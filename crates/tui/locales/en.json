@@ -315,7 +315,7 @@
     "HomeGoalModeTip": "Goal tracking - Set /goal <objective> to pursue objectives",
     "OnboardLanguageTitle": "Choose your language",
     "OnboardLanguageBlurb": "Pick the UI language. You can change it any time with `/settings set locale <tag>`.",
-    "OnboardLanguageFooter": "Press 1-8 to choose, or Enter to keep the current setting",
+    "OnboardLanguageFooter": "Press 1-9 to choose, or Enter to keep the current setting",
     "OnboardProviderTitle": "Choose your model provider",
     "OnboardProviderBlurb": "Pick where your API key comes from. CodeWhale treats every provider equally — none is privileged.",
     "OnboardProviderFooter": "Press 1-8 to choose, ↑/↓ to move, Enter to continue, Esc to go back.",

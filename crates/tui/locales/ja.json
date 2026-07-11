@@ -313,7 +313,7 @@
     "HomeGoalModeTip": "Goal 追跡 - /goal <目標> で持続的な目標を追跡",
     "OnboardLanguageTitle": "言語を選択",
     "OnboardLanguageBlurb": "UI 言語を選んでください。`/settings set locale <tag>` でいつでも変更できます。",
-    "OnboardLanguageFooter": "1〜8 で選択、または Enter で現在の設定を維持",
+    "OnboardLanguageFooter": "1〜9 で選択、または Enter で現在の設定を維持",
     "OnboardProviderTitle": "モデルプロバイダーを選択",
     "OnboardProviderBlurb": "API キーの取得元を選びます。CodeWhale はすべてのプロバイダーを平等に扱います — 特権はありません。",
     "OnboardProviderFooter": "1-8 で選択、↑/↓ で移動、Enter で続行、Esc で戻る。",

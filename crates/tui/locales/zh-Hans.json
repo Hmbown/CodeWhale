@@ -313,7 +313,7 @@
     "HomeGoalModeTip": "Goal 跟踪 - 设置 /goal <目标> 以跟踪持久目标",
     "OnboardLanguageTitle": "选择语言",
     "OnboardLanguageBlurb": "选择界面语言。可随时使用 `/settings set locale <tag>` 修改。",
-    "OnboardLanguageFooter": "按 1-8 选择，或按 Enter 保留当前设置",
+    "OnboardLanguageFooter": "按 1-9 选择，或按 Enter 保留当前设置",
     "OnboardProviderTitle": "选择模型提供商",
     "OnboardProviderBlurb": "选择 API 密钥来源。CodeWhale 平等对待每个提供商——无一特权。",
     "OnboardProviderFooter": "按 1-8 选择，↑/↓ 移动，Enter 继续，Esc 返回。",

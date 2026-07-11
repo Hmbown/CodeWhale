@@ -30,6 +30,7 @@ pub const LANGUAGE_OPTIONS: &[(char, &str, &str, &str)] = &[
         "(Latin American Spanish)",
     ),
     ('8', "vi", "Tiếng Việt", "(Vietnamese)"),
+    ('9', "ko", "한국어", "(Korean)"),
 ];
 
 pub fn lines(app: &App) -> Vec<Line<'static>> {

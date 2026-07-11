@@ -313,7 +313,7 @@
     "HomeGoalModeTip": "Rastreamento de Goal - Use /goal <objetivo> para rastrear um objetivo persistente",
     "OnboardLanguageTitle": "Escolha o idioma",
     "OnboardLanguageBlurb": "Escolha o idioma da interface. Você pode mudá-lo a qualquer momento com `/settings set locale <tag>`.",
-    "OnboardLanguageFooter": "Pressione 1-8 para escolher, ou Enter para manter a configuração atual",
+    "OnboardLanguageFooter": "Pressione 1-9 para escolher, ou Enter para manter a configuração atual",
     "OnboardProviderTitle": "Escolha seu provedor de modelos",
     "OnboardProviderBlurb": "Escolha de onde vem sua chave API. O CodeWhale trata todos os provedores igualmente — nenhum é privilegiado.",
     "OnboardProviderFooter": "Pressione 1-8 para escolher, ↑/↓ para mover, Enter para continuar, Esc para voltar.",

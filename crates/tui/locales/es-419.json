@@ -313,7 +313,7 @@
     "HomeGoalModeTip": "Seguimiento de Goal - Usa /goal <objetivo> para seguir un objetivo persistente",
     "OnboardLanguageTitle": "Elige el idioma",
     "OnboardLanguageBlurb": "Elige el idioma de la interfaz. Puedes cambiarlo en cualquier momento con `/settings set locale <etiqueta>`.",
-    "OnboardLanguageFooter": "Presiona 1-8 para elegir, o Enter para mantener la configuración actual",
+    "OnboardLanguageFooter": "Presiona 1-9 para elegir, o Enter para mantener la configuración actual",
     "OnboardProviderTitle": "Elige tu proveedor de modelos",
     "OnboardProviderBlurb": "Elige de dónde viene tu clave API. CodeWhale trata a todos los proveedores por igual — ninguno tiene privilegios.",
     "OnboardProviderFooter": "Presiona 1-8 para elegir, ↑/↓ para mover, Enter para continuar, Esc para volver.",

@@ -313,7 +313,7 @@
     "HomeGoalModeTip": "Theo dõi mục tiêu - Dùng /goal <mục_tiêu> để đặt mục tiêu làm việc",
     "OnboardLanguageTitle": "Chọn ngôn ngữ của bạn",
     "OnboardLanguageBlurb": "Chọn ngôn ngữ hiển thị. Bạn có thể thay đổi bất kỳ lúc nào bằng lệnh `/settings set locale <tag>`.",
-    "OnboardLanguageFooter": "Nhấn phím từ 1-8 để chọn, hoặc Enter để giữ cài đặt hiện tại",
+    "OnboardLanguageFooter": "Nhấn phím từ 1-9 để chọn, hoặc Enter để giữ cài đặt hiện tại",
     "OnboardProviderTitle": "Chọn nhà cung cấp mô hình",
     "OnboardProviderBlurb": "Chọn nguồn khóa API. CodeWhale đối xử bình đẳng với mọi nhà cung cấp — không ai được ưu tiên.",
     "OnboardProviderFooter": "Nhấn 1-8 để chọn, ↑/↓ để di chuyển, Enter để tiếp tục, Esc để quay lại.",

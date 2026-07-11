@@ -14,6 +14,7 @@ pub enum Locale {
     PtBr,
     Es419,
     Vi,
+    Ko,
 }
 
 impl Locale {
@@ -26,6 +27,7 @@ impl Locale {
             Self::PtBr => "pt-BR",
             Self::Es419 => "es-419",
             Self::Vi => "vi",
+            Self::Ko => "ko",
         }
     }
 
@@ -38,6 +40,7 @@ impl Locale {
             Self::PtBr => "Brazilian Portuguese (Português do Brasil)",
             Self::Es419 => "Latin American Spanish (Español latinoamericano)",
             Self::Vi => "Vietnamese (Tiếng Việt)",
+            Self::Ko => "Korean (한국어)",
         }
     }
 
@@ -52,6 +55,7 @@ impl Locale {
             Self::PtBr,
             Self::Es419,
             Self::Vi,
+            Self::Ko,
         ]
     }
 
@@ -67,6 +71,7 @@ impl Locale {
             Self::PtBr,
             Self::Es419,
             Self::Vi,
+            Self::Ko,
         ]
     }
 
@@ -1633,6 +1638,7 @@ pub fn thinking_translation_placeholder(locale: Locale) -> &'static str {
         Locale::PtBr => "Pensando; traduzindo ao concluir...",
         Locale::Es419 => "Pensando; traduciendo al finalizar...",
         Locale::Vi => "Đang suy nghĩ; sẽ dịch sau khi hoàn thành...",
+        Locale::Ko => "생각하는 중입니다. 완료되면 번역합니다...",
     }
 }
 
@@ -1645,6 +1651,7 @@ pub fn thinking_translation_in_progress(locale: Locale) -> &'static str {
         Locale::PtBr => "Traduzindo o conteúdo de raciocínio...",
         Locale::Es419 => "Traduciendo el contenido de razonamiento...",
         Locale::Vi => "Đang dịch nội dung suy nghĩ...",
+        Locale::Ko => "생각 내용을 번역하는 중...",
     }
 }
 
@@ -1657,6 +1664,7 @@ pub fn thinking_translation_complete(locale: Locale) -> &'static str {
         Locale::PtBr => "Tradução do raciocínio concluída",
         Locale::Es419 => "Traducción del razonamiento completada",
         Locale::Vi => "Đã dịch xong nội dung suy nghĩ",
+        Locale::Ko => "생각 내용 번역 완료",
     }
 }
 
@@ -1669,6 +1677,7 @@ pub fn thinking_translation_failed(locale: Locale) -> &'static str {
         Locale::PtBr => "Falha ao traduzir o raciocínio",
         Locale::Es419 => "Falló la traducción del razonamiento",
         Locale::Vi => "Dịch nội dung suy nghĩ thất bại",
+        Locale::Ko => "생각 내용 번역 실패",
     }
 }
 
@@ -1681,6 +1690,7 @@ pub fn hidden_translation_failed(locale: Locale) -> &'static str {
         Locale::PtBr => "A tradução falhou; o texto original está oculto.",
         Locale::Es419 => "La traducción falló; el texto original está oculto.",
         Locale::Vi => "Dịch thất bại; văn bản gốc đã bị ẩn.",
+        Locale::Ko => "번역에 실패했습니다. 원문은 숨겨져 있습니다.",
     }
 }
 
@@ -1784,6 +1794,9 @@ fn parse_locale(value: &str) -> Option<Locale> {
     if value.starts_with("vi") {
         return Some(Locale::Vi);
     }
+    if value.starts_with("ko") {
+        return Some(Locale::Ko);
+    }
     None
 }
 
@@ -1847,6 +1860,7 @@ mod tests {
             Locale::PtBr => include_str!("../locales/pt-BR.json"),
             Locale::Es419 => include_str!("../locales/es-419.json"),
             Locale::Vi => include_str!("../locales/vi.json"),
+            Locale::Ko => include_str!("../locales/ko.json"),
         }
     }
 

@@ -737,6 +737,10 @@ impl GuidedConstitutionDraft {
                     "\nNguyên tắc tự do của người dùng: {}",
                     bounded_freeform_note(note, MAX_NOTES_LEN)
                 ),
+                Locale::Ko => format!(
+                    "\n사용자 자유 원칙: {}",
+                    bounded_freeform_note(note, MAX_NOTES_LEN)
+                ),
                 _ => format!(
                     "\nUser freeform principle: {}",
                     bounded_freeform_note(note, MAX_NOTES_LEN)
@@ -900,6 +904,15 @@ impl GuidedEvidence {
             (Locale::Vi, Self::ReleaseReceipts) => {
                 "Trích dẫn tệp, lệnh, ảnh chụp, CI hoặc nguồn cho tuyên bố quan trọng và bằng chứng phát hành."
             }
+            (Locale::Ko, Self::Assumptions) => {
+                "완료를 주장하기 전에 가정, 불확실한 점, 남은 위험을 요약한다."
+            }
+            (Locale::Ko, Self::TestsAndReceipts) => {
+                "불확실성을 실질적으로 줄일 수 있을 때는 명령어, 테스트, 스크린샷, 인용으로 구체적으로 검증한다."
+            }
+            (Locale::Ko, Self::ReleaseReceipts) => {
+                "중요한 주장과 릴리스 근거에는 파일 경로, 명령어, 스크린샷, CI, 출처를 제시한다."
+            }
             (_, Self::Assumptions) => {
                 "Summarize assumptions, unknowns, and remaining risk before claiming completion."
             }
@@ -949,6 +962,9 @@ impl GuidedCommunication {
             (Locale::Vi, Self::Concise) => "ngắn gọn",
             (Locale::Vi, Self::Teaching) => "giảng giải",
             (Locale::Vi, Self::Direct) => "trực tiếp",
+            (Locale::Ko, Self::Concise) => "간결함",
+            (Locale::Ko, Self::Teaching) => "설명 중심",
+            (Locale::Ko, Self::Direct) => "직설적",
             (_, Self::Concise) => "concise",
             (_, Self::Teaching) => "teaching",
             (_, Self::Direct) => "direct",
@@ -997,6 +1013,13 @@ impl GuidedCommunication {
             (Locale::Vi, Self::Direct) => {
                 "Nói thẳng về điểm chặn, rủi ro và bất định; tránh câu chữ trang trí."
             }
+            (Locale::Ko, Self::Concise) => "업데이트는 간결하게 유지하고, 중요한 트레이드오프만 짧게 설명한다.",
+            (Locale::Ko, Self::Teaching) => {
+                "사용자가 시스템을 이해할 수 있을 만큼 핵심 추론과 트레이드오프를 설명한다."
+            }
+            (Locale::Ko, Self::Direct) => {
+                "차단 요인, 위험, 불확실성을 직설적으로 말하고 장식적인 표현은 피한다."
+            }
             (_, Self::Concise) => "Keep updates concise and explain important tradeoffs briefly.",
             (_, Self::Teaching) => {
                 "Explain key reasoning and tradeoffs enough that the user can learn the system."
@@ -1044,6 +1067,9 @@ impl GuidedPrivacy {
             (Locale::Vi, Self::StandardCare) => "bảo vệ tiêu chuẩn",
             (Locale::Vi, Self::StrictBoundaries) => "ranh giới nghiêm ngặt",
             (Locale::Vi, Self::ProjectLocal) => "bộ nhớ trong dự án",
+            (Locale::Ko, Self::StandardCare) => "표준 보호",
+            (Locale::Ko, Self::StrictBoundaries) => "엄격한 경계",
+            (Locale::Ko, Self::ProjectLocal) => "프로젝트 내 메모리",
             (_, Self::StandardCare) => "standard care",
             (_, Self::StrictBoundaries) => "strict boundaries",
             (_, Self::ProjectLocal) => "project-local memory",
@@ -1105,6 +1131,15 @@ impl GuidedPrivacy {
             }
             (Locale::Vi, Self::ProjectLocal) => {
                 "Giữ ngữ cảnh riêng của dự án trong dự án; tránh ghi vào bộ nhớ nếu không được yêu cầu rõ."
+            }
+            (Locale::Ko, Self::StandardCare) => {
+                "비밀 정보, 사용자 파일, Git 이력, 프로덕션 시스템, 비용, 프라이버시, 시간을 보호한다."
+            }
+            (Locale::Ko, Self::StrictBoundaries) => {
+                "비밀 정보, 개인 데이터, 자격 증명, 프로덕션 상태, 자금, 게시 작업은 먼저 확인하는 경계로 취급한다."
+            }
+            (Locale::Ko, Self::ProjectLocal) => {
+                "프로젝트 고유 맥락은 프로젝트 안에 두고, 명시적으로 요청받지 않는 한 메모리에 쓰지 않는다."
             }
             (_, Self::StandardCare) => {
                 "Protect secrets, user files, git history, production systems, cost, privacy, and time."
@@ -1174,6 +1209,15 @@ impl GuidedPrivacy {
             (Locale::Vi, Self::ProjectLocal) => {
                 "Xác nhận trước khi mang chi tiết dự án sang bộ nhớ, workspace khác hoặc handoff cũ."
             }
+            (Locale::Ko, Self::StandardCare) => {
+                "파괴적이거나, 비용이 크거나, 자격 증명, 게시, 법적, 보안 위험이 있는 작업 전에 먼저 물어본다."
+            }
+            (Locale::Ko, Self::StrictBoundaries) => {
+                "민감 정보를 읽거나 퍼뜨리기 전, 프로덕션 시스템을 건드리기 전, 자금을 쓰거나 게시하기 전에 멈추고 물어본다."
+            }
+            (Locale::Ko, Self::ProjectLocal) => {
+                "프로젝트 세부 정보를 메모리, 다른 워크스페이스, 오래된 인계 자료로 옮기기 전에 확인한다."
+            }
             (_, Self::StandardCare) => {
                 "Ask before destructive, high-cost, credential, publishing, legal, or security-risk actions."
             }
@@ -1223,6 +1267,9 @@ impl GuidedPrinciples {
             (Locale::Vi, Self::ScopedChanges) => "thay đổi có phạm vi",
             (Locale::Vi, Self::UserVoice) => "giữ giọng người dùng",
             (Locale::Vi, Self::ReversibleOps) => "bước có thể đảo ngược",
+            (Locale::Ko, Self::ScopedChanges) => "범위가 명확한 변경",
+            (Locale::Ko, Self::UserVoice) => "사용자의 어조 유지",
+            (Locale::Ko, Self::ReversibleOps) => "되돌릴 수 있는 단계",
             (_, Self::ScopedChanges) => "scoped changes",
             (_, Self::UserVoice) => "user voice",
             (_, Self::ReversibleOps) => "reversible steps",
@@ -1285,6 +1332,15 @@ impl GuidedPrinciples {
             (Locale::Vi, Self::ReversibleOps) => {
                 "Nguyên tắc tự do: ưu tiên bước có thể đảo ngược, checkpoint và ghi chú rollback trước thao tác tác động cao."
             }
+            (Locale::Ko, Self::ScopedChanges) => {
+                "자유 원칙: 작고 리뷰하기 쉬운 변경을 우선하고, 명시적으로 요청받지 않는 한 관련 없는 리팩터링은 하지 않는다."
+            }
+            (Locale::Ko, Self::UserVoice) => {
+                "자유 원칙: 사용자의 어조, 브랜드, 제약을 유지하고 선호를 권한 확대로 취급하지 않는다."
+            }
+            (Locale::Ko, Self::ReversibleOps) => {
+                "자유 원칙: 영향이 큰 작업 전에 되돌릴 수 있는 단계, 체크포인트, 롤백 메모를 우선한다."
+            }
             (_, Self::ScopedChanges) => {
                 "Freeform principle: prefer small, reviewable changes and avoid unrelated refactors unless explicitly requested."
             }
@@ -1328,6 +1384,9 @@ fn autonomy_label(preference: AutonomyPreference, locale: Locale) -> &'static st
         (Locale::Vi, AutonomyPreference::Cautious) => "thận trọng",
         (Locale::Vi, AutonomyPreference::Balanced) => "cân bằng",
         (Locale::Vi, AutonomyPreference::Autonomous) => "chủ động",
+        (Locale::Ko, AutonomyPreference::Cautious) => "신중함",
+        (Locale::Ko, AutonomyPreference::Balanced) => "균형",
+        (Locale::Ko, AutonomyPreference::Autonomous) => "적극적",
         (_, AutonomyPreference::Cautious) => "cautious",
         (_, AutonomyPreference::Balanced) => "balanced",
         (_, AutonomyPreference::Autonomous) => "ambitious",
@@ -1391,6 +1450,15 @@ fn autonomy_priority(preference: AutonomyPreference, locale: Locale) -> &'static
         (Locale::Vi, AutonomyPreference::Autonomous) => {
             "Gộp việc thường lệ an toàn, nhưng dừng với thao tác phá hủy, thông tin xác thực, xuất bản, chi phí cao, pháp lý hoặc bảo mật."
         }
+        (Locale::Ko, AutonomyPreference::Cautious) => {
+            "파일 수정, 명령어 실행, 애매한 제품 선택 전에 멈추고 물어본다."
+        }
+        (Locale::Ko, AutonomyPreference::Balanced) => {
+            "명확하고 위험이 낮은 작업은 바로 진행하고, 위험하거나 파괴적이거나 애매한 작업은 먼저 확인한다."
+        }
+        (Locale::Ko, AutonomyPreference::Autonomous) => {
+            "안전한 정형 작업은 모아서 진행하되, 파괴적이거나 자격 증명, 게시, 고비용, 법적, 보안 위험이 있는 작업에서는 멈추고 물어본다."
+        }
         (_, AutonomyPreference::Cautious) => {
             "Stop and ask before editing files, running commands, or choosing between ambiguous product paths."
         }
@@ -1419,6 +1487,9 @@ fn authority_priority(locale: Locale) -> &'static str {
         }
         Locale::Vi => {
             "Yêu cầu hiện tại của người dùng và bằng chứng trực tiếp từ công cụ ưu tiên hơn bộ nhớ, handoff cũ và phỏng đoán."
+        }
+        Locale::Ko => {
+            "현재 사용자 요청과 실시간 도구 근거는 메모리, 오래된 인계 자료, 추측보다 우선한다."
         }
         _ => {
             "Current user requests and live tool evidence outrank memory, stale handoffs, and guesses."
@@ -1498,6 +1569,12 @@ fn freeform_note_line(locale: Locale, note: &str, editing: bool) -> Line<'static
             "F Nguyên tắc tự do: nhấn F để nhập hoặc dán nguyên tắc có giới hạn".to_string()
         }
         (Locale::Vi, false, false) => format!("F Nguyên tắc tự do: {preview}"),
+        (Locale::Ko, true, true) => {
+            "F 자유 원칙: 편집 중 - 제한된 원칙을 입력하거나 붙여넣고 Enter로 완료".to_string()
+        }
+        (Locale::Ko, true, false) => format!("F 자유 원칙: 편집 중 - {preview}"),
+        (Locale::Ko, false, true) => "F 자유 원칙: F를 눌러 제한된 원칙을 입력하거나 붙여넣기".to_string(),
+        (Locale::Ko, false, false) => format!("F 자유 원칙: {preview}"),
         (_, true, true) => {
             "F Own words: editing - type or paste a bounded principle, Enter to finish".to_string()
         }
@@ -3161,6 +3238,7 @@ fn ratification_preview_title(locale: Locale) -> &'static str {
         Locale::PtBr => "Constituição do Usuário - Rascunho para Ratificação",
         Locale::Es419 => "Constitución del Usuario - Borrador para Ratificación",
         Locale::Vi => "Hiến pháp Người dùng - Bản nháp để phê chuẩn",
+        Locale::Ko => "사용자 헌법 - 승인 전 초안",
         _ => "User Constitution — Draft for Ratification",
     }
 }
@@ -3185,6 +3263,7 @@ fn constitution_ratification_text(
             Locale::PtBr => "A constituição estruturada está vazia.".to_string(),
             Locale::Es419 => "La constitución estructurada está vacía.".to_string(),
             Locale::Vi => "Hiến pháp có cấu trúc đang trống.".to_string(),
+            Locale::Ko => "구조화된 헌법이 비어 있습니다.".to_string(),
             _ => "The structured constitution is empty.".to_string(),
         });
     let layer_order = tr(locale, MessageId::SetupCheckpointLayerOrder);
@@ -3416,6 +3495,46 @@ fn constitution_ratification_text(
                  PHÊ CHUẨN\n{ratify_how}"
             )
         }
+        Locale::Ko => {
+            let drafted_by = match provenance {
+                DraftProvenance::Model(label) => format!(
+                    "{label}이(가) 당신의 가이드 답변을 바탕으로 초안을 작성했고, CodeWhale이 구조를 검증하고 범위를 제한했습니다."
+                ),
+                DraftProvenance::Guided => {
+                    "당신의 가이드 답변으로부터 결정적으로 생성되었습니다.".to_string()
+                }
+                DraftProvenance::Existing => {
+                    "constitution.json에서 불러온 기존 헌법이며, 변경 없이 그대로 표시됩니다."
+                        .to_string()
+                }
+            };
+            let ratify_how = match provenance {
+                DraftProvenance::Existing => {
+                    "이것은 이미 당신의 상시 규칙입니다. 미리보기를 닫고 K를 눌러 그대로 유지하며 체크포인트를 완료하세요; \
+                     파일은 수정되지 않습니다. /constitution 또는 /setup으로 언제든지 수정할 수 있습니다."
+                }
+                _ => {
+                    "확인하기 전까지는 아무것도 규칙이 되지 않습니다. 미리보기를 닫고 G를 눌러 승인하고 저장하세요. \
+                     /constitution 또는 /setup으로 언제든지 수정할 수 있습니다."
+                }
+            };
+            format!(
+                "CODEWHALE · 사용자 헌법\n{RULE}\n\n{drafted_by}\n\n\
+                 이것은 CodeWhale이 당신과 함께 일하는 방식에 대한 상시 규칙입니다. 훌륭한 헌법이 그렇듯, \
+                 사용할 수 있을 만큼 짧고, 소모적인 규칙이 아닌 지속적인 원칙으로 이루어져 있으며, 당신이 변화함에 따라 수정할 수 있습니다. \
+                 이는 모든 개별 사례를 판단하는 대신 권한과 한계를 규정하며, 세션을 넘어 협업의 연속성을 부여합니다. \
+                 다만 이것은 기억이 아닙니다: 이력이 아니라 원칙을 담습니다.\n\n\
+                 {rendered}\n\n\
+                 권한 계층\n{layer_order}\n당신의 직접적인 요청은 언제나 이 문서보다 우선합니다.\n\n\
+                 이것이 할 수 없는 일\n\
+                 이것은 행동을 안내할 뿐입니다. 승인 정책, 샌드박스, 셸, 네트워크, 신뢰, MCP 권한, 기본 모드, 게시, 지출 권한을 \
+                 부여하거나 바꿀 수 없습니다; 이는 여전히 런타임에서 당신이 직접 관리합니다.\n\n\
+                 축소된 코어와 옵트인 모듈\n\
+                 내장된 55줄 코어는 계속 활성 상태입니다. 이 초안은 사용자 전역의 상시 선호만 저장합니다. \
+                 무거운 실행/오케스트레이션 지침은 모드 프롬프트나 향후 옵트인 모듈에 속합니다. 이 미리보기는 모듈을 활성화하지 않으며 그 설정도 바꾸지 않습니다.\n\n\
+                 승인\n{ratify_how}"
+            )
+        }
         _ => {
             let drafted_by = match provenance {
                 DraftProvenance::Model(label) => format!(
@@ -3486,6 +3605,9 @@ fn model_draft_invitation_line(locale: Locale, model_label: &str) -> String {
         Locale::Vi => {
             format!("A {model_label} có thể soạn. Bạn phê chuẩn. Không lưu gì nếu chưa có bạn.")
         }
+        Locale::Ko => {
+            format!("A {model_label}이(가) 초안을 작성할 수 있습니다. 승인은 당신이 합니다. 당신 없이는 아무것도 저장되지 않습니다.")
+        }
         _ => format!("A {model_label} can draft it. You ratify it. Nothing saves without you."),
     }
 }
@@ -3501,6 +3623,7 @@ fn keep_existing_invitation_line(locale: Locale) -> &'static str {
             "K Conservar constitución existente - revisa, conserva, archivo sin cambios."
         }
         Locale::Vi => "K Giữ hiến pháp hiện có - xem lại, giữ nguyên, tệp không đổi.",
+        Locale::Ko => "K 기존 헌법 유지 - 검토 후 유지, 파일은 변경되지 않음.",
         _ => "K Keep your existing constitution — review it, keep it, file unchanged.",
     }
 }
@@ -3534,6 +3657,11 @@ fn model_draft_ready_line(locale: Locale, model_label: &str) -> String {
                 "Bản nháp của {model_label} chờ phê chuẩn - G để xem và phê chuẩn; 1-6 sẽ bỏ bản nháp."
             )
         }
+        Locale::Ko => {
+            format!(
+                "{model_label}의 초안이 승인을 기다리고 있습니다 - G로 확인하고 승인, 1-6은 초안을 버립니다."
+            )
+        }
         _ => format!(
             "Draft by {model_label} awaits ratification — G to review and ratify; 1-6 discards it."
         ),
@@ -3556,6 +3684,9 @@ pub(crate) fn model_draft_ready_message(locale: Locale, model_label: &str) -> St
         ),
         Locale::Vi => format!(
             "{model_label} đã soạn hiến pháp của bạn. Xem bản xem trước rồi nhấn G để phê chuẩn."
+        ),
+        Locale::Ko => format!(
+            "{model_label}이(가) 당신의 헌법 초안을 작성했습니다. 미리보기를 확인한 뒤 G를 눌러 승인하세요."
         ),
         _ => format!(
             "{model_label} drafted your constitution. Review the preview, then press G to ratify."
@@ -3595,6 +3726,11 @@ pub(crate) fn model_draft_failed_message(
         Locale::Vi => {
             format!(
                 "{model_label} không thể soạn hiến pháp của bạn ({reason}). Bản nháp hướng dẫn vẫn hợp lệ; nhấn G để xem trước và phê chuẩn."
+            )
+        }
+        Locale::Ko => {
+            format!(
+                "{model_label}이(가) 당신의 헌법 초안을 작성하지 못했습니다 ({reason}). 가이드 초안은 여전히 유효합니다. G를 눌러 미리보고 승인하세요."
             )
         }
         _ => format!(
@@ -4060,6 +4196,13 @@ mod tests {
                         "không bật",
                         "không thể cấp hoặc đổi chính sách phê duyệt, sandbox, shell, mạng",
                         "quyền MCP",
+                    ),
+                    Locale::Ko => (
+                        "축소된 코어",
+                        "모듈",
+                        "활성화하지 않으며",
+                        "승인 정책, 샌드박스, 셸, 네트워크, 신뢰, MCP 권한, 기본 모드, 게시, 지출 권한을 부여하거나 바꿀 수 없습니다",
+                        "MCP 권한",
                     ),
                     Locale::En => (
                         "REDUCED CORE",
@@ -4823,6 +4966,7 @@ mod tests {
             (Locale::PtBr, "guiada por evidências"),
             (Locale::Es419, "basada en evidencia"),
             (Locale::Vi, "ưu tiên bằng chứng"),
+            (Locale::Ko, "근거 중심"),
         ];
         for (locale, marker) in markers {
             let body = guided_constitution_template(locale).render_body();
@@ -4888,6 +5032,7 @@ mod tests {
             (Locale::PtBr, "NÚCLEO REDUZIDO E MÓDULOS OPT-IN"),
             (Locale::Es419, "NÚCLEO REDUCIDO Y MÓDULOS OPT-IN"),
             (Locale::Vi, "LÕI RÚT GỌN VÀ MÔ-ĐUN OPT-IN"),
+            (Locale::Ko, "축소된 코어와 옵트인 모듈"),
         ];
         for (locale, marker) in localized_markers {
             let content = constitution_ratification_text(
