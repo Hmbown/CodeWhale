@@ -2238,6 +2238,7 @@ pub(super) fn parse_usage(usage: Option<&Value>) -> Usage {
         output_tokens: output_tokens.min(u64::from(u32::MAX)) as u32,
         prompt_cache_hit_tokens,
         prompt_cache_miss_tokens,
+        prompt_cache_write_tokens: None,
         reasoning_tokens,
         reasoning_replay_tokens: None,
         server_tool_use,

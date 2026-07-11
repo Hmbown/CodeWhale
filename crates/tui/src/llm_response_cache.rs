@@ -94,6 +94,7 @@ mod tests {
                 output_tokens: 7,
                 prompt_cache_hit_tokens: Some(3),
                 prompt_cache_miss_tokens: Some(39),
+                prompt_cache_write_tokens: None,
                 reasoning_tokens: Some(5),
                 reasoning_replay_tokens: Some(2),
                 server_tool_use: None,

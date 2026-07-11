@@ -6,7 +6,7 @@
 //! reliable balance endpoint exists.
 
 use chrono::{DateTime, TimeZone, Utc};
-use codewhale_config::pricing::TokenUsage;
+use codewhale_config::pricing::{OfferingPricing, TokenUsage};
 
 use crate::config::ApiProvider;
 use crate::models::Usage;
@@ -99,6 +99,9 @@ struct CurrencyPricing {
     input_cache_hit_per_million: f64,
     input_cache_miss_per_million: f64,
     output_per_million: f64,
+    /// Cache-write (creation) rate. `None` means write tokens are billed at
+    /// the cache-miss / input rate (providers without a separate write tier).
+    cache_write_per_million: Option<f64>,
 }
 
 /// Per-million-token pricing for a model.
@@ -167,19 +170,19 @@ fn known_pricing_for_model(model_lower: &str) -> Option<ModelPricing> {
         "openai/gpt-5.6-luna" | "gpt-5.6-luna" => Some(usd_only_pricing(0.10, 1.00, 6.00)),
         "meta/muse-spark-1.1" | "muse-spark-1.1" => Some(usd_only_pricing(1.25, 1.25, 4.25)),
         // Anthropic first-party rates including the published cache-read
-        // discounts (2026-07-09 audit,
+        // discounts and 5-minute cache-write rates (2026-07-09 audit,
         // https://platform.claude.com/docs/en/about-claude/pricing). These sit
-        // above the catalog lookup because the bundled catalog cannot carry a
-        // cache-read rate yet. Cache-write rates (1.25x-2x input) exist
-        // upstream but `CurrencyPricing` has no cache-write field.
-        "claude-opus-4-8" => Some(usd_only_pricing(0.50, 5.00, 25.00)),
-        "claude-sonnet-4-6" => Some(usd_only_pricing(0.30, 3.00, 15.00)),
-        "claude-haiku-4-5" => Some(usd_only_pricing(0.10, 1.00, 5.00)),
+        // above the catalog lookup because the bundled catalog cannot carry
+        // cache-read/write rates yet. 1h write is 2x input; we price the
+        // common 5m tier (1.25x input) here (#4318).
+        "claude-opus-4-8" => Some(usd_pricing_with_write(0.50, 5.00, 25.00, 6.25)),
+        "claude-sonnet-4-6" => Some(usd_pricing_with_write(0.30, 3.00, 15.00, 3.75)),
+        "claude-haiku-4-5" => Some(usd_pricing_with_write(0.10, 1.00, 5.00, 1.25)),
         // Claude Fable 5 (GA 2026-06-09). Its newer tokenizer produces ~30%
         // more tokens for the same text than prior Claude models, so raw
         // per-token rate comparisons against other Claude rows undercount its
         // effective cost. Cache-write is 12.50 (5m) / 20.00 (1h) upstream.
-        "claude-fable-5" => Some(usd_only_pricing(1.00, 10.00, 50.00)),
+        "claude-fable-5" => Some(usd_pricing_with_write(1.00, 10.00, 50.00, 12.50)),
         // Z.ai GLM-5.2 cache-read rate per https://docs.z.ai/guides/overview/pricing
         // (cache storage limited-time free).
         "z-ai/glm-5.2" | "glm-5.2" => Some(usd_only_pricing(0.26, 1.40, 4.40)),
@@ -228,8 +231,8 @@ fn known_pricing_for_model(model_lower: &str) -> Option<ModelPricing> {
         "qwen/qwen3.6-max-preview" => Some(usd_only_pricing(1.04, 1.04, 6.24)),
         "qwen/qwen3.6-27b" => Some(usd_only_pricing(0.15, 0.285, 2.40)),
         "qwen/qwen3.6-plus" => Some(usd_only_pricing(0.325, 0.325, 1.95)),
-        // Cache-write is 0.40 upstream; CurrencyPricing has no cache-write field.
-        "qwen/qwen3.7-plus" => Some(usd_only_pricing(0.064, 0.32, 1.28)),
+        // Cache-write is 0.40 upstream (#4318).
+        "qwen/qwen3.7-plus" => Some(usd_pricing_with_write(0.064, 0.32, 1.28, 0.40)),
         "qwen/qwen3.7-max" => Some(usd_only_pricing(0.25, 1.25, 3.75)),
 
         "google/gemma-4-31b-it" => Some(usd_only_pricing(0.09, 0.12, 0.35)),
@@ -247,28 +250,58 @@ fn usd_only_pricing(
     input_cache_miss_per_million: f64,
     output_per_million: f64,
 ) -> ModelPricing {
+    usd_pricing(
+        input_cache_hit_per_million,
+        input_cache_miss_per_million,
+        output_per_million,
+        None,
+    )
+}
+
+fn usd_pricing_with_write(
+    input_cache_hit_per_million: f64,
+    input_cache_miss_per_million: f64,
+    output_per_million: f64,
+    cache_write_per_million: f64,
+) -> ModelPricing {
+    usd_pricing(
+        input_cache_hit_per_million,
+        input_cache_miss_per_million,
+        output_per_million,
+        Some(cache_write_per_million),
+    )
+}
+
+fn usd_pricing(
+    input_cache_hit_per_million: f64,
+    input_cache_miss_per_million: f64,
+    output_per_million: f64,
+    cache_write_per_million: Option<f64>,
+) -> ModelPricing {
     ModelPricing {
         usd: CurrencyPricing {
             input_cache_hit_per_million,
             input_cache_miss_per_million,
             output_per_million,
+            cache_write_per_million,
         },
         cny: None,
     }
 }
 
 /// Claude Sonnet 5 pricing (https://platform.claude.com/docs/en/about-claude/pricing):
-/// introductory 2.00 / 10.00 (cache-read 0.20) through 2026-08-31 UTC, then
-/// the standard 3.00 / 15.00 (cache-read 0.30).
+/// introductory 2.00 / 10.00 (cache-read 0.20, cache-write 2.50) through
+/// 2026-08-31 UTC, then the standard 3.00 / 15.00 (cache-read 0.30,
+/// cache-write 3.75). Write rates are the published 5-minute tier (#4318).
 fn claude_sonnet_5_pricing(now: DateTime<Utc>) -> ModelPricing {
     let intro_ends = Utc
         .with_ymd_and_hms(2026, 9, 1, 0, 0, 0)
         .single()
         .expect("valid intro-pricing cutoff");
     if now < intro_ends {
-        usd_only_pricing(0.20, 2.00, 10.00)
+        usd_pricing_with_write(0.20, 2.00, 10.00, 2.50)
     } else {
-        usd_only_pricing(0.30, 3.00, 15.00)
+        usd_pricing_with_write(0.30, 3.00, 15.00, 3.75)
     }
 }
 
@@ -278,11 +311,13 @@ fn deepseek_v4_pro_pricing() -> ModelPricing {
             input_cache_hit_per_million: 0.003625,
             input_cache_miss_per_million: 0.435,
             output_per_million: 0.87,
+            cache_write_per_million: None,
         },
         cny: Some(CurrencyPricing {
             input_cache_hit_per_million: 0.025,
             input_cache_miss_per_million: 3.0,
             output_per_million: 6.0,
+            cache_write_per_million: None,
         }),
     }
 }
@@ -293,11 +328,13 @@ fn deepseek_v4_flash_pricing() -> ModelPricing {
             input_cache_hit_per_million: 0.0028,
             input_cache_miss_per_million: 0.14,
             output_per_million: 0.28,
+            cache_write_per_million: None,
         },
         cny: Some(CurrencyPricing {
             input_cache_hit_per_million: 0.02,
             input_cache_miss_per_million: 1.0,
             output_per_million: 2.0,
+            cache_write_per_million: None,
         }),
     }
 }
@@ -334,23 +371,52 @@ pub fn calculate_turn_cost_estimate_for_provider(
     if provider == ApiProvider::OpenaiCodex {
         return None;
     }
+    if usage.prompt_cache_write_tokens.unwrap_or(0) > 0
+        && let Some(estimate) = crate::provider_lake::catalog_offering_for_model(provider, model)
+            .as_ref()
+            .and_then(|offering| catalog_cost_estimate_from_offering(offering, usage))
+    {
+        return Some(estimate);
+    }
     calculate_turn_cost_estimate_from_usage(model, usage)
 }
 
+/// Estimate cache-write usage from a sourced catalog row when it publishes the
+/// separate write tier. Other usage continues through the legacy table, which
+/// retains CNY estimates and compatibility fallbacks.
+fn catalog_cost_estimate_from_offering(
+    offering: &codewhale_config::catalog::CatalogOffering,
+    usage: &Usage,
+) -> Option<CostEstimate> {
+    let usage = token_usage_for_pricing(usage);
+    let pricing = OfferingPricing::from_catalog_offering(offering)?;
+    if usage.cache_write == 0 || pricing.cache_write_per_million.is_none() {
+        return None;
+    }
+
+    pricing.estimate_cost(&usage).map(CostEstimate::usd_only)
+}
+
 /// Project provider-normalized turn usage into canonical billable token
-/// classes for the shared config pricing layer (#2961).
+/// classes for the shared config pricing layer (#2961 / #4318).
 ///
-/// `Usage::prompt_cache_miss_tokens` is billed as ordinary non-cached input in
-/// current CodeWhale pricing rows. `cache_write` remains zero because the TUI
-/// `Usage` shape does not yet distinguish cache creation/write tokens from
-/// ordinary cache misses.
+/// `Usage::prompt_cache_miss_tokens` is billed as ordinary non-cached input.
+/// `Usage::prompt_cache_write_tokens` maps to `TokenUsage::cache_write` so
+/// providers that publish a write premium (Anthropic 1.25x–2x) are not
+/// undercounted.
 #[must_use]
 pub fn token_usage_for_pricing(usage: &Usage) -> TokenUsage {
     let cache_read = usage.prompt_cache_hit_tokens.unwrap_or(0);
-    let non_cached_reported = usage
-        .prompt_cache_miss_tokens
-        .unwrap_or_else(|| usage.input_tokens.saturating_sub(cache_read));
-    let accounted_input = cache_read.saturating_add(non_cached_reported);
+    let cache_write = usage.prompt_cache_write_tokens.unwrap_or(0);
+    let non_cached_reported = usage.prompt_cache_miss_tokens.unwrap_or_else(|| {
+        usage
+            .input_tokens
+            .saturating_sub(cache_read)
+            .saturating_sub(cache_write)
+    });
+    let accounted_input = cache_read
+        .saturating_add(non_cached_reported)
+        .saturating_add(cache_write);
     let uncategorized_input = usage.input_tokens.saturating_sub(accounted_input);
     let input = non_cached_reported.saturating_add(uncategorized_input);
     let output = usage
@@ -361,7 +427,7 @@ pub fn token_usage_for_pricing(usage: &Usage) -> TokenUsage {
         input: u64::from(input),
         output: u64::from(output),
         cache_read: u64::from(cache_read),
-        cache_write: 0,
+        cache_write: u64::from(cache_write),
     }
 }
 
@@ -369,8 +435,12 @@ fn calculate_turn_cost_from_usage_with_pricing(pricing: CurrencyPricing, usage: 
     let usage = token_usage_for_pricing(usage);
     let hit_cost = (usage.cache_read as f64 / 1_000_000.0) * pricing.input_cache_hit_per_million;
     let miss_cost = (usage.input as f64 / 1_000_000.0) * pricing.input_cache_miss_per_million;
+    let write_rate = pricing
+        .cache_write_per_million
+        .unwrap_or(pricing.input_cache_miss_per_million);
+    let write_cost = (usage.cache_write as f64 / 1_000_000.0) * write_rate;
     let output_cost = (usage.output as f64 / 1_000_000.0) * pricing.output_per_million;
-    hit_cost + miss_cost + output_cost
+    hit_cost + miss_cost + write_cost + output_cost
 }
 
 /// Estimate how much money was saved by serving `cache_hit_tokens` from the
@@ -517,6 +587,90 @@ mod tests {
             assert!(estimate.usd > 0.0, "expected positive USD for {model}");
             assert_eq!(estimate.cny, 0.0);
         }
+
+        // Anthropic / Qwen rows that publish a cache-write premium (#4318).
+        for (model, write) in [
+            ("claude-opus-4-8", Some(6.25)),
+            ("claude-sonnet-4-6", Some(3.75)),
+            ("claude-haiku-4-5", Some(1.25)),
+            ("claude-fable-5", Some(12.50)),
+            ("qwen/qwen3.7-plus", Some(0.40)),
+            ("gpt-5.5", None),
+        ] {
+            let pricing = pricing_for_model_at(model, Utc::now()).expect(model);
+            assert_eq!(
+                pricing.usd.cache_write_per_million, write,
+                "cache-write rate for {model}"
+            );
+        }
+    }
+
+    #[test]
+    fn cache_write_tokens_increase_anthropic_cost_estimate() {
+        let with_write = Usage {
+            input_tokens: 12_048,
+            output_tokens: 1,
+            prompt_cache_hit_tokens: Some(10_000),
+            prompt_cache_miss_tokens: Some(3),
+            prompt_cache_write_tokens: Some(2_045),
+            ..Default::default()
+        };
+        let write_as_miss = Usage {
+            input_tokens: 12_048,
+            output_tokens: 1,
+            prompt_cache_hit_tokens: Some(10_000),
+            prompt_cache_miss_tokens: Some(2_048),
+            prompt_cache_write_tokens: None,
+            ..Default::default()
+        };
+
+        let priced =
+            calculate_turn_cost_estimate_from_usage("claude-fable-5", &with_write).expect("priced");
+        let undercounted =
+            calculate_turn_cost_estimate_from_usage("claude-fable-5", &write_as_miss)
+                .expect("priced");
+        // 2045 write @ 12.50 vs same tokens @ miss 10.00 → ~0.005 USD premium.
+        assert!(
+            priced.usd > undercounted.usd,
+            "write premium should raise cost: priced={} undercounted={}",
+            priced.usd,
+            undercounted.usd
+        );
+        let expected_premium = (2_045.0 / 1_000_000.0) * (12.50 - 10.00);
+        assert!(
+            (priced.usd - undercounted.usd - expected_premium).abs() < 1e-9,
+            "premium delta mismatch: {}",
+            priced.usd - undercounted.usd
+        );
+    }
+
+    #[test]
+    fn catalog_pricing_uses_its_cache_write_rate() {
+        let offering = codewhale_config::catalog::CatalogOffering {
+            provider: "anthropic".to_string(),
+            wire_model_id: "catalog-priced-model".to_string(),
+            endpoint_key: "chat".to_string(),
+            cost: Some(codewhale_config::models_dev::ModelsDevCost {
+                input: Some(10.0),
+                output: Some(50.0),
+                cache_read: Some(1.0),
+                cache_write: Some(12.5),
+            }),
+            ..Default::default()
+        };
+        let usage = Usage {
+            input_tokens: 13,
+            output_tokens: 5,
+            prompt_cache_hit_tokens: Some(2),
+            prompt_cache_miss_tokens: Some(3),
+            prompt_cache_write_tokens: Some(8),
+            ..Default::default()
+        };
+
+        let estimate =
+            catalog_cost_estimate_from_offering(&offering, &usage).expect("catalog cost estimate");
+        assert!((estimate.usd - 0.000_382).abs() < 1e-15);
+        assert_eq!(estimate.cny, 0.0);
     }
 
     #[test]
@@ -526,6 +680,7 @@ mod tests {
             output_tokens: 100,
             prompt_cache_hit_tokens: Some(250),
             prompt_cache_miss_tokens: Some(700),
+            prompt_cache_write_tokens: Some(50),
             reasoning_tokens: Some(50),
             ..Default::default()
         };
@@ -533,10 +688,10 @@ mod tests {
         assert_eq!(
             token_usage_for_pricing(&usage),
             TokenUsage {
-                input: 750,
+                input: 700,
                 output: 150,
                 cache_read: 250,
-                cache_write: 0,
+                cache_write: 50,
             }
         );
     }
@@ -633,6 +788,7 @@ mod tests {
         assert_eq!(pricing.usd.input_cache_hit_per_million, 0.20);
         assert_eq!(pricing.usd.input_cache_miss_per_million, 2.00);
         assert_eq!(pricing.usd.output_per_million, 10.00);
+        assert_eq!(pricing.usd.cache_write_per_million, Some(2.50));
         assert!(pricing.cny.is_none());
     }
 
@@ -644,6 +800,7 @@ mod tests {
         assert_eq!(pricing.usd.input_cache_hit_per_million, 0.30);
         assert_eq!(pricing.usd.input_cache_miss_per_million, 3.00);
         assert_eq!(pricing.usd.output_per_million, 15.00);
+        assert_eq!(pricing.usd.cache_write_per_million, Some(3.75));
         assert!(pricing.cny.is_none());
         assert!(has_pricing_for_model("claude-sonnet-5"));
     }

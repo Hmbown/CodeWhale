@@ -108,6 +108,10 @@ impl TurnContext {
             self.usage.prompt_cache_miss_tokens,
             usage.prompt_cache_miss_tokens,
         );
+        self.usage.prompt_cache_write_tokens = add_optional_usage(
+            self.usage.prompt_cache_write_tokens,
+            usage.prompt_cache_write_tokens,
+        );
         self.usage.reasoning_tokens =
             add_optional_usage(self.usage.reasoning_tokens, usage.reasoning_tokens);
     }

@@ -2069,8 +2069,8 @@ impl Engine {
         if let Some(hit_tokens) = usage.cache_read_input_tokens {
             line.push_str(&format!(", cache hits {hit_tokens}"));
         }
-        if let Some(miss_tokens) = usage.cache_creation_input_tokens {
-            line.push_str(&format!(", cache misses {miss_tokens}"));
+        if let Some(write_tokens) = usage.cache_creation_input_tokens {
+            line.push_str(&format!(", cache writes {write_tokens}"));
         }
         Some(line)
     }

@@ -407,6 +407,7 @@ fn accrue_child_token_cost_if_any(app: &mut App, result: &Result<ToolResult, Too
         output_tokens: u32::try_from(output_tokens).unwrap_or(u32::MAX),
         prompt_cache_hit_tokens,
         prompt_cache_miss_tokens,
+        prompt_cache_write_tokens: None,
         reasoning_tokens: None,
         reasoning_replay_tokens: None,
         server_tool_use: None,

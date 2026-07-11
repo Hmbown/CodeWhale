@@ -213,6 +213,10 @@ pub struct Usage {
     pub prompt_cache_hit_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_cache_miss_tokens: Option<u32>,
+    /// Cache-creation / cache-write tokens (Anthropic `cache_creation_input_tokens`).
+    /// Billed at the cache-write rate when the pricing row publishes one (#4318).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_write_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_tokens: Option<u32>,
     /// Approximate input tokens spent re-sending prior `reasoning_content`

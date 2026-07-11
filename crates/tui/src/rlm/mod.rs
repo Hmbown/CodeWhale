@@ -42,6 +42,10 @@ fn add_usage_with_prompt_cache(total: &mut Usage, delta: &Usage) {
         total.prompt_cache_miss_tokens,
         delta.prompt_cache_miss_tokens,
     );
+    total.prompt_cache_write_tokens = add_optional_usage(
+        total.prompt_cache_write_tokens,
+        delta.prompt_cache_write_tokens,
+    );
 }
 
 fn add_optional_usage(total: Option<u32>, delta: Option<u32>) -> Option<u32> {

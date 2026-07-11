@@ -11,10 +11,11 @@
 //!   CodeWhale's `reasoning_effort` tiers, sampling-parameter rules for
 //!   models that reject them, and `cache_control` breakpoint placement
 //!   aligned with the prefix-zone model in `prefix_cache.rs`;
-//! - usage normalization (#2961): `prompt_cache_hit_tokens` comes from
-//!   `cache_read_input_tokens`, `prompt_cache_miss_tokens` is `input_tokens`
-//!   plus `cache_creation_input_tokens`, and the normalized `input_tokens`
-//!   is the sum of all three (total prompt, the DeepSeek convention);
+//! - usage normalization (#2961 / #4318): `prompt_cache_hit_tokens` comes from
+//!   `cache_read_input_tokens`, `prompt_cache_write_tokens` from
+//!   `cache_creation_input_tokens`, `prompt_cache_miss_tokens` is the raw
+//!   non-cached `input_tokens`, and the normalized `input_tokens` is the sum
+//!   of all three (total prompt, the DeepSeek convention);
 //! - signed-thinking handling: `signature_delta` is captured into
 //!   [`crate::models::Delta::SignatureDelta`] and assistant thinking blocks
 //!   replay verbatim (signature included); unsigned thinking blocks are
@@ -496,8 +497,8 @@ fn convert_anthropic_sse_data(data: &str) -> Option<Result<StreamEvent>> {
 }
 
 /// Map Anthropic's usage payload onto the normalized [`Usage`] convention
-/// (#2961): hit = cache reads, miss = uncached input + cache writes,
-/// `input_tokens` = the total prompt across all three.
+/// (#2961 / #4318): hit = cache reads, write = cache creation, miss = raw
+/// uncached input, `input_tokens` = the total prompt across all three.
 fn parse_anthropic_usage(usage: &Value) -> Usage {
     let field = |name: &str| {
         usage
@@ -517,7 +518,8 @@ fn parse_anthropic_usage(usage: &Value) -> Usage {
             .saturating_add(cache_read),
         output_tokens: output,
         prompt_cache_hit_tokens: Some(cache_read),
-        prompt_cache_miss_tokens: Some(input_raw.saturating_add(cache_creation)),
+        prompt_cache_miss_tokens: Some(input_raw),
+        prompt_cache_write_tokens: Some(cache_creation),
         reasoning_tokens: None,
         reasoning_replay_tokens: None,
         server_tool_use: None,
@@ -852,7 +854,8 @@ mod tests {
         };
         assert_eq!(message.usage.input_tokens, 3 + 2045 + 18000);
         assert_eq!(message.usage.prompt_cache_hit_tokens, Some(18000));
-        assert_eq!(message.usage.prompt_cache_miss_tokens, Some(3 + 2045));
+        assert_eq!(message.usage.prompt_cache_miss_tokens, Some(3));
+        assert_eq!(message.usage.prompt_cache_write_tokens, Some(2045));
 
         assert!(matches!(
             &decoded[1],
@@ -927,6 +930,21 @@ mod tests {
         assert_eq!(usage.output_tokens, 5);
         assert_eq!(usage.prompt_cache_hit_tokens, Some(0));
         assert_eq!(usage.prompt_cache_miss_tokens, Some(10));
+        assert_eq!(usage.prompt_cache_write_tokens, Some(0));
+    }
+
+    #[test]
+    fn usage_mapping_keeps_cache_write_separate_from_miss() {
+        let usage = parse_anthropic_usage(&json!({
+            "input_tokens": 3,
+            "cache_creation_input_tokens": 2045,
+            "cache_read_input_tokens": 18000,
+            "output_tokens": 1,
+        }));
+        assert_eq!(usage.input_tokens, 3 + 2045 + 18000);
+        assert_eq!(usage.prompt_cache_hit_tokens, Some(18000));
+        assert_eq!(usage.prompt_cache_miss_tokens, Some(3));
+        assert_eq!(usage.prompt_cache_write_tokens, Some(2045));
     }
 
     #[test]

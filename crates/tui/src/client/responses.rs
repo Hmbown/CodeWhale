@@ -707,6 +707,7 @@ fn parse_responses_usage(val: &Value) -> Usage {
         output_tokens: output,
         prompt_cache_hit_tokens,
         prompt_cache_miss_tokens,
+        prompt_cache_write_tokens: None,
         reasoning_tokens,
         reasoning_replay_tokens: None,
         server_tool_use: None,

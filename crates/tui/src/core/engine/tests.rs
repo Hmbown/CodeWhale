@@ -5461,6 +5461,7 @@ fn turn_metadata_surfaces_context_and_resource_usage() {
         output_tokens: 300,
         prompt_cache_hit_tokens: Some(800),
         prompt_cache_miss_tokens: Some(400),
+        prompt_cache_write_tokens: Some(400),
         ..Default::default()
     });
     {
@@ -5487,7 +5488,7 @@ fn turn_metadata_surfaces_context_and_resource_usage() {
         "session usage should be model-visible: {text}"
     );
     assert!(text.contains("cache hits 800"), "got: {text}");
-    assert!(text.contains("cache misses 400"), "got: {text}");
+    assert!(text.contains("cache writes 400"), "got: {text}");
     assert!(
         text.contains("Active goal resource usage:"),
         "active goal resource usage should be model-visible: {text}"
