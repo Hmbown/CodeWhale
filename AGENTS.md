@@ -114,3 +114,37 @@
   (`gh issue list --repo Hmbown/CodeWhale --milestone "<current milestone>"`) and
   refresh state before acting. Older per-version triage docs under `docs/` are
   historical reference only.
+
+## Cursor Cloud specific instructions
+
+Standard build/test/run commands are already documented above and in
+`CONTRIBUTING.md`; this section only records the non-obvious cloud-VM caveats.
+
+- **System build dep:** the build needs `libdbus-1-dev` (pulled in by
+  `crates/secrets` for the OS keyring). It is installed by the startup update
+  script; if a `cargo build` fails with a `dbus`/`pkg-config` error, that dep is
+  missing.
+- **`rustup default` must be set:** some tests and runtime paths spawn shells in
+  temp dirs *outside* this checkout (e.g. `run_verifiers_background_*`, sub-agent
+  worktrees). Those spawned shells only see the repo's `rust-toolchain.toml`
+  override while inside `/workspace`, so without a global default they fail with
+  "rustup could not choose a version of rustc to run". The update script runs
+  `rustup default stable` to fix this.
+- **Known env-specific test failures at `/workspace` (not code bugs):** because
+  the checkout sits directly under `/`, two `codewhale-tui` subagent tests fail
+  here — `git_repo_root_reports_attempted_paths_when_no_repo_found` (cannot
+  create a temp dir in the unwritable parent `/`) and
+  `create_isolated_worktree_reports_friendly_error_when_no_repo_found` (walking
+  up to `/` discovers `/workspace` itself as a repo). Both pass when the repo is
+  checked out under a normal, writable parent. `run_verifiers_background_*` is
+  the separate pre-existing flake already noted above. Everything else in
+  `cargo test --workspace` passes (~6384 tests).
+- **Running the agent without provider API keys:** point CodeWhale at any local
+  OpenAI-compatible endpoint via the keyless `vllm`/`ollama`/`sglang` providers,
+  e.g. `CODEWHALE_PROVIDER=vllm VLLM_BASE_URL=http://127.0.0.1:8000/v1
+  VLLM_MODEL=<id> codewhale exec --auto "..."`. `codewhale exec` (add `--auto`
+  for tool use) is the non-interactive path to exercise the full agent loop.
+- **Dispatcher needs its sibling:** the `codewhale` binary shells out to a
+  sibling `codewhale-tui` in the same directory (both land in `target/debug`
+  after a build). If they are not co-located, set `DEEPSEEK_TUI_BIN` to the
+  `codewhale-tui` path.
