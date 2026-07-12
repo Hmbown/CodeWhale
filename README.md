@@ -155,7 +155,7 @@ you want isn't here, that's a good issue to open.
 
 - **Open models, hosted:** `deepseek` (the default), `openrouter`,
   `huggingface` (Inference Providers), `moonshot` (Kimi), `zai` (GLM),
-  `minimax`, `volcengine` (Ark), `nvidia-nim`, `together`, `fireworks`,
+  `minimax` / `minimax-anthropic`, `volcengine` (Ark), `nvidia-nim`, `together`, `fireworks`,
   `novita`, `siliconflow` / `siliconflow-CN`, `arcee`, `xiaomi-mimo`,
   `openmodel`, `deepinfra`, `stepfun`, `atlascloud`, `qianfan`, `wanjie-ark`, plus a generic
   `openai`-compatible route for any gateway.

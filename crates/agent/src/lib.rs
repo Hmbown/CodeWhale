@@ -777,6 +777,28 @@ impl Default for ModelRegistry {
                 supports_reasoning: true,
             },
             ModelInfo {
+                id: "MiniMax-M3".to_string(),
+                provider: ProviderKind::MinimaxAnthropic,
+                aliases: vec![
+                    "minimax-anthropic".to_string(),
+                    "minimax-anthropic-m3".to_string(),
+                    "minimax-m3".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "MiniMax-M2.7".to_string(),
+                provider: ProviderKind::MinimaxAnthropic,
+                aliases: vec![
+                    "minimax-anthropic-m2.7".to_string(),
+                    "minimax-anthropic-m2-7".to_string(),
+                    "minimax-m2.7".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
                 id: "MiniMax-M2.7-highspeed".to_string(),
                 provider: ProviderKind::Minimax,
                 aliases: vec![
@@ -1561,6 +1583,7 @@ mod tests {
             (ProviderKind::Zai, "GLM-5.2"),
             (ProviderKind::Stepfun, "step-3.7-flash"),
             (ProviderKind::Minimax, "MiniMax-M2.1"),
+            (ProviderKind::MinimaxAnthropic, "MiniMax-M3"),
             (ProviderKind::Openmodel, "deepseek-v4-flash"),
             (ProviderKind::Meta, "muse-spark-1.1"),
             (ProviderKind::Xai, "grok-4.5"),
@@ -1654,6 +1677,25 @@ mod tests {
             let resolved = registry.resolve(Some(alias), Some(ProviderKind::Minimax));
 
             assert_eq!(resolved.resolved.provider, ProviderKind::Minimax);
+            assert_eq!(resolved.resolved.id, expected);
+            assert!(!resolved.used_fallback);
+            assert!(resolved.resolved.supports_tools);
+            assert!(resolved.resolved.supports_reasoning);
+        }
+    }
+
+    #[test]
+    fn minimax_anthropic_models_resolve_when_provider_hinted() {
+        let registry = ModelRegistry::default();
+
+        for (alias, expected) in [
+            ("minimax-anthropic", "MiniMax-M3"),
+            ("minimax-m3", "MiniMax-M3"),
+            ("minimax-m2.7", "MiniMax-M2.7"),
+        ] {
+            let resolved = registry.resolve(Some(alias), Some(ProviderKind::MinimaxAnthropic));
+
+            assert_eq!(resolved.resolved.provider, ProviderKind::MinimaxAnthropic);
             assert_eq!(resolved.resolved.id, expected);
             assert!(!resolved.used_fallback);
             assert!(resolved.resolved.supports_tools);

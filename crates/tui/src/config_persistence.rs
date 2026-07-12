@@ -378,6 +378,7 @@ fn provider_base_url_table_key(provider: ApiProvider) -> anyhow::Result<&'static
         ApiProvider::Zai => Ok("zai"),
         ApiProvider::Stepfun => Ok("stepfun"),
         ApiProvider::Minimax => Ok("minimax"),
+        ApiProvider::MinimaxAnthropic => Ok("minimax_anthropic"),
         ApiProvider::Sakana => Ok("sakana"),
         ApiProvider::LongCat => Ok("longcat"),
         ApiProvider::Meta => Ok("meta"),

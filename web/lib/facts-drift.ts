@@ -103,6 +103,7 @@ function deriveProvidersFromConfig(cfg: string): ProviderFact[] {
     Zai: { id: "zai", label: "Z.ai", env: "ZAI_API_KEY / Z_AI_API_KEY" },
     Stepfun: { id: "stepfun", label: "StepFun", env: "STEPFUN_API_KEY / STEP_API_KEY" },
     Minimax: { id: "minimax", label: "MiniMax", env: "MINIMAX_API_KEY" },
+    MinimaxAnthropic: { id: "minimax-anthropic", label: "MiniMax (Anthropic-compatible)", env: "MINIMAX_API_KEY" },
     Openmodel: { id: "openmodel", label: "OpenModel", env: "OPENMODEL_API_KEY" },
     Sakana: { id: "sakana", label: "Sakana AI", env: "FUGU_API_KEY / SAKANA_API_KEY" },
     LongCat: { id: "longcat", label: "LongCat", env: "LONGCAT_API_KEY" },

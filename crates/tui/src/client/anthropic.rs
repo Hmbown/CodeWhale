@@ -960,5 +960,9 @@ mod tests {
             anthropic_messages_url("https://api.deepseek.com/anthropic"),
             "https://api.deepseek.com/anthropic/v1/messages"
         );
+        assert_eq!(
+            anthropic_messages_url("https://api.minimax.io/anthropic"),
+            "https://api.minimax.io/anthropic/v1/messages"
+        );
     }
 }

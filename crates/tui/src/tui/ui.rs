@@ -9763,7 +9763,9 @@ fn render(f: &mut Frame, app: &mut App, config: &Config) {
             crate::config::ApiProvider::OpenaiCodex => Some("Codex"),
             crate::config::ApiProvider::Zai => Some("Z.ai"),
             crate::config::ApiProvider::Stepfun => Some("StepFun"),
-            crate::config::ApiProvider::Minimax => Some("MiniMax"),
+            crate::config::ApiProvider::Minimax | crate::config::ApiProvider::MinimaxAnthropic => {
+                Some("MiniMax")
+            }
             crate::config::ApiProvider::Sakana => Some("Sakana"),
             crate::config::ApiProvider::LongCat => Some("Meituan LongCat"),
             crate::config::ApiProvider::Meta => Some("Meta"),
@@ -11793,6 +11795,7 @@ fn mirror_saved_api_key_in_config(config: &mut Config, provider: ApiProvider, ap
         ApiProvider::Zai => &mut providers.zai,
         ApiProvider::Stepfun => &mut providers.stepfun,
         ApiProvider::Minimax => &mut providers.minimax,
+        ApiProvider::MinimaxAnthropic => &mut providers.minimax_anthropic,
         ApiProvider::Sakana => &mut providers.sakana,
         ApiProvider::LongCat => &mut providers.longcat,
         ApiProvider::Meta => &mut providers.meta,
@@ -11918,6 +11921,7 @@ fn set_provider_auth_mode_in_memory(config: &mut Config, provider: ApiProvider, 
         ApiProvider::Zai => &mut providers.zai,
         ApiProvider::Stepfun => &mut providers.stepfun,
         ApiProvider::Minimax => &mut providers.minimax,
+        ApiProvider::MinimaxAnthropic => &mut providers.minimax_anthropic,
         ApiProvider::Sakana => &mut providers.sakana,
         ApiProvider::LongCat => &mut providers.longcat,
         ApiProvider::Meta => &mut providers.meta,

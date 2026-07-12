@@ -99,6 +99,12 @@ pub enum ProviderKind {
     Stepfun,
     #[serde(alias = "mini-max", alias = "mini_max", alias = "minimax")]
     Minimax,
+    #[serde(
+        alias = "minimax_anthropic",
+        alias = "mini-max-anthropic",
+        alias = "mini_max_anthropic"
+    )]
+    MinimaxAnthropic,
     #[serde(alias = "deep-infra", alias = "deep_infra")]
     Deepinfra,
     #[serde(alias = "sakana-ai", alias = "sakana_ai", alias = "fugu")]
@@ -127,7 +133,7 @@ pub enum ProviderKind {
 }
 
 impl ProviderKind {
-    pub const ALL: [Self; 33] = [
+    pub const ALL: [Self; 34] = [
         Self::Deepseek,
         Self::DeepseekAnthropic,
         Self::NvidiaNim,
@@ -155,6 +161,7 @@ impl ProviderKind {
         Self::Zai,
         Self::Stepfun,
         Self::Minimax,
+        Self::MinimaxAnthropic,
         Self::Deepinfra,
         Self::Sakana,
         Self::LongCat,

@@ -186,6 +186,11 @@ fn known_pricing_for_model(model_lower: &str) -> Option<ModelPricing> {
         // Moonshot K2.7 Code cache-read rate per
         // https://platform.kimi.ai/docs/pricing/chat-k27-code
         "moonshotai/kimi-k2.7-code" | "kimi-k2.7-code" => Some(usd_only_pricing(0.19, 0.95, 4.00)),
+        // MiniMax cache-read pricing. Cache-write is not represented by
+        // CurrencyPricing yet, so only the supported fields are populated.
+        "minimax/minimax-m3" | "minimax-m3" | "minimax/minimax-m2.7" | "minimax-m2.7" => {
+            Some(usd_only_pricing(0.06, 0.30, 1.20))
+        }
         // gpt-5-codex is deprecated upstream on the ChatGPT-OAuth path
         // (successor: gpt-5.3-codex); API usage is still billed at these rates.
         // https://developers.openai.com/api/docs/models/gpt-5.3-codex
@@ -210,7 +215,6 @@ fn known_pricing_for_model(model_lower: &str) -> Option<ModelPricing> {
         "z-ai/glm-5.1" | "glm-5.1" => Some(usd_only_pricing(0.26, 1.40, 4.40)),
         // GLM-5 Turbo pricing per https://docs.z.ai/guides/overview/pricing
         "z-ai/glm-5-turbo" | "glm-5-turbo" => Some(usd_only_pricing(0.24, 1.20, 4.00)),
-        "minimax/minimax-m3" | "minimax-m3" => Some(usd_only_pricing(0.06, 0.30, 1.20)),
         // Arcee publishes no cache rate for Trinity Large Thinking, so the
         // cache-hit rate equals the input rate (no-discount representation).
         // https://docs.arcee.ai/get-started/pricing
@@ -464,6 +468,16 @@ mod tests {
             assert_eq!(pricing.usd.input_cache_miss_per_million, input, "{model}");
             assert_eq!(pricing.usd.output_per_million, output, "{model}");
             assert!(has_pricing_for_model(model));
+        }
+    }
+
+    #[test]
+    fn minimax_target_models_use_cache_read_discount() {
+        for model in ["minimax-m3", "minimax-m2.7"] {
+            let pricing = pricing_for_model_at(model, Utc::now()).expect(model);
+            assert_eq!(pricing.usd.input_cache_hit_per_million, 0.06, "{model}");
+            assert_eq!(pricing.usd.input_cache_miss_per_million, 0.30, "{model}");
+            assert_eq!(pricing.usd.output_per_million, 1.20, "{model}");
         }
     }
 

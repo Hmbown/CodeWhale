@@ -845,6 +845,7 @@ struct EnvGuard {
     stepfun_model: Option<OsString>,
     minimax_api_key: Option<OsString>,
     minimax_base_url: Option<OsString>,
+    minimax_anthropic_base_url: Option<OsString>,
     minimax_model: Option<OsString>,
     sakana_api_key: Option<OsString>,
     fugu_api_key: Option<OsString>,
@@ -977,6 +978,7 @@ impl EnvGuard {
             stepfun_model: env::var_os("STEPFUN_MODEL"),
             minimax_api_key: env::var_os("MINIMAX_API_KEY"),
             minimax_base_url: env::var_os("MINIMAX_BASE_URL"),
+            minimax_anthropic_base_url: env::var_os("MINIMAX_ANTHROPIC_BASE_URL"),
             minimax_model: env::var_os("MINIMAX_MODEL"),
             sakana_api_key: env::var_os("SAKANA_API_KEY"),
             fugu_api_key: env::var_os("FUGU_API_KEY"),
@@ -1095,6 +1097,7 @@ impl EnvGuard {
             env::remove_var("STEPFUN_MODEL");
             env::remove_var("MINIMAX_API_KEY");
             env::remove_var("MINIMAX_BASE_URL");
+            env::remove_var("MINIMAX_ANTHROPIC_BASE_URL");
             env::remove_var("MINIMAX_MODEL");
             env::remove_var("SAKANA_API_KEY");
             env::remove_var("FUGU_API_KEY");
@@ -1248,6 +1251,10 @@ impl Drop for EnvGuard {
             Self::restore_var("STEPFUN_MODEL", self.stepfun_model.take());
             Self::restore_var("MINIMAX_API_KEY", self.minimax_api_key.take());
             Self::restore_var("MINIMAX_BASE_URL", self.minimax_base_url.take());
+            Self::restore_var(
+                "MINIMAX_ANTHROPIC_BASE_URL",
+                self.minimax_anthropic_base_url.take(),
+            );
             Self::restore_var("MINIMAX_MODEL", self.minimax_model.take());
             Self::restore_var("SAKANA_API_KEY", self.sakana_api_key.take());
             Self::restore_var("FUGU_API_KEY", self.fugu_api_key.take());
@@ -4157,6 +4164,11 @@ fn zai_stepfun_minimax_and_sakana_default_to_first_party_routes() {
             DEFAULT_MINIMAX_MODEL,
         ),
         (
+            ProviderKind::MinimaxAnthropic,
+            DEFAULT_MINIMAX_ANTHROPIC_BASE_URL,
+            DEFAULT_MINIMAX_MODEL,
+        ),
+        (
             ProviderKind::Sakana,
             DEFAULT_SAKANA_BASE_URL,
             DEFAULT_SAKANA_MODEL,
@@ -4240,6 +4252,29 @@ fn minimax_env_model_override_canonicalizes_known_aliases() {
 
     assert_eq!(resolved.provider, ProviderKind::Minimax);
     assert_eq!(resolved.model, "MiniMax-M2.5-highspeed");
+}
+
+#[test]
+fn minimax_anthropic_env_overrides_use_messages_base_url() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+    unsafe {
+        env::set_var("CODEWHALE_PROVIDER", "minimax-anthropic");
+        env::set_var(
+            "MINIMAX_ANTHROPIC_BASE_URL",
+            "https://messages.minimax.example/anthropic",
+        );
+        env::set_var("MINIMAX_MODEL", "MiniMax-M2.7");
+    }
+
+    let resolved = ConfigToml::default().resolve_runtime_options(&CliRuntimeOverrides::default());
+
+    assert_eq!(resolved.provider, ProviderKind::MinimaxAnthropic);
+    assert_eq!(
+        resolved.base_url,
+        "https://messages.minimax.example/anthropic"
+    );
+    assert_eq!(resolved.model, "MiniMax-M2.7");
 }
 
 #[test]

@@ -227,6 +227,15 @@ pub struct ProvidersToml {
     #[serde(
         default,
         skip_serializing_if = "ProviderConfigToml::is_empty",
+        alias = "minimax-anthropic",
+        alias = "minimaxAnthropic",
+        alias = "mini-max-anthropic",
+        alias = "mini_max_anthropic"
+    )]
+    pub minimax_anthropic: ProviderConfigToml,
+    #[serde(
+        default,
+        skip_serializing_if = "ProviderConfigToml::is_empty",
         alias = "deep-infra",
         alias = "deep_infra"
     )]
@@ -369,6 +378,7 @@ impl ProvidersToml {
             ProviderKind::Zai => &self.zai,
             ProviderKind::Stepfun => &self.stepfun,
             ProviderKind::Minimax => &self.minimax,
+            ProviderKind::MinimaxAnthropic => &self.minimax_anthropic,
             ProviderKind::Deepinfra => &self.deepinfra,
             ProviderKind::Sakana => &self.sakana,
             ProviderKind::LongCat => &self.longcat,
@@ -407,6 +417,7 @@ impl ProvidersToml {
             ProviderKind::Zai => &mut self.zai,
             ProviderKind::Stepfun => &mut self.stepfun,
             ProviderKind::Minimax => &mut self.minimax,
+            ProviderKind::MinimaxAnthropic => &mut self.minimax_anthropic,
             ProviderKind::Deepinfra => &mut self.deepinfra,
             ProviderKind::Sakana => &mut self.sakana,
             ProviderKind::LongCat => &mut self.longcat,
@@ -2260,6 +2271,7 @@ impl ConfigToml {
                 ProviderKind::Zai => DEFAULT_ZAI_BASE_URL.to_string(),
                 ProviderKind::Stepfun => DEFAULT_STEPFUN_BASE_URL.to_string(),
                 ProviderKind::Minimax => DEFAULT_MINIMAX_BASE_URL.to_string(),
+                ProviderKind::MinimaxAnthropic => DEFAULT_MINIMAX_ANTHROPIC_BASE_URL.to_string(),
                 ProviderKind::Deepinfra => DEFAULT_DEEPINFRA_BASE_URL.to_string(),
                 ProviderKind::Sakana => DEFAULT_SAKANA_BASE_URL.to_string(),
                 ProviderKind::LongCat => DEFAULT_LONGCAT_BASE_URL.to_string(),
@@ -2495,8 +2507,10 @@ fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
     {
         return canonical.to_string();
     }
-    if matches!(provider, ProviderKind::Minimax)
-        && let Some(canonical) = canonical_minimax_model_id(model)
+    if matches!(
+        provider,
+        ProviderKind::Minimax | ProviderKind::MinimaxAnthropic
+    ) && let Some(canonical) = canonical_minimax_model_id(model)
     {
         return canonical.to_string();
     }
@@ -2515,6 +2529,7 @@ fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
             | ProviderKind::Zai
             | ProviderKind::Stepfun
             | ProviderKind::Minimax
+            | ProviderKind::MinimaxAnthropic
             | ProviderKind::Qianfan
             | ProviderKind::Ollama
             | ProviderKind::Meta
@@ -2840,7 +2855,7 @@ fn default_model_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Openmodel => DEFAULT_OPENMODEL_MODEL,
         ProviderKind::Zai => DEFAULT_ZAI_MODEL,
         ProviderKind::Stepfun => DEFAULT_STEPFUN_MODEL,
-        ProviderKind::Minimax => DEFAULT_MINIMAX_MODEL,
+        ProviderKind::Minimax | ProviderKind::MinimaxAnthropic => DEFAULT_MINIMAX_MODEL,
         ProviderKind::Deepinfra => DEFAULT_DEEPINFRA_MODEL,
         ProviderKind::Sakana => DEFAULT_SAKANA_MODEL,
         ProviderKind::LongCat => DEFAULT_LONGCAT_MODEL,
@@ -2880,6 +2895,7 @@ fn default_base_url_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Zai => DEFAULT_ZAI_BASE_URL,
         ProviderKind::Stepfun => DEFAULT_STEPFUN_BASE_URL,
         ProviderKind::Minimax => DEFAULT_MINIMAX_BASE_URL,
+        ProviderKind::MinimaxAnthropic => DEFAULT_MINIMAX_ANTHROPIC_BASE_URL,
         ProviderKind::Deepinfra => DEFAULT_DEEPINFRA_BASE_URL,
         ProviderKind::Sakana => DEFAULT_SAKANA_BASE_URL,
         ProviderKind::LongCat => DEFAULT_LONGCAT_BASE_URL,
@@ -4423,6 +4439,7 @@ struct EnvRuntimeOverrides {
     stepfun_base_url: Option<String>,
     stepfun_model: Option<String>,
     minimax_base_url: Option<String>,
+    minimax_anthropic_base_url: Option<String>,
     minimax_model: Option<String>,
     deepinfra_base_url: Option<String>,
     deepinfra_model: Option<String>,
@@ -4657,6 +4674,9 @@ impl EnvRuntimeOverrides {
             minimax_base_url: std::env::var("MINIMAX_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            minimax_anthropic_base_url: std::env::var("MINIMAX_ANTHROPIC_BASE_URL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
             minimax_model: std::env::var("MINIMAX_MODEL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
@@ -4749,6 +4769,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::Zai => self.zai_base_url.clone(),
             ProviderKind::Stepfun => self.stepfun_base_url.clone(),
             ProviderKind::Minimax => self.minimax_base_url.clone(),
+            ProviderKind::MinimaxAnthropic => self.minimax_anthropic_base_url.clone(),
             ProviderKind::Deepinfra => self.deepinfra_base_url.clone(),
             ProviderKind::Sakana => self.sakana_base_url.clone(),
             ProviderKind::LongCat => self.longcat_base_url.clone(),
@@ -4781,7 +4802,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::Openmodel => self.openmodel_model.clone(),
             ProviderKind::Zai => self.zai_model.clone(),
             ProviderKind::Stepfun => self.stepfun_model.clone(),
-            ProviderKind::Minimax => self.minimax_model.clone(),
+            ProviderKind::Minimax | ProviderKind::MinimaxAnthropic => self.minimax_model.clone(),
             ProviderKind::Deepinfra => self.deepinfra_model.clone(),
             ProviderKind::Sakana => self.sakana_model.clone(),
             ProviderKind::LongCat => self.longcat_model.clone(),
