@@ -3,11 +3,11 @@ import type { Metadata } from "next";
 /** Canonical origin for the production site (no trailing slash). */
 export const SITE_URL = "https://codewhale.net";
 
-export const SITE_NAME = "CodeWhale";
+export const SITE_NAME = "Codewhale";
 
 /** The one-line product identity, used as the default OG image alt text. */
 export const IDENTITY_PHRASE =
-  "The calm, provider-honest terminal coding agent for any model — open models first.";
+  "Documentation and source for the open-source Codewhale terminal coding runtime.";
 
 /** Shared OG card rendered by app/opengraph-image.tsx (1200×630 PNG). */
 const OG_IMAGE = {

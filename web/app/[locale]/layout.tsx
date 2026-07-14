@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
-import { Fraunces, IBM_Plex_Sans, JetBrains_Mono, Noto_Serif_SC } from "next/font/google";
+import { IBM_Plex_Sans, JetBrains_Mono, Noto_Serif_SC, Space_Grotesk } from "next/font/google";
 import { Nav } from "@/components/nav";
 import { Footer } from "@/components/footer";
 import { locales, type Locale } from "@/lib/i18n/config";
 import { buildPageMetadata } from "@/lib/page-meta";
 import "../globals.css";
 
-const display = Fraunces({
+const display = Space_Grotesk({
   subsets: ["latin"],
   weight: ["400", "500", "600", "700"],
   variable: "--font-display",
@@ -47,11 +47,11 @@ export async function generateMetadata({ params }: { params: Promise<{ locale: s
     path: "/",
     locale,
     title: isZh
-      ? "CodeWhale — 适配任意模型的终端编程智能体，开放模型优先"
-      : "CodeWhale — the terminal coding agent for any model, open models first",
+      ? "Codewhale 文档与开源运行时"
+      : "Codewhale documentation and open-source runtime",
     description: isZh
-      ? "开源终端编程智能体：适配任意模型，开放模型优先。从 DeepSeek、本地 vLLM/Ollama 到原生 Claude 与 OpenAI，内置审批制工具、沙箱隔离与 /restore 回滚。"
-      : "Open-source terminal coding agent for any model, open models first: provider-honest routing from DeepSeek and local vLLM/Ollama to native Claude and OpenAI, with approval-gated tools, sandboxing, rollback, and durable Fleet/Workflow runs.",
+      ? "安装 Codewhale，并查找有关模式、权限、工具、提供商、配置、运行时 API 和社区贡献的准确文档。"
+      : "Install Codewhale and find precise documentation for modes, permissions, tools, providers, configuration, the runtime API, and community contributions.",
   });
 }
 

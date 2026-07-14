@@ -56,7 +56,7 @@ export function MobileMenu({
       {open && (
         <div
           id="mobile-menu"
-          className="md:hidden fixed inset-x-0 top-[5.7rem] bottom-0 z-40 bg-paper hairline-t overflow-y-auto"
+          className="md:hidden fixed inset-x-0 top-[4.25rem] bottom-0 z-40 bg-paper hairline-t overflow-y-auto"
           role="dialog"
           aria-modal="true"
         >

@@ -2,38 +2,44 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ---------- root tokens — DeepSeek-aligned ---------- */
+/* ---------- root tokens — Codewhale ocean ---------- */
 :root {
   /* RGB channel triples backing the Tailwind surface/ink tokens (see
      tailwind.config.ts). These carry the same light values as the hex vars
      below; the docs routes override them for dark mode. */
-  --c-paper: 255 255 255;
-  --c-paper-deep: 244 246 251;
-  --c-paper-edge: 229 232 240;
-  --c-ink: 14 14 16;
-  --c-ink-soft: 46 46 51;
-  --c-ink-mute: 107 114 128;
+  --c-paper: 247 248 250;
+  --c-paper-deep: 239 241 245;
+  --c-paper-edge: 221 226 234;
+  --c-ink: 27 34 48;
+  --c-ink-soft: 76 85 103;
+  --c-ink-mute: 105 116 138;
 
-  --paper: #ffffff;
-  --paper-deep: #f4f6fb;
-  --paper-edge: #e5e8f0;
-  --paper-line: #0e0e10;
-  --paper-line-soft: #d4d8e2;
-  --ink: #0e0e10;
-  --ink-soft: #2e2e33;
-  --ink-mute: #6b7280;
-  --indigo: #4d6bfe;
-  --indigo-deep: #3a52cc;
-  --indigo-pale: #e9eefe;
-  --ochre: #9c7a3f;
-  --jade: #0ab68b;
-  --cobalt: #1f3a8a;
+  --paper: #f7f8fa;
+  --paper-deep: #eff1f5;
+  --paper-edge: #dde2ea;
+  --paper-line: #1b2230;
+  --paper-line-soft: #cbd3df;
+  --ink: #1b2230;
+  --ink-soft: #4c5567;
+  --ink-mute: #69748a;
+  --indigo: #355e70;
+  --indigo-deep: #274a5a;
+  --indigo-pale: #e2ecef;
+  --ochre: #b58b59;
+  --jade: #18a78b;
+  --cobalt: #1a2944;
+  --ocean-deep: #081221;
+  --ocean-mid: #111d32;
+  --ocean-current: #d1ebf4;
+  --ocean-mist: #e9edf1;
+  --ocean-coral: #ff7a59;
+  --signal-gold: #f6c453;
 
   /* Hairline + code surfaces routed through vars so the docs dark theme can
      lighten hairlines and raise the code panel without touching every rule. */
-  --hairline: rgba(14, 14, 16, 0.18);
-  --code-bg: #0e0e10;
-  --code-fg: #e6e8f0;
+  --hairline: rgba(20, 35, 70, 0.14);
+  --code-bg: #081221;
+  --code-fg: #d1ebf4;
 }
 
 /* ---------- base ---------- */
@@ -77,7 +83,7 @@ body {
 main, header, footer, nav { position: relative; z-index: 1; }
 
 /* ---------- type ---------- */
-.font-display { font-family: var(--font-display), "Fraunces", "Noto Serif SC", Georgia, serif; }
+.font-display { font-family: var(--font-display), "Space Grotesk", "Noto Sans SC", system-ui, sans-serif; }
 .font-cjk { font-family: "Noto Serif SC", "Source Han Serif SC", serif; }
 
 /* CJK paragraph rhythm — looser leading, wider tracking for body; tighter for headings */
@@ -100,14 +106,14 @@ main, header, footer, nav { position: relative; z-index: 1; }
 .font-mono { font-family: var(--font-mono), "JetBrains Mono", ui-monospace, monospace; }
 
 h1, h2, h3, h4 {
-  font-family: var(--font-display), "Fraunces", "Noto Serif SC", Georgia, serif;
+  font-family: var(--font-display), "Space Grotesk", "Noto Sans SC", system-ui, sans-serif;
   font-weight: 600;
-  letter-spacing: -0.018em;
+  letter-spacing: -0.03em;
   color: var(--ink);
 }
 
-h1 { font-size: clamp(2.1rem, 5vw, 4.2rem); line-height: 1; word-break: keep-all; overflow-wrap: anywhere; }
-h2 { font-size: clamp(1.5rem, 2.8vw, 2.4rem); line-height: 1.1; word-break: keep-all; overflow-wrap: anywhere; }
+h1 { font-size: clamp(2.25rem, 5vw, 4.75rem); line-height: 0.98; word-break: keep-all; overflow-wrap: anywhere; }
+h2 { font-size: clamp(1.5rem, 2.8vw, 2.6rem); line-height: 1.08; word-break: keep-all; overflow-wrap: anywhere; }
 h3 { font-size: 1.18rem; line-height: 1.25; }
 
 @media (max-width: 640px) {
@@ -219,7 +225,7 @@ h3 { font-size: 1.18rem; line-height: 1.25; }
 /* ---------- numbers ---------- */
 .tabular { font-variant-numeric: tabular-nums; }
 .bignum {
-  font-family: var(--font-display), "Fraunces", serif;
+  font-family: var(--font-body), "IBM Plex Sans", system-ui, sans-serif;
   font-weight: 600;
   font-size: 2.2rem;
   line-height: 1;
@@ -268,10 +274,65 @@ code.inline {
 }
 
 /* ---------- nav link ---------- */
+.site-nav {
+  position: sticky;
+  z-index: 30;
+  top: 0;
+  border-bottom: 1px solid var(--hairline);
+  background: rgba(247, 248, 250, 0.98);
+}
+
+.site-nav-inner {
+  display: flex;
+  width: min(100% - 2.5rem, 74rem);
+  min-height: 4.25rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2rem;
+  margin-inline: auto;
+}
+
+.site-wordmark {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.7rem;
+  color: var(--ink);
+  font-family: var(--font-display), "Space Grotesk", system-ui, sans-serif;
+  font-size: 1.15rem;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+
+.site-wordmark svg { color: var(--signal-gold); }
+
+.site-nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.site-github-link,
+.site-install-link {
+  display: inline-flex;
+  min-height: 2.25rem;
+  align-items: center;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  font-family: var(--font-body), "IBM Plex Sans", system-ui, sans-serif;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.site-github-link:hover { border-color: var(--ink); }
+.site-install-link { border-color: rgba(20, 35, 70, 0.17); background: linear-gradient(180deg, var(--indigo), var(--indigo-deep)); color: #fff; }
+.site-install-link:hover { border-color: var(--indigo-deep); background: var(--indigo-deep); }
+
 .nav-link {
-  font-family: var(--font-mono), monospace;
+  font-family: var(--font-body), "IBM Plex Sans", system-ui, sans-serif;
   font-size: 0.78rem;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
   color: var(--ink);
   position: relative;
   padding: 0.25rem 0;
@@ -287,6 +348,57 @@ code.inline {
   transition: transform 180ms ease;
 }
 .nav-link:hover::after, .nav-link[aria-current="page"]::after { transform: scaleX(1); }
+
+/* ---------- footer ---------- */
+.site-footer {
+  border-top: 1px solid rgba(215, 233, 236, 0.13);
+  background: var(--ocean-deep);
+  color: #d7e9ec;
+}
+
+.site-footer-main,
+.site-footer-meta {
+  width: min(100% - 2.5rem, 74rem);
+  margin-inline: auto;
+}
+
+.site-footer-main {
+  display: grid;
+  grid-template-columns: minmax(16rem, 1.25fr) minmax(18rem, 0.75fr);
+  gap: 4rem;
+  padding-block: 2.8rem;
+}
+
+.site-wordmark-footer,
+.site-wordmark-footer span { color: #edf8f9; }
+.site-wordmark-footer svg { color: var(--signal-gold); }
+.site-footer-brand p { max-width: 30rem; margin-top: 0.8rem; color: rgba(215, 233, 236, 0.62); font-size: 0.86rem; line-height: 1.6; }
+
+.site-footer-links {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2rem;
+}
+
+.site-footer-links > div { display: flex; flex-direction: column; gap: 0.55rem; }
+.site-footer-links span { margin-bottom: 0.25rem; color: var(--ocean-current); font-family: var(--font-mono), "JetBrains Mono", monospace; font-size: 0.64rem; letter-spacing: 0.1em; text-transform: uppercase; }
+.site-footer-links a { color: rgba(215, 233, 236, 0.76); font-size: 0.82rem; }
+.site-footer-links a:hover { color: #edf8f9; }
+
+.site-footer-meta {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 1.5rem;
+  align-items: center;
+  padding-block: 1rem;
+  border-top: 1px solid rgba(215, 233, 236, 0.13);
+  color: rgba(215, 233, 236, 0.5);
+  font-family: var(--font-mono), "JetBrains Mono", monospace;
+  font-size: 0.62rem;
+}
+
+.site-footer-meta a:hover { color: var(--ocean-current); }
+.site-footer-meta > div { display: flex; gap: 1rem; }
 
 /* ---------- ticker ---------- */
 .ticker-track {
@@ -374,8 +486,427 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   .ticker-track { gap: 1.5rem; padding-right: 1.5rem; }
 }
 
+@media (max-width: 900px) {
+  .site-nav-inner { gap: 1rem; }
+  .site-github-link { display: none; }
+  .site-footer-main { grid-template-columns: 1fr; gap: 2.5rem; }
+  .site-footer-meta { grid-template-columns: 1fr; gap: 0.7rem; }
+}
+
+@media (max-width: 700px) {
+  .site-nav-inner,
+  .site-footer-main,
+  .site-footer-meta { width: min(100% - 2rem, 74rem); }
+  .site-install-link { display: none; }
+  .site-wordmark { font-size: 1.05rem; }
+}
+
 /* Anchor fallback; page-level scroll-mt utilities should be able to override it. */
 :where([id]) { scroll-margin-top: 5rem; }
+
+/* ------------------------------------------------------------------ */
+/*  Documentation-led public home                                    */
+/* ------------------------------------------------------------------ */
+
+.portal-home {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.portal-container {
+  width: min(100% - 2.5rem, 72rem);
+  margin-inline: auto;
+}
+
+.portal-hero {
+  position: relative;
+  overflow: hidden;
+  border-bottom: 1px solid var(--hairline);
+  background:
+    radial-gradient(circle at 84% 8%, rgba(125, 177, 197, 0.15), transparent 28rem),
+    linear-gradient(180deg, #ffffff 0%, var(--ocean-mist) 100%);
+}
+
+.portal-current {
+  position: absolute;
+  inset: 0;
+  opacity: 0.22;
+  pointer-events: none;
+  background-image: repeating-radial-gradient(
+    ellipse 82% 44% at 24% -22%,
+    transparent 0,
+    transparent 2.7rem,
+    rgba(104, 143, 157, 0.18) 2.76rem,
+    transparent 2.83rem
+  );
+  mask-image: linear-gradient(to bottom, transparent, black 24%, black 72%, transparent);
+}
+
+.portal-hero-grid {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1.12fr) minmax(20rem, 0.88fr);
+  gap: clamp(2.5rem, 6vw, 5rem);
+  align-items: center;
+  padding-block: clamp(3.25rem, 6vw, 4.75rem);
+}
+
+.portal-hero-copy {
+  max-width: 42rem;
+}
+
+.portal-mark {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  margin-bottom: 1.25rem;
+  color: var(--ink-mute);
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.portal-mark svg {
+  color: var(--signal-gold);
+}
+
+.portal-hero h1 {
+  max-width: 41rem;
+  font-size: clamp(2.4rem, 5vw, 3.7rem);
+  line-height: 1.01;
+}
+
+.portal-lede {
+  max-width: 40rem;
+  margin-top: 1.35rem;
+  color: var(--ink-soft);
+  font-size: clamp(1rem, 1.7vw, 1.18rem);
+  line-height: 1.7;
+}
+
+.portal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  margin-top: 1.7rem;
+}
+
+.portal-button {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  padding: 0.65rem 1rem;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+.portal-button-primary {
+  border-color: var(--indigo-deep);
+  background: var(--indigo-deep);
+  color: #fff;
+}
+
+.portal-button-primary:hover {
+  background: var(--ocean-deep);
+}
+
+.portal-button-secondary {
+  border-color: var(--paper-line-soft);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--ink);
+}
+
+.portal-button-secondary:hover {
+  border-color: var(--ink-soft);
+  background: #fff;
+}
+
+.portal-meta {
+  max-width: 38rem;
+  margin-top: 0.9rem;
+  color: var(--ink-mute);
+  font-size: 0.76rem;
+  line-height: 1.55;
+}
+
+.portal-quickstart {
+  padding: clamp(1.35rem, 3vw, 2rem);
+  border: 1px solid rgba(209, 235, 244, 0.22);
+  border-radius: 8px;
+  background: var(--ocean-deep);
+  box-shadow: 0 1.25rem 3rem rgba(5, 12, 24, 0.16);
+  color: #d7e9ec;
+}
+
+.portal-quickstart > span {
+  color: #9fc5d2;
+  font-family: var(--font-mono), "JetBrains Mono", monospace;
+  font-size: 0.65rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.portal-quickstart h2 {
+  margin-top: 0.65rem;
+  color: #f0f8fa;
+  font-size: clamp(1.2rem, 2vw, 1.55rem);
+  letter-spacing: -0.02em;
+}
+
+.portal-quickstart p {
+  margin-top: 0.7rem;
+  color: rgba(215, 233, 236, 0.7);
+  font-size: 0.84rem;
+  line-height: 1.65;
+}
+
+.portal-quickstart pre.code-block {
+  margin-top: 1.15rem;
+  border-color: rgba(209, 235, 244, 0.2);
+  background: rgba(2, 8, 18, 0.6);
+}
+
+.portal-quickstart > a {
+  display: inline-block;
+  margin-top: 1rem;
+  color: var(--ocean-current);
+  font-size: 0.76rem;
+}
+
+.portal-quickstart > a:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.25rem;
+}
+
+.portal-section {
+  padding-block: clamp(3.25rem, 6vw, 4.75rem);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.portal-section-muted {
+  background: var(--paper-deep);
+}
+
+.portal-section-grid {
+  display: grid;
+  grid-template-columns: minmax(14rem, 0.62fr) minmax(0, 1.38fr);
+  gap: clamp(2.5rem, 7vw, 6.5rem);
+}
+
+.portal-section-copy > span,
+.portal-docs-heading span,
+.portal-community-grid > div:first-child > span {
+  color: var(--ink-mute);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.portal-section-copy h2,
+.portal-docs-heading h2,
+.portal-community h2 {
+  margin-top: 0.65rem;
+  font-size: clamp(1.55rem, 3vw, 2.4rem);
+}
+
+.portal-section-copy p {
+  margin-top: 0.9rem;
+  color: var(--ink-soft);
+  font-size: 0.92rem;
+  line-height: 1.7;
+}
+
+.portal-topic-list {
+  border-top: 1px solid var(--hairline);
+}
+
+.portal-topic-list > a {
+  display: grid;
+  grid-template-columns: minmax(8rem, 0.42fr) minmax(0, 1fr) auto;
+  gap: 1.25rem;
+  align-items: start;
+  padding-block: 1.15rem;
+  border-bottom: 1px solid var(--hairline);
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+.portal-topic-list > a:hover {
+  color: var(--indigo-deep);
+  background: rgba(255, 255, 255, 0.52);
+}
+
+.portal-topic-list strong {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.portal-topic-list span {
+  color: var(--ink-soft);
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.portal-topic-list span:last-child {
+  color: var(--ink-mute);
+}
+
+.portal-docs-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 2rem;
+  margin-bottom: 2rem;
+}
+
+.portal-docs-heading a {
+  flex: none;
+  color: var(--indigo-deep);
+  font-size: 0.78rem;
+}
+
+.portal-docs-heading a:hover,
+.portal-community-links a:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.25rem;
+}
+
+.portal-doc-groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(2.5rem, 6vw, 5rem);
+}
+
+.portal-doc-groups h3 {
+  font-size: 1.05rem;
+  letter-spacing: -0.01em;
+}
+
+.portal-doc-groups section > p {
+  min-height: 4.5rem;
+  margin-top: 0.55rem;
+  color: var(--ink-soft);
+  font-size: 0.84rem;
+  line-height: 1.6;
+}
+
+.portal-doc-groups .portal-topic-list {
+  margin-top: 1.25rem;
+}
+
+.portal-doc-groups .portal-topic-list > a {
+  grid-template-columns: minmax(7rem, 0.42fr) minmax(0, 1fr) auto;
+  gap: 0.9rem;
+}
+
+.portal-community {
+  padding-block: clamp(3.25rem, 6vw, 4.75rem);
+  background:
+    radial-gradient(circle at 84% -30%, rgba(111, 183, 204, 0.14), transparent 30rem),
+    var(--ocean-deep);
+  color: #d7e9ec;
+}
+
+.portal-community-grid {
+  display: grid;
+  grid-template-columns: minmax(16rem, 0.85fr) minmax(0, 1.15fr);
+  gap: clamp(2.5rem, 7vw, 7rem);
+}
+
+.portal-community-grid > div:first-child > span {
+  color: #9fc5d2;
+}
+
+.portal-community h2 {
+  color: #f0f8fa;
+}
+
+.portal-community p {
+  color: rgba(215, 233, 236, 0.76);
+  font-size: 0.96rem;
+  line-height: 1.75;
+}
+
+.portal-community-links {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem 1.5rem;
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid rgba(209, 235, 244, 0.18);
+}
+
+.portal-community-links a {
+  color: var(--ocean-current);
+  font-size: 0.78rem;
+}
+
+@media (max-width: 900px) {
+  .portal-hero-grid,
+  .portal-section-grid,
+  .portal-community-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .portal-hero-copy {
+    max-width: 48rem;
+  }
+
+  .portal-quickstart {
+    max-width: 42rem;
+  }
+}
+
+@media (max-width: 760px) {
+  .portal-container {
+    width: min(100% - 2rem, 72rem);
+  }
+
+  .portal-doc-groups {
+    grid-template-columns: 1fr;
+  }
+
+  .portal-doc-groups section > p {
+    min-height: 0;
+  }
+}
+
+@media (max-width: 560px) {
+  .portal-hero-grid {
+    gap: 2.25rem;
+    padding-block: 2.75rem;
+  }
+
+  .portal-actions,
+  .portal-docs-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .portal-button {
+    width: 100%;
+  }
+
+  .portal-topic-list > a,
+  .portal-doc-groups .portal-topic-list > a {
+    grid-template-columns: 1fr auto;
+    gap: 0.45rem 1rem;
+  }
+
+  .portal-topic-list > a span:nth-child(2) {
+    grid-column: 1 / -1;
+  }
+
+  .portal-topic-list > a span:last-child {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .portal-community-links {
+    grid-template-columns: 1fr;
+  }
+}
 
 /* ------------------------------------------------------------------ */
 /*  Dark mode — scoped to the /docs routes                            */

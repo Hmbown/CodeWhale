@@ -1,6 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" fill="#0E0E10"/>
-  <text x="50%" y="55%" text-anchor="middle" dominant-baseline="middle"
-        font-family="'Noto Serif SC', serif" font-weight="700" font-size="20" fill="#F4F1E8">深</text>
-  <rect x="0" y="29" width="32" height="3" fill="#4D6BFE"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" fill="#061D2B"/>
+  <path fill="#F6C453" d="M8 34c0-10 12-18 27-18 13 0 21 6 22 14l7-7-2 11 2 11-8-7c-3 7-11 11-21 11-12 0-22-6-27-15Z"/>
+  <circle cx="23" cy="29" r="2" fill="#061D2B"/>
 </svg>

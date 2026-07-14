@@ -5,8 +5,7 @@ export const alt = `${SITE_NAME} — ${IDENTITY_PHRASE}`;
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
-// Palette mirrors tailwind.config.ts: ink #0E0E10, indigo #4D6BFE,
-// paper-line-soft #D4D8E2, ink-mute #6B7280.
+// The social card mirrors the restrained light-to-depth website treatment.
 export default function OpengraphImage() {
   return new ImageResponse(
     (
@@ -17,7 +16,7 @@ export default function OpengraphImage() {
           display: "flex",
           flexDirection: "column",
           justifyContent: "space-between",
-          backgroundColor: "#0E0E10",
+          backgroundColor: "#F7F8FA",
           padding: "72px 84px",
           fontFamily: "sans-serif",
         }}
@@ -30,10 +29,10 @@ export default function OpengraphImage() {
             fontSize: 26,
             letterSpacing: 0,
             textTransform: "uppercase",
-            color: "#6B7280",
+            color: "#69748A",
           }}
         >
-          <div style={{ width: 14, height: 14, backgroundColor: "#4D6BFE" }} />
+          <div style={{ width: 28, height: 14, borderRadius: "50% 45% 45% 50%", backgroundColor: "#F6C453" }} />
           codewhale.net
         </div>
         <div style={{ display: "flex", flexDirection: "column" }}>
@@ -41,25 +40,27 @@ export default function OpengraphImage() {
             style={{
               fontSize: 116,
               fontWeight: 700,
-              color: "#FFFFFF",
+              color: "#1B2230",
               letterSpacing: 0,
             }}
           >
-            CodeWhale
+            Codewhale
           </div>
           <div
             style={{
               marginTop: 28,
               fontSize: 38,
               lineHeight: 1.35,
-              color: "#D4D8E2",
+              color: "#4C5567",
               maxWidth: 980,
             }}
           >
             {IDENTITY_PHRASE}
           </div>
         </div>
-        <div style={{ display: "flex", width: "100%", height: 6, backgroundColor: "#4D6BFE" }} />
+        <div style={{ display: "flex", width: "100%", height: 14, backgroundColor: "#081221" }}>
+          <div style={{ width: "32%", height: "100%", backgroundColor: "#9FC5D2" }} />
+        </div>
       </div>
     ),
     { ...size },
