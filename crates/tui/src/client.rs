@@ -1513,6 +1513,74 @@ impl DeepSeekClient {
                     openrouter_to_catalog_offering(item, &provider, &fingerprint, fetched_at)
                 })
                 .collect()
+        } else if provider == "telecomjs" {
+            // TelecomJS TokenHub returns bare model IDs (e.g. "glm-5.2",
+            // "deepseek-v4-flash") that correspond to models also present in the
+            // bundled catalog under their home providers. Match against the
+            // bundled catalog (case-insensitive) to inherit metadata (context
+            // window, reasoning, tool_call, etc.) so the model picker shows
+            // rich capability information instead of empty rows.
+            let models =
+                parse_models_response(&body).map_err(|_| CatalogRefreshError::InvalidResponse)?;
+            if models.is_empty() {
+                return Err(CatalogRefreshError::EmptyList);
+            }
+            let bundled = codewhale_config::catalog::bundled_catalog_offerings();
+            let default_model_id = codewhale_config::ProviderKind::Telecomjs
+                .provider()
+                .default_model();
+            models
+                .into_iter()
+                .map(|model| {
+                    let is_default = model.id == default_model_id;
+                    // Find a bundled offering whose wire_model_id matches
+                    // case-insensitively, regardless of provider.
+                    let bundled_match = bundled.iter().find(|offering| {
+                        offering
+                            .wire_model_id
+                            .eq_ignore_ascii_case(&model.id)
+                    });
+                    if let Some(matched) = bundled_match {
+                        CatalogOffering {
+                            provider: provider.clone(),
+                            wire_model_id: model.id,
+                            canonical_model: matched.canonical_model.clone(),
+                            endpoint_key: "chat".to_string(),
+                            default_for_provider: is_default,
+                            family: matched.family.clone(),
+                            limit: matched.limit.clone(),
+                            cost: matched.cost.clone(),
+                            modalities: matched.modalities.clone(),
+                            reasoning: matched.reasoning,
+                            tool_call: matched.tool_call,
+                            reasoning_options: matched.reasoning_options.clone(),
+                            source: CatalogSource::Live {
+                                base_url_fingerprint: fingerprint.clone(),
+                                fetched_at,
+                            },
+                        }
+                    } else {
+                        CatalogOffering {
+                            provider: provider.clone(),
+                            wire_model_id: model.id,
+                            canonical_model: None,
+                            endpoint_key: "chat".to_string(),
+                            default_for_provider: is_default,
+                            family: None,
+                            limit: None,
+                            cost: None,
+                            modalities: None,
+                            reasoning: None,
+                            tool_call: None,
+                            reasoning_options: Vec::new(),
+                            source: CatalogSource::Live {
+                                base_url_fingerprint: fingerprint.clone(),
+                                fetched_at,
+                            },
+                        }
+                    }
+                })
+                .collect()
         } else {
             let models = apply_provider_model_cutline(
                 self.api_provider,
@@ -1577,6 +1645,60 @@ impl DeepSeekClient {
                 CatalogStatus::Failed { reason }
             }
         }
+    }
+
+    /// Best-effort background refresh of the active provider's own `/v1/models`
+    /// catalog, merging results into the provider lake (#3385).
+    ///
+    /// Unlike [`models_dev_live::spawn_background_refresh`] (which fetches the
+    /// cross-provider Models.dev catalog), this calls the provider's own
+    /// `/v1/models` endpoint and merges the results into the existing live
+    /// snapshot via [`provider_lake::merge_live_offerings`], preserving rows
+    /// from other sources.
+    ///
+    /// Currently activated for providers whose model list is not covered by the
+    /// Models.dev catalog (e.g. TelecomJS TokenHub). The refresh is non-fatal:
+    /// on failure, existing/bundled rows remain available.
+    pub fn spawn_active_provider_catalog_refresh(config: &Config) {
+        let provider = config.api_provider();
+        // Only refresh for providers that serve their own model list and are
+        // not already covered by the Models.dev catalog.
+        if !matches!(provider, ApiProvider::Telecomjs) {
+            return;
+        }
+
+        let client = match DeepSeekClient::new(config) {
+            Ok(client) => client,
+            Err(err) => {
+                tracing::debug!(
+                    target: "provider_catalog",
+                    error = %err,
+                    "skipping provider catalog refresh: client creation failed"
+                );
+                return;
+            }
+        };
+
+        tokio::spawn(async move {
+            match client.fetch_catalog_delta().await {
+                Ok(delta) => {
+                    let count = delta.offerings.len();
+                    crate::provider_lake::merge_live_offerings(delta.offerings);
+                    tracing::debug!(
+                        target: "provider_catalog",
+                        offering_count = count,
+                        "provider catalog refresh merged {count} offerings into provider lake"
+                    );
+                }
+                Err(err) => {
+                    tracing::debug!(
+                        target: "provider_catalog",
+                        error = ?err,
+                        "provider catalog refresh failed; keeping existing rows"
+                    );
+                }
+            }
+        });
     }
 
     /// Generate speech with Xiaomi MiMo TTS models.
@@ -2226,7 +2348,8 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::Deepinfra
             | ApiProvider::Together
             | ApiProvider::Atlascloud
-            | ApiProvider::Zai => {
+            | ApiProvider::Zai
+            | ApiProvider::Telecomjs => {
                 body["thinking"] = json!({ "type": "disabled" });
             }
             ApiProvider::OpenaiCodex => {
@@ -2292,7 +2415,8 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::Sglang
             | ApiProvider::Volcengine
             | ApiProvider::Deepinfra
-            | ApiProvider::Atlascloud => {
+            | ApiProvider::Atlascloud
+            | ApiProvider::Telecomjs => {
                 body["reasoning_effort"] = json!("high");
                 body["thinking"] = json!({ "type": "enabled" });
             }
@@ -2386,7 +2510,8 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::Sglang
             | ApiProvider::Volcengine
             | ApiProvider::Deepinfra
-            | ApiProvider::Atlascloud => {
+            | ApiProvider::Atlascloud
+            | ApiProvider::Telecomjs => {
                 body["reasoning_effort"] = json!("max");
                 body["thinking"] = json!({ "type": "enabled" });
             }

@@ -75,6 +75,8 @@ pub enum ApiProvider {
     OpencodeGo,
     Meta,
     Xai,
+    /// Jiangsu Telecom TokenHub — OpenAI-compatible AI gateway.
+    Telecomjs,
     /// User-defined OpenAI-compatible endpoint (#1519).
     ///
     /// Selected when `provider = "<name>"` names a `[providers.<name>]
@@ -237,6 +239,7 @@ impl ApiProvider {
             Self::OpencodeGo => "https://opencode.ai/zen/",
             Self::Meta => "https://developer.meta.com/ai/",
             Self::Xai => "https://console.x.ai/",
+            Self::Telecomjs => "https://aigw.telecomjs.com/",
             Self::OpenaiCodex | Self::Sglang | Self::Vllm | Self::Ollama => return None,
             // Custom endpoints have no canonical credential page; the user
             // supplies the key via their own `api_key_env`.
@@ -252,7 +255,7 @@ impl ApiProvider {
 
     /// `ApiProvider` discriminant → `ProviderKind` lookup.
     /// Index 1 is `None` for the legacy `DeepseekCN` variant.
-    const KIND_LOOKUP: [Option<codewhale_config::ProviderKind>; 36] = [
+    const KIND_LOOKUP: [Option<codewhale_config::ProviderKind>; 37] = [
         Some(codewhale_config::ProviderKind::Deepseek),
         None, // DeepseekCN
         Some(codewhale_config::ProviderKind::DeepseekAnthropic),
@@ -288,11 +291,12 @@ impl ApiProvider {
         Some(codewhale_config::ProviderKind::OpencodeGo),
         Some(codewhale_config::ProviderKind::Meta),
         Some(codewhale_config::ProviderKind::Xai),
+        Some(codewhale_config::ProviderKind::Telecomjs),
         Some(codewhale_config::ProviderKind::Custom),
     ];
 
     /// `ProviderKind` discriminant → `ApiProvider` lookup.
-    const FROM_KIND_LOOKUP: [Self; 35] = [
+    const FROM_KIND_LOOKUP: [Self; 36] = [
         Self::Deepseek,
         Self::DeepseekAnthropic,
         Self::NvidiaNim,
@@ -327,6 +331,7 @@ impl ApiProvider {
         Self::OpencodeGo,
         Self::Meta,
         Self::Xai,
+        Self::Telecomjs,
         Self::Custom,
     ];
 
@@ -1335,6 +1340,19 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
             XAI_GROK_COMPOSER_2_5_FAST_MODEL,
             XAI_GROK_4_20_0309_REASONING_MODEL,
             XAI_GROK_4_20_0309_NON_REASONING_MODEL,
+        ],
+        ApiProvider::Telecomjs => vec![
+            DEFAULT_TELECOMJS_MODEL,
+            "deepseek-v4-flash",
+            "DeepSeek-R1",
+            "qwen3.7-plus",
+            "qwen3-max",
+            "glm-5.2",
+            "glm-5.1",
+            "GLM-5.0",
+            "Minimax-M2.5",
+            "kimi-k2.7-code",
+            "Doubao-Seed-2.0-Pro",
         ],
         // Custom endpoints expose no built-in completion names; the user
         // supplies their own model id (#1519).
@@ -2832,6 +2850,14 @@ pub struct ProvidersConfig {
     pub meta: ProviderConfig,
     #[serde(default, alias = "x-ai", alias = "x_ai", alias = "grok")]
     pub xai: ProviderConfig,
+    #[serde(
+        default,
+        alias = "telecom-js",
+        alias = "telecom_js",
+        alias = "telecomjs-cn",
+        alias = "tokenhub"
+    )]
+    pub telecomjs: ProviderConfig,
     /// Arbitrary user-named custom providers (#1519).
     ///
     /// Captures every `[providers.<name>]` table whose key is not one of the
@@ -4087,6 +4113,7 @@ impl Config {
             ApiProvider::OpencodeGo => &providers.opencode_go,
             ApiProvider::Meta => &providers.meta,
             ApiProvider::Xai => &providers.xai,
+            ApiProvider::Telecomjs => &providers.telecomjs,
             // Handled by the name-keyed early return above (#1519).
             ApiProvider::Custom => unreachable!("custom provider resolved by name above"),
         })
@@ -4152,6 +4179,7 @@ impl Config {
             ApiProvider::OpencodeGo => &mut providers.opencode_go,
             ApiProvider::Meta => &mut providers.meta,
             ApiProvider::Xai => &mut providers.xai,
+            ApiProvider::Telecomjs => &mut providers.telecomjs,
             // Handled by the name-keyed early return above (#1519).
             ApiProvider::Custom => unreachable!("custom provider resolved by name above"),
         }
@@ -4459,6 +4487,7 @@ impl Config {
             ApiProvider::OpencodeGo => DEFAULT_OPENCODE_GO_MODEL,
             ApiProvider::Meta => DEFAULT_META_MODEL,
             ApiProvider::Xai => DEFAULT_XAI_MODEL,
+            ApiProvider::Telecomjs => DEFAULT_TELECOMJS_MODEL,
             // Custom endpoints have no built-in default model; pass through the
             // descriptor placeholder when nothing is configured (#1519).
             ApiProvider::Custom => codewhale_config::ProviderKind::Custom
@@ -4516,7 +4545,8 @@ impl Config {
             | ApiProvider::LongCat
             | ApiProvider::OpencodeGo
             | ApiProvider::Meta
-            | ApiProvider::Xai => None,
+            | ApiProvider::Xai
+            | ApiProvider::Telecomjs => None,
             ApiProvider::Custom if self.uses_legacy_literal_custom_route() => self.base_url.clone(),
             // Named custom routes read their base URL from `provider_base`.
             ApiProvider::Custom => None,
@@ -4582,6 +4612,7 @@ impl Config {
                         ApiProvider::OpencodeGo => DEFAULT_OPENCODE_GO_BASE_URL,
                         ApiProvider::Meta => DEFAULT_META_BASE_URL,
                         ApiProvider::Xai => DEFAULT_XAI_BASE_URL,
+                        ApiProvider::Telecomjs => DEFAULT_TELECOMJS_BASE_URL,
                         // No built-in endpoint; descriptor placeholder keeps the
                         // fallback total. A real custom route configures
                         // `[providers.<name>] base_url` which wins above (#1519).
@@ -6040,6 +6071,13 @@ fn apply_env_overrides(config: &mut Config) {
                     .xai
                     .base_url = Some(value);
             }
+            ApiProvider::Telecomjs => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .telecomjs
+                    .base_url = Some(value);
+            }
             // Custom resolves to the named `[providers.<name>]` table; route the
             // override through the exact route while retaining the released
             // root-literal custom storage shape (#1519, #4334).
@@ -6239,6 +6277,16 @@ fn apply_env_overrides(config: &mut Config) {
             .xai
             .base_url = Some(value);
     }
+    if matches!(config.api_provider(), ApiProvider::Telecomjs)
+        && let Ok(value) = std::env::var("TELECOMJS_BASE_URL")
+        && !value.trim().is_empty()
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .telecomjs
+            .base_url = Some(value);
+    }
     if let Ok(value) = std::env::var("DEEPSEEK_HTTP_HEADERS")
         && let Ok(headers) = parse_http_headers(&value)
         && !headers.is_empty()
@@ -6299,6 +6347,7 @@ fn apply_env_overrides(config: &mut Config) {
                 ApiProvider::OpencodeGo => &mut providers.opencode_go,
                 ApiProvider::Meta => &mut providers.meta,
                 ApiProvider::Xai => &mut providers.xai,
+                ApiProvider::Telecomjs => &mut providers.telecomjs,
                 ApiProvider::Custom => providers
                     .custom
                     .entry(custom_key.expect("custom key captured for custom provider"))
@@ -6483,6 +6532,16 @@ fn apply_env_overrides(config: &mut Config) {
             .opencode_go
             .model = Some(value);
     }
+    if matches!(config.api_provider(), ApiProvider::Telecomjs)
+        && let Ok(value) = std::env::var("TELECOMJS_MODEL")
+        && !value.trim().is_empty()
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .telecomjs
+            .model = Some(value);
+    }
     if let Some(value) = codewhale_env_var("CODEWHALE_MODEL", "DEEPSEEK_MODEL")
         .ok()
         .or_else(|| {
@@ -6560,6 +6619,7 @@ fn apply_env_overrides(config: &mut Config) {
                 ApiProvider::OpencodeGo => &mut providers.opencode_go,
                 ApiProvider::Meta => &mut providers.meta,
                 ApiProvider::Xai => &mut providers.xai,
+                ApiProvider::Telecomjs => &mut providers.telecomjs,
             };
             entry.model = Some(value);
         }
@@ -6814,6 +6874,7 @@ pub(crate) fn provider_passes_model_through(provider: ApiProvider) -> bool {
             | ApiProvider::Huggingface
             | ApiProvider::Meta
             | ApiProvider::Xai
+            | ApiProvider::Telecomjs
             // Custom OpenAI-compatible endpoints preserve user-supplied model
             // ids verbatim (#1519); never normalize/rewrite them.
             | ApiProvider::Custom
@@ -7424,6 +7485,7 @@ fn merge_providers(
             opencode_go: merge_provider_config(base.opencode_go, override_cfg.opencode_go),
             meta: merge_provider_config(base.meta, override_cfg.meta),
             xai: merge_provider_config(base.xai, override_cfg.xai),
+            telecomjs: merge_provider_config(base.telecomjs, override_cfg.telecomjs),
             custom: merge_custom_providers(base.custom, override_cfg.custom),
         }),
     }

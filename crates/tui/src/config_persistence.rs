@@ -444,6 +444,7 @@ fn provider_base_url_table_key(provider: ApiProvider) -> anyhow::Result<&'static
         ApiProvider::OpencodeGo => Ok("opencode_go"),
         ApiProvider::Meta => Ok("meta"),
         ApiProvider::Xai => Ok("xai"),
+        ApiProvider::Telecomjs => Ok("telecomjs"),
         // Custom providers live under a user-chosen `[providers.<name>]` table,
         // not a fixed key. Persisting base_url through this static-key path is
         // out of scope for the #1519 constrained slice; users edit the named

@@ -153,3 +153,6 @@ pub(crate) const DEFAULT_META_BASE_URL: &str = "https://api.meta.ai/v1";
 // xAI / Grok API-key route defaults
 pub(crate) const DEFAULT_XAI_MODEL: &str = "grok-4.5";
 pub(crate) const DEFAULT_XAI_BASE_URL: &str = "https://api.x.ai/v1";
+// TelecomJS (Jiangsu Telecom TokenHub) defaults
+pub(crate) const DEFAULT_TELECOMJS_MODEL: &str = "deepseek-v4-pro";
+pub(crate) const DEFAULT_TELECOMJS_BASE_URL: &str = "https://aigw.telecomjs.com/v1";

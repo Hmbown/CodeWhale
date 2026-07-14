@@ -21,7 +21,8 @@ use super::{
     DEFAULT_QIANFAN_BASE_URL, DEFAULT_QIANFAN_MODEL, DEFAULT_SAKANA_BASE_URL, DEFAULT_SAKANA_MODEL,
     DEFAULT_SGLANG_BASE_URL, DEFAULT_SGLANG_MODEL, DEFAULT_SILICONFLOW_BASE_URL,
     DEFAULT_SILICONFLOW_CN_BASE_URL, DEFAULT_SILICONFLOW_MODEL, DEFAULT_STEPFUN_BASE_URL,
-    DEFAULT_STEPFUN_MODEL, DEFAULT_TOGETHER_BASE_URL, DEFAULT_TOGETHER_MODEL,
+    DEFAULT_STEPFUN_MODEL, DEFAULT_TELECOMJS_BASE_URL, DEFAULT_TELECOMJS_MODEL,
+    DEFAULT_TOGETHER_BASE_URL, DEFAULT_TOGETHER_MODEL,
     DEFAULT_VLLM_BASE_URL, DEFAULT_VLLM_MODEL, DEFAULT_VOLCENGINE_BASE_URL,
     DEFAULT_VOLCENGINE_MODEL, DEFAULT_WANJIE_ARK_BASE_URL, DEFAULT_WANJIE_ARK_MODEL,
     DEFAULT_XAI_BASE_URL, DEFAULT_XAI_MODEL, DEFAULT_XIAOMI_MIMO_BASE_URL,
@@ -706,6 +707,18 @@ provider!(
     aliases: ["x-ai", "x_ai", "grok"]
 );
 
+provider!(
+    Telecomjs,
+    Telecomjs,
+    "telecomjs",
+    "Telecom JiangSu",
+    DEFAULT_TELECOMJS_BASE_URL,
+    DEFAULT_TELECOMJS_MODEL,
+    ["TELECOMJS_API_KEY"],
+    "telecomjs",
+    aliases: ["telecom-js", "telecom_js", "telecomjs-cn", "tokenhub"]
+);
+
 /// User-defined OpenAI-compatible endpoint (#1519).
 ///
 /// A single dynamic provider identity for arbitrary `[providers.<name>]
@@ -793,9 +806,10 @@ static LONGCAT: LongCat = LongCat;
 static OPENCODE_GO: OpencodeGo = OpencodeGo;
 static META: Meta = Meta;
 static XAI: Xai = Xai;
+static TELECOMJS: Telecomjs = Telecomjs;
 static CUSTOM: Custom = Custom;
 
-static PROVIDER_REGISTRY: [&dyn Provider; 35] = [
+static PROVIDER_REGISTRY: [&dyn Provider; 36] = [
     &DEEPSEEK,
     &DEEPSEEK_ANTHROPIC,
     &NVIDIA_NIM,
@@ -830,6 +844,7 @@ static PROVIDER_REGISTRY: [&dyn Provider; 35] = [
     &OPENCODE_GO,
     &META,
     &XAI,
+    &TELECOMJS,
     &CUSTOM,
 ];
 

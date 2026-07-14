@@ -72,6 +72,33 @@ pub fn clear_live_snapshot() {
     }
 }
 
+/// Merge additional live offerings into the existing live snapshot (#4188).
+///
+/// Unlike [`set_live_snapshot`] (which replaces the entire snapshot), this
+/// merges new rows by `(provider, wire_model_id)` identity, preserving rows
+/// from other sources (e.g. Models.dev) that were already published. This is
+/// used by per-provider catalog refreshes (e.g. TelecomJS `/v1/models`) that
+/// need to coexist with the cross-provider Models.dev live layer.
+pub fn merge_live_offerings(new_offerings: Vec<CatalogOffering>) {
+    if new_offerings.is_empty() {
+        return;
+    }
+    if let Ok(mut guard) = LIVE_SNAPSHOT.write() {
+        let existing = guard.take().unwrap_or_default();
+        use std::collections::BTreeMap;
+        let mut merged: BTreeMap<(String, String), CatalogOffering> = BTreeMap::new();
+        for row in &existing.offerings {
+            merged.insert((row.provider.clone(), row.wire_model_id.clone()), row.clone());
+        }
+        for row in new_offerings {
+            merged.insert((row.provider.clone(), row.wire_model_id.clone()), row);
+        }
+        *guard = Some(CatalogSnapshot {
+            offerings: merged.into_values().collect(),
+        });
+    }
+}
+
 /// The merged catalog snapshot: live rows override bundled rows on
 /// `(provider, wire_model_id)` identity (#4188). When no live snapshot is
 /// present, this is just the offline bundled snapshot.

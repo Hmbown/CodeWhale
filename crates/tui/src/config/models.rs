@@ -192,3 +192,5 @@ pub const XAI_GROK_COMPOSER_2_5_FAST_MODEL: &str = "grok-composer-2.5-fast";
 pub const XAI_GROK_4_20_0309_REASONING_MODEL: &str = "grok-4.20-0309-reasoning";
 pub const XAI_GROK_4_20_0309_NON_REASONING_MODEL: &str = "grok-4.20-0309-non-reasoning";
 pub const DEFAULT_XAI_BASE_URL: &str = "https://api.x.ai/v1";
+pub const DEFAULT_TELECOMJS_MODEL: &str = "deepseek-v4-pro";
+pub const DEFAULT_TELECOMJS_BASE_URL: &str = "https://aigw.telecomjs.com/v1";

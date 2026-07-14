@@ -124,6 +124,13 @@ pub enum ProviderKind {
     Meta,
     #[serde(alias = "x-ai", alias = "x_ai", alias = "grok")]
     Xai,
+    /// Jiangsu Telecom TokenHub (OpenAI-compatible).
+    ///
+    /// An AI gateway operated by Jiangsu Telecom that speaks the OpenAI Chat
+    /// Completions wire protocol and serves a broad model catalog; each API key
+    /// may access a different subset of models.
+    #[serde(alias = "telecom-js", alias = "telecom_js", alias = "telecomjs-cn", alias = "tokenhub")]
+    Telecomjs,
     /// User-defined OpenAI-compatible endpoint (#1519).
     ///
     /// A single dynamic identity for arbitrary `[providers.<name>]
@@ -135,7 +142,7 @@ pub enum ProviderKind {
 }
 
 impl ProviderKind {
-    pub const ALL: [Self; 35] = [
+    pub const ALL: [Self; 36] = [
         Self::Deepseek,
         Self::DeepseekAnthropic,
         Self::NvidiaNim,
@@ -170,6 +177,7 @@ impl ProviderKind {
         Self::OpencodeGo,
         Self::Meta,
         Self::Xai,
+        Self::Telecomjs,
         Self::Custom,
     ];
 

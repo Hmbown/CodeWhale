@@ -13142,6 +13142,7 @@ fn mirror_saved_api_key_in_config(config: &mut Config, provider: ApiProvider, ap
         ApiProvider::OpencodeGo => &mut providers.opencode_go,
         ApiProvider::Meta => &mut providers.meta,
         ApiProvider::Xai => &mut providers.xai,
+        ApiProvider::Telecomjs => &mut providers.telecomjs,
     };
     entry.api_key = Some(api_key);
 }
@@ -13269,6 +13270,7 @@ fn set_provider_auth_mode_in_memory(config: &mut Config, provider: ApiProvider, 
         ApiProvider::OpencodeGo => &mut providers.opencode_go,
         ApiProvider::Meta => &mut providers.meta,
         ApiProvider::Xai => &mut providers.xai,
+        ApiProvider::Telecomjs => &mut providers.telecomjs,
     };
     entry.auth_mode = Some(auth_mode);
 }
