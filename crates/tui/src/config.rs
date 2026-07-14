@@ -68,6 +68,7 @@ pub enum ApiProvider {
     Zai,
     Stepfun,
     Minimax,
+    MinimaxAnthropic,
     Deepinfra,
     Sakana,
     LongCat,
@@ -203,7 +204,9 @@ impl ApiProvider {
             Self::Openmodel => "https://docs.openmodel.ai/en/docs/guides/api-key",
             Self::Zai => "https://z.ai/model-api",
             Self::Stepfun => "https://platform.stepfun.ai/",
-            Self::Minimax => "https://platform.minimax.io/docs/guides/quickstart-preparation",
+            Self::Minimax | Self::MinimaxAnthropic => {
+                "https://platform.minimax.io/docs/guides/quickstart-preparation"
+            }
             Self::Deepinfra => "https://deepinfra.com/dash/api_keys",
             Self::Sakana => "https://api.sakana.ai/",
             Self::LongCat => "https://longcat.chat/platform",
@@ -224,7 +227,7 @@ impl ApiProvider {
 
     /// `ApiProvider` discriminant → `ProviderKind` lookup.
     /// Index 1 is `None` for the legacy `DeepseekCN` variant.
-    const KIND_LOOKUP: [Option<codewhale_config::ProviderKind>; 34] = [
+    const KIND_LOOKUP: [Option<codewhale_config::ProviderKind>; 35] = [
         Some(codewhale_config::ProviderKind::Deepseek),
         None, // DeepseekCN
         Some(codewhale_config::ProviderKind::DeepseekAnthropic),
@@ -253,6 +256,7 @@ impl ApiProvider {
         Some(codewhale_config::ProviderKind::Zai),
         Some(codewhale_config::ProviderKind::Stepfun),
         Some(codewhale_config::ProviderKind::Minimax),
+        Some(codewhale_config::ProviderKind::MinimaxAnthropic),
         Some(codewhale_config::ProviderKind::Deepinfra),
         Some(codewhale_config::ProviderKind::Sakana),
         Some(codewhale_config::ProviderKind::LongCat),
@@ -262,7 +266,7 @@ impl ApiProvider {
     ];
 
     /// `ProviderKind` discriminant → `ApiProvider` lookup.
-    const FROM_KIND_LOOKUP: [Self; 33] = [
+    const FROM_KIND_LOOKUP: [Self; 34] = [
         Self::Deepseek,
         Self::DeepseekAnthropic,
         Self::NvidiaNim,
@@ -290,6 +294,7 @@ impl ApiProvider {
         Self::Zai,
         Self::Stepfun,
         Self::Minimax,
+        Self::MinimaxAnthropic,
         Self::Deepinfra,
         Self::Sakana,
         Self::LongCat,
@@ -462,7 +467,10 @@ pub enum RequestPayloadMode {
 /// in the API payload (after normalization / provider-specific mapping).
 #[must_use]
 pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> ProviderCapability {
-    if matches!(provider, ApiProvider::Anthropic | ApiProvider::Openmodel) {
+    if matches!(
+        provider,
+        ApiProvider::Anthropic | ApiProvider::MinimaxAnthropic | ApiProvider::Openmodel
+    ) {
         return ProviderCapability {
             provider,
             resolved_model: resolved_model.to_string(),
@@ -584,7 +592,7 @@ pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> Provi
 
     let request_payload_mode = if matches!(
         provider,
-        ApiProvider::DeepseekAnthropic | ApiProvider::Openmodel
+        ApiProvider::DeepseekAnthropic | ApiProvider::MinimaxAnthropic | ApiProvider::Openmodel
     ) {
         RequestPayloadMode::AnthropicMessages
     } else {
@@ -1028,7 +1036,7 @@ pub fn canonical_model_id_for_provider(provider: ApiProvider, model: &str) -> Op
         ApiProvider::Arcee => canonical_arcee_model_id(trimmed),
         ApiProvider::Moonshot => canonical_moonshot_model_id(trimmed),
         ApiProvider::Zai => canonical_zai_model_id(trimmed),
-        ApiProvider::Minimax => canonical_minimax_model_id(trimmed),
+        ApiProvider::Minimax | ApiProvider::MinimaxAnthropic => canonical_minimax_model_id(trimmed),
         _ => None,
     };
     if let Some(canonical) = family_canonical {
@@ -1176,7 +1184,7 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
             DEFAULT_ANTHROPIC_MODEL,
             ANTHROPIC_HAIKU_MODEL,
         ],
-        ApiProvider::Minimax => vec![
+        ApiProvider::Minimax | ApiProvider::MinimaxAnthropic => vec![
             DEFAULT_MINIMAX_MODEL,
             MINIMAX_M2_7_MODEL,
             MINIMAX_M2_7_HIGHSPEED_MODEL,
@@ -2640,6 +2648,14 @@ pub struct ProvidersConfig {
     pub stepfun: ProviderConfig,
     #[serde(default)]
     pub minimax: ProviderConfig,
+    #[serde(
+        default,
+        alias = "minimax-anthropic",
+        alias = "minimaxAnthropic",
+        alias = "mini-max-anthropic",
+        alias = "mini_max_anthropic"
+    )]
+    pub minimax_anthropic: ProviderConfig,
     #[serde(default, alias = "sakana-ai", alias = "sakana_ai", alias = "fugu")]
     pub sakana: ProviderConfig,
     #[serde(
@@ -2710,6 +2726,7 @@ impl ProvidersConfig {
             ("providers.zai", &self.zai),
             ("providers.stepfun", &self.stepfun),
             ("providers.minimax", &self.minimax),
+            ("providers.minimax_anthropic", &self.minimax_anthropic),
             ("providers.sakana", &self.sakana),
             ("providers.meta", &self.meta),
             ("providers.xai", &self.xai),
@@ -3490,6 +3507,7 @@ impl Config {
             ApiProvider::Zai => &providers.zai,
             ApiProvider::Stepfun => &providers.stepfun,
             ApiProvider::Minimax => &providers.minimax,
+            ApiProvider::MinimaxAnthropic => &providers.minimax_anthropic,
             ApiProvider::Sakana => &providers.sakana,
             ApiProvider::LongCat => &providers.longcat,
             ApiProvider::Meta => &providers.meta,
@@ -3553,6 +3571,7 @@ impl Config {
             ApiProvider::Zai => &mut providers.zai,
             ApiProvider::Stepfun => &mut providers.stepfun,
             ApiProvider::Minimax => &mut providers.minimax,
+            ApiProvider::MinimaxAnthropic => &mut providers.minimax_anthropic,
             ApiProvider::Sakana => &mut providers.sakana,
             ApiProvider::LongCat => &mut providers.longcat,
             ApiProvider::Meta => &mut providers.meta,
@@ -3747,7 +3766,7 @@ impl Config {
             ApiProvider::Zai => DEFAULT_ZAI_MODEL,
             ApiProvider::Stepfun => DEFAULT_STEPFUN_MODEL,
             ApiProvider::Anthropic => DEFAULT_ANTHROPIC_MODEL,
-            ApiProvider::Minimax => DEFAULT_MINIMAX_MODEL,
+            ApiProvider::Minimax | ApiProvider::MinimaxAnthropic => DEFAULT_MINIMAX_MODEL,
             ApiProvider::Sakana => DEFAULT_SAKANA_MODEL,
             ApiProvider::LongCat => DEFAULT_LONGCAT_MODEL,
             ApiProvider::Meta => DEFAULT_META_MODEL,
@@ -3804,6 +3823,7 @@ impl Config {
             | ApiProvider::Zai
             | ApiProvider::Stepfun
             | ApiProvider::Minimax
+            | ApiProvider::MinimaxAnthropic
             | ApiProvider::Sakana
             | ApiProvider::LongCat
             | ApiProvider::Meta
@@ -3867,6 +3887,7 @@ impl Config {
                         ApiProvider::Stepfun => DEFAULT_STEPFUN_BASE_URL,
                         ApiProvider::Anthropic => DEFAULT_ANTHROPIC_BASE_URL,
                         ApiProvider::Minimax => DEFAULT_MINIMAX_BASE_URL,
+                        ApiProvider::MinimaxAnthropic => DEFAULT_MINIMAX_ANTHROPIC_BASE_URL,
                         ApiProvider::Sakana => DEFAULT_SAKANA_BASE_URL,
                         ApiProvider::LongCat => DEFAULT_LONGCAT_BASE_URL,
                         ApiProvider::Meta => DEFAULT_META_BASE_URL,
@@ -5045,6 +5066,13 @@ fn apply_env_overrides(config: &mut Config) {
                     .minimax
                     .base_url = Some(value);
             }
+            ApiProvider::MinimaxAnthropic => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .minimax_anthropic
+                    .base_url = Some(value);
+            }
             ApiProvider::Sakana => {
                 config
                     .providers
@@ -5321,6 +5349,7 @@ fn apply_env_overrides(config: &mut Config) {
             ApiProvider::Zai => &mut providers.zai,
             ApiProvider::Stepfun => &mut providers.stepfun,
             ApiProvider::Minimax => &mut providers.minimax,
+            ApiProvider::MinimaxAnthropic => &mut providers.minimax_anthropic,
             ApiProvider::Sakana => &mut providers.sakana,
             ApiProvider::LongCat => &mut providers.longcat,
             ApiProvider::Meta => &mut providers.meta,
@@ -5567,6 +5596,7 @@ fn apply_env_overrides(config: &mut Config) {
                 ApiProvider::Zai => &mut providers.zai,
                 ApiProvider::Stepfun => &mut providers.stepfun,
                 ApiProvider::Minimax => &mut providers.minimax,
+                ApiProvider::MinimaxAnthropic => &mut providers.minimax_anthropic,
                 ApiProvider::Sakana => &mut providers.sakana,
                 ApiProvider::LongCat => &mut providers.longcat,
                 ApiProvider::Meta => &mut providers.meta,
@@ -6350,6 +6380,10 @@ fn merge_providers(
             zai: merge_provider_config(base.zai, override_cfg.zai),
             stepfun: merge_provider_config(base.stepfun, override_cfg.stepfun),
             minimax: merge_provider_config(base.minimax, override_cfg.minimax),
+            minimax_anthropic: merge_provider_config(
+                base.minimax_anthropic,
+                override_cfg.minimax_anthropic,
+            ),
             sakana: merge_provider_config(base.sakana, override_cfg.sakana),
             longcat: merge_provider_config(base.longcat, override_cfg.longcat),
             meta: merge_provider_config(base.meta, override_cfg.meta),

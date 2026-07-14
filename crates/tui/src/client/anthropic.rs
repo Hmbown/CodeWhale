@@ -27,6 +27,7 @@
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
+use crate::config::ApiProvider;
 use crate::llm_client::StreamEventBox;
 use crate::logging;
 use crate::models::{ContentBlock, MessageRequest, MessageResponse, StreamEvent, Usage};
@@ -116,25 +117,31 @@ impl DeepSeekClient {
             body["tool_choice"] = anthropic_tool_choice(tool_choice);
         }
 
-        // Thinking + effort shaping. "off" omits thinking entirely; any other
-        // tier enables adaptive thinking, with `output_config.effort` only on
-        // models the capability matrix marks as thinking-capable.
+        // Thinking + effort shaping. MiniMax supports adaptive/disabled but
+        // not Anthropic's output_config effort field; native Anthropic routes
+        // keep the existing effort mapping.
         let thinking_capable = crate::models::model_supports_reasoning(&request.model);
+        let is_minimax = self.api_provider == ApiProvider::MinimaxAnthropic;
         let effort = request
             .reasoning_effort
             .as_deref()
             .map(|raw| raw.trim().to_ascii_lowercase());
         match effort.as_deref() {
+            Some("off" | "disabled" | "none" | "false") if is_minimax && thinking_capable => {
+                body["thinking"] = json!({ "type": "disabled" });
+            }
             Some("off" | "disabled" | "none" | "false") => {}
             Some(level) if thinking_capable => {
                 body["thinking"] = json!({ "type": "adaptive" });
-                let mapped = match level {
-                    "low" | "minimal" => "low",
-                    "medium" | "mid" => "medium",
-                    "max" | "xhigh" | "highest" => "max",
-                    _ => "high",
-                };
-                body["output_config"] = json!({ "effort": mapped });
+                if !is_minimax {
+                    let mapped = match level {
+                        "low" | "minimal" => "low",
+                        "medium" | "mid" => "medium",
+                        "max" | "xhigh" | "highest" => "max",
+                        _ => "high",
+                    };
+                    body["output_config"] = json!({ "effort": mapped });
+                }
             }
             None if thinking_capable => {
                 body["thinking"] = json!({ "type": "adaptive" });
@@ -620,6 +627,22 @@ mod tests {
         DeepSeekClient::new(&config).expect("anthropic client constructs")
     }
 
+    fn minimax_test_client() -> DeepSeekClient {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let config = crate::config::Config {
+            provider: Some("minimax-anthropic".to_string()),
+            providers: Some(crate::config::ProvidersConfig {
+                minimax_anthropic: crate::config::ProviderConfig {
+                    api_key: Some("test-key".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        DeepSeekClient::new(&config).expect("MiniMax Messages client constructs")
+    }
+
     #[test]
     fn body_keeps_native_cache_control_on_system_and_tools() {
         let client = test_client();
@@ -703,6 +726,26 @@ mod tests {
             true,
         );
         assert!(body.get("thinking").is_none(), "{body}");
+        assert!(body.get("output_config").is_none(), "{body}");
+    }
+
+    #[test]
+    fn minimax_body_uses_supported_thinking_controls() {
+        let client = minimax_test_client();
+        let body =
+            client.build_anthropic_body(&request_with("MiniMax-M3", Some("off"), None, None), true);
+        assert_eq!(
+            body.pointer("/thinking/type").and_then(Value::as_str),
+            Some("disabled")
+        );
+        assert!(body.get("output_config").is_none(), "{body}");
+
+        let body = client
+            .build_anthropic_body(&request_with("MiniMax-M3", Some("high"), None, None), true);
+        assert_eq!(
+            body.pointer("/thinking/type").and_then(Value::as_str),
+            Some("adaptive")
+        );
         assert!(body.get("output_config").is_none(), "{body}");
     }
 
@@ -991,6 +1034,14 @@ mod tests {
         assert_eq!(
             anthropic_messages_url("https://api.deepseek.com/anthropic"),
             "https://api.deepseek.com/anthropic/v1/messages"
+        );
+        assert_eq!(
+            anthropic_messages_url("https://api.minimax.io/anthropic"),
+            "https://api.minimax.io/anthropic/v1/messages"
+        );
+        assert_eq!(
+            anthropic_messages_url("https://api.minimaxi.com/anthropic"),
+            "https://api.minimaxi.com/anthropic/v1/messages"
         );
     }
 }

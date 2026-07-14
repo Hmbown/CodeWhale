@@ -189,6 +189,10 @@ fn known_pricing_for_model(model_lower: &str) -> Option<ModelPricing> {
         // Moonshot K2.7 Code cache-read rate per
         // https://platform.kimi.ai/docs/pricing/chat-k27-code
         "moonshotai/kimi-k2.7-code" | "kimi-k2.7-code" => Some(usd_only_pricing(0.19, 0.95, 4.00)),
+        // MiniMax-M3 uses the lower standard tier for metadata-only lookups;
+        // cost estimation selects the correct tier from total input usage.
+        "minimax-m3" => Some(minimax_m3_standard_pricing(false)),
+        "minimax-m2.7" => Some(usd_pricing_with_write(0.06, 0.30, 1.20, 0.375)),
         // gpt-5-codex is deprecated upstream on the ChatGPT-OAuth path
         // (successor: gpt-5.3-codex); API usage is still billed at these rates.
         // https://developers.openai.com/api/docs/models/gpt-5.3-codex
@@ -213,7 +217,6 @@ fn known_pricing_for_model(model_lower: &str) -> Option<ModelPricing> {
         "z-ai/glm-5.1" | "glm-5.1" => Some(usd_only_pricing(0.26, 1.40, 4.40)),
         // GLM-5 Turbo pricing per https://docs.z.ai/guides/overview/pricing
         "z-ai/glm-5-turbo" | "glm-5-turbo" => Some(usd_only_pricing(0.24, 1.20, 4.00)),
-        "minimax/minimax-m3" | "minimax-m3" => Some(usd_only_pricing(0.06, 0.30, 1.20)),
         // Arcee publishes no cache rate for Trinity Large Thinking, so the
         // cache-hit rate equals the input rate (no-discount representation).
         // https://docs.arcee.ai/get-started/pricing
@@ -289,6 +292,25 @@ fn usd_pricing(
     }
 }
 
+const MINIMAX_M3_LONG_CONTEXT_THRESHOLD: u32 = 512_000;
+
+fn minimax_m3_standard_pricing(long_context: bool) -> ModelPricing {
+    if long_context {
+        usd_only_pricing(0.12, 0.60, 2.40)
+    } else {
+        usd_only_pricing(0.06, 0.30, 1.20)
+    }
+}
+
+fn pricing_for_model_and_usage(model: &str, usage: &Usage) -> Option<ModelPricing> {
+    if model.trim().eq_ignore_ascii_case("minimax-m3") {
+        return Some(minimax_m3_standard_pricing(
+            usage.input_tokens > MINIMAX_M3_LONG_CONTEXT_THRESHOLD,
+        ));
+    }
+    pricing_for_model(model)
+}
+
 /// Claude Sonnet 5 pricing (https://platform.claude.com/docs/en/about-claude/pricing):
 /// introductory 2.00 / 10.00 (cache-read 0.20, cache-write 2.50) through
 /// 2026-08-31 UTC, then the standard 3.00 / 15.00 (cache-read 0.30,
@@ -349,7 +371,7 @@ pub fn calculate_turn_cost_from_usage(model: &str, usage: &Usage) -> Option<f64>
 /// Calculate cost from provider usage in both official currencies.
 #[must_use]
 pub fn calculate_turn_cost_estimate_from_usage(model: &str, usage: &Usage) -> Option<CostEstimate> {
-    let pricing = pricing_for_model(model)?;
+    let pricing = pricing_for_model_and_usage(model, usage)?;
     Some(CostEstimate {
         usd: calculate_turn_cost_from_usage_with_pricing(pricing.usd, usage),
         cny: pricing
@@ -470,6 +492,12 @@ pub fn calculate_cache_savings(model: &str, cache_hit_tokens: u32) -> Option<Cos
     if cache_hit_tokens == 0 {
         return None;
     }
+    // M3's cache-read savings depend on whether total input crosses 512k;
+    // this helper receives only cache-hit tokens, so an estimate would guess
+    // the tier. The full turn-cost path has total input and remains precise.
+    if model.trim().eq_ignore_ascii_case("minimax-m3") {
+        return None;
+    }
     let pricing = pricing_for_model(model)?;
     let tokens = cache_hit_tokens as f64 / 1_000_000.0;
     Some(CostEstimate {
@@ -553,6 +581,32 @@ mod tests {
             assert_eq!(pricing.usd.output_per_million, output, "{model}");
             assert!(has_pricing_for_model(model));
         }
+    }
+
+    #[test]
+    fn minimax_m3_standard_pricing_tracks_the_512k_input_boundary() {
+        for (input_tokens, cache_read, input, output) in
+            [(512_000, 0.06, 0.30, 1.20), (512_001, 0.12, 0.60, 2.40)]
+        {
+            let usage = Usage {
+                input_tokens,
+                ..Usage::default()
+            };
+            let pricing = pricing_for_model_and_usage("MiniMax-M3", &usage).expect("M3 pricing");
+            assert_eq!(pricing.usd.input_cache_hit_per_million, cache_read);
+            assert_eq!(pricing.usd.input_cache_miss_per_million, input);
+            assert_eq!(pricing.usd.output_per_million, output);
+        }
+        assert!(calculate_cache_savings("MiniMax-M3", 1).is_none());
+    }
+
+    #[test]
+    fn minimax_m2_7_preserves_cache_read_and_write_rates() {
+        let pricing = pricing_for_model_at("MiniMax-M2.7", Utc::now()).expect("M2.7 pricing");
+        assert_eq!(pricing.usd.input_cache_hit_per_million, 0.06);
+        assert_eq!(pricing.usd.input_cache_miss_per_million, 0.30);
+        assert_eq!(pricing.usd.output_per_million, 1.20);
+        assert_eq!(pricing.usd.cache_write_per_million, Some(0.375));
     }
 
     #[test]

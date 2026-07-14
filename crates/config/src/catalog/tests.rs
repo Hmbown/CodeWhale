@@ -587,6 +587,39 @@ fn bundled_asset_yields_real_chat_offerings_for_key_models() {
     let kimi = find(&rows, "moonshot", "kimi-k2.7-code");
     assert_eq!(kimi.limit.as_ref().and_then(|l| l.context), Some(262_144));
 
+    let minimax_m3 = find(&rows, "minimax-anthropic", "MiniMax-M3");
+    assert_eq!(
+        minimax_m3.limit.as_ref().and_then(|limit| limit.context),
+        Some(1_000_000)
+    );
+    let input_modalities = minimax_m3
+        .modalities
+        .as_ref()
+        .expect("M3 modalities")
+        .input
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    assert_eq!(input_modalities, ["text", "image", "video"]);
+    assert_eq!(
+        minimax_m3.reasoning_options[0]
+            .get("default")
+            .and_then(serde_json::Value::as_str),
+        Some("disabled")
+    );
+
+    let minimax_m2_7 = find(&rows, "minimax-anthropic", "MiniMax-M2.7");
+    assert_eq!(
+        minimax_m2_7.limit.as_ref().and_then(|limit| limit.context),
+        Some(204_800)
+    );
+    assert_eq!(
+        minimax_m2_7.reasoning_options[0]
+            .get("default")
+            .and_then(serde_json::Value::as_str),
+        Some("always_on")
+    );
+
     // Audio/TTS rows are absent (the asset only ships chat models, but assert
     // the filter contract anyway).
     assert!(
@@ -629,6 +662,18 @@ fn bundled_asset_pricing_is_honest() {
     assert_eq!(cost.input, Some(1.40));
     assert_eq!(cost.output, Some(4.40));
     assert_eq!(cost.cache_read, Some(0.26));
+
+    // M3 has input-length and service tiers that the flat catalog cost shape
+    // cannot represent, so the bundled route row stays honestly unpriced.
+    let minimax_m3 = find(&rows, "minimax-anthropic", "MiniMax-M3");
+    assert!(minimax_m3.cost.is_none());
+
+    let minimax_m2_7 = find(&rows, "minimax-anthropic", "MiniMax-M2.7");
+    let cost = minimax_m2_7.cost.as_ref().expect("M2.7 is priced");
+    assert_eq!(cost.input, Some(0.30));
+    assert_eq!(cost.output, Some(1.20));
+    assert_eq!(cost.cache_read, Some(0.06));
+    assert_eq!(cost.cache_write, Some(0.375));
 }
 
 #[test]

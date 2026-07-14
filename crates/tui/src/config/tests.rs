@@ -67,6 +67,11 @@ fn deepseek_api_key_reads_metadata_env_vars_for_newer_providers() -> Result<()> 
         (ApiProvider::Stepfun, "STEPFUN_API_KEY", "stepfun-env-key"),
         (ApiProvider::Minimax, "MINIMAX_API_KEY", "minimax-env-key"),
         (
+            ApiProvider::MinimaxAnthropic,
+            "MINIMAX_API_KEY",
+            "minimax-env-key",
+        ),
+        (
             ApiProvider::Deepinfra,
             "DEEPINFRA_API_KEY",
             "deepinfra-env-key",
@@ -3942,6 +3947,14 @@ fn model_completion_names_for_minimax_include_direct_chat_models() {
 }
 
 #[test]
+fn model_completion_names_for_minimax_anthropic_include_target_models() {
+    let models = model_completion_names_for_provider(ApiProvider::MinimaxAnthropic);
+
+    assert!(models.contains(&DEFAULT_MINIMAX_MODEL));
+    assert!(models.contains(&MINIMAX_M2_7_MODEL));
+}
+
+#[test]
 fn model_completion_names_for_sakana_include_fugu_models() {
     assert_eq!(
         model_completion_names_for_provider(ApiProvider::Sakana),
@@ -7282,6 +7295,19 @@ fn provider_capability_minimax_direct_models_use_api_docs_shape() {
         assert_eq!(
             cap.request_payload_mode,
             RequestPayloadMode::ChatCompletions
+        );
+    }
+}
+
+#[test]
+fn provider_capability_minimax_anthropic_uses_messages_shape() {
+    for model in [DEFAULT_MINIMAX_MODEL, MINIMAX_M2_7_MODEL] {
+        let cap = provider_capability(ApiProvider::MinimaxAnthropic, model);
+        assert!(cap.thinking_supported, "{model}");
+        assert!(!cap.cache_telemetry_supported, "{model}");
+        assert_eq!(
+            cap.request_payload_mode,
+            RequestPayloadMode::AnthropicMessages
         );
     }
 }

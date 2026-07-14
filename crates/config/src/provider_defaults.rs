@@ -124,6 +124,7 @@ pub(crate) const MINIMAX_M2_1_MODEL: &str = "MiniMax-M2.1";
 pub(crate) const MINIMAX_M2_1_HIGHSPEED_MODEL: &str = "MiniMax-M2.1-highspeed";
 pub(crate) const MINIMAX_M2_MODEL: &str = "MiniMax-M2";
 pub(crate) const DEFAULT_MINIMAX_BASE_URL: &str = "https://api.minimax.io/v1";
+pub(crate) const DEFAULT_MINIMAX_ANTHROPIC_BASE_URL: &str = "https://api.minimax.io/anthropic";
 pub(crate) const DEFAULT_DEEPINFRA_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
 pub(crate) const DEFAULT_DEEPINFRA_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
 pub(crate) const DEFAULT_DEEPINFRA_BASE_URL: &str = "https://api.deepinfra.com/v1/openai";

@@ -940,6 +940,7 @@ fn default_reasoning_stream_visibility(provider: ApiProvider) -> ProviderReasoni
         | ApiProvider::Volcengine
         | ApiProvider::Arcee
         | ApiProvider::Minimax
+        | ApiProvider::MinimaxAnthropic
         | ApiProvider::Sglang
         | ApiProvider::Vllm
         | ApiProvider::Zai

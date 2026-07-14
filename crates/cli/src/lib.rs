@@ -61,6 +61,12 @@ enum ProviderArg {
     Zai,
     Stepfun,
     Minimax,
+    #[value(
+        alias = "minimax_anthropic",
+        alias = "mini-max-anthropic",
+        alias = "mini_max_anthropic"
+    )]
+    MinimaxAnthropic,
     #[value(alias = "deep-infra", alias = "deep_infra")]
     Deepinfra,
     #[value(alias = "fugu", alias = "sakana-ai", alias = "sakana_ai")]
@@ -107,6 +113,7 @@ impl From<ProviderArg> for ProviderKind {
             ProviderArg::Zai => ProviderKind::Zai,
             ProviderArg::Stepfun => ProviderKind::Stepfun,
             ProviderArg::Minimax => ProviderKind::Minimax,
+            ProviderArg::MinimaxAnthropic => ProviderKind::MinimaxAnthropic,
             ProviderArg::Deepinfra => ProviderKind::Deepinfra,
             ProviderArg::Sakana => ProviderKind::Sakana,
             ProviderArg::LongCat => ProviderKind::LongCat,
@@ -4336,6 +4343,8 @@ mod tests {
             ("zai", ProviderArg::Zai),
             ("stepfun", ProviderArg::Stepfun),
             ("minimax", ProviderArg::Minimax),
+            ("minimax-anthropic", ProviderArg::MinimaxAnthropic),
+            ("minimax_anthropic", ProviderArg::MinimaxAnthropic),
             ("deepinfra", ProviderArg::Deepinfra),
             ("deep-infra", ProviderArg::Deepinfra),
             ("siliconflow-cn", ProviderArg::SiliconflowCn),

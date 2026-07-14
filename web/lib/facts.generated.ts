@@ -18,7 +18,7 @@ export interface RepoFacts {
 }
 
 export const FACTS: RepoFacts = {
-  "generatedAt": "2026-07-14T03:21:25.297Z",
+  "generatedAt": "2026-07-14T04:52:31.545Z",
   "version": "0.8.68",
   "crates": [
     "agent",
@@ -181,6 +181,11 @@ export const FACTS: RepoFacts = {
     {
       "id": "minimax",
       "label": "MiniMax",
+      "env": "MINIMAX_API_KEY"
+    },
+    {
+      "id": "minimax-anthropic",
+      "label": "MiniMax (Anthropic-compatible)",
       "env": "MINIMAX_API_KEY"
     },
     {

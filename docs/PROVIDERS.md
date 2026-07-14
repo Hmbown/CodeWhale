@@ -235,6 +235,7 @@ the same links where possible.
 | `zai` | [Z.ai model API](https://z.ai/model-api) |
 | `stepfun` | [StepFun Open Platform](https://platform.stepfun.ai/) |
 | `minimax` | [MiniMax prerequisites](https://platform.minimax.io/docs/guides/quickstart-preparation) |
+| `minimax-anthropic` | [MiniMax prerequisites](https://platform.minimax.io/docs/guides/quickstart-preparation) |
 | `huggingface` | [Hugging Face tokens](https://huggingface.co/settings/tokens) |
 | `deepinfra` | [DeepInfra API keys](https://deepinfra.com/dash/api_keys) |
 | `together` | [Together API keys](https://api.together.ai/settings/api-keys) |
@@ -268,7 +269,8 @@ the same links where possible.
 | `moonshot` | `[providers.moonshot]` | `MOONSHOT_API_KEY`, `KIMI_API_KEY` | `MOONSHOT_BASE_URL`, `KIMI_BASE_URL`; default `https://api.moonshot.ai/v1` | `kimi-k2.7-code`, `kimi-k2.6`; Kimi Code path uses `kimi-for-coding` at `https://api.kimi.com/coding/v1` | Moonshot/Kimi route. `kimi` and `kimi-k2` aliases select `kimi-k2.7-code`; `MOONSHOT_MODEL`, `KIMI_MODEL_NAME`, and `KIMI_MODEL` are accepted. Kimi thinking streams through `reasoning_content`; CodeWhale keeps it in Thinking cells and replays it for thinking/tool-call continuity. `[providers.moonshot] auth_mode = "kimi_oauth"` reads Kimi Code OAuth credentials from `KIMI_CODE_HOME`/`~/.kimi-code`, with legacy `KIMI_SHARE_DIR`/`~/.kimi` fallback. |
 | `zai` | `[providers.zai]` | `ZAI_API_KEY`, `Z_AI_API_KEY` | `ZAI_BASE_URL`, `Z_AI_BASE_URL`; default `https://api.z.ai/api/coding/paas/v4`; general API `https://api.z.ai/api/paas/v4` | `GLM-5.2` default; `GLM-5.1`, `GLM-5-Turbo` available | Z.AI GLM Coding Plan route. `GLM-5.2` is the default; set `model = "GLM-5.1"` or `ZAI_MODEL=GLM-5.1` for the smaller model, or `GLM-5-Turbo` for the fast variant used by faster/explore sub-agents. |
 | `stepfun` | `[providers.stepfun]` | `STEPFUN_API_KEY`, `STEP_API_KEY` | `STEPFUN_BASE_URL`, `STEP_BASE_URL`; default `https://api.stepfun.ai/v1`; Coding Plan endpoint `https://api.stepfun.com/step_plan/v1` | `step-3.7-flash` | StepFun / StepFlash direct OpenAI-compatible route. Set `[providers.stepfun].base_url` or `STEP_BASE_URL` to the Coding Plan URL when using that plan. `STEPFUN_MODEL` and `STEP_MODEL` are accepted. |
-| `minimax` | `[providers.minimax]` | `MINIMAX_API_KEY` | `MINIMAX_BASE_URL`; default `https://api.minimax.io/v1`; Anthropic-compatible routes are `https://api.minimax.io/anthropic` globally and `https://api.minimaxi.com/anthropic` in China | `MiniMax-M3`, `MiniMax-M2.7`, `MiniMax-M2.7-highspeed`, `MiniMax-M2.5`, `MiniMax-M2.5-highspeed`, `MiniMax-M2.1`, `MiniMax-M2.1-highspeed`, `MiniMax-M2` | MiniMax direct OpenAI-compatible route. CodeWhale sends `reasoning_split = true` so MiniMax thinking arrives separately from answer text, and direct MiniMax IDs stay distinct from OpenRouter namespaced IDs such as `minimax/minimax-m3`. |
+| `minimax` | `[providers.minimax]` | `MINIMAX_API_KEY` | `MINIMAX_BASE_URL`; default `https://api.minimax.io/v1`; China `https://api.minimaxi.com/v1` | `MiniMax-M3`, `MiniMax-M2.7`, `MiniMax-M2.7-highspeed`, `MiniMax-M2.5`, `MiniMax-M2.5-highspeed`, `MiniMax-M2.1`, `MiniMax-M2.1-highspeed`, `MiniMax-M2` | MiniMax direct OpenAI-compatible route. CodeWhale sends `reasoning_split = true` so MiniMax thinking arrives separately from answer text. Official M3 input modalities are text, image, and video; M2.7 is text-only. |
+| `minimax-anthropic` | `[providers.minimax_anthropic]` | `MINIMAX_API_KEY` | `MINIMAX_ANTHROPIC_BASE_URL`; default `https://api.minimax.io/anthropic`; China `https://api.minimaxi.com/anthropic` | `MiniMax-M3`, `MiniMax-M2.7` | MiniMax direct Anthropic-compatible Messages route. Keep the `/anthropic` suffix because CodeWhale appends `/v1/messages`; the route uses `x-api-key`. M3 supports adaptive or disabled thinking. M2.7 always keeps thinking enabled. |
 | `sglang` | `[providers.sglang]` | Optional `SGLANG_API_KEY` | `SGLANG_BASE_URL`; default `http://localhost:30000/v1` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | Self-hosted OpenAI-compatible route. Localhost deployments commonly omit auth. `SGLANG_MODEL` is accepted. |
 | `vllm` | `[providers.vllm]` | Optional `VLLM_API_KEY` | `VLLM_BASE_URL`; default `http://localhost:8000/v1` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | Self-hosted vLLM OpenAI-compatible route. Localhost deployments commonly omit auth. `VLLM_MODEL` is accepted. |
 | `ollama` | `[providers.ollama]` | Optional `OLLAMA_API_KEY` | `OLLAMA_BASE_URL`; default `http://localhost:11434/v1` | `deepseek-coder:1.3b`; provider-hinted custom tags pass through | Self-hosted Ollama OpenAI-compatible route. Localhost deployments commonly omit auth. `OLLAMA_MODEL` is accepted. |
@@ -403,6 +405,7 @@ endpoint when the endpoint supports model listing.
 | `zai` | `GLM-5.2`, `GLM-5.1`, `GLM-5-Turbo`; provider-hinted custom model IDs pass through | yes | yes |
 | `stepfun` | `step-3.7-flash` | yes | no |
 | `minimax` | `MiniMax-M3`, `MiniMax-M2.7`, `MiniMax-M2.7-highspeed`, `MiniMax-M2.5`, `MiniMax-M2.5-highspeed`, `MiniMax-M2.1`, `MiniMax-M2.1-highspeed`, `MiniMax-M2` | yes | yes |
+| `minimax-anthropic` | `MiniMax-M3`, `MiniMax-M2.7` | yes | yes |
 | `sglang` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | yes | yes |
 | `vllm` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | yes | yes |
 | `ollama` | `deepseek-coder:1.3b`; custom tags pass through when provider hint is `ollama` | yes | no |
@@ -431,7 +434,8 @@ metadata, not a live API probe. Current fields are:
 `thinking_supported`, `cache_telemetry_supported`, and `request_payload_mode`.
 
 Most shipped providers use the Chat Completions request payload mode. Native
-Anthropic and OpenModel use Messages, and `openai-codex` uses Responses.
+Messages routes, including `minimax-anthropic`, use `/v1/messages`, and
+`openai-codex` uses Responses.
 
 For OpenAI-compatible gateways or self-hosted runtimes whose real window
 differs from the static table, set `[providers.<name>] context_window = N`.
@@ -463,10 +467,31 @@ context-pressure checks, compaction, and output-cap budgeting.
 | Direct Z.AI `GLM-5-Turbo` | 202,752 | 131,072 | yes | no | faster/explore sub-agent sibling |
 | Direct MiniMax `MiniMax-M3` | 1,000,000 | 524,288 | yes | no | not documented in code |
 | Direct MiniMax M2.x models | 204,800 | 4,096 fallback until MiniMax output metadata is promoted | yes | no | not documented in code |
+| MiniMax Messages route (`MiniMax-M3`, `MiniMax-M2.7`) | model-specific values above | model-specific values above | yes | no | route uses `/anthropic/v1/messages` |
 | Generic `openai` and AtlasCloud | 128,000 | 4,096 | no in doctor capability metadata | no | not documented in code |
 | Ollama | 8,192 | 4,096 | no | no | not documented in code |
 | Hugging Face Inference Providers V4 model IDs | 131,072 | 4,096 | yes | no | not documented in code |
 | Other recognized DeepSeek model IDs | 128,000 unless the model name carries an explicit `Nk` hint | 4,096 | no unless V4/reasoner logic matches | DeepSeek/NIM only | DeepSeek beta only |
+
+MiniMax M3 uses input-length and service tiers. CodeWhale omits
+`service_tier`, so requests use the standard tier and cost estimates select the
+correct standard rate from total input usage. Priority rates are listed to keep
+the official tier structure visible. Prices are USD per million tokens.
+
+| Model / service tier | Input length | Input | Output | Cache read | Cache write |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `MiniMax-M3` standard | up to 512,000 input tokens | $0.30 | $1.20 | $0.06 | not published |
+| `MiniMax-M3` standard | over 512,000 input tokens | $0.60 | $2.40 | $0.12 | not published |
+| `MiniMax-M3` priority | up to 512,000 input tokens | $0.45 | $1.80 | $0.09 | not published |
+| `MiniMax-M3` priority | over 512,000 input tokens | $0.90 | $3.60 | $0.18 | not published |
+| `MiniMax-M2.7` standard | all supported inputs | $0.30 | $1.20 | $0.06 | $0.375 |
+
+These values come from the [MiniMax pay-as-you-go pricing
+guide](https://platform.minimax.io/docs/guides/pricing-paygo). M3 thinking is
+adaptive or disabled; the OpenAI-compatible API defaults to adaptive and the
+Anthropic-compatible API defaults to disabled. M2.7 thinking cannot be
+disabled. CodeWhale sends explicit controls when the user selects a reasoning
+mode.
 
 Tool-call support is tracked separately by the static `ModelRegistry` and by
 the endpoint's ability to accept OpenAI-compatible `tools` payloads. A custom

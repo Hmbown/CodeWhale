@@ -935,7 +935,10 @@ fn is_auth_dialect_header(header_name: &HeaderName) -> bool {
 fn api_provider_uses_anthropic_messages(api_provider: ApiProvider) -> bool {
     matches!(
         api_provider,
-        ApiProvider::Anthropic | ApiProvider::DeepseekAnthropic | ApiProvider::Openmodel
+        ApiProvider::Anthropic
+            | ApiProvider::DeepseekAnthropic
+            | ApiProvider::MinimaxAnthropic
+            | ApiProvider::Openmodel
     )
 }
 
@@ -1993,10 +1996,12 @@ pub(super) fn apply_reasoning_effort(
                 // #3024: Ollama OpenAI-compat endpoint accepts think param.
                 body["think"] = json!(false);
             }
-            ApiProvider::Anthropic | ApiProvider::DeepseekAnthropic | ApiProvider::Openmodel => {
-                // #3014: thinking/effort shaping happens natively inside
-                // client/anthropic.rs (adaptive thinking + output_config),
-                // not via OpenAI-dialect fields.
+            ApiProvider::Anthropic
+            | ApiProvider::DeepseekAnthropic
+            | ApiProvider::MinimaxAnthropic
+            | ApiProvider::Openmodel => {
+                // Thinking shaping happens in the Messages adapter, which
+                // applies each provider's supported control fields.
             }
             ApiProvider::NvidiaNim => {
                 body["chat_template_kwargs"] = json!({
@@ -2078,10 +2083,12 @@ pub(super) fn apply_reasoning_effort(
                 // #3024: Ollama think param.
                 body["think"] = json!(true);
             }
-            ApiProvider::Anthropic | ApiProvider::DeepseekAnthropic | ApiProvider::Openmodel => {
-                // #3014: thinking/effort shaping happens natively inside
-                // client/anthropic.rs (adaptive thinking + output_config),
-                // not via OpenAI-dialect fields.
+            ApiProvider::Anthropic
+            | ApiProvider::DeepseekAnthropic
+            | ApiProvider::MinimaxAnthropic
+            | ApiProvider::Openmodel => {
+                // Thinking shaping happens in the Messages adapter, which
+                // applies each provider's supported control fields.
             }
             ApiProvider::NvidiaNim => {
                 body["chat_template_kwargs"] = json!({
@@ -2150,10 +2157,12 @@ pub(super) fn apply_reasoning_effort(
                 // #3024: Ollama think param.
                 body["think"] = json!(true);
             }
-            ApiProvider::Anthropic | ApiProvider::DeepseekAnthropic | ApiProvider::Openmodel => {
-                // #3014: thinking/effort shaping happens natively inside
-                // client/anthropic.rs (adaptive thinking + output_config),
-                // not via OpenAI-dialect fields.
+            ApiProvider::Anthropic
+            | ApiProvider::DeepseekAnthropic
+            | ApiProvider::MinimaxAnthropic
+            | ApiProvider::Openmodel => {
+                // Thinking shaping happens in the Messages adapter, which
+                // applies each provider's supported control fields.
             }
             ApiProvider::NvidiaNim => {
                 body["chat_template_kwargs"] = json!({
@@ -2383,6 +2392,24 @@ mod tests {
             ..Config::default()
         })
         .expect("deepseek anthropic client")
+    }
+
+    fn minimax_anthropic_client_with_base_url(base_url: String) -> DeepSeekClient {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let providers = ProvidersConfig {
+            minimax_anthropic: ProviderConfig {
+                api_key: Some("minimax-test".to_string()),
+                base_url: Some(base_url),
+                ..ProviderConfig::default()
+            },
+            ..ProvidersConfig::default()
+        };
+        DeepSeekClient::new(&Config {
+            provider: Some("minimax-anthropic".to_string()),
+            providers: Some(providers),
+            ..Config::default()
+        })
+        .expect("minimax anthropic client")
     }
 
     fn zai_client_for_test() -> DeepSeekClient {
@@ -2629,6 +2656,14 @@ mod tests {
             api_url("https://api.deepseek.com/beta", "models"),
             "https://api.deepseek.com/v1/models"
         );
+        assert_eq!(
+            api_url("https://api.minimax.io/anthropic", "models"),
+            "https://api.minimax.io/anthropic/v1/models"
+        );
+        assert_eq!(
+            api_url("https://api.minimaxi.com/anthropic", "models"),
+            "https://api.minimaxi.com/anthropic/v1/models"
+        );
         // explicit v<N> versions other than /v1 should be preserved
         assert_eq!(
             api_url(
@@ -2863,6 +2898,31 @@ mod tests {
     }
 
     #[test]
+    fn minimax_anthropic_uses_anthropic_header_dialect() {
+        let headers = DeepSeekClient::default_headers_for_provider(
+            "minimax-test",
+            &HashMap::new(),
+            ApiProvider::MinimaxAnthropic,
+            crate::config::DEFAULT_MINIMAX_ANTHROPIC_BASE_URL,
+        )
+        .expect("headers");
+
+        assert_eq!(
+            headers
+                .get("x-api-key")
+                .and_then(|value| value.to_str().ok()),
+            Some("minimax-test")
+        );
+        assert_eq!(
+            headers
+                .get("anthropic-version")
+                .and_then(|value| value.to_str().ok()),
+            Some("2023-06-01")
+        );
+        assert!(headers.get(AUTHORIZATION).is_none());
+    }
+
+    #[test]
     fn openmodel_uses_bearer_auth_with_anthropic_version() {
         let mut extra = HashMap::new();
         extra.insert("Authorization".to_string(), "Bearer wrong".to_string());
@@ -2962,6 +3022,78 @@ mod tests {
             requests.is_empty(),
             "DeepSeek Anthropic-compatible route must not probe /models"
         );
+    }
+
+    #[tokio::test]
+    async fn minimax_anthropic_health_check_uses_models_endpoint() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/anthropic/v1/models"))
+            .and(header("x-api-key", "minimax-test"))
+            .and(header("anthropic-version", "2023-06-01"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": []})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = minimax_anthropic_client_with_base_url(format!("{}/anthropic", server.uri()));
+
+        assert!(client.health_check().await.expect("health check"));
+    }
+
+    #[tokio::test]
+    async fn minimax_anthropic_request_uses_messages_endpoint() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/anthropic/v1/messages"))
+            .and(header("x-api-key", "minimax-test"))
+            .and(header("anthropic-version", "2023-06-01"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "ok"}],
+                "model": "MiniMax-M3",
+                "stop_reason": "end_turn",
+                "stop_sequence": null,
+                "usage": {"input_tokens": 3, "output_tokens": 1}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = minimax_anthropic_client_with_base_url(format!("{}/anthropic", server.uri()));
+        let response = client
+            .create_message(MessageRequest {
+                model: "MiniMax-M3".to_string(),
+                messages: vec![Message {
+                    role: "user".to_string(),
+                    content: vec![ContentBlock::Text {
+                        text: "hello".to_string(),
+                        cache_control: None,
+                    }],
+                }],
+                max_tokens: 32,
+                system: None,
+                tools: None,
+                tool_choice: None,
+                metadata: None,
+                thinking: None,
+                reasoning_effort: Some("off".to_string()),
+                stream: Some(false),
+                temperature: None,
+                top_p: None,
+            })
+            .await
+            .expect("message succeeds");
+
+        assert_eq!(response.content.len(), 1);
+        let requests = server.received_requests().await.expect("recorded requests");
+        let body: Value = serde_json::from_slice(&requests[0].body).expect("request JSON");
+        assert_eq!(
+            body.pointer("/thinking/type").and_then(Value::as_str),
+            Some("disabled")
+        );
+        assert!(body.get("output_config").is_none(), "{body}");
     }
 
     #[tokio::test]

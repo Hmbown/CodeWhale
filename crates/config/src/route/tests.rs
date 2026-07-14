@@ -161,9 +161,10 @@ fn descriptor_protocol_matches_provider_wire() {
         );
         let expected = match kind {
             ProviderKind::OpenaiCodex => RequestProtocol::Responses,
-            ProviderKind::DeepseekAnthropic | ProviderKind::Anthropic | ProviderKind::Openmodel => {
-                RequestProtocol::AnthropicMessages
-            }
+            ProviderKind::DeepseekAnthropic
+            | ProviderKind::Anthropic
+            | ProviderKind::MinimaxAnthropic
+            | ProviderKind::Openmodel => RequestProtocol::AnthropicMessages,
             _ => RequestProtocol::ChatCompletions,
         };
         assert_eq!(d.protocol(), expected, "{kind:?} protocol mismatch");
@@ -360,6 +361,24 @@ fn resolver_carries_models_dev_limits_into_ready_candidate() {
     assert_eq!(out.limits.input_tokens, Some(900_000));
     assert_eq!(out.limits.output_tokens, Some(131_072));
     assert!(out.limits.has_known_limit());
+}
+
+#[test]
+fn minimax_anthropic_routes_use_catalog_limits_and_messages_protocol() {
+    let resolver = RouteResolver::new();
+
+    for (model, context) in [("MiniMax-M3", 1_000_000), ("MiniMax-M2.7", 204_800)] {
+        let route = resolver
+            .resolve(&req(Some(ProviderKind::MinimaxAnthropic), Some(model)))
+            .expect("MiniMax Messages route should resolve");
+
+        assert_eq!(route.provider_kind, ProviderKind::MinimaxAnthropic);
+        assert_eq!(route.wire_model_id.as_str(), model);
+        assert_eq!(route.protocol, RequestProtocol::AnthropicMessages);
+        assert_eq!(route.endpoint.protocol, RequestProtocol::AnthropicMessages);
+        assert_eq!(route.endpoint.base_url, "https://api.minimax.io/anthropic");
+        assert_eq!(route.limits.context_tokens, Some(context));
+    }
 }
 
 #[test]
