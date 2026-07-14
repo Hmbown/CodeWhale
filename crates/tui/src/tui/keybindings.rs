@@ -221,7 +221,9 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
         section: KeybindingSection::Submission,
     },
     KeybindingEntry {
-        chord: "Ctrl+Shift+T",
+        // `/transcript` is the reliable fallback when a terminal cannot
+        // distinguish Ctrl+Shift+T from Ctrl+T.
+        chord: "/transcript / Ctrl+Shift+T",
         description_id: crate::localization::MessageId::KbLiveTranscript,
         section: KeybindingSection::Submission,
     },
@@ -366,6 +368,16 @@ mod tests {
                 "wired transcript shortcut missing from help: {wired}"
             );
         }
+    }
+
+    #[test]
+    fn live_transcript_documents_command_before_shaky_chord() {
+        let transcript = KEYBINDINGS
+            .iter()
+            .find(|entry| entry.description_id == crate::localization::MessageId::KbLiveTranscript)
+            .expect("live transcript entry should be documented");
+
+        assert_eq!(transcript.chord, "/transcript / Ctrl+Shift+T");
     }
 
     #[test]

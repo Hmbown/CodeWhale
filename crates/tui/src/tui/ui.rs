@@ -9210,6 +9210,9 @@ async fn apply_command_result(
             AppAction::OpenContextInspector => {
                 open_context_inspector(app);
             }
+            AppAction::OpenLiveTranscript => {
+                open_live_transcript_overlay(app);
+            }
             AppAction::CompactContext => {
                 app.status_message = Some("Compacting context...".to_string());
                 let _ = engine_handle.send(Op::CompactContext).await;
@@ -10746,12 +10749,9 @@ fn open_backtrack_overlay(app: &mut App) {
     app.needs_redraw = true;
 }
 
-/// Toggle the live transcript overlay on `Ctrl+Shift+T`. Closes the overlay if it's
-/// already on top; otherwise pushes a fresh one in sticky-tail mode.
-fn toggle_live_transcript_overlay(app: &mut App) {
+/// Open a fresh live transcript overlay in sticky-tail mode.
+fn open_live_transcript_overlay(app: &mut App) {
     if app.view_stack.top_kind() == Some(ModalKind::LiveTranscript) {
-        app.view_stack.pop();
-        app.needs_redraw = true;
         return;
     }
     let mut overlay = LiveTranscriptOverlay::new();
@@ -10759,6 +10759,17 @@ fn toggle_live_transcript_overlay(app: &mut App) {
     app.view_stack.push(overlay);
     app.status_message = Some("Live transcript: tailing (Esc to close)".to_string());
     app.needs_redraw = true;
+}
+
+/// Toggle the live transcript overlay on `Ctrl+Shift+T`. Closes the overlay if it's
+/// already on top; otherwise uses the same open path as `/transcript`.
+fn toggle_live_transcript_overlay(app: &mut App) {
+    if app.view_stack.top_kind() == Some(ModalKind::LiveTranscript) {
+        app.view_stack.pop();
+        app.needs_redraw = true;
+        return;
+    }
+    open_live_transcript_overlay(app);
 }
 
 /// Open the `/model` picker pre-filtered to `provider` (#3083). The model

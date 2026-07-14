@@ -6823,6 +6823,8 @@ pub enum AppAction {
         api_timeout_secs: u64,
         heartbeat_timeout_secs: u64,
     },
+    /// Open the live transcript overlay through a terminal-safe command path.
+    OpenLiveTranscript,
     OpenContextInspector,
     CompactContext,
     PurgeContext,

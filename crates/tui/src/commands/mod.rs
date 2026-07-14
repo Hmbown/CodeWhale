@@ -435,6 +435,21 @@ mod tests {
     }
 
     #[test]
+    fn transcript_command_is_discoverable_and_opens_live_overlay() {
+        let transcript = command_infos()
+            .into_iter()
+            .find(|cmd| cmd.name == "transcript")
+            .expect("transcript command should exist");
+        assert_eq!(transcript.usage, "/transcript");
+        assert!(transcript.show_in_empty_discovery());
+
+        let mut app = create_test_app();
+        let result = execute("/transcript", &mut app);
+        assert!(!result.is_error);
+        assert!(matches!(result.action, Some(AppAction::OpenLiveTranscript)));
+    }
+
+    #[test]
     fn hf_alias_dispatches_to_concepts_helper() {
         let mut app = create_test_app();
         let result = execute("/huggingface concepts", &mut app);

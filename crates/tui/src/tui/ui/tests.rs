@@ -63,6 +63,22 @@ fn underwater_motion_keeps_its_smoother_cadence_during_live_status() {
 }
 
 #[test]
+fn live_transcript_command_open_path_is_idempotent() {
+    let mut app = create_test_app();
+
+    open_live_transcript_overlay(&mut app);
+    open_live_transcript_overlay(&mut app);
+
+    assert_eq!(app.view_stack.top_kind(), Some(ModalKind::LiveTranscript));
+    app.view_stack.pop();
+    assert_eq!(
+        app.view_stack.top_kind(),
+        None,
+        "opening twice must not stack duplicate transcript overlays"
+    );
+}
+
+#[test]
 fn config_update_preview_suppresses_only_success_message_not_action_or_errors() {
     let preview = prepare_config_update_result(
         commands::CommandResult::with_message_and_action(
