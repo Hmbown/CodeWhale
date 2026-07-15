@@ -686,6 +686,9 @@ pub fn build_router(state: RuntimeApiState) -> Router {
         .route("/v1/usage", get(get_usage))
         .route("/v1/snapshots", get(list_snapshots))
         .route("/v1/snapshots/{id}/restore", post(restore_snapshot))
+        .route("/v1/providers", get(list_providers))
+        .route("/v1/providers/{id}/models", get(list_provider_models))
+        .route("/v1/providers/{id}/switch", post(switch_provider))
         .route("/v1/config", get(get_config).post(set_config))
         .route("/v1/config/reload", post(reload_config))
         .route_layer(middleware::from_fn_with_state(
@@ -3037,6 +3040,361 @@ fn snapshot_entries_for_workspace(
         .collect())
 }
 
+// ── Provider / Model catalog endpoints ──
+
+/// Entry in `GET /v1/providers`.
+///
+/// Exposes the static provider registry so the GUI can render a dynamic
+/// provider picker instead of hard-coding `deepseek` only. The `id` matches
+/// `ApiProvider::as_str()` and is the value the GUI should send back via
+/// `POST /v1/config { key: "provider", value: <id> }`.
+#[derive(Debug, Clone, Serialize)]
+struct ProviderEntry {
+    /// Stable identifier — matches `ApiProvider::as_str()` and the TOML
+    /// `provider = "<id>"` key. Use this as the canonical value when
+    /// persisting or comparing.
+    id: String,
+    /// Human-friendly name for picker UIs (e.g. "DeepSeek", "OpenAI").
+    display_name: String,
+    /// Default base URL for this provider ( informational; the live base URL
+    /// may be overridden in config.toml).
+    default_base_url: String,
+    /// Default model id for this provider, if any. Empty for pass-through
+    /// providers (Ollama / Custom) that expose no built-in catalog.
+    default_model: String,
+    /// Whether this provider exposes a built-in model list. When false, the
+    /// GUI should render a free-text input instead of calling
+    /// `/v1/providers/{id}/models`.
+    has_model_catalog: bool,
+    /// API key environment variable candidates, e.g. `["DEEPSEEK_API_KEY"]`.
+    /// The GUI may surface these in a tooltip when auth is missing.
+    env_vars: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ProvidersResponse {
+    /// Currently active provider id (matches `GET /v1/config`'s `provider`).
+    current: String,
+    providers: Vec<ProviderEntry>,
+}
+
+/// Entry in `GET /v1/providers/{id}/models`.
+#[derive(Debug, Clone, Serialize)]
+struct ProviderModelEntry {
+    /// Canonical model id (suitable for `default_text_model` or
+    /// `POST /v1/threads/{id}` `model` field).
+    id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ProviderModelsResponse {
+    provider: String,
+    models: Vec<ProviderModelEntry>,
+}
+
+fn push_unique_model(models: &mut Vec<String>, model: &str) {
+    let model = model.trim();
+    if !model.is_empty()
+        && !models
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(model))
+    {
+        models.push(model.to_string());
+    }
+}
+
+fn normalize_api_base_url(base_url: &str) -> String {
+    base_url.trim().trim_end_matches('/').to_ascii_lowercase()
+}
+
+fn provider_uses_custom_route_for_api(config: &Config, provider: ApiProvider) -> bool {
+    config
+        .provider_config_for(provider)
+        .and_then(|entry| entry.base_url.as_deref())
+        .is_some_and(|base_url| {
+            normalize_api_base_url(base_url) != normalize_api_base_url(provider.default_base_url())
+        })
+}
+
+fn provider_models_for_api(
+    config: &Config,
+    active_provider: ApiProvider,
+    provider: ApiProvider,
+) -> Vec<String> {
+    let mut models = Vec::new();
+    if let Some(model) = config
+        .provider_config_for(provider)
+        .and_then(|entry| entry.model.as_deref())
+    {
+        push_unique_model(&mut models, model);
+    }
+    if provider == active_provider {
+        let active_model = config.default_model();
+        if !active_model.trim().eq_ignore_ascii_case("auto") {
+            push_unique_model(&mut models, &active_model);
+        }
+        if config.model_ids_pass_through() {
+            return models;
+        }
+    }
+    if provider_uses_custom_route_for_api(config, provider) {
+        return models;
+    }
+    for model in crate::provider_lake::models_for_provider(config, active_provider, provider) {
+        push_unique_model(&mut models, &model);
+    }
+    models
+}
+
+fn provider_default_model_for_api(
+    config: &Config,
+    active_provider: ApiProvider,
+    provider: ApiProvider,
+) -> String {
+    if provider == active_provider {
+        return config.default_model();
+    }
+    provider_models_for_api(config, active_provider, provider)
+        .into_iter()
+        .next()
+        .unwrap_or_default()
+}
+
+async fn list_providers(
+    State(state): State<RuntimeApiState>,
+) -> Result<Json<ProvidersResponse>, ApiError> {
+    let config = state.config.read().clone();
+    let active_provider = config.api_provider();
+    let current = active_provider.as_str().to_string();
+    let mut providers = Vec::new();
+    for api_provider in ApiProvider::sorted_for_display() {
+        let default_model = provider_default_model_for_api(&config, active_provider, api_provider);
+        let has_model_catalog =
+            !crate::provider_lake::all_catalog_models_for_provider(api_provider).is_empty();
+        providers.push(ProviderEntry {
+            id: api_provider.as_str().to_string(),
+            display_name: api_provider.display_name().to_string(),
+            default_base_url: api_provider.default_base_url().to_string(),
+            default_model,
+            has_model_catalog,
+            env_vars: api_provider
+                .env_vars()
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
+        });
+    }
+    Ok(Json(ProvidersResponse { current, providers }))
+}
+
+#[derive(Debug, Deserialize)]
+struct ListProviderModelsParams {
+    /// Optional filter: when provided, models whose id contains this
+    /// substring (case-insensitive) are returned. Currently informational —
+    /// the catalog is small enough to filter client-side.
+    #[serde(default)]
+    #[allow(dead_code)]
+    filter: Option<String>,
+}
+
+async fn list_provider_models(
+    State(state): State<RuntimeApiState>,
+    Path(id): Path<String>,
+    _params: Query<ListProviderModelsParams>,
+) -> Result<Json<ProviderModelsResponse>, ApiError> {
+    let config = state.config.read().clone();
+    let active_provider = config.api_provider();
+    let api_provider = ApiProvider::parse(&id)
+        .ok_or_else(|| ApiError::bad_request(format!("Unknown provider id '{id}'")))?;
+    // Reject requests for the legacy deepseek-cn alias that has no
+    // ProviderKind metadata — the GUI should use `deepseek` instead.
+    if api_provider == ApiProvider::DeepseekCN {
+        return Err(ApiError::bad_request(
+            "provider 'deepseek-cn' is a legacy alias; use 'deepseek' instead",
+        ));
+    }
+    let models = provider_models_for_api(&config, active_provider, api_provider)
+        .into_iter()
+        .map(|id| ProviderModelEntry { id: id.to_string() })
+        .collect();
+    Ok(Json(ProviderModelsResponse {
+        provider: api_provider.as_str().to_string(),
+        models,
+    }))
+}
+
+/// Request body for `POST /v1/providers/{id}/switch`.
+///
+/// Mirrors the TUI's `AppAction::SwitchProvider { provider, model }` payload
+/// (see `tui/ui.rs::switch_provider`). `model` is optional: when omitted,
+/// the runtime resolves the active model from `[providers.<id>].model` (or
+/// the provider's built-in default) and **does not** persist a `model` key,
+/// so the user's per-provider config is preserved. When provided, the model
+/// is normalized, persisted for the target provider, and (for DeepSeek
+/// providers) also pinned as `default_text_model`.
+#[derive(Debug, Deserialize, Default)]
+struct SwitchProviderRequest {
+    #[serde(default)]
+    model: Option<String>,
+}
+
+/// Response for `POST /v1/providers/{id}/switch`.
+#[derive(Debug, Serialize)]
+struct SwitchProviderResponse {
+    /// The provider id that was switched to (echoes the path).
+    provider: String,
+    /// The resolved active model after the switch. This is the model the
+    /// runtime will use for new turns — either the user-supplied override
+    /// or the value resolved from `[providers.<id>].model` / the
+    /// provider's built-in default. The GUI should display *this* value,
+    /// not `ProviderEntry.default_model`, to avoid showing the catalog
+    /// default when the user has configured a different model.
+    model: String,
+    /// Human-readable status message for logging/toasts.
+    message: String,
+    /// Whether the new provider + model were persisted to config.toml.
+    persisted: bool,
+}
+
+/// `POST /v1/providers/{id}/switch` — switch the active provider, optionally
+/// overriding the model.
+///
+/// This is the GUI-facing counterpart of the TUI's `/provider` slash command
+/// (`commands/groups/core/provider.rs`) and `AppAction::SwitchProvider`
+/// (`tui/ui.rs::switch_provider`). It exists so the GUI does not have to
+/// simulate the switch with multiple `POST /v1/config` calls + a reload,
+/// which historically led to two bugs:
+///
+/// 1. The GUI persisted `model = <catalog default>` even when the user
+///    clicked the picker without choosing a model, clobbering a user-set
+///    `[providers.<id>].model` (e.g. `glm-2` overwritten with
+///    `deepseek-v4-pro`).
+/// 2. The GUI then displayed the catalog default instead of the actually
+///    resolved model, because it never asked the backend what model was
+///    selected.
+///
+/// Persistence mirrors `switch_provider` (ui.rs:9390-9410):
+/// - `provider` is always persisted (root `provider` key).
+/// - `model` is persisted **only** when `model_override.is_some()`, via
+///   `persist_provider_model_key` (writes `[providers.<id>].model`, or the
+///   root `default_text_model` for DeepSeek). The `Settings` provider-model
+///   map is updated the same way, including the DeepSeek-specific
+///   `default_model` pin.
+/// - Config is reloaded from disk and synced to active engines via
+///   `runtime_threads.reload_config`, exactly like `POST /v1/config/reload`.
+async fn switch_provider(
+    State(state): State<RuntimeApiState>,
+    Path(id): Path<String>,
+    Json(req): Json<SwitchProviderRequest>,
+) -> Result<Json<SwitchProviderResponse>, ApiError> {
+    use crate::config_persistence;
+
+    let target = ApiProvider::parse(&id)
+        .ok_or_else(|| ApiError::bad_request(format!("Unknown provider id '{id}'")))?;
+    // Reject the legacy deepseek-cn alias — same guard as list_provider_models.
+    if target == ApiProvider::DeepseekCN {
+        return Err(ApiError::bad_request(
+            "provider 'deepseek-cn' is a legacy alias; use 'deepseek' instead",
+        ));
+    }
+
+    // Normalize the optional model override against the *target* provider.
+    // Mirrors `set_config`'s `model` branch, which validates against the
+    // active route — except here we validate against the target provider,
+    // because the active route is about to change.
+    let model_override: Option<String> = match req.model.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(raw) => Some(normalize_runtime_config_model(target, raw)?),
+    };
+
+    // Resolve the target provider identity *before* mutating config, so
+    // persistence uses the same key the TUI's switch_provider would.
+    let (provider_identity, _active_provider) = {
+        let config = state.config.read();
+        (config.provider_identity_for(target), config.api_provider())
+    };
+
+    // Persist `provider` (always) + `model` (only when explicitly given).
+    // This is the critical TUI-parity rule: a bare `/provider <id>` (no
+    // model arg) MUST NOT write a `model` key, otherwise the user's
+    // per-provider `[providers.<id>].model` config gets overwritten with
+    // whatever the runtime resolves as the default.
+    config_persistence::persist_root_string_key(
+        state.config_path.as_deref(),
+        "provider",
+        &provider_identity,
+    )
+    .map_err(|e| ApiError::internal(format!("Failed to persist provider: {e}")))?;
+
+    if let Some(ref model) = model_override {
+        config_persistence::persist_provider_model_key(
+            state.config_path.as_deref(),
+            target,
+            &provider_identity,
+            model,
+        )
+        .map_err(|e| ApiError::internal(format!("Failed to persist model: {e}")))?;
+
+        // Mirror the TUI's Settings update (ui.rs:9398-9406): record the
+        // provider→model mapping, and for DeepSeek also pin the global
+        // `default_model`. Failures here are non-fatal — the config.toml
+        // write above is the source of truth.
+        if let Ok(mut settings) = crate::settings::Settings::load_persisted() {
+            settings.set_model_for_provider(target.as_str(), model);
+            if matches!(target, ApiProvider::Deepseek | ApiProvider::DeepseekCN) {
+                let _ = settings.set("default_model", model);
+            }
+            let _ = settings.save();
+        }
+    }
+
+    // Reload config from disk and sync to active engines. This matches
+    // `POST /v1/config/reload` exactly: load → validate thread routes →
+    // swap in the new config. A failure here means an active thread's
+    // route is invalid under the new provider — surface it so the GUI can
+    // tell the user to fix their config.
+    let reloaded = Config::load(state.config_path.clone(), state.config_profile.as_deref())
+        .map_err(|e| ApiError::internal(format!("Failed to reload config: {e}")))?;
+    state
+        .runtime_threads
+        .reload_config(reloaded.clone())
+        .await
+        .map_err(|err| ApiError::bad_request(format!("Config reload rejected: {err}")))?;
+    {
+        let mut config = state.config.write();
+        *config = reloaded;
+    }
+
+    // Read the resolved active model + provider from the freshly reloaded
+    // config. This is the value the GUI must display — NOT the catalog
+    // default and NOT the previously-active model.
+    let (active_provider, active_model) = {
+        let config = state.config.read();
+        (config.api_provider(), config.default_model())
+    };
+
+    let message = if model_override.is_some() {
+        format!(
+            "Provider switched to {} (model: {}).",
+            active_provider.as_str(),
+            active_model
+        )
+    } else {
+        format!(
+            "Provider switched to {} (model: {}, resolved from config).",
+            active_provider.as_str(),
+            active_model
+        )
+    };
+
+    Ok(Json(SwitchProviderResponse {
+        provider: active_provider.as_str().to_string(),
+        model: active_model,
+        message,
+        persisted: true,
+    }))
+}
+
 // ── Config endpoints ──
 
 /// GUI-relevant config snapshot returned by `GET /v1/config`.
@@ -3099,6 +3457,20 @@ fn persist_runtime_tui_setting(key: &str, value: &str) -> Result<(), ApiError> {
         .map_err(|e| ApiError::internal(format!("Failed to save settings: {e}")))
 }
 
+fn persisted_or_active_provider(state: &RuntimeApiState) -> ApiProvider {
+    if let Ok(config) = Config::load(state.config_path.clone(), None) {
+        return config.api_provider();
+    }
+    state.config.read().api_provider()
+}
+
+fn effective_model_for_provider(config: &Config, provider: ApiProvider) -> String {
+    if provider == config.api_provider() {
+        return config.default_model();
+    }
+    provider_default_model_for_api(config, config.api_provider(), provider)
+}
+
 /// Response for `POST /v1/config/reload`.
 #[derive(Debug, Serialize)]
 struct ReloadConfigResponse {
@@ -3115,6 +3487,7 @@ async fn get_config(
     let model = config.default_model();
 
     let provider = config.provider_identity_for(config.api_provider());
+
     let approval_mode = config
         .approval_policy
         .as_deref()
@@ -3225,6 +3598,18 @@ async fn set_config(
                 "deepseek_base_url",
                 &value,
             ),
+            "provider" => {
+                // Validate the provider id against the static registry so the
+                // GUI gets a clear error instead of silently persisting an
+                // unknown value that `Config::api_provider()` would later
+                // ignore (falling back to DeepSeek).
+                if ApiProvider::parse(&value).is_none() {
+                    return Err(ApiError::bad_request(format!(
+                        "Unknown provider '{value}'. Call GET /v1/providers for the list of supported ids."
+                    )));
+                }
+                config_persistence::persist_root_string_key(config_path, "provider", &value)
+            }
             "provider_url" | "provider_base_url" => {
                 let provider = state.config.read().api_provider();
                 config_persistence::persist_provider_base_url_key(config_path, provider, &value)
@@ -3340,7 +3725,7 @@ async fn set_config(
             }
             _ => {
                 return Err(ApiError::bad_request(format!(
-                    "Unknown config key '{key}'. Supported keys: model, default_model, reasoning_effort, approval_mode, base_url, provider_url, cost_currency, default_mode, auto_compact, allow_shell, mcp_config_path, show_thinking, show_tool_details, locale, max_history, calm_mode, prefer_external_pdftotext, workspace_follow_symlinks, subagents_enabled, subagents_max_depth, sandbox_mode, strict_tool_mode, memory_enabled, search_provider, prompt_suggestion"
+                    "Unknown config key '{key}'. Supported keys: model, default_model, reasoning_effort, approval_mode, base_url, provider, provider_url, cost_currency, default_mode, auto_compact, allow_shell, mcp_config_path, show_thinking, show_tool_details, locale, max_history, calm_mode, prefer_external_pdftotext, workspace_follow_symlinks, subagents_enabled, subagents_max_depth, sandbox_mode, strict_tool_mode, memory_enabled, search_provider, prompt_suggestion"
                 )));
             }
         };

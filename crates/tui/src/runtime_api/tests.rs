@@ -671,15 +671,18 @@ async fn spawn_test_server_with_root_token_mobile_workspace_and_overrides(
     let _ = rustls::crypto::ring::default_provider().install_default();
     fs::create_dir_all(&sessions_dir)?;
     fs::create_dir_all(&workspace)?;
-    let config = Config {
-        // Runtime-API tests that exercise a real turn boundary must pass the
-        // same synchronous client preflight as production. Keep the client
-        // hermetic; any later request fails fast against loopback.
-        api_key: Some("runtime-api-test-key".to_string()),
-        base_url: Some("http://127.0.0.1:1/v1".to_string()),
-        mcp_config_path: Some(root.join("mcp.json").to_string_lossy().to_string()),
-        ..Config::default()
+    let mut config = if let Some(path) = overrides.config_path.clone() {
+        Config::load(Some(path), None)?
+    } else {
+        Config {
+            api_key: Some("runtime-api-test-key".to_string()),
+            base_url: Some("http://127.0.0.1:1/v1".to_string()),
+            ..Config::default()
+        }
     };
+    config.mcp_config_path = Some(root.join("mcp.json").to_string_lossy().to_string());
+
+    config.mcp_config_path = Some(root.join("mcp.json").to_string_lossy().to_string());
     let manager = TaskManager::start_with_executor(
         TaskManagerConfig {
             data_dir: root.join("tasks"),
@@ -5596,6 +5599,182 @@ async fn get_config(client: &reqwest::Client, addr: &SocketAddr) -> serde_json::
         .expect("GET /v1/config should return valid JSON")
 }
 
+async fn get_providers(client: &reqwest::Client, addr: &SocketAddr) -> serde_json::Value {
+    client
+        .get(format!("http://{addr}/v1/providers"))
+        .send()
+        .await
+        .expect("GET /v1/providers should not fail at transport level")
+        .error_for_status()
+        .expect("GET /v1/providers should return 200")
+        .json()
+        .await
+        .expect("GET /v1/providers should return valid JSON")
+}
+
+async fn get_provider_models(
+    client: &reqwest::Client,
+    addr: &SocketAddr,
+    provider: &str,
+) -> serde_json::Value {
+    client
+        .get(format!("http://{addr}/v1/providers/{provider}/models"))
+        .send()
+        .await
+        .expect("GET /v1/providers/{id}/models should not fail at transport level")
+        .error_for_status()
+        .expect("GET /v1/providers/{id}/models should return 200")
+        .json()
+        .await
+        .expect("GET /v1/providers/{id}/models should return valid JSON")
+}
+
+#[tokio::test]
+async fn get_config_returns_active_provider_model() -> Result<()> {
+    let root = std::env::temp_dir().join(format!(
+        "codewhale-config-active-provider-{}",
+        Uuid::new_v4()
+    ));
+    fs::create_dir_all(&root)?;
+    let config_file = root.join("custom-config.toml");
+    fs::write(
+        &config_file,
+        format!(
+            "default_text_model = \"deepseek-v4-pro\"\nprovider = \"volcengine\"\n\n[providers.volcengine]\nmodel = \"{}\"\n",
+            crate::config::DEFAULT_VOLCENGINE_FLASH_MODEL
+        ),
+    )?;
+
+    let Some((addr, _runtime_threads, handle)) =
+        spawn_test_server_with_config_path(config_file).await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let body = get_config(&client, &addr).await;
+    assert_eq!(body["provider"].as_str(), Some("volcengine"));
+    assert_eq!(
+        body["model"].as_str(),
+        Some(crate::config::DEFAULT_VOLCENGINE_FLASH_MODEL),
+        "GET /v1/config should expose the active provider model, not the root DeepSeek default"
+    );
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn api_surfaces_only_configured_model_for_custom_provider_route() -> Result<()> {
+    let root = std::env::temp_dir().join(format!(
+        "codewhale-config-custom-provider-model-{}",
+        Uuid::new_v4()
+    ));
+    fs::create_dir_all(&root)?;
+    let config_file = root.join("custom-config.toml");
+    fs::write(
+        &config_file,
+        "provider = \"volcengine\"\n\n[providers.volcengine]\nbase_url = \"https://ark.cn-beijing.volces.com/api/plan/v3\"\nmodel = \"glm-5.2\"\napi_key = \"ark-test\"\n",
+    )?;
+
+    let Some((addr, _runtime_threads, handle)) =
+        spawn_test_server_with_config_path(config_file).await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let config_body = get_config(&client, &addr).await;
+    assert_eq!(config_body["provider"].as_str(), Some("volcengine"));
+    assert_eq!(
+        config_body["model"].as_str(),
+        Some("glm-5.2"),
+        "GET /v1/config should preserve the active provider's explicit custom model"
+    );
+
+    let providers = get_providers(&client, &addr).await;
+    let volcengine = providers["providers"]
+        .as_array()
+        .and_then(|providers| {
+            providers
+                .iter()
+                .find(|entry| entry["id"].as_str() == Some("volcengine"))
+        })
+        .expect("volcengine provider entry");
+    assert_eq!(providers["current"].as_str(), Some("volcengine"));
+    assert_eq!(
+        volcengine["default_model"].as_str(),
+        Some("glm-5.2"),
+        "GET /v1/providers should mirror the /provider default route when a saved model override exists"
+    );
+
+    let provider_models = get_provider_models(&client, &addr, "volcengine").await;
+    let model_ids: Vec<_> = provider_models["models"]
+        .as_array()
+        .expect("models array")
+        .iter()
+        .filter_map(|entry| entry["id"].as_str())
+        .collect();
+    assert_eq!(
+        model_ids.first().copied(),
+        Some("glm-5.2"),
+        "configured volcengine model should be the only model exposed for a custom provider route"
+    );
+    assert_eq!(model_ids, vec!["glm-5.2"]);
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn api_surfaces_only_active_model_when_runtime_route_passes_ids_through() -> Result<()> {
+    let root = std::env::temp_dir().join(format!(
+        "codewhale-config-runtime-pass-through-{}",
+        Uuid::new_v4()
+    ));
+    fs::create_dir_all(&root)?;
+    let config_file = root.join("custom-config.toml");
+    fs::write(
+        &config_file,
+        "provider = \"volcengine\"\nbase_url = \"https://ark.cn-beijing.volces.com/api/plan/v3\"\n\n[providers.volcengine]\nmodel = \"glm-5.2\"\napi_key = \"ark-test\"\n",
+    )?;
+
+    let Some((addr, _runtime_threads, handle)) =
+        spawn_test_server_with_config_path(config_file).await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let config_body = get_config(&client, &addr).await;
+    assert_eq!(config_body["provider"].as_str(), Some("volcengine"));
+    assert_eq!(config_body["model"].as_str(), Some("glm-5.2"));
+
+    let providers = get_providers(&client, &addr).await;
+    let volcengine = providers["providers"]
+        .as_array()
+        .and_then(|providers| {
+            providers
+                .iter()
+                .find(|entry| entry["id"].as_str() == Some("volcengine"))
+        })
+        .expect("volcengine provider entry");
+    assert_eq!(providers["current"].as_str(), Some("volcengine"));
+    assert_eq!(volcengine["default_model"].as_str(), Some("glm-5.2"));
+
+    let provider_models = get_provider_models(&client, &addr, "volcengine").await;
+    let model_ids: Vec<_> = provider_models["models"]
+        .as_array()
+        .expect("models array")
+        .iter()
+        .filter_map(|entry| entry["id"].as_str())
+        .collect();
+    assert_eq!(model_ids, vec!["glm-5.2"]);
+
+    handle.abort();
+    Ok(())
+}
+
 #[tokio::test]
 async fn reload_config_reads_from_config_path_and_updates_in_memory_state() -> Result<()> {
     // Fix #2 + reload behavior: This test proves that reload reads from the
@@ -5685,6 +5864,384 @@ async fn reload_config_reads_from_config_path_and_updates_in_memory_state() -> R
         after_reload["subagents_max_depth"].as_u64(),
         Some(5),
         "after reload, subagents_max_depth should be 5"
+    );
+
+    handle.abort();
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// POST /v1/providers/{id}/switch endpoint tests
+//
+// These tests pin down the TUI-parity contract for the GUI's provider
+// picker: a bare switch (no model arg) MUST NOT overwrite the user's
+// `[providers.<id>].model` config. Regression for the bug where clicking
+// volcengine in the picker forced `model = "deepseek-v4-pro"` even when
+// the user had configured `model = "glm-2"`.
+// ---------------------------------------------------------------------------
+
+/// Helper: POST to `/v1/providers/{id}/switch` and return the response
+/// status + body JSON.
+async fn post_switch_provider(
+    client: &reqwest::Client,
+    addr: &SocketAddr,
+    provider: &str,
+    body: &serde_json::Value,
+) -> (reqwest::StatusCode, serde_json::Value) {
+    let resp = client
+        .post(format!("http://{addr}/v1/providers/{provider}/switch"))
+        .json(body)
+        .send()
+        .await
+        .expect("POST /v1/providers/{id}/switch should not fail at transport level");
+    let status = resp.status();
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .unwrap_or_else(|_| serde_json::json!({"_error": "non-json response body"}));
+    (status, body)
+}
+
+#[tokio::test]
+async fn switch_provider_without_model_arg_preserves_user_per_provider_model() -> Result<()> {
+    // Regression: clicking volcengine in the GUI picker used to send
+    // `POST /v1/config { key: "model", value: "deepseek-v4-pro" }` (the
+    // catalog default), clobbering the user's `[providers.volcengine].model
+    // = "glm-2"`. The new /v1/providers/{id}/switch endpoint MUST NOT
+    // touch the model key when no model arg is provided — mirroring the
+    // TUI's `/provider volcengine` (model: None) flow in
+    // `commands/groups/core/provider.rs` + `tui/ui.rs::switch_provider`.
+    let root = std::env::temp_dir().join(format!("codewhale-switch-no-model-{}", Uuid::new_v4()));
+    fs::create_dir_all(&root)?;
+    let config_file = root.join("custom-config.toml");
+    fs::write(
+        &config_file,
+        r#"provider = "deepseek"
+default_text_model = "deepseek-v4-pro"
+
+[providers.volcengine]
+api_key = "ark-test"
+base_url = "https://ark.cn-beijing.volces.com/api/plan/v3"
+model = "glm-2"
+"#,
+    )?;
+
+    let Some((addr, _runtime_threads, handle)) =
+        spawn_test_server_with_config_path(config_file.clone()).await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    // Switch to volcengine WITHOUT a model arg — simulates a picker click.
+    let (status, body) =
+        post_switch_provider(&client, &addr, "volcengine", &serde_json::json!({})).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "switch should succeed, body: {body}"
+    );
+
+    // Response must report the user's configured model, NOT the catalog
+    // default "deepseek-v4-pro".
+    assert_eq!(
+        body["provider"].as_str(),
+        Some("volcengine"),
+        "response should echo the switched-to provider"
+    );
+    assert_eq!(
+        body["model"].as_str(),
+        Some("glm-2"),
+        "resolved model must be the user's `[providers.volcengine].model`, \
+         not the catalog default — if this fails the switch endpoint is \
+         clobbering per-provider config"
+    );
+
+    // The config file on disk must NOT contain a `model = "deepseek-v4-pro"`
+    // override for volcengine — `glm-2` must be preserved verbatim.
+    let persisted = fs::read_to_string(&config_file)?;
+    assert!(
+        persisted.contains("model = \"glm-2\""),
+        "user's `[providers.volcengine].model = \"glm-2\"` must be preserved on disk. \
+         Actual config:\n{persisted}"
+    );
+    assert!(
+        !persisted
+            .matches("model = \"deepseek-v4-pro\"")
+            .count()
+            .ge(&2),
+        "switch must not add a second `model = \"deepseek-v4-pro\"` line for volcengine. \
+         Actual config:\n{persisted}"
+    );
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn switch_provider_with_explicit_model_arg_persists_model() -> Result<()> {
+    // When the user explicitly chooses a model (e.g. `/provider volcengine
+    // glm-2.5` or a model-picker selection), the switch endpoint MUST
+    // persist that model — mirroring `switch_provider`'s
+    // `if model_override.is_some()` branch (ui.rs:9400-9405).
+    let root = std::env::temp_dir().join(format!("codewhale-switch-with-model-{}", Uuid::new_v4()));
+    fs::create_dir_all(&root)?;
+    let config_file = root.join("custom-config.toml");
+    fs::write(
+        &config_file,
+        r#"provider = "deepseek"
+default_text_model = "deepseek-v4-pro"
+
+[providers.volcengine]
+api_key = "ark-test"
+base_url = "https://ark.cn-beijing.volces.com/api/plan/v3"
+model = "glm-2"
+"#,
+    )?;
+
+    let Some((addr, _runtime_threads, handle)) =
+        spawn_test_server_with_config_path(config_file.clone()).await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    // Switch to volcengine WITH an explicit model arg.
+    let (status, body) = post_switch_provider(
+        &client,
+        &addr,
+        "volcengine",
+        &serde_json::json!({ "model": "deepseek-v4-flash" }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "switch with explicit model should succeed, body: {body}"
+    );
+
+    // The persisted config must reflect the explicit override.
+    let persisted = fs::read_to_string(&config_file)?;
+    assert!(
+        persisted.contains("model = \"deepseek-v4-flash\""),
+        "explicit model arg must be persisted to `[providers.volcengine].model`. \
+         Actual config:\n{persisted}"
+    );
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn switch_provider_rejects_unknown_provider_id() -> Result<()> {
+    let root = std::env::temp_dir().join(format!("codewhale-switch-unknown-{}", Uuid::new_v4()));
+    fs::create_dir_all(&root)?;
+    let config_file = root.join("custom-config.toml");
+    fs::write(&config_file, "# empty\n")?;
+
+    let Some((addr, _runtime_threads, handle)) =
+        spawn_test_server_with_config_path(config_file.clone()).await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let (status, _body) = post_switch_provider(
+        &client,
+        &addr,
+        "not-a-real-provider",
+        &serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "unknown provider id should return 400"
+    );
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn switch_provider_rejects_legacy_deepseek_cn_alias() -> Result<()> {
+    // The legacy `deepseek-cn` alias has no ProviderKind metadata; the
+    // GUI must use `deepseek` instead. Same guard as list_provider_models.
+    let root = std::env::temp_dir().join(format!("codewhale-switch-cn-alias-{}", Uuid::new_v4()));
+    fs::create_dir_all(&root)?;
+    let config_file = root.join("custom-config.toml");
+    fs::write(&config_file, "# empty\n")?;
+
+    let Some((addr, _runtime_threads, handle)) =
+        spawn_test_server_with_config_path(config_file.clone()).await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let (status, body) =
+        post_switch_provider(&client, &addr, "deepseek-cn", &serde_json::json!({})).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "deepseek-cn should be rejected, body: {body}"
+    );
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn switch_provider_with_deepseek_and_explicit_model_updates_default_text_model() -> Result<()>
+{
+    // When switching TO a DeepSeek provider with an explicit model, the
+    // endpoint must persist `default_text_model` (the DeepSeek-specific
+    // root key) in addition to the provider change, mirroring
+    // `switch_provider` in ui.rs which pins `default_model` for DeepSeek.
+    let root = std::env::temp_dir().join(format!(
+        "codewhale-switch-deepseek-model-{}",
+        Uuid::new_v4()
+    ));
+    fs::create_dir_all(&root)?;
+    let config_file = root.join("custom-config.toml");
+    fs::write(
+        &config_file,
+        r#"provider = "volcengine"
+default_text_model = "old-model"
+
+[providers.volcengine]
+api_key = "ark-test"
+base_url = "https://ark.cn-beijing.volces.com/api/plan/v3"
+model = "glm-2"
+"#,
+    )?;
+
+    let Some((addr, _runtime_threads, handle)) =
+        spawn_test_server_with_config_path(config_file.clone()).await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    // Switch to deepseek WITH an explicit model override.
+    let (status, body) = post_switch_provider(
+        &client,
+        &addr,
+        "deepseek",
+        &serde_json::json!({ "model": "deepseek-v4-pro" }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "switch to deepseek with model should succeed, body: {body}"
+    );
+
+    // The persisted config must have provider = "deepseek" and
+    // default_text_model updated to the explicit model.
+    let persisted = fs::read_to_string(&config_file)?;
+    assert!(
+        persisted.contains("provider = \"deepseek\""),
+        "provider should be persisted as deepseek. Actual config:\n{persisted}"
+    );
+    assert!(
+        persisted.contains("default_text_model = \"deepseek-v4-pro\""),
+        "DeepSeek explicit model must be persisted as default_text_model. \
+         Actual config:\n{persisted}"
+    );
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn switch_provider_empty_model_string_treated_as_no_override() -> Result<()> {
+    // An empty string model (`{ "model": "" }`) must be treated the same
+    // as no model at all — the endpoint should NOT persist a model key,
+    // matching the TUI's behavior where a blank model arg is ignored.
+    let root =
+        std::env::temp_dir().join(format!("codewhale-switch-empty-model-{}", Uuid::new_v4()));
+    fs::create_dir_all(&root)?;
+    let config_file = root.join("custom-config.toml");
+    fs::write(
+        &config_file,
+        r#"provider = "deepseek"
+default_text_model = "deepseek-v4-pro"
+
+[providers.volcengine]
+api_key = "ark-test"
+base_url = "https://ark.cn-beijing.volces.com/api/plan/v3"
+model = "glm-2"
+"#,
+    )?;
+
+    let Some((addr, _runtime_threads, handle)) =
+        spawn_test_server_with_config_path(config_file.clone()).await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let (status, body) = post_switch_provider(
+        &client,
+        &addr,
+        "volcengine",
+        &serde_json::json!({ "model": "" }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "switch with empty model should succeed, body: {body}"
+    );
+
+    // The user's `model = "glm-2"` must NOT be overwritten.
+    let persisted = fs::read_to_string(&config_file)?;
+    assert!(
+        persisted.contains("model = \"glm-2\""),
+        "user's model must be preserved when empty-string model is sent. \
+         Actual config:\n{persisted}"
+    );
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn switch_provider_persists_provider_key_on_disk() -> Result<()> {
+    // Verify that the root `provider = "..."` key is correctly written to
+    // the config file on disk, not just in the response body.
+    let root =
+        std::env::temp_dir().join(format!("codewhale-switch-provider-disk-{}", Uuid::new_v4()));
+    fs::create_dir_all(&root)?;
+    let config_file = root.join("custom-config.toml");
+    fs::write(
+        &config_file,
+        r#"provider = "deepseek"
+default_text_model = "deepseek-v4-pro"
+
+[providers.volcengine]
+api_key = "ark-test"
+base_url = "https://ark.cn-beijing.volces.com/api/plan/v3"
+model = "glm-2"
+"#,
+    )?;
+
+    let Some((addr, _runtime_threads, handle)) =
+        spawn_test_server_with_config_path(config_file.clone()).await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let (status, _body) =
+        post_switch_provider(&client, &addr, "volcengine", &serde_json::json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let persisted = fs::read_to_string(&config_file)?;
+    assert!(
+        persisted.contains("provider = \"volcengine\""),
+        "root `provider` key must be updated on disk. Actual config:\n{persisted}"
     );
 
     handle.abort();
@@ -6067,6 +6624,64 @@ async fn reload_config_with_malformed_file_returns_error() -> Result<()> {
         message.contains("failed to reload config"),
         "error message should mention reload failure, got: {message}"
     );
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn set_config_model_follows_persisted_provider_before_reload() -> Result<()> {
+    let root = std::env::temp_dir().join(format!(
+        "codewhale-config-provider-model-{}",
+        Uuid::new_v4()
+    ));
+    fs::create_dir_all(&root)?;
+    let config_file = root.join("custom-config.toml");
+    fs::write(
+        &config_file,
+        format!(
+            "provider = \"deepseek\"\ndefault_text_model = \"deepseek-v4-pro\"\n\n[providers.volcengine]\nmodel = \"{}\"\n",
+            crate::config::DEFAULT_VOLCENGINE_MODEL
+        ),
+    )?;
+
+    let Some((addr, _runtime_threads, handle)) =
+        spawn_test_server_with_config_path(config_file.clone()).await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let (status, body) = post_set_config(&client, &addr, "provider", "volcengine", true).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+
+    let target_model = crate::config::DEFAULT_VOLCENGINE_FLASH_MODEL;
+    let (status, body) = post_set_config(&client, &addr, "model", target_model, true).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+
+    let config_body = fs::read_to_string(&config_file)?;
+    assert!(
+        config_body.contains("provider = \"volcengine\""),
+        "provider should be persisted before reload"
+    );
+    assert!(
+        config_body.contains(&format!("model = \"{target_model}\"")),
+        "volcengine model should be written to the provider table"
+    );
+    assert!(
+        config_body.contains("default_text_model = \"deepseek-v4-pro\""),
+        "switching provider model must not overwrite DeepSeek's root default_text_model"
+    );
+
+    let reload_resp = client
+        .post(format!("http://{addr}/v1/config/reload"))
+        .send()
+        .await?;
+    assert_eq!(reload_resp.status(), StatusCode::OK);
+
+    let after_reload = get_config(&client, &addr).await;
+    assert_eq!(after_reload["provider"].as_str(), Some("volcengine"));
+    assert_eq!(after_reload["model"].as_str(), Some(target_model));
 
     handle.abort();
     Ok(())

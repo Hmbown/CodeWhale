@@ -266,6 +266,21 @@ pub(crate) fn persist_provider_model_key(
     Ok(path)
 }
 
+fn provider_model_table_key(provider: ApiProvider) -> anyhow::Result<&'static str> {
+    match provider {
+        ApiProvider::Deepseek | ApiProvider::DeepseekCN => {
+            anyhow::bail!("DeepSeek uses the root default_text_model setting")
+        }
+        ApiProvider::Custom => {
+            anyhow::bail!("custom providers store model in their named [providers.<name>] table")
+        }
+        _ => provider
+            .metadata()
+            .map(|metadata| metadata.provider_config_key())
+            .context("provider config key"),
+    }
+}
+
 fn provider_base_url_table_key(provider: ApiProvider) -> anyhow::Result<&'static str> {
     match provider {
         ApiProvider::Deepseek | ApiProvider::DeepseekCN => {
