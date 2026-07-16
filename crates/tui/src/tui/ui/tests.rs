@@ -63,6 +63,47 @@ fn underwater_motion_keeps_its_smoother_cadence_during_live_status() {
 }
 
 #[test]
+fn underwater_motion_ticks_only_for_visible_unobscured_owners() {
+    assert!(!underwater_motion_surface_visible(None, true, true, false));
+    assert!(!underwater_motion_surface_visible(
+        Some(Rect::new(0, 0, 0, 24)),
+        true,
+        true,
+        false,
+    ));
+    assert!(underwater_motion_surface_visible(
+        Some(Rect::new(0, 0, 40, 12)),
+        true,
+        false,
+        false,
+    ));
+    assert!(underwater_motion_surface_visible(
+        Some(Rect::new(0, 0, 60, 16)),
+        false,
+        true,
+        false,
+    ));
+    assert!(!underwater_motion_surface_visible(
+        Some(Rect::new(0, 0, 60, 16)),
+        false,
+        false,
+        false,
+    ));
+    assert!(underwater_motion_surface_visible(
+        Some(Rect::new(0, 0, 80, 24)),
+        false,
+        false,
+        false,
+    ));
+    assert!(!underwater_motion_surface_visible(
+        Some(Rect::new(0, 0, 100, 32)),
+        true,
+        true,
+        true,
+    ));
+}
+
+#[test]
 fn live_transcript_command_open_path_is_idempotent() {
     let mut app = create_test_app();
 

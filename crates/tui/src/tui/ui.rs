@@ -209,10 +209,10 @@ const TOOL_HANG_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(600);
 // the per-tool spinner pulse — keep this fast enough that the whale-spout
 // braille pattern reads as continuous motion instead of teleport-frames.
 const UI_STATUS_ANIMATION_MS: u64 = crate::tui::spinner::BRAILLE_SPINNER_FRAME_MS;
-/// Ambient fish and the completion wake need a smoother cadence than the
-/// deliberately legible status spinner. This remains modest enough for a
-/// terminal renderer while avoiding the five-frame-per-second "jump" seen
-/// whenever live status motion and ocean motion overlap.
+/// Ambient fish, the idle-mark caustic, and the completion wake use a modest
+/// ~12.5fps clock. Active markers run at 8fps; keeping the atmosphere on the
+/// faster clock makes diagonal color travel continuous without forcing the
+/// whole TUI onto a 30fps repaint loop.
 pub(crate) const UI_UNDERWATER_ANIMATION_MS: u64 = 80;
 // At an 80-column terminal the file tree owns 20 columns, leaving a 60-column
 // chat host. Keep a compact 20-column sidebar plus a 40-column transcript.
@@ -3731,31 +3731,34 @@ async fn run_event_loop(
         // the empty water is large enough to earn it.
         let ombre_field_breathes = app.ocean_treatment.is_ombre()
             && crate::tui::ocean::OceanRamp::for_theme(&app.ui_theme).is_some();
-        let ambient_life_visible = app.viewport.last_transcript_area.is_some_and(|area| {
-            area.width >= crate::tui::ocean::AMBIENT_MIN_WIDTH
-                && area.height >= crate::tui::ocean::AMBIENT_MIN_HEIGHT
-        });
         let browsing_history = !app.viewport.transcript_scroll.is_at_tail();
-        let underwater_ambient_motion = !app.low_motion
-            && app.fancy_animations
-            && app.ocean_treatment.supports_ambient_life()
-            && (ombre_field_breathes || ambient_life_visible)
-            && app.onboarding == OnboardingState::None
-            && !app.attention_hold_active()
+        let empty_water_visible = app.history.is_empty()
+            && app
+                .active_cell
+                .as_ref()
+                .is_none_or(crate::tui::active_cell::ActiveCell::is_empty)
+            && !app.is_loading;
+        // A paused terminal owns the eye. Modal/launch/onboarding visibility
+        // and attention stillness are centralized in the shell motion gate.
+        let underwater_surface_obscured = event_broker.is_paused();
+        let underwater_motion_visible = underwater_motion_surface_visible(
+            app.viewport.last_transcript_area,
+            ombre_field_breathes,
+            empty_water_visible,
+            underwater_surface_obscured,
+        );
+        let shell_motion_enabled = crate::tui::underwater::decorative_shell_motion_enabled(app);
+        let underwater_ambient_motion = shell_motion_enabled
+            && underwater_motion_visible
             && (browsing_history
                 || matches!(
                     crate::tui::underwater::ShellPhase::from_app(app),
                     crate::tui::underwater::ShellPhase::Working
                         | crate::tui::underwater::ShellPhase::Verifying
                 )
-                || (app.history.is_empty()
-                    && app
-                        .active_cell
-                        .as_ref()
-                        .is_none_or(crate::tui::active_cell::ActiveCell::is_empty)
-                    && !app.is_loading));
-        let underwater_completion_motion = !app.low_motion
-            && app.fancy_animations
+                || empty_water_visible);
+        let underwater_completion_motion = shell_motion_enabled
+            && !underwater_surface_obscured
             && matches!(app.runtime_turn_status.as_deref(), Some("completed"))
             && app
                 .ocean_completion_started_at
@@ -14175,6 +14178,30 @@ fn status_animation_interval_ms(app: &App) -> u64 {
     } else {
         UI_STATUS_ANIMATION_MS
     }
+}
+
+/// Whether any underwater motion owner is actually visible in the transcript
+/// host. This keeps the scheduler honest: ombre needs a non-empty viewport,
+/// fish need their collision-safe water budget, and the smaller idle whale may
+/// independently earn its caustic. Obscured surfaces never request frames.
+#[must_use]
+fn underwater_motion_surface_visible(
+    area: Option<Rect>,
+    ombre_field_breathes: bool,
+    empty_water_visible: bool,
+    obscured: bool,
+) -> bool {
+    if obscured {
+        return false;
+    }
+    area.is_some_and(|area| {
+        area.width > 0
+            && area.height > 0
+            && (ombre_field_breathes
+                || (area.width >= crate::tui::ocean::AMBIENT_MIN_WIDTH
+                    && area.height >= crate::tui::ocean::AMBIENT_MIN_HEIGHT)
+                || (empty_water_visible && crate::tui::underwater::empty_state_mark_visible(area)))
+    })
 }
 
 fn animation_interval_ms(app: &App, status_motion: bool, underwater_motion: bool) -> u64 {

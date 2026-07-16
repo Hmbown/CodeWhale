@@ -20,7 +20,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::localization::{Locale, MessageId, tr};
 use crate::tui::{
-    app::{App, AppMode},
+    app::{App, AppMode, OnboardingState},
     approval::ApprovalMode,
     views::ModalKind,
 };
@@ -179,6 +179,15 @@ pub enum ShellPhase {
 const WORKING_BUBBLE_FRAMES: [&str; 8] = ["⠀", "⢀", "⣀", "⣄", "⣤", "⣦", "⣶", "⣿"];
 const COMPLETION_BREATH_MS: u128 = 800;
 const COMPLETION_RELEASE_MS: u128 = 560;
+const IDLE_WHALE_ROWS: [&str; 3] = [
+    " ▗▄▄▄▄▄▄▄▄▄▄▄▄▄▖    ▚▞",
+    "▐██·████████████▙▄▄▄▞",
+    " ▝▀▀▀▀▀▀▀▀▀▀▀▀▀▘",
+];
+const IDLE_SHIMMER_CYCLE_MS: u128 = 4_000;
+const IDLE_SHIMMER_SWEEP_FRACTION: f32 = 0.32;
+const IDLE_SHIMMER_BAND_HALF_WIDTH: f32 = 0.38;
+const IDLE_SHIMMER_STRENGTH: f32 = 0.33;
 
 impl ShellPhase {
     #[must_use]
@@ -315,16 +324,14 @@ pub(crate) fn phase_marker(app: &App, phase: ShellPhase) -> (&'static str, Cow<'
         ShellPhase::Idle => ("·", phase.label(locale)),
         ShellPhase::Typing => ("›", phase.label(locale)),
         ShellPhase::Working => {
-            let frame = if app.low_motion || !app.fancy_animations {
-                WORKING_BUBBLE_FRAMES[4]
-            } else {
-                let elapsed = app.turn_started_at.map_or_else(
-                    || app.ocean_started_at.elapsed(),
-                    |started| started.elapsed(),
-                );
-                let index = (elapsed.as_millis() / 300) as usize % WORKING_BUBBLE_FRAMES.len();
-                WORKING_BUBBLE_FRAMES[index]
-            };
+            // The footer and the live tool card share one wall-clock cadence,
+            // so the two primary liveness marks never look like unrelated
+            // spinners. The shared helper also preserves the 400ms
+            // "motion is earned" delay and reduced/still fallback.
+            let frame = crate::tui::spinner::braille_spinner_frame(
+                app.turn_started_at,
+                app.low_motion || !app.fancy_animations,
+            );
             (frame, phase.label(locale))
         }
         ShellPhase::Verifying => {
@@ -765,6 +772,111 @@ pub fn render_footer(area: Rect, buf: &mut Buffer, app: &mut App) {
 
 /// Build the post-launch idle composition. It is deliberately not a command
 /// dashboard: one brand mark, one context line, and one quiet Fleet setup path.
+#[must_use]
+pub(crate) fn empty_state_mark_visible(area: Rect) -> bool {
+    ShellTier::for_area(area) != ShellTier::Compact && area.height >= 14 && area.width >= 28
+}
+
+#[must_use]
+pub(crate) fn decorative_shell_motion_enabled(app: &App) -> bool {
+    crate::tui::motion::MotionPolicy::from_settings(
+        app.low_motion,
+        app.fancy_animations,
+        app.constrained_frame_rate,
+    )
+    .allows_decorative()
+        && app.ocean_treatment.supports_ambient_life()
+        && !app.attention_hold_active()
+        && app.onboarding == OnboardingState::None
+        && !app.launch.visible
+        && app.view_stack.is_empty()
+}
+
+#[must_use]
+fn idle_mark_animation_enabled(app: &App) -> bool {
+    decorative_shell_motion_enabled(app) && matches!(ShellPhase::from_app(app), ShellPhase::Idle)
+}
+
+/// Raised-cosine caustic band for the idle whale. The 4s cycle spends roughly
+/// 1.3s crossing the mark and parks off-screen for the remainder, so the brand
+/// has a clear moment of life without becoming looping chrome.
+#[must_use]
+fn idle_mark_shine_opacity(diagonal: f32, elapsed_ms: u128) -> f32 {
+    let cycle_progress = (elapsed_ms % IDLE_SHIMMER_CYCLE_MS) as f32 / IDLE_SHIMMER_CYCLE_MS as f32;
+    let sweep_progress = (cycle_progress / IDLE_SHIMMER_SWEEP_FRACTION).min(1.0);
+    let band_position =
+        -IDLE_SHIMMER_BAND_HALF_WIDTH + sweep_progress * (1.0 + 2.0 * IDLE_SHIMMER_BAND_HALF_WIDTH);
+    let distance = (diagonal - band_position).abs();
+    if distance >= IDLE_SHIMMER_BAND_HALF_WIDTH {
+        return 0.0;
+    }
+    let raised_cosine =
+        0.5 * (1.0 + (std::f32::consts::PI * distance / IDLE_SHIMMER_BAND_HALF_WIDTH).cos());
+    IDLE_SHIMMER_STRENGTH * raised_cosine
+}
+
+#[must_use]
+fn idle_mark_color(base: Color, highlight: Color, opacity: f32) -> Color {
+    if opacity <= 0.0 {
+        return base;
+    }
+    match (base, highlight) {
+        (Color::Rgb(..), Color::Rgb(..)) => crate::palette::blend(highlight, base, opacity),
+        // Named/terminal-owned colors cannot be blended truthfully. Hold the
+        // stable brand color instead of flashing the entire mark at full ink.
+        _ => base,
+    }
+}
+
+fn idle_whale_row_spans(
+    text: &'static str,
+    row: usize,
+    elapsed_ms: u128,
+    animated: bool,
+    base: Color,
+    highlight: Color,
+    eye: Color,
+) -> Vec<Span<'static>> {
+    let rows = IDLE_WHALE_ROWS.len() as f32;
+    let cols = IDLE_WHALE_ROWS
+        .iter()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(1) as f32;
+    let mut spans = Vec::new();
+    let mut run = String::new();
+    let mut run_color = None;
+
+    for (column, ch) in text.chars().enumerate() {
+        let diagonal = (column as f32 + (rows - 1.0 - row as f32)) / (cols + rows);
+        let color = if ch == '·' {
+            eye
+        } else if animated {
+            idle_mark_color(
+                base,
+                highlight,
+                idle_mark_shine_opacity(diagonal, elapsed_ms),
+            )
+        } else {
+            base
+        };
+        if run_color != Some(color) {
+            if let Some(previous) = run_color {
+                spans.push(Span::styled(
+                    std::mem::take(&mut run),
+                    Style::default().fg(previous),
+                ));
+            }
+            run_color = Some(color);
+        }
+        run.push(ch);
+    }
+    if let Some(previous) = run_color {
+        spans.push(Span::styled(run, Style::default().fg(previous)));
+    }
+    spans
+}
+
 pub fn empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
     if area.width == 0 || area.height == 0 {
         return Vec::new();
@@ -772,29 +884,24 @@ pub fn empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
     let width = usize::from(area.width);
     let tier = ShellTier::for_area(area);
     let mut lines = vec![Line::from(""); usize::from(area.height / 4)];
-    if tier != ShellTier::Compact && area.height >= 14 && area.width >= 28 {
-        let mark = [
-            vec![Span::styled(
-                "   ˚",
-                Style::default().fg(app.ui_theme.accent_secondary),
-            )],
-            vec![Span::styled(
-                " ▗▄▄▄▄▄▄▄▄▄▄▄▄▄▖    ▚▞",
-                Style::default().fg(app.ui_theme.accent_primary),
-            )],
-            vec![
-                Span::styled("▐██", Style::default().fg(app.ui_theme.accent_primary)),
-                Span::styled("·", Style::default().fg(app.ui_theme.text_body)),
-                Span::styled(
-                    "████████████▙▄▄▄▞",
-                    Style::default().fg(app.ui_theme.accent_primary),
-                ),
-            ],
-            vec![Span::styled(
-                " ▝▀▀▀▀▀▀▀▀▀▀▀▀▀▘",
-                Style::default().fg(app.ui_theme.accent_primary),
-            )],
-        ];
+    if empty_state_mark_visible(area) {
+        let animated = idle_mark_animation_enabled(app);
+        let elapsed_ms = app.ocean_started_at.elapsed().as_millis();
+        let mut mark = vec![vec![Span::styled(
+            "   ˚",
+            Style::default().fg(app.ui_theme.accent_secondary),
+        )]];
+        mark.extend(IDLE_WHALE_ROWS.iter().enumerate().map(|(row, text)| {
+            idle_whale_row_spans(
+                text,
+                row,
+                elapsed_ms,
+                animated,
+                app.ui_theme.accent_primary,
+                app.ui_theme.text_body,
+                app.ui_theme.text_body,
+            )
+        }));
         for row in mark {
             let row_width = span_width(&row);
             let inset = " ".repeat(width.saturating_sub(row_width) / 2);
@@ -1096,9 +1203,9 @@ mod tests {
         let mut app = test_app();
 
         app.runtime_turn_status = Some("in_progress".to_string());
-        app.turn_started_at = Some(Instant::now() - Duration::from_millis(1_250));
+        app.turn_started_at = Some(Instant::now() - Duration::from_millis(1_300));
         let (working, label) = phase_marker(&app, ShellPhase::from_app(&app));
-        assert_eq!(working, WORKING_BUBBLE_FRAMES[4]);
+        assert_eq!(working, crate::tui::spinner::BRAILLE_SPINNER_FRAMES[7]);
         assert_eq!(label, "working");
 
         app.low_motion = true;
@@ -1119,6 +1226,80 @@ mod tests {
         let (marker, label) = phase_marker(&app, ShellPhase::from_app(&app));
         assert_eq!(marker, "✕");
         assert_eq!(label, "failed");
+    }
+
+    #[test]
+    fn idle_whale_caustic_sweeps_then_parks_offscreen() {
+        assert_eq!(idle_mark_shine_opacity(0.5, 0), 0.0);
+        assert!(
+            idle_mark_shine_opacity(0.5, 640) > 0.32,
+            "the raised-cosine band should reach its peak near mid-sweep"
+        );
+        assert_eq!(
+            idle_mark_shine_opacity(0.5, 2_000),
+            0.0,
+            "the caustic must rest offscreen between sweeps"
+        );
+    }
+
+    #[test]
+    fn idle_whale_caustic_preserves_text_width_and_has_a_static_fallback() {
+        let base = Color::Rgb(246, 196, 83);
+        let highlight = Color::Rgb(246, 242, 232);
+        let text = IDLE_WHALE_ROWS[0];
+        let moving = idle_whale_row_spans(text, 0, 640, true, base, highlight, highlight);
+        let parked = idle_whale_row_spans(text, 0, 2_000, true, base, highlight, highlight);
+        let frozen_a = idle_whale_row_spans(text, 0, 640, false, base, highlight, highlight);
+        let frozen_b = idle_whale_row_spans(text, 0, 2_000, false, base, highlight, highlight);
+
+        let content = |spans: &[Span<'_>]| {
+            spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        };
+        let colors =
+            |spans: &[Span<'_>]| spans.iter().map(|span| span.style.fg).collect::<Vec<_>>();
+
+        for spans in [&moving, &parked, &frozen_a, &frozen_b] {
+            assert_eq!(content(spans), text);
+            assert_eq!(span_width(spans), text.width());
+        }
+        assert_ne!(colors(&moving), colors(&parked));
+        assert_eq!(colors(&frozen_a), colors(&frozen_b));
+    }
+
+    #[test]
+    fn idle_whale_caustic_obeys_motion_policy_and_attention_stillness() {
+        let mut app = test_app();
+        app.launch.visible = false;
+        app.low_motion = false;
+        app.fancy_animations = true;
+        assert!(idle_mark_animation_enabled(&app));
+
+        app.low_motion = true;
+        assert!(!idle_mark_animation_enabled(&app));
+
+        app.low_motion = false;
+        app.fancy_animations = false;
+        assert!(!idle_mark_animation_enabled(&app));
+
+        app.fancy_animations = true;
+        app.plan_prompt_pending = true;
+        assert!(!idle_mark_animation_enabled(&app));
+
+        app.plan_prompt_pending = false;
+        app.ocean_treatment = crate::tui::ocean::OceanTreatment::Classic;
+        assert!(!idle_mark_animation_enabled(&app));
+
+        app.ocean_treatment = crate::tui::ocean::OceanTreatment::Ombre;
+        app.launch.visible = true;
+        assert!(!idle_mark_animation_enabled(&app));
+
+        app.launch.visible = false;
+        app.view_stack
+            .push(crate::tui::views::HelpView::new_for_locale(app.ui_locale));
+        assert!(!idle_mark_animation_enabled(&app));
     }
 
     #[test]

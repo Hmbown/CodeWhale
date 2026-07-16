@@ -115,7 +115,7 @@ impl ChatWidget {
         // empty composer, so typing or receiving the first message made the
         // fish appear to die.
         let underwater_motion_enabled =
-            !app.low_motion && app.fancy_animations && !app.attention_hold_active();
+            crate::tui::underwater::decorative_shell_motion_enabled(app);
         let browsing_history = !app.viewport.transcript_scroll.is_at_tail();
         let ocean_animated = underwater_motion_enabled
             && (render_empty_state
@@ -4146,6 +4146,8 @@ mod tests {
     };
     use crate::tui::scrolling::{TranscriptLineMeta, TranscriptScroll};
     use ratatui::{
+        Terminal,
+        backend::TestBackend,
         buffer::Buffer,
         layout::Rect,
         style::{Color, Style},
@@ -5819,11 +5821,18 @@ mod tests {
     fn launch_hierarchy_survives_responsive_gate_sizes() {
         for (width, height) in [(40, 12), (60, 16), (80, 24), (100, 32), (140, 40)] {
             let mut app = create_test_app();
+            app.low_motion = false;
+            app.fancy_animations = true;
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+            terminal
+                .draw(|frame| {
+                    let area = frame.area();
+                    let widget = ChatWidget::new(&mut app, area);
+                    widget.render(area, frame.buffer_mut());
+                })
+                .expect("responsive idle draw");
             let area = Rect::new(0, 0, width, height);
-            let mut buf = Buffer::empty(area);
-
-            ChatWidget::new(&mut app, area).render(area, &mut buf);
-            let rendered = buffer_text(&buf, area);
+            let rendered = buffer_text(terminal.backend().buffer(), area);
 
             assert!(
                 rendered.contains("Fleet") && rendered.contains("/fleet setup"),
@@ -5833,6 +5842,11 @@ mod tests {
                 assert!(
                     !rendered.contains("▗▄▄"),
                     "the decorative whale must yield before the Fleet action at {width}x{height}"
+                );
+            } else if width >= 60 && height >= 16 {
+                assert!(
+                    rendered.contains("▗▄▄"),
+                    "the idle whale should remain visible at {width}x{height}:\n{rendered}"
                 );
             }
         }
