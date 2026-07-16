@@ -103,33 +103,16 @@ impl FleetScheduler {
             ) {
                 continue;
             }
-            if let Some(worker_id) = task.leased_to.as_deref() {
-                self.append_worker_event(
-                    &task.entry.run_id,
-                    worker_id,
-                    &task.entry.task_id,
-                    FleetWorkerEventPayload::Interrupted {
-                        signal: Some(reason.to_string()),
-                    },
-                )?;
-                self.append_worker_event(
-                    &task.entry.run_id,
-                    worker_id,
-                    &task.entry.task_id,
-                    FleetWorkerEventPayload::Cancelled {
-                        cancelled_by: Some("scheduler".to_string()),
-                    },
-                )?;
-            } else {
-                self.ledger.mark_task_terminal_status(
-                    &task.entry.run_id,
-                    &task.entry.task_id,
-                    None,
-                    &self.timestamp(),
-                    FleetTaskLedgerStatus::Cancelled,
-                )?;
+            if self.ledger.cancel_task_if_active(
+                &task.entry.run_id,
+                &task.entry.task_id,
+                None,
+                &self.timestamp(),
+                Some(reason),
+                Some("scheduler"),
+            )? {
+                report.cancelled += 1;
             }
-            report.cancelled += 1;
         }
         self.ledger
             .update_run_status(run_id, FleetRunStatus::Cancelled, &self.timestamp())?;
@@ -156,30 +139,70 @@ impl FleetScheduler {
                         .leased_to
                         .clone()
                         .unwrap_or_else(|| "fleet-scheduler".to_string());
-                    self.append_worker_event(
+                    let heartbeat_at = state
+                        .heartbeats
+                        .get(&worker_id)
+                        .map(|heartbeat| heartbeat.timestamp.as_str());
+                    let latest_seq = state
+                        .latest_seq
+                        .get(&format!(
+                            "{}:{}:{}",
+                            worker_id, task.entry.run_id.0, task.entry.task_id
+                        ))
+                        .copied()
+                        .unwrap_or(0);
+                    let Some(stale_event) = self.ledger.append_event_if_lease_unchanged(
                         &task.entry.run_id,
                         &worker_id,
                         &task.entry.task_id,
+                        task.entry.attempts,
+                        latest_seq,
+                        heartbeat_at,
+                        &self.timestamp(),
                         FleetWorkerEventPayload::Stale {
-                            last_heartbeat_at: state
-                                .heartbeats
-                                .get(&worker_id)
-                                .map(|heartbeat| heartbeat.timestamp.clone()),
+                            last_heartbeat_at: heartbeat_at.map(str::to_string),
                         },
-                    )?;
+                    )?
+                    else {
+                        continue;
+                    };
                     report.marked_stale += 1;
-                    self.retry_or_fail(task, &task_spec, &worker_id, report)
-                        .with_context(|| format!("recovering stale task {}", task.entry.task_id))?;
+                    self.retry_or_fail(
+                        task,
+                        &task_spec,
+                        &worker_id,
+                        stale_event.seq,
+                        heartbeat_at,
+                        report,
+                    )
+                    .with_context(|| format!("recovering stale task {}", task.entry.task_id))?;
                 }
                 FleetTaskLedgerStatus::Failed => {
                     let worker_id = task
                         .leased_to
                         .clone()
                         .unwrap_or_else(|| "fleet-scheduler".to_string());
-                    self.retry_or_fail(task, &task_spec, &worker_id, report)
-                        .with_context(|| {
-                            format!("recovering failed task {}", task.entry.task_id)
-                        })?;
+                    let latest_seq = state
+                        .latest_seq
+                        .get(&format!(
+                            "{}:{}:{}",
+                            worker_id, task.entry.run_id.0, task.entry.task_id
+                        ))
+                        .copied()
+                        .unwrap_or(0);
+                    let heartbeat_at = state
+                        .heartbeats
+                        .get(&worker_id)
+                        .map(|heartbeat| heartbeat.timestamp.as_str());
+                    self.retry_or_fail(
+                        task,
+                        &task_spec,
+                        &worker_id,
+                        latest_seq,
+                        heartbeat_at,
+                        report,
+                    )
+                    .with_context(|| format!("recovering failed task {}", task.entry.task_id))?;
                 }
                 _ => {}
             }
@@ -215,20 +238,43 @@ impl FleetScheduler {
                 .leased_to
                 .clone()
                 .unwrap_or_else(|| "fleet-scheduler".to_string());
-            self.append_worker_event(
+            let heartbeat_at = state
+                .heartbeats
+                .get(&worker_id)
+                .map(|heartbeat| heartbeat.timestamp.as_str());
+            let latest_seq = state
+                .latest_seq
+                .get(&format!(
+                    "{}:{}:{}",
+                    worker_id, task.entry.run_id.0, task.entry.task_id
+                ))
+                .copied()
+                .unwrap_or(0);
+            let Some(stale_event) = self.ledger.append_event_if_lease_unchanged(
                 &task.entry.run_id,
                 &worker_id,
                 &task.entry.task_id,
+                task.entry.attempts,
+                latest_seq,
+                heartbeat_at,
+                &self.timestamp(),
                 FleetWorkerEventPayload::Stale {
-                    last_heartbeat_at: state
-                        .heartbeats
-                        .get(&worker_id)
-                        .map(|heartbeat| heartbeat.timestamp.clone()),
+                    last_heartbeat_at: heartbeat_at.map(str::to_string),
                 },
-            )?;
+            )?
+            else {
+                continue;
+            };
             report.marked_stale += 1;
-            self.retry_or_fail(task, &task_spec, &worker_id, report)
-                .with_context(|| format!("resuming stale task {}", task.entry.task_id))?;
+            self.retry_or_fail(
+                task,
+                &task_spec,
+                &worker_id,
+                stale_event.seq,
+                heartbeat_at,
+                report,
+            )
+            .with_context(|| format!("resuming stale task {}", task.entry.task_id))?;
         }
         Ok(())
     }
@@ -238,42 +284,51 @@ impl FleetScheduler {
         task: &FleetTaskState,
         task_spec: &FleetTaskSpec,
         worker_id: &str,
+        expected_latest_seq: u64,
+        expected_heartbeat_at: Option<&str>,
         report: &mut FleetSchedulerReport,
     ) -> Result<()> {
         let retry_policy = task_spec.retry_policy.clone().unwrap_or_default();
         if task.entry.attempts < retry_policy.max_attempts {
             let lease_expires_at = self.lease_expires_at();
-            self.ledger.lease_task(
+            if !self.ledger.restart_task_if_unchanged(
                 &task.entry.run_id,
                 &task.entry.task_id,
                 worker_id,
+                task.status,
+                task.entry.attempts,
+                expected_latest_seq,
+                expected_heartbeat_at,
                 &self.timestamp(),
                 Some(&lease_expires_at),
-            )?;
-            self.append_worker_event(
-                &task.entry.run_id,
-                worker_id,
-                &task.entry.task_id,
-                FleetWorkerEventPayload::Restarted {
-                    restart_count: task.entry.attempts,
-                },
-            )?;
-            self.append_worker_event(
-                &task.entry.run_id,
-                worker_id,
-                &task.entry.task_id,
-                FleetWorkerEventPayload::Running,
-            )?;
-            self.ledger
-                .heartbeat(worker_id, &self.timestamp(), None, None)?;
+                task.entry.attempts,
+            )? {
+                return Ok(());
+            }
             report.restarted += 1;
             return Ok(());
         }
 
-        self.append_worker_event(
+        if task.status == FleetTaskLedgerStatus::Failed {
+            report.alerts += self.record_alerts(
+                &task.entry.run_id,
+                &task.entry.task_id,
+                worker_id,
+                task.entry.attempts,
+                task_spec,
+                FleetAlertEventClass::RestartExhausted,
+            )?;
+            return Ok(());
+        }
+
+        let terminal = self.ledger.append_terminal_event_if_lease_unchanged(
             &task.entry.run_id,
             worker_id,
             &task.entry.task_id,
+            task.entry.attempts,
+            expected_latest_seq,
+            expected_heartbeat_at,
+            &self.timestamp(),
             FleetWorkerEventPayload::Failed {
                 reason: format!(
                     "retry attempts exhausted after {} attempt(s)",
@@ -282,11 +337,15 @@ impl FleetScheduler {
                 recoverable: false,
             },
         )?;
+        if terminal.is_none() {
+            return Ok(());
+        }
         report.failed += 1;
         report.alerts += self.record_alerts(
             &task.entry.run_id,
             &task.entry.task_id,
             worker_id,
+            task.entry.attempts,
             task_spec,
             FleetAlertEventClass::RestartExhausted,
         )?;
@@ -313,35 +372,24 @@ impl FleetScheduler {
                 return Ok(());
             };
             let lease_expires_at = self.lease_expires_at();
-            self.ledger.lease_task(
+            if !self.ledger.start_task_if_enqueued(
                 &task.entry.run_id,
                 &task.entry.task_id,
                 &worker_id,
                 &self.timestamp(),
                 Some(&lease_expires_at),
-            )?;
-            self.append_worker_event(
-                &task.entry.run_id,
-                &worker_id,
-                &task.entry.task_id,
-                FleetWorkerEventPayload::Leased {
-                    lease_expires_at: Some(lease_expires_at),
-                },
-            )?;
-            self.append_worker_event(
-                &task.entry.run_id,
-                &worker_id,
-                &task.entry.task_id,
-                FleetWorkerEventPayload::Starting,
-            )?;
-            self.append_worker_event(
-                &task.entry.run_id,
-                &worker_id,
-                &task.entry.task_id,
-                FleetWorkerEventPayload::Running,
-            )?;
-            self.ledger
-                .heartbeat(&worker_id, &self.timestamp(), None, None)?;
+                Some(self.policy.max_workers_per_run),
+                vec![
+                    FleetWorkerEventPayload::Leased {
+                        lease_expires_at: Some(lease_expires_at.clone()),
+                    },
+                    FleetWorkerEventPayload::Starting,
+                    FleetWorkerEventPayload::Running,
+                ],
+                || {},
+            )? {
+                continue;
+            }
             report.launched += 1;
             report.heartbeats += 1;
         }
@@ -423,6 +471,7 @@ impl FleetScheduler {
         run_id: &FleetRunId,
         task_id: &str,
         worker_id: &str,
+        expected_attempts: u32,
         task_spec: &FleetTaskSpec,
         event_class: FleetAlertEventClass,
     ) -> Result<usize> {
@@ -433,20 +482,23 @@ impl FleetScheduler {
             return Ok(0);
         }
         let mut count = 0;
-        for channel in &policy.channels {
+        for (channel_index, channel) in policy.channels.iter().enumerate() {
             let label = alert_channel_label(channel);
-            self.ledger
-                .record_alert(run_id, task_id, label, &self.timestamp())?;
-            self.append_worker_event(
+            // A policy may contain multiple endpoints of the same kind. The
+            // run snapshot preserves channel order while redacting secrets, so
+            // a kind + ordinal key is stable, non-secret, and instance-unique.
+            let channel_key = format!("{label}#{channel_index}");
+            if self.ledger.record_failed_attempt_alert_once(
                 run_id,
-                worker_id,
                 task_id,
-                FleetWorkerEventPayload::Escalated {
-                    channel: label.to_string(),
-                    alert_id: None,
-                },
-            )?;
-            count += 1;
+                worker_id,
+                expected_attempts,
+                label,
+                &channel_key,
+                &self.timestamp(),
+            )? {
+                count += 1;
+            }
         }
         Ok(count)
     }
@@ -488,20 +540,8 @@ impl FleetScheduler {
         task_id: &str,
         payload: FleetWorkerEventPayload,
     ) -> Result<FleetWorkerEvent> {
-        let state = self.ledger.rebuild_state()?;
-        let key = event_key(worker_id, &run_id.0, task_id);
-        let seq = state.latest_seq.get(&key).copied().unwrap_or(0) + 1;
-        let event = FleetWorkerEvent {
-            seq,
-            run_id: run_id.clone(),
-            worker_id: worker_id.to_string(),
-            task_id: task_id.to_string(),
-            timestamp: self.timestamp(),
-            payload,
-            extra: BTreeMap::new(),
-        };
-        self.ledger.append_event(event.clone())?;
-        Ok(event)
+        self.ledger
+            .append_event_next_seq(run_id, worker_id, task_id, &self.timestamp(), payload)
     }
 
     fn timestamp(&self) -> String {
@@ -595,13 +635,11 @@ fn alert_policy_matches(policy: &FleetAlertPolicy, class: FleetAlertEventClass) 
     policy.events.is_empty() || policy.events.contains(&class)
 }
 
-fn event_key(worker_id: &str, run_id: &str, task_id: &str) -> String {
-    format!("{worker_id}:{run_id}:{task_id}")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
     use tempfile::TempDir;
 
     fn base_now() -> DateTime<Utc> {
@@ -763,9 +801,14 @@ mod tests {
         let mut failing = task("task-a", 1);
         failing.alert_policy = Some(FleetAlertPolicy {
             events: vec![FleetAlertEventClass::RestartExhausted],
-            channels: vec![FleetAlertChannel::Slack {
-                webhook: FleetAlertEndpoint::inline("https://hooks.slack.invalid/secret"),
-            }],
+            channels: vec![
+                FleetAlertChannel::Slack {
+                    webhook: FleetAlertEndpoint::inline("https://hooks.slack.invalid/secret-a"),
+                },
+                FleetAlertChannel::Slack {
+                    webhook: FleetAlertEndpoint::inline("https://hooks.slack.invalid/secret-b"),
+                },
+            ],
             after_attempts: Some(1),
             after_minutes_stale: Some(1),
         });
@@ -778,17 +821,116 @@ mod tests {
         assert_eq!(report.marked_stale, 1);
         assert_eq!(report.restarted, 0);
         assert_eq!(report.failed, 1);
-        assert_eq!(report.alerts, 1);
+        assert_eq!(report.alerts, 2);
         let state = scheduler.ledger.rebuild_state().unwrap();
         assert_eq!(
             state.tasks["run-1:task-a"].status,
             FleetTaskLedgerStatus::Failed
         );
+        assert_eq!(state.alerts.len(), 2);
+        assert_eq!(state.escalated_events.len(), 1);
         let ledger = ledger_text(&scheduler);
         assert!(ledger.contains("\"state\":\"failed\""));
-        assert!(ledger.contains("\"state\":\"escalated\""));
         assert!(ledger.contains("\"record\":\"alert_sent\""));
+        assert_eq!(
+            ledger
+                .lines()
+                .filter(|line| line.contains("\"record\":\"alert_sent\""))
+                .count(),
+            2
+        );
         assert!(!ledger.contains("hooks.slack.invalid/secret"));
+    }
+
+    #[test]
+    fn exhausted_failed_attempt_alerts_exactly_once_across_competing_schedulers() {
+        let tmp = TempDir::new().unwrap();
+        let owner = scheduler(&tmp, 1);
+        let mut failing = task("task-a", 1);
+        failing.alert_policy = Some(FleetAlertPolicy {
+            events: vec![FleetAlertEventClass::RestartExhausted],
+            channels: vec![FleetAlertChannel::Slack {
+                webhook: FleetAlertEndpoint::inline("https://hooks.slack.invalid/secret"),
+            }],
+            after_attempts: Some(1),
+            after_minutes_stale: Some(1),
+        });
+        create_run(&owner, "run-1", vec![failing], 1);
+        owner.tick_run(&FleetRunId::from("run-1")).unwrap();
+        owner
+            .ledger
+            .append_terminal_event_if_leased(
+                &FleetRunId::from("run-1"),
+                "worker-1",
+                "task-a",
+                1,
+                &owner.timestamp(),
+                FleetWorkerEventPayload::Failed {
+                    reason: "worker failed before scheduler recovery".to_string(),
+                    recoverable: true,
+                },
+            )
+            .unwrap()
+            .unwrap();
+
+        let root = tmp.path().to_path_buf();
+        let barrier = Arc::new(Barrier::new(2));
+        let handles = (0..2)
+            .map(|_| {
+                let root = root.clone();
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    let mut contender = FleetScheduler::open(
+                        root,
+                        FleetSchedulerPolicy {
+                            max_workers_per_run: 1,
+                            max_workers_per_host: 1,
+                            max_workers_per_task_class: 1,
+                            lease_seconds: 30,
+                            heartbeat_timeout: Duration::from_secs(5),
+                        },
+                    )
+                    .unwrap();
+                    contender.set_now(base_now() + chrono::Duration::seconds(10));
+                    barrier.wait();
+                    contender.tick_run(&FleetRunId::from("run-1")).unwrap()
+                })
+            })
+            .collect::<Vec<_>>();
+        let reports = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(reports.iter().map(|report| report.alerts).sum::<usize>(), 1);
+        assert_eq!(reports.iter().map(|report| report.failed).sum::<usize>(), 0);
+        let state = owner.ledger.rebuild_state().unwrap();
+        assert_eq!(state.alerts.len(), 1);
+        assert_eq!(state.escalated_events.len(), 1);
+        assert_eq!(
+            ledger_text(&owner)
+                .lines()
+                .filter(|line| line.contains("\"record\":\"alert_sent\""))
+                .count(),
+            1
+        );
+
+        owner.ledger.compact().unwrap();
+        let mut after_compaction = scheduler(&tmp, 1);
+        after_compaction.set_now(base_now() + chrono::Duration::seconds(20));
+        let report = after_compaction
+            .tick_run(&FleetRunId::from("run-1"))
+            .unwrap();
+        assert_eq!(report.alerts, 0);
+        assert_eq!(
+            after_compaction
+                .ledger
+                .rebuild_state()
+                .unwrap()
+                .alerts
+                .len(),
+            1
+        );
     }
 
     #[test]

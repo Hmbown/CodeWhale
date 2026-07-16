@@ -2,9 +2,10 @@
 name = "codewhale-hooks"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Hook dispatch and notifications support for CodeWhale"
+description = "Hook dispatch and notifications support for Codewhale"
 
 [dependencies]
 anyhow.workspace = true

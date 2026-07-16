@@ -216,7 +216,7 @@ struct Cli {
 enum Commands {
     /// Run interactive/non-interactive flows via the TUI binary.
     Run(RunArgs),
-    /// Run CodeWhale diagnostics.
+    /// Run Codewhale diagnostics.
     Doctor(TuiPassthroughArgs),
     /// List live provider API models via the TUI binary.
     Models(TuiPassthroughArgs),
@@ -233,7 +233,7 @@ enum Commands {
     Init(TuiPassthroughArgs),
     /// Bootstrap MCP config and/or skills directories.
     Setup(TuiPassthroughArgs),
-    /// Generate a remote CodeWhale agent deploy bundle (cloud + chat bridge).
+    /// Generate a remote Codewhale agent deploy bundle (cloud + chat bridge).
     RemoteSetup(RemoteSetupArgs),
     /// Run a non-interactive prompt through the TUI runtime.
     #[command(after_help = "\
@@ -266,8 +266,8 @@ path used by stream-json wrappers.
     /// Run checked-in Workflows through a Lane Runtime backend.
     #[command(after_help = "\
 Examples:
-  codewhale workflow run stopship --issue 4090 --fleet v0868-stopship --runtime tmux
-  codewhale workflow run stopship --fleet v0868-stopship --runtime inline --verify
+  codewhale workflow run stopship --fleet stopship --runtime tmux --goal verify-release-candidate
+  codewhale workflow run stopship --fleet stopship --runtime inline --verify
 
 `workflow run` validates the checked-in Workflow source and named Fleet roster,
 creates a Lane record, then dispatches the Workflow tool directly through the
@@ -282,13 +282,13 @@ Examples:
   codewhale lane attach <lane-id>
   codewhale lane logs <lane-id>
   codewhale lane stop <lane-id>
-  codewhale lane start --workflow stopship --fleet v0868-stopship --runtime tmux --issue 4090 -- echo hello
+  codewhale lane start --workflow stopship --fleet stopship --runtime tmux --goal verify-release-candidate -- echo hello
 
 Lane records persist under $CODEWHALE_HOME/lanes/. tmux durability belongs to
 Runtime, not Fleet.
 ")]
     Lane(LaneArgs),
-    /// Run a CodeWhale-powered code review over a git diff.
+    /// Run a Codewhale-powered code review over a git diff.
     Review(TuiPassthroughArgs),
     /// Apply a patch file or stdin to the working tree.
     Apply(TuiPassthroughArgs),
@@ -542,7 +542,7 @@ enum LaneCommand {
         /// Workflow name (e.g. `stopship`).
         #[arg(long)]
         workflow: Option<String>,
-        /// Fleet roster name (e.g. `v0868-stopship`).
+        /// Fleet roster name (e.g. `stopship`).
         #[arg(long)]
         fleet: Option<String>,
         /// Issue id binding.
@@ -583,9 +583,9 @@ struct WorkflowArgs {
 enum WorkflowCommand {
     /// Run a checked-in Workflow through a Runtime-backed Lane.
     Run {
-        /// Workflow name or path. `stopship` maps to workflows/v0868_stopship_lane.workflow.js.
+        /// Workflow name or path. `stopship` maps to workflows/stopship.workflow.js.
         workflow: String,
-        /// Named Fleet roster (e.g. v0868-stopship). Required for role-resolved Workflow runs.
+        /// Named Fleet roster (e.g. stopship). Required for role-resolved Workflow runs.
         #[arg(long)]
         fleet: String,
         /// Issue id binding recorded on the Lane and passed into workflow args.
@@ -953,7 +953,7 @@ fn run_workflow_command(
             let roots = named_fleet_search_roots(&workspace);
             let named_fleet = codewhale_workflow::load_named_fleet(&fleet, &roots)
                 .with_context(|| format!("load fleet `{fleet}` from {}", display_roots(&roots)))?;
-            if workflow == "stopship" || fleet == "v0868-stopship" {
+            if workflow == "stopship" || fleet == "stopship" || fleet == "v0868-stopship" {
                 named_fleet
                     .validate_stopship_roles()
                     .with_context(|| format!("validate stopship roles in fleet `{fleet}`"))?;
@@ -1057,8 +1057,6 @@ fn workflow_source_candidates(
     for rel in [
         format!("workflows/{raw}.workflow.js"),
         format!("workflows/{normalized}.workflow.js"),
-        format!("workflows/v0868_{normalized}_lane.workflow.js"),
-        format!("workflows/v0868_{normalized}.workflow.js"),
     ] {
         let path = workspace.join(rel);
         if !candidates.iter().any(|existing| existing == &path) {
@@ -3983,11 +3981,11 @@ mod tests {
             "run",
             "stopship",
             "--fleet",
-            "v0868-stopship",
+            "stopship",
             "--runtime",
             "tmux",
             "--issue",
-            "4090",
+            "4375",
         ]);
         assert!(matches!(
             cli.command,
@@ -4000,9 +3998,9 @@ mod tests {
                     ..
                 }
             })) if workflow == "stopship"
-                && fleet == "v0868-stopship"
+                && fleet == "stopship"
                 && runtime == "tmux"
-                && issue.as_deref() == Some("4090")
+                && issue.as_deref() == Some("4375")
         ));
     }
 
@@ -4145,6 +4143,28 @@ model = "qwen-2.5-7b"
     }
 
     #[test]
+    fn short_workflow_names_do_not_resolve_historical_v0868_files() {
+        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..");
+        let candidates = workflow_source_candidates("issue-sweep", None, &workspace);
+        assert!(candidates.iter().all(|path| {
+            !path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with("v0868_"))
+        }));
+        assert!(resolve_workflow_source_path("issue-sweep", None, &workspace).is_err());
+
+        let historical = resolve_workflow_source_path(
+            "workflows/v0868_issue_sweep.workflow.js",
+            None,
+            &workspace,
+        )
+        .expect("explicit historical workflow path");
+        assert!(historical.ends_with("workflows/v0868_issue_sweep.workflow.js"));
+    }
+
+    #[test]
     fn workflow_run_resolves_stopship_alias_and_payload() {
         let _lock = env_lock();
         let (_dir, _tui) = install_fake_tui_binary();
@@ -4170,7 +4190,7 @@ model = "qwen-2.5-7b"
         let resolved = resolved_runtime_for_test(ProviderKind::Deepseek, ProviderSource::Config);
         let source = resolve_workflow_source_path("stopship", None, &workspace)
             .expect("stopship workflow source");
-        assert!(source.ends_with("workflows/v0868_stopship_lane.workflow.js"));
+        assert!(source.ends_with("workflows/stopship.workflow.js"));
 
         let process = workflow_exec_command(WorkflowExecSpec {
             cli: &cli,
@@ -4179,8 +4199,8 @@ model = "qwen-2.5-7b"
             source_root: &workspace,
             source_path: &source,
             workflow: "stopship",
-            fleet: "v0868-stopship",
-            issue: Some("4090"),
+            fleet: "stopship",
+            issue: Some("4375"),
             goal: Some("fix stopship"),
             token_budget: Some(25_000),
             verify: true,
@@ -4199,9 +4219,9 @@ model = "qwen-2.5-7b"
                 .any(|pair| pair == ["--profile", "workflow-profile"])
         );
         assert!(!joined.contains("Run the CodeWhale"));
-        assert!(joined.contains("\"source_path\":\"workflows/v0868_stopship_lane.workflow.js\""));
-        assert!(joined.contains("\"fleet\":\"v0868-stopship\""));
-        assert!(joined.contains("\"issue\":\"4090\""));
+        assert!(joined.contains("\"source_path\":\"workflows/stopship.workflow.js\""));
+        assert!(joined.contains("\"fleet\":\"stopship\""));
+        assert!(joined.contains("\"issue\":\"4375\""));
         assert!(joined.contains("\"token_budget\":25000"));
         assert!(joined.contains("\"verify\":true"));
         assert!(

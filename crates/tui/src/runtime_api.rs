@@ -1,4 +1,4 @@
-//! Runtime HTTP/SSE API for local CodeWhale automation.
+//! Runtime HTTP/SSE API for local Codewhale automation.
 
 use std::convert::Infallible;
 use std::fs;

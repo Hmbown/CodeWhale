@@ -127,6 +127,28 @@ impl Default for ModelRegistry {
                 supports_tools: true,
                 supports_reasoning: true,
             },
+            // OpenAI public API models carried by the bundled catalog.
+            ModelInfo {
+                id: "gpt-5.3-codex".to_string(),
+                provider: ProviderKind::Openai,
+                aliases: vec!["gpt53-codex".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "gpt-5.5".to_string(),
+                provider: ProviderKind::Openai,
+                aliases: vec!["openai-gpt-5.5".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "gpt-5.5-pro".to_string(),
+                provider: ProviderKind::Openai,
+                aliases: vec!["openai-gpt-5.5-pro".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
             // OpenAI public API GPT-5.6 family.
             ModelInfo {
                 id: "gpt-5.6".to_string(),
@@ -217,6 +239,13 @@ impl Default for ModelRegistry {
                     "arcee-trinity".to_string(),
                     "arcee-trinity-large-thinking".to_string(),
                 ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "trinity-mini".to_string(),
+                provider: ProviderKind::Arcee,
+                aliases: vec!["arcee-trinity-mini".to_string()],
                 supports_tools: true,
                 supports_reasoning: true,
             },
@@ -312,6 +341,13 @@ impl Default for ModelRegistry {
                 id: "qwen/qwen3.6-plus".to_string(),
                 provider: ProviderKind::Openrouter,
                 aliases: vec!["qwen3.6-plus".to_string(), "qwen-3.6-plus".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "qwen/qwen3.7-plus".to_string(),
+                provider: ProviderKind::Openrouter,
+                aliases: vec!["qwen3.7-plus".to_string(), "qwen-3.7-plus".to_string()],
                 supports_tools: true,
                 supports_reasoning: true,
             },
@@ -734,6 +770,20 @@ impl Default for ModelRegistry {
                 aliases: vec!["haiku".to_string(), "claude-haiku".to_string()],
                 supports_tools: true,
                 supports_reasoning: false,
+            },
+            ModelInfo {
+                id: "claude-sonnet-5".to_string(),
+                provider: ProviderKind::Anthropic,
+                aliases: vec!["sonnet-5".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "claude-fable-5".to_string(),
+                provider: ProviderKind::Anthropic,
+                aliases: vec!["fable".to_string(), "fable-5".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
             },
             // OpenModel Anthropic-compatible Messages route
             ModelInfo {
@@ -1513,7 +1563,8 @@ mod tests {
 
         assert_eq!(resolved.resolved.provider, ProviderKind::Arcee);
         assert_eq!(resolved.resolved.id, "trinity-mini");
-        assert!(!resolved.resolved.supports_reasoning);
+        assert!(resolved.resolved.supports_reasoning);
+        assert!(!resolved.used_fallback);
     }
 
     #[test]
@@ -1780,6 +1831,50 @@ mod tests {
         assert_eq!(unscoped.resolved.provider, ProviderKind::Together);
         assert_eq!(unscoped.resolved.id, "thinkingmachines/inkling");
         assert!(!unscoped.used_fallback);
+    }
+
+    #[test]
+    fn registry_lists_and_resolves_every_v090_catalog_addition() {
+        let registry = ModelRegistry::default();
+        let advertised = [
+            (ProviderKind::Anthropic, "claude-sonnet-5"),
+            (ProviderKind::Anthropic, "claude-fable-5"),
+            (ProviderKind::Openai, "gpt-5.3-codex"),
+            (ProviderKind::Openai, "gpt-5.5"),
+            (ProviderKind::Openai, "gpt-5.5-pro"),
+            (ProviderKind::Openrouter, "qwen/qwen3.7-plus"),
+            (ProviderKind::Arcee, "trinity-mini"),
+        ];
+
+        let listed = registry.list();
+        for (provider, model_id) in advertised {
+            assert!(
+                listed
+                    .iter()
+                    .any(|model| model.provider == provider && model.id == model_id),
+                "missing {model_id} ({}) from model list",
+                provider.as_str()
+            );
+            let resolved = registry.resolve(Some(model_id), Some(provider));
+            assert_eq!(resolved.resolved.provider, provider, "{model_id}");
+            assert_eq!(resolved.resolved.id, model_id, "{model_id}");
+            assert!(!resolved.used_fallback, "{model_id}");
+        }
+    }
+
+    #[test]
+    fn gpt_55_stays_provider_scoped_between_openai_and_codex() {
+        let registry = ModelRegistry::default();
+
+        let unscoped = registry.resolve(Some("gpt-5.5"), None);
+        assert_eq!(unscoped.resolved.provider, ProviderKind::Openai);
+        assert_eq!(unscoped.resolved.id, "gpt-5.5");
+        assert!(!unscoped.used_fallback);
+
+        let codex = registry.resolve(Some("gpt-5.5"), Some(ProviderKind::OpenaiCodex));
+        assert_eq!(codex.resolved.provider, ProviderKind::OpenaiCodex);
+        assert_eq!(codex.resolved.id, "gpt-5.5");
+        assert!(!codex.used_fallback);
     }
 
     #[test]

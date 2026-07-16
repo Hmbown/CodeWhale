@@ -3590,7 +3590,7 @@ async fn mobile_page_is_available_only_when_enabled() -> Result<()> {
         .await?
         .error_for_status()?;
     let html = enabled.text().await?;
-    assert!(html.contains("CodeWhale Mobile"));
+    assert!(html.contains("Codewhale Mobile"));
     assert!(html.contains("/v1/approvals/"));
     assert!(html.contains("MAX_VISIBLE_EVENTS = 100"));
     assert!(html.contains("replay_limit="));
@@ -3619,7 +3619,7 @@ async fn mobile_page_serves_shell_when_auth_enabled() -> Result<()> {
         .await?
         .error_for_status()?;
     let html = shell.text().await?;
-    assert!(html.contains("CodeWhale Mobile"));
+    assert!(html.contains("Codewhale Mobile"));
     assert!(html.contains("TOKEN_COOKIE"));
 
     let bearer = client
@@ -3628,7 +3628,7 @@ async fn mobile_page_serves_shell_when_auth_enabled() -> Result<()> {
         .send()
         .await?
         .error_for_status()?;
-    assert!(bearer.text().await?.contains("CodeWhale Mobile"));
+    assert!(bearer.text().await?.contains("Codewhale Mobile"));
 
     handle.abort();
     Ok(())
@@ -3651,7 +3651,7 @@ async fn mobile_insecure_mode_allows_page_and_v1_routes_without_token() -> Resul
         .send()
         .await?
         .error_for_status()?;
-    assert!(page.text().await?.contains("CodeWhale Mobile"));
+    assert!(page.text().await?.contains("Codewhale Mobile"));
 
     let summary = client
         .get(format!("http://{addr}/v1/threads/summary"))

@@ -39,8 +39,15 @@ release evidence. The reports and pull requests below materially shaped it.
   transcript review report that led to live Page Up/Down, modified-arrow,
   Home/End, and mouse-wheel navigation while the decision card stays active
   (#4371)
+- **[Angel-Hair](https://github.com/Angel-Hair)** — reports that restored the
+  opt-in `remember` tool to the first-turn catalog, made required user
+  confirmation a real goal blocker, and added a clear recovery notice for
+  cached approval denials (#4373, #4374, #4375)
 - **[Bruce / bruce6135](https://github.com/bruce6135)** — Kimi Coding Plan
   reproduction that exposed the false 1K emergency-compaction budget (#4368)
+- **[Matt Van Horn / mvanhorn](https://github.com/mvanhorn)** — first-turn
+  `remember` regression coverage and the Kimi output-budget correction that
+  prevents false emergency compaction (#4377, #4378)
 - **[郝某人BH / hmr-BH](https://github.com/hmr-BH)** — native Simplified
   Chinese review that replaced literal legal/doctrinal metaphors with clear
   collaboration terminology across setup and `/constitution` (#4369)

@@ -627,11 +627,11 @@ workflow({
 
     #[test]
     fn stopship_acceptance_fixture_is_read_only_and_gate_complete() {
-        let source = include_str!("../../../workflows/v0868_stopship_lane.workflow.js");
-        let workflow = compile_javascript_workflow("v0868_stopship_lane.workflow.js", source)
+        let source = include_str!("../../../workflows/stopship.workflow.js");
+        let workflow = compile_javascript_workflow("stopship.workflow.js", source)
             .expect("compile stopship acceptance fixture");
 
-        assert_eq!(workflow.id.as_deref(), Some("v0868-stopship-lane"));
+        assert_eq!(workflow.id.as_deref(), Some("stopship-release-acceptance"));
         let WorkflowNode::Sequence(sequence) = &workflow.nodes[0] else {
             panic!("acceptance fixture should begin with one ordered role chain");
         };

@@ -131,9 +131,9 @@ fn print_header() {
     use crate::palette;
     use colored::Colorize;
     let (r, g, b) = palette::WHALE_INFO_RGB;
-    println!("{}", "CodeWhale Remote Setup".truecolor(r, g, b).bold());
+    println!("{}", "Codewhale Remote Setup".truecolor(r, g, b).bold());
     println!("{}", "======================".truecolor(r, g, b));
-    println!("Generate a deploy bundle for a remote CodeWhale agent (cloud + chat bridge).");
+    println!("Generate a deploy bundle for a remote Codewhale agent (cloud + chat bridge).");
 }
 
 // ---------------------------------------------------------------------------

@@ -192,7 +192,7 @@ release anxiety: contributors cannot tell whether their work merged.
 - [ ] `npm view deepseek-tui deprecated` is non-empty. The legacy npm package
       is deprecated and must not receive an `X.Y.Z` publish.
 - [ ] Distribution channels are canonical-first: the website install page
-      (codewhale.net/install) shows CodeWhale-native commands first (`npm install -g
+      (codewhale.net/install) shows Codewhale-native commands first (`npm install -g
       codewhale`, `curl .../install.sh | sh`); Homebrew is labeled as legacy
       compatibility; the shell installer uses codewhale-native names as documented
       in `docs/REBRAND.md#homebrew`.

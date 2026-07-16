@@ -357,8 +357,8 @@ mod tests {
         let record = reg
             .create_pending(
                 Some("stopship".into()),
-                Some("v0868-stopship".into()),
-                Some("4090".into()),
+                Some("stopship".into()),
+                Some("4375".into()),
                 None,
                 RuntimeBackendKind::Tmux,
                 Some(3600),
@@ -369,8 +369,8 @@ mod tests {
         let reg2 = LaneRegistry::open(dir.path()).unwrap();
         let loaded = reg2.load(&id).unwrap();
         assert_eq!(loaded.workflow.as_deref(), Some("stopship"));
-        assert_eq!(loaded.fleet.as_deref(), Some("v0868-stopship"));
-        assert_eq!(loaded.issue.as_deref(), Some("4090"));
+        assert_eq!(loaded.fleet.as_deref(), Some("stopship"));
+        assert_eq!(loaded.issue.as_deref(), Some("4375"));
         assert_eq!(loaded.runtime, RuntimeBackendKind::Tmux);
         assert_eq!(loaded.status, LaneStatus::Pending);
         assert!(loaded.log_path.is_file() || loaded.log_path.exists());

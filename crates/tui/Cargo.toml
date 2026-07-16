@@ -2,6 +2,7 @@
 name = "codewhale-tui"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Terminal UI for open-source and open-weight coding models"
@@ -42,6 +43,7 @@ clap_complete.workspace = true
 colored = "3.0.0"
 crossterm = "0.29"
 dotenvy = "0.15.7"
+fd-lock = "4.0.4"
 dirs.workspace = true
 futures-util = "0.3.31"
 oauth2 = "5"

@@ -2,16 +2,16 @@
 
 > The terminal coding agent for any model — open models first.
 
-CodeWhale is a Rust TUI and CLI for many model providers — DeepSeek,
+Codewhale is a Rust TUI and CLI for many model providers — DeepSeek,
 OpenRouter, Hugging Face, and local vLLM/SGLang/Ollama are first-class routes,
 and it speaks natively to Anthropic Claude and OpenAI when that's what you have
 — with approval-gated tools, OS sandboxing, side-git snapshots, and `/restore`
 rollback.
 
 This npm package is a small launcher: it downloads the matching native
-CodeWhale binaries for your platform, verifies them against the release
+Codewhale binaries for your platform, verifies them against the release
 SHA-256 manifest, and installs the `codewhale`, `codew`, and `codewhale-tui`
-commands. The application state and credentials still live in CodeWhale's
+commands. The application state and credentials still live in Codewhale's
 normal config files, not inside `node_modules`.
 
 > Previously published as `deepseek-tui`. See

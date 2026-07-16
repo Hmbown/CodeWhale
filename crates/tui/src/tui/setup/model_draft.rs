@@ -37,7 +37,7 @@ pub(crate) const DRAFT_MAX_TOKENS: u32 = 1600;
 /// tests can pin the guardrails.
 fn drafting_system_prompt() -> String {
     concat!(
-        "You are helping a new CodeWhale user draft their user constitution: durable, ",
+        "You are helping a new Codewhale user draft their user constitution: durable, ",
         "advisory standing preferences for how an AI coding agent should work with them ",
         "across all their projects.\n\n",
         "Return ONLY one JSON object — no markdown fences, no commentary — with exactly ",

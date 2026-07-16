@@ -66,6 +66,8 @@ pub enum ModelProvider {
     Qwen,
     /// Arcee Trinity models.
     Arcee,
+    /// Together-hosted models with provider-owned wire identities.
+    Together,
     /// Xiaomi MiMo models.
     XiaomiMimo,
     /// Meta Muse models.
@@ -145,7 +147,7 @@ const SEED_MODEL_IDS: &[(&str, ModelProvider)] = &[
     ("gpt-5.6-terra", ModelProvider::OpenAi),
     ("gpt-5.6-luna", ModelProvider::OpenAi),
     ("gpt-5-codex", ModelProvider::OpenAiCodex),
-    ("gpt-5.3-codex", ModelProvider::OpenAiCodex),
+    ("gpt-5.3-codex", ModelProvider::OpenAi),
     // --- Moonshot / Kimi (config DEFAULT_MOONSHOT_MODEL / KIMI_CODE) ---
     ("kimi-k2.7-code", ModelProvider::Moonshot),
     ("kimi-k2.6", ModelProvider::Moonshot),
@@ -165,11 +167,14 @@ const SEED_MODEL_IDS: &[(&str, ModelProvider)] = &[
     // --- Qwen (OpenRouter routing defaults) ---
     ("qwen/qwen3.6-flash", ModelProvider::Qwen),
     ("qwen/qwen3.6-plus", ModelProvider::Qwen),
+    ("qwen/qwen3.7-plus", ModelProvider::Qwen),
     ("qwen/qwen3.6-35b-a3b", ModelProvider::Qwen),
     // --- Arcee Trinity (config DEFAULT_ARCEE_MODEL) ---
     ("trinity-large-thinking", ModelProvider::Arcee),
     ("arcee-ai/trinity-large-thinking", ModelProvider::Arcee),
     ("trinity-mini", ModelProvider::Arcee),
+    // --- Together / Thinking Machines ---
+    ("thinkingmachines/inkling", ModelProvider::Together),
     // --- Sakana / Fugu (config DEFAULT_SAKANA_MODEL) ---
     ("fugu-ultra-20260615", ModelProvider::Other),
     ("fugu-ultra", ModelProvider::Other),
@@ -361,6 +366,30 @@ mod tests {
         assert_eq!(meta.context_window, Some(1_000_000));
         assert_eq!(meta.max_output, Some(32_000));
         assert!(meta.supports_reasoning);
+    }
+
+    #[test]
+    fn v090_model_metadata_is_provider_correct_and_conservative() {
+        let gpt = lookup("gpt-5.3-codex").expect("GPT-5.3 Codex seed");
+        assert_eq!(gpt.provider, ModelProvider::OpenAi);
+
+        let qwen = lookup("qwen/qwen3.7-plus").expect("Qwen 3.7 Plus seed");
+        assert_eq!(qwen.provider, ModelProvider::Qwen);
+        assert_eq!(qwen.context_window, None);
+        assert_eq!(qwen.max_output, None);
+        assert!(qwen.supports_reasoning);
+
+        let trinity = lookup("trinity-mini").expect("Trinity Mini seed");
+        assert_eq!(trinity.provider, ModelProvider::Arcee);
+        assert_eq!(trinity.context_window, Some(128_000));
+        assert_eq!(trinity.max_output, None);
+        assert!(trinity.supports_reasoning);
+
+        let inkling = lookup("thinkingmachines/inkling").expect("Inkling seed");
+        assert_eq!(inkling.provider, ModelProvider::Together);
+        assert_eq!(inkling.context_window, None);
+        assert_eq!(inkling.max_output, None);
+        assert!(inkling.supports_reasoning);
     }
 
     #[test]

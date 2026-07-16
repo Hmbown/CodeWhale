@@ -5,18 +5,22 @@
 # Checks performed:
 #   1. No `crates/*/Cargo.toml` carries a literal `version = "x.y.z"`; every
 #      crate must inherit `version.workspace = true`.
-#   2. `npm/codewhale/package.json` `version` matches the workspace
-#      `version` in the root `Cargo.toml`. (`npm/deepseek-tui/` still
-#      exists only as an unpublished compatibility notice and must stay
-#      private.)
-#   3. Internal `codewhale-*` path dependency pins match the workspace version.
-#   4. The TUI crate's packaged changelog copy matches root `CHANGELOG.md`.
-#   5. The current release has a dated Keep a Changelog entry and compare link.
-#   6. README contributor additions are mentioned in the current release entry.
-#   7. `SECURITY.md` keeps the dedicated security contact.
-#   8. `codewhale-app-server` stays library-only; the shipped app-server
+#   2. Every crate inherits the workspace MSRV through
+#      `rust-version.workspace = true`.
+#   3. `npm/codewhale/package.json` and the root workspace lock entry match
+#      the workspace `version` in the root `Cargo.toml`.
+#      (`npm/deepseek-tui/` still exists only as an unpublished compatibility
+#      notice and must stay private.)
+#   4. Internal `codewhale-*` path dependency pins match the workspace version.
+#   5. The TUI crate's packaged changelog copy matches root `CHANGELOG.md`.
+#   6. The current release has a dated Keep a Changelog entry and compare link.
+#   7. README contributor additions are mentioned in the current release entry.
+#   8. `SECURITY.md` keeps the dedicated security contact.
+#   9. Generated website facts carry the workspace version.
+#  10. Public install and version snippets point at the current release.
+#  11. `codewhale-app-server` stays library-only; the shipped app-server
 #      entrypoint belongs to `codewhale-cli`.
-#   9. `Cargo.lock` is in sync with the manifests (`cargo metadata --locked`
+#  12. `Cargo.lock` is in sync with the manifests (`cargo metadata --locked`
 #      fails if not).
 set -euo pipefail
 
@@ -32,11 +36,32 @@ if [[ -n "${literals}" ]]; then
   fail=1
 fi
 
-# 2) Workspace ↔ npm package.json.
+# 2) Workspace MSRV inheritance. A workspace value is not included in package
+# metadata unless every member opts in, which would silently omit the MSRV from
+# all crates.io manifests.
+missing_rust_version=""
+for manifest in crates/*/Cargo.toml; do
+  if ! grep -qxF 'rust-version.workspace = true' "${manifest}"; then
+    missing_rust_version+="${manifest}"$'\n'
+  fi
+done
+if [[ -n "${missing_rust_version}" ]]; then
+  echo "::error::Every crate manifest must inherit the workspace MSRV with 'rust-version.workspace = true':" >&2
+  printf '%s' "${missing_rust_version}" >&2
+  fail=1
+fi
+
+# 3) Workspace ↔ npm package.json ↔ root package lock.
 workspace_version="$(grep -E '^version = "' Cargo.toml | head -n1 | sed -E 's/^version = "([^"]+)".*/\1/')"
 npm_version="$(node -p "require('./npm/codewhale/package.json').version")"
 if [[ "${workspace_version}" != "${npm_version}" ]]; then
   echo "::error::npm/codewhale/package.json version (${npm_version}) does not match workspace Cargo.toml (${workspace_version})." >&2
+  fail=1
+fi
+lock_npm_version="$(node -p "require('./package-lock.json').packages?.['npm/codewhale']?.version ?? ''")"
+if [[ "${workspace_version}" != "${lock_npm_version}" ]]; then
+  echo "::error::package-lock.json npm/codewhale version (${lock_npm_version:-<missing>}) does not match workspace Cargo.toml (${workspace_version})." >&2
+  echo "Run: npm install --package-lock-only --ignore-scripts" >&2
   fail=1
 fi
 if [[ -f npm/deepseek-tui/package.json ]]; then
@@ -52,7 +77,7 @@ if [[ -f npm/deepseek-tui/package.json ]]; then
   fi
 fi
 
-# 3) Internal path dependency pins.
+# 4) Internal path dependency pins.
 internal_dep_drift="$(
   grep -nE 'codewhale-[a-z-]+[[:space:]]*=[[:space:]]*\{[^}]*version[[:space:]]*=[[:space:]]*"' crates/*/Cargo.toml \
     | grep -v "version[[:space:]]*=[[:space:]]*\"${workspace_version}\"" || true
@@ -63,14 +88,14 @@ if [[ -n "${internal_dep_drift}" ]]; then
   fail=1
 fi
 
-# 4) Packaged TUI changelog slice (recent releases embedded in the binary).
+# 5) Packaged TUI changelog slice (recent releases embedded in the binary).
 if ! ./scripts/sync-changelog.sh --check >/dev/null 2>&1; then
   echo "::error::crates/tui/CHANGELOG.md is out of date with the root CHANGELOG.md slice." >&2
   echo "Run: ./scripts/sync-changelog.sh" >&2
   fail=1
 fi
 
-# 5) Current release-note shape.
+# 6) Current release-note shape.
 current_section="$(
   awk -v version="${workspace_version}" '
     index($0, "## [" version "] - ") == 1 { in_section = 1; print; next }
@@ -108,7 +133,7 @@ unreleased_section="$(
 credit_sections="${current_section}
 ${unreleased_section}"
 
-# 6) Contributor-credit cross-check for README additions on the release branch.
+# 7) Contributor-credit cross-check for README additions on the release branch.
 # This cannot prove every external PR author has been credited, but it does
 # catch the common release-polish failure mode: adding a README contributor row
 # without mentioning that credit/correction in the current release entry. While
@@ -140,7 +165,7 @@ if [[ -n "${previous_tag}" ]]; then
   fi
 fi
 
-# 7) Security contact guard.
+# 8) Security contact guard.
 security_email="hmbown@gmail.com"
 if ! grep -qF "${security_email}" SECURITY.md; then
   echo "::error::SECURITY.md must list ${security_email} as the security contact." >&2
@@ -151,7 +176,7 @@ if grep -qF "hmbown.dev@gmail.com" SECURITY.md; then
   fail=1
 fi
 
-# 8) Generated web facts carry the workspace version. The file is ignored and
+# 9) Generated web facts carry the workspace version. The file is ignored and
 # generated during web builds, so a clean CI checkout must derive it before this
 # release guard can inspect it.
 if [[ ! -f web/lib/facts.generated.ts ]]; then
@@ -167,7 +192,7 @@ if [[ "${facts_version}" != "${workspace_version}" ]]; then
   fi
 fi
 
-# 9) README install-tag examples point at the current release.
+# 10) README install-tag examples point at the current release.
 for readme in README.md README.zh-CN.md README.ja-JP.md README.vi.md README.ko-KR.md; do
   stale_tags="$(grep -nE -- "--tag v[0-9]+\.[0-9]+\.[0-9]+" "${readme}" | grep -v -- "--tag v${workspace_version}" || true)"
   if [[ -n "${stale_tags}" ]]; then
@@ -177,7 +202,7 @@ for readme in README.md README.zh-CN.md README.ja-JP.md README.vi.md README.ko-K
   fi
 done
 
-# 9b) Public install/version snippets stay on the current release (#3767).
+# 10b) Public install/version snippets stay on the current release (#3767).
 # `codewhale --version   # X.Y.Z` verify-your-install lines across README
 # locales and docs/INSTALL.md, plus the docs/INSTALL.md npm-wrapper publish
 # pointer ("published at vX.Y.Z"). These drifted while this gate still passed
@@ -193,7 +218,6 @@ for doc in README.md README.zh-CN.md README.ja-JP.md README.vi.md README.ko-KR.m
   fi
 done
 
-stale_wrapper_pointer="$(grep -nE -- "wrapper is published at" docs/INSTALL.md | grep -E -- "v[0-9]+\.[0-9]+\.[0-9]+" | grep -v -- "v${workspace_version}" || true)"
 # The publish pointer can wrap onto the next line; also scan the line after the lead-in.
 wrapper_pointer_version="$(grep -A1 -E -- "wrapper is published at" docs/INSTALL.md | grep -oE -- "v[0-9]+\.[0-9]+\.[0-9]+" | head -n1 || true)"
 if [[ -n "${wrapper_pointer_version}" && "${wrapper_pointer_version}" != "v${workspace_version}" ]]; then
@@ -201,7 +225,13 @@ if [[ -n "${wrapper_pointer_version}" && "${wrapper_pointer_version}" != "v${wor
   fail=1
 fi
 
-# 10) App-server is not a standalone binary.
+remote_smoke_tag="$(grep -oE 'RELEASE_TAG:-v[0-9]+\.[0-9]+\.[0-9]+' scripts/remote-smoke/setup-vm.sh | head -n1 | sed 's/.*:-//' || true)"
+if [[ "${remote_smoke_tag}" != "v${workspace_version}" ]]; then
+  echo "::error::scripts/remote-smoke/setup-vm.sh defaults to ${remote_smoke_tag:-<missing>}, want v${workspace_version}." >&2
+  fail=1
+fi
+
+# 11) App-server is not a standalone binary.
 app_server_bins="$(
   cargo metadata --locked --format-version 1 --no-deps \
     | node -e '
@@ -223,7 +253,7 @@ if [[ -n "${app_server_bins}" ]]; then
   fail=1
 fi
 
-# 11) Cargo.lock in sync.
+# 12) Cargo.lock in sync.
 if ! cargo metadata --locked --format-version 1 --no-deps >/dev/null 2>&1; then
   echo "::error::Cargo.lock is out of sync with the manifests. Run 'cargo update -p codewhale-tui' or 'cargo build' and commit the result." >&2
   fail=1

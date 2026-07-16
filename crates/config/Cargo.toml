@@ -2,9 +2,10 @@
 name = "codewhale-config"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Config schema and precedence model for CodeWhale"
+description = "Config schema and precedence model for Codewhale"
 
 [dependencies]
 anyhow.workspace = true

@@ -331,7 +331,7 @@ classify_branch() {
 
   # Has unique commits; inspect authors for the contributor-preservation
   # policy. Never auto-delete; always keep/review.
-  local unique authors non_maint=0
+  local unique non_maint=0
   unique="$(git rev-list --count "${ref}" "${not_args[@]}" 2>/dev/null || echo 0)"
   [[ "${unique}" -eq 0 ]] && return 0
 
@@ -371,7 +371,7 @@ done < <(git for-each-ref --format='%(refname:short)' refs/heads/)
 while IFS= read -r name; do
   [[ -z "${name}" ]] && continue
   # name comes through as <remote>/<branch>; strip the remote prefix.
-  short="${name#${remote_name}/}"
+  short="${name#"${remote_name}"/}"
   [[ "${short}" == "HEAD" ]] && continue
   classify_branch remote "${short}" "refs/remotes/${remote_name}/${short}"
 done < <(git for-each-ref --format='%(refname:short)' "refs/remotes/${remote_name}/")

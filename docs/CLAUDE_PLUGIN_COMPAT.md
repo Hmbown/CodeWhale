@@ -1,6 +1,6 @@
 # Claude Plugin Compatibility
 
-CodeWhale treats Claude Code skill folders as instruction bundles when they are
+Codewhale treats Claude Code skill folders as instruction bundles when they are
 plain `SKILL.md` directories. It does not run Claude Code plugin runtimes.
 
 ## Supported
@@ -32,4 +32,4 @@ plugin archives with a clear message so it never silently chooses one skill and
 drops the plugin runtime behavior.
 
 For richer integrations, wrap the plugin's executable surface as MCP, hooks, or
-a CodeWhale skill that names the external command explicitly.
+a Codewhale skill that names the external command explicitly.

@@ -145,7 +145,7 @@ PORT=$(pick_port)
 log "=== Test Group 1: Token auth ==="
 start_server "$PORT" --mobile --auth-token "$TOKEN"
 
-assert_body_contains GET "/mobile" "" "CodeWhale Mobile"
+assert_body_contains GET "/mobile" "" "Codewhale Mobile"
 assert_body_not_contains GET "/mobile" "" "$TOKEN"
 assert_status GET "/v1/threads/summary" 401
 assert_status GET "/v1/threads/summary" "Authorization: Bearer ${TOKEN}" 200
@@ -160,7 +160,7 @@ PORT=$(pick_port)
 log "=== Test Group 2: Insecure mode (no token) ==="
 start_server "$PORT" --mobile --insecure
 
-assert_body_contains GET "/mobile" "" "CodeWhale Mobile"
+assert_body_contains GET "/mobile" "" "Codewhale Mobile"
 assert_status GET "/v1/threads/summary" 200
 
 stop_server

@@ -444,6 +444,45 @@ fn resolver_custom_endpoint_allows_namespaced_selector_for_strict_provider() {
 }
 
 #[test]
+fn resolver_treats_every_official_deepseek_endpoint_as_strict_direct() {
+    let resolver = RouteResolver::new();
+    for base_url in [
+        "https://api.deepseek.com",
+        "https://api.deepseek.com/v1/",
+        "https://api.deepseek.com/beta",
+    ] {
+        let request = RouteRequest {
+            explicit_provider: Some(ProviderKind::Deepseek),
+            model_selector: Some(LogicalModelRef::from("anthropic/claude-foo")),
+            saved_provider_model: None,
+            base_url_override: Some(base_url.to_string()),
+        };
+        assert!(
+            matches!(
+                resolver.resolve(&request),
+                Err(RouteError::ForeignModelForDirectProvider { .. })
+            ),
+            "official endpoint {base_url} must retain DeepSeek's strict namespace"
+        );
+    }
+}
+
+#[test]
+fn resolver_does_not_trust_deepseek_hostname_substrings() {
+    let resolver = RouteResolver::new();
+    let request = RouteRequest {
+        explicit_provider: Some(ProviderKind::Deepseek),
+        model_selector: Some(LogicalModelRef::from("vendor/custom-coder")),
+        saved_provider_model: None,
+        base_url_override: Some("https://api.deepseek.com.evil.example/v1".to_string()),
+    };
+    let route = resolver
+        .resolve(&request)
+        .expect("lookalike host must be treated as a custom endpoint");
+    assert_eq!(route.wire_model_id.as_str(), "vendor/custom-coder");
+}
+
+#[test]
 fn resolver_explicit_custom_with_base_url_override_passes_model_through_verbatim() {
     // #1519: an explicit `Custom` provider with a base_url override resolves via
     // the LocalOrCustom pass-through, preserving even a namespaced selector as
@@ -558,6 +597,78 @@ fn default_resolver_preserves_seam_canonical_joins() {
         "seam canonical join must survive the asset merge"
     );
     assert_eq!(hosted.wire_model_id.as_str(), "deepseek-ai/DeepSeek-V4-Pro");
+}
+
+#[test]
+fn together_inkling_aliases_use_the_exact_wire_identity_without_invented_metadata() {
+    let resolver = RouteResolver::new();
+
+    for requested in ["inkling", "together-inkling", "thinkingmachines/inkling"] {
+        let route = resolver
+            .resolve(&req(Some(ProviderKind::Together), Some(requested)))
+            .expect("Together Inkling route should resolve");
+        assert_eq!(route.provider_kind, ProviderKind::Together, "{requested}");
+        assert_eq!(
+            route.wire_model_id.as_str(),
+            "thinkingmachines/inkling",
+            "{requested}"
+        );
+        assert!(route.canonical_model.is_none(), "{requested}");
+        assert!(!route.limits.has_known_limit(), "{requested}");
+        assert!(matches!(
+            route.pricing,
+            Some(super::candidate::PricingSku::UnknownOrStale)
+        ));
+    }
+}
+
+#[test]
+fn together_custom_endpoint_preserves_its_explicit_model_id() {
+    let resolver = RouteResolver::new();
+    let route = resolver
+        .resolve(&RouteRequest {
+            explicit_provider: Some(ProviderKind::Together),
+            model_selector: Some(LogicalModelRef::from("inkling")),
+            saved_provider_model: None,
+            base_url_override: Some("http://127.0.0.1:8000/v1".to_string()),
+        })
+        .expect("custom Together-compatible endpoint should resolve");
+
+    assert_eq!(route.wire_model_id.as_str(), "inkling");
+}
+
+#[test]
+fn openrouter_qwen37_plus_aliases_use_exact_catalog_wire_identity() {
+    let resolver = RouteResolver::new();
+
+    for requested in ["qwen3.7-plus", "qwen-3.7-plus", "qwen/qwen3.7-plus"] {
+        let route = resolver
+            .resolve(&req(Some(ProviderKind::Openrouter), Some(requested)))
+            .expect("OpenRouter Qwen 3.7 Plus route should resolve");
+        assert_eq!(route.wire_model_id.as_str(), "qwen/qwen3.7-plus");
+        assert!(!route.limits.has_known_limit());
+        assert!(matches!(
+            route.pricing,
+            Some(super::candidate::PricingSku::Token {
+                input_per_mtok: Some(_),
+                output_per_mtok: Some(_)
+            })
+        ));
+    }
+}
+
+#[test]
+fn openrouter_custom_endpoint_preserves_qwen37_alias() {
+    let route = RouteResolver::new()
+        .resolve(&RouteRequest {
+            explicit_provider: Some(ProviderKind::Openrouter),
+            model_selector: Some(LogicalModelRef::from("qwen3.7-plus")),
+            saved_provider_model: None,
+            base_url_override: Some("https://gateway.example.test/v1".to_string()),
+        })
+        .expect("custom OpenRouter-compatible endpoint should resolve");
+
+    assert_eq!(route.wire_model_id.as_str(), "qwen3.7-plus");
 }
 
 #[test]

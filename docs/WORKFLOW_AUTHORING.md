@@ -1,7 +1,7 @@
 # Workflow Authoring
 
 > **Ordinary multi-agent work does not require this file.** In Operate, send
-> normal messages; CodeWhale can work directly or prefer background workers
+> normal messages; Codewhale can work directly or prefer background workers
 > when parallelism, isolation, or duration makes delegation useful. Use Workflow
 > when ordered phases, gates, shared budgets, replay, or deterministic fan-in
 > matter; Act/Agent may also use optional soft-auto launch. See

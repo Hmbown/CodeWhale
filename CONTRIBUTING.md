@@ -210,7 +210,7 @@ What this means for you:
 
 ## Contribution Gate
 
-CodeWhale uses a maintainer-managed contribution gate for the community front
+Codewhale uses a maintainer-managed contribution gate for the community front
 door. Maintainers and collaborators bypass this gate automatically. The gate
 workflows default to dry-run / comment-only mode so maintainers can observe the
 signal before changing contributor flow.
@@ -221,7 +221,7 @@ keeping good-faith contributors seen, credited, and able to keep helping.
 
 Issues are never auto-closed by the contribution gate. Unapproved external
 issues receive a short welcome note that asks for reproduction details and then
-remain open for maintainer triage. CodeWhale depends on real edge cases from
+remain open for maintainer triage. Codewhale depends on real edge cases from
 real users, so issue intake should stay warm and open.
 
 Pull requests are different because they can touch code, CI, release plumbing,
@@ -254,7 +254,7 @@ reopened, ask the contributor to resubmit after the allowlist PR is merged.
 
 ## Agent-Assisted Improvements
 
-CodeWhale is allowed to help improve CodeWhale, but the contribution still has
+Codewhale is allowed to help improve Codewhale, but the contribution still has
 to be shaped for human review. The recommended workflow is the
 [recursive self-improvement prompt](docs/RECURSIVE_SELF_IMPROVEMENT.md): run it
 from a fresh fork or branch, let the agent find exactly one small friction point,

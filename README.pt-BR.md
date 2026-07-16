@@ -1,5 +1,5 @@
-<!-- source: README.md sha256:561a074b0e36 -->
-# CodeWhale
+<!-- source: README.md sha256:ddc9cd7b5aea -->
+# Codewhale
 
 Um agente de código para o seu terminal. Funciona com qualquer modelo; modelos
 abertos em primeiro lugar.
@@ -20,7 +20,7 @@ mais de 30 outros rodam pelo mesmo runtime e pelas mesmas ferramentas.
 [![crates.io](https://img.shields.io/crates/v/codewhale-cli?label=crates.io)](https://crates.io/crates/codewhale-cli)
 [![npm](https://img.shields.io/npm/v/codewhale?label=npm)](https://www.npmjs.com/package/codewhale)
 
-![CodeWhale rodando em um terminal](assets/screenshot.png)
+![Codewhale rodando em um terminal](assets/screenshot.png)
 
 ## Instalação
 

@@ -65,8 +65,8 @@ If you are unsure whether a bug is in scope, report it anyway. We will triage an
 
 ## WeCom Bridge Security
 
-The WeCom Bridge (`integrations/wecom-bridge/`) extends CodeWhale to WeCom
-(企业微信) Smart Bot WebSocket sessions. It inherits all standard CodeWhale
+The WeCom Bridge (`integrations/wecom-bridge/`) extends Codewhale to WeCom
+(企业微信) Smart Bot WebSocket sessions. It inherits all standard Codewhale
 security boundaries and adds bridge-specific controls.
 
 ### Bridge-specific protections

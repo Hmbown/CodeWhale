@@ -2,9 +2,10 @@
 name = "codewhale-protocol"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "App-server protocol frames for CodeWhale runtime integrations"
+description = "App-server protocol frames for Codewhale runtime integrations"
 
 [dependencies]
 chrono.workspace = true

@@ -1,6 +1,6 @@
 # HarmonyOS and OpenHarmony
 
-This page covers CodeWhale on HarmonyOS PC and OpenHarmony cross-build setups.
+This page covers Codewhale on HarmonyOS PC and OpenHarmony cross-build setups.
 
 ## Running On HarmonyOS PC
 

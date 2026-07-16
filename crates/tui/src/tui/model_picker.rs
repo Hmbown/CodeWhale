@@ -1277,12 +1277,17 @@ fn effective_picker_metadata_with_codex(
         .as_ref()
         .and_then(|card| card.context_window)
         .map(|tokens| tokens.min(u64::from(u32::MAX)) as u32);
+    let preserves_unknown_limits = offering.is_some()
+        || (provider == ApiProvider::Together
+            && id.eq_ignore_ascii_case(crate::config::TOGETHER_INKLING_MODEL));
     let context_window = if context_override.is_some() {
         profile.context_window
     } else if provider == ApiProvider::OpenaiCodex {
         codex_metadata.and_then(|metadata| metadata.context_window)
+    } else if preserves_unknown_limits {
+        card_context
     } else {
-        card_context.or(profile.context_window)
+        profile.context_window
     };
     let card_output = card
         .as_ref()
@@ -1293,8 +1298,10 @@ fn effective_picker_metadata_with_codex(
     // so omitting it is more truthful than claiming that API limit for OAuth.
     let max_output = if provider == ApiProvider::OpenaiCodex {
         None
+    } else if preserves_unknown_limits {
+        card_output
     } else {
-        card_output.or(profile.max_output)
+        profile.max_output
     };
     let profile_tool_calls = match profile.native_tool_calls {
         SupportState::Supported => Some(true),
@@ -3128,6 +3135,7 @@ mod tests {
             "deepseek/deepseek-v4-pro",
             "deepseek/deepseek-v4-flash",
             "qwen/qwen3.6-flash",
+            "qwen/qwen3.7-plus",
             "minimax/minimax-m3",
         ] {
             assert!(
@@ -3137,6 +3145,34 @@ mod tests {
         }
         assert!(!view.show_custom_model_row);
         assert_eq!(view.resolved_model(), "minimax/minimax-m3");
+    }
+
+    #[test]
+    fn v090_picker_metadata_preserves_unknown_catalog_limits_and_prices() {
+        let config = Config::default();
+
+        let qwen =
+            effective_picker_metadata(&config, Some(ApiProvider::Openrouter), "qwen/qwen3.7-plus");
+        assert_eq!(qwen.context_window, None);
+        assert_eq!(qwen.max_output, None);
+        assert!(qwen.reasoning);
+        assert!(matches!(qwen.pricing, PickerPricing::Known(_)));
+
+        let trinity = effective_picker_metadata(&config, Some(ApiProvider::Arcee), "trinity-mini");
+        assert_eq!(trinity.context_window, Some(128_000));
+        assert_eq!(trinity.max_output, None);
+        assert!(trinity.reasoning);
+        assert_eq!(trinity.pricing, PickerPricing::Unknown);
+
+        let inkling = effective_picker_metadata(
+            &config,
+            Some(ApiProvider::Together),
+            crate::config::TOGETHER_INKLING_MODEL,
+        );
+        assert_eq!(inkling.context_window, None);
+        assert_eq!(inkling.max_output, None);
+        assert!(inkling.reasoning);
+        assert_eq!(inkling.pricing, PickerPricing::Unknown);
     }
 
     #[test]

@@ -20,7 +20,7 @@
 # Uses prebuilt release binaries instead of a Rust build.
 set -euo pipefail
 
-RELEASE_TAG="${RELEASE_TAG:-v0.8.67}"
+RELEASE_TAG="${RELEASE_TAG:-v0.9.0}"
 REPO_URL="${REPO_URL:-https://github.com/Hmbown/CodeWhale.git}"
 REPO_BRANCH="${REPO_BRANCH:-main}"
 SECRETS_FILE="${SECRETS_FILE:-/tmp/cw-secrets.env}"

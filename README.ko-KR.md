@@ -1,5 +1,5 @@
-<!-- source: README.md sha256:561a074b0e36 -->
-# CodeWhale
+<!-- source: README.md sha256:ddc9cd7b5aea -->
+# Codewhale
 
 터미널에서 쓰는 코딩 에이전트입니다. 어떤 모델과도 동작하며, 오픈 모델을
 우선합니다.
@@ -21,7 +21,7 @@ Kimi, GLM과 그 밖의 30개 이상이 같은 런타임과 같은 도구를 통
 [![crates.io](https://img.shields.io/crates/v/codewhale-cli?label=crates.io)](https://crates.io/crates/codewhale-cli)
 [![npm](https://img.shields.io/npm/v/codewhale?label=npm)](https://www.npmjs.com/package/codewhale)
 
-![터미널에서 실행 중인 CodeWhale](assets/screenshot.png)
+![터미널에서 실행 중인 Codewhale](assets/screenshot.png)
 
 ## 설치
 

@@ -1,5 +1,5 @@
-<!-- source: README.md sha256:561a074b0e36 -->
-# CodeWhale
+<!-- source: README.md sha256:ddc9cd7b5aea -->
+# Codewhale
 
 一个运行在终端里的编程智能体。适配任意模型；开放模型优先。
 
@@ -13,7 +13,7 @@
 [![crates.io](https://img.shields.io/crates/v/codewhale-cli?label=crates.io)](https://crates.io/crates/codewhale-cli)
 [![npm](https://img.shields.io/npm/v/codewhale?label=npm)](https://www.npmjs.com/package/codewhale)
 
-![CodeWhale 在终端中运行](assets/screenshot.png)
+![Codewhale 在终端中运行](assets/screenshot.png)
 
 ## 安装
 

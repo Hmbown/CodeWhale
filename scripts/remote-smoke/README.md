@@ -4,7 +4,7 @@ Status: experimental smoke-lab scripts for the US-first remote-workbench lane
 (issue #1990). Not part of the supported install paths until the smoke passes
 and this graduates into a documented setup.
 
-This concretizes `docs/REMOTE_VM_US.md`: a cheap US VPS running the CodeWhale
+This concretizes `docs/REMOTE_VM_US.md`: a cheap US VPS running the Codewhale
 runtime on `127.0.0.1` plus the Telegram long-polling bridge, reusing the
 provider-agnostic Ubuntu scripts under `scripts/tencent-lighthouse/` (audited:
 nothing in them is Tencent-specific).

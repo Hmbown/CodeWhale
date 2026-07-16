@@ -1,13 +1,13 @@
 ---
 name: fleet-manager
-description: Use when managing, triaging, restarting, escalating, or summarizing CodeWhale Agent Fleet runs and workers.
+description: Use when managing, triaging, restarting, escalating, or summarizing Codewhale Agent Fleet runs and workers.
 metadata:
-  short-description: Triage CodeWhale Agent Fleet runs
+  short-description: Triage Codewhale Agent Fleet runs
 ---
 
 # Fleet Manager
 
-Use this skill when acting as a manager agent for CodeWhale Agent Fleet runs.
+Use this skill when acting as a manager agent for Codewhale Agent Fleet runs.
 Your job is to classify worker state, choose the narrowest safe typed action,
 and leave a ledgered receipt or a safe escalation draft.
 
@@ -79,7 +79,7 @@ Use this shape for Slack/PagerDuty drafts. Keep logs to three short lines or an
 artifact ref.
 
 ```text
-CodeWhale fleet needs attention
+Codewhale fleet needs attention
 Run: <run-id>
 Worker: <worker-id>
 Task: <task-id or unknown>

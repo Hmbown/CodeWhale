@@ -1,4 +1,4 @@
-# CodeWhale
+# Codewhale
 
 A coding agent for your terminal. Works with any model; open models first.
 
@@ -17,7 +17,7 @@ the same runtime and tools.
 [![crates.io](https://img.shields.io/crates/v/codewhale-cli?label=crates.io)](https://crates.io/crates/codewhale-cli)
 [![npm](https://img.shields.io/npm/v/codewhale?label=npm)](https://www.npmjs.com/package/codewhale)
 
-![CodeWhale running in a terminal](assets/screenshot.png)
+![Codewhale running in a terminal](assets/screenshot.png)
 
 ## Install
 

@@ -1,5 +1,5 @@
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║                         CodeWhale Configuration                               ║
+# ║                         Codewhale Configuration                               ║
 # ║                                                                              ║
 # ║  Terminal coding agent for any model — open models first.                ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
@@ -90,7 +90,7 @@ cost_currency = "usd" # usd | cny
 # ─────────────────────────────────────────────────────────────────────────────────
 # Startup update check
 # ─────────────────────────────────────────────────────────────────────────────────
-# The TUI checks for newer CodeWhale releases in the background at startup.
+# The TUI checks for newer Codewhale releases in the background at startup.
 # Set check_for_updates = false in managed or air-gapped environments.
 # update_uri may point at a GitHub-compatible latest-release JSON endpoint.
 [update]
@@ -614,7 +614,7 @@ max_subagents = 10 # optional (1-20)
 # ─────────────────────────────────────────────────────────────────────────────────
 # OpenAI Codex (ChatGPT) Provider — EXPERIMENTAL
 # Reuses your existing ChatGPT/Codex CLI OAuth login. Run `codex login` first;
-# CodeWhale reads and refreshes the access token from ~/.codex/auth.json. No API
+# Codewhale reads and refreshes the access token from ~/.codex/auth.json. No API
 # key is stored here. Talks to the OpenAI Responses API at /codex/responses.
 # Env var aliases: OPENAI_CODEX_ACCESS_TOKEN / CODEX_ACCESS_TOKEN (token override),
 #   OPENAI_CODEX_BASE_URL / CODEX_BASE_URL, OPENAI_CODEX_MODEL / CODEX_MODEL,
@@ -867,7 +867,7 @@ fallback_default_prior = 3.8
 # ─────────────────────────────────────────────────────────────────────────────────
 # Harness Profiles (preview schema; runtime consumption follows later)
 # ─────────────────────────────────────────────────────────────────────────────────
-# Harness profiles let future CodeWhale runtime slices select model-specific
+# Harness profiles let future Codewhale runtime slices select model-specific
 # prompt, context, tool, and subagent posture. v0.9 parses, validates, and can
 # resolve profiles for tests/status plumbing, but normal Agent and Workflow
 # runs do not silently promote or mutate behavior from these profiles yet.
@@ -1043,7 +1043,7 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 #
 # [[hooks.hooks]]
 # event = "session_start"
-# command = "echo 'CodeWhale session started'"
+# command = "echo 'Codewhale session started'"
 #
 # # Inject ephemeral creds into every shell call. Output one
 # # KEY=VALUE per line on stdout (export prefix optional).

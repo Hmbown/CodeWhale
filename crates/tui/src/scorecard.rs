@@ -887,7 +887,7 @@ mod tests {
     }
 
     #[test]
-    fn costless_catalog_rows_fall_back_only_after_the_exact_route_gate() {
+    fn costless_catalog_rows_fall_back_only_to_verified_provider_prices() {
         let u = Usage {
             input_tokens: 1_000_000,
             output_tokens: 500_000,
@@ -935,12 +935,16 @@ mod tests {
 
         let card = Scorecard::from_turns(&turns);
 
-        assert!((card.per_turn[0].cost_usd - 0.12).abs() < f64::EPSILON);
+        // Trinity Mini has no verified provider rate in the release metadata;
+        // a removed hand-written estimate must stay unknown, not become zero
+        // or leak through from a similarly named route.
+        assert_eq!(card.per_turn[0].cost_usd, 0.0);
+        assert!(card.per_turn[0].cost_unpriced);
         // MiniMax-M2.7 publishes a distinct cache-write rate (0.375/M),
         // retained by the provider-owned fallback even without a priced
         // catalog offering.
         assert!((card.per_turn[1].cost_usd - 0.8475).abs() < f64::EPSILON);
-        assert!(card.per_turn[..2].iter().all(|turn| !turn.cost_unpriced));
+        assert!(!card.per_turn[1].cost_unpriced);
         assert!(card.per_turn[..2].iter().all(|turn| turn.cost_cny_unpriced));
         assert!(card.per_turn[2..].iter().all(|turn| turn.cost_unpriced));
     }

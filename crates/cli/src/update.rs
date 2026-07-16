@@ -604,7 +604,7 @@ fn legacy_binary_message(current_exe: &Path) -> String {
 this binary ({exe}) is using the legacy deepseek/deepseek-tui command name.
 
 The package has been renamed to `codewhale`. This update will install canonical
-CodeWhale binaries (`codewhale` and, when present, `codewhale-tui`) beside the
+Codewhale binaries (`codewhale` and, when present, `codewhale-tui`) beside the
 legacy command when the install directory is writable. DeepSeek provider support
 is unchanged.
 
@@ -1095,7 +1095,7 @@ fn release_tag_from_github_release_html(body: &str) -> Option<String> {
 
 fn fetch_latest_beta_release_from_url(url: &str, proxy: Option<&Proxy>) -> Result<Release> {
     let body = fetch_release_json(url, "release list", proxy)?;
-    // GitHub caps this endpoint at 100 releases per page. CodeWhale uses the
+    // GitHub caps this endpoint at 100 releases per page. Codewhale uses the
     // first page as the latest-beta search window, matching GitHub's ordering.
     let releases: Vec<Release> = serde_json::from_str(&body).with_context(|| {
         format!("failed to parse release list JSON from GitHub API. Response: {body}")
@@ -1308,7 +1308,7 @@ fn glibc_compatibility_message(
     };
     format!(
         "\
-Prebuilt CodeWhale asset `{asset_name}` requires GLIBC_{required}, but {host_line}
+Prebuilt Codewhale asset `{asset_name}` requires GLIBC_{required}, but {host_line}
 
 Official Linux release binaries are GNU libc builds. Ubuntu 22.04 ships glibc
 2.35, so it cannot run a binary that was built against Ubuntu 24.04/glibc 2.39.
@@ -2252,7 +2252,7 @@ mod tests {
             Some(GlibcVersion::new(2, 35, 0)),
         );
 
-        assert!(message.contains("Prebuilt CodeWhale asset `codewhale-linux-x64`"));
+        assert!(message.contains("Prebuilt Codewhale asset `codewhale-linux-x64`"));
         assert!(message.contains("requires GLIBC_2.39"));
         assert!(message.contains("this system has glibc 2.35"));
         assert!(message.contains("cargo install codewhale-cli --locked"));

@@ -1,6 +1,6 @@
 # @codewhale/runtime-sdk
 
-Small JavaScript helpers and TypeScript declarations for CodeWhale's local
+Small JavaScript helpers and TypeScript declarations for Codewhale's local
 Runtime API. The package is intentionally transport-only: it never bypasses the
 Rust runtime, sandbox, approvals, provider configuration, or fleet ledger.
 

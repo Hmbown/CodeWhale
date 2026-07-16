@@ -1,5 +1,5 @@
-<!-- source: README.md sha256:561a074b0e36 -->
-# CodeWhale
+<!-- source: README.md sha256:ddc9cd7b5aea -->
+# Codewhale
 
 Một coding agent cho terminal của bạn. Hoạt động với mọi model; ưu tiên model mở.
 
@@ -18,7 +18,7 @@ khác chạy qua cùng một runtime và bộ công cụ.
 [![crates.io](https://img.shields.io/crates/v/codewhale-cli?label=crates.io)](https://crates.io/crates/codewhale-cli)
 [![npm](https://img.shields.io/npm/v/codewhale?label=npm)](https://www.npmjs.com/package/codewhale)
 
-![CodeWhale chạy trong terminal](assets/screenshot.png)
+![Codewhale chạy trong terminal](assets/screenshot.png)
 
 ## Cài đặt
 

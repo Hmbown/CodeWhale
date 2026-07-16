@@ -106,7 +106,7 @@ pub(super) fn should_resume_after_sleep(
 
 /// Convert low-level reqwest/hyper stream read errors into an operator-facing
 /// message. The raw provider error remains attached, but the lead sentence
-/// explains why CodeWhale may retry before any output and why it must surface
+/// explains why Codewhale may retry before any output and why it must surface
 /// the warning once partial output has already streamed.
 pub(super) fn stream_read_error_user_message(message: &str, any_content_received: bool) -> String {
     let lower = message.to_ascii_lowercase();
@@ -119,9 +119,9 @@ pub(super) fn stream_read_error_user_message(message: &str, any_content_received
     }
 
     let retry_note = if any_content_received {
-        "Some output had already streamed, so CodeWhale is surfacing the warning instead of replaying the request and risking duplicated output."
+        "Some output had already streamed, so Codewhale is surfacing the warning instead of replaying the request and risking duplicated output."
     } else {
-        "No output had streamed yet, so CodeWhale will retry automatically while retry budget remains."
+        "No output had streamed yet, so Codewhale will retry automatically while retry budget remains."
     };
     format!(
         "Provider stream connection dropped while reading the response body. {retry_note} Details: {message}"

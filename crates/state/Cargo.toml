@@ -2,9 +2,10 @@
 name = "codewhale-state"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Session/thread persistence and recovery model for CodeWhale"
+description = "Session/thread persistence and recovery model for Codewhale"
 
 [dependencies]
 anyhow.workspace = true

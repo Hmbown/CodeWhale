@@ -1,6 +1,6 @@
 # Legacy `.deepseek/` compatibility paths — audit & migration status (#3068)
 
-CodeWhale was renamed from DeepSeek-TUI. To avoid breaking existing installs, the runtime reads
+Codewhale was renamed from DeepSeek-TUI. To avoid breaking existing installs, the runtime reads
 state from the new `~/.codewhale/` location but **falls back** to the legacy `~/.deepseek/` location,
 and always **writes** to `~/.codewhale/`. This doc audits each legacy reference and records a
 keep / deprecate / remove decision so the migration is auditable.

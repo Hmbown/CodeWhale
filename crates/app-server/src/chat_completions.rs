@@ -12,10 +12,15 @@ use std::collections::BTreeMap;
 
 use axum::Json;
 use axum::extract::State;
-use axum::http::{HeaderMap, HeaderName, StatusCode};
+use axum::http::{HeaderName, StatusCode};
 use axum::response::IntoResponse;
 use codewhale_agent::ModelRegistry;
-use codewhale_config::{ConfigToml, ProviderKind, provider::WireFormat};
+use codewhale_config::{
+    ConfigToml, ProviderKind, auth_mode_disables_api_key, is_upstream_auth_header,
+    provider::WireFormat,
+    provider_base_url_is_official, provider_preserves_custom_base_url_model,
+    route::{LogicalModelRef, RouteError, RouteRequest, RouteResolver},
+};
 use serde_json::Value;
 
 use super::AppState;
@@ -29,6 +34,7 @@ struct ResolvedModelEndpoint {
     base_url: String,
     model: String,
     api_key: Option<String>,
+    auth_disabled: bool,
     http_headers: BTreeMap<String, String>,
     path_suffix: Option<String>,
     insecure_skip_tls_verify: bool,
@@ -43,33 +49,95 @@ fn resolve_endpoint(
     config: &ConfigToml,
     registry: &ModelRegistry,
     request_model: Option<&str>,
-) -> ResolvedModelEndpoint {
-    let provider_kind = provider_for_request(config, registry, request_model);
+) -> Result<ResolvedModelEndpoint, RouteError> {
+    let configured_base_url = provider_base_url(config, config.provider);
+    let configured_endpoint_owns_models =
+        endpoint_preserves_raw_model_ids(config.provider, &configured_base_url);
+    let provider_kind = if configured_endpoint_owns_models {
+        config.provider
+    } else {
+        request_model
+            .filter(|model| !model.trim().is_empty())
+            .and_then(|model_name| {
+                inferred_provider_for_model(registry, config.provider, model_name)
+            })
+            .unwrap_or(config.provider)
+    };
     let provider_cfg = config.providers.for_provider(provider_kind);
     let provider_meta = provider_kind.provider();
 
     // Base URL: configured → default
-    let base_url = provider_cfg
-        .base_url
-        .clone()
-        .unwrap_or_else(|| provider_meta.default_base_url().to_string());
+    let base_url = provider_base_url(config, provider_kind);
+    let endpoint_owns_models = endpoint_preserves_raw_model_ids(provider_kind, &base_url);
 
-    // Model: request → configured → provider-level configured → default
-    let model = request_model
+    // Keep provider inference and wire identity separate: ModelRegistry picks
+    // the provider for a known request alias, while RouteResolver owns the
+    // provider-scoped wire model and custom-endpoint passthrough contract.
+    let raw_selected_model = request_model
         .filter(|m| !m.trim().is_empty())
         .map(str::to_string)
         .or_else(|| provider_cfg.model.clone())
+        .or_else(|| {
+            (provider_kind == ProviderKind::Deepseek)
+                .then(|| config.default_text_model.clone())
+                .flatten()
+        })
         .unwrap_or_else(|| provider_meta.default_model().to_string());
+    let selected_model = if endpoint_owns_models {
+        raw_selected_model
+    } else {
+        let resolved = registry.resolve(Some(&raw_selected_model), Some(provider_kind));
+        if !resolved.used_fallback && resolved.resolved.provider == provider_kind {
+            resolved.resolved.id
+        } else {
+            raw_selected_model
+        }
+    };
+    let route = RouteResolver::new().resolve(&RouteRequest {
+        explicit_provider: Some(provider_kind),
+        model_selector: Some(LogicalModelRef::from(selected_model.as_str())),
+        saved_provider_model: None,
+        base_url_override: Some(base_url.clone()),
+    })?;
+    let model = route.wire_model_id.as_str().to_string();
 
-    // API key: configured → environment
-    let api_key = provider_cfg.api_key.clone().or_else(|| {
-        provider_meta
-            .env_vars()
-            .iter()
-            .find_map(|var| std::env::var(var).ok())
+    let auth_mode = provider_cfg.auth_mode.as_deref().or_else(|| {
+        (provider_kind == config.provider)
+            .then_some(config.auth_mode.as_deref())
+            .flatten()
+    });
+    let auth_disabled = auth_mode_disables_api_key(auth_mode);
+
+    let configured_api_key = provider_cfg.api_key.as_deref().or_else(|| {
+        (provider_kind == ProviderKind::Deepseek)
+            .then_some(config.api_key.as_deref())
+            .flatten()
     });
 
-    let http_headers = provider_cfg.http_headers.clone();
+    // Provider auth comes only from the resolved endpoint configuration. The
+    // HTTP request's Authorization header authenticates the caller to the local
+    // app-server and is never a provider credential.
+    let api_key = resolve_upstream_api_key(
+        configured_api_key,
+        auth_disabled,
+        provider_base_url_is_official(provider_kind, &base_url),
+        || {
+            provider_meta
+                .env_vars()
+                .iter()
+                .find_map(|var| std::env::var(var).ok())
+        },
+    );
+
+    let mut http_headers = if provider_kind == config.provider {
+        config.http_headers.clone()
+    } else {
+        BTreeMap::new()
+    };
+    http_headers.extend(provider_cfg.http_headers.clone());
+    if auth_disabled {
+        http_headers.retain(|name, _| !is_upstream_auth_header(name));
+    }
 
     let path_suffix = provider_cfg.path_suffix.clone();
 
@@ -77,39 +145,74 @@ fn resolve_endpoint(
 
     let wire_format = provider_meta.wire();
 
-    ResolvedModelEndpoint {
+    Ok(ResolvedModelEndpoint {
         provider: provider_kind,
         base_url,
         model,
         api_key,
+        auth_disabled,
         http_headers,
         path_suffix,
         insecure_skip_tls_verify,
         wire_format,
+    })
+}
+
+/// Prefer the configured provider when a model id/alias exists on more than
+/// one provider. Only a genuine scoped miss may infer a different registry
+/// provider. This keeps `deepseek-v4-pro` on a configured OpenRouter route
+/// while still allowing a DeepSeek default to route an unambiguous `inkling`
+/// request to Together.
+fn inferred_provider_for_model(
+    registry: &ModelRegistry,
+    configured_provider: ProviderKind,
+    model_name: &str,
+) -> Option<ProviderKind> {
+    let scoped = registry.resolve(Some(model_name), Some(configured_provider));
+    if !scoped.used_fallback && scoped.resolved.provider == configured_provider {
+        return Some(configured_provider);
+    }
+    let global = registry.resolve(Some(model_name), None);
+    (!global.used_fallback).then_some(global.resolved.provider)
+}
+
+fn resolve_upstream_api_key(
+    configured: Option<&str>,
+    auth_disabled: bool,
+    allow_ambient: bool,
+    ambient_provider_env: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    if auth_disabled {
+        None
+    } else if let Some(configured) = configured {
+        Some(configured.to_string())
+    } else if allow_ambient {
+        ambient_provider_env()
+    } else {
+        None
     }
 }
 
-/// Determine which provider to use for a chat-completions request.
-///
-/// 1. If the request includes a `model` name, resolve it through the registry.
-///    When the registry finds a match (not a fallback), use that provider.
-/// 2. Otherwise fall back to the configured default provider.
-fn provider_for_request(
-    config: &ConfigToml,
-    registry: &ModelRegistry,
-    request_model: Option<&str>,
-) -> ProviderKind {
-    if let Some(model_name) = request_model {
-        let resolved = registry.resolve(Some(model_name), None);
-        // Only use the registry's provider hint when the model was actually
-        // matched; otherwise the registry's fallback is noise and we should
-        // respect the configured default provider.
-        if !resolved.used_fallback {
-            return resolved.resolved.provider;
-        }
-    }
-    // Fall back to configured provider.
-    config.provider
+fn provider_base_url(config: &ConfigToml, provider: ProviderKind) -> String {
+    let metadata = provider.provider();
+    config
+        .providers
+        .for_provider(provider)
+        .base_url
+        .clone()
+        .or_else(|| {
+            (provider == ProviderKind::Deepseek)
+                .then(|| config.base_url.clone())
+                .flatten()
+        })
+        .unwrap_or_else(|| metadata.default_base_url().to_string())
+}
+
+fn endpoint_preserves_raw_model_ids(provider: ProviderKind, base_url: &str) -> bool {
+    matches!(
+        provider,
+        ProviderKind::Custom | ProviderKind::Ollama | ProviderKind::Vllm | ProviderKind::Sglang
+    ) || provider_preserves_custom_base_url_model(provider, base_url)
 }
 
 /// Build the upstream URL.
@@ -170,7 +273,6 @@ fn is_version_segment(segment: &str) -> bool {
 
 pub(crate) async fn chat_completions_handler(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Json(mut body): Json<Value>,
 ) -> impl IntoResponse {
     // Reject streaming early.
@@ -197,7 +299,22 @@ pub(crate) async fn chat_completions_handler(
 
     // Resolve endpoint.
     let config = state.config.read().await;
-    let endpoint = resolve_endpoint(&config, &state.registry, request_model);
+    let endpoint = match resolve_endpoint(&config, &state.registry, request_model) {
+        Ok(endpoint) => endpoint,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": {
+                        "message": format!("model route could not be resolved: {error}"),
+                        "type": "invalid_request_error",
+                        "code": "model_route_invalid"
+                    }
+                })),
+            )
+                .into_response();
+        }
+    };
 
     // Only ChatCompletions providers are supported.
     if endpoint.wire_format != WireFormat::ChatCompletions {
@@ -217,10 +334,10 @@ pub(crate) async fn chat_completions_handler(
             .into_response();
     }
 
-    // Inject default model if the request didn't include one.
-    if request_model.is_none() || request_model.is_some_and(|m| m.trim().is_empty()) {
-        body["model"] = serde_json::Value::String(endpoint.model.clone());
-    }
+    // Always write the resolved model back. Unknown provider-owned ids remain
+    // byte-for-byte passthrough values, while known aliases become their exact
+    // provider wire ids before forwarding.
+    body["model"] = serde_json::Value::String(endpoint.model.clone());
 
     let url = upstream_url(&endpoint);
 
@@ -259,19 +376,17 @@ pub(crate) async fn chat_completions_handler(
         .map(|client| {
             let mut req = client.post(&url).json(&body);
 
-            // Auth: configured API key takes priority (the proxy owns credentials).
-            // Incoming Bearer header is only used as a fallback when no configured key exists.
-            let auth_from_header = headers
-                .get("authorization")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|raw| raw.strip_prefix("Bearer "));
-            let api_key = endpoint.api_key.as_deref().or(auth_from_header);
-            if let Some(key) = api_key {
+            if !endpoint.auth_disabled
+                && let Some(key) = endpoint.api_key.as_deref()
+            {
                 req = req.bearer_auth(key);
             }
 
             // Forward configured provider headers.
             for (name, value) in &endpoint.http_headers {
+                if endpoint.auth_disabled && is_upstream_auth_header(name) {
+                    continue;
+                }
                 if let Ok(header_name) = HeaderName::from_bytes(name.as_bytes()) {
                     req = req.header(header_name, value.as_str());
                 }
@@ -336,6 +451,7 @@ mod tests {
     use codewhale_config::provider::WireFormat;
     use std::fs;
     use std::sync::OnceLock;
+    use tokio::sync::mpsc;
     use tower::ServiceExt;
 
     use super::super::{app_router, build_state};
@@ -398,6 +514,46 @@ mod tests {
         (StatusCode::OK, Json(response_body))
     }
 
+    async fn capturing_mock_handler(
+        axum::extract::State(captured): axum::extract::State<
+            mpsc::UnboundedSender<axum::http::HeaderMap>,
+        >,
+        headers: axum::http::HeaderMap,
+        body: Json<Value>,
+    ) -> impl axum::response::IntoResponse {
+        captured
+            .send(headers.clone())
+            .expect("capture upstream headers");
+        mock_handler(headers, body).await
+    }
+
+    async fn start_capturing_mock_upstream() -> (
+        String,
+        mpsc::UnboundedReceiver<axum::http::HeaderMap>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind capturing upstream");
+        let addr = listener.local_addr().expect("capturing upstream address");
+        let base_url = format!("http://{}:{}", addr.ip(), addr.port());
+        let (captured_tx, captured_rx) = mpsc::unbounded_channel();
+
+        let handle = tokio::spawn(async move {
+            let app = axum::Router::new()
+                .route(
+                    "/v1/chat/completions",
+                    axum::routing::post(capturing_mock_handler),
+                )
+                .with_state(captured_tx);
+            axum::serve(listener, app)
+                .await
+                .expect("serve capturing upstream");
+        });
+
+        (base_url, captured_rx, handle)
+    }
+
     fn app_with_mock_upstream(
         auth_token: Option<&str>,
         mock_base_url: &str,
@@ -430,6 +586,76 @@ api_key = "arcee-configured-key"
             auth_token.map(std::string::ToString::to_string),
         )
         .expect("state");
+        (app_router(state, &[]), tmp)
+    }
+
+    fn app_with_together_mock_upstream(mock_base_url: &str) -> (axum::Router, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config_path = tmp.path().join("config.toml");
+        let config_content = format!(
+            r#"
+provider = "deepseek"
+
+[providers.together]
+base_url = "{mock_base_url}"
+api_key = "together-configured-key"
+"#
+        );
+        fs::write(&config_path, config_content).expect("write config");
+        let state = build_state(Some(config_path), None).expect("state");
+        (app_router(state, &[]), tmp)
+    }
+
+    fn app_with_root_deepseek_mock_upstream(
+        mock_base_url: &str,
+    ) -> (axum::Router, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config_path = tmp.path().join("config.toml");
+        let config_content = format!(
+            r#"
+provider = "deepseek"
+api_key = "root-deepseek-key"
+base_url = "{mock_base_url}"
+default_text_model = "root-deepseek-model"
+http_headers = {{ "X-Root-Route" = "kept" }}
+"#
+        );
+        fs::write(&config_path, config_content).expect("write config");
+        let state = build_state(Some(config_path), None).expect("state");
+        (app_router(state, &[]), tmp)
+    }
+
+    fn app_with_auth_boundary_mock_upstream(
+        auth_token: &str,
+        mock_base_url: &str,
+        provider_api_key: &str,
+        auth_mode: Option<&str>,
+        include_configured_auth_headers: bool,
+    ) -> (axum::Router, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config_path = tmp.path().join("config.toml");
+        let auth_mode = auth_mode
+            .map(|mode| format!("auth_mode = {mode:?}"))
+            .unwrap_or_default();
+        let configured_auth_headers = if include_configured_auth_headers {
+            r#"http_headers = { aUtHoRiZaTiOn = "Bearer configured-header-secret", "X-API-Key" = "configured-x-key-secret", "Api-Key" = "configured-key-secret", "Proxy-Authorization" = "Basic configured-proxy-secret", "X-Auth-Token" = "configured-auth-token", "X-Access-Token" = "configured-access-token", "X-Goog-Api-Key" = "configured-google-key", Cookie = "session=secret", "X-Route-Metadata" = "safe" }"#
+        } else {
+            ""
+        };
+        let config_content = format!(
+            r#"
+provider = "arcee"
+
+[providers.arcee]
+base_url = "{mock_base_url}"
+model = "trinity-large-thinking"
+api_key = {provider_api_key:?}
+{auth_mode}
+{configured_auth_headers}
+"#
+        );
+        fs::write(&config_path, config_content).expect("write config");
+        let state = build_state(Some(config_path), Some(auth_token.to_string())).expect("state");
         (app_router(state, &[]), tmp)
     }
 
@@ -516,6 +742,47 @@ api_key = "arcee-configured-key"
     }
 
     #[tokio::test]
+    async fn root_deepseek_compatibility_fields_reach_the_configured_upstream() {
+        install_crypto_provider();
+        let (mock_url, mut captured, _mock) = start_capturing_mock_upstream().await;
+        let (app, _tmp) = app_with_root_deepseek_mock_upstream(&mock_url);
+
+        let body = serde_json::json!({
+            "messages": [{"role": "user", "content": "hello"}]
+        });
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let response_body = response_body_json(response).await;
+        assert_eq!(response_body["model"], "root-deepseek-model");
+        assert!(
+            response_body["choices"][0]["message"]["content"]
+                .as_str()
+                .is_some_and(|content| content.contains("auth=Bearer root-deepseek-key"))
+        );
+        let headers = tokio::time::timeout(std::time::Duration::from_secs(1), captured.recv())
+            .await
+            .expect("upstream request timeout")
+            .expect("captured upstream request");
+        assert_eq!(
+            headers
+                .get("x-root-route")
+                .and_then(|value| value.to_str().ok()),
+            Some("kept")
+        );
+    }
+
+    #[tokio::test]
     async fn configured_model_preserved_when_provided() {
         install_crypto_provider();
         let (mock_url, _mock) = start_mock_upstream().await;
@@ -543,6 +810,214 @@ api_key = "arcee-configured-key"
         assert_eq!(response.status(), StatusCode::OK);
         let resp_body = response_body_json(response).await;
         assert_eq!(resp_body["model"], "custom-model-v2");
+    }
+
+    #[test]
+    fn official_together_inkling_aliases_resolve_to_the_exact_wire_model() {
+        let config = ConfigToml::default();
+        let registry = ModelRegistry::default();
+
+        for requested in ["inkling", "together-inkling", "thinkingmachines/inkling"] {
+            let endpoint =
+                resolve_endpoint(&config, &registry, Some(requested)).expect("Inkling route");
+            assert_eq!(endpoint.provider, ProviderKind::Together, "{requested}");
+            assert_eq!(endpoint.model, "thinkingmachines/inkling", "{requested}");
+        }
+    }
+
+    #[test]
+    fn shared_alias_prefers_the_configured_provider_before_global_inference() {
+        let config = ConfigToml {
+            provider: ProviderKind::Openrouter,
+            ..ConfigToml::default()
+        };
+
+        let endpoint =
+            resolve_endpoint(&config, &ModelRegistry::default(), Some("deepseek-v4-pro"))
+                .expect("configured-provider route");
+
+        assert_eq!(endpoint.provider, ProviderKind::Openrouter);
+    }
+
+    #[test]
+    fn root_auth_and_headers_do_not_bleed_across_inferred_providers() {
+        let mut config = ConfigToml {
+            provider: ProviderKind::Deepseek,
+            auth_mode: Some("none".to_string()),
+            ..ConfigToml::default()
+        };
+        config.http_headers.insert(
+            "X-Root-Route".to_string(),
+            "must-not-cross-providers".to_string(),
+        );
+        config.providers.together.api_key = Some("together-key".to_string());
+
+        let endpoint = resolve_endpoint(&config, &ModelRegistry::default(), Some("inkling"))
+            .expect("Together route");
+
+        assert_eq!(endpoint.provider, ProviderKind::Together);
+        assert!(!endpoint.auth_disabled);
+        assert_eq!(endpoint.api_key.as_deref(), Some("together-key"));
+        assert!(!endpoint.http_headers.contains_key("X-Root-Route"));
+    }
+
+    #[test]
+    fn official_endpoints_forward_canonical_registry_wire_ids() {
+        let config = ConfigToml::default();
+        let registry = ModelRegistry::default();
+
+        for (requested, provider, expected) in [
+            (
+                "qwen3.7-plus",
+                ProviderKind::Openrouter,
+                "qwen/qwen3.7-plus",
+            ),
+            ("gpt53-codex", ProviderKind::Openai, "gpt-5.3-codex"),
+            ("arcee-trinity-mini", ProviderKind::Arcee, "trinity-mini"),
+        ] {
+            let endpoint =
+                resolve_endpoint(&config, &registry, Some(requested)).expect("known alias route");
+            assert_eq!(endpoint.provider, provider, "{requested}");
+            assert_eq!(endpoint.model, expected, "{requested}");
+        }
+    }
+
+    #[test]
+    fn every_official_deepseek_endpoint_canonicalizes_retired_aliases() {
+        let registry = ModelRegistry::default();
+        for base_url in [
+            "https://api.deepseek.com",
+            "https://api.deepseek.com/v1/",
+            "https://api.deepseek.com/beta",
+        ] {
+            for alias in ["deepseek-chat", "deepseek-reasoner"] {
+                let mut config = ConfigToml::default();
+                config.providers.deepseek.base_url = Some(base_url.to_string());
+                let endpoint = resolve_endpoint(&config, &registry, Some(alias))
+                    .expect("official DeepSeek route");
+                assert_eq!(endpoint.provider, ProviderKind::Deepseek, "{base_url}");
+                assert_eq!(endpoint.model, "deepseek-v4-flash", "{base_url} {alias}");
+            }
+        }
+    }
+
+    #[test]
+    fn custom_endpoint_preserves_known_registry_alias_verbatim() {
+        let mut config = ConfigToml::default();
+        config
+            .providers
+            .for_provider_mut(ProviderKind::Openrouter)
+            .base_url = Some("https://gateway.example.test/v1".to_string());
+
+        let endpoint = resolve_endpoint(&config, &ModelRegistry::default(), Some("qwen3.7-plus"))
+            .expect("custom OpenRouter-compatible route");
+        assert_eq!(endpoint.provider, ProviderKind::Openrouter);
+        assert_eq!(endpoint.model, "qwen3.7-plus");
+    }
+
+    #[test]
+    fn custom_endpoint_never_resolves_ambient_provider_env() {
+        let ambient_was_read = std::cell::Cell::new(false);
+        let api_key = resolve_upstream_api_key(None, false, false, || {
+            ambient_was_read.set(true);
+            Some("ambient-provider-secret".to_string())
+        });
+
+        assert_eq!(api_key, None);
+        assert!(!ambient_was_read.get());
+    }
+
+    #[test]
+    fn disabled_auth_never_resolves_configured_or_ambient_credentials() {
+        let ambient_was_read = std::cell::Cell::new(false);
+        let api_key = resolve_upstream_api_key(Some("provider-secret"), true, true, || {
+            ambient_was_read.set(true);
+            Some("ambient-provider-secret".to_string())
+        });
+
+        assert_eq!(api_key, None);
+        assert!(!ambient_was_read.get());
+    }
+
+    #[test]
+    fn active_custom_endpoint_is_not_hijacked_by_known_foreign_alias() {
+        let mut config = ConfigToml {
+            provider: ProviderKind::Arcee,
+            ..ConfigToml::default()
+        };
+        config
+            .providers
+            .for_provider_mut(ProviderKind::Arcee)
+            .base_url = Some("https://gateway.example.test/v1".to_string());
+
+        let endpoint = resolve_endpoint(&config, &ModelRegistry::default(), Some("qwen3.7-plus"))
+            .expect("active custom endpoint route");
+        assert_eq!(endpoint.provider, ProviderKind::Arcee);
+        assert_eq!(endpoint.model, "qwen3.7-plus");
+    }
+
+    #[test]
+    fn official_configured_alias_is_canonicalized_when_model_is_omitted() {
+        let mut config = ConfigToml {
+            provider: ProviderKind::Openrouter,
+            ..ConfigToml::default()
+        };
+        config
+            .providers
+            .for_provider_mut(ProviderKind::Openrouter)
+            .model = Some("qwen3.7-plus".to_string());
+
+        let endpoint = resolve_endpoint(&config, &ModelRegistry::default(), None)
+            .expect("configured official alias route");
+        assert_eq!(endpoint.provider, ProviderKind::Openrouter);
+        assert_eq!(endpoint.model, "qwen/qwen3.7-plus");
+    }
+
+    #[test]
+    fn configured_together_inkling_alias_is_normalized_when_model_is_omitted() {
+        let mut config = ConfigToml {
+            provider: ProviderKind::Together,
+            ..ConfigToml::default()
+        };
+        config
+            .providers
+            .for_provider_mut(ProviderKind::Together)
+            .model = Some("inkling".to_string());
+
+        let endpoint = resolve_endpoint(&config, &ModelRegistry::default(), None)
+            .expect("configured Inkling route");
+        assert_eq!(endpoint.provider, ProviderKind::Together);
+        assert_eq!(endpoint.model, "thinkingmachines/inkling");
+    }
+
+    #[tokio::test]
+    async fn custom_together_endpoint_preserves_explicit_inkling_model_ids() {
+        install_crypto_provider();
+        let (mock_url, _mock) = start_mock_upstream().await;
+        let (app, _tmp) = app_with_together_mock_upstream(&mock_url);
+
+        for requested in ["inkling", "together-inkling", "thinkingmachines/inkling"] {
+            let body = serde_json::json!({
+                "model": requested,
+                "messages": [{"role": "user", "content": "hello"}]
+            });
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri("/v1/chat/completions")
+                        .header("content-type", "application/json")
+                        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(response.status(), StatusCode::OK, "{requested}");
+            let resp_body = response_body_json(response).await;
+            assert_eq!(resp_body["model"], requested, "{requested}");
+        }
     }
 
     #[tokio::test]
@@ -581,6 +1056,102 @@ api_key = "arcee-configured-key"
         assert!(
             content.contains("auth=Bearer arcee-configured-key"),
             "expected configured auth in mock echo, got: {content}"
+        );
+    }
+
+    #[tokio::test]
+    async fn app_authorization_is_not_forwarded_when_upstream_auth_is_disabled() {
+        install_crypto_provider();
+        let (mock_url, mut captured, _mock) = start_capturing_mock_upstream().await;
+        let (app, _tmp) = app_with_auth_boundary_mock_upstream(
+            "app-secret",
+            &mock_url,
+            "provider-secret",
+            Some("none"),
+            true,
+        );
+
+        let body = serde_json::json!({
+            "model": "trinity-large-thinking",
+            "messages": [{"role": "user", "content": "hello"}]
+        });
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .header("authorization", "Bearer app-secret")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let headers = tokio::time::timeout(std::time::Duration::from_secs(1), captured.recv())
+            .await
+            .expect("upstream request timeout")
+            .expect("captured upstream request");
+        for name in [
+            "authorization",
+            "x-api-key",
+            "api-key",
+            "proxy-authorization",
+            "x-auth-token",
+            "x-access-token",
+            "x-goog-api-key",
+            "cookie",
+        ] {
+            assert!(headers.get(name).is_none(), "disabled auth leaked {name}");
+        }
+        assert_eq!(
+            headers
+                .get("x-route-metadata")
+                .and_then(|value| value.to_str().ok()),
+            Some("safe")
+        );
+    }
+
+    #[tokio::test]
+    async fn configured_provider_credential_is_the_only_outbound_bearer() {
+        install_crypto_provider();
+        let (mock_url, mut captured, _mock) = start_capturing_mock_upstream().await;
+        let (app, _tmp) = app_with_auth_boundary_mock_upstream(
+            "app-secret",
+            &mock_url,
+            "provider-secret",
+            None,
+            false,
+        );
+
+        let body = serde_json::json!({
+            "model": "trinity-large-thinking",
+            "messages": [{"role": "user", "content": "hello"}]
+        });
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .header("authorization", "Bearer app-secret")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let headers = tokio::time::timeout(std::time::Duration::from_secs(1), captured.recv())
+            .await
+            .expect("upstream request timeout")
+            .expect("captured upstream request");
+        assert_eq!(
+            headers
+                .get("authorization")
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer provider-secret")
         );
     }
 
@@ -726,6 +1297,7 @@ api_key = "arcee-configured-key"
             base_url: "https://api.anthropic.com".to_string(),
             model: "claude-sonnet-4-20250514".to_string(),
             api_key: Some("sk-ant-test".to_string()),
+            auth_disabled: false,
             http_headers: BTreeMap::new(),
             path_suffix: None,
             insecure_skip_tls_verify: false,
@@ -744,6 +1316,7 @@ api_key = "arcee-configured-key"
             base_url: "https://api.arcee.ai".to_string(),
             model: "trinity".to_string(),
             api_key: None,
+            auth_disabled: false,
             http_headers: BTreeMap::new(),
             path_suffix: None,
             insecure_skip_tls_verify: false,
@@ -762,6 +1335,7 @@ api_key = "arcee-configured-key"
             base_url: "https://api.arcee.ai/api/v1".to_string(),
             model: "trinity".to_string(),
             api_key: None,
+            auth_disabled: false,
             http_headers: BTreeMap::new(),
             path_suffix: None,
             insecure_skip_tls_verify: false,
@@ -780,6 +1354,7 @@ api_key = "arcee-configured-key"
             base_url: "https://openrouter.ai/api/v1".to_string(),
             model: "deepseek/deepseek-v4-pro".to_string(),
             api_key: None,
+            auth_disabled: false,
             http_headers: BTreeMap::new(),
             path_suffix: Some("/chat/completions".to_string()),
             insecure_skip_tls_verify: false,
@@ -798,6 +1373,7 @@ api_key = "arcee-configured-key"
             base_url: "https://api.deepseek.com/beta".to_string(),
             model: "deepseek-chat".to_string(),
             api_key: None,
+            auth_disabled: false,
             http_headers: BTreeMap::new(),
             path_suffix: None,
             insecure_skip_tls_verify: false,
@@ -816,6 +1392,7 @@ api_key = "arcee-configured-key"
             base_url: "https://api.deepseek.com/".to_string(),
             model: "deepseek-chat".to_string(),
             api_key: None,
+            auth_disabled: false,
             http_headers: BTreeMap::new(),
             path_suffix: None,
             insecure_skip_tls_verify: false,

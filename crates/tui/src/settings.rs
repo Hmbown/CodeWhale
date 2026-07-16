@@ -117,7 +117,7 @@ impl TuiPrefs {
             .map(|home| home.join(TUI_PREFS_FILE_NAME));
         if codewhale_config::codewhale_home_is_explicit() {
             return primary.ok_or_else(|| {
-                anyhow::anyhow!("Failed to resolve tui.toml path: no CodeWhale home found.")
+                anyhow::anyhow!("Failed to resolve tui.toml path: no Codewhale home found.")
             });
         }
         let legacy_home = codewhale_config::legacy_deepseek_home()
@@ -320,7 +320,7 @@ pub struct Settings {
     pub provider_models: Option<std::collections::HashMap<String, String>>,
     /// Header status indicator next to the effort chip. Cycles through a
     /// per-turn animation keyed off `App::turn_started_at`:
-    /// - `"cw"` (default): static typographic CodeWhale mark.
+    /// - `"cw"` (default): static typographic Codewhale mark.
     /// - `"whale"`: historical `🐳 → 🐋` 12-frame sequence
     ///   originally shipped in v0.3.5, removed in v0.8.x's "smoother TUI
     ///   streaming" pass, restored in v0.8.30. Idle frame is a steady `🐳`.

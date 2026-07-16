@@ -15,10 +15,9 @@ use crate::provider_lake::{all_catalog_models_for_provider, models_for_provider}
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ModelAuthSource {
     Config,
-    Command,
     Env,
     OAuthCli,
-    Secret,
+    NoAuth,
     KeylessLocal,
 }
 
@@ -209,13 +208,23 @@ fn provider_default_model(config: &Config, provider: ApiProvider) -> String {
 }
 
 fn auth_source_for_provider(config: &Config, provider: ApiProvider) -> Option<ModelAuthSource> {
-    if provider == ApiProvider::Custom {
-        let configured = config.provider_config_for(provider)?;
-        if crate::provider_readiness::credential_state_for_provider(config, provider)
-            == crate::provider_readiness::CredentialState::Local
-        {
+    let credential_state =
+        crate::provider_readiness::credential_state_for_provider(config, provider);
+    match credential_state {
+        crate::provider_readiness::CredentialState::NoAuth => {
+            return Some(ModelAuthSource::NoAuth);
+        }
+        crate::provider_readiness::CredentialState::Local => {
             return Some(ModelAuthSource::KeylessLocal);
         }
+        crate::provider_readiness::CredentialState::MissingKey
+        | crate::provider_readiness::CredentialState::MissingLogin
+        | crate::provider_readiness::CredentialState::Legacy => return None,
+        crate::provider_readiness::CredentialState::Saved => {}
+    }
+
+    if provider == ApiProvider::Custom {
+        let configured = config.provider_config_for(provider)?;
         if configured
             .api_key_env
             .as_deref()
@@ -225,12 +234,6 @@ fn auth_source_for_provider(config: &Config, provider: ApiProvider) -> Option<Mo
         {
             return Some(ModelAuthSource::Env);
         }
-        if let Some(auth) = configured.auth.as_ref() {
-            return match auth.source {
-                codewhale_config::AuthSourceKind::Command => Some(ModelAuthSource::Command),
-                codewhale_config::AuthSourceKind::Secret => Some(ModelAuthSource::Secret),
-            };
-        }
         return (configured
             .api_key
             .as_deref()
@@ -238,31 +241,28 @@ fn auth_source_for_provider(config: &Config, provider: ApiProvider) -> Option<Mo
             || crate::config::explicit_cli_api_key_override().is_some())
         .then_some(ModelAuthSource::Config);
     }
-    if matches!(
-        provider,
-        ApiProvider::Ollama | ApiProvider::Sglang | ApiProvider::Vllm
-    ) {
-        return Some(ModelAuthSource::KeylessLocal);
-    }
-    if env_has_key_for(provider) {
-        return Some(ModelAuthSource::Env);
-    }
-    if let Some(auth) = config
-        .provider_config_for(provider)
-        .and_then(|entry| entry.auth.as_ref())
-    {
-        return match auth.source {
-            codewhale_config::AuthSourceKind::Command => Some(ModelAuthSource::Command),
-            codewhale_config::AuthSourceKind::Secret => Some(ModelAuthSource::Secret),
-        };
-    }
-    if provider_uses_oauth_cli(config, provider) && has_api_key_for(config, provider) {
+    if provider_uses_oauth_cli(config, provider) {
         return Some(ModelAuthSource::OAuthCli);
     }
-    has_api_key_for(config, provider).then_some(ModelAuthSource::Config)
+    if config
+        .provider_config_for(provider)
+        .and_then(|entry| entry.api_key_env.as_deref())
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .is_some_and(|name| std::env::var(name).is_ok_and(|value| !value.trim().is_empty()))
+    {
+        return Some(ModelAuthSource::Env);
+    }
+    if !config.should_skip_secret_store_for_provider(provider) && env_has_key_for(provider) {
+        return Some(ModelAuthSource::Env);
+    }
+    Some(ModelAuthSource::Config)
 }
 
 fn provider_uses_oauth_cli(config: &Config, provider: ApiProvider) -> bool {
+    if config.provider_uses_custom_endpoint(provider) {
+        return false;
+    }
     match provider {
         ApiProvider::OpenaiCodex => true,
         ApiProvider::Moonshot => config
@@ -380,16 +380,26 @@ mod tests {
     }
 
     #[test]
-    fn inventory_reports_command_auth_without_secret_value() {
+    fn inventory_ignores_unresolved_command_and_secret_auth_metadata() {
         let _env_lock = crate::test_support::lock_test_env();
+        let temp = tempfile::tempdir().expect("isolated credential home");
+        let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", temp.path());
+        let _backend = crate::test_support::EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
         let _deepseek = crate::test_support::EnvVarGuard::remove("DEEPSEEK_API_KEY");
         let _openai = crate::test_support::EnvVarGuard::remove("OPENAI_API_KEY");
+        let _xai = crate::test_support::EnvVarGuard::remove("XAI_API_KEY");
         let mut providers = crate::config::ProvidersConfig::default();
         providers.openai.auth = Some(codewhale_config::ProviderAuthSourceToml {
             source: codewhale_config::AuthSourceKind::Command,
             command: vec!["secret-tool".to_string(), "lookup".to_string()],
             timeout_ms: Some(2000),
             secret_id: None,
+        });
+        providers.xai.auth = Some(codewhale_config::ProviderAuthSourceToml {
+            source: codewhale_config::AuthSourceKind::Secret,
+            command: Vec::new(),
+            timeout_ms: None,
+            secret_id: Some("codewhale/xai".to_string()),
         });
         let config = Config {
             provider: Some("openai".to_string()),
@@ -398,17 +408,37 @@ mod tests {
         };
 
         let inventory = ModelInventory::from_config(&config);
+        assert!(inventory.candidates.iter().all(|candidate| !matches!(
+            candidate.provider,
+            ApiProvider::Openai | ApiProvider::Xai
+        )));
+    }
+
+    #[test]
+    fn inventory_marks_explicit_no_auth_separately_from_keyless_local() {
+        let mut providers = crate::config::ProvidersConfig::default();
+        providers.vllm.auth_mode = Some("none".to_string());
+        providers.vllm.model = Some("local-model".to_string());
+        let config = Config {
+            provider: Some("vllm".to_string()),
+            providers: Some(providers),
+            ..Default::default()
+        };
+
+        let inventory = ModelInventory::from_config(&config);
         let candidate = inventory
             .candidates
             .iter()
-            .find(|candidate| candidate.provider == ApiProvider::Openai)
-            .expect("openai candidate");
+            .find(|candidate| {
+                candidate.provider == ApiProvider::Vllm && candidate.model == "local-model"
+            })
+            .expect("vLLM no-auth candidate");
 
-        assert_eq!(candidate.auth_source, ModelAuthSource::Command);
-        let json = inventory.router_context_json();
-        assert!(json.contains(r#""auth_source":"command""#));
-        assert!(!json.contains("secret-tool"));
-        assert!(!json.contains("lookup"));
+        assert_eq!(candidate.auth_source, ModelAuthSource::NoAuth);
+        assert_eq!(
+            candidate.readiness,
+            crate::provider_readiness::ResolvedProviderReadiness::NoAuthUnchecked
+        );
     }
 
     #[test]

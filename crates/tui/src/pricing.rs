@@ -626,8 +626,8 @@ pub(crate) fn calculate_turn_cost_estimate_for_provider_at(
     }
 
     // A few first-party rows predate or intentionally omit a Models.dev entry
-    // (for example OpenAI API `gpt-5-codex`, Arcee `trinity-mini`, and MiniMax
-    // `minimax-m2.7`). Preserve only an explicit provider-owned allowlist here;
+    // (for example OpenAI API `gpt-5-codex` and MiniMax `minimax-m2.7`).
+    // Preserve only an explicit provider-owned allowlist here;
     // a costless foreign/catalog route must remain unpriced.
     let pricing = provider_owned_hand_pricing_at(provider, &catalog_model, recorded_at)?;
     Some(cost_estimate_with_pricing(pricing, usage))
@@ -691,12 +691,7 @@ fn provider_owned_hand_pricing_at(
         ApiProvider::Minimax | ApiProvider::MinimaxAnthropic => {
             matches!(model_lower.as_str(), "minimax-m3" | "minimax-m2.7")
         }
-        ApiProvider::Arcee => {
-            matches!(
-                model_lower.as_str(),
-                "trinity-mini" | "trinity-large-thinking"
-            )
-        }
+        ApiProvider::Arcee => model_lower == "trinity-large-thinking",
         ApiProvider::Meta => model_lower == "muse-spark-1.1",
         _ => false,
     };
@@ -1083,8 +1078,6 @@ mod tests {
         for (model, input, output) in [
             ("minimax-m2.7", 0.3, 1.2),
             ("minimax/minimax-m2.7", 0.3, 1.2),
-            ("trinity-mini", 0.045, 0.15),
-            ("arcee-ai/trinity-mini", 0.045, 0.15),
             ("step-3.7-flash", 0.2, 1.15),
             ("fugu-ultra-20260615", 5.0, 30.0),
             ("fugu-ultra", 5.0, 30.0),
@@ -1094,6 +1087,26 @@ mod tests {
             assert_eq!(pricing.usd.output_per_million, output, "{model}");
             assert!(has_pricing_for_model(model));
         }
+    }
+
+    #[test]
+    fn trinity_mini_stays_unpriced_without_verified_provider_rates() {
+        let usage = Usage {
+            input_tokens: 1_000,
+            output_tokens: 100,
+            ..Usage::default()
+        };
+
+        assert!(pricing_for_model_at("trinity-mini", Utc::now()).is_none());
+        assert!(!has_pricing_for_model("trinity-mini"));
+        assert!(!has_pricing_for_provider(
+            ApiProvider::Arcee,
+            "trinity-mini"
+        ));
+        assert!(
+            calculate_turn_cost_estimate_for_provider(ApiProvider::Arcee, "trinity-mini", &usage,)
+                .is_none()
+        );
     }
 
     #[test]

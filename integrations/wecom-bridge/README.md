@@ -51,7 +51,7 @@ node src/index.mjs
 | `/allow <approval_id> [remember]` | 批准待处理的工具调用 |
 | `/deny <approval_id>` | 拒绝待处理的工具调用 |
 
-其他所有内容均作为 CodeWhale 提示发送。群聊中需要在消息前加 `/cw` 前缀。
+其他所有内容均作为 Codewhale 提示发送。群聊中需要在消息前加 `/cw` 前缀。
 
 ## 首次配对
 
@@ -88,7 +88,7 @@ node src/index.mjs
 
 Bridge 使用 BotID + Secret 获取 access_token，建立 WebSocket 长连接。
 接收 `aibot_msg_callback` 事件，通过 `aibot_respond_msg` 命令回复消息。
-所有消息处理与 CodeWhale Runtime API 交互，与 Feishu/Telegram bridge 共享相同逻辑。
+所有消息处理与 Codewhale Runtime API 交互，与 Feishu/Telegram bridge 共享相同逻辑。
 
 ## 与 weixin-bridge 的区别
 

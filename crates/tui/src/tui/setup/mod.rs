@@ -3256,7 +3256,7 @@ fn guided_constitution_template(locale: Locale) -> UserConstitution {
 enum DraftProvenance {
     /// Rendered deterministically from the guided answers.
     Guided,
-    /// Drafted by the named model, then sanitized and bounded by CodeWhale.
+    /// Drafted by the named model, then sanitized and bounded by Codewhale.
     Model(String),
     /// The user's existing `constitution.json`, shown unchanged for the
     /// keep-existing checkpoint completion (#3794).
@@ -3305,7 +3305,7 @@ fn constitution_ratification_text(
         Locale::Ja => {
             let drafted_by = match provenance {
                 DraftProvenance::Model(label) => format!(
-                    "{label} があなたのガイド回答から起草し、CodeWhale が構造検証と境界制限を適用しました。"
+                    "{label} があなたのガイド回答から起草し、Codewhale が構造検証と境界制限を適用しました。"
                 ),
                 DraftProvenance::Guided => {
                     "あなたのガイド回答から決定的に生成されました。".to_string()
@@ -3327,7 +3327,7 @@ fn constitution_ratification_text(
             };
             format!(
                 "CODEWHALE · ユーザー憲法\n{RULE}\n\n{drafted_by}\n\n\
-                 これは CodeWhale があなたと協働するための常設の基準です。優れた憲法のように、使えるほど短く、\
+                 これは Codewhale があなたと協働するための常設の基準です。優れた憲法のように、使えるほど短く、\
                  網羅的な規則ではなく持続する原則で構成され、あなたの変化に合わせて修正できます。\
                  すべての個別判断を裁くのではなく権限と境界を定め、セッションを越えて協働を継続させます。\
                  ただしこれは記憶ではありません。履歴ではなく原則を保持します。\n\n\
@@ -3345,7 +3345,7 @@ fn constitution_ratification_text(
         Locale::ZhHans => {
             let drafted_by = match provenance {
                 DraftProvenance::Model(label) => format!(
-                    "由 {label} 根据你的引导式答案起草，并已由 CodeWhale 完成结构校验与边界限制。"
+                    "由 {label} 根据你的引导式答案起草，并已由 Codewhale 完成结构校验与边界限制。"
                 ),
                 DraftProvenance::Guided => "由你的引导式答案确定性生成。".to_string(),
                 DraftProvenance::Existing => {
@@ -3365,7 +3365,7 @@ fn constitution_ratification_text(
             };
             format!(
                 "CODEWHALE · 用户协作准则\n{RULE}\n\n{drafted_by}\n\n\
-                 这是 CodeWhale 与你协作时长期遵循的偏好和规则。内容应保持简短、便于执行，以持久原则为主，并可随时调整。\
+                 这是 Codewhale 与你协作时长期遵循的偏好和规则。内容应保持简短、便于执行，以持久原则为主，并可随时调整。\
                  它界定协作方式与行为边界，而不是替你决定每一种情况；它让协作跨会话延续——但它不是记忆，只保留原则，不保留历史。\n\n\
                  {rendered}\n\n\
                  权限层级\n{layer_order}\n你的直接指令始终高于本文件。\n\n\
@@ -3379,7 +3379,7 @@ fn constitution_ratification_text(
         Locale::ZhHant => {
             let drafted_by = match provenance {
                 DraftProvenance::Model(label) => format!(
-                    "由 {label} 根據你的引導式答案起草，並已由 CodeWhale 完成結構驗證與邊界限制。"
+                    "由 {label} 根據你的引導式答案起草，並已由 Codewhale 完成結構驗證與邊界限制。"
                 ),
                 DraftProvenance::Guided => "由你的引導式答案確定性生成。".to_string(),
                 DraftProvenance::Existing => {
@@ -3398,7 +3398,7 @@ fn constitution_ratification_text(
             };
             format!(
                 "CODEWHALE · 使用者憲法\n{RULE}\n\n{drafted_by}\n\n\
-                 這是 CodeWhale 與你協作的長期準則。像優秀的憲法一樣：足夠簡短因而可用，由持久原則而非詳盡規則構成，並且可以隨你修訂。\
+                 這是 Codewhale 與你協作的長期準則。像優秀的憲法一樣：足夠簡短因而可用，由持久原則而非詳盡規則構成，並且可以隨你修訂。\
                  它界定權力與邊界，而非裁決每個具體決定；它讓協作跨會話延續，但它不是記憶，它承載的是原則，而非歷史。\n\n\
                  {rendered}\n\n\
                  權限層級\n{layer_order}\n你的直接指令始終高於本文件。\n\n\
@@ -3412,7 +3412,7 @@ fn constitution_ratification_text(
         Locale::PtBr => {
             let drafted_by = match provenance {
                 DraftProvenance::Model(label) => format!(
-                    "Rascunhado por {label} a partir das suas respostas guiadas, depois validado por schema e limitado pelo CodeWhale."
+                    "Rascunhado por {label} a partir das suas respostas guiadas, depois validado por schema e limitado pelo Codewhale."
                 ),
                 DraftProvenance::Guided => {
                     "Renderizado deterministicamente a partir das suas respostas guiadas.".to_string()
@@ -3434,7 +3434,7 @@ fn constitution_ratification_text(
             };
             format!(
                 "CODEWHALE · CONSTITUIÇÃO DO USUÁRIO\n{RULE}\n\n{drafted_by}\n\n\
-                 Esta é a regra permanente de como o CodeWhale trabalha com você. Como boas constituições, \
+                 Esta é a regra permanente de como o Codewhale trabalha com você. Como boas constituições, \
                  ela é curta o bastante para ser usada, formada por princípios duráveis em vez de regras exaustivas, \
                  e pode ser emendada conforme você muda. Ela define poderes e limites em vez de decidir cada caso, \
                  e dá continuidade à colaboração entre sessões. Mas ela não é memória: carrega princípios, não histórico.\n\n\
@@ -3452,7 +3452,7 @@ fn constitution_ratification_text(
         Locale::Es419 => {
             let drafted_by = match provenance {
                 DraftProvenance::Model(label) => format!(
-                    "Redactado por {label} desde tus respuestas guiadas, luego validado por schema y acotado por CodeWhale."
+                    "Redactado por {label} desde tus respuestas guiadas, luego validado por schema y acotado por Codewhale."
                 ),
                 DraftProvenance::Guided => {
                     "Renderizado de forma determinística desde tus respuestas guiadas.".to_string()
@@ -3474,7 +3474,7 @@ fn constitution_ratification_text(
             };
             format!(
                 "CODEWHALE · CONSTITUCIÓN DEL USUARIO\n{RULE}\n\n{drafted_by}\n\n\
-                 Esta es la regla permanente de cómo CodeWhale trabaja contigo. Como las buenas constituciones, \
+                 Esta es la regla permanente de cómo Codewhale trabaja contigo. Como las buenas constituciones, \
                  es lo bastante breve para usarse, hecha de principios duraderos en vez de reglas exhaustivas, \
                  y enmendable a medida que cambias. Define poderes y límites en vez de decidir cada caso, \
                  y da continuidad a la colaboración entre sesiones. Pero no es memoria: lleva principios, no historial.\n\n\
@@ -3492,7 +3492,7 @@ fn constitution_ratification_text(
         Locale::Vi => {
             let drafted_by = match provenance {
                 DraftProvenance::Model(label) => format!(
-                    "Được {label} soạn từ câu trả lời hướng dẫn của bạn, rồi được CodeWhale kiểm tra schema và giới hạn biên."
+                    "Được {label} soạn từ câu trả lời hướng dẫn của bạn, rồi được Codewhale kiểm tra schema và giới hạn biên."
                 ),
                 DraftProvenance::Guided => {
                     "Được kết xuất xác định từ câu trả lời hướng dẫn của bạn.".to_string()
@@ -3514,7 +3514,7 @@ fn constitution_ratification_text(
             };
             format!(
                 "CODEWHALE · HIẾN PHÁP NGƯỜI DÙNG\n{RULE}\n\n{drafted_by}\n\n\
-                 Đây là luật thường trực cho cách CodeWhale làm việc với bạn. Giống các hiến pháp tốt, \
+                 Đây là luật thường trực cho cách Codewhale làm việc với bạn. Giống các hiến pháp tốt, \
                  nó đủ ngắn để dùng, gồm các nguyên tắc bền vững thay vì luật lệ cạn kiệt, \
                  và có thể sửa khi bạn thay đổi. Nó định khung quyền hạn và giới hạn thay vì quyết định từng trường hợp, \
                  đồng thời giữ sự liên tục giữa các phiên. Nhưng nó không phải bộ nhớ: nó mang nguyên tắc, không mang lịch sử.\n\n\
@@ -3532,7 +3532,7 @@ fn constitution_ratification_text(
         Locale::Ko => {
             let drafted_by = match provenance {
                 DraftProvenance::Model(label) => format!(
-                    "{label}이(가) 당신의 가이드 답변을 바탕으로 초안을 작성했고, CodeWhale이 구조를 검증하고 범위를 제한했습니다."
+                    "{label}이(가) 당신의 가이드 답변을 바탕으로 초안을 작성했고, Codewhale이 구조를 검증하고 범위를 제한했습니다."
                 ),
                 DraftProvenance::Guided => {
                     "당신의 가이드 답변으로부터 결정적으로 생성되었습니다.".to_string()
@@ -3554,7 +3554,7 @@ fn constitution_ratification_text(
             };
             format!(
                 "CODEWHALE · 사용자 헌법\n{RULE}\n\n{drafted_by}\n\n\
-                 이것은 CodeWhale이 당신과 함께 일하는 방식에 대한 상시 규칙입니다. 훌륭한 헌법이 그렇듯, \
+                 이것은 Codewhale이 당신과 함께 일하는 방식에 대한 상시 규칙입니다. 훌륭한 헌법이 그렇듯, \
                  사용할 수 있을 만큼 짧고, 소모적인 규칙이 아닌 지속적인 원칙으로 이루어져 있으며, 당신이 변화함에 따라 수정할 수 있습니다. \
                  이는 모든 개별 사례를 판단하는 대신 권한과 한계를 규정하며, 세션을 넘어 협업의 연속성을 부여합니다. \
                  다만 이것은 기억이 아닙니다: 이력이 아니라 원칙을 담습니다.\n\n\
@@ -3572,7 +3572,7 @@ fn constitution_ratification_text(
         _ => {
             let drafted_by = match provenance {
                 DraftProvenance::Model(label) => format!(
-                    "Drafted by {label} from your guided answers, then schema-checked and bounded by CodeWhale."
+                    "Drafted by {label} from your guided answers, then schema-checked and bounded by Codewhale."
                 ),
                 DraftProvenance::Guided => {
                     "Rendered deterministically from your guided answers.".to_string()
@@ -3595,7 +3595,7 @@ fn constitution_ratification_text(
             };
             format!(
                 "CODEWHALE · USER CONSTITUTION\n{RULE}\n\n{drafted_by}\n\n\
-                 This is the standing law for how CodeWhale works with you. Like the best \
+                 This is the standing law for how Codewhale works with you. Like the best \
                  constitutions, it is short enough to use, made of durable principles rather \
                  than exhaustive rules, and amendable as you change. It frames powers and \
                  limits rather than deciding every case, and it gives your collaboration \
@@ -4169,7 +4169,7 @@ mod tests {
         assert!(visible_copy.contains("协作准则"));
         assert!(visible_copy.contains("自定义准则"));
         assert!(visible_copy.contains("可选策略"));
-        assert!(visible_copy.contains("CodeWhale"));
+        assert!(visible_copy.contains("Codewhale"));
         assert!(visible_copy.contains("/constitution"));
         assert!(visible_copy.contains("constitution.json"));
     }
@@ -5090,7 +5090,7 @@ mod tests {
                 locale.tag()
             );
             assert!(
-                !body.contains("A CodeWhale user who wants"),
+                !body.contains("A Codewhale user who wants"),
                 "locale {} reused English purpose copy",
                 locale.tag()
             );
@@ -5195,7 +5195,7 @@ mod tests {
             &DraftProvenance::Model("GLM-5.2".to_string()),
         );
         assert!(drafted.contains("Drafted by GLM-5.2"));
-        assert!(drafted.contains("schema-checked and bounded by CodeWhale"));
+        assert!(drafted.contains("schema-checked and bounded by Codewhale"));
 
         let zh = constitution_ratification_text(
             Locale::ZhHans,

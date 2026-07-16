@@ -7,14 +7,14 @@ only the provider and safety knobs you need.
 
 ## Constitution, project instructions, and repo authority
 
-CodeWhale has several instruction surfaces. They are deliberately separate so a
+Codewhale has several instruction surfaces. They are deliberately separate so a
 personal constitution, repo policy, project instructions, and runtime security
 controls do not blur together.
 
 - **Bundled global Constitution** — the compiled base law in the binary. It is
   the default floor for every session.
 - **User-global constitution** — the normal guided setup output. Manage it with
-  `/constitution` or `/setup`; CodeWhale stores structured data at
+  `/constitution` or `/setup`; Codewhale stores structured data at
   `$CODEWHALE_HOME/constitution.json` (default `~/.codewhale/constitution.json`)
   and renders it into a separate `<codewhale_user_constitution>` prose block.
   This can express preferences and stop conditions, but it does not change
@@ -35,7 +35,7 @@ the update checkpoint agree.
 
 ### Managing the user-global constitution (`/setup` and `/constitution`)
 
-On first launch CodeWhale runs a short **constitution-first** setup path:
+On first launch Codewhale runs a short **constitution-first** setup path:
 language → provider/model readiness → runtime posture → create or confirm your
 constitution. The bundled/default constitution is always valid, so you can
 defer; reopen the hub any time with `/setup`.
@@ -62,8 +62,8 @@ posture/config.
 Each repo can carry two distinct, complementary files:
 
 - **`AGENTS.md`** — ordinary project working instructions.
-- **`.codewhale/constitution.json`** — CodeWhale-specific **repo authority /
-  prioritization policy**: when local sources conflict, which should CodeWhale
+- **`.codewhale/constitution.json`** — Codewhale-specific **repo authority /
+  prioritization policy**: when local sources conflict, which should Codewhale
   trust first, and what to verify before claiming a task is done. `.codewhale/`
   lives inside the repo (like `.github/`). Example:
 
@@ -100,7 +100,7 @@ Each repo can carry two distinct, complementary files:
   additionally **mechanically enforced** in the tool gate. See
   [Enforced repo-law invariants](#enforced-repo-law-invariants) below.
 
-  This is the **repo-local law** layer in CodeWhale's hierarchy: *bundled global
+  This is the **repo-local law** layer in Codewhale's hierarchy: *bundled global
   Constitution* → *user-global constitution* (`$CODEWHALE_HOME/constitution.json`,
   rendered as prose) → *repo constitution* (`.codewhale/constitution.json`, this
   file) → *AGENTS/project instructions* → *memory and handoffs* → *current
@@ -111,12 +111,12 @@ Each repo can carry two distinct, complementary files:
   the current user request.
 
 > **`WHALE.md` is deprecated.** It overlapped confusingly with `AGENTS.md`.
-> CodeWhale no longer reads `WHALE.md` as project or global context. If one is
+> Codewhale no longer reads `WHALE.md` as project or global context. If one is
 > present, setup/context diagnostics report it as ignored so you can migrate it.
-> Move ordinary instructions to `AGENTS.md` and CodeWhale-specific authority
+> Move ordinary instructions to `AGENTS.md` and Codewhale-specific authority
 > policy to `.codewhale/constitution.json`. Personal standing guidance belongs
 > in `/constitution` / `$CODEWHALE_HOME/constitution.json`. (The global
-> CodeWhale Constitution shipped in the model prompt is a separate thing and is
+> Codewhale Constitution shipped in the model prompt is a separate thing and is
 > unaffected.)
 
 ### Enforced repo-law invariants
@@ -203,7 +203,7 @@ is a no-op**, so existing installs keep the bundled prompt.
 
 Scope is deliberately narrow: only the byte-stable **base prompt segment** is
 overridable. Mode deltas, the approval policy, the tool taxonomy, Context
-Management, and the Compaction Relay are still owned by CodeWhale's runtime
+Management, and the Compaction Relay are still owned by Codewhale's runtime
 assembly, so an override **cannot remove safety-relevant guidance** (sandbox,
 approvals) — it only swaps the task/voice framing. To customize ordinary
 personal behavior, prefer `/constitution`; to customize per-repo behavior,
@@ -264,7 +264,7 @@ project-level `allow_shell = false` can still tighten the session; project-level
 When the TUI starts in a workspace that contains a regular-file
 `<workspace>/.codewhale/config.toml`, the safe values declared in that file are
 merged on top of the global config. Legacy
-`<workspace>/.deepseek/config.toml` files are still read when the CodeWhale path
+`<workspace>/.deepseek/config.toml` files are still read when the Codewhale path
 is absent. Symlinked project config files are rejected. This lets a repo suggest
 a model or tighten local safety posture without touching the user's
 `~/.codewhale/config.toml`. Pass `--no-project-config` to skip the overlay for
@@ -288,7 +288,7 @@ Credential, endpoint, provider-selection, MCP config, hooks, skills, capacity,
 retry, hotbar bindings, and `instructions = [...]` settings stay user-global.
 If a repo-local config declares `api_key`, `base_url`, `provider`,
 `mcp_config_path`, `hotbar`, `allow_shell = true`, or `instructions`,
-CodeWhale ignores that key and keeps the user's global setting.
+Codewhale ignores that key and keeps the user's global setting.
 
 The `codewhale` facade and `codewhale-tui` binary share the same config file for
 DeepSeek auth and model defaults. `codewhale auth set --provider deepseek` (and
@@ -346,7 +346,7 @@ SiliconFlow defaults to `https://api.siliconflow.com/v1`, accepts
 `https://api.siliconflow.cn/v1` with the `[providers.siliconflow_cn]` table and
 `SILICONFLOW_API_KEY` credential slot.
 Arcee AI defaults to `https://api.arcee.ai/api/v1`, accepts `ARCEE_BASE_URL`,
-and uses `trinity-large-thinking` by default for CodeWhale agent work.
+and uses `trinity-large-thinking` by default for Codewhale agent work.
 `trinity-large-preview` is also listed as a direct Arcee API model; OpenRouter's
 `arcee-ai/trinity-large-thinking` remains the OpenRouter namespaced form, while
 the direct Arcee provider uses the bare `trinity-large-thinking` ID. Direct
@@ -416,13 +416,13 @@ context_window = 1000000
 ```
 
 Use the regional DashScope `compatible-mode/v1` base URL that matches the
-region of your API key. CodeWhale keeps `qwen-plus` scoped to the `openai`
+region of your API key. Codewhale keeps `qwen-plus` scoped to the `openai`
 provider route and does not infer a different provider from the model prefix.
 The same rule applies to all provider-prefixed model strings: a prefix such as
 `deepseek-ai/...` or `deepseek/...` is a provider-owned wire ID under the
 selected provider, not an automatic switch to the DeepSeek provider.
 Set `context_window` to the gateway/model's real total context window when it
-differs from CodeWhale's static model metadata.
+differs from Codewhale's static model metadata.
 
 If the gateway accepts `POST /chat/completions` but rejects
 `/v1/chat/completions`, set a provider-local `path_suffix`:
@@ -463,7 +463,7 @@ setting.
 
 ### Vision Model
 
-CodeWhale's chat provider and `image_analyze` tool are configured separately.
+Codewhale's chat provider and `image_analyze` tool are configured separately.
 The main chat path remains the selected text/tool provider; image analysis runs
 through `[vision_model]` when the `vision_model` feature is enabled.
 
@@ -499,7 +499,7 @@ distinct set of commands (`auth`, `config`, `model`, `thread`, `sandbox`,
 
 ### Startup Update Checks
 
-By default, the TUI starts a background check for the latest stable CodeWhale
+By default, the TUI starts a background check for the latest stable Codewhale
 release and shows a short toast only when a newer release is available and the
 official release assets are complete.
 
@@ -513,7 +513,7 @@ check_for_updates = false
 
 To redirect the startup check, set `update_uri` to an internal endpoint that
 returns GitHub-compatible latest-release JSON. Minimal mirror metadata with a
-`tag_name` field is accepted; if `assets` are present, CodeWhale requires the
+`tag_name` field is accepted; if `assets` are present, Codewhale requires the
 same uploaded asset set as the official release before showing the toast.
 
 ```toml
@@ -740,7 +740,7 @@ Remaining variables:
 - `DEEPSEEK_FORCE_HTTP1` (`1|true|yes|on` pins the HTTP client to HTTP/1.1, disabling HTTP/2; useful on Windows or behind proxies that mishandle long-lived H2 streams)
 - `CODEWHALE_HOME` (override the base data directory; defaults to `~/.codewhale`).
   If you previously exported `DEEPSEEK_HOME`, rename it to `CODEWHALE_HOME`;
-  the old env var is not used for new CodeWhale state paths.
+  the old env var is not used for new Codewhale state paths.
 - `CODEWHALE_RELEASE_BASE_URL` (release asset mirror used by `codewhale update`
   and by TUI startup update checks when `[update].update_uri` is not set, or as
   a fallback when that configured URI cannot be fetched)
@@ -934,7 +934,7 @@ metacharacters in the pattern are matched literally.
 Repositories can ship policy in `<workspace>/.codewhale/hooks.toml`,
 using the same shape as the `[hooks]` table (top-level fields plus
 `[[hooks]]` entries). Project hooks are executable shell
-configuration, so CodeWhale only loads them after the workspace has
+configuration, so Codewhale only loads them after the workspace has
 been trusted in user-owned config through the trust prompt or a
 `[projects."<workspace>"] trust_level = "trusted"` entry. Session
 `/trust on` mode does not enable repo-supplied hooks by itself, and
@@ -1228,10 +1228,10 @@ If you are upgrading from older releases:
 ### Core keys (used by the TUI/engine)
 
 - `provider` (string, optional): `deepseek` (default), `deepseek-anthropic`, `nvidia-nim`, `openai`, `atlascloud`, `wanjie-ark`, `volcengine`, `openrouter`, `xiaomi-mimo`, `novita`, `fireworks`, `siliconflow`, `arcee`, `siliconflow-CN`, `moonshot`, `sglang`, `vllm`, `ollama`, `huggingface`, `together`, `qianfan`, `openai-codex`, `anthropic`, `openmodel`, `zai`, `stepfun`, `minimax`, `deepinfra`, or `sakana`. Legacy `deepseek-cn` configs are still accepted as an alias for `deepseek`; DeepSeek uses the same official host [`https://api.deepseek.com`](https://api-docs.deepseek.com/) worldwide. `deepseek-anthropic` targets DeepSeek's Anthropic Messages-compatible endpoint at `https://api.deepseek.com/anthropic` using `DEEPSEEK_API_KEY`; `nvidia-nim` targets NVIDIA's NIM-hosted DeepSeek endpoints through `https://integrate.api.nvidia.com/v1`; `openai` targets a generic OpenAI-compatible endpoint, defaulting to `https://api.openai.com/v1`; `atlascloud` targets AtlasCloud's OpenAI-compatible endpoint at `https://api.atlascloud.ai/v1`; `wanjie-ark` targets Wanjie Ark's OpenAI-compatible endpoint at `https://maas-openapi.wanjiedata.com/api/v1`; `volcengine` targets Volcengine Ark's OpenAI-compatible coding endpoint at `https://ark.cn-beijing.volces.com/api/coding/v3`; `openrouter` targets `https://openrouter.ai/api/v1`; `xiaomi-mimo` targets Xiaomi MiMo's OpenAI-compatible endpoint, using `https://token-plan-sgp.xiaomimimo.com/v1` by default for Token Plan keys (`tp-...`) and `https://api.xiaomimimo.com/v1` for pay-as-you-go keys. For Token Plan accounts outside the Singapore default, set `base_url` explicitly or use `mode = "token-plan-cn"` for China and `mode = "token-plan-ams"` for Europe/Amsterdam; `novita` targets `https://api.novita.ai/openai/v1`; `fireworks` targets `https://api.fireworks.ai/inference/v1`; `siliconflow` targets SiliconFlow, defaulting to `https://api.siliconflow.com/v1`; `arcee` targets Arcee AI's OpenAI-compatible endpoint at `https://api.arcee.ai/api/v1`; `siliconflow-CN` targets the SiliconFlow China regional endpoint through `[providers.siliconflow_cn]`; `moonshot` targets Moonshot/Kimi, defaulting to `https://api.moonshot.ai/v1`; `sglang` targets a self-hosted OpenAI-compatible endpoint, defaulting to `http://localhost:30000/v1`; `vllm` targets a self-hosted vLLM OpenAI-compatible endpoint, defaulting to `http://localhost:8000/v1`; `ollama` targets Ollama's OpenAI-compatible endpoint, defaulting to `http://localhost:11434/v1`; `huggingface` targets Hugging Face Inference Providers at `https://router.huggingface.co/v1`; `together` targets Together AI at `https://api.together.xyz/v1`; `qianfan` targets Baidu Qianfan at `https://api.baiduqianfan.ai/v1`; `openai-codex` targets ChatGPT/Codex OAuth; `anthropic` targets Claude's native Messages API; `openmodel` targets OpenModel's Anthropic-compatible Messages API at `https://api.openmodel.ai`; `zai` targets Z.ai at `https://api.z.ai/api/coding/paas/v4`; `stepfun` targets StepFun at `https://api.stepfun.ai/v1`; `minimax` targets MiniMax at `https://api.minimax.io/v1`; `deepinfra` targets DeepInfra at `https://api.deepinfra.com/v1/openai`; `sakana` targets Sakana AI Fugu at `https://api.sakana.ai/v1`.
-- `minimax-anthropic` (string provider value): selects MiniMax's Anthropic-compatible Messages route through `[providers.minimax_anthropic]`. The default Base URL is `https://api.minimax.io/anthropic`; set `https://api.minimaxi.com/anthropic` for China. Keep the `/anthropic` suffix because CodeWhale appends `/v1/messages`. The route uses `MINIMAX_API_KEY` and defaults to `MiniMax-M3`; `MiniMax-M2.7` is also registered. Official M3 input modalities are text, image, and video, with adaptive or disabled thinking. M2.7 is text-only and always keeps thinking enabled.
+- `minimax-anthropic` (string provider value): selects MiniMax's Anthropic-compatible Messages route through `[providers.minimax_anthropic]`. The default Base URL is `https://api.minimax.io/anthropic`; set `https://api.minimaxi.com/anthropic` for China. Keep the `/anthropic` suffix because Codewhale appends `/v1/messages`. The route uses `MINIMAX_API_KEY` and defaults to `MiniMax-M3`; `MiniMax-M2.7` is also registered. Official M3 input modalities are text, image, and video, with adaptive or disabled thinking. M2.7 is text-only and always keeps thinking enabled.
 - `api_key` (string, required for hosted providers): must be non-empty for DeepSeek/hosted providers (or set the provider API key env var). Self-hosted SGLang, vLLM, and Ollama can omit it.
 - `base_url` (string, optional): defaults to `https://api.deepseek.com/beta` for DeepSeek's OpenAI-compatible Chat Completions API, including legacy `provider = "deepseek-cn"` configs. Other defaults are `https://api.deepseek.com/anthropic` for `deepseek-anthropic`, `https://integrate.api.nvidia.com/v1` for `nvidia-nim`, `https://api.openai.com/v1` for `openai`, `https://api.atlascloud.ai/v1` for `atlascloud`, `https://maas-openapi.wanjiedata.com/api/v1` for `wanjie-ark`, `https://ark.cn-beijing.volces.com/api/coding/v3` for `volcengine`, `https://openrouter.ai/api/v1` for `openrouter`, `https://token-plan-sgp.xiaomimimo.com/v1` for `xiaomi-mimo` when the API key starts with `tp-...` and `https://api.xiaomimimo.com/v1` otherwise, `https://api.novita.ai/openai/v1` for `novita`, `https://api.fireworks.ai/inference/v1` for `fireworks`, `https://api.siliconflow.com/v1` for `siliconflow`, `https://api.siliconflow.cn/v1` for `siliconflow-CN`, `https://api.arcee.ai/api/v1` for `arcee`, `https://api.moonshot.ai/v1` for `moonshot`, `https://api.minimax.io/v1` for `minimax`, `https://api.openmodel.ai` for `openmodel`, `https://api.z.ai/api/coding/paas/v4` for `zai`, `https://api.stepfun.ai/v1` for `stepfun`, `https://api.deepinfra.com/v1/openai` for `deepinfra`, `https://api.sakana.ai/v1` for `sakana`, `https://router.huggingface.co/v1` for `huggingface`, `https://api.together.xyz/v1` for `together`, `https://api.baiduqianfan.ai/v1` for `qianfan`, `https://chatgpt.com/backend-api` for `openai-codex`, `https://api.anthropic.com` for `anthropic`, `http://localhost:30000/v1` for `sglang`, `http://localhost:8000/v1` for `vllm`, and `http://localhost:11434/v1` for `ollama`. Set `base_url = "https://token-plan-cn.xiaomimimo.com/v1"` for China-region Xiaomi MiMo Token Plan accounts or `base_url = "https://token-plan-ams.xiaomimimo.com/v1"` for Europe/Amsterdam accounts. Set `https://api.deepseek.com` or `https://api.deepseek.com/v1` explicitly to opt out of DeepSeek beta features.
-- `context_window` (integer, optional provider-table key): override the total context window for the active `[providers.<name>]` route when an OpenAI-compatible gateway, hosted model alias, or self-hosted runtime has a different limit than CodeWhale's static model table. For example, `[providers.openai] context_window = 1000000` lets an OpenAI-compatible DashScope/Qwen route budget against a 1M-token window instead of the conservative fallback. The value must be greater than 0 and affects prompt context notes, compaction thresholds, context-pressure checks, and request output caps.
+- `context_window` (integer, optional provider-table key): override the total context window for the active `[providers.<name>]` route when an OpenAI-compatible gateway, hosted model alias, or self-hosted runtime has a different limit than Codewhale's static model table. For example, `[providers.openai] context_window = 1000000` lets an OpenAI-compatible DashScope/Qwen route budget against a 1M-token window instead of the conservative fallback. The value must be greater than 0 and affects prompt context notes, compaction thresholds, context-pressure checks, and request output caps.
 - `path_suffix` (string, optional provider-table key): override the chat-completions path for OpenAI-compatible gateways that do not serve `/v1/chat/completions`. For example, `[providers.openai] path_suffix = "/chat/completions"` sends chat requests to the unversioned base URL plus `/chat/completions`; `models` and `beta/*` requests keep their normal routing.
 - `reasoning_stream_style` (string, optional provider-table key): override how streaming reasoning is separated from answer text for the active provider route. Use `separate_field` for `reasoning_content` / `reasoning` deltas, `inline_tags` for gateways that stream `<think>...</think>` inside `delta.content`, or `none` to render incoming content exactly as answer text.
 - `[providers.<name>.auth]` (table, optional): provider-scoped auth source metadata. `source = "command"` stores a command argv plus optional `timeout_ms`; `source = "secret"` stores a `secret_id`. This slice lets provider readiness, `/provider`, and doctor JSON report the auth source class without exposing command argv output or secret values; executing commands and resolving external secret material is handled by the follow-up resolver work.
@@ -1424,7 +1424,7 @@ If you are upgrading from older releases:
   between portable `SKILL.md` bundles and Claude Code plugin runtimes.
 - `[skills].scan_codewhale_only` (bool, default `false`): when `true`, session
   skill discovery ignores cross-tool roots such as `.claude/skills`,
-  `.opencode/skills`, `.cursor/skills`, and `~/.agents/skills`. CodeWhale still
+  `.opencode/skills`, `.cursor/skills`, and `~/.agents/skills`. Codewhale still
   scans `<workspace>/.codewhale/skills`, `~/.codewhale/skills`, and any explicit
   `skills_dir` override.
 - `[verifier].enabled` (bool, default `false`): enables automatic
@@ -1435,12 +1435,12 @@ If you are upgrading from older releases:
   `hunted` / `wounded` / `escaped`. `"hunt"` is the only shipped policy today;
   unknown values are rejected so future policies can be added deliberately.
 - `mcp_config_path` (string, optional): defaults to `~/.codewhale/mcp.json`, with
-  legacy `~/.deepseek/mcp.json` fallback when the CodeWhale path is absent.
+  legacy `~/.deepseek/mcp.json` fallback when the Codewhale path is absent.
   It is visible in `/config` and can be changed from the TUI. The new path is
   used immediately by `/mcp`, but rebuilding the model-visible MCP tool pool
   requires restarting the TUI.
 - `notes_path` (string, optional): defaults to `~/.codewhale/notes.txt`, with
-  legacy `~/.deepseek/notes.txt` fallback when the CodeWhale path is absent, and
+  legacy `~/.deepseek/notes.txt` fallback when the Codewhale path is absent, and
   is used by the model-visible `note` tool.
 - `[memory].enabled` (bool, optional): defaults to `false`. When `true`,
   the TUI loads the user memory file into a `<user_memory>` prompt block,
@@ -1448,7 +1448,7 @@ If you are upgrading from older releases:
   slash command, and registers the `remember` tool. The same toggle is
   available via `DEEPSEEK_MEMORY=on`.
 - `memory_path` (string, optional): defaults to `~/.codewhale/memory.md`, with
-  legacy `~/.deepseek/memory.md` fallback when the CodeWhale path is absent.
+  legacy `~/.deepseek/memory.md` fallback when the Codewhale path is absent.
   Used by the user-memory feature when enabled — see
   [`MEMORY.md`](MEMORY.md) for the full feature surface (`# foo`
   composer prefix, `/memory` slash command, `remember` tool, opt-in
@@ -1599,7 +1599,7 @@ These keys are accepted by the config loader but not currently used by the inter
 
 ## Tool Catalog
 
-CodeWhale loads a small core native tool catalog by default and leaves less
+Codewhale loads a small core native tool catalog by default and leaves less
 common native tools discoverable through ToolSearch. To keep specific native
 tools loaded on every request, add them to `[tools].always_load`:
 
@@ -1647,7 +1647,7 @@ and Tavily, Bocha, Metaso, SearXNG, Baidu, Volcengine, or Sofya can be selected
 when an API-backed provider is preferred.
 
 For a private/internal search service that serves DuckDuckGo-compatible HTML,
-keep `provider = "duckduckgo"` and set `base_url`; CodeWhale appends the `q`
+keep `provider = "duckduckgo"` and set `base_url`; Codewhale appends the `q`
 query parameter to that endpoint and applies network policy to its host.
 Custom endpoints do not fall back to public Bing. `CODEWHALE_SEARCH_BASE_URL`
 can override this per process; `DEEPSEEK_SEARCH_BASE_URL` remains accepted as
@@ -1655,8 +1655,8 @@ the legacy alias.
 
 **SearXNG** ([docs](https://docs.searxng.org/dev/search_api.html)) uses the
 configured instance's JSON API. Set `provider = "searxng"` and
-`base_url = "https://your-searxng.example"`; CodeWhale calls
-`/search?q=...&format=json`. CodeWhale does not use a public SearXNG instance
+`base_url = "https://your-searxng.example"`; Codewhale calls
+`/search?q=...&format=json`. Codewhale does not use a public SearXNG instance
 by default because public instances often disable JSON output or rate-limit API
 traffic.
 

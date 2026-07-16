@@ -71,6 +71,8 @@ pub struct FleetTaskVerificationInput {
     pub run_id: FleetRunId,
     pub task_id: String,
     pub worker_id: String,
+    /// Durable lease generation whose result is being verified.
+    pub attempt: u32,
     pub exit_code: Option<i32>,
     pub artifacts: Vec<FleetArtifactRef>,
     /// Resolved-route snapshot to persist on the receipt (#3154).
@@ -244,7 +246,7 @@ pub fn verify_task_result(
             "run the configured scorer command to finalize this receipt",
         ),
         Some(FleetScorerSpec::CodeWhaleVerifierPrompt { .. }) => partial(
-            "CodeWhale verifier prompt configured",
+            "Codewhale verifier prompt configured",
             "run a verifier prompt pass to finalize this receipt",
         ),
         Some(FleetScorerSpec::Manual) => partial(
@@ -262,8 +264,7 @@ pub fn verify_task_result(
     }
 }
 
-pub fn record_verification_receipt(
-    ledger: &FleetLedger,
+pub fn prepare_verification_receipt(
     workspace: &Path,
     input: &FleetTaskVerificationInput,
     verification: FleetTaskVerification,
@@ -272,6 +273,7 @@ pub fn record_verification_receipt(
         "run_id": input.run_id.0.clone(),
         "task_id": input.task_id.clone(),
         "worker_id": input.worker_id.clone(),
+        "attempt": input.attempt,
         "result": verification.result.clone(),
         "failure_kind": verification.failure_kind.clone(),
         "score": verification.score.clone(),
@@ -280,13 +282,22 @@ pub fn record_verification_receipt(
     });
     let bytes =
         serde_json::to_vec_pretty(&evidence).context("serializing fleet receipt evidence")?;
+    // Content-address the evidence as well as namespacing it by attempt. A
+    // stale verifier may finish after a retry has started; it is allowed to
+    // leave an orphaned evidence file, but it must never overwrite the file a
+    // winning attempt's durable receipt references.
+    let evidence_hash = crate::hashing::sha256_hex(&bytes);
+    let filename = format!(
+        "verification-receipt-attempt-{:010}-{}.json",
+        input.attempt, evidence_hash
+    );
     let receipt_artifact = write_fleet_artifact_ref(
         workspace,
         &input.run_id,
         &input.task_id,
         &input.worker_id,
         FleetArtifactKind::Receipt,
-        "verification-receipt.json",
+        &filename,
         &bytes,
         Some("application/json"),
     )?;
@@ -296,6 +307,8 @@ pub fn record_verification_receipt(
         run_id: input.run_id.clone(),
         task_id: input.task_id.clone(),
         worker_id: input.worker_id.clone(),
+        attempt: Some(input.attempt),
+        terminal_seq: None,
         completed_at: timestamp(),
         result: verification.result,
         failure_kind: verification.failure_kind,
@@ -304,6 +317,16 @@ pub fn record_verification_receipt(
         resolved_route: input.resolved_route.clone(),
         effective_permissions: input.effective_permissions.clone(),
     };
+    Ok(receipt)
+}
+
+pub fn record_verification_receipt(
+    ledger: &FleetLedger,
+    workspace: &Path,
+    input: &FleetTaskVerificationInput,
+    verification: FleetTaskVerification,
+) -> Result<FleetReceipt> {
+    let receipt = prepare_verification_receipt(workspace, input, verification)?;
     ledger.record_receipt(receipt.clone())?;
     Ok(receipt)
 }
@@ -798,6 +821,7 @@ mod tests {
             run_id: FleetRunId::from("run-1"),
             task_id: "task-a".to_string(),
             worker_id: "worker-1".to_string(),
+            attempt: 1,
             exit_code: Some(0),
             artifacts: vec![],
             resolved_route: None,
@@ -906,6 +930,7 @@ mod tests {
             run_id: FleetRunId::from("run-1"),
             task_id: "task-a".to_string(),
             worker_id: "worker-1".to_string(),
+            attempt: 3,
             exit_code: Some(1),
             artifacts: vec![log],
             resolved_route: None,
@@ -933,16 +958,65 @@ mod tests {
 
         assert_eq!(receipt.result, FleetTaskResult::Fail);
         assert_eq!(receipt.failure_kind, Some(FleetTaskFailureKind::Task));
+        assert_eq!(receipt.attempt, Some(3));
+        assert_eq!(receipt.terminal_seq, None);
         assert_eq!(receipt.effective_permissions, input.effective_permissions);
         assert_eq!(receipt.artifacts.len(), 2);
         assert!(matches!(
             receipt.artifacts.last().unwrap().kind,
             FleetArtifactKind::Receipt
         ));
+        assert!(
+            receipt
+                .artifacts
+                .last()
+                .unwrap()
+                .path
+                .to_string_lossy()
+                .contains("verification-receipt-attempt-0000000003-")
+        );
         let state = ledger.rebuild_state().unwrap();
         assert_eq!(
             state.receipts["run-1:task-a"].failure_kind,
             Some(FleetTaskFailureKind::Task)
         );
+    }
+
+    #[test]
+    fn verification_evidence_is_attempt_and_content_addressed() {
+        let tmp = TempDir::new().unwrap();
+        let mut input = FleetTaskVerificationInput {
+            run_id: FleetRunId::from("run-1"),
+            task_id: "task-a".to_string(),
+            worker_id: "worker-1".to_string(),
+            attempt: 1,
+            exit_code: Some(1),
+            artifacts: Vec::new(),
+            resolved_route: None,
+            effective_permissions: None,
+        };
+        let scorer = task("task-a", Some(FleetScorerSpec::ExitCode));
+        let stale_verification = verify_task_result(tmp.path(), &scorer, &input);
+        let stale = prepare_verification_receipt(tmp.path(), &input, stale_verification).unwrap();
+
+        input.attempt = 2;
+        input.exit_code = Some(0);
+        let winning_verification = verify_task_result(tmp.path(), &scorer, &input);
+        let winning =
+            prepare_verification_receipt(tmp.path(), &input, winning_verification).unwrap();
+
+        let stale_path = &stale.artifacts.last().unwrap().path;
+        let winning_path = &winning.artifacts.last().unwrap().path;
+        assert_ne!(stale_path, winning_path);
+        assert!(stale_path.to_string_lossy().contains("attempt-0000000001-"));
+        assert!(
+            winning_path
+                .to_string_lossy()
+                .contains("attempt-0000000002-")
+        );
+        assert!(tmp.path().join(stale_path).is_file());
+        assert!(tmp.path().join(winning_path).is_file());
+        assert_eq!(stale.result, FleetTaskResult::Fail);
+        assert_eq!(winning.result, FleetTaskResult::Pass);
     }
 }

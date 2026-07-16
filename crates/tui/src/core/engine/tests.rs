@@ -5910,10 +5910,17 @@ fn route_context_budget_prefers_resolved_route_limits() {
 fn kimi_catalog_output_ceiling_does_not_collapse_input_budget() {
     let _lock = lock_test_env();
     let _guard = ScopedDeepSeekMaxOutputTokens::unset();
-    // #4368: Models.dev reports Kimi's full 262K context as both its context
-    // window and provider output ceiling. That ceiling must not be reserved as
-    // though every normal turn requested 262K of output, which leaves only the
-    // 1K minimum input floor and triggers spurious emergency compaction.
+    let documented =
+        route_context_budget_for_route(ApiProvider::Moonshot, "kimi-k2.7-code", None, 0)
+            .expect("bundled Kimi limits should produce a budget");
+    assert_eq!(documented.window_tokens, 262_144);
+    assert_eq!(documented.output_cap_tokens, 32_768);
+    assert_eq!(documented.available_input_tokens, 228_352);
+
+    // #4368/#4378: Models.dev may report Kimi's full 262K context as both its
+    // context window and provider output ceiling. That ceiling must not be
+    // reserved as though every normal turn requested 262K of output; the
+    // integrated Kimi route cap is 32K.
     let limits = codewhale_config::route::RouteLimits {
         context_tokens: Some(262_144),
         input_tokens: None,
@@ -5925,8 +5932,8 @@ fn kimi_catalog_output_ceiling_does_not_collapse_input_budget() {
             .expect("Kimi route limits should produce a budget");
 
     assert_eq!(budget.window_tokens, 262_144);
-    assert_eq!(budget.output_cap_tokens, 65_536);
-    assert_eq!(budget.available_input_tokens, 195_584);
+    assert_eq!(budget.output_cap_tokens, 32_768);
+    assert_eq!(budget.available_input_tokens, 228_352);
 }
 
 #[test]

@@ -161,7 +161,7 @@ const THINKING_CHOICES: &[Choice] = &[
     },
     Choice {
         label: Cow::Borrowed("auto"),
-        summary: Cow::Borrowed("Let CodeWhale choose"),
+        summary: Cow::Borrowed("Let Codewhale choose"),
         description: Cow::Borrowed("Choose a thinking tier from the worker prompt at runtime."),
     },
 ];
@@ -681,7 +681,7 @@ impl FleetSetupView {
             draft.render_toml()
         ));
         self.model_draft = Some(draft);
-        self.model_draft_label = Some("CodeWhale starter".to_string());
+        self.model_draft_label = Some("Codewhale starter".to_string());
         self.review_scroll = 0;
         ViewAction::None
     }

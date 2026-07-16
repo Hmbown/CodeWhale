@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.9.0] - 2026-07-15
+## [0.9.0] - 2026-07-16
 
 Codewhale v0.9.0 replaces the default terminal shell with the underwater
 interaction system, makes Operate message-first, and hardens the Fleet,
@@ -26,9 +26,10 @@ largest curated model-and-pricing expansion in the project so far.
   budget after output reservation and safety headroom, so large-output and
   tight self-hosted routes compact before provider context rejection. The TUI
   pre-send gate and warning copy now use the same token threshold as the
-  engine. Preserve the 262K Kimi route's usable input budget when catalog
-  metadata also advertises a 262K output ceiling (#4293 by @SamhandsomeLee,
-  #4368).
+  engine. Preserve the 262K Kimi route's usable input budget and use the
+  documented 32K default generation budget instead of mirroring the context
+  window as output (#4293 by @SamhandsomeLee, #4368 by @bruce6135, and #4378
+  by @mvanhorn).
 - Fail closed instead of reporting base-rate dollar estimates for direct OpenAI
   GPT-5.4/5.4 Pro, GPT-5.5 (including dated snapshots), and GPT-5.6
   Sol/Terra/Luna requests above 272K input tokens. Exact tiered accounting
@@ -58,7 +59,8 @@ largest curated model-and-pricing expansion in the project so far.
   initial bounded-walk approach from #4367 by @LeoLin990405).
 - Keep the opt-in `remember` tool in the model-visible first-turn catalog so
   durable preference capture works without requiring a model to discover a
-  tool it cannot yet know exists (#4373 by @Angel-Hair).
+  tool it cannot yet know exists (#4373 by @Angel-Hair and #4377 by
+  @mvanhorn).
 - Make `review` handle a staged snapshot relative to a base ref by comparing
   the branch merge-base tree with the index. This preserves committed and
   staged branch work, excludes unstaged edits, and avoids the invalid
@@ -83,6 +85,12 @@ largest curated model-and-pricing expansion in the project so far.
   saved provider against live configuration before creating a client, never
   infer a provider from the model ID, and fail closed when the named route was
   removed, invalid, or ambiguous (#4334).
+- Bind credentials to the endpoint that owns them. Environment-selected custom
+  hosts can no longer inherit saved provider keys, keyring entries, OAuth, or
+  ambient provider variables; only an explicitly source-marked CLI key may
+  follow an explicit CLI endpoint override. `auth_mode = "none"` also strips
+  credential-shaped custom headers consistently in the TUI and app server,
+  while keyless loopback routes remain usable as local runtimes.
 - Make hosted runtime threads deterministic and provider-exact: serialize
   thread, turn, and event mutation; keep cancellation ownership with the host;
   preserve the selected provider through every durable turn; terminalize
@@ -91,17 +99,26 @@ largest curated model-and-pricing expansion in the project so far.
 - Treat required user confirmation as a real goal blocker instead of a failed
   goal, and explain how to recover when a previously cached approval is denied.
   Both states now remain visible and actionable across all shipped locales
-  instead of looking like unexplained model or tool failure (#4374, #4375).
+  instead of looking like unexplained model or tool failure (#4374 and #4375
+  by @Angel-Hair).
 - Make Fleet launch and teardown deterministic: route flags are placed before
   `exec`, workers are contained in owned Unix sessions or Windows Job Objects,
   and cancellation reaps surviving descendants with bounded escalation before
-  manager state settles.
+  manager state settles. Fence progress, terminal status, verification
+  receipts, and evidence by durable attempt generation so a stale process can
+  never complete or overwrite a restarted attempt; terminal state and receipt
+  now commit atomically, stale-heartbeat decisions use a full lease CAS,
+  exhausted-retry alerts are exactly once, and crash-truncated ledger tails are
+  quarantined before the next append.
 - Keep the stopship Workflow fixture bounded to measured 24k-per-turn role
   budgets and a 360k aggregate. Free-form descriptions no longer fabricate
   write, shell, or network risk; unknown structured risk remains fail-closed.
 - Keep repository trust affirmative and explicit: only `1`/`Y` are advertised
   as acceptance keys, while Enter remains non-affirmative and explains the
   required choice.
+- Replace literal legal and doctrinal metaphors in Simplified Chinese setup and
+  `/constitution` copy with direct collaboration terminology reviewed by a
+  native speaker (#4369 by @hmr-BH).
 - Keep the transcript reviewable while an inline approval card is active:
   Page Up/Down, modified arrows, Home/End, and the mouse wheel now move through
   the visible evidence without changing or dismissing the pending decision
@@ -360,7 +377,7 @@ largest curated model-and-pricing expansion in the project so far.
 - Demote the bundled Models.dev snapshot to an offline/stale fallback after
   live catalog refresh (#4188). ProviderLake precedence is live Models.dev >
   bundled seed > legacy hardcoded completion names; pickers, inventory, and
-  subagent validation stay catalog-backed, and CodeWhale-only providers keep
+  subagent validation stay catalog-backed, and Codewhale-only providers keep
   defaults when Models.dev has no rows.
 
 ### Added
@@ -459,16 +476,6 @@ largest curated model-and-pricing expansion in the project so far.
   long turns and the offline queue persists on every push (#1830);
   queue/steer paths surface toasts while streaming (#2317, #1338); and
   modal submit errors re-open the modal instead of being swallowed (#1198).
-- app-server hardening: `/v1/chat/completions` requires the bearer token;
-  errors return real 4xx/5xx statuses; request bodies and SSE frames are
-  size-limited; stdio `config get` redacts secrets and stdio shutdown reaps
-  the runtime child; graceful shutdown on SIGTERM/Ctrl+C; constant-time
-  token comparison; dropping the runtime bridge no longer blocks the
-  runtime.
-- Policy/config/secrets: user-layer ExecPolicy rules outrank agent-layer
-  rules; chained commands no longer propose trusted-prefix amendments;
-  config and secrets writes are atomic (with fsync) on all platforms; empty
-  provider chains no longer panic.
 - Core/state: paused jobs persist as paused across restarts; unarchive
   updates the in-memory cache; tool dispatch has a timeout; MCP
   notifications no longer receive responses; corrupted checkpoints surface
@@ -483,6 +490,17 @@ largest curated model-and-pricing expansion in the project so far.
   sessions. Contributed by Nightt (@nightt5879) (#4088, #4026).
 - The public `/api/github/feed` endpoint is now forced dynamic on Cloudflare so
   it returns live GitHub activity instead of a build-time empty feed.
+
+### Security
+
+- Require bearer authentication for `/v1/chat/completions`, compare tokens in
+  constant time, return accurate 4xx/5xx statuses, bound request bodies and SSE
+  frames, redact secrets from stdio `config get`, and reliably reap the runtime
+  child during shutdown.
+- Keep trust precedence and secret persistence fail-closed: user ExecPolicy
+  rules outrank agent-layer rules, chained commands cannot propose unsafe
+  trusted-prefix amendments, and config and secret writes are atomic with
+  filesystem synchronization on every supported platform.
 
 ### Changed
 
@@ -499,6 +517,13 @@ largest curated model-and-pricing expansion in the project so far.
   now map to Act + Full Access permissions via a compatibility shim and
   show a one-shot deprecation notice. Removal is deferred beyond v0.9.0 so
   this release does not break existing scripts without a dedicated cutover.
+
+### Removed
+
+- Remove the deprecated `deepseek` and `deepseek-tui` binary shims in this
+  breaking release. `codewhale`, `codew`, and `codewhale-tui` are the supported
+  entry points; existing DeepSeek provider support and legacy config/session
+  migration remain intact.
 
 ### Known issues
 
@@ -530,9 +555,11 @@ reproductions shaped v0.9.0:
   [@knqiufan](https://github.com/knqiufan),
   [@LeoLin990405](https://github.com/LeoLin990405),
   [@moduvoice](https://github.com/moduvoice),
+  [@mvanhorn](https://github.com/mvanhorn),
   [@Mr-Moon121](https://github.com/Mr-Moon121), and
   [@MXAntian](https://github.com/MXAntian).
-- [@nightt5879](https://github.com/nightt5879),
+- [@Angel-Hair](https://github.com/Angel-Hair),
+  [@nightt5879](https://github.com/nightt5879),
   [@nsfoxer](https://github.com/nsfoxer),
   [@octo-patch](https://github.com/octo-patch),
   [@qinlinwang](https://github.com/qinlinwang),

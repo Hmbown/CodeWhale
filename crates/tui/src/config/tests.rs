@@ -2384,11 +2384,9 @@ fn saved_credential_describe_returns_config_file_path() {
     assert_eq!(cf.describe(), "/tmp/x.toml");
 }
 
-/// #593: the dual-write outcome describes both targets so the
-/// onboarding toast (`API key saved to {describe}`) tells the user
-/// the key landed in *both* the keyring and the config file —
-/// which is the whole point of the fix (defeats stale-keyring
-/// shadow while keeping the config file inspectable).
+/// #593: the dual-write outcome describes both targets so the onboarding toast
+/// (`API key saved to {describe}`) tells the user the key landed in both the
+/// selected durable secret store and the inspectable config file.
 #[test]
 fn saved_credential_describe_lists_both_targets_for_keyring_and_config() {
     let dual = SavedCredential::KeyringAndConfigFile {
@@ -2397,7 +2395,7 @@ fn saved_credential_describe_lists_both_targets_for_keyring_and_config() {
     };
     assert_eq!(
         dual.describe(),
-        "OS keyring (system keyring) and /tmp/x.toml"
+        "secret store (system keyring) and /tmp/x.toml"
     );
 }
 
@@ -3155,6 +3153,494 @@ fn deepseek_api_key_prefers_saved_config_over_stale_env() -> Result<()> {
     unsafe {
         env::remove_var("DEEPSEEK_API_KEY");
     }
+    Ok(())
+}
+
+#[test]
+fn standalone_tui_reads_saved_secret_before_ambient_env() -> Result<()> {
+    let _lock = lock_test_env();
+    let temp_root = tempfile::tempdir()?;
+    let _guard = EnvGuard::new(temp_root.path());
+    let codewhale_home = temp_root.path().join("isolated-codewhale");
+    fs::create_dir_all(&codewhale_home)?;
+    let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", codewhale_home.as_os_str());
+    let _backend = EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+    let _ambient_key = EnvVarGuard::set("DEEPSEEK_API_KEY", "stale-env-key");
+
+    let secrets = codewhale_secrets::Secrets::auto_detect();
+    secrets.set("deepseek", "saved-secret-key")?;
+
+    let config = Config::default();
+    assert_eq!(config.deepseek_api_key()?, "saved-secret-key");
+    assert!(has_api_key(&config));
+    assert!(active_provider_has_config_api_key(&config));
+
+    let configured = Config {
+        api_key: Some("fresh-config-key".to_string()),
+        ..Config::default()
+    };
+    assert_eq!(configured.deepseek_api_key()?, "fresh-config-key");
+    Ok(())
+}
+
+#[test]
+fn authenticated_local_provider_reads_saved_secret() -> Result<()> {
+    let _lock = lock_test_env();
+    let temp_root = tempfile::tempdir()?;
+    let _guard = EnvGuard::new(temp_root.path());
+    let codewhale_home = temp_root.path().join("isolated-codewhale");
+    fs::create_dir_all(&codewhale_home)?;
+    let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", codewhale_home.as_os_str());
+    let _backend = EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+    let _ambient_key = EnvVarGuard::remove("VLLM_API_KEY");
+
+    codewhale_secrets::Secrets::auto_detect().set("vllm", "saved-local-secret")?;
+
+    let mut providers = ProvidersConfig::default();
+    providers.vllm.base_url = Some("http://127.0.0.1:8000/v1".to_string());
+    providers.vllm.auth_mode = Some("api_key".to_string());
+    let config = Config {
+        provider: Some("vllm".to_string()),
+        providers: Some(providers),
+        ..Config::default()
+    };
+
+    assert_eq!(config.deepseek_api_key()?, "saved-local-secret");
+    assert!(has_api_key(&config));
+    assert!(active_provider_has_config_api_key(&config));
+    Ok(())
+}
+
+#[test]
+fn named_custom_provider_never_reuses_generic_custom_secret() -> Result<()> {
+    let _lock = lock_test_env();
+    let temp_root = tempfile::tempdir()?;
+    let _guard = EnvGuard::new(temp_root.path());
+    let codewhale_home = temp_root.path().join("isolated-codewhale");
+    fs::create_dir_all(&codewhale_home)?;
+    let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", codewhale_home.as_os_str());
+    let _backend = EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+
+    codewhale_secrets::Secrets::auto_detect().set("custom", "endpoint-a-secret")?;
+
+    let mut providers = ProvidersConfig::default();
+    providers.custom.insert(
+        "endpoint-b".to_string(),
+        ProviderConfig {
+            kind: Some("openai-compatible".to_string()),
+            base_url: Some("https://endpoint-b.example.test/v1".to_string()),
+            model: Some("endpoint-b-model".to_string()),
+            auth_mode: Some("api_key".to_string()),
+            ..ProviderConfig::default()
+        },
+    );
+    let config = Config {
+        provider: Some("endpoint-b".to_string()),
+        providers: Some(providers),
+        ..Config::default()
+    };
+
+    assert!(config.should_skip_secret_store_for_provider(ApiProvider::Custom));
+    assert!(provider_secret_store_api_key(&config, ApiProvider::Custom).is_none());
+    assert!(config.deepseek_api_key().is_err());
+    assert!(!has_api_key(&config));
+    assert!(!active_provider_has_config_api_key(&config));
+    Ok(())
+}
+
+#[test]
+fn built_in_provider_custom_endpoint_never_reuses_global_credentials() -> Result<()> {
+    let _lock = lock_test_env();
+    let temp_root = tempfile::tempdir()?;
+    let _guard = EnvGuard::new(temp_root.path());
+    let codewhale_home = temp_root.path().join("isolated-codewhale");
+    fs::create_dir_all(&codewhale_home)?;
+    let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", codewhale_home.as_os_str());
+    let _backend = EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+    let _ambient = EnvVarGuard::set("OPENROUTER_API_KEY", "ambient-official-key");
+    codewhale_secrets::Secrets::auto_detect().set("openrouter", "saved-official-key")?;
+
+    let mut providers = ProvidersConfig::default();
+    providers.openrouter.base_url = Some("https://gateway.example.test/v1".to_string());
+    let config = Config {
+        provider: Some("openrouter".to_string()),
+        providers: Some(providers),
+        ..Config::default()
+    };
+
+    assert!(config.provider_uses_custom_endpoint(ApiProvider::Openrouter));
+    assert!(config.should_skip_secret_store_for_provider(ApiProvider::Openrouter));
+    assert!(config.deepseek_api_key().is_err());
+    assert!(!has_api_key(&config));
+    assert!(!active_provider_has_config_api_key(&config));
+    assert!(!active_provider_has_env_api_key(&config));
+    Ok(())
+}
+
+#[test]
+fn custom_endpoint_accepts_route_bound_api_key_env_and_reports_ready() -> Result<()> {
+    let _lock = lock_test_env();
+    let temp_root = tempfile::tempdir()?;
+    let _guard = EnvGuard::new(temp_root.path());
+    let _route_key = EnvVarGuard::set("MY_GATEWAY_ROUTE_KEY", "route-bound-key");
+    let _ambient = EnvVarGuard::set("OPENROUTER_API_KEY", "ambient-official-key");
+
+    let mut providers = ProvidersConfig::default();
+    providers.openrouter.base_url = Some("https://gateway.example.test/v1".to_string());
+    providers.openrouter.api_key_env = Some("MY_GATEWAY_ROUTE_KEY".to_string());
+    let config = Config {
+        provider: Some("openrouter".to_string()),
+        providers: Some(providers),
+        ..Config::default()
+    };
+
+    assert_eq!(config.deepseek_api_key()?, "route-bound-key");
+    assert!(has_api_key_for(&config, ApiProvider::Openrouter));
+    assert!(active_provider_has_env_api_key(&config));
+    assert!(active_provider_uses_env_only_api_key(&config));
+    Ok(())
+}
+
+#[test]
+fn env_selected_custom_endpoints_do_not_rebind_file_credentials() -> Result<()> {
+    let _lock = lock_test_env();
+    let temp_root = tempfile::tempdir()?;
+    let _guard = EnvGuard::new(temp_root.path());
+    let config_path = temp_root.path().join("config.toml");
+    let _route_key = EnvVarGuard::set("MY_GATEWAY_ROUTE_KEY", "route-bound-file-key");
+    let _source = EnvVarGuard::remove("DEEPSEEK_API_KEY_SOURCE");
+    let _cli_key = EnvVarGuard::remove("CODEWHALE_CLI_API_KEY");
+
+    fs::write(
+        &config_path,
+        r#"api_key = "saved-root-deepseek-key"
+default_text_model = "deepseek-chat"
+"#,
+    )?;
+    {
+        let _generic_base = EnvVarGuard::set(
+            "CODEWHALE_BASE_URL",
+            "https://generic-gateway.example.test/v1",
+        );
+        let config = Config::load(Some(config_path.clone()), None)?;
+        assert!(config.provider_uses_custom_endpoint(ApiProvider::Deepseek));
+        assert!(config.deepseek_api_key().is_err());
+        assert!(!active_provider_has_config_api_key(&config));
+        assert!(!active_provider_has_env_api_key(&config));
+        assert!(!has_api_key_for(&config, ApiProvider::Deepseek));
+    }
+
+    fs::write(
+        &config_path,
+        r#"provider = "openrouter"
+
+[providers.openrouter]
+api_key = "saved-openrouter-route-key"
+api_key_env = "MY_GATEWAY_ROUTE_KEY"
+model = "openai/gpt-5"
+"#,
+    )?;
+    for (env_name, endpoint) in [
+        (
+            "CODEWHALE_BASE_URL",
+            "https://generic-openrouter-gateway.example.test/v1",
+        ),
+        (
+            "OPENROUTER_BASE_URL",
+            "https://provider-openrouter-gateway.example.test/v1",
+        ),
+    ] {
+        let _base = EnvVarGuard::set(env_name, endpoint);
+        let config = Config::load(Some(config_path.clone()), None)?;
+        assert_eq!(config.deepseek_base_url(), endpoint);
+        assert!(config.provider_uses_custom_endpoint(ApiProvider::Openrouter));
+        assert!(config.deepseek_api_key().is_err());
+        assert!(!active_provider_has_config_api_key(&config));
+        assert!(!active_provider_has_env_api_key(&config));
+        assert!(!has_api_key_for(&config, ApiProvider::Openrouter));
+    }
+
+    Ok(())
+}
+
+#[test]
+fn file_bound_custom_endpoints_keep_route_credentials() -> Result<()> {
+    let _lock = lock_test_env();
+    let temp_root = tempfile::tempdir()?;
+    let _guard = EnvGuard::new(temp_root.path());
+    let config_path = temp_root.path().join("config.toml");
+    let _route_key = EnvVarGuard::set("MY_GATEWAY_ROUTE_KEY", "file-env-route-key");
+
+    fs::write(
+        &config_path,
+        r#"api_key = "file-root-key"
+base_url = "https://file-deepseek-gateway.example.test/v1"
+default_text_model = "private-deepseek-model"
+"#,
+    )?;
+    let root = Config::load(Some(config_path.clone()), None)?;
+    assert_eq!(root.deepseek_api_key()?, "file-root-key");
+    assert!(active_provider_has_config_api_key(&root));
+    assert!(has_api_key_for(&root, ApiProvider::Deepseek));
+
+    fs::write(
+        &config_path,
+        r#"provider = "openrouter"
+
+[providers.openrouter]
+api_key = "file-provider-key"
+base_url = "https://file-openrouter-gateway.example.test/v1"
+model = "private-openrouter-model"
+"#,
+    )?;
+    let provider_key = Config::load(Some(config_path.clone()), None)?;
+    assert_eq!(provider_key.deepseek_api_key()?, "file-provider-key");
+    assert!(active_provider_has_config_api_key(&provider_key));
+    assert!(has_api_key_for(&provider_key, ApiProvider::Openrouter));
+
+    fs::write(
+        &config_path,
+        r#"provider = "openrouter"
+
+[providers.openrouter]
+api_key_env = "MY_GATEWAY_ROUTE_KEY"
+base_url = "https://file-openrouter-gateway.example.test/v1"
+model = "private-openrouter-model"
+"#,
+    )?;
+    let route_env = Config::load(Some(config_path), None)?;
+    assert_eq!(route_env.deepseek_api_key()?, "file-env-route-key");
+    assert!(active_provider_has_env_api_key(&route_env));
+    assert!(has_api_key_for(&route_env, ApiProvider::Openrouter));
+    Ok(())
+}
+
+#[test]
+fn source_marked_cli_key_can_follow_cli_forwarded_custom_base_url() -> Result<()> {
+    let _lock = lock_test_env();
+    let temp_root = tempfile::tempdir()?;
+    let _guard = EnvGuard::new(temp_root.path());
+    let config_path = temp_root.path().join("config.toml");
+    fs::write(
+        &config_path,
+        r#"api_key = "saved-root-key"
+base_url = "https://api.deepseek.com/v1"
+default_text_model = "deepseek-chat"
+"#,
+    )?;
+    let _base = EnvVarGuard::set(
+        "DEEPSEEK_BASE_URL",
+        "https://explicit-cli-gateway.example.test/v1",
+    );
+    let _source = EnvVarGuard::set("DEEPSEEK_API_KEY_SOURCE", "cli");
+    let _cli_key = EnvVarGuard::set("CODEWHALE_CLI_API_KEY", "explicit-cli-key");
+
+    let config = Config::load(Some(config_path), None)?;
+    assert_eq!(config.deepseek_api_key()?, "explicit-cli-key");
+    assert!(!active_provider_has_config_api_key(&config));
+    assert!(active_provider_has_env_api_key(&config));
+    assert!(active_provider_uses_env_only_api_key(&config));
+    assert!(has_api_key_for(&config, ApiProvider::Deepseek));
+    Ok(())
+}
+
+#[test]
+fn managed_file_endpoint_replaces_lower_env_provenance() -> Result<()> {
+    let _lock = lock_test_env();
+    let temp_root = tempfile::tempdir()?;
+    let _guard = EnvGuard::new(temp_root.path());
+    let config_path = temp_root.path().join("config.toml");
+    let managed_path = temp_root.path().join("managed.toml");
+    fs::write(
+        &managed_path,
+        r#"[providers.openrouter]
+api_key = "managed-route-key"
+base_url = "https://managed-gateway.example.test/v1"
+model = "managed-model"
+"#,
+    )?;
+    fs::write(
+        &config_path,
+        format!(
+            "provider = \"openrouter\"\nmanaged_config_path = {:?}\n",
+            managed_path.display().to_string()
+        ),
+    )?;
+    let _base = EnvVarGuard::set(
+        "CODEWHALE_BASE_URL",
+        "https://lower-env-gateway.example.test/v1",
+    );
+
+    let config = Config::load(Some(config_path), None)?;
+    assert_eq!(
+        config.deepseek_base_url(),
+        "https://managed-gateway.example.test/v1"
+    );
+    assert_eq!(config.deepseek_api_key()?, "managed-route-key");
+    assert!(active_provider_has_config_api_key(&config));
+    assert!(has_api_key_for(&config, ApiProvider::Openrouter));
+    Ok(())
+}
+
+#[test]
+fn env_base_url_provenance_tracks_the_route_across_provider_switches() -> Result<()> {
+    let _lock = lock_test_env();
+    let temp_root = tempfile::tempdir()?;
+    let _guard = EnvGuard::new(temp_root.path());
+    let config_path = temp_root.path().join("config.toml");
+    fs::write(
+        &config_path,
+        r#"provider = "openrouter"
+
+[providers.openrouter]
+api_key = "stale-openrouter-file-key"
+model = "openrouter-model"
+
+[providers.openai]
+api_key = "file-openai-key"
+base_url = "https://file-openai-gateway.example.test/v1"
+model = "private-openai-model"
+
+[providers.anthropic]
+api_key = "stale-anthropic-file-key"
+model = "claude-sonnet-5"
+"#,
+    )?;
+    let _base = EnvVarGuard::set("CODEWHALE_BASE_URL", "https://env-gateway.example.test/v1");
+    let mut config = Config::load(Some(config_path), None)?;
+    assert!(config.deepseek_api_key().is_err());
+
+    config.provider = Some("openai".to_string());
+    assert_eq!(
+        config.deepseek_base_url(),
+        "https://file-openai-gateway.example.test/v1"
+    );
+    assert_eq!(config.deepseek_api_key()?, "file-openai-key");
+
+    config.provider = Some("anthropic".to_string());
+    assert_eq!(
+        config.deepseek_base_url(),
+        "https://env-gateway.example.test/v1"
+    );
+    assert!(config.deepseek_api_key().is_err());
+
+    config.provider = Some("openrouter".to_string());
+    assert!(
+        config.deepseek_api_key().is_err(),
+        "switching away and back must retain the env ownership receipt for that route"
+    );
+    Ok(())
+}
+
+#[test]
+fn named_custom_api_key_env_satisfies_runtime_and_onboarding_readiness() -> Result<()> {
+    let _lock = lock_test_env();
+    let temp_root = tempfile::tempdir()?;
+    let _guard = EnvGuard::new(temp_root.path());
+    let _route_key = EnvVarGuard::set("NAMED_CUSTOM_ROUTE_KEY", "named-route-key");
+
+    let mut providers = ProvidersConfig::default();
+    providers.custom.insert(
+        "acme".to_string(),
+        ProviderConfig {
+            kind: Some("openai-compatible".to_string()),
+            base_url: Some("https://acme.example.test/v1".to_string()),
+            model: Some("acme-model".to_string()),
+            api_key_env: Some("NAMED_CUSTOM_ROUTE_KEY".to_string()),
+            ..ProviderConfig::default()
+        },
+    );
+    let config = Config {
+        provider: Some("acme".to_string()),
+        providers: Some(providers),
+        ..Config::default()
+    };
+
+    assert_eq!(config.deepseek_api_key()?, "named-route-key");
+    assert!(has_api_key_for(&config, ApiProvider::Custom));
+    assert!(has_api_key(&config));
+    Ok(())
+}
+
+#[test]
+fn auth_mode_none_suppresses_config_env_secret_and_oauth_credentials() -> Result<()> {
+    let _lock = lock_test_env();
+    let temp_root = tempfile::tempdir()?;
+    let _guard = EnvGuard::new(temp_root.path());
+    let codewhale_home = temp_root.path().join("isolated-codewhale");
+    fs::create_dir_all(&codewhale_home)?;
+    let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", codewhale_home.as_os_str());
+    let _backend = EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+    let _ambient = EnvVarGuard::set("XAI_API_KEY", "ambient-xai-key");
+    let oauth_path = temp_root.path().join("grok-auth.json");
+    fs::write(&oauth_path, r#"{"access_token":"oauth-token"}"#)?;
+    let _oauth_path = EnvVarGuard::set("GROK_AUTH_PATH", oauth_path.as_os_str());
+    codewhale_secrets::Secrets::auto_detect().set("xai", "saved-xai-key")?;
+
+    let mut providers = ProvidersConfig::default();
+    providers.xai.auth_mode = Some("none".to_string());
+    providers.xai.api_key = Some("configured-xai-key".to_string());
+    providers.xai.http_headers = Some(HashMap::from([
+        ("X-API-Key".to_string(), "configured-x-key".to_string()),
+        ("Api-Key".to_string(), "configured-key".to_string()),
+        (
+            "Proxy-Authorization".to_string(),
+            "Basic configured-proxy-secret".to_string(),
+        ),
+        (
+            "X-Auth-Token".to_string(),
+            "configured-auth-token".to_string(),
+        ),
+        (
+            "X-Access-Token".to_string(),
+            "configured-access-token".to_string(),
+        ),
+        (
+            "X-Goog-Api-Key".to_string(),
+            "configured-google-key".to_string(),
+        ),
+        ("Cookie".to_string(), "session=secret".to_string()),
+        ("X-Route-Metadata".to_string(), "safe".to_string()),
+    ]));
+    let config = Config {
+        provider: Some("xai".to_string()),
+        http_headers: Some(HashMap::from([(
+            "aUtHoRiZaTiOn".to_string(),
+            "Bearer configured-secret".to_string(),
+        )])),
+        providers: Some(providers),
+        ..Config::default()
+    };
+
+    assert_eq!(config.deepseek_api_key()?, "");
+    assert!(
+        has_api_key(&config),
+        "no-auth routes are ready without a key"
+    );
+    assert!(!active_provider_has_config_api_key(&config));
+    assert!(!active_provider_has_env_api_key(&config));
+    let headers = config.http_headers();
+    for name in [
+        "authorization",
+        "x-api-key",
+        "api-key",
+        "proxy-authorization",
+        "x-auth-token",
+        "x-access-token",
+        "x-goog-api-key",
+        "cookie",
+    ] {
+        assert!(
+            !headers
+                .keys()
+                .any(|candidate| candidate.eq_ignore_ascii_case(name)),
+            "disabled auth leaked {name}: {headers:?}"
+        );
+    }
+    assert_eq!(
+        headers.get("X-Route-Metadata").map(String::as_str),
+        Some("safe")
+    );
     Ok(())
 }
 
@@ -4013,6 +4499,8 @@ fn normalize_model_name_for_provider_maps_recent_openrouter_aliases() {
         ("qwen3.6-35b-a3b", OPENROUTER_QWEN_3_6_35B_A3B_MODEL),
         ("qwen3.6-max-preview", OPENROUTER_QWEN_3_6_MAX_PREVIEW_MODEL),
         ("qwen3.6-plus", OPENROUTER_QWEN_3_6_PLUS_MODEL),
+        ("qwen3.7-plus", OPENROUTER_QWEN_3_7_PLUS_MODEL),
+        ("qwen-3.7-plus", OPENROUTER_QWEN_3_7_PLUS_MODEL),
         ("mimo-v2.5-pro", OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL),
         ("kimi-k2.7-code", OPENROUTER_KIMI_K2_7_CODE_MODEL),
         ("kimi", OPENROUTER_KIMI_K2_7_CODE_MODEL),
@@ -5001,7 +5489,7 @@ mode = "token-plan-usa"
 }
 
 #[test]
-fn xiaomi_mimo_env_overrides_provider_base_url_model_and_key() -> Result<()> {
+fn xiaomi_mimo_custom_env_url_does_not_inherit_ambient_key() -> Result<()> {
     let _lock = lock_test_env();
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -5025,7 +5513,11 @@ fn xiaomi_mimo_env_overrides_provider_base_url_model_and_key() -> Result<()> {
 
     let config = Config::load(None, None)?;
     assert_eq!(config.api_provider(), ApiProvider::XiaomiMimo);
-    assert_eq!(config.deepseek_api_key()?, "mimo-env-key");
+    let error = config
+        .deepseek_api_key()
+        .expect_err("ambient key must not follow a custom endpoint");
+    assert!(error.to_string().contains("must be bound explicitly"));
+    assert!(!has_api_key(&config));
     assert_eq!(
         config.deepseek_base_url(),
         "https://mimo-gateway.example/v1"
@@ -5161,7 +5653,7 @@ fn wanjie_ark_provider_uses_documented_defaults() -> Result<()> {
 }
 
 #[test]
-fn wanjie_ark_env_overrides_provider_base_url_model_and_key() -> Result<()> {
+fn wanjie_ark_custom_env_url_does_not_inherit_ambient_key() -> Result<()> {
     let _lock = lock_test_env();
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -5184,7 +5676,11 @@ fn wanjie_ark_env_overrides_provider_base_url_model_and_key() -> Result<()> {
 
     let config = Config::load(None, None)?;
     assert_eq!(config.api_provider(), ApiProvider::WanjieArk);
-    assert_eq!(config.deepseek_api_key()?, "wanjie-env-key");
+    let error = config
+        .deepseek_api_key()
+        .expect_err("ambient key must not follow a custom endpoint");
+    assert!(error.to_string().contains("must be bound explicitly"));
+    assert!(!has_api_key(&config));
     assert_eq!(config.deepseek_base_url(), "https://wanjie.example/api/v1");
     assert_eq!(config.default_model(), "wanjie-model-id");
     Ok(())
@@ -5445,7 +5941,7 @@ fn deepseek_model_env_passes_custom_model_through_for_non_deepseek_providers() -
 }
 
 #[test]
-fn openai_env_overrides_provider_base_url_and_model() -> Result<()> {
+fn openai_custom_env_url_does_not_inherit_ambient_key() -> Result<()> {
     let _lock = lock_test_env();
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -5469,7 +5965,11 @@ fn openai_env_overrides_provider_base_url_and_model() -> Result<()> {
 
     let config = Config::load(None, None)?;
     assert_eq!(config.api_provider(), ApiProvider::Openai);
-    assert_eq!(config.deepseek_api_key()?, "openai-env-key");
+    let error = config
+        .deepseek_api_key()
+        .expect_err("ambient key must not follow a custom endpoint");
+    assert!(error.to_string().contains("must be bound explicitly"));
+    assert!(!has_api_key(&config));
     assert_eq!(
         config.deepseek_base_url(),
         "https://openai-compatible.example/v4"
@@ -5479,7 +5979,7 @@ fn openai_env_overrides_provider_base_url_and_model() -> Result<()> {
 }
 
 #[test]
-fn openai_env_accepts_facade_base_url_forwarding() -> Result<()> {
+fn openai_facade_custom_url_does_not_inherit_ambient_key() -> Result<()> {
     let _lock = lock_test_env();
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -5503,7 +6003,11 @@ fn openai_env_accepts_facade_base_url_forwarding() -> Result<()> {
 
     let config = Config::load(None, None)?;
     assert_eq!(config.api_provider(), ApiProvider::Openai);
-    assert_eq!(config.deepseek_api_key()?, "forwarded-openai-key");
+    let error = config
+        .deepseek_api_key()
+        .expect_err("ambient key must not follow a custom endpoint");
+    assert!(error.to_string().contains("must be bound explicitly"));
+    assert!(!has_api_key(&config));
     assert_eq!(
         config.deepseek_base_url(),
         "https://forwarded-openai.example/v4"
@@ -5631,7 +6135,7 @@ fn volcengine_provider_requires_api_key() -> Result<()> {
 }
 
 #[test]
-fn volcengine_env_overrides_base_url_model_and_key() -> Result<()> {
+fn volcengine_custom_env_url_does_not_inherit_ambient_key() -> Result<()> {
     let _lock = lock_test_env();
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -5655,7 +6159,11 @@ fn volcengine_env_overrides_base_url_model_and_key() -> Result<()> {
 
     let config = Config::load(None, None)?;
     assert_eq!(config.api_provider(), ApiProvider::Volcengine);
-    assert_eq!(config.deepseek_api_key()?, "volc-env-key");
+    let error = config
+        .deepseek_api_key()
+        .expect_err("ambient key must not follow a custom endpoint");
+    assert!(error.to_string().contains("must be bound explicitly"));
+    assert!(!has_api_key(&config));
     assert_eq!(config.deepseek_base_url(), "https://volc.example/v1");
     assert_eq!(config.default_model(), "DeepSeek-V4-Flash");
     Ok(())
@@ -5968,7 +6476,7 @@ fn fireworks_env_overrides_key_and_model() -> Result<()> {
 }
 
 #[test]
-fn siliconflow_env_overrides_key_base_url_and_model() -> Result<()> {
+fn siliconflow_custom_env_url_does_not_inherit_ambient_key() -> Result<()> {
     let _lock = lock_test_env();
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -5992,7 +6500,11 @@ fn siliconflow_env_overrides_key_base_url_and_model() -> Result<()> {
 
     let config = Config::load(None, None)?;
     assert_eq!(config.api_provider(), ApiProvider::Siliconflow);
-    assert_eq!(config.deepseek_api_key()?, "sf-env-key");
+    let error = config
+        .deepseek_api_key()
+        .expect_err("ambient key must not follow a custom endpoint");
+    assert!(error.to_string().contains("must be bound explicitly"));
+    assert!(!has_api_key(&config));
     assert_eq!(config.deepseek_base_url(), "https://sf-mirror.example/v1");
     assert_eq!(config.default_model(), "deepseek-v4-flash");
     Ok(())
@@ -6027,7 +6539,7 @@ fn arcee_provider_uses_direct_defaults() -> Result<()> {
 }
 
 #[test]
-fn arcee_env_overrides_key_base_url_and_model() -> Result<()> {
+fn arcee_custom_env_url_does_not_inherit_ambient_key() -> Result<()> {
     let _lock = lock_test_env();
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -6050,7 +6562,11 @@ fn arcee_env_overrides_key_base_url_and_model() -> Result<()> {
 
     let config = Config::load(None, None)?;
     assert_eq!(config.api_provider(), ApiProvider::Arcee);
-    assert_eq!(config.deepseek_api_key()?, "arcee-env-key");
+    let error = config
+        .deepseek_api_key()
+        .expect_err("ambient key must not follow a custom endpoint");
+    assert!(error.to_string().contains("must be bound explicitly"));
+    assert!(!has_api_key(&config));
     assert_eq!(
         config.deepseek_base_url(),
         "https://arcee-mirror.example/api/v1"
@@ -6912,7 +7428,10 @@ fn has_api_key_for_uses_deepseek_cn_provider_table() -> Result<()> {
 }
 
 #[test]
-fn has_api_key_for_accepts_provider_auth_source_metadata() {
+fn provider_auth_source_metadata_is_not_a_runtime_credential() -> Result<()> {
+    let _lock = lock_test_env();
+    let temp_root = tempfile::tempdir()?;
+    let _guard = EnvGuard::new(temp_root.path());
     let mut providers = ProvidersConfig::default();
     providers.openai.auth = Some(codewhale_config::ProviderAuthSourceToml {
         source: codewhale_config::AuthSourceKind::Command,
@@ -6921,11 +7440,14 @@ fn has_api_key_for_accepts_provider_auth_source_metadata() {
         secret_id: None,
     });
     let config = Config {
+        provider: Some("openai".to_string()),
         providers: Some(providers),
         ..Config::default()
     };
 
-    assert!(has_api_key_for(&config, ApiProvider::Openai));
+    assert!(!has_api_key_for(&config, ApiProvider::Openai));
+    assert!(config.deepseek_api_key().is_err());
+    Ok(())
 }
 
 #[test]
@@ -7465,28 +7987,40 @@ fn provider_capability_arcee_direct_models_use_api_docs_shape() {
         RequestPayloadMode::ChatCompletions
     );
 
-    for model in [ARCEE_TRINITY_LARGE_PREVIEW_MODEL, ARCEE_TRINITY_MINI_MODEL] {
-        let cap = provider_capability(ApiProvider::Arcee, model);
+    let preview = provider_capability(ApiProvider::Arcee, ARCEE_TRINITY_LARGE_PREVIEW_MODEL);
+    assert_eq!(preview.context_window, 262_144);
+    assert_eq!(preview.max_output, 4096);
+    assert!(!preview.thinking_supported);
 
-        let expected_window = if model == ARCEE_TRINITY_LARGE_PREVIEW_MODEL {
-            262_144
-        } else {
-            128_000
-        };
-        let expected_output = if model == ARCEE_TRINITY_LARGE_PREVIEW_MODEL {
-            4096
-        } else {
-            64_000
-        };
-        assert_eq!(cap.context_window, expected_window);
-        assert_eq!(cap.max_output, expected_output);
-        assert!(!cap.thinking_supported);
-        assert!(!cap.cache_telemetry_supported);
-        assert_eq!(
-            cap.request_payload_mode,
-            RequestPayloadMode::ChatCompletions
-        );
-    }
+    let mini = provider_capability(ApiProvider::Arcee, ARCEE_TRINITY_MINI_MODEL);
+    assert_eq!(mini.context_window, 128_000);
+    // ProviderCapability carries a mandatory request fallback; model metadata
+    // itself deliberately keeps Trinity Mini's upstream output limit unknown.
+    assert_eq!(mini.max_output, 4096);
+    assert_eq!(
+        crate::models::max_output_tokens_for_model(ARCEE_TRINITY_MINI_MODEL),
+        None
+    );
+    assert!(mini.thinking_supported);
+    assert!(!mini.cache_telemetry_supported);
+    assert_eq!(
+        mini.request_payload_mode,
+        RequestPayloadMode::ChatCompletions
+    );
+}
+
+#[test]
+fn provider_capability_marks_exact_inkling_route_as_reasoning() {
+    let cap = provider_capability(ApiProvider::Together, TOGETHER_INKLING_MODEL);
+    assert!(cap.thinking_supported);
+    assert_eq!(
+        crate::models::context_window_for_model(TOGETHER_INKLING_MODEL),
+        None
+    );
+    assert_eq!(
+        crate::models::max_output_tokens_for_model(TOGETHER_INKLING_MODEL),
+        None
+    );
 }
 
 #[test]
@@ -7599,7 +8133,7 @@ fn provider_capability_atlascloud_v4_model_resolves_model_metadata() {
 fn provider_capability_moonshot_default_model_resolves_kimi_metadata() {
     let cap = provider_capability(ApiProvider::Moonshot, DEFAULT_MOONSHOT_MODEL);
     assert_eq!(cap.context_window, 262_144);
-    assert_eq!(cap.max_output, 262_144);
+    assert_eq!(cap.max_output, 32_768);
     assert!(cap.thinking_supported);
     assert!(!cap.cache_telemetry_supported);
     assert_eq!(
@@ -7890,7 +8424,7 @@ fn huggingface_missing_key_error_mentions_env_fallbacks() -> Result<()> {
 }
 
 #[test]
-fn huggingface_env_overrides_key_base_url_and_model() -> Result<()> {
+fn huggingface_custom_env_urls_do_not_inherit_ambient_keys() -> Result<()> {
     let _lock = lock_test_env();
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -7919,7 +8453,11 @@ fn huggingface_env_overrides_key_base_url_and_model() -> Result<()> {
 
         let config = Config::load(None, None)?;
         assert_eq!(config.api_provider(), ApiProvider::Huggingface);
-        assert_eq!(config.deepseek_api_key()?, "hf-env-key");
+        let error = config
+            .deepseek_api_key()
+            .expect_err("ambient key must not follow a custom endpoint");
+        assert!(error.to_string().contains("must be bound explicitly"));
+        assert!(!has_api_key(&config));
         assert_eq!(config.deepseek_base_url(), "https://custom-hf.example/v1");
         assert_eq!(config.default_model(), "meta-llama/Llama-3-70B");
     }
@@ -7938,7 +8476,11 @@ fn huggingface_env_overrides_key_base_url_and_model() -> Result<()> {
 
         let config = Config::load(None, None)?;
         assert_eq!(config.api_provider(), ApiProvider::Huggingface);
-        assert_eq!(config.deepseek_api_key()?, "hf-env-key");
+        let error = config
+            .deepseek_api_key()
+            .expect_err("ambient key must not follow a custom endpoint");
+        assert!(error.to_string().contains("must be bound explicitly"));
+        assert!(!has_api_key(&config));
         assert_eq!(config.deepseek_base_url(), "https://custom-hf.example/v1");
         assert_eq!(config.default_model(), "meta-llama/Llama-3-70B");
     }
@@ -7965,7 +8507,7 @@ fn notifications_parse_custom_completion_sound_file() {
 }
 
 #[test]
-fn huggingface_short_env_fallbacks_configure_route() -> Result<()> {
+fn huggingface_short_custom_env_url_does_not_inherit_ambient_key() -> Result<()> {
     let _lock = lock_test_env();
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -7988,7 +8530,11 @@ fn huggingface_short_env_fallbacks_configure_route() -> Result<()> {
 
     let config = Config::load(None, None)?;
     assert_eq!(config.api_provider(), ApiProvider::Huggingface);
-    assert_eq!(config.deepseek_api_key()?, "hf-token-value");
+    let error = config
+        .deepseek_api_key()
+        .expect_err("ambient key must not follow a custom endpoint");
+    assert!(error.to_string().contains("must be bound explicitly"));
+    assert!(!has_api_key(&config));
     assert_eq!(config.deepseek_base_url(), "https://short-hf.example/v1");
     assert_eq!(config.default_model(), "org/short-model");
     Ok(())
@@ -8528,7 +9074,12 @@ default_text_model = "legacy-model"
     );
     assert_eq!(config.deepseek_base_url(), "http://127.0.0.1:18185/v1");
     assert_eq!(config.default_model(), "env-legacy-model");
-    assert_eq!(config.deepseek_api_key()?, "legacy-root-key");
+    assert_eq!(
+        config.deepseek_api_key()?,
+        "",
+        "an env-selected keyless loopback route must not inherit the file-owned root key"
+    );
+    assert!(!active_provider_has_config_api_key(&config));
     assert_eq!(
         config
             .http_headers()

@@ -93,7 +93,7 @@
     "kimi-k2.7-code": {
       "id": "kimi-k2.7-code",
       "context_window": 262144,
-      "max_output": 262144,
+      "max_output": 32768,
       "supports_reasoning": true,
       "input_usd_per_million": 0.95,
       "output_usd_per_million": 4.0,
@@ -104,7 +104,7 @@
     "moonshotai/kimi-k2.7-code": {
       "id": "moonshotai/kimi-k2.7-code",
       "context_window": 262144,
-      "max_output": 262144,
+      "max_output": 32768,
       "supports_reasoning": true,
       "input_usd_per_million": 0.95,
       "output_usd_per_million": 4.0,
@@ -186,23 +186,9 @@
     "trinity-mini": {
       "id": "trinity-mini",
       "context_window": 128000,
-      "max_output": 64000,
-      "supports_reasoning": false,
-      "input_usd_per_million": 0.045,
-      "output_usd_per_million": 0.15,
+      "supports_reasoning": true,
       "modalities": ["text"],
-      "supported_parameters": [],
-      "provenance": "bundled"
-    },
-    "arcee-ai/trinity-mini": {
-      "id": "arcee-ai/trinity-mini",
-      "context_window": 128000,
-      "max_output": 64000,
-      "supports_reasoning": false,
-      "input_usd_per_million": 0.045,
-      "output_usd_per_million": 0.15,
-      "modalities": ["text"],
-      "supported_parameters": [],
+      "supported_parameters": ["reasoning"],
       "provenance": "bundled"
     },
     "claude-opus-4-8": {

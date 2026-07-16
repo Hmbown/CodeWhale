@@ -199,10 +199,10 @@ mod tests {
     fn kimi_catalog_output_ceiling_preserves_input_budget() {
         let _lock = crate::test_support::lock_test_env();
         let _max_output = crate::test_support::EnvVarGuard::remove("DEEPSEEK_MAX_OUTPUT_TOKENS");
-        // #4368: Models.dev reports Kimi's full 262K context as both context
-        // and output ceilings. On a sub-500K window, reserve the effective
-        // request cap rather than treating that catalog maximum as the amount
-        // every turn will emit.
+        // #4368/#4378: Models.dev may report Kimi's full 262K context as both
+        // context and output ceilings. On a sub-500K window, reserve the
+        // route-effective 32K request cap rather than treating that catalog
+        // maximum as the amount every turn will emit.
         let limits = RouteLimits {
             context_tokens: Some(262_144),
             output_tokens: Some(262_144),
@@ -217,9 +217,9 @@ mod tests {
             80.0,
         );
 
-        assert_eq!(budget.output_cap_tokens, 65_536);
-        assert_eq!(budget.input_budget_ceiling, 195_584);
-        assert_eq!(trigger, 156_467);
+        assert_eq!(budget.output_cap_tokens, 32_768);
+        assert_eq!(budget.input_budget_ceiling, 228_352);
+        assert_eq!(trigger, 182_682);
         assert!(trigger as u64 <= budget.input_budget_ceiling);
         assert!(
             trigger < 209_715,

@@ -33,6 +33,7 @@ export const RELEASE_CONTRIBUTORS: string[] = [
   "@knqiufan",
   "@LeoLin990405",
   "@moduvoice",
+  "@mvanhorn",
   "@Mr-Moon121",
   "@MXAntian",
   "@nightt5879",
@@ -45,6 +46,7 @@ export const RELEASE_CONTRIBUTORS: string[] = [
 
 /** Contributors who helped with reports, reproductions, and verification. */
 export const RELEASE_HELPERS: string[] = [
+  "@Angel-Hair",
   "@amuthantamil",
   "@bruce6135",
   "@eugenicum",

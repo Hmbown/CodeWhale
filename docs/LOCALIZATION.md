@@ -1,6 +1,6 @@
 # Localization Matrix
 
-Canonical tracking document for every locale CodeWhale ships, is actively
+Canonical tracking document for every locale Codewhale ships, is actively
 building, is planning, or has explicitly deferred.
 
 > **Scope note (2026-07-12):** this matrix tracks the website/README surface.

@@ -1,7 +1,7 @@
 # CodeWhale v0.8.68 — Agent Workflow Playbook
 
-> **Status (2026-07-13): Historical execution playbook for an unpublished
-> release candidate.** v0.8.68 has not yet been tagged or publicly published,
+> **Status (2026-07-15): Historical execution playbook superseded by v0.9.0.**
+> v0.8.68 was never tagged or publicly published,
 > and the waves/checkmarks below are not proof that current acceptance criteria
 > or release gates pass. Use the current
 > [v0.9.0 release-candidate ledger](releases/v0.9.0-release-candidate.md) for

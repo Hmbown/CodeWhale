@@ -5218,13 +5218,13 @@ reviewer = "reviewer"
         std::fs::create_dir_all(&fleet_dir).expect("fleet dir");
         let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         std::fs::copy(
-            repo_root.join("workflows/v0868_stopship_lane.workflow.js"),
-            workflow_dir.join("v0868_stopship_lane.workflow.js"),
+            repo_root.join("workflows/stopship.workflow.js"),
+            workflow_dir.join("stopship.workflow.js"),
         )
         .expect("copy stopship acceptance fixture");
         std::fs::copy(
-            repo_root.join("fleets/v0868-stopship.toml"),
-            fleet_dir.join("v0868-stopship.toml"),
+            repo_root.join("fleets/stopship.toml"),
+            fleet_dir.join("stopship.toml"),
         )
         .expect("copy stopship fleet");
 
@@ -5245,8 +5245,8 @@ reviewer = "reviewer"
             .execute(
                 json!({
                     "action": "run",
-                    "source_path": "workflows/v0868_stopship_lane.workflow.js",
-                    "fleet": "v0868-stopship",
+                    "source_path": "workflows/stopship.workflow.js",
+                    "fleet": "stopship",
                     "token_budget": 60_000
                 }),
                 &ctx,

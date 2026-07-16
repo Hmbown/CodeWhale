@@ -2,9 +2,10 @@
 name = "codewhale-core"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Core runtime boundaries for CodeWhale"
+description = "Core runtime boundaries for Codewhale"
 
 [dependencies]
 anyhow.workspace = true

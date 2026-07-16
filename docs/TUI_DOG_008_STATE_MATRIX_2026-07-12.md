@@ -2,12 +2,12 @@
 
 > **2026-07-13 overnight update.** The color grammar and several motion gaps
 > below were closed on the same dirty lane:
-> live/done pairing now matches the HTML (seafoam `#4fd1c5` = live work,
+> live/done pairing now matches the implemented release grammar (seafoam `#4fd1c5` = live work,
 > working green `#9bd66f` = settled ✓; the old sky-blue working /
 > teal-success inversion is gone); waiting/approval read coral and failed
 > reads rose; the whale mark carries the seafoam spout + ivory eye; ambient
 > fish are two sky-blue shades so teal stays exclusively "live"; the ombre
-> shimmer runs on the ~90 s reference cadence and provably freezes on
+> shimmer runs on the ~90 s ambient cadence and provably freezes on
 > waiting/approval/failed; completion takes the one-shot 800 ms field
 > brightness breath; and a first-class `ShellPhase::Verifying` renders the
 > metered braille tick (distinct from the working bubble) for live
@@ -17,14 +17,14 @@
 
 Dated receipt: 2026-07-12
 Lane: `codex/underwater-tui-20260711` @ worktree `codewhale-underwater-tui`
-Primary reference: `/Volumes/VIXinSSD/CW/tui-fix/cw-underwater-take.html`
+Reference basis: current TUI implementation plus real-terminal release QA.
+Private design prototypes are intentionally not part of this public receipt.
 Scope: visual metamorphosis / shell grammar (not Fleet, keybinding, or hitbox siblings)
 
 Status values: `implemented` | `partial` | `missing`
-Captures: hierarchy design aid at
-`/Volumes/VIXinSSD/CW/backups/tui-dog-008-2026-07-12/tui-dog-008-working-hierarchy.png`
-(not acceptance proof). No dogfood reinstall on this pass. Ownership is code
-truth; Hunter eyeball remains the acceptance gate.
+A hierarchy design aid is retained in the private workspace archive (not
+acceptance proof). No dogfood reinstall on this pass. Ownership is code truth;
+Hunter eyeball remains the acceptance gate.
 
 ### Focused tests run (2026-07-12)
 
@@ -37,17 +37,17 @@ truth; Hunter eyeball remains the acceptance gate.
 
 ## State matrix
 
-| State | HTML hierarchy (acceptance) | Status | Owning modules | Notes / gap |
+| State | Release interaction contract | Status | Owning modules | Notes / gap |
 | --- | --- | --- | --- | --- |
 | **idle** | Whale empty water; roomy `❯` hint; quiet `idle` phase; ambient fish only in empty water | **partial** | `underwater.rs`, `ocean.rs`, `widgets` ambient, `composer_chrome.rs` | Empty-state whale + fish exist. Composer baseline was a cramped 1-line quiet rule; chrome policy now reserves multi-line breathing room and sheds padding before content at compact heights. Ambient life still needs live PTY proof under `env -u NO_COLOR`. |
 | **typing** | Fish flee; `›` / draft phase; composer owns attention | **partial** | `underwater.rs` (`ShellPhase::Typing`), `composer_ui.rs`, `widgets::ComposerWidget` | Phase + flee-on-engage exist. Focus/shortcut ownership is sibling TUI-DOG-002/003 — not claimed here. |
-| **working** | Ledger: prompt → short narration → settled `✓` receipts → **one** live row; phase band **above** `❯`; quiet composer | **partial → landing** | `phase_strip.rs`, `active_cell.rs`, `history` tool cells, `widgets::ChatWidget` | Before this pass: phase was the bottom footer under the composer (audit 2026-07-12 reversed HTML order). Now live phases place the strip above the composer. Ledger density/narration still needs Hunter eyeball; remove any remaining classic sidebar status echo in classic-only path. |
-| **tool receipt** | Settled rows dim; live mark only on the active tool | **partial** | `active_cell.rs`, `history.rs`, `tool_routing.rs` | One active cell + settled flush is correct ownership. Visual “settled vs live” contrast and single live mark need live comparison to HTML. |
+| **working** | Ledger: prompt → short narration → settled `✓` receipts → **one** live row; phase band **above** `❯`; quiet composer | **partial → landing** | `phase_strip.rs`, `active_cell.rs`, `history` tool cells, `widgets::ChatWidget` | Before this pass: phase was the bottom footer under the composer (the 2026-07-12 audit had the order reversed). Now live phases place the strip above the composer. Ledger density/narration still needs Hunter eyeball; remove any remaining classic sidebar status echo in classic-only path. |
+| **tool receipt** | Settled rows dim; live mark only on the active tool | **partial** | `active_cell.rs`, `history.rs`, `tool_routing.rs` | One active cell + settled flush is correct ownership. Visual “settled vs live” contrast and the single live mark need real-terminal comparison. |
 | **workers open** | Top/side work surface: Tasks/To-do rows with open/stop; one focus owner | **partial** | `work_surface/*` | Surface + placements exist. Selection/scroll/Stop arm are sibling TUI-DOG-004/005/006. |
-| **waiting for user** | Coral still `◆` / `?`; ambient frozen; phase above composer | **partial → landing** | `phase_strip.rs`, `underwater.rs` | Marker/color/stillness typed. Placement now follows live-phase-above-composer rule. Attention band copy still quieter than HTML question bubble. |
+| **waiting for user** | Coral still `◆` / `?`; ambient frozen; phase above composer | **partial → landing** | `phase_strip.rs`, `underwater.rs` | Marker/color/stillness typed. Placement now follows the live-phase-above-composer rule. Attention band copy still needs real-terminal review. |
 | **approval** | Modal/approval owns the decision; shell phase coral | **partial** | `approval.rs`, `widgets::ApprovalWidget`, `phase_strip.rs` | Approval modal exists; phase maps from `ModalKind`. Not a visual parity claim for the card itself. |
 | **failed** | Coral `✕`; persists until acknowledged; no jitter | **partial** | `underwater.rs`, `phase_strip.rs` | Marker + sticky failed phase exist. Persistence-until-ack UX needs live confirm. |
-| **done** | One `finishing → ✓ done` breath; then stable; composer bottom | **partial → landing** | `underwater.rs` completion breath, `phase_strip.rs` | Footer-only exhale exists. With phase-above placement, completion now sits on the strip above `❯` (HTML §5), not under it. |
+| **done** | One `finishing → ✓ done` breath; then stable; composer bottom | **partial → landing** | `underwater.rs` completion breath, `phase_strip.rs` | Footer-only exhale exists. With phase-above placement, completion now sits on the strip above `❯`, not under it. |
 
 ## Layout grammar (this pass)
 
@@ -82,5 +82,6 @@ truth; Hunter eyeball remains the acceptance gate.
 
 - Dirty Fleet files (`fleet/profile.rs`, `fleet/roster.rs`, Fleet identity hunks in `ui.rs`) are untouched by this issue.
 - Siblings own TUI-DOG-001–007 / 009–011. Do not merge their selection/keybinding work into this receipt.
-- Prior audit `UNDERWATER_TUI_REPLACEMENT_AUDIT.md` claimed footer-below-composer as finished; live dogfood (TUI-DOG-008) overrides that for acceptance.
+- A prior internal audit claimed footer-below-composer as finished; live dogfood
+  (TUI-DOG-008) overrides that for acceptance.
 - No push / commit / install on this pass.

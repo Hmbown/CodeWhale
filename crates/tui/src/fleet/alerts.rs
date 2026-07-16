@@ -410,7 +410,7 @@ fn safe_event_payload(event: &FleetAlertEvent) -> Value {
 
 fn slack_body(event: &FleetAlertEvent, channel: Option<&str>) -> Value {
     let text = format!(
-        "CodeWhale fleet {}: run={} task={} reason={}",
+        "Codewhale fleet {}: run={} task={} reason={}",
         alert_class_label(event.class),
         event.run_id.0,
         event.task_id.as_deref().unwrap_or("-"),
@@ -450,7 +450,7 @@ fn pagerduty_body(event: &FleetAlertEvent, severity: &str, routing_key: String) 
         "routing_key": routing_key,
         "event_action": "trigger",
         "payload": {
-            "summary": format!("CodeWhale fleet {}: {}", alert_class_label(event.class), short_reason(&event.reason)),
+            "summary": format!("Codewhale fleet {}: {}", alert_class_label(event.class), short_reason(&event.reason)),
             "severity": severity,
             "source": "codewhale",
             "custom_details": safe_event_payload(event),
@@ -703,6 +703,8 @@ mod tests {
             run_id: FleetRunId::from("run-1"),
             task_id: "task-a".to_string(),
             worker_id: "worker-1".to_string(),
+            attempt: None,
+            terminal_seq: None,
             completed_at: "2026-06-13T02:00:00Z".to_string(),
             result: FleetTaskResult::Fail,
             failure_kind: Some(FleetTaskFailureKind::Verifier),

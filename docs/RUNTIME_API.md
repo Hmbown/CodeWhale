@@ -163,7 +163,7 @@ codewhale doctor --json
 | `config_path` | string | Resolved config file path |
 | `config_present` | bool | Whether the config file exists |
 | `workspace` | string | Default workspace directory |
-| `legacy_state.primary_root` | string | Primary CodeWhale state root inspected for known state paths |
+| `legacy_state.primary_root` | string | Primary Codewhale state root inspected for known state paths |
 | `legacy_state.legacy_root` | string | Legacy `.deepseek` state root inspected for known state paths |
 | `legacy_state.needs_attention` | bool | Whether known `~/.deepseek` state paths are unmigrated or also present beside `~/.codewhale` |
 | `legacy_state.legacy_only_count` | number | Count of known state paths present only under the legacy root |
@@ -179,7 +179,7 @@ codewhale doctor --json
 | `mcp.present` | bool | Whether MCP config exists |
 | `mcp.servers` | array | Per-server health: `{name, enabled, status, detail}` |
 | `skills.selected` | string | Resolved skills directory |
-| `skills.global.path` / `.present` / `.count` | — | CodeWhale global skills dir (`~/.codewhale/skills`, with legacy `~/.deepseek/skills` support) |
+| `skills.global.path` / `.present` / `.count` | — | Codewhale global skills dir (`~/.codewhale/skills`, with legacy `~/.deepseek/skills` support) |
 | `skills.agents.path` / `.present` / `.count` | — | Workspace `.agents/skills/` dir |
 | `skills.agents_global.path` / `.present` / `.count` | — | agentskills.io global skills dir (`~/.agents/skills`) |
 | `skills.local.path` / `.present` / `.count` | — | `skills/` dir |
@@ -577,7 +577,7 @@ model is preserved. Added in v0.8.10 (#561).
 
 The v0.8.60 Runtime SDK fixture lives in `npm/runtime-sdk` and is exposed as
 the `@codewhale/runtime-sdk` workspace package. It is deliberately thin: every
-helper calls the local Rust Runtime API and therefore cannot bypass CodeWhale's
+helper calls the local Rust Runtime API and therefore cannot bypass Codewhale's
 sandbox, approval prompts, provider configuration, or fleet ledger authority.
 
 ```js

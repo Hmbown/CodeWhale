@@ -364,13 +364,15 @@ pub fn max_output_tokens_for_model(model: &str) -> Option<u32> {
             Some(128_000)
         }
         "claude-haiku-4-5" => Some(64_000),
-        "arcee-ai/trinity-large-thinking"
-        | "trinity-large-thinking"
-        | "moonshotai/kimi-k2.7-code"
+        "arcee-ai/trinity-large-thinking" | "trinity-large-thinking" => Some(262_144),
+        // Kimi K2.7 Code has a 256K context window but its documented default
+        // maximum generation is 32K. Keeping those separate prevents the
+        // input budget from collapsing to the 1K emergency floor (#4368).
+        "moonshotai/kimi-k2.7-code"
         | "moonshotai/kimi-k2.6"
         | "kimi-k2.7-code"
         | "kimi-k2.6"
-        | "kimi-for-coding" => Some(262_144),
+        | "kimi-for-coding" => Some(32_768),
         "minimax/minimax-m3" | "minimax-m3" => Some(524_288),
         // Alibaba's published limit is 65,536 output tokens; the earlier
         // 262,140 mirrored the context window (data-entry smell flagged by
@@ -425,8 +427,10 @@ pub fn model_supports_reasoning(model: &str) -> bool {
             | "claude-fable-5"
             | "gpt-5-codex"
             | "gpt-5.3-codex"
+            | "trinity-mini"
             | "arcee-ai/trinity-large-thinking"
             | "trinity-large-thinking"
+            | "thinkingmachines/inkling"
             | "google/gemma-4-31b-it"
             | "google/gemma-4-31b-it:free"
             | "google/gemma-4-26b-a4b-it"
@@ -455,6 +459,7 @@ pub fn model_supports_reasoning(model: &str) -> bool {
             | "qwen/qwen3.6-max-preview"
             | "qwen/qwen3.6-27b"
             | "qwen/qwen3.6-plus"
+            | "qwen/qwen3.7-plus"
             | "tencent/hy3-preview"
             | "xiaomi/mimo-v2.5-pro"
             | "xiaomi/mimo-v2.5"
@@ -910,14 +915,24 @@ mod tests {
     }
 
     #[test]
-    fn arcee_direct_models_have_static_windows_without_reasoning_flag() {
+    fn arcee_direct_models_preserve_verified_capabilities_only() {
         assert_eq!(
             context_window_for_model("trinity-large-preview"),
             Some(262_144)
         );
         assert!(!model_supports_reasoning("trinity-large-preview"));
         assert_eq!(context_window_for_model("trinity-mini"), Some(128_000));
-        assert!(!model_supports_reasoning("trinity-mini"));
+        assert_eq!(max_output_tokens_for_model("trinity-mini"), None);
+        assert!(model_supports_reasoning("trinity-mini"));
+    }
+
+    #[test]
+    fn qwen37_plus_and_inkling_reasoning_do_not_invent_limits() {
+        for model in ["qwen/qwen3.7-plus", "thinkingmachines/inkling"] {
+            assert_eq!(context_window_for_model(model), None, "{model}");
+            assert_eq!(max_output_tokens_for_model(model), None, "{model}");
+            assert!(model_supports_reasoning(model), "{model}");
+        }
     }
 
     #[test]
@@ -992,12 +1007,13 @@ mod tests {
         // vision model): same compact window as 5.1 but reasoning-capable.
         assert_eq!(context_window_for_model("z-ai/glm-5-turbo"), Some(202_752));
         assert!(model_supports_reasoning("z-ai/glm-5-turbo"));
-        assert_eq!(max_output_tokens_for_model("kimi-k2.7-code"), Some(262_144));
-        assert_eq!(max_output_tokens_for_model("kimi-k2.6"), Some(262_144));
         assert_eq!(
-            max_output_tokens_for_model("kimi-for-coding"),
-            Some(262_144)
+            crate::model_catalog::resolved_max_output("kimi-k2.7-code"),
+            Some(32_768)
         );
+        assert_eq!(max_output_tokens_for_model("kimi-k2.7-code"), Some(32_768));
+        assert_eq!(max_output_tokens_for_model("kimi-k2.6"), Some(32_768));
+        assert_eq!(max_output_tokens_for_model("kimi-for-coding"), Some(32_768));
         assert_eq!(max_output_tokens_for_model("minimax-m3"), Some(524_288));
         assert_eq!(max_output_tokens_for_model("glm-5.1"), Some(131_072));
         assert_eq!(max_output_tokens_for_model("glm-5.2"), Some(131_072));

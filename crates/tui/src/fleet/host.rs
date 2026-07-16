@@ -944,11 +944,49 @@ fn signal_unix_session(
 }
 
 #[cfg(all(unix, test))]
-fn unix_pid_is_alive(pid: libc::pid_t) -> bool {
-    if unsafe { libc::kill(pid, 0) } == 0 {
-        return true;
+fn unix_pid_is_running(pid: libc::pid_t) -> bool {
+    let visible = if unsafe { libc::kill(pid, 0) } == 0 {
+        true
+    } else {
+        std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    };
+    if !visible {
+        return false;
     }
-    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+
+    // `kill(pid, 0)` also succeeds for zombies. The Fleet containment code
+    // has already finished its job once a descendant is dead; on macOS an
+    // orphan can remain visible as a zombie briefly while launchd reaps it.
+    // Ask `ps` for the process state so test assertions do not mistake that
+    // transient kernel bookkeeping for a live leaked worker. If `ps` itself
+    // cannot be launched, stay conservative and treat the PID as running.
+    match Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+    {
+        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .next()
+            .is_some_and(|state| !state.starts_with('Z')),
+        // A failed status does not prove exit: preserve the positive kernel
+        // visibility result and let the bounded waiter retry.
+        Ok(_) => true,
+        Err(_) => true,
+    }
+}
+
+#[cfg(all(unix, test))]
+fn wait_for_unix_pid_exit(pid: libc::pid_t, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if !unix_pid_is_running(pid) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
 }
 
 #[cfg(windows)]
@@ -1229,21 +1267,91 @@ mod tests {
 
         let handle = adapter.start_worker(request).expect("start dispatcher");
         let root_pid = handle.pid.expect("dispatcher pid") as libc::pid_t;
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !pid_file.is_file() && Instant::now() < deadline {
+        let tool_pid = wait_for_valid_pid_file(&pid_file, Duration::from_secs(5));
+        if helper_mode != "detached-dispatcher" {
+            assert!(unix_pid_is_running(root_pid));
+        }
+        assert!(unix_pid_is_running(tool_pid));
+        (root_pid, tool_pid)
+    }
+
+    #[cfg(unix)]
+    fn wait_for_valid_pid_file(pid_file: &Path, timeout: Duration) -> libc::pid_t {
+        let deadline = Instant::now() + timeout;
+        let mut last_observation = "file not created".to_string();
+        loop {
+            match std::fs::read_to_string(pid_file) {
+                Ok(contents) => {
+                    let trimmed = contents.trim();
+                    match trimmed.parse::<libc::pid_t>() {
+                        Ok(pid) if pid > 0 => return pid,
+                        _ => last_observation = format!("invalid contents {trimmed:?}"),
+                    }
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => last_observation = format!("read failed: {err}"),
+            }
+            if Instant::now() >= deadline {
+                panic!(
+                    "separate-group tool never published a valid PID to {} ({last_observation})",
+                    pid_file.display()
+                );
+            }
             thread::sleep(Duration::from_millis(25));
         }
-        assert!(pid_file.is_file(), "separate-group tool never started");
-        let tool_pid = std::fs::read_to_string(&pid_file)
-            .unwrap()
-            .trim()
-            .parse::<libc::pid_t>()
-            .unwrap();
-        if helper_mode != "detached-dispatcher" {
-            assert!(unix_pid_is_alive(root_pid));
-        }
-        assert!(unix_pid_is_alive(tool_pid));
-        (root_pid, tool_pid)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pid_file_wait_ignores_created_but_incomplete_file() {
+        let tmp = TempDir::new().unwrap();
+        let pid_file = tmp.path().join("worker.pid");
+        std::fs::write(&pid_file, "pid=").unwrap();
+        let expected_pid = std::process::id() as libc::pid_t;
+        let writer_path = pid_file.clone();
+        let writer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            std::fs::write(writer_path, expected_pid.to_string()).unwrap();
+        });
+
+        assert_eq!(
+            wait_for_valid_pid_file(&pid_file, Duration::from_secs(1)),
+            expected_pid
+        );
+        writer.join().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_pid_running_treats_zombie_as_exited() {
+        let mut child = Command::new("sh")
+            .args(["-c", "exit 0"])
+            .spawn()
+            .expect("spawn short-lived child");
+        let pid = child.id() as libc::pid_t;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let saw_zombie = loop {
+            let state = Command::new("ps")
+                .args(["-o", "stat=", "-p", &pid.to_string()])
+                .output()
+                .expect("inspect child state");
+            let is_zombie = String::from_utf8_lossy(&state.stdout)
+                .split_whitespace()
+                .next()
+                .is_some_and(|state| state.starts_with('Z'));
+            if is_zombie {
+                break true;
+            }
+            if Instant::now() >= deadline {
+                break false;
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+
+        let reported_running = unix_pid_is_running(pid);
+        child.wait().expect("reap zombie child");
+        assert!(saw_zombie, "child never became a zombie");
+        assert!(!reported_running, "zombie was reported as running");
     }
 
     fn wait_for_log(
@@ -1293,7 +1401,7 @@ mod tests {
         assert_eq!(status.state, FleetHostWorkerState::Stopped);
         #[cfg(unix)]
         assert!(
-            !unix_pid_is_alive(direct_pid as libc::pid_t),
+            wait_for_unix_pid_exit(direct_pid as libc::pid_t, Duration::from_secs(1)),
             "stopped direct worker was not reaped"
         );
         adapter.cleanup_worker("local-1").unwrap();
@@ -1320,9 +1428,12 @@ mod tests {
             .expect("stop complete worker tree");
 
         assert_eq!(status.state, FleetHostWorkerState::Stopped);
-        assert!(!unix_pid_is_alive(root_pid), "dispatcher survived stop");
         assert!(
-            !unix_pid_is_alive(tool_pid),
+            wait_for_unix_pid_exit(root_pid, Duration::from_secs(1)),
+            "dispatcher survived stop"
+        );
+        assert!(
+            wait_for_unix_pid_exit(tool_pid, Duration::from_secs(1)),
             "separate-process-group tool survived stop"
         );
     }
@@ -1341,11 +1452,11 @@ mod tests {
 
         assert_ne!(status.state, FleetHostWorkerState::Running);
         assert!(
-            !unix_pid_is_alive(root_pid),
+            wait_for_unix_pid_exit(root_pid, Duration::from_secs(1)),
             "dispatcher survived interrupt"
         );
         assert!(
-            !unix_pid_is_alive(tool_pid),
+            wait_for_unix_pid_exit(tool_pid, Duration::from_secs(1)),
             "separate-process-group tool survived interrupt"
         );
     }
@@ -1371,11 +1482,11 @@ mod tests {
             thread::sleep(Duration::from_millis(25));
         }
         assert!(
-            !unix_pid_is_alive(root_pid),
+            wait_for_unix_pid_exit(root_pid, Duration::from_secs(1)),
             "dispatcher should have exited"
         );
         assert!(
-            unix_pid_is_alive(tool_pid),
+            unix_pid_is_running(tool_pid),
             "delegated tool exited too early"
         );
 
@@ -1384,7 +1495,7 @@ mod tests {
             .expect("clean up surviving dispatcher session");
 
         assert!(
-            !unix_pid_is_alive(tool_pid),
+            wait_for_unix_pid_exit(tool_pid, Duration::from_secs(1)),
             "tool survived after its dispatcher exited"
         );
         assert_eq!(

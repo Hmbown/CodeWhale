@@ -34,8 +34,8 @@ use super::descriptor::ProviderDescriptor;
 use super::errors::RouteError;
 use super::ids::{LogicalModelRef, ModelId, ProviderId, WireModelId};
 use super::offering::{ProviderModelOffering, RouteLimits, bundled_offerings};
-use crate::ProviderKind;
 use crate::catalog::{CatalogOffering, bundled_catalog_offerings};
+use crate::{ProviderKind, provider_preserves_custom_base_url_model};
 
 /// A request to resolve into an executable route.
 ///
@@ -227,7 +227,7 @@ impl RouteResolver {
         ),
         RouteError,
     > {
-        let raw = logical_model.raw();
+        let raw = provider_scoped_wire_alias(provider_kind, logical_model.raw(), class);
 
         // Try to match a catalog offering owned by THIS provider, either by
         // canonical model id or by exact wire id. This keeps interpretation
@@ -330,6 +330,31 @@ impl RouteResolver {
     }
 }
 
+/// Normalize aliases whose provider wire identity is publicly documented but
+/// intentionally absent from the offline offering catalog. Keeping this seam
+/// provider-scoped avoids claiming unverified limits or pricing while ensuring
+/// receipts and HTTP requests carry the exact upstream model id.
+fn provider_scoped_wire_alias(
+    provider_kind: ProviderKind,
+    raw: &str,
+    class: ProviderClass,
+) -> &str {
+    if class != ProviderClass::LocalOrCustom {
+        if provider_kind == ProviderKind::Together
+            && (raw.eq_ignore_ascii_case("inkling") || raw.eq_ignore_ascii_case("together-inkling"))
+        {
+            return "thinkingmachines/inkling";
+        }
+        if provider_kind == ProviderKind::Openrouter
+            && (raw.eq_ignore_ascii_case("qwen3.7-plus")
+                || raw.eq_ignore_ascii_case("qwen-3.7-plus"))
+        {
+            return "qwen/qwen3.7-plus";
+        }
+    }
+    raw
+}
+
 /// Build the default resolver offerings from the bundled Models.dev asset.
 ///
 /// [`bundled_offerings`] is an empty override seam (#4139): when it later gains
@@ -389,32 +414,8 @@ fn request_uses_custom_endpoint(
     descriptor: &ProviderDescriptor,
     base_url_override: Option<&str>,
 ) -> bool {
-    base_url_override.is_some_and(|base_url| {
-        normalize_route_base_url(base_url)
-            != normalize_route_base_url(descriptor.default_base_url())
-    })
-}
-
-fn normalize_route_base_url(base_url: &str) -> String {
-    let trimmed = base_url.trim().trim_end_matches('/');
-    let deepseek_domains = ["api.deepseek.com", "api.deepseeki.com"];
-    if deepseek_domains
-        .iter()
-        .any(|domain| trimmed.to_ascii_lowercase().contains(domain))
-    {
-        return trimmed.trim_end_matches("/v1").to_string();
-    }
-    if let Some(idx) = trimmed.find("://") {
-        let (scheme, rest) = trimmed.split_at(idx);
-        let scheme = scheme.to_ascii_lowercase();
-        let rest = &rest[3..];
-        let (authority, path) = match rest.find('/') {
-            Some(p) => (&rest[..p], &rest[p..]),
-            None => (rest, ""),
-        };
-        return format!("{scheme}://{}{path}", authority.to_ascii_lowercase());
-    }
-    trimmed.to_ascii_lowercase()
+    base_url_override
+        .is_some_and(|base_url| provider_preserves_custom_base_url_model(descriptor.kind, base_url))
 }
 
 /// True when `base_url` is an `http://` endpoint whose host is NOT loopback

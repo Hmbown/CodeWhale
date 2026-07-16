@@ -41,7 +41,7 @@ node src/index.mjs
 - `/allow <approval_id> [remember]`
 - `/deny <approval_id>`
 
-其他所有内容均作为 CodeWhale 提示发送。
+其他所有内容均作为 Codewhale 提示发送。
 
 ## 首次配对
 

@@ -1,4 +1,4 @@
-//! CLI entry point for CodeWhale.
+//! CLI entry point for Codewhale.
 
 #![allow(clippy::uninlined_format_args)]
 
@@ -159,7 +159,7 @@ fn install_rustls_crypto_provider() {
     bin_name = "codewhale-tui",
     author,
     version = env!("DEEPSEEK_BUILD_VERSION"),
-    about = "CodeWhale terminal coding agent",
+    about = "Codewhale terminal coding agent",
     long_about = "Terminal-native TUI and CLI for open-source and open-weight coding models.\n\nRun 'codewhale' to start.\n\nProvider routes include DeepSeek, Arcee, Hugging Face, OpenRouter, Xiaomi MiMo, local vLLM/SGLang/Ollama, and more."
 )]
 struct Cli {
@@ -243,7 +243,7 @@ enum Commands {
     SessionDiagnostics(SessionDiagnosticsArgs),
     /// Bootstrap MCP config and/or skills directories
     Setup(SetupArgs),
-    /// Generate a remote CodeWhale agent deploy bundle (cloud + chat bridge)
+    /// Generate a remote Codewhale agent deploy bundle (cloud + chat bridge)
     RemoteSetup(remote_setup::RemoteSetupArgs),
     /// Generate shell completions
     Completions {
@@ -792,7 +792,7 @@ fn resolve_exec_resume_route(
             .map_err(anyhow::Error::msg)
             .with_context(|| {
                 format!(
-                    "saved session provider '{}' is unavailable; CodeWhale will not fall back",
+                    "saved session provider '{}' is unavailable; Codewhale will not fall back",
                     saved_provider_identity
                 )
             })?;
@@ -1179,13 +1179,13 @@ enum McpCommand {
     },
     /// Validate MCP config and required servers
     Validate,
-    /// Register this CodeWhale binary as a local MCP stdio server.
+    /// Register this Codewhale binary as a local MCP stdio server.
     ///
     /// This adds a config entry that runs `codewhale serve --mcp` (stdio protocol).
     /// For the HTTP/SSE runtime API, use `codewhale serve --http` directly instead.
     #[command(
         name = "add-self",
-        long_about = "Register this CodeWhale binary as a local MCP stdio server.\n\nAdds a config entry to ~/.codewhale/mcp.json that launches `codewhale serve --mcp`\nvia the stdio transport. Other CodeWhale sessions (or any MCP client) can then\ndiscover and call tools exposed by this server.\n\nUse `codewhale serve --http` instead if you need the HTTP/SSE runtime API."
+        long_about = "Register this Codewhale binary as a local MCP stdio server.\n\nAdds a config entry to ~/.codewhale/mcp.json that launches `codewhale serve --mcp`\nvia the stdio transport. Other Codewhale sessions (or any MCP client) can then\ndiscover and call tools exposed by this server.\n\nUse `codewhale serve --http` instead if you need the HTTP/SSE runtime API."
     )]
     AddSelf {
         /// Server name in mcp.json (default: "codewhale")
@@ -2518,7 +2518,7 @@ fn run_setup(config: &Config, workspace: &Path, args: SetupArgs) -> Result<()> {
 
     println!(
         "{}",
-        "CodeWhale Setup".truecolor(aqua_r, aqua_g, aqua_b).bold()
+        "Codewhale Setup".truecolor(aqua_r, aqua_g, aqua_b).bold()
     );
     println!("{}", "==============".truecolor(sky_r, sky_g, sky_b));
     println!("Workspace: {}", crate::utils::display_path(workspace));
@@ -2626,16 +2626,20 @@ fn report_write_status(label: &str, path: &Path, status: WriteStatus) {
 /// Source of the resolved DeepSeek API key, used in status reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ApiKeySource {
-    Command,
     Env,
     Config,
     Keyring,
-    Secret,
+    NoAuth,
     Missing,
 }
 
 fn resolve_api_key_source(config: &Config) -> ApiKeySource {
     let provider = config.api_provider();
+    let auth_mode = config.auth_mode_for_provider(provider);
+    if crate::config::auth_mode_disables_api_key(auth_mode.as_deref()) {
+        return ApiKeySource::NoAuth;
+    }
+    let custom_endpoint = config.provider_uses_custom_endpoint(provider);
     if std::env::var("DEEPSEEK_API_KEY")
         .ok()
         .filter(|k| !k.trim().is_empty())
@@ -2643,7 +2647,7 @@ fn resolve_api_key_source(config: &Config) -> ApiKeySource {
     {
         match std::env::var("DEEPSEEK_API_KEY_SOURCE").ok().as_deref() {
             Some("config") => return ApiKeySource::Config,
-            Some("keyring") => return ApiKeySource::Keyring,
+            Some("keyring") if !custom_endpoint => return ApiKeySource::Keyring,
             _ => {}
         }
     }
@@ -2664,14 +2668,12 @@ fn resolve_api_key_source(config: &Config) -> ApiKeySource {
 
     if provider_config_key || root_deepseek_key {
         ApiKeySource::Config
-    } else if let Some(auth) = config
-        .provider_config()
-        .and_then(|entry| entry.auth.as_ref())
+    } else if configured_provider_env_key_source(config).is_some() {
+        ApiKeySource::Env
+    } else if !config.should_skip_secret_store_for_provider(provider)
+        && crate::config::provider_secret_store_api_key(config, provider).is_some()
     {
-        match auth.source {
-            codewhale_config::AuthSourceKind::Command => ApiKeySource::Command,
-            codewhale_config::AuthSourceKind::Secret => ApiKeySource::Secret,
-        }
+        ApiKeySource::Keyring
     } else if provider_env_key_source_for_config(config).is_some() {
         ApiKeySource::Env
     } else {
@@ -2680,6 +2682,14 @@ fn resolve_api_key_source(config: &Config) -> ApiKeySource {
 }
 
 fn provider_env_key_source_for_config(config: &Config) -> Option<String> {
+    configured_provider_env_key_source(config).or_else(|| {
+        (!config.should_skip_secret_store_for_provider(config.api_provider()))
+            .then(|| provider_env_key_source(config.api_provider()).map(str::to_string))
+            .flatten()
+    })
+}
+
+fn configured_provider_env_key_source(config: &Config) -> Option<String> {
     config
         .provider_config()
         .and_then(|entry| entry.api_key_env.as_deref())
@@ -2687,7 +2697,6 @@ fn provider_env_key_source_for_config(config: &Config) -> Option<String> {
         .filter(|name| !name.is_empty())
         .filter(|name| std::env::var(name).is_ok_and(|value| !value.trim().is_empty()))
         .map(str::to_string)
-        .or_else(|| provider_env_key_source(config.api_provider()).map(str::to_string))
 }
 
 fn provider_env_key_source(provider: crate::config::ApiProvider) -> Option<&'static str> {
@@ -2743,16 +2752,12 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
 
     println!(
         "{}",
-        "CodeWhale Status".truecolor(aqua_r, aqua_g, aqua_b).bold()
+        "Codewhale Status".truecolor(aqua_r, aqua_g, aqua_b).bold()
     );
     println!("{}", "===============".truecolor(sky_r, sky_g, sky_b));
     println!("workspace: {}", workspace.display());
 
     match resolve_api_key_source(config) {
-        ApiKeySource::Command => println!(
-            "  {} api_key: configured via auth command",
-            "✓".truecolor(aqua_r, aqua_g, aqua_b)
-        ),
         ApiKeySource::Env => {
             let env_vars = provider_env_key_source_for_config(config)
                 .unwrap_or_else(|| provider_env_vars_label(config.api_provider()));
@@ -2769,8 +2774,8 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
             "  {} api_key: set via config",
             "✓".truecolor(aqua_r, aqua_g, aqua_b)
         ),
-        ApiKeySource::Secret => println!(
-            "  {} api_key: configured via secret source",
+        ApiKeySource::NoAuth => println!(
+            "  {} api_key: disabled for this route",
             "✓".truecolor(aqua_r, aqua_g, aqua_b)
         ),
         ApiKeySource::Missing => {
@@ -3071,7 +3076,7 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
     println!("  active: {}", crate::utils::display_path(active_root));
     if active_root != &code_home {
         println!(
-            "  note: legacy {} found; start CodeWhale once to trigger safe migration where available.",
+            "  note: legacy {} found; start Codewhale once to trigger safe migration where available.",
             crate::utils::display_path(&legacy_home)
         );
     }
@@ -3145,11 +3150,10 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
     let api_key_source = resolve_api_key_source(config);
     let has_api_key = if config.deepseek_api_key().is_ok() {
         let source_label = match api_key_source {
-            ApiKeySource::Command => "configured auth command",
             ApiKeySource::Config => "config.toml",
             ApiKeySource::Keyring => "OS keyring",
-            ApiKeySource::Secret => "configured secret source",
             ApiKeySource::Env => "environment",
+            ApiKeySource::NoAuth => "no-auth route",
             ApiKeySource::Missing
                 if matches!(
                     config.api_provider(),
@@ -3990,7 +3994,7 @@ fn print_doctor_legacy_state_report(
         }
     }
     println!(
-        "    Start CodeWhale once to trigger safe migration where available, then rerun `codewhale doctor`."
+        "    Start Codewhale once to trigger safe migration where available, then rerun `codewhale doctor`."
     );
 }
 
@@ -4622,11 +4626,10 @@ fn run_doctor_json(
         });
 
     let api_key_state = match resolve_api_key_source(config) {
-        ApiKeySource::Command => "command",
         ApiKeySource::Env => "env",
         ApiKeySource::Config => "config",
         ApiKeySource::Keyring => "keyring",
-        ApiKeySource::Secret => "secret",
+        ApiKeySource::NoAuth => "none",
         ApiKeySource::Missing => "missing",
     };
 
@@ -4970,7 +4973,10 @@ fn doctor_base_url_class(provider: crate::config::ApiProvider, base_url: &str) -
 
 fn doctor_auth_scheme(config: &Config) -> &'static str {
     let provider = config.api_provider();
-    if provider == crate::config::ApiProvider::Anthropic {
+    if crate::config::auth_mode_disables_api_key(config.auth_mode_for_provider(provider).as_deref())
+    {
+        "none"
+    } else if provider == crate::config::ApiProvider::Anthropic {
         "x-api-key"
     } else if provider == crate::config::ApiProvider::XiaomiMimo
         && (doctor_xiaomi_mimo_base_url_uses_token_plan(&config.deepseek_base_url())
@@ -5006,11 +5012,10 @@ fn doctor_xiaomi_mimo_base_url_uses_token_plan(base_url: &str) -> bool {
 
 fn doctor_api_key_source_label(source: ApiKeySource) -> &'static str {
     match source {
-        ApiKeySource::Command => "command",
         ApiKeySource::Env => "env",
         ApiKeySource::Config => "config",
         ApiKeySource::Keyring => "keyring",
-        ApiKeySource::Secret => "secret",
+        ApiKeySource::NoAuth => "none",
         ApiKeySource::Missing => "missing",
     }
 }
@@ -13154,6 +13159,149 @@ mod setup_helper_tests {
     }
 
     #[test]
+    fn resolve_api_key_source_reports_standalone_secret_store() {
+        let _lock = crate::test_support::lock_test_env();
+        let temp = TempDir::new().expect("temp home");
+        let codewhale_home = temp.path().join("codewhale-home");
+        std::fs::create_dir_all(&codewhale_home).expect("create codewhale home");
+        let _home =
+            crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", codewhale_home.as_os_str());
+        let _backend = crate::test_support::EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+        let _deepseek_key = crate::test_support::EnvVarGuard::remove("DEEPSEEK_API_KEY");
+        let _deepseek_source = crate::test_support::EnvVarGuard::remove("DEEPSEEK_API_KEY_SOURCE");
+        codewhale_secrets::Secrets::auto_detect()
+            .set("deepseek", "standalone-secret")
+            .expect("save secret");
+
+        assert_eq!(
+            resolve_api_key_source(&Config::default()),
+            ApiKeySource::Keyring
+        );
+    }
+
+    #[test]
+    fn custom_provider_env_source_precedes_saved_secret_store() {
+        let _lock = crate::test_support::lock_test_env();
+        let temp = TempDir::new().expect("temp home");
+        let codewhale_home = temp.path().join("codewhale-home");
+        std::fs::create_dir_all(&codewhale_home).expect("create codewhale home");
+        let _home =
+            crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", codewhale_home.as_os_str());
+        let _backend = crate::test_support::EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+        let _declared_env =
+            crate::test_support::EnvVarGuard::set("QA_CUSTOM_API_KEY", "declared-env-key");
+        let _deepseek_key = crate::test_support::EnvVarGuard::remove("DEEPSEEK_API_KEY");
+        let _deepseek_source = crate::test_support::EnvVarGuard::remove("DEEPSEEK_API_KEY_SOURCE");
+        codewhale_secrets::Secrets::auto_detect()
+            .set("custom", "saved-custom-secret")
+            .expect("save secret");
+
+        let mut custom = std::collections::HashMap::new();
+        custom.insert(
+            "qa-gateway".to_string(),
+            crate::config::ProviderConfig {
+                kind: Some("openai-compatible".to_string()),
+                base_url: Some("https://gateway.example.test/v1".to_string()),
+                model: Some("qa-model".to_string()),
+                api_key_env: Some("QA_CUSTOM_API_KEY".to_string()),
+                ..Default::default()
+            },
+        );
+        let config = Config {
+            provider: Some("qa-gateway".to_string()),
+            providers: Some(crate::config::ProvidersConfig {
+                custom,
+                ..Default::default()
+            }),
+            ..Config::default()
+        };
+
+        assert_eq!(resolve_api_key_source(&config), ApiKeySource::Env);
+        assert_eq!(
+            config.deepseek_api_key().expect("custom key"),
+            "declared-env-key"
+        );
+    }
+
+    #[test]
+    fn named_custom_provider_does_not_report_generic_secret_store() {
+        let _lock = crate::test_support::lock_test_env();
+        let temp = TempDir::new().expect("temp home");
+        let codewhale_home = temp.path().join("codewhale-home");
+        std::fs::create_dir_all(&codewhale_home).expect("create codewhale home");
+        let _home =
+            crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", codewhale_home.as_os_str());
+        let _backend = crate::test_support::EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+        let _deepseek_key = crate::test_support::EnvVarGuard::remove("DEEPSEEK_API_KEY");
+        let _deepseek_source = crate::test_support::EnvVarGuard::remove("DEEPSEEK_API_KEY_SOURCE");
+        codewhale_secrets::Secrets::auto_detect()
+            .set("custom", "unrelated-custom-secret")
+            .expect("save secret");
+
+        let mut custom = std::collections::HashMap::new();
+        custom.insert(
+            "qa-gateway".to_string(),
+            crate::config::ProviderConfig {
+                kind: Some("openai-compatible".to_string()),
+                base_url: Some("https://gateway.example.test/v1".to_string()),
+                model: Some("qa-model".to_string()),
+                auth_mode: Some("api_key".to_string()),
+                ..Default::default()
+            },
+        );
+        let config = Config {
+            provider: Some("qa-gateway".to_string()),
+            providers: Some(crate::config::ProvidersConfig {
+                custom,
+                ..Default::default()
+            }),
+            ..Config::default()
+        };
+
+        assert_eq!(resolve_api_key_source(&config), ApiKeySource::Missing);
+        assert!(config.deepseek_api_key().is_err());
+    }
+
+    #[test]
+    fn custom_built_in_endpoint_does_not_report_ambient_provider_key() {
+        let _lock = crate::test_support::lock_test_env();
+        let _openrouter =
+            crate::test_support::EnvVarGuard::set("OPENROUTER_API_KEY", "ambient-key");
+        let _deepseek_key = crate::test_support::EnvVarGuard::remove("DEEPSEEK_API_KEY");
+        let _deepseek_source = crate::test_support::EnvVarGuard::remove("DEEPSEEK_API_KEY_SOURCE");
+        let mut providers = crate::config::ProvidersConfig::default();
+        providers.openrouter.base_url = Some("https://gateway.example.test/v1".to_string());
+        let config = Config {
+            provider: Some("openrouter".to_string()),
+            providers: Some(providers),
+            ..Config::default()
+        };
+
+        assert_eq!(resolve_api_key_source(&config), ApiKeySource::Missing);
+        assert!(config.deepseek_api_key().is_err());
+    }
+
+    #[test]
+    fn auth_mode_none_reports_distinct_no_auth_source_and_scheme() {
+        let _lock = crate::test_support::lock_test_env();
+        let _openrouter =
+            crate::test_support::EnvVarGuard::set("OPENROUTER_API_KEY", "ambient-key");
+        let mut providers = crate::config::ProvidersConfig::default();
+        providers.openrouter.auth_mode = Some("none".to_string());
+        providers.openrouter.api_key = Some("configured-key".to_string());
+        let config = Config {
+            provider: Some("openrouter".to_string()),
+            providers: Some(providers),
+            ..Config::default()
+        };
+
+        assert_eq!(resolve_api_key_source(&config), ApiKeySource::NoAuth);
+        assert_eq!(doctor_api_key_source_label(ApiKeySource::NoAuth), "none");
+        assert_eq!(doctor_auth_scheme(&config), "none");
+        assert_eq!(config.deepseek_api_key().expect("no-auth route"), "");
+    }
+
+    #[test]
     fn resolve_api_key_source_prefers_config_over_env() {
         let _guard = crate::test_support::lock_test_env();
         let prev = std::env::var("DEEPSEEK_API_KEY").ok();
@@ -13196,7 +13344,7 @@ mod setup_helper_tests {
     }
 
     #[test]
-    fn resolve_api_key_source_reports_provider_command_auth_class() {
+    fn resolve_api_key_source_ignores_unresolved_provider_command_metadata() {
         let _guard = crate::test_support::lock_test_env();
         let _deepseek_key = crate::test_support::EnvVarGuard::remove("DEEPSEEK_API_KEY");
         let _deepseek_source = crate::test_support::EnvVarGuard::remove("DEEPSEEK_API_KEY_SOURCE");
@@ -13216,11 +13364,12 @@ mod setup_helper_tests {
 
         let source = resolve_api_key_source(&cfg);
 
-        assert_eq!(source, ApiKeySource::Command);
+        assert_eq!(source, ApiKeySource::Missing);
+        assert!(cfg.deepseek_api_key().is_err());
     }
 
     #[test]
-    fn resolve_api_key_source_reports_provider_secret_auth_class() {
+    fn resolve_api_key_source_ignores_unresolved_provider_secret_metadata() {
         let _guard = crate::test_support::lock_test_env();
         let _deepseek_key = crate::test_support::EnvVarGuard::remove("DEEPSEEK_API_KEY");
         let _deepseek_source = crate::test_support::EnvVarGuard::remove("DEEPSEEK_API_KEY_SOURCE");
@@ -13240,7 +13389,8 @@ mod setup_helper_tests {
 
         let source = resolve_api_key_source(&cfg);
 
-        assert_eq!(source, ApiKeySource::Secret);
+        assert_eq!(source, ApiKeySource::Missing);
+        assert!(cfg.deepseek_api_key().is_err());
     }
 
     #[test]

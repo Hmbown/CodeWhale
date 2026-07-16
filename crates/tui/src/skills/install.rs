@@ -33,7 +33,7 @@
 //!   command writes a `.trusted` marker; tool-execution gating is a separate
 //!   concern that lives next to the tool registry.
 //! * Claude Code plugin archives that contain multiple skills are rejected with
-//!   an explicit migration message. CodeWhale can install individual
+//!   an explicit migration message. Codewhale can install individual
 //!   `SKILL.md` bundles, including `.claude/skills/<name>/SKILL.md`, but it
 //!   does not execute `plugin.json` plugin runtimes or custom command bundles.
 
@@ -234,7 +234,7 @@ pub enum InstallError {
     #[error("symlinks are not allowed in skill tarballs")]
     SymlinkRejected,
     #[error(
-        "Claude Code plugin archive contains multiple SKILL.md entries; CodeWhale installs one SKILL.md bundle at a time and does not run plugin.json/custom-command runtimes. Install or migrate an individual skills/<name> directory instead"
+        "Claude Code plugin archive contains multiple SKILL.md entries; Codewhale installs one SKILL.md bundle at a time and does not run plugin.json/custom-command runtimes. Install or migrate an individual skills/<name> directory instead"
     )]
     ClaudePluginBundle,
     #[error("skill '{0}' is already installed; use update or remove it first")]

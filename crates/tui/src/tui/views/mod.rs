@@ -2557,7 +2557,7 @@ fn config_choice_label(key: &str, value: &str) -> String {
         ("default_mode", "agent") => "Agent".to_string(),
         ("default_mode", "plan") => "Plan (read only)".to_string(),
         ("reasoning_effort", "default") => "Provider default".to_string(),
-        ("status_indicator", "cw") => "CodeWhale mark".to_string(),
+        ("status_indicator", "cw") => "Codewhale mark".to_string(),
         ("status_indicator", "whale") => "Animated whale".to_string(),
         ("status_indicator", "dots") => "Animated dots".to_string(),
         ("status_indicator", "off") => "Off".to_string(),

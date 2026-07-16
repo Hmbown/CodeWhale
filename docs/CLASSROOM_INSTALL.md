@@ -1,6 +1,6 @@
-# CodeWhale Classroom / Lab Install Checklist
+# Codewhale Classroom / Lab Install Checklist
 
-A step-by-step checklist for IT admins deploying CodeWhale on lab or classroom
+A step-by-step checklist for IT admins deploying Codewhale on lab or classroom
 machines running Windows.
 
 > **Audience**: IT staff, teaching assistants, lab managers.
@@ -85,7 +85,7 @@ If `codewhale` is not found, the user may need to open a **new** terminal window
 ## Lab validation checklist
 
 Run this once on a clean lab machine, and again on a machine that already has a
-previous CodeWhale install:
+previous Codewhale install:
 
 | # | Scenario | Expected result | Done? |
 |---|----------|-----------------|-------|
@@ -167,7 +167,7 @@ $newPath = ($currentPath -split ";" | Where-Object { $_ -and ($_ -ne $binDir) })
 
 If building a golden image (WIM/FFU):
 
-1. Install CodeWhale using Option A (silent) or Option C (manual).
+1. Install Codewhale using Option A (silent) or Option C (manual).
 2. Do **not** set API keys in the image — these are per-user/per-student.
 3. The install directory (`%LOCALAPPDATA%\Programs\CodeWhale\bin`) is per-user,
    so it will be present for the user who installed it. For other users on the

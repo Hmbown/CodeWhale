@@ -68,8 +68,8 @@ and are built on Ubuntu 24.04, so they can require `GLIBC_2.39`.
 
 This floor applies only to the **GNU libc** arm64 asset. The static x64 (musl)
 asset has no `GLIBC_*` symbols, so it passes the install preflight and runs on
-older systems without error. In the current v0.8.67 release lane, the GNU asset
-is built on Ubuntu 24.04 and can require `GLIBC_2.39`. Ubuntu 22.04 ships glibc
+older systems without error. The v0.9.0 GNU arm64 asset is built on Ubuntu
+24.04 and can require `GLIBC_2.39`. Ubuntu 22.04 ships glibc
 2.35, so those arm64 binaries fail with errors such as:
 
 ```text
@@ -486,7 +486,7 @@ curl -L -o codewhale-bundles-sha256.txt \
   https://github.com/Hmbown/CodeWhale/releases/download/vX.Y.Z/codewhale-bundles-sha256.txt
 ```
 
-Inside a CodeWhale workspace, `/restore list [N]` lists side-git file snapshots
+Inside a Codewhale workspace, `/restore list [N]` lists side-git file snapshots
 and `/restore <N>` restores files from the chosen snapshot. That workspace
 rollback does not change your installed binary version and does not rewrite
 conversation history.
@@ -529,7 +529,7 @@ CodeWhaleSetup.exe /S
 
 The installer is per-user and does not request elevation. Run silent installs in
 the target user's context, or use a deployment tool that can run the installer
-for each user profile that needs CodeWhale.
+for each user profile that needs Codewhale.
 
 The release-built installer is currently unsigned and may trigger Windows
 SmartScreen. Verify the SHA-256 checksum from `codewhale-artifacts-sha256.txt`
@@ -540,7 +540,7 @@ your environment requires signed application packages.
 
 ```powershell
 cd scripts\installer
-# Place codewhale.exe and codewhale-tui.exe here, then:
+# Place codewhale.exe, codew.exe, and codewhale-tui.exe here, then:
 makensis /DVERSION=<version> codewhale.nsi
 ```
 
@@ -809,7 +809,7 @@ cargo install codewhale-tui --locked
 ```
 
 The prebuilt npm/GitHub binaries do not need these build-time packages; they
-only apply when WSL2 is compiling CodeWhale from source.
+only apply when WSL2 is compiling Codewhale from source.
 
 ### Wrapper installs but `codewhale` isn't found
 

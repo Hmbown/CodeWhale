@@ -16,7 +16,7 @@ The current `agent` implementation delegates to the durable sub-agent runtime
 while that cutover completes. It can still be useful for short in-session
 delegation. Transient provider header/stream/time-out failures are retried with
 backoff inside the child runtime before the worker is marked interrupted; if the
-retry budget is exhausted, CodeWhale preserves a checkpoint and returns a
+retry budget is exhausted, Codewhale preserves a checkpoint and returns a
 continuation handle instead of leaving the parent to infer what happened. For
 work that must survive process restarts, sleep, or remote execution, prefer
 Fleet or a Workflow-backed fleet run.
@@ -39,7 +39,7 @@ stance toward the work — not just a different label.
 
 ## Maintainer posture
 
-Sub-agents help CodeWhale move faster, but the parent agent still owns the
+Sub-agents help Codewhale move faster, but the parent agent still owns the
 maintainer decision. Use children to gather evidence, review patches, and run
 verification while keeping the community posture in
 [`AGENT_ETHOS.md`](AGENT_ETHOS.md): issues are open intake, PR gates are
@@ -88,7 +88,7 @@ approach.
 
 ## Worktree isolation
 
-For parallel edit lanes, launch the child with `worktree: true`. CodeWhale
+For parallel edit lanes, launch the child with `worktree: true`. Codewhale
 creates a fresh git worktree and branch for that child, runs the child from the
 isolated checkout, and reports the resulting workspace/branch in the returned
 session projection and worker record. By default the branch is

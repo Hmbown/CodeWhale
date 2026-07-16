@@ -2,9 +2,10 @@
 name = "codewhale-lane"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Lane registry and Runtime backends for CodeWhale workflow instances"
+description = "Lane registry and Runtime backends for Codewhale workflow instances"
 
 [dependencies]
 anyhow.workspace = true

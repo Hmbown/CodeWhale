@@ -17,7 +17,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use super::executor::{
-    FleetExecutor, FleetWorkerReportedRoute, FleetWorkerTerminalEvent,
+    FleetExecutor, FleetExecutorAttempt, FleetWorkerReportedRoute, FleetWorkerTerminalEvent,
     build_worker_exec_command_with_profiles,
 };
 use super::host::FleetHostErrorKind;
@@ -25,7 +25,7 @@ use super::ledger::{FleetLedger, FleetLedgerState, FleetTaskLedgerStatus, FleetT
 use super::scheduler::{FleetScheduler, FleetSchedulerPolicy};
 use super::task_spec::{
     FleetTaskSpecDocument, FleetTaskVerificationInput, load_task_spec_document,
-    record_verification_receipt, validate_task_spec_document, verify_task_result,
+    prepare_verification_receipt, validate_task_spec_document, verify_task_result,
 };
 use super::worker_runtime;
 use crate::config::Config;
@@ -377,8 +377,9 @@ impl FleetManager {
             let Some((entry, task_spec)) = next_enqueued_task_for_run(&state, run_id) else {
                 break;
             };
-            self.start_worker_task(&worker_id, &entry, &task_spec)?;
-            report.leased += 1;
+            if self.start_worker_task(&worker_id, &entry, &task_spec, Some(max_workers))? {
+                report.leased += 1;
+            }
         }
 
         self.refresh_run_status(run_id)?;
@@ -483,7 +484,25 @@ impl FleetManager {
         report.started += self.start_leased_workers(run_id, executor, codewhale_binary, model)?;
 
         for worker_id in executor.worker_ids() {
-            if let Some(task) = self.cancelled_executor_task_context(&worker_id)? {
+            let tracked_attempt = executor.tracked_attempt(&worker_id);
+            if let Some(attempt) = tracked_attempt.as_ref()
+                && self
+                    .executor_task_context_for_attempt(&worker_id, attempt)?
+                    .is_none()
+            {
+                // The ledger advanced to another attempt (restart), or made
+                // this attempt terminal (cancel/stop), while this process was
+                // still alive. The executor owns the host handle, so fence and
+                // reap the old process without publishing any event against the
+                // replacement generation.
+                executor.stop_worker(&worker_id)?;
+                executor.forget_worker(&worker_id);
+                report.terminals += 1;
+                continue;
+            }
+            if tracked_attempt.is_none()
+                && let Some(_task) = self.cancelled_executor_task_context(&worker_id)?
+            {
                 // Cancellation is ledgered by an out-of-process control
                 // command. Only this executor owns the host process handle,
                 // so it must enforce the terminal state before returning from
@@ -491,14 +510,6 @@ impl FleetManager {
                 // after cancellation; publish one final authoritative event
                 // after the process is actually stopped instead.
                 executor.stop_worker(&worker_id)?;
-                self.append_worker_event(
-                    &task.entry.run_id,
-                    &worker_id,
-                    &task.entry.task_id,
-                    FleetWorkerEventPayload::Cancelled {
-                        cancelled_by: Some("operator".to_string()),
-                    },
-                )?;
                 executor.forget_worker(&worker_id);
                 report.terminals += 1;
                 continue;
@@ -512,22 +523,40 @@ impl FleetManager {
                 if is_terminal_payload(&payload) {
                     continue;
                 }
-                let Some(task) = self.executor_task_context(&worker_id)? else {
+                let task = if let Some(attempt) = tracked_attempt.as_ref() {
+                    self.executor_task_context_for_attempt(&worker_id, attempt)?
+                } else {
+                    self.executor_task_context(&worker_id)?
+                };
+                let Some(task) = task else {
                     continue;
                 };
-                self.append_worker_event(
-                    &task.entry.run_id,
-                    &worker_id,
-                    &task.entry.task_id,
-                    payload,
-                )?;
+                if self
+                    .ledger
+                    .append_event_if_leased(
+                        &task.entry.run_id,
+                        &worker_id,
+                        &task.entry.task_id,
+                        task.entry.attempts,
+                        &timestamp(),
+                        payload,
+                    )?
+                    .is_none()
+                {
+                    continue;
+                }
                 self.ledger
                     .heartbeat(&worker_id, &timestamp(), None, None)?;
                 report.events += 1;
             }
 
             if let Some(terminal) = executor.poll_terminal_with_status(&worker_id) {
-                let Some(task) = self.executor_task_context(&worker_id)? else {
+                let task = if let Some(attempt) = tracked_attempt.as_ref() {
+                    self.executor_task_context_for_attempt(&worker_id, attempt)?
+                } else {
+                    self.executor_task_context(&worker_id)?
+                };
+                let Some(task) = task else {
                     executor.forget_worker(&worker_id);
                     continue;
                 };
@@ -591,25 +620,30 @@ impl FleetManager {
             .map(|heartbeat| heartbeat.timestamp.clone());
         let alert_state = latest_alert_for_worker(&state, worker_id);
 
-        // Enrich with sub-agent worker runtime state when available.
-        let runtime_state = self.sub_agent_manager.as_ref().and_then(|mgr| {
-            mgr.try_read()
-                .ok()
-                .and_then(|guard| guard.get_worker_record(worker_id))
-                .map(|record| FleetWorkerRuntimeProjection {
-                    agent_status: format!("{:?}", record.status).to_lowercase(),
-                    steps_taken: record.steps_taken,
-                    latest_message: record.latest_message,
-                    error: record.error,
-                    result_summary: record.result_summary,
-                    has_session: !matches!(
-                        record.status,
-                        crate::tools::subagent::AgentWorkerStatus::Completed
-                            | crate::tools::subagent::AgentWorkerStatus::Failed
-                            | crate::tools::subagent::AgentWorkerStatus::Cancelled
-                    ),
-                })
-        });
+        // Enrich only a live lease with its in-memory worker projection. A
+        // terminal durable task always wins over a lagging runtime record.
+        let runtime_state = current
+            .as_ref()
+            .filter(|task| task.status == FleetTaskLedgerStatus::Leased)
+            .and(self.sub_agent_manager.as_ref())
+            .and_then(|mgr| {
+                mgr.try_read()
+                    .ok()
+                    .and_then(|guard| guard.get_worker_record(worker_id))
+                    .map(|record| FleetWorkerRuntimeProjection {
+                        agent_status: format!("{:?}", record.status).to_lowercase(),
+                        steps_taken: record.steps_taken,
+                        latest_message: record.latest_message,
+                        error: record.error,
+                        result_summary: record.result_summary,
+                        has_session: !matches!(
+                            record.status,
+                            crate::tools::subagent::AgentWorkerStatus::Completed
+                                | crate::tools::subagent::AgentWorkerStatus::Failed
+                                | crate::tools::subagent::AgentWorkerStatus::Cancelled
+                        ),
+                    })
+            });
 
         Ok(FleetWorkerInspection {
             worker_id: worker_id.to_string(),
@@ -634,22 +668,17 @@ impl FleetManager {
         let Some(task) = active_task_for_worker(&state, worker_id) else {
             bail!("worker {worker_id} has no running fleet task");
         };
-        self.append_worker_event(
+        let cancelled = self.ledger.cancel_task_if_active(
             &task.entry.run_id,
-            worker_id,
             &task.entry.task_id,
-            FleetWorkerEventPayload::Interrupted {
-                signal: Some("operator".to_string()),
-            },
+            Some(worker_id),
+            &timestamp(),
+            Some("operator"),
+            Some("operator"),
         )?;
-        self.append_worker_event(
-            &task.entry.run_id,
-            worker_id,
-            &task.entry.task_id,
-            FleetWorkerEventPayload::Cancelled {
-                cancelled_by: Some("operator".to_string()),
-            },
-        )?;
+        if !cancelled {
+            bail!("worker {worker_id} no longer has that running fleet task");
+        }
         self.refresh_run_status(&task.entry.run_id)?;
         self.inspect_worker(worker_id)
     }
@@ -662,26 +691,33 @@ impl FleetManager {
             bail!("worker {worker_id} has no fleet task to restart");
         };
         let now = timestamp();
-        self.ledger.lease_task(
+        let latest_seq = state
+            .latest_seq
+            .get(&event_key(
+                worker_id,
+                &task.entry.run_id.0,
+                &task.entry.task_id,
+            ))
+            .copied()
+            .unwrap_or(0);
+        let heartbeat_at = state
+            .heartbeats
+            .get(worker_id)
+            .map(|heartbeat| heartbeat.timestamp.as_str());
+        if !self.ledger.restart_task_if_unchanged(
             &task.entry.run_id,
             &task.entry.task_id,
             worker_id,
+            task.status,
+            task.entry.attempts,
+            latest_seq,
+            heartbeat_at,
             &now,
             None,
-        )?;
-        self.append_worker_event(
-            &task.entry.run_id,
-            worker_id,
-            &task.entry.task_id,
-            FleetWorkerEventPayload::Restarted { restart_count: 1 },
-        )?;
-        self.append_worker_event(
-            &task.entry.run_id,
-            worker_id,
-            &task.entry.task_id,
-            FleetWorkerEventPayload::Running,
-        )?;
-        self.ledger.heartbeat(worker_id, &timestamp(), None, None)?;
+            task.entry.attempts,
+        )? {
+            bail!("worker {worker_id} task changed before it could be restarted");
+        }
         self.ledger
             .update_run_status(&task.entry.run_id, FleetRunStatus::Running, &timestamp())?;
         self.inspect_worker(worker_id)
@@ -699,23 +735,16 @@ impl FleetManager {
             ) {
                 continue;
             }
-            if let Some(worker_id) = task.leased_to.as_deref() {
-                self.append_worker_event(
-                    &task.entry.run_id,
-                    worker_id,
-                    &task.entry.task_id,
-                    FleetWorkerEventPayload::Interrupted {
-                        signal: Some("stop_all".to_string()),
-                    },
-                )?;
-            }
-            self.ledger.mark_task_terminal_status(
+            if !self.ledger.cancel_task_if_active(
                 &task.entry.run_id,
                 &task.entry.task_id,
-                task.leased_to.as_deref(),
+                None,
                 &now,
-                FleetTaskLedgerStatus::Cancelled,
-            )?;
+                Some("stop_all"),
+                Some("operator"),
+            )? {
+                continue;
+            }
             affected_runs.insert(task.entry.run_id.0.clone());
             stopped += 1;
         }
@@ -747,23 +776,16 @@ impl FleetManager {
             ) {
                 continue;
             }
-            if let Some(worker_id) = task.leased_to.as_deref() {
-                self.append_worker_event(
-                    &task.entry.run_id,
-                    worker_id,
-                    &task.entry.task_id,
-                    FleetWorkerEventPayload::Interrupted {
-                        signal: Some("stop_run".to_string()),
-                    },
-                )?;
-            }
-            self.ledger.mark_task_terminal_status(
+            if !self.ledger.cancel_task_if_active(
                 &task.entry.run_id,
                 &task.entry.task_id,
-                task.leased_to.as_deref(),
+                None,
                 &now,
-                FleetTaskLedgerStatus::Cancelled,
-            )?;
+                Some("stop_run"),
+                Some("operator"),
+            )? {
+                continue;
+            }
             stopped += 1;
         }
         self.ledger
@@ -776,7 +798,8 @@ impl FleetManager {
         worker_id: &str,
         entry: &FleetInboxEntry,
         task_spec: &FleetTaskSpec,
-    ) -> Result<()> {
+        max_active_for_run: Option<usize>,
+    ) -> Result<bool> {
         let sub_agent_worker = if self.sub_agent_manager.is_some() {
             let run = self
                 .ledger
@@ -813,48 +836,38 @@ impl FleetManager {
         } else {
             None
         };
-        let now = timestamp();
-        self.ledger
-            .lease_task(&entry.run_id, &entry.task_id, worker_id, &now, None)?;
-        self.append_worker_event(
-            &entry.run_id,
-            worker_id,
-            &entry.task_id,
-            FleetWorkerEventPayload::Leased {
-                lease_expires_at: None,
-            },
-        )?;
-        self.append_worker_event(
-            &entry.run_id,
-            worker_id,
-            &entry.task_id,
-            FleetWorkerEventPayload::Starting,
-        )?;
         let log_artifact = self.write_log_artifact(&entry.run_id, worker_id, task_spec)?;
-        self.append_worker_event(
+        let now = timestamp();
+        if !self.ledger.start_task_if_enqueued(
             &entry.run_id,
-            worker_id,
             &entry.task_id,
-            FleetWorkerEventPayload::Artifact(log_artifact.clone()),
-        )?;
-        self.append_worker_event(
-            &entry.run_id,
             worker_id,
-            &entry.task_id,
-            FleetWorkerEventPayload::Running,
-        )?;
-        self.ledger.heartbeat(worker_id, &timestamp(), None, None)?;
-
-        // Register with the sub-agent manager for headless worker tracking.
-        // The engine's agent path handles actual sub-agent spawning.
-        if let Some(ref mgr) = self.sub_agent_manager
-            && let Some(worker) = sub_agent_worker
-            && let Ok(mut guard) = mgr.try_write()
-        {
-            guard.register_worker(worker);
+            &now,
+            None,
+            max_active_for_run,
+            vec![
+                FleetWorkerEventPayload::Leased {
+                    lease_expires_at: None,
+                },
+                FleetWorkerEventPayload::Starting,
+                FleetWorkerEventPayload::Artifact(log_artifact),
+                FleetWorkerEventPayload::Running,
+            ],
+            || {
+                // Registration shares the durable transition lock, so a
+                // cancellation cannot win between claim and projection setup.
+                if let Some(ref mgr) = self.sub_agent_manager
+                    && let Some(worker) = sub_agent_worker
+                    && let Ok(mut guard) = mgr.try_write()
+                {
+                    guard.register_worker(worker);
+                }
+            },
+        )? {
+            return Ok(false);
         }
 
-        Ok(())
+        Ok(true)
     }
 
     fn start_leased_workers(
@@ -901,15 +914,36 @@ impl FleetManager {
                 roster.members(),
             )?;
             let cwd = resolve_task_cwd(&self.workspace, &task_spec);
-            match executor.start_worker_on_host(worker_id, &worker_spec.host, command, Some(cwd)) {
+            let attempt = FleetExecutorAttempt {
+                run_id: task.entry.run_id.clone(),
+                task_id: task.entry.task_id.clone(),
+                attempt: task.entry.attempts,
+            };
+            match executor.start_worker_attempt_on_host(
+                worker_id,
+                &worker_spec.host,
+                command,
+                Some(cwd),
+                attempt,
+            ) {
                 Ok(handle) => {
                     let artifact = self.host_log_artifact(&handle.log_path);
-                    self.append_worker_event(
-                        run_id,
-                        worker_id,
-                        &task.entry.task_id,
-                        FleetWorkerEventPayload::Artifact(artifact),
-                    )?;
+                    if self
+                        .ledger
+                        .append_event_if_leased(
+                            run_id,
+                            worker_id,
+                            &task.entry.task_id,
+                            task.entry.attempts,
+                            &timestamp(),
+                            FleetWorkerEventPayload::Artifact(artifact),
+                        )?
+                        .is_none()
+                    {
+                        executor.stop_worker(worker_id)?;
+                        executor.forget_worker(worker_id);
+                        continue;
+                    }
                     started += 1;
                 }
                 Err(err) => {
@@ -961,6 +995,40 @@ impl FleetManager {
         }))
     }
 
+    fn executor_task_context_for_attempt(
+        &self,
+        worker_id: &str,
+        attempt: &FleetExecutorAttempt,
+    ) -> Result<Option<FleetExecutorTaskContext>> {
+        let state = self.ledger.rebuild_state()?;
+        let key = task_key(&attempt.run_id.0, &attempt.task_id);
+        let Some(task) = state.tasks.get(&key) else {
+            return Ok(None);
+        };
+        if task.status != FleetTaskLedgerStatus::Leased
+            || task.leased_to.as_deref() != Some(worker_id)
+            || task.entry.attempts != attempt.attempt
+        {
+            return Ok(None);
+        }
+        let Some(run) = state.runs.get(&attempt.run_id.0) else {
+            return Ok(None);
+        };
+        let Some(task_spec) = run
+            .task_specs
+            .iter()
+            .find(|spec| spec.id == attempt.task_id)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        Ok(Some(FleetExecutorTaskContext {
+            entry: task.entry.clone(),
+            task_spec,
+            worker_id: worker_id.to_string(),
+        }))
+    }
+
     fn cancelled_executor_task_context(
         &self,
         worker_id: &str,
@@ -1000,7 +1068,10 @@ impl FleetManager {
         let Some(current) = state.tasks.get(&key) else {
             return Ok(false);
         };
-        if !matches!(current.status, FleetTaskLedgerStatus::Leased) {
+        if current.status != FleetTaskLedgerStatus::Leased
+            || current.leased_to.as_deref() != Some(task.worker_id.as_str())
+            || current.entry.attempts != task.entry.attempts
+        {
             return Ok(false);
         }
 
@@ -1013,24 +1084,31 @@ impl FleetManager {
         } = terminal;
         let (receipt_result, failure_kind, exit_code) = task_receipt_outcome(&payload, exit_code);
         let terminal_completed = matches!(&payload, FleetWorkerEventPayload::Completed { .. });
+        let expected_terminal_status = match &payload {
+            FleetWorkerEventPayload::Completed { .. } => FleetTaskLedgerStatus::Completed,
+            FleetWorkerEventPayload::Failed { .. } => FleetTaskLedgerStatus::Failed,
+            FleetWorkerEventPayload::Cancelled { .. } => FleetTaskLedgerStatus::Cancelled,
+            _ => bail!("fleet executor outcome must contain a terminal worker event"),
+        };
         for tail_payload in tail_payloads {
             if is_terminal_payload(&tail_payload) {
                 continue;
             }
-            self.append_worker_event(
-                &task.entry.run_id,
-                &task.worker_id,
-                &task.entry.task_id,
-                tail_payload,
-            )?;
+            if self
+                .ledger
+                .append_event_if_leased(
+                    &task.entry.run_id,
+                    &task.worker_id,
+                    &task.entry.task_id,
+                    task.entry.attempts,
+                    &timestamp(),
+                    tail_payload,
+                )?
+                .is_none()
+            {
+                return Ok(false);
+            }
         }
-        self.append_worker_event(
-            &task.entry.run_id,
-            &task.worker_id,
-            &task.entry.task_id,
-            payload,
-        )?;
-
         let artifacts = self.task_artifacts_for_receipt(
             &task.entry.run_id,
             &task.entry.task_id,
@@ -1055,58 +1133,50 @@ impl FleetManager {
             run_id: task.entry.run_id.clone(),
             task_id: task.entry.task_id.clone(),
             worker_id: task.worker_id.clone(),
+            attempt: task.entry.attempts,
             exit_code,
             artifacts,
             resolved_route,
             effective_permissions,
         };
-        if task.task_spec.scorer.is_some() {
+        let receipt = if task.task_spec.scorer.is_some() || terminal_completed {
             let verification =
                 verify_task_result(&self.workspace, &task.task_spec, &verification_input);
-            let receipt = record_verification_receipt(
-                &self.ledger,
-                &self.workspace,
-                &verification_input,
-                verification,
-            )?;
-            if matches!(
-                receipt.result,
-                FleetTaskResult::Fail | FleetTaskResult::Timeout
-            ) {
-                self.ledger.mark_task_terminal_status(
-                    &task.entry.run_id,
-                    &task.entry.task_id,
-                    Some(&task.worker_id),
-                    &timestamp(),
-                    FleetTaskLedgerStatus::Failed,
-                )?;
+            prepare_verification_receipt(&self.workspace, &verification_input, verification)?
+        } else {
+            FleetReceipt {
+                run_id: task.entry.run_id.clone(),
+                task_id: task.entry.task_id.clone(),
+                worker_id: task.worker_id.clone(),
+                attempt: Some(task.entry.attempts),
+                terminal_seq: None,
+                completed_at: timestamp(),
+                result: receipt_result,
+                failure_kind,
+                artifacts: verification_input.artifacts,
+                score: None,
+                resolved_route: verification_input.resolved_route,
+                effective_permissions: verification_input.effective_permissions,
             }
-            return Ok(true);
-        }
-        if terminal_completed {
-            let verification =
-                verify_task_result(&self.workspace, &task.task_spec, &verification_input);
-            record_verification_receipt(
-                &self.ledger,
-                &self.workspace,
-                &verification_input,
-                verification,
-            )?;
-            return Ok(true);
-        }
-        self.ledger.record_receipt(FleetReceipt {
-            run_id: task.entry.run_id.clone(),
-            task_id: task.entry.task_id.clone(),
-            worker_id: task.worker_id.clone(),
-            completed_at: timestamp(),
-            result: receipt_result,
-            failure_kind,
-            artifacts: verification_input.artifacts,
-            score: None,
-            resolved_route: verification_input.resolved_route,
-            effective_permissions: verification_input.effective_permissions,
-        })?;
-        Ok(true)
+        };
+        let final_status = (matches!(
+            receipt.result,
+            FleetTaskResult::Fail | FleetTaskResult::Timeout
+        ) && expected_terminal_status != FleetTaskLedgerStatus::Failed)
+            .then_some(FleetTaskLedgerStatus::Failed);
+        Ok(self
+            .ledger
+            .finalize_task_attempt_if_leased(
+                &task.entry.run_id,
+                &task.worker_id,
+                &task.entry.task_id,
+                task.entry.attempts,
+                &timestamp(),
+                payload,
+                final_status,
+                receipt,
+            )?
+            .is_some())
     }
 
     /// Resolve the route snapshot to persist on a task's receipt (#3154).
@@ -1236,20 +1306,8 @@ impl FleetManager {
         task_id: &str,
         payload: FleetWorkerEventPayload,
     ) -> Result<FleetWorkerEvent> {
-        let state = self.ledger.rebuild_state()?;
-        let key = event_key(worker_id, &run_id.0, task_id);
-        let seq = state.latest_seq.get(&key).copied().unwrap_or(0) + 1;
-        let event = FleetWorkerEvent {
-            seq,
-            run_id: run_id.clone(),
-            worker_id: worker_id.to_string(),
-            task_id: task_id.to_string(),
-            timestamp: timestamp(),
-            payload,
-            extra: BTreeMap::new(),
-        };
-        self.ledger.append_event(event.clone())?;
-        Ok(event)
+        self.ledger
+            .append_event_next_seq(run_id, worker_id, task_id, &timestamp(), payload)
     }
 
     fn write_log_artifact(
@@ -1913,6 +1971,8 @@ mod tests {
                     run_id: run_id.clone(),
                     task_id: task_id.to_string(),
                     worker_id,
+                    attempt: Some(1),
+                    terminal_seq: None,
                     completed_at: heartbeat_ts.to_string(),
                     result: FleetTaskResult::Pass,
                     failure_kind: None,
@@ -2039,8 +2099,8 @@ mod tests {
 
         let text = std::fs::read_to_string(manager.ledger_path()).unwrap();
         assert!(text.contains("\"state\":\"failed\""));
-        assert!(text.contains("\"state\":\"escalated\""));
         assert!(text.contains("\"record\":\"alert_sent\""));
+        assert_eq!(manager.rebuild_state().unwrap().escalated_events.len(), 1);
         assert!(
             !text.contains("hooks.slack.invalid/secret"),
             "secret webhook redacted in ledger"
@@ -2211,6 +2271,7 @@ mod tests {
         let path = task_spec_file(&tmp, vec![task("task-a"), task("task-b")]);
         let pid_path = tmp.path().join("live-worker.pid");
         let first_worker_marker = tmp.path().join("first-worker-started");
+        let stopped_marker = tmp.path().join("first-worker-stopped");
         let fake = fake_codewhale(
             &tmp,
             &format!(
@@ -2222,44 +2283,49 @@ fi
 touch '{first_worker_marker}'
 printf '%s' "$$" > '{}'
 printf '{{"type":"content","content":"running"}}\n'
-exec sleep 30
+trap 'touch "{stopped_marker}"; exit 0' INT TERM
+sleep 30
 "#,
                 pid_path.display(),
                 first_worker_marker = first_worker_marker.display(),
+                stopped_marker = stopped_marker.display(),
             ),
         );
         let report = manager.create_run_from_task_spec_path(&path, 1).unwrap();
         let worker_id = report.worker_ids[0].clone();
         let mut executor = FleetExecutor::new(&manager.workspace);
-        let started = std::time::Instant::now();
         let rt = tokio::runtime::Runtime::new().unwrap();
 
         let (status, interrupted) = rt.block_on(async {
-            tokio::join!(
-                async {
-                    manager
-                        .run_to_completion(
-                            &report.run_id,
-                            1,
-                            &mut executor,
-                            &fake.display().to_string(),
-                            None,
-                            Duration::from_millis(10),
-                        )
+            tokio::time::timeout(Duration::from_secs(15), async {
+                tokio::join!(
+                    async {
+                        manager
+                            .run_to_completion(
+                                &report.run_id,
+                                1,
+                                &mut executor,
+                                &fake.display().to_string(),
+                                None,
+                                Duration::from_millis(10),
+                            )
+                            .await
+                            .unwrap()
+                    },
+                    async {
+                        tokio::time::timeout(Duration::from_secs(10), async {
+                            while !pid_path.is_file() {
+                                tokio::time::sleep(Duration::from_millis(5)).await;
+                            }
+                        })
                         .await
-                        .unwrap()
-                },
-                async {
-                    for _ in 0..200 {
-                        if pid_path.is_file() {
-                            break;
-                        }
-                        tokio::time::sleep(Duration::from_millis(5)).await;
+                        .expect("fake worker never started");
+                        controller.interrupt_worker(&worker_id).unwrap()
                     }
-                    assert!(pid_path.is_file(), "fake worker never started");
-                    controller.interrupt_worker(&worker_id).unwrap()
-                }
-            )
+                )
+            })
+            .await
+            .expect("Fleet cancellation did not beat the worker's natural exit")
         });
 
         assert_eq!(interrupted.status, FleetWorkerStatus::Online);
@@ -2268,30 +2334,108 @@ exec sleep 30
         assert_eq!(status.running, 0);
         assert!(executor.worker_ids().is_empty());
         assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "cancellation waited for the fake worker's natural exit"
+            stopped_marker.is_file(),
+            "cancelled Fleet worker did not observe the stop signal"
         );
-
-        let pid = std::fs::read_to_string(&pid_path).unwrap();
-        let still_running = std::process::Command::new("kill")
-            .args(["-0", pid.trim()])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .unwrap()
-            .success();
-        assert!(!still_running, "cancelled Fleet worker is still alive");
 
         let inspection = controller.inspect_worker(&worker_id).unwrap();
         assert_eq!(inspection.status, FleetWorkerStatus::Online);
-        assert!(matches!(
-            inspection.latest_event.map(|event| event.payload),
-            Some(FleetWorkerEventPayload::Cancelled { .. })
-        ));
+        let state = controller.rebuild_state().unwrap();
+        let task_key = task_key(&report.run_id.0, "task-a");
         assert_eq!(
-            inspection.last_error.as_deref(),
-            Some("cancelled by operator")
+            state.tasks[&task_key].status,
+            FleetTaskLedgerStatus::Cancelled
         );
+        let event_key = event_key(&worker_id, &report.run_id.0, "task-a");
+        assert!(matches!(
+            &state.latest_events[&event_key].payload,
+            FleetWorkerEventPayload::Cancelled { .. }
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn live_restart_fences_old_process_and_only_attempt_two_completes() {
+        let tmp = TempDir::new().unwrap();
+        let manager = FleetManager::open(tmp.path()).unwrap();
+        let controller = FleetManager::open(tmp.path()).unwrap();
+        let path = task_spec_file(&tmp, vec![task("task-a")]);
+        let first_worker_marker = tmp.path().join("first-attempt-started");
+        let stopped_marker = tmp.path().join("first-attempt-stopped");
+        let fake = fake_codewhale(
+            &tmp,
+            &format!(
+                r#"#!/bin/sh
+if [ -e '{first_worker_marker}' ]; then
+  printf '{{"type":"content","content":"attempt two"}}\n'
+  exit 0
+fi
+touch '{first_worker_marker}'
+printf '{{"type":"content","content":"attempt one still running"}}\n'
+trap 'touch "{stopped_marker}"; exit 0' INT TERM
+while :; do sleep 1; done
+"#,
+                first_worker_marker = first_worker_marker.display(),
+                stopped_marker = stopped_marker.display(),
+            ),
+        );
+        let report = manager.create_run_from_task_spec_path(&path, 1).unwrap();
+        let worker_id = report.worker_ids[0].clone();
+        let mut executor = FleetExecutor::new(&manager.workspace);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        let status = rt.block_on(async {
+            tokio::time::timeout(Duration::from_secs(15), async {
+                tokio::join!(
+                    async {
+                        manager
+                            .run_to_completion(
+                                &report.run_id,
+                                1,
+                                &mut executor,
+                                &fake.display().to_string(),
+                                None,
+                                Duration::from_millis(10),
+                            )
+                            .await
+                            .unwrap()
+                    },
+                    async {
+                        tokio::time::timeout(Duration::from_secs(10), async {
+                            while !first_worker_marker.is_file() {
+                                tokio::time::sleep(Duration::from_millis(5)).await;
+                            }
+                        })
+                        .await
+                        .expect("first Fleet attempt never started");
+                        controller.restart_worker(&worker_id).unwrap();
+                    }
+                )
+                .0
+            })
+            .await
+            .expect("restarted Fleet task did not finish")
+        });
+
+        assert_eq!(status.completed, 1);
+        assert_eq!(status.running, 0);
+        assert_eq!(status.restarted, 1);
+        assert!(executor.worker_ids().is_empty());
+        assert!(
+            stopped_marker.is_file(),
+            "the restarted attempt's old host process was not stopped"
+        );
+        let state = controller.rebuild_state().unwrap();
+        let task_key = task_key(&report.run_id.0, "task-a");
+        assert_eq!(state.tasks[&task_key].entry.attempts, 2);
+        assert_eq!(
+            state.tasks[&task_key].status,
+            FleetTaskLedgerStatus::Completed
+        );
+        let receipt = &state.receipts[&task_key];
+        assert_eq!(receipt.attempt, Some(2));
+        assert!(receipt.terminal_seq.is_some());
+        assert_eq!(receipt.result, FleetTaskResult::Partial);
     }
 
     #[test]

@@ -307,9 +307,18 @@ pub struct FleetExecutor {
     streams: std::collections::BTreeMap<String, WorkerStream>,
 }
 
+/// Durable lease identity owned by one concrete host process.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FleetExecutorAttempt {
+    pub run_id: codewhale_protocol::fleet::FleetRunId,
+    pub task_id: String,
+    pub attempt: u32,
+}
+
 struct WorkerStream {
     log_path: std::path::PathBuf,
     host: WorkerStreamHost,
+    attempt: Option<FleetExecutorAttempt>,
     offset: u64,
     // Keep incomplete stream frames as bytes. Decoding each read separately
     // corrupts valid UTF-8 when a multibyte code point crosses a read boundary.
@@ -422,6 +431,29 @@ impl FleetExecutor {
         command: FleetWorkerCommand,
         cwd: Option<std::path::PathBuf>,
     ) -> super::host::FleetHostResult<super::host::FleetWorkerHandle> {
+        self.start_worker_on_host_inner(worker_id, host, command, cwd, None)
+    }
+
+    /// Start the concrete process for one exact durable Fleet lease.
+    pub fn start_worker_attempt_on_host(
+        &mut self,
+        worker_id: &str,
+        host: &FleetHostSpec,
+        command: FleetWorkerCommand,
+        cwd: Option<std::path::PathBuf>,
+        attempt: FleetExecutorAttempt,
+    ) -> super::host::FleetHostResult<super::host::FleetWorkerHandle> {
+        self.start_worker_on_host_inner(worker_id, host, command, cwd, Some(attempt))
+    }
+
+    fn start_worker_on_host_inner(
+        &mut self,
+        worker_id: &str,
+        host: &FleetHostSpec,
+        command: FleetWorkerCommand,
+        cwd: Option<std::path::PathBuf>,
+        attempt: Option<FleetExecutorAttempt>,
+    ) -> super::host::FleetHostResult<super::host::FleetWorkerHandle> {
         let mut request = super::host::FleetWorkerStartRequest::new(worker_id, command);
         request.cwd = cwd;
         let (handle, host) = match host {
@@ -450,6 +482,7 @@ impl FleetExecutor {
             WorkerStream {
                 log_path: handle.log_path.clone(),
                 host,
+                attempt,
                 offset: 0,
                 pending: Vec::new(),
                 terminal: false,
@@ -465,6 +498,12 @@ impl FleetExecutor {
 
     pub fn worker_ids(&self) -> Vec<String> {
         self.streams.keys().cloned().collect()
+    }
+
+    pub fn tracked_attempt(&self, worker_id: &str) -> Option<FleetExecutorAttempt> {
+        self.streams
+            .get(worker_id)
+            .and_then(|stream| stream.attempt.clone())
     }
 
     /// Stop a tracked worker at the host boundary.
@@ -684,6 +723,7 @@ mod tests {
             WorkerStream {
                 log_path,
                 host: WorkerStreamHost::Local,
+                attempt: None,
                 offset: 0,
                 pending: Vec::new(),
                 terminal: false,

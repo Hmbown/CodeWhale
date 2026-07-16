@@ -153,6 +153,7 @@ pub struct ProviderDashboardRow {
 pub enum ProviderAuthStatus {
     Configured,
     Missing,
+    NoAuth,
     Optional,
     OAuthReady,
     OAuthMissing,
@@ -401,7 +402,18 @@ impl ProviderDashboardRow {
         } else {
             has_api_key_for(config, provider)
         };
-        let auth_status = auth_status_for(provider, has_key, configured);
+        let auth_mode = config.auth_mode_for_provider(provider);
+        let no_auth = crate::config::auth_mode_disables_api_key(auth_mode.as_deref());
+        let api_key_required = crate::config::auth_mode_requires_api_key(auth_mode.as_deref());
+        let official_endpoint = !config.provider_uses_custom_endpoint(provider);
+        let auth_status = auth_status_for(
+            provider,
+            has_key,
+            configured,
+            no_auth,
+            api_key_required,
+            official_endpoint,
+        );
         let usage_meter = usage_meter_for(provider);
         let provider_id = provider_id_override
             .map(str::to_string)
@@ -546,11 +558,7 @@ impl ProviderDashboardRow {
             messages.push("catalog snapshot missing; using provider default".to_string());
         }
 
-        let credential_state = if provider == ApiProvider::Custom {
-            credential_state_from_auth(auth_status)
-        } else {
-            credential_state_for_provider(config, provider)
-        };
+        let credential_state = credential_state_for_provider(config, provider);
         let route_identity =
             route_identity_for_model(config, provider, &default_route.logical_model);
         let readiness = readiness_for(
@@ -612,10 +620,11 @@ impl ProviderDashboardRow {
     fn compact_hint(&self) -> String {
         // Self-hosted providers carry a local/private posture; surface it next
         // to the base URL so the row reads correctly without a key (#3083).
-        let self_hosted = if matches!(
-            self.auth_status,
-            ProviderAuthStatus::Local | ProviderAuthStatus::Optional
-        ) {
+        let self_hosted = if self.provider.is_self_hosted()
+            || matches!(
+                self.auth_status,
+                ProviderAuthStatus::Local | ProviderAuthStatus::Optional
+            ) {
             " (self-hosted)"
         } else {
             ""
@@ -798,6 +807,7 @@ impl ProviderAuthStatus {
         match self {
             Self::Configured => "key:configured",
             Self::Missing => "key:not-set",
+            Self::NoAuth => "auth:none",
             Self::Optional => "key:optional",
             Self::OAuthReady => "auth:oauth-ready",
             Self::OAuthMissing => "auth:oauth-missing",
@@ -963,11 +973,24 @@ fn auth_status_for(
     provider: ApiProvider,
     has_key: bool,
     configured: Option<&crate::config::ProviderConfig>,
+    no_auth: bool,
+    api_key_required: bool,
+    official_endpoint: bool,
 ) -> ProviderAuthStatus {
-    if matches!(provider, ApiProvider::Ollama) {
-        return ProviderAuthStatus::Local;
+    if no_auth {
+        return ProviderAuthStatus::NoAuth;
     }
-    if matches!(provider, ApiProvider::Sglang | ApiProvider::Vllm) {
+    if provider.is_self_hosted() {
+        if api_key_required {
+            return if has_key {
+                ProviderAuthStatus::Configured
+            } else {
+                ProviderAuthStatus::Missing
+            };
+        }
+        if provider == ApiProvider::Ollama {
+            return ProviderAuthStatus::Local;
+        }
         return if has_explicit_credential(provider, configured) {
             ProviderAuthStatus::Configured
         } else {
@@ -983,14 +1006,17 @@ fn auth_status_for(
             ProviderAuthStatus::Missing
         };
     }
-    if provider == ApiProvider::Moonshot && configured.is_some_and(config_uses_kimi_oauth) {
+    if provider == ApiProvider::Moonshot
+        && official_endpoint
+        && configured.is_some_and(config_uses_kimi_oauth)
+    {
         return if crate::config::kimi_cli_credentials_valid() {
             ProviderAuthStatus::OAuthReady
         } else {
             ProviderAuthStatus::OAuthMissing
         };
     }
-    if provider == ApiProvider::OpenaiCodex {
+    if provider == ApiProvider::OpenaiCodex && official_endpoint {
         return if has_key {
             ProviderAuthStatus::OAuthReady
         } else {
@@ -998,6 +1024,7 @@ fn auth_status_for(
         };
     }
     if provider == ApiProvider::Xai
+        && official_endpoint
         && let Some(status) = xai_oauth_status(configured, crate::xai_oauth::credentials_valid())
     {
         return status;
@@ -1039,10 +1066,6 @@ fn has_explicit_credential(
                 .api_key
                 .as_deref()
                 .is_some_and(|value| !value.trim().is_empty())
-                || entry
-                    .auth
-                    .as_ref()
-                    .is_some_and(|auth| auth.validate().is_ok())
         })
 }
 
@@ -1061,10 +1084,6 @@ fn custom_provider_has_auth(configured: Option<&crate::config::ProviderConfig>) 
                 .map(str::trim)
                 .filter(|name| !name.is_empty())
                 .is_some_and(|name| std::env::var(name).is_ok_and(|value| !value.trim().is_empty()))
-            || entry
-                .auth
-                .as_ref()
-                .is_some_and(|auth| auth.validate().is_ok())
     })
 }
 
@@ -1073,22 +1092,12 @@ fn custom_provider_auth_is_optional(configured: Option<&crate::config::ProviderC
         entry
             .auth_mode
             .as_deref()
-            .is_some_and(auth_mode_disables_api_key)
+            .is_some_and(|mode| crate::config::auth_mode_disables_api_key(Some(mode)))
             || entry
                 .base_url
                 .as_deref()
                 .is_some_and(base_url_uses_local_host)
     })
-}
-
-fn auth_mode_disables_api_key(mode: &str) -> bool {
-    matches!(
-        mode.trim()
-            .to_ascii_lowercase()
-            .replace(['-', ' '], "_")
-            .as_str(),
-        "none" | "off" | "disabled" | "no_auth" | "noapi" | "no_api_key" | "anonymous"
-    )
 }
 
 fn missing_auth_message(
@@ -1126,16 +1135,6 @@ fn readiness_for(
     health: &ProviderReadinessSnapshot,
 ) -> ResolvedProviderReadiness {
     crate::provider_readiness::resolve_with_identity(identity, credential, route_ok, health)
-}
-
-fn credential_state_from_auth(auth_status: ProviderAuthStatus) -> CredentialState {
-    match auth_status {
-        ProviderAuthStatus::Local | ProviderAuthStatus::Optional => CredentialState::Local,
-        ProviderAuthStatus::Configured | ProviderAuthStatus::OAuthReady => CredentialState::Saved,
-        ProviderAuthStatus::Legacy => CredentialState::Legacy,
-        ProviderAuthStatus::Missing => CredentialState::MissingKey,
-        ProviderAuthStatus::OAuthMissing => CredentialState::MissingLogin,
-    }
 }
 
 fn usage_meter_for(provider: ApiProvider) -> String {
@@ -1461,7 +1460,10 @@ impl ProviderPickerView {
     fn selected_has_key(&self) -> bool {
         matches!(
             self.rows[self.selected_idx].credential_state,
-            CredentialState::Saved | CredentialState::Local | CredentialState::Legacy
+            CredentialState::Saved
+                | CredentialState::NoAuth
+                | CredentialState::Local
+                | CredentialState::Legacy
         )
     }
 
@@ -1821,7 +1823,10 @@ impl ProviderPickerView {
             };
             let has_usable_auth = matches!(
                 row.credential_state,
-                CredentialState::Saved | CredentialState::Local | CredentialState::Legacy
+                CredentialState::Saved
+                    | CredentialState::NoAuth
+                    | CredentialState::Local
+                    | CredentialState::Legacy
             );
             let hint_style = if is_selected {
                 let hint_fg = if has_usable_auth {
@@ -3658,6 +3663,34 @@ mod tests {
     }
 
     #[test]
+    fn protected_self_hosted_row_requires_its_configured_auth_mode() {
+        let _env_lock = crate::test_support::lock_test_env();
+        let temp = tempfile::tempdir().expect("isolated credential home");
+        let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", temp.path());
+        let _backend = crate::test_support::EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+        let _vllm_key = crate::test_support::EnvVarGuard::remove("VLLM_API_KEY");
+        let _vllm_base_url = crate::test_support::EnvVarGuard::remove("VLLM_BASE_URL");
+        let config = Config {
+            provider: Some("vllm".to_string()),
+            providers: Some(crate::config::ProvidersConfig {
+                vllm: crate::config::ProviderConfig {
+                    auth_mode: Some("api_key".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Config::default()
+        };
+
+        let row = ProviderDashboardRow::from_config(ApiProvider::Vllm, ApiProvider::Vllm, &config);
+
+        assert_eq!(row.auth_status, ProviderAuthStatus::Missing);
+        assert_eq!(row.credential_state, CredentialState::MissingKey);
+        assert_eq!(row.readiness, ResolvedProviderReadiness::MissingKey);
+        assert!(row.compact_hint().contains("(self-hosted)"));
+    }
+
+    #[test]
     fn self_hosted_reasoning_visibility_covers_vllm() {
         assert_eq!(
             default_reasoning_stream_visibility(ApiProvider::Sglang),
@@ -3702,6 +3735,111 @@ mod tests {
         assert_eq!(row.default_route.logical_model, "custom-model");
         assert_eq!(row.default_route.wire_model, "custom-model");
         assert_eq!(row.supported_protocols, vec!["chat".to_string()]);
+    }
+
+    #[test]
+    fn custom_endpoint_cannot_claim_official_xai_oauth_readiness() {
+        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let temp = tempfile::tempdir().expect("isolated oauth home");
+        let _xai_key = EnvVarGuard::remove("XAI_API_KEY");
+        let missing_grok_auth = temp.path().join("missing.json");
+        let _grok_auth = EnvVarGuard::set(
+            "GROK_AUTH_PATH",
+            missing_grok_auth.to_str().expect("utf8 test path"),
+        );
+        let config = Config {
+            provider: Some("xai".to_string()),
+            providers: Some(crate::config::ProvidersConfig {
+                xai: crate::config::ProviderConfig {
+                    base_url: Some("https://gateway.example.test/v1".to_string()),
+                    model: Some("private-grok".to_string()),
+                    auth_mode: Some("oauth".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Config::default()
+        };
+
+        let row = ProviderDashboardRow::from_config(ApiProvider::Xai, ApiProvider::Xai, &config);
+
+        assert_eq!(row.auth_status, ProviderAuthStatus::Missing);
+        assert_eq!(row.credential_state, CredentialState::MissingKey);
+        assert_eq!(row.readiness, ResolvedProviderReadiness::MissingKey);
+        assert!(!row.compact_hint().contains("oauth"));
+    }
+
+    #[test]
+    fn explicit_no_auth_custom_row_is_distinct_and_usable() {
+        let custom = std::collections::HashMap::from([(
+            "no-auth-gateway".to_string(),
+            crate::config::ProviderConfig {
+                kind: Some("openai-compatible".to_string()),
+                base_url: Some("https://gateway.example.test/v1".to_string()),
+                model: Some("private-model".to_string()),
+                auth_mode: Some("no-auth".to_string()),
+                ..Default::default()
+            },
+        )]);
+        let config = Config {
+            provider: Some("no-auth-gateway".to_string()),
+            providers: Some(crate::config::ProvidersConfig {
+                custom,
+                ..Default::default()
+            }),
+            ..Config::default()
+        };
+
+        let picker = ProviderPickerView::new(ApiProvider::Custom, &config);
+        let row = picker
+            .rows
+            .iter()
+            .find(|row| row.provider_id == "no-auth-gateway")
+            .expect("configured no-auth row");
+
+        assert_eq!(row.auth_status, ProviderAuthStatus::NoAuth);
+        assert_eq!(row.credential_state, CredentialState::NoAuth);
+        assert_eq!(row.readiness, ResolvedProviderReadiness::NoAuthUnchecked);
+        assert!(picker.selected_has_key());
+        assert!(row.compact_hint().contains("auth:none"));
+    }
+
+    #[test]
+    fn unresolved_custom_auth_metadata_does_not_mark_picker_row_configured() {
+        let custom = std::collections::HashMap::from([(
+            "metadata-only".to_string(),
+            crate::config::ProviderConfig {
+                kind: Some("openai-compatible".to_string()),
+                base_url: Some("https://gateway.example.test/v1".to_string()),
+                model: Some("private-model".to_string()),
+                auth: Some(codewhale_config::ProviderAuthSourceToml {
+                    source: codewhale_config::AuthSourceKind::Command,
+                    command: vec!["secret-tool".to_string(), "lookup".to_string()],
+                    timeout_ms: Some(2_000),
+                    secret_id: None,
+                }),
+                ..Default::default()
+            },
+        )]);
+        let config = Config {
+            provider: Some("metadata-only".to_string()),
+            providers: Some(crate::config::ProvidersConfig {
+                custom,
+                ..Default::default()
+            }),
+            ..Config::default()
+        };
+
+        let picker = ProviderPickerView::new(ApiProvider::Custom, &config);
+        let row = picker
+            .rows
+            .iter()
+            .find(|row| row.provider_id == "metadata-only")
+            .expect("metadata-only row remains visible for repair");
+
+        assert_eq!(row.auth_status, ProviderAuthStatus::Missing);
+        assert_eq!(row.credential_state, CredentialState::MissingKey);
+        assert_eq!(row.readiness, ResolvedProviderReadiness::MissingKey);
     }
 
     #[test]

@@ -325,7 +325,7 @@ pub fn missing_auth_message() -> String {
     format!(
         "OpenAI Codex OAuth credentials not found.\n\
          \n\
-         CodeWhale checked OPENAI_CODEX_ACCESS_TOKEN, CODEX_ACCESS_TOKEN, and {}.\n\
+         Codewhale checked OPENAI_CODEX_ACCESS_TOKEN, CODEX_ACCESS_TOKEN, and {}.\n\
          Run `codex login` to authenticate with ChatGPT/Codex OAuth, or set OPENAI_CODEX_ACCESS_TOKEN for this process.",
         auth_file_path().display()
     )

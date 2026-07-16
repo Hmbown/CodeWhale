@@ -2,9 +2,10 @@
 name = "codewhale-workflow-js"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Dynamic Workflow runtime: sandboxed rquickjs scripts that dispatch CodeWhale subagents"
+description = "Dynamic Workflow runtime: sandboxed rquickjs scripts that dispatch Codewhale subagents"
 
 [dependencies]
 async-trait.workspace = true

@@ -2,6 +2,7 @@
 name = "codewhale-cli"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Agentic terminal facade for open-source and open-weight coding models"

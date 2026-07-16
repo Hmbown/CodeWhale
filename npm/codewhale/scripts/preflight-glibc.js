@@ -96,7 +96,7 @@ function glibcCompatibilityMessage(required, host) {
     ? `this system has glibc ${formatVersion(host)}, which is too old for that asset.`
     : "this system does not appear to provide GNU libc.";
   return [
-    `Prebuilt CodeWhale Linux binaries require GLIBC_${formatVersion(required)}, but ${hostLine}`,
+    `Prebuilt Codewhale Linux binaries require GLIBC_${formatVersion(required)}, but ${hostLine}`,
     "",
     "The Linux x64 release asset is a static (musl) build that runs on any glibc,",
     "but the Linux arm64 asset is a GNU libc build linked against",

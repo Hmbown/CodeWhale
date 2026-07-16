@@ -2,9 +2,10 @@
 name = "codewhale-release"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Shared CodeWhale release discovery and version comparison helpers"
+description = "Shared Codewhale release discovery and version comparison helpers"
 
 [dependencies]
 anyhow.workspace = true

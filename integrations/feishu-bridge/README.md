@@ -16,7 +16,7 @@ Security model:
 - Tool approvals are text commands: `/allow <approval_id>` or `/deny <approval_id>`.
 - Feishu/Lark only sees the prompts, status, thread summaries, and approval
   messages the bridge sends. The workspace, shell, and runtime HTTP listener
-  stay local behind the CodeWhale runtime token.
+  stay local behind the Codewhale runtime token.
 
 ## Setup
 
@@ -62,7 +62,7 @@ sudo journalctl -u codewhale-feishu-bridge -f
 - `/deny <approval_id>`
 
 Anything else is sent as a prompt. If group control is explicitly enabled,
-messages should start with the CodeWhale prefix `/cw`, for example:
+messages should start with the Codewhale prefix `/cw`, for example:
 
 ```text
 /cw check git status and tell me what is dirty

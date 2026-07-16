@@ -5,7 +5,7 @@ turns. It is a protocol note, not an implemented endpoint.
 
 The goal is to let a local supervisor audit one completed turn without
 screen-scraping the terminal transcript. A receipt should summarize the durable
-runtime records that CodeWhale already owns: thread metadata, turn status, turn
+runtime records that Codewhale already owns: thread metadata, turn status, turn
 items, event sequence lineage, usage when available, approval decisions, and
 side-effect boundaries.
 
@@ -34,7 +34,7 @@ only read persisted runtime records and append-only events.
 ## Review Receipts
 
 `codewhale review --write-receipt` writes a local JSON receipt for the reviewed
-diff under the CodeWhale state directory (`review-receipts/`) unless
+diff under the Codewhale state directory (`review-receipts/`) unless
 `--receipt-path <path>` is provided. This is a pre-push handoff artifact: it
 records what diff was reviewed and what the review reported, without pushing,
 tagging, opening a PR, or claiming to replace maintainer review.

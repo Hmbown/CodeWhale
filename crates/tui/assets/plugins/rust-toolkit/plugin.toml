@@ -2,7 +2,7 @@
 name = "rust-toolkit"
 description = "Rust development toolkit with cargo check integration"
 version = "0.1.0"
-author = "CodeWhale Team"
+author = "Codewhale Team"
 
 [skills]
 path = "skills"

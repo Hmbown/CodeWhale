@@ -1151,8 +1151,8 @@ mod tests {
         let mut record = reg
             .create_pending(
                 Some("stopship".into()),
-                Some("v0868-stopship".into()),
-                Some("4090".into()),
+                Some("stopship".into()),
+                Some("4375".into()),
                 None,
                 RuntimeBackendKind::Tmux,
                 None,

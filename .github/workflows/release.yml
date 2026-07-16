@@ -635,7 +635,7 @@ jobs:
             printf 'where wt >nul 2>nul\r\n'
             printf 'set NO_ANIMATIONS=1\r\n'
             printf 'if "%%ERRORLEVEL%%"=="0" (\r\n'
-            printf '    wt --title CodeWhale cmd /k "%%~dp0codewhale-windows-x64.exe"\r\n'
+            printf '    wt --title Codewhale cmd /k "%%~dp0codewhale-windows-x64.exe"\r\n'
             printf ') else (\r\n'
             printf '    "%%~dp0codewhale-windows-x64.exe"\r\n'
             printf ')\r\n'
@@ -737,5 +737,5 @@ jobs:
 # npm publish is intentionally not automated. The npm account requires 2FA OTP
 # on every publish, and a granular automation token that bypasses 2FA has not
 # been provisioned. Release the npm wrapper manually from a developer machine
-# after the GitHub Release has been created — see CLAUDE.md "Releases" for the
-# exact commands.
+# after the GitHub Release has been created — see the "npm Wrapper Release"
+# section of docs/RELEASE_RUNBOOK.md for the exact commands.

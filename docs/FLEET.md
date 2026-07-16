@@ -194,7 +194,7 @@ next recursive ring rather than trying to show the whole tree at once.
 }
 ```
 
-Workers are optional. If omitted, CodeWhale creates local worker slots up to
+Workers are optional. If omitted, Codewhale creates local worker slots up to
 `--max-workers`.
 
 Task specs are typed in Rust and keep verification data separate from worker
@@ -428,7 +428,7 @@ Choose one typed action:
 Safe Slack or PagerDuty draft:
 
 ```text
-CodeWhale fleet needs attention
+Codewhale fleet needs attention
 Run: <run-id>
 Worker: <worker-id>
 Task: <task-id or unknown>
@@ -486,10 +486,10 @@ Example SSH worker spec:
 Defaults are intentionally conservative:
 
 - no hosted control plane or cloud provisioning is enabled;
-- SSH requires an explicit host, working directory, and CodeWhale binary path;
+- SSH requires an explicit host, working directory, and Codewhale binary path;
 - secret-like environment names such as `TOKEN`, `SECRET`, `PASSWORD`,
   `API_KEY`, and `PRIVATE_KEY` are rejected from adapter allowlists;
-- secrets should remain in CodeWhale config providers or remote host config,
+- secrets should remain in Codewhale config providers or remote host config,
   not in task instructions, argv, or fleet logs.
 
 ## Security and Trust Boundaries

@@ -18,7 +18,7 @@ Related docs:
 
 1. **You ask naturally** — “audit every crate for unsafe,” “scout then implement,”
    “compare these two providers in parallel.”
-2. **CodeWhale decides in Act/Agent** — broad, independent, or staged work can
+2. **Codewhale decides in Act/Agent** — broad, independent, or staged work can
    trigger Workflow; one-file edits, simple commands, and pure Q&A do not.
 3. **It tells you first** — e.g. “This looks set up for a Workflow — three scouts
    then one verifier.”
@@ -92,7 +92,7 @@ Automatic Workflow is suppressed for:
 - Risky writes without a clear decomposition  
 - Estimated children above `auto_start_child_limit` (ask or shrink first)
 
-In those cases CodeWhale uses direct tools or a single `agent` instead.
+In those cases Codewhale uses direct tools or a single `agent` instead.
 
 ## Dogfood scenarios (#4131)
 

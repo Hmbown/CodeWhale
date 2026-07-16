@@ -157,7 +157,7 @@ pub(crate) fn workspace_fingerprint(workspace: &Path) -> String {
 /// pin the guardrails.
 fn profile_drafting_system_prompt() -> String {
     concat!(
-        "You are helping a CodeWhale user draft a fleet agent profile: a small, ",
+        "You are helping a Codewhale user draft a fleet agent profile: a small, ",
         "durable description of one worker role their agent fleet can spawn.\n\n",
         "Return ONLY one JSON object — no markdown fences, no commentary — with these ",
         "fields (include \"model\" only when a specific target model is given below; ",

@@ -1,9 +1,9 @@
 {
   "_meta": {
-    "about": "Offline/stale fallback Models.dev-shaped catalog snapshot for CodeWhale (#3385, demoted by #4188).",
+    "about": "Offline/stale fallback Models.dev-shaped catalog snapshot for Codewhale (#3385, demoted by #4188).",
     "schema": "Matches crates/config/src/models_dev.rs ModelsDevCatalog ({ models, providers }).",
     "role": "NOT a competing source of truth. Preferred metadata is the live Models.dev catalog published into ProviderLake (#4187). This asset is used only when live/cache rows are unavailable (offline startup, failed refresh, or empty cache).",
-    "source": "Compact offline seed of verified in-repo defaults (context/output from crates/tui/src/models.rs; USD pricing from crates/tui/src/pricing.rs) for providers CodeWhale ships with. It is intentionally smaller than a full Models.dev dump; live refresh supersedes these rows on (provider, wire_model_id) identity.",
+    "source": "Compact offline seed of verified in-repo defaults (context/output from crates/tui/src/models.rs; USD pricing from crates/tui/src/pricing.rs) for providers Codewhale ships with. It is intentionally smaller than a full Models.dev dump; live refresh supersedes these rows on (provider, wire_model_id) identity.",
     "honesty": "Pricing is intentionally OMITTED where the repo does not publish a trustworthy per-token rate: DeepSeek-native rows (priced via the time-aware DeepSeek table elsewhere, kept UnknownOrStale at the route layer), aggregator-hosted DeepSeek rows (aggregator account terms, not DeepSeek Platform pricing), and Xiaomi MiMo rows (published PAYG rates apply only to sk- pay-as-you-go keys; the catalog cannot distinguish that billing surface from credit/quota Token Plan keys, so MiMo stays unpriced). Absent pricing surfaces as PricingSku::UnknownOrStale, never a fabricated zero.",
     "default_rows": "Each provider's `default: true` wire id equals that provider's built-in DEFAULT_*_MODEL so RouteResolver::new() and the descriptor stay in agreement when offline.",
     "coverage": "15 providers, 44 chat offerings (offline seed only)."

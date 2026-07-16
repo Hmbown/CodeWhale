@@ -1,5 +1,5 @@
-<!-- source: README.md sha256:561a074b0e36 -->
-# CodeWhale
+<!-- source: README.md sha256:ddc9cd7b5aea -->
+# Codewhale
 
 ターミナルで動くコーディングエージェント。あらゆるモデルで動作し、オープンモデルを最優先します。
 
@@ -13,7 +13,7 @@
 [![crates.io](https://img.shields.io/crates/v/codewhale-cli?label=crates.io)](https://crates.io/crates/codewhale-cli)
 [![npm](https://img.shields.io/npm/v/codewhale?label=npm)](https://www.npmjs.com/package/codewhale)
 
-![ターミナルで動作する CodeWhale](assets/screenshot.png)
+![ターミナルで動作する Codewhale](assets/screenshot.png)
 
 ## インストール
 

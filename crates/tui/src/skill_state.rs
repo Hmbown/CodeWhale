@@ -105,7 +105,7 @@ impl SkillStateStore {
 
 fn default_state_path() -> Result<PathBuf> {
     let dir = codewhale_config::ensure_state_dir(".")
-        .context("could not resolve or create CodeWhale state directory")?;
+        .context("could not resolve or create Codewhale state directory")?;
     Ok(dir.join(STATE_FILE_NAME))
 }
 

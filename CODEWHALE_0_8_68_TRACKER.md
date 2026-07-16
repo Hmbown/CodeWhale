@@ -1,7 +1,7 @@
 # CodeWhale 0.8.68 — Workflow + Stability Patch Release
 
-> **Status (2026-07-13): Historical planning record for an unpublished release
-> candidate.** v0.8.68 has not yet been tagged or publicly published. The
+> **Status (2026-07-15): Historical planning record superseded by v0.9.0.**
+> v0.8.68 was never tagged or publicly published. The
 > checkmarks and verdicts below record planning at different points in time;
 > they are not completion, test, merge, or release evidence. Use the current
 > [v0.9.0 release-candidate ledger](docs/releases/v0.9.0-release-candidate.md)

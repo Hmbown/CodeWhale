@@ -1,10 +1,10 @@
 # CodeWhale for VS Code
 
-Official CodeWhale extension scaffold for local development.
+Official Codewhale extension scaffold for local development.
 
 This first slice is intentionally small:
 
-- open CodeWhale in an integrated terminal
+- open Codewhale in an integrated terminal
 - start `codewhale serve --http` in a visible terminal
 - check a local runtime through `/health` and `/v1/runtime/info`
 - show connection state in the status bar

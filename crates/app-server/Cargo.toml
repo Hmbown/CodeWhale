@@ -2,9 +2,10 @@
 name = "codewhale-app-server"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "App-server transport for CodeWhale runtime integrations"
+description = "App-server transport for Codewhale runtime integrations"
 # `codewhale app-server` is owned by codewhale-cli; this crate is library-only.
 autobins = false
 

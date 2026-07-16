@@ -176,7 +176,7 @@ mod tests {
     use super::*;
 
     const STOPSHIP_TOML: &str = r#"
-name = "v0868-stopship"
+name = "stopship"
 description = "Stopship dogfood fleet"
 
 [roles]
@@ -190,7 +190,7 @@ release_lead = "manager"
     #[test]
     fn stopship_fleet_resolves_all_five_roles() {
         let fleet = parse_named_fleet(STOPSHIP_TOML).expect("parse");
-        assert_eq!(fleet.name, "v0868-stopship");
+        assert_eq!(fleet.name, "stopship");
         fleet.validate_stopship_roles().expect("all roles");
         assert_eq!(fleet.resolve("scout").unwrap(), "scout");
         assert_eq!(fleet.resolve("implementer").unwrap(), "builder");
@@ -212,7 +212,7 @@ release_lead = "manager"
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("..");
-        let fleet = load_named_fleet("v0868-stopship", &[root]).expect("load workspace fleet");
+        let fleet = load_named_fleet("stopship", &[root]).expect("load workspace fleet");
         fleet.validate_stopship_roles().unwrap();
     }
 }

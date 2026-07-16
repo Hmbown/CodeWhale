@@ -29,8 +29,8 @@ else
   source_identity="${source_sha}"
 fi
 
-cli_version="$(${src_dir}/codewhale --version)"
-tui_version="$(${src_dir}/codewhale-tui --version)"
+cli_version="$("${src_dir}/codewhale" --version)"
+tui_version="$("${src_dir}/codewhale-tui" --version)"
 short_sha="${source_sha:0:12}"
 if [[ "${cli_version}" != *"${short_sha}"* || "${tui_version}" != *"${short_sha}"* ]]; then
   echo "ERROR: release binaries do not embed current HEAD ${short_sha}" >&2

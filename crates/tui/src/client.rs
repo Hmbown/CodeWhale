@@ -21,6 +21,7 @@ use codewhale_config::catalog::{
     ProviderCatalogCache, ProviderCatalogDelta, base_url_fingerprint, now_unix,
 };
 use codewhale_config::route::ReadyRouteCandidate;
+use codewhale_config::{auth_mode_disables_api_key, is_upstream_auth_header};
 
 use crate::config::{ApiProvider, Config, RetryPolicy, wire_model_for_provider_route};
 use crate::llm_client::{
@@ -734,6 +735,8 @@ impl DeepSeekClient {
         let retry = config.retry_policy();
         let stream_idle_timeout = Duration::from_secs(config.stream_chunk_timeout_secs());
         let http_headers = config.http_headers();
+        let auth_disabled =
+            auth_mode_disables_api_key(config.auth_mode_for_provider(api_provider).as_deref());
         let insecure_skip_tls_verify = config.insecure_skip_tls_verify();
         let path_suffix = config
             .provider_config_for(api_provider)
@@ -778,8 +781,13 @@ impl DeepSeekClient {
             ));
         }
 
-        let http_client =
-            Self::build_http_client(&api_key, &http_headers, api_provider, &base_url)?;
+        let http_client = Self::build_http_client_with_auth_mode(
+            &api_key,
+            &http_headers,
+            api_provider,
+            &base_url,
+            auth_disabled,
+        )?;
 
         Ok(Self {
             http_client,
@@ -797,13 +805,36 @@ impl DeepSeekClient {
         })
     }
 
+    #[cfg(test)]
     fn build_http_client(
         api_key: &str,
         extra_headers: &HashMap<String, String>,
         api_provider: ApiProvider,
         base_url: &str,
     ) -> Result<reqwest::Client> {
-        let headers = build_default_headers(api_key, extra_headers, api_provider, base_url)?;
+        Self::build_http_client_with_auth_mode(
+            api_key,
+            extra_headers,
+            api_provider,
+            base_url,
+            false,
+        )
+    }
+
+    fn build_http_client_with_auth_mode(
+        api_key: &str,
+        extra_headers: &HashMap<String, String>,
+        api_provider: ApiProvider,
+        base_url: &str,
+        auth_disabled: bool,
+    ) -> Result<reqwest::Client> {
+        let headers = build_default_headers(
+            api_key,
+            extra_headers,
+            api_provider,
+            base_url,
+            auth_disabled,
+        )?;
         // The ChatGPT Codex backend sits behind Cloudflare bot protection that
         // only admits the Codex CLI's user agent; present a codex_cli_rs UA on
         // that path so the request is handled like the official client.
@@ -850,6 +881,7 @@ impl DeepSeekClient {
             extra_headers,
             ApiProvider::Deepseek,
             crate::config::DEFAULT_DEEPSEEK_BASE_URL,
+            false,
         )
     }
 
@@ -860,7 +892,17 @@ impl DeepSeekClient {
         api_provider: ApiProvider,
         base_url: &str,
     ) -> Result<HeaderMap> {
-        build_default_headers(api_key, extra_headers, api_provider, base_url)
+        build_default_headers(api_key, extra_headers, api_provider, base_url, false)
+    }
+
+    #[cfg(test)]
+    fn default_headers_for_provider_with_auth_disabled(
+        api_key: &str,
+        extra_headers: &HashMap<String, String>,
+        api_provider: ApiProvider,
+        base_url: &str,
+    ) -> Result<HeaderMap> {
+        build_default_headers(api_key, extra_headers, api_provider, base_url, true)
     }
 }
 
@@ -869,6 +911,7 @@ fn build_default_headers(
     extra_headers: &HashMap<String, String>,
     api_provider: ApiProvider,
     base_url: &str,
+    auth_disabled: bool,
 ) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
@@ -883,7 +926,9 @@ fn build_default_headers(
             HeaderValue::from_static("2023-06-01"),
         );
     }
-    let auth_header_name = if !api_key.is_empty()
+    let auth_header_name = if auth_disabled {
+        None
+    } else if !api_key.is_empty()
         && api_provider_uses_anthropic_messages(api_provider)
         && api_provider != ApiProvider::Openmodel
     {
@@ -911,6 +956,9 @@ fn build_default_headers(
         let name = name.trim();
         let value = value.trim();
         if name.is_empty() || value.is_empty() {
+            continue;
+        }
+        if auth_disabled && is_upstream_auth_header(name) {
             continue;
         }
         let header_name = HeaderName::from_bytes(name.as_bytes())?;
@@ -969,7 +1017,7 @@ pub async fn verify_provider_api_key(
         // way; accept the key optimistically (same as health_check).
         return Ok(());
     }
-    let headers = build_default_headers(api_key, &Default::default(), provider, base_url)
+    let headers = build_default_headers(api_key, &Default::default(), provider, base_url, false)
         .map_err(|err| format!("failed to build auth headers: {err:#}"))?;
     let client = crate::tls::reqwest_client_builder()
         .default_headers(headers)
@@ -2693,6 +2741,62 @@ mod tests {
         extra.insert("X-Blank".to_string(), "   ".to_string());
         let headers = DeepSeekClient::default_headers("sk-test", &extra).expect("headers");
         assert!(headers.get("x-blank").is_none());
+    }
+
+    #[test]
+    fn disabled_auth_strips_every_auth_header_dialect_at_client_sink() {
+        let mut extra = HashMap::new();
+        extra.insert(
+            "aUtHoRiZaTiOn".to_string(),
+            "Bearer configured-secret".to_string(),
+        );
+        extra.insert("X-API-Key".to_string(), "configured-x-key".to_string());
+        extra.insert("Api-Key".to_string(), "configured-key".to_string());
+        extra.insert(
+            "Proxy-Authorization".to_string(),
+            "Basic configured-proxy-secret".to_string(),
+        );
+        extra.insert(
+            "X-Auth-Token".to_string(),
+            "configured-auth-token".to_string(),
+        );
+        extra.insert(
+            "X-Access-Token".to_string(),
+            "configured-access-token".to_string(),
+        );
+        extra.insert(
+            "X-Goog-Api-Key".to_string(),
+            "configured-google-key".to_string(),
+        );
+        extra.insert("Cookie".to_string(), "session=secret".to_string());
+        extra.insert("X-Route-Metadata".to_string(), "safe".to_string());
+
+        let headers = DeepSeekClient::default_headers_for_provider_with_auth_disabled(
+            "generated-secret",
+            &extra,
+            ApiProvider::Deepseek,
+            crate::config::DEFAULT_DEEPSEEK_BASE_URL,
+        )
+        .expect("headers");
+
+        for name in [
+            "authorization",
+            "x-api-key",
+            "api-key",
+            "proxy-authorization",
+            "x-auth-token",
+            "x-access-token",
+            "x-goog-api-key",
+            "cookie",
+        ] {
+            assert!(headers.get(name).is_none(), "disabled auth leaked {name}");
+        }
+        assert_eq!(
+            headers
+                .get("x-route-metadata")
+                .and_then(|value| value.to_str().ok()),
+            Some("safe")
+        );
     }
 
     #[test]

@@ -252,7 +252,7 @@ Current Workflow node wrappers are `agent`, `branch`, `sequence`, `reduce`,
 Fleet roster profile; explicit agent fields override profile defaults.
 
 The model-facing `workflow` tool can start, run, inspect, or cancel a workflow
-from inline source or a `source_path`. When CodeWhale uses this path, ask it to
+from inline source or a `source_path`. When Codewhale uses this path, ask it to
 show the plan first if the workflow will launch multiple workers or touch files.
 
 ## 5. Natural Language Intake
@@ -267,7 +267,7 @@ them.
 ```
 
 After reviewing the generated spec, save it as `tasks.json` and run the Fleet
-commands above. For workflows, ask CodeWhale to draft a `.workflow.js` file,
+commands above. For workflows, ask Codewhale to draft a `.workflow.js` file,
 show the plan, and use the workflow tool path only after approval.
 
 This review step is intentional. It keeps provider routing, DeepSeek or other

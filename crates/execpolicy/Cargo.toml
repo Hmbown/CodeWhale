@@ -2,9 +2,10 @@
 name = "codewhale-execpolicy"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Execution policy and approval model for CodeWhale"
+description = "Execution policy and approval model for Codewhale"
 
 [dependencies]
 anyhow.workspace = true

@@ -32,7 +32,7 @@ need to set it for non-explore children. Use an exact `model` only when you know
 provider-specific id; it overrides `model_strength`.
 Child thinking is explicit too. Use `thinking: "off"` for fast explore/lookups, `thinking: "high"`
 for ordinary reasoning, `thinking: "max"` for hard design/debug/release/security work, and
-`thinking: "auto"` when you want CodeWhale to choose from the child prompt. Omit it to inherit the
+`thinking: "auto"` when you want Codewhale to choose from the child prompt. Omit it to inherit the
 parent thinking mode; explicit `thinking` overrides the default off used with `model_strength:
 "faster"`.
 

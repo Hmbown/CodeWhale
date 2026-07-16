@@ -829,7 +829,7 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     };
     if use_alt_screen {
         execute!(stdout, EnterAlternateScreen)?;
-        // Windows also suppresses CodeWhale's own verbose CLI logger while
+        // Windows also suppresses Codewhale's own verbose CLI logger while
         // the alt-screen is active. The stderr redirect above catches raw
         // writes; this prevents the known verbose source at the origin.
         #[cfg(windows)]
@@ -3982,7 +3982,7 @@ async fn run_event_loop(
                     Err(err) => {
                         tracing::warn!(error = %err, "failed to restart terminal input pump");
                         app.push_status_toast(
-                            "Terminal input stalled; recovery failed. Restart CodeWhale if keys stop responding.",
+                            "Terminal input stalled; recovery failed. Restart Codewhale if keys stop responding.",
                             StatusToastLevel::Error,
                             None,
                         );
@@ -7638,7 +7638,7 @@ fn paused_command_note(title: &str, resume: bool) -> String {
         "The user is not resuming that paused command. Answer only the new message and do not continue the paused command."
     };
     format!(
-        "\n\nCodeWhale paused custom slash command context:\n\
+        "\n\nCodewhale paused custom slash command context:\n\
 Paused custom slash command: {title}\n\
 Paused command: {title}\n\
 {instruction}"
@@ -10001,7 +10001,7 @@ fn handle_shell_job_action(app: &mut App, action: crate::tui::app::ShellJobActio
         Err(_) => {
             add_shell_job_message(
                 app,
-                "Shell tracking hit an internal error — restart CodeWhale to recover.".to_string(),
+                "Shell tracking hit an internal error — restart Codewhale to recover.".to_string(),
             );
             return;
         }
@@ -13201,7 +13201,7 @@ fn apply_loaded_session(
     )
     .map_err(|reason| {
         format!(
-            "saved session provider '{}' could not be resolved from the live config: {reason}. CodeWhale will not fall back",
+            "saved session provider '{}' could not be resolved from the live config: {reason}. Codewhale will not fall back",
             provider_identity.key
         )
     })?;
@@ -13908,7 +13908,7 @@ pub(crate) fn request_foreground_shell_background(app: &mut App) {
         }
         Err(_) => {
             app.status_message = Some(
-                "Shell tracking hit an internal error — restart CodeWhale to recover.".to_string(),
+                "Shell tracking hit an internal error — restart Codewhale to recover.".to_string(),
             );
         }
     }

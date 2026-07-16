@@ -44,7 +44,7 @@ pub struct PromptSessionContext<'a> {
     /// Optional output-verbosity mode. `concise` appends a short output
     /// discipline block; unset keeps the normal conversational prompt.
     pub verbosity: Option<&'a str>,
-    /// Restrict skill discovery to CodeWhale-owned roots plus explicit
+    /// Restrict skill discovery to Codewhale-owned roots plus explicit
     /// `skills_dir` configuration.
     pub skills_scan_codewhale_only: bool,
 }
@@ -420,7 +420,7 @@ static PROMPT_OVERRIDE_NOTICES: LazyLock<Mutex<Vec<String>>> =
 ///
 /// This hook only replaces the byte-stable base/personality prompt segment.
 /// Mode deltas, approval policy, tool taxonomy, Core Execution, and the
-/// Compaction Relay stay owned by CodeWhale's system prompt assembly.
+/// Compaction Relay stay owned by Codewhale's system prompt assembly.
 #[non_exhaustive]
 #[derive(Debug)]
 pub struct StaticPromptCtx<'a> {
@@ -433,7 +433,7 @@ pub struct StaticPromptCtx<'a> {
     pub default_layers: &'a str,
 }
 
-/// Embedder hook for replacing CodeWhale's byte-stable base/personality prompt
+/// Embedder hook for replacing Codewhale's byte-stable base/personality prompt
 /// segment.
 pub type StaticPromptComposer = dyn Fn(&StaticPromptCtx<'_>) -> String + Send + Sync + 'static;
 
@@ -500,7 +500,7 @@ pub fn set_static_prompt_composer_override(
 
 // ── Config-directory prompt overrides (issue #3638) ──
 // Bridge the embedder override hooks above to a user-facing source: an
-// optional file in the CodeWhale config directory. This lets users repurpose
+// optional file in the Codewhale config directory. This lets users repurpose
 // the TUI for non-software use cases (e.g. long-form writing) by swapping the
 // constitutional base prompt, without editing in-tree files or shipping a
 // custom embedder build.
@@ -608,7 +608,7 @@ pub fn load_config_dir_prompt_overrides(config_dir: &Path) -> Vec<&'static str> 
     applied
 }
 
-/// Resolve the CodeWhale config directory and load any prompt overrides found
+/// Resolve the Codewhale config directory and load any prompt overrides found
 /// there. Convenience wrapper around [`load_config_dir_prompt_overrides`] for
 /// startup wiring; silently does nothing when the config home cannot be
 /// resolved.
@@ -1037,7 +1037,7 @@ fn render_core_tool_group(group: &[&str], core_tools: &[&str]) -> Option<String>
 const AUTHORITY_RECAP: &str = "\
 ## Authority Recap
 
-CodeWhale's constitution governs your behavior. Ground truth underlies the
+Codewhale's constitution governs your behavior. Ground truth underlies the
 whole list: the user may override a fact, but no one may invent one. When
 guidance conflicts, the user's request this turn outranks this constitution,
 which outranks nearest-scope project law and instructions, which outrank
@@ -1247,7 +1247,7 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
 
     // 3. Skills block. #432: default discovery walks every compatible
     // workspace/global skill directory so skills installed for other AI-tool
-    // conventions show up in the catalogue. Users can opt into a CodeWhale-only
+    // conventions show up in the catalogue. Users can opt into a Codewhale-only
     // scan with `[skills] scan_codewhale_only = true`. When an explicit
     // `skills_dir` is configured, union it with the workspace view instead of
     // treating it as a fallback; the workspace view often returns Some and
@@ -1618,10 +1618,10 @@ mod tests {
         let composer: Box<StaticPromptComposer> = Box::new(|ctx| {
             assert_eq!(ctx.model_id, "deepseek-v4-pro");
             assert_eq!(ctx.personality, Personality::Calm);
-            // The 0.9.0 core is model-agnostic ("You are CodeWhale") and
+            // The 0.9.0 core is model-agnostic ("You are Codewhale") and
             // folds tone in — no per-model id line, no separate personality
             // section in default_layers.
-            assert!(ctx.default_layers.contains("You are CodeWhale"));
+            assert!(ctx.default_layers.contains("You are Codewhale"));
             assert!(
                 ctx.default_layers
                     .contains("Take the work seriously. Don't take")
@@ -1677,8 +1677,8 @@ mod tests {
     #[test]
     fn base_prompt_carries_constitutional_core() {
         for phrase in [
-            "## CodeWhale",
-            "You are CodeWhale",
+            "## Codewhale",
+            "You are Codewhale",
             "The A is already yours",
             "Let the work speak",
             "### Ground truth",
@@ -1807,7 +1807,7 @@ mod tests {
     fn compose_prompt_for_v4_model_stays_model_fact_free() {
         let prompt =
             compose_prompt_with_approval_model_and_shell(Personality::Calm, "deepseek-v4-pro");
-        assert!(prompt.contains("You are CodeWhale"));
+        assert!(prompt.contains("You are Codewhale"));
         assert!(!prompt.contains("Your V4 Characteristics"));
         assert!(!prompt.contains("one-million-token context window"));
         assert_no_unresolved_model_placeholders(&prompt);
@@ -1817,7 +1817,7 @@ mod tests {
     fn compose_prompt_for_kimi_stays_model_fact_free() {
         let prompt =
             compose_prompt_with_approval_model_and_shell(Personality::Calm, "moonshotai/kimi-k2.6");
-        assert!(prompt.contains("You are CodeWhale"));
+        assert!(prompt.contains("You are Codewhale"));
         assert!(!prompt.contains("Your V4 Characteristics"));
         assert!(!prompt.contains("one-million"));
         assert!(!prompt.contains("$0.14"));
@@ -1829,7 +1829,7 @@ mod tests {
     #[test]
     fn compose_prompt_for_openai_api_gpt_55_stays_model_fact_free() {
         let prompt = compose_prompt_with_approval_model_and_shell(Personality::Calm, "gpt-5.5");
-        assert!(prompt.contains("You are CodeWhale"));
+        assert!(prompt.contains("You are Codewhale"));
         assert!(!prompt.contains("Your V4 Characteristics"));
         assert!(!prompt.contains("1050000-token context window"));
         assert!(!prompt.contains("Models may emit *thinking tokens*"));
@@ -1841,7 +1841,7 @@ mod tests {
     fn compose_prompt_for_unknown_model_stays_model_fact_free() {
         let prompt =
             compose_prompt_with_approval_model_and_shell(Personality::Calm, "llama3.3:70b");
-        assert!(prompt.contains("You are CodeWhale"));
+        assert!(prompt.contains("You are Codewhale"));
         assert!(!prompt.contains("Your V4 Characteristics"));
         assert!(!prompt.contains("one-million"));
         assert!(!prompt.contains("$0.14"));
@@ -1874,8 +1874,8 @@ mod tests {
         let kimi =
             compose_prompt_with_approval_model_and_shell(Personality::Calm, "moonshotai/kimi-k2.6");
         assert!(
-            flash.contains("You are CodeWhale"),
-            "0.9.0 preamble must open with the model-agnostic CodeWhale stance"
+            flash.contains("You are Codewhale"),
+            "0.9.0 preamble must open with the model-agnostic Codewhale stance"
         );
         assert!(
             !flash.contains("You are deepseek-v4-flash")
@@ -1916,7 +1916,7 @@ mod tests {
         // system prompt, scoped under each mode sub-heading.
         assert!(!prompt.contains("## Core Tool Taxonomy"));
         assert!(!prompt.contains("## Toolbox"));
-        assert!(prompt.contains("You are CodeWhale"));
+        assert!(prompt.contains("You are Codewhale"));
     }
 
     #[test]
@@ -1971,7 +1971,7 @@ mod tests {
             "full system prompt must contain the authority recap"
         );
         assert!(
-            text.contains("CodeWhale's constitution governs your behavior"),
+            text.contains("Codewhale's constitution governs your behavior"),
             "authority recap must reference the Constitution"
         );
         assert!(
@@ -2060,8 +2060,8 @@ mod tests {
             prompt.contains("Take the work seriously. Don't take"),
             "Preamble should carry tone guidance (take the work, not yourself, seriously)"
         );
-        // Verify the preamble still carries the CodeWhale identity.
-        assert!(prompt.contains("You are CodeWhale"));
+        // Verify the preamble still carries the Codewhale identity.
+        assert!(prompt.contains("You are Codewhale"));
         assert!(prompt.contains("Let the work speak"));
     }
 
@@ -2184,7 +2184,7 @@ mod tests {
             ),
         );
         let preamble_marker = "## 语言要求";
-        let base_marker = "You are CodeWhale";
+        let base_marker = "You are Codewhale";
         let preamble_pos = text
             .find(preamble_marker)
             .expect("zh-Hans preamble should be present");
@@ -2467,7 +2467,7 @@ mod tests {
             crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", codewhale_home.as_os_str());
 
         let constitution = codewhale_config::UserConstitution {
-            about: Some("Maintains CodeWhale release lanes.".to_string()),
+            about: Some("Maintains Codewhale release lanes.".to_string()),
             working_style: vec!["Prefer live verification before claims.".to_string()],
             priorities: vec!["Keep release gates green.".to_string()],
             autonomy_preference: codewhale_config::AutonomyPreference::Balanced,
@@ -2504,7 +2504,7 @@ mod tests {
             "user constitution should be its own layer after the base/project context and before volatile environment data"
         );
         assert!(prompt.contains("source=\"user-global\""));
-        assert!(prompt.contains("Maintains CodeWhale release lanes."));
+        assert!(prompt.contains("Maintains Codewhale release lanes."));
         assert!(prompt.contains("Prefer live verification before claims."));
         assert!(
             !prompt.contains(&codewhale_home.display().to_string()),
@@ -2799,7 +2799,7 @@ mod tests {
     fn compose_prompt_includes_all_layers() {
         let prompt = compose_prompt(Personality::Calm);
         // Base layer — balanced Constitution; procedural recipes stay out.
-        assert!(prompt.contains("## CodeWhale"));
+        assert!(prompt.contains("## Codewhale"));
         assert!(prompt.contains("### Whose word wins"));
         assert!(!prompt.contains("## STATUTES (Tier 2)"));
         assert!(!prompt.contains("## EVIDENCE (Tier 6)"));
@@ -2816,10 +2816,10 @@ mod tests {
     #[test]
     fn constitution_md_carries_required_structure() {
         let md = BASE_PROMPT;
-        assert!(md.contains("## CodeWhale"), "missing title");
+        assert!(md.contains("## Codewhale"), "missing title");
         let mut cursor = 0usize;
         for needle in [
-            "## CodeWhale",
+            "## Codewhale",
             "### Ground truth",
             "### Verify before you claim",
             "### Do what's asked",
@@ -2892,7 +2892,7 @@ mod tests {
     #[test]
     fn compose_prompt_deterministic_order() {
         let prompt = compose_prompt(Personality::Calm);
-        let base_pos = prompt.find("## CodeWhale").unwrap();
+        let base_pos = prompt.find("## Codewhale").unwrap();
         let article_pos = prompt.find("### Ground truth").unwrap();
 
         assert!(base_pos < article_pos);
@@ -2908,7 +2908,7 @@ mod tests {
         assert!(!prompt.contains("Mode: Plan"));
         assert!(!prompt.contains("Approval Policy:"));
         // Base prompt carries the 0.9.0 compact Constitution.
-        assert!(prompt.contains("You are CodeWhale"));
+        assert!(prompt.contains("You are Codewhale"));
         assert!(prompt.contains("Take the work seriously. Don't take"));
     }
 
@@ -2937,7 +2937,7 @@ mod tests {
                 "{name} mode prompt should remain compact, got {estimated_tokens} estimated tokens"
             );
             for forbidden in [
-                "## CodeWhale",
+                "## Codewhale",
                 "## STATUTES (Tier 2)",
                 "## REGULATIONS (Tier 3)",
                 "## EVIDENCE (Tier 6)",
@@ -2987,7 +2987,7 @@ mod tests {
         assert!(!prompt.contains("Mode: Agent"));
         assert!(!prompt.contains("Approval Policy:"));
         // The compact Constitutional preamble is still present.
-        assert!(prompt.contains("You are CodeWhale"));
+        assert!(prompt.contains("You are Codewhale"));
     }
 
     #[test]
@@ -3002,7 +3002,7 @@ mod tests {
             "personality enum is a no-op — both produce identical output"
         );
         assert!(calm.contains("Take the work seriously. Don't take"));
-        assert!(calm.contains("You are CodeWhale"));
+        assert!(calm.contains("You are Codewhale"));
     }
 
     #[test]
