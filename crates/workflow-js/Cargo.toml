@@ -27,5 +27,11 @@ rquickjs = { workspace = true, features = ["bindgen"] }
 [target.'cfg(target_os = "netbsd")'.dependencies]
 rquickjs = { workspace = true, features = ["bindgen"] }
 
+# rquickjs does not ship pre-generated bindings for OpenHarmony/OpenHarmony.
+# Generate them at build time so the crate compiles there instead of trying
+# to include a nonexistent bindings file.
+[target.'cfg(target_env = "ohos")'.dependencies]
+rquickjs = { workspace = true, features = ["bindgen"] }
+
 [dev-dependencies]
 serde_json.workspace = true
