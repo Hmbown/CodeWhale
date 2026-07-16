@@ -10,7 +10,7 @@ use crate::config::{ApiProvider, Config, DEFAULT_NVIDIA_NIM_BASE_URL, ProviderId
 pub(crate) struct ResolvedRuntimeRoute {
     pub(crate) identity: ProviderIdentity,
     pub(crate) candidate: ReadyRouteCandidate,
-    pub(crate) config: Config,
+    pub(crate) config: Box<Config>,
     pub(crate) model: String,
     preflighted_client: Option<DeepSeekClient>,
 }
@@ -78,7 +78,7 @@ impl ResolvedRuntimeRoute {
         Ok(ValidatedRuntimeRoute {
             identity: self.identity,
             candidate: self.candidate,
-            config: Box::new(self.config),
+            config: self.config,
             model: self.model,
             client,
         })
@@ -96,7 +96,7 @@ impl ValidatedRuntimeRoute {
         ResolvedRuntimeRoute {
             identity: self.identity,
             candidate: self.candidate,
-            config: *self.config,
+            config: self.config,
             model: self.model,
             preflighted_client: Some(self.client),
         }
@@ -191,7 +191,7 @@ pub(crate) fn resolve_runtime_route_for_identity(
     Ok(ResolvedRuntimeRoute {
         identity,
         candidate,
-        config: route_config,
+        config: Box::new(route_config),
         model,
         preflighted_client: None,
     })
@@ -267,6 +267,18 @@ fn root_base_url_belongs_to_non_deepseek_provider(base_url: &str) -> bool {
 mod tests {
     use super::*;
     use crate::config::{DEFAULT_TEXT_MODEL, DEFAULT_ZAI_MODEL, ProviderConfig, ProvidersConfig};
+
+    #[test]
+    fn resolved_runtime_route_keeps_large_config_off_async_stacks() {
+        assert!(
+            std::mem::size_of::<ResolvedRuntimeRoute>() <= 1024,
+            "resolved routes cross several async boundaries and must keep Config boxed"
+        );
+        assert!(
+            std::mem::size_of::<ResolvedRuntimeRoute>() < std::mem::size_of::<Config>(),
+            "resolved routes must remain smaller than their scoped Config payload"
+        );
+    }
 
     #[test]
     fn codex_route_uses_fresh_account_context_and_drops_api_only_limits() {

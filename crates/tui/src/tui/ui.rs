@@ -8719,7 +8719,7 @@ async fn apply_provider_fallback_switch(
         ));
         return;
     }
-    *config = next_config;
+    *config = *next_config;
     app.set_provider_identity_record(target_identity);
     app.billing_presentation = crate::route_billing::for_route(config, target);
 
@@ -13209,7 +13209,7 @@ fn apply_loaded_session(
     // workspace fields. A failed session switch must leave the current session
     // wholly intact.
     app.restore_work_state(session.work_state.as_ref())?;
-    *config = restored_route.config;
+    *config = *restored_route.config;
     let (messages, recovered_draft) = recover_interrupted_user_tail(&session.messages);
     app.api_messages = messages;
     app.clear_history();

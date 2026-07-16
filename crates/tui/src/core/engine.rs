@@ -909,7 +909,7 @@ impl Engine {
         let provider_id = route.identity.exact_id;
         let model = route.model;
         let limits = crate::route_budget::known_route_limits(route.candidate.limits);
-        let api_config = route.config;
+        let api_config = *route.config;
         let concrete_client = preflighted_client
             .map(Ok)
             .unwrap_or_else(|| DeepSeekClient::from_candidate(&api_config, &route.candidate));
