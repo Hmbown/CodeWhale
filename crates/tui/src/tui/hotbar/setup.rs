@@ -649,8 +649,14 @@ impl HotbarSetupView {
                 .fg(palette::TEXT_MUTED)
                 .add_modifier(Modifier::BOLD),
         ))];
-        for (idx, row) in rows.iter().enumerate() {
-            lines.push(self.action_row_line(source, idx, row, area.width));
+        // Keep the focused row inside the rendered viewport. The list used to
+        // render only its first rows, so keyboard selection could advance past
+        // `/export` while the highlight stayed behind (#4418).
+        let visible_rows = usize::from(area.height.saturating_sub(1));
+        let visible_range =
+            action_list_visible_range(self.selected_action_idx(source), rows.len(), visible_rows);
+        for idx in visible_range {
+            lines.push(self.action_row_line(source, idx, rows[idx], area.width));
         }
         Paragraph::new(lines)
             .style(Style::default().fg(palette::TEXT_PRIMARY))
@@ -930,6 +936,20 @@ fn wrap_index(current: usize, len: usize, delta: isize) -> usize {
     usize::try_from((current + delta).rem_euclid(len)).expect("wrapped index fits")
 }
 
+fn action_list_visible_range(
+    selected_idx: usize,
+    row_count: usize,
+    visible_rows: usize,
+) -> std::ops::Range<usize> {
+    if row_count == 0 || visible_rows == 0 {
+        return 0..0;
+    }
+    let selected_idx = selected_idx.min(row_count.saturating_sub(1));
+    let start = selected_idx.saturating_add(1).saturating_sub(visible_rows);
+    let end = start.saturating_add(visible_rows).min(row_count);
+    start..end
+}
+
 fn action_matches_query(row: &HotbarSetupActionRow, locale: Locale, query: &str) -> bool {
     let status = row.status_label(locale);
     [
@@ -1031,8 +1051,8 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
-    fn rendered_text(view: &HotbarSetupView) -> String {
-        let area = Rect::new(0, 0, 140, 36);
+    fn rendered_text_at(view: &HotbarSetupView, width: u16, height: u16) -> String {
+        let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
         view.render(area, &mut buf);
 
@@ -1044,6 +1064,10 @@ mod tests {
             out.push('\n');
         }
         out
+    }
+
+    fn rendered_text(view: &HotbarSetupView) -> String {
+        rendered_text_at(view, 140, 36)
     }
 
     #[test]
@@ -1433,6 +1457,26 @@ mod tests {
         assert_eq!(view.selected_slot(), 8);
         view.handle_key(key(KeyCode::Left));
         assert_eq!(view.selected_slot(), 7);
+    }
+
+    #[test]
+    fn down_past_export_keeps_the_selected_action_visible() {
+        let app = test_app();
+        let mut view = HotbarSetupView::new(&app, &Config::default());
+        assert!(view.select_action_by_id("slash.export"));
+
+        view.handle_key(key(KeyCode::Down));
+        let selected = view.selected_action().expect("action after /export");
+        assert_ne!(selected.metadata.id, "slash.export");
+
+        let rendered = rendered_text_at(&view, 80, 24);
+        assert!(
+            rendered.lines().any(|line| {
+                line.contains('>') && line.contains(&selected.metadata.display_name)
+            }),
+            "focused action {} must remain visible after moving past /export:\n{rendered}",
+            selected.metadata.id
+        );
     }
 
     #[test]

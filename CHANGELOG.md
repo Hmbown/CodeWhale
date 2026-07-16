@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (#1481 by @seanthefuturegorilla; implementation harvested from PR #773 by
   @zhangweiii and PR #1050 by @sternelee).
 
+### Fixed
+
+- Keep the Hotbar Setup action list synchronized with keyboard focus when the
+  selection moves beyond the visible rows, including Down past `/export`
+  (#4418).
+
 ## [0.9.0] - 2026-07-16
 
 Codewhale v0.9.0 replaces the default terminal shell with the underwater
