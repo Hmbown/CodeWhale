@@ -169,6 +169,8 @@ pub enum AutomationSchedule {
     Hourly {
         interval_hours: u32,
         byday: Option<Vec<Weekday>>,
+        anchor_hour: Option<u32>,
+        anchor_minute: Option<u32>,
     },
     Weekly {
         byday: Vec<Weekday>,
@@ -201,9 +203,14 @@ impl AutomationSchedule {
         match freq {
             AutomationFrequency::Hourly => {
                 for key in parts.keys() {
-                    if key != "FREQ" && key != "INTERVAL" && key != "BYDAY" {
+                    if key != "FREQ"
+                        && key != "INTERVAL"
+                        && key != "BYDAY"
+                        && key != "BYHOUR"
+                        && key != "BYMINUTE"
+                    {
                         bail!(
-                            "Unsupported RRULE field '{key}' for HOURLY. Allowed: FREQ,INTERVAL,BYDAY"
+                            "Unsupported RRULE field '{key}' for HOURLY. Allowed: FREQ,INTERVAL,BYDAY,BYHOUR,BYMINUTE"
                         );
                     }
                 }
@@ -220,9 +227,27 @@ impl AutomationSchedule {
                     .get("BYDAY")
                     .map(|value| parse_byday(value))
                     .transpose()?;
+                let anchor_hour = parts
+                    .get("BYHOUR")
+                    .map(|value| value.parse::<u32>())
+                    .transpose()
+                    .context("Failed to parse BYHOUR")?;
+                let anchor_minute = parts
+                    .get("BYMINUTE")
+                    .map(|value| value.parse::<u32>())
+                    .transpose()
+                    .context("Failed to parse BYMINUTE")?;
+                if anchor_hour.is_some_and(|hour| hour > 23) {
+                    bail!("BYHOUR must be between 0 and 23");
+                }
+                if anchor_minute.is_some_and(|minute| minute > 59) {
+                    bail!("BYMINUTE must be between 0 and 59");
+                }
                 Ok(Self::Hourly {
                     interval_hours,
                     byday,
+                    anchor_hour,
+                    anchor_minute,
                 })
             }
             AutomationFrequency::Weekly => {
@@ -267,16 +292,42 @@ impl AutomationSchedule {
         }
     }
 
-    pub fn next_after(&self, after: DateTime<Utc>) -> Result<DateTime<Utc>> {
+    fn next_after_with_anchor(
+        &self,
+        after: DateTime<Utc>,
+        anchor_reference: DateTime<Utc>,
+    ) -> Result<DateTime<Utc>> {
         let local_after = after.with_timezone(&Local);
         match self {
             Self::Hourly {
                 interval_hours,
                 byday,
+                anchor_hour,
+                anchor_minute,
             } => {
-                let mut candidate = local_after + Duration::hours(i64::from(*interval_hours))
-                    - Duration::seconds(i64::from(local_after.second()))
-                    - Duration::nanoseconds(i64::from(local_after.nanosecond()));
+                let mut candidate = if anchor_hour.is_some() || anchor_minute.is_some() {
+                    let local_anchor_reference = anchor_reference.with_timezone(&Local);
+                    let hour = anchor_hour.unwrap_or(local_anchor_reference.hour());
+                    let minute = anchor_minute.unwrap_or(0);
+                    let anchor_naive = local_anchor_reference
+                        .date_naive()
+                        .and_hms_opt(hour, minute, 0)
+                        .ok_or_else(|| anyhow::anyhow!("Unable to construct HOURLY anchor"))?;
+                    let anchor = resolve_local_datetime(anchor_naive)
+                        .ok_or_else(|| anyhow::anyhow!("Unable to resolve HOURLY anchor"))?;
+                    let interval_seconds = i64::from(*interval_hours) * 60 * 60;
+                    let elapsed_seconds = local_after.signed_duration_since(anchor).num_seconds();
+                    let steps = if elapsed_seconds < 0 {
+                        0
+                    } else {
+                        elapsed_seconds / interval_seconds + 1
+                    };
+                    anchor + Duration::seconds(steps * interval_seconds)
+                } else {
+                    local_after + Duration::hours(i64::from(*interval_hours))
+                        - Duration::seconds(i64::from(local_after.second()))
+                        - Duration::nanoseconds(i64::from(local_after.nanosecond()))
+                };
 
                 if let Some(days) = byday {
                     for _ in 0..(24 * 21) {
@@ -404,7 +455,7 @@ impl AutomationManager {
         let now = Utc::now();
         let status = req.status.unwrap_or(AutomationStatus::Active);
         let next_run_at = if matches!(status, AutomationStatus::Active) {
-            Some(schedule.next_after(now)?)
+            Some(schedule.next_after_with_anchor(now, now)?)
         } else {
             None
         };
@@ -503,7 +554,8 @@ impl AutomationManager {
             existing.rrule = normalized;
             if matches!(existing.status, AutomationStatus::Active) {
                 let schedule = AutomationSchedule::parse_rrule(&existing.rrule)?;
-                existing.next_run_at = Some(schedule.next_after(Utc::now())?);
+                existing.next_run_at =
+                    Some(schedule.next_after_with_anchor(Utc::now(), existing.created_at)?);
             }
         }
         if let Some(cwds) = req.cwds {
@@ -527,7 +579,8 @@ impl AutomationManager {
                 existing.next_run_at = None;
             } else {
                 let schedule = AutomationSchedule::parse_rrule(&existing.rrule)?;
-                existing.next_run_at = Some(schedule.next_after(Utc::now())?);
+                existing.next_run_at =
+                    Some(schedule.next_after_with_anchor(Utc::now(), existing.created_at)?);
             }
         }
 
@@ -661,7 +714,8 @@ impl AutomationManager {
 
             let schedule = AutomationSchedule::parse_rrule(&automation.rrule)?;
             let Some(due_at) = automation.next_run_at else {
-                automation.next_run_at = Some(schedule.next_after(now)?);
+                automation.next_run_at =
+                    Some(schedule.next_after_with_anchor(now, automation.created_at)?);
                 automation.updated_at = now;
                 self.save_automation(&automation)?;
                 continue;
@@ -678,7 +732,8 @@ impl AutomationManager {
                 .any(|run| run.scheduled_for == due_at);
 
             if existing_for_slot {
-                automation.next_run_at = Some(schedule.next_after(due_at)?);
+                automation.next_run_at =
+                    Some(schedule.next_after_with_anchor(due_at, automation.created_at)?);
                 automation.updated_at = now;
                 self.save_automation(&automation)?;
                 continue;
@@ -702,7 +757,8 @@ impl AutomationManager {
         };
         let schedule = AutomationSchedule::parse_rrule(&automation.rrule)?;
         automation.updated_at = now;
-        automation.next_run_at = Some(schedule.next_after(run.scheduled_for)?);
+        automation.next_run_at =
+            Some(schedule.next_after_with_anchor(run.scheduled_for, automation.created_at)?);
         self.save_automation(&automation)
     }
 
@@ -1220,12 +1276,51 @@ mod tests {
             AutomationSchedule::Hourly {
                 interval_hours,
                 byday,
+                ..
             } => {
                 assert_eq!(interval_hours, 2);
                 assert_eq!(byday.expect("byday").len(), 2);
             }
             _ => panic!("expected hourly"),
         }
+    }
+
+    #[test]
+    fn hourly_rrule_uses_clock_time_as_a_stable_anchor() {
+        let schedule =
+            AutomationSchedule::parse_rrule("FREQ=HOURLY;INTERVAL=2;BYHOUR=8;BYMINUTE=30")
+                .expect("parse anchored hourly schedule");
+        let reference = Utc::now();
+        let local_reference = reference.with_timezone(&Local);
+        let anchor = resolve_local_datetime(
+            local_reference
+                .date_naive()
+                .and_hms_opt(8, 30, 0)
+                .expect("valid anchor time"),
+        )
+        .expect("resolvable local anchor");
+        let after = (anchor + Duration::minutes(61)).with_timezone(&Utc);
+
+        let next = schedule
+            .next_after_with_anchor(after, reference)
+            .expect("next anchored run");
+
+        assert_eq!(next, (anchor + Duration::hours(2)).with_timezone(&Utc));
+    }
+
+    #[test]
+    fn hourly_rrule_accepts_minute_only_anchor() {
+        let schedule = AutomationSchedule::parse_rrule("FREQ=HOURLY;INTERVAL=1;BYMINUTE=15")
+            .expect("parse minute anchor");
+
+        assert!(matches!(
+            schedule,
+            AutomationSchedule::Hourly {
+                anchor_hour: None,
+                anchor_minute: Some(15),
+                ..
+            }
+        ));
     }
 
     #[test]
