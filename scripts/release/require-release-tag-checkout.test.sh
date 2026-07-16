@@ -8,6 +8,10 @@ trap 'rm -rf "${tmp_dir}"' EXIT
 remote="${tmp_dir}/remote.git"
 checkout="${tmp_dir}/checkout"
 git init --bare --quiet "${remote}"
+# GitHub's versions job intentionally uses a depth-1 checkout. A local clone
+# of that checkout remains shallow, so this disposable remote must accept the
+# fixture's tag without requiring history that the test never inspects.
+git -C "${remote}" config receive.shallowUpdate true
 git clone --quiet --no-hardlinks "${repo_root}" "${checkout}"
 git -C "${checkout}" remote set-url origin "${remote}"
 git -C "${checkout}" config user.name "Release Test"
