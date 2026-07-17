@@ -40,6 +40,43 @@ pub enum WireFormat {
     AnthropicMessages,
 }
 
+/// How a provider selects its request wire format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WirePolicy {
+    /// Every model served by the provider uses the same wire format.
+    Fixed(WireFormat),
+    /// The provider catalog selects a wire format per model/endpoint.
+    ModelAware,
+}
+
+impl WirePolicy {
+    /// Return the fixed format, or `None` for model-aware providers.
+    #[must_use]
+    pub const fn fixed(self) -> Option<WireFormat> {
+        match self {
+            Self::Fixed(format) => Some(format),
+            Self::ModelAware => None,
+        }
+    }
+
+    /// Resolve a concrete format from an offering endpoint key.
+    #[must_use]
+    pub fn resolve(self, endpoint_key: &str) -> Option<WireFormat> {
+        if let Self::Fixed(format) = self {
+            return Some(format);
+        }
+
+        match endpoint_key.trim().to_ascii_lowercase().as_str() {
+            "chat" | "chat_completions" | "chat-completions" => Some(WireFormat::ChatCompletions),
+            "responses" => Some(WireFormat::Responses),
+            "messages" | "anthropic_messages" | "anthropic-messages" => {
+                Some(WireFormat::AnthropicMessages)
+            }
+            _ => None,
+        }
+    }
+}
+
 /// Static metadata for a built-in model provider.
 pub trait Provider: Send + Sync {
     /// Provider enum variant represented by this entry.
@@ -70,9 +107,9 @@ pub trait Provider: Send + Sync {
         &[]
     }
 
-    /// Wire format used by the provider.
-    fn wire(&self) -> WireFormat {
-        WireFormat::ChatCompletions
+    /// Policy used to select the request wire format.
+    fn wire_policy(&self) -> WirePolicy {
+        WirePolicy::Fixed(WireFormat::ChatCompletions)
     }
 }
 
@@ -175,8 +212,8 @@ impl Provider for DeepseekAnthropic {
         &["deepseek_anthropic", "deepseek-claude", "deepseek_claude"]
     }
 
-    fn wire(&self) -> WireFormat {
-        WireFormat::AnthropicMessages
+    fn wire_policy(&self) -> WirePolicy {
+        WirePolicy::Fixed(WireFormat::AnthropicMessages)
     }
 }
 provider!(
@@ -463,8 +500,8 @@ impl Provider for OpenaiCodex {
         ]
     }
 
-    fn wire(&self) -> WireFormat {
-        WireFormat::Responses
+    fn wire_policy(&self) -> WirePolicy {
+        WirePolicy::Fixed(WireFormat::Responses)
     }
 }
 
@@ -500,8 +537,8 @@ impl Provider for Anthropic {
         "anthropic"
     }
 
-    fn wire(&self) -> WireFormat {
-        WireFormat::AnthropicMessages
+    fn wire_policy(&self) -> WirePolicy {
+        WirePolicy::Fixed(WireFormat::AnthropicMessages)
     }
 }
 
@@ -541,8 +578,8 @@ impl Provider for Openmodel {
         &["open-model", "open_model"]
     }
 
-    fn wire(&self) -> WireFormat {
-        WireFormat::AnthropicMessages
+    fn wire_policy(&self) -> WirePolicy {
+        WirePolicy::Fixed(WireFormat::AnthropicMessages)
     }
 }
 
@@ -622,8 +659,8 @@ impl Provider for MinimaxAnthropic {
         ]
     }
 
-    fn wire(&self) -> WireFormat {
-        WireFormat::AnthropicMessages
+    fn wire_policy(&self) -> WirePolicy {
+        WirePolicy::Fixed(WireFormat::AnthropicMessages)
     }
 }
 
@@ -754,8 +791,8 @@ impl Provider for Custom {
         "custom"
     }
 
-    fn wire(&self) -> WireFormat {
-        WireFormat::ChatCompletions
+    fn wire_policy(&self) -> WirePolicy {
+        WirePolicy::Fixed(WireFormat::ChatCompletions)
     }
 }
 
@@ -898,6 +935,26 @@ pub fn provider_for_kind(kind: ProviderKind) -> &'static dyn Provider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_aware_wire_policy_resolves_only_supported_endpoint_keys() {
+        let policy = WirePolicy::ModelAware;
+        assert_eq!(policy.resolve("chat"), Some(WireFormat::ChatCompletions));
+        assert_eq!(policy.resolve("responses"), Some(WireFormat::Responses));
+        assert_eq!(
+            policy.resolve("messages"),
+            Some(WireFormat::AnthropicMessages)
+        );
+        assert_eq!(policy.resolve("models/gemini-3.1-pro"), None);
+        assert_eq!(policy.resolve(""), None);
+    }
+
+    #[test]
+    fn fixed_wire_policy_ignores_catalog_endpoint_keys() {
+        let policy = WirePolicy::Fixed(WireFormat::Responses);
+        assert_eq!(policy.resolve("chat"), Some(WireFormat::Responses));
+        assert_eq!(policy.resolve("unknown"), Some(WireFormat::Responses));
+    }
 
     #[test]
     fn display_order_is_alphabetical_by_display_name() {

@@ -172,13 +172,20 @@ impl RouteResolver {
             self.scope_selector(provider_kind, &provider_id, &logical_model, class)?
         };
 
+        let protocol = descriptor
+            .protocol_for_endpoint(&endpoint_key)
+            .ok_or_else(|| RouteError::UnsupportedModelProtocol {
+                provider: provider_id.clone(),
+                model: wire_model_id.as_str().to_string(),
+                endpoint_key: endpoint_key.clone(),
+            })?;
         let endpoint = ResolvedEndpoint {
             base_url: req
                 .base_url_override
                 .clone()
                 .unwrap_or_else(|| descriptor.default_base_url().to_string()),
             endpoint_key,
-            protocol: descriptor.protocol(),
+            protocol,
         };
 
         // Advisory validation (#1519): a non-loopback `http://` endpoint sends
@@ -200,7 +207,7 @@ impl RouteResolver {
             wire_model_id,
             endpoint,
             ResolvedAuthSource::Missing,
-            descriptor.protocol(),
+            protocol,
             limits,
             // #3085: honest pricing projected from the matched offering (the
             // catalog layer maps sourced cost → SKU); `UnknownOrStale` whenever

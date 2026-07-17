@@ -145,8 +145,10 @@ fn descriptor_for_every_kind_has_nonempty_transport_facts() {
             !d.default_wire_model().as_str().is_empty(),
             "{kind:?} default_wire_model empty"
         );
-        // protocol() always yields a RequestProtocol; calling it must not panic.
-        let _: RequestProtocol = d.protocol();
+        // Every currently shipped provider has a concrete default protocol.
+        let _: RequestProtocol = d
+            .protocol_for_endpoint("chat")
+            .expect("current provider protocol");
     }
 }
 
@@ -155,9 +157,9 @@ fn descriptor_protocol_matches_provider_wire() {
     for kind in ProviderKind::ALL {
         let d = ProviderDescriptor::for_kind(kind);
         assert_eq!(
-            d.protocol(),
-            kind.provider().wire(),
-            "{kind:?} protocol must equal provider().wire()"
+            d.protocol_for_endpoint("chat"),
+            kind.provider().wire_policy().fixed(),
+            "{kind:?} protocol must equal the provider wire policy"
         );
         let expected = match kind {
             ProviderKind::OpenaiCodex => RequestProtocol::Responses,
@@ -167,7 +169,11 @@ fn descriptor_protocol_matches_provider_wire() {
             | ProviderKind::Openmodel => RequestProtocol::AnthropicMessages,
             _ => RequestProtocol::ChatCompletions,
         };
-        assert_eq!(d.protocol(), expected, "{kind:?} protocol mismatch");
+        assert_eq!(
+            d.protocol_for_endpoint("chat"),
+            Some(expected),
+            "{kind:?} protocol mismatch"
+        );
     }
 }
 
@@ -829,7 +835,9 @@ fn resolver_protocol_matches_descriptor_for_every_provider() {
             .unwrap_or_else(|e| panic!("{kind:?} should resolve its own default: {e}"));
         assert_eq!(
             out.protocol,
-            ProviderDescriptor::for_kind(kind).protocol(),
+            ProviderDescriptor::for_kind(kind)
+                .protocol_for_endpoint(&out.endpoint.endpoint_key)
+                .expect("resolved endpoint protocol"),
             "{kind:?} candidate protocol must match descriptor"
         );
         assert_eq!(

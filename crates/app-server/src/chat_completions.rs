@@ -19,7 +19,7 @@ use codewhale_config::{
     ConfigToml, ProviderKind, auth_mode_disables_api_key, is_upstream_auth_header,
     provider::WireFormat,
     provider_base_url_is_official, provider_preserves_custom_base_url_model,
-    route::{LogicalModelRef, RouteError, RouteRequest, RouteResolver},
+    route::{LogicalModelRef, ProviderId, RouteError, RouteRequest, RouteResolver},
 };
 use serde_json::Value;
 
@@ -143,7 +143,13 @@ fn resolve_endpoint(
 
     let insecure_skip_tls_verify = provider_cfg.insecure_skip_tls_verify.unwrap_or(false);
 
-    let wire_format = provider_meta.wire();
+    let wire_format = provider_meta.wire_policy().fixed().ok_or_else(|| {
+        RouteError::UnsupportedModelProtocol {
+            provider: ProviderId::from(provider_kind.as_str()),
+            model: model.clone(),
+            endpoint_key: "unresolved".to_string(),
+        }
+    })?;
 
     Ok(ResolvedModelEndpoint {
         provider: provider_kind,

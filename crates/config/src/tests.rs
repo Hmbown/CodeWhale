@@ -3648,7 +3648,10 @@ fn deepseek_anthropic_route_defaults_to_anthropic_endpoint() {
         DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL
     );
     assert_eq!(provider.env_vars(), &["DEEPSEEK_API_KEY"]);
-    assert_eq!(provider.wire(), provider::WireFormat::AnthropicMessages);
+    assert_eq!(
+        provider.wire_policy().fixed(),
+        Some(provider::WireFormat::AnthropicMessages)
+    );
 
     let config = ConfigToml {
         provider: ProviderKind::DeepseekAnthropic,
@@ -3691,7 +3694,10 @@ fn openmodel_route_defaults_to_messages_endpoint() {
     assert_eq!(provider.default_model(), DEFAULT_OPENMODEL_MODEL);
     assert_eq!(provider.default_base_url(), DEFAULT_OPENMODEL_BASE_URL);
     assert_eq!(provider.env_vars(), &["OPENMODEL_API_KEY"]);
-    assert_eq!(provider.wire(), provider::WireFormat::AnthropicMessages);
+    assert_eq!(
+        provider.wire_policy().fixed(),
+        Some(provider::WireFormat::AnthropicMessages)
+    );
 
     let config = ConfigToml {
         provider: ProviderKind::Openmodel,
@@ -3765,7 +3771,10 @@ fn opencode_go_resolves_current_chat_completions_route() {
     assert_eq!(metadata.default_base_url(), DEFAULT_OPENCODE_GO_BASE_URL);
     assert_eq!(metadata.default_model(), DEFAULT_OPENCODE_GO_MODEL);
     assert_eq!(metadata.env_vars(), &["OPENCODE_GO_API_KEY"]);
-    assert_eq!(metadata.wire(), provider::WireFormat::ChatCompletions);
+    assert_eq!(
+        metadata.wire_policy().fixed(),
+        Some(provider::WireFormat::ChatCompletions)
+    );
 
     let config: ConfigToml = toml::from_str(
         r#"
@@ -3966,7 +3975,7 @@ fn provider_metadata_defaults_match_runtime_helpers() {
             | ProviderKind::Openmodel => provider::WireFormat::AnthropicMessages,
             _ => provider::WireFormat::ChatCompletions,
         };
-        assert_eq!(provider.wire(), expected_wire);
+        assert_eq!(provider.wire_policy().fixed(), Some(expected_wire));
     }
 }
 

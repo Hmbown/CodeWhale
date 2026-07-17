@@ -56,8 +56,9 @@ fn every_provider_kind_has_a_wellformed_descriptor() {
             );
         }
 
-        // The wire protocol accessor must not panic for any kind.
-        let _ = descriptor.protocol();
+        // Current fixed providers resolve a concrete protocol for their
+        // default endpoint key.
+        let _ = descriptor.protocol_for_endpoint("chat");
     }
 }
 
