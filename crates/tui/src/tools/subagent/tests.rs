@@ -2817,7 +2817,6 @@ fn enabled_agent_surface_options() -> AgentToolSurfaceOptions {
     let mut options = AgentToolSurfaceOptions::new(ShellPolicy::Full);
     options.apply_patch_enabled = true;
     options.web_search_enabled = true;
-    options.memory_tool_enabled = true;
     options.goal_state = Some(crate::tools::goal::new_shared_goal_state());
     options
 }
@@ -2895,7 +2894,6 @@ fn subagent_feature_gates_match_parent_agent_surface() {
         "fetch_url",
         "web.run",
         "wait_for_dev_server",
-        "remember",
     ] {
         assert!(
             !parent_names.contains(name),

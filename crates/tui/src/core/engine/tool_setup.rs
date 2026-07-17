@@ -7,10 +7,6 @@ use crate::core::authority::shell_policy_for_mode;
 use crate::tools::AgentToolSurfaceOptions;
 use crate::worker_profile::ShellPolicy;
 
-fn should_register_remember_tool(memory_enabled: bool, moraine_fallback: bool) -> bool {
-    memory_enabled && !moraine_fallback
-}
-
 impl Engine {
     pub(super) fn agent_tool_surface_options(
         &self,
@@ -19,8 +15,6 @@ impl Engine {
         let mut options = AgentToolSurfaceOptions::new(shell_policy);
         options.apply_patch_enabled = self.config.features.enabled(Feature::ApplyPatch);
         options.web_search_enabled = self.config.features.enabled(Feature::WebSearch);
-        options.memory_tool_enabled =
-            should_register_remember_tool(self.config.memory_enabled, self.config.moraine_fallback);
         options.vision_config = if self.config.features.enabled(Feature::VisionModel) {
             self.config.vision_config.clone()
         } else {
@@ -80,14 +74,6 @@ impl Engine {
             builder = builder.with_web_tools();
         }
 
-        // Register the `remember` tool only when the user has opted in to
-        // user-memory (#489). Without that opt-in the tool would always
-        // fail; surfacing it would just waste catalog slots.
-        // TODO(v0.8.71): remove when Moraine recall stable; see #3490, #3495
-        if should_register_remember_tool(self.config.memory_enabled, self.config.moraine_fallback) {
-            builder = builder.with_remember_tool();
-        }
-
         // Register image_analyze tool when vision_model is configured and feature enabled.
         if self.config.features.enabled(Feature::VisionModel)
             && let Some(ref vision_config) = self.config.vision_config
@@ -109,17 +95,5 @@ impl Engine {
         }
 
         builder
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::should_register_remember_tool;
-
-    #[test]
-    fn remember_tool_registration_respects_moraine_fallback() {
-        assert!(should_register_remember_tool(true, false));
-        assert!(!should_register_remember_tool(false, false));
-        assert!(!should_register_remember_tool(true, true));
     }
 }

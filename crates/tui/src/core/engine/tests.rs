@@ -2594,7 +2594,6 @@ fn non_yolo_mode_retains_default_defer_policy() {
     assert!(!should_default_defer_tool("run_tests", &always_load));
     assert!(!should_default_defer_tool("agent", &always_load));
     assert!(!should_default_defer_tool("read_file", &always_load));
-    assert!(!should_default_defer_tool("remember", &always_load));
     assert!(!should_default_defer_tool(
         "wait_for_dev_server",
         &always_load
@@ -2654,7 +2653,6 @@ fn model_tool_catalog_applies_native_and_mcp_deferral() {
             api_tool("write_file"),
             api_tool("exec_shell"),
             api_tool("edit_file"),
-            api_tool("remember"),
             api_tool("project_map"),
         ],
         vec![api_tool("list_mcp_resources"), api_tool("mcp_server_write")],
@@ -2673,7 +2671,6 @@ fn model_tool_catalog_applies_native_and_mcp_deferral() {
     assert_eq!(defer_loading("write_file"), Some(false));
     assert_eq!(defer_loading("exec_shell"), Some(false));
     assert_eq!(defer_loading("edit_file"), Some(false));
-    assert_eq!(defer_loading("remember"), Some(false));
     assert_eq!(defer_loading("project_map"), Some(true));
     assert_eq!(defer_loading("list_mcp_resources"), Some(false));
     assert_eq!(defer_loading("mcp_server_write"), Some(true));

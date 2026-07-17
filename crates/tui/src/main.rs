@@ -8319,7 +8319,6 @@ async fn build_direct_workflow_tool(
     let mut surface = AgentToolSurfaceOptions::new(shell_policy);
     surface.apply_patch_enabled = features.enabled(Feature::ApplyPatch);
     surface.web_search_enabled = features.enabled(Feature::WebSearch);
-    surface.memory_tool_enabled = config.memory_enabled() && !config.moraine_fallback();
     surface.vision_config = features
         .enabled(Feature::VisionModel)
         .then(|| config.vision_model_config())
