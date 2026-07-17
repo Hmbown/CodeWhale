@@ -183,6 +183,8 @@ pub const OPENCODE_GO_CHAT_MODELS: &[&str] = &[
     "mimo-v2.5",
     "mimo-v2.5-pro",
 ];
+pub const DEFAULT_OPENCODE_ZEN_MODEL: &str = "gpt-5.5";
+pub const DEFAULT_OPENCODE_ZEN_BASE_URL: &str = "https://opencode.ai/zen/v1";
 pub const DEFAULT_META_MODEL: &str = "muse-spark-1.1";
 pub const DEFAULT_META_BASE_URL: &str = "https://api.meta.ai/v1";
 pub const DEFAULT_XAI_MODEL: &str = "grok-4.5";

@@ -76,6 +76,13 @@ enum ProviderArg {
     #[value(alias = "opencode_go", alias = "opencodego")]
     OpencodeGo,
     #[value(
+        alias = "opencode_zen",
+        alias = "opencodezen",
+        alias = "zen",
+        alias = "opencode"
+    )]
+    OpencodeZen,
+    #[value(
         alias = "meta-ai",
         alias = "meta_ai",
         alias = "meta-model-api",
@@ -120,6 +127,7 @@ impl From<ProviderArg> for ProviderKind {
             ProviderArg::Sakana => ProviderKind::Sakana,
             ProviderArg::LongCat => ProviderKind::LongCat,
             ProviderArg::OpencodeGo => ProviderKind::OpencodeGo,
+            ProviderArg::OpencodeZen => ProviderKind::OpencodeZen,
             ProviderArg::Meta => ProviderKind::Meta,
             ProviderArg::Xai => ProviderKind::Xai,
         }
@@ -4043,6 +4051,19 @@ mod tests {
     fn opencode_go_provider_aliases_parse_as_builtin() {
         for alias in ["opencode-go", "opencode_go", "opencodego"] {
             assert_eq!(builtin_provider_arg(alias), Some(ProviderArg::OpencodeGo));
+        }
+    }
+
+    #[test]
+    fn opencode_zen_provider_aliases_parse_as_builtin() {
+        for alias in [
+            "opencode-zen",
+            "opencode_zen",
+            "opencodezen",
+            "zen",
+            "opencode",
+        ] {
+            assert_eq!(builtin_provider_arg(alias), Some(ProviderArg::OpencodeZen));
         }
     }
 

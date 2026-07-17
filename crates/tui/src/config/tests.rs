@@ -174,6 +174,19 @@ fn missing_provider_api_key_message_uses_provider_metadata() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn opencode_zen_missing_credentials_never_mentions_codex_oauth() -> Result<()> {
+    let message = missing_provider_api_key_message(ApiProvider::OpencodeZen)?;
+    assert!(message.contains("OpenCode Zen API key not found"));
+    assert!(message.contains("OPENCODE_ZEN_API_KEY"));
+    assert!(message.contains("OPENCODE_API_KEY"));
+    assert!(message.contains("[providers.opencode_zen]"));
+    assert!(!message.contains("codex login"));
+    assert!(!message.contains("ChatGPT"));
+    assert!(!message.contains("auth.json"));
+    Ok(())
+}
+
 // GHSA-72w5-pf8h-xfp4 — regression: `allow_shell` must be opt-in.
 #[test]
 fn allow_shell_defaults_to_false_when_unset() {

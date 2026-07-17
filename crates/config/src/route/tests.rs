@@ -145,10 +145,11 @@ fn descriptor_for_every_kind_has_nonempty_transport_facts() {
             !d.default_wire_model().as_str().is_empty(),
             "{kind:?} default_wire_model empty"
         );
-        // Every currently shipped provider has a concrete default protocol.
-        let _: RequestProtocol = d
-            .protocol_for_endpoint("chat")
-            .expect("current provider protocol");
+        if d.wire_policy().fixed().is_some() {
+            let _: RequestProtocol = d
+                .protocol_for_endpoint("chat")
+                .expect("fixed provider protocol");
+        }
     }
 }
 
@@ -156,22 +157,39 @@ fn descriptor_for_every_kind_has_nonempty_transport_facts() {
 fn descriptor_protocol_matches_provider_wire() {
     for kind in ProviderKind::ALL {
         let d = ProviderDescriptor::for_kind(kind);
+        if kind == ProviderKind::OpencodeZen {
+            assert_eq!(d.wire_policy(), crate::provider::WirePolicy::ModelAware);
+            assert_eq!(
+                d.protocol_for_endpoint("chat"),
+                Some(RequestProtocol::ChatCompletions)
+            );
+            assert_eq!(
+                d.protocol_for_endpoint("responses"),
+                Some(RequestProtocol::Responses)
+            );
+            assert_eq!(
+                d.protocol_for_endpoint("messages"),
+                Some(RequestProtocol::AnthropicMessages)
+            );
+            assert_eq!(d.protocol_for_endpoint("models/gemini"), None);
+            continue;
+        }
         assert_eq!(
             d.protocol_for_endpoint("chat"),
             kind.provider().wire_policy().fixed(),
             "{kind:?} protocol must equal the provider wire policy"
         );
         let expected = match kind {
-            ProviderKind::OpenaiCodex => RequestProtocol::Responses,
+            ProviderKind::OpenaiCodex => Some(RequestProtocol::Responses),
             ProviderKind::DeepseekAnthropic
             | ProviderKind::Anthropic
             | ProviderKind::MinimaxAnthropic
-            | ProviderKind::Openmodel => RequestProtocol::AnthropicMessages,
-            _ => RequestProtocol::ChatCompletions,
+            | ProviderKind::Openmodel => Some(RequestProtocol::AnthropicMessages),
+            _ => Some(RequestProtocol::ChatCompletions),
         };
         assert_eq!(
             d.protocol_for_endpoint("chat"),
-            Some(expected),
+            expected,
             "{kind:?} protocol mismatch"
         );
     }
@@ -830,6 +848,13 @@ fn resolver_protocol_matches_descriptor_for_every_provider() {
         // the whole provider set.
         let default_wire = ProviderDescriptor::for_kind(kind).default_wire_model();
         let request = req(Some(kind), Some(default_wire.as_str()));
+        if kind == ProviderKind::OpencodeZen {
+            let error = r
+                .resolve(&request)
+                .expect_err("Zen without a catalog offering must fail closed");
+            assert!(matches!(error, RouteError::UnsupportedModelProtocol { .. }));
+            continue;
+        }
         let out = r
             .resolve(&request)
             .unwrap_or_else(|e| panic!("{kind:?} should resolve its own default: {e}"));

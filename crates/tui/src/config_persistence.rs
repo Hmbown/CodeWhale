@@ -442,6 +442,7 @@ fn provider_base_url_table_key(provider: ApiProvider) -> anyhow::Result<&'static
         ApiProvider::Sakana => Ok("sakana"),
         ApiProvider::LongCat => Ok("longcat"),
         ApiProvider::OpencodeGo => Ok("opencode_go"),
+        ApiProvider::OpencodeZen => Ok("opencode_zen"),
         ApiProvider::Meta => Ok("meta"),
         ApiProvider::Xai => Ok("xai"),
         // Custom providers live under a user-chosen `[providers.<name>]` table,

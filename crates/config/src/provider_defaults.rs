@@ -147,6 +147,12 @@ pub(crate) const OPENCODE_GO_KIMI_K2_6_MODEL: &str = "kimi-k2.6";
 pub(crate) const OPENCODE_GO_DEEPSEEK_V4_FLASH_MODEL: &str = "deepseek-v4-flash";
 pub(crate) const OPENCODE_GO_MIMO_V2_5_MODEL: &str = "mimo-v2.5";
 pub(crate) const OPENCODE_GO_MIMO_V2_5_PRO_MODEL: &str = "mimo-v2.5-pro";
+
+// OpenCode Zen is a model-aware gateway. The default is a documented
+// Responses model, but every executable route must still obtain its protocol
+// from a provider-scoped catalog offering.
+pub(crate) const DEFAULT_OPENCODE_ZEN_MODEL: &str = "gpt-5.5";
+pub(crate) const DEFAULT_OPENCODE_ZEN_BASE_URL: &str = "https://opencode.ai/zen/v1";
 // Meta Model API / Muse Spark defaults
 pub(crate) const DEFAULT_META_MODEL: &str = "muse-spark-1.1";
 pub(crate) const DEFAULT_META_BASE_URL: &str = "https://api.meta.ai/v1";

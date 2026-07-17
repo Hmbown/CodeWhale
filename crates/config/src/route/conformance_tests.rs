@@ -11,6 +11,7 @@ use super::descriptor::ProviderDescriptor;
 use super::ids::{LogicalModelRef, ProviderId};
 use super::resolver::{RouteRequest, RouteResolver};
 use crate::ProviderKind;
+use crate::provider::WirePolicy;
 
 fn none_request(kind: ProviderKind) -> RouteRequest {
     RouteRequest {
@@ -68,6 +69,16 @@ fn every_provider_kind_resolves_its_default_route() {
     let bundled = bundled_offerings();
     for &kind in ProviderKind::all() {
         let descriptor = ProviderDescriptor::for_kind(kind);
+        if descriptor.wire_policy() == WirePolicy::ModelAware {
+            let error = resolver
+                .resolve(&none_request(kind))
+                .expect_err("model-aware provider without catalog proof must fail closed");
+            assert!(matches!(
+                error,
+                super::RouteError::UnsupportedModelProtocol { .. }
+            ));
+            continue;
+        }
         let candidate = resolver.resolve(&none_request(kind)).unwrap_or_else(|err| {
             panic!("{kind:?}: default (None selector) route must resolve, got {err:?}")
         });
@@ -108,12 +119,23 @@ fn every_provider_kind_resolves_its_default_route() {
 fn every_provider_kind_resolves_the_auto_selector() {
     let resolver = RouteResolver::new();
     for &kind in ProviderKind::all() {
+        let descriptor = ProviderDescriptor::for_kind(kind);
         let request = RouteRequest {
             explicit_provider: Some(kind),
             model_selector: Some(LogicalModelRef::from("auto")),
             saved_provider_model: None,
             base_url_override: None,
         };
+        if descriptor.wire_policy() == WirePolicy::ModelAware {
+            let error = resolver
+                .resolve(&request)
+                .expect_err("model-aware provider without catalog proof must fail closed");
+            assert!(matches!(
+                error,
+                super::RouteError::UnsupportedModelProtocol { .. }
+            ));
+            continue;
+        }
         let candidate = resolver
             .resolve(&request)
             .unwrap_or_else(|err| panic!("{kind:?}: `auto` must resolve, got {err:?}"));
