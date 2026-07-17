@@ -32,6 +32,10 @@ notes, and relevant issue/PR comments.
 
 - **[h3c-hexin](https://github.com/h3c-hexin)** — calendar-anchored hourly
   automation recurrence across DST and lifecycle transitions (PR #4381)
+- **[Shen Yongqing / shenyongqing](https://github.com/shenyongqing)** —
+  HarmonyOS/OpenHarmony QuickJS bindgen activation for
+  `codewhale-workflow-js` (PR #4384), covering the workflow-js build slice of
+  #2970
 - **[zhangweiii](https://github.com/zhangweiii)** and
   **[Sterne Lee / sternelee](https://github.com/sternelee)** — the original
   first-class OpenCode Go implementations in PRs #773 and #1050, harvested

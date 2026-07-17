@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restart, resume, RRULE updates, duplicate-slot recovery, and post-run
   advancement. Nonexistent clock slots are skipped and ambiguous slots run at
   their first occurrence (#4381 by @h3c-hexin).
+- Generate QuickJS bindings at build time for the `codewhale-workflow-js`
+  crate on HarmonyOS/OpenHarmony (`target_env = "ohos"`), where rquickjs has
+  no pre-generated bindings (#4384 by @shenyongqing; workflow-js slice of
+  #2970).
 - Convert persisted sub-agent completion and still-running control events into
   concise, non-authoritative resume checkpoints, keeping their raw runtime
   envelopes, sentinels, and retry instructions out of restored model and TUI
