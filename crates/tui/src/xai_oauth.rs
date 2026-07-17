@@ -37,6 +37,8 @@ pub const DEFAULT_SCOPES: &str = "openid profile email offline_access api:access
 const REFRESH_SKEW_SECS: i64 = 60;
 const DEVICE_POLL_DEFAULT_SECS: u64 = 5;
 const DEVICE_POLL_MAX_SECS: u64 = 900;
+/// RFC 8628 §3.5: on `slow_down` the polling interval increases by 5 seconds.
+const DEVICE_SLOW_DOWN_STEP_SECS: u64 = 5;
 const OAUTH_RESPONSE_BODY_LIMIT: u64 = 64 * 1024;
 const OAUTH_ERROR_DETAIL_LIMIT: usize = 256;
 
@@ -298,18 +300,20 @@ fn device_code_login_with(
         eprintln!("Could not open the browser automatically: {err}");
     }
 
-    let interval = device.interval.unwrap_or(DEVICE_POLL_DEFAULT_SECS).max(1);
+    let mut interval = device.interval.unwrap_or(DEVICE_POLL_DEFAULT_SECS).max(1);
     let deadline = std::time::Instant::now()
         + Duration::from_secs(device.expires_in.unwrap_or(DEVICE_POLL_MAX_SECS).max(30));
 
     loop {
-        if std::time::Instant::now() >= deadline {
+        let now = std::time::Instant::now();
+        if now >= deadline {
             bail!(
                 "xAI device-code authorization timed out. Re-run device login \
                  and approve the code before it expires."
             );
         }
-        thread::sleep(Duration::from_secs(interval));
+        // Never sleep past the code's expiry, even after slow_down backoff.
+        thread::sleep(Duration::from_secs(interval).min(deadline - now));
         match poll_device_token(&endpoints.token_endpoint, client_id, &device.device_code) {
             Ok(token) => {
                 let mut file = if auth_path.exists() {
@@ -348,10 +352,13 @@ fn device_code_login_with(
             }
             Err(err) => {
                 let msg = err.to_string();
-                if msg.contains("authorization_pending") || msg.contains("slow_down") {
-                    continue;
+                match device_poll_backoff(interval, &msg) {
+                    Some(next_interval) => {
+                        interval = next_interval;
+                        continue;
+                    }
+                    None => return Err(err),
                 }
-                return Err(err);
             }
         }
     }
@@ -533,6 +540,22 @@ fn fallback_device_oauth_endpoints(issuer: &str) -> DeviceOauthEndpoints {
     DeviceOauthEndpoints {
         device_authorization_endpoint: format!("{issuer}/oauth2/device/code"),
         token_endpoint: format!("{issuer}/oauth2/token"),
+    }
+}
+
+/// RFC 8628 §3.5 polling update for a failed token poll.
+///
+/// Returns the interval to use for the next poll when polling should
+/// continue: `authorization_pending` keeps the current interval, `slow_down`
+/// increases it by [`DEVICE_SLOW_DOWN_STEP_SECS`]. Any other error is
+/// terminal and returns `None`.
+fn device_poll_backoff(interval: u64, error: &str) -> Option<u64> {
+    if error.contains("authorization_pending") {
+        Some(interval)
+    } else if error.contains("slow_down") {
+        Some(interval + DEVICE_SLOW_DOWN_STEP_SECS)
+    } else {
+        None
     }
 }
 
@@ -877,7 +900,7 @@ use std::os::unix::fs::PermissionsExt;
 mod tests {
     use super::*;
     use tempfile::TempDir;
-    use wiremock::matchers::{body_string_contains, method, path};
+    use wiremock::matchers::{body_string_contains, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
@@ -1165,6 +1188,7 @@ mod tests {
             .await;
         Mock::given(method("POST"))
             .and(path("/oauth2/device-advertised"))
+            .and(header("content-type", "application/x-www-form-urlencoded"))
             .and(body_string_contains(format!(
                 "client_id={GROK_OIDC_CLIENT_ID}"
             )))
@@ -1183,6 +1207,14 @@ mod tests {
             .await;
         Mock::given(method("POST"))
             .and(path("/oauth2/token-advertised"))
+            .and(header("content-type", "application/x-www-form-urlencoded"))
+            .and(body_string_contains(
+                "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code",
+            ))
+            .and(body_string_contains(format!(
+                "client_id={GROK_OIDC_CLIENT_ID}"
+            )))
+            .and(body_string_contains("device_code=device-token"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "access_token": "test-xai-access",
                 "refresh_token": "test-xai-refresh",
@@ -1218,6 +1250,272 @@ mod tests {
         assert_eq!(
             fs::metadata(&auth_path).unwrap().permissions().mode() & 0o777,
             0o600
+        );
+    }
+
+    #[test]
+    fn device_poll_backoff_follows_rfc8628() {
+        // authorization_pending keeps the current interval.
+        assert_eq!(device_poll_backoff(5, "authorization_pending"), Some(5));
+        // slow_down increases the interval by 5 seconds (RFC 8628 §3.5).
+        assert_eq!(
+            device_poll_backoff(5, "slow_down"),
+            Some(5 + DEVICE_SLOW_DOWN_STEP_SECS)
+        );
+        // Terminal errors stop polling.
+        assert_eq!(device_poll_backoff(5, "access_denied"), None);
+        assert_eq!(device_poll_backoff(5, "expired_token"), None);
+    }
+
+    #[test]
+    fn apply_token_response_sets_expiry_from_expires_in() {
+        let mut entry = GrokAuthEntry {
+            key: None,
+            refresh_token: None,
+            expires_at: None,
+            oidc_issuer: None,
+            oidc_client_id: None,
+            auth_mode: None,
+            extra: BTreeMap::new(),
+        };
+        let token = TokenResponse {
+            access_token: Some("fresh-access".to_string()),
+            refresh_token: Some("fresh-refresh".to_string()),
+            expires_in: Some(3600),
+            error: None,
+        };
+        let before = now_unix_secs().expect("clock");
+
+        apply_token_response(&mut entry, XAI_OIDC_ISSUER, GROK_OIDC_CLIENT_ID, &token)
+            .expect("apply token");
+
+        assert_eq!(entry.key.as_deref(), Some("fresh-access"));
+        assert_eq!(entry.refresh_token.as_deref(), Some("fresh-refresh"));
+        let expires_at = entry
+            .expires_at
+            .as_deref()
+            .and_then(parse_rfc3339_secs)
+            .expect("expires_at set from expires_in");
+        let after = now_unix_secs().expect("clock");
+        assert!(
+            expires_at >= before + 3600,
+            "{expires_at} < {before} + 3600"
+        );
+        assert!(expires_at <= after + 3600, "{expires_at} > {after} + 3600");
+    }
+
+    #[test]
+    fn apply_token_response_rejects_missing_access_token() {
+        let mut entry = GrokAuthEntry {
+            key: None,
+            refresh_token: None,
+            expires_at: None,
+            oidc_issuer: None,
+            oidc_client_id: None,
+            auth_mode: None,
+            extra: BTreeMap::new(),
+        };
+        let token = TokenResponse {
+            access_token: None,
+            refresh_token: None,
+            expires_in: None,
+            error: None,
+        };
+
+        let error = apply_token_response(&mut entry, XAI_OIDC_ISSUER, GROK_OIDC_CLIENT_ID, &token)
+            .expect_err("missing access_token must fail");
+
+        assert!(
+            error.to_string().contains("missing access_token"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn device_code_login_polls_through_pending_and_slow_down() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/.well-known/openid-configuration"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "issuer": server.uri(),
+                "device_authorization_endpoint": format!("{}/oauth2/device-advertised", server.uri()),
+                "token_endpoint": format!("{}/oauth2/token-advertised", server.uri())
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/device-advertised"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "device_code": "device-token",
+                "user_code": "CW-TEST",
+                "verification_uri": format!("{}/verify", server.uri()),
+                "expires_in": 60,
+                "interval": 1
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        // wiremock matches mocks in mount order, so mount the one-shot
+        // transient-error responses before the terminal success response:
+        // poll 1 -> authorization_pending, poll 2 -> slow_down, poll 3 -> ok.
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token-advertised"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": "authorization_pending"
+            })))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token-advertised"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": "slow_down"
+            })))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token-advertised"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "test-xai-access",
+                "refresh_token": "test-xai-refresh",
+                "expires_in": 3600
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let dir = TempDir::new().unwrap();
+        let auth_path = dir.path().join("grok-auth.json");
+        let result = tokio::task::block_in_place(|| {
+            device_code_login_with(
+                &server.uri(),
+                GROK_OIDC_CLIENT_ID,
+                DEFAULT_SCOPES,
+                &auth_path,
+                false,
+            )
+        });
+
+        let credentials = result.expect("device login after pending and slow_down");
+        assert_eq!(credentials.access_token, "test-xai-access");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn device_code_login_surfaces_user_denial() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/.well-known/openid-configuration"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "issuer": server.uri(),
+                "device_authorization_endpoint": format!("{}/oauth2/device-advertised", server.uri()),
+                "token_endpoint": format!("{}/oauth2/token-advertised", server.uri())
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/device-advertised"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "device_code": "device-token",
+                "user_code": "CW-TEST",
+                "verification_uri": format!("{}/verify", server.uri()),
+                "expires_in": 60,
+                "interval": 1
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token-advertised"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": "access_denied",
+                "error_description": "The user denied the authorization request"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let dir = TempDir::new().unwrap();
+        let auth_path = dir.path().join("grok-auth.json");
+        let result = tokio::task::block_in_place(|| {
+            device_code_login_with(
+                &server.uri(),
+                GROK_OIDC_CLIENT_ID,
+                DEFAULT_SCOPES,
+                &auth_path,
+                false,
+            )
+        });
+
+        let error = result.expect_err("user denial must stop polling");
+        let message = format!("{error:#}");
+        assert!(message.contains("access_denied"), "{message}");
+        assert!(message.contains("HTTP 400"), "{message}");
+        assert!(!message.contains("authorization_pending"), "{message}");
+        // The denial must not leave a partial credential on disk.
+        assert!(!auth_path.exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn poll_device_token_surfaces_expired_token() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": "expired_token",
+                "error_description": "The device code has expired"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let error = tokio::task::block_in_place(|| {
+            poll_device_token(
+                &format!("{}/oauth2/token", server.uri()),
+                GROK_OIDC_CLIENT_ID,
+                "device-token",
+            )
+            .expect_err("expired device code must fail")
+        });
+        let message = error.to_string();
+
+        assert!(message.contains("expired_token"), "{message}");
+        assert!(message.contains("HTTP 400"), "{message}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn poll_device_token_reports_non_json_without_raw_parse_failure() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(
+                ResponseTemplate::new(503)
+                    .set_body_raw("<html>upstream-maintenance-detail</html>", "text/html"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let error = tokio::task::block_in_place(|| {
+            poll_device_token(
+                &format!("{}/oauth2/token", server.uri()),
+                GROK_OIDC_CLIENT_ID,
+                "device-token",
+            )
+            .expect_err("non-JSON response must fail")
+        });
+        let message = error.to_string();
+
+        assert!(message.contains("HTTP 503"), "{message}");
+        assert!(message.contains("text/html"), "{message}");
+        assert!(message.contains("expected JSON"), "{message}");
+        assert!(
+            !message.contains("upstream-maintenance-detail"),
+            "{message}"
         );
     }
 }
