@@ -547,6 +547,22 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   padding-block: clamp(3.25rem, 6vw, 4.75rem);
 }
 
+.portal-product-shot {
+  position: relative;
+  width: min(100% - 2.5rem, 53.25rem);
+  margin-top: clamp(-1rem, -2vw, -0.5rem);
+  margin-bottom: clamp(2.5rem, 6vw, 4.75rem);
+}
+
+.portal-product-shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid rgba(209, 235, 244, 0.26);
+  border-radius: 8px;
+  box-shadow: 0 1.5rem 3.75rem rgba(5, 12, 24, 0.2);
+}
+
 .portal-hero-copy {
   max-width: 42rem;
 }

@@ -17,7 +17,7 @@ the same runtime and tools.
 [![crates.io](https://img.shields.io/crates/v/codewhale-cli?label=crates.io)](https://crates.io/crates/codewhale-cli)
 [![npm](https://img.shields.io/npm/v/codewhale?label=npm)](https://www.npmjs.com/package/codewhale)
 
-![Codewhale running in a terminal](assets/screenshot.png)
+![Codewhale TUI idle screen with GLM-5.2 selected through Z.ai](assets/screenshot.png)
 
 ## Install
 

@@ -8,6 +8,21 @@ function pageSource(path: string): string {
 }
 
 describe("public website copy contracts", () => {
+  it("keeps the README and website product screenshot synchronized and accessible", () => {
+    const home = pageSource("page.tsx");
+    const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+    const readmeShot = readFileSync(new URL("../../assets/screenshot.png", import.meta.url));
+    const websiteShot = readFileSync(
+      new URL("../public/codewhale-tui.png", import.meta.url),
+    );
+    const alt = "Codewhale TUI idle screen with GLM-5.2 selected through Z.ai";
+
+    expect(readme).toContain(`![${alt}](assets/screenshot.png)`);
+    expect(home).toContain(`src="/codewhale-tui.png"`);
+    expect(home).toContain(`alt="${alt}"`);
+    expect(websiteShot.equals(readmeShot)).toBe(true);
+  });
+
   it("keeps the docs hub on the compact ocean portal instead of the old almanac treatment", () => {
     const layout = pageSource("docs/layout.tsx");
     const search = readFileSync(new URL("../components/docs-search.tsx", import.meta.url), "utf8");

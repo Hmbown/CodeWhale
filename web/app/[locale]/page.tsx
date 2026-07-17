@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 import { InstallCodeBlock } from "@/components/install-code-block";
 import { Whale } from "@/components/whale";
@@ -113,6 +114,17 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
             </Link>
           </aside>
         </div>
+
+        <figure className="portal-container portal-product-shot">
+          <Image
+            src="/codewhale-tui.png"
+            alt="Codewhale TUI idle screen with GLM-5.2 selected through Z.ai"
+            width={852}
+            height={453}
+            sizes="(max-width: 760px) calc(100vw - 2rem), (max-width: 852px) calc(100vw - 2.5rem), 852px"
+            priority
+          />
+        </figure>
       </section>
 
       <section className="portal-section">
