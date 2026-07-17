@@ -114,6 +114,13 @@ pub enum ProviderKind {
     #[serde(alias = "opencode_go", alias = "opencodego")]
     OpencodeGo,
     #[serde(
+        alias = "opencode_zen",
+        alias = "opencodezen",
+        alias = "zen",
+        alias = "opencode"
+    )]
+    OpencodeZen,
+    #[serde(
         alias = "meta-ai",
         alias = "meta_ai",
         alias = "meta-model-api",
@@ -135,7 +142,7 @@ pub enum ProviderKind {
 }
 
 impl ProviderKind {
-    pub const ALL: [Self; 35] = [
+    pub const ALL: [Self; 36] = [
         Self::Deepseek,
         Self::DeepseekAnthropic,
         Self::NvidiaNim,
@@ -168,6 +175,7 @@ impl ProviderKind {
         Self::Sakana,
         Self::LongCat,
         Self::OpencodeGo,
+        Self::OpencodeZen,
         Self::Meta,
         Self::Xai,
         Self::Custom,

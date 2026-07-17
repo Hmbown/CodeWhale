@@ -145,8 +145,11 @@ fn descriptor_for_every_kind_has_nonempty_transport_facts() {
             !d.default_wire_model().as_str().is_empty(),
             "{kind:?} default_wire_model empty"
         );
-        // protocol() always yields a RequestProtocol; calling it must not panic.
-        let _: RequestProtocol = d.protocol();
+        if d.wire_policy().fixed().is_some() {
+            let _: RequestProtocol = d
+                .protocol_for_endpoint("chat")
+                .expect("fixed provider protocol");
+        }
     }
 }
 
@@ -154,20 +157,41 @@ fn descriptor_for_every_kind_has_nonempty_transport_facts() {
 fn descriptor_protocol_matches_provider_wire() {
     for kind in ProviderKind::ALL {
         let d = ProviderDescriptor::for_kind(kind);
+        if kind == ProviderKind::OpencodeZen {
+            assert_eq!(d.wire_policy(), crate::provider::WirePolicy::ModelAware);
+            assert_eq!(
+                d.protocol_for_endpoint("chat"),
+                Some(RequestProtocol::ChatCompletions)
+            );
+            assert_eq!(
+                d.protocol_for_endpoint("responses"),
+                Some(RequestProtocol::Responses)
+            );
+            assert_eq!(
+                d.protocol_for_endpoint("messages"),
+                Some(RequestProtocol::AnthropicMessages)
+            );
+            assert_eq!(d.protocol_for_endpoint("models/gemini"), None);
+            continue;
+        }
         assert_eq!(
-            d.protocol(),
-            kind.provider().wire(),
-            "{kind:?} protocol must equal provider().wire()"
+            d.protocol_for_endpoint("chat"),
+            kind.provider().wire_policy().fixed(),
+            "{kind:?} protocol must equal the provider wire policy"
         );
         let expected = match kind {
-            ProviderKind::OpenaiCodex => RequestProtocol::Responses,
+            ProviderKind::OpenaiCodex => Some(RequestProtocol::Responses),
             ProviderKind::DeepseekAnthropic
             | ProviderKind::Anthropic
             | ProviderKind::MinimaxAnthropic
-            | ProviderKind::Openmodel => RequestProtocol::AnthropicMessages,
-            _ => RequestProtocol::ChatCompletions,
+            | ProviderKind::Openmodel => Some(RequestProtocol::AnthropicMessages),
+            _ => Some(RequestProtocol::ChatCompletions),
         };
-        assert_eq!(d.protocol(), expected, "{kind:?} protocol mismatch");
+        assert_eq!(
+            d.protocol_for_endpoint("chat"),
+            expected,
+            "{kind:?} protocol mismatch"
+        );
     }
 }
 
@@ -736,6 +760,82 @@ fn opencode_go_resolver_rejects_messages_models_even_on_custom_base_urls() {
 }
 
 #[test]
+fn opencode_zen_resolver_selects_protocol_from_documented_model_catalog() {
+    use super::offering::{
+        OPENCODE_ZEN_CHAT_MODELS, OPENCODE_ZEN_MESSAGES_MODELS, OPENCODE_ZEN_RESPONSES_MODELS,
+    };
+
+    let resolver = RouteResolver::new();
+    let groups = [
+        (
+            OPENCODE_ZEN_RESPONSES_MODELS,
+            "responses",
+            RequestProtocol::Responses,
+        ),
+        (
+            OPENCODE_ZEN_MESSAGES_MODELS,
+            "messages",
+            RequestProtocol::AnthropicMessages,
+        ),
+        (
+            OPENCODE_ZEN_CHAT_MODELS,
+            "chat",
+            RequestProtocol::ChatCompletions,
+        ),
+    ];
+
+    for (models, endpoint_key, protocol) in groups {
+        for model in models {
+            for requested in [model.to_string(), format!("opencode/{model}")] {
+                let route = resolver
+                    .resolve(&req(Some(ProviderKind::OpencodeZen), Some(&requested)))
+                    .unwrap_or_else(|error| panic!("{requested} should resolve: {error}"));
+                assert_eq!(route.provider_kind, ProviderKind::OpencodeZen);
+                assert_eq!(route.wire_model_id.as_str(), *model, "{requested}");
+                assert_eq!(route.endpoint.endpoint_key, endpoint_key, "{requested}");
+                assert_eq!(route.protocol, protocol, "{requested}");
+            }
+        }
+    }
+
+    let automatic = resolver
+        .resolve(&req(Some(ProviderKind::OpencodeZen), Some("auto")))
+        .expect("OpenCode Zen auto should resolve to its documented default");
+    assert_eq!(automatic.wire_model_id.as_str(), "gpt-5.5");
+    assert_eq!(automatic.protocol, RequestProtocol::Responses);
+}
+
+#[test]
+fn opencode_zen_resolver_fails_closed_for_unproven_protocols() {
+    let resolver = RouteResolver::new();
+
+    for model in [
+        "gemini-3.1-pro",
+        "opencode/gemini-3.5-flash",
+        "unknown-model",
+    ] {
+        for base_url_override in [
+            None,
+            Some("https://zen-gateway.example.test/v1".to_string()),
+        ] {
+            let request = RouteRequest {
+                explicit_provider: Some(ProviderKind::OpencodeZen),
+                model_selector: Some(LogicalModelRef::from(model)),
+                saved_provider_model: None,
+                base_url_override,
+            };
+            assert!(
+                matches!(
+                    resolver.resolve(&request),
+                    Err(RouteError::UnsupportedModelProtocol { .. })
+                ),
+                "{model} must fail closed without a supported protocol mapping"
+            );
+        }
+    }
+}
+
+#[test]
 fn resolver_deepseek_none_selector_uses_default_wire_id() {
     let r = RouteResolver::new();
     let out = r
@@ -829,7 +929,9 @@ fn resolver_protocol_matches_descriptor_for_every_provider() {
             .unwrap_or_else(|e| panic!("{kind:?} should resolve its own default: {e}"));
         assert_eq!(
             out.protocol,
-            ProviderDescriptor::for_kind(kind).protocol(),
+            ProviderDescriptor::for_kind(kind)
+                .protocol_for_endpoint(&out.endpoint.endpoint_key)
+                .expect("resolved endpoint protocol"),
             "{kind:?} candidate protocol must match descriptor"
         );
         assert_eq!(

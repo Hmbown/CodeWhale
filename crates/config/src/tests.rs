@@ -872,6 +872,10 @@ struct EnvGuard {
     opencode_go_api_key: Option<OsString>,
     opencode_go_base_url: Option<OsString>,
     opencode_go_model: Option<OsString>,
+    opencode_zen_api_key: Option<OsString>,
+    opencode_api_key: Option<OsString>,
+    opencode_zen_base_url: Option<OsString>,
+    opencode_zen_model: Option<OsString>,
     meta_model_api_key: Option<OsString>,
     model_api_key: Option<OsString>,
     meta_model_api_base_url: Option<OsString>,
@@ -901,6 +905,10 @@ impl EnvGuard {
             opencode_go_api_key: env::var_os("OPENCODE_GO_API_KEY"),
             opencode_go_base_url: env::var_os("OPENCODE_GO_BASE_URL"),
             opencode_go_model: env::var_os("OPENCODE_GO_MODEL"),
+            opencode_zen_api_key: env::var_os("OPENCODE_ZEN_API_KEY"),
+            opencode_api_key: env::var_os("OPENCODE_API_KEY"),
+            opencode_zen_base_url: env::var_os("OPENCODE_ZEN_BASE_URL"),
+            opencode_zen_model: env::var_os("OPENCODE_ZEN_MODEL"),
             meta_model_api_key: env::var_os("META_MODEL_API_KEY"),
             model_api_key: env::var_os("MODEL_API_KEY"),
             meta_model_api_base_url: env::var_os("META_MODEL_API_BASE_URL"),
@@ -1023,6 +1031,10 @@ impl EnvGuard {
             env::remove_var("OPENCODE_GO_API_KEY");
             env::remove_var("OPENCODE_GO_BASE_URL");
             env::remove_var("OPENCODE_GO_MODEL");
+            env::remove_var("OPENCODE_ZEN_API_KEY");
+            env::remove_var("OPENCODE_API_KEY");
+            env::remove_var("OPENCODE_ZEN_BASE_URL");
+            env::remove_var("OPENCODE_ZEN_MODEL");
             env::remove_var("META_MODEL_API_KEY");
             env::remove_var("MODEL_API_KEY");
             env::remove_var("META_MODEL_API_BASE_URL");
@@ -1168,6 +1180,10 @@ impl Drop for EnvGuard {
             Self::restore_var("OPENCODE_GO_API_KEY", self.opencode_go_api_key.take());
             Self::restore_var("OPENCODE_GO_BASE_URL", self.opencode_go_base_url.take());
             Self::restore_var("OPENCODE_GO_MODEL", self.opencode_go_model.take());
+            Self::restore_var("OPENCODE_ZEN_API_KEY", self.opencode_zen_api_key.take());
+            Self::restore_var("OPENCODE_API_KEY", self.opencode_api_key.take());
+            Self::restore_var("OPENCODE_ZEN_BASE_URL", self.opencode_zen_base_url.take());
+            Self::restore_var("OPENCODE_ZEN_MODEL", self.opencode_zen_model.take());
             Self::restore_var("META_MODEL_API_KEY", self.meta_model_api_key.take());
             Self::restore_var("MODEL_API_KEY", self.model_api_key.take());
             Self::restore_var(
@@ -3648,7 +3664,10 @@ fn deepseek_anthropic_route_defaults_to_anthropic_endpoint() {
         DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL
     );
     assert_eq!(provider.env_vars(), &["DEEPSEEK_API_KEY"]);
-    assert_eq!(provider.wire(), provider::WireFormat::AnthropicMessages);
+    assert_eq!(
+        provider.wire_policy().fixed(),
+        Some(provider::WireFormat::AnthropicMessages)
+    );
 
     let config = ConfigToml {
         provider: ProviderKind::DeepseekAnthropic,
@@ -3691,7 +3710,10 @@ fn openmodel_route_defaults_to_messages_endpoint() {
     assert_eq!(provider.default_model(), DEFAULT_OPENMODEL_MODEL);
     assert_eq!(provider.default_base_url(), DEFAULT_OPENMODEL_BASE_URL);
     assert_eq!(provider.env_vars(), &["OPENMODEL_API_KEY"]);
-    assert_eq!(provider.wire(), provider::WireFormat::AnthropicMessages);
+    assert_eq!(
+        provider.wire_policy().fixed(),
+        Some(provider::WireFormat::AnthropicMessages)
+    );
 
     let config = ConfigToml {
         provider: ProviderKind::Openmodel,
@@ -3765,7 +3787,10 @@ fn opencode_go_resolves_current_chat_completions_route() {
     assert_eq!(metadata.default_base_url(), DEFAULT_OPENCODE_GO_BASE_URL);
     assert_eq!(metadata.default_model(), DEFAULT_OPENCODE_GO_MODEL);
     assert_eq!(metadata.env_vars(), &["OPENCODE_GO_API_KEY"]);
-    assert_eq!(metadata.wire(), provider::WireFormat::ChatCompletions);
+    assert_eq!(
+        metadata.wire_policy().fixed(),
+        Some(provider::WireFormat::ChatCompletions)
+    );
 
     let config: ConfigToml = toml::from_str(
         r#"
@@ -3814,6 +3839,60 @@ model = "opencode-go/glm-5.2"
     assert_eq!(resolved.base_url, "https://go-gateway.example/v1");
     assert_eq!(resolved.model, DEFAULT_OPENCODE_GO_MODEL);
     assert_eq!(resolved.api_key, None);
+}
+
+#[test]
+fn opencode_zen_configures_model_aware_provider_with_catalog_proof() {
+    for alias in [
+        "opencode-zen",
+        "opencode_zen",
+        "opencodezen",
+        "zen",
+        "opencode",
+    ] {
+        assert_eq!(ProviderKind::parse(alias), Some(ProviderKind::OpencodeZen));
+    }
+
+    let metadata = provider::resolve_provider("opencode_zen").expect("Zen provider metadata");
+    assert_eq!(metadata.id(), "opencode-zen");
+    assert_eq!(metadata.display_name(), "OpenCode Zen");
+    assert_eq!(metadata.provider_config_key(), "opencode_zen");
+    assert_eq!(metadata.default_base_url(), DEFAULT_OPENCODE_ZEN_BASE_URL);
+    assert_eq!(metadata.default_model(), DEFAULT_OPENCODE_ZEN_MODEL);
+    assert_eq!(
+        metadata.env_vars(),
+        &["OPENCODE_ZEN_API_KEY", "OPENCODE_API_KEY"]
+    );
+    assert_eq!(metadata.wire_policy(), provider::WirePolicy::ModelAware);
+
+    let config: ConfigToml = toml::from_str(
+        r#"
+provider = "opencode-zen"
+
+[providers.opencode_zen]
+api_key = "zen-config-key"
+base_url = "https://zen-gateway.example/v1"
+model = "gpt-5.5"
+"#,
+    )
+    .expect("OpenCode Zen provider table");
+    let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(resolved.provider, ProviderKind::OpencodeZen);
+    assert_eq!(resolved.base_url, "https://zen-gateway.example/v1");
+    assert_eq!(resolved.model, "gpt-5.5");
+    assert_eq!(resolved.api_key.as_deref(), Some("zen-config-key"));
+
+    let resolver = crate::route::RouteResolver::new();
+    let route = resolver
+        .resolve(&crate::route::RouteRequest {
+            explicit_provider: Some(ProviderKind::OpencodeZen),
+            model_selector: Some(crate::route::LogicalModelRef::from("gpt-5.5")),
+            saved_provider_model: None,
+            base_url_override: None,
+        })
+        .expect("documented Zen model must resolve");
+    assert_eq!(route.protocol, crate::route::RequestProtocol::Responses);
+    assert_eq!(route.endpoint.endpoint_key, "responses");
 }
 
 #[test]
@@ -3959,14 +4038,15 @@ fn provider_metadata_defaults_match_runtime_helpers() {
         // Anthropic-compatible routes speak the native Messages API; every
         // other built-in provider is OpenAI-compatible Chat Completions.
         let expected_wire = match kind {
-            ProviderKind::OpenaiCodex => provider::WireFormat::Responses,
+            ProviderKind::OpencodeZen => None,
+            ProviderKind::OpenaiCodex => Some(provider::WireFormat::Responses),
             ProviderKind::Anthropic
             | ProviderKind::DeepseekAnthropic
             | ProviderKind::MinimaxAnthropic
-            | ProviderKind::Openmodel => provider::WireFormat::AnthropicMessages,
-            _ => provider::WireFormat::ChatCompletions,
+            | ProviderKind::Openmodel => Some(provider::WireFormat::AnthropicMessages),
+            _ => Some(provider::WireFormat::ChatCompletions),
         };
-        assert_eq!(provider.wire(), expected_wire);
+        assert_eq!(provider.wire_policy().fixed(), expected_wire);
     }
 }
 

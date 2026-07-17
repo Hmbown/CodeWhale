@@ -4971,14 +4971,17 @@ fn doctor_provider_source(config: &Config) -> &'static str {
 }
 
 fn doctor_wire_protocol(provider: crate::config::ApiProvider) -> &'static str {
-    match provider
+    let policy = provider
         .metadata()
-        .map(|metadata| metadata.wire())
-        .unwrap_or(codewhale_config::provider::WireFormat::ChatCompletions)
-    {
-        codewhale_config::provider::WireFormat::ChatCompletions => "chat_completions",
-        codewhale_config::provider::WireFormat::Responses => "responses",
-        codewhale_config::provider::WireFormat::AnthropicMessages => "anthropic_messages",
+        .map(|metadata| metadata.wire_policy())
+        .unwrap_or(codewhale_config::provider::WirePolicy::Fixed(
+            codewhale_config::provider::WireFormat::ChatCompletions,
+        ));
+    match policy.fixed() {
+        Some(codewhale_config::provider::WireFormat::ChatCompletions) => "chat_completions",
+        Some(codewhale_config::provider::WireFormat::Responses) => "responses",
+        Some(codewhale_config::provider::WireFormat::AnthropicMessages) => "anthropic_messages",
+        None => "model_aware",
     }
 }
 

@@ -23,6 +23,16 @@ pub enum RouteError {
         /// The foreign model selector that was rejected.
         model: String,
     },
+    /// A model-aware provider did not prove a supported request protocol for
+    /// the selected model/endpoint.
+    UnsupportedModelProtocol {
+        /// Provider whose catalog row was incomplete or unsupported.
+        provider: ProviderId,
+        /// Selected provider-owned model id.
+        model: String,
+        /// Catalog endpoint key, when one was present.
+        endpoint_key: String,
+    },
 }
 
 impl fmt::Display for RouteError {
@@ -41,6 +51,15 @@ impl fmt::Display for RouteError {
             Self::ForeignModelForDirectProvider { provider, model } => write!(
                 f,
                 "model {model:?} is not served by direct provider {}",
+                provider.as_str()
+            ),
+            Self::UnsupportedModelProtocol {
+                provider,
+                model,
+                endpoint_key,
+            } => write!(
+                f,
+                "model {model:?} on provider {} has unsupported or unproven endpoint {endpoint_key:?}",
                 provider.as_str()
             ),
         }

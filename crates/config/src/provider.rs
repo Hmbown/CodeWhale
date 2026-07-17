@@ -16,16 +16,17 @@ use super::{
     DEFAULT_NOVITA_MODEL, DEFAULT_NVIDIA_NIM_BASE_URL, DEFAULT_NVIDIA_NIM_MODEL,
     DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_BASE_URL,
     DEFAULT_OPENAI_CODEX_BASE_URL, DEFAULT_OPENAI_CODEX_MODEL, DEFAULT_OPENAI_MODEL,
-    DEFAULT_OPENCODE_GO_BASE_URL, DEFAULT_OPENCODE_GO_MODEL, DEFAULT_OPENMODEL_BASE_URL,
-    DEFAULT_OPENMODEL_MODEL, DEFAULT_OPENROUTER_BASE_URL, DEFAULT_OPENROUTER_MODEL,
-    DEFAULT_QIANFAN_BASE_URL, DEFAULT_QIANFAN_MODEL, DEFAULT_SAKANA_BASE_URL, DEFAULT_SAKANA_MODEL,
-    DEFAULT_SGLANG_BASE_URL, DEFAULT_SGLANG_MODEL, DEFAULT_SILICONFLOW_BASE_URL,
-    DEFAULT_SILICONFLOW_CN_BASE_URL, DEFAULT_SILICONFLOW_MODEL, DEFAULT_STEPFUN_BASE_URL,
-    DEFAULT_STEPFUN_MODEL, DEFAULT_TOGETHER_BASE_URL, DEFAULT_TOGETHER_MODEL,
-    DEFAULT_VLLM_BASE_URL, DEFAULT_VLLM_MODEL, DEFAULT_VOLCENGINE_BASE_URL,
-    DEFAULT_VOLCENGINE_MODEL, DEFAULT_WANJIE_ARK_BASE_URL, DEFAULT_WANJIE_ARK_MODEL,
-    DEFAULT_XAI_BASE_URL, DEFAULT_XAI_MODEL, DEFAULT_XIAOMI_MIMO_BASE_URL,
-    DEFAULT_XIAOMI_MIMO_MODEL, DEFAULT_ZAI_BASE_URL, DEFAULT_ZAI_MODEL, ProviderKind,
+    DEFAULT_OPENCODE_GO_BASE_URL, DEFAULT_OPENCODE_GO_MODEL, DEFAULT_OPENCODE_ZEN_BASE_URL,
+    DEFAULT_OPENCODE_ZEN_MODEL, DEFAULT_OPENMODEL_BASE_URL, DEFAULT_OPENMODEL_MODEL,
+    DEFAULT_OPENROUTER_BASE_URL, DEFAULT_OPENROUTER_MODEL, DEFAULT_QIANFAN_BASE_URL,
+    DEFAULT_QIANFAN_MODEL, DEFAULT_SAKANA_BASE_URL, DEFAULT_SAKANA_MODEL, DEFAULT_SGLANG_BASE_URL,
+    DEFAULT_SGLANG_MODEL, DEFAULT_SILICONFLOW_BASE_URL, DEFAULT_SILICONFLOW_CN_BASE_URL,
+    DEFAULT_SILICONFLOW_MODEL, DEFAULT_STEPFUN_BASE_URL, DEFAULT_STEPFUN_MODEL,
+    DEFAULT_TOGETHER_BASE_URL, DEFAULT_TOGETHER_MODEL, DEFAULT_VLLM_BASE_URL, DEFAULT_VLLM_MODEL,
+    DEFAULT_VOLCENGINE_BASE_URL, DEFAULT_VOLCENGINE_MODEL, DEFAULT_WANJIE_ARK_BASE_URL,
+    DEFAULT_WANJIE_ARK_MODEL, DEFAULT_XAI_BASE_URL, DEFAULT_XAI_MODEL,
+    DEFAULT_XIAOMI_MIMO_BASE_URL, DEFAULT_XIAOMI_MIMO_MODEL, DEFAULT_ZAI_BASE_URL,
+    DEFAULT_ZAI_MODEL, ProviderKind,
 };
 
 /// Wire protocol spoken by a provider.
@@ -38,6 +39,43 @@ pub enum WireFormat {
     Responses,
     /// Native Anthropic Messages API (`/v1/messages`).
     AnthropicMessages,
+}
+
+/// How a provider selects its request wire format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WirePolicy {
+    /// Every model served by the provider uses the same wire format.
+    Fixed(WireFormat),
+    /// The provider catalog selects a wire format per model/endpoint.
+    ModelAware,
+}
+
+impl WirePolicy {
+    /// Return the fixed format, or `None` for model-aware providers.
+    #[must_use]
+    pub const fn fixed(self) -> Option<WireFormat> {
+        match self {
+            Self::Fixed(format) => Some(format),
+            Self::ModelAware => None,
+        }
+    }
+
+    /// Resolve a concrete format from an offering endpoint key.
+    #[must_use]
+    pub fn resolve(self, endpoint_key: &str) -> Option<WireFormat> {
+        if let Self::Fixed(format) = self {
+            return Some(format);
+        }
+
+        match endpoint_key.trim().to_ascii_lowercase().as_str() {
+            "chat" | "chat_completions" | "chat-completions" => Some(WireFormat::ChatCompletions),
+            "responses" => Some(WireFormat::Responses),
+            "messages" | "anthropic_messages" | "anthropic-messages" => {
+                Some(WireFormat::AnthropicMessages)
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Static metadata for a built-in model provider.
@@ -70,9 +108,9 @@ pub trait Provider: Send + Sync {
         &[]
     }
 
-    /// Wire format used by the provider.
-    fn wire(&self) -> WireFormat {
-        WireFormat::ChatCompletions
+    /// Policy used to select the request wire format.
+    fn wire_policy(&self) -> WirePolicy {
+        WirePolicy::Fixed(WireFormat::ChatCompletions)
     }
 }
 
@@ -175,8 +213,8 @@ impl Provider for DeepseekAnthropic {
         &["deepseek_anthropic", "deepseek-claude", "deepseek_claude"]
     }
 
-    fn wire(&self) -> WireFormat {
-        WireFormat::AnthropicMessages
+    fn wire_policy(&self) -> WirePolicy {
+        WirePolicy::Fixed(WireFormat::AnthropicMessages)
     }
 }
 provider!(
@@ -463,8 +501,8 @@ impl Provider for OpenaiCodex {
         ]
     }
 
-    fn wire(&self) -> WireFormat {
-        WireFormat::Responses
+    fn wire_policy(&self) -> WirePolicy {
+        WirePolicy::Fixed(WireFormat::Responses)
     }
 }
 
@@ -500,8 +538,8 @@ impl Provider for Anthropic {
         "anthropic"
     }
 
-    fn wire(&self) -> WireFormat {
-        WireFormat::AnthropicMessages
+    fn wire_policy(&self) -> WirePolicy {
+        WirePolicy::Fixed(WireFormat::AnthropicMessages)
     }
 }
 
@@ -541,8 +579,8 @@ impl Provider for Openmodel {
         &["open-model", "open_model"]
     }
 
-    fn wire(&self) -> WireFormat {
-        WireFormat::AnthropicMessages
+    fn wire_policy(&self) -> WirePolicy {
+        WirePolicy::Fixed(WireFormat::AnthropicMessages)
     }
 }
 
@@ -622,8 +660,8 @@ impl Provider for MinimaxAnthropic {
         ]
     }
 
-    fn wire(&self) -> WireFormat {
-        WireFormat::AnthropicMessages
+    fn wire_policy(&self) -> WirePolicy {
+        WirePolicy::Fixed(WireFormat::AnthropicMessages)
     }
 }
 
@@ -674,6 +712,47 @@ provider!(
     "opencode_go",
     aliases: ["opencode_go", "opencodego"]
 );
+
+/// OpenCode Zen gateway with a model-scoped wire protocol.
+pub struct OpencodeZen;
+
+impl Provider for OpencodeZen {
+    fn id(&self) -> &'static str {
+        "opencode-zen"
+    }
+
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::OpencodeZen
+    }
+
+    fn display_name(&self) -> &'static str {
+        "OpenCode Zen"
+    }
+
+    fn default_base_url(&self) -> &'static str {
+        DEFAULT_OPENCODE_ZEN_BASE_URL
+    }
+
+    fn default_model(&self) -> &'static str {
+        DEFAULT_OPENCODE_ZEN_MODEL
+    }
+
+    fn env_vars(&self) -> &'static [&'static str] {
+        &["OPENCODE_ZEN_API_KEY", "OPENCODE_API_KEY"]
+    }
+
+    fn provider_config_key(&self) -> &'static str {
+        "opencode_zen"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &["opencode_zen", "opencodezen", "zen", "opencode"]
+    }
+
+    fn wire_policy(&self) -> WirePolicy {
+        WirePolicy::ModelAware
+    }
+}
 
 provider!(
     Meta,
@@ -754,8 +833,8 @@ impl Provider for Custom {
         "custom"
     }
 
-    fn wire(&self) -> WireFormat {
-        WireFormat::ChatCompletions
+    fn wire_policy(&self) -> WirePolicy {
+        WirePolicy::Fixed(WireFormat::ChatCompletions)
     }
 }
 
@@ -791,11 +870,12 @@ static DEEPINFRA: Deepinfra = Deepinfra;
 static SAKANA: Sakana = Sakana;
 static LONGCAT: LongCat = LongCat;
 static OPENCODE_GO: OpencodeGo = OpencodeGo;
+static OPENCODE_ZEN: OpencodeZen = OpencodeZen;
 static META: Meta = Meta;
 static XAI: Xai = Xai;
 static CUSTOM: Custom = Custom;
 
-static PROVIDER_REGISTRY: [&dyn Provider; 35] = [
+static PROVIDER_REGISTRY: [&dyn Provider; 36] = [
     &DEEPSEEK,
     &DEEPSEEK_ANTHROPIC,
     &NVIDIA_NIM,
@@ -828,6 +908,7 @@ static PROVIDER_REGISTRY: [&dyn Provider; 35] = [
     &SAKANA,
     &LONGCAT,
     &OPENCODE_GO,
+    &OPENCODE_ZEN,
     &META,
     &XAI,
     &CUSTOM,
@@ -898,6 +979,26 @@ pub fn provider_for_kind(kind: ProviderKind) -> &'static dyn Provider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_aware_wire_policy_resolves_only_supported_endpoint_keys() {
+        let policy = WirePolicy::ModelAware;
+        assert_eq!(policy.resolve("chat"), Some(WireFormat::ChatCompletions));
+        assert_eq!(policy.resolve("responses"), Some(WireFormat::Responses));
+        assert_eq!(
+            policy.resolve("messages"),
+            Some(WireFormat::AnthropicMessages)
+        );
+        assert_eq!(policy.resolve("models/gemini-3.1-pro"), None);
+        assert_eq!(policy.resolve(""), None);
+    }
+
+    #[test]
+    fn fixed_wire_policy_ignores_catalog_endpoint_keys() {
+        let policy = WirePolicy::Fixed(WireFormat::Responses);
+        assert_eq!(policy.resolve("chat"), Some(WireFormat::Responses));
+        assert_eq!(policy.resolve("unknown"), Some(WireFormat::Responses));
+    }
 
     #[test]
     fn display_order_is_alphabetical_by_display_name() {

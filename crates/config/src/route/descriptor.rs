@@ -10,7 +10,7 @@
 //! inside a `Serialize` struct; serialize the resolved facts instead.
 
 use crate::ProviderKind;
-use crate::provider::{self, Provider};
+use crate::provider::{self, Provider, WirePolicy};
 
 use super::RequestProtocol;
 use super::ids::{ProviderId, WireModelId};
@@ -60,10 +60,16 @@ impl ProviderDescriptor {
         self.inner.env_vars()
     }
 
-    /// Selected wire protocol for this provider.
+    /// Policy used to select this provider's wire protocol.
     #[must_use]
-    pub fn protocol(&self) -> RequestProtocol {
-        self.inner.wire()
+    pub fn wire_policy(&self) -> WirePolicy {
+        self.inner.wire_policy()
+    }
+
+    /// Resolve the concrete protocol for an offering endpoint key.
+    #[must_use]
+    pub fn protocol_for_endpoint(&self, endpoint_key: &str) -> Option<RequestProtocol> {
+        self.wire_policy().resolve(endpoint_key)
     }
 }
 
@@ -72,7 +78,7 @@ impl std::fmt::Debug for ProviderDescriptor {
         f.debug_struct("ProviderDescriptor")
             .field("kind", &self.kind)
             .field("id", &self.inner.id())
-            .field("protocol", &self.inner.wire())
+            .field("wire_policy", &self.inner.wire_policy())
             .finish()
     }
 }

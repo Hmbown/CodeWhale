@@ -17,11 +17,11 @@
 # `--provider fireworks`, `--provider siliconflow`, `--provider siliconflow-CN`,
 # `/provider arcee`, `/provider moonshot`, `/provider qianfan`, `/provider sglang`, `/provider vllm`,
 # `/provider ollama`, `/provider huggingface`, `/provider stepfun`, `/provider openmodel`,
-# `/provider opencode-go`, `/provider meta`, `/provider xai`) toggle without having to re-enter keys. Top-level
+# `/provider opencode-go`, `/provider opencode-zen`, `/provider meta`, `/provider xai`) toggle without having to re-enter keys. Top-level
 # `api_key` / `base_url` are
 # still read as DeepSeek defaults when `[providers.deepseek]` is absent
 # (backward compatibility).
-provider = "deepseek" # deepseek | deepseek-cn | deepseek-anthropic | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | siliconflow-CN | arcee | moonshot | zai | stepfun | minimax | sglang | vllm | ollama | huggingface | together | qianfan | openai-codex | anthropic | openmodel | deepinfra | sakana | longcat | opencode-go | meta | xai
+provider = "deepseek" # deepseek | deepseek-cn | deepseek-anthropic | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | siliconflow-CN | arcee | moonshot | zai | stepfun | minimax | sglang | vllm | ollama | huggingface | together | qianfan | openai-codex | anthropic | openmodel | deepinfra | sakana | longcat | opencode-go | opencode-zen | meta | xai
 api_key = "YOUR_DEEPSEEK_API_KEY" # must be non-empty
 base_url = "https://api.deepseek.com/beta"
 # provider = "deepseek-cn"                       # legacy alias (official host is still https://api.deepseek.com)
@@ -577,6 +577,20 @@ max_subagents = 10 # optional (1-20)
 # api_key = "YOUR_OPENCODE_GO_API_KEY"
 # base_url = "https://opencode.ai/zen/go/v1"
 # model = "deepseek-v4-pro"
+
+# OpenCode Zen (https://opencode.ai/docs/zen/)
+# Model-aware gateway: GPT models use Responses, Claude/Qwen use Anthropic
+# Messages, and DeepSeek/MiniMax/GLM/Kimi/Grok/free models use Chat Completions.
+# Gemini uses a Google-specific protocol that Codewhale does not implement and
+# therefore fails closed instead of being sent with the wrong request shape.
+# Env vars: OPENCODE_ZEN_API_KEY (preferred), OPENCODE_API_KEY,
+# OPENCODE_ZEN_BASE_URL, OPENCODE_ZEN_MODEL
+[providers.opencode_zen]
+# api_key = "YOUR_OPENCODE_ZEN_API_KEY"
+# base_url = "https://opencode.ai/zen/v1"
+# model = "gpt-5.5"                         # Responses default
+# model = "claude-sonnet-4-6"               # Anthropic Messages example
+# model = "deepseek-v4-pro"                 # Chat Completions example
 
 # Meta Model API / Muse Spark (https://developer.meta.com/ai/)
 # OpenAI-compatible Chat Completions route.

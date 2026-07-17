@@ -533,10 +533,9 @@ impl ProviderDashboardRow {
                     vec![
                         provider
                             .metadata()
-                            .map(|metadata| protocol_label(metadata.wire()).to_string())
-                            .unwrap_or_else(|| {
-                                protocol_label(WireFormat::ChatCompletions).to_string()
-                            }),
+                            .and_then(|metadata| metadata.wire_policy().fixed())
+                            .map(|protocol| protocol_label(protocol).to_string())
+                            .unwrap_or_else(|| "model-aware".to_string()),
                     ],
                     ProviderDefaultRoute {
                         logical_model: configured_model.unwrap_or_else(|| "invalid".to_string()),
