@@ -1892,18 +1892,16 @@ fn write_provider_api_key_to_config(
 fn prepare_provider_api_key_metadata(store: &mut ConfigStore, provider: ProviderKind) {
     store.config.auth_mode = Some("api_key".to_string());
     store.config.providers.for_provider_mut(provider).auth_mode = Some("api_key".to_string());
-    if provider == ProviderKind::Deepseek {
-        if store.config.default_text_model.is_none() {
-            store.config.default_text_model = Some(
-                store
-                    .config
-                    .providers
-                    .deepseek
-                    .model
-                    .clone()
-                    .unwrap_or_else(|| "deepseek-v4-pro".to_string()),
-            );
-        }
+    if provider == ProviderKind::Deepseek && store.config.default_text_model.is_none() {
+        store.config.default_text_model = Some(
+            store
+                .config
+                .providers
+                .deepseek
+                .model
+                .clone()
+                .unwrap_or_else(|| "deepseek-v4-pro".to_string()),
+        );
     }
 }
 
