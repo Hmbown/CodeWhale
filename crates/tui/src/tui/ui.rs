@@ -179,7 +179,7 @@ use self::activity_detail::open_activity_detail_pager;
 /// Upper bound on slash-menu entries returned to the renderer. The composer's
 /// render path already paginates with center-tracking (see
 /// `widgets::ComposerWidget::render`), so this only needs to be high enough to
-/// encompass the full filtered command list â€” never the visible-row budget.
+/// encompass the full filtered command list â€?never the visible-row budget.
 /// Bumped from 6 to 128 to fix #64 (selection couldn't reach commands beyond
 /// the visible window because the source list itself was capped).
 const SLASH_MENU_LIMIT: usize = 128;
@@ -203,11 +203,11 @@ const TURN_STALL_WATCHDOG_GRACE: Duration = Duration::from_secs(30);
 /// Running tools can legitimately exceed the silent-turn timeout, but a tool
 /// with no progress heartbeat or output beyond this ceiling is treated as hung.
 // Must stay comfortably above `turn_stall_watchdog_timeout` so a running tool
-// gets extra grace beyond the turn-stall threshold (#1862 trimmed 15m â†’ 10m).
+// gets extra grace beyond the turn-stall threshold (#1862 trimmed 15m â†?10m).
 const TOOL_HANG_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(600);
 // Forced repaint cadence while a turn is live (model loading, compacting,
 // sub-agents running). Drives the footer water-spout animation as well as
-// the per-tool spinner pulse â€” keep this fast enough that the whale-spout
+// the per-tool spinner pulse â€?keep this fast enough that the whale-spout
 // braille pattern reads as continuous motion instead of teleport-frames.
 const UI_STATUS_ANIMATION_MS: u64 = crate::tui::spinner::BRAILLE_SPINNER_FRAME_MS;
 /// Ambient fish, the idle-mark caustic, and the completion wake use a modest
@@ -417,8 +417,7 @@ const TERMINAL_ORIGIN_RESET: &[u8] = b"\x1b[r\x1b[?6l\x1b[H";
 const ENABLE_ALT_SCROLL_MODE: &[u8] = b"\x1b[?1007h";
 const DISABLE_ALT_SCROLL_MODE: &[u8] = b"\x1b[?1007l";
 /// Begin synchronized update (DEC 2026): tell the terminal to defer
-/// rendering until END_SYNC_UPDATE is received. Best-effort â€”
-/// terminals that don't support this silently ignore the sequence.
+/// rendering until END_SYNC_UPDATE is received. Best-effort â€?/// terminals that don't support this silently ignore the sequence.
 /// Reduces flicker on GPU-accelerated terminals (Ghostty, VSCode
 /// Terminal, Kitty, WezTerm) by batching ratatui's incremental
 /// diff writes into a single frame.
@@ -892,7 +891,7 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     // Mouse capture, bracketed paste, focus events, and the Kitty
     // keyboard-protocol escape-disambiguation flag (#442). Single source
     // of truth shared with the FocusGained recovery path and
-    // resume_terminal â€” see recover_terminal_modes.
+    // resume_terminal â€?see recover_terminal_modes.
     //
     // Focus events are necessary for IME compositor re-activation on
     // macOS when the user switches away (Cmd+Tab) and returns. The Kitty
@@ -902,7 +901,7 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     // Alacritty 0.13+, WezTerm, recent Konsole, recent xterm) report
     // unambiguous events for Option/Alt-modified keys and plain Esc.
     //
-    // Only `DISAMBIGUATE_ESCAPE_CODES` is pushed â€” the higher tiers
+    // Only `DISAMBIGUATE_ESCAPE_CODES` is pushed â€?the higher tiers
     // (`REPORT_EVENT_TYPES`, `REPORT_ALL_KEYS_AS_ESCAPE_CODES`) emit
     // release events that the existing key handlers would mis-route
     // as duplicate presses.
@@ -910,7 +909,7 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     // On Windows, crossterm's `PushKeyboardEnhancementFlags` command always
     // reports the terminal as unsupported (`is_ansi_code_supported` returns
     // false), so the escape is written directly instead. VSCode's integrated
-    // terminal and Windows Terminal â‰¥1.17 honour the kitty keyboard protocol
+    // terminal and Windows Terminal â‰?.17 honour the kitty keyboard protocol
     // and will correctly disambiguate Shift+Enter from plain Enter once this
     // sequence is received. Terminals that do not understand it silently
     // ignore it.
@@ -1025,7 +1024,7 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
                     }
                     if app.status_message.is_none() && app.queued_message_count() > 0 {
                         app.status_message = Some(format!(
-                            "Restored {} queued message(s) from previous session â€” â†‘ to edit, Ctrl+X to discard",
+                            "Restored {} queued message(s) from previous session â€?â†?to edit, Ctrl+X to discard",
                             app.queued_message_count()
                         ));
                     }
@@ -1068,7 +1067,7 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
         .shell_manager
         .clone()
         .unwrap_or_else(|| crate::tools::shell::new_shared_shell_manager(app.workspace.clone()));
-    // #2511: ensure hook_executor is initialized for fresh sessions â€” it is
+    // #2511: ensure hook_executor is initialized for fresh sessions â€?it is
     // only set by apply_workspace_runtime_state (session resume / workspace
     // switch), so a brand-new session would otherwise leave it None and both
     // exec_shell shell_env hooks and ToolCallBefore gate would silently no-op.
@@ -1200,7 +1199,7 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
 
     if result.is_ok() && should_show_resume_hint(app.current_session_id.as_deref()) {
         // Printed AFTER `LeaveAlternateScreen` / `drop(terminal)` above,
-        // so we're back on the primary screen â€” this is the one
+        // so we're back on the primary screen â€?this is the one
         // legitimate stdout write in the TUI module tree. The
         // module-level `#![deny(clippy::print_stdout)]` would otherwise
         // refuse it.
@@ -1229,7 +1228,7 @@ fn resume_hint_text() -> &'static str {
 /// side must disable raw mode again. `SeqCst` ordering guarantees that when
 /// both sides run, at least one observes the other's flag, so a raw-mode
 /// enable landing after the probe timeout is always undone. Both sides
-/// observing each other is fine â€” a duplicate `disable_raw_mode` is a no-op.
+/// observing each other is fine â€?a duplicate `disable_raw_mode` is a no-op.
 fn raw_mode_probe_handshake(publish: &AtomicBool, check: &AtomicBool) -> bool {
     publish.store(true, Ordering::SeqCst);
     check.load(Ordering::SeqCst)
@@ -1738,7 +1737,7 @@ fn build_app_system_prompt_with_goal(
 /// Tasks completing during the current session always show (until the
 /// next session boundary). Tasks that completed shortly before the
 /// session also show, so users coming back to a terminal see "you just
-/// finished X". Anything older than this window is hidden â€” preventing
+/// finished X". Anything older than this window is hidden â€?preventing
 /// the sidebar from accumulating indefinitely (bug #1913).
 const WORK_SIDEBAR_RECENT_COMPLETED_TTL: chrono::Duration = chrono::Duration::hours(2);
 
@@ -1747,14 +1746,14 @@ const WORK_SIDEBAR_RECENT_COMPLETED_TTL: chrono::Duration = chrono::Duration::ho
 ///
 /// Active tasks (`Queued`/`Running`) are always included. Terminal
 /// tasks (`Completed`/`Failed`/`Canceled`) are kept only if their
-/// `ended_at` falls within the "recent" window â€” defined as either:
+/// `ended_at` falls within the "recent" window â€?defined as either:
 ///
 /// - within the current TUI session (`ended_at >= session_started_at`), or
 /// - within `recent_ttl` of `now` (so a task that finished a few
 ///   minutes before the session started still shows).
 ///
-/// Anything older than that â€” including the multi-day-old completed
-/// tasks reported in bug #1913 â€” is excluded so the sidebar does not
+/// Anything older than that â€?including the multi-day-old completed
+/// tasks reported in bug #1913 â€?is excluded so the sidebar does not
 /// accumulate indefinitely across sessions.
 ///
 /// A terminal task missing `ended_at` is treated as not-recent and
@@ -1847,7 +1846,7 @@ fn refresh_shell_exec_live_output(app: &mut App) -> bool {
     let Some(shell_mgr) = app.runtime_services.shell_manager.as_ref().cloned() else {
         return false;
     };
-    // #3804: render-only read â€” try_lock so a contended shell Mutex can never
+    // #3804: render-only read â€?try_lock so a contended shell Mutex can never
     // block the async UI loop; skip this frame's live-output update on
     // contention (the next refresh picks it up).
     let jobs = {
@@ -1985,7 +1984,7 @@ static BALANCE_CLIENT: LazyLock<::reqwest::Client> = LazyLock::new(|| {
 
 /// Fetch the DeepSeek account balance from the balance API.
 ///
-/// Returns `None` on any error (network, auth, parse) â€” callers should treat
+/// Returns `None` on any error (network, auth, parse) â€?callers should treat
 /// a `None` return as "balance unknown" and keep the previous value.
 async fn fetch_deepseek_balance(
     api_key: &str,
@@ -2046,7 +2045,7 @@ async fn run_event_loop(
         .checked_sub(Duration::from_millis(UI_STATUS_ANIMATION_MS))
         .unwrap_or_else(Instant::now);
     // 120 FPS draw cap. Without this we redraw on every SSE chunk during a
-    // long stream â€” wasted work the user can't perceive. See
+    // long stream â€?wasted work the user can't perceive. See
     // `tui::frame_rate_limiter` for the rationale; ports the small piece of
     // codex's frame coalescing that maps cleanly onto our poll-based loop.
     let mut frame_rate_limiter = crate::tui::frame_rate_limiter::FrameRateLimiter::default();
@@ -2072,7 +2071,7 @@ async fn run_event_loop(
         .unwrap_or_else(Instant::now);
     let mut last_recovery_snapshot_at: Option<Instant> = None;
 
-    // Fire-and-forget version check â€” runs once per session in the
+    // Fire-and-forget version check â€?runs once per session in the
     // background. On success, a short status toast advertises the update
     // without replacing the user's configured footer/status-line chips.
     let mut version_check: Option<tokio::task::JoinHandle<Option<String>>> =
@@ -2368,7 +2367,7 @@ async fn run_event_loop(
                         // deliver `MessageComplete` first, in which case
                         // `last_reasoning.take()` below would be `None` and
                         // the thinking block would be dropped from
-                        // `api_messages` â€” causing a DeepSeek HTTP 400 on the
+                        // `api_messages` â€?causing a DeepSeek HTTP 400 on the
                         // next turn (V4 thinking-mode requires
                         // `reasoning_content` replay). Inline-finalize the
                         // thinking entry here so this branch is order-
@@ -2393,7 +2392,7 @@ async fn run_event_loop(
                             {
                                 *streaming = false;
                             }
-                            // Streaming flag flipped â€” the cell's compact /
+                            // Streaming flag flipped â€?the cell's compact /
                             // transcript variants render slightly
                             // differently, so bump its revision so the cache
                             // refreshes this row only.
@@ -2564,7 +2563,7 @@ async fn run_event_loop(
                         ) {
                             app.pending_subagent_dispatch = Some(name.clone());
                             if matches!(name.as_str(), "rlm_open" | "rlm_eval" | "rlm") {
-                                // New fanout invocation â€” children should
+                                // New fanout invocation â€?children should
                                 // group under a fresh card, not the
                                 // previous fanout's leftover.
                                 app.last_fanout_card_index = None;
@@ -2608,7 +2607,7 @@ async fn run_event_loop(
                         // background shell jobs force a jobs-panel refresh.
                         // Checklist/todo/plan tools drive the To-do panel,
                         // which reads `app.todos` directly and repaints on the
-                        // normal redraw â€” no forced refresh needed (avoids the
+                        // normal redraw â€?no forced refresh needed (avoids the
                         // old per-checklist Tasks-panel churn).
                         if matches!(
                             name.as_str(),
@@ -2960,8 +2959,8 @@ async fn run_event_loop(
                             // Debt ledger completion-gate: after every completed
                             // turn, check whether there are unresolved entries
                             // the agent should address before claiming the task is
-                            // done (#2127). This runs autonomously â€” no tool call
-                            // required â€” so the agent can't forget to check.
+                            // done (#2127). This runs autonomously â€?no tool call
+                            // required â€?so the agent can't forget to check.
                             if let Ok(ledger) = crate::slop_ledger::SlopLedger::load()
                                 && ledger.has_open_entries()
                                 && let Some(gate_msg) = ledger.completion_gate_summary()
@@ -2975,14 +2974,14 @@ async fn run_event_loop(
                             }
 
                             let tool_count = app.tool_evidence.len();
-                            let mut receipt = "âœ“ turn completed".to_string();
+                            let mut receipt = "âœ?turn completed".to_string();
                             if tool_count > 0 {
                                 let _ = write!(receipt, " Â· {tool_count} tool(s) used");
                                 for evidence in &app.tool_evidence {
                                     let summary = crate::utils::truncate_with_ellipsis(
                                         &evidence.summary,
                                         60,
-                                        "â€¦",
+                                        "â€?,
                                     );
                                     let _ = write!(receipt, " Â· {}: {summary}", evidence.tool_name);
                                 }
@@ -3229,7 +3228,7 @@ async fn run_event_loop(
                             repair.diagnostics_found.saturating_add(diagnostics_found);
                         repair.files_touched = repair.files_touched.saturating_add(files);
                         if injected {
-                            // Injection itself is not a repair attempt â€” the model
+                            // Injection itself is not a repair attempt â€?the model
                             // has only been shown the diagnostics so far (#4107).
                             repair.injected = true;
                             if repair.latest == "unavailable" || repair.latest.is_empty() {
@@ -3333,7 +3332,7 @@ async fn run_event_loop(
                             app.agent_activity_started_at = Some(Instant::now());
                         }
                         // #3030: progress can arrive before AgentSpawned is
-                        // observed â€” assign the stable label on first sight.
+                        // observed â€?assign the stable label on first sight.
                         let label = app.ensure_agent_label(&id);
                         app.status_message = Some(format!("{label}: {display}"));
                         // A progress-first agent (its AgentSpawned was dropped
@@ -3486,7 +3485,7 @@ async fn run_event_loop(
                         }
                     }
                     EngineEvent::WorkflowUi { run_id, event } => {
-                        // #4122: live typed workflow events â†’ panel + history card.
+                        // #4122: live typed workflow events â†?panel + history card.
                         apply_workflow_ui_event(app, &run_id, &event);
                         // #4095 residual: budget_updated is high-frequency under
                         // multi-agent fan-out. Data is already applied; pace the
@@ -3757,7 +3756,7 @@ async fn run_event_loop(
 
         // Avoid cloning the queued messages/draft every loop iteration
         // (~20-40 Hz) purely for change detection. When the queue is empty and
-        // was empty last time â€” the overwhelmingly common case â€” there is
+        // was empty last time â€?the overwhelmingly common case â€?there is
         // nothing to compare, so skip the clone entirely. A multi-KB queued
         // draft is only cloned while one is actually pending.
         let queue_now_empty = app.queued_messages.is_empty() && app.queued_draft.is_none();
@@ -3801,7 +3800,7 @@ async fn run_event_loop(
         // Idle ambient motion belongs to every underwater treatment: ombre
         // breathes its water column, while flat and Terminal-owned animate
         // foreground life only. Schedule redraws only when something can
-        // actually move â€” the ombre field at any size, or ambient life once
+        // actually move â€?the ombre field at any size, or ambient life once
         // the empty water is large enough to earn it.
         let ombre_field_breathes = app.ocean_treatment.is_ombre()
             && crate::tui::ocean::OceanRamp::for_theme(&app.ui_theme).is_some();
@@ -4087,7 +4086,7 @@ async fn run_event_loop(
                 );
                 // Once a real bracketed-paste event has been observed in
                 // this session, the rapid-keystroke heuristic in
-                // paste_burst is redundant â€” disable it so fast typing /
+                // paste_burst is redundant â€?disable it so fast typing /
                 // IME commits / autocomplete bursts don't get
                 // mis-classified as a paste.
                 app.bracketed_paste_seen = true;
@@ -4100,7 +4099,7 @@ async fn run_event_loop(
                 } else if app.view_stack.handle_paste(text) {
                     // Modal consumed the paste (e.g. provider picker key entry)
                 } else if !app.view_stack.is_empty() {
-                    // A non-consumed modal is open â€” don't leak paste into composer
+                    // A non-consumed modal is open â€?don't leak paste into composer
                 } else {
                     // Paste into main input
                     app.insert_paste_text(text);
@@ -4112,7 +4111,7 @@ async fn run_event_loop(
             // viewport reset before repainting. App-switching and interactive
             // handoffs can leave the host terminal scrolled away from row 0
             // and (on macOS) can drop the keyboard, mouse-tracking, or
-            // bracketed-paste modes â€” recover_terminal_modes() is the
+            // bracketed-paste modes â€?recover_terminal_modes() is the
             // canonical place those flags live.
             if terminal_event_needs_viewport_recapture(&evt) {
                 let now = Instant::now();
@@ -4219,7 +4218,7 @@ async fn run_event_loop(
             if app.use_mouse_capture
                 && let Event::Mouse(mouse) = evt
             {
-                // Mouse interaction clears the âœ… completion marker.
+                // Mouse interaction clears the âœ?completion marker.
                 crate::tui::notifications::reset_title_on_interaction();
                 if should_drop_loading_mouse_motion(app, mouse) {
                     continue;
@@ -4336,7 +4335,7 @@ async fn run_event_loop(
                 continue;
             }
 
-            // User interaction â€” clear the âœ… completion marker from the title.
+            // User interaction â€?clear the âœ?completion marker from the title.
             crate::tui::notifications::reset_title_on_interaction();
 
             let Event::Key(mut key) = evt else {
@@ -4355,8 +4354,7 @@ async fn run_event_loop(
             key.modifiers = mapped;
 
             // Normalize the raw Ctrl+C control byte (0x03) delivered in
-            // PTY/raw-mode â€” and by some kitty-keyboard-protocol terminals â€”
-            // to canonical Ctrl+C so the quit-arm flow always runs (#4090).
+            // PTY/raw-mode â€?and by some kitty-keyboard-protocol terminals â€?            // to canonical Ctrl+C so the quit-arm flow always runs (#4090).
             normalize_raw_ctrl_c(&mut key);
 
             // Approval is a decision boundary, not a viewport lock. Keep the
@@ -4600,8 +4598,8 @@ async fn run_event_loop(
                         }
                         OnboardingState::TrustDirectory => {
                             // Trusting a workspace is a security boundary, so it
-                            // must be a deliberate choice. Enter â€” the "advance"
-                            // key on every other onboarding screen â€” must NOT
+                            // must be a deliberate choice. Enter â€?the "advance"
+                            // key on every other onboarding screen â€?must NOT
                             // grant trust by reflex (accidental-trust risk). Nor
                             // is it a silent dead key: point the user at the
                             // explicit keys the footer advertises.
@@ -4826,7 +4824,7 @@ async fn run_event_loop(
             // reserved for the composer end-of-line binding used by shells.
             if key_shortcuts::is_file_tree_toggle_shortcut(&key) {
                 if let Some(_state) = app.file_tree.as_mut() {
-                    // File tree visible â†’ hide it.
+                    // File tree visible â†?hide it.
                     app.file_tree = None;
                     app.status_message = Some("File tree closed".to_string());
                 } else {
@@ -5245,11 +5243,10 @@ async fn run_event_loop(
                     }
                 }
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    // Four behaviors layered on Ctrl+C in priority order â€” see
+                    // Four behaviors layered on Ctrl+C in priority order â€?see
                     // `CtrlCDisposition` for the unit-tested decision table.
-                    // 1. selection active â†’ copy + clear (Windows convention,
-                    //    #1337); 2. turn in flight â†’ cancel; 3. quit-armed â†’
-                    //    exit; 4. otherwise â†’ arm the 2-second exit prompt.
+                    // 1. selection active â†?copy + clear (Windows convention,
+                    //    #1337); 2. turn in flight â†?cancel; 3. quit-armed â†?                    //    exit; 4. otherwise â†?arm the 2-second exit prompt.
                     match ctrl_c_disposition(app) {
                         CtrlCDisposition::CopySelection => {
                             copy_active_selection(app);
@@ -5284,7 +5281,7 @@ async fn run_event_loop(
                     let _ = engine_handle.send(Op::Shutdown).await;
                     return Ok(());
                 }
-                // Vim composer mode: Esc from Insert/Visual â†’ Normal.
+                // Vim composer mode: Esc from Insert/Visual â†?Normal.
                 // This arm runs before the generic Esc handler so Insert mode
                 // Esc doesn't accidentally cancel an in-flight request.
                 KeyCode::Esc
@@ -5308,7 +5305,7 @@ async fn run_event_loop(
                 KeyCode::Esc => {
                     match next_escape_action(app, slash_menu_open) {
                         EscapeAction::CloseSlashMenu => {
-                            // A popup-style action wins over backtrack â€” clear
+                            // A popup-style action wins over backtrack â€?clear
                             // any prime so a stale Primed state can't jump us
                             // straight into Selecting on the next Esc.
                             app.backtrack.reset();
@@ -5362,7 +5359,7 @@ async fn run_event_loop(
                             app.clear_input_recoverable();
                         }
                         EscapeAction::Noop => {
-                            // Nothing else cares about this Esc â€” route it
+                            // Nothing else cares about this Esc â€?route it
                             // through the backtrack state machine. While
                             // streaming or with the live transcript already
                             // open, fall through silently (#133 acceptance:
@@ -5431,7 +5428,7 @@ async fn run_event_loop(
                     let _ = app.select_previous_composer_attachment();
                     continue;
                 }
-                // #85: â†‘ edits the most-recent queued message when the composer
+                // #85: â†?edits the most-recent queued message when the composer
                 // is idle and the pending-input preview is showing queued work.
                 KeyCode::Up
                     if key.modifiers.is_empty()
@@ -5529,7 +5526,7 @@ async fn run_event_loop(
                 // Transcript-nav shortcuts now require Alt, leaving most bare
                 // letters free to insert as text. Before v0.8.30, bare `g`,
                 // `G`, `[`, `]`, `?`, and `l` on an empty composer were
-                // hijacked for navigation â€” typing "good" yielded "ood" with
+                // hijacked for navigation â€?typing "good" yielded "ood" with
                 // no whale and no warning. The Alt-prefixed shortcuts mirror
                 // the Alt+R / Alt+C pattern already in use. Shift is
                 // permitted for most capital-letter forms.
@@ -5656,7 +5653,7 @@ async fn run_event_loop(
                                 build_queued_message(app, input)
                             };
                             if app.is_loading {
-                                // Engine is busy â€” steer into the current turn.
+                                // Engine is busy â€?steer into the current turn.
                                 attempt_steer_with_queue_fallback(
                                     app,
                                     &engine_handle,
@@ -5664,7 +5661,7 @@ async fn run_event_loop(
                                 )
                                 .await;
                             } else {
-                                // Engine is idle â€” send as a regular message
+                                // Engine is idle â€?send as a regular message
                                 // so the content is not lost to rx_steer's
                                 // stale-drain in handle_send_message (#1331).
                                 submit_or_steer_message(app, config, &engine_handle, queued)
@@ -5675,7 +5672,7 @@ async fn run_event_loop(
                 }
                 KeyCode::Enter => {
                     // #573: when the user typed a slash-command prefix that
-                    // the popup is matching (e.g. `/mo` â†’ `/model`), Enter
+                    // the popup is matching (e.g. `/mo` â†?`/model`), Enter
                     // should run the *highlighted match* rather than
                     // sending the literal `/mo` text. Only kick in when the
                     // popup has at least one entry; otherwise fall through
@@ -5696,7 +5693,7 @@ async fn run_event_loop(
                         if handle_plan_choice(app, config, &engine_handle, &input).await? {
                             continue;
                         }
-                        // `# foo` quick-add (#492) â€” when memory is enabled,
+                        // `# foo` quick-add (#492) â€?when memory is enabled,
                         // a single line starting with `#` (but not `##` /
                         // `#!` shebangs / Markdown headings the user might
                         // be pasting in) is intercepted: the text is
@@ -5732,7 +5729,7 @@ async fn run_event_loop(
                             } else {
                                 build_queued_message(app, input)
                             };
-                            // #383: /edit â€” if the user invoked /edit to revise
+                            // #383: /edit â€?if the user invoked /edit to revise
                             // the last message, undo the last exchange before
                             // dispatching the replacement. Sync the engine
                             // session so it also drops the old exchange.
@@ -5867,8 +5864,7 @@ async fn run_event_loop(
                     // Only fires when no modal is active (the !view_stack
                     // branch above already returns early in that case) and
                     // the composer is the focused input target. We accept the
-                    // shortcut whether or not a model turn is streaming â€”
-                    // editing the buffer never disturbs in-flight work.
+                    // shortcut whether or not a model turn is streaming â€?                    // editing the buffer never disturbs in-flight work.
                     let seed = app.input.clone();
                     let editor_result = terminal_input.pause_for_child_terminal().and_then(|()| {
                         let result = drain_terminal_input_queue(
@@ -5956,7 +5952,7 @@ async fn run_event_loop(
                         crate::composer_stash::push_stash(&app.input);
                         app.clear_input_recoverable();
                         app.push_status_toast(
-                            "Draft stashed â€” `/stash pop` to restore",
+                            "Draft stashed â€?`/stash pop` to restore",
                             StatusToastLevel::Info,
                             Some(3_000),
                         );
@@ -5964,10 +5960,9 @@ async fn run_event_loop(
                 }
                 KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     // #379: context-sensitive Ctrl+Y.
-                    // When the composer has content â†’ emacs-style yank
+                    // When the composer has content â†?emacs-style yank
                     // from the kill buffer at the cursor.
-                    // When the composer is empty (transcript focus) â†’
-                    // copy the focused cell text to the system clipboard.
+                    // When the composer is empty (transcript focus) â†?                    // copy the focused cell text to the system clipboard.
                     if app.input.is_empty() && app.view_stack.is_empty() {
                         if copy_focused_cell(app) {
                             app.push_status_toast(
@@ -6040,7 +6035,7 @@ async fn run_event_loop(
                         && key.modifiers.is_empty()
                         && app.view_stack.is_empty() =>
                 {
-                    // absorb â€” Visual mode not yet fully implemented
+                    // absorb â€?Visual mode not yet fully implemented
                 }
                 KeyCode::Char(c) if is_plain_char => {
                     app.insert_char(c);
@@ -6332,7 +6327,7 @@ async fn run_cache_warmup(app: &App, config: &Config) -> Result<(Usage, String, 
 /// underneath) with a hard timeout so a slow provider cannot wedge setup.
 ///
 /// On success the sanitized, bounded draft is installed into the open wizard
-/// and its ratification preview opens on top â€” nothing persists until the
+/// and its ratification preview opens on top â€?nothing persists until the
 /// user ratifies with `G`. Every failure (no client, timeout, request error,
 /// invalid or empty JSON) is a status line, never an error state: the
 /// deterministic guided draft remains the standing fallback.
@@ -6367,12 +6362,12 @@ async fn handle_setup_constitution_model_draft(
     app.status_message = Some(match locale {
         crate::localization::Locale::ZhHans => {
             format!(
-                "{model_label} æ­£åœ¨ç”Ÿæˆåä½œå‡†åˆ™è‰æ¡ˆâ€¦â€¦ï¼ˆæœ€å¤š {}sï¼‰",
+                "{model_label} æ­£åœ¨ç”Ÿæˆåä½œå‡†åˆ™è‰æ¡ˆâ€¦â€¦ï¼ˆæœ€å¤?{}sï¼?,
                 DRAFT_TIMEOUT.as_secs()
             )
         }
         _ => format!(
-            "{model_label} is drafting your constitutionâ€¦ (up to {}s)",
+            "{model_label} is drafting your constitutionâ€?(up to {}s)",
             DRAFT_TIMEOUT.as_secs()
         ),
     });
@@ -6438,8 +6433,7 @@ fn deliver_constitution_draft_result(
     }
     app.needs_redraw = true;
 }
-/// One-shot fleet-profile draft: same contract as the constitution drafter â€”
-/// minimal payload out, untrusted gate in, preview before ratify, degrade to
+/// One-shot fleet-profile draft: same contract as the constitution drafter â€?/// minimal payload out, untrusted gate in, preview before ratify, degrade to
 /// the manual authoring flow on any failure.
 async fn handle_fleet_profile_model_draft(
     app: &mut App,
@@ -6453,11 +6447,11 @@ async fn handle_fleet_profile_model_draft(
     // The route the operator actually picked at `m`-press time (#4093). A
     // model draft always comes back `provider: None` (the untrusted gate
     // strips any provider), so this captured `(provider, model)` is what the
-    // ratified profile is pinned to â€” immune to the model omitting/altering
+    // ratified profile is pinned to â€?immune to the model omitting/altering
     // the route AND to the selection changing while the draft is in flight.
     // `None` for an `inherit` pick (no concrete route to keep).
     let picked_route = provider.map(|provider| (provider, model.clone()));
-    // Do NOT await the network call on the event loop â€” that parks the whole
+    // Do NOT await the network call on the event loop â€?that parks the whole
     // TUI for up to the timeout (#3757 review). Spawn it into the shared
     // fleet_draft_cell and let the loop poll + deliver the result, keeping
     // the wizard interactive with a drafting status.
@@ -6485,19 +6479,19 @@ async fn handle_fleet_profile_model_draft(
     app.status_message = Some(match locale {
         crate::localization::Locale::ZhHans => {
             format!(
-                "{model_label} æ­£åœ¨èµ·è‰é…ç½®â€¦â€¦ï¼ˆæœ€å¤š {}sï¼‰",
+                "{model_label} æ­£åœ¨èµ·è‰é…ç½®â€¦â€¦ï¼ˆæœ€å¤?{}sï¼?,
                 DRAFT_TIMEOUT.as_secs()
             )
         }
         _ => format!(
-            "{model_label} is drafting the profileâ€¦ (up to {}s)",
+            "{model_label} is drafting the profileâ€?(up to {}s)",
             DRAFT_TIMEOUT.as_secs()
         ),
     });
     app.needs_redraw = true;
     tokio::spawn(async move {
         // Redacted, bounded workspace fingerprint (manifest names, test
-        // commands, branch + dirty count â€” no contents, secrets, or absolute
+        // commands, branch + dirty count â€?no contents, secrets, or absolute
         // paths). Computed off the event loop; the untrusted-output gate on
         // the reply is unchanged.
         let fingerprint = tokio::task::spawn_blocking(move || {
@@ -6538,7 +6532,7 @@ async fn handle_fleet_profile_model_draft(
 /// background draft lands, and directly on the pre-spawn
 /// provider-construction failure.
 ///
-/// The preview renders inline on the wizard's own Review step â€” deliberately
+/// The preview renders inline on the wizard's own Review step â€?deliberately
 /// NOT in a separate pager (#4093): a standalone pager view owns its own
 /// `g`/`G` scroll bindings and would swallow the ratify keypress, forcing an
 /// Esc-then-g round trip before the user could actually save.
@@ -6571,7 +6565,7 @@ fn deliver_fleet_draft_result(
                 if installed {
                     app.status_message = Some(match locale {
                         crate::localization::Locale::ZhHans => {
-                            format!("{model_label} å·²èµ·è‰é…ç½®ã€‚è¯·æŸ¥çœ‹ä¸‹æ–¹ TOMLï¼Œç„¶åŽæŒ‰ g ä¿å­˜ã€‚")
+                            format!("{model_label} å·²èµ·è‰é…ç½®ã€‚è¯·æŸ¥çœ‹ä¸‹æ–¹ TOMLï¼Œç„¶åŽæŒ‰ g ä¿å­˜ã€?)
                         }
                         _ => format!(
                             "{model_label} drafted the profile. Review the TOML below, then press g to save."
@@ -6583,7 +6577,7 @@ fn deliver_fleet_draft_result(
         Err(reason) => {
             app.status_message = Some(match locale {
                 crate::localization::Locale::ZhHans => {
-                    format!("{model_label} æœªèƒ½èµ·è‰é…ç½®ï¼ˆ{reason}ï¼‰ã€‚æŒ‰ Enter ä»ä¼šæ’å…¥ç¼–å†™æç¤ºã€‚")
+                    format!("{model_label} æœªèƒ½èµ·è‰é…ç½®ï¼ˆ{reason}ï¼‰ã€‚æŒ‰ Enter ä»ä¼šæ’å…¥ç¼–å†™æç¤ºã€?)
                 }
                 _ => format!(
                     "{model_label} could not draft the profile ({reason}). Enter still inserts the authoring prompt."
@@ -6731,7 +6725,7 @@ fn reconcile_turn_liveness(app: &mut App, now: Instant, has_running_agents: bool
         return true;
     }
 
-    // Branch 3: turn started but never completed â€” engine may have
+    // Branch 3: turn started but never completed â€?engine may have
     // panicked, sub-agent may be stuck, or the completion event was lost.
     if app.is_loading
         && matches!(app.runtime_turn_status.as_deref(), Some("in_progress"))
@@ -6747,7 +6741,7 @@ fn reconcile_turn_liveness(app: &mut App, now: Instant, has_running_agents: bool
     {
         recover_stalled_runtime_turn(
             app,
-            "Turn stalled â€” no completion signal received. Please try again.",
+            "Turn stalled â€?no completion signal received. Please try again.",
             StatusToastLevel::Error,
         );
         return true;
@@ -6768,7 +6762,7 @@ fn reconcile_turn_liveness(app: &mut App, now: Instant, has_running_agents: bool
     {
         recover_stalled_runtime_turn(
             app,
-            "Tool stalled with no progress for 10m â€” recovered; the command may still be running in the background. Use exec_shell_cancel or retry.",
+            "Tool stalled with no progress for 10m â€?recovered; the command may still be running in the background. Use exec_shell_cancel or retry.",
             StatusToastLevel::Error,
         );
         return true;
@@ -6786,7 +6780,7 @@ fn turn_stall_watchdog_timeout(app: &App) -> Duration {
 /// #2739: persist the current in-memory session state before a recovery or
 /// cancellation path clears turn bookkeeping. Without this snapshot, the
 /// just-finalised partial turn lives only in `app.api_messages` and is never
-/// written to disk, so `--continue` loads the *previous* save â€” effectively
+/// written to disk, so `--continue` loads the *previous* save â€?effectively
 /// losing the entire in-progress turn.
 fn persist_recovery_snapshot(app: &mut App) {
     if let Ok(manager) = SessionManager::default_location()
@@ -6859,7 +6853,7 @@ fn recover_stalled_runtime_turn(app: &mut App, message: &str, level: StatusToast
     app.pending_turn_route = None;
     app.active_turn = None;
     app.suppress_stream_events_until_turn_complete = false;
-    // Per-turn scroll lock â€” clear so the next turn auto-scrolls.
+    // Per-turn scroll lock â€?clear so the next turn auto-scrolls.
     app.user_scrolled_during_stream = false;
     app.push_status_toast(message, level, None);
 }
@@ -6868,7 +6862,7 @@ fn recover_stalled_runtime_turn(app: &mut App, message: &str, level: StatusToast
 ///
 /// Returns whether the current `AgentProgress` event may request a redraw,
 /// updating the last-redraw timestamp when it may. Data updates are never
-/// throttled â€” only the repaint request is.
+/// throttled â€?only the repaint request is.
 fn agent_progress_redraw_permitted(last_redraw: &mut Option<Instant>, now: Instant) -> bool {
     match *last_redraw {
         Some(last) if now.duration_since(last) < Duration::from_millis(100) => false,
@@ -7067,7 +7061,7 @@ pub(crate) fn apply_engine_error_to_app(
 
     // #455 (observer-only): fire `on_error` hooks so operators can
     // page on auth / billing / invalid-request failures without
-    // tailing the audit log. Read-only â€” the hook can react but not
+    // tailing the audit log. Read-only â€?the hook can react but not
     // suppress the error from reaching the transcript. Fast-path
     // skip when no hooks configured.
     if app
@@ -7121,7 +7115,7 @@ pub(crate) fn apply_engine_error_to_app(
     }
     // Error is already in the transcript as HistoryCell::Error above;
     // don't emit a redundant status_message that would become a sticky
-    // toast in the footer â€” that duplicates the transcript entry.
+    // toast in the footer â€?that duplicates the transcript entry.
 }
 
 fn rollback_provider_after_auth_failure(app: &mut App, config: &mut Config) -> Option<String> {
@@ -7526,7 +7520,7 @@ fn queue_current_draft_for_next_turn(app: &mut App) -> bool {
     };
     enqueue_offline_message(app, queued);
     let toast = format!(
-        "{} queued follow-up(s) â€” sends after current output; â†‘ edit last, /queue send <n>",
+        "{} queued follow-up(s) â€?sends after current output; â†?edit last, /queue send <n>",
         app.queued_message_count()
     );
     app.status_message = Some(toast.clone());
@@ -7585,7 +7579,7 @@ async fn send_taken_queued_message_now(
     if app.offline_mode {
         restore_queued_message(app, restore_index, message);
         app.status_message = Some(format!(
-            "Offline: {} queued follow-up(s) â€” /queue send <n>, /queue clear",
+            "Offline: {} queued follow-up(s) â€?/queue send <n>, /queue clear",
             app.queued_message_count()
         ));
         return Ok(());
@@ -7596,7 +7590,7 @@ async fn send_taken_queued_message_now(
         if let Err(err) = steer_user_message(app, engine_handle, message.clone()).await {
             restore_queued_message(app, restore_index, message);
             app.status_message = Some(format!(
-                "Steer failed ({err}); {} queued follow-up(s) â€” /queue send <n>, /queue clear",
+                "Steer failed ({err}); {} queued follow-up(s) â€?/queue send <n>, /queue clear",
                 app.queued_message_count()
             ));
         } else {
@@ -7637,7 +7631,7 @@ fn queued_message_content_for_app(
 ) -> String {
     // Pass the process CWD explicitly so the resolver's two-pass logic can
     // honor the user's launch directory when it differs from `--workspace`
-    // (issue #101 â€” file mentions silently routing to the wrong root).
+    // (issue #101 â€?file mentions silently routing to the wrong root).
     let user_request = crate::tui::file_mention::user_request_with_file_mentions(
         &message.display,
         &app.workspace,
@@ -8163,7 +8157,7 @@ pub(crate) fn apply_goal_snapshot_to_app(app: &mut App, snapshot: &GoalSnapshot)
         app.hunt.started_at = Some(Instant::now());
     }
     // Freeze the elapsed timer the first time a goal leaves the active state.
-    // Paused (Wounded) goals freeze too â€” usage snapshots keep arriving while
+    // Paused (Wounded) goals freeze too â€?usage snapshots keep arriving while
     // paused, and clearing here would silently un-freeze a timer the user just
     // paused (matching close_hunt, which records the pause instant). Only an
     // explicit resume back to Hunting re-arms the timer.
@@ -8499,13 +8493,13 @@ async fn apply_model_picker_choice(
 
     let mut summary = match (model_changed, effort_changed) {
         (true, true) => format!(
-            "Model: {previous_model} â†’ {model_summary} Â· thinking: {previous_effort_summary} â†’ {effort_summary}"
+            "Model: {previous_model} â†?{model_summary} Â· thinking: {previous_effort_summary} â†?{effort_summary}"
         ),
         (true, false) => {
-            format!("Model: {previous_model} â†’ {model_summary} Â· thinking {effort_summary}")
+            format!("Model: {previous_model} â†?{model_summary} Â· thinking {effort_summary}")
         }
         (false, true) => format!(
-            "Thinking: {previous_effort_summary} â†’ {effort_summary} Â· model {model_summary}"
+            "Thinking: {previous_effort_summary} â†?{effort_summary} Â· model {model_summary}"
         ),
         (false, false) => unreachable!(),
     };
@@ -8556,7 +8550,7 @@ async fn apply_picker_effort_choice(
     .await;
 
     let mut summary = format!(
-        "Thinking: {} â†’ {} Â· model {}",
+        "Thinking: {} â†?{} Â· model {}",
         previous_effort.display_label_for_provider(app.api_provider),
         effort.display_label_for_provider(app.api_provider),
         app.model_display_label()
@@ -8621,7 +8615,7 @@ async fn switch_provider(
                     *config = previous_config;
                     app.view_stack.push(picker);
                     app.status_message = Some(format!(
-                        "{} needs a key or local runtime â€” enter one to switch.",
+                        "{} needs a key or local runtime â€?enter one to switch.",
                         target.display_name()
                     ));
                     app.needs_redraw = true;
@@ -8742,11 +8736,11 @@ async fn switch_provider(
     .map(|err| format!("Provider selection was not fully persisted: {err}"));
 
     let mut switch_summary = format!(
-        "Provider switched: {} â†’ {}",
+        "Provider switched: {} â†?{}",
         previous_identity, target_identity,
     );
     switch_summary.push(char::from(10));
-    switch_summary.push_str(&format!("Model: {previous_model} â†’ {new_model}"));
+    switch_summary.push_str(&format!("Model: {previous_model} â†?{new_model}"));
     switch_summary.push(char::from(10));
     switch_summary.push_str(&format!("Endpoint: {new_endpoint}"));
     if let Some(ref warning) = persist_warning {
@@ -9251,7 +9245,7 @@ async fn apply_command_result(
                 }
             }
             AppAction::ListSubAgents => {
-                // #3802: non-blocking send â€” refresh op, safe to drop.
+                // #3802: non-blocking send â€?refresh op, safe to drop.
                 let _ = engine_handle.try_send(Op::ListSubAgents);
             }
             AppAction::CancelSubAgent { agent_id } => {
@@ -10106,7 +10100,7 @@ fn handle_shell_job_action(app: &mut App, action: crate::tui::app::ShellJobActio
         Err(_) => {
             add_shell_job_message(
                 app,
-                "Shell tracking hit an internal error â€” restart Codewhale to recover.".to_string(),
+                "Shell tracking hit an internal error â€?restart Codewhale to recover.".to_string(),
             );
             return;
         }
@@ -10360,7 +10354,7 @@ async fn attempt_steer_with_queue_fallback(
         Err(err) => {
             enqueue_offline_message(app, message);
             let status = format!(
-                "Steer failed ({err}); {} queued follow-up(s) â€” /queue send <n>",
+                "Steer failed ({err}); {} queued follow-up(s) â€?/queue send <n>",
                 app.queued_message_count()
             );
             app.status_message = Some(status.clone());
@@ -10370,19 +10364,19 @@ async fn attempt_steer_with_queue_fallback(
 }
 
 /// Park a draft on the queued-messages bucket for dispatch after TurnComplete.
-/// Unlike a steer, the message is NOT forwarded immediately â€” it waits for
+/// Unlike a steer, the message is NOT forwarded immediately â€?it waits for
 /// the current turn to finish, then dispatches as a normal user message.
 async fn queue_follow_up(app: &mut App, message: QueuedMessage) -> Result<()> {
     let display = message.display.clone();
     enqueue_offline_message(app, message);
     let toast = if app.mode == AppMode::Operate {
         format!(
-            "Queued task: {display} ({} total) â€” dispatches next while workers continue; â†‘ to edit",
+            "Queued task: {display} ({} total) â€?dispatches next while workers continue; â†?to edit",
             app.queued_message_count()
         )
     } else {
         format!(
-            "Queued: {display} ({} total) â€” sends after current output; â†‘ to edit",
+            "Queued: {display} ({} total) â€?sends after current output; â†?to edit",
             app.queued_message_count()
         )
     };
@@ -10414,22 +10408,22 @@ async fn submit_or_steer_message(
             enqueue_offline_message(app, message);
             let (status, toast) = if app.offline_mode {
                 (
-                    format!("Offline: {count} queued follow-up(s) â€” â†‘ edit last, /queue send <n>"),
+                    format!("Offline: {count} queued follow-up(s) â€?â†?edit last, /queue send <n>"),
                     format!("Offline: queued follow-up ({count} total)"),
                 )
             } else if app.mode == AppMode::Operate {
                 (
                     format!(
-                        "{count} queued task(s) â€” dispatches next while workers continue; â†‘ edit last, /queue send <n>"
+                        "{count} queued task(s) â€?dispatches next while workers continue; â†?edit last, /queue send <n>"
                     ),
-                    format!("Queued task ({count} total) â€” dispatches next"),
+                    format!("Queued task ({count} total) â€?dispatches next"),
                 )
             } else {
                 (
                     format!(
-                        "{count} queued follow-up(s) â€” sends after current output; â†‘ edit last, /queue send <n>"
+                        "{count} queued follow-up(s) â€?sends after current output; â†?edit last, /queue send <n>"
                     ),
-                    format!("Queued follow-up ({count} total) â€” sends after current output"),
+                    format!("Queued follow-up ({count} total) â€?sends after current output"),
                 )
             };
             app.status_message = Some(status);
@@ -10464,7 +10458,7 @@ fn restore_failed_immediate_submit(app: &mut App, message: QueuedMessage, error:
 /// Drain `app.pending_steers` into a single `QueuedMessage` ready for
 /// `dispatch_user_message`. Returns `None` if the queue was empty (caller
 /// then falls back to `app.queued_messages`). Skill instruction is taken
-/// from the first message that supplies one â€” multiple steers shouldn't
+/// from the first message that supplies one â€?multiple steers shouldn't
 /// double-up the system framing.
 fn merge_pending_steers(app: &mut App) -> Option<QueuedMessage> {
     let drained = app.drain_pending_steers();
@@ -10622,12 +10616,12 @@ async fn handle_plan_choice(
 /// Build the pending-input preview widget from current `App` state.
 ///
 /// v0.6.6 (#122) wires all three buckets:
-/// - `pending_steers` â€” typed during a running turn + Esc; held until the
+/// - `pending_steers` â€?typed during a running turn + Esc; held until the
 ///   abort lands and gets resubmitted as a fresh merged turn.
-/// - `rejected_steers` â€” engine declined a mid-turn steer (scaffolding;
+/// - `rejected_steers` â€?engine declined a mid-turn steer (scaffolding;
 ///   no engine path produces these yet but the bucket renders with a distinct
 ///   rejected-steer label).
-/// - `queued_messages` â€” Enter while busy; drained at end-of-turn. In Operate,
+/// - `queued_messages` â€?Enter while busy; drained at end-of-turn. In Operate,
 ///   the foreground operator dispatches these as additional background tasks.
 fn build_pending_input_preview(app: &App) -> PendingInputPreview {
     let mut preview = PendingInputPreview::new();
@@ -10766,7 +10760,7 @@ fn render(f: &mut Frame, app: &mut App, config: &Config) {
     // then split the remaining body area for chat / preview / composer /
     // footer. This guarantees the header is never vertically centered
     // regardless of ratatui Flex defaults or terminal size.
-    // Fixes #1834 â€” macOS terminal title centering.
+    // Fixes #1834 â€?macOS terminal title centering.
     let (header_area, body_area) = {
         let split = Layout::default()
             .direction(Direction::Vertical)
@@ -10791,7 +10785,7 @@ fn render(f: &mut Frame, app: &mut App, config: &Config) {
     };
 
     // Pending-input preview (queued / steered messages). Empty when nothing's
-    // queued, so zero height when idle. Phase 2 of #85 â€” solves the
+    // queued, so zero height when idle. Phase 2 of #85 â€?solves the
     // "messages typed during a running turn vanish" complaint by giving the
     // user immediate visible feedback above the composer.
     let pending_preview = build_pending_input_preview(app);
@@ -11146,7 +11140,7 @@ fn render(f: &mut Frame, app: &mut App, config: &Config) {
 ///
 /// When `full_repaint` is true, the terminal scroll margins and origin mode
 /// are reset, the screen is cleared, ratatui's buffer is emptied, and then
-/// the full UI is drawn â€” all within a single DEC 2026 synchronized-update
+/// the full UI is drawn â€?all within a single DEC 2026 synchronized-update
 /// batch so GPU-accelerated terminals (Ghostty, VS Code, Kitty) render one
 /// complete frame instead of a blank intermediate frame followed by the UI.
 ///
@@ -11196,7 +11190,7 @@ fn draw_app_frame_inner(
 /// top view isn't a `LiveTranscriptOverlay`.
 fn refresh_live_transcript_overlay(app: &mut App) {
     // Pop+push lets us hold &mut to the overlay while also borrowing `app`
-    // mutably for the snapshot â€” direct re-borrow through `view_stack`
+    // mutably for the snapshot â€?direct re-borrow through `view_stack`
     // would otherwise alias `app`.
     let Some(mut overlay) = app.view_stack.pop() else {
         return;
@@ -11259,7 +11253,7 @@ fn toggle_live_transcript_overlay(app: &mut App) {
 /// picker's search already scopes rows by provider display name, so we reuse
 /// the standard "open model picker" path and seed its query by replaying the
 /// provider's display name as character input through the public view-stack
-/// key path â€” no model-picker internals are touched.
+/// key path â€?no model-picker internals are touched.
 fn open_model_picker_for_provider(
     app: &mut App,
     config: &Config,
@@ -11352,7 +11346,7 @@ fn use_bundled_constitution(app: &mut App, config: &Config) {
 
 /// Hide the Hotbar: persist `hotbar = []` (the canonical "disabled" state) and
 /// clear the live in-memory slots so the panel disappears immediately. The
-/// explicit empty array â€” not a missing key â€” is what disables defaults, so we
+/// explicit empty array â€?not a missing key â€?is what disables defaults, so we
 /// store `Some(vec![])` rather than `None`.
 fn disable_hotbar(app: &mut App, config: &mut Config) {
     match crate::config_persistence::persist_hotbar_bindings(app.config_path.as_deref(), &[]) {
@@ -11619,7 +11613,7 @@ async fn handle_view_events(
                             None,
                         );
                         app.status_message =
-                            Some(format!("Failed to submit response: {err} â€” try again"));
+                            Some(format!("Failed to submit response: {err} â€?try again"));
                     }
                 }
             }
@@ -11883,7 +11877,7 @@ async fn handle_view_events(
                 // A ratified profile must not silently clobber a differently
                 // named existing profile that shares this id (which would also
                 // make the whole agents dir fail to load on the duplicate).
-                // Overwriting the SAME file is fine â€” that is an intentional
+                // Overwriting the SAME file is fine â€?that is an intentional
                 // re-draft of this profile.
                 // The collision gate only needs file identities. Accept
                 // otherwise legacy profile fields here so an old, unrelated
@@ -11915,7 +11909,7 @@ async fn handle_view_events(
                 // has actually configured/credentialed. The picker already
                 // offers models only from configured providers, but a
                 // model-drafted or hand-edited route (or credentials removed
-                // after the pick) could still name an unconfigured one â€” which
+                // after the pick) could still name an unconfigured one â€?which
                 // would fail loudly at launch. Catch it at save time with a
                 // clear message, reusing the SAME predicate the picker uses.
                 if let Some(provider_id) = draft.provider.as_deref()
@@ -11947,7 +11941,7 @@ async fn handle_view_events(
                         let zh = app.ui_locale == crate::localization::Locale::ZhHans;
                         app.add_message(HistoryCell::System {
                             content: if zh {
-                                format!("å·²ä¿å­˜ Fleet é…ç½®ï¼š{}", target.display())
+                                format!("å·²ä¿å­?Fleet é…ç½®ï¼š{}", target.display())
                             } else {
                                 format!(
                                     "Fleet {} profile saved: {}",
@@ -11957,7 +11951,7 @@ async fn handle_view_events(
                             },
                         });
                         app.status_message = Some(if zh {
-                            format!("å·²ä¿å­˜ Fleet é…ç½®ï¼š{}", draft.file_name())
+                            format!("å·²ä¿å­?Fleet é…ç½®ï¼š{}", draft.file_name())
                         } else if roster_refresh_failed {
                             format!(
                                 "Fleet {} profile saved, but the live roster could not refresh; restart before dispatching {}",
@@ -12061,7 +12055,7 @@ async fn handle_view_events(
             }
             ViewEvent::SubAgentsRefresh => {
                 app.status_message = Some("Refreshing sub-agents...".to_string());
-                // #3802: non-blocking send â€” refresh op, safe to drop.
+                // #3802: non-blocking send â€?refresh op, safe to drop.
                 let _ = engine_handle.try_send(Op::ListSubAgents);
             }
             ViewEvent::SidebarAgentCancel { agent_id } => {
@@ -12409,7 +12403,7 @@ async fn apply_approval_decision(
         ReviewDecision::Denied => {
             // Cache the denial so the model retry-loop doesn't re-prompt for
             // the exact same approval_key (#360). Only the key (per-call
-            // unique) is stored â€” NOT the tool_name, which would block all
+            // unique) is stored â€?NOT the tool_name, which would block all
             // future invocations of the same tool type (#1377).
             if !event.timed_out {
                 app.approval_session_denied.insert(event.approval_key);
@@ -12775,7 +12769,7 @@ fn apply_backtrack(app: &mut App, depth: usize) {
     // visible `HistoryCell::User` cells (real prompts), but a naive
     // `role == "user"` walk over `api_messages` over-counts: tool results are
     // stored as `role == "user"` messages too, so in any turn with tool calls
-    // the cut would land mid-turn on a tool_result â€” leaving a dangling
+    // the cut would land mid-turn on a tool_result â€?leaving a dangling
     // assistant tool_use with no matching result and a transcript the provider
     // rejects. Count only messages that actually yield a User cell, the same
     // predicate `apply_loaded_session` uses.
@@ -12792,7 +12786,7 @@ fn apply_backtrack(app: &mut App, depth: usize) {
         app.view_stack.pop();
     }
     app.status_message =
-        Some("Rewound to previous user message â€” edit and Enter to resend".to_string());
+        Some("Rewound to previous user message â€?edit and Enter to resend".to_string());
     app.scroll_to_bottom();
     app.mark_history_updated();
     app.needs_redraw = true;
@@ -12973,7 +12967,7 @@ async fn apply_provider_picker_api_key_with_verifier(
         .unwrap_or_else(|| provider.default_base_url());
     match verifier.verify(provider, &api_key, base_url).await {
         Ok(()) => {
-            // Key is valid â€” continue the guided flow at model pick without
+            // Key is valid â€?continue the guided flow at model pick without
             // writing the secret yet.
             let runtime_status = query_provider_runtime_status(engine_handle).await;
             if let Some(picker) =
@@ -12988,7 +12982,7 @@ async fn apply_provider_picker_api_key_with_verifier(
             {
                 app.view_stack.push(picker);
                 app.status_message = Some(format!(
-                    "{} API key verified â€” pick a default model.",
+                    "{} API key verified â€?pick a default model.",
                     provider.as_str()
                 ));
             } else {
@@ -13383,7 +13377,7 @@ fn apply_loaded_session(
     app.session.subagent_cost_event_seqs.clear();
     // Restore the high-water marks from persisted metadata so the
     // monotonic cost guarantee (#244) survives session restarts.
-    // Take the max with the current totals â€” old sessions without
+    // Take the max with the current totals â€?old sessions without
     // persisted high-water fields deserialise to 0.0 and fall back to
     // the restored total with no regression.
     let total_restored_usd = session.metadata.cost.total_usd();
@@ -13529,7 +13523,7 @@ fn resolve_loaded_session_route(app: &mut App, config: &Config) {
 ///    phrase boundary (period, comma, colon, or word boundary) within
 ///    `SESSION_TITLE_MAX_CHARS`, never splitting mid-word.
 ///
-/// Never leaks raw prompt text â€” the result is always a concise label.
+/// Never leaks raw prompt text â€?the result is always a concise label.
 fn derive_session_title(messages: &[Message]) -> Option<String> {
     let text = messages.iter().find(|m| m.role == "user").and_then(|m| {
         m.content.iter().find_map(|block| match block {
@@ -13571,11 +13565,11 @@ pub(crate) fn short_title_truncate(text: &str, max_chars: usize) -> String {
     // Look for a natural boundary within the allowed range.
     let candidate: String = text.chars().take(max_chars).collect();
     let boundary = candidate
-        .rfind(['.', ',', ':', ';', 'â€”', '-'])
+        .rfind(['.', ',', ':', ';', 'â€?, '-'])
         .or_else(|| candidate.rfind(' '))
         .unwrap_or(max_chars.min(candidate.len()).saturating_sub(1));
     let cut: String = text.chars().take(boundary.max(1)).collect();
-    format!("{cut}â€¦")
+    format!("{cut}â€?)
 }
 
 fn recover_interrupted_user_tail(messages: &[Message]) -> (Vec<Message>, Option<QueuedMessage>) {
@@ -13643,7 +13637,7 @@ fn pause_terminal(
 ) -> Result<()> {
     // #443: pop keyboard enhancement flags before handing the terminal
     // to a child process so it doesn't inherit a half-configured input
-    // mode. Best-effort â€” terminals that didn't accept the flags
+    // mode. Best-effort â€?terminals that didn't accept the flags
     // silently ignore the pop. Matches the shutdown and panic paths.
     pop_keyboard_enhancement_flags(terminal.backend_mut());
     disable_alternate_scroll_mode(terminal.backend_mut());
@@ -13673,7 +13667,7 @@ fn resume_terminal(
     enable_raw_mode()?;
     if use_alt_screen {
         execute!(terminal.backend_mut(), EnterAlternateScreen)?;
-        // Re-entering alt-screen after mode recovery â€” suppress verbose
+        // Re-entering alt-screen after mode recovery â€?suppress verbose
         // CLI logging again so eprintln! doesn't leak into the TUI.
         #[cfg(windows)]
         crate::logging::set_verbose(false);
@@ -13684,7 +13678,7 @@ fn resume_terminal(
         use_bracketed_paste,
     );
     // Cache the real terminal size *before* resetting the viewport, so that
-    // reset_terminal_viewport â†’ terminal.clear() â†’ autoresize() â†’ backend.size()
+    // reset_terminal_viewport â†?terminal.clear() â†?autoresize() â†?backend.size()
     // picks up the cached size instead of falling through to
     // crossterm::terminal::size() which may return stale buffer metadata
     // (especially on Windows after a secondary EnterAlternateScreen).
@@ -13702,13 +13696,13 @@ fn reset_terminal_viewport(terminal: &mut AppTerminal, sync_output_enabled: bool
     // child processes leave DECSTBM/DECOM behind; if ratatui's diff renderer
     // then writes "row 0", terminals can place it relative to the leaked
     // scroll region and the whole viewport appears shifted down. We
-    // deliberately do *not* emit CSI 2J/3J here â€” see TERMINAL_ORIGIN_RESET
+    // deliberately do *not* emit CSI 2J/3J here â€?see TERMINAL_ORIGIN_RESET
     // for why; the immediately-following ratatui `terminal.clear()` flushes a
     // single clear via the diff renderer, which the alt-screen buffer absorbs
     // without visible flicker on the affected terminals.
     //
     // Wrap the reset+clear sequence in DEC 2026 synchronized-output mode
-    // (`\x1b[?2026h` â€¦ `\x1b[?2026l`) so GPU-accelerated terminals
+    // (`\x1b[?2026h` â€?`\x1b[?2026l`) so GPU-accelerated terminals
     // (Ghostty, VSCode, Kitty, WezTerm) defer rendering until the whole
     // frame is staged. Terminals that don't support it silently ignore.
     // The wrap is opt-out via `synchronized_output = "off"` for terminals
@@ -13736,10 +13730,10 @@ fn push_keyboard_enhancement_flags<W: Write>(writer: &mut W) {
     // crossterm's PushKeyboardEnhancementFlags command unconditionally
     // returns Unsupported on Windows (is_ansi_code_supported() == false), so
     // the ANSI escape is written directly on that platform. Modern Windows
-    // terminals (VSCode integrated terminal, Windows Terminal â‰¥1.17) honour
+    // terminals (VSCode integrated terminal, Windows Terminal â‰?.17) honour
     // the kitty keyboard protocol but crossterm's event reader does not
     // decode CSI u sequences on Windows (issue #1599). Write \033[>0u to
-    // probe the protocol without enabling any flags â€” Enter stays as \n.
+    // probe the protocol without enabling any flags â€?Enter stays as \n.
     #[cfg(windows)]
     {
         if let Err(err) = write!(writer, "\x1b[>0u").and_then(|()| writer.flush()) {
@@ -13811,7 +13805,7 @@ pub(crate) fn disable_alternate_scroll_mode<W: Write>(writer: &mut W) {
 /// Best-effort terminal restoration for emergency exit paths
 /// (panic hook, signal handlers). Mirrors the normal teardown in
 /// `run_event_loop` but tolerates any subset of modes not actually being
-/// active â€” every step is discarded on failure so a half-initialized TUI
+/// active â€?every step is discarded on failure so a half-initialized TUI
 /// (e.g. SIGINT during startup before `EnterAlternateScreen`) still gets
 /// raw mode + kitty keyboard flags cleared, which is what causes the
 /// `^[[>5u` shell pollution reported in #1583.
@@ -13841,7 +13835,7 @@ fn enable_windows_ime_console_mode() {
 
     // SAFETY: Win32 console API is safe to call from any thread.
     // Failures (console handle invalid, mode query fails) are silently
-    // ignored â€” this is a best-effort IME compatibility tweak.
+    // ignored â€?this is a best-effort IME compatibility tweak.
     unsafe {
         let Ok(handle) = GetStdHandle(windows::Win32::System::Console::STD_INPUT_HANDLE) else {
             return;
@@ -13862,10 +13856,10 @@ fn enable_windows_ime_console_mode() {
 /// attempted.
 ///
 /// **Canonical location for terminal-mode setup.** If you add a new mode
-/// flag at startup or in `resume_terminal`, add it here too â€” `FocusGained`
+/// flag at startup or in `resume_terminal`, add it here too â€?`FocusGained`
 /// recovery calls this and will silently fall behind otherwise.
 ///
-/// Excluded by design: raw mode and the alternate screen â€” those persist
+/// Excluded by design: raw mode and the alternate screen â€?those persist
 /// across focus events and are only re-established by `resume_terminal`
 /// after a suspension, which always runs a separate path.
 ///
@@ -13988,8 +13982,7 @@ pub(crate) fn request_foreground_shell_background(app: &mut App) {
         return;
     }
     if !active_foreground_shell_running(app) {
-        // #3032 AC3: name the reason backgrounding is unavailable â€”
-        // interactive execs and non-shell blocking tools are visibly running
+        // #3032 AC3: name the reason backgrounding is unavailable â€?        // interactive execs and non-shell blocking tools are visibly running
         // but cannot be detached, and a generic shrug reads like a bug.
         let reason = if terminal_pause_has_live_owner(app) {
             "the running command is interactive"
@@ -14020,7 +14013,7 @@ pub(crate) fn request_foreground_shell_background(app: &mut App) {
         }
         Err(_) => {
             app.status_message = Some(
-                "Shell tracking hit an internal error â€” restart Codewhale to recover.".to_string(),
+                "Shell tracking hit an internal error â€?restart Codewhale to recover.".to_string(),
             );
         }
     }
@@ -14164,11 +14157,11 @@ fn context_usage_snapshot_for_window(app: &App, max: u32) -> Option<(i64, u32, f
     // Always prefer the estimated current-context size (computed from
     // `app.api_messages`) when we have it. Reported `last_prompt_tokens`
     // comes from `Event::TurnComplete.usage`, which the engine builds with
-    // `turn.add_usage` â€” that SUMS input_tokens across every round in the
+    // `turn.add_usage` â€?that SUMS input_tokens across every round in the
     // turn, so a multi-round tool-call turn reports a value much larger
     // than the actual context window state, then the next single-round
     // turn drops back to a single round's input_tokens. User-visible %
-    // was bouncing 31% â†’ 9% (#115) because of this. The estimate is
+    // was bouncing 31% â†?9% (#115) because of this. The estimate is
     // monotonic wrt conversation growth, which is what a "context filling
     // up" indicator should show. We still consult `reported` only as a
     // fallback when no estimate is available (e.g., immediately after a
@@ -14185,7 +14178,7 @@ fn context_usage_snapshot_for_window(app: &App, max: u32) -> Option<(i64, u32, f
     Some((used, max, percent))
 }
 
-/// Retained as a callable utility â€” `context_usage_snapshot` no longer uses
+/// Retained as a callable utility â€?`context_usage_snapshot` no longer uses
 /// it directly (#115 makes the estimate the primary signal), but tests in
 /// `ui/tests.rs` still exercise it and a future heuristic may want to
 /// distinguish "obviously inflated reported tokens" from healthy reports.

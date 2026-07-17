@@ -105,6 +105,15 @@ Thank you to the contributors whose code, reports, and reviews shaped v0.9.1:
 - [@seanthefuturegorilla](https://github.com/seanthefuturegorilla) — the
   canonical OpenCode Go/Zen provider request and acceptance direction
   (#1481).
+- [@nightt5879](https://github.com/nightt5879) — the Solarized Light
+  background preservation fix (PR #4471).
+- [@AiurArtanis](https://github.com/AiurArtanis) — the Solarized Light
+  regression report and reproduction (#4457).
+- [@shenjackyuanjie](https://github.com/shenjackyuanjie) — the HarmonyOS
+  workflow-js bindgen, portable-pty gating, and SDK environment work
+  (PR #4470).
+- [@shenyongqing](https://github.com/shenyongqing) — the original HarmonyOS
+  bindgen approach (PR #4384), carried into the landed implementation.
 
 ## [0.9.0] - 2026-07-16
 

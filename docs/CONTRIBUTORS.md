@@ -40,6 +40,16 @@ notes, and relevant issue/PR comments.
 - **[Sean Tse / seanthefuturegorilla](https://github.com/seanthefuturegorilla)**
   — the canonical OpenCode Go/Zen provider request and acceptance direction in
   #1481
+- **[nightt5879](https://github.com/nightt5879)** — the Solarized Light
+  background preservation fix for the underwater shell (PR #4471)
+- **[AiurArtanis](https://github.com/AiurArtanis)** — the Solarized Light
+  v0.9.0 regression report and reproduction (#4457)
+- **[shenjackyuanjie](https://github.com/shenjackyuanjie)** — the HarmonyOS
+  workflow-js bindgen, portable-pty gating, and SDK environment work
+  (PR #4470)
+- **[shenyongqing](https://github.com/shenyongqing)** — the original HarmonyOS
+  workflow-js bindgen approach (PR #4384), carried into the landed
+  implementation with credit
 
 </details>
 
