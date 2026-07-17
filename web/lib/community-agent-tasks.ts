@@ -97,21 +97,20 @@ export async function runTriage(env: AgentEnv): Promise<Record<string, unknown>>
     let processed = 0;
     let skipped = 0;
 
-    for (const issue of newIssues) {
-      if (await hasFreshDraft(env.CURATED_KV, "issue", String(issue.number), issue.updated_at)) {
-        skipped++;
-        continue;
-      }
+    const results = await Promise.allSettled(
+      newIssues.map(async (issue) => {
+        if (await hasFreshDraft(env.CURATED_KV, "issue", String(issue.number), issue.updated_at)) {
+          return { skipped: true };
+        }
 
-      const payload = {
-        number: issue.number,
-        title: issue.title,
-        body: (issue.body ?? "").slice(0, 3000),
-        labels: issue.labels.map((l) => l.name),
-        url: issue.html_url,
-      };
+        const payload = {
+          number: issue.number,
+          title: issue.title,
+          body: (issue.body ?? "").slice(0, 3000),
+          labels: issue.labels.map((l) => l.name),
+          url: issue.html_url,
+        };
 
-      try {
         const { content, usage } = await agentChat(
           [{ role: "system", content: TRIAGE_PROMPT }, { role: "user", content: JSON.stringify(payload) }],
           env.DEEPSEEK_API_KEY!,
@@ -131,8 +130,15 @@ export async function runTriage(env: AgentEnv): Promise<Record<string, unknown>>
         };
         await saveDraft(env.CURATED_KV, draft);
         await logUsage(env.CURATED_KV, usage.input, usage.output);
-        processed++;
-      } catch {
+        return { skipped: false };
+      })
+    );
+
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        if (result.value.skipped) skipped++;
+        else processed++;
+      } else {
         skipped++;
       }
     }
@@ -162,39 +168,38 @@ export async function runPrReview(env: AgentEnv): Promise<Record<string, unknown
     let processed = 0;
     let skipped = 0;
 
-    for (const pr of prs.slice(0, 10)) {
-      if (await hasFreshDraft(env.CURATED_KV, "pr", String(pr.number), pr.updated_at)) {
-        skipped++;
-        continue;
-      }
+    const results = await Promise.allSettled(
+      prs.slice(0, 10).map(async (pr) => {
+        if (await hasFreshDraft(env.CURATED_KV, "pr", String(pr.number), pr.updated_at)) {
+          return { skipped: true };
+        }
 
-      // Fetch diff stats if not included
-      let diffStats = { changed_files: pr.changed_files ?? 0, additions: pr.additions ?? 0, deletions: pr.deletions ?? 0 };
-      if (!pr.changed_files) {
-        try {
-          const diffRes = await fetch(`https://api.github.com/repos/${repo}/pulls/${pr.number}`, {
-            headers: {
-              Accept: "application/vnd.github+json",
-              "X-GitHub-Api-Version": "2022-11-28",
-              "User-Agent": "codewhale-web",
-              ...(env.GITHUB_TOKEN ? { Authorization: `Bearer ${env.GITHUB_TOKEN}` } : {}),
-            },
-          });
-          const diffData = (await diffRes.json()) as { changed_files?: number; additions?: number; deletions?: number };
-          diffStats = { changed_files: diffData.changed_files ?? 0, additions: diffData.additions ?? 0, deletions: diffData.deletions ?? 0 };
-        } catch { /* use defaults */ }
-      }
+        // Fetch diff stats if not included
+        let diffStats = { changed_files: pr.changed_files ?? 0, additions: pr.additions ?? 0, deletions: pr.deletions ?? 0 };
+        if (!pr.changed_files) {
+          try {
+            const diffRes = await fetch(`https://api.github.com/repos/${repo}/pulls/${pr.number}`, {
+              headers: {
+                Accept: "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+                "User-Agent": "codewhale-web",
+                ...(env.GITHUB_TOKEN ? { Authorization: `Bearer ${env.GITHUB_TOKEN}` } : {}),
+              },
+            });
+            const diffData = (await diffRes.json()) as { changed_files?: number; additions?: number; deletions?: number };
+            diffStats = { changed_files: diffData.changed_files ?? 0, additions: diffData.additions ?? 0, deletions: diffData.deletions ?? 0 };
+          } catch { /* use defaults */ }
+        }
 
-      const payload = {
-        number: pr.number,
-        title: pr.title,
-        body: (pr.body ?? "").slice(0, 3000),
-        author: pr.user.login,
-        url: pr.html_url,
-        ...diffStats,
-      };
+        const payload = {
+          number: pr.number,
+          title: pr.title,
+          body: (pr.body ?? "").slice(0, 3000),
+          author: pr.user.login,
+          url: pr.html_url,
+          ...diffStats,
+        };
 
-      try {
         const { content, usage } = await agentChat(
           [{ role: "system", content: PR_REVIEW_PROMPT }, { role: "user", content: JSON.stringify(payload) }],
           env.DEEPSEEK_API_KEY!,
@@ -214,8 +219,15 @@ export async function runPrReview(env: AgentEnv): Promise<Record<string, unknown
         };
         await saveDraft(env.CURATED_KV, draft);
         await logUsage(env.CURATED_KV, usage.input, usage.output);
-        processed++;
-      } catch {
+        return { skipped: false };
+      })
+    );
+
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        if (result.value.skipped) skipped++;
+        else processed++;
+      } else {
         skipped++;
       }
     }
@@ -247,21 +259,20 @@ export async function runStale(env: AgentEnv): Promise<Record<string, unknown>> 
     let processed = 0;
     let skipped = 0;
 
-    for (const issue of issues.slice(0, 10)) {
-      if (await hasFreshDraft(env.CURATED_KV, "stale", String(issue.number), issue.updated_at)) {
-        skipped++;
-        continue;
-      }
+    const results = await Promise.allSettled(
+      issues.slice(0, 10).map(async (issue) => {
+        if (await hasFreshDraft(env.CURATED_KV, "stale", String(issue.number), issue.updated_at)) {
+          return { skipped: true };
+        }
 
-      const payload = {
-        number: issue.number,
-        title: issue.title,
-        body: (issue.body ?? "").slice(0, 2000),
-        url: issue.html_url,
-        lastUpdated: issue.updated_at,
-      };
+        const payload = {
+          number: issue.number,
+          title: issue.title,
+          body: (issue.body ?? "").slice(0, 2000),
+          url: issue.html_url,
+          lastUpdated: issue.updated_at,
+        };
 
-      try {
         const { content, usage } = await agentChat(
           [{ role: "system", content: STALE_PROMPT }, { role: "user", content: JSON.stringify(payload) }],
           env.DEEPSEEK_API_KEY!,
@@ -281,8 +292,15 @@ export async function runStale(env: AgentEnv): Promise<Record<string, unknown>> 
         };
         await saveDraft(env.CURATED_KV, draft);
         await logUsage(env.CURATED_KV, usage.input, usage.output);
-        processed++;
-      } catch {
+        return { skipped: false };
+      })
+    );
+
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        if (result.value.skipped) skipped++;
+        else processed++;
+      } else {
         skipped++;
       }
     }
