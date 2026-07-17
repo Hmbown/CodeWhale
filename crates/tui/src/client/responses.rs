@@ -1,4 +1,5 @@
-//! OpenAI Responses API bridge for the OpenAI Codex / ChatGPT provider.
+//! OpenAI Responses API bridge for OpenAI Codex / ChatGPT and compatible
+//! provider routes such as OpenCode Zen.
 //!
 //! Implements a dedicated Responses API client that maps CodeWhale's internal
 //! message/tool types to the Responses wire format and parses streaming SSE
@@ -19,7 +20,7 @@ use crate::models::{
 use crate::tools::schema_sanitize;
 
 use super::{
-    DeepSeekClient, ERROR_BODY_MAX_BYTES, bounded_error_text, from_api_tool_name,
+    DeepSeekClient, ERROR_BODY_MAX_BYTES, api_url, bounded_error_text, from_api_tool_name,
     system_to_instructions, to_api_tool_name,
 };
 
@@ -77,20 +78,25 @@ pub(super) fn build_responses_body(request: &MessageRequest) -> Value {
 }
 
 impl DeepSeekClient {
-    /// Handle a streaming Responses API request for the OpenAI Codex provider.
+    /// Handle a streaming Responses API request.
     pub(super) async fn handle_responses_stream(
         &self,
         request: MessageRequest,
     ) -> Result<StreamEventBox> {
         let body = build_responses_body(&request);
-        let url = format!("{}{}", self.base_url, CODEX_RESPONSES_PATH);
+        let is_codex = self.api_provider == crate::config::ApiProvider::OpenaiCodex;
+        let url = if is_codex {
+            format!("{}{}", self.base_url, CODEX_RESPONSES_PATH)
+        } else {
+            api_url(&self.base_url, "responses")
+        };
 
         // The bearer Authorization header is already installed as a default
         // header on `http_client` (resolved from the Codex OAuth access token),
         // so it must not be set again here or it would be duplicated. The
         // ChatGPT backend additionally requires the account id and the
         // experimental Responses beta opt-in.
-        let account_id = crate::oauth::codex_account_id();
+        let account_id = is_codex.then(crate::oauth::codex_account_id).flatten();
         let request_body =
             serde_json::to_vec(&body).context("Failed to serialize Responses API request body")?;
         let response = self
@@ -99,11 +105,14 @@ impl DeepSeekClient {
                     .http_client
                     .post(&url)
                     .header("Content-Type", "application/json")
-                    .header("Accept", "text/event-stream")
-                    .header("OpenAI-Beta", "responses=experimental")
-                    .header("originator", "codex_cli_rs");
-                if let Some(account_id) = &account_id {
-                    builder = builder.header("chatgpt-account-id", account_id);
+                    .header("Accept", "text/event-stream");
+                if is_codex {
+                    builder = builder
+                        .header("OpenAI-Beta", "responses=experimental")
+                        .header("originator", "codex_cli_rs");
+                    if let Some(account_id) = &account_id {
+                        builder = builder.header("chatgpt-account-id", account_id);
+                    }
                 }
                 builder.body(request_body.clone())
             })

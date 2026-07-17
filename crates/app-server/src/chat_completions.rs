@@ -19,7 +19,7 @@ use codewhale_config::{
     ConfigToml, ProviderKind, auth_mode_disables_api_key, is_upstream_auth_header,
     provider::WireFormat,
     provider_base_url_is_official, provider_preserves_custom_base_url_model,
-    route::{LogicalModelRef, ProviderId, RouteError, RouteRequest, RouteResolver},
+    route::{LogicalModelRef, RouteError, RouteRequest, RouteResolver},
 };
 use serde_json::Value;
 
@@ -143,13 +143,7 @@ fn resolve_endpoint(
 
     let insecure_skip_tls_verify = provider_cfg.insecure_skip_tls_verify.unwrap_or(false);
 
-    let wire_format = provider_meta.wire_policy().fixed().ok_or_else(|| {
-        RouteError::UnsupportedModelProtocol {
-            provider: ProviderId::from(provider_kind.as_str()),
-            model: model.clone(),
-            endpoint_key: "unresolved".to_string(),
-        }
-    })?;
+    let wire_format = route.protocol;
 
     Ok(ResolvedModelEndpoint {
         provider: provider_kind,
@@ -224,7 +218,11 @@ fn provider_base_url(config: &ConfigToml, provider: ProviderKind) -> String {
 fn endpoint_preserves_raw_model_ids(provider: ProviderKind, base_url: &str) -> bool {
     matches!(
         provider,
-        ProviderKind::Custom | ProviderKind::Ollama | ProviderKind::Vllm | ProviderKind::Sglang
+        ProviderKind::Custom
+            | ProviderKind::Ollama
+            | ProviderKind::Vllm
+            | ProviderKind::Sglang
+            | ProviderKind::OpencodeZen
     ) || provider_preserves_custom_base_url_model(provider, base_url)
 }
 
@@ -907,6 +905,32 @@ api_key = {provider_api_key:?}
         assert_eq!(endpoint.provider, ProviderKind::OpencodeGo);
         assert_eq!(endpoint.model, "glm-5.2");
         assert_eq!(endpoint.wire_format, WireFormat::ChatCompletions);
+    }
+
+    #[test]
+    fn opencode_zen_app_route_uses_the_resolved_model_protocol() {
+        let config = ConfigToml {
+            provider: ProviderKind::OpencodeZen,
+            ..ConfigToml::default()
+        };
+        let registry = ModelRegistry::default();
+
+        for (model, expected) in [
+            ("gpt-5.5", WireFormat::Responses),
+            ("claude-sonnet-4-6", WireFormat::AnthropicMessages),
+            ("deepseek-v4-pro", WireFormat::ChatCompletions),
+        ] {
+            let endpoint = resolve_endpoint(&config, &registry, Some(model))
+                .unwrap_or_else(|error| panic!("{model} should resolve: {error}"));
+            assert_eq!(endpoint.provider, ProviderKind::OpencodeZen);
+            assert_eq!(endpoint.model, model);
+            assert_eq!(endpoint.wire_format, expected);
+        }
+
+        assert!(matches!(
+            resolve_endpoint(&config, &registry, Some("gemini-3.1-pro")),
+            Err(RouteError::UnsupportedModelProtocol { .. })
+        ));
     }
 
     #[test]
