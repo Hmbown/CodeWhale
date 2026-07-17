@@ -1184,6 +1184,47 @@ mod tests {
     }
 
     #[test]
+    fn manager_call_tool_propagates_client_error() {
+        let mut manager = McpManager::default();
+        manager.register_server(
+            make_server_config("s1"),
+            ToolFilter::default(),
+            Box::new(InMemoryMcpClient::default()),
+        );
+        let err = manager.call_tool("s1", "missing_tool", json!({})).unwrap_err();
+        assert!(err.to_string().contains("tool 'missing_tool' not found"));
+    }
+
+    struct MockArgumentClient;
+    impl McpManagedClient for MockArgumentClient {
+        fn list_tools(&self) -> Result<Vec<McpToolDescriptor>> {
+            Ok(vec![])
+        }
+        fn call_tool(&self, _tool_name: &str, arguments: Value) -> Result<Value> {
+            Ok(arguments) // Just echo the arguments back to test they are passed
+        }
+        fn list_resources(&self) -> Result<Vec<McpResourceDescriptor>> {
+            Ok(vec![])
+        }
+        fn read_resource(&self, _uri: &str) -> Result<Value> {
+            Err(anyhow::anyhow!("not found"))
+        }
+    }
+
+    #[test]
+    fn manager_call_tool_passes_arguments() {
+        let mut manager = McpManager::default();
+        manager.register_server(
+            make_server_config("s1"),
+            ToolFilter::default(),
+            Box::new(MockArgumentClient),
+        );
+        let args = json!({"arg1": "value1", "arg2": 42});
+        let result = manager.call_tool("s1", "t", args.clone()).unwrap();
+        assert_eq!(result, args);
+    }
+
+    #[test]
     fn manager_call_qualified_tool_parses_name() {
         let mut manager = McpManager::default();
         manager.register_server(
