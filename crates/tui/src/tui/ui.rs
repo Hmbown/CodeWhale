@@ -6028,7 +6028,12 @@ async fn run_event_loop(
                         && key.modifiers.is_empty()
                         && !slash_menu_open
                         && !mention_menu_open
-                        && app.view_stack.is_empty() =>
+                        && app.view_stack.is_empty()
+                        // When the input is empty, Space expands the focused
+                        // thinking block (#1972).  Don't let Vim Normal mode
+                        // swallow it — let it fall through to the global
+                        // Space binding.
+                        && !(c == ' ' && app.input.is_empty()) =>
                 {
                     vim_mode::handle_vim_normal_key(app, c);
                     continue;
