@@ -1482,99 +1482,6 @@ impl Drop for TerminalCleanupGuard {
     }
 }
 
-/// Recognise composer input that is a `# foo` memory quick-add (#492).
-///
-/// Returns `true` for inputs that:
-/// - start with `#`,
-/// - have at least one non-whitespace character after the leading `#`,
-/// - are a single line (no embedded `\n`), and
-/// - are not a shebang (`#!`) or Markdown heading (`## …`, `### …`).
-///
-/// Multi-`#` prefixes are deliberately rejected so users can paste
-/// Markdown headings into the composer without triggering the quick-add.
-#[must_use]
-fn is_memory_quick_add(input: &str) -> bool {
-    let trimmed = input.trim_start();
-    if !trimmed.starts_with('#') {
-        return false;
-    }
-    if trimmed.starts_with("##") || trimmed.starts_with("#!") {
-        return false;
-    }
-    if input.contains('\n') {
-        return false;
-    }
-    // Require something after the `#`.
-    !trimmed.trim_start_matches('#').trim().is_empty()
-}
-
-fn should_intercept_memory_quick_add(config: &Config, input: &str) -> bool {
-    config.memory_enabled() && !config.moraine_fallback() && is_memory_quick_add(input)
-}
-
-#[cfg(test)]
-mod memory_quick_add_tests {
-    use super::should_intercept_memory_quick_add;
-    use crate::config::Config;
-
-    #[test]
-    fn memory_quick_add_interception_respects_moraine_fallback() {
-        let enabled: Config = toml::from_str(
-            r#"
-            [memory]
-            enabled = true
-            "#,
-        )
-        .expect("parse enabled memory config");
-        assert!(should_intercept_memory_quick_add(
-            &enabled,
-            "# remember this"
-        ));
-
-        let moraine: Config = toml::from_str(
-            r#"
-            [memory]
-            enabled = true
-            moraine_fallback = true
-            "#,
-        )
-        .expect("parse moraine memory config");
-        assert!(!should_intercept_memory_quick_add(
-            &moraine,
-            "# remember this"
-        ));
-
-        let disabled: Config = Config::default();
-        assert!(!should_intercept_memory_quick_add(
-            &disabled,
-            "# remember this"
-        ));
-        assert!(!should_intercept_memory_quick_add(
-            &enabled,
-            "## Markdown heading"
-        ));
-    }
-}
-
-/// Persist a `# foo` quick-add to the memory file and surface a status
-/// note to the user. Errors land in the same status channel so a missing
-/// memory directory becomes visible without crashing the composer.
-fn handle_memory_quick_add(app: &mut App, input: &str, config: &Config) {
-    let path = config.memory_path();
-    match crate::memory::append_entry(&path, input) {
-        Ok(()) => {
-            app.status_message = Some(format!("memory: appended to {}", path.display()));
-        }
-        Err(err) => {
-            app.status_message = Some(format!(
-                "memory: failed to write {}: {}",
-                path.display(),
-                err
-            ));
-        }
-    }
-}
-
 fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
     let provider = app.api_provider;
     let max_subagents = app.max_subagents.clamp(1, crate::config::MAX_SUBAGENTS);
@@ -5681,18 +5588,6 @@ async fn run_event_loop(
                     }
                     if let Some(input) = app.handle_composer_enter() {
                         if handle_plan_choice(app, config, &engine_handle, &input).await? {
-                            continue;
-                        }
-                        // `# foo` quick-add (#492) — when memory is enabled,
-                        // a single line starting with `#` (but not `##` /
-                        // `#!` shebangs / Markdown headings the user might
-                        // be pasting in) is intercepted: the text is
-                        // appended to the user memory file and the input
-                        // is consumed without firing a turn. Disabled
-                        // behaviour falls through to normal turn submit.
-                        // TODO(v0.8.71): remove legacy quick-add when Moraine recall stable; see #3490, #3495
-                        if should_intercept_memory_quick_add(config, &input) {
-                            handle_memory_quick_add(app, &input, config);
                             continue;
                         }
                         if handle_bang_shell_input(app, &engine_handle, &input).await? {
