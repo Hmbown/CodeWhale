@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of this narrow route until Codewhale supports per-model wire selection
   (#1481 by @seanthefuturegorilla; implementation harvested from PR #773 by
   @zhangweiii and PR #1050 by @sternelee).
+- Add OpenCode Zen as a separate model-aware API-key provider. Its curated
+  model catalog selects Responses, Anthropic Messages, or Chat Completions per
+  model; unsupported Gemini and unknown models fail closed, and Zen missing
+  credentials never fall through to ChatGPT/Codex OAuth guidance.
 
 ### Fixed
 

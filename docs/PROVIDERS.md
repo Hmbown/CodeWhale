@@ -33,7 +33,7 @@ The canonical provider IDs are:
 `siliconflow`, `arcee`, `siliconflow-CN`, `moonshot`, `sglang`, `vllm`,
 `ollama`, `huggingface`, `together`, `qianfan`, `openai-codex`, `anthropic`,
 `openmodel`, `zai`, `stepfun`, `minimax`, `deepinfra`, `sakana`, `longcat`,
-`opencode-go`, `meta`, and `xai`.
+`opencode-go`, `opencode-zen`, `meta`, and `xai`.
 
 Use any of these surfaces to select a provider:
 
@@ -109,14 +109,16 @@ the listed provider env vars.
 | `sakana` | `[providers.sakana]` | OpenAI Chat Completions | `FUGU_API_KEY`, `SAKANA_API_KEY` |
 | `longcat` | `[providers.longcat]` | OpenAI Chat Completions | `LONGCAT_API_KEY` |
 | `opencode-go` | `[providers.opencode_go]` | OpenAI Chat Completions | `OPENCODE_GO_API_KEY` |
+| `opencode-zen` | `[providers.opencode_zen]` | Model-aware: OpenAI Responses, Anthropic Messages, or OpenAI Chat Completions | `OPENCODE_ZEN_API_KEY`, `OPENCODE_API_KEY` |
 | `meta` | `[providers.meta]` | OpenAI Chat Completions | `META_MODEL_API_KEY`, `MODEL_API_KEY` |
 | `xai` | `[providers.xai]` | OpenAI Chat Completions | `XAI_API_KEY` |
 
 Default base URLs and models for each route are listed in the shipped provider
 table below. The wire protocol values above are derived from
 `crates/config/src/provider.rs`: `ChatCompletions` is the default,
-`openai-codex` overrides to `Responses`, and `deepseek-anthropic`,
-`anthropic`, plus `openmodel` override to `AnthropicMessages`.
+`openai-codex` overrides to `Responses`; `deepseek-anthropic`, `anthropic`, and
+`openmodel` override to `AnthropicMessages`; and `opencode-zen` resolves the
+protocol from the selected model's curated offering.
 
 ## Auth And Env Rules
 
@@ -247,6 +249,7 @@ the same links where possible.
 | `sakana` | [Sakana AI API](https://api.sakana.ai/) |
 | `longcat` | [Meituan LongCat platform](https://longcat.chat/platform) |
 | `opencode-go` | [OpenCode Go](https://opencode.ai/docs/go/) |
+| `opencode-zen` | [OpenCode Zen](https://opencode.ai/docs/zen/) |
 | `meta` | [Meta Model API](https://developer.meta.com/ai/) |
 | `xai` | [xAI Console](https://console.x.ai/) |
 
@@ -286,8 +289,35 @@ the same links where possible.
 | `sakana` | `[providers.sakana]` | `FUGU_API_KEY`, `SAKANA_API_KEY` | `SAKANA_BASE_URL`; default `https://api.sakana.ai/v1` | `fugu` (default), `fugu-ultra-20260615` | Sakana AI Fugu OpenAI-compatible route. Standard Chat Completions wire protocol; streaming supported. `fugu-ultra-20260615` is the heavy/reasoning variant. Env var aliases: `FUGU_API_KEY` (primary), `SAKANA_API_KEY`; provider aliases: `sakana-ai`, `sakana_ai`, `fugu`. |
 | `longcat` | `[providers.longcat]` | `LONGCAT_API_KEY` | `LONGCAT_BASE_URL`; default `https://api.longcat.chat/openai/v1` | `LongCat-2.0` (default) | Meituan LongCat curated model gateway. OpenAI-compatible Chat Completions wire protocol. Sign up at https://longcat.chat/platform for an API key. Provider aliases: `long-cat`, `meituan-longcat`, `meituan`. |
 | `opencode-go` | `[providers.opencode_go]` | `OPENCODE_GO_API_KEY` | `OPENCODE_GO_BASE_URL`; default `https://opencode.ai/zen/go/v1` | `deepseek-v4-pro` (default), `glm-5.2`, `glm-5.1`, `kimi-k2.7-code`, `kimi-k2.6`, `deepseek-v4-flash`, `mimo-v2.5`, `mimo-v2.5-pro` | [OpenCode Go](https://opencode.ai/docs/go/) subscription route using OpenAI-compatible Chat Completions. `OPENCODE_GO_MODEL` is accepted. Codewhale uses bare wire IDs; familiar `opencode-go/<model-id>` input aliases normalize to the bare ID. Go models documented only on the Anthropic `/messages` endpoint are deliberately not advertised by this route until Codewhale supports per-model wire selection. Billing surfaces show the Go allowance instead of token-price estimates. |
+| `opencode-zen` | `[providers.opencode_zen]` | `OPENCODE_ZEN_API_KEY`, fallback `OPENCODE_API_KEY` | `OPENCODE_ZEN_BASE_URL`; default `https://opencode.ai/zen/v1` | `gpt-5.5` (default); current documented GPT, Claude, Qwen, DeepSeek, MiniMax, GLM, Kimi, Grok, and free-model IDs | [OpenCode Zen](https://opencode.ai/docs/zen/) model-aware gateway. `OPENCODE_ZEN_MODEL` is accepted, and official `opencode/<model-id>` selectors normalize to bare wire IDs. GPT rows use `/responses`; Claude and Qwen rows use `/messages`; DeepSeek, MiniMax, GLM, Kimi, Grok, and the listed free rows use `/chat/completions`. All use the Zen API key with Bearer auth; the route never uses ChatGPT/Codex OAuth guidance or headers. Gemini currently fails closed because its model-specific Google wire protocol is not implemented. Unknown models also fail closed until their protocol is present in the curated catalog. |
 | `meta` | `[providers.meta]` | `META_MODEL_API_KEY`, `MODEL_API_KEY` | `META_MODEL_API_BASE_URL`, `MODEL_API_BASE_URL`; default `https://api.meta.ai/v1` | `muse-spark-1.1` (default) | [Meta Model API](https://developer.meta.com/ai/resources/blog/build-with-muse-spark/) public-preview route using OpenAI-compatible Chat Completions. Muse Spark 1.1 keeps its wire ID, tool support, 1M context, 32K output metadata, and `none` through `xhigh` reasoning effort. `META_MODEL_API_MODEL` and `MODEL_API_MODEL` are accepted. Provider aliases: `meta-ai`, `meta_model_api`, `muse`, `muse-spark`. |
 | `xai` | `[providers.xai]` | `XAI_API_KEY` **or** OAuth via `auth_mode = "oauth"` (`~/.grok/auth.json` / device-code) | `XAI_BASE_URL`; default `https://api.x.ai/v1` | `grok-4.5` (default), `grok-4.3`, `grok-build`, `grok-composer-2.5-fast`, `grok-4.20-0309-reasoning`, `grok-4.20-0309-non-reasoning` | xAI/Grok OpenAI-compatible Chat Completions route. **API-key** (default): Bearer token from console.x.ai via `XAI_API_KEY` / keyring / `api_key`. **OAuth**: set `[providers.xai] auth_mode = "oauth"` to reuse the official Grok CLI token file (`~/.grok/auth.json`, `$GROK_HOME/auth.json`, or `GROK_AUTH_PATH`); tokens refresh against `https://auth.x.ai/oauth2/token` before expiry. Device-code login is available via `crate::xai_oauth::device_code_login` (verification URL + user code; no localhost callback — SSH/headless friendly). OAuth may return HTTP 403 on some SuperGrok tiers — keep API-key as the reliable fallback. `XAI_MODEL` is accepted. Provider aliases: `x-ai`, `x_ai`, `grok`. |
+
+### OpenCode Zen protocol catalog
+
+The bundled Zen transport snapshot follows the [official endpoint
+table](https://opencode.ai/docs/zen/) and is intentionally explicit:
+
+- Responses: `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`,
+  `gpt-5.5-pro`, `gpt-5.4`, `gpt-5.4-pro`, `gpt-5.4-mini`, `gpt-5.4-nano`,
+  `gpt-5.3-codex`, `gpt-5.3-codex-spark`, `gpt-5.2`, `gpt-5.2-codex`,
+  `gpt-5.1`, `gpt-5.1-codex`, `gpt-5.1-codex-max`,
+  `gpt-5.1-codex-mini`, `gpt-5`, `gpt-5-codex`, `gpt-5-nano`.
+- Anthropic Messages: `claude-fable-5`, `claude-opus-4-8`,
+  `claude-opus-4-7`, `claude-opus-4-6`, `claude-opus-4-5`,
+  `claude-sonnet-5`, `claude-sonnet-4-6`, `claude-sonnet-4-5`,
+  `claude-haiku-4-5`, `qwen3.7-max`, `qwen3.7-plus`, `qwen3.6-plus`,
+  `qwen3.5-plus`.
+- Chat Completions: `deepseek-v4-pro`, `deepseek-v4-flash`, `minimax-m3`,
+  `minimax-m2.7`, `minimax-m2.5`, `glm-5.2`, `glm-5.1`, `glm-5`,
+  `kimi-k2.5`, `kimi-k2.6`, `kimi-k2.7-code`, `grok-4.5`,
+  `grok-build-0.1`, `big-pickle`, `mimo-v2.5-free`,
+  `north-mini-code-free`, `nemotron-3-ultra-free`,
+  `deepseek-v4-flash-free`.
+
+Gemini entries are excluded because the official table assigns them Google's
+model-specific protocol. A catalog miss never falls back to another Zen wire
+shape, including when a custom Zen base URL is configured.
 
 ### Hugging Face Provider vs MCP vs Hub
 
