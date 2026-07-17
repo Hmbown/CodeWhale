@@ -4,15 +4,20 @@
 # This check intentionally does not require an OpenHarmony SDK or sysroot. It
 # only asks Cargo to resolve the codewhale-tui dependency graph for the OHOS
 # target and fails if crates known to break or be unsupported on OHOS re-enter
-# that graph.
+# that graph. It also proves the OHOS target activates the rquickjs-sys
+# `bindgen` feature for codewhale-workflow-js, which is the only reason the
+# crate compiles for a target with no pre-generated QuickJS bindings.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
 target="${1:-aarch64-unknown-linux-ohos}"
 package="${CODEWHALE_OHOS_DEP_PACKAGE:-codewhale-tui}"
+workflow_js_package="${CODEWHALE_OHOS_WORKFLOW_JS_PACKAGE:-codewhale-workflow-js}"
 
 cargo_tree_with_retry() {
+  local package="$1"
+  shift
   local attempt
   local max_attempts="${CODEWHALE_OHOS_DEP_RETRIES:-3}"
   local delay_seconds="${CODEWHALE_OHOS_DEP_RETRY_DELAY_SECONDS:-10}"
@@ -31,10 +36,9 @@ cargo_tree_with_retry() {
       cargo tree \
         --locked \
         --package "${package}" \
-        --all-features \
         --target "${target}" \
         --prefix none \
-        --no-dedupe \
+        "$@" \
         2>"${err_file}"
     )"; then
       rm -f "${err_file}"
@@ -54,7 +58,7 @@ cargo_tree_with_retry() {
   done
 }
 
-tree="$(cargo_tree_with_retry)"
+tree="$(cargo_tree_with_retry "${package}" --all-features --no-dedupe)"
 
 disallowed="$(
   grep -E '^(nix v0\.(28|29)\.|portable-pty v|starlark v|arboard v|keyring v)' <<<"${tree}" || true
@@ -73,3 +77,28 @@ if [[ -n "${disallowed}" ]]; then
 fi
 
 echo "OHOS dependency graph OK for ${package} on ${target}."
+
+# codewhale-workflow-js only compiles for OHOS because its
+# `cfg(target_env = "ohos")` dependency gate activates rquickjs's `bindgen`
+# feature, which forwards to rquickjs-sys so QuickJS bindings are generated at
+# build time. Resolve the feature graph for the OHOS target (pure metadata, no
+# SDK or target toolchain needed) and fail loudly if either feature edge
+# disappears — for example because the target gate was dropped or an rquickjs
+# upgrade renamed the feature.
+workflow_js_features="$(cargo_tree_with_retry "${workflow_js_package}" --edges features)"
+
+if ! grep -qF 'rquickjs feature "bindgen"' <<<"${workflow_js_features}" \
+  || ! grep -qF 'rquickjs-sys feature "bindgen"' <<<"${workflow_js_features}"; then
+  {
+    echo "::error::OHOS target graph for ${workflow_js_package} lost the rquickjs bindgen feature edges:"
+    grep -E '^(rquickjs|rquickjs-sys|rquickjs-core|bindgen)( v| feature)' <<<"${workflow_js_features}" || true
+    echo
+    echo "crates/workflow-js/Cargo.toml must keep activating rquickjs's \`bindgen\`"
+    echo "feature under cfg(target_env = \"ohos\"); rquickjs ships no pre-generated"
+    echo "QuickJS bindings for OpenHarmony, so without that edge the crate cannot"
+    echo "compile for ${target}."
+  } >&2
+  exit 1
+fi
+
+echo "OHOS rquickjs-sys bindgen feature edge OK for ${workflow_js_package} on ${target}."
