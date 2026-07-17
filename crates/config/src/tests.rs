@@ -3842,7 +3842,7 @@ model = "opencode-go/glm-5.2"
 }
 
 #[test]
-fn opencode_zen_configures_model_aware_provider_and_fails_closed_without_catalog_proof() {
+fn opencode_zen_configures_model_aware_provider_with_catalog_proof() {
     for alias in [
         "opencode-zen",
         "opencode_zen",
@@ -3883,21 +3883,16 @@ model = "gpt-5.5"
     assert_eq!(resolved.api_key.as_deref(), Some("zen-config-key"));
 
     let resolver = crate::route::RouteResolver::new();
-    let error = resolver
+    let route = resolver
         .resolve(&crate::route::RouteRequest {
             explicit_provider: Some(ProviderKind::OpencodeZen),
             model_selector: Some(crate::route::LogicalModelRef::from("gpt-5.5")),
             saved_provider_model: None,
             base_url_override: None,
         })
-        .expect_err("Zen model without catalog protocol proof must fail closed");
-    assert!(
-        matches!(
-            error,
-            crate::route::RouteError::UnsupportedModelProtocol { .. }
-        ),
-        "unexpected error: {error:?}"
-    );
+        .expect("documented Zen model must resolve");
+    assert_eq!(route.protocol, crate::route::RequestProtocol::Responses);
+    assert_eq!(route.endpoint.endpoint_key, "responses");
 }
 
 #[test]

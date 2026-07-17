@@ -760,6 +760,82 @@ fn opencode_go_resolver_rejects_messages_models_even_on_custom_base_urls() {
 }
 
 #[test]
+fn opencode_zen_resolver_selects_protocol_from_documented_model_catalog() {
+    use super::offering::{
+        OPENCODE_ZEN_CHAT_MODELS, OPENCODE_ZEN_MESSAGES_MODELS, OPENCODE_ZEN_RESPONSES_MODELS,
+    };
+
+    let resolver = RouteResolver::new();
+    let groups = [
+        (
+            OPENCODE_ZEN_RESPONSES_MODELS,
+            "responses",
+            RequestProtocol::Responses,
+        ),
+        (
+            OPENCODE_ZEN_MESSAGES_MODELS,
+            "messages",
+            RequestProtocol::AnthropicMessages,
+        ),
+        (
+            OPENCODE_ZEN_CHAT_MODELS,
+            "chat",
+            RequestProtocol::ChatCompletions,
+        ),
+    ];
+
+    for (models, endpoint_key, protocol) in groups {
+        for model in models {
+            for requested in [model.to_string(), format!("opencode/{model}")] {
+                let route = resolver
+                    .resolve(&req(Some(ProviderKind::OpencodeZen), Some(&requested)))
+                    .unwrap_or_else(|error| panic!("{requested} should resolve: {error}"));
+                assert_eq!(route.provider_kind, ProviderKind::OpencodeZen);
+                assert_eq!(route.wire_model_id.as_str(), *model, "{requested}");
+                assert_eq!(route.endpoint.endpoint_key, endpoint_key, "{requested}");
+                assert_eq!(route.protocol, protocol, "{requested}");
+            }
+        }
+    }
+
+    let automatic = resolver
+        .resolve(&req(Some(ProviderKind::OpencodeZen), Some("auto")))
+        .expect("OpenCode Zen auto should resolve to its documented default");
+    assert_eq!(automatic.wire_model_id.as_str(), "gpt-5.5");
+    assert_eq!(automatic.protocol, RequestProtocol::Responses);
+}
+
+#[test]
+fn opencode_zen_resolver_fails_closed_for_unproven_protocols() {
+    let resolver = RouteResolver::new();
+
+    for model in [
+        "gemini-3.1-pro",
+        "opencode/gemini-3.5-flash",
+        "unknown-model",
+    ] {
+        for base_url_override in [
+            None,
+            Some("https://zen-gateway.example.test/v1".to_string()),
+        ] {
+            let request = RouteRequest {
+                explicit_provider: Some(ProviderKind::OpencodeZen),
+                model_selector: Some(LogicalModelRef::from(model)),
+                saved_provider_model: None,
+                base_url_override,
+            };
+            assert!(
+                matches!(
+                    resolver.resolve(&request),
+                    Err(RouteError::UnsupportedModelProtocol { .. })
+                ),
+                "{model} must fail closed without a supported protocol mapping"
+            );
+        }
+    }
+}
+
+#[test]
 fn resolver_deepseek_none_selector_uses_default_wire_id() {
     let r = RouteResolver::new();
     let out = r
@@ -848,13 +924,6 @@ fn resolver_protocol_matches_descriptor_for_every_provider() {
         // the whole provider set.
         let default_wire = ProviderDescriptor::for_kind(kind).default_wire_model();
         let request = req(Some(kind), Some(default_wire.as_str()));
-        if kind == ProviderKind::OpencodeZen {
-            let error = r
-                .resolve(&request)
-                .expect_err("Zen without a catalog offering must fail closed");
-            assert!(matches!(error, RouteError::UnsupportedModelProtocol { .. }));
-            continue;
-        }
         let out = r
             .resolve(&request)
             .unwrap_or_else(|e| panic!("{kind:?} should resolve its own default: {e}"));

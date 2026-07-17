@@ -262,6 +262,12 @@ impl RouteResolver {
                     model: logical_model.raw().to_string(),
                 }
             })?
+        } else if provider_kind == ProviderKind::OpencodeZen {
+            logical_model
+                .raw()
+                .strip_prefix("opencode/")
+                .or_else(|| logical_model.raw().strip_prefix("opencode-zen/"))
+                .unwrap_or_else(|| logical_model.raw())
         } else {
             provider_scoped_wire_alias(provider_kind, logical_model.raw(), class)
         };
@@ -402,9 +408,8 @@ fn provider_scoped_wire_alias(
 
 /// Build the default resolver offerings from the bundled Models.dev asset.
 ///
-/// [`bundled_offerings`] is an empty override seam (#4139): when it later gains
-/// curated rows again, those win a `(provider, wire id)` collision over the
-/// asset. Today the asset is the sole bundled source of truth.
+/// Curated transport rows win a `(provider, wire id)` collision over the asset;
+/// all other offerings continue to come from Models.dev.
 fn default_offerings() -> Vec<ProviderModelOffering> {
     let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
     let mut out = Vec::new();
