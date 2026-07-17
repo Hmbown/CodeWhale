@@ -18,10 +18,13 @@ const SPREADSHEETS_BODY: &str = include_str!("../../assets/skills/spreadsheets/S
 const PDF_BODY: &str = include_str!("../../assets/skills/pdf/SKILL.md");
 const FEISHU_BODY: &str = include_str!("../../assets/skills/feishu/SKILL.md");
 
+type ProbeFactory = fn() -> Box<dyn ReadinessProbe>;
+
 struct BundledSkill {
     name: &'static str,
     body: &'static str,
     introduced_in: u32,
+    probe: Option<ProbeFactory>,
 }
 
 const BUNDLED_SKILLS: &[BundledSkill] = &[
@@ -29,63 +32,116 @@ const BUNDLED_SKILLS: &[BundledSkill] = &[
         name: "skill-creator",
         body: SKILL_CREATOR_BODY,
         introduced_in: 1,
+        probe: None,
     },
     BundledSkill {
         name: "delegate",
         body: DELEGATE_BODY,
         introduced_in: 2,
+        probe: None,
     },
     BundledSkill {
         name: "v4-best-practices",
         body: V4_BEST_PRACTICES_BODY,
         introduced_in: 3,
+        probe: None,
     },
     BundledSkill {
         name: "plugin-creator",
         body: PLUGIN_CREATOR_BODY,
         introduced_in: 3,
+        probe: None,
     },
     BundledSkill {
         name: "skill-installer",
         body: SKILL_INSTALLER_BODY,
         introduced_in: 3,
+        probe: None,
     },
     BundledSkill {
         name: "mcp-builder",
         body: MCP_BUILDER_BODY,
         introduced_in: 3,
+        probe: None,
     },
     BundledSkill {
         name: "fleet-manager",
         body: FLEET_MANAGER_BODY,
         introduced_in: 4,
+        probe: None,
     },
     BundledSkill {
         name: "documents",
         body: DOCUMENTS_BODY,
         introduced_in: 3,
+        probe: None,
     },
     BundledSkill {
         name: "presentations",
         body: PRESENTATIONS_BODY,
         introduced_in: 3,
+        probe: Some(make_presentations_probe),
     },
     BundledSkill {
         name: "spreadsheets",
         body: SPREADSHEETS_BODY,
         introduced_in: 3,
+        probe: Some(make_spreadsheets_probe),
     },
     BundledSkill {
         name: "pdf",
         body: PDF_BODY,
         introduced_in: 3,
+        probe: None,
     },
     BundledSkill {
         name: "feishu",
         body: FEISHU_BODY,
         introduced_in: 3,
+        probe: None,
     },
 ];
+
+use crate::skills::SkillReadiness;
+use crate::skills::probe::{ReadinessProbe, has_openpyxl, has_python, has_python_pptx, register};
+struct PresentationsProbe;
+impl ReadinessProbe for PresentationsProbe {
+    fn probe(&self) -> SkillReadiness {
+        if has_python() && has_python_pptx() {
+            SkillReadiness::Ready
+        } else if has_python() {
+            SkillReadiness::Partial
+        } else {
+            SkillReadiness::NeedsSetup
+        }
+    }
+    fn required_tools(&self) -> Vec<String> {
+        vec!["python3".into(), "python-pptx".into()]
+    }
+}
+
+struct SpreadsheetsProbe;
+impl ReadinessProbe for SpreadsheetsProbe {
+    fn probe(&self) -> SkillReadiness {
+        if has_python() && has_openpyxl() {
+            SkillReadiness::Ready
+        } else if has_python() {
+            SkillReadiness::Partial
+        } else {
+            SkillReadiness::NeedsSetup
+        }
+    }
+    fn required_tools(&self) -> Vec<String> {
+        vec!["python3".into(), "openpyxl".into()]
+    }
+}
+
+fn make_presentations_probe() -> Box<dyn ReadinessProbe> {
+    Box::new(PresentationsProbe)
+}
+fn make_spreadsheets_probe() -> Box<dyn ReadinessProbe> {
+    Box::new(SpreadsheetsProbe)
+}
 
 /// Whether a skill name matches one of the bundled first-party skills.
 ///
@@ -151,6 +207,16 @@ pub fn install_system_skills(skills_dir: &Path) -> std::io::Result<()> {
         .map(|s| s.trim().to_string());
 
     let mut changed = false;
+    // ── Phase 1: always register probes (guaranteed, no early return) ──
+    for skill in BUNDLED_SKILLS {
+        if let Some(factory) = skill.probe {
+            register(skill.name, factory());
+        }
+    }
+    // ── Phase 2: install skill files (may fail — let errors propagate) ──
+    // Register test probe in debug builds only (never in release)
+    #[cfg(debug_assertions)]
+    register("skill-never-ready", Box::new(crate::skills::probe::NeverReadyProbe));
     for skill in BUNDLED_SKILLS {
         changed |= install_one(skills_dir, skill, installed_version.as_deref())?;
     }
@@ -159,6 +225,7 @@ pub fn install_system_skills(skills_dir: &Path) -> std::io::Result<()> {
         fs::create_dir_all(skills_dir)?;
         fs::write(&marker, BUNDLED_SKILL_VERSION)?;
     }
+
     Ok(())
 }
 

@@ -13,6 +13,16 @@ use crate::tui::history::HistoryCell;
 
 use crate::commands::CommandResult;
 
+fn skill_readiness_badge(name: &str) -> String {
+    let result = match crate::skills::probe::probe(name) {
+        Some(crate::skills::SkillReadiness::NeedsSetup) => " [needs setup]".to_string(),
+        Some(crate::skills::SkillReadiness::Partial) => " [partial]".to_string(),
+        _ => String::new(),
+    };
+    eprintln!("skill_readiness_badge({name}) = {result:?}");
+    result
+}
+
 #[cfg(test)]
 thread_local! {
     static TEST_HOME_DIR: std::cell::RefCell<Option<std::path::PathBuf>> =
@@ -117,9 +127,20 @@ fn inspect_skills(app: &mut App) -> CommandResult {
     } else {
         for skill in registry.list() {
             if skill.description.trim().is_empty() {
-                let _ = writeln!(output, "  - {}", skill.name);
+                let _ = writeln!(
+                    output,
+                    "  - {}{}",
+                    skill.name,
+                    skill_readiness_badge(&skill.name)
+                );
             } else {
-                let _ = writeln!(output, "  - {} — {}", skill.name, skill.description);
+                let _ = writeln!(
+                    output,
+                    "  - {} — {}{}",
+                    skill.name,
+                    skill.description,
+                    skill_readiness_badge(&skill.name)
+                );
             }
             let _ = writeln!(output, "    path: {}", skill.path.display());
         }
@@ -136,6 +157,7 @@ fn inspect_skills(app: &mut App) -> CommandResult {
 /// discovery mode, searched directories, and skill source paths.
 fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
     let mut prefix: Option<String> = None;
+    let _ = std::fs::write("D:\\codewhale_debug.txt", format!("list_skills called, arg={arg:?}\n"));
     if let Some(arg) = arg {
         let trimmed = arg.trim();
         if trimmed == "--remote" || trimmed == "remote" {
@@ -197,7 +219,7 @@ fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
         // The user typed a prefix that matched nothing. Surface what
         // they typed plus the full count so they can decide whether
         // to adjust the prefix or run `/skills` for the whole list.
-        let p = prefix.as_deref().unwrap_or("");
+        let p = prefix.as_deref().unwrap_or("? ");
         return CommandResult::message(format!(
             "No skills match prefix `{p}` (out of {} available).\n\nRun /skills to see them all.{warnings}",
             registry.len()
@@ -221,7 +243,13 @@ fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
             if idx > 0 {
                 output.push('\n');
             }
-            let _ = writeln!(output, "  /{} - {}", skill.name, skill.description);
+            let _ = writeln!(
+                output,
+                "  /{} - {}{}",
+                skill.name,
+                skill.description,
+                skill_readiness_badge(&skill.name)
+            );
         }
     } else {
         // Unfiltered view: partition into user-created and built-in so a
@@ -239,7 +267,13 @@ fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
         if !user_skills.is_empty() {
             let _ = writeln!(output, "Your skills ({}):", user_skills.len());
             for skill in &user_skills {
-                let _ = writeln!(output, "  /{} - {}", skill.name, skill.description);
+                let _ = writeln!(
+                    output,
+                    "  /{} - {}{}",
+                    skill.name,
+                    skill.description,
+                    skill_readiness_badge(&skill.name)
+                );
             }
             if !bundled_skills.is_empty() {
                 output.push('\n');
@@ -255,7 +289,13 @@ fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
             // likely getting their first look at the catalog.
             if user_skills.is_empty() {
                 for skill in &bundled_skills {
-                    let _ = writeln!(output, "  /{} - {}", skill.name, skill.description);
+                    let _ = writeln!(
+                        output,
+                        "  /{} - {}{}",
+                        skill.name,
+                        skill.description,
+                        skill_readiness_badge(&skill.name)
+                    );
                 }
             } else {
                 let names: Vec<String> = bundled_skills
@@ -311,8 +351,8 @@ fn run_skill(app: &mut App, name: Option<&str>) -> CommandResult {
     // Sub-command dispatch happens before the activation path so users can't
     // accidentally activate a skill literally named "install".
     let mut iter = raw.splitn(2, char::is_whitespace);
-    let head = iter.next().unwrap_or("").trim();
-    let rest = iter.next().unwrap_or("").trim();
+    let head = iter.next().unwrap_or("? ").trim();
+    let rest = iter.next().unwrap_or("? ").trim();
     match head {
         "install" => return install_skill(app, rest),
         "update" => return update_skill(app, rest),
@@ -345,10 +385,32 @@ fn activate_skill(app: &mut App, name: &str) -> CommandResult {
     let registry = discover_visible_skills(app);
 
     if let Some(skill) = registry.get(name) {
-        let instruction = format!(
+        let mut instruction = format!(
             "You are now using a skill. Follow these instructions:\n\n# Skill: {}\n\n{}\n\n---\n\nNow respond to the user's request following the above skill instructions.",
             skill.name, skill.body
         );
+
+        eprintln!(
+            "activate skill: {name}, readiness probe={:?}",
+            crate::skills::probe::probe(name)
+        );
+        // If skill reports NeedsSetup, append readiness report instruction
+        if let Some(readiness) = crate::skills::probe::probe(name) {
+            use crate::skills::SkillReadiness;
+            if readiness == SkillReadiness::NeedsSetup || readiness == SkillReadiness::Partial {
+                let status = if readiness == SkillReadiness::NeedsSetup {
+                    "needs setup"
+                } else {
+                    "partial"
+                };
+                let report = format!(
+                    "\n\n## ⚠ Readiness Notice\n\nThis skill reports as **{status}**. Required tools may be missing.\n\
+                     After attempting the task, report whether the skill worked, what dependencies are \
+                     missing, and whether installation was successful.\n\n---\n"
+                );
+                instruction.push_str(&report);
+            }
+        }
 
         app.add_message(HistoryCell::System {
             content: format!("Activated skill: {}\n\n{}", skill.name, skill.description),

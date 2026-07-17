@@ -253,6 +253,7 @@ struct SkillEntry {
     path: PathBuf,
     enabled: bool,
     is_bundled: bool,
+    readiness: crate::skills::SkillReadiness,
 }
 
 #[derive(Debug, Serialize)]
@@ -1330,6 +1331,8 @@ async fn list_skills(
             path: skill.path.clone(),
             enabled: skill_state.is_enabled(&skill.name),
             is_bundled: skill_entry_is_bundled(skill, &skills_dir),
+            readiness: crate::skills::probe::probe(&skill.name)
+                .unwrap_or(crate::skills::SkillReadiness::Unknown),
         })
         .collect();
     Ok(Json(SkillsResponse {

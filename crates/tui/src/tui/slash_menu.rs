@@ -180,7 +180,14 @@ fn skill_mention_entries(
         .filter(|(skill_name, _)| skill_name.to_ascii_lowercase().starts_with(&partial_lower))
         .map(|(skill_name, skill_desc)| SlashMenuEntry {
             name: format!("{trigger}{skill_name}"),
-            description: skill_desc.clone(),
+            description: {
+                let badge = match crate::skills::probe::probe(skill_name) {
+                    Some(crate::skills::SkillReadiness::NeedsSetup) => " [needs setup]",
+                    Some(crate::skills::SkillReadiness::Partial) => " [partial]",
+                    _ => "",
+                };
+                format!("{skill_desc}{badge}")
+            },
             is_skill: true,
             alias_hint: None,
         })

@@ -3386,6 +3386,8 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
     println!();
     println!("{}", "Skills:".bold());
     let global_skills_dir = config.skills_dir();
+    // Ensure bundled skill probes are registered for doctor --json
+    let _ = crate::skills::install_system_skills(&global_skills_dir);
     let agents_skills_dir = workspace.join(".agents").join("skills");
     let local_skills_dir = workspace.join("skills");
     let agents_global_skills_dir = crate::skills::agents_global_skills_dir();
@@ -4685,6 +4687,8 @@ fn run_doctor_json(
     };
 
     let global_skills_dir = config.skills_dir();
+    // Ensure bundled skill probes are registered for doctor --json
+    let _ = crate::skills::install_system_skills(&global_skills_dir);
     let agents_skills_dir = workspace.join(".agents").join("skills");
     let local_skills_dir = workspace.join("skills");
     let agents_global_skills_dir = crate::skills::agents_global_skills_dir();
@@ -4757,6 +4761,26 @@ fn run_doctor_json(
     let (code_home, legacy_home) = doctor_state_roots();
     let legacy_state_report = doctor_legacy_state_report(&code_home, &legacy_home);
 
+    let skill_items: Vec<serde_json::Value> = {
+        let registry = crate::skills::discover_for_workspace_and_dir_with_mode(
+            workspace,
+            &selected_skills_dir,
+            crate::skills::SkillDiscoveryMode::Compatible,
+        );
+        registry
+            .list()
+            .iter()
+            .map(|skill| {
+                serde_json::json!({
+                    "name": skill.name,
+                    "readiness": crate::skills::probe::probe(&skill.name)
+                        .unwrap_or(crate::skills::SkillReadiness::Unknown),
+                    "required_tools": crate::skills::probe::query_tools(&skill.name),
+                })
+            })
+            .collect()
+    };
+
     let report = json!({
         "version": env!("CARGO_PKG_VERSION"),
         "config_path": config_path.display().to_string(),
@@ -4814,6 +4838,7 @@ fn run_doctor_json(
                 "present": claude_skills_dir.exists(),
                 "count": skills_count_for(&claude_skills_dir),
             },
+            "items": skill_items,
         },
         "tools": {
             "path": tools_dir.display().to_string(),

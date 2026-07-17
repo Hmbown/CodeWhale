@@ -1,6 +1,7 @@
 //! Skill discovery and registry for local SKILL.md files.
 
 pub mod install;
+pub mod probe;
 mod system;
 // Re-exports kept for documentation parity and downstream consumers; the
 // binary itself imports directly from `skills::install`. `#[allow(...)]`
@@ -65,6 +66,15 @@ impl SkillDiscoveryMode {
     }
 }
 
+use serde::{Deserialize, Serialize};
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SkillReadiness {
+    Ready,
+    Partial,
+    NeedsSetup,
+    Unknown,
+}
+
 /// Parsed representation of a SKILL.md definition.
 #[derive(Debug, Clone)]
 pub struct Skill {
@@ -82,6 +92,7 @@ pub struct Skill {
     /// or manually-placed skills, so callers must use this rather than
     /// reconstructing `<dir>/<name>/SKILL.md`.
     pub path: PathBuf,
+    pub readiness: SkillReadiness, // ← Unknown by default #need_documentation
 }
 
 impl Skill {
@@ -494,6 +505,7 @@ impl SkillRegistry {
                 // Filled in by `discover` after parse succeeds; default to an
                 // empty path so direct constructors (e.g. tests) compile.
                 path: PathBuf::new(),
+                readiness: SkillReadiness::Unknown,
             });
         }
 
@@ -515,6 +527,7 @@ impl SkillRegistry {
             localized_descriptions: HashMap::new(),
             body: content.trim().to_string(),
             path: PathBuf::new(),
+            readiness: SkillReadiness::Unknown,
         })
     }
 
@@ -1127,6 +1140,7 @@ mod tests {
                 .join("skills")
                 .join("workspace-priority")
                 .join("SKILL.md"),
+            readiness: super::SkillReadiness::Unknown,
         });
 
         let big_desc = "y".repeat(super::MAX_SKILL_DESCRIPTION_CHARS - 20);
@@ -1142,6 +1156,7 @@ mod tests {
                     .join("skills")
                     .join(format!("aaa-global-{i:03}"))
                     .join("SKILL.md"),
+                readiness: super::SkillReadiness::Unknown,
             });
         }
 
@@ -1195,6 +1210,7 @@ body";
             localized_descriptions: localized,
             body: String::new(),
             path: std::path::PathBuf::new(),
+            readiness: super::SkillReadiness::Unknown,
         };
 
         assert_eq!(skill.description_for_locale("zh"), "中文描述"); // exact
@@ -1226,6 +1242,7 @@ body";
             localized_descriptions: localized,
             body: String::new(),
             path: std::path::PathBuf::new(),
+            readiness: super::SkillReadiness::Unknown,
         };
         // Exact Traditional key wins for a Traditional session.
         assert_eq!(skill.description_for_locale("zh-Hant"), "繁體描述");
@@ -1242,6 +1259,7 @@ body";
             localized_descriptions: std::collections::HashMap::new(),
             body: String::new(),
             path: std::path::PathBuf::new(),
+            readiness: super::SkillReadiness::Unknown,
         };
         assert_eq!(skill.description_for_locale("zh"), "only english");
     }
@@ -1257,6 +1275,7 @@ body";
             localized_descriptions: localized,
             body: "body".to_string(),
             path: std::path::PathBuf::from("/skills/compress/SKILL.md"),
+            readiness: super::SkillReadiness::Unknown,
         });
 
         let zh = super::render_skills_block(&registry, "zh-Hans").expect("zh block");
