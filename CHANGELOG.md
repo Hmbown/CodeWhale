@@ -11,8 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Codewhale v0.9.1 ships a first-class local web client over the Runtime API,
 first-class OpenCode Go and restored xAI device login on the provider surface,
-calendar-correct hourly automations, and a hardening pass over the community
-site's draft, feed, login, and content-watch boundaries.
+calendar-correct hourly automations, a buildable OpenHarmony workflow-js
+target, and hardening for Auto routing, remote-terminal clipboard transport,
+restart recovery, and the community site's content boundaries.
 
 ### Added
 
@@ -36,6 +37,27 @@ site's draft, feed, login, and content-watch boundaries.
 
 ### Fixed
 
+- Generate QuickJS bindings for `aarch64-unknown-linux-ohos` with the native
+  SDK's libclang and sysroot, carry the OHOS target and sysroot through final
+  linking, and keep unsupported persistent PTY dependencies out of the target
+  while retaining non-PTY `exec_shell` support (#4470 by @shenjackyuanjie;
+  original bindgen approach in #4384 by @shenyongqing).
+- Honor `[auto] cost_saving = true` in provider-aware heuristic and classifier
+  routing, using only validated same-provider fast siblings and deriving
+  fallback candidates from their actual provider so Auto cannot invent a
+  cross-provider model. Providers without a known fast sibling stay on the
+  active model (#4486; partial #4405).
+- Make terminal-client clipboard behavior truthful over SSH: use OSC 52
+  outside tmux, stock `tmux load-buffer -w` inside tmux, and bracketed paste
+  for client-to-remote text. Graphical text and image access now requires
+  credible forwarding or an explicit override, transport failures no longer
+  claim success, and help distinguishes terminal text paste from graphical
+  image attachment (#4484).
+- Keep a fresh TUI Work surface from rendering prior-session worker snapshots
+  or durable-task terminal receipts whose creation or completion predates the
+  current app start. Active durable tasks remain visible, and shared history
+  stays available through `/tasks` and archived agent views (#4488; partial
+  #4416).
 - Make doctor and setup output distinguish static configuration, command
   availability, MCP protocol readiness, and backend health instead of
   presenting configured routes as live-healthy. Ordinary doctor runs no
