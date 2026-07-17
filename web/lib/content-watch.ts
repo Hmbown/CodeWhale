@@ -99,23 +99,28 @@ export async function runLinkCheck(env: WatchEnv): Promise<{ ok: boolean; checke
   }), { expirationTtl: 60 * 60 * 24 * 14 });
 
   // Write drafts ONLY for new breakages — dedup by URL on the open-draft list.
-  for (const b of broken) {
-    const id = b.url.replace(/[^a-z0-9]+/gi, "-").slice(0, 80);
-    const key = `draft:linkcheck:${id}`;
-    const existing = await env.CURATED_KV.get(key);
-    if (existing) continue; // already flagged; don't churn
+  const linkChecks = await Promise.all(
+    broken.map(async (b) => {
+      const id = b.url.replace(/[^a-z0-9]+/gi, "-").slice(0, 80);
+      const key = `draft:linkcheck:${id}`;
+      const existing = await env.CURATED_KV!.get(key);
+      return { b, id, existing };
+    })
+  );
 
-    const draft: AgentDraft = {
-      id,
+  const linkDraftsToSave: AgentDraft[] = linkChecks
+    .filter((c) => !c.existing) // already flagged; don't churn
+    .map((c) => ({
+      id: c.id,
       type: "triage", // reuse existing draft type so /admin renders it
-      targetUrl: b.url,
-      bodyEn: `**Broken link** (auto-detected by daily watch cron)\n\n- Label: **${b.label}**\n- URL: ${b.url}\n- HTTP status: ${b.status}\n- Latency: ${b.ms}ms\n\nThis URL is referenced in codewhale.net copy. Update the source page or fix the destination.\n\n— drafted by community assistant, pending maintainer review`,
-      bodyZh: `**链接失效**（每日巡检自动发现）\n\n- 名称：**${b.label}**\n- 地址：${b.url}\n- HTTP 状态：${b.status}\n- 延迟：${b.ms}ms\n\n该地址被 codewhale.net 文案引用，请更新源页面或修复目标。\n\n— 由社区助理草拟，待维护者审阅`,
+      targetUrl: c.b.url,
+      bodyEn: `**Broken link** (auto-detected by daily watch cron)\n\n- Label: **${c.b.label}**\n- URL: ${c.b.url}\n- HTTP status: ${c.b.status}\n- Latency: ${c.b.ms}ms\n\nThis URL is referenced in codewhale.net copy. Update the source page or fix the destination.\n\n— drafted by community assistant, pending maintainer review`,
+      bodyZh: `**链接失效**（每日巡检自动发现）\n\n- 名称：**${c.b.label}**\n- 地址：${c.b.url}\n- HTTP 状态：${c.b.status}\n- 延迟：${c.b.ms}ms\n\n该地址被 codewhale.net 文案引用，请更新源页面或修复目标。\n\n— 由社区助理草拟，待维护者审阅`,
       generatedAt: new Date().toISOString(),
       posted: false,
-    };
-    await saveDraft(env.CURATED_KV, draft);
-  }
+    }));
+
+  await Promise.all(linkDraftsToSave.map((draft) => saveDraft(env.CURATED_KV!, draft)));
 
   return { ok: true, checked: results.length, broken: broken.length, results: broken };
 }
@@ -281,26 +286,34 @@ ${docsText}`;
   }
 
   const drifts = parsed.drifts ?? [];
-  let drafted = 0;
-  for (const d of drifts) {
-    const id = `${d.page}-${d.claim.slice(0, 40).replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`.slice(0, 80);
-    const key = `draft:semantic-drift:${id}`;
-    const existing = await env.CURATED_KV.get(key);
-    if (existing) continue;
 
-    const body = `Page: **${d.page}**\n\nClaim that may be drifted:\n> ${d.claim}\n\nEvidence:\n> ${d.evidence}\n\nSuggested replacement:\n> ${d.suggested_replacement}\n\n— drafted by community assistant, pending maintainer review`;
-    const draft: AgentDraft = {
-      id,
-      type: "triage",
-      targetUrl: `https://codewhale.net/en/${d.page === "homepage" ? "" : d.page}`,
-      bodyEn: body,
-      bodyZh: body,
-      generatedAt: new Date().toISOString(),
-      posted: false,
-    };
-    await saveDraft(env.CURATED_KV, draft);
-    drafted++;
-  }
+  const driftChecks = await Promise.all(
+    drifts.map(async (d) => {
+      const id = `${d.page}-${d.claim.slice(0, 40).replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`.slice(0, 80);
+      const key = `draft:semantic-drift:${id}`;
+      // env.CURATED_KV is already checked at the beginning of the function
+      const existing = await env.CURATED_KV!.get(key);
+      return { d, id, existing };
+    })
+  );
+
+  const draftsToSave: AgentDraft[] = driftChecks
+    .filter((c) => !c.existing)
+    .map((c) => {
+      const body = `Page: **${c.d.page}**\n\nClaim that may be drifted:\n> ${c.d.claim}\n\nEvidence:\n> ${c.d.evidence}\n\nSuggested replacement:\n> ${c.d.suggested_replacement}\n\n— drafted by community assistant, pending maintainer review`;
+      return {
+        id: c.id,
+        type: "triage",
+        targetUrl: `https://codewhale.net/en/${c.d.page === "homepage" ? "" : c.d.page}`,
+        bodyEn: body,
+        bodyZh: body,
+        generatedAt: new Date().toISOString(),
+        posted: false,
+      };
+    });
+
+  await Promise.all(draftsToSave.map((draft) => saveDraft(env.CURATED_KV!, draft)));
+  const drafted = draftsToSave.length;
 
   return { ok: true, drafted };
 }
