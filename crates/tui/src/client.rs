@@ -1193,10 +1193,7 @@ fn build_default_headers(
         None
     } else if !api_key.is_empty()
         && uses_anthropic_messages
-        && !matches!(
-            api_provider,
-            ApiProvider::Openmodel | ApiProvider::OpencodeZen
-        )
+        && api_provider != ApiProvider::Openmodel
     {
         Some(HeaderName::from_static("x-api-key"))
     } else if !api_key.is_empty()
@@ -2802,6 +2799,26 @@ mod tests {
         }
     }
 
+    fn assert_zen_messages_api_key_without_bearer(request: &wiremock::Request) {
+        assert_eq!(
+            request
+                .headers
+                .get("x-api-key")
+                .and_then(|value| value.to_str().ok()),
+            Some("zen-test-key")
+        );
+        assert!(
+            request.headers.get(AUTHORIZATION).is_none(),
+            "Zen Messages request must not include Authorization"
+        );
+        for forbidden in ["openai-beta", "originator", "chatgpt-account-id"] {
+            assert!(
+                request.headers.get(forbidden).is_none(),
+                "Zen request must not include {forbidden}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn opencode_zen_responses_request_shape_uses_responses_route_without_oauth_headers() {
         let server = MockServer::start().await;
@@ -2836,7 +2853,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn opencode_zen_messages_request_shape_uses_bearer_anthropic_route() {
+    async fn opencode_zen_messages_request_shape_uses_api_key_anthropic_route() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v1/messages"))
@@ -2863,7 +2880,7 @@ mod tests {
 
         let requests = server.received_requests().await.expect("recorded request");
         assert_eq!(requests.len(), 1);
-        assert_zen_bearer_without_codex_headers(&requests[0]);
+        assert_zen_messages_api_key_without_bearer(&requests[0]);
         assert_eq!(
             requests[0]
                 .headers
