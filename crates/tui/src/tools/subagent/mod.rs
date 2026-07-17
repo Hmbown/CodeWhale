@@ -6836,50 +6836,21 @@ async fn run_subagent(
                     agent_id: agent_id.clone(),
                 });
             }
-            let status = SubAgentStatus::Cancelled;
-            let duration_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
-            insert_subagent_full_transcript_handle(
+            return Ok(finish_subagent_run(
                 runtime,
-                &agent_id,
-                &agent_type,
-                &assignment,
-                &status,
+                agent_id.clone(),
+                agent_type.clone(),
+                assignment.clone(),
+                SubAgentStatus::Cancelled,
                 None,
-                latest_checkpoint.as_ref(),
+                latest_checkpoint.clone(),
                 transcript_artifact.as_mut(),
                 &messages,
                 steps,
-                duration_ms,
+                started_at,
                 fork_context_enabled,
             )
-            .await;
-            return Ok(SubAgentResult {
-                name: agent_id.clone(),
-                agent_id: agent_id.clone(),
-                context_mode: if fork_context_enabled {
-                    "forked"
-                } else {
-                    "fresh"
-                }
-                .to_string(),
-                fork_context: fork_context_enabled,
-                workspace: Some(runtime.context.workspace.clone()),
-                git_branch: current_git_branch(&runtime.context.workspace),
-                agent_type: agent_type.clone(),
-                assignment: assignment.clone(),
-                model: runtime.model.clone(),
-                nickname: None,
-                status,
-                worker_status: None,
-                parent_run_id: runtime.parent_agent_id.clone(),
-                spawn_depth: runtime.spawn_depth,
-                result: None,
-                steps_taken: steps,
-                checkpoint: latest_checkpoint.clone(),
-                needs_input: None,
-                duration_ms,
-                from_prior_session: false,
-            });
+            .await);
         }
 
         steps += 1;
@@ -6982,45 +6953,20 @@ async fn run_subagent(
                         agent_id: agent_id.clone(),
                     });
                 }
-                let status = SubAgentStatus::Cancelled;
-                let duration_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
-                insert_subagent_full_transcript_handle(
+                return Ok(finish_subagent_run(
                     runtime,
-                    &agent_id,
-                    &agent_type,
-                    &assignment,
-                    &status,
+                    agent_id.clone(),
+                    agent_type.clone(),
+                    assignment.clone(),
+                    SubAgentStatus::Cancelled,
                     None,
-                    latest_checkpoint.as_ref(),
+                    latest_checkpoint.clone(),
                     transcript_artifact.as_mut(),
                     &messages,
                     steps,
-                    duration_ms,
+                    started_at,
                     fork_context_enabled,
-                )
-                .await;
-                return Ok(SubAgentResult {
-                    name: agent_id.clone(),
-                    agent_id: agent_id.clone(),
-                    context_mode: if fork_context_enabled { "forked" } else { "fresh" }.to_string(),
-                    fork_context: fork_context_enabled,
-                    workspace: Some(runtime.context.workspace.clone()),
-                    git_branch: current_git_branch(&runtime.context.workspace),
-                    agent_type: agent_type.clone(),
-                    assignment: assignment.clone(),
-                    model: runtime.model.clone(),
-                    nickname: None,
-                    status,
-                    worker_status: None,
-                    parent_run_id: runtime.parent_agent_id.clone(),
-                    spawn_depth: runtime.spawn_depth,
-                    result: None,
-                    steps_taken: steps,
-                    checkpoint: latest_checkpoint.clone(),
-                    needs_input: None,
-                    duration_ms,
-                    from_prior_session: false,
-                });
+                ).await);
             }
             api = request_subagent_model_response_with_retries(
                 runtime,
@@ -7137,8 +7083,6 @@ async fn run_subagent(
                     agent_id: agent_id.clone(),
                 });
             }
-            let status = SubAgentStatus::BudgetExhausted;
-            let duration_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
             latest_checkpoint = Some(
                 checkpoint_subagent_progress(
                     runtime,
@@ -7150,48 +7094,21 @@ async fn run_subagent(
                 )
                 .await,
             );
-            insert_subagent_full_transcript_handle(
+            return Ok(finish_subagent_run(
                 runtime,
-                &agent_id,
-                &agent_type,
-                &assignment,
-                &status,
-                final_result.as_ref(),
-                latest_checkpoint.as_ref(),
+                agent_id.clone(),
+                agent_type.clone(),
+                assignment.clone(),
+                SubAgentStatus::BudgetExhausted,
+                final_result.clone(),
+                latest_checkpoint.clone(),
                 transcript_artifact.as_mut(),
                 &messages,
                 steps,
-                duration_ms,
+                started_at,
                 fork_context_enabled,
             )
-            .await;
-            return Ok(SubAgentResult {
-                name: agent_id.clone(),
-                agent_id: agent_id.clone(),
-                context_mode: if fork_context_enabled {
-                    "forked"
-                } else {
-                    "fresh"
-                }
-                .to_string(),
-                fork_context: fork_context_enabled,
-                workspace: Some(runtime.context.workspace.clone()),
-                git_branch: current_git_branch(&runtime.context.workspace),
-                agent_type: agent_type.clone(),
-                assignment: assignment.clone(),
-                model: runtime.model.clone(),
-                nickname: None,
-                status,
-                worker_status: None,
-                parent_run_id: runtime.parent_agent_id.clone(),
-                spawn_depth: runtime.spawn_depth,
-                result: final_result.clone(),
-                steps_taken: steps,
-                checkpoint: latest_checkpoint.clone(),
-                needs_input: None,
-                duration_ms,
-                from_prior_session: false,
-            });
+            .await);
         }
 
         for block in &response.content {
@@ -7478,7 +7395,6 @@ async fn run_subagent(
              raise it with max_steps or split the work into smaller independent tasks"
         ))
     };
-    let duration_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
     latest_checkpoint = Some(build_subagent_checkpoint(
         &agent_id,
         subagent_status_name(&status),
@@ -7486,23 +7402,57 @@ async fn run_subagent(
         steps,
         false,
     ));
+
+    Ok(finish_subagent_run(
+        runtime,
+        agent_id.clone(),
+        agent_type.clone(),
+        assignment.clone(),
+        status,
+        final_result.clone(),
+        latest_checkpoint.clone(),
+        transcript_artifact.as_mut(),
+        &messages,
+        steps,
+        started_at,
+        fork_context_enabled,
+    )
+    .await)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn finish_subagent_run(
+    runtime: &SubAgentRuntime,
+    agent_id: String,
+    agent_type: SubAgentType,
+    assignment: SubAgentAssignment,
+    status: SubAgentStatus,
+    result: Option<String>,
+    checkpoint: Option<SubAgentCheckpoint>,
+    transcript_artifact: Option<&mut SubAgentTranscriptArtifactWriter>,
+    messages: &[Message],
+    steps: u32,
+    started_at: Instant,
+    fork_context_enabled: bool,
+) -> SubAgentResult {
+    let duration_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
     insert_subagent_full_transcript_handle(
         runtime,
         &agent_id,
         &agent_type,
         &assignment,
         &status,
-        final_result.as_ref(),
-        latest_checkpoint.as_ref(),
-        transcript_artifact.as_mut(),
-        &messages,
+        result.as_ref(),
+        checkpoint.as_ref(),
+        transcript_artifact,
+        messages,
         steps,
         duration_ms,
         fork_context_enabled,
     )
     .await;
 
-    Ok(SubAgentResult {
+    SubAgentResult {
         name: agent_id.clone(),
         agent_id,
         context_mode: if fork_context_enabled {
@@ -7522,13 +7472,13 @@ async fn run_subagent(
         worker_status: None,
         parent_run_id: runtime.parent_agent_id.clone(),
         spawn_depth: runtime.spawn_depth,
-        result: final_result,
+        result,
         steps_taken: steps,
-        checkpoint: latest_checkpoint,
+        checkpoint,
         needs_input: None,
         duration_ms,
         from_prior_session: false,
-    })
+    }
 }
 
 fn optional_input_str<'a>(input: &'a Value, keys: &[&str]) -> Option<&'a str> {
