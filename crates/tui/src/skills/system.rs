@@ -87,6 +87,52 @@ const BUNDLED_SKILLS: &[BundledSkill] = &[
     },
 ];
 
+<<<<<<< Updated upstream
+=======
+use crate::skills::SkillReadiness;
+use crate::skills::probe::{
+    ProbeRegistry, ReadinessProbe, has_openpyxl, has_python, has_python_pptx,
+};
+struct PresentationsProbe;
+impl ReadinessProbe for PresentationsProbe {
+    fn probe(&self) -> SkillReadiness {
+        if has_python() && has_python_pptx() {
+            SkillReadiness::Ready
+        } else if has_python() {
+            SkillReadiness::Partial
+        } else {
+            SkillReadiness::NeedsSetup
+        }
+    }
+    fn required_tools(&self) -> Vec<String> {
+        vec!["python3".into(), "python-pptx".into()]
+    }
+}
+
+struct SpreadsheetsProbe;
+impl ReadinessProbe for SpreadsheetsProbe {
+    fn probe(&self) -> SkillReadiness {
+        if has_python() && has_openpyxl() {
+            SkillReadiness::Ready
+        } else if has_python() {
+            SkillReadiness::Partial
+        } else {
+            SkillReadiness::NeedsSetup
+        }
+    }
+    fn required_tools(&self) -> Vec<String> {
+        vec!["python3".into(), "openpyxl".into()]
+    }
+}
+
+fn make_presentations_probe() -> Box<dyn ReadinessProbe> {
+    Box::new(PresentationsProbe)
+}
+fn make_spreadsheets_probe() -> Box<dyn ReadinessProbe> {
+    Box::new(SpreadsheetsProbe)
+}
+
+>>>>>>> Stashed changes
 /// Whether a skill name matches one of the bundled first-party skills.
 ///
 /// Used by `/skills` to distinguish user-created skills (which should be
@@ -143,7 +189,7 @@ fn install_one(
 ///
 /// Errors are I/O errors from the filesystem; the caller should log them but not
 /// abort startup.
-pub fn install_system_skills(skills_dir: &Path) -> std::io::Result<()> {
+pub fn install_system_skills(skills_dir: &Path, probes: &mut ProbeRegistry) -> std::io::Result<()> {
     let marker = skills_dir.join(".system-installed-version");
 
     let installed_version = fs::read_to_string(&marker)
@@ -151,6 +197,22 @@ pub fn install_system_skills(skills_dir: &Path) -> std::io::Result<()> {
         .map(|s| s.trim().to_string());
 
     let mut changed = false;
+<<<<<<< Updated upstream
+=======
+    // ── Phase 1: always register probes (guaranteed, no early return) ──
+    for skill in BUNDLED_SKILLS {
+        if let Some(factory) = skill.probe {
+            probes.register(skill.name, factory());
+        }
+    }
+    // ── Phase 2: install skill files (may fail — let errors propagate) ──
+    // Register test probe in debug builds only (never in release)
+    #[cfg(debug_assertions)]
+    probes.register(
+        "skill-never-ready",
+        Box::new(crate::skills::probe::NeverReadyProbe),
+    );
+>>>>>>> Stashed changes
     for skill in BUNDLED_SKILLS {
         changed |= install_one(skills_dir, skill, installed_version.as_deref())?;
     }
@@ -203,7 +265,7 @@ mod tests {
     #[test]
     fn fresh_install_creates_bundled_skills_and_marker() {
         let tmp = TempDir::new().unwrap();
-        install_system_skills(tmp.path()).unwrap();
+        install_system_skills(tmp.path(), &mut ProbeRegistry::new()).unwrap();
 
         for skill in BUNDLED_SKILLS {
             assert!(
@@ -221,7 +283,7 @@ mod tests {
     #[test]
     fn fresh_install_skills_parse_for_discovery() {
         let tmp = TempDir::new().unwrap();
-        install_system_skills(tmp.path()).unwrap();
+        install_system_skills(tmp.path(), &mut ProbeRegistry::new()).unwrap();
 
         let registry = crate::skills::SkillRegistry::discover(tmp.path());
         assert!(
@@ -247,7 +309,7 @@ mod tests {
     #[test]
     fn calling_twice_is_idempotent() {
         let tmp = TempDir::new().unwrap();
-        install_system_skills(tmp.path()).unwrap();
+        install_system_skills(tmp.path(), &mut ProbeRegistry::new()).unwrap();
 
         for skill in BUNDLED_SKILLS {
             fs::write(
@@ -257,7 +319,7 @@ mod tests {
             .unwrap();
         }
 
-        install_system_skills(tmp.path()).unwrap();
+        install_system_skills(tmp.path(), &mut ProbeRegistry::new()).unwrap();
 
         for skill in BUNDLED_SKILLS {
             let body = fs::read_to_string(skill_file(&tmp, skill.name)).unwrap();
@@ -275,13 +337,13 @@ mod tests {
     #[test]
     fn user_deleted_dir_is_not_recreated() {
         let tmp = TempDir::new().unwrap();
-        install_system_skills(tmp.path()).unwrap();
+        install_system_skills(tmp.path(), &mut ProbeRegistry::new()).unwrap();
 
         // Simulate user deliberately removing one skill directory.
         fs::remove_dir_all(skill_dir(&tmp, "delegate")).unwrap();
 
         // Re-launch must NOT recreate the deleted directory.
-        install_system_skills(tmp.path()).unwrap();
+        install_system_skills(tmp.path(), &mut ProbeRegistry::new()).unwrap();
 
         assert!(
             !skill_file(&tmp, "delegate").exists(),
@@ -296,13 +358,13 @@ mod tests {
     #[test]
     fn user_deleted_all_dirs_are_not_recreated() {
         let tmp = TempDir::new().unwrap();
-        install_system_skills(tmp.path()).unwrap();
+        install_system_skills(tmp.path(), &mut ProbeRegistry::new()).unwrap();
 
         for skill in BUNDLED_SKILLS {
             fs::remove_dir_all(skill_dir(&tmp, skill.name)).unwrap();
         }
 
-        install_system_skills(tmp.path()).unwrap();
+        install_system_skills(tmp.path(), &mut ProbeRegistry::new()).unwrap();
 
         for skill in BUNDLED_SKILLS {
             assert!(
@@ -326,7 +388,7 @@ mod tests {
         }
         fs::write(marker_file(&tmp), "0").unwrap(); // older than BUNDLED_SKILL_VERSION
 
-        install_system_skills(tmp.path()).unwrap();
+        install_system_skills(tmp.path(), &mut ProbeRegistry::new()).unwrap();
 
         for skill in BUNDLED_SKILLS {
             let body = fs::read_to_string(skill_file(&tmp, skill.name)).unwrap();
@@ -359,7 +421,7 @@ mod tests {
         }
         fs::write(marker_file(&tmp), "2").unwrap();
 
-        install_system_skills(tmp.path()).unwrap();
+        install_system_skills(tmp.path(), &mut ProbeRegistry::new()).unwrap();
 
         for skill in BUNDLED_SKILLS {
             assert_eq!(
@@ -379,7 +441,7 @@ mod tests {
         // before later versions introduced more system skills.
         fs::write(marker_file(&tmp), "2").unwrap();
 
-        install_system_skills(tmp.path()).unwrap();
+        install_system_skills(tmp.path(), &mut ProbeRegistry::new()).unwrap();
 
         assert!(
             !skill_file(&tmp, "skill-creator").exists(),
@@ -408,7 +470,7 @@ mod tests {
     #[test]
     fn uninstall_removes_bundled_skills_and_marker() {
         let tmp = TempDir::new().unwrap();
-        install_system_skills(tmp.path()).unwrap();
+        install_system_skills(tmp.path(), &mut ProbeRegistry::new()).unwrap();
         uninstall_system_skills(tmp.path()).unwrap();
 
         for skill in BUNDLED_SKILLS {
