@@ -308,12 +308,12 @@ mod tests {
 
     #[test]
     fn cookie_has_exact_security_attributes_without_the_runtime_bearer() {
-        let session_token = "cwws_0123456789abcdef0123456789abcdef";
+        let session_token = format!("{WEB_SESSION_PREFIX}{}", "01".repeat(16));
         let runtime_bearer = "cwrt_runtime_secret_never_in_browser_storage";
-        let cookie = web_session_cookie(session_token);
+        let cookie = web_session_cookie(&session_token);
         assert_eq!(
             cookie,
-            "codewhale_web_session=cwws_0123456789abcdef0123456789abcdef; HttpOnly; SameSite=Strict; Path=/"
+            format!("codewhale_web_session={session_token}; HttpOnly; SameSite=Strict; Path=/")
         );
         assert!(!cookie.contains(runtime_bearer));
         assert!(!cookie.contains("Domain="));
@@ -322,9 +322,9 @@ mod tests {
     #[test]
     fn launcher_url_contains_only_the_one_time_capability() {
         let token = "cwrt_runtime_secret_never_in_browser_arguments";
-        let nonce = "cwwb_0123456789abcdef0123456789abcdef";
-        let url = bootstrap_url("127.0.0.1:7878".parse().unwrap(), nonce);
-        assert!(url.ends_with(nonce));
+        let nonce = format!("{BOOTSTRAP_PREFIX}{}", "01".repeat(16));
+        let url = bootstrap_url("127.0.0.1:7878".parse().unwrap(), &nonce);
+        assert!(url.ends_with(&nonce));
         assert!(!url.contains(token));
         assert!(!url.contains('?'));
         assert!(!url.contains('#'));
