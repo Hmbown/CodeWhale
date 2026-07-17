@@ -4111,7 +4111,7 @@ mod tests {
             message.contains("FIM completion is not supported"),
             "{message}"
         );
-        assert!(message.contains("Anthropic Messages protocol"), "{message}");
+        assert!(message.contains("no proven FIM wire contract"), "{message}");
         let requests = server.received_requests().await.expect("recorded requests");
         assert!(
             requests.is_empty(),
