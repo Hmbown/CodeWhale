@@ -79,6 +79,10 @@
 - Review PRs from code, tests, linked issues, comments, and check results — let
   those, rather than the title or labels alone, drive every merge, close,
   harvest, or defer decision on community work.
+- Triage issues toward the agent-ready standard in
+  `docs/AGENT_READY_ISSUES.md`: maintainer-authored bodies get restructured
+  into executable specs with verified anchors; community-authored issues get a
+  maintainer deconstruction comment instead of a body rewrite.
 - Respect concurrent work in the tree — leave unrelated edits by other people or
   agents intact.
 
