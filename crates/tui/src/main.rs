@@ -5,7 +5,7 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -14,7 +14,6 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
-use dotenvy::dotenv;
 use tempfile::NamedTempFile;
 use wait_timeout::ChildExt;
 
@@ -1341,6 +1340,18 @@ fn main() -> Result<()> {
         orig_hook(panic_info);
     }));
 
+    // Parse and freeze every startup authority before Tokio or any other
+    // worker thread exists. A workspace `.env` is intentionally a narrow
+    // credential convenience surface: it must never redirect product state,
+    // configuration, MCP, trust, sandbox, executable lookup, or plugin
+    // discovery. Plugin discovery therefore runs first, and the loader below
+    // admits only built-in provider credential names from a stable file read.
+    let (cli, command) = prepare_cli_startup(
+        Cli::parse(),
+        || crate::plugins::init_registry(&[]),
+        warn_on_workspace_dotenv_result,
+    );
+
     // The interactive runtime intentionally carries a large state machine:
     // terminal rendering, modal dispatch, provider setup, and fleet/workflow
     // events all share one async owner. Debug builds retain enough stack
@@ -1351,7 +1362,7 @@ fn main() -> Result<()> {
     let runtime_thread = std::thread::Builder::new()
         .name("codewhale-main".to_string())
         .stack_size(CODEWHALE_MAIN_STACK_BYTES)
-        .spawn(run_async_main)
+        .spawn(move || run_async_main(cli, command))
         .context("Failed to start the Codewhale runtime thread")?;
     match runtime_thread.join() {
         Ok(result) => result,
@@ -1367,7 +1378,7 @@ fn main() -> Result<()> {
 }
 
 #[tokio::main]
-async fn run_async_main() -> Result<()> {
+async fn run_async_main(cli: Cli, command: Option<Commands>) -> Result<()> {
     // Install signal handlers that restore the terminal before the
     // process exits. Without this, Ctrl+C delivered while raw mode /
     // kitty keyboard enhancement / alt-screen are active (or in the
@@ -1384,17 +1395,6 @@ async fn run_async_main() -> Result<()> {
     // suspend path, and SIGTERM / SIGHUP from the OS.
     spawn_signal_cleanup_task();
 
-    // Parse first so help/version/errors still exit without touching plugin
-    // state. Plugin discovery must precede workspace-local dotenv loading:
-    // otherwise an untrusted repository could redirect CODEWHALE_HOME to a
-    // repository-owned plugin manifest containing an stdio MCP server.
-    let (cli, command) = prepare_cli_startup(
-        Cli::parse(),
-        || crate::plugins::init_registry(&[]),
-        || {
-            dotenv().ok();
-        },
-    );
     logging::set_verbose(cli.verbose || logging::env_requests_verbose_logging());
 
     // Install any user prompt overrides from the config directory before an
@@ -1714,6 +1714,328 @@ fn prepare_cli_startup(
     load_dotenv();
     let command = cli.command.clone();
     (cli, command)
+}
+
+const MAX_WORKSPACE_DOTENV_BYTES: u64 = 1024 * 1024;
+
+#[derive(Debug, Default)]
+struct WorkspaceDotenvReport {
+    path: PathBuf,
+    loaded: BTreeSet<String>,
+    ignored: BTreeSet<String>,
+}
+
+/// Load the narrow, data-plane subset of a workspace `.env` before Tokio.
+///
+/// Repository content is not product authority. In particular, a committed
+/// `.env` must not be able to redirect `CODEWHALE_HOME`, config/profile files,
+/// MCP servers, plugin trust, executable lookup, sandbox/approval posture, or
+/// network destinations. Shell-exported values and config/CLI arguments remain
+/// the explicit surfaces for those controls.
+fn warn_on_workspace_dotenv_result() {
+    match load_workspace_dotenv_credentials() {
+        Ok(Some(report)) if !report.ignored.is_empty() => {
+            eprintln!(
+                "Codewhale ignored non-credential settings in {}: {}. Use config.toml, CLI flags, or the launching shell for control settings.",
+                report.path.display(),
+                display_env_key_set(&report.ignored)
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            // The error intentionally contains no file contents or parsed
+            // values. A malformed or unsafe workspace file fails closed while
+            // shell/config credentials remain available.
+            eprintln!("Codewhale did not load workspace .env: {error}");
+        }
+    }
+}
+
+fn display_env_key_set(keys: &BTreeSet<String>) -> String {
+    const MAX_DISPLAYED: usize = 12;
+    let mut labels = keys
+        .iter()
+        .take(MAX_DISPLAYED)
+        .map(|key| {
+            if key
+                .chars()
+                .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
+            {
+                key.as_str()
+            } else {
+                "<invalid-name>"
+            }
+        })
+        .collect::<Vec<_>>();
+    if keys.len() > MAX_DISPLAYED {
+        labels.push("...");
+    }
+    labels.join(", ")
+}
+
+fn load_workspace_dotenv_credentials() -> Result<Option<WorkspaceDotenvReport>> {
+    let Some(path) = find_workspace_dotenv()? else {
+        return Ok(None);
+    };
+    load_workspace_dotenv_credentials_from_path(&path).map(Some)
+}
+
+fn find_workspace_dotenv() -> Result<Option<PathBuf>> {
+    let cwd = std::env::current_dir().context("could not resolve the current workspace")?;
+    let boundary = cwd
+        .ancestors()
+        .find(|ancestor| std::fs::symlink_metadata(ancestor.join(".git")).is_ok())
+        .unwrap_or(cwd.as_path());
+
+    for ancestor in cwd.ancestors() {
+        let candidate = ancestor.join(".env");
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(_) => return Ok(Some(candidate)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(anyhow!(
+                    "could not inspect {}: {error}",
+                    candidate.display()
+                ));
+            }
+        }
+        if ancestor == boundary {
+            break;
+        }
+    }
+    Ok(None)
+}
+
+fn load_workspace_dotenv_credentials_from_path(path: &Path) -> Result<WorkspaceDotenvReport> {
+    let contents = read_stable_workspace_dotenv(path)?;
+    let text = std::str::from_utf8(&contents)
+        .map_err(|_| anyhow!("{} is not valid UTF-8", path.display()))?;
+    if dotenv_has_variable_expansion(text) {
+        bail!(
+            "{} uses variable expansion; workspace .env values must be literal to prevent ambient-secret substitution",
+            path.display()
+        );
+    }
+
+    let mut report = WorkspaceDotenvReport {
+        path: path.to_path_buf(),
+        ..WorkspaceDotenvReport::default()
+    };
+    let entries = dotenvy::from_read_iter(std::io::Cursor::new(contents))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|_| anyhow!("{} could not be parsed safely", path.display()))?;
+    for entry in entries {
+        let (key, value) = entry;
+        if !is_workspace_dotenv_credential_key(&key) {
+            report.ignored.insert(key);
+            continue;
+        }
+        if std::env::var_os(&key).is_some() {
+            continue;
+        }
+
+        // SAFETY: this loader runs synchronously in `main` before the runtime
+        // owner or Tokio workers are spawned. No concurrent environment reader
+        // exists inside Codewhale, and later startup code treats this process
+        // environment as immutable.
+        unsafe { std::env::set_var(&key, value) };
+        report.loaded.insert(key);
+    }
+    Ok(report)
+}
+
+fn is_workspace_dotenv_credential_key(key: &str) -> bool {
+    codewhale_config::provider::providers_sorted_for_display()
+        .into_iter()
+        .any(|provider| provider.env_vars().contains(&key))
+        || matches!(
+            key,
+            "DEEPSEEK_SEARCH_API_KEY"
+                | "SOFYA_API_KEY"
+                | "METASO_API_KEY"
+                | "BAIDU_SEARCH_API_KEY"
+                | "DEEPSEEK_SANDBOX_API_KEY"
+        )
+}
+
+fn dotenv_has_variable_expansion(contents: &str) -> bool {
+    let mut escaped = false;
+    let mut single_quoted = false;
+    let mut double_quoted = false;
+    let mut comment = false;
+
+    for ch in contents.chars() {
+        if comment {
+            // Reject expansion markers even in comments. This is deliberately
+            // conservative, and ignoring other comment text prevents an
+            // unmatched quote there from changing how the next line is read.
+            if ch == '$' {
+                return true;
+            }
+            if ch == '\n' {
+                comment = false;
+                escaped = false;
+            }
+            continue;
+        }
+        if single_quoted {
+            if ch == '\'' {
+                single_quoted = false;
+            }
+            continue;
+        }
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch == '\'' && !double_quoted {
+            single_quoted = true;
+            continue;
+        }
+        if ch == '"' {
+            double_quoted = !double_quoted;
+            continue;
+        }
+        if ch == '#' && !double_quoted {
+            comment = true;
+            continue;
+        }
+        if ch == '$' {
+            return true;
+        }
+    }
+    false
+}
+
+fn read_stable_workspace_dotenv(path: &Path) -> Result<Vec<u8>> {
+    let mut file = open_workspace_dotenv_without_following_links(path)?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| anyhow!("could not inspect {}: {error}", path.display()))?;
+    if !metadata.is_file() {
+        bail!("{} is not a regular file", path.display());
+    }
+    if workspace_dotenv_has_multiple_links(&file, &metadata)? {
+        bail!(
+            "{} has multiple filesystem links, not a unique workspace-owned file",
+            path.display()
+        );
+    }
+    if metadata.len() > MAX_WORKSPACE_DOTENV_BYTES {
+        bail!(
+            "{} exceeds the {} byte workspace .env limit",
+            path.display(),
+            MAX_WORKSPACE_DOTENV_BYTES
+        );
+    }
+
+    let mut contents = Vec::with_capacity(metadata.len() as usize);
+    (&mut file)
+        .take(MAX_WORKSPACE_DOTENV_BYTES + 1)
+        .read_to_end(&mut contents)
+        .map_err(|error| anyhow!("could not read {}: {error}", path.display()))?;
+    if contents.len() as u64 > MAX_WORKSPACE_DOTENV_BYTES {
+        bail!(
+            "{} exceeds the {} byte workspace .env limit",
+            path.display(),
+            MAX_WORKSPACE_DOTENV_BYTES
+        );
+    }
+    Ok(contents)
+}
+
+#[cfg(unix)]
+fn workspace_dotenv_has_multiple_links(
+    _file: &std::fs::File,
+    metadata: &std::fs::Metadata,
+) -> Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+
+    Ok(metadata.nlink() > 1)
+}
+
+#[cfg(windows)]
+fn workspace_dotenv_has_multiple_links(
+    file: &std::fs::File,
+    _metadata: &std::fs::Metadata,
+) -> Result<bool> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: `file` owns a live kernel handle for the already-open `.env`;
+    // `information` remains writable for the duration of this synchronous
+    // call. No path lookup or re-open occurs here.
+    unsafe {
+        GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut information)
+            .map_err(|error| anyhow!("could not inspect workspace .env link count: {error}"))?;
+    }
+    Ok(information.nNumberOfLinks > 1)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn workspace_dotenv_has_multiple_links(
+    _file: &std::fs::File,
+    _metadata: &std::fs::Metadata,
+) -> Result<bool> {
+    Ok(false)
+}
+
+#[cfg(unix)]
+fn open_workspace_dotenv_without_following_links(path: &Path) -> Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    std::fs::OpenOptions::new()
+        .read(true)
+        // `O_NONBLOCK` is inert for regular files but prevents a FIFO named
+        // `.env` from hanging startup before the metadata check can reject it.
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|error| anyhow!("could not securely open {}: {error}", path.display()))
+}
+
+#[cfg(windows)]
+fn open_workspace_dotenv_without_following_links(path: &Path) -> Result<std::fs::File> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .map_err(|error| anyhow!("could not securely open {}: {error}", path.display()))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| anyhow!("could not inspect {}: {error}", path.display()))?;
+    if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        bail!(
+            "{} is a reparse point, not a workspace-owned file",
+            path.display()
+        );
+    }
+    Ok(file)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_workspace_dotenv_without_following_links(path: &Path) -> Result<std::fs::File> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| anyhow!("could not inspect {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() {
+        bail!(
+            "{} is a symbolic link, not a workspace-owned file",
+            path.display()
+        );
+    }
+    std::fs::File::open(path)
+        .map_err(|error| anyhow!("could not securely open {}: {error}", path.display()))
 }
 
 /// Generate shell completions for the given shell
@@ -2957,7 +3279,10 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
 fn dotenv_status_line(workspace: &Path) -> String {
     let dotenv = workspace.join(".env");
     if dotenv.exists() {
-        return format!(".env present at {}", dotenv.display());
+        return format!(
+            ".env present at {} (literal provider credentials only)",
+            dotenv.display()
+        );
     }
 
     if workspace.join(".env.example").exists() {
@@ -11767,6 +12092,284 @@ mod terminal_mode_tests {
     }
 
     #[test]
+    fn workspace_dotenv_loads_only_provider_credentials_and_preserves_shell_values() {
+        let _lock = crate::test_support::lock_test_env();
+        let _deepseek = crate::test_support::EnvVarGuard::remove("DEEPSEEK_API_KEY");
+        let _nvidia = crate::test_support::EnvVarGuard::set("NVIDIA_API_KEY", "shell-key");
+        let _home = crate::test_support::EnvVarGuard::remove("CODEWHALE_HOME");
+        let _config = crate::test_support::EnvVarGuard::remove("CODEWHALE_CONFIG_PATH");
+        let _shell = crate::test_support::EnvVarGuard::remove("DEEPSEEK_ALLOW_SHELL");
+        let tmp = tempfile::TempDir::new().expect("temp workspace");
+        let dotenv = tmp.path().join(".env");
+        std::fs::write(
+            &dotenv,
+            "DEEPSEEK_API_KEY=workspace-key\n\
+             NVIDIA_API_KEY=repo-must-not-override-shell\n\
+             CODEWHALE_HOME=./attacker-home\n\
+             CODEWHALE_CONFIG_PATH=./attacker.toml\n\
+             DEEPSEEK_ALLOW_SHELL=true\n",
+        )
+        .expect("write dotenv");
+
+        let report = load_workspace_dotenv_credentials_from_path(&dotenv).expect("safe load");
+
+        assert_eq!(
+            std::env::var("DEEPSEEK_API_KEY").as_deref(),
+            Ok("workspace-key")
+        );
+        assert_eq!(std::env::var("NVIDIA_API_KEY").as_deref(), Ok("shell-key"));
+        assert!(std::env::var_os("CODEWHALE_HOME").is_none());
+        assert!(std::env::var_os("CODEWHALE_CONFIG_PATH").is_none());
+        assert!(std::env::var_os("DEEPSEEK_ALLOW_SHELL").is_none());
+        assert_eq!(
+            report.loaded,
+            BTreeSet::from(["DEEPSEEK_API_KEY".to_string()])
+        );
+        assert_eq!(
+            report.ignored,
+            BTreeSet::from([
+                "CODEWHALE_CONFIG_PATH".to_string(),
+                "CODEWHALE_HOME".to_string(),
+                "DEEPSEEK_ALLOW_SHELL".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn workspace_dotenv_rejects_ambient_variable_substitution() {
+        let _lock = crate::test_support::lock_test_env();
+        let _deepseek = crate::test_support::EnvVarGuard::remove("DEEPSEEK_API_KEY");
+        let _ambient = crate::test_support::EnvVarGuard::set(
+            "CODEWHALE_JS_SECRET_LEAK_TEST",
+            "ambient-secret-must-not-expand",
+        );
+        let tmp = tempfile::TempDir::new().expect("temp workspace");
+        let dotenv = tmp.path().join(".env");
+        std::fs::write(
+            &dotenv,
+            "DEEPSEEK_API_KEY=${CODEWHALE_JS_SECRET_LEAK_TEST}\n",
+        )
+        .expect("write dotenv");
+
+        let error = load_workspace_dotenv_credentials_from_path(&dotenv)
+            .expect_err("expansion must fail closed")
+            .to_string();
+
+        assert!(error.contains("variable expansion"));
+        assert!(!error.contains("ambient-secret-must-not-expand"));
+        assert!(std::env::var_os("DEEPSEEK_API_KEY").is_none());
+    }
+
+    #[test]
+    fn workspace_dotenv_rejects_multiline_ambient_variable_substitution() {
+        let _lock = crate::test_support::lock_test_env();
+        let _deepseek = crate::test_support::EnvVarGuard::remove("DEEPSEEK_API_KEY");
+        let _ambient = crate::test_support::EnvVarGuard::set(
+            "CODEWHALE_JS_SECRET_LEAK_TEST",
+            "ambient-secret-must-not-expand",
+        );
+        let tmp = tempfile::TempDir::new().expect("temp workspace");
+        let dotenv = tmp.path().join(".env");
+        std::fs::write(
+            &dotenv,
+            "DEEPSEEK_API_KEY=\"prefix\n$CODEWHALE_JS_SECRET_LEAK_TEST=bar\nsuffix\"\n",
+        )
+        .expect("write dotenv");
+
+        let error = load_workspace_dotenv_credentials_from_path(&dotenv)
+            .expect_err("multiline expansion must fail closed")
+            .to_string();
+
+        assert!(error.contains("variable expansion"));
+        assert!(!error.contains("ambient-secret-must-not-expand"));
+        assert!(std::env::var_os("DEEPSEEK_API_KEY").is_none());
+    }
+
+    #[test]
+    fn workspace_dotenv_comment_quote_cannot_hide_later_expansion() {
+        let _lock = crate::test_support::lock_test_env();
+        let _deepseek = crate::test_support::EnvVarGuard::remove("DEEPSEEK_API_KEY");
+        let _ambient = crate::test_support::EnvVarGuard::set(
+            "CODEWHALE_JS_SECRET_LEAK_TEST",
+            "ambient-secret-must-not-expand",
+        );
+        let tmp = tempfile::TempDir::new().expect("temp workspace");
+        let dotenv = tmp.path().join(".env");
+        std::fs::write(
+            &dotenv,
+            "# unmatched quote in ignored comment: '\n\
+             DEEPSEEK_API_KEY=$CODEWHALE_JS_SECRET_LEAK_TEST\n",
+        )
+        .expect("write dotenv");
+
+        let error = load_workspace_dotenv_credentials_from_path(&dotenv)
+            .expect_err("comment quote must not hide expansion")
+            .to_string();
+
+        assert!(error.contains("variable expansion"));
+        assert!(!error.contains("ambient-secret-must-not-expand"));
+        assert!(std::env::var_os("DEEPSEEK_API_KEY").is_none());
+    }
+
+    #[test]
+    fn workspace_dotenv_allows_single_quoted_literal_dollar() {
+        let _lock = crate::test_support::lock_test_env();
+        let _deepseek = crate::test_support::EnvVarGuard::remove("DEEPSEEK_API_KEY");
+        let tmp = tempfile::TempDir::new().expect("temp workspace");
+        let dotenv = tmp.path().join(".env");
+        std::fs::write(&dotenv, "DEEPSEEK_API_KEY='$literal-value'\n").expect("write dotenv");
+
+        load_workspace_dotenv_credentials_from_path(&dotenv).expect("literal dollar load");
+
+        assert_eq!(
+            std::env::var("DEEPSEEK_API_KEY").as_deref(),
+            Ok("$literal-value")
+        );
+    }
+
+    #[test]
+    fn workspace_dotenv_parse_failure_applies_no_earlier_credentials() {
+        let _lock = crate::test_support::lock_test_env();
+        let _deepseek = crate::test_support::EnvVarGuard::remove("DEEPSEEK_API_KEY");
+        let tmp = tempfile::TempDir::new().expect("temp workspace");
+        let dotenv = tmp.path().join(".env");
+        std::fs::write(
+            &dotenv,
+            "DEEPSEEK_API_KEY=must-not-survive\nBROKEN=\"unterminated\n",
+        )
+        .expect("write dotenv");
+
+        let error = load_workspace_dotenv_credentials_from_path(&dotenv)
+            .expect_err("parse failure must be transactional")
+            .to_string();
+
+        assert!(error.contains("could not be parsed safely"), "{error}");
+        assert!(!error.contains("must-not-survive"));
+        assert!(std::env::var_os("DEEPSEEK_API_KEY").is_none());
+    }
+
+    #[test]
+    fn workspace_dotenv_credential_allowlist_excludes_control_plane_names() {
+        for provider in codewhale_config::provider::providers_sorted_for_display() {
+            for key in provider.env_vars() {
+                assert!(
+                    is_workspace_dotenv_credential_key(key),
+                    "provider credential {key} must remain supported"
+                );
+            }
+        }
+        for key in [
+            "CODEWHALE_HOME",
+            "CODEWHALE_CONFIG_PATH",
+            "DEEPSEEK_CONFIG_PATH",
+            "DEEPSEEK_PROFILE",
+            "DEEPSEEK_MANAGED_CONFIG_PATH",
+            "DEEPSEEK_REQUIREMENTS_PATH",
+            "DEEPSEEK_PROVIDER",
+            "DEEPSEEK_BASE_URL",
+            "DEEPSEEK_MODEL",
+            "DEEPSEEK_APPROVAL_POLICY",
+            "DEEPSEEK_SANDBOX_MODE",
+            "DEEPSEEK_ALLOW_SHELL",
+            "DEEPSEEK_YOLO",
+            "DEEPSEEK_MCP_CONFIG",
+            "CODEWHALE_RUNTIME_TOKEN",
+            "PATH",
+            "NODE_OPTIONS",
+            "PYTHONPATH",
+            "LD_PRELOAD",
+            "DYLD_INSERT_LIBRARIES",
+        ] {
+            assert!(
+                !is_workspace_dotenv_credential_key(key),
+                "control-plane variable {key} must not load from a workspace"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn workspace_dotenv_does_not_follow_symbolic_links() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::TempDir::new().expect("temp workspace");
+        let external = tmp.path().join("external-credentials");
+        let dotenv = tmp.path().join(".env");
+        std::fs::write(&external, "DEEPSEEK_API_KEY=external-secret\n")
+            .expect("write external fixture");
+        symlink(&external, &dotenv).expect("create dotenv symlink");
+
+        let error = load_workspace_dotenv_credentials_from_path(&dotenv)
+            .expect_err("symlink must fail closed")
+            .to_string();
+
+        assert!(error.contains("securely open"), "{error}");
+        assert!(!error.contains("external-secret"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn workspace_dotenv_rejects_hard_links_to_external_files() {
+        let tmp = tempfile::TempDir::new().expect("temp workspace");
+        let external = tmp.path().join("external-credentials");
+        let dotenv = tmp.path().join(".env");
+        std::fs::write(&external, "DEEPSEEK_API_KEY=external-secret\n")
+            .expect("write external fixture");
+        std::fs::hard_link(&external, &dotenv).expect("create dotenv hard link");
+
+        let error = load_workspace_dotenv_credentials_from_path(&dotenv)
+            .expect_err("hard link must fail closed")
+            .to_string();
+
+        assert!(error.contains("multiple filesystem links"), "{error}");
+        assert!(!error.contains("external-secret"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn workspace_dotenv_rejects_fifo_without_blocking_startup() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let tmp = tempfile::TempDir::new().expect("temp workspace");
+        let dotenv = tmp.path().join(".env");
+        let c_path = CString::new(dotenv.as_os_str().as_bytes()).expect("fifo path");
+        // SAFETY: `c_path` is a live, NUL-terminated path and the requested
+        // mode grants access only to the current user.
+        let result = unsafe { libc::mkfifo(c_path.as_ptr(), libc::S_IRUSR | libc::S_IWUSR) };
+        assert_eq!(result, 0, "mkfifo failed: {}", io::Error::last_os_error());
+
+        let (tx, rx) = mpsc::channel();
+        let worker_path = dotenv.clone();
+        let worker = std::thread::spawn(move || {
+            let result = load_workspace_dotenv_credentials_from_path(&worker_path)
+                .map(|_| "unexpected success".to_string())
+                .unwrap_or_else(|error| error.to_string());
+            tx.send(result).expect("send loader result");
+        });
+
+        let error = match rx.recv_timeout(Duration::from_secs(1)) {
+            Ok(error) => error,
+            Err(timeout) => {
+                // Release a regressed blocking reader so the test can fail
+                // promptly instead of leaving a stuck process behind.
+                let _writer = std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&dotenv)
+                    .expect("open fifo writer to release blocked reader");
+                let _ = rx.recv_timeout(Duration::from_secs(1));
+                worker.join().expect("join released loader");
+                panic!("workspace .env FIFO blocked startup: {timeout}");
+            }
+        };
+        worker.join().expect("join loader");
+
+        assert!(error.contains("not a regular file"), "{error}");
+    }
+
+    #[test]
     fn exec_json_conflicts_with_stream_json_output() {
         let err = Cli::try_parse_from([
             "codewhale",
@@ -13497,18 +14100,20 @@ mod setup_helper_tests {
         let keys = documented_env_keys(&env_example);
         for required in [
             "DEEPSEEK_API_KEY",
-            "DEEPSEEK_BASE_URL",
-            "DEEPSEEK_MODEL",
             "NVIDIA_API_KEY",
-            "NIM_BASE_URL",
-            "RUST_LOG",
-            "DEEPSEEK_APPROVAL_POLICY",
-            "DEEPSEEK_SANDBOX_MODE",
-            "DEEPSEEK_YOLO",
+            "NVIDIA_NIM_API_KEY",
+            "ATLASCLOUD_API_KEY",
         ] {
             assert!(
                 keys.contains(required),
                 ".env.example is missing {required}"
+            );
+        }
+
+        for key in &keys {
+            assert!(
+                is_workspace_dotenv_credential_key(key),
+                ".env.example documents non-credential control setting {key}"
             );
         }
 

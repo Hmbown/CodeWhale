@@ -1,9 +1,19 @@
 # Configuration
 
 codewhale reads configuration from a TOML file plus environment variables.
-At process startup it also loads a workspace-local `.env` file when present.
-Use the tracked `.env.example` as the template; copy it to `.env`, then edit
-only the provider and safety knobs you need.
+At process startup it may also load literal built-in-provider credentials from
+a workspace-local `.env` file. Use the tracked `.env.example` as the template;
+copy it to `.env`, then add only credential values.
+
+A workspace is not configuration authority. Codewhale therefore ignores
+config/profile/home paths, provider/model/base-URL routing, MCP/plugin state,
+approval/sandbox/shell posture, executable paths, runtime settings, and every
+other non-credential `.env` entry. Variable expansion is rejected so a
+repository cannot substitute an ambient secret into a credential value. Use
+`config.toml`, CLI flags, or values exported by the launching shell for those
+explicit control-plane settings. `.env` is read from a stable regular-file
+handle, is capped at 1 MiB, and symbolic links, reparse points, and multiply
+linked files are rejected.
 
 ## Constitution, project instructions, and repo authority
 
