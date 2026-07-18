@@ -8,11 +8,25 @@ use crate::skills::install::{
     self, DEFAULT_MAX_SIZE_BYTES, DEFAULT_REGISTRY_URL, InstallOutcome, InstallSource,
     RegistryFetchResult, SkillSyncOutcome, SyncResult, UpdateResult,
 };
+use crate::skills::probe::ProbeRegistry;
 use crate::tui::app::{App, AppAction};
 use crate::tui::history::HistoryCell;
 
 use crate::commands::CommandResult;
 
+<<<<<<< Updated upstream
+=======
+fn skill_readiness_badge(probes: &ProbeRegistry, name: &str) -> String {
+    let result = match probes.probe(name) {
+        Some(crate::skills::SkillReadiness::NeedsSetup) => " [needs setup]".to_string(),
+        Some(crate::skills::SkillReadiness::Partial) => " [partial]".to_string(),
+        _ => String::new(),
+    };
+    eprintln!("skill_readiness_badge({name}) = {result:?}");
+    result
+}
+
+>>>>>>> Stashed changes
 #[cfg(test)]
 thread_local! {
     static TEST_HOME_DIR: std::cell::RefCell<Option<std::path::PathBuf>> =
@@ -83,6 +97,7 @@ fn visible_skill_directories(app: &App) -> Vec<std::path::PathBuf> {
 }
 
 fn inspect_skills(app: &mut App) -> CommandResult {
+    let probes = ProbeRegistry::new();
     let mode = skill_discovery_mode(app);
     let dirs = visible_skill_directories(app);
     let registry = discover_visible_skills(app);
@@ -117,9 +132,26 @@ fn inspect_skills(app: &mut App) -> CommandResult {
     } else {
         for skill in registry.list() {
             if skill.description.trim().is_empty() {
+<<<<<<< Updated upstream
                 let _ = writeln!(output, "  - {}", skill.name);
             } else {
                 let _ = writeln!(output, "  - {} — {}", skill.name, skill.description);
+=======
+                let _ = writeln!(
+                    output,
+                    "  - {}{}",
+                    skill.name,
+                    skill_readiness_badge(&probes, &skill.name)
+                );
+            } else {
+                let _ = writeln!(
+                    output,
+                    "  - {} — {}{}",
+                    skill.name,
+                    skill.description,
+                    skill_readiness_badge(&probes, &skill.name)
+                );
+>>>>>>> Stashed changes
             }
             let _ = writeln!(output, "    path: {}", skill.path.display());
         }
@@ -135,7 +167,15 @@ fn inspect_skills(app: &mut App) -> CommandResult {
 /// local cache (`~/.codewhale/cache/skills/`). Pass `inspect` to show local
 /// discovery mode, searched directories, and skill source paths.
 fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
+    let probes = ProbeRegistry::new();
     let mut prefix: Option<String> = None;
+<<<<<<< Updated upstream
+=======
+    let _ = std::fs::write(
+        "D:\\codewhale_debug.txt",
+        format!("list_skills called, arg={arg:?}\n"),
+    );
+>>>>>>> Stashed changes
     if let Some(arg) = arg {
         let trimmed = arg.trim();
         if trimmed == "--remote" || trimmed == "remote" {
@@ -221,7 +261,17 @@ fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
             if idx > 0 {
                 output.push('\n');
             }
+<<<<<<< Updated upstream
             let _ = writeln!(output, "  /{} - {}", skill.name, skill.description);
+=======
+            let _ = writeln!(
+                output,
+                "  /{} - {}{}",
+                skill.name,
+                skill.description,
+                skill_readiness_badge(&probes, &skill.name)
+            );
+>>>>>>> Stashed changes
         }
     } else {
         // Unfiltered view: partition into user-created and built-in so a
@@ -239,7 +289,17 @@ fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
         if !user_skills.is_empty() {
             let _ = writeln!(output, "Your skills ({}):", user_skills.len());
             for skill in &user_skills {
+<<<<<<< Updated upstream
                 let _ = writeln!(output, "  /{} - {}", skill.name, skill.description);
+=======
+                let _ = writeln!(
+                    output,
+                    "  /{} - {}{}",
+                    skill.name,
+                    skill.description,
+                    skill_readiness_badge(&probes, &skill.name)
+                );
+>>>>>>> Stashed changes
             }
             if !bundled_skills.is_empty() {
                 output.push('\n');
@@ -255,7 +315,17 @@ fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
             // likely getting their first look at the catalog.
             if user_skills.is_empty() {
                 for skill in &bundled_skills {
+<<<<<<< Updated upstream
                     let _ = writeln!(output, "  /{} - {}", skill.name, skill.description);
+=======
+                    let _ = writeln!(
+                        output,
+                        "  /{} - {}{}",
+                        skill.name,
+                        skill.description,
+                        skill_readiness_badge(&probes, &skill.name)
+                    );
+>>>>>>> Stashed changes
                 }
             } else {
                 let names: Vec<String> = bundled_skills
@@ -342,6 +412,7 @@ fn activate_skill(app: &mut App, name: &str) -> CommandResult {
     // `/skill new` is a friendly alias for `/skill skill-creator`.
     let name = if name == "new" { "skill-creator" } else { name };
 
+    let probes = ProbeRegistry::new();
     let registry = discover_visible_skills(app);
 
     if let Some(skill) = registry.get(name) {
@@ -350,6 +421,31 @@ fn activate_skill(app: &mut App, name: &str) -> CommandResult {
             skill.name, skill.body
         );
 
+<<<<<<< Updated upstream
+=======
+        eprintln!(
+            "activate skill: {name}, readiness probe={:?}",
+            probes.probe(name)
+        );
+        // If skill reports NeedsSetup, append readiness report instruction
+        if let Some(readiness) = probes.probe(name) {
+            use crate::skills::SkillReadiness;
+            if readiness == SkillReadiness::NeedsSetup || readiness == SkillReadiness::Partial {
+                let status = if readiness == SkillReadiness::NeedsSetup {
+                    "needs setup"
+                } else {
+                    "partial"
+                };
+                let report = format!(
+                    "\n\n## ⚠ Readiness Notice\n\nThis skill reports as **{status}**. Required tools may be missing.\n\
+                     After attempting the task, report whether the skill worked, what dependencies are \
+                     missing, and whether installation was successful.\n\n---\n"
+                );
+                instruction.push_str(&report);
+            }
+        }
+
+>>>>>>> Stashed changes
         app.add_message(HistoryCell::System {
             content: format!("Activated skill: {}\n\n{}", skill.name, skill.description),
         });

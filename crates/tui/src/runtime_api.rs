@@ -60,6 +60,7 @@ use crate::session_manager::default_sessions_dir;
 #[cfg(test)]
 pub(super) use crate::session_manager::{SavedSession, SessionMetadata};
 use crate::skill_state::SkillStateStore;
+use crate::skills::probe::ProbeRegistry;
 use crate::task_manager::{
     NewTaskRequest, SharedTaskManager, TaskManager, TaskManagerConfig, TaskRecord, TaskSummary,
 };
@@ -1382,6 +1383,10 @@ async fn list_skills(
             path: skill.path.clone(),
             enabled: skill_state.is_enabled(&skill.name),
             is_bundled: skill_entry_is_bundled(skill, &skills_dir),
+<<<<<<< Updated upstream
+=======
+            readiness: crate::skills::SkillReadiness::Unknown,
+>>>>>>> Stashed changes
         })
         .collect();
     Ok(Json(SkillsResponse {

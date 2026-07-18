@@ -6,6 +6,7 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use std::collections::HashMap;
+use crate::skills::probe::ProbeRegistry;
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -3469,6 +3470,12 @@ async fn run_doctor(
     println!();
     println!("{}", "Skills:".bold());
     let global_skills_dir = config.skills_dir();
+<<<<<<< Updated upstream
+=======
+    // Ensure bundled skill probes are registered for doctor --json
+    let mut probes = crate::skills::probe::ProbeRegistry::new();
+    let _ = crate::skills::install_system_skills(&global_skills_dir, &mut probes);
+>>>>>>> Stashed changes
     let agents_skills_dir = workspace.join(".agents").join("skills");
     let local_skills_dir = workspace.join("skills");
     let agents_global_skills_dir = crate::skills::agents_global_skills_dir();
@@ -4763,6 +4770,12 @@ fn run_doctor_json(
     };
 
     let global_skills_dir = config.skills_dir();
+<<<<<<< Updated upstream
+=======
+    // Ensure bundled skill probes are registered for doctor --json
+    let mut probes = crate::skills::probe::ProbeRegistry::new();
+    let _ = crate::skills::install_system_skills(&global_skills_dir, &mut probes);
+>>>>>>> Stashed changes
     let agents_skills_dir = workspace.join(".agents").join("skills");
     let local_skills_dir = workspace.join("skills");
     let agents_global_skills_dir = crate::skills::agents_global_skills_dir();
@@ -4835,6 +4848,29 @@ fn run_doctor_json(
     let (code_home, legacy_home) = doctor_state_roots();
     let legacy_state_report = doctor_legacy_state_report(&code_home, &legacy_home);
 
+<<<<<<< Updated upstream
+=======
+    let skill_items: Vec<serde_json::Value> = {
+        let registry = crate::skills::discover_for_workspace_and_dir_with_mode(
+            workspace,
+            &selected_skills_dir,
+            crate::skills::SkillDiscoveryMode::Compatible,
+        );
+        registry
+            .list()
+            .iter()
+            .map(|skill| {
+                serde_json::json!({
+                    "name": skill.name,
+                    "readiness": probes.probe(&skill.name)
+                        .unwrap_or(crate::skills::SkillReadiness::Unknown),
+                    "required_tools": probes.query_tools(&skill.name),
+                })
+            })
+            .collect()
+    };
+
+>>>>>>> Stashed changes
     let report = json!({
         "version": env!("CARGO_PKG_VERSION"),
         "config_path": config_path.display().to_string(),
@@ -7599,7 +7635,8 @@ async fn run_interactive(
     // Auto-install bundled system skills (e.g. skill-creator) on first launch.
     // Errors are non-fatal: log a warning and continue.
     let skills_dir = config.skills_dir();
-    if let Err(e) = crate::skills::install_system_skills(&skills_dir) {
+    let mut probes = ProbeRegistry::new();
+    if let Err(e) = crate::skills::install_system_skills(&skills_dir, &mut probes) {
         logging::warn(format!("Failed to install system skills: {e}"));
     }
 
