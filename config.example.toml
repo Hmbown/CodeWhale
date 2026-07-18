@@ -801,6 +801,10 @@ apply_patch = true
 mcp = true
 exec_policy = true
 # vision_model = false  # enable vision model for image_analyze tool
+# verify_tool = false   # disable the agent-callable `verify` self-critique tool
+                        # (#4196). On by default; the agent decides when to spend
+                        # the extra reasoning, so cost is only incurred on demand.
+                        # Set false to remove it from the model's tool catalog.
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Vision Model Configuration (optional)

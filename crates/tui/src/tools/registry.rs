@@ -501,6 +501,9 @@ pub struct AgentToolSurfaceOptions {
     pub vision_config: Option<crate::config::VisionModelConfig>,
     pub speech_output_dir: Option<PathBuf>,
     pub goal_state: Option<SharedGoalState>,
+    /// Register the agent-callable `verify` self-critique tool (#4196).
+    /// Gated by `Feature::Verify` (`[features] verify_tool`), default on.
+    pub verify_tool_enabled: bool,
 }
 
 impl AgentToolSurfaceOptions {
@@ -514,6 +517,7 @@ impl AgentToolSurfaceOptions {
             vision_config: None,
             speech_output_dir: None,
             goal_state: None,
+            verify_tool_enabled: true,
         }
     }
 }
@@ -892,6 +896,15 @@ impl ToolRegistryBuilder {
         self.with_tool(Arc::new(ReviewTool::new(client, model)))
     }
 
+    /// Include the agent-callable `verify` self-critique tool (#4196). The
+    /// critic runs at elevated reasoning (default `Max`) independent of the
+    /// session tier and is given no tools, so it cannot recurse into `verify`.
+    #[must_use]
+    pub fn with_verify_tool(self, client: Option<DeepSeekClient>, model: String) -> Self {
+        use super::verify::VerifyTool;
+        self.with_tool(Arc::new(VerifyTool::new(client, model)))
+    }
+
     /// Include note tool.
     #[must_use]
     pub fn with_note_tool(self) -> Self {
@@ -1052,6 +1065,8 @@ impl ToolRegistryBuilder {
         plan_state: super::plan::SharedPlanState,
     ) -> Self {
         let speech_client = client.clone();
+        let verify_client = client.clone();
+        let verify_model = model.clone();
         let mut builder = self
             .with_agent_tools_policy(options.shell_policy)
             .with_todo_tool(todo_list)
@@ -1062,6 +1077,9 @@ impl ToolRegistryBuilder {
             .with_fim_tool(client, model)
             .with_speech_tools(speech_client, options.speech_output_dir.clone());
 
+        if options.verify_tool_enabled {
+            builder = builder.with_verify_tool(verify_client, verify_model);
+        }
         if let Some(goal_state) = options.goal_state {
             builder = builder.with_goal_tools(goal_state);
         }
@@ -1896,6 +1914,61 @@ mod tests {
         let registry = ToolRegistryBuilder::new().with_finance_tool().build(ctx);
 
         assert!(registry.contains("finance"));
+    }
+
+    #[test]
+    fn with_verify_tool_registers_and_exposes_verify() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        let registry = ToolRegistryBuilder::new()
+            .with_verify_tool(None, "test-model".to_string())
+            .build(ctx);
+
+        assert!(
+            registry.contains("verify"),
+            "verify tool should be registered"
+        );
+        let api_names = registry
+            .to_api_tools()
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+        assert!(
+            api_names.iter().any(|name| name == "verify"),
+            "verify tool should be model-visible"
+        );
+    }
+
+    #[test]
+    fn agent_runtime_surface_gates_verify_on_option() {
+        use super::AgentToolSurfaceOptions;
+        use crate::worker_profile::ShellPolicy;
+
+        let build_surface = |verify_enabled: bool| {
+            let tmp = tempdir().expect("tempdir");
+            let ctx = ToolContext::new(tmp.path().to_path_buf());
+            let mut options = AgentToolSurfaceOptions::new(ShellPolicy::Full);
+            options.verify_tool_enabled = verify_enabled;
+            ToolRegistryBuilder::new()
+                .with_agent_runtime_surface(
+                    None,
+                    "test-model".to_string(),
+                    options,
+                    crate::tools::todo::new_shared_todo_list(),
+                    crate::tools::plan::new_shared_plan_state(),
+                )
+                .build(ctx)
+        };
+
+        assert!(
+            build_surface(true).contains("verify"),
+            "verify should register when enabled"
+        );
+        assert!(
+            !build_surface(false).contains("verify"),
+            "verify should be absent when the opt-out disables it"
+        );
     }
 
     #[test]

@@ -62,6 +62,7 @@ pub mod truncate;
 pub mod user_input;
 pub mod validate_data;
 pub mod verifier;
+pub mod verify;
 pub mod web_run;
 pub mod web_search;
 pub mod workflow;
