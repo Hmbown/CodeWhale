@@ -62,7 +62,7 @@ toml.workspace = true
 toml_edit.workspace = true
 tokio.workspace = true
 tokio-util = { version = "0.7.16", features = ["io"] }
-unicode-width = "0.2"
+unicode-width = { version = "0.2", features = ["cjk"] }
 unicode-segmentation = "1.12"
 urlencoding = "2.1"
 uuid.workspace = true
