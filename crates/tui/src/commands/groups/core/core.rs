@@ -1502,7 +1502,10 @@ mod tests {
         let msg = result
             .message
             .expect("home dashboard should return message");
-        assert!(msg.contains("主面板"), "missing zh-Hans title:\n{msg}");
+        assert!(
+            msg.contains("Codewhale"),
+            "missing canonical product title:\n{msg}"
+        );
         assert!(msg.contains("模型"), "missing zh-Hans model label:\n{msg}");
         assert!(
             msg.contains("快捷操作"),

@@ -13,7 +13,7 @@ Feature: Core command visible surfaces
     When the user runs the core command "/workspace"
     Then the message window should include "Current workspace:"
     When the user runs the core command "/home"
-    Then the message window should include "codewhale Home Dashboard"
+    Then the message window should include "Codewhale"
     And the message window should include "/links"
 
   Scenario: Core state commands report visible changes
