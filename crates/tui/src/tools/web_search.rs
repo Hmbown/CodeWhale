@@ -17,12 +17,16 @@ use super::spec::{
 use crate::config::SearchProvider;
 use crate::network_policy::{Decision, NetworkPolicyDecider};
 use async_trait::async_trait;
-use base64::{Engine as _, engine::general_purpose};
 use regex::Regex;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::sync::OnceLock;
 use std::time::Duration;
+
+use super::web::scrape::{
+    ScrapedSearchResult, is_duckduckgo_challenge, parse_bing_results as scrape_bing_results,
+    parse_duckduckgo_results as scrape_duckduckgo_results,
+};
 
 const DUCKDUCKGO_ENDPOINT: &str = "https://html.duckduckgo.com/html/";
 const BING_HOST: &str = "www.bing.com";
@@ -55,55 +59,8 @@ fn check_policy(decider: Option<&NetworkPolicyDecider>, host: &str) -> Result<()
     }
 }
 
-// Cached regex patterns for HTML parsing
-static TITLE_RE: OnceLock<Regex> = OnceLock::new();
-static SNIPPET_RE: OnceLock<Regex> = OnceLock::new();
-static TAG_RE: OnceLock<Regex> = OnceLock::new();
-static BING_RESULT_RE: OnceLock<Regex> = OnceLock::new();
-static BING_TITLE_RE: OnceLock<Regex> = OnceLock::new();
-static BING_SNIPPET_RE: OnceLock<Regex> = OnceLock::new();
+// Cached regex for secret redaction in error bodies
 static BEARER_TOKEN_RE: OnceLock<Regex> = OnceLock::new();
-
-fn get_title_re() -> &'static Regex {
-    TITLE_RE.get_or_init(|| {
-        Regex::new(r#"<a[^>]*class=\"result__a\"[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>"#)
-            .expect("title regex pattern is valid")
-    })
-}
-
-fn get_snippet_re() -> &'static Regex {
-    SNIPPET_RE.get_or_init(|| {
-        Regex::new(
-            r#"<a[^>]*class=\"result__snippet\"[^>]*>(.*?)</a>|<div[^>]*class=\"result__snippet\"[^>]*>(.*?)</div>"#,
-        )
-        .expect("snippet regex pattern is valid")
-    })
-}
-
-fn get_tag_re() -> &'static Regex {
-    TAG_RE.get_or_init(|| Regex::new(r"<[^>]+>").expect("tag regex pattern is valid"))
-}
-
-fn get_bing_result_re() -> &'static Regex {
-    BING_RESULT_RE.get_or_init(|| {
-        Regex::new(r#"(?is)<li[^>]*class=\"[^\"]*\bb_algo\b[^\"]*\"[^>]*>(.*?)</li>"#)
-            .expect("bing result regex pattern is valid")
-    })
-}
-
-fn get_bing_title_re() -> &'static Regex {
-    BING_TITLE_RE.get_or_init(|| {
-        Regex::new(r#"(?is)<h2[^>]*>.*?<a[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>"#)
-            .expect("bing title regex pattern is valid")
-    })
-}
-
-fn get_bing_snippet_re() -> &'static Regex {
-    BING_SNIPPET_RE.get_or_init(|| {
-        Regex::new(r#"(?is)<div[^>]*class=\"[^\"]*\bb_caption\b[^\"]*\"[^>]*>.*?<p[^>]*>(.*?)</p>"#)
-            .expect("bing snippet regex pattern is valid")
-    })
-}
 
 fn get_bearer_token_re() -> &'static Regex {
     BEARER_TOKEN_RE.get_or_init(|| {
@@ -1039,6 +996,16 @@ fn truncate_error_body(body: &str) -> String {
     }
 }
 
+static TAG_RE: OnceLock<Regex> = OnceLock::new();
+
+fn get_tag_re() -> &'static Regex {
+    TAG_RE.get_or_init(|| Regex::new(r"<[^>]+>").expect("tag regex pattern is valid"))
+}
+
+fn strip_html_tags(text: &str) -> String {
+    get_tag_re().replace_all(text, "").to_string()
+}
+
 fn sanitize_error_body(body: &str) -> String {
     let stripped = strip_html_tags(body);
     let visible: String = stripped
@@ -1428,182 +1395,25 @@ async fn run_bing_search(
 }
 
 fn parse_duckduckgo_results(html: &str, max_results: usize) -> Vec<WebSearchEntry> {
-    let title_re = get_title_re();
-    let snippet_re = get_snippet_re();
-    let snippets: Vec<String> = snippet_re
-        .captures_iter(html)
-        .filter_map(|cap| cap.get(1).or_else(|| cap.get(2)))
-        .map(|m| normalize_text(m.as_str()))
-        .collect();
-
-    let mut results = Vec::new();
-    for (idx, cap) in title_re.captures_iter(html).enumerate() {
-        if results.len() >= max_results {
-            break;
-        }
-        let href = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-        let title_raw = cap.get(2).map(|m| m.as_str()).unwrap_or("");
-        let title = normalize_text(title_raw);
-        if title.is_empty() {
-            continue;
-        }
-        let url = normalize_url(href);
-        let snippet = snippets
-            .get(idx)
-            .map(|s| s.to_string())
-            .filter(|s| !s.is_empty());
-
-        results.push(WebSearchEntry {
-            title,
-            url,
-            snippet,
-        });
-    }
-
-    if is_likely_spam_results(&results) {
-        // Same defence as the Bing path (#964): a DDG fallback page can
-        // also serve a single-domain stuffed result set when the upstream
-        // is degraded. Drop rather than mislead the model.
-        return Vec::new();
-    }
-    results
-}
-
-fn is_duckduckgo_challenge(html: &str) -> bool {
-    html.contains("anomaly-modal") || html.contains("Unfortunately, bots use DuckDuckGo too")
+    scrape_duckduckgo_results(html, max_results)
+        .into_iter()
+        .map(web_search_entry_from_scraped)
+        .collect()
 }
 
 fn parse_bing_results(html: &str, max_results: usize) -> Vec<WebSearchEntry> {
-    let mut results = Vec::new();
-    for cap in get_bing_result_re().captures_iter(html) {
-        if results.len() >= max_results {
-            break;
-        }
-        let Some(block) = cap.get(1).map(|m| m.as_str()) else {
-            continue;
-        };
-        let Some(title_cap) = get_bing_title_re().captures(block) else {
-            continue;
-        };
-        let href = title_cap.get(1).map(|m| m.as_str()).unwrap_or("");
-        let title_raw = title_cap.get(2).map(|m| m.as_str()).unwrap_or("");
-        let title = normalize_text(title_raw);
-        if title.is_empty() {
-            continue;
-        }
-        let snippet = get_bing_snippet_re()
-            .captures(block)
-            .and_then(|snippet_cap| snippet_cap.get(1))
-            .map(|m| normalize_text(m.as_str()))
-            .filter(|s| !s.is_empty());
-
-        results.push(WebSearchEntry {
-            title,
-            url: normalize_bing_url(href),
-            snippet,
-        });
-    }
-
-    if is_likely_spam_results(&results) {
-        // Bing's scraping endpoint occasionally serves a stuffed page
-        // where the same low-quality domain owns most of the b_algo
-        // entries — #964 reported eight in a row from
-        // `astralia.forumgratuit.org` for unrelated queries. Treat the
-        // batch as "no results" so the caller surfaces a clean failure
-        // message instead of routing the model toward junk.
-        return Vec::new();
-    }
-    results
+    scrape_bing_results(html, max_results)
+        .into_iter()
+        .map(web_search_entry_from_scraped)
+        .collect()
 }
 
-/// Heuristic spam detector for scraped SERP HTML (#964).
-///
-/// Returns `true` when one root domain owns at least 60% of the result
-/// set and there are at least three results. A real-world top-five page
-/// from Google/Bing/DDG mixes domains; a result page dominated by one
-/// host is almost always SEO spam or a bot-detection-stuffed substitute.
-fn is_likely_spam_results(results: &[WebSearchEntry]) -> bool {
-    if results.len() < 3 {
-        return false;
+fn web_search_entry_from_scraped(entry: ScrapedSearchResult) -> WebSearchEntry {
+    WebSearchEntry {
+        title: entry.title,
+        url: entry.url,
+        snippet: entry.snippet,
     }
-    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    for r in results {
-        if let Some(host) = root_domain(&r.url) {
-            *counts.entry(host).or_insert(0) += 1;
-        }
-    }
-    let Some(&max) = counts.values().max() else {
-        return false;
-    };
-    // 60% threshold: 3-of-5, 4-of-6, 5-of-8 all trip; 2-of-5 doesn't.
-    max * 5 >= results.len() * 3
-}
-
-/// Extract the registrable root domain (eTLD+1 approximation) from a URL
-/// so spam detection groups `astralia.forumgratuit.org` with
-/// `russia.forumgratuit.org`. Returns lowercase host minus the leftmost
-/// label, or the bare host when there are only two labels.
-fn root_domain(url: &str) -> Option<String> {
-    let after_scheme = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
-    let host = after_scheme.split(['/', '?', '#']).next()?;
-    let host = host.split('@').next_back()?;
-    let host = host.split(':').next()?.to_ascii_lowercase();
-    if host.is_empty() {
-        return None;
-    }
-    let labels: Vec<&str> = host.split('.').filter(|s| !s.is_empty()).collect();
-    if labels.len() <= 2 {
-        return Some(host);
-    }
-    Some(labels[labels.len().saturating_sub(2)..].join("."))
-}
-
-fn normalize_url(href: &str) -> String {
-    if let Some(uddg) = extract_query_param(href, "uddg") {
-        let decoded = percent_decode(&uddg);
-        if !decoded.is_empty() {
-            return decoded;
-        }
-    }
-    if href.starts_with("//") {
-        return format!("https:{href}");
-    }
-    if href.starts_with('/') {
-        return format!("https://duckduckgo.com{href}");
-    }
-    href.to_string()
-}
-
-fn normalize_bing_url(href: &str) -> String {
-    // Bing wraps every SERP result URL in a `/ck/a?...&u=<base64>` click-tracking
-    // redirect, and in the raw HTML the separators are `&amp;` entities. Without
-    // decoding entities first, `extract_query_param` looks for `u` but the actual
-    // key is `amp;u`, so the real URL is never recovered: every result collapses to
-    // a `bing.com` root domain, which the spam heuristic then rejects — yielding
-    // zero results for the default Bing backend. Decode entities before parsing.
-    let href = decode_html_entities(href);
-    let href = href.as_str();
-    if let Some(encoded) = extract_query_param(href, "u") {
-        let decoded = percent_decode(&encoded);
-        let token = decoded.strip_prefix("a1").unwrap_or(&decoded);
-        let mut padded = token.replace('-', "+").replace('_', "/");
-        while !padded.len().is_multiple_of(4) {
-            padded.push('=');
-        }
-        if let Ok(bytes) = general_purpose::STANDARD.decode(padded)
-            && let Ok(url) = String::from_utf8(bytes)
-            && (url.starts_with("http://") || url.starts_with("https://"))
-        {
-            return url;
-        }
-    }
-    if href.starts_with("//") {
-        return format!("https:{href}");
-    }
-    if href.starts_with('/') {
-        return format!("https://www.bing.com{href}");
-    }
-    href.to_string()
 }
 
 fn duckduckgo_search_url(
@@ -1658,114 +1468,21 @@ fn duckduckgo_allows_bing_fallback(base_url: Option<&str>) -> bool {
     configured_search_base_url(base_url).is_none()
 }
 
-fn normalize_text(text: &str) -> String {
-    let stripped = strip_html_tags(text);
-    let decoded = decode_html_entities(&stripped);
-    decoded.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn strip_html_tags(text: &str) -> String {
-    get_tag_re().replace_all(text, "").to_string()
-}
-
-fn decode_html_entities(text: &str) -> String {
-    use regex::Regex;
-    use std::sync::OnceLock;
-
-    static ENTITY_RE: OnceLock<Regex> = OnceLock::new();
-    let re = ENTITY_RE.get_or_init(|| {
-        Regex::new(r"&(?:#(\d+)|#x([0-9A-Fa-f]+)|([a-zA-Z]+));").expect("HTML entity regex")
-    });
-
-    re.replace_all(text, |caps: &regex::Captures| {
-        if let Some(dec) = caps.get(1) {
-            return dec
-                .as_str()
-                .parse::<u32>()
-                .ok()
-                .and_then(std::char::from_u32)
-                .unwrap_or('\u{FFFD}')
-                .to_string();
-        }
-        if let Some(hex) = caps.get(2) {
-            return u32::from_str_radix(hex.as_str(), 16)
-                .ok()
-                .and_then(std::char::from_u32)
-                .unwrap_or('\u{FFFD}')
-                .to_string();
-        }
-        let named = caps.get(3).map(|m| m.as_str());
-        match named {
-            Some("amp") => "&",
-            Some("lt") => "<",
-            Some("gt") => ">",
-            Some("quot") => "\"",
-            Some("apos") => "'",
-            Some("nbsp") => " ",
-            Some("copy") => "\u{00A9}",
-            Some("reg") => "\u{00AE}",
-            Some("mdash") => "\u{2014}",
-            Some("ndash") => "\u{2013}",
-            Some("lsquo") => "\u{2018}",
-            Some("rsquo") => "\u{2019}",
-            Some("ldquo") => "\u{201C}",
-            Some("rdquo") => "\u{201D}",
-            Some("hellip") => "\u{2026}",
-            _ => return caps.get(0).map(|m| m.as_str()).unwrap_or("").to_string(),
-        }
-        .to_string()
-    })
-    .to_string()
-}
-
 fn url_encode(input: &str) -> String {
     crate::utils::url_encode(input)
-}
-
-fn percent_decode(input: &str) -> String {
-    let bytes = input.as_bytes();
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'%' if i + 2 < bytes.len() => {
-                let hex = &input[i + 1..i + 3];
-                if let Ok(val) = u8::from_str_radix(hex, 16) {
-                    out.push(val);
-                    i += 3;
-                    continue;
-                }
-                out.push(bytes[i]);
-            }
-            b'+' => out.push(b' '),
-            _ => out.push(bytes[i]),
-        }
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).to_string()
-}
-
-fn extract_query_param(url: &str, key: &str) -> Option<String> {
-    let query = url.split_once('?')?.1;
-    for part in query.split('&') {
-        let mut iter = part.splitn(2, '=');
-        let name = iter.next().unwrap_or("");
-        if name == key {
-            return iter.next().map(str::to_string);
-        }
-    }
-    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        ERROR_BODY_PREVIEW_BYTES, WebSearchEntry, WebSearchTool, baidu_search_payload,
-        bocha_error_message, decode_html_entities, duckduckgo_search_url, extract_search_query,
-        is_likely_spam_results, normalize_bing_url, optional_search_max_results,
+        ERROR_BODY_PREVIEW_BYTES, WebSearchTool, baidu_search_payload, bocha_error_message,
+        duckduckgo_search_url, extract_search_query, optional_search_max_results,
         parse_baidu_results, parse_bocha_results, parse_searxng_results, parse_sofya_results,
-        root_domain, sanitize_error_body, searxng_search_url, truncate_error_body,
-        volcengine_extract_text,
+        sanitize_error_body, searxng_search_url, truncate_error_body, volcengine_extract_text,
+    };
+    use crate::tools::web::scrape::{
+        ScrapedSearchResult, decode_html_entities, is_likely_spam_results, normalize_bing_url,
+        root_domain,
     };
     use serde_json::json;
 
@@ -1780,8 +1497,8 @@ mod tests {
         assert_eq!(normalize_bing_url(href), "https://rust-lang.org/");
     }
 
-    fn entry(url: &str) -> WebSearchEntry {
-        WebSearchEntry {
+    fn entry(url: &str) -> ScrapedSearchResult {
+        ScrapedSearchResult {
             title: "x".into(),
             url: url.into(),
             snippet: None,

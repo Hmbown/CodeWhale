@@ -9,7 +9,6 @@ use super::spec::{
 };
 use super::web::guard::validate_fetch_target;
 use async_trait::async_trait;
-use base64::{Engine as _, engine::general_purpose};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -21,6 +20,11 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use parking_lot::{RwLock, RwLockWriteGuard};
+
+use super::web::scrape::{
+    ScrapedSearchResult, is_duckduckgo_challenge, parse_bing_results as scrape_bing_results,
+    parse_duckduckgo_results as scrape_duckduckgo_results,
+};
 
 const MAX_RESULTS: usize = 10;
 const DEFAULT_TIMEOUT_MS: u64 = 15_000;
@@ -1393,11 +1397,6 @@ static BLOCK_RE: OnceLock<Regex> = OnceLock::new();
 static SCRIPT_RE: OnceLock<Regex> = OnceLock::new();
 static STYLE_RE: OnceLock<Regex> = OnceLock::new();
 static TITLE_RE: OnceLock<Regex> = OnceLock::new();
-static SNIPPET_RE: OnceLock<Regex> = OnceLock::new();
-static SEARCH_TITLE_RE: OnceLock<Regex> = OnceLock::new();
-static BING_RESULT_RE: OnceLock<Regex> = OnceLock::new();
-static BING_TITLE_RE: OnceLock<Regex> = OnceLock::new();
-static BING_SNIPPET_RE: OnceLock<Regex> = OnceLock::new();
 
 fn get_anchor_re() -> &'static Regex {
     ANCHOR_RE.get_or_init(|| {
@@ -1427,43 +1426,6 @@ fn get_style_re() -> &'static Regex {
 
 fn get_title_re() -> &'static Regex {
     TITLE_RE.get_or_init(|| Regex::new(r"(?is)<title[^>]*>(.*?)</title>").unwrap())
-}
-
-fn get_search_title_re() -> &'static Regex {
-    SEARCH_TITLE_RE.get_or_init(|| {
-        Regex::new(r#"<a[^>]*class=\"result__a\"[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>"#)
-            .expect("title regex pattern is valid")
-    })
-}
-
-fn get_search_snippet_re() -> &'static Regex {
-    SNIPPET_RE.get_or_init(|| {
-        Regex::new(
-            r#"<a[^>]*class=\"result__snippet\"[^>]*>(.*?)</a>|<div[^>]*class=\"result__snippet\"[^>]*>(.*?)</div>"#,
-        )
-        .expect("snippet regex pattern is valid")
-    })
-}
-
-fn get_bing_result_re() -> &'static Regex {
-    BING_RESULT_RE.get_or_init(|| {
-        Regex::new(r#"(?is)<li[^>]*class=\"[^\"]*\bb_algo\b[^\"]*\"[^>]*>(.*?)</li>"#)
-            .expect("bing result regex pattern is valid")
-    })
-}
-
-fn get_bing_title_re() -> &'static Regex {
-    BING_TITLE_RE.get_or_init(|| {
-        Regex::new(r#"(?is)<h2[^>]*>.*?<a[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>"#)
-            .expect("bing title regex pattern is valid")
-    })
-}
-
-fn get_bing_snippet_re() -> &'static Regex {
-    BING_SNIPPET_RE.get_or_init(|| {
-        Regex::new(r#"(?is)<div[^>]*class=\"[^\"]*\bb_caption\b[^\"]*\"[^>]*>.*?<p[^>]*>(.*?)</p>"#)
-            .expect("bing snippet regex pattern is valid")
-    })
 }
 
 fn parse_html(html: &str, base_url: &str) -> (Vec<String>, Vec<WebLink>, Option<String>) {
@@ -1593,149 +1555,25 @@ fn decode_html_entities(text: &str) -> String {
 }
 
 fn parse_duckduckgo_results(html: &str, max_results: usize) -> Vec<SearchEntry> {
-    let title_re = get_search_title_re();
-    let snippet_re = get_search_snippet_re();
-    let snippets: Vec<String> = snippet_re
-        .captures_iter(html)
-        .filter_map(|cap| cap.get(1).or_else(|| cap.get(2)))
-        .map(|m| normalize_whitespace(&decode_html_entities(&strip_tags(m.as_str()))))
-        .collect();
-
-    let mut results = Vec::new();
-    for (idx, cap) in title_re.captures_iter(html).enumerate() {
-        if results.len() >= max_results {
-            break;
-        }
-        let href = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-        let title_raw = cap.get(2).map(|m| m.as_str()).unwrap_or("");
-        let title = normalize_whitespace(&decode_html_entities(&strip_tags(title_raw)));
-        if title.is_empty() {
-            continue;
-        }
-        let url = normalize_search_url(href);
-        let snippet = snippets
-            .get(idx)
-            .map(|s| s.to_string())
-            .filter(|s| !s.is_empty());
-
-        results.push(SearchEntry {
-            title,
-            url,
-            snippet,
-        });
-    }
-
-    results
-}
-
-fn is_duckduckgo_challenge(html: &str) -> bool {
-    html.contains("anomaly-modal") || html.contains("Unfortunately, bots use DuckDuckGo too")
+    scrape_duckduckgo_results(html, max_results)
+        .into_iter()
+        .map(search_entry_from_scraped)
+        .collect()
 }
 
 fn parse_bing_results(html: &str, max_results: usize) -> Vec<SearchEntry> {
-    let mut results = Vec::new();
-    for cap in get_bing_result_re().captures_iter(html) {
-        if results.len() >= max_results {
-            break;
-        }
-        let Some(block) = cap.get(1).map(|m| m.as_str()) else {
-            continue;
-        };
-        let Some(title_cap) = get_bing_title_re().captures(block) else {
-            continue;
-        };
-        let href = title_cap.get(1).map(|m| m.as_str()).unwrap_or("");
-        let title_raw = title_cap.get(2).map(|m| m.as_str()).unwrap_or("");
-        let title = normalize_whitespace(&decode_html_entities(&strip_tags(title_raw)));
-        if title.is_empty() {
-            continue;
-        }
-        let snippet = get_bing_snippet_re()
-            .captures(block)
-            .and_then(|snippet_cap| snippet_cap.get(1))
-            .map(|m| normalize_whitespace(&decode_html_entities(&strip_tags(m.as_str()))))
-            .filter(|s| !s.is_empty());
-
-        results.push(SearchEntry {
-            title,
-            url: normalize_bing_url(href),
-            snippet,
-        });
-    }
-
-    results
+    scrape_bing_results(html, max_results)
+        .into_iter()
+        .map(search_entry_from_scraped)
+        .collect()
 }
 
-fn normalize_search_url(href: &str) -> String {
-    if let Some(uddg) = extract_query_param(href, "uddg") {
-        let decoded = percent_decode(&uddg);
-        if !decoded.is_empty() {
-            return decoded;
-        }
+fn search_entry_from_scraped(entry: ScrapedSearchResult) -> SearchEntry {
+    SearchEntry {
+        title: entry.title,
+        url: entry.url,
+        snippet: entry.snippet,
     }
-    if href.starts_with("//") {
-        return format!("https:{href}");
-    }
-    if href.starts_with('/') {
-        return format!("https://duckduckgo.com{href}");
-    }
-    href.to_string()
-}
-
-fn normalize_bing_url(href: &str) -> String {
-    if let Some(encoded) = extract_query_param(href, "u") {
-        let decoded = percent_decode(&encoded);
-        let token = decoded.strip_prefix("a1").unwrap_or(&decoded);
-        let mut padded = token.replace('-', "+").replace('_', "/");
-        while !padded.len().is_multiple_of(4) {
-            padded.push('=');
-        }
-        if let Ok(bytes) = general_purpose::STANDARD.decode(padded)
-            && let Ok(url) = String::from_utf8(bytes)
-            && looks_like_url(&url)
-        {
-            return url;
-        }
-    }
-    if href.starts_with("//") {
-        return format!("https:{href}");
-    }
-    if href.starts_with('/') {
-        return format!("https://www.bing.com{href}");
-    }
-    href.to_string()
-}
-
-fn extract_query_param(url: &str, key: &str) -> Option<String> {
-    let query_start = url.find('?')?;
-    let query = &url[query_start + 1..];
-    for part in query.split('&') {
-        let (k, v) = part.split_once('=')?;
-        if k == key {
-            return Some(v.to_string());
-        }
-    }
-    None
-}
-
-fn percent_decode(input: &str) -> String {
-    let mut out = Vec::with_capacity(input.len());
-    let bytes = input.as_bytes();
-    let mut idx = 0;
-    while idx < bytes.len() {
-        if bytes[idx] == b'%'
-            && idx + 2 < bytes.len()
-            && let Ok(hex) = std::str::from_utf8(&bytes[idx + 1..idx + 3])
-            && let Ok(val) = u8::from_str_radix(hex, 16)
-        {
-            out.push(val);
-            idx += 3;
-            continue;
-        }
-        out.push(bytes[idx]);
-        idx += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn url_encode(input: &str) -> String {
@@ -1832,19 +1670,26 @@ mod tests {
     }
 
     #[test]
-    fn percent_decode_handles_utf8_multibyte_sequences() {
-        // Percent-encoded CJK: %E4%B8%AA%E4%BA%BA = 个人 (each glyph is 3 UTF-8 bytes).
-        assert_eq!(percent_decode("Hello %E4%B8%AA%E4%BA%BA"), "Hello 个人");
-        assert_eq!(percent_decode("%E7%B4%A0%E6%9D%90"), "素材");
-        // Percent-encoded UTF-8 inside a URL path (DuckDuckGo `uddg=` redirect shape).
-        assert_eq!(
-            percent_decode("https://example.com/%E9%A1%B5%E9%9D%A2"),
-            "https://example.com/页面"
+    fn web_run_search_path_filters_known_spam_domain() {
+        // Intended behavior change vs pre-unify web_run: spam filter applies
+        // unconditionally on the shared scraper used by web_run (#964).
+        let html = r#"
+            <a class="result__a" href="https://astralia.forumgratuit.org/a">A</a>
+            <a class="result__snippet">spam</a>
+            <a class="result__a" href="https://russia.forumgratuit.org/b">B</a>
+            <a class="result__snippet">spam</a>
+            <a class="result__a" href="https://other.forumgratuit.org/c">C</a>
+            <a class="result__snippet">spam</a>
+            <a class="result__a" href="https://hello.forumgratuit.org/d">D</a>
+            <a class="result__snippet">spam</a>
+            <a class="result__a" href="https://world.forumgratuit.org/e">E</a>
+            <a class="result__snippet">spam</a>
+        "#;
+        let results = parse_duckduckgo_results(html, 10);
+        assert!(
+            results.is_empty(),
+            "web_run path must drop single-domain spam SERPs via shared scraper"
         );
-        // Raw UTF-8 in the input passes through unchanged.
-        assert_eq!(percent_decode("查询 keyword"), "查询 keyword");
-        // ASCII-only inputs preserve existing behavior; `+` stays literal.
-        assert_eq!(percent_decode("foo+bar%20baz"), "foo+bar baz");
     }
 
     #[cfg(feature = "pdf")]
