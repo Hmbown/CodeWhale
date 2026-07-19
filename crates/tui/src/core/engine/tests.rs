@@ -1087,8 +1087,18 @@ fn make_plan_at(
         supports_parallel,
         read_only,
         detached_start: false,
+        resources: vec![ResourceClaim::ReadPath(PathBuf::from(format!(
+            "src-{index}.rs"
+        )))],
         blocked_error: None,
         guard_result: None,
+    }
+}
+
+fn parallel_batch_indices(batch: &ToolExecutionBatch) -> Vec<usize> {
+    match batch {
+        ToolExecutionBatch::Parallel(plans) => plans.iter().map(|plan| plan.index).collect(),
+        ToolExecutionBatch::Serial(_) => panic!("expected parallel batch"),
     }
 }
 
@@ -2071,6 +2081,44 @@ fn parallel_batch_requires_read_only_parallel_tools() {
 }
 
 #[test]
+fn parallel_batch_rejects_conflicting_prepared_resources() {
+    let mut first = make_plan_at(0, true, true, false, false);
+    first.resources = vec![ResourceClaim::ReadPath(PathBuf::from("src/lib.rs"))];
+    let mut second = make_plan_at(1, true, true, false, false);
+    second.resources = vec![ResourceClaim::WritePath(PathBuf::from("src/lib.rs"))];
+    assert!(!should_parallelize_tool_batch(&[first, second]));
+
+    let mut first = make_plan_at(0, true, true, false, false);
+    first.resources = vec![ResourceClaim::ReadPath(PathBuf::from("src/a.rs"))];
+    let mut second = make_plan_at(1, true, true, false, false);
+    second.resources = vec![ResourceClaim::WritePath(PathBuf::from("src/b.rs"))];
+    assert!(should_parallelize_tool_batch(&[first, second]));
+
+    let mut global = make_plan_at(0, true, true, false, false);
+    global.resources = vec![ResourceClaim::GlobalExclusive];
+    let mut claimless = make_plan_at(1, true, true, false, false);
+    claimless.resources.clear();
+    assert!(!should_parallelize_tool_batch(&[global, claimless]));
+}
+
+#[test]
+fn conflicting_resource_barriers_preserve_tool_order() {
+    let path = PathBuf::from("src/lib.rs");
+    let mut read_before = make_plan_at(0, true, true, false, false);
+    read_before.resources = vec![ResourceClaim::ReadPath(path.clone())];
+    let mut write = make_plan_at(1, true, true, false, false);
+    write.resources = vec![ResourceClaim::WritePath(path.clone())];
+    let mut read_after = make_plan_at(2, true, true, false, false);
+    read_after.resources = vec![ResourceClaim::ReadPath(path)];
+
+    let batches = plan_tool_execution_batches(vec![read_before, write, read_after]);
+    assert_eq!(batches.len(), 3);
+    assert_eq!(parallel_batch_indices(&batches[0]), vec![0]);
+    assert_eq!(parallel_batch_indices(&batches[1]), vec![1]);
+    assert_eq!(parallel_batch_indices(&batches[2]), vec![2]);
+}
+
+#[test]
 fn tool_execution_batches_use_serial_barriers() {
     let batches = plan_tool_execution_batches(vec![
         make_plan_at(0, true, true, false, false),
@@ -2122,80 +2170,72 @@ fn tool_execution_batches_use_serial_barriers() {
 }
 
 #[test]
-fn shell_readonly_plans_batch_around_serial_barrier() {
+fn globally_exclusive_shell_plans_never_share_a_batch() {
     let mut shell_a = make_plan_at(0, true, true, false, false);
     shell_a.name = "exec_shell".to_string();
     shell_a.input = json!({"command": "git status -s"});
+    shell_a.resources = vec![ResourceClaim::GlobalExclusive];
     let mut shell_b = make_plan_at(1, true, true, false, false);
     shell_b.name = "exec_shell".to_string();
     shell_b.input = json!({"command": "git log --oneline -5"});
+    shell_b.resources = vec![ResourceClaim::GlobalExclusive];
     let mut write_shell = make_plan_at(2, false, false, true, false);
     write_shell.name = "exec_shell".to_string();
     write_shell.input = json!({"command": "cargo build"});
+    write_shell.resources = vec![ResourceClaim::GlobalExclusive];
     let mut shell_c = make_plan_at(3, true, true, false, false);
     shell_c.name = "exec_shell".to_string();
     shell_c.input = json!({"command": "bash -lc 'rg TODO crates/tui/src/core'"});
+    shell_c.resources = vec![ResourceClaim::GlobalExclusive];
 
     let batches = plan_tool_execution_batches(vec![shell_a, shell_b, write_shell, shell_c]);
-    assert_eq!(batches.len(), 3);
+    assert_eq!(batches.len(), 4);
 
     match &batches[0] {
-        ToolExecutionBatch::Parallel(plans) => {
-            assert_eq!(
-                plans.iter().map(|plan| plan.index).collect::<Vec<_>>(),
-                vec![0, 1]
-            );
-        }
+        ToolExecutionBatch::Parallel(plans) => assert_eq!(plans[0].index, 0),
         ToolExecutionBatch::Serial(_) => panic!("first batch should be parallel"),
     }
     match &batches[1] {
+        ToolExecutionBatch::Parallel(plans) => assert_eq!(plans[0].index, 1),
+        ToolExecutionBatch::Serial(_) => panic!("second batch should be parallel"),
+    }
+    match &batches[2] {
         ToolExecutionBatch::Serial(plan) => assert_eq!(plan.index, 2),
         ToolExecutionBatch::Parallel(_) => panic!("write shell should be a serial barrier"),
     }
-    match &batches[2] {
-        ToolExecutionBatch::Parallel(plans) => {
-            assert_eq!(
-                plans.iter().map(|plan| plan.index).collect::<Vec<_>>(),
-                vec![3]
-            );
-        }
-        ToolExecutionBatch::Serial(_) => panic!("third batch should be parallel"),
+    match &batches[3] {
+        ToolExecutionBatch::Parallel(plans) => assert_eq!(plans[0].index, 3),
+        ToolExecutionBatch::Serial(_) => panic!("fourth batch should be parallel"),
     }
 }
 
 #[test]
-fn background_shell_starts_batch_with_readonly_tools_when_auto_approved() {
+fn globally_exclusive_background_shell_does_not_overlap_readonly_shells() {
     let mut shell_a = make_plan_at(0, true, true, false, false);
     shell_a.name = "exec_shell".to_string();
     shell_a.input = json!({"command": "git status -s"});
+    shell_a.resources = vec![ResourceClaim::GlobalExclusive];
 
     let mut background_cargo = make_plan_at(1, false, false, false, false);
     background_cargo.name = "exec_shell".to_string();
     background_cargo.input = json!({"command": "cargo check --workspace", "background": true});
     background_cargo.detached_start = true;
+    background_cargo.resources = vec![ResourceClaim::GlobalExclusive];
 
     let mut shell_b = make_plan_at(2, true, true, false, false);
     shell_b.name = "exec_shell".to_string();
     shell_b.input = json!({"command": "rg TODO crates/tui/src/core"});
+    shell_b.resources = vec![ResourceClaim::GlobalExclusive];
 
     let batches = plan_tool_execution_batches(vec![shell_a, background_cargo, shell_b]);
-    assert_eq!(batches.len(), 1);
-
-    match &batches[0] {
-        ToolExecutionBatch::Parallel(plans) => {
-            assert_eq!(
-                plans.iter().map(|plan| plan.index).collect::<Vec<_>>(),
-                vec![0, 1, 2]
-            );
-        }
-        ToolExecutionBatch::Serial(_) => {
-            panic!("background shell start should join parallel batch")
-        }
-    }
+    assert_eq!(batches.len(), 3);
+    assert_eq!(parallel_batch_indices(&batches[0]), vec![0]);
+    assert_eq!(parallel_batch_indices(&batches[1]), vec![1]);
+    assert_eq!(parallel_batch_indices(&batches[2]), vec![2]);
 }
 
 #[test]
-fn background_verifier_starts_batch_with_readonly_tools_when_auto_approved() {
+fn globally_exclusive_background_verifier_does_not_overlap_readonly_tools() {
     let mut shell_a = make_plan_at(0, true, true, false, false);
     shell_a.name = "exec_shell".to_string();
     shell_a.input = json!({"command": "git status -s"});
@@ -2204,87 +2244,59 @@ fn background_verifier_starts_batch_with_readonly_tools_when_auto_approved() {
     verifier.name = "run_verifiers".to_string();
     verifier.input = json!({"profile": "rust", "level": "full", "background": true});
     verifier.detached_start = true;
+    verifier.resources = vec![ResourceClaim::GlobalExclusive];
 
     let mut shell_b = make_plan_at(2, true, true, false, false);
     shell_b.name = "exec_shell".to_string();
     shell_b.input = json!({"command": "rg TODO crates/tui/src/core"});
 
     let batches = plan_tool_execution_batches(vec![shell_a, verifier, shell_b]);
-    assert_eq!(batches.len(), 1);
-
-    match &batches[0] {
-        ToolExecutionBatch::Parallel(plans) => {
-            assert_eq!(
-                plans.iter().map(|plan| plan.index).collect::<Vec<_>>(),
-                vec![0, 1, 2]
-            );
-        }
-        ToolExecutionBatch::Serial(_) => {
-            panic!("background verifier start should join parallel batch")
-        }
-    }
+    assert_eq!(batches.len(), 3);
+    assert_eq!(parallel_batch_indices(&batches[0]), vec![0]);
+    assert_eq!(parallel_batch_indices(&batches[1]), vec![1]);
+    assert_eq!(parallel_batch_indices(&batches[2]), vec![2]);
 }
 
-// #3801: agent `action=start` plans with `detached_start=true` and no approval
-// (YOLO / auto-approve mode) should all join one parallel batch instead of
-// being serialized N ways under the global tool-execution write lock.
+// Detached starts remain eligible for a parallel chunk, but their conservative
+// global claim prevents overlap until the agent scheduler exposes narrower
+// budget/session claims.
 #[test]
-fn agent_start_detached_plans_join_single_parallel_batch() {
-    // Simulate 4 independent `agent start` calls — each is a detached_start,
-    // not read-only, not parallel-safe in the read-only sense, but qualifies
-    // for the detached-start parallel-batch path.
+fn globally_exclusive_agent_starts_are_singleton_batches() {
     let plans: Vec<ToolExecutionPlan> = (0..4)
         .map(|i| {
             let mut plan = make_plan_at(i, false, false, false, false);
             plan.name = "agent".to_string();
             plan.detached_start = true;
+            plan.resources = vec![ResourceClaim::GlobalExclusive];
             plan
         })
         .collect();
 
     let batches = plan_tool_execution_batches(plans);
-    assert_eq!(
-        batches.len(),
-        1,
-        "all 4 agent starts should form 1 parallel batch"
-    );
-    match &batches[0] {
-        ToolExecutionBatch::Parallel(plans) => {
-            assert_eq!(plans.len(), 4);
-            assert!(
-                plans.iter().all(|p| p.detached_start),
-                "every plan in the parallel batch should be a detached_start"
-            );
-        }
-        ToolExecutionBatch::Serial(_) => {
-            panic!("agent starts should be parallel, not serial");
-        }
+    assert_eq!(batches.len(), 4);
+    for (index, batch) in batches.iter().enumerate() {
+        assert_eq!(parallel_batch_indices(batch), vec![index]);
     }
 }
 
-// #3801: mixed agent starts and read-only tools should coexist in a parallel batch.
 #[test]
-fn agent_start_detached_plans_batch_with_readonly_tools() {
+fn globally_exclusive_agent_start_splits_neighboring_readonly_tools() {
     let mut grep_a = make_plan_at(0, true, true, false, false);
     grep_a.name = "grep_files".to_string();
 
     let mut agent_start = make_plan_at(1, false, false, false, false);
     agent_start.name = "agent".to_string();
     agent_start.detached_start = true;
+    agent_start.resources = vec![ResourceClaim::GlobalExclusive];
 
     let mut grep_b = make_plan_at(2, true, true, false, false);
     grep_b.name = "grep_files".to_string();
 
     let batches = plan_tool_execution_batches(vec![grep_a, agent_start, grep_b]);
-    assert_eq!(batches.len(), 1);
-    match &batches[0] {
-        ToolExecutionBatch::Parallel(plans) => {
-            assert_eq!(plans.len(), 3);
-        }
-        ToolExecutionBatch::Serial(_) => {
-            panic!("read-only tools + detached agent start should form 1 parallel batch");
-        }
-    }
+    assert_eq!(batches.len(), 3);
+    assert_eq!(parallel_batch_indices(&batches[0]), vec![0]);
+    assert_eq!(parallel_batch_indices(&batches[1]), vec![1]);
+    assert_eq!(parallel_batch_indices(&batches[2]), vec![2]);
 }
 
 #[test]

@@ -1624,6 +1624,7 @@ impl Engine {
                 let mut supports_parallel = false;
                 let mut read_only = false;
                 let mut detached_start = false;
+                let mut resources = vec![ResourceClaim::GlobalExclusive];
                 let mut blocked_error: Option<ToolError> = None;
                 let guard_result: Option<ToolResult> = None;
                 // #3026: set by a hook `ask` decision; applied AFTER the
@@ -1794,6 +1795,7 @@ impl Engine {
                     read_only = prepared.call.read_only;
                     detached_start = prepared.call.starts_detached;
                     tool_input = prepared.call.input;
+                    resources = prepared.call.resources;
 
                     let approval = match prepared.call.approval {
                         ApprovalRequirement::Auto => "auto",
@@ -1808,7 +1810,7 @@ impl Engine {
                         "supports_parallel": supports_parallel,
                         "starts_detached": detached_start,
                         "approval": approval,
-                        "resources": prepared.call.resources,
+                        "resources": &resources,
                         "reprepared_after_hook": reprepared_after_hook,
                     }));
                 }
@@ -1987,6 +1989,7 @@ impl Engine {
                     supports_parallel,
                     read_only,
                     detached_start,
+                    resources,
                     blocked_error,
                     guard_result,
                 });

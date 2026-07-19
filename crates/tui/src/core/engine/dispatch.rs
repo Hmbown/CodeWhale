@@ -18,7 +18,7 @@
 use serde_json::json;
 
 use crate::models::{Tool, ToolCaller};
-use crate::tools::spec::{ToolError, ToolResult};
+use crate::tools::spec::{ResourceClaim, ToolError, ToolResult, schedule_non_conflicting};
 use crate::tui::app::AppMode;
 
 use super::ToolUseState;
@@ -49,6 +49,7 @@ pub(super) struct ToolExecutionPlan {
     pub(super) supports_parallel: bool,
     pub(super) read_only: bool,
     pub(super) detached_start: bool,
+    pub(super) resources: Vec<ResourceClaim>,
     pub(super) blocked_error: Option<ToolError>,
     pub(super) guard_result: Option<ToolResult>,
 }
@@ -495,7 +496,17 @@ pub(super) fn parse_parallel_tool_calls(
 
 #[cfg(test)]
 pub(super) fn should_parallelize_tool_batch(plans: &[ToolExecutionPlan]) -> bool {
-    !plans.is_empty() && plans.iter().all(tool_plan_can_join_parallel_batch)
+    if plans.is_empty() || !plans.iter().all(tool_plan_can_join_parallel_batch) {
+        return false;
+    }
+    schedule_non_conflicting(
+        plans
+            .iter()
+            .map(|plan| ((), plan.resources.clone()))
+            .collect(),
+    )
+    .len()
+        == 1
 }
 
 pub(super) fn tool_plan_is_parallel_safe(plan: &ToolExecutionPlan) -> bool {
@@ -512,25 +523,27 @@ pub(super) fn plan_tool_execution_batches(
     plans: Vec<ToolExecutionPlan>,
 ) -> Vec<ToolExecutionBatch> {
     let mut batches = Vec::new();
-    let mut parallel_chunk = Vec::new();
+    let mut parallel_candidates = Vec::new();
+
+    let flush_parallel = |parallel_candidates: &mut Vec<_>,
+                          batches: &mut Vec<ToolExecutionBatch>| {
+        for chunk in schedule_non_conflicting(std::mem::take(parallel_candidates)) {
+            batches.push(ToolExecutionBatch::Parallel(chunk));
+        }
+    };
 
     for plan in plans {
         if tool_plan_can_join_parallel_batch(&plan) {
-            parallel_chunk.push(plan);
+            let resources = plan.resources.clone();
+            parallel_candidates.push((plan, resources));
             continue;
         }
 
-        if !parallel_chunk.is_empty() {
-            batches.push(ToolExecutionBatch::Parallel(std::mem::take(
-                &mut parallel_chunk,
-            )));
-        }
+        flush_parallel(&mut parallel_candidates, &mut batches);
         batches.push(ToolExecutionBatch::Serial(Box::new(plan)));
     }
 
-    if !parallel_chunk.is_empty() {
-        batches.push(ToolExecutionBatch::Parallel(parallel_chunk));
-    }
+    flush_parallel(&mut parallel_candidates, &mut batches);
 
     batches
 }

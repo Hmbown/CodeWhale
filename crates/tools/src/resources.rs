@@ -4,9 +4,8 @@ use serde::{Deserialize, Serialize};
 
 /// A conservative resource claim calculated before a tool may execute.
 ///
-/// The prepared-call seam only records these claims. The product scheduler
-/// continues to use its established Boolean policy until resource-aware
-/// batching lands.
+/// The prepared-call seam records these claims before authority checks and the
+/// product scheduler uses them to keep parallel batches non-conflicting.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResourceClaim {
@@ -59,22 +58,34 @@ fn trees_overlap(left: &Path, right: &Path) -> bool {
 /// claims share a batch; conflicting items retain their original order.
 #[must_use]
 pub fn schedule_non_conflicting<T>(items: Vec<(T, Vec<ResourceClaim>)>) -> Vec<Vec<T>> {
-    let mut batches: Vec<(Vec<T>, Vec<ResourceClaim>)> = Vec::new();
+    let mut batches = Vec::new();
+    let mut batch = Vec::new();
+    let mut batch_claims = Vec::new();
+
     for (item, claims) in items {
-        if let Some((batch, batch_claims)) = batches.iter_mut().find(|(_, batch_claims)| {
-            !claims.iter().any(|claim| {
+        let global_barrier = !batch.is_empty()
+            && (claims.contains(&ResourceClaim::GlobalExclusive)
+                || batch_claims.contains(&ResourceClaim::GlobalExclusive));
+        let conflicts = global_barrier
+            || claims.iter().any(|claim| {
                 batch_claims
                     .iter()
                     .any(|existing| claim.conflicts_with(existing))
-            })
-        }) {
-            batch.push(item);
-            batch_claims.extend(claims);
-        } else {
-            batches.push((vec![item], claims));
+            });
+        if conflicts && !batch.is_empty() {
+            batches.push(std::mem::take(&mut batch));
+            batch_claims.clear();
         }
+
+        batch.push(item);
+        batch_claims.extend(claims);
     }
-    batches.into_iter().map(|(items, _)| items).collect()
+
+    if !batch.is_empty() {
+        batches.push(batch);
+    }
+
+    batches
 }
 
 #[cfg(test)]
@@ -99,6 +110,56 @@ mod tests {
             ("b", vec![ResourceClaim::WritePath(PathBuf::from("b.rs"))]),
         ]);
         assert_eq!(batches, vec![vec!["a", "b"]]);
+    }
+
+    #[test]
+    fn intervening_conflict_preserves_contiguous_order() {
+        let path = PathBuf::from("src/lib.rs");
+        let batches = schedule_non_conflicting(vec![
+            ("read-before", vec![ResourceClaim::ReadPath(path.clone())]),
+            ("write", vec![ResourceClaim::WritePath(path.clone())]),
+            ("read-after", vec![ResourceClaim::ReadPath(path)]),
+        ]);
+        assert_eq!(
+            batches,
+            vec![vec!["read-before"], vec!["write"], vec!["read-after"]]
+        );
+    }
+
+    #[test]
+    fn tree_claims_conflict_only_when_a_write_scope_overlaps() {
+        let src = PathBuf::from("workspace/src");
+        let nested = PathBuf::from("workspace/src/nested");
+        let source_file = PathBuf::from("workspace/src/lib.rs");
+        let test_file = PathBuf::from("workspace/tests/test.rs");
+
+        assert!(
+            !ResourceClaim::ReadTree(src.clone())
+                .conflicts_with(&ResourceClaim::ReadPath(source_file.clone()))
+        );
+        assert!(
+            ResourceClaim::ReadTree(src.clone())
+                .conflicts_with(&ResourceClaim::WritePath(source_file.clone()))
+        );
+        assert!(
+            !ResourceClaim::ReadTree(src.clone())
+                .conflicts_with(&ResourceClaim::WritePath(test_file))
+        );
+        assert!(
+            ResourceClaim::WriteTree(src.clone())
+                .conflicts_with(&ResourceClaim::ReadPath(source_file))
+        );
+        assert!(ResourceClaim::WriteTree(src).conflicts_with(&ResourceClaim::ReadTree(nested)));
+    }
+
+    #[test]
+    fn global_exclusive_stays_a_singleton_barrier() {
+        let batches = schedule_non_conflicting(vec![
+            ("before", Vec::new()),
+            ("global", vec![ResourceClaim::GlobalExclusive]),
+            ("after", Vec::new()),
+        ]);
+        assert_eq!(batches, vec![vec!["before"], vec!["global"], vec!["after"]]);
     }
 
     #[test]

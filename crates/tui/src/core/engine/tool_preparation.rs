@@ -4,6 +4,9 @@
 //! the input-specific policy decision inspectable and reusable, including a
 //! mandatory second preparation after a hook rewrites input.
 
+use std::collections::BTreeSet;
+use std::path::PathBuf;
+
 use serde_json::Value;
 
 use crate::mcp::McpPool;
@@ -52,8 +55,10 @@ pub(super) fn prepare_tool_call(
     if let Some(registry) = registry
         && let Some(spec) = registry.get(name)
     {
+        let mut call = spec.prepare(input, registry.context())?;
+        call.resources = registered_resource_claims(name, &call.input, registry.context())?;
         return Ok(PreparedToolPolicy {
-            call: spec.prepare(input, registry.context())?,
+            call,
             auto_approve: registry.context().auto_approve,
         });
     }
@@ -127,6 +132,91 @@ fn conservative_execution_policy(
         },
         auto_approve,
     }
+}
+
+fn registered_resource_claims(
+    name: &str,
+    input: &Value,
+    context: &crate::tools::ToolContext,
+) -> Result<Vec<ResourceClaim>, ToolError> {
+    match name {
+        "read_file" => path_claim(input, "path", None, context, ResourceClaim::ReadPath),
+        "write_file" | "edit_file" => {
+            path_claim(input, "path", None, context, ResourceClaim::WritePath)
+        }
+        "list_dir" | "grep_files" | "file_search" => {
+            path_claim(input, "path", Some("."), context, ResourceClaim::ReadTree)
+        }
+        "apply_patch" => apply_patch_resource_claims(input, context),
+        "terminal/run" => Ok(terminal_claim(input, "session", Some("term-1"))),
+        "terminal/send" | "terminal/wait" | "terminal/cancel" | "terminal/reset" => {
+            Ok(terminal_claim(input, "session", None))
+        }
+        "exec_shell_wait"
+        | "exec_wait"
+        | "exec_shell_interact"
+        | "exec_interact"
+        | "exec_shell_cancel" => Ok(terminal_claim(input, "task_id", None)),
+        _ => Ok(global_exclusive_claim()),
+    }
+}
+
+fn path_claim(
+    input: &Value,
+    key: &str,
+    default: Option<&str>,
+    context: &crate::tools::ToolContext,
+    build: fn(PathBuf) -> ResourceClaim,
+) -> Result<Vec<ResourceClaim>, ToolError> {
+    let raw = input
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .or(default);
+    let Some(raw) = raw else {
+        return Ok(global_exclusive_claim());
+    };
+    Ok(context
+        .resolve_path(raw)
+        .map_or_else(|_| global_exclusive_claim(), |path| vec![build(path)]))
+}
+
+fn apply_patch_resource_claims(
+    input: &Value,
+    context: &crate::tools::ToolContext,
+) -> Result<Vec<ResourceClaim>, ToolError> {
+    let Ok(preflight) = crate::tools::apply_patch::preflight_apply_patch(input) else {
+        return Ok(global_exclusive_claim());
+    };
+    if preflight.touched_files.is_empty() {
+        return Ok(global_exclusive_claim());
+    }
+
+    let mut claims = BTreeSet::new();
+    for path in preflight.touched_files {
+        let Ok(path) = context.resolve_path(&path) else {
+            return Ok(global_exclusive_claim());
+        };
+        claims.insert(ResourceClaim::WritePath(path));
+    }
+    Ok(claims.into_iter().collect())
+}
+
+fn terminal_claim(input: &Value, key: &str, default: Option<&str>) -> Vec<ResourceClaim> {
+    input
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .or(default)
+        .map_or_else(global_exclusive_claim, |id| {
+            vec![ResourceClaim::Terminal(id.to_string())]
+        })
+}
+
+fn global_exclusive_claim() -> Vec<ResourceClaim> {
+    vec![ResourceClaim::GlobalExclusive]
 }
 
 #[cfg(test)]
@@ -355,5 +445,163 @@ mod tests {
             prepared.call.approval,
             prepared.auto_approve,
         ));
+    }
+
+    #[test]
+    fn hook_rewrite_reprepares_resource_claims_from_final_input() {
+        let root = tempdir().expect("tempdir");
+        let context = ToolContext::new(root.path().to_path_buf());
+        let original_path = context.resolve_path("before.rs").expect("original path");
+        let rewritten_path = context.resolve_path("after.rs").expect("rewritten path");
+        let mut registry = ToolRegistry::new(context);
+        registry.register(Arc::new(crate::tools::file::ReadFileTool));
+
+        let original = prepare_tool_call(
+            "read_file",
+            json!({"path": "before.rs"}),
+            Some(&registry),
+            false,
+        )
+        .expect("prepare original read");
+        let rewritten = reprepare_tool_call_after_hook(
+            "read_file",
+            json!({"path": "after.rs"}),
+            Some(&registry),
+            false,
+        )
+        .expect("reprepare rewritten read");
+
+        assert_eq!(
+            original.call.resources,
+            vec![ResourceClaim::ReadPath(original_path)]
+        );
+        assert_eq!(
+            rewritten.call.resources,
+            vec![ResourceClaim::ReadPath(rewritten_path)]
+        );
+    }
+
+    #[test]
+    fn registered_file_claims_are_canonical_and_input_specific() {
+        let root = tempdir().expect("tempdir");
+        let context = ToolContext::new(root.path().to_path_buf());
+        let exact = context.resolve_path("src/lib.rs").expect("exact path");
+        let tree = context.resolve_path("src").expect("tree path");
+
+        assert_eq!(
+            registered_resource_claims("read_file", &json!({"path": "src/lib.rs"}), &context,)
+                .expect("read claim"),
+            vec![ResourceClaim::ReadPath(exact.clone())]
+        );
+        assert_eq!(
+            registered_resource_claims("edit_file", &json!({"path": "src/lib.rs"}), &context,)
+                .expect("write claim"),
+            vec![ResourceClaim::WritePath(exact)]
+        );
+        assert_eq!(
+            registered_resource_claims("grep_files", &json!({"path": "src"}), &context)
+                .expect("tree claim"),
+            vec![ResourceClaim::ReadTree(tree)]
+        );
+        assert_eq!(
+            registered_resource_claims("read_file", &json!({"path": "../../outside"}), &context,)
+                .expect("path escape must fall back conservatively"),
+            vec![ResourceClaim::GlobalExclusive]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_aliases_resolve_to_the_same_file_claim() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempdir().expect("tempdir");
+        let real_dir = root.path().join("real");
+        std::fs::create_dir(&real_dir).expect("create real directory");
+        std::fs::write(real_dir.join("lib.rs"), "fn main() {}\n").expect("write real file");
+        symlink("real", root.path().join("alias")).expect("create directory symlink");
+        let context = ToolContext::new(root.path().to_path_buf());
+        let canonical_real = real_dir
+            .join("lib.rs")
+            .canonicalize()
+            .expect("canonical file");
+
+        let read_alias =
+            registered_resource_claims("read_file", &json!({"path": "alias/lib.rs"}), &context)
+                .expect("alias claim");
+        let write_real =
+            registered_resource_claims("write_file", &json!({"path": "real/lib.rs"}), &context)
+                .expect("real claim");
+
+        assert_eq!(read_alias, vec![ResourceClaim::ReadPath(canonical_real)]);
+        assert!(read_alias[0].conflicts_with(&write_real[0]));
+    }
+
+    #[test]
+    fn apply_patch_claims_every_resolved_target_or_falls_back_global() {
+        let root = tempdir().expect("tempdir");
+        let context = ToolContext::new(root.path().to_path_buf());
+        let a = context.resolve_path("a.rs").expect("a path");
+        let b = context.resolve_path("b.rs").expect("b path");
+
+        let claims = registered_resource_claims(
+            "apply_patch",
+            &json!({
+                "replace": [
+                    {"path": "b.rs", "content": "b"},
+                    {"path": "a.rs", "content": "a"}
+                ]
+            }),
+            &context,
+        )
+        .expect("patch claims");
+        assert_eq!(
+            claims,
+            vec![ResourceClaim::WritePath(a), ResourceClaim::WritePath(b)]
+        );
+
+        assert_eq!(
+            registered_resource_claims(
+                "apply_patch",
+                &json!({"patch": "not a unified diff"}),
+                &context,
+            )
+            .expect("fallback claim"),
+            vec![ResourceClaim::GlobalExclusive]
+        );
+        assert_eq!(
+            registered_resource_claims(
+                "apply_patch",
+                &json!({"replace": [{"path": "../../outside", "content": "nope"}]}),
+                &context,
+            )
+            .expect("escaped target fallback"),
+            vec![ResourceClaim::GlobalExclusive]
+        );
+    }
+
+    #[test]
+    fn terminal_and_unknown_tools_keep_conservative_claims() {
+        let root = tempdir().expect("tempdir");
+        let context = ToolContext::new(root.path().to_path_buf());
+
+        assert_eq!(
+            registered_resource_claims("terminal/run", &json!({}), &context)
+                .expect("default terminal"),
+            vec![ResourceClaim::Terminal("term-1".to_string())]
+        );
+        assert_eq!(
+            registered_resource_claims(
+                "exec_shell_interact",
+                &json!({"task_id": "task-7"}),
+                &context,
+            )
+            .expect("task terminal"),
+            vec![ResourceClaim::Terminal("task-7".to_string())]
+        );
+        assert_eq!(
+            registered_resource_claims("plugin_tool", &json!({}), &context).expect("unknown tool"),
+            vec![ResourceClaim::GlobalExclusive]
+        );
     }
 }

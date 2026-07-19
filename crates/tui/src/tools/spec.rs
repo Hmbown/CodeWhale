@@ -29,6 +29,7 @@ use crate::worker_profile::ShellPolicy;
 pub use codewhale_tools::{
     ApprovalRequirement, PreparedToolCall, ResourceClaim, ToolCapability, ToolError, ToolResult,
     optional_bool, optional_str, optional_u64, required_str, required_u64,
+    schedule_non_conflicting,
 };
 
 #[async_trait]
