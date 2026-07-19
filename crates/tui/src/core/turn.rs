@@ -13,7 +13,7 @@
 //! `/restore N` and the `revert_turn` tool both consume these
 //! snapshots.
 
-use crate::models::Usage;
+use crate::models::{Message, Usage};
 use crate::snapshot::SnapshotRepo;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -43,6 +43,11 @@ pub struct TurnContext {
 
     /// Usage for this turn
     pub usage: Usage,
+
+    /// Exact initial user message carrying the mutable SlopLedger gate, when
+    /// one was attached. Compaction uses this turn-scoped identity as an
+    /// authoritative pin without retaining matching gates from older turns.
+    pub(crate) active_slop_gate_message: Option<Message>,
 }
 
 impl TurnContext {
@@ -60,6 +65,7 @@ impl TurnContext {
                 output_tokens: 0,
                 ..Usage::default()
             },
+            active_slop_gate_message: None,
         }
     }
 

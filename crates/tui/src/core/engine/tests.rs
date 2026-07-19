@@ -7406,6 +7406,189 @@ fn refresh_system_prompt_is_noop_when_unchanged() {
 }
 
 #[test]
+fn slop_gate_does_not_change_the_stable_system_prompt() {
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let (mut engine, _handle) = Engine::new(config, &Config::default());
+    let marker = "SLOP_GATE_SYSTEM_FINGERPRINT_REGRESSION";
+    engine.slop_ledger_gate_cache = Some((
+        Some(std::time::SystemTime::UNIX_EPOCH),
+        Some(marker.to_string()),
+    ));
+
+    engine.refresh_system_prompt();
+
+    let prompt = match engine.session.system_prompt.as_ref() {
+        Some(SystemPrompt::Text(text)) => text.clone(),
+        Some(SystemPrompt::Blocks(blocks)) => blocks
+            .iter()
+            .map(|block| block.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        None => panic!("expected system prompt"),
+    };
+    assert!(!prompt.contains(marker));
+    assert_eq!(
+        engine
+            .slop_ledger_gate_cache
+            .as_ref()
+            .and_then(|(_, block)| block.as_deref()),
+        Some(marker),
+        "system prompt refresh must not consult or rewrite the user-turn gate cache"
+    );
+}
+
+#[test]
+fn slop_gate_is_an_initial_external_user_turn_tail_block() {
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let (mut engine, _handle) = Engine::new(config, &Config::default());
+    let marker = "## debt gate test marker";
+
+    let message = engine.user_text_message_with_turn_metadata("finish the task".to_string());
+    let message = Engine::attach_slop_ledger_gate(message, Some(marker.to_string()));
+
+    assert_eq!(message.content.len(), 3);
+    assert!(matches!(
+        message.content.first(),
+        Some(ContentBlock::Text { text, .. }) if text == "finish the task"
+    ));
+    assert!(matches!(
+        message.content.get(1),
+        Some(ContentBlock::Text { text, .. }) if text == marker
+    ));
+    assert!(matches!(
+        message.content.last(),
+        Some(ContentBlock::Text { text, .. }) if text.starts_with("<turn_meta>\n")
+    ));
+
+    let runtime = engine.runtime_text_message_with_turn_metadata(
+        "runtime continuation".to_string(),
+        UserInputProvenance::Runtime,
+    );
+    engine.slop_ledger_gate_cache = Some((
+        Some(std::time::SystemTime::UNIX_EPOCH),
+        Some(marker.to_string()),
+    ));
+    let runtime =
+        engine.with_slop_ledger_gate_for_initial_user_turn(runtime, UserInputProvenance::Runtime);
+    assert_eq!(runtime.content.len(), 2);
+    assert!(
+        !runtime
+            .content
+            .iter()
+            .any(|block| matches!(block, ContentBlock::Text { text, .. } if text == marker))
+    );
+
+    // `turn_loop` uses this plain constructor for mid-turn steers. The gate
+    // from the initial message is already in that turn's transcript, so a
+    // steer must not duplicate the mutable block.
+    let steer = engine.user_text_message_with_turn_metadata("mid-turn steer".to_string());
+    assert!(
+        !steer
+            .content
+            .iter()
+            .any(|block| matches!(block, ContentBlock::Text { text, .. } if text == marker))
+    );
+}
+
+#[tokio::test]
+async fn slop_gate_survives_mid_turn_compaction_without_reinjection() {
+    use crate::llm_client::mock::{MockLlmClient, canned};
+
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let (mut engine, _handle) = Engine::new(config, &Config::default());
+    let marker = "## active turn debt gate";
+
+    let message = Message {
+        role: "user".to_string(),
+        content: vec![
+            ContentBlock::Text {
+                text: "finish this long task".to_string(),
+                cache_control: None,
+            },
+            ContentBlock::Text {
+                text: "<turn_meta>\nInput provenance: external_user\n</turn_meta>".to_string(),
+                cache_control: None,
+            },
+        ],
+    };
+    let active_gate_message = Engine::attach_slop_ledger_gate(message, Some(marker.to_string()));
+    engine.session.add_message(active_gate_message.clone());
+
+    // Move the initial message outside the always-retained tail. A newer user
+    // message also prevents the generic chat-template fallback from pinning it
+    // accidentally, so this test exercises the active-turn pin specifically.
+    for index in 0..12 {
+        engine.session.add_message(Message {
+            role: if index == 10 { "user" } else { "assistant" }.to_string(),
+            content: vec![ContentBlock::Text {
+                text: format!("history {index} {}", "x".repeat(1_024)),
+                cache_control: None,
+            }],
+        });
+    }
+
+    let unpinned_plan = crate::compaction::plan_compaction(
+        &engine.session.messages,
+        Some(&engine.session.workspace),
+        4,
+        None,
+        None,
+    );
+    assert!(
+        unpinned_plan.summarize_indices.contains(&0),
+        "fixture must prove the gate would otherwise be summarized away: {unpinned_plan:?}"
+    );
+
+    let pins = engine.compaction_pins_for_active_turn(Some(&active_gate_message));
+    assert!(pins.contains(&0));
+
+    let compaction = CompactionConfig {
+        enabled: true,
+        token_threshold: 1,
+        ..CompactionConfig::default()
+    };
+    let mock = MockLlmClient::new(vec![canned::simple_text_turn("bounded history summary")]);
+    assert!(should_compact(
+        &engine.session.messages,
+        &compaction,
+        Some(&engine.session.workspace),
+        Some(&pins),
+        None,
+    ));
+
+    let result = compact_messages_safe(
+        &mock,
+        &engine.session.messages,
+        &compaction,
+        Some(&engine.session.workspace),
+        Some(&pins),
+        None,
+    )
+    .await
+    .expect("mid-turn compaction");
+
+    assert!(result.messages.contains(&active_gate_message));
+    assert!(result.messages.iter().any(|message| {
+        message
+            .content
+            .iter()
+            .any(|block| matches!(block, ContentBlock::Text { text, .. } if text == marker))
+    }));
+}
+
+#[test]
 fn engine_prompt_respects_hidden_thinking_config() {
     let tmp = tempdir().expect("tempdir");
     let config = EngineConfig {

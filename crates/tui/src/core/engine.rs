@@ -691,8 +691,8 @@ pub struct Engine {
     /// and forwarded as a synthetic user message before the next API call.
     pending_lsp_blocks: Vec<crate::lsp::DiagnosticBlock>,
     /// Cached SlopLedger gate block keyed by the ledger file's modified time.
-    /// This keeps prompt refreshes cheap while still noticing append/update
-    /// writes from slop ledger tools during the same session.
+    /// This keeps user-turn tail assembly cheap while still noticing
+    /// append/update writes from slop ledger tools during the same session.
     slop_ledger_gate_cache: Option<(Option<SystemTime>, Option<String>)>,
     /// Current operating mode. Updated on `ChangeMode` and `SendMessage`.
     current_mode: AppMode,
@@ -2414,6 +2414,40 @@ impl Engine {
         )
     }
 
+    /// Snapshot the mutable completion gate once for a new top-level user
+    /// turn. Mid-turn steers stay inside the same `handle_deepseek_turn` and
+    /// reuse this already-present block; reinjecting it on every steer would
+    /// duplicate debt text and erase the token-economy benefit of this seam.
+    fn with_slop_ledger_gate_for_initial_user_turn(
+        &mut self,
+        message: Message,
+        provenance: UserInputProvenance,
+    ) -> Message {
+        if provenance != UserInputProvenance::ExternalUser {
+            return message;
+        }
+        Self::attach_slop_ledger_gate(message, self.slop_ledger_gate_block())
+    }
+
+    fn attach_slop_ledger_gate(mut message: Message, gate_block: Option<String>) -> Message {
+        let Some(gate_block) = gate_block else {
+            return message;
+        };
+
+        // Preserve the stable user-text prefix and keep `<turn_meta>` last.
+        // The debt gate changes with local ledger state, so placing it here
+        // avoids invalidating the fingerprinted system prompt for every turn.
+        let insert_at = message.content.len().saturating_sub(1);
+        message.content.insert(
+            insert_at,
+            ContentBlock::Text {
+                text: gate_block,
+                cache_control: None,
+            },
+        );
+        message
+    }
+
     fn user_text_message_with_turn_metadata_for_route_and_provenance(
         &self,
         text: String,
@@ -2787,6 +2821,10 @@ impl Engine {
             reasoning_effort_auto,
             provenance,
         );
+        let base_content_blocks = user_msg.content.len();
+        let user_msg = self.with_slop_ledger_gate_for_initial_user_turn(user_msg, provenance);
+        turn.active_slop_gate_message =
+            (user_msg.content.len() > base_content_blocks).then(|| user_msg.clone());
         self.session.add_message(user_msg);
 
         let previous_goal_objective = self.config.goal_objective.clone();
@@ -3377,10 +3415,39 @@ impl Engine {
         removed
     }
 
+    /// Merge working-set pins with the mutable completion gate carried by the
+    /// current top-level user turn. The exact message identity matters: an
+    /// unchanged ledger can produce identical gate text on older turns, and
+    /// pinning every historical copy would defeat compaction.
+    fn compaction_pins_for_active_turn(
+        &self,
+        active_slop_gate_message: Option<&Message>,
+    ) -> Vec<usize> {
+        let mut pins = self
+            .session
+            .working_set
+            .pinned_message_indices(&self.session.messages, &self.session.workspace);
+
+        if let Some(active_message) = active_slop_gate_message
+            && let Some(index) = self
+                .session
+                .messages
+                .iter()
+                .rposition(|message| message == active_message)
+        {
+            pins.push(index);
+        }
+
+        pins.sort_unstable();
+        pins.dedup();
+        pins
+    }
+
     async fn recover_context_overflow(
         &mut self,
         client: &dyn crate::core::model_client::ModelClient,
         reason: &str,
+        active_slop_gate_message: Option<&Message>,
     ) -> bool {
         let Some(target_budget) = context_input_budget_for_route(
             self.api_provider,
@@ -3414,10 +3481,7 @@ impl Engine {
         // Previously this passed None/None, so a compaction routed here (which,
         // on large windows, is the path that actually fires) could summarize
         // away pinned errors, patches, and the files the user is editing.
-        let compaction_pins = self
-            .session
-            .working_set
-            .pinned_message_indices(&self.session.messages, &self.session.workspace);
+        let compaction_pins = self.compaction_pins_for_active_turn(active_slop_gate_message);
         let compaction_paths = self.session.working_set.top_paths(24);
 
         match compact_messages_safe(
@@ -3890,29 +3954,8 @@ impl Engine {
                 plugin_registry: Some(self.plugin_registry.as_ref()),
             },
         );
-        let mut stable_prompt =
+        let stable_prompt =
             merge_system_prompts(Some(&base), self.session.compaction_summary_prompt.clone());
-
-        // SlopLedger completion-gate: inject unresolved slop entries into the
-        // system prompt so the agent can autonomously review them before
-        // claiming the task is done (#2127).
-        let gate_block = self.slop_ledger_gate_block();
-        if let Some(ref block) = gate_block {
-            match &mut stable_prompt {
-                Some(SystemPrompt::Text(prompt_text)) => {
-                    prompt_text.push_str("\n\n");
-                    prompt_text.push_str(block);
-                }
-                Some(SystemPrompt::Blocks(blocks)) => {
-                    blocks.push(crate::models::SystemBlock {
-                        block_type: "text".to_string(),
-                        text: block.clone(),
-                        cache_control: None,
-                    });
-                }
-                None => {}
-            }
-        }
 
         let stable_hash = system_prompt_hash(stable_prompt.as_ref());
         if self.session.system_prompt_override {
