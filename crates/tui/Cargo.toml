@@ -102,6 +102,7 @@ vt100 = "0.16"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+portable-pty = "0.9"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
@@ -110,7 +111,6 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Secur
 arboard = "3.4"
 
 [target.'cfg(not(target_env = "ohos"))'.dependencies]
-portable-pty = "0.9"
 starlark = "0.13.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
