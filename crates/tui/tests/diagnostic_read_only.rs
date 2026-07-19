@@ -3,6 +3,9 @@
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Output};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use codewhale_secrets::{FileKeyringStore, KeyringStore};
 use tempfile::TempDir;
@@ -461,36 +464,85 @@ fn diagnostic_command(workspace: &std::path::Path, home: &std::path::Path) -> Co
 }
 
 struct CompletionServer {
-    server: MockServer,
-    runtime: tokio::runtime::Runtime,
+    base_url: String,
+    commands: tokio::sync::mpsc::UnboundedSender<CompletionServerCommand>,
+    owner: Option<thread::JoinHandle<()>>,
+}
+
+enum CompletionServerCommand {
+    ReceivedRequests(mpsc::SyncSender<Vec<wiremock::Request>>),
+    Shutdown,
 }
 
 impl CompletionServer {
     fn start() -> Self {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .expect("local probe runtime");
-        let server = runtime.block_on(MockServer::start());
-        let body = "{\"id\":\"doctor\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"deepseek-chat\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}";
-        runtime.block_on(
-            Mock::given(method("POST"))
-                .and(path("/v1/chat/completions"))
-                .respond_with(ResponseTemplate::new(200).set_body_raw(body, "application/json"))
-                .mount(&server),
-        );
-        Self { server, runtime }
+        let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
+        let (commands, mut command_receiver) = tokio::sync::mpsc::unbounded_channel();
+        let owner = thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .expect("local probe runtime");
+            runtime.block_on(async move {
+                let server = MockServer::start().await;
+                let body = "{\"id\":\"doctor\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"deepseek-chat\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}";
+                Mock::given(method("POST"))
+                    .and(path("/v1/chat/completions"))
+                    .respond_with(
+                        ResponseTemplate::new(200).set_body_raw(body, "application/json"),
+                    )
+                    .mount(&server)
+                    .await;
+                ready_sender
+                    .send(format!("{}/v1", server.uri()))
+                    .expect("publish local probe address");
+
+                while let Some(command) = command_receiver.recv().await {
+                    match command {
+                        CompletionServerCommand::ReceivedRequests(sender) => {
+                            let requests = server
+                                .received_requests()
+                                .await
+                                .expect("request recording enabled");
+                            let _ = sender.send(requests);
+                        }
+                        CompletionServerCommand::Shutdown => break,
+                    }
+                }
+            });
+        });
+        let base_url = ready_receiver
+            .recv_timeout(Duration::from_secs(10))
+            .expect("local probe server must start");
+        Self {
+            base_url,
+            commands,
+            owner: Some(owner),
+        }
     }
 
     fn base_url(&self) -> String {
-        format!("{}/v1", self.server.uri())
+        self.base_url.clone()
     }
 
     fn received_requests(&self) -> Vec<wiremock::Request> {
-        self.runtime
-            .block_on(self.server.received_requests())
-            .expect("request recording enabled")
+        let (sender, receiver) = mpsc::sync_channel(1);
+        self.commands
+            .send(CompletionServerCommand::ReceivedRequests(sender))
+            .expect("local probe server must remain available");
+        receiver
+            .recv_timeout(Duration::from_secs(10))
+            .expect("local probe request snapshot")
+    }
+}
+
+impl Drop for CompletionServer {
+    fn drop(&mut self) {
+        let _ = self.commands.send(CompletionServerCommand::Shutdown);
+        if let Some(owner) = self.owner.take() {
+            owner.join().expect("stop local probe server");
+        }
     }
 }
 
