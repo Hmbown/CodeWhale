@@ -412,10 +412,12 @@ web_search = true
     h.send(keys::key::enter())?;
     h.wait_for_text("Choose your language", BOOT_TIMEOUT)?;
     h.send(keys::key::enter())?;
-    h.wait_for_text("Trust Workspace", BOOT_TIMEOUT)?;
+    h.wait_for_text("Know this workspace", BOOT_TIMEOUT)?;
     h.wait_for_text("Press 1/Y to trust and continue", BOOT_TIMEOUT)?;
-    h.send(keys::key::enter())?;
-    h.wait_for_text("Press 1 or Y to trust this workspace", BOOT_TIMEOUT)?;
+    // Decline through the explicit trust hotkey. Enter's fail-closed behavior
+    // is covered by the deterministic onboarding unit tests; this PTY leg is
+    // the early-init/config compatibility sentinel and should not depend on a
+    // transient status-toast redraw before proving input reaches the process.
     h.send(keys::key::ch('2'))?;
     assert_eq!(h.wait_for_exit(KEY_TIMEOUT), Some(0));
     Ok(())
