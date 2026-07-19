@@ -2,6 +2,7 @@
 
 pub mod api_key;
 pub mod language;
+pub mod mental_models;
 pub mod trust_directory;
 pub mod welcome;
 
@@ -41,6 +42,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         OnboardingState::Provider => provider_lines(app),
         OnboardingState::ApiKey => api_key::lines(app),
         OnboardingState::TrustDirectory => trust_directory::lines(app),
+        OnboardingState::MentalModels => mental_models::lines(app),
         OnboardingState::Tips => tips_lines(app),
         OnboardingState::None => Vec::new(),
     };
@@ -74,13 +76,12 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn onboarding_step(app: &App) -> (usize, usize) {
-    let needs_trust = !app.trust_mode && needs_trust(&app.workspace);
-    // Welcome + Language + Tips are always shown.
-    let mut total = 3;
-    if app.onboarding_needs_api_key {
+    // Welcome + Language + Mental Models + Tips are always shown.
+    let mut total = 4;
+    if app.onboarding_had_api_key_step {
         total += 2;
     }
-    if needs_trust {
+    if app.onboarding_had_trust_step {
         total += 1;
     }
 
@@ -90,12 +91,13 @@ fn onboarding_step(app: &App) -> (usize, usize) {
         OnboardingState::Provider => 3,
         OnboardingState::ApiKey => 4,
         OnboardingState::TrustDirectory => {
-            if app.onboarding_needs_api_key {
+            if app.onboarding_had_api_key_step {
                 5
             } else {
                 3
             }
         }
+        OnboardingState::MentalModels => total - 1,
         OnboardingState::Tips => total,
         OnboardingState::None => total,
     };
@@ -273,7 +275,8 @@ pub fn advance_onboarding_from_welcome(app: &mut App) {
 }
 
 /// Language → next step. Routes to Provider/ApiKey when the session lacks a
-/// key, to TrustDirectory when the workspace is untrusted, otherwise to Tips.
+/// key, to TrustDirectory when the workspace is untrusted, otherwise to the
+/// mental-model primer.
 pub fn advance_onboarding_after_language(app: &mut App) {
     app.status_message = None;
     if app.onboarding_needs_api_key {
@@ -281,17 +284,30 @@ pub fn advance_onboarding_after_language(app: &mut App) {
     } else if !app.trust_mode && needs_trust(&app.workspace) {
         app.onboarding = OnboardingState::TrustDirectory;
     } else {
-        app.onboarding = OnboardingState::Tips;
+        app.onboarding = OnboardingState::MentalModels;
     }
 }
 
 pub fn advance_onboarding_after_api_key(app: &mut App) {
     app.status_message = None;
-    if !app.trust_mode && needs_trust(&app.workspace) {
+    if app.onboarding_missing_key_recovery {
+        app.onboarding = OnboardingState::Tips;
+    } else if !app.trust_mode && needs_trust(&app.workspace) {
         app.onboarding = OnboardingState::TrustDirectory;
     } else {
-        app.onboarding = OnboardingState::Tips;
+        app.onboarding = OnboardingState::MentalModels;
     }
+}
+
+pub fn back_from_mental_models(app: &mut App) {
+    app.status_message = None;
+    app.onboarding = if app.onboarding_had_trust_step {
+        OnboardingState::TrustDirectory
+    } else if app.onboarding_had_api_key_step {
+        OnboardingState::ApiKey
+    } else {
+        OnboardingState::Language
+    };
 }
 
 fn provider_lines(app: &App) -> Vec<ratatui::text::Line<'static>> {

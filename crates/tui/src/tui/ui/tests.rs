@@ -10006,6 +10006,8 @@ async fn onboarding_empty_key_activates_and_persists_keyless_local_provider() {
     app.onboarding = OnboardingState::ApiKey;
     app.onboarding_needs_api_key = true;
     app.onboarding_provider = ApiProvider::Ollama;
+    app.onboarding_missing_key_recovery = false;
+    app.onboarding_had_api_key_step = true;
     app.trust_mode = true;
     app.api_key_input.clear();
     let mut config = Config::default();
@@ -10015,7 +10017,7 @@ async fn onboarding_empty_key_activates_and_persists_keyless_local_provider() {
 
     assert_eq!(app.api_provider, ApiProvider::Ollama);
     assert_eq!(config.provider.as_deref(), Some("ollama"));
-    assert_eq!(app.onboarding, OnboardingState::Tips);
+    assert_eq!(app.onboarding, OnboardingState::MentalModels);
     assert!(!app.onboarding_needs_api_key);
     assert!(!app.api_key_env_only);
     assert!(!app.offline_mode);
@@ -10029,12 +10031,13 @@ fn onboarding_after_api_key_save_does_not_repeat_language_step() {
     let mut app = create_test_app();
     app.onboarding = OnboardingState::ApiKey;
     app.onboarding_needs_api_key = false;
+    app.onboarding_missing_key_recovery = false;
     app.trust_mode = true;
     app.status_message = Some("saved".to_string());
 
     crate::tui::onboarding::advance_onboarding_after_api_key(&mut app);
 
-    assert_eq!(app.onboarding, OnboardingState::Tips);
+    assert_eq!(app.onboarding, OnboardingState::MentalModels);
     assert_eq!(app.status_message, None);
 }
 
@@ -10045,11 +10048,45 @@ fn onboarding_after_api_key_save_routes_to_trust_when_needed() {
     app.workspace = tmpdir.path().to_path_buf();
     app.onboarding = OnboardingState::ApiKey;
     app.onboarding_needs_api_key = false;
+    app.onboarding_missing_key_recovery = false;
     app.trust_mode = false;
 
     crate::tui::onboarding::advance_onboarding_after_api_key(&mut app);
 
     assert_eq!(app.onboarding, OnboardingState::TrustDirectory);
+}
+
+#[test]
+fn missing_key_recovery_skips_first_run_mental_models() {
+    let mut app = create_test_app();
+    app.onboarding = OnboardingState::ApiKey;
+    app.onboarding_missing_key_recovery = true;
+    app.trust_mode = true;
+
+    crate::tui::onboarding::advance_onboarding_after_api_key(&mut app);
+
+    assert_eq!(app.onboarding, OnboardingState::Tips);
+}
+
+#[test]
+fn mental_models_backtracks_to_the_last_first_run_decision() {
+    let mut app = create_test_app();
+    app.onboarding = OnboardingState::MentalModels;
+    app.onboarding_had_api_key_step = false;
+    app.onboarding_had_trust_step = true;
+    crate::tui::onboarding::back_from_mental_models(&mut app);
+    assert_eq!(app.onboarding, OnboardingState::TrustDirectory);
+
+    app.onboarding = OnboardingState::MentalModels;
+    app.onboarding_had_trust_step = false;
+    app.onboarding_had_api_key_step = true;
+    crate::tui::onboarding::back_from_mental_models(&mut app);
+    assert_eq!(app.onboarding, OnboardingState::ApiKey);
+
+    app.onboarding = OnboardingState::MentalModels;
+    app.onboarding_had_api_key_step = false;
+    crate::tui::onboarding::back_from_mental_models(&mut app);
+    assert_eq!(app.onboarding, OnboardingState::Language);
 }
 
 #[test]
@@ -10069,21 +10106,40 @@ fn api_key_escape_returns_to_provider_step() {
 }
 
 #[test]
-fn trust_directory_completion_advances_to_tips() {
+fn trust_directory_completion_advances_to_mental_models() {
     let _guard = ConfigPathEnvGuard::new();
     let tmpdir = TempDir::new().expect("workspace tempdir");
     let mut app = create_test_app();
     app.workspace = tmpdir.path().to_path_buf();
     app.onboarding = OnboardingState::TrustDirectory;
     app.onboarding_workspace_trust_gate = false;
+    app.onboarding_missing_key_recovery = false;
+    app.onboarding_had_trust_step = true;
     app.trust_mode = false;
 
     complete_trust_directory_onboarding(&mut app, &Config::default())
         .expect("trust completion should succeed");
 
     assert!(app.trust_mode);
-    assert_eq!(app.onboarding, OnboardingState::Tips);
+    assert_eq!(app.onboarding, OnboardingState::MentalModels);
     assert!(app.runtime_services.hook_executor.is_some());
+}
+
+#[test]
+fn trust_completion_during_missing_key_recovery_advances_to_tips() {
+    let _guard = ConfigPathEnvGuard::new();
+    let tmpdir = TempDir::new().expect("workspace tempdir");
+    let mut app = create_test_app();
+    app.workspace = tmpdir.path().to_path_buf();
+    app.onboarding = OnboardingState::TrustDirectory;
+    app.onboarding_workspace_trust_gate = false;
+    app.onboarding_missing_key_recovery = true;
+    app.trust_mode = false;
+
+    complete_trust_directory_onboarding(&mut app, &Config::default())
+        .expect("trust completion should succeed");
+
+    assert_eq!(app.onboarding, OnboardingState::Tips);
 }
 
 #[test]

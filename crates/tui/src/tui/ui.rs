@@ -757,8 +757,10 @@ fn complete_trust_directory_onboarding(app: &mut App, config: &Config) -> Result
     if app.onboarding_workspace_trust_gate {
         app.onboarding_workspace_trust_gate = false;
         app.onboarding = OnboardingState::None;
-    } else {
+    } else if app.onboarding_missing_key_recovery {
         app.onboarding = OnboardingState::Tips;
+    } else {
+        app.onboarding = OnboardingState::MentalModels;
     }
     Ok(())
 }
@@ -4727,6 +4729,21 @@ async fn run_event_loop(
                         app.onboarding = OnboardingState::Welcome;
                         app.status_message = None;
                     }
+                    KeyCode::Esc if app.onboarding == OnboardingState::MentalModels => {
+                        onboarding::back_from_mental_models(app);
+                    }
+                    _ if app.onboarding == OnboardingState::MentalModels
+                        && is_permission_cycle_shortcut(&key) =>
+                    {
+                        cycle_permission_posture(app, config, &engine_handle).await;
+                    }
+                    KeyCode::Tab
+                        if app.onboarding == OnboardingState::MentalModels
+                            && key.modifiers.is_empty() =>
+                    {
+                        app.cycle_mode();
+                        sync_mode_update(app, &engine_handle).await;
+                    }
                     // Language picker hotkeys select + persist (#566).
                     //
                     // Note: this used to be a single match-guard with `&& let`,
@@ -4847,6 +4864,10 @@ async fn run_event_loop(
                                 "Press 1 or Y to trust this workspace, or 2 or N to exit."
                                     .to_string(),
                             );
+                        }
+                        OnboardingState::MentalModels => {
+                            app.status_message = None;
+                            app.onboarding = OnboardingState::Tips;
                         }
                         OnboardingState::Tips => {
                             app.finish_onboarding_without_feature_intro();
@@ -5154,23 +5175,7 @@ async fn run_event_loop(
             if is_permission_cycle_shortcut(&key)
                 && matches!(app.view_stack.top_kind(), None | Some(ModalKind::Config))
             {
-                let control = config.approval_policy_control(
-                    app.config_path.as_deref(),
-                    app.config_profile.as_deref(),
-                    &app.workspace,
-                );
-                let changed = if control == crate::config::ApprovalPolicyControl::RootConfig {
-                    app.cycle_root_approval_posture()
-                } else {
-                    app.cycle_approval_posture()
-                };
-                if changed {
-                    if control == crate::config::ApprovalPolicyControl::RootConfig {
-                        config.approval_policy = None;
-                    }
-                    sync_mode_update(app, &engine_handle).await;
-                    refresh_config_view_if_open(app, "permission_posture");
-                }
+                cycle_permission_posture(app, config, &engine_handle).await;
                 continue;
             }
 
@@ -8603,6 +8608,30 @@ fn is_permission_cycle_shortcut(key: &KeyEvent) -> bool {
     }
     matches!(key.code, KeyCode::BackTab)
         || (matches!(key.code, KeyCode::Tab) && key.modifiers.contains(KeyModifiers::SHIFT))
+}
+
+async fn cycle_permission_posture(
+    app: &mut App,
+    config: &mut Config,
+    engine_handle: &EngineHandle,
+) {
+    let control = config.approval_policy_control(
+        app.config_path.as_deref(),
+        app.config_profile.as_deref(),
+        &app.workspace,
+    );
+    let changed = if control == crate::config::ApprovalPolicyControl::RootConfig {
+        app.cycle_root_approval_posture()
+    } else {
+        app.cycle_approval_posture()
+    };
+    if changed {
+        if control == crate::config::ApprovalPolicyControl::RootConfig {
+            config.approval_policy = None;
+        }
+        sync_mode_update(app, engine_handle).await;
+        refresh_config_view_if_open(app, "permission_posture");
+    }
 }
 
 async fn apply_mode_update(app: &mut App, engine_handle: &EngineHandle, mode: AppMode) -> bool {

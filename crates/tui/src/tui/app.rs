@@ -77,6 +77,7 @@ pub enum OnboardingState {
     Provider,
     ApiKey,
     TrustDirectory,
+    MentalModels,
     Tips,
     None,
 }
@@ -2162,6 +2163,9 @@ pub struct App {
     /// provider is missing its key. Esc then exits to the offline composer
     /// instead of walking back through first-run steps.
     pub onboarding_missing_key_recovery: bool,
+    /// First-run route receipts used by the mental-model screen's Back action.
+    pub onboarding_had_api_key_step: bool,
+    pub onboarding_had_trust_step: bool,
     pub api_key_env_only: bool,
     pub api_key_input: String,
     pub api_key_cursor: usize,
@@ -3349,6 +3353,8 @@ impl App {
             onboarding_provider: provider,
             onboarding_workspace_trust_gate,
             onboarding_missing_key_recovery,
+            onboarding_had_api_key_step: !was_onboarded && needs_api_key,
+            onboarding_had_trust_step: !was_onboarded && needs_workspace_trust,
             api_key_env_only,
             api_key_input: String::new(),
             api_key_cursor: 0,

@@ -450,6 +450,7 @@
     "OnboardWelcomeStepLanguage": "選擇語言",
     "OnboardWelcomeStepApiKey": "連接 API 金鑰",
     "OnboardWelcomeStepTrust": "信任工作區",
+    "OnboardWelcomeStepMentalModels": "了解模式與權限",
     "OnboardWelcomeStepTips": "設定提示",
     "OnboardWelcomeDefaults": "內建預設規則已有效；可隨時用 /constitution 修改。",
     "OnboardWelcomeEnter": "按 Enter 繼續。",
