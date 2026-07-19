@@ -1434,7 +1434,8 @@ mod tests {
         let result = home_dashboard(&mut app);
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("codewhale Home Dashboard"));
+        assert!(msg.contains("Codewhale"));
+        assert!(!msg.contains("codewhale Home Dashboard"));
         assert!(msg.contains("Model:"));
         assert!(msg.contains("Mode:"));
         assert!(msg.contains("Workspace:"));

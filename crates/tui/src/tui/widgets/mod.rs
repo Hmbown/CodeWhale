@@ -5773,6 +5773,7 @@ mod tests {
 
         assert!(rendered.contains("codewhale · /tmp/codewhale-test-workspace · no git · mcp 2"));
         assert!(rendered.contains("Fleet setup  /fleet setup"));
+        assert!(rendered.contains("/help or Ctrl+K"));
         assert!(!rendered.contains("Model  /model"));
         assert!(!rendered.contains("Rules  /constitution"));
     }

@@ -480,6 +480,8 @@ pub enum MessageId {
     OnboardTipsLine2,
     OnboardTipsLine3,
     OnboardTipsLine4,
+    OnboardTipsDoctorPrefix,
+    OnboardTipsDoctorSuffix,
     OnboardTipsFooterEnter,
     OnboardTipsFooterAction,
     // Constitution-first setup wizard.
@@ -951,6 +953,7 @@ pub enum MessageId {
     EmptyStateMcpLabel,
     EmptyStateFleetLabel,
     EmptyStateFleetSetupLabel,
+    EmptyStateHelpHint,
     // Session picker surface.
     SessionsSurfaceTitle,
     SessionsPaneTitle,
@@ -1459,6 +1462,8 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::OnboardTipsLine2,
     MessageId::OnboardTipsLine3,
     MessageId::OnboardTipsLine4,
+    MessageId::OnboardTipsDoctorPrefix,
+    MessageId::OnboardTipsDoctorSuffix,
     MessageId::OnboardTipsFooterEnter,
     MessageId::OnboardTipsFooterAction,
     MessageId::SetupWizardTitle,
@@ -1897,6 +1902,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::EmptyStateMcpLabel,
     MessageId::EmptyStateFleetLabel,
     MessageId::EmptyStateFleetSetupLabel,
+    MessageId::EmptyStateHelpHint,
     MessageId::SessionsSurfaceTitle,
     MessageId::SessionsPaneTitle,
     MessageId::SessionsHistoryPaneTitle,

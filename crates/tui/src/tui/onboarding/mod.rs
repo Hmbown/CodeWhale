@@ -121,6 +121,16 @@ pub fn tips_lines(app: &App) -> Vec<ratatui::text::Line<'static>> {
         Line::from(Span::raw(app.tr(MessageId::OnboardTipsLine3).to_string())),
         Line::from(Span::raw(app.tr(MessageId::OnboardTipsLine4).to_string())),
         Line::from(vec![
+            Span::raw(app.tr(MessageId::OnboardTipsDoctorPrefix).to_string()),
+            Span::styled(
+                "codewhale doctor",
+                Style::default()
+                    .fg(palette::TEXT_PRIMARY)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(app.tr(MessageId::OnboardTipsDoctorSuffix).to_string()),
+        ]),
+        Line::from(vec![
             Span::styled(
                 app.tr(MessageId::OnboardTipsFooterEnter).to_string(),
                 Style::default()
@@ -390,6 +400,7 @@ mod tests {
         assert!(body.contains("/constitution"));
         assert!(body.contains("/provider"));
         assert!(body.contains("/model"));
+        assert!(body.contains("codewhale doctor"));
         assert!(body.contains("open setup if it needs attention"));
         assert!(!body.contains("open the workspace"));
     }

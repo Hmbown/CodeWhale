@@ -987,6 +987,17 @@ pub fn empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
             format!("{inset}{fleet}"),
             Style::default().fg(app.ui_theme.text_hint),
         )));
+        if area.height >= 7 {
+            let help = format!(
+                "/help or Ctrl+K {}",
+                tr(app.ui_locale, MessageId::EmptyStateHelpHint)
+            );
+            let inset = " ".repeat(width.saturating_sub(help.width()) / 2);
+            lines.push(Line::from(Span::styled(
+                format!("{inset}{help}"),
+                Style::default().fg(app.ui_theme.text_hint),
+            )));
+        }
     }
     lines
 }
