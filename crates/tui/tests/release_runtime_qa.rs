@@ -542,17 +542,17 @@ async fn release_six_worker_fanout_keeps_typing_render_and_esc_cancel_live() -> 
     tui.wait_for(
         |frame| {
             let text = frame.text();
-            text.to_ascii_lowercase().contains("workers 6")
-                && (text.matches("Agent ").count() >= 6
-                    || text.matches("delegate scout [running]").count() >= 6)
+            text.matches("Agent ").count() >= 6
+                || text.matches("delegate scout [running]").count() >= 6
         },
         Duration::from_secs(5),
     )?;
 
     let fanout_frame = tui.debug_dump();
     assert!(
-        fanout_frame.to_ascii_lowercase().contains("workers 6"),
-        "all six workers were not visible in the owned Work surface:\n{fanout_frame}"
+        fanout_frame.matches("Agent ").count() >= 6
+            || fanout_frame.matches("delegate scout [running]").count() >= 6,
+        "all six workers were not visible in the live runtime projection:\n{fanout_frame}"
     );
 
     // The provider is deliberately holding every child open. Prove keyboard

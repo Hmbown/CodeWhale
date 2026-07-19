@@ -3537,7 +3537,7 @@ fn agent_stop_action_for_click(action: &SidebarRowAction) -> Option<SidebarRowAc
         | SidebarRowAction::HotbarSlot(_)
         | SidebarRowAction::OpenAgentDetail { .. }
         | SidebarRowAction::CancelAgent { .. }
-        | SidebarRowAction::InspectText { .. } => None,
+        | SidebarRowAction::InspectWork { .. } => None,
     }
 }
 

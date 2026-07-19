@@ -3510,6 +3510,7 @@ impl Engine {
             authority.auto_approve,
         )
         .with_state_namespace(self.session.id.clone())
+        .with_review_plan_changes(matches!(mode, AppMode::Plan))
         .with_features(self.config.features.clone())
         .with_shell_manager(self.shell_manager.clone())
         .with_file_read_tracker(self.file_read_tracker.clone())

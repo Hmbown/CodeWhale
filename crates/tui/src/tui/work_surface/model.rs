@@ -1,8 +1,13 @@
+use std::collections::HashSet;
+use std::fmt::Write as _;
+
 use ratatui::layout::Rect;
 
-use crate::localization::MessageId;
-use crate::tools::todo::{TodoItem, TodoStatus};
 use crate::tui::app::{App, SidebarRowAction};
+use crate::work_graph::{
+    AcceptanceRequirement, EdgeKind, EvidenceKind, EvidenceKindTag, NodeKind, NodeState,
+    OperationBinding, OwnerState, Provenance, WorkGraphSnapshot, WorkNode,
+};
 
 /// Persisted Ocean work-surface placement. Bottom is deliberately absent: the
 /// composer and phase footer own the shell's lower edge.
@@ -44,7 +49,6 @@ pub(super) enum WorkTone {
     Attention,
     Success,
     Muted,
-    Worker,
 }
 
 #[derive(Debug, Clone)]
@@ -56,18 +60,37 @@ pub(super) struct WorkRow {
     pub tone: WorkTone,
     pub selectable: bool,
     pub primary_action: Option<SidebarRowAction>,
-    pub stop_action: Option<SidebarRowAction>,
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct WorkHitbox {
     pub id: WorkRowId,
     pub row_y: u16,
-    /// Render-time Open control hitbox (TUI-DOG-005).
-    pub open_zone_start_col: Option<u16>,
-    pub open_zone_end_col: Option<u16>,
-    pub stop_zone_start_col: Option<u16>,
-    pub stop_zone_end_col: Option<u16>,
+}
+
+#[derive(Debug, Clone)]
+enum WorkSourceState {
+    Empty,
+    Error(String),
+    Disconnected,
+}
+
+impl WorkSourceState {
+    const fn label(&self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::Error(_) => "error",
+            Self::Disconnected => "disconnected",
+        }
+    }
+
+    fn detail(&self) -> &str {
+        match self {
+            Self::Empty => "No graph-owned work in the active session",
+            Self::Error(error) => error,
+            Self::Disconnected => "Work Graph runtime is not attached",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -85,12 +108,8 @@ pub struct WorkSurfaceState {
     pub visible_rows: usize,
     pub total_rows: usize,
     pub(super) hovered: Option<WorkRowId>,
-    /// Row-local Stop arm (TUI-DOG-006).
-    pub(super) stop_arm: Option<super::interaction::StopArm>,
-    /// Transient marker after confirm until the worker leaves the live set.
-    pub(super) stopping: Option<WorkRowId>,
     pub(super) hitboxes: Vec<WorkHitbox>,
-    pub(super) cached_todos: Vec<TodoItem>,
+    pub(super) cached_graph: Option<WorkGraphSnapshot>,
     pub(super) latest_rows: Vec<WorkRow>,
 }
 
@@ -114,10 +133,8 @@ impl WorkSurfaceState {
             visible_rows: 0,
             total_rows: 0,
             hovered: None,
-            stop_arm: None,
-            stopping: None,
             hitboxes: Vec::new(),
-            cached_todos: Vec::new(),
+            cached_graph: None,
             latest_rows: Vec::new(),
         }
     }
@@ -157,49 +174,41 @@ impl WorkSurfaceState {
 }
 
 pub(super) fn project(app: &mut App) -> Vec<WorkRow> {
-    if let Ok(todos) = app.todos.try_lock() {
-        app.work_surface.cached_todos = todos.snapshot().items;
-    }
+    let active_session = app.current_session_id.is_some();
+    let capture = app.runtime_services.work.as_ref().map(|work| {
+        work.try_capture(app.current_session_id.as_deref())
+            .map(|snapshot| snapshot.map(|snapshot| snapshot.graph))
+    });
 
-    let live = super::live_projection::LiveWorkProjection::from_app(app);
-    let attention_hold = live
-        .rows
-        .iter()
-        .any(|row| row.state == super::live_projection::LiveWorkState::Waiting);
-    let todos = app.work_surface.cached_todos.clone();
+    let (graph, source_state) = match capture {
+        Some(Ok(Some(graph))) => {
+            app.work_surface.cached_graph = Some(graph.clone());
+            (Some(graph), None)
+        }
+        Some(Ok(None)) => {
+            app.work_surface.cached_graph = None;
+            (None, active_session.then_some(WorkSourceState::Empty))
+        }
+        Some(Err(error)) => (
+            app.work_surface.cached_graph.clone(),
+            active_session.then_some(WorkSourceState::Error(error)),
+        ),
+        None => (
+            app.work_surface.cached_graph.clone(),
+            active_session.then_some(WorkSourceState::Disconnected),
+        ),
+    };
 
-    let mut rows = Vec::new();
-    if live.counts.active > 0 || !live.rows.is_empty() {
-        rows.push(section(
-            "active",
-            &format!(
-                "Active {} · Tasks {} · Runs {} · Workers {}",
-                live.counts.active, live.counts.tasks, live.counts.runs, live.counts.workers
-            ),
-            live.counts.active,
-        ));
-        rows.extend(live.rows.iter().map(|row| live_row(row, attention_hold)));
-    }
-    if !todos.is_empty() {
-        let completed = todos
-            .iter()
-            .filter(|item| item.status == TodoStatus::Completed)
-            .count();
-        let label = app.tr(MessageId::SidebarTodoLabel).into_owned();
-        rows.push(section(
-            "todo",
-            &format!("{label} {completed}/{}", todos.len()),
-            todos.len(),
-        ));
-        rows.extend(todos.into_iter().map(todo_row));
-    }
+    let rows = match graph {
+        Some(graph) => graph_rows(&graph, source_state.as_ref()),
+        None => source_state.map_or_else(Vec::new, |state| {
+            vec![heading(
+                &format!("Work · {}", state.label()),
+                state.detail(),
+            )]
+        }),
+    };
     app.work_surface.latest_rows = rows.clone();
-    let stoppable: Vec<_> = rows
-        .iter()
-        .filter(|row| row.stop_action.is_some())
-        .map(|row| row.id.clone())
-        .collect();
-    super::interaction::clear_stale_stopping(app, &stoppable);
     if let Some(opened) = app.work_surface.opened.as_ref()
         && !rows.iter().any(|row| &row.id == opened)
     {
@@ -208,116 +217,462 @@ pub(super) fn project(app: &mut App) -> Vec<WorkRow> {
     rows
 }
 
-fn section(id: &str, label: &str, count: usize) -> WorkRow {
+fn graph_rows(
+    snapshot: &WorkGraphSnapshot,
+    source_state: Option<&WorkSourceState>,
+) -> Vec<WorkRow> {
+    let visible = snapshot
+        .nodes
+        .iter()
+        .filter(|node| {
+            matches!(
+                node.kind,
+                NodeKind::PlanStep | NodeKind::Operation | NodeKind::Blocker
+            )
+        })
+        .collect::<Vec<_>>();
+    let running = visible
+        .iter()
+        .filter(|node| node.state == NodeState::Active)
+        .count();
+    let waiting = visible
+        .iter()
+        .filter(|node| node.state == NodeState::Waiting)
+        .count();
+    let ready = visible
+        .iter()
+        .filter(|node| node.state == NodeState::Ready)
+        .count();
+    let blocked = visible
+        .iter()
+        .filter(|node| node_is_attention(node))
+        .count();
+    let status = source_state
+        .map(|state| format!(" · {} · cached r{}", state.label(), snapshot.revision))
+        .unwrap_or_default();
+    let detail = source_state.map_or_else(
+        || format!("graph revision {}", snapshot.revision),
+        |state| format!("graph revision {} · {}", snapshot.revision, state.detail()),
+    );
+    let waiting = if waiting > 0 {
+        format!(" · {waiting} waiting")
+    } else {
+        String::new()
+    };
+    let mut rows = vec![heading(
+        &format!("Work · {running} running{waiting} · {ready} ready · {blocked} blocked{status}"),
+        &detail,
+    )];
+    rows.extend(
+        visible
+            .into_iter()
+            .map(|node| graph_node_row(snapshot, node)),
+    );
+    rows
+}
+
+fn heading(label: &str, detail: &str) -> WorkRow {
     WorkRow {
-        id: WorkRowId(format!("section:{id}")),
+        id: WorkRowId("section:work".to_string()),
         mark: "▾",
-        label: if label.chars().any(char::is_numeric) {
-            label.to_string()
-        } else {
-            format!("{label} {count}")
-        },
-        detail: label.to_string(),
+        label: label.to_string(),
+        detail: detail.to_string(),
         tone: WorkTone::Heading,
         selectable: false,
         primary_action: None,
-        stop_action: None,
     }
 }
 
-fn live_row(row: &super::live_projection::LiveWorkRow, attention_hold: bool) -> WorkRow {
-    let namespace = if row.kind == super::live_projection::LiveWorkKind::Run {
-        "jobs"
-    } else {
-        "task"
+fn graph_node_row(snapshot: &WorkGraphSnapshot, node: &WorkNode) -> WorkRow {
+    let (mark, tone) = match node.state {
+        NodeState::Ready => ("○", WorkTone::Muted),
+        NodeState::Active => ("▸", WorkTone::Live),
+        NodeState::Waiting => ("◆", WorkTone::Attention),
+        NodeState::Blocked => ("!", WorkTone::Attention),
+        NodeState::Completed if node.acceptance.is_empty() => ("✓", WorkTone::Success),
+        NodeState::Completed => ("!", WorkTone::Attention),
+        NodeState::Verified => ("✓", WorkTone::Success),
+        NodeState::Stale => ("?", WorkTone::Attention),
+        NodeState::Superseded | NodeState::Cancelled => ("−", WorkTone::Muted),
+        NodeState::Failed => ("✕", WorkTone::Attention),
     };
-    let source_id = match row.kind {
-        super::live_projection::LiveWorkKind::Worker => row
-            .identity
-            .strip_prefix("worker:")
-            .unwrap_or(&row.identity)
-            .to_string(),
-        super::live_projection::LiveWorkKind::Run => row
-            .identity
-            .strip_prefix("shell:")
-            .unwrap_or(&row.detail)
-            .to_string(),
-        _ => row.detail.clone(),
-    };
-    let open = format!("/{namespace} show {source_id}");
-    let stoppable = row.state != super::live_projection::LiveWorkState::Settled
-        && matches!(
-            row.kind,
-            super::live_projection::LiveWorkKind::Task | super::live_projection::LiveWorkKind::Run
-        );
-    let (mark, tone) = match row.state {
-        super::live_projection::LiveWorkState::Active if attention_hold => ("·", WorkTone::Muted),
-        _ => match row.state {
-            super::live_projection::LiveWorkState::Active => (
-                "›",
-                if row.kind == super::live_projection::LiveWorkKind::Worker {
-                    WorkTone::Worker
-                } else {
-                    WorkTone::Live
-                },
-            ),
-            super::live_projection::LiveWorkState::Waiting => ("◆", WorkTone::Attention),
-            super::live_projection::LiveWorkState::Settled => match row.status.as_str() {
-                "completed" | "success" | "done" => ("✓", WorkTone::Success),
-                "failed" | "canceled" | "cancelled" | "interrupted" => ("✕", WorkTone::Attention),
-                _ => ("☐", WorkTone::Muted),
-            },
-        },
-    };
-    let (primary_action, stop_action) = match row.kind {
-        super::live_projection::LiveWorkKind::Worker => {
-            let agent_id = source_id
-                .strip_prefix("worker:")
-                .unwrap_or(&source_id)
-                .to_string();
-            (
-                Some(SidebarRowAction::OpenAgentDetail {
-                    agent_id: agent_id.clone(),
-                }),
-                (row.state != super::live_projection::LiveWorkState::Settled)
-                    .then_some(SidebarRowAction::CancelAgent { agent_id }),
-            )
-        }
-        _ => (
-            Some(SidebarRowAction::Command(open)),
-            stoppable
-                .then(|| SidebarRowAction::Command(format!("/{namespace} cancel {source_id}"))),
-        ),
-    };
+    let state = state_label(node);
+    let kind = kind_label(node.kind);
+    let stop_action = stop_action(node.binding.as_ref());
     WorkRow {
-        id: WorkRowId(row.identity.clone()),
+        id: WorkRowId(format!("graph:{}", node.id.as_str())),
         mark,
-        label: row.label.clone(),
-        detail: row.detail.clone(),
+        label: node.title.clone(),
+        detail: format!("{state} · {kind}"),
         tone,
         selectable: true,
-        primary_action,
-        stop_action,
-    }
-}
-
-fn todo_row(item: TodoItem) -> WorkRow {
-    let (mark, tone) = match item.status {
-        TodoStatus::Completed => ("✓", WorkTone::Success),
-        TodoStatus::InProgress => ("▸", WorkTone::Live),
-        TodoStatus::Pending => ("☐", WorkTone::Muted),
-    };
-    WorkRow {
-        id: WorkRowId(format!("todo:{}", item.id)),
-        mark,
-        label: item.content.clone(),
-        detail: format!("#{}", item.id),
-        tone,
-        selectable: true,
-        primary_action: Some(SidebarRowAction::InspectText {
-            label: item.content,
-            detail: format!("#{}", item.id),
+        primary_action: Some(SidebarRowAction::InspectWork {
+            title: format!("Work · {}", node.title),
+            body: inspector_text(snapshot, node),
+            stop_action: stop_action.map(Box::new),
         }),
-        stop_action: None,
+    }
+}
+
+fn node_is_attention(node: &WorkNode) -> bool {
+    matches!(
+        node.state,
+        NodeState::Blocked | NodeState::Stale | NodeState::Failed
+    ) || (node.state == NodeState::Completed && !node.acceptance.is_empty())
+}
+
+fn state_label(node: &WorkNode) -> &'static str {
+    match node.state {
+        NodeState::Ready => "ready",
+        NodeState::Active => "running",
+        NodeState::Waiting => "waiting",
+        NodeState::Blocked => "blocked",
+        NodeState::Completed if node.acceptance.is_empty() => "completed",
+        NodeState::Completed => "completed · evidence pending",
+        NodeState::Verified => "verified",
+        NodeState::Stale => "stale",
+        NodeState::Superseded => "superseded",
+        NodeState::Cancelled => "cancelled",
+        NodeState::Failed => "failed",
+    }
+}
+
+const fn kind_label(kind: NodeKind) -> &'static str {
+    match kind {
+        NodeKind::Objective => "objective",
+        NodeKind::PlanStep => "plan step",
+        NodeKind::Operation => "operation",
+        NodeKind::Evidence => "evidence",
+        NodeKind::Blocker => "blocker",
+        NodeKind::Approval => "approval",
+        NodeKind::RuntimeRef => "runtime",
+        NodeKind::LaneRef => "lane",
+    }
+}
+
+fn stop_action(binding: Option<&OperationBinding>) -> Option<SidebarRowAction> {
+    let binding = binding?;
+    if let Some(id) = binding.external.strip_prefix("task:") {
+        Some(SidebarRowAction::Command(format!("/task cancel {id}")))
+    } else if let Some(id) = binding.external.strip_prefix("shell:") {
+        Some(SidebarRowAction::Command(format!("/jobs cancel {id}")))
+    } else if let Some(id) = binding.external.strip_prefix("worker:") {
+        Some(SidebarRowAction::CancelAgent {
+            agent_id: id.to_string(),
+        })
+    } else {
+        binding
+            .external
+            .strip_prefix("workflow:")
+            .map(|id| SidebarRowAction::Command(format!("/workflow cancel {id}")))
+    }
+}
+
+fn inspector_text(snapshot: &WorkGraphSnapshot, node: &WorkNode) -> String {
+    let mut out = String::new();
+    section_text(
+        &mut out,
+        "Objective",
+        objective_for(snapshot, node)
+            .as_deref()
+            .unwrap_or("Not connected"),
+    );
+    section_list(
+        &mut out,
+        "Prerequisites",
+        related_nodes(snapshot, node, EdgeKind::DependsOn, true),
+    );
+    section_text(
+        &mut out,
+        "Current",
+        &format!("{} · {}", state_label(node), kind_label(node.kind)),
+    );
+    section_list(
+        &mut out,
+        "Downstream impact",
+        related_nodes(snapshot, node, EdgeKind::DependsOn, false),
+    );
+    section_text(&mut out, "Binding + lifecycle owner", &binding_text(node));
+    section_text(
+        &mut out,
+        "Evidence vs acceptance",
+        &evidence_text(snapshot, node),
+    );
+    section_text(
+        &mut out,
+        "Blockers / approvals",
+        &blockers_approvals_text(snapshot, node),
+    );
+    section_text(&mut out, "Why next", &why_next(snapshot, node));
+    section_text(
+        &mut out,
+        "Provenance + last reconcile",
+        &provenance_text(node),
+    );
+    if node.state == NodeState::Stale {
+        section_text(
+            &mut out,
+            "Last bounded output",
+            last_output_ref(snapshot, node)
+                .as_deref()
+                .unwrap_or("No output receipt"),
+        );
+    }
+    out.trim_end().to_string()
+}
+
+fn objective_for(snapshot: &WorkGraphSnapshot, node: &WorkNode) -> Option<String> {
+    if node.kind == NodeKind::Objective {
+        return Some(node.title.clone());
+    }
+    let mut current = node.id.clone();
+    let mut seen = HashSet::new();
+    while seen.insert(current.clone()) {
+        let Some(parent) = snapshot.edges.iter().find_map(|edge| {
+            (edge.kind == EdgeKind::Contains && edge.to == current).then(|| edge.from.clone())
+        }) else {
+            break;
+        };
+        let Some(parent_node) = snapshot.node(&parent) else {
+            break;
+        };
+        if parent_node.kind == NodeKind::Objective {
+            return Some(parent_node.title.clone());
+        }
+        current = parent;
+    }
+    snapshot.compat.plan.objective.clone()
+}
+
+fn related_nodes(
+    snapshot: &WorkGraphSnapshot,
+    node: &WorkNode,
+    kind: EdgeKind,
+    outgoing: bool,
+) -> Vec<String> {
+    snapshot
+        .edges
+        .iter()
+        .filter(|edge| edge.kind == kind)
+        .filter_map(|edge| {
+            let related = if outgoing && edge.from == node.id {
+                Some(&edge.to)
+            } else if !outgoing && edge.to == node.id {
+                Some(&edge.from)
+            } else {
+                None
+            }?;
+            snapshot
+                .node(related)
+                .map(|related| format!("{} · {}", related.title, state_label(related)))
+        })
+        .collect()
+}
+
+fn binding_text(node: &WorkNode) -> String {
+    let Some(binding) = node.binding.as_ref() else {
+        return "Not bound".to_string();
+    };
+    let mut text = format!(
+        "Owner: {}\nDurable: {}",
+        binding.external,
+        if binding.durable { "yes" } else { "no" }
+    );
+    if let Some(observation) = binding.last_observation.as_ref() {
+        let owner_state = match observation.owner_state {
+            OwnerState::Running => "running",
+            OwnerState::Waiting => "waiting",
+            OwnerState::Completed => "completed",
+            OwnerState::Failed => "failed",
+            OwnerState::Cancelled => "cancelled",
+        };
+        let _ = write!(
+            text,
+            "\nLast owner state: {owner_state}\nLast reconcile: {} ms UTC · sequence {}",
+            observation.observed_at, observation.seq
+        );
+    } else {
+        text.push_str("\nLast reconcile: never");
+    }
+    text
+}
+
+fn evidence_text(snapshot: &WorkGraphSnapshot, node: &WorkNode) -> String {
+    let acceptance = if node.acceptance.is_empty() {
+        vec!["- No evidence requirement".to_string()]
+    } else {
+        node.acceptance
+            .iter()
+            .map(|requirement| format!("- {}", acceptance_label(requirement)))
+            .collect()
+    };
+    let evidence = evidence_for(snapshot, node);
+    let evidence = if evidence.is_empty() {
+        vec!["- None attached".to_string()]
+    } else {
+        evidence
+            .into_iter()
+            .map(|evidence| {
+                let reference = evidence
+                    .evidence
+                    .as_ref()
+                    .map(|item| item.reference())
+                    .unwrap_or("invalid evidence node");
+                format!("- {reference} · {}", state_label(evidence))
+            })
+            .collect()
+    };
+    format!(
+        "Acceptance:\n{}\nEvidence:\n{}",
+        acceptance.join("\n"),
+        evidence.join("\n")
+    )
+}
+
+fn acceptance_label(requirement: &AcceptanceRequirement) -> String {
+    match requirement {
+        AcceptanceRequirement::EvidenceOfKind { kind } => {
+            let kind = match kind {
+                EvidenceKindTag::ToolRun => "tool run",
+                EvidenceKindTag::Artifact => "artifact",
+                EvidenceKindTag::TestSummary => "test summary",
+                EvidenceKindTag::Receipt => "receipt",
+                EvidenceKindTag::Approval => "approval",
+                EvidenceKindTag::Route => "route",
+            };
+            format!("evidence of kind {kind}")
+        }
+    }
+}
+
+fn evidence_for<'a>(snapshot: &'a WorkGraphSnapshot, node: &WorkNode) -> Vec<&'a WorkNode> {
+    snapshot
+        .edges
+        .iter()
+        .filter(|edge| edge.kind == EdgeKind::Verifies && edge.to == node.id)
+        .filter_map(|edge| snapshot.node(&edge.from))
+        .collect()
+}
+
+fn blockers_approvals_text(snapshot: &WorkGraphSnapshot, node: &WorkNode) -> String {
+    let mut lines = Vec::new();
+    lines.extend(
+        related_nodes(snapshot, node, EdgeKind::Blocks, false)
+            .into_iter()
+            .map(|item| format!("- Blocked by {item}")),
+    );
+    lines.extend(
+        related_nodes(snapshot, node, EdgeKind::RequiresApproval, true)
+            .into_iter()
+            .map(|item| format!("- Approval {item}")),
+    );
+    if node.kind == NodeKind::PlanStep {
+        lines.extend(
+            snapshot
+                .nodes
+                .iter()
+                .filter(|candidate| candidate.kind == NodeKind::Approval)
+                .map(|approval| format!("- {} · {}", approval.title, state_label(approval))),
+        );
+    }
+    if lines.is_empty() {
+        "None".to_string()
+    } else {
+        lines.join("\n")
+    }
+}
+
+fn why_next(snapshot: &WorkGraphSnapshot, node: &WorkNode) -> String {
+    match node.state {
+        NodeState::Ready => {
+            let pending = related_nodes(snapshot, node, EdgeKind::DependsOn, true);
+            if pending.is_empty() {
+                "Ready with no recorded prerequisite".to_string()
+            } else {
+                format!("Ready after: {}", pending.join(", "))
+            }
+        }
+        NodeState::Active => "Lifecycle owner reports active work".to_string(),
+        NodeState::Waiting => "Waiting on an owner or approval".to_string(),
+        NodeState::Blocked => "Blocked; resolve the causes above".to_string(),
+        NodeState::Completed if !node.acceptance.is_empty() => {
+            "Execution ended, but acceptance evidence is still missing".to_string()
+        }
+        NodeState::Stale => "Owner cannot confirm liveness after reconciliation".to_string(),
+        NodeState::Verified => "Acceptance evidence is satisfied".to_string(),
+        NodeState::Completed => "Completed with no evidence requirement".to_string(),
+        NodeState::Superseded => "A replacement node owns this work".to_string(),
+        NodeState::Cancelled => "Cancelled by lifecycle owner".to_string(),
+        NodeState::Failed => "Failed; inspect owner output before retrying".to_string(),
+    }
+}
+
+fn provenance_text(node: &WorkNode) -> String {
+    let provenance = match &node.provenance {
+        Provenance::Import { ordinal, .. } => ordinal
+            .map(|ordinal| format!("legacy import · ordinal {ordinal}"))
+            .unwrap_or_else(|| "legacy import".to_string()),
+        Provenance::ToolUpdate { tool, call_id } => {
+            format!("tool {tool} · call {call_id}")
+        }
+        Provenance::RuntimeReconcile {
+            source,
+            observed_at,
+        } => format!("runtime {source} · {observed_at} ms UTC"),
+        Provenance::UserEdit { proposal_id } => format!("user-approved diff {proposal_id}"),
+    };
+    let reconcile = node
+        .binding
+        .as_ref()
+        .and_then(|binding| binding.last_observation.as_ref())
+        .map(|observation| format!("{} ms UTC", observation.observed_at))
+        .unwrap_or_else(|| "never".to_string());
+    format!("Source: {provenance}\nLast reconcile: {reconcile}")
+}
+
+fn last_output_ref(snapshot: &WorkGraphSnapshot, node: &WorkNode) -> Option<String> {
+    evidence_for(snapshot, node)
+        .into_iter()
+        .max_by_key(|evidence| evidence.updated_at)
+        .and_then(|evidence| evidence.evidence.as_ref())
+        .map(|evidence| {
+            let kind = match evidence.kind() {
+                EvidenceKind::ToolRun => "tool run",
+                EvidenceKind::Artifact { .. } => "artifact",
+                EvidenceKind::TestSummary => "test summary",
+                EvidenceKind::Receipt { .. } => "receipt",
+                EvidenceKind::Approval => "approval",
+                EvidenceKind::Route => "route",
+            };
+            let bytes = evidence
+                .raw_bytes()
+                .map(|bytes| format!(" · {bytes} raw bytes"))
+                .unwrap_or_default();
+            let truncation = if evidence.truncated() {
+                " · truncated"
+            } else {
+                ""
+            };
+            format!("{} · {kind}{bytes}{truncation}", evidence.reference())
+        })
+}
+
+fn section_text(out: &mut String, title: &str, body: &str) {
+    let _ = writeln!(out, "{title}\n{body}\n");
+}
+
+fn section_list(out: &mut String, title: &str, items: Vec<String>) {
+    if items.is_empty() {
+        section_text(out, title, "None");
+    } else {
+        section_text(
+            out,
+            title,
+            &items
+                .into_iter()
+                .map(|item| format!("- {item}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
     }
 }

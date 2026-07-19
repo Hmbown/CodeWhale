@@ -216,6 +216,34 @@ fn transcript_navigation_does_not_capture_keys_for_other_modals() {
 }
 
 #[test]
+fn closing_work_inspector_pager_clears_opened_row_owner() {
+    let mut app = create_test_app();
+    app.todos.try_lock().expect("To-do state").add(
+        "Inspect me".to_string(),
+        crate::tools::todo::TodoStatus::InProgress,
+    );
+    let _ = crate::tui::work_surface::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('w'), KeyModifiers::ALT),
+    );
+    app.work_surface.opened = app.work_surface.selected.clone();
+    assert!(app.work_surface.opened.is_some());
+    app.view_stack
+        .push(PagerView::from_text("Work", "detail", 40));
+
+    let was_work_inspector =
+        app.work_surface.opened.is_some() && app.view_stack.top_kind() == Some(ModalKind::Pager);
+    let events = app
+        .view_stack
+        .handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(events.is_empty());
+    clear_work_inspector_after_pager_close(&mut app, was_work_inspector);
+
+    assert_eq!(app.view_stack.top_kind(), None);
+    assert!(app.work_surface.opened.is_none());
+}
+
+#[test]
 fn approval_mouse_wheel_reviews_transcript_without_closing_card() {
     let mut app = create_test_app();
     app.view_stack.push(ApprovalView::new(ApprovalRequest::new(

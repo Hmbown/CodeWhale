@@ -108,6 +108,8 @@ pub struct PlanPromptView {
     confirming_exit: bool,
     /// The plan snapshot to display (if update_plan was called).
     plan: Option<PlanSnapshot>,
+    /// Validated graph delta that will be applied only if the user accepts.
+    plan_diff_summary: Option<String>,
     /// The checklist/todo snapshot to display (if `checklist_write` was used).
     /// Kept separate from the plan so the most actionable view of progress is
     /// visible inside the plan confirmation modal.
@@ -124,6 +126,7 @@ impl PlanPromptView {
             last_max_scroll: Cell::new(0),
             confirming_exit: false,
             plan,
+            plan_diff_summary: None,
             todos: None,
         }
     }
@@ -134,6 +137,12 @@ impl PlanPromptView {
     #[must_use]
     pub fn with_todos(mut self, todos: Option<TodoListSnapshot>) -> Self {
         self.todos = todos;
+        self
+    }
+
+    #[must_use]
+    pub fn with_plan_diff_summary(mut self, summary: Option<String>) -> Self {
+        self.plan_diff_summary = summary;
         self
     }
 
@@ -390,6 +399,22 @@ impl ModalView for PlanPromptView {
             Style::default().fg(palette::TEXT_PRIMARY).bold(),
         )]));
         lines.push(Line::from(""));
+
+        if let Some(ref summary) = self.plan_diff_summary {
+            lines.push(Line::from(Span::styled(
+                "Proposed changes",
+                Style::default().fg(palette::WHALE_INFO).bold(),
+            )));
+            for raw_line in summary.lines() {
+                for wrapped in wrap_text(raw_line, content_width) {
+                    lines.push(Line::from(Span::styled(
+                        wrapped,
+                        Style::default().fg(palette::TEXT_PRIMARY),
+                    )));
+                }
+            }
+            lines.push(Line::from(""));
+        }
 
         // v0.8.44: render plan details when update_plan was called (#834)
         if let Some(ref plan) = self.plan {
@@ -964,6 +989,21 @@ mod tests {
         assert!(rendered.contains("Verification plan:"));
         assert!(rendered.contains("Handoff packet:"));
         assert!(rendered.contains("Render rich sections"));
+    }
+
+    #[test]
+    fn plan_prompt_renders_validated_graph_delta_before_actions() {
+        let view = PlanPromptView::new(Some(PlanSnapshot::default())).with_plan_diff_summary(Some(
+            "Scope: 2 -> 1 plan steps\nAdded nodes (0): none\nChanged nodes (1): Verify candidate\nRemoved nodes (1): Retire draft\nEdges: +0 / -1\nDependencies: +0 / -0\nAcceptance requirements changed: 1".to_string(),
+        ));
+        let rendered = render_view(&view, 160, 120);
+
+        assert!(rendered.contains("Proposed changes"));
+        assert!(rendered.contains("Scope: 2 -> 1 plan steps"));
+        assert!(rendered.contains("Changed nodes (1): Verify candidate"));
+        assert!(rendered.contains("Removed nodes (1): Retire draft"));
+        assert!(rendered.contains("Acceptance requirements changed: 1"));
+        assert!(rendered.contains("Accept plan (Act)"));
     }
 
     #[test]

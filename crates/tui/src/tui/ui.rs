@@ -3147,15 +3147,47 @@ async fn run_event_loop(
                             && app.queued_message_count() == 0
                             && app.queued_draft.is_none()
                         {
-                            app.plan_prompt_pending = true;
-                            app.add_message(HistoryCell::System {
-                                content: plan_next_step_prompt(),
-                            });
-                            if app.view_stack.top_kind() != Some(ModalKind::PlanPrompt) {
-                                let plan = Some(app.plan_state.lock().await.snapshot());
-                                let todos = Some(app.todos.lock().await.snapshot());
-                                app.view_stack
-                                    .push(PlanPromptView::new(plan).with_todos(todos));
+                            let review_plan = match app.runtime_services.work.as_ref().map(|work| {
+                                work.plan_review_for_confirmation(app.current_session_id.as_deref())
+                            }) {
+                                Some(Ok(Some((proposal_id, proposed, summary)))) => {
+                                    Ok((Some(proposal_id), proposed, Some(summary)))
+                                }
+                                None => Ok((None, app.plan_state.lock().await.snapshot(), None)),
+                                Some(Ok(None)) => {
+                                    Ok((None, app.plan_state.lock().await.snapshot(), None))
+                                }
+                                Some(Err(err)) => Err(err),
+                            };
+                            match review_plan {
+                                Ok((proposal_id, plan, summary)) => {
+                                    app.pending_plan_proposal_id = proposal_id;
+                                    app.plan_prompt_pending = true;
+                                    app.add_message(HistoryCell::System {
+                                        content: plan_next_step_prompt(),
+                                    });
+                                    if app.view_stack.top_kind() != Some(ModalKind::PlanPrompt) {
+                                        let todos = Some(app.todos.lock().await.snapshot());
+                                        app.view_stack.push(
+                                            PlanPromptView::new(Some(plan))
+                                                .with_plan_diff_summary(summary)
+                                                .with_todos(todos),
+                                        );
+                                    }
+                                }
+                                Err(err) => {
+                                    tracing::warn!(
+                                        error = %err,
+                                        "validated Plan diff could not be rendered for review"
+                                    );
+                                    app.plan_prompt_pending = false;
+                                    app.pending_plan_proposal_id = None;
+                                    let message = format!(
+                                        "Plan review is unavailable; no proposal was accepted ({err})"
+                                    );
+                                    app.status_message = Some(message.clone());
+                                    app.add_message(HistoryCell::System { content: message });
+                                }
                             }
                         }
                         app.plan_tool_used_in_turn = false;
@@ -4053,7 +4085,6 @@ async fn run_event_loop(
         // Expire the "Press Ctrl+C again to quit" prompt silently after its
         // window. Triggers a redraw if the prompt was visible.
         app.tick_quit_armed();
-        let _ = crate::tui::work_surface::tick_stop_arm(app);
         app.tick_receipt();
         crate::tui::footer_ui::maybe_log_provider_wait_incident(app);
         // While the user is drag-selecting past the transcript edge, advance
@@ -5098,7 +5129,10 @@ async fn run_event_loop(
             }
 
             if !app.view_stack.is_empty() {
+                let closing_work_inspector = app.work_surface.opened.is_some()
+                    && app.view_stack.top_kind() == Some(ModalKind::Pager);
                 let events = app.view_stack.handle_key(key);
+                clear_work_inspector_after_pager_close(app, closing_work_inspector);
                 app.needs_redraw = true;
                 if handle_view_events_boxed(
                     terminal,
@@ -6217,6 +6251,12 @@ async fn run_event_loop(
                 app.paste_burst.deactivate_keep_window();
             }
         }
+    }
+}
+
+fn clear_work_inspector_after_pager_close(app: &mut App, was_work_inspector: bool) {
+    if was_work_inspector && app.view_stack.top_kind() != Some(ModalKind::Pager) {
+        app.work_surface.opened = None;
     }
 }
 
@@ -10946,9 +10986,11 @@ async fn apply_plan_choice(
         app.runtime_services.work.as_ref(),
         app.current_session_id.as_deref(),
         acceptance,
+        app.pending_plan_proposal_id.as_ref(),
     )
     .await
     .map_err(|err| anyhow::anyhow!("failed to project accepted plan: {err}"))?;
+    app.pending_plan_proposal_id = None;
     persist_pending_work_checkpoint(app)
         .await
         .map_err(|err| anyhow::anyhow!("accepted plan was not checkpointed: {err}"))?;

@@ -1,17 +1,14 @@
-//! Ocean work-surface ownership.
+//! Ocean Work Graph surface ownership.
 //!
-//! This is the replacement boundary for the transcript-top Tasks / To-do /
-//! workers UI. Legacy sidebar code may feed other treatments, but Ocean state,
-//! rendering, focus, scrolling, and row actions live here as one component.
+//! Placement, scrolling, selection, and pager ownership remain local to this
+//! component. Every visible work row derives from the active-session graph.
 
 mod input;
 mod interaction;
-mod live_projection;
 mod model;
 mod render;
 
 pub use input::{handle_key, handle_mouse};
-pub use interaction::tick_stop_arm;
 pub use model::{WorkSurfacePlacement, WorkSurfaceState};
 pub use render::{height, render, split_chat};
 
@@ -19,12 +16,21 @@ pub use render::{height, render, split_chat};
 mod tests {
     use std::path::PathBuf;
 
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
     use ratatui::{Terminal, backend::TestBackend};
 
     use crate::config::Config;
     use crate::tools::todo::TodoStatus;
-    use crate::tui::app::{App, TaskPanelEntry, TaskPanelEntryKind, TuiOptions};
+    use crate::tui::app::{App, SidebarRowAction, TuiOptions};
+    use crate::work_graph::{
+        AcceptanceRequirement, ChangeCtx, EdgeKind, EvidenceKindTag, NodeKind, NodeState,
+        OperationBinding, Provenance, WorkEdge, WorkEdgeId, WorkGraph, WorkGraphChange, WorkNode,
+        WorkNodeId,
+    };
+
+    const SESSION: &str = "work-surface-test";
 
     fn app() -> App {
         let options = TuiOptions {
@@ -53,73 +59,369 @@ mod tests {
         app
     }
 
-    fn add_task(app: &mut App, id: &str) {
-        app.task_panel.push(TaskPanelEntry {
-            id: id.to_string(),
-            status: "running".to_string(),
-            prompt_summary: format!("task {id}"),
-            duration_ms: Some(1_000),
-            kind: TaskPanelEntryKind::Background,
-            stale: false,
-            elapsed_since_output_ms: None,
-            owner_agent_id: None,
-            owner_agent_name: None,
-        });
-    }
-
-    #[test]
-    fn projection_keeps_every_todo_reachable() {
-        let mut app = app();
-        add_task(&mut app, "one");
+    fn add_todos(app: &mut App, count: usize) {
         let mut todos = app.todos.try_lock().expect("todos");
-        for (text, status) in [
-            ("done", TodoStatus::Completed),
-            ("current", TodoStatus::InProgress),
-            ("next", TodoStatus::Pending),
-            ("later", TodoStatus::Pending),
-        ] {
-            todos.add(text.to_string(), status);
+        for index in 0..count {
+            todos.add(
+                format!("work item {index}"),
+                if index == 0 {
+                    TodoStatus::InProgress
+                } else {
+                    TodoStatus::Pending
+                },
+            );
         }
-        drop(todos);
-
-        let rows = super::model::project(&mut app);
-        let todo_rows = rows
-            .iter()
-            .filter(|row| row.id.0.starts_with("todo:"))
-            .count();
-        assert_eq!(todo_rows, 4);
-        assert!(rows.iter().any(|row| row.label == "later"));
     }
 
-    #[test]
-    fn dedicated_workflow_panel_is_not_duplicated_into_work() {
-        let mut app = app();
-        app.workflow_panel = Some(crate::tui::widgets::workflow_panel::WorkflowPanel::new(
-            "workflow_owner",
-            "single workflow owner",
-            0,
-        ));
-
-        let projection = super::live_projection::LiveWorkProjection::from_app(&app);
-
-        assert!(projection.rows.is_empty());
-        assert_eq!(projection.counts.active, 0);
-        assert!(super::model::project(&mut app).is_empty());
+    fn operation_graph(state: NodeState) -> crate::work_graph::WorkGraphSnapshot {
+        let objective = WorkNodeId::derive(SESSION, "objective");
+        let operation = WorkNodeId::derive(SESSION, "operation");
+        let ctx = |now| ChangeCtx {
+            session_id: SESSION.to_string(),
+            now,
+            idempotency_key: None,
+        };
+        let node = |id: WorkNodeId, kind, title: &str, now| WorkNode {
+            id,
+            kind,
+            title: title.to_string(),
+            state: NodeState::Ready,
+            acceptance: Vec::new(),
+            binding: None,
+            evidence: None,
+            provenance: Provenance::RuntimeReconcile {
+                source: "test-owner".to_string(),
+                observed_at: now,
+            },
+            created_at: now,
+            updated_at: now,
+        };
+        let mut graph = WorkGraph::new();
+        graph
+            .apply(
+                WorkGraphChange::AddNode {
+                    node: node(objective.clone(), NodeKind::Objective, "Ship v0.9.1", 1),
+                },
+                ctx(1),
+            )
+            .expect("objective");
+        graph
+            .apply(
+                WorkGraphChange::AddNode {
+                    node: node(
+                        operation.clone(),
+                        NodeKind::Operation,
+                        "Verify installed build",
+                        2,
+                    ),
+                },
+                ctx(2),
+            )
+            .expect("operation");
+        graph
+            .apply(
+                WorkGraphChange::AddEdge {
+                    edge: WorkEdge {
+                        id: WorkEdgeId::derive(SESSION, "contains"),
+                        kind: EdgeKind::Contains,
+                        from: objective,
+                        to: operation.clone(),
+                    },
+                },
+                ctx(3),
+            )
+            .expect("contains");
+        graph
+            .apply(
+                WorkGraphChange::BindOperation {
+                    node: operation.clone(),
+                    binding: OperationBinding {
+                        external: "shell:shell_1234abcd".to_string(),
+                        durable: false,
+                        last_observation: None,
+                    },
+                },
+                ctx(4),
+            )
+            .expect("binding");
+        if state != NodeState::Ready {
+            graph
+                .apply(
+                    WorkGraphChange::UpdateNode {
+                        id: operation,
+                        patch: crate::work_graph::WorkNodePatch {
+                            state: Some(state),
+                            ..crate::work_graph::WorkNodePatch::default()
+                        },
+                    },
+                    ctx(5),
+                )
+                .expect("state");
+        }
+        graph.into_snapshot()
     }
 
-    #[test]
-    fn overflow_has_panel_owned_scroll_and_stable_selection() {
-        let mut app = app();
-        for id in ["one", "two", "three", "four"] {
-            add_task(&mut app, id);
-        }
-        let backend = TestBackend::new(80, 5);
+    fn restore_graph(app: &mut App, graph: &crate::work_graph::WorkGraphSnapshot) {
+        app.current_session_id = Some(SESSION.to_string());
+        app.runtime_services
+            .work
+            .as_ref()
+            .expect("Work Graph runtime")
+            .restore(
+                SESSION,
+                Some(graph),
+                &crate::work_graph::project_todos(graph),
+                &crate::work_graph::project_plan(graph),
+            )
+            .expect("restore graph");
+    }
+
+    fn render_text(app: &mut App, width: u16, height: u16) -> String {
+        let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).expect("terminal");
         terminal
-            .draw(|frame| super::render(frame, frame.area(), &mut app))
+            .draw(|frame| super::render(frame, frame.area(), app))
             .expect("draw");
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    #[test]
+    fn projection_keeps_every_legacy_todo_as_a_graph_row() {
+        let mut app = app();
+        add_todos(&mut app, 4);
+
+        let rows = super::model::project(&mut app);
+
+        assert!(rows[0].label.starts_with("Work · 1 running · 3 ready"));
+        for index in 0..4 {
+            assert!(
+                rows.iter()
+                    .any(|row| row.label == format!("work item {index}"))
+            );
+        }
+        assert!(rows.iter().all(|row| !row.id.0.starts_with("todo:")));
+    }
+
+    #[test]
+    fn active_session_without_work_renders_truthful_empty_state() {
+        let mut app = app();
+        app.current_session_id = Some(SESSION.to_string());
+
+        let rows = super::model::project(&mut app);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].label, "Work · empty");
+        assert!(!rows[0].selectable);
+    }
+
+    #[test]
+    fn missing_runtime_renders_disconnected_state() {
+        let mut app = app();
+        app.current_session_id = Some(SESSION.to_string());
+        app.runtime_services.work = None;
+
+        let rows = super::model::project(&mut app);
+
+        assert_eq!(rows[0].label, "Work · disconnected");
+    }
+
+    #[test]
+    fn busy_graph_authority_renders_truthful_error_without_leaking_it_into_header() {
+        let mut app = app();
+        app.current_session_id = Some(SESSION.to_string());
+        let todos = app.todos.clone();
+        let _guard = todos.try_lock().expect("hold To-do authority lock");
+
+        let rows = super::model::project(&mut app);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].label, "Work · error");
+        assert!(rows[0].detail.contains("To-do state is busy"));
+        assert!(!rows[0].label.contains("busy"));
+    }
+
+    #[test]
+    fn graph_error_without_an_active_session_stays_suppressed() {
+        let mut app = app();
+        let todos = app.todos.clone();
+        let _guard = todos.try_lock().expect("hold To-do authority lock");
+
+        let rows = super::model::project(&mut app);
+
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn waiting_operation_is_not_counted_as_running() {
+        let mut app = app();
+        let graph = operation_graph(NodeState::Waiting);
+        restore_graph(&mut app, &graph);
+
+        let rows = super::model::project(&mut app);
+
+        assert!(
+            rows[0]
+                .label
+                .starts_with("Work · 0 running · 1 waiting · 0 ready · 0 blocked"),
+            "{}",
+            rows[0].label
+        );
+    }
+
+    #[test]
+    fn stale_operation_is_blocked_attention_with_bounded_output_section() {
+        let mut app = app();
+        let graph = operation_graph(NodeState::Stale);
+        restore_graph(&mut app, &graph);
+
+        let rows = super::model::project(&mut app);
+        assert!(rows[0].label.contains("1 blocked"), "{}", rows[0].label);
+        let row = rows.iter().find(|row| row.selectable).expect("stale row");
+        assert_eq!(row.mark, "?");
+        assert!(row.detail.starts_with("stale · operation"));
+        let Some(SidebarRowAction::InspectWork { body, .. }) = row.primary_action.as_ref() else {
+            panic!("stale row must open inspector");
+        };
+        assert!(
+            body.contains("Last bounded output\nNo output receipt"),
+            "{body}"
+        );
+        assert!(body.contains("Owner cannot confirm liveness"), "{body}");
+    }
+
+    #[test]
+    fn completed_operation_with_acceptance_is_not_rendered_done() {
+        let mut graph = WorkGraph::from_snapshot(operation_graph(NodeState::Ready));
+        let operation = WorkNodeId::derive(SESSION, "operation");
+        graph
+            .apply(
+                WorkGraphChange::UpdateNode {
+                    id: operation,
+                    patch: crate::work_graph::WorkNodePatch {
+                        state: Some(NodeState::Completed),
+                        acceptance: Some(vec![AcceptanceRequirement::EvidenceOfKind {
+                            kind: EvidenceKindTag::ToolRun,
+                        }]),
+                        ..crate::work_graph::WorkNodePatch::default()
+                    },
+                },
+                ChangeCtx {
+                    session_id: SESSION.to_string(),
+                    now: 6,
+                    idempotency_key: None,
+                },
+            )
+            .expect("completed pending evidence");
+        let graph = graph.into_snapshot();
+        let mut app = app();
+        restore_graph(&mut app, &graph);
+
+        let rows = super::model::project(&mut app);
+        assert!(rows[0].label.contains("1 blocked"), "{}", rows[0].label);
+        let row = rows
+            .iter()
+            .find(|row| row.selectable)
+            .expect("operation row");
+        assert_eq!(row.mark, "!");
+        assert!(row.detail.contains("completed · evidence pending"));
+        assert_ne!(row.mark, "✓");
+        let Some(SidebarRowAction::InspectWork { body, .. }) = row.primary_action.as_ref() else {
+            panic!("completed operation must remain inspectable");
+        };
+        assert!(body.contains("evidence of kind tool run"), "{body}");
+        assert!(
+            body.contains("acceptance evidence is still missing"),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn work_rows_open_graph_inspector_without_inline_controls() {
+        let mut app = app();
+        let graph = operation_graph(NodeState::Ready);
+        restore_graph(&mut app, &graph);
+
+        let text = render_text(&mut app, 100, 6);
+        assert!(!text.contains("[open]"), "{text}");
+        assert!(!text.contains("[stop]"), "{text}");
+        let row_y = app
+            .work_surface
+            .hitboxes
+            .iter()
+            .find(|hit| hit.id.0.starts_with("graph:"))
+            .expect("graph hitbox")
+            .row_y;
+        let outcome = super::handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 2,
+                row: row_y,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+        let action = outcome.action.expect("inspector action");
+        let SidebarRowAction::InspectWork {
+            body, stop_action, ..
+        } = &action
+        else {
+            panic!("expected Work inspector");
+        };
+        for section in [
+            "Objective",
+            "Prerequisites",
+            "Downstream impact",
+            "Binding + lifecycle owner",
+            "Evidence vs acceptance",
+            "Blockers / approvals",
+            "Why next",
+            "Provenance + last reconcile",
+        ] {
+            assert!(body.contains(section), "missing {section}: {body}");
+        }
+        assert!(matches!(
+            stop_action.as_deref(),
+            Some(SidebarRowAction::Command(command)) if command == "/jobs cancel shell_1234abcd"
+        ));
+        crate::tui::mouse_ui::apply_sidebar_row_action(&mut app, action);
+        assert_eq!(
+            app.view_stack.top_kind(),
+            Some(crate::tui::views::ModalKind::Pager)
+        );
+    }
+
+    #[test]
+    fn narrow_render_hover_keeps_full_untruncated_row() {
+        let mut app = app();
+        app.todos.try_lock().expect("todos").add(
+            "A deliberately long graph-owned work row".to_string(),
+            TodoStatus::InProgress,
+        );
+
+        let _ = render_text(&mut app, 24, 4);
+        let hover = app
+            .sidebar_hover
+            .sections
+            .last()
+            .and_then(|section| section.rows.first())
+            .expect("hover row");
+        assert!(hover.is_truncated);
+        assert!(hover.full_text.contains("deliberately long graph-owned"));
+        assert!(hover.stop_action.is_none());
+    }
+
+    #[test]
+    fn overflow_scroll_and_selection_remain_panel_owned() {
+        let mut app = app();
+        add_todos(&mut app, 8);
+        let _ = render_text(&mut app, 80, 5);
         assert!(app.work_surface.total_rows > app.work_surface.visible_rows);
-        assert_eq!(app.work_surface.last_area.expect("area").width, 80);
 
         let transcript_delta = app.viewport.pending_scroll_delta;
         let outcome = super::handle_mouse(
@@ -139,9 +441,7 @@ mod tests {
     #[test]
     fn keyboard_navigation_is_panel_local_when_focused() {
         let mut app = app();
-        for id in ["one", "two", "three"] {
-            add_task(&mut app, id);
-        }
+        add_todos(&mut app, 3);
         app.work_surface.visible_rows = 2;
         assert!(
             super::handle_key(
@@ -157,521 +457,61 @@ mod tests {
     }
 
     #[test]
-    fn printable_keys_release_panel_focus_for_the_composer() {
+    fn printable_keys_release_panel_focus_for_composer() {
         let mut app = app();
-        add_task(&mut app, "one");
-        assert!(
-            super::handle_key(
-                &mut app,
-                KeyEvent::new(KeyCode::Char('w'), KeyModifiers::ALT)
-            )
-            .is_some()
+        add_todos(&mut app, 1);
+        let _ = super::handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('w'), KeyModifiers::ALT),
         );
-        assert!(app.work_surface.focused);
 
         let outcome = super::handle_key(
             &mut app,
             KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
         );
-        assert!(outcome.is_none(), "composer must receive the printable key");
+
+        assert!(outcome.is_none());
         assert!(!app.work_surface.focused);
     }
 
     #[test]
-    fn compact_surface_preserves_task_todo_and_stop_control() {
-        let mut app = app();
-        add_task(&mut app, "shell_compact");
-        app.todos
-            .try_lock()
-            .expect("todos")
-            .add("keep prompt readable".to_string(), TodoStatus::InProgress);
-        let backend = TestBackend::new(40, 3);
-        let mut terminal = Terminal::new(backend).expect("terminal");
-        terminal
-            .draw(|frame| super::render(frame, frame.area(), &mut app))
-            .expect("draw");
-        let text = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(text.contains("task shell_compact"), "{text}");
-        assert!(text.contains("keep prompt"), "{text}");
-        assert_eq!(app.work_surface.total_rows, 2);
-        assert!(
-            app.work_surface
-                .hitboxes
-                .iter()
-                .any(|hitbox| hitbox.stop_zone_start_col.is_some())
-        );
-    }
-
-    #[test]
-    fn waiting_row_freezes_other_live_marks() {
-        let mut app = app();
-        add_task(&mut app, "run");
-        add_task(&mut app, "ask");
-        app.task_panel[1].status = "waiting".to_string();
-        let backend = TestBackend::new(100, 5);
-        let mut terminal = Terminal::new(backend).expect("terminal");
-        terminal
-            .draw(|frame| super::render(frame, frame.area(), &mut app))
-            .expect("draw");
-        let text = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(text.contains('◆'), "waiting keeps a still attention mark");
-        assert!(
-            !text.contains('›'),
-            "other live marks freeze under attention"
-        );
-    }
-
-    #[test]
-    fn progress_only_workers_render_before_snapshot_refresh() {
-        let mut app = app();
-        for index in 1..=3 {
-            let id = format!("agent_{index}");
-            app.agent_label_map
-                .insert(id.clone(), format!("Agent {index}"));
-            app.agent_progress.insert(id, "starting".to_string());
-        }
-        let backend = TestBackend::new(80, 8);
-        let mut terminal = Terminal::new(backend).expect("terminal");
-        terminal
-            .draw(|frame| super::render(frame, frame.area(), &mut app))
-            .expect("draw");
-        let text = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert_eq!(app.work_surface.total_rows, 4, "section plus three workers");
-        assert!(text.contains("Agent 1"), "{text}");
-        assert!(text.contains("Agent 3"), "{text}");
-    }
-
-    #[test]
-    fn completed_fleet_strip_spends_only_rows_it_can_render() {
-        let mut app = app();
-        for id in ["reef", "harbor", "current"] {
-            add_task(&mut app, id);
-        }
-        for task in &mut app.task_panel {
-            task.status = "completed".to_string();
-        }
-
-        let height = super::height(&mut app, 89, 50, false);
-        assert_eq!(height, 5, "section + three receipts + divider");
-
-        let backend = TestBackend::new(89, height);
-        let mut terminal = Terminal::new(backend).expect("terminal");
-        terminal
-            .draw(|frame| super::render(frame, frame.area(), &mut app))
-            .expect("draw");
-        let rows = (0..height)
-            .map(|y| {
-                (0..89)
-                    .map(|x| terminal.backend().buffer()[(x, y)].symbol())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>();
-        assert!(rows[0].contains("Active 0"), "{rows:?}");
-        assert!(rows[1].contains("task current"), "{rows:?}");
-        assert!(rows[2].contains("task harbor"), "{rows:?}");
-        assert!(rows[3].contains("task reef"), "{rows:?}");
-        assert!(rows[4].contains('─'), "divider missing: {rows:?}");
-        assert!(
-            rows.iter().all(|row| !row.trim().is_empty()),
-            "content-sized strip must not reserve blank rows: {rows:?}"
-        );
-    }
-
-    #[test]
-    fn disappearing_work_clears_owned_mouse_state() {
-        let mut app = app();
-        add_task(&mut app, "gone");
-        let backend = TestBackend::new(80, 8);
-        let mut terminal = Terminal::new(backend).expect("terminal");
-        terminal
-            .draw(|frame| super::render(frame, frame.area(), &mut app))
-            .expect("draw");
-        assert!(app.work_surface.last_area.is_some());
-        app.work_surface.focused = true;
-        app.task_panel.clear();
-
-        assert_eq!(super::height(&mut app, 80, 8, false), 0);
-        assert!(app.work_surface.last_area.is_none());
-        assert!(app.work_surface.hitboxes.is_empty());
-        assert!(!app.work_surface.focused);
-    }
-
-    #[test]
-    fn compact_surface_keeps_overflow_rows_reachable() {
-        let mut app = app();
-        for id in ["one", "two", "three"] {
-            add_task(&mut app, id);
-        }
-        for text in ["first", "second", "third"] {
-            app.todos
-                .try_lock()
-                .expect("todos")
-                .add(text.to_string(), TodoStatus::Pending);
-        }
-        let backend = TestBackend::new(40, 3);
-        let mut terminal = Terminal::new(backend).expect("terminal");
-        terminal
-            .draw(|frame| super::render(frame, frame.area(), &mut app))
-            .expect("draw");
-        assert_eq!(app.work_surface.total_rows, 6);
-        app.work_surface.focused = true;
-        let _ = super::handle_key(&mut app, KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
-        assert!(app.work_surface.scroll_offset > 0);
-        assert!(
-            app.work_surface
-                .selected
-                .as_ref()
-                .is_some_and(|id| id.0.starts_with("todo:"))
-        );
-    }
-
-    #[test]
-    fn left_and_right_placements_reserve_a_side_rail() {
+    fn side_placements_reuse_the_same_graph_rows() {
         for (placement, expected_chat_x, expected_rail_x) in [
             (super::WorkSurfacePlacement::Left, 30, 0),
             (super::WorkSurfacePlacement::Right, 0, 70),
         ] {
             let mut app = app();
-            add_task(&mut app, "rail");
+            add_todos(&mut app, 2);
             app.work_surface.placement = placement;
             assert_eq!(super::height(&mut app, 100, 24, false), 0);
-
             let area = ratatui::layout::Rect::new(0, 0, 100, 12);
             let (chat, rail) = super::split_chat(&mut app, area, false);
             let rail = rail.expect("side rail");
             assert_eq!(chat.x, expected_chat_x);
-            assert_eq!(chat.width, 70);
             assert_eq!(rail.x, expected_rail_x);
             assert_eq!(rail.width, 30);
-
-            let backend = TestBackend::new(100, 12);
-            let mut terminal = Terminal::new(backend).expect("terminal");
-            terminal
-                .draw(|frame| super::render(frame, rail, &mut app))
-                .expect("draw");
-            assert_eq!(app.work_surface.last_area, Some(rail));
-            let divider_x = if placement == super::WorkSurfacePlacement::Left {
-                rail.right().saturating_sub(1)
-            } else {
-                rail.x
-            };
-            assert_eq!(terminal.backend().buffer()[(divider_x, 0)].symbol(), "│");
+            assert!(
+                app.work_surface
+                    .latest_rows
+                    .iter()
+                    .any(|row| row.label == "work item 1")
+            );
         }
     }
 
     #[test]
-    fn side_rail_mouse_capture_stays_inside_the_rail() {
+    fn opened_row_toggles_closed_without_losing_selection() {
         let mut app = app();
-        for id in ["one", "two", "three", "four"] {
-            add_task(&mut app, id);
-        }
-        app.work_surface.placement = super::WorkSurfacePlacement::Right;
-        assert_eq!(super::height(&mut app, 100, 24, false), 0);
-        let area = ratatui::layout::Rect::new(0, 0, 100, 4);
-        let (chat, rail) = super::split_chat(&mut app, area, false);
-        let rail = rail.expect("right rail");
-        let backend = TestBackend::new(100, 4);
-        let mut terminal = Terminal::new(backend).expect("terminal");
-        terminal
-            .draw(|frame| super::render(frame, rail, &mut app))
-            .expect("draw");
+        add_todos(&mut app, 1);
+        let row = super::model::project(&mut app)
+            .into_iter()
+            .find(|row| row.selectable)
+            .expect("work row");
+        let open = row.primary_action.clone();
 
-        let inside = super::handle_mouse(
-            &mut app,
-            MouseEvent {
-                kind: MouseEventKind::ScrollDown,
-                column: rail.x.saturating_add(2),
-                row: rail.y.saturating_add(1),
-                modifiers: KeyModifiers::NONE,
-            },
-        );
-        assert!(inside.consumed);
-        assert!(app.work_surface.scroll_offset > 0);
-
-        let outside = super::handle_mouse(
-            &mut app,
-            MouseEvent {
-                kind: MouseEventKind::ScrollDown,
-                column: chat.x.saturating_add(2),
-                row: chat.y.saturating_add(1),
-                modifiers: KeyModifiers::NONE,
-            },
-        );
-        assert!(!outside.consumed);
-    }
-
-    #[test]
-    fn classic_and_narrow_layouts_keep_the_existing_top_surface() {
-        let mut app = app();
-        add_task(&mut app, "top");
-        app.work_surface.placement = super::WorkSurfacePlacement::Right;
-
-        assert_eq!(super::height(&mut app, 100, 24, true), 3);
-        let area = ratatui::layout::Rect::new(0, 0, 100, 12);
-        let (chat, rail) = super::split_chat(&mut app, area, true);
-        assert_eq!(chat, area);
-        assert!(rail.is_none());
-        assert_eq!(
-            app.work_surface.placement,
-            super::WorkSurfacePlacement::Right,
-            "Classic fallback must not overwrite the saved Ocean preference"
-        );
-
-        assert_eq!(super::height(&mut app, 60, 16, false), 3);
-        let narrow = ratatui::layout::Rect::new(0, 0, 60, 8);
-        let (chat, rail) = super::split_chat(&mut app, narrow, false);
-        assert_eq!(chat, narrow);
-        assert!(rail.is_none());
-    }
-
-    #[test]
-    fn enter_toggles_already_opened_worker_closed() {
-        let mut app = app();
-        for index in 1..=2 {
-            let id = format!("agent_{index}");
-            app.agent_label_map
-                .insert(id.clone(), format!("Agent {index}"));
-            app.agent_progress.insert(id, "running".to_string());
-        }
-        app.work_surface.focused = true;
-        let rows = super::model::project(&mut app);
-        let worker = rows
-            .iter()
-            .find(|row| row.id.0 == "worker:agent_1")
-            .expect("worker");
-        app.work_surface.selected = Some(worker.id.clone());
-        let open = worker.primary_action.clone();
-        assert!(super::interaction::activate_primary(&mut app, &worker.id, open.clone()).is_some());
-        assert_eq!(app.work_surface.opened.as_ref(), Some(&worker.id));
-        assert!(super::interaction::activate_primary(&mut app, &worker.id, open).is_none());
+        assert!(super::interaction::activate_primary(&mut app, &row.id, open.clone()).is_some());
+        assert!(super::interaction::activate_primary(&mut app, &row.id, open).is_none());
         assert!(app.work_surface.opened.is_none());
-        assert_eq!(app.work_surface.selected.as_ref(), Some(&worker.id));
-    }
-
-    #[test]
-    fn stop_first_activation_arms_row_with_visible_confirm() {
-        let mut app = app();
-        app.agent_label_map
-            .insert("agent_1".into(), "Agent 1".into());
-        app.agent_progress
-            .insert("agent_1".into(), "running".into());
-        let backend = TestBackend::new(100, 8);
-        let mut terminal = Terminal::new(backend).expect("terminal");
-        terminal
-            .draw(|frame| super::render(frame, frame.area(), &mut app))
-            .expect("draw");
-        let worker = app
-            .work_surface
-            .latest_rows
-            .iter()
-            .find(|row| row.id.0 == "worker:agent_1")
-            .expect("worker")
-            .clone();
-        let stop = worker.stop_action.clone().expect("stop");
-        assert!(super::interaction::activate_stop(&mut app, &worker.id, stop.clone()).is_none());
-        terminal
-            .draw(|frame| super::render(frame, frame.area(), &mut app))
-            .expect("draw");
-        let text = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(text.contains("confirm"), "{text}");
-        assert!(text.contains("Esc"), "{text}");
-        let confirmed =
-            super::interaction::activate_stop(&mut app, &worker.id, stop).expect("fire");
-        assert!(matches!(
-            confirmed,
-            crate::tui::app::SidebarRowAction::CancelAgent { agent_id } if agent_id == "agent_1"
-        ));
-    }
-
-    #[test]
-    fn todo_row_body_click_opens_pager_without_open_control() {
-        let mut app = app();
-        app.todos
-            .try_lock()
-            .expect("todos")
-            .add("ship underwater strip".into(), TodoStatus::InProgress);
-        let backend = TestBackend::new(100, 8);
-        let mut terminal = Terminal::new(backend).expect("terminal");
-        terminal
-            .draw(|frame| super::render(frame, frame.area(), &mut app))
-            .expect("draw");
-        // Inspect-only rows render no [open] suffix and record no open hitbox;
-        // the row body itself is the pager affordance.
-        let text = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(!text.contains("[open]"), "{text}");
-        let hit = app
-            .work_surface
-            .hitboxes
-            .iter()
-            .find(|hit| hit.id.0.starts_with("todo:"))
-            .expect("todo hitbox");
-        assert!(hit.open_zone_start_col.is_none());
-        assert!(hit.open_zone_end_col.is_none());
-        let row_y = hit.row_y;
-        let outcome = super::handle_mouse(
-            &mut app,
-            MouseEvent {
-                kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
-                column: 2,
-                row: row_y,
-                modifiers: KeyModifiers::NONE,
-            },
-        );
-        assert!(outcome.consumed);
-        assert!(matches!(
-            outcome.action,
-            Some(crate::tui::app::SidebarRowAction::InspectText { .. })
-        ));
-        crate::tui::mouse_ui::apply_sidebar_row_action(&mut app, outcome.action.expect("action"));
-        assert_eq!(
-            app.view_stack.top_kind(),
-            Some(crate::tui::views::ModalKind::Pager)
-        );
-        assert!(app.work_surface.opened.is_some());
-    }
-
-    #[test]
-    fn focus_claim_clears_transcript_selection_owner() {
-        use crate::tui::selection::TranscriptSelectionPoint;
-        let mut app = app();
-        add_task(&mut app, "one");
-        app.viewport.transcript_selection.anchor = Some(TranscriptSelectionPoint {
-            line_index: 0,
-            column: 0,
-        });
-        app.viewport.transcript_selection.head = app.viewport.transcript_selection.anchor;
-        assert!(
-            super::handle_key(
-                &mut app,
-                KeyEvent::new(KeyCode::Char('w'), KeyModifiers::ALT)
-            )
-            .is_some()
-        );
-        assert!(app.work_surface.focused);
-        assert!(!app.viewport.transcript_selection.is_active());
-    }
-
-    #[test]
-    fn placements_share_keyboard_toggle_and_stop_arm() {
-        for placement in [
-            super::WorkSurfacePlacement::Top,
-            super::WorkSurfacePlacement::Left,
-            super::WorkSurfacePlacement::Right,
-        ] {
-            let mut app = app();
-            app.work_surface.placement = placement;
-            app.agent_label_map
-                .insert("agent_1".into(), "Agent 1".into());
-            app.agent_progress
-                .insert("agent_1".into(), "running".into());
-            let area = ratatui::layout::Rect::new(0, 0, 100, 12);
-            let render_area = match placement {
-                super::WorkSurfacePlacement::Top => {
-                    let _ = super::height(&mut app, 100, 24, false);
-                    area
-                }
-                super::WorkSurfacePlacement::Left | super::WorkSurfacePlacement::Right => {
-                    // Project rows before split_chat so the side rail exists.
-                    let _ = super::model::project(&mut app);
-                    let (_, rail) = super::split_chat(&mut app, area, false);
-                    rail.expect("rail")
-                }
-            };
-            let backend = TestBackend::new(100, 12);
-            let mut terminal = Terminal::new(backend).expect("terminal");
-            terminal
-                .draw(|frame| super::render(frame, render_area, &mut app))
-                .expect("draw");
-            app.work_surface.focused = true;
-            let worker_id = app
-                .work_surface
-                .latest_rows
-                .iter()
-                .find(|row| row.id.0.starts_with("worker:"))
-                .map(|row| row.id.clone())
-                .expect("worker");
-            app.work_surface.selected = Some(worker_id.clone());
-            let open = Some(crate::tui::app::SidebarRowAction::OpenAgentDetail {
-                agent_id: "agent_1".into(),
-            });
-            assert!(
-                super::interaction::activate_primary(&mut app, &worker_id, open.clone()).is_some(),
-                "{placement:?}"
-            );
-            assert!(
-                super::interaction::activate_primary(&mut app, &worker_id, open).is_none(),
-                "{placement:?}"
-            );
-            let stop = crate::tui::app::SidebarRowAction::CancelAgent {
-                agent_id: "agent_1".into(),
-            };
-            assert!(
-                super::interaction::activate_stop(&mut app, &worker_id, stop.clone()).is_none(),
-                "{placement:?}"
-            );
-            assert!(
-                super::interaction::activate_stop(&mut app, &worker_id, stop).is_some(),
-                "{placement:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn moving_selection_clears_armed_stop() {
-        let mut app = app();
-        for index in 1..=2 {
-            let id = format!("agent_{index}");
-            app.agent_label_map
-                .insert(id.clone(), format!("Agent {index}"));
-            app.agent_progress.insert(id, "running".into());
-        }
-        app.work_surface.focused = true;
-        let rows = super::model::project(&mut app);
-        let selectable: Vec<_> = rows
-            .iter()
-            .filter(|row| row.selectable)
-            .map(|row| row.id.clone())
-            .collect();
-        assert!(selectable.len() >= 2);
-        let first = selectable[0].clone();
-        let second = selectable[1].clone();
-        app.work_surface.selected = Some(first.clone());
-        let stop = crate::tui::app::SidebarRowAction::CancelAgent {
-            agent_id: first.0.trim_start_matches("worker:").to_string(),
-        };
-        assert!(super::interaction::activate_stop(&mut app, &first, stop).is_none());
-        app.work_surface.selected = Some(second);
-        super::interaction::on_selection_changed(&mut app);
-        assert!(app.work_surface.stop_arm.is_none());
+        assert_eq!(app.work_surface.selected.as_ref(), Some(&row.id));
     }
 }

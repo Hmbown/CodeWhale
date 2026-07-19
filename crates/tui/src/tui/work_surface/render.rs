@@ -8,8 +8,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use crate::localization::MessageId;
-use crate::tui::app::{App, SidebarHoverRow, SidebarHoverSection, SidebarRowAction};
+use crate::tui::app::{App, SidebarHoverRow, SidebarHoverSection};
 use crate::tui::ui_text::truncate_line_to_width;
 
 use super::model::{WorkHitbox, WorkRow, WorkSurfacePlacement, WorkTone, project};
@@ -40,8 +39,6 @@ pub fn height(app: &mut App, width: u16, terminal_height: u16, classic_shell: bo
         app.work_surface.selected = None;
         app.work_surface.opened = None;
         app.work_surface.hovered = None;
-        app.work_surface.stop_arm = None;
-        app.work_surface.stopping = None;
         app.work_surface.last_area = None;
         app.work_surface.hitboxes.clear();
         app.work_surface.latest_rows.clear();
@@ -201,23 +198,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
             app.work_surface.focused && app.work_surface.selected.as_ref() == Some(&row.id);
         let hovered = app.work_surface.hovered.as_ref() == Some(&row.id);
         let opened = app.work_surface.opened.as_ref() == Some(&row.id);
-        let armed = app
-            .work_surface
-            .stop_arm
-            .as_ref()
-            .is_some_and(|arm| arm.is_active() && arm.row_id == row.id);
-        let stopping = app.work_surface.stopping.as_ref() == Some(&row.id);
-        let style = row_style(app, row, selected, hovered, opened, armed);
-        let controls = controls_text(app, row, content_area.width, armed, stopping, opened);
-        let controls_width = UnicodeWidthStr::width(controls.as_str());
+        let style = row_style(app, row, selected, hovered, opened);
         let compact_owner = if body_area.height <= 2 {
             row.id
                 .0
                 .split_once(':')
                 .map(|(kind, _)| match kind {
-                    "task" => format!("{} · ", app.tr(MessageId::SidebarTasksLabel)),
-                    "todo" => format!("{} · ", app.tr(MessageId::SidebarTodoLabel)),
-                    "worker" => format!("{} · ", app.tr(MessageId::FleetRosterWorkers)),
+                    "graph" => "Work · ".to_string(),
                     _ => String::new(),
                 })
                 .unwrap_or_default()
@@ -234,40 +221,40 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
         } else {
             format!("{compact_owner}{mark} ")
         };
+        let detail = if row.tone != WorkTone::Heading && content_area.width >= 44 {
+            format!("  {}", row.detail)
+        } else {
+            String::new()
+        };
+        let detail_width = UnicodeWidthStr::width(detail.as_str());
         let label_width = usize::from(content_area.width)
-            .saturating_sub(UnicodeWidthStr::width(prefix.as_str()) + controls_width)
+            .saturating_sub(UnicodeWidthStr::width(prefix.as_str()) + detail_width)
             .max(1);
         let label = truncate_line_to_width(&row.label, label_width);
         let gap = usize::from(content_area.width).saturating_sub(
             UnicodeWidthStr::width(prefix.as_str())
                 + UnicodeWidthStr::width(label.as_str())
-                + controls_width,
+                + detail_width,
         );
-        let display = format!("{prefix}{label}{}{controls}", " ".repeat(gap));
+        let display = format!("{prefix}{label}{}{detail}", " ".repeat(gap));
         lines.push(Line::from(Span::styled(display.clone(), style)));
 
-        let (open_start, open_end, stop_start, stop_end) =
-            control_zones(app, row, content_area, armed, stopping, opened);
         hitboxes.push(WorkHitbox {
             id: row.id.clone(),
             row_y,
-            open_zone_start_col: open_start,
-            open_zone_end_col: open_end,
-            stop_zone_start_col: stop_start,
-            stop_zone_end_col: stop_end,
         });
 
         if row.selectable {
             hover_rows.push(SidebarHoverRow {
                 row_y,
                 display_text: display,
-                full_text: row.label.clone(),
+                full_text: format!("{} · {}", row.label, row.detail),
                 detail: Some(row.detail.clone()),
-                is_truncated: label != row.label,
+                is_truncated: label != row.label || detail.is_empty(),
                 click_action: row.primary_action.clone(),
-                stop_action: row.stop_action.clone(),
-                stop_zone_start_col: stop_start,
-                stop_zone_end_col: stop_end,
+                stop_action: None,
+                stop_zone_start_col: None,
+                stop_zone_end_col: None,
             });
         }
     }
@@ -294,124 +281,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
     });
 }
 
-/// Whether a row earns an `[open]` control. Rows whose only action is text
-/// inspection (todos) skip it: the row body click already opens the pager,
-/// hover shows the full text, and right-click copies it, so the suffix would
-/// only waste label width.
-fn shows_open_control(row: &WorkRow) -> bool {
-    match &row.primary_action {
-        Some(SidebarRowAction::InspectText { .. }) => row.stop_action.is_some(),
-        Some(_) => true,
-        None => false,
-    }
-}
-
-fn controls_text(
-    app: &App,
-    row: &WorkRow,
-    width: u16,
-    armed: bool,
-    stopping: bool,
-    _opened: bool,
-) -> String {
-    if stopping {
-        let stopping_label = app.tr(MessageId::WorkSurfaceStoppingControl);
-        return if width < 60 {
-            format!(" {stopping_label}")
-        } else {
-            format!(" [{stopping_label}]")
-        };
-    }
-    if armed {
-        let confirm = app.tr(MessageId::WorkSurfaceStopConfirmControl);
-        return if width < 60 {
-            format!(" {confirm} Esc")
-        } else {
-            format!(" [{confirm}] Esc")
-        };
-    }
-    let open = app.tr(MessageId::SidebarOpenControl);
-    let stop = app.tr(MessageId::SidebarStopControl);
-    match (
-        shows_open_control(row),
-        row.stop_action.is_some(),
-        width < 60,
-    ) {
-        (true, true, true) => format!(" {open} {stop}"),
-        (true, false, true) => format!(" {open}"),
-        (true, true, false) => format!(" [{open}] [{stop}]"),
-        (true, false, false) => format!(" [{open}]"),
-        _ => String::new(),
-    }
-}
-
-/// Record Open/Stop hitboxes from the same glyphs shown on screen.
-fn control_zones(
-    app: &App,
-    row: &WorkRow,
-    content_area: Rect,
-    armed: bool,
-    stopping: bool,
-    opened: bool,
-) -> (Option<u16>, Option<u16>, Option<u16>, Option<u16>) {
-    if stopping || (row.primary_action.is_none() && row.stop_action.is_none() && !armed) {
-        return (None, None, None, None);
-    }
-    let width = content_area.width;
-    let row_right = content_area.x.saturating_add(content_area.width);
-    let controls = controls_text(app, row, width, armed, stopping, opened);
-    let controls_width = UnicodeWidthStr::width(controls.as_str()) as u16;
-    let controls_start = row_right.saturating_sub(controls_width);
-
-    if armed {
-        // Whole armed control strip is the confirm hitbox.
-        return (None, None, Some(controls_start), Some(row_right));
-    }
-
-    let open = app.tr(MessageId::SidebarOpenControl);
-    let stop = app.tr(MessageId::SidebarStopControl);
-    let (open_text, stop_text) = if width < 60 {
-        (format!(" {open}"), format!(" {stop}"))
-    } else {
-        (format!(" [{open}]"), format!(" [{stop}]"))
-    };
-
-    let mut cursor = controls_start;
-    let mut open_zone = (None, None);
-    let mut stop_zone = (None, None);
-    // Derive zones from the same predicate as controls_text so hitboxes always
-    // match the rendered glyphs; inspect-only rows have no [open] hitbox and
-    // rely on the row-body click to reach the pager.
-    if shows_open_control(row) {
-        let open_width = UnicodeWidthStr::width(open_text.as_str()) as u16;
-        open_zone = (Some(cursor), Some(cursor.saturating_add(open_width)));
-        cursor = cursor.saturating_add(open_width);
-    }
-    if row.stop_action.is_some() {
-        let stop_width = UnicodeWidthStr::width(stop_text.as_str()) as u16;
-        stop_zone = (Some(cursor), Some(cursor.saturating_add(stop_width)));
-    }
-    (open_zone.0, open_zone.1, stop_zone.0, stop_zone.1)
-}
-
-fn row_style(
-    app: &App,
-    row: &WorkRow,
-    selected: bool,
-    hovered: bool,
-    opened: bool,
-    armed: bool,
-) -> Style {
+fn row_style(app: &App, row: &WorkRow, selected: bool, hovered: bool, opened: bool) -> Style {
     let fg = match row.tone {
         WorkTone::Heading => app.ui_theme.accent_primary,
         WorkTone::Live => app.ui_theme.status_working,
         WorkTone::Attention => app.ui_theme.error_fg,
         WorkTone::Success => app.ui_theme.success,
         WorkTone::Muted => app.ui_theme.text_muted,
-        // Workers are live actors, not completed work. Keep their identity in
-        // the sky/info lane so it is visually distinct from the green used by
-        // verified checklist items below.
-        WorkTone::Worker => app.ui_theme.info,
     };
     let mut style = Style::default().fg(fg).bg(app.ui_theme.surface_bg);
     if row.tone == WorkTone::Heading {
@@ -419,12 +295,6 @@ fn row_style(
     }
     if !row.selectable {
         return style;
-    }
-    if armed {
-        return style
-            .fg(app.ui_theme.error_fg)
-            .bg(app.ui_theme.selection_bg)
-            .add_modifier(Modifier::BOLD);
     }
     if opened {
         style = style

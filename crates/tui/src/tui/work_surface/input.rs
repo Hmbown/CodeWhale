@@ -2,10 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 
 use crate::tui::app::{App, SidebarRowAction};
 
-use super::interaction::{
-    activate_primary, activate_stop, claim_focus, close_opened, disarm_stop, on_selection_changed,
-    release_focus,
-};
+use super::interaction::{activate_primary, claim_focus, close_opened, release_focus};
 use super::model::{WorkRow, WorkRowId, project};
 
 #[derive(Debug, Default)]
@@ -44,9 +41,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Option<Option<SidebarRowActio
 
     let action = match key.code {
         KeyCode::Esc => {
-            if app.work_surface.stop_arm.is_some() {
-                disarm_stop(app);
-            } else if app.work_surface.opened.is_some() {
+            if app.work_surface.opened.is_some() {
                 close_opened(app);
             } else {
                 release_focus(app);
@@ -55,54 +50,30 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Option<Option<SidebarRowActio
         }
         KeyCode::Up => {
             move_selection(app, &rows, -1);
-            on_selection_changed(app);
             None
         }
         KeyCode::Down => {
             move_selection(app, &rows, 1);
-            on_selection_changed(app);
             None
         }
         KeyCode::Home => {
             select_edge(app, &rows, false);
-            on_selection_changed(app);
             None
         }
         KeyCode::End => {
             select_edge(app, &rows, true);
-            on_selection_changed(app);
             None
         }
         KeyCode::PageUp => {
             move_selection(app, &rows, -(app.work_surface.visible_rows.max(1) as isize));
-            on_selection_changed(app);
             None
         }
         KeyCode::PageDown => {
             move_selection(app, &rows, app.work_surface.visible_rows.max(1) as isize);
-            on_selection_changed(app);
             None
         }
-        KeyCode::Delete => selected_row(app, &rows).and_then(|row| {
-            row.stop_action
-                .clone()
-                .and_then(|action| activate_stop(app, &row.id, action))
-        }),
-        KeyCode::Enter => {
-            // Enter confirms an armed Stop on the selected row; otherwise it
-            // toggles the primary Open/detail action.
-            if let Some(arm) = app.work_surface.stop_arm.as_ref()
-                && arm.is_active()
-                && app.work_surface.selected.as_ref() == Some(&arm.row_id)
-            {
-                let row_id = arm.row_id.clone();
-                let action = arm.action.clone();
-                activate_stop(app, &row_id, action)
-            } else {
-                selected_row(app, &rows)
-                    .and_then(|row| activate_primary(app, &row.id, row.primary_action.clone()))
-            }
-        }
+        KeyCode::Enter => selected_row(app, &rows)
+            .and_then(|row| activate_primary(app, &row.id, row.primary_action.clone())),
         _ => return None,
     };
     app.work_surface.clamp_selection(&rows);
@@ -182,41 +153,10 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent) -> MouseOutcome {
                 };
             };
             claim_focus(app);
-            let hitbox = app
-                .work_surface
-                .hitboxes
-                .iter()
-                .find(|candidate| candidate.row_y == mouse.row)
-                .cloned();
-
-            let in_stop = hitbox.as_ref().is_some_and(|hit| {
-                hit.stop_zone_start_col
-                    .zip(hit.stop_zone_end_col)
-                    .is_some_and(|(start, end)| mouse.column >= start && mouse.column < end)
-            });
-            let in_open = hitbox.as_ref().is_some_and(|hit| {
-                hit.open_zone_start_col
-                    .zip(hit.open_zone_end_col)
-                    .is_some_and(|(start, end)| mouse.column >= start && mouse.column < end)
-            });
-
-            let previous = app.work_surface.selected.clone();
             app.work_surface.selected = Some(row.id.clone());
-            if previous.as_ref() != Some(&row.id) {
-                on_selection_changed(app);
-            }
             app.needs_redraw = true;
 
-            let action = if in_stop {
-                row.stop_action
-                    .clone()
-                    .and_then(|action| activate_stop(app, &row.id, action))
-            } else if in_open || row.primary_action.is_some() {
-                // Open zone and row body share the primary activate/toggle.
-                activate_primary(app, &row.id, row.primary_action.clone())
-            } else {
-                None
-            };
+            let action = activate_primary(app, &row.id, row.primary_action.clone());
             MouseOutcome {
                 consumed: true,
                 action,

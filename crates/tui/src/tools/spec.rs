@@ -185,6 +185,9 @@ pub struct ToolContext {
     /// Whether tools should auto-approve without safety checks (YOLO mode).
     /// When true, command safety analysis is skipped for shell execution.
     pub auto_approve: bool,
+    /// Plan-mode `update_plan` calls must create a validated, reviewable graph
+    /// proposal. Other modes may update ordinary progress directly.
+    pub review_plan_changes: bool,
     /// Effective shell policy for this execution context.
     pub shell_policy: ShellPolicy,
     /// Effective feature flag set for the running session.
@@ -284,6 +287,7 @@ impl ToolContext {
             elevated_sandbox_policy: None,
             shell_network_denied_hint: None,
             auto_approve: false,
+            review_plan_changes: false,
             shell_policy: ShellPolicy::Full,
             features: Features::with_defaults(),
             state_namespace: "workspace".to_string(),
@@ -330,6 +334,7 @@ impl ToolContext {
             elevated_sandbox_policy: None,
             shell_network_denied_hint: None,
             auto_approve: false,
+            review_plan_changes: false,
             shell_policy: ShellPolicy::Full,
             features: Features::with_defaults(),
             state_namespace: "workspace".to_string(),
@@ -376,6 +381,7 @@ impl ToolContext {
             elevated_sandbox_policy: None,
             shell_network_denied_hint: None,
             auto_approve,
+            review_plan_changes: false,
             shell_policy: ShellPolicy::Full,
             features: Features::with_defaults(),
             state_namespace: "workspace".to_string(),
@@ -407,6 +413,14 @@ impl ToolContext {
     #[must_use]
     pub fn with_runtime_services(mut self, runtime: RuntimeToolServices) -> Self {
         self.runtime = runtime;
+        self
+    }
+
+    /// Require plan updates in this turn to remain pending until the user
+    /// accepts their graph diff from the Plan review surface.
+    #[must_use]
+    pub fn with_review_plan_changes(mut self, review: bool) -> Self {
+        self.review_plan_changes = review;
         self
     }
 

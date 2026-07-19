@@ -1632,11 +1632,12 @@ pub enum SidebarRowAction {
     CancelAgent {
         agent_id: String,
     },
-    /// Safe read-only inspection for work rows without a mutable backend
-    /// action (for example an agent-owned To-do item).
-    InspectText {
-        label: String,
-        detail: String,
+    /// Open the Work Graph inspector in the shared pager. Any lifecycle stop
+    /// action is carried into that inspector instead of consuming row width.
+    InspectWork {
+        title: String,
+        body: String,
+        stop_action: Option<Box<SidebarRowAction>>,
     },
 }
 
@@ -1650,7 +1651,7 @@ impl SidebarRowAction {
             | Self::ToggleAgentDetails { .. }
             | Self::OpenAgentDetail { .. }
             | Self::CancelAgent { .. }
-            | Self::InspectText { .. } => None,
+            | Self::InspectWork { .. } => None,
         }
     }
 
@@ -1662,7 +1663,7 @@ impl SidebarRowAction {
             Self::CancelAgent { .. } => true,
             Self::ToggleAgentDetails { .. }
             | Self::OpenAgentDetail { .. }
-            | Self::InspectText { .. }
+            | Self::InspectWork { .. }
             | Self::HotbarSlot(_) => false,
         }
     }
@@ -2221,6 +2222,9 @@ pub struct App {
     pub plan_state: SharedPlanState,
     /// Whether a plan follow-up prompt is waiting for user input
     pub plan_prompt_pending: bool,
+    /// Exact graph proposal rendered in the current Plan confirmation. Plan
+    /// acceptance must present this identity again or fail closed.
+    pub pending_plan_proposal_id: Option<crate::work_graph::ProposalId>,
     /// Whether update_plan was called during the current turn
     pub plan_tool_used_in_turn: bool,
     /// Todo list for `TodoWriteTool`. Read by the plan confirmation modal to
@@ -3368,6 +3372,7 @@ impl App {
             project_doc: None,
             plan_state,
             plan_prompt_pending: false,
+            pending_plan_proposal_id: None,
             plan_tool_used_in_turn: false,
             todos,
             runtime_services: RuntimeToolServices {
@@ -3639,6 +3644,7 @@ impl App {
 
         if mode != AppMode::Plan {
             self.plan_prompt_pending = false;
+            self.pending_plan_proposal_id = None;
             self.plan_tool_used_in_turn = false;
         }
 
@@ -6739,6 +6745,7 @@ impl App {
         session_id: &str,
         state: Option<&SessionWorkState>,
     ) -> Result<(), String> {
+        self.pending_plan_proposal_id = None;
         if let Some(work) = self.runtime_services.work.as_ref() {
             let empty = SessionWorkState::default();
             let state = state.unwrap_or(&empty);

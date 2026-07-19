@@ -1109,7 +1109,10 @@ fn file_ask_rule_engine(tool: &str, path: &str) -> codewhale_execpolicy::ExecPol
 
 fn model_turn_event_timeout() -> Duration {
     if cfg!(windows) {
-        Duration::from_secs(30)
+        // The Windows CI runner executes the full TUI test binary with thousands of
+        // tests competing for CPU. Keep this high enough that an approval-gated
+        // model turn is not mistaken for a lifecycle failure under runner load.
+        Duration::from_secs(60)
     } else {
         Duration::from_secs(10)
     }

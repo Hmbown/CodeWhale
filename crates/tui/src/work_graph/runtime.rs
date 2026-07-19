@@ -7,9 +7,9 @@ use crate::tools::todo::{SharedTodoList, TodoList, TodoListSnapshot, TodoStatus}
 
 use super::{
     ApprovalRef, ChangeCtx, CompatPlanMetadata, CompatProjectionState, CompatTodoBinding, EdgeKind,
-    NodeKind, NodeState, ProposalId, Provenance, WorkEdge, WorkEdgeId, WorkGraph, WorkGraphChange,
-    WorkGraphProposal, WorkGraphSnapshot, WorkNode, WorkNodeId, WorkNodePatch, import_legacy,
-    project_plan, project_todos, validate,
+    NodeKind, NodeState, ProposalId, ProposedNodeUpdate, Provenance, WorkEdge, WorkEdgeId,
+    WorkGraph, WorkGraphChange, WorkGraphProposal, WorkGraphSnapshot, WorkNode, WorkNodeId,
+    WorkNodePatch, import_legacy, project_plan, project_todos, validate,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -94,6 +94,66 @@ impl WorkRuntime {
         Ok(derived_plan)
     }
 
+    /// Stage a Plan-mode edit as a validated graph proposal. The accepted
+    /// graph and its legacy projections remain unchanged until `accept_plan`;
+    /// repeated revision turns explicitly withdraw the earlier proposal.
+    pub async fn propose_plan_update(
+        &self,
+        session_id: &str,
+        tool: &str,
+        plan: &PlanSnapshot,
+    ) -> Result<PlanSnapshot, String> {
+        let todos_guard = self.todos.lock().await;
+        let plan_guard = self.plan.lock().await;
+        let mut active = lock_unpoisoned(&self.graph);
+        let base = graph_for_update(
+            &mut active,
+            session_id,
+            &plan_guard.snapshot(),
+            &todos_guard.snapshot(),
+        )?;
+        let mut graph = WorkGraph::from_snapshot(base);
+        let prior_proposals = graph
+            .snapshot()
+            .proposals
+            .iter()
+            .map(|proposal| proposal.id.clone())
+            .collect::<Vec<_>>();
+        for proposal_id in prior_proposals {
+            apply_change(
+                &mut graph,
+                session_id,
+                tool,
+                WorkGraphChange::WithdrawPlanDiff { proposal_id },
+            )?;
+        }
+        let proposal = build_plan_proposal(graph.snapshot(), session_id, tool, plan)?;
+        let preview = super::reducer::preview_plan_diff(
+            graph.snapshot(),
+            &proposal,
+            &ChangeCtx {
+                session_id: session_id.to_string(),
+                now: now_ms(),
+                idempotency_key: None,
+            },
+        )
+        .map_err(|err| format!("{tool}: {err}"))?;
+        let proposed_plan = project_plan(&preview);
+        apply_change(
+            &mut graph,
+            session_id,
+            tool,
+            WorkGraphChange::ProposePlanDiff { proposal },
+        )?;
+        let next = graph.into_snapshot();
+        let current_plan = project_plan(&next);
+        let current_todos = project_todos(&next);
+        validate_combined(&next, &current_plan, &current_todos)?;
+        active.snapshot = Some(next);
+        active.pending_publish = true;
+        Ok(proposed_plan)
+    }
+
     /// Apply a legacy To-do/checklist payload through the graph and publish
     /// both projections from the committed candidate.
     pub async fn apply_todo_update(
@@ -128,6 +188,7 @@ impl WorkRuntime {
         &self,
         session_id: Option<&str>,
         approval_reference: &str,
+        expected_proposal_id: Option<&ProposalId>,
     ) -> Result<usize, String> {
         let todos_guard = self.todos.lock().await;
         let plan_guard = self.plan.lock().await;
@@ -139,17 +200,51 @@ impl WorkRuntime {
             &plan_guard.snapshot(),
             &todos_guard.snapshot(),
         )?;
-        if base.compat.plan_order.is_empty() {
-            // There is no Plan diff to accept. A legacy-only To-do import may
-            // still have happened while resolving the base and must receive
-            // its first graph-bearing persistence boundary.
-            if !base.is_empty() {
-                active.snapshot = Some(base);
+        let mut graph = WorkGraph::from_snapshot(base);
+        let proposal_ids = graph
+            .snapshot()
+            .proposals
+            .iter()
+            .map(|proposal| proposal.id.clone())
+            .collect::<Vec<_>>();
+        let mut accepted_existing_proposal = false;
+        if proposal_ids.is_empty() {
+            if expected_proposal_id.is_some() {
+                return Err("the reviewed Plan proposal is no longer pending".to_string());
+            }
+        } else {
+            let expected = expected_proposal_id.ok_or_else(|| {
+                "Plan acceptance is missing the proposal shown for review".to_string()
+            })?;
+            if proposal_ids.len() != 1 || proposal_ids.first() != Some(expected) {
+                return Err(
+                    "the pending Plan proposal changed after review; render it again before accepting"
+                        .to_string(),
+                );
+            }
+            apply_change(
+                &mut graph,
+                &session_id,
+                "plan_acceptance",
+                WorkGraphChange::AcceptPlanDiff {
+                    proposal_id: expected.clone(),
+                    approval: ApprovalRef {
+                        reference: approval_reference.to_string(),
+                    },
+                },
+            )?;
+            accepted_existing_proposal = true;
+        }
+        if graph.snapshot().compat.plan_order.is_empty() {
+            // There is no Plan content to alias. This can be a reviewed plan
+            // deletion or a legacy-only import; either still needs its next
+            // graph-bearing persistence boundary.
+            if !graph.snapshot().is_empty() {
+                active.snapshot = Some(graph.into_snapshot());
                 active.pending_publish = true;
             }
             return Ok(0);
         }
-        let mut graph = WorkGraph::from_snapshot(base);
         let active_plan_node = graph
             .snapshot()
             .compat
@@ -212,35 +307,39 @@ impl WorkRuntime {
                 .ok_or_else(|| "To-do item IDs are exhausted".to_string())?;
         }
         let changed = compat.todos.len().saturating_sub(before);
-        let proposal_id = ProposalId::derive(
-            &session_id,
-            &format!("plan-acceptance:{}", graph.snapshot().revision),
-        );
-        apply_change(
-            &mut graph,
-            &session_id,
-            "plan_acceptance",
-            WorkGraphChange::ProposePlanDiff {
-                proposal: WorkGraphProposal {
-                    id: proposal_id.clone(),
-                    added_nodes: Vec::new(),
-                    added_edges: Vec::new(),
-                    updated_nodes: Vec::new(),
-                    removed_edges: Vec::new(),
+        if !accepted_existing_proposal {
+            let proposal_id = ProposalId::derive(
+                &session_id,
+                &format!("plan-acceptance:{}", graph.snapshot().revision),
+            );
+            apply_change(
+                &mut graph,
+                &session_id,
+                "plan_acceptance",
+                WorkGraphChange::ProposePlanDiff {
+                    proposal: WorkGraphProposal {
+                        id: proposal_id.clone(),
+                        added_nodes: Vec::new(),
+                        added_edges: Vec::new(),
+                        updated_nodes: Vec::new(),
+                        removed_nodes: Vec::new(),
+                        removed_edges: Vec::new(),
+                        replacement_compat: None,
+                    },
                 },
-            },
-        )?;
-        apply_change(
-            &mut graph,
-            &session_id,
-            "plan_acceptance",
-            WorkGraphChange::AcceptPlanDiff {
-                proposal_id,
-                approval: ApprovalRef {
-                    reference: approval_reference.to_string(),
+            )?;
+            apply_change(
+                &mut graph,
+                &session_id,
+                "plan_acceptance",
+                WorkGraphChange::AcceptPlanDiff {
+                    proposal_id,
+                    approval: ApprovalRef {
+                        reference: approval_reference.to_string(),
+                    },
                 },
-            },
-        )?;
+            )?;
+        }
         apply_change(
             &mut graph,
             &session_id,
@@ -324,6 +423,69 @@ impl WorkRuntime {
             return Ok(projected);
         }
         Ok(self.todos.lock().await.snapshot())
+    }
+
+    /// Return the latest validated pending Plan diff as a read-only preview
+    /// for the review modal. Nothing is published or accepted here.
+    pub fn plan_for_review(
+        &self,
+        session_id: Option<&str>,
+    ) -> Result<Option<PlanSnapshot>, String> {
+        self.plan_review_for_confirmation(session_id)
+            .map(|review| review.map(|(_, plan, _)| plan))
+    }
+
+    /// Return the exact proposal identity together with the preview and its
+    /// user-visible delta. The UI retains this id and must present it again at
+    /// acceptance, so a proposal replaced after rendering fails closed.
+    pub fn plan_review_for_confirmation(
+        &self,
+        session_id: Option<&str>,
+    ) -> Result<Option<(ProposalId, PlanSnapshot, String)>, String> {
+        let active = lock_unpoisoned(&self.graph);
+        if let (Some(expected), Some(actual)) = (session_id, active.session_id.as_deref())
+            && expected != actual
+        {
+            return Ok(None);
+        }
+        let Some(graph) = active.snapshot.as_ref() else {
+            return Ok(None);
+        };
+        let Some(proposal) = graph.proposals.last() else {
+            return Ok(None);
+        };
+        let preview = super::reducer::preview_plan_diff(
+            graph,
+            proposal,
+            &ChangeCtx {
+                session_id: resolved_session_id(&active, session_id),
+                now: now_ms(),
+                idempotency_key: None,
+            },
+        )
+        .map_err(|err| err.to_string())?;
+        Ok(Some((
+            proposal.id.clone(),
+            project_plan(&preview),
+            format_plan_diff_summary(graph, proposal),
+        )))
+    }
+
+    /// Compact, user-visible receipt for the latest pending Plan diff.
+    pub fn plan_diff_summary(&self, session_id: Option<&str>) -> Result<Option<String>, String> {
+        let active = lock_unpoisoned(&self.graph);
+        if let (Some(expected), Some(actual)) = (session_id, active.session_id.as_deref())
+            && expected != actual
+        {
+            return Ok(None);
+        }
+        let Some(graph) = active.snapshot.as_ref() else {
+            return Ok(None);
+        };
+        Ok(graph
+            .proposals
+            .last()
+            .map(|proposal| format_plan_diff_summary(graph, proposal)))
     }
 
     /// Capture a persistence-ready graph plus fully populated old views.
@@ -486,6 +648,248 @@ fn graph_for_update(
     };
     active.snapshot = Some(graph.clone());
     Ok(graph)
+}
+
+fn build_plan_proposal(
+    base: &WorkGraphSnapshot,
+    session_id: &str,
+    tool: &str,
+    plan: &PlanSnapshot,
+) -> Result<WorkGraphProposal, String> {
+    let serialized = serde_json::to_string(plan)
+        .map_err(|err| format!("failed to serialize plan proposal: {err}"))?;
+    let proposal_id = ProposalId::derive(
+        session_id,
+        &format!("plan-edit:{}:{serialized}", base.revision),
+    );
+    let mut target = update_plan_graph(base.clone(), session_id, tool, plan)?;
+
+    // A shorter reviewed plan removes its retired plan-step scope and every
+    // incident edge in the same proposal. Validation rejects the candidate if
+    // that would orphan live work or violate another graph invariant.
+    let removed_scope = base
+        .compat
+        .plan_order
+        .iter()
+        .filter(|id| !target.compat.plan_order.contains(id))
+        .cloned()
+        .collect::<Vec<_>>();
+    target
+        .nodes
+        .retain(|node| !removed_scope.contains(&node.id));
+    target
+        .edges
+        .retain(|edge| !removed_scope.contains(&edge.from) && !removed_scope.contains(&edge.to));
+    validate(&target).map_err(|err| format!("{tool}: proposed plan is invalid: {err}"))?;
+
+    let edit_provenance = Provenance::UserEdit {
+        proposal_id: proposal_id.clone(),
+    };
+    let mut added_nodes = Vec::new();
+    let mut updated_nodes = Vec::new();
+    for target_node in &target.nodes {
+        let Some(current) = base.node(&target_node.id) else {
+            let mut added = target_node.clone();
+            added.provenance = edit_provenance.clone();
+            added_nodes.push(added);
+            continue;
+        };
+        if current.kind != target_node.kind
+            || current.binding != target_node.binding
+            || current.evidence != target_node.evidence
+        {
+            return Err(format!(
+                "{tool}: plan proposal tried to mutate protected fields on node {}",
+                target_node.id
+            ));
+        }
+        let mut patch = WorkNodePatch::default();
+        if current.title != target_node.title {
+            patch.title = Some(target_node.title.clone());
+        }
+        if current.state != target_node.state {
+            patch.state = Some(target_node.state);
+        }
+        if current.acceptance != target_node.acceptance {
+            patch.acceptance = Some(target_node.acceptance.clone());
+        }
+        if patch.title.is_some() || patch.state.is_some() || patch.acceptance.is_some() {
+            patch.provenance = Some(edit_provenance.clone());
+            updated_nodes.push(ProposedNodeUpdate {
+                id: target_node.id.clone(),
+                patch,
+            });
+        }
+    }
+
+    let removed_nodes = base
+        .nodes
+        .iter()
+        .filter(|node| target.node(&node.id).is_none())
+        .map(|node| node.id.clone())
+        .collect::<Vec<_>>();
+    let mut added_edges = Vec::new();
+    for target_edge in &target.edges {
+        if let Some(current) = base.edge(&target_edge.id) {
+            if current != target_edge {
+                return Err(format!(
+                    "{tool}: plan proposal changed edge {} without replacing its identity",
+                    target_edge.id
+                ));
+            }
+        } else {
+            added_edges.push(target_edge.clone());
+        }
+    }
+    let removed_edges = base
+        .edges
+        .iter()
+        .filter(|edge| target.edge(&edge.id).is_none())
+        .map(|edge| edge.id.clone())
+        .collect::<Vec<_>>();
+
+    Ok(WorkGraphProposal {
+        id: proposal_id,
+        added_nodes,
+        added_edges,
+        updated_nodes,
+        removed_nodes,
+        removed_edges,
+        replacement_compat: Some(target.compat),
+    })
+}
+
+fn format_plan_diff_summary(graph: &WorkGraphSnapshot, proposal: &WorkGraphProposal) -> String {
+    fn titles<'a>(nodes: impl Iterator<Item = &'a WorkNode>) -> String {
+        let titles = nodes.map(|node| node.title.as_str()).collect::<Vec<_>>();
+        if titles.is_empty() {
+            "none".to_string()
+        } else {
+            titles.join("; ")
+        }
+    }
+
+    fn edge_kind(kind: EdgeKind) -> &'static str {
+        match kind {
+            EdgeKind::Contains => "contains",
+            EdgeKind::DependsOn => "depends on",
+            EdgeKind::Blocks => "blocks",
+            EdgeKind::Produces => "produces",
+            EdgeKind::Verifies => "verifies",
+            EdgeKind::RunsOn => "runs on",
+            EdgeKind::RequiresApproval => "requires approval",
+            EdgeKind::Supersedes => "supersedes",
+        }
+    }
+
+    let node_title = |id: &WorkNodeId| {
+        graph
+            .node(id)
+            .or_else(|| proposal.added_nodes.iter().find(|node| &node.id == id))
+            .map(|node| node.title.as_str())
+            .unwrap_or("unknown node")
+    };
+    let edges = |items: Vec<&WorkEdge>| {
+        if items.is_empty() {
+            "none".to_string()
+        } else {
+            items
+                .into_iter()
+                .map(|edge| {
+                    format!(
+                        "{} -> {} ({})",
+                        node_title(&edge.from),
+                        node_title(&edge.to),
+                        edge_kind(edge.kind)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
+        }
+    };
+
+    let changed_titles = proposal
+        .updated_nodes
+        .iter()
+        .filter_map(|update| {
+            update
+                .patch
+                .title
+                .as_deref()
+                .or_else(|| graph.node(&update.id).map(|node| node.title.as_str()))
+        })
+        .collect::<Vec<_>>();
+    let changed_titles = if changed_titles.is_empty() {
+        "none".to_string()
+    } else {
+        changed_titles.join("; ")
+    };
+    let removed_titles = titles(
+        proposal
+            .removed_nodes
+            .iter()
+            .filter_map(|id| graph.node(id)),
+    );
+    let old_scope = graph.compat.plan_order.len();
+    let new_scope = proposal
+        .replacement_compat
+        .as_ref()
+        .map_or(old_scope, |compat| compat.plan_order.len());
+    let dependency_adds = proposal
+        .added_edges
+        .iter()
+        .filter(|edge| edge.kind == EdgeKind::DependsOn)
+        .count();
+    let dependency_removals = proposal
+        .removed_edges
+        .iter()
+        .filter(|id| {
+            graph
+                .edge(id)
+                .is_some_and(|edge| edge.kind == EdgeKind::DependsOn)
+        })
+        .count();
+    let added_edges = edges(proposal.added_edges.iter().collect());
+    let removed_edges = edges(
+        proposal
+            .removed_edges
+            .iter()
+            .filter_map(|id| graph.edge(id))
+            .collect(),
+    );
+    let acceptance_changes = proposal
+        .added_nodes
+        .iter()
+        .filter(|node| !node.acceptance.is_empty())
+        .count()
+        + proposal
+            .updated_nodes
+            .iter()
+            .filter(|update| update.patch.acceptance.is_some())
+            .count()
+        + proposal
+            .removed_nodes
+            .iter()
+            .filter_map(|id| graph.node(id))
+            .filter(|node| !node.acceptance.is_empty())
+            .count();
+
+    format!(
+        "Scope: {old_scope} -> {new_scope} plan steps\n\
+         Added nodes ({}): {}\n\
+         Changed nodes ({}): {changed_titles}\n\
+         Removed nodes ({}): {removed_titles}\n\
+         Added edges ({}): {added_edges}\n\
+         Removed edges ({}): {removed_edges}\n\
+         Dependencies: +{dependency_adds} / -{dependency_removals}\n\
+         Acceptance requirements changed: {acceptance_changes}",
+        proposal.added_nodes.len(),
+        titles(proposal.added_nodes.iter()),
+        proposal.updated_nodes.len(),
+        proposal.removed_nodes.len(),
+        proposal.added_edges.len(),
+        proposal.removed_edges.len(),
+    )
 }
 
 fn update_plan_graph(
@@ -921,12 +1325,16 @@ mod tests {
             .await
             .expect("plan update");
         assert_eq!(
-            runtime.accept_plan(Some("session"), "accept_act").await,
+            runtime
+                .accept_plan(Some("session"), "accept_act", None)
+                .await,
             Ok(1)
         );
         assert_eq!(runtime.publish_pending().await, Ok(true));
         assert_eq!(
-            runtime.accept_plan(Some("session"), "accept_act").await,
+            runtime
+                .accept_plan(Some("session"), "accept_act", None)
+                .await,
             Ok(0),
             "already-aliased acceptance adds no duplicate To-do rows"
         );
@@ -1020,7 +1428,7 @@ mod tests {
         );
 
         runtime
-            .accept_plan(Some("session"), "accept_act")
+            .accept_plan(Some("session"), "accept_act", None)
             .await
             .expect("accept plan");
         let captured = runtime
@@ -1045,6 +1453,216 @@ mod tests {
                 .any(|node| node.kind == NodeKind::Approval),
             "accepted plans must retain an Approval node"
         );
+    }
+
+    #[tokio::test]
+    async fn plan_proposal_stays_unpublished_until_acceptance() {
+        let todos = crate::tools::todo::new_shared_todo_list();
+        let plan = crate::tools::plan::new_shared_plan_state();
+        let runtime = new_shared_work_runtime(todos.clone(), plan.clone());
+        let proposed = PlanSnapshot {
+            objective: Some("Ship safely".to_string()),
+            items: vec![
+                PlanItemArg {
+                    step: "Review diff".to_string(),
+                    status: StepStatus::InProgress,
+                },
+                PlanItemArg {
+                    step: "Run gates".to_string(),
+                    status: StepStatus::Pending,
+                },
+            ],
+            ..PlanSnapshot::default()
+        };
+
+        assert_eq!(
+            runtime
+                .propose_plan_update("session", "update_plan", &proposed)
+                .await,
+            Ok(proposed.clone())
+        );
+        assert_eq!(
+            runtime.plan_for_review(Some("session")),
+            Ok(Some(proposed.clone()))
+        );
+        let summary = runtime
+            .plan_diff_summary(Some("session"))
+            .expect("plan diff summary")
+            .expect("pending summary");
+        assert!(summary.contains("Scope: 0 -> 2 plan steps"), "{summary}");
+        assert!(summary.contains("Added nodes (3)"), "{summary}");
+        assert!(summary.contains("Acceptance requirements changed: 0"));
+        let staged = runtime
+            .capture(Some("session"))
+            .expect("capture staged proposal")
+            .expect("staged graph");
+        assert!(
+            staged.plan.is_empty(),
+            "accepted Plan projection must not move"
+        );
+        assert_eq!(staged.graph.proposals.len(), 1);
+        let reviewed_proposal_id = staged.graph.proposals[0].id.clone();
+        assert!(staged.graph.proposals[0].added_nodes.len() >= 3);
+        assert!(staged.graph.proposals[0].replacement_compat.is_some());
+        assert!(
+            runtime
+                .accept_plan(Some("session"), "accept_act", None)
+                .await
+                .expect_err("acceptance without the rendered proposal id must fail")
+                .contains("missing the proposal")
+        );
+        let unseen_proposal_id = ProposalId::derive("session", "unseen-proposal");
+        assert!(
+            runtime
+                .accept_plan(Some("session"), "accept_act", Some(&unseen_proposal_id),)
+                .await
+                .expect_err("a different proposal id must fail")
+                .contains("changed after review")
+        );
+        assert_eq!(
+            runtime
+                .capture(Some("session"))
+                .expect("capture rejected acceptance")
+                .expect("graph")
+                .graph
+                .proposals
+                .len(),
+            1,
+            "a mismatched acceptance must leave the reviewed proposal untouched"
+        );
+
+        assert_eq!(runtime.publish_pending().await, Ok(true));
+        assert!(plan.lock().await.snapshot().is_empty());
+        assert!(todos.lock().await.snapshot().is_empty());
+
+        assert_eq!(
+            runtime
+                .accept_plan(Some("session"), "accept_act", Some(&reviewed_proposal_id),)
+                .await,
+            Ok(2)
+        );
+        let accepted = runtime
+            .capture(Some("session"))
+            .expect("capture accepted proposal")
+            .expect("accepted graph");
+        assert_eq!(accepted.plan, proposed);
+        assert!(accepted.graph.proposals.is_empty());
+        assert_eq!(
+            accepted
+                .graph
+                .nodes
+                .iter()
+                .filter(|node| node.kind == NodeKind::Approval)
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn revised_plan_withdraws_prior_proposal_and_reviews_removed_scope() {
+        let todos = crate::tools::todo::new_shared_todo_list();
+        let plan = crate::tools::plan::new_shared_plan_state();
+        let runtime = new_shared_work_runtime(todos, plan);
+        let first = PlanSnapshot {
+            items: vec![
+                PlanItemArg {
+                    step: "Keep".to_string(),
+                    status: StepStatus::InProgress,
+                },
+                PlanItemArg {
+                    step: "Remove after review".to_string(),
+                    status: StepStatus::Pending,
+                },
+            ],
+            ..PlanSnapshot::default()
+        };
+        runtime
+            .propose_plan_update("session", "update_plan", &first)
+            .await
+            .expect("initial proposal");
+        let replacement = PlanSnapshot {
+            items: vec![PlanItemArg {
+                step: "Replacement before acceptance".to_string(),
+                status: StepStatus::InProgress,
+            }],
+            ..PlanSnapshot::default()
+        };
+        runtime
+            .propose_plan_update("session", "update_plan", &replacement)
+            .await
+            .expect("replacement proposal");
+        let replaced = runtime
+            .capture(Some("session"))
+            .expect("capture replacement")
+            .expect("replacement graph");
+        assert_eq!(replaced.graph.proposals.len(), 1);
+        let reviewed_replacement_id = replaced.graph.proposals[0].id.clone();
+        assert_eq!(
+            runtime.plan_for_review(Some("session")),
+            Ok(Some(replacement.clone()))
+        );
+        assert!(replaced.graph.history.iter().any(|receipt| {
+            receipt.summary == "withdraw_plan_diff"
+                || receipt.summary.starts_with("withdraw_plan_diff ")
+        }));
+
+        runtime
+            .accept_plan(
+                Some("session"),
+                "accept_act",
+                Some(&reviewed_replacement_id),
+            )
+            .await
+            .expect("accept replacement");
+        runtime
+            .publish_pending()
+            .await
+            .expect("publish replacement");
+        let expanded = PlanSnapshot {
+            items: vec![
+                PlanItemArg {
+                    step: "Replacement before acceptance".to_string(),
+                    status: StepStatus::InProgress,
+                },
+                PlanItemArg {
+                    step: "Remove only after review".to_string(),
+                    status: StepStatus::Pending,
+                },
+            ],
+            ..PlanSnapshot::default()
+        };
+        runtime
+            .apply_plan_update("session", "update_plan", &expanded)
+            .await
+            .expect("expand accepted plan");
+        runtime.publish_pending().await.expect("publish expansion");
+        let shorter = PlanSnapshot {
+            items: vec![PlanItemArg {
+                step: "Replacement before acceptance".to_string(),
+                status: StepStatus::Completed,
+            }],
+            ..PlanSnapshot::default()
+        };
+        runtime
+            .propose_plan_update("session", "update_plan", &shorter)
+            .await
+            .expect("shorter proposal");
+        let removal = runtime
+            .capture(Some("session"))
+            .expect("capture shorter proposal")
+            .expect("shorter graph");
+        assert_eq!(removal.graph.proposals.len(), 1);
+        assert_eq!(removal.graph.proposals[0].removed_nodes.len(), 1);
+        let summary = runtime
+            .plan_diff_summary(Some("session"))
+            .expect("removed-scope summary")
+            .expect("pending removal summary");
+        assert!(summary.contains("Scope: 2 -> 1 plan steps"), "{summary}");
+        assert!(
+            summary.contains("Removed nodes (1): Remove only after review"),
+            "{summary}"
+        );
+        assert_eq!(runtime.plan_for_review(Some("session")), Ok(Some(shorter)));
     }
 
     #[test]

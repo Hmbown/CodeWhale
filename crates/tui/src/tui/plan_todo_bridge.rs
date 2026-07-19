@@ -25,12 +25,14 @@ pub async fn project_accepted_plan(
     work: Option<&crate::work_graph::SharedWorkRuntime>,
     session_id: Option<&str>,
     acceptance: PlanAcceptance,
+    expected_proposal_id: Option<&crate::work_graph::ProposalId>,
 ) -> Result<usize, String> {
     let Some(approval_reference) = acceptance.approval_reference() else {
         return Ok(0);
     };
     let work = work.ok_or_else(|| "Work Graph runtime is not attached".to_string())?;
-    work.accept_plan(session_id, approval_reference).await
+    work.accept_plan(session_id, approval_reference, expected_proposal_id)
+        .await
 }
 
 #[cfg(test)]
@@ -40,11 +42,11 @@ mod tests {
     #[tokio::test]
     async fn revise_and_exit_need_no_graph_and_never_write() {
         assert_eq!(
-            project_accepted_plan(None, None, PlanAcceptance::Revise).await,
+            project_accepted_plan(None, None, PlanAcceptance::Revise, None).await,
             Ok(0)
         );
         assert_eq!(
-            project_accepted_plan(None, None, PlanAcceptance::Exit).await,
+            project_accepted_plan(None, None, PlanAcceptance::Exit, None).await,
             Ok(0)
         );
     }
@@ -52,7 +54,7 @@ mod tests {
     #[tokio::test]
     async fn acceptance_fails_closed_without_graph_authority() {
         assert_eq!(
-            project_accepted_plan(None, None, PlanAcceptance::AcceptAct)
+            project_accepted_plan(None, None, PlanAcceptance::AcceptAct, None)
                 .await
                 .unwrap_err(),
             "Work Graph runtime is not attached"

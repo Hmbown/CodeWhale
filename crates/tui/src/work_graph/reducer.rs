@@ -109,7 +109,16 @@ fn apply_pure(
             if next.proposals.iter().any(|p| p.id == proposal.id) {
                 return Err(structural(format!("duplicate proposal {}", proposal.id)));
             }
+            validate_proposal(&next, proposal, ctx)?;
             next.proposals.push(proposal.clone());
+        }
+        WorkGraphChange::WithdrawPlanDiff { proposal_id } => {
+            let before = next.proposals.len();
+            next.proposals
+                .retain(|proposal| proposal.id != *proposal_id);
+            if next.proposals.len() == before {
+                return Err(structural(format!("proposal {proposal_id} not found")));
+            }
         }
         WorkGraphChange::AcceptPlanDiff {
             proposal_id,
@@ -371,5 +380,46 @@ fn apply_proposal(
             return Err(structural(format!("edge {edge_id} not found")));
         }
     }
+    for node_id in &proposal.removed_nodes {
+        if next
+            .edges
+            .iter()
+            .any(|edge| edge.from == *node_id || edge.to == *node_id)
+        {
+            return Err(structural(format!(
+                "node {node_id} still has edges after proposed removals"
+            )));
+        }
+        let before = next.nodes.len();
+        next.nodes.retain(|node| node.id != *node_id);
+        if next.nodes.len() == before {
+            return Err(structural(format!("node {node_id} not found")));
+        }
+    }
+    if let Some(compat) = &proposal.replacement_compat {
+        next.compat.clone_from(compat);
+    }
     Ok(())
+}
+
+/// Reject malformed or invariant-breaking plan edits before they become
+/// user-reviewable. Acceptance reruns the same atomic application and the
+/// outer reducer validation, so reviewed and accepted semantics cannot drift.
+fn validate_proposal(
+    current: &WorkGraphSnapshot,
+    proposal: &WorkGraphProposal,
+    ctx: &ChangeCtx,
+) -> Result<(), ValidationReport> {
+    preview_plan_diff(current, proposal, ctx).map(|_| ())
+}
+
+pub(super) fn preview_plan_diff(
+    current: &WorkGraphSnapshot,
+    proposal: &WorkGraphProposal,
+    ctx: &ChangeCtx,
+) -> Result<WorkGraphSnapshot, ValidationReport> {
+    let mut candidate = current.clone();
+    apply_proposal(&mut candidate, proposal, ctx)?;
+    validate(&candidate)?;
+    Ok(candidate)
 }

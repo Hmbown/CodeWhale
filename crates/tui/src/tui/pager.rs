@@ -31,6 +31,15 @@ use crate::tui::views::{
     render_panel_scroll_rail, render_underwater_surface,
 };
 
+#[derive(Debug, Clone)]
+struct PagerDestructiveAction {
+    key: char,
+    label: String,
+    confirm_label: String,
+    event: ViewEvent,
+    armed: bool,
+}
+
 pub struct PagerView {
     title: String,
     lines: Vec<Line<'static>>,
@@ -53,6 +62,9 @@ pub struct PagerView {
     /// concern and may insert line breaks or normalize whitespace; Turn
     /// Inspector copy must retain the assembled text exactly (#4482).
     copy_text: Option<String>,
+    /// Optional inspector-owned destructive action. It requires two presses
+    /// (or key then Enter); Esc disarms before it closes the pager.
+    destructive_action: Option<PagerDestructiveAction>,
 }
 
 impl PagerView {
@@ -71,6 +83,7 @@ impl PagerView {
             last_visible_height: Cell::new(0),
             export_markdown: None,
             copy_text: None,
+            destructive_action: None,
         }
     }
 
@@ -86,6 +99,26 @@ impl PagerView {
     /// pager remains free to wrap content to its viewport.
     pub fn with_copy_text(mut self, text: impl Into<String>) -> Self {
         self.copy_text = Some(text.into());
+        self
+    }
+
+    /// Attach a two-step destructive action to this pager. Work Graph
+    /// inspectors use this to keep Stop inside the detail surface while
+    /// reusing the existing command/agent cancellation events.
+    pub fn with_destructive_action(
+        mut self,
+        key: char,
+        label: impl Into<String>,
+        confirm_label: impl Into<String>,
+        event: ViewEvent,
+    ) -> Self {
+        self.destructive_action = Some(PagerDestructiveAction {
+            key,
+            label: label.into(),
+            confirm_label: confirm_label.into(),
+            event,
+            armed: false,
+        });
         self
     }
 
@@ -264,6 +297,24 @@ impl ModalView for PagerView {
             }
         }
 
+        if let Some(action) = self.destructive_action.as_mut() {
+            if key.code == KeyCode::Esc && action.armed {
+                action.armed = false;
+                self.pending_g = false;
+                return ViewAction::None;
+            }
+            let matching_key =
+                matches!(key.code, KeyCode::Char(ch) if ch.eq_ignore_ascii_case(&action.key));
+            if matching_key || (key.code == KeyCode::Enter && action.armed) {
+                self.pending_g = false;
+                if action.armed {
+                    return ViewAction::EmitAndClose(action.event.clone());
+                }
+                action.armed = true;
+                return ViewAction::None;
+            }
+        }
+
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         let max_scroll = self.max_scroll();
@@ -430,6 +481,15 @@ impl ModalView for PagerView {
         ];
         if self.export_markdown.is_some() {
             hints.push(ActionHint::new("e", "copy handoff"));
+        }
+        if let Some(action) = self.destructive_action.as_ref() {
+            let key = action.key.to_string();
+            let label = if action.armed {
+                action.confirm_label.clone()
+            } else {
+                action.label.clone()
+            };
+            hints.push(ActionHint::new(key, label));
         }
         let content = render_modal_footer(inner, buf, &hints);
 
@@ -610,6 +670,38 @@ mod tests {
 
     fn ctrl(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::CONTROL)
+    }
+
+    #[test]
+    fn destructive_action_requires_two_steps_and_escape_only_disarms() {
+        let mut pager = make_pager(2).with_destructive_action(
+            's',
+            "stop",
+            "confirm stop · Esc cancels",
+            ViewEvent::SidebarAgentCancel {
+                agent_id: "agent_1".to_string(),
+            },
+        );
+
+        assert!(matches!(
+            pager.handle_key(key(KeyCode::Char('s'))),
+            ViewAction::None
+        ));
+        assert!(matches!(
+            pager.handle_key(key(KeyCode::Esc)),
+            ViewAction::None
+        ));
+        assert!(matches!(
+            pager.handle_key(key(KeyCode::Esc)),
+            ViewAction::Close
+        ));
+
+        let _ = pager.handle_key(key(KeyCode::Char('s')));
+        assert!(matches!(
+            pager.handle_key(key(KeyCode::Enter)),
+            ViewAction::EmitAndClose(ViewEvent::SidebarAgentCancel { agent_id })
+                if agent_id == "agent_1"
+        ));
     }
 
     /// Drive a render once so `last_visible_height` is populated and paging

@@ -55,6 +55,12 @@ pub enum WorkGraphChange {
     ProposePlanDiff {
         proposal: WorkGraphProposal,
     },
+    /// Explicitly retire a pending proposal before a replacement is
+    /// proposed. This keeps repeated "Revise plan" turns reviewable without
+    /// silently rewriting or accumulating stale proposals.
+    WithdrawPlanDiff {
+        proposal_id: ProposalId,
+    },
     AcceptPlanDiff {
         proposal_id: ProposalId,
         approval: ApprovalRef,
@@ -87,6 +93,7 @@ impl WorkGraphChange {
             WorkGraphChange::ReconcileOperation { .. } => "reconcile_operation",
             WorkGraphChange::AttachEvidence { .. } => "attach_evidence",
             WorkGraphChange::ProposePlanDiff { .. } => "propose_plan_diff",
+            WorkGraphChange::WithdrawPlanDiff { .. } => "withdraw_plan_diff",
             WorkGraphChange::AcceptPlanDiff { .. } => "accept_plan_diff",
             WorkGraphChange::Supersede { .. } => "supersede",
             WorkGraphChange::ReplaceCompatProjection { .. } => "replace_compat_projection",
@@ -114,10 +121,21 @@ pub struct WorkNodePatch {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkGraphProposal {
     pub id: ProposalId,
+    #[serde(default)]
     pub added_nodes: Vec<WorkNode>,
+    #[serde(default)]
     pub added_edges: Vec<WorkEdge>,
+    #[serde(default)]
     pub updated_nodes: Vec<ProposedNodeUpdate>,
+    #[serde(default)]
+    pub removed_nodes: Vec<WorkNodeId>,
+    #[serde(default)]
     pub removed_edges: Vec<WorkEdgeId>,
+    /// Graph-owned inputs for the legacy Plan/To-do projections. This is part
+    /// of the reviewed scope delta and is applied atomically with the graph
+    /// changes. Older saved proposals deserialize with no replacement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement_compat: Option<CompatProjectionState>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -1,4 +1,6 @@
 {
+    "SidebarStopControl": "停止",
+    "WorkSurfaceStopConfirmHint": "確認停止 · Esc 取消",
     "ComposerDispatchFailedRestored": "訊息未傳送（{error}）；已還原到輸入框。",
     "CmdAuthDescription": "管理提供者驗證流程",
     "CmdRelayDescription": "為新執行緒建立會話接力摘要",

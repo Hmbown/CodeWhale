@@ -749,25 +749,40 @@ pub(crate) fn apply_sidebar_row_action(app: &mut App, action: SidebarRowAction) 
         SidebarRowAction::CancelAgent { agent_id } => {
             vec![ViewEvent::SidebarAgentCancel { agent_id }]
         }
-        SidebarRowAction::InspectText { label, detail } => {
-            // Truthful To-do/Plan detail destination (TUI-DOG-005): open a pager
-            // with the full item text instead of a status-line-only fake Open.
+        SidebarRowAction::InspectWork {
+            title,
+            body,
+            stop_action,
+        } => {
             let width = app
                 .viewport
                 .last_transcript_area
                 .map(|area| area.width)
                 .unwrap_or(80);
-            let title = app.tr(MessageId::SidebarTodoLabel).into_owned();
-            let body = if detail.trim().is_empty() {
-                label
-            } else {
-                format!("{label}\n\n{detail}")
-            };
-            app.view_stack.push(crate::tui::pager::PagerView::from_text(
-                title,
-                &body,
-                width.saturating_sub(2),
-            ));
+            let mut pager =
+                crate::tui::pager::PagerView::from_text(title, &body, width.saturating_sub(2))
+                    .with_copy_text(body);
+            let stop_event = stop_action.and_then(|action| match *action {
+                SidebarRowAction::Command(command) => {
+                    use crate::tui::views::CommandPaletteAction;
+                    Some(ViewEvent::CommandPaletteSelected {
+                        action: CommandPaletteAction::ExecuteCommand { command },
+                    })
+                }
+                SidebarRowAction::CancelAgent { agent_id } => {
+                    Some(ViewEvent::SidebarAgentCancel { agent_id })
+                }
+                _ => None,
+            });
+            if let Some(event) = stop_event {
+                pager = pager.with_destructive_action(
+                    's',
+                    app.tr(MessageId::SidebarStopControl),
+                    app.tr(MessageId::WorkSurfaceStopConfirmHint),
+                    event,
+                );
+            }
+            app.view_stack.push(pager);
             app.needs_redraw = true;
             Vec::new()
         }

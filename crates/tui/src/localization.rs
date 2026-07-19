@@ -1052,13 +1052,9 @@ pub enum MessageId {
     // Sidebar work strip.
     SidebarTasksLabel,
     SidebarTodoLabel,
-    SidebarOpenControl,
     SidebarStopControl,
     SidebarDestructiveArmed,
-    /// Row-local Stop confirm label once armed (TUI-DOG-006).
-    WorkSurfaceStopConfirmControl,
-    /// Transient label while a confirmed Stop is in flight.
-    WorkSurfaceStoppingControl,
+    WorkSurfaceStopConfirmHint,
     // Composer slash menu.
     ComposerSlashMenuHint,
     // Approval modal — repository law band.
@@ -1991,11 +1987,9 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::WorkflowDebrief,
     MessageId::SidebarTasksLabel,
     MessageId::SidebarTodoLabel,
-    MessageId::SidebarOpenControl,
     MessageId::SidebarStopControl,
     MessageId::SidebarDestructiveArmed,
-    MessageId::WorkSurfaceStopConfirmControl,
-    MessageId::WorkSurfaceStoppingControl,
+    MessageId::WorkSurfaceStopConfirmHint,
     MessageId::ComposerSlashMenuHint,
     MessageId::ApprovalRepoLawBadge,
     MessageId::ApprovalRepoLawTitle,
@@ -2264,6 +2258,20 @@ mod tests {
                 missing_message_ids(*locale).is_empty(),
                 "{} is missing messages",
                 locale.tag()
+            );
+        }
+    }
+
+    #[test]
+    fn work_stop_confirmation_is_explicitly_localized() {
+        for locale in Locale::shipped_complete() {
+            if *locale == Locale::En {
+                continue;
+            }
+            assert_ne!(tr(*locale, MessageId::SidebarStopControl), "stop");
+            assert_ne!(
+                tr(*locale, MessageId::WorkSurfaceStopConfirmHint),
+                "confirm stop · Esc cancels"
             );
         }
     }

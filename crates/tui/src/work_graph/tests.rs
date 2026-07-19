@@ -554,7 +554,9 @@ fn scripted_run() -> WorkGraph {
                 ..WorkNodePatch::default()
             },
         }],
+        removed_nodes: Vec::new(),
         removed_edges: Vec::new(),
+        replacement_compat: None,
     };
     must(
         &mut graph,
@@ -675,6 +677,28 @@ fn snapshot_serde_round_trips() {
     let restored: WorkGraphSnapshot = serde_json::from_str(&json).unwrap();
     assert_eq!(&restored, graph.snapshot());
     validate(&restored).expect("restored snapshot still satisfies invariants");
+}
+
+#[test]
+fn pre_wg3_proposal_shape_deserializes_with_empty_delta_extensions() {
+    let proposal = WorkGraphProposal {
+        id: ProposalId::derive(SESSION, "legacy-proposal"),
+        added_nodes: Vec::new(),
+        added_edges: Vec::new(),
+        updated_nodes: Vec::new(),
+        removed_nodes: vec![nid("old-step")],
+        removed_edges: Vec::new(),
+        replacement_compat: Some(CompatProjectionState::default()),
+    };
+    let mut value = serde_json::to_value(proposal).expect("serialize current proposal");
+    let object = value.as_object_mut().expect("proposal object");
+    object.remove("removed_nodes");
+    object.remove("replacement_compat");
+
+    let restored: WorkGraphProposal =
+        serde_json::from_value(value).expect("deserialize pre-WG3 proposal");
+    assert!(restored.removed_nodes.is_empty());
+    assert!(restored.replacement_compat.is_none());
 }
 
 #[test]

@@ -529,7 +529,7 @@ fn resize_and_mouse_wheel_preserve_composer_ownership() -> anyhow::Result<()> {
 }
 
 #[test]
-fn work_surface_real_rows_own_click_wheel_resize_and_stop_confirm() -> anyhow::Result<()> {
+fn work_surface_real_rows_own_click_wheel_and_resize() -> anyhow::Result<()> {
     let _guard = qa_pty_test_lock();
     let ws = make_sealed_workspace()?;
     let session_path = ws.workspace().join("mouse-work-session.json");
@@ -617,72 +617,9 @@ fn work_surface_real_rows_own_click_wheel_resize_and_stop_confirm() -> anyhow::R
     };
     let (row, col) = h.frame().find_text(target).expect("row survived resize");
     h.send(keys::mouse::click(row, col))?;
-    h.wait_for_text("To-do", KEY_TIMEOUT)?;
+    h.wait_for_text("Work", KEY_TIMEOUT)?;
     h.wait_for_text(target, KEY_TIMEOUT)?;
     h.wait_for_text("q/Esc close", KEY_TIMEOUT)?;
-    let _ = h.shutdown();
-
-    let mut h = Harness::builder(Harness::cargo_bin("codewhale-tui"))
-        .cwd(ws.workspace())
-        .clear_env()
-        .seal_home(ws.home())
-        .env("DEEPSEEK_API_KEY", "ci-test-key-not-real")
-        .env("DEEPSEEK_BASE_URL", "http://127.0.0.1:1")
-        .env("NO_ANIMATIONS", "1")
-        .env("RUST_LOG", "warn")
-        .args([
-            "--workspace",
-            ws.workspace().to_str().expect("utf-8 workspace path"),
-            "--no-project-config",
-            "--skip-onboarding",
-            "--mouse-capture",
-            "--yolo",
-        ])
-        .size(24, 80)
-        .spawn()?;
-    enter_launch_session(&mut h)?;
-
-    // A live bang shell projects a real stoppable run row. Arm and accept the
-    // rendered row-local Stop control using its actual post-resize coordinates.
-    h.paste("! echo CWQA_STOP_ROW; sleep 30")?;
-    h.wait_for_text("CWQA_STOP_ROW", KEY_TIMEOUT)?;
-    h.wait_for_idle(Duration::from_millis(100), Duration::from_secs(2))?;
-    h.send(keys::key::enter())?;
-    h.wait_for_text("run running", KEY_TIMEOUT)?;
-    h.wait_for_text("[stop]", KEY_TIMEOUT)?;
-    let (stop_row, stop_col) = h.frame().find_text("stop").expect("rendered Stop control");
-    h.send(keys::mouse::click(stop_row, stop_col))?;
-    h.wait_for_text("confirm", KEY_TIMEOUT)?;
-
-    // Reject the row-local Stop with Esc. A second Esc only releases the work
-    // surface's focus; neither keypress may leak through and cancel the live
-    // command. This is the real-PTY counterpart to the interaction unit tests
-    // and protects the dialog-vs-active-work ownership boundary.
-    h.send(keys::key::esc())?;
-    h.wait_for(
-        |frame| frame.contains("run running") && !frame.contains("confirm"),
-        KEY_TIMEOUT,
-    )?;
-    h.send(keys::key::esc())?;
-    h.wait_for_idle(Duration::from_millis(150), Duration::from_secs(2))?;
-    assert!(
-        h.frame().contains("run running"),
-        "repeated Esc after rejecting Stop cancelled active work:\n{}",
-        h.debug_dump()
-    );
-
-    // Re-arm from the rendered control after focus was released, then accept.
-    let (stop_row, stop_col) = h.frame().find_text("stop").expect("rendered Stop control");
-    h.send(keys::mouse::click(stop_row, stop_col))?;
-    h.wait_for_text("confirm", KEY_TIMEOUT)?;
-    // Confirm the mouse-armed, row-selected action with Enter. Unit coverage
-    // separately proves the armed control strip's second-click hitbox.
-    h.send(keys::key::enter())?;
-    h.wait_for(
-        |frame| !frame.contains("run running"),
-        Duration::from_secs(5),
-    )?;
-
     let _ = h.shutdown();
     Ok(())
 }
@@ -771,7 +708,7 @@ fn approval_modal_keeps_wheel_for_review_and_denies_without_side_effect() -> any
 }
 
 /// Release stopship coverage: a real built TUI restores durable Work state and
-/// keeps both To-do and the effective permission posture visible at each
+/// keeps both Work and the effective permission posture visible at each
 /// supported compact evidence size. No model turn is sent.
 #[test]
 fn work_and_permission_are_visible_at_release_terminal_sizes() -> anyhow::Result<()> {
@@ -866,15 +803,15 @@ fn work_and_permission_are_visible_at_release_terminal_sizes() -> anyhow::Result
         h.wait_for_text("/load", KEY_TIMEOUT)?;
         h.wait_for_idle(Duration::from_millis(150), Duration::from_secs(2))?;
         h.send(keys::key::enter())?;
-        h.wait_for_text("To-do", KEY_TIMEOUT)?;
+        h.wait_for_text("Work", KEY_TIMEOUT)?;
         h.wait_for_text("Full Access", KEY_TIMEOUT)?;
         h.wait_for_idle(Duration::from_millis(250), Duration::from_secs(3))?;
 
         let frame = h.frame();
         let dump = frame.debug_dump();
         assert!(
-            frame.contains("To-do"),
-            "To-do missing at {cols}x{rows}:\n{dump}"
+            frame.contains("Work"),
+            "Work missing at {cols}x{rows}:\n{dump}"
         );
         assert!(
             frame.contains("persisted") || frame.contains("2 items"),
