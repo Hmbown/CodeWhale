@@ -1286,6 +1286,105 @@ async fn injected_model_drives_real_engine_navigation_trajectory() {
 }
 
 #[tokio::test]
+async fn injected_model_duplicate_reads_execute_once_and_close_both_tool_ids() {
+    use crate::llm_client::mock::{MockLlmClient, canned};
+
+    let workspace = tempdir().expect("tempdir");
+    fs::write(workspace.path().join("README.md"), "coalesced-read-proof\n").expect("write fixture");
+    let duplicate_read_turn = vec![
+        canned::message_start("mock_msg_duplicate_read"),
+        canned::tool_use_block_start(0, "call-read-1", "read_file"),
+        canned::tool_input_delta(0, r#"{"path":"README.md"}"#),
+        canned::block_stop(0),
+        canned::tool_use_block_start(1, "call-read-2", "read_file"),
+        canned::tool_input_delta(1, r#"{"path":"README.md"}"#),
+        canned::block_stop(1),
+        canned::message_delta("tool_use", None),
+        canned::message_stop(),
+    ];
+    let mock = std::sync::Arc::new(MockLlmClient::new(vec![
+        duplicate_read_turn,
+        canned::simple_text_turn("Duplicate read complete."),
+    ]));
+    let client: crate::core::model_client::SharedModelClient = mock.clone();
+    let (engine, handle) = Engine::new_with_model_client(
+        deterministic_engine_config(workspace.path()),
+        &Config::default(),
+        client,
+    );
+    let task = tokio::spawn(engine.run());
+    handle
+        .send(external_user_message_op(
+            "Issue the duplicate read batch.",
+            AppMode::Agent,
+            &Config::default(),
+        ))
+        .await
+        .expect("send duplicate-read trajectory");
+
+    let mut results = HashMap::new();
+    let mut rx = handle.rx_event.write().await;
+    while let Some(event) = tokio::time::timeout(model_turn_event_timeout(), rx.recv())
+        .await
+        .expect("timed out waiting for duplicate-read trajectory")
+    {
+        match event {
+            Event::ToolCallComplete {
+                id, name, result, ..
+            } if name == "read_file" => {
+                results.insert(id, result.expect("read result"));
+            }
+            Event::TurnComplete { status, error, .. } => {
+                assert_eq!(status, TurnOutcomeStatus::Completed, "{error:?}");
+                break;
+            }
+            _ => {}
+        }
+    }
+    drop(rx);
+
+    assert_eq!(results.len(), 2, "every tool ID needs one terminal result");
+    let leader = &results["call-read-1"];
+    let follower = &results["call-read-2"];
+    assert!(leader.content.contains("coalesced-read-proof"));
+    assert_eq!(
+        leader
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("executed"))
+            .and_then(serde_json::Value::as_bool),
+        None,
+        "the first read is the physical execution"
+    );
+    assert_eq!(follower.metadata.as_ref().unwrap()["executed"], false);
+    assert_eq!(
+        follower.metadata.as_ref().unwrap()["read_repeat"]["action"],
+        "same_batch_subscription"
+    );
+    assert_eq!(
+        follower.metadata.as_ref().unwrap()["read_repeat"]["source_tool_use_id"],
+        "call-read-1"
+    );
+
+    let requests = mock.captured_requests();
+    assert_eq!(requests.len(), 2);
+    let result_ids = requests[1]
+        .messages
+        .iter()
+        .flat_map(|message| message.content.iter())
+        .filter_map(|block| match block {
+            ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(result_ids.contains(&"call-read-1"));
+    assert!(result_ids.contains(&"call-read-2"));
+
+    handle.send(Op::Shutdown).await.expect("shutdown engine");
+    task.await.expect("engine task");
+}
+
+#[tokio::test]
 async fn injected_model_receives_malformed_tool_feedback_and_recovers() {
     use crate::llm_client::mock::{MockLlmClient, canned};
 
@@ -2078,6 +2177,77 @@ fn parallel_batch_requires_read_only_parallel_tools() {
     let mut gated_background = make_plan(false, false, true, false);
     gated_background.detached_start = true;
     assert!(!should_parallelize_tool_batch(&[gated_background]));
+}
+
+#[test]
+fn identical_read_only_calls_share_one_same_batch_execution() {
+    let mut first = make_plan_at(0, true, true, false, false);
+    first.name = "read_file".to_string();
+    first.input = json!({"path": "src/lib.rs", "limit": 50});
+    let mut duplicate = make_plan_at(1, true, true, false, false);
+    duplicate.name = "read_file".to_string();
+    duplicate.input = json!({"limit": 50, "path": "src/lib.rs"});
+    let mut guard = read_repeat_guard::ReadRepeatGuard::default();
+
+    let planned = dispatch::plan_read_repeat_execution(vec![first, duplicate], &mut guard);
+
+    assert_eq!(planned.executable.len(), 1);
+    assert_eq!(planned.coalesced.len(), 1);
+    assert_eq!(planned.coalesced[0].leader_index, 0);
+    assert_eq!(planned.coalesced[0].follower.index, 1);
+    assert_eq!(planned.occurrences[&0].count, 1);
+    assert_eq!(planned.occurrences[&1].count, 2);
+}
+
+#[test]
+fn write_barrier_prevents_stale_same_batch_read_subscription() {
+    let mut read_before = make_plan_at(0, true, true, false, false);
+    read_before.name = "read_file".to_string();
+    read_before.input = json!({"path": "src/lib.rs"});
+    let mut write = make_plan_at(1, false, false, false, false);
+    write.name = "write_file".to_string();
+    write.input = json!({"path": "src/lib.rs", "content": "changed"});
+    let mut read_after = make_plan_at(2, true, true, false, false);
+    read_after.name = "read_file".to_string();
+    read_after.input = json!({"path": "src/lib.rs"});
+    let mut guard = read_repeat_guard::ReadRepeatGuard::default();
+
+    let planned =
+        dispatch::plan_read_repeat_execution(vec![read_before, write, read_after], &mut guard);
+
+    assert_eq!(planned.executable.len(), 3);
+    assert!(planned.coalesced.is_empty());
+    assert_eq!(planned.occurrences[&0].count, 1);
+    assert_eq!(planned.occurrences[&2].count, 2);
+}
+
+#[test]
+fn fifth_cross_step_read_becomes_a_nonexecuting_receipt() {
+    let mut guard = read_repeat_guard::ReadRepeatGuard::default();
+    let mut first_occurrence = None;
+
+    for index in 0..read_repeat_guard::RECEIPT_THRESHOLD {
+        let mut plan = make_plan_at(index, true, true, false, false);
+        plan.name = "read_file".to_string();
+        plan.input = json!({"path": "src/lib.rs"});
+        let mut planned = dispatch::plan_read_repeat_execution(vec![plan], &mut guard);
+        let occurrence = planned.occurrences[&index].clone();
+        if index == 0 {
+            guard.remember_success(&occurrence, "tool-0", &ToolResult::success("file contents"));
+            first_occurrence = Some(occurrence);
+        }
+
+        let plan = planned.executable.pop().expect("one cross-step plan");
+        if index + 1 < read_repeat_guard::RECEIPT_THRESHOLD {
+            assert!(plan.guard_result.is_none());
+        } else {
+            let receipt = plan.guard_result.expect("fifth read receipt");
+            assert_eq!(receipt.metadata.as_ref().unwrap()["executed"], false);
+            assert!(receipt.content.contains("tool-0"));
+        }
+    }
+
+    assert_eq!(first_occurrence.expect("first occurrence").count, 1);
 }
 
 #[test]

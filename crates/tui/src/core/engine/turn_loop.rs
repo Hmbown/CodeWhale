@@ -5,6 +5,8 @@
 //! event handling, tool planning/execution, LSP post-edit hooks, capacity
 //! checkpoints, and loop termination.
 
+use super::dispatch::{ReadRepeatExecutionPlan, plan_read_repeat_execution};
+use super::read_repeat_guard::{RECEIPT_THRESHOLD, ReadRepeatGuard};
 use super::stuck_guard::{
     RUNTIME_NOTICE as STUCK_RUNTIME_NOTICE, StepFingerprint, StuckGuard, StuckSignal,
 };
@@ -14,6 +16,7 @@ use crate::prompt_zones::PinnedPrefix;
 use crate::runtime_handoff::{
     subagent_completion_runtime_message, waiting_for_subagents_runtime_message,
 };
+use crate::tools::spec::ToolTerminalStatus;
 
 const MAX_APPROVAL_INTENT_SUMMARY_CHARS: usize = 2_000;
 const TOOL_ERROR_DEGRADATION_THRESHOLD: u32 = 2;
@@ -278,6 +281,9 @@ impl Engine {
 
         let mut consecutive_tool_error_steps = 0u32;
         let mut stuck_guard = StuckGuard::default();
+        // Scoped to this external user turn: counts survive all model/tool
+        // steps below, then reset before the next user prompt.
+        let mut read_repeat_guard = ReadRepeatGuard::default();
         let mut turn_error: Option<String> = None;
         let mut context_recovery_attempts = 0u8;
         let mut tool_catalog = tools.unwrap_or_default();
@@ -2016,7 +2022,21 @@ impl Engine {
             };
 
             let plan_count = plans.len();
-            let batches = plan_tool_execution_batches(plans);
+            let ReadRepeatExecutionPlan {
+                executable,
+                coalesced: coalesced_read_plans,
+                occurrences: read_repeat_occurrences,
+            } = plan_read_repeat_execution(plans, &mut read_repeat_guard);
+            if !coalesced_read_plans.is_empty() {
+                let _ = self
+                    .tx_event
+                    .send(Event::status(format!(
+                        "Coalesced {} duplicate read-only call(s) onto the first execution",
+                        coalesced_read_plans.len()
+                    )))
+                    .await;
+            }
+            let batches = plan_tool_execution_batches(executable);
             let parallel_chunks = batches
                 .iter()
                 .filter_map(|batch| match batch {
@@ -2601,6 +2621,64 @@ impl Engine {
                 }
             }
 
+            // Same-batch read-only duplicates subscribe to the first physical
+            // execution, but retain their own provider tool-call/result pair.
+            // Counts five and above receive a compact pointer instead of a
+            // repeated body; cancellation retains its explicit terminal state.
+            for coalesced in coalesced_read_plans {
+                let occurrence = &coalesced.occurrence;
+                let follower = coalesced.follower;
+                let leader = outcomes
+                    .get(coalesced.leader_index)
+                    .and_then(Option::as_ref);
+                let (leader_id, leader_status, leader_result) = match leader {
+                    Some(leader) => (
+                        leader.id.clone(),
+                        Some(leader.terminal.status),
+                        leader.terminal.legacy_result(),
+                    ),
+                    None => (
+                        format!("missing-leader-{}", coalesced.leader_index),
+                        None,
+                        Err(ToolError::execution_failed(
+                            "coalesced read leader did not produce a terminal result",
+                        )),
+                    ),
+                };
+                let result =
+                    read_repeat_guard.coalesced_result(occurrence, &leader_id, &leader_result);
+                emit_tool_audit(json!({
+                    "event": "tool.read_repeat_coalesced",
+                    "tool_id": follower.id.clone(),
+                    "tool_name": follower.name.clone(),
+                    "leader_tool_id": leader_id,
+                    "count": occurrence.count,
+                    "receipt": occurrence.count >= RECEIPT_THRESHOLD,
+                }));
+                let _ = self
+                    .tx_event
+                    .send(Event::ToolCallComplete {
+                        id: follower.id.clone(),
+                        name: follower.name.clone(),
+                        result: result.clone(),
+                    })
+                    .await;
+                let terminal = match result {
+                    Ok(result) if leader_status == Some(ToolTerminalStatus::Cancelled) => {
+                        ToolExecutionOutcome::cancelled(result)
+                    }
+                    result => ToolExecutionOutcome::from_legacy(result),
+                };
+                outcomes[follower.index] = Some(ToolExecOutcome {
+                    index: follower.index,
+                    id: follower.id,
+                    name: follower.name,
+                    input: follower.input,
+                    started_at: Instant::now(),
+                    terminal,
+                });
+            }
+
             let mut step_error_count = 0usize;
             // Categorized tool errors collected this step. Feeds the capacity
             // controller's error-escalation checkpoint so it can distinguish
@@ -2617,27 +2695,44 @@ impl Engine {
             // goal-loop turn while get_goal already reflects the new objective.
             let mut goal_tool_ran = false;
             let mut stuck_signal = None;
+            let mut read_repeat_stop: Option<(String, usize)> = None;
 
             for outcome in outcomes.into_iter().flatten() {
                 let tool_input = outcome.input.clone();
                 let tool_name_for_ws = outcome.name.clone();
                 let terminal_status = outcome.terminal.status;
-                let result = outcome.terminal.into_legacy_result();
-                let observed_signal = match &result {
-                    Ok(output) if output.success => {
-                        stuck_guard.observe(StepFingerprint::tool(&outcome.name, &tool_input, None))
+                let mut result = outcome.terminal.into_legacy_result();
+                if let Some(occurrence) = read_repeat_occurrences.get(&outcome.index) {
+                    if let Ok(output) = result.as_mut() {
+                        read_repeat_guard.remember_success(occurrence, &outcome.id, output);
+                        read_repeat_guard.decorate_model_result(occurrence, output);
                     }
-                    Ok(output) => stuck_guard.observe(StepFingerprint::tool(
-                        &outcome.name,
-                        &tool_input,
-                        Some(&output.content),
-                    )),
-                    Err(error) => stuck_guard.observe(StepFingerprint::tool(
-                        &outcome.name,
-                        &tool_input,
-                        Some(&error.to_string()),
-                    )),
-                };
+                    if ReadRepeatGuard::should_stop(occurrence) {
+                        read_repeat_stop = Some((outcome.name.clone(), occurrence.count));
+                    }
+                }
+                // Read-only repetition has its own non-consecutive 3/5/8
+                // policy. Feeding the same calls into the older consecutive
+                // stuck guard would stop at five and defeat the receipt lane.
+                let observed_signal =
+                    if read_repeat_occurrences.contains_key(&outcome.index) {
+                        None
+                    } else {
+                        match &result {
+                            Ok(output) if output.success => stuck_guard
+                                .observe(StepFingerprint::tool(&outcome.name, &tool_input, None)),
+                            Ok(output) => stuck_guard.observe(StepFingerprint::tool(
+                                &outcome.name,
+                                &tool_input,
+                                Some(&output.content),
+                            )),
+                            Err(error) => stuck_guard.observe(StepFingerprint::tool(
+                                &outcome.name,
+                                &tool_input,
+                                Some(&error.to_string()),
+                            )),
+                        }
+                    };
                 if matches!(observed_signal, Some(StuckSignal::Stop)) {
                     stuck_signal = Some(StuckSignal::Stop);
                 } else if matches!(observed_signal, Some(StuckSignal::Warn))
@@ -2673,12 +2768,14 @@ impl Engine {
                             .and_then(|metadata| metadata.get("executed"))
                             .and_then(serde_json::Value::as_bool)
                             .unwrap_or(true);
-                        self.session.working_set.observe_tool_call(
-                            &tool_name_for_ws,
-                            &tool_input,
-                            Some(&output_for_context),
-                            &self.session.workspace,
-                        );
+                        if tool_was_executed {
+                            self.session.working_set.observe_tool_call(
+                                &tool_name_for_ws,
+                                &tool_input,
+                                Some(&output_for_context),
+                                &self.session.workspace,
+                            );
+                        }
 
                         // #136: post-edit LSP diagnostics hook. We only run
                         // this on success — failed edits leave the file
@@ -2729,7 +2826,14 @@ impl Engine {
                             .iter()
                             .find(|tool| tool.name == outcome.name)
                             .map(|tool| &tool.input_schema);
-                        let error = format_tool_error_with_schema(&e, &outcome.name, input_schema);
+                        let mut error =
+                            format_tool_error_with_schema(&e, &outcome.name, input_schema);
+                        if let Some(occurrence) = read_repeat_occurrences.get(&outcome.index)
+                            && let Some(nudge) = ReadRepeatGuard::corrective_nudge(occurrence)
+                        {
+                            error.push_str("\n\n");
+                            error.push_str(nudge);
+                        }
                         self.session.working_set.observe_tool_call(
                             &tool_name_for_ws,
                             &tool_input,
@@ -2758,6 +2862,19 @@ impl Engine {
             // applies it behind a `changed` guard).
             if goal_tool_ran {
                 self.emit_goal_updated().await;
+            }
+
+            if let Some((tool_name, count)) = read_repeat_stop {
+                let reason = format!(
+                    "read-only repetition limit reached for '{tool_name}' at occurrence {count}; stopping turn deterministically"
+                );
+                emit_tool_audit(json!({
+                    "event": "tool.read_repeat_stopped",
+                    "tool_name": tool_name,
+                    "count": count,
+                }));
+                let _ = self.tx_event.send(Event::status(reason.clone())).await;
+                return (TurnOutcomeStatus::Failed, Some(reason));
             }
 
             if let Some(signal) = stuck_signal {

@@ -15,6 +15,8 @@
 //! All items are `pub(super)`-only: the public engine surface (Op/Event,
 //! `EngineHandle`, `spawn_engine`) stays in `core/engine.rs`.
 
+use std::collections::HashMap;
+
 use serde_json::json;
 
 use crate::models::{Tool, ToolCaller};
@@ -24,6 +26,7 @@ use crate::tools::spec::{
 use crate::tui::app::AppMode;
 
 use super::ToolUseState;
+use super::read_repeat_guard::{ReadRepeatGuard, ReadRepeatOccurrence};
 
 // === Types ============================================================
 
@@ -59,6 +62,18 @@ pub(super) struct ToolExecutionPlan {
 pub(super) enum ToolExecutionBatch {
     Parallel(Vec<ToolExecutionPlan>),
     Serial(Box<ToolExecutionPlan>),
+}
+
+pub(super) struct CoalescedReadPlan {
+    pub(super) leader_index: usize,
+    pub(super) follower: ToolExecutionPlan,
+    pub(super) occurrence: ReadRepeatOccurrence,
+}
+
+pub(super) struct ReadRepeatExecutionPlan {
+    pub(super) executable: Vec<ToolExecutionPlan>,
+    pub(super) coalesced: Vec<CoalescedReadPlan>,
+    pub(super) occurrences: HashMap<usize, ReadRepeatOccurrence>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -520,6 +535,61 @@ pub(super) fn tool_plan_can_join_parallel_batch(plan: &ToolExecutionPlan) -> boo
     plan.blocked_error.is_none()
         && (tool_plan_is_parallel_safe(plan)
             || (plan.detached_start && !plan.approval_required && !plan.interactive))
+}
+
+/// Register finalized read-only calls and remove same-batch duplicates from
+/// physical execution. Every removed follower is retained so the turn loop can
+/// fan the leader's terminal result back out under the follower's own tool ID.
+pub(super) fn plan_read_repeat_execution(
+    plans: Vec<ToolExecutionPlan>,
+    guard: &mut ReadRepeatGuard,
+) -> ReadRepeatExecutionPlan {
+    let mut executable = Vec::with_capacity(plans.len());
+    let mut coalesced = Vec::new();
+    let mut occurrences = HashMap::new();
+    let mut leaders = HashMap::new();
+
+    for mut plan in plans {
+        let eligible = plan.read_only
+            && !plan.interactive
+            && !plan.detached_start
+            && plan.blocked_error.is_none()
+            && plan.guard_result.is_none();
+        if !eligible {
+            // A write, interactive call, detached start, denial, or other
+            // execution barrier may change what a later read observes. Do not
+            // subscribe a post-barrier read to a pre-barrier result.
+            leaders.clear();
+            executable.push(plan);
+            continue;
+        }
+
+        let occurrence = guard.register(&plan.name, &plan.input);
+        occurrences.insert(plan.index, occurrence.clone());
+
+        if let Some(receipt) = guard.prior_receipt(&occurrence) {
+            plan.guard_result = Some(receipt);
+            executable.push(plan);
+            continue;
+        }
+
+        if let Some(leader_index) = leaders.get(&occurrence.key).copied() {
+            coalesced.push(CoalescedReadPlan {
+                leader_index,
+                follower: plan,
+                occurrence,
+            });
+        } else {
+            leaders.insert(occurrence.key.clone(), plan.index);
+            executable.push(plan);
+        }
+    }
+
+    ReadRepeatExecutionPlan {
+        executable,
+        coalesced,
+        occurrences,
+    }
 }
 
 pub(super) fn plan_tool_execution_batches(

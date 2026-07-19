@@ -4511,6 +4511,7 @@ use context::{
 use context::{context_input_budget_for_provider, effective_max_output_tokens};
 mod dispatch;
 mod lsp_hooks;
+mod read_repeat_guard;
 mod streaming;
 mod stuck_guard;
 mod token_estimate_cache;
