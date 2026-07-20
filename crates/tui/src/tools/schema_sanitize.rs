@@ -1053,60 +1053,83 @@ pub fn sanitize_for_kimi(schema: &mut serde_json::Value) {
 
 /// Normalize a complete Kimi / Moonshot `function.parameters` object.
 ///
-/// Kimi / Moonshot requires `"type": "object"` on the parameters root
-/// regardless of whether the schema uses `properties`, `$ref`, `anyOf`,
-/// `allOf`, or `oneOf`.  We run `sanitize_for_kimi` first so nested
-/// `anyOf` / `oneOf` handling is correct, then unconditionally ensure
-/// `type: object` is present at the root (#3281).
+/// Kimi / Moonshot's MFJS (Moonshot Flavored JSON Schema) requires:
+/// - Root MUST be `type: "object"`
+/// - `anyOf` / `oneOf` / `allOf` are NOT supported at root level
+///   (only in nested positions inside `properties`)
 ///
-/// This is root-only because recursively injecting `type: object` into
-/// every empty object would corrupt JSON Schema maps such as
-/// `"properties": {}`.
+/// Spec: https://github.com/MoonshotAI/walle/blob/main/docs/mfjs-spec.md
+///
+/// We reuse `sanitize_for_responses` (same approach as xAI / OpenAI
+/// Responses): merge root composition properties into `properties`,
+/// remove composition keywords, ensure `type: "object"`.
+///
+/// For bare `$ref` schemas, we wrap in `allOf` to avoid sibling
+/// keywords alongside `$ref`.
+///
+/// Finally, `sanitize_for_kimi` fixes *nested* positions: at any level,
+/// a schema carrying both `type` and `anyOf`/`oneOf` must push `type`
+/// into the items and drop it from the parent — the same rule the root
+/// validator enforces, applied recursively (#2438). This runs after the
+/// root pass so the root itself is already composition-free and the
+/// recursion only touches surviving nested alternatives.
 pub fn sanitize_for_kimi_parameters(parameters: &mut serde_json::Value) {
     if !parameters.is_object() {
         *parameters = serde_json::Value::Object(Map::new());
     }
 
-    // Run the generic Kimi pass first so nested `anyOf` / `oneOf` receive
-    // their `type` from the parent *before* we re-add it at the root.
+    tracing::debug!(
+        before = %parameters,
+        "sanitize_for_kimi_parameters: input schema"
+    );
+
+    // MFJS does not support anyOf/oneOf/allOf at root. Reuse the same
+    // sanitizer as xAI / OpenAI Responses: merge properties, remove
+    // composition keywords, ensure type: "object".
+    let constraint_note = sanitize_for_responses(parameters);
+
+    tracing::debug!(
+        after_responses = %parameters,
+        ?constraint_note,
+        "sanitize_for_kimi_parameters: after sanitize_for_responses"
+    );
+
+    // Handle bare $ref: sanitize_for_responses adds type + properties as
+    // siblings, but JSON Schema forbids sibling keywords alongside $ref.
+    // Wrap in allOf if $ref is still present.
+    if let Some(obj) = parameters.as_object_mut()
+        && obj.contains_key("$ref")
+        && let Some(ref_val) = obj.remove("$ref")
+    {
+        let mut new_root = serde_json::Map::new();
+        new_root.insert(
+            "type".to_string(),
+            serde_json::Value::String("object".to_string()),
+        );
+        new_root.insert(
+            "allOf".to_string(),
+            serde_json::Value::Array(vec![serde_json::json!({"$ref": ref_val})]),
+        );
+        for (k, v) in obj.iter() {
+            if k != "$ref" {
+                new_root.insert(k.clone(), v.clone());
+            }
+        }
+        *obj = new_root;
+        tracing::debug!("sanitize_for_kimi_parameters: wrapped bare $ref in allOf");
+    }
+
+    // Nested positions: at any level below root, MFJS (and the #2438
+    // validator) requires `type` to live inside anyOf/oneOf items, not on
+    // the parent that carries the composition keyword. The root is already
+    // composition-free after sanitize_for_responses, so this pass only
+    // rewrites surviving nested alternatives.
     sanitize_for_kimi(parameters);
 
-    // Always ensure `type: object` at the parameters root.  Kimi/Moonshot
-    // rejects any parameters schema missing it (#3265, #3281).
-    //
-    // For bare `$ref` schemas (e.g. `{"$ref": "#/definitions/FileArgs"}`),
-    // we cannot add a sibling `type` because JSON Schema forbids sibling
-    // keywords alongside `$ref`.  Instead we wrap the $ref in an `allOf`
-    // array and inject `type: object` at the root — a standard JSON Schema
-    // pattern that preserves the $ref semantics.
-    if let Some(obj) = parameters.as_object_mut()
-        && !obj.contains_key("type")
-    {
-        if let Some(ref_val) = obj.remove("$ref") {
-            let mut new_root = serde_json::Map::new();
-            new_root.insert(
-                "type".to_string(),
-                serde_json::Value::String("object".to_string()),
-            );
-            new_root.insert(
-                "allOf".to_string(),
-                serde_json::Value::Array(vec![serde_json::json!({"$ref": ref_val})]),
-            );
-            // Preserve any other keys the original object may have had
-            // (e.g. "description") in the new root.
-            for (k, v) in obj.iter() {
-                if k != "$ref" {
-                    new_root.insert(k.clone(), v.clone());
-                }
-            }
-            *obj = new_root;
-        } else {
-            obj.insert(
-                "type".to_string(),
-                serde_json::Value::String("object".to_string()),
-            );
-        }
-    }
+    tracing::debug!(
+        final = %parameters,
+        "sanitize_for_kimi_parameters: final schema"
+    );
 }
 
 #[cfg(test)]
@@ -1199,7 +1222,9 @@ mod kimi_tests {
     fn kimi_parameters_add_type_to_empty_root() {
         let mut schema = json!({});
         sanitize_for_kimi_parameters(&mut schema);
-        assert_eq!(schema, json!({"type": "object"}));
+        assert_eq!(schema["type"], "object");
+        // sanitize_for_responses ensures properties exists as an empty object
+        assert!(schema["properties"].is_object());
     }
 
     #[test]
@@ -1223,6 +1248,9 @@ mod kimi_tests {
 
     #[test]
     fn kimi_parameters_add_type_to_anyof_root() {
+        // MFJS does not support anyOf at root. sanitize_for_responses merges
+        // properties and removes composition. For anyOf with one null type,
+        // collapse_nullable_unions handles it before the merge.
         let mut schema = json!({
             "anyOf": [
                 {"type": "object", "properties": {"path": {"type": "string"}}},
@@ -1231,11 +1259,16 @@ mod kimi_tests {
         });
         sanitize_for_kimi_parameters(&mut schema);
         assert_eq!(schema["type"], "object");
-        assert!(schema["anyOf"].is_array());
+        assert!(
+            schema.get("anyOf").is_none(),
+            "anyOf must be removed at root for MFJS"
+        );
+        assert!(schema["properties"].is_object());
     }
 
     #[test]
     fn kimi_parameters_add_type_to_allof_root() {
+        // Single-element allOf is collapsed, properties merged.
         let mut schema = json!({
             "allOf": [
                 {"type": "object", "properties": {"name": {"type": "string"}}}
@@ -1243,11 +1276,16 @@ mod kimi_tests {
         });
         sanitize_for_kimi_parameters(&mut schema);
         assert_eq!(schema["type"], "object");
-        assert!(schema["allOf"].is_array());
+        assert!(
+            schema.get("allOf").is_none(),
+            "allOf must be removed at root for MFJS"
+        );
+        assert_eq!(schema["properties"]["name"]["type"], "string");
     }
 
     #[test]
     fn kimi_parameters_add_type_to_oneof_root() {
+        // Properties from oneOf items merged into root, oneOf removed.
         let mut schema = json!({
             "oneOf": [
                 {"type": "object", "properties": {"id": {"type": "integer"}}},
@@ -1256,7 +1294,12 @@ mod kimi_tests {
         });
         sanitize_for_kimi_parameters(&mut schema);
         assert_eq!(schema["type"], "object");
-        assert!(schema["oneOf"].is_array());
+        assert!(
+            schema.get("oneOf").is_none(),
+            "oneOf must be removed at root for MFJS"
+        );
+        assert_eq!(schema["properties"]["id"]["type"], "integer");
+        assert_eq!(schema["properties"]["name"]["type"], "string");
     }
 
     #[test]
@@ -1269,5 +1312,44 @@ mod kimi_tests {
         assert!(schema["allOf"].is_array());
         assert_eq!(schema["allOf"][0]["$ref"], "#/definitions/FileArgs");
         assert!(schema.get("$ref").is_none());
+    }
+
+    #[test]
+    fn kimi_parameters_pushes_type_into_nested_composition_items() {
+        // Nested composition below root: MFJS still requires `type` inside
+        // the items, not on the parent carrying anyOf/oneOf (#2438). Root
+        // handling must not touch this; the trailing sanitize_for_kimi
+        // pass must.
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "handle": {
+                    "type": "object",
+                    "oneOf": [
+                        {"type": "object", "properties": {"id": {"type": "string"}}},
+                        {"type": "string"}
+                    ]
+                }
+            }
+        });
+        sanitize_for_kimi_parameters(&mut schema);
+        // Root keeps type: object, no composition at root.
+        assert_eq!(schema["type"], "object");
+        assert!(schema.get("anyOf").is_none());
+        assert!(schema.get("oneOf").is_none());
+        // Nested parent type is pushed into items and removed (#2438 rule
+        // applied recursively); the composition itself is preserved.
+        let handle = &schema["properties"]["handle"];
+        assert!(
+            handle.get("type").is_none(),
+            "nested parent type must be removed: {handle:?}"
+        );
+        let one_of = handle["oneOf"].as_array().unwrap();
+        for item in one_of {
+            assert!(
+                item.get("type").is_some(),
+                "each nested item must carry its own type: {item:?}"
+            );
+        }
     }
 }

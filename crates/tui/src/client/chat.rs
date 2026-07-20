@@ -260,8 +260,10 @@ impl DeepSeekClient {
                 .iter()
                 .map(|tool| tool_to_chat_for_base_url(tool, &self.base_url))
                 .collect();
-            // Kimi / Moonshot enforces stricter JSON Schema: `type` must be
-            // inside `anyOf` / `oneOf` items, not on the parent (#2438).
+            // Kimi / Moonshot MFJS does not support anyOf/oneOf/allOf at
+            // parameters root. sanitize_for_kimi_parameters merges composition
+            // properties and removes the keywords. Same approach as xAI.
+            // Spec: https://github.com/MoonshotAI/walle/blob/main/docs/mfjs-spec.md
             if matches!(self.api_provider, crate::config::ApiProvider::Moonshot) {
                 for t in &mut chat_tools {
                     if let Some(fn_obj) = t
@@ -431,8 +433,10 @@ impl DeepSeekClient {
                 .iter()
                 .map(|tool| tool_to_chat_for_base_url(tool, &self.base_url))
                 .collect();
-            // Kimi / Moonshot enforces stricter JSON Schema: `type` must be
-            // inside `anyOf` / `oneOf` items, not on the parent (#2438).
+            // Kimi / Moonshot MFJS does not support anyOf/oneOf/allOf at
+            // parameters root. sanitize_for_kimi_parameters merges composition
+            // properties and removes the keywords. Same approach as xAI.
+            // Spec: https://github.com/MoonshotAI/walle/blob/main/docs/mfjs-spec.md
             if matches!(self.api_provider, crate::config::ApiProvider::Moonshot) {
                 for t in &mut chat_tools {
                     if let Some(fn_obj) = t
