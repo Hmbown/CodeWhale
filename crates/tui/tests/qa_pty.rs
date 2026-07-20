@@ -1392,3 +1392,188 @@ fn paste_unbracketed_with_trailing_newline_does_not_autosubmit() -> anyhow::Resu
     let _ = h.shutdown();
     Ok(())
 }
+
+/// A loopback SSE fixture that answers the first chat request with one long
+/// assistant message so the transcript exceeds several viewports. Later
+/// requests get a short stop so the server thread always drains.
+fn spawn_long_reply_fixture(
+    content: String,
+) -> anyhow::Result<(String, std::thread::JoinHandle<()>)> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    listener.set_nonblocking(true)?;
+    let address = listener.local_addr()?;
+    let handle = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut served = 0usize;
+        while served < 4 && Instant::now() < deadline {
+            let Ok((mut stream, _)) = listener.accept() else {
+                std::thread::sleep(Duration::from_millis(10));
+                continue;
+            };
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+            let mut request = [0u8; 64 * 1024];
+            let _ = stream.read(&mut request);
+            let reply = if served == 0 {
+                content.as_str()
+            } else {
+                "SCROLLPROBE-EXTRA"
+            };
+            let body = [
+                format!(
+                    "data: {}\n\n",
+                    serde_json::json!({
+                        "id":"chatcmpl-scroll",
+                        "object":"chat.completion.chunk",
+                        "model":"deepseek-v4-flash",
+                        "choices":[{"index":0,"delta":{"content":reply},"finish_reason":null}]
+                    })
+                ),
+                format!(
+                    "data: {}\n\n",
+                    serde_json::json!({
+                        "id":"chatcmpl-scroll",
+                        "object":"chat.completion.chunk",
+                        "model":"deepseek-v4-flash",
+                        "choices":[{"index":0,"delta":{},"finish_reason":"stop"}],
+                        "usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14}
+                    })
+                ),
+                "data: [DONE]\n\n".to_string(),
+            ]
+            .join("");
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+            served += 1;
+        }
+    });
+    Ok((format!("http://{address}"), handle))
+}
+
+enum ScrollDir {
+    Up,
+    Down,
+}
+
+/// Scroll the transcript one step at a time — letting each step settle past the
+/// input-coalescing/redraw throttle — until `needle` is on-screen. Each step
+/// sends both a page key and a wheel event so it works regardless of which the
+/// transcript honors. Returns whether the needle became visible.
+fn scroll_until(h: &mut Harness, dir: ScrollDir, needle: &str) -> bool {
+    if h.frame().contains(needle) {
+        return true;
+    }
+    for _ in 0..50 {
+        match dir {
+            ScrollDir::Up => {
+                let _ = h.send(keys::key::page_up());
+                let _ = h.send(keys::mouse::wheel_up(10, 10));
+            }
+            ScrollDir::Down => {
+                let _ = h.send(keys::mouse::wheel_down(10, 10));
+                let _ = h.send(keys::mouse::wheel_down(10, 10));
+            }
+        }
+        let _ = h.wait_for_idle(Duration::from_millis(60), Duration::from_millis(400));
+        if h.frame().contains(needle) {
+            return true;
+        }
+    }
+    false
+}
+
+/// #4603: long transcript output must be retained beyond the viewport and
+/// remain reviewable by scrolling, with follow-tail restored on return to the
+/// bottom. Provider-free: the reply is a sealed loopback SSE fixture.
+#[test]
+fn long_output_scrolls_and_restores_follow_tail() -> anyhow::Result<()> {
+    let _guard = qa_pty_test_lock();
+
+    // A reply well over three 24-row viewports: a head marker, ~90 numbered
+    // lines, a very wide line (horizontal overflow), and a tail marker.
+    let mut lines = vec!["SCROLLPROBE-HEAD".to_string()];
+    for i in 1..=90 {
+        lines.push(format!("SCROLLPROBE-LINE-{i:03}"));
+    }
+    lines.push(format!("SCROLLPROBE-WIDE-START{}WIDE-END", "x".repeat(200)));
+    lines.push("SCROLLPROBE-TAIL".to_string());
+    let content = lines.join("\n");
+
+    let (base_url, server) = spawn_long_reply_fixture(content)?;
+    let ws = make_sealed_workspace()?;
+    let mut h = Harness::builder(Harness::cargo_bin("codewhale-tui"))
+        .cwd(ws.workspace())
+        .clear_env()
+        .seal_home(ws.home())
+        .env("DEEPSEEK_API_KEY", "ci-test-key-not-real")
+        .env("DEEPSEEK_BASE_URL", &base_url)
+        .env("NO_ANIMATIONS", "1")
+        .env("RUST_LOG", "warn")
+        .args([
+            "--workspace",
+            ws.workspace().to_str().expect("utf-8 workspace path"),
+            "--no-project-config",
+            "--skip-onboarding",
+            "--mouse-capture",
+        ])
+        .size(24, 100)
+        .spawn()?;
+    enter_launch_session(&mut h)?;
+
+    // One turn that produces the long reply.
+    let prompt = "Emit the long scroll probe.";
+    h.paste(prompt)?;
+    h.wait_for_text(prompt, KEY_TIMEOUT)?;
+    h.wait_for_idle(Duration::from_millis(100), Duration::from_secs(2))?;
+    h.send(keys::key::enter())?;
+
+    // The tail lands in view (follow-tail) and the head has scrolled off:
+    // the content exists beyond the viewport rather than being truncated away.
+    h.wait_for_text("SCROLLPROBE-TAIL", Duration::from_secs(10))?;
+    assert!(
+        !h.frame().contains("SCROLLPROBE-HEAD"),
+        "head should be above the viewport once the long reply settles:\n{}",
+        h.frame().debug_dump()
+    );
+
+    // Scroll up: the retained head becomes reviewable and the tail leaves view.
+    // Scroll incrementally, letting each step settle — the TUI coalesces a
+    // rapid input burst, so one page/wheel event at a time is what a real user
+    // (and a reliable test) applies.
+    assert!(
+        scroll_until(&mut h, ScrollDir::Up, "SCROLLPROBE-HEAD"),
+        "head must be reachable by scrolling up:\n{}",
+        h.frame().debug_dump()
+    );
+    assert!(
+        !h.frame().contains("SCROLLPROBE-TAIL"),
+        "scrolled away from the tail, so the tail marker should be gone:\n{}",
+        h.frame().debug_dump()
+    );
+
+    // Resize (reflow) preserves the ability to review earlier content.
+    h.resize(30, 80)?;
+    h.wait_for(|f| f.rows() == 30 && f.cols() == 80, KEY_TIMEOUT)?;
+    h.wait_for_idle(Duration::from_millis(200), Duration::from_secs(3))?;
+    assert!(
+        h.frame().contains("SCROLLPROBE-HEAD")
+            || scroll_until(&mut h, ScrollDir::Up, "SCROLLPROBE-HEAD"),
+        "head must stay reviewable after a reflow:\n{}",
+        h.frame().debug_dump()
+    );
+
+    // Returning to the bottom restores follow-tail.
+    assert!(
+        scroll_until(&mut h, ScrollDir::Down, "SCROLLPROBE-TAIL"),
+        "follow-tail must be restorable by scrolling back to the bottom:\n{}",
+        h.frame().debug_dump()
+    );
+
+    let _ = h.shutdown();
+    server.join().expect("scroll fixture server thread");
+    Ok(())
+}
