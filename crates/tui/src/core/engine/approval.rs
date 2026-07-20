@@ -12,6 +12,7 @@ use crate::tools::spec::ToolError;
 use crate::tools::user_input::{UserInputRequest, UserInputResponse};
 
 const USER_INPUT_TIMEOUT: Duration = Duration::from_secs(300);
+const MAX_LATE_SENSITIVE_PROJECTION_ATTEMPTS: u32 = 5;
 
 use super::Engine;
 
@@ -58,11 +59,17 @@ impl Engine {
     /// turn. Provenance is extended first, so concurrent/new writes already
     /// project through it; retrying both sink families on every pass also
     /// repairs a partial prior pass instead of treating set membership as a
-    /// completed-cleanup receipt.
-    async fn refresh_late_sensitive_projections_until_clean(&mut self) {
+    /// completed-cleanup receipt. Permanent failures stop after a bounded
+    /// number of passes and cancellation interrupts backoff; either path fails
+    /// closed without returning the exact response to the provider.
+    async fn refresh_late_sensitive_projections(&mut self) -> Result<(), ToolError> {
         let mut attempt = 0u32;
         loop {
             attempt = attempt.saturating_add(1);
+            #[cfg(test)]
+            {
+                self.late_sensitive_projection_attempts = attempt;
+            }
             let workflow_result = crate::tools::workflow::refresh_sensitive_user_input_provenance(
                 &self.session.sensitive_user_input_provenance,
             );
@@ -73,8 +80,14 @@ impl Engine {
                 .refresh_sensitive_user_input_provenance(
                     &self.session.sensitive_user_input_provenance,
                 );
-            if workflow_result.is_ok() && child_result.is_ok() {
-                return;
+            #[cfg(test)]
+            let forced_failure = self.force_late_sensitive_projection_failure;
+            #[cfg(not(test))]
+            let forced_failure = false;
+            let workflow_clean = workflow_result.is_ok() && !forced_failure;
+            let child_clean = child_result.is_ok() && !forced_failure;
+            if workflow_clean && child_clean {
+                return Ok(());
             }
 
             // Do not return the exact answer while any known public/durable
@@ -82,13 +95,27 @@ impl Engine {
             // so the operational warning intentionally reports only the pass.
             tracing::warn!(
                 attempt,
-                workflow_clean = workflow_result.is_ok(),
-                child_clean = child_result.is_ok(),
+                workflow_clean,
+                child_clean,
                 "late privacy projection incomplete; retrying before provider resume"
             );
+            if attempt >= MAX_LATE_SENSITIVE_PROJECTION_ATTEMPTS {
+                return Err(ToolError::execution_failed(
+                    "Private user input was not forwarded because Codewhale could not complete durable privacy cleanup"
+                        .to_string(),
+                ));
+            }
             let shift = attempt.saturating_sub(1).min(4);
             let backoff_ms = 50u64.saturating_mul(1u64 << shift);
-            tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+            tokio::select! {
+                _ = self.cancel_token.cancelled() => {
+                    let suffix = self.cancel_reason_suffix();
+                    return Err(ToolError::cancelled(format!(
+                        "Request cancelled during private-data cleanup{suffix}"
+                    )));
+                }
+                () = tokio::time::sleep(Duration::from_millis(backoff_ms)) => {}
+            }
         }
     }
 
@@ -181,10 +208,13 @@ impl Engine {
                                         &response,
                                         &mut sensitive_values,
                                     );
+                                    let has_sensitive_values = !sensitive_values.is_empty();
                                     self.session
                                         .sensitive_user_input_provenance
                                         .extend(sensitive_values);
-                                    self.refresh_late_sensitive_projections_until_clean().await;
+                                    if has_sensitive_values {
+                                        self.refresh_late_sensitive_projections().await?;
+                                    }
                                     return Ok(response);
                                 }
                                 UserInputDecision::Cancelled { id } if id == tool_id => {

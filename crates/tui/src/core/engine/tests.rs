@@ -8770,6 +8770,104 @@ async fn session_snapshot_carries_live_provenance_after_same_session_compaction(
     run.abort();
 }
 
+fn private_input_fixture(
+    secret: &str,
+) -> (
+    crate::tools::user_input::UserInputRequest,
+    crate::tools::user_input::UserInputResponse,
+) {
+    (
+        crate::tools::user_input::UserInputRequest {
+            questions: vec![crate::tools::user_input::UserInputQuestion {
+                header: "PIN".to_string(),
+                id: "pin".to_string(),
+                question: "Enter the PIN".to_string(),
+                options: vec![
+                    crate::tools::user_input::UserInputOption {
+                        label: "Skip".to_string(),
+                        description: "Continue without it".to_string(),
+                    },
+                    crate::tools::user_input::UserInputOption {
+                        label: "Cancel".to_string(),
+                        description: "Stop".to_string(),
+                    },
+                ],
+                allow_free_text: true,
+                multi_select: false,
+            }],
+        },
+        crate::tools::user_input::UserInputResponse {
+            answers: vec![crate::tools::user_input::UserInputAnswer {
+                id: "pin".to_string(),
+                label: "Other".to_string(),
+                value: secret.to_string(),
+            }],
+        },
+    )
+}
+
+#[tokio::test]
+async fn permanent_late_projection_failure_is_bounded_and_fails_closed() {
+    const SECRET: &str = "projection-failure-482915";
+    let (mut engine, handle) = Engine::new(EngineConfig::default(), &Config::default());
+    engine.force_late_sensitive_projection_failure = true;
+    let (request, response) = private_input_fixture(SECRET);
+    handle
+        .submit_user_input("private-input", response)
+        .await
+        .expect("queue modal response");
+    let started = Instant::now();
+
+    let error = engine
+        .await_user_input("private-input", request)
+        .await
+        .expect_err("a dirty durable sink must not return the exact response");
+
+    assert_eq!(engine.late_sensitive_projection_attempts, 5);
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert!(
+        error
+            .to_string()
+            .contains("could not complete durable privacy cleanup"),
+        "{error}"
+    );
+    assert!(!error.to_string().contains(SECRET));
+    assert!(
+        engine
+            .session
+            .sensitive_user_input_provenance
+            .snapshot()
+            .contains(SECRET),
+        "failed cleanup keeps taint registered for every later sink/retry"
+    );
+}
+
+#[tokio::test]
+async fn cancellation_interrupts_late_projection_retry_without_forwarding_response() {
+    const SECRET: &str = "projection-cancel-482915";
+    let (mut engine, handle) = Engine::new(EngineConfig::default(), &Config::default());
+    engine.force_late_sensitive_projection_failure = true;
+    let cancel = engine.cancel_token.clone();
+    let (request, response) = private_input_fixture(SECRET);
+    handle
+        .submit_user_input("private-input", response)
+        .await
+        .expect("queue modal response");
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        cancel.cancel();
+    });
+
+    let error = engine
+        .await_user_input("private-input", request)
+        .await
+        .expect_err("cancellation must stop cleanup before provider resume");
+
+    assert!(error.to_string().contains("cancelled"), "{error}");
+    assert!(!error.to_string().contains(SECRET));
+    assert!(engine.late_sensitive_projection_attempts < 5);
+}
+
 #[tokio::test]
 async fn sync_session_projects_persisted_subagent_handoff_for_headless_restore() {
     let tmp = tempdir().expect("tempdir");

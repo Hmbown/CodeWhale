@@ -337,6 +337,11 @@ impl SessionManager {
             } else {
                 artifact.session_id.as_str()
             };
+            // Forked sessions retain references to parent-owned artifacts.
+            // Saving the fork must never rewrite the parent's durable bytes.
+            if owner != session.metadata.id {
+                continue;
+            }
             let Some(path) =
                 crate::artifacts::session_artifact_absolute_path(owner, &artifact.storage_path)
             else {
@@ -347,24 +352,51 @@ impl SessionManager {
             if !path.exists() {
                 continue;
             }
-            let raw = fs::read_to_string(&path).map_err(|error| {
+            let metadata = fs::metadata(&path).map_err(|error| {
                 std::io::Error::new(
                     error.kind(),
                     format!(
-                        "could not privacy-project textual session artifact {}: {error}",
+                        "could not inspect session artifact {} for privacy projection: {error}",
                         path.display()
                     ),
                 )
             })?;
+            let key = (owner.to_string(), artifact.storage_path.clone());
+            // Codewhale's text spill writer owns `.txt`; media/PDF fetches use
+            // their validated binary extension. Never decode or rewrite an
+            // arbitrary binary artifact merely because its record is attached
+            // to a session.
+            if !artifact
+                .storage_path
+                .extension()
+                .and_then(std::ffi::OsStr::to_str)
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("txt"))
+            {
+                projected_sizes.insert(key, metadata.len());
+                continue;
+            }
+            let bytes = fs::read(&path).map_err(|error| {
+                std::io::Error::new(
+                    error.kind(),
+                    format!(
+                        "could not read textual session artifact {} for privacy projection: {error}",
+                        path.display()
+                    ),
+                )
+            })?;
+            let Ok(raw) = String::from_utf8(bytes) else {
+                // A mislabeled/legacy `.txt` artifact can still contain opaque
+                // bytes. Preserve it byte-for-byte rather than failing a save
+                // or corrupting the artifact.
+                projected_sizes.insert(key, metadata.len());
+                continue;
+            };
             let projected =
                 crate::runtime_threads::redacted_sensitive_user_input_text(&raw, sensitive_values);
             if projected != raw {
                 write_atomic(&path, projected.as_bytes())?;
             }
-            projected_sizes.insert(
-                (owner.to_string(), artifact.storage_path.clone()),
-                projected.len() as u64,
-            );
+            projected_sizes.insert(key, projected.len() as u64);
         }
         Ok(projected_sizes)
     }
@@ -2468,6 +2500,125 @@ mod tests {
             saved_artifact.len() as u64,
             "metadata follows rewritten artifact bytes"
         );
+    }
+
+    #[test]
+    fn session_and_checkpoint_persistence_preserve_owned_binary_artifacts() {
+        const SECRET: &str = "482915";
+
+        struct ArtifactRootReset(Option<PathBuf>);
+        impl Drop for ArtifactRootReset {
+            fn drop(&mut self) {
+                crate::artifacts::set_test_artifact_sessions_root(self.0.take());
+            }
+        }
+
+        let _artifact_guard = crate::artifacts::TEST_ARTIFACT_SESSIONS_GUARD
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let tmp = tempdir().expect("tempdir");
+        let sessions_dir = tmp.path().join("sessions");
+        let _artifact_root = ArtifactRootReset(crate::artifacts::set_test_artifact_sessions_root(
+            Some(sessions_dir.clone()),
+        ));
+        let manager = SessionManager::new(sessions_dir.clone()).expect("new");
+        let mut session = create_saved_session(&[], "model", tmp.path(), 0, None);
+        let storage_path = PathBuf::from("artifacts/art_binary.png");
+        let artifact_path = sessions_dir.join(&session.metadata.id).join(&storage_path);
+        fs::create_dir_all(artifact_path.parent().expect("artifact parent")).expect("artifact dir");
+        let png_signature = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        fs::write(&artifact_path, png_signature).expect("binary artifact");
+        session.artifacts.push(crate::artifacts::ArtifactRecord {
+            id: "art_binary".to_string(),
+            kind: crate::artifacts::ArtifactKind::ToolOutput,
+            session_id: session.metadata.id.clone(),
+            tool_call_id: "call-binary".to_string(),
+            tool_name: "fetch_url".to_string(),
+            created_at: Utc::now(),
+            byte_size: png_signature.len() as u64,
+            preview: format!("fetched image {SECRET}"),
+            storage_path: storage_path.clone(),
+        });
+        session
+            .sensitive_user_input_provenance
+            .extend([SECRET.to_string()]);
+
+        manager
+            .save_session(&session)
+            .expect("binary-safe session save");
+        manager
+            .save_checkpoint(&session)
+            .expect("binary-safe checkpoint save");
+
+        assert_eq!(
+            fs::read(&artifact_path).expect("binary bytes"),
+            png_signature
+        );
+        let loaded = manager
+            .load_session(&session.metadata.id)
+            .expect("load binary session");
+        assert_eq!(loaded.artifacts[0].storage_path, storage_path);
+        assert_eq!(loaded.artifacts[0].byte_size, png_signature.len() as u64);
+        assert!(!loaded.artifacts[0].preview.contains(SECRET));
+    }
+
+    #[test]
+    fn fork_persistence_never_rewrites_parent_owned_artifact_bytes() {
+        const SECRET: &str = "482915";
+
+        struct ArtifactRootReset(Option<PathBuf>);
+        impl Drop for ArtifactRootReset {
+            fn drop(&mut self) {
+                crate::artifacts::set_test_artifact_sessions_root(self.0.take());
+            }
+        }
+
+        let _artifact_guard = crate::artifacts::TEST_ARTIFACT_SESSIONS_GUARD
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let tmp = tempdir().expect("tempdir");
+        let sessions_dir = tmp.path().join("sessions");
+        let _artifact_root = ArtifactRootReset(crate::artifacts::set_test_artifact_sessions_root(
+            Some(sessions_dir.clone()),
+        ));
+        let manager = SessionManager::new(sessions_dir.clone()).expect("new");
+        let parent_id = "parent7";
+        let storage_path = PathBuf::from("artifacts/shared.txt");
+        let parent_path = sessions_dir.join(parent_id).join(&storage_path);
+        fs::create_dir_all(parent_path.parent().expect("parent artifact dir"))
+            .expect("parent artifact dir");
+        let parent_bytes = format!("parent-owned output {SECRET}\n");
+        fs::write(&parent_path, parent_bytes.as_bytes()).expect("parent artifact");
+
+        let mut fork = create_saved_session(&[], "model", tmp.path(), 0, None);
+        fork.metadata.id = "child-fork".to_string();
+        fork.metadata.parent_session_id = Some(parent_id.to_string());
+        fork.artifacts.push(crate::artifacts::ArtifactRecord {
+            id: "shared".to_string(),
+            kind: crate::artifacts::ArtifactKind::ToolOutput,
+            session_id: parent_id.to_string(),
+            tool_call_id: "call-parent".to_string(),
+            tool_name: "exec_shell".to_string(),
+            created_at: Utc::now(),
+            byte_size: parent_bytes.len() as u64,
+            preview: format!("parent preview {SECRET}"),
+            storage_path: storage_path.clone(),
+        });
+        fork.sensitive_user_input_provenance
+            .extend([SECRET.to_string(), "7".to_string()]);
+
+        manager.save_session(&fork).expect("save fork");
+        manager.save_checkpoint(&fork).expect("checkpoint fork");
+
+        assert_eq!(
+            fs::read(&parent_path).expect("parent artifact after fork save"),
+            parent_bytes.as_bytes(),
+            "a fork may reference but never mutate its parent's artifact"
+        );
+        let loaded = manager.load_session(&fork.metadata.id).expect("load fork");
+        assert_eq!(loaded.artifacts[0].session_id, parent_id);
+        assert_eq!(loaded.artifacts[0].storage_path, storage_path);
+        assert!(!loaded.artifacts[0].preview.contains(SECRET));
     }
 
     #[test]

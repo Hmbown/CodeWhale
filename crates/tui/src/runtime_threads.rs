@@ -407,17 +407,44 @@ fn redact_sensitive_json_string_leaves(value: &mut Value, sensitive_values: &[St
 /// identity, routing, lifecycle, or enum/discriminant data. The field name
 /// itself remains structural; only string leaves below it are projected.
 fn serialized_field_contains_public_text(container: Option<&str>, field: &str) -> bool {
-    // Saved route identity is durable control-plane data, not generated
-    // prose. A short answer that happens to equal a model/provider/mode must
-    // not make a saved session unloadable or silently change its route.
-    if matches!(container, Some("SessionMetadata"))
+    // Identity is durable control-plane data, not generated prose. A short
+    // answer that happens to be a provider name, path segment, numeric id, or
+    // agent-id substring must not make a record unloadable or silently retarget
+    // it. Container-specific exceptions keep identically named prose fields in
+    // unrelated structs projectable.
+    let structural_identity = matches!(container, Some("ThreadRecord"))
         && matches!(
             field,
-            "model" | "model_provider" | "model_provider_id" | "mode" | "parent_session_id"
+            "id" | "model"
+                | "model_provider"
+                | "model_provider_id"
+                | "workspace"
+                | "mode"
+                | "latest_turn_id"
+                | "latest_response_bookmark"
+                | "task_id"
+                | "session_id"
         )
+        || matches!(container, Some("SessionMetadata"))
+            && matches!(
+                field,
+                "id" | "model"
+                    | "model_provider"
+                    | "model_provider_id"
+                    | "workspace"
+                    | "mode"
+                    | "parent_session_id"
+            )
         || matches!(container, Some("SavedAutoRouteReceipt"))
             && matches!(field, "model" | "provider_identity")
-    {
+        || matches!(container, Some("ArtifactRecord"))
+            && matches!(
+                field,
+                "id" | "session_id" | "tool_call_id" | "tool_name" | "storage_path"
+            )
+        || matches!(container, Some("PersistedSubAgent"))
+            && matches!(field, "id" | "workspace" | "model" | "session_boot_id");
+    if structural_identity {
         return false;
     }
     matches!(
@@ -5080,11 +5107,10 @@ impl RuntimeThreadManager {
             )?;
             let previous_session_id = thread.session_id.clone();
             thread.session_id = Some(requested_session_id);
-            // A standalone session string is identity-shaped, so the
-            // schema-aware serializer intentionally leaves it alone. Project
-            // the containing typed record after assignment: within this
-            // field context, `session_id` is public free text while the rest
-            // of the thread schema remains fixed.
+            // Project the containing typed record after assignment. The
+            // schema-aware serializer keeps `session_id` byte-exact because
+            // it is an execution identity used to restore full history, while
+            // still projecting public prose elsewhere in the record.
             let mut thread = self.project_registered_sensitive_clone(thread_id, &thread)?;
             let session_id = thread.session_id.clone().unwrap_or_default();
             if previous_session_id.as_deref() == Some(session_id.as_str()) {

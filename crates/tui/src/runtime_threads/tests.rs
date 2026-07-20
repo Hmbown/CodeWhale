@@ -8150,6 +8150,52 @@ fn typed_projection_preserves_short_discriminants_and_request_response_identity(
 }
 
 #[test]
+fn late_thread_projection_preserves_every_execution_identity_field_byte_exact() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let store = RuntimeThreadStore::open(tmp.path().join("runtime"))?;
+    let mut thread = sample_thread("thread-7");
+    thread.model = "gpt-7".to_string();
+    thread.model_provider = Some("openai".to_string());
+    thread.model_provider_id = Some("openai-7".to_string());
+    thread.workspace = PathBuf::from("/tmp/repo");
+    thread.mode = "agent".to_string();
+    thread.latest_turn_id = Some("turn-7".to_string());
+    thread.latest_response_bookmark = Some("bookmark-7".to_string());
+    thread.task_id = Some("task-7".to_string());
+    thread.session_id = Some("linked-7".to_string());
+    thread.system_prompt = Some("public prose echoed openai tmp 7".to_string());
+    thread.title = Some("title echoed openai tmp 7".to_string());
+    store.save_thread(&thread)?;
+
+    store.rewrite_sensitive_projection(
+        &thread.id,
+        &HashSet::from(["openai".to_string(), "tmp".to_string(), "7".to_string()]),
+    )?;
+
+    let projected = store.load_thread(&thread.id)?;
+    assert_eq!(projected.id, thread.id);
+    assert_eq!(projected.model, thread.model);
+    assert_eq!(projected.model_provider, thread.model_provider);
+    assert_eq!(projected.model_provider_id, thread.model_provider_id);
+    assert_eq!(projected.workspace, thread.workspace);
+    assert_eq!(projected.mode, thread.mode);
+    assert_eq!(projected.latest_turn_id, thread.latest_turn_id);
+    assert_eq!(
+        projected.latest_response_bookmark,
+        thread.latest_response_bookmark
+    );
+    assert_eq!(projected.task_id, thread.task_id);
+    assert_eq!(projected.session_id, thread.session_id);
+    for prose in [projected.system_prompt, projected.title] {
+        let prose = prose.expect("projected public prose remains present");
+        assert!(!prose.contains("openai"), "{prose}");
+        assert!(!prose.contains("tmp"), "{prose}");
+        assert!(!prose.contains('7'), "{prose}");
+    }
+    Ok(())
+}
+
+#[test]
 fn public_tool_result_projects_dynamic_metadata_without_changing_result_schema() -> Result<()> {
     let sensitive_values = HashSet::from(["input".to_string(), "7".to_string()]);
     let result = Ok(
@@ -8325,24 +8371,42 @@ async fn late_root_taint_rewrites_thread_metadata_and_event_replay() -> Result<(
 
     let durable_thread = manager.store.load_thread(&thread.id)?;
     let durable_events = manager.store.events_since(&thread.id, None)?;
-    assert!(!serde_json::to_string(&durable_thread)?.contains(SECRET));
-    assert!(!serde_json::to_string(&durable_events)?.contains(SECRET));
+    assert_eq!(
+        durable_thread.workspace,
+        PathBuf::from(format!("/tmp/guessed-{SECRET}")),
+        "late privacy projection must not corrupt execution identity"
+    );
     assert!(
-        !std::fs::read_to_string(data_dir.join("threads").join(format!("{}.json", thread.id)))?
+        !durable_thread
+            .title
+            .as_deref()
+            .unwrap_or_default()
             .contains(SECRET)
     );
+    assert!(
+        !durable_thread
+            .system_prompt
+            .as_deref()
+            .unwrap_or_default()
+            .contains(SECRET)
+    );
+    assert!(!serde_json::to_string(&durable_events)?.contains(SECRET));
+    let durable_thread_file: ThreadRecord = serde_json::from_str(&std::fs::read_to_string(
+        data_dir.join("threads").join(format!("{}.json", thread.id)),
+    )?)?;
+    assert_eq!(durable_thread_file, durable_thread);
     assert!(
         !std::fs::read_to_string(data_dir.join("events").join(format!("{}.jsonl", thread.id)))?
             .contains(SECRET)
     );
-    assert!(!serde_json::to_string(&manager.get_thread(&thread.id).await?)?.contains(SECRET));
-    assert!(
-        !serde_json::to_string(
-            &manager
-                .list_threads(ThreadListFilter::IncludeArchived, None)
-                .await?
-        )?
-        .contains(SECRET)
+    assert_eq!(manager.get_thread(&thread.id).await?, durable_thread);
+    assert_eq!(
+        manager
+            .list_threads(ThreadListFilter::IncludeArchived, None)
+            .await?
+            .into_iter()
+            .find(|candidate| candidate.id == thread.id),
+        Some(durable_thread)
     );
 
     let projected_update = manager
@@ -8594,7 +8658,7 @@ async fn pending_late_taint_manifest_projects_forks_and_usage_keys() -> Result<(
     usage_turn.effective_provider = Some(format!("provider-{SECRET}"));
     manager.store.save_turn(&usage_turn)?;
     let mut raw_thread = manager.store.load_thread(&thread.id)?;
-    raw_thread.model = format!("thread-model-{SECRET}");
+    raw_thread.title = Some(format!("thread-title-{SECRET}"));
     manager.store.save_thread(&raw_thread)?;
 
     // Fail after replacing only the thread record. Source turns, items, and
@@ -8648,10 +8712,16 @@ async fn pending_late_taint_manifest_projects_forks_and_usage_keys() -> Result<(
         );
     }
 
-    // Forks inherit the source taint set, so a later metadata write cannot
-    // reintroduce the classified bytes into the new root.
+    // Forks inherit the source taint set, so a later public-prose metadata
+    // write cannot reintroduce the classified bytes into the new root.
     manager
-        .set_thread_session_id(&forked.id, &format!("linked-{SECRET}"))
+        .update_thread(
+            &forked.id,
+            UpdateThreadRequest {
+                title: Some(format!("linked title {SECRET}")),
+                ..UpdateThreadRequest::default()
+            },
+        )
         .await?;
     assert!(!serde_json::to_string(&manager.store.load_thread(&forked.id)?)?.contains(SECRET));
     assert!(
@@ -8693,7 +8763,7 @@ fn failed_sensitive_fork_publication_removes_orphan_taint_state() -> Result<()> 
 }
 
 #[tokio::test]
-async fn registered_taint_projects_session_and_turn_api_returns() -> Result<()> {
+async fn registered_taint_preserves_session_identity_and_projects_turn_api_returns() -> Result<()> {
     const SECRET: &str = "api-return-secret-482915";
     let manager = test_manager(test_runtime_dir())?;
     let thread = manager
@@ -8706,17 +8776,11 @@ async fn registered_taint_projects_session_and_turn_api_returns() -> Result<()> 
     manager
         .set_thread_session_id(&thread.id, &format!("session-{SECRET}"))
         .await?;
-    let persisted_thread = serde_json::to_value(manager.store.load_thread(&thread.id)?)?;
-    let leaking_fields = persisted_thread
-        .as_object()
-        .into_iter()
-        .flat_map(|fields| fields.iter())
-        .filter(|(_, value)| value.to_string().contains(SECRET))
-        .map(|(key, _)| key.as_str())
-        .collect::<Vec<_>>();
-    assert!(
-        leaking_fields.is_empty(),
-        "leaking fields: {leaking_fields:?}"
+    let persisted_thread = manager.store.load_thread(&thread.id)?;
+    assert_eq!(
+        persisted_thread.session_id.as_deref(),
+        Some(format!("session-{SECRET}").as_str()),
+        "linked-session identity must remain byte-exact for history restore"
     );
     assert!(
         !serde_json::to_string(&manager.store.events_since(&thread.id, None)?)?.contains(SECRET)

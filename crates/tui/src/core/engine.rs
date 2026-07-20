@@ -715,6 +715,10 @@ pub struct Engine {
     token_estimate_cache: TokenEstimateCache,
     /// Shared pause flag set by the TUI and read before tool execution.
     shared_paused: Arc<StdMutex<bool>>,
+    #[cfg(test)]
+    force_late_sensitive_projection_failure: bool,
+    #[cfg(test)]
+    late_sensitive_projection_attempts: u32,
 }
 
 fn claim_subagent_completion(
@@ -1268,6 +1272,10 @@ impl Engine {
             current_mode: AppMode::Agent,
             token_estimate_cache: TokenEstimateCache::new(),
             shared_paused: shared_paused.clone(),
+            #[cfg(test)]
+            force_late_sensitive_projection_failure: false,
+            #[cfg(test)]
+            late_sensitive_projection_attempts: 0,
         };
         let handle = EngineHandle {
             tx_op,

@@ -638,9 +638,33 @@ fn project_turn_handoff_line(
     }
 
     if let Some(body) = line.strip_prefix("- ") {
-        if let Some(separator) = body.find(": ") {
-            let prefix_end = separator + 2;
-            let (prefix, value) = body.split_at(prefix_end);
+        // Only renderer-owned labels are structural. Treating every substring
+        // before the first `: ` as a label lets user-authored plan/todo text
+        // escape projection (for example `[ ] call 482915: then verify`).
+        // Keep this allowlist exact and project the whole row otherwise.
+        const FIXED_BULLET_PREFIXES: &[&str] = &[
+            "Strategy: ",
+            "Route steps: ",
+            "To-do: ",
+            "Route: ",
+            "Auto decision: ",
+            "Auto pair: ",
+            "Auto scope: ",
+            "Auto data: ",
+            "Tokens (last turn): ",
+            "Tokens (session): ",
+            "Cost (session): ",
+            "Usage plan: ",
+            "Cost: ",
+            "Status: ",
+            "Result: ",
+            "Error: ",
+        ];
+        if let Some(prefix) = FIXED_BULLET_PREFIXES
+            .iter()
+            .find(|prefix| body.starts_with(**prefix))
+        {
+            let value = &body[prefix.len()..];
             return format!(
                 "- {prefix}{}",
                 crate::runtime_threads::redacted_sensitive_user_input_text(value, sensitive_values,)
@@ -1042,6 +1066,27 @@ Structured result blocks:\n";
             !projected.contains("Input ID Name Tool call"),
             "{projected}"
         );
+    }
+
+    #[test]
+    fn turn_handoff_does_not_treat_user_plan_text_before_colon_as_structure() {
+        const SECRET: &str = "482915";
+        let tmpdir = TempDir::new().expect("tempdir");
+        let app = test_app(&tmpdir);
+        app.sensitive_user_input_provenance
+            .extend([SECRET.to_string()]);
+        let raw = "# Turn handoff\n\
+                   _Status: completed · generated 2026-07-20 12:00:00_\n\
+                   \n\
+                   ## Strategy / To-do\n\
+                   - [ ] call 482915: then verify\n\
+                   - Strategy: preserve fixed label while removing 482915\n";
+
+        let projected = sanitize_turn_handoff(&app, raw);
+
+        assert!(!projected.contains(SECRET), "{projected}");
+        assert!(projected.contains("- [ ] call [redacted user input]: then verify"));
+        assert!(projected.contains("- Strategy: preserve fixed label"));
     }
 
     #[test]

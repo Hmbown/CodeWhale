@@ -534,7 +534,8 @@ fn headless_worker_records_persist_with_subagent_state() {
         .persist_state()
         .expect("persist state")
         .join()
-        .expect("persist thread");
+        .expect("persist thread")
+        .expect("persist write");
 
     let mut loaded = SubAgentManager::new(tmp.path().to_path_buf(), 4).with_state_path(state_path);
     loaded.load_state().expect("load state");
@@ -4345,7 +4346,8 @@ fn test_persist_and_reload_marks_running_agent_as_interrupted() {
         .persist_state()
         .expect("persist state")
         .join()
-        .expect("persist thread");
+        .expect("persist thread")
+        .expect("persist write");
 
     let mut reloaded = SubAgentManager::new(workspace, 2)
         .with_state_path(default_state_path(tmp.path()).expect("default state path"));
@@ -4388,7 +4390,8 @@ fn generated_whale_name_is_not_persisted_or_replayed_on_load() {
         .persist_state()
         .expect("persist state")
         .join()
-        .expect("persist thread");
+        .expect("persist thread")
+        .expect("persist write");
 
     let mut persisted: Value =
         serde_json::from_str(&std::fs::read_to_string(&state_path).expect("read persisted state"))
@@ -4446,7 +4449,8 @@ fn explicit_nonmatching_whale_word_is_persisted_and_loaded() {
         .persist_state()
         .expect("persist state")
         .join()
-        .expect("persist thread");
+        .expect("persist thread")
+        .expect("persist write");
 
     let persisted: Value =
         serde_json::from_str(&std::fs::read_to_string(&state_path).expect("read persisted state"))
@@ -4497,7 +4501,8 @@ fn persist_and_reload_preserves_checkpoint_for_interrupted_running_agent() {
         .persist_state()
         .expect("persist state")
         .join()
-        .expect("persist thread");
+        .expect("persist thread")
+        .expect("persist write");
 
     let mut reloaded = SubAgentManager::new(workspace, 2)
         .with_state_path(default_state_path(tmp.path()).expect("default state path"));
@@ -4595,7 +4600,8 @@ fn restart_reconciles_every_orphan_execution_status_once_and_preserves_receipts(
         .persist_state()
         .expect("persist restart fixture")
         .join()
-        .expect("persist thread");
+        .expect("persist thread")
+        .expect("persist write");
 
     let mut reloaded =
         SubAgentManager::new(workspace.clone(), 8).with_state_path(state_path.clone());
@@ -4671,7 +4677,8 @@ fn restart_reconciles_every_orphan_execution_status_once_and_preserves_receipts(
         .persist_state()
         .expect("persist reconciled state")
         .join()
-        .expect("persist thread");
+        .expect("persist thread")
+        .expect("persist write");
     let mut loaded_again = SubAgentManager::new(workspace, 8).with_state_path(state_path);
     loaded_again.load_state().expect("load reconciled state");
     assert_eq!(
@@ -7117,7 +7124,8 @@ fn persist_round_trip_preserves_session_boot_id() {
             .persist_state()
             .expect("persist round-trip should write")
             .join()
-            .expect("persist thread");
+            .expect("persist thread")
+            .expect("persist write");
     }
 
     // A fresh manager comes up with a *different* boot id and reloads
@@ -8910,7 +8918,8 @@ fn cleanup_evicts_stale_terminal_worker_records_and_keeps_live_ones() {
         .persist_state()
         .expect("persist after cleanup")
         .join()
-        .expect("persist thread");
+        .expect("persist thread")
+        .expect("persist write");
     let mut reloaded =
         SubAgentManager::new(tmp.path().to_path_buf(), 4).with_state_path(state_path);
     reloaded.load_state().expect("load pruned state");
@@ -9324,7 +9333,8 @@ fn late_parent_taint_rewrites_started_child_transcript_and_manager_state() {
         .persist_state()
         .expect("raw persist")
         .join()
-        .expect("raw persist thread");
+        .expect("raw persist thread")
+        .expect("raw persist write");
     assert!(
         std::fs::read_to_string(&state_path)
             .expect("raw state")
@@ -9354,6 +9364,104 @@ fn late_parent_taint_rewrites_started_child_transcript_and_manager_state() {
             .expect("serialize result")
             .contains(SECRET)
     );
+}
+
+#[test]
+fn late_privacy_cleanup_propagates_background_state_write_failure() {
+    const SECRET: &str = "cleanup-write-failure-482915";
+    let tmp = tempdir().expect("tempdir");
+    let state_path = tmp.path().join("subagents.v1.json");
+    // A directory at the final file path lets payload construction succeed but
+    // makes the background atomic rename fail deterministically.
+    std::fs::create_dir_all(&state_path).expect("blocking state directory");
+    let provenance = crate::runtime_threads::SensitiveUserInputProvenance::default();
+    let mut manager =
+        SubAgentManager::new(tmp.path().to_path_buf(), 1).with_state_path(state_path.clone());
+    let (input_tx, _input_rx) = mpsc::unbounded_channel();
+    let mut agent = SubAgent::new(
+        "agent_cleanup_failure".to_string(),
+        SubAgentType::General,
+        format!("prompt echoed {SECRET}"),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        None,
+        None,
+        input_tx,
+        tmp.path().to_path_buf(),
+        manager.current_session_boot_id.clone(),
+    );
+    agent.sensitive_user_input_provenance = provenance.clone();
+    manager.agents.insert(agent.id.clone(), agent);
+    provenance.extend([SECRET.to_string()]);
+
+    let error = manager
+        .refresh_sensitive_user_input_provenance(&provenance)
+        .expect_err("privacy cleanup must surface the writer's rename failure");
+
+    assert!(!error.to_string().is_empty());
+    assert!(
+        state_path.is_dir(),
+        "failed publish must not replace the target"
+    );
+}
+
+#[test]
+fn superseded_state_writer_cannot_publish_after_privacy_generation() {
+    const SECRET: &str = "paused-old-writer-482915";
+    let tmp = tempdir().expect("tempdir");
+    let state_path = tmp.path().join("subagents.v1.json");
+    let provenance = crate::runtime_threads::SensitiveUserInputProvenance::default();
+    let mut manager =
+        SubAgentManager::new(tmp.path().to_path_buf(), 1).with_state_path(state_path.clone());
+    let (input_tx, _input_rx) = mpsc::unbounded_channel();
+    let mut agent = SubAgent::new(
+        "agent_generation".to_string(),
+        SubAgentType::General,
+        format!("raw payload {SECRET}"),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        None,
+        None,
+        input_tx,
+        tmp.path().to_path_buf(),
+        manager.current_session_boot_id.clone(),
+    );
+    agent.sensitive_user_input_provenance = provenance.clone();
+    manager.agents.insert(agent.id.clone(), agent);
+    let (_, raw_payload) = manager
+        .build_persist_payload()
+        .expect("build raw payload")
+        .expect("configured state path");
+    assert!(
+        serde_json::to_string(&raw_payload)
+            .expect("serialize raw payload")
+            .contains(SECRET),
+        "negative control must prove the older generation captured raw bytes"
+    );
+
+    // Pause both real writers at their shared rename boundary. The second
+    // schedule advances the generation after provenance is registered, so the
+    // older payload must retire without publishing regardless of wake order.
+    let persist_io = Arc::clone(&manager.persist_io);
+    let io_guard = persist_io.lock();
+    let older = manager.persist_state().expect("schedule older raw writer");
+    provenance.extend([SECRET.to_string()]);
+    let projected = manager
+        .persist_state()
+        .expect("schedule projected writer after cleanup");
+    drop(io_guard);
+
+    older
+        .join()
+        .expect("older writer thread")
+        .expect("superseded writer exits cleanly");
+    projected
+        .join()
+        .expect("projected writer thread")
+        .expect("projected writer publishes");
+    let durable = std::fs::read_to_string(state_path).expect("durable projected state");
+    assert!(!durable.contains(SECRET), "{durable}");
+    assert!(durable.contains("[redacted user input]"), "{durable}");
 }
 
 #[test]
@@ -9426,6 +9534,32 @@ fn child_local_taint_rewrites_earlier_append_only_transcript_records() {
             .expect("serialize live provider messages")
             .contains(SECRET)
     );
+}
+
+#[test]
+fn late_transcript_projection_preserves_structural_agent_id() {
+    const AGENT_ID: &str = "agent_7abc";
+    let tmp = tempdir().expect("tempdir");
+    let mut writer = SubAgentTranscriptArtifactWriter::create(
+        tmp.path(),
+        AGENT_ID,
+        crate::runtime_threads::SensitiveUserInputProvenance::default(),
+    )
+    .expect("create transcript");
+    writer
+        .sync_messages(&[text_message("assistant", "model echoed 7")], true)
+        .expect("persist transcript");
+
+    reproject_subagent_transcript_artifact(tmp.path(), AGENT_ID, &HashSet::from(["7".to_string()]))
+        .expect("reproject transcript");
+
+    let raw = std::fs::read_to_string(&writer.path).expect("projected transcript");
+    let header: Value = serde_json::from_str(raw.lines().next().expect("header")).expect("header");
+    assert_eq!(header["agent_id"], AGENT_ID);
+    assert!(!raw.contains("model echoed 7"), "{raw}");
+    let restored = load_subagent_transcript_artifact(tmp.path(), AGENT_ID)
+        .expect("exact agent id keeps transcript loadable");
+    assert_eq!(restored.len(), 1);
 }
 
 #[test]

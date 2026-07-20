@@ -2685,6 +2685,11 @@ pub struct SubAgentManager {
     /// capture the most recent checkpoint.
     last_persist_at: Option<Instant>,
     persist_pending: bool,
+    /// Monotonic publication generation plus one shared disk boundary for the
+    /// background state writer. A superseded payload may finish serializing,
+    /// but it can never rename over a newer privacy-projected snapshot.
+    persist_generation: Arc<std::sync::atomic::AtomicU64>,
+    persist_io: Arc<parking_lot::Mutex<()>>,
     /// #3803: last time `cleanup` ran. The sidebar refresh (`Op::ListSubAgents`)
     /// renders from a read-only `list()` snapshot and only runs the
     /// write-locked `cleanup` on a bounded cadence, so a UI refresh storm during
@@ -2706,6 +2711,11 @@ impl SubAgentManager {
         &mut self,
         provenance: &crate::runtime_threads::SensitiveUserInputProvenance,
     ) -> Result<()> {
+        // Invalidate every payload captured before this provenance snapshot.
+        // Writers re-check the generation while holding `persist_io`, so an
+        // older paused thread cannot publish after this cleanup completes.
+        self.persist_generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         let sensitive_values = provenance.snapshot();
         let agent_ids = self
             .agents
@@ -2741,7 +2751,7 @@ impl SubAgentManager {
             self.last_persist_at = Some(Instant::now());
             self.persist_state()?
                 .join()
-                .map_err(|_| anyhow!("sub-agent privacy persist thread panicked"))?;
+                .map_err(|_| anyhow!("sub-agent privacy persist thread panicked"))??;
         }
         Ok(())
     }
@@ -2770,6 +2780,8 @@ impl SubAgentManager {
             launch_gate: Arc::new(Semaphore::new(max_agents.max(1))),
             last_persist_at: None,
             persist_pending: false,
+            persist_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            persist_io: Arc::new(parking_lot::Mutex::new(())),
             last_cleanup_at: None,
             queued_mail: HashMap::new(),
             woken_agents: HashMap::new(),
@@ -2937,21 +2949,34 @@ impl SubAgentManager {
     /// thread so the caller's write lock is released before touching the
     /// filesystem.
     ///
-    /// Returns a [`std::thread::JoinHandle`] that resolves when the disk write
-    /// completes.  Callers may `.join()` for synchronous semantics or drop it
-    /// for fire-and-forget.
-    fn persist_state(&self) -> Result<std::thread::JoinHandle<()>> {
+    /// Returns a [`std::thread::JoinHandle`] that resolves to the real disk
+    /// result. Callers that require a privacy boundary must join and propagate
+    /// both a panic and an I/O error; best-effort callers may drop the handle
+    /// because the writer logs any failure itself.
+    fn persist_state(&self) -> Result<std::thread::JoinHandle<Result<()>>> {
         let Some((path, payload)) = self.build_persist_payload()? else {
             // Nothing to persist — return a no-op handle.
-            return Ok(std::thread::spawn(|| {}));
+            return Ok(std::thread::spawn(|| Ok(())));
         };
         let workspace = self.workspace.clone();
+        let generation = self
+            .persist_generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+            .saturating_add(1);
+        let current_generation = Arc::clone(&self.persist_generation);
+        let persist_io = Arc::clone(&self.persist_io);
         // Spawn disk I/O off the write-lock hot path.  `payload` is fully
         // owned (cloned from `self.agents`) so it is `Send` and safe to move.
         let handle = std::thread::spawn(move || {
-            if let Err(err) = write_json_atomic(&workspace, &path, &payload) {
+            let _io = persist_io.lock();
+            if current_generation.load(std::sync::atomic::Ordering::Acquire) != generation {
+                return Ok(());
+            }
+            let result = write_json_atomic(&workspace, &path, &payload);
+            if let Err(err) = &result {
                 tracing::warn!(target: "subagent", ?err, "failed to persist sub-agent state");
             }
+            result
         });
         Ok(handle)
     }
@@ -3013,10 +3038,19 @@ impl SubAgentManager {
             self.persist_pending = false;
             // Synchronous disk I/O — safe because we are shutting down and no
             // callers depend on releasing the write lock quickly.
-            if let Ok(Some((path, payload))) = self.build_persist_payload()
-                && let Err(err) = write_json_atomic(&self.workspace, &path, &payload)
-            {
-                tracing::warn!(target: "subagent", ?err, "failed to flush pending sub-agent state");
+            match self.persist_state() {
+                Ok(handle) => match handle.join() {
+                    Ok(Ok(())) => {}
+                    Ok(Err(err)) => {
+                        tracing::warn!(target: "subagent", ?err, "failed to flush pending sub-agent state");
+                    }
+                    Err(_) => {
+                        tracing::warn!(target: "subagent", "pending sub-agent state writer panicked");
+                    }
+                },
+                Err(err) => {
+                    tracing::warn!(target: "subagent", ?err, "failed to prepare pending sub-agent state");
+                }
             }
         }
     }
@@ -4932,15 +4966,10 @@ fn reproject_subagent_transcript_artifact(
             {
                 *slot = serde_json::to_value(message)?;
             }
-        } else if let Some(agent_id_value) = value.get_mut("agent_id")
-            && let Some(raw_agent_id) = agent_id_value.as_str()
-        {
-            *agent_id_value =
-                Value::String(crate::runtime_threads::redacted_sensitive_user_input_text(
-                    raw_agent_id,
-                    sensitive_values,
-                ));
         }
+        // Header/schema records contain only structural ownership fields. In
+        // particular `agent_id` must remain byte-exact because the loader uses
+        // it to authenticate the derived artifact path against the header.
         encoded.extend(json_line(&value)?);
     }
     rewrite_private_subagent_transcript_atomic(&io_guard, &workspace, &path, &encoded)
