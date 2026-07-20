@@ -1520,6 +1520,18 @@ impl DeepSeekClient {
             // bundled catalog (case-insensitive) to inherit metadata (context
             // window, reasoning, tool_call, etc.) so the model picker shows
             // rich capability information instead of empty rows.
+            //
+            // Correctness boundary (#4188 review): matching solely by
+            // case-insensitive `wire_model_id` across all providers can copy
+            // capabilities and cost from an unrelated provider/version. A
+            // gateway exposing `DeepSeek-R1` does not by itself prove identical
+            // limits, prices, reasoning controls, or tool support.
+            //
+            // Strategy: prefer same-provider matches (explicit canonical mapping)
+            // and inherit all metadata; for cross-provider matches, only inherit
+            // `family` (name-derived, safe) and leave provider-specific fields
+            // (limit, cost, reasoning, tool_call, modalities, canonical_model,
+            // reasoning_options) as unknown — they must be proven per-gateway.
             let models =
                 parse_models_response(&body).map_err(|_| CatalogRefreshError::InvalidResponse)?;
             if models.is_empty() {
@@ -1533,14 +1545,28 @@ impl DeepSeekClient {
                 .into_iter()
                 .map(|model| {
                     let is_default = model.id == default_model_id;
-                    // Find a bundled offering whose wire_model_id matches
-                    // case-insensitively, regardless of provider.
-                    let bundled_match = bundled.iter().find(|offering| {
-                        offering
-                            .wire_model_id
-                            .eq_ignore_ascii_case(&model.id)
+
+                    // 1) Same-provider match: explicit canonical mapping — inherit
+                    //    all metadata (same provider proves same model capabilities).
+                    let same_provider_match = bundled.iter().find(|offering| {
+                        offering.provider.eq_ignore_ascii_case(&provider)
+                            && offering.wire_model_id.eq_ignore_ascii_case(&model.id)
                     });
-                    if let Some(matched) = bundled_match {
+
+                    // 2) Cross-provider match: same wire_model_id but different
+                    //    provider — only inherit `family` (name-derived, safe).
+                    //    Provider-specific fields remain unknown.
+                    let cross_provider_match = if same_provider_match.is_none() {
+                        bundled.iter().find(|offering| {
+                            !offering.provider.eq_ignore_ascii_case(&provider)
+                                && offering.wire_model_id.eq_ignore_ascii_case(&model.id)
+                        })
+                    } else {
+                        None
+                    };
+
+                    if let Some(matched) = same_provider_match {
+                        // Same-provider match: full metadata inheritance is safe.
                         CatalogOffering {
                             provider: provider.clone(),
                             wire_model_id: model.id,
@@ -1559,7 +1585,33 @@ impl DeepSeekClient {
                                 fetched_at,
                             },
                         }
+                    } else if let Some(matched) = cross_provider_match {
+                        // Cross-provider match: only inherit family (name-derived).
+                        // Provider-specific metadata (limit, cost, reasoning,
+                        // tool_call, modalities, canonical_model,
+                        // reasoning_options) is NOT inherited — a gateway
+                        // exposing the same model ID does not prove identical
+                        // limits, prices, or capabilities.
+                        CatalogOffering {
+                            provider: provider.clone(),
+                            wire_model_id: model.id,
+                            canonical_model: None,
+                            endpoint_key: "chat".to_string(),
+                            default_for_provider: is_default,
+                            family: matched.family.clone(),
+                            limit: None,
+                            cost: None,
+                            modalities: None,
+                            reasoning: None,
+                            tool_call: None,
+                            reasoning_options: Vec::new(),
+                            source: CatalogSource::Live {
+                                base_url_fingerprint: fingerprint.clone(),
+                                fetched_at,
+                            },
+                        }
                     } else {
+                        // No match at all: bare offering with no metadata.
                         CatalogOffering {
                             provider: provider.clone(),
                             wire_model_id: model.id,
@@ -2185,13 +2237,18 @@ fn parse_openrouter_models_response(
 
 fn publish_provider_lake_snapshot(cache: &ProviderCatalogCache) {
     // Publish fresh *and* stale/prior rows so pickers keep live catalog coverage
-    // after TTL expiry or a failed refresh (#4139). Empty caches clear the live
-    // layer and fall back to the bundled snapshot.
+    // after TTL expiry or a failed refresh (#4139). Empty caches clear the
+    // per-provider live layer and fall back to bundled/Models.dev snapshot.
     let offerings = cache.all_visible_offerings(now_unix());
     if offerings.is_empty() {
-        crate::provider_lake::clear_live_snapshot();
+        crate::provider_lake::clear_live_snapshot_for_source(
+            crate::provider_lake::LiveSource::PerProvider,
+        );
     } else {
-        crate::provider_lake::set_live_snapshot(CatalogSnapshot { offerings });
+        crate::provider_lake::set_live_snapshot(
+            CatalogSnapshot { offerings },
+            crate::provider_lake::LiveSource::PerProvider,
+        );
     }
 }
 
@@ -2348,10 +2405,20 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::Deepinfra
             | ApiProvider::Together
             | ApiProvider::Atlascloud
-            | ApiProvider::Zai
-            | ApiProvider::Telecomjs => {
+            | ApiProvider::Zai => {
                 body["thinking"] = json!({ "type": "disabled" });
             }
+            // TelecomJS TokenHub: the gateway's OpenAI Chat Completions API
+            // (POST /v1/chat/completions) does not document `reasoning_effort`
+            // or `thinking` as supported parameters. The `thinking` field is
+            // only available on the Anthropic Messages API (POST /v1/messages)
+            // with a different shape ({"type":"enabled","budget_tokens":N}).
+            // Since CodeWhale routes TelecomJS through the Chat Completions
+            // path, we must NOT inject these fields — the gateway may silently
+            // ignore them or reject the request, and not every gateway model
+            // (qwen-max, deepseek-chat, gpt-4o, claude, etc.) accepts the same
+            // reasoning dialect (#4188 review: verify against actual behavior).
+            ApiProvider::Telecomjs => {}
             ApiProvider::OpenaiCodex => {
                 // OpenAI Codex uses Responses API — thinking handled differently
             }
@@ -2415,11 +2482,13 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::Sglang
             | ApiProvider::Volcengine
             | ApiProvider::Deepinfra
-            | ApiProvider::Atlascloud
-            | ApiProvider::Telecomjs => {
+            | ApiProvider::Atlascloud => {
                 body["reasoning_effort"] = json!("high");
                 body["thinking"] = json!({ "type": "enabled" });
             }
+            // TelecomJS: see comment in the "off" branch above — the gateway's
+            // Chat Completions API does not support reasoning_effort or thinking.
+            ApiProvider::Telecomjs => {}
             // OpenRouter/Novita/Together: pass through the actual user-chosen value.
             // OpenRouter's unified scale is none/minimal/low/medium/high/xhigh;
             // DeepSeek models hosted there accept those directly.
@@ -2510,11 +2579,13 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::Sglang
             | ApiProvider::Volcengine
             | ApiProvider::Deepinfra
-            | ApiProvider::Atlascloud
-            | ApiProvider::Telecomjs => {
+            | ApiProvider::Atlascloud => {
                 body["reasoning_effort"] = json!("max");
                 body["thinking"] = json!({ "type": "enabled" });
             }
+            // TelecomJS: see comment in the "off" branch above — the gateway's
+            // Chat Completions API does not support reasoning_effort or thinking.
+            ApiProvider::Telecomjs => {}
             ApiProvider::Openrouter | ApiProvider::Novita | ApiProvider::Together => {
                 body["reasoning_effort"] = json!("xhigh");
                 body["thinking"] = json!({ "type": "enabled" });
@@ -4720,6 +4791,31 @@ mod tests {
         let mut body = json!({});
         apply_reasoning_effort(&mut body, Some("off"), ApiProvider::Moonshot);
         assert_eq!(body, json!({ "thinking": { "type": "disabled" } }));
+    }
+
+    /// TelecomJS TokenHub: the gateway's OpenAI Chat Completions API does NOT
+    /// support `reasoning_effort` or `thinking` fields (#4188 review). Verify
+    /// that no reasoning fields are injected for any effort level, since not
+    /// every gateway model (qwen-max, deepseek-chat, gpt-4o, claude, etc.)
+    /// accepts the same reasoning dialect.
+    #[test]
+    fn reasoning_effort_telecomjs_does_not_inject_reasoning_fields() {
+        for effort in &["off", "low", "medium", "high", "max", "xhigh"] {
+            let mut body = json!({});
+            apply_reasoning_effort(&mut body, Some(effort), ApiProvider::Telecomjs);
+            assert!(
+                body.get("reasoning_effort").is_none(),
+                "TelecomJS must not inject reasoning_effort for effort={effort}: {body}"
+            );
+            assert!(
+                body.get("thinking").is_none(),
+                "TelecomJS must not inject thinking for effort={effort}: {body}"
+            );
+            assert!(
+                body.get("think").is_none(),
+                "TelecomJS must not inject think for effort={effort}: {body}"
+            );
+        }
     }
 
     #[test]

@@ -361,7 +361,7 @@ fn publish_from_body(
         return Err(err);
     }
     let count = offerings.len();
-    crate::provider_lake::set_live_snapshot(CatalogSnapshot { offerings });
+    crate::provider_lake::set_live_snapshot(CatalogSnapshot { offerings }, crate::provider_lake::LiveSource::ModelsDev);
     set_status(ModelsDevStatus {
         freshness,
         offering_count: count,

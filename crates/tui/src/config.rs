@@ -5790,6 +5790,7 @@ fn provider_env_base_url_override(provider: ApiProvider) -> Option<String> {
         ApiProvider::Huggingface => &["HUGGINGFACE_BASE_URL", "HF_BASE_URL"],
         ApiProvider::Meta => &["META_MODEL_API_BASE_URL", "MODEL_API_BASE_URL"],
         ApiProvider::Xai => &["XAI_BASE_URL"],
+        ApiProvider::Telecomjs => &["TELECOMJS_BASE_URL"],
         ApiProvider::OpencodeGo => &["OPENCODE_GO_BASE_URL"],
         ApiProvider::Deepseek
         | ApiProvider::DeepseekCN
