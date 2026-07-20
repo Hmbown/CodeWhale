@@ -299,6 +299,62 @@ struct FirstRequestGatedGoalModelClient {
     release_request: std::sync::Arc<tokio::sync::Notify>,
 }
 
+struct IndexedGatedGoalModelClient {
+    calls: std::sync::atomic::AtomicUsize,
+    gates: HashMap<
+        usize,
+        (
+            std::sync::Arc<tokio::sync::Notify>,
+            std::sync::Arc<tokio::sync::Notify>,
+        ),
+    >,
+    max_calls: usize,
+}
+
+#[async_trait::async_trait]
+impl crate::core::model_client::ModelClient for IndexedGatedGoalModelClient {
+    fn provider_name(&self) -> &str {
+        "deterministic-goal"
+    }
+
+    fn model(&self) -> &str {
+        "local-model"
+    }
+
+    async fn create_message(
+        &self,
+        _request: crate::models::MessageRequest,
+    ) -> anyhow::Result<crate::models::MessageResponse> {
+        anyhow::bail!("indexed gate regression uses the streaming model boundary")
+    }
+
+    async fn create_message_stream(
+        &self,
+        _request: crate::models::MessageRequest,
+    ) -> anyhow::Result<crate::llm_client::StreamEventBox> {
+        let call = self
+            .calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            .saturating_add(1);
+        if call > self.max_calls {
+            anyhow::bail!("unexpected indexed goal model request #{call}");
+        }
+        if let Some((entered, release)) = self.gates.get(&call).cloned() {
+            entered.notify_one();
+            release.notified().await;
+        }
+
+        let events = crate::llm_client::mock::canned::simple_text_turn("still working")
+            .into_iter()
+            .map(Ok);
+        Ok(Box::pin(futures_util::stream::iter(events)))
+    }
+
+    async fn health_check(&self) -> anyhow::Result<bool> {
+        Ok(true)
+    }
+}
+
 #[async_trait::async_trait]
 impl crate::core::model_client::ModelClient for FirstRequestGatedGoalModelClient {
     fn provider_name(&self) -> &str {
@@ -805,6 +861,233 @@ async fn saturated_mailbox_does_not_deadlock_goal_continuation_self_dispatch() {
 }
 
 #[tokio::test]
+async fn queued_ordinary_turn_does_not_multiply_engine_goal_continuations() {
+    let first_entered = std::sync::Arc::new(tokio::sync::Notify::new());
+    let release_first = std::sync::Arc::new(tokio::sync::Notify::new());
+    let third_entered = std::sync::Arc::new(tokio::sync::Notify::new());
+    let release_third = std::sync::Arc::new(tokio::sync::Notify::new());
+    let model = std::sync::Arc::new(IndexedGatedGoalModelClient {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        gates: HashMap::from([
+            (
+                1,
+                (
+                    std::sync::Arc::clone(&first_entered),
+                    std::sync::Arc::clone(&release_first),
+                ),
+            ),
+            (
+                3,
+                (
+                    std::sync::Arc::clone(&third_entered),
+                    std::sync::Arc::clone(&release_third),
+                ),
+            ),
+        ]),
+        max_calls: 3,
+    });
+    let config = goal_custom_route_config();
+    let engine_config = EngineConfig {
+        model: "local-model".to_string(),
+        max_steps: 1,
+        snapshots_enabled: false,
+        terminal_chrome_enabled: false,
+        goal_objective: Some("coalesce queued goal turns".to_string()),
+        ..EngineConfig::default()
+    };
+    let client: crate::core::model_client::SharedModelClient = model.clone();
+    let (engine, handle) = Engine::new_with_model_client(engine_config, &config, client);
+    let goal_state = engine.config.goal_state.clone();
+    let run_task = tokio::spawn(engine.run());
+    let send_message = |content: &str| Op::SendMessage {
+        content: content.to_string(),
+        mode: AppMode::Agent,
+        route: resolved_route_for_test(&config, "local-model"),
+        compaction: Box::new(CompactionConfig::default()),
+        goal_objective: Some("coalesce queued goal turns".to_string()),
+        goal_token_budget: None,
+        goal_status: crate::tools::goal::GoalStatus::Active,
+        reasoning_effort: None,
+        reasoning_effort_auto: false,
+        auto_model: false,
+        allow_shell: false,
+        trust_mode: false,
+        auto_approve: false,
+        approval_mode: crate::tui::approval::ApprovalMode::Suggest,
+        translation_enabled: false,
+        show_thinking: false,
+        allowed_tools: None,
+        dynamic_tools: Vec::new(),
+        hook_executor: None,
+        verbosity: None,
+        provenance: UserInputProvenance::ExternalUser,
+    };
+
+    handle
+        .send(send_message("start the goal turn"))
+        .await
+        .expect("send first goal turn");
+    tokio::time::timeout(model_turn_event_timeout(), first_entered.notified())
+        .await
+        .expect("first goal request was never entered");
+
+    // This ordinary user turn is already ahead of the first synthetic token
+    // when the gated turn completes. It may refresh that token's tools, but it
+    // must not create a second autonomous continuation.
+    handle
+        .send(send_message("queued ordinary follow-up"))
+        .await
+        .expect("queue ordinary follow-up");
+    release_first.notify_one();
+
+    tokio::time::timeout(model_turn_event_timeout(), third_entered.notified())
+        .await
+        .expect("coalesced synthetic continuation was never entered");
+    handle
+        .send(Op::SetGoalStatus {
+            status: crate::tools::goal::GoalStatus::Paused,
+            clear: false,
+        })
+        .await
+        .expect("queue goal pause behind synthetic turn");
+    release_third.notify_one();
+
+    let _session = tokio::time::timeout(model_turn_event_timeout(), handle.get_session_snapshot())
+        .await
+        .expect("queued-turn coalescing did not settle")
+        .expect("post-coalescing session snapshot");
+    assert_eq!(
+        model.calls.load(std::sync::atomic::Ordering::SeqCst),
+        3,
+        "one initial turn, one queued user turn, and one synthetic continuation are expected"
+    );
+    assert_eq!(
+        goal_state.lock().expect("goal lock").snapshot().status,
+        "paused"
+    );
+
+    handle.send(Op::Shutdown).await.expect("shutdown engine");
+    tokio::time::timeout(model_turn_event_timeout(), run_task)
+        .await
+        .expect("engine did not shut down after queued-turn coalescing")
+        .expect("engine task");
+}
+
+#[tokio::test]
+async fn saturated_goal_controls_run_before_ready_idle_child_completion() {
+    use crate::tools::subagent::SubAgentCompletion;
+
+    let stale_tool = DynamicToolSpec {
+        namespace: Some("goal-regression".to_string()),
+        name: "stale".to_string(),
+        description: "stale tool catalog".to_string(),
+        input_schema: json!({"type": "object"}),
+        defer_loading: false,
+    };
+    let fresh_tool = DynamicToolSpec {
+        name: "fresh".to_string(),
+        description: "fresh tool catalog".to_string(),
+        ..stale_tool.clone()
+    };
+    let config = goal_custom_route_config();
+    let (mut engine, handle) = Engine::new(
+        EngineConfig {
+            snapshots_enabled: false,
+            terminal_chrome_enabled: false,
+            ..EngineConfig::default()
+        },
+        &config,
+    );
+
+    for index in 0..ENGINE_OP_CHANNEL_CAPACITY {
+        let status = if index + 1 == ENGINE_OP_CHANNEL_CAPACITY {
+            crate::tools::goal::GoalStatus::Paused
+        } else {
+            crate::tools::goal::GoalStatus::Active
+        };
+        handle
+            .tx_op
+            .try_send(Op::SetGoalStatus {
+                status,
+                clear: false,
+            })
+            .unwrap_or_else(|error| panic!("fill ordering mailbox slot {index}: {error}"));
+    }
+    assert_eq!(handle.tx_op.capacity(), 0, "fixture must saturate mailbox");
+    engine
+        .tx_subagent_completion
+        .send(SubAgentCompletion {
+            agent_id: "agent_ready_during_backpressure".to_string(),
+            payload: "ready child completion".to_string(),
+        })
+        .expect("queue ready idle child completion");
+    engine.schedule_goal_continuation(vec![stale_tool]);
+    assert!(
+        engine.draining_goal_continuation_backpressure(),
+        "full mailbox must activate temporary op priority"
+    );
+
+    // Inspect the exact production receive helper without running handlers:
+    // all controls that filled the mailbox, including the final pause, must be
+    // selected before the already-ready idle child completion.
+    for index in 0..ENGINE_OP_CHANNEL_CAPACITY {
+        let input = tokio::time::timeout(model_turn_event_timeout(), engine.next_run_input(false))
+            .await
+            .expect("backpressured operation receive timed out")
+            .expect("engine input");
+        let EngineRunInput::Operation(op) = input else {
+            panic!("idle child completion beat queued control {index}");
+        };
+        let Op::SetGoalStatus { status, clear } = *op else {
+            panic!("unexpected operation before queued control {index}");
+        };
+        assert!(!clear);
+        let expected = if index + 1 == ENGINE_OP_CHANNEL_CAPACITY {
+            crate::tools::goal::GoalStatus::Paused
+        } else {
+            crate::tools::goal::GoalStatus::Active
+        };
+        assert_eq!(status, expected);
+        if index == 0 {
+            // Refresh after capacity opens. The existing token must retain its
+            // FIFO position behind the remaining controls while carrying the
+            // newest runtime tool catalog when it is eventually consumed.
+            engine.schedule_goal_continuation(vec![fresh_tool.clone()]);
+        }
+    }
+
+    let token = engine
+        .next_run_input(false)
+        .await
+        .expect("backpressured continuation token");
+    let EngineRunInput::Operation(token) = token else {
+        panic!("idle child completion beat the backpressured continuation token");
+    };
+    let Op::ContinueGoal {
+        dynamic_tools,
+        engine_schedule_id,
+    } = *token
+    else {
+        panic!("expected engine-owned continuation token");
+    };
+    assert!(dynamic_tools.is_empty());
+    let continued_tools = engine
+        .take_scheduled_goal_continuation(engine_schedule_id, dynamic_tools)
+        .expect("engine-owned continuation token must consume its schedule marker");
+    assert_eq!(continued_tools, vec![fresh_tool]);
+    assert!(!engine.draining_goal_continuation_backpressure());
+
+    let child = engine
+        .next_run_input(false)
+        .await
+        .expect("ready idle child completion");
+    let EngineRunInput::SubAgentCompletion(child) = child else {
+        panic!("unexpected operation after backpressure drain");
+    };
+    assert_eq!(child.agent_id, "agent_ready_during_backpressure");
+}
+
+#[tokio::test]
 async fn cross_turn_token_budget_exhaustion_blocks_goal_and_refreshes_prompt() {
     use crate::llm_client::mock::{MockLlmClient, canned};
 
@@ -977,6 +1260,7 @@ async fn queued_goal_clear_refreshes_prompt_and_cancels_stale_continuation() {
     handle
         .send(Op::ContinueGoal {
             dynamic_tools: Vec::new(),
+            engine_schedule_id: None,
         })
         .await
         .expect("queue stale continuation");
@@ -1108,6 +1392,7 @@ async fn exhausted_goal_terminalizes_before_invalid_route_resolution() {
     handle
         .send(Op::ContinueGoal {
             dynamic_tools: Vec::new(),
+            engine_schedule_id: None,
         })
         .await
         .expect("queue exhausted continuation");
@@ -1187,6 +1472,7 @@ async fn invalid_route_blocks_active_goal_and_refreshes_projections() {
     handle
         .send(Op::ContinueGoal {
             dynamic_tools: Vec::new(),
+            engine_schedule_id: None,
         })
         .await
         .expect("queue active continuation");
@@ -1292,6 +1578,7 @@ async fn rejected_continuation_dispatch_blocks_goal_after_failed_turn() {
     handle
         .send(Op::ContinueGoal {
             dynamic_tools: Vec::new(),
+            engine_schedule_id: None,
         })
         .await
         .expect("queue rejected continuation");
@@ -1414,6 +1701,7 @@ async fn started_nonretryable_continuation_failure_blocks_goal_with_bounded_reas
     handle
         .send(Op::ContinueGoal {
             dynamic_tools: Vec::new(),
+            engine_schedule_id: None,
         })
         .await
         .expect("queue failing continuation");

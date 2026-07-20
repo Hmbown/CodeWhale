@@ -135,6 +135,10 @@ pub enum Op {
         /// Runtime-supplied tools remain available across the synthetic turn
         /// that continues the same logical goal run.
         dynamic_tools: Vec<DynamicToolSpec>,
+        /// Opaque identity for an engine-owned synthetic continuation. Direct
+        /// callers use `None`; the engine uses `Some` to coalesce one token
+        /// across capacity-waiting, enqueued, and running-adjacent states.
+        engine_schedule_id: Option<u64>,
     },
 
     /// Execute a user-submitted composer shell command (`! <command>`) without

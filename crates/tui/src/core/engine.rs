@@ -648,10 +648,11 @@ pub struct Engine {
     /// Clone of the op-channel sender, so the engine can self-dispatch ops
     /// (e.g. a goal-continuation `SendMessage` after a turn completes).
     tx_op: mpsc::Sender<Op>,
-    /// At most one continuation waiting for op-channel capacity. Keeping this
-    /// on the sole consumer avoids awaiting a channel that only this engine can
-    /// drain while preserving FIFO behind controls already in the mailbox.
-    pending_goal_continuation: Option<PendingGoalContinuation>,
+    /// At most one engine-owned continuation across capacity-waiting and
+    /// enqueued states. The authoritative dynamic-tool set stays here so a
+    /// later successful turn can refresh it without adding a second token.
+    scheduled_goal_continuation: Option<ScheduledGoalContinuation>,
+    goal_continuation_schedule_seq: u64,
     rx_approval: mpsc::Receiver<ApprovalDecision>,
     rx_user_input: mpsc::Receiver<UserInputDecision>,
     rx_steer: mpsc::Receiver<String>,
@@ -734,8 +735,14 @@ enum GoalContinuationAction {
     },
 }
 
-struct PendingGoalContinuation {
+struct ScheduledGoalContinuation {
+    id: u64,
     dynamic_tools: Vec<DynamicToolSpec>,
+    enqueued: bool,
+    /// Once a full mailbox delays this token, drain operations through the
+    /// token before selecting idle child completions. That preserves controls
+    /// already ahead of it without changing normal run-loop fairness.
+    draining_backpressure: bool,
 }
 
 enum SendMessageOutcome {
@@ -744,6 +751,11 @@ enum SendMessageOutcome {
         status: TurnOutcomeStatus,
         error: Option<String>,
     },
+}
+
+enum EngineRunInput {
+    Operation(Box<Op>),
+    SubAgentCompletion(SubAgentCompletion),
 }
 
 impl SendMessageOutcome {
@@ -1240,7 +1252,8 @@ impl Engine {
             active_route_capabilities: codewhale_config::route::RouteCapabilities::default(),
             rx_op,
             tx_op: tx_op.clone(),
-            pending_goal_continuation: None,
+            scheduled_goal_continuation: None,
+            goal_continuation_schedule_seq: 0,
             rx_approval,
             rx_user_input,
             rx_steer,
@@ -1588,10 +1601,61 @@ impl Engine {
     }
 
     fn schedule_goal_continuation(&mut self, dynamic_tools: Vec<DynamicToolSpec>) {
-        // Coalesce a continuation that could not enter a saturated mailbox.
-        // The most recent completed turn owns the freshest dynamic-tool set.
-        self.pending_goal_continuation = Some(PendingGoalContinuation { dynamic_tools });
+        if let Some(scheduled) = self.scheduled_goal_continuation.as_mut() {
+            // A normal user turn or idle child handoff can finish while the
+            // prior synthetic token is already queued. Refresh that one token
+            // instead of multiplying autonomous turns and provider spend.
+            scheduled.dynamic_tools = dynamic_tools;
+            self.try_flush_pending_goal_continuation();
+            return;
+        }
+
+        self.goal_continuation_schedule_seq =
+            self.goal_continuation_schedule_seq.wrapping_add(1).max(1);
+        self.scheduled_goal_continuation = Some(ScheduledGoalContinuation {
+            id: self.goal_continuation_schedule_seq,
+            dynamic_tools,
+            enqueued: false,
+            draining_backpressure: false,
+        });
         self.try_flush_pending_goal_continuation();
+    }
+
+    fn take_scheduled_goal_continuation(
+        &mut self,
+        engine_schedule_id: Option<u64>,
+        direct_dynamic_tools: Vec<DynamicToolSpec>,
+    ) -> Option<Vec<DynamicToolSpec>> {
+        let Some(schedule_id) = engine_schedule_id else {
+            return Some(direct_dynamic_tools);
+        };
+        let Some(scheduled) = self.scheduled_goal_continuation.take() else {
+            tracing::warn!(
+                schedule_id,
+                "discarding stale engine-owned goal continuation token"
+            );
+            return None;
+        };
+        if scheduled.id != schedule_id {
+            tracing::warn!(
+                schedule_id,
+                current_schedule_id = scheduled.id,
+                "discarding superseded engine-owned goal continuation token"
+            );
+            self.scheduled_goal_continuation = Some(scheduled);
+            return None;
+        }
+
+        // Clear before executing the synthetic turn. A successful execution
+        // may now schedule exactly one replacement; inactive/failed turns do
+        // not leave a phantom outstanding marker behind.
+        Some(scheduled.dynamic_tools)
+    }
+
+    fn draining_goal_continuation_backpressure(&self) -> bool {
+        self.scheduled_goal_continuation
+            .as_ref()
+            .is_some_and(|scheduled| scheduled.draining_backpressure)
     }
 
     fn goal_continuation_failure_message(&self, error: Option<&str>) -> String {
@@ -1623,22 +1687,67 @@ impl Engine {
     }
 
     fn try_flush_pending_goal_continuation(&mut self) {
-        let Some(pending) = self.pending_goal_continuation.take() else {
+        let Some(scheduled) = self.scheduled_goal_continuation.as_ref() else {
             return;
         };
+        if scheduled.enqueued {
+            return;
+        }
+        let schedule_id = scheduled.id;
 
         match self.tx_op.try_send(Op::ContinueGoal {
-            dynamic_tools: pending.dynamic_tools,
+            // The authoritative set stays in `scheduled_goal_continuation` so
+            // later completed turns can refresh it without moving this token.
+            dynamic_tools: Vec::new(),
+            engine_schedule_id: Some(schedule_id),
         }) {
-            Ok(()) => {}
-            Err(mpsc::error::TrySendError::Full(Op::ContinueGoal { dynamic_tools })) => {
-                self.pending_goal_continuation = Some(PendingGoalContinuation { dynamic_tools });
+            Ok(()) => {
+                if let Some(scheduled) = self.scheduled_goal_continuation.as_mut()
+                    && scheduled.id == schedule_id
+                {
+                    scheduled.enqueued = true;
+                }
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 tracing::warn!("goal continuation dropped because the engine mailbox is closed");
+                if self
+                    .scheduled_goal_continuation
+                    .as_ref()
+                    .is_some_and(|scheduled| scheduled.id == schedule_id)
+                {
+                    self.scheduled_goal_continuation = None;
+                }
             }
             Err(mpsc::error::TrySendError::Full(_)) => {
-                unreachable!("goal continuation scheduler only sends ContinueGoal operations")
+                if let Some(scheduled) = self.scheduled_goal_continuation.as_mut()
+                    && scheduled.id == schedule_id
+                {
+                    scheduled.draining_backpressure = true;
+                }
+            }
+        }
+    }
+
+    async fn next_run_input(&mut self, host_managed_turns: bool) -> Option<EngineRunInput> {
+        // A full mailbox means queued controls must run first. Retrying at the
+        // top of each receive appends the continuation behind the remaining
+        // controls as soon as one slot becomes available.
+        self.try_flush_pending_goal_continuation();
+        if self.draining_goal_continuation_backpressure() {
+            // The synthetic token sits behind the controls that filled the
+            // mailbox. Drain through that token before accepting an idle child
+            // completion; consuming the token clears this temporary priority
+            // so normal select fairness resumes immediately.
+            self.rx_op
+                .recv()
+                .await
+                .map(|op| EngineRunInput::Operation(Box::new(op)))
+        } else {
+            tokio::select! {
+                op = self.rx_op.recv() => op.map(|op| EngineRunInput::Operation(Box::new(op))),
+                completion = self.rx_subagent_completion.recv(), if !host_managed_turns => {
+                    completion.map(EngineRunInput::SubAgentCompletion)
+                }
             }
         }
     }
@@ -1646,11 +1755,6 @@ impl Engine {
     /// Run the engine event loop
     #[allow(clippy::too_many_lines)]
     pub async fn run(mut self) {
-        enum EngineRunInput {
-            Operation(Box<Op>),
-            SubAgentCompletion(SubAgentCompletion),
-        }
-
         // RuntimeThreadManager owns durable turn claims and installs a thread
         // id in runtime services. Only the interactive TUI may autonomously
         // create a new turn while the engine is otherwise idle; a hosted
@@ -1659,17 +1763,7 @@ impl Engine {
         let host_managed_turns = self.host_managed_turns();
 
         loop {
-            // A full mailbox means queued controls must run first. Retrying at
-            // the top of the loop appends the continuation behind the
-            // remaining controls as soon as one slot becomes available.
-            self.try_flush_pending_goal_continuation();
-            let input = tokio::select! {
-                op = self.rx_op.recv() => op.map(|op| EngineRunInput::Operation(Box::new(op))),
-                completion = self.rx_subagent_completion.recv(), if !host_managed_turns => {
-                    completion.map(EngineRunInput::SubAgentCompletion)
-                }
-            };
-            let Some(input) = input else {
+            let Some(input) = self.next_run_input(host_managed_turns).await else {
                 break;
             };
 
@@ -1726,7 +1820,15 @@ impl Engine {
                         )
                         .await;
                     }
-                    Op::ContinueGoal { dynamic_tools } => {
+                    Op::ContinueGoal {
+                        dynamic_tools,
+                        engine_schedule_id,
+                    } => {
+                        let Some(dynamic_tools) = self
+                            .take_scheduled_goal_continuation(engine_schedule_id, dynamic_tools)
+                        else {
+                            continue;
+                        };
                         // Status controls queued while the previous turn was
                         // running are processed before this operation. Re-read
                         // the live goal now so pause/clear/complete/blocked can
