@@ -734,7 +734,7 @@ impl ToolSpec for WriteFileTool {
             })?;
         }
 
-        crate::utils::write_atomic(&file_path, file_content.as_bytes()).map_err(|e| {
+        crate::utils::write_atomic_workspace(&file_path, file_content.as_bytes()).map_err(|e| {
             ToolError::execution_failed(format!("Failed to write {}: {}", file_path.display(), e))
         })?;
         context.note_file_read(&file_path);
@@ -891,7 +891,7 @@ impl ToolSpec for EditFileTool {
             (contents.replace(search, replace), count, None)
         };
 
-        crate::utils::write_atomic(&file_path, updated.as_bytes()).map_err(|e| {
+        crate::utils::write_atomic_workspace(&file_path, updated.as_bytes()).map_err(|e| {
             ToolError::execution_failed(format!("Failed to write {}: {}", file_path.display(), e))
         })?;
         context.note_file_read(&file_path);
@@ -1928,6 +1928,93 @@ mod tests {
         // Verify nested file was created
         let written = fs::read_to_string(tmp.path().join("subdir/nested/file.txt")).expect("read");
         assert_eq!(written, "nested content");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn write_file_tool_new_file_matches_standard_creation_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        let control = tmp.path().join("control.txt");
+        fs::write(&control, b"control").expect("write control");
+
+        WriteFileTool
+            .execute(
+                json!({"path": "created.txt", "content": "from write_file"}),
+                &ctx,
+            )
+            .await
+            .expect("execute");
+
+        let control_mode = fs::metadata(&control)
+            .expect("control metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        let created_mode = fs::metadata(tmp.path().join("created.txt"))
+            .expect("created metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(created_mode, control_mode);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn write_file_tool_preserves_existing_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+        let path = tmp.path().join("shared.txt");
+        fs::write(&path, b"before").expect("initial write");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o664))
+            .expect("set shared permissions");
+
+        WriteFileTool
+            .execute(json!({"path": "shared.txt", "content": "after"}), &ctx)
+            .await
+            .expect("execute");
+
+        let mode = fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o664);
+        assert_eq!(fs::read_to_string(&path).expect("read"), "after");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn edit_file_tool_preserves_executable_bits() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+        let path = tmp.path().join("script.sh");
+        fs::write(&path, b"#!/bin/sh\nexit 0\n").expect("initial write");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+            .expect("set executable permissions");
+        read_before_edit(&ctx, "script.sh").await;
+
+        EditFileTool
+            .execute(
+                json!({
+                    "path": "script.sh",
+                    "search": "exit 0",
+                    "replace": "exit 1"
+                }),
+                &ctx,
+            )
+            .await
+            .expect("execute");
+
+        let mode = fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o755);
+        assert_eq!(
+            fs::read_to_string(&path).expect("read"),
+            "#!/bin/sh\nexit 1\n"
+        );
     }
 
     #[tokio::test]

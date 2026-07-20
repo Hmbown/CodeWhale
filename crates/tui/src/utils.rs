@@ -228,7 +228,23 @@ pub fn project_tree(root: &Path, max_depth: usize, follow_symlinks: bool) -> Str
 
 // === Filesystem Helpers ===
 
+/// Permission policy for atomic writes.
+///
+/// - [`AtomicWritePermissions::Private`]: keep tempfile's owner-only defaults
+///   (used for CodeWhale internal persistence such as session/history/trust).
+/// - [`AtomicWritePermissions::Workspace`]: match ordinary workspace file
+///   semantics — new files request mode `0666` (kernel applies umask); existing
+///   files retain ordinary `rwx` bits (not setuid/setgid/sticky).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AtomicWritePermissions {
+    Private,
+    Workspace,
+}
+
 /// Atomically write `contents` to `path` using a temporary file + fsync + rename.
+///
+/// Uses a **private** permission policy (Unix tempfile default `0600`). Prefer
+/// [`write_atomic_workspace`] for user workspace source/config files.
 ///
 /// 1. Creates a `NamedTempFile` in the same directory as `path` (same filesystem).
 /// 2. Writes `contents` to the temp file.
@@ -244,15 +260,86 @@ pub fn project_tree(root: &Path, max_depth: usize, follow_symlinks: bool) -> Str
 /// Returns `io::Error` if the parent directory cannot be determined, the temp
 /// file cannot be created, the write fails, or the rename fails.
 pub fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    write_atomic_with_permissions(path, contents, AtomicWritePermissions::Private)
+}
+
+/// Atomically write `contents` to a **user workspace** path.
+///
+/// On Unix:
+/// - New files request creation mode `0666`; the OS applies the process umask
+///   (same candidate mode as ordinary `std::fs::write`).
+/// - Existing files keep ordinary permission bits (`mode & 0o777`), including
+///   executable bits. setuid/setgid/sticky are intentionally not restored.
+///
+/// On Windows this matches [`write_atomic`] (no POSIX mode simulation).
+///
+/// # Errors
+/// Same failure modes as [`write_atomic`].
+pub fn write_atomic_workspace(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    write_atomic_with_permissions(path, contents, AtomicWritePermissions::Workspace)
+}
+
+fn write_atomic_with_permissions(
+    path: &Path,
+    contents: &[u8],
+    #[cfg_attr(not(unix), allow(unused_variables))] permission_policy: AtomicWritePermissions,
+) -> std::io::Result<()> {
     let parent = path.parent().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!("path has no parent directory: {}", path.display()),
         )
     })?;
+
+    // Capture ordinary rwx bits before replacement. Use symlink_metadata so we
+    // do not follow links: an inaccessible or dangling symlink target must not
+    // abort the write — rename still replaces the directory entry, matching
+    // the pre-#4606 private write_atomic behavior. Symlink entries themselves
+    // are treated as "no mode to preserve" (new ordinary file after rename);
+    // only regular-file modes are restored. Mask with 0o777 so setuid/setgid/
+    // sticky are never restored after rewriting content.
+    #[cfg(unix)]
+    let existing_workspace_mode = if permission_policy == AtomicWritePermissions::Workspace {
+        match fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => None,
+            Ok(metadata) => {
+                use std::os::unix::fs::PermissionsExt;
+                Some(metadata.permissions().mode() & 0o777)
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+            Err(err) => return Err(err),
+        }
+    } else {
+        None
+    };
+
     // Use parent directory so the rename is on the same filesystem.
-    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+    #[cfg(unix)]
+    let mut builder = tempfile::Builder::new();
+    #[cfg(not(unix))]
+    let builder = tempfile::Builder::new();
+
+    // New workspace files should behave like ordinary files opened with
+    // creation mode 0666. The kernel applies the inherited process umask.
+    // Do NOT chmod after create: set_permissions bypasses umask.
+    #[cfg(unix)]
+    if permission_policy == AtomicWritePermissions::Workspace && existing_workspace_mode.is_none() {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(fs::Permissions::from_mode(0o666));
+    }
+
+    let mut tmp = builder.tempfile_in(parent)?;
     std::io::Write::write_all(&mut tmp, contents)?;
+
+    // Atomic replacement creates a new inode. Restore ordinary access /
+    // executable bits of an existing workspace file before persisting.
+    #[cfg(unix)]
+    if let Some(mode) = existing_workspace_mode {
+        use std::os::unix::fs::PermissionsExt;
+        tmp.as_file()
+            .set_permissions(fs::Permissions::from_mode(mode))?;
+    }
+
     tmp.as_file().sync_all()?;
     #[cfg(windows)]
     {
@@ -792,6 +879,189 @@ mod atomic_write_tests {
             tmp_files.is_empty(),
             "temp files left behind: {tmp_files:?}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_workspace_new_file_matches_standard_creation_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().expect("tempdir");
+        let control = dir.path().join("control.txt");
+        let actual = dir.path().join("actual.txt");
+
+        fs::write(&control, b"control").expect("write control");
+        write_atomic_workspace(&actual, b"actual").expect("atomic workspace write");
+
+        let control_mode = fs::metadata(&control)
+            .expect("control metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        let actual_mode = fs::metadata(&actual)
+            .expect("actual metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+
+        assert_eq!(actual_mode, control_mode);
+        assert_eq!(fs::read(&actual).expect("read"), b"actual");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_workspace_preserves_existing_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("shared.txt");
+        fs::write(&path, b"before").expect("initial write");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o664))
+            .expect("set shared permissions");
+
+        write_atomic_workspace(&path, b"after").expect("atomic workspace write");
+
+        let mode = fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o664);
+        assert_eq!(fs::read(&path).expect("read"), b"after");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_workspace_preserves_executable_bits() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("script.sh");
+        fs::write(&path, b"#!/bin/sh\nexit 0\n").expect("initial write");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+            .expect("set executable permissions");
+
+        write_atomic_workspace(&path, b"#!/bin/sh\nexit 1\n").expect("atomic workspace write");
+
+        let mode = fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o755);
+        assert_eq!(fs::read(&path).expect("read"), b"#!/bin/sh\nexit 1\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_workspace_does_not_restore_special_bits() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("special.sh");
+        fs::write(&path, b"#!/bin/sh\n").expect("initial write");
+        // Request sticky + setgid + rwxr-xr-x. Filesystems may clear some
+        // special bits; we only assert that after rewrite we never keep
+        // bits outside the ordinary 0o777 mask.
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o6755));
+        let before = fs::metadata(&path)
+            .expect("metadata before")
+            .permissions()
+            .mode();
+        let expected_ordinary = before & 0o777;
+
+        write_atomic_workspace(&path, b"#!/bin/sh\necho rewritten\n")
+            .expect("atomic workspace write");
+
+        let after = fs::metadata(&path)
+            .expect("metadata after")
+            .permissions()
+            .mode();
+        assert_eq!(after & 0o777, expected_ordinary);
+        assert_eq!(after & !0o777, 0, "special bits must not be restored");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_workspace_replaces_symlink_without_following_target() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let dir = tempdir().expect("tempdir");
+        let target = dir.path().join("target.txt");
+        let link = dir.path().join("link.txt");
+        fs::write(&target, b"target-body").expect("write target");
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600))
+            .expect("lock down target mode");
+        symlink(&target, &link).expect("create symlink");
+
+        write_atomic_workspace(&link, b"replaced-link")
+            .expect("workspace write must replace symlink directory entry");
+
+        let link_meta = fs::symlink_metadata(&link).expect("link metadata");
+        assert!(
+            link_meta.file_type().is_file() && !link_meta.file_type().is_symlink(),
+            "rename should replace the symlink with a regular file"
+        );
+        assert_eq!(fs::read(&link).expect("read link path"), b"replaced-link");
+        // Target inode must remain untouched (old private write_atomic semantics).
+        assert_eq!(fs::read(&target).expect("read target"), b"target-body");
+        assert_eq!(
+            fs::metadata(&target)
+                .expect("target metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_workspace_replaces_symlink_when_target_is_unreadable() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let dir = tempdir().expect("tempdir");
+        let secret_dir = dir.path().join("secret");
+        fs::create_dir(&secret_dir).expect("create secret dir");
+        let secret_file = secret_dir.join("hidden.txt");
+        fs::write(&secret_file, b"hidden").expect("write hidden");
+        // Remove search permission so following the symlink fails with EACCES,
+        // while lstat on the symlink itself still succeeds.
+        fs::set_permissions(&secret_dir, fs::Permissions::from_mode(0o000))
+            .expect("lock secret dir");
+
+        let link = dir.path().join("to-hidden.txt");
+        symlink(&secret_file, &link).expect("symlink to hidden file");
+
+        // Following metadata must fail; workspace write must still succeed.
+        assert!(
+            fs::metadata(&link).is_err(),
+            "precondition: following the symlink must fail"
+        );
+
+        let result = write_atomic_workspace(&link, b"new-content");
+
+        // Restore dir perms so tempdir cleanup can remove nested files.
+        let _ = fs::set_permissions(&secret_dir, fs::Permissions::from_mode(0o700));
+
+        result.expect("workspace write must not abort when symlink target is unreadable");
+        let link_meta = fs::symlink_metadata(&link).expect("link metadata");
+        assert!(link_meta.file_type().is_file() && !link_meta.file_type().is_symlink());
+        assert_eq!(fs::read(&link).expect("read"), b"new-content");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_private_new_file_does_not_gain_group_or_other_access() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("private.json");
+
+        write_atomic(&path, b"{}").expect("private atomic write");
+
+        let mode = fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
+        assert_eq!(mode & 0o077, 0);
+    }
+
+    #[test]
+    fn write_atomic_workspace_writes_content() {
+        let tmp = tempdir().expect("tempdir");
+        let path = tmp.path().join("workspace.txt");
+        write_atomic_workspace(&path, b"workspace").expect("write_atomic_workspace");
+        assert_eq!(fs::read(&path).expect("read"), b"workspace");
     }
 
     #[test]

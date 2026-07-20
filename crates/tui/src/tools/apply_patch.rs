@@ -1092,7 +1092,7 @@ fn apply_pending_writes(pending: &[PendingWrite]) -> Result<(), ToolError> {
             };
 
             parent_result.and_then(|()| {
-                crate::utils::write_atomic(&entry.path, content.as_bytes()).map_err(|e| {
+                crate::utils::write_atomic_workspace(&entry.path, content.as_bytes()).map_err(|e| {
                     ToolError::execution_failed(format!(
                         "Failed to write {}: {}",
                         entry.path.display(),
@@ -1127,7 +1127,7 @@ fn rollback_pending_writes(applied: &[PendingWrite]) {
     for entry in applied.iter().rev() {
         match entry.original.as_ref() {
             Some(content) => {
-                let _ = crate::utils::write_atomic(&entry.path, content.as_bytes());
+                let _ = crate::utils::write_atomic_workspace(&entry.path, content.as_bytes());
             }
             None => {
                 let _ = fs::remove_file(&entry.path);
