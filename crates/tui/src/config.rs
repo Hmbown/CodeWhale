@@ -3560,6 +3560,13 @@ impl Config {
                 ApiProvider::names_hint()
             );
         }
+        let active_provider = self.api_provider();
+        validate_kimi_code_api_model_id(
+            active_provider,
+            &self.deepseek_base_url(),
+            &self.default_model(),
+        )
+        .map_err(anyhow::Error::msg)?;
         if let Some(ref key) = self.api_key
             && key.trim().is_empty()
         {
@@ -7230,6 +7237,27 @@ pub(crate) fn is_exact_kimi_code_k3_route(
     provider == ApiProvider::Moonshot
         && moonshot_base_url_is_exact_kimi_code(base_url)
         && model.trim().eq_ignore_ascii_case(KIMI_CODE_K3_MODEL)
+}
+
+/// Reject the Claude Code-only `k3[1m]` context hint when it is supplied as a
+/// Kimi Code API model id. Codewhale has a first-class context-window field,
+/// so silently rewriting this value would both send the wrong wire id and
+/// claim a plan entitlement the user may not have.
+pub(crate) fn validate_kimi_code_api_model_id(
+    provider: ApiProvider,
+    base_url: &str,
+    model: &str,
+) -> std::result::Result<(), String> {
+    if provider == ApiProvider::Moonshot
+        && moonshot_base_url_is_exact_kimi_code(base_url)
+        && model.trim().eq_ignore_ascii_case("k3[1m]")
+    {
+        return Err(
+            "Kimi Code model `k3[1m]` is a Claude Code environment convention, not an API model id. Use model = \"k3\". If your Kimi Code plan includes 1M context, also set context_window = 1048576; otherwise keep the 262144 safe default."
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 /// Credential help for a concrete provider route.

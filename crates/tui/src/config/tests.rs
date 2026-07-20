@@ -7799,6 +7799,34 @@ fn moonshot_kimi_code_missing_key_reports_membership_plan_console() -> Result<()
     Ok(())
 }
 
+#[test]
+fn moonshot_kimi_code_saved_claude_k3_1m_alias_fails_with_api_model_guidance() -> Result<()> {
+    let _lock = lock_test_env();
+    let temp = tempfile::tempdir()?;
+    let _guard = EnvGuard::new(temp.path());
+    let config_path = temp.path().join(".deepseek").join("config.toml");
+    ensure_parent_dir(&config_path)?;
+    fs::write(
+        &config_path,
+        r#"provider = "moonshot"
+
+[providers.moonshot]
+api_key = "kimi-code-key"
+base_url = "https://api.kimi.com/coding/v1"
+model = "k3[1m]"
+"#,
+    )?;
+
+    let error = Config::load(None, None)
+        .expect_err("saved Claude Code context hints must not become API model ids");
+    let message = error.to_string();
+    assert!(message.contains("model = \"k3\""), "{message}");
+    assert!(message.contains("context_window = 1048576"), "{message}");
+    assert!(message.contains("plan includes 1M context"), "{message}");
+    assert!(message.contains("262144 safe default"), "{message}");
+    Ok(())
+}
+
 /// Env-var-only path: `CODEWHALE_BASE_URL=https://api.kimi.com/coding/v1`
 /// combined with `CODEWHALE_PROVIDER=moonshot` must trigger Kimi Code
 /// model selection even when the TOML has no `base_url`.

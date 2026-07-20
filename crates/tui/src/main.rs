@@ -6056,8 +6056,10 @@ fn provider_capability_report(config: &Config) -> serde_json::Value {
 
     let provider = config.api_provider();
     let configured_model = config.default_model();
-    let route =
-        crate::route_runtime::resolve_runtime_route(config, provider, Some(&configured_model)).ok();
+    let route_result =
+        crate::route_runtime::resolve_runtime_route(config, provider, Some(&configured_model));
+    let route_error = route_result.as_ref().err().cloned();
+    let route = route_result.ok();
     let resolved_model = route
         .as_ref()
         .map_or(configured_model.as_str(), |route| route.model.as_str());
@@ -6115,6 +6117,7 @@ fn provider_capability_report(config: &Config) -> serde_json::Value {
         "thinking_supported": thinking_supported,
         "cache_telemetry_supported": cache_telemetry_supported,
         "request_payload_mode": serde_json::to_value(request_payload_mode).unwrap_or_default(),
+        "route_error": route_error,
         "alias_deprecation": alias_deprecation,
     })
 }
@@ -6125,13 +6128,12 @@ fn doctor_route_report(config: &Config) -> serde_json::Value {
     let target = doctor_api_target(config);
     let provider = config.api_provider();
     let redacted_base_url = crate::client::redact_url_for_display(&target.base_url);
-    let context_window = crate::route_runtime::resolve_runtime_route(
-        config,
-        provider,
-        Some(&target.model),
-    )
-    .ok()
-    .map(|route| {
+    let route_result =
+        crate::route_runtime::resolve_runtime_route(config, provider, Some(&target.model));
+    let route_error = route_result.as_ref().err().cloned();
+    let context_window = route_result
+        .ok()
+        .map(|route| {
         json!({
             "tokens": route.context_window.tokens,
             "source": route.context_window.source.label(),
@@ -6160,6 +6162,7 @@ fn doctor_route_report(config: &Config) -> serde_json::Value {
             "source": doctor_api_key_source_label(resolve_api_key_source(config)),
         },
         "context_window": context_window,
+        "route_error": route_error,
     })
 }
 
@@ -12318,6 +12321,36 @@ mod doctor_endpoint_tests {
         assert_eq!(report["context_window_source"], "catalog");
         assert_eq!(report["max_output"], 131_072);
         assert_eq!(report["thinking_supported"], true);
+    }
+
+    #[test]
+    fn doctor_reports_claude_only_k3_1m_alias_as_an_invalid_api_model() {
+        let config = Config {
+            provider: Some("moonshot".to_string()),
+            providers: Some(crate::config::ProvidersConfig {
+                moonshot: crate::config::ProviderConfig {
+                    api_key: Some("kimi-plan-secret".to_string()),
+                    base_url: Some(crate::config::DEFAULT_KIMI_CODE_BASE_URL.to_string()),
+                    model: Some("k3[1m]".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        for report in [
+            doctor_route_report(&config),
+            provider_capability_report(&config),
+        ] {
+            let error = report["route_error"]
+                .as_str()
+                .expect("doctor must expose the route rejection");
+            assert!(error.contains("model = \"k3\""), "{error}");
+            assert!(error.contains("context_window = 1048576"), "{error}");
+            assert!(error.contains("plan includes 1M context"), "{error}");
+            assert!(!report.to_string().contains("kimi-plan-secret"));
+        }
     }
 
     #[test]

@@ -9,7 +9,7 @@ use crate::client::DeepSeekClient;
 use crate::codex_model_cache::{CodexModelCacheFreshness, model_roster};
 use crate::config::{
     ApiProvider, Config, DEFAULT_NVIDIA_NIM_BASE_URL, KIMI_CODE_K3_CONTEXT_WINDOW_TOKENS,
-    ProviderIdentity, is_exact_kimi_code_k3_route,
+    ProviderIdentity, is_exact_kimi_code_k3_route, validate_kimi_code_api_model_id,
 };
 
 /// Why a route is using its effective context-window value.  Keep this
@@ -197,6 +197,12 @@ pub(crate) fn resolve_route_candidate_with_context_metadata(
     context_window_override: Option<u32>,
     provider_reported_context: Option<ProviderReportedKimiCodeContext>,
 ) -> Result<RouteCandidateResolution, String> {
+    let effective_base_url = base_url_override
+        .as_deref()
+        .unwrap_or_else(|| provider.default_base_url());
+    if let Some(model) = model_selector.or(saved_provider_model) {
+        validate_kimi_code_api_model_id(provider, effective_base_url, model)?;
+    }
     let resolver = RouteResolver::new();
     let base_request = RouteRequest {
         explicit_provider: provider.kind(),
@@ -756,6 +762,25 @@ mod tests {
             candidate.wire_model_id().as_str(),
         ));
         assert_eq!(candidate.limits().context_tokens, Some(1_048_576));
+    }
+
+    #[test]
+    fn kimi_code_rejects_claude_only_k3_1m_alias_for_selected_and_saved_models() {
+        for (selected, saved) in [(Some("k3[1m]"), None), (None, Some("k3[1m]"))] {
+            let error = resolve_route_candidate(
+                ApiProvider::Moonshot,
+                selected,
+                saved,
+                Some(crate::config::DEFAULT_KIMI_CODE_BASE_URL.to_string()),
+                None,
+            )
+            .expect_err("Claude Code's context hint is not a Kimi Code API model id");
+
+            assert!(error.contains("model = \"k3\""), "{error}");
+            assert!(error.contains("context_window = 1048576"), "{error}");
+            assert!(error.contains("plan includes 1M context"), "{error}");
+            assert!(error.contains("262144 safe default"), "{error}");
+        }
     }
 
     #[test]
