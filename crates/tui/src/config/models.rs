@@ -114,6 +114,7 @@ pub const KIMI_CODE_K3_MODEL: &str = "k3";
 /// Max output remains 131_072 and must not be conflated with this window.
 pub const KIMI_CODE_K3_CONTEXT_WINDOW_TOKENS: u32 = 1_048_576;
 /// Documented K3 max generation tokens; never use this as a context window.
+#[allow(dead_code)] // Public contract constant for route/budget call sites.
 pub const KIMI_K3_MAX_OUTPUT_TOKENS: u32 = 131_072;
 pub const DEFAULT_SGLANG_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
 pub const DEFAULT_SGLANG_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
