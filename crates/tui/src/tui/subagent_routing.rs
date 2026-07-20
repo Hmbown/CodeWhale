@@ -505,7 +505,7 @@ fn task_status_label(status: TaskStatus) -> &'static str {
 fn hunt_verdict_glyph(verdict: Option<&str>) -> &'static str {
     match verdict {
         Some("hunting") => "·",
-        Some("hunted") => "✓",
+        Some("hunted") => crate::tui::glyphs::DONE,
         Some("wounded") => "!",
         Some("escaped") => "×",
         Some(_) => "?",

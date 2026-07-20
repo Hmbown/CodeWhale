@@ -434,6 +434,14 @@ fn semantic_tokens_align_primary_accent_with_action_not_human_gold() {
 }
 
 #[test]
+fn stable_dark_and_light_ids_expose_blue_stage_product_names() {
+    assert_eq!(ThemeId::from_name("dark"), Some(ThemeId::Whale));
+    assert_eq!(ThemeId::Whale.display_name(), "Blue Stage");
+    assert_eq!(ThemeId::from_name("light"), Some(ThemeId::WhaleLight));
+    assert_eq!(ThemeId::WhaleLight.display_name(), "Blue Stage Light");
+}
+
+#[test]
 fn community_theme_info_keeps_the_sky_live_role_on_ansi16() {
     assert_eq!(
         adapt_fg_for_depth(

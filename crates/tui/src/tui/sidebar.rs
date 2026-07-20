@@ -800,11 +800,11 @@ fn work_panel_hover_texts(
         && texts.len() < max_rows
     {
         let icon = if summary.goal_completed {
-            "✓"
+            crate::tui::glyphs::DONE
         } else if summary.workflow_paused {
-            "⏸"
+            crate::tui::glyphs::PAUSED
         } else {
-            "◆"
+            crate::tui::glyphs::ATTENTION
         };
         texts.push(format!("Goal: {icon} {objective}"));
 
@@ -997,11 +997,11 @@ fn push_work_goal_lines(
     }
 
     let icon = if summary.goal_completed {
-        "✓"
+        crate::tui::glyphs::DONE
     } else if summary.workflow_paused {
-        "⏸"
+        crate::tui::glyphs::PAUSED
     } else {
-        "◆"
+        crate::tui::glyphs::ATTENTION
     };
     let status_style = if summary.goal_completed {
         Style::default()

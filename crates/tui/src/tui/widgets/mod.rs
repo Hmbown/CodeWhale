@@ -1510,7 +1510,7 @@ impl Renderable for ComposerWidget<'_> {
                     } else {
                         Style::default().fg(palette::TEXT_MUTED)
                     };
-                    let marker = if is_selected { "▸" } else { " " };
+                    let marker = crate::tui::glyphs::selection_marker(is_selected);
                     lines.push(Line::from(vec![
                         Span::styled(" ", Style::default()),
                         Span::styled(marker, style),
@@ -1560,7 +1560,7 @@ impl Renderable for ComposerWidget<'_> {
                 } else {
                     Style::default().fg(palette::TEXT_MUTED)
                 };
-                let marker = if is_selected { "▸" } else { " " };
+                let marker = crate::tui::glyphs::selection_marker(is_selected);
                 lines.push(Line::from(vec![
                     Span::styled(" ", Style::default()),
                     Span::styled(marker, style),
@@ -1627,7 +1627,7 @@ impl Renderable for ComposerWidget<'_> {
                 } else {
                     Style::default().fg(palette::TEXT_MUTED)
                 };
-                let marker = if is_selected { "▸" } else { " " };
+                let marker = crate::tui::glyphs::selection_marker(is_selected);
 
                 // Name column
                 let name_style = if entry.is_skill && !is_selected {

@@ -12,17 +12,17 @@ pub(super) const TOOL_RUNNING_SYMBOLS: [&str; 8] = crate::tui::spinner::BRAILLE_
 pub(super) const TOOL_STATUS_SYMBOL_MS: u64 = crate::tui::spinner::BRAILLE_SPINNER_FRAME_MS;
 /// Visual marker for the user role at the start of their message line. Solid
 /// vertical bar — no animation; user input is a finished thing.
-pub(super) const USER_GLYPH: &str = "\u{258E}"; // ▎
+pub(super) const USER_GLYPH: &str = crate::tui::glyphs::USER;
 /// Visual marker for the assistant role. Solid bullet that pulses at 2s
 /// cycle while the response is streaming, holds full brightness when idle.
-pub(super) const ASSISTANT_GLYPH: &str = "\u{25CF}"; // ●
+pub(super) const ASSISTANT_GLYPH: &str = crate::tui::glyphs::CURRENT;
 /// Transcript body left rail. Solid 1/8 block (`▏`) followed by a space —
 /// used as a visual left-margin anchor for continuation lines, tool-card
 /// detail rows, and affordance lines. Dimmed so it guides the eye without
 /// competing with content.
-pub(super) const TRANSCRIPT_RAIL: &str = "\u{258F} "; // ▏ + space
+pub(super) const TRANSCRIPT_RAIL: &str = crate::tui::glyphs::TRANSCRIPT_RAIL;
 pub(super) const TOOL_CARD_SUMMARY_LINES: usize = 4;
-pub(super) const TOOL_DONE_SYMBOL: &str = "✓";
-pub(super) const TOOL_FAILED_SYMBOL: &str = "✕";
+pub(super) const TOOL_DONE_SYMBOL: &str = crate::tui::glyphs::DONE;
+pub(super) const TOOL_FAILED_SYMBOL: &str = crate::tui::glyphs::FAILED;
 /// Compact Ctrl+B affordance for foreground shell waits in the live transcript.
 pub(super) const FOREGROUND_SHELL_WAIT_HINT: &str = "Ctrl+B → /jobs";

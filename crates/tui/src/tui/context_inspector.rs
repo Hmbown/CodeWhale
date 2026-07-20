@@ -736,7 +736,7 @@ impl ModalView for ContextInspectorView {
         self.hitboxes.borrow_mut().clear();
         for (idx, row) in self.rows.iter().enumerate() {
             let selected = idx == self.selected;
-            let marker = if selected { "▸" } else { " " };
+            let marker = crate::tui::glyphs::selection_marker(selected);
             let style = if selected {
                 Style::default()
                     .fg(palette::SELECTION_TEXT)

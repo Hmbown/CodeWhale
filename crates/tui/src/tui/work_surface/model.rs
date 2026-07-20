@@ -285,17 +285,19 @@ fn heading(label: &str, detail: &str) -> WorkRow {
 
 fn graph_node_row(snapshot: &WorkGraphSnapshot, node: &WorkNode) -> WorkRow {
     let (mark, tone) = match node.state {
-        NodeState::Ready => ("○", WorkTone::Muted),
-        NodeState::Initializing => ("▸", WorkTone::Live),
-        NodeState::Active => ("▸", WorkTone::Live),
-        NodeState::Waiting => ("◆", WorkTone::Attention),
+        NodeState::Ready => (crate::tui::glyphs::READY, WorkTone::Muted),
+        NodeState::Initializing => (crate::tui::glyphs::SELECTION, WorkTone::Live),
+        NodeState::Active => (crate::tui::glyphs::SELECTION, WorkTone::Live),
+        NodeState::Waiting => (crate::tui::glyphs::ATTENTION, WorkTone::Attention),
         NodeState::Blocked => ("!", WorkTone::Attention),
-        NodeState::Completed if node.acceptance.is_empty() => ("✓", WorkTone::Success),
+        NodeState::Completed if node.acceptance.is_empty() => {
+            (crate::tui::glyphs::DONE, WorkTone::Success)
+        }
         NodeState::Completed => ("!", WorkTone::Attention),
-        NodeState::Verified => ("✓", WorkTone::Success),
+        NodeState::Verified => (crate::tui::glyphs::DONE, WorkTone::Success),
         NodeState::Stale => ("?", WorkTone::Attention),
         NodeState::Superseded | NodeState::Cancelled => ("−", WorkTone::Muted),
-        NodeState::Failed => ("✕", WorkTone::Attention),
+        NodeState::Failed => (crate::tui::glyphs::FAILED, WorkTone::Attention),
     };
     let state = state_label(node);
     let kind = kind_label(node.kind);

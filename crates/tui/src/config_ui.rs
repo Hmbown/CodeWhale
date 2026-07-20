@@ -43,10 +43,13 @@ pub struct ConfigUiDocument {
 pub struct RuntimeSection {
     #[schemars(
         title = "Active provider",
-        description = "Informational route identity. Switch providers with /provider before opening this editor."
+        description = "Route fact only. Switch providers with /provider, then return here to tune this session."
     )]
     pub provider: String,
-    #[schemars(title = "Current model")]
+    #[schemars(
+        title = "Current model",
+        description = "Model used by the active provider for this session. Save to apply the exact route choice."
+    )]
     pub model: String,
     pub approval_mode: ApprovalModeValue,
 }
@@ -67,7 +70,7 @@ pub struct SettingsSection {
     pub theme: UiThemeValue,
     #[schemars(
         title = "Background color",
-        description = "Main TUI background color as #RRGGBB"
+        description = "Optional Blue Stage background override as #RRGGBB. Leave empty to keep the named theme."
     )]
     pub background_color: Option<String>,
     pub bracketed_paste: bool,
@@ -93,12 +96,12 @@ pub struct SettingsSection {
     pub prefer_external_pdftotext: bool,
     #[schemars(
         title = "Follow symlinks",
-        description = "Follow symbolic links during workspace file discovery walks. Enable for symlink-based multi-project workspaces."
+        description = "Allow workspace discovery to cross symbolic links. Enable only when linked projects are part of this workspace."
     )]
     pub workspace_follow_symlinks: bool,
     #[schemars(
         title = "Provider model overrides",
-        description = "Saved TUI model selection for each provider identity. The active provider's entry follows Current model."
+        description = "Durable model choices by provider identity. The active provider's entry follows Current model."
     )]
     pub provider_models: BTreeMap<String, String>,
     pub default_model: Option<String>,
@@ -407,9 +410,11 @@ pub fn build_document(app: &App, config: &Config) -> Result<ConfigUiDocument> {
 
 pub fn build_schema() -> Value {
     let mut schema = serde_json::to_value(schema_for!(ConfigUiDocument)).expect("config ui schema");
-    schema["title"] = Value::String("codewhale Config".to_string());
-    schema["description"] =
-        Value::String("Edit runtime and persisted TUI configuration.".to_string());
+    schema["title"] = Value::String("Codewhale Config".to_string());
+    schema["description"] = Value::String(
+        "Tune live runtime choices and durable TUI defaults. Provider switching stays in /provider."
+            .to_string(),
+    );
     // Provider switching is asynchronous and owns client preflight, so this
     // editor shows the route identity only as validation context. `/provider`
     // remains the sole provider-switch surface.
@@ -422,8 +427,8 @@ pub fn run_tui_editor(app: &App, config: &Config) -> Result<ConfigUiDocument> {
     let document = build_document(app, config)?;
     let value = SchemaUI::new(serde_json::to_value(document.clone())?)
         .with_schema(build_schema())
-        .with_title("codewhale Config")
-        .with_description("Edit persisted settings and live runtime knobs.")
+        .with_title("Codewhale Config")
+        .with_description("Review the live route, then save the settings you want to keep.")
         .run(FrontendOptions::Tui(
             UiOptions::default()
                 .with_confirm_exit(true)
@@ -440,8 +445,10 @@ pub async fn start_web_editor(app: &App, config: &Config) -> Result<WebConfigSes
     let initial = serde_json::to_value(build_document(app, config)?)?;
     let session = WebSessionBuilder::new(build_schema())
         .with_initial_data(initial)
-        .with_title("codewhale Config")
-        .with_description("Save updates the browser draft. Exit commits changes back to the TUI.")
+        .with_title("Codewhale Config")
+        .with_description(
+            "Save updates this browser draft. Exit returns the reviewed changes to the TUI.",
+        )
         .build()?;
     let bound = bind_session(session, ServeOptions::default()).await?;
     let addr = bound.local_addr();
@@ -1382,9 +1389,20 @@ background_color = "#1A1B26"
     #[test]
     fn schema_contains_typed_enums() {
         let schema = build_schema();
+        assert_eq!(schema["title"], serde_json::json!("Codewhale Config"));
+        assert!(
+            schema["description"]
+                .as_str()
+                .is_some_and(|copy| copy.contains("Provider switching stays in /provider"))
+        );
         assert_eq!(
             schema["$defs"]["RuntimeSection"]["properties"]["provider"]["readOnly"],
             serde_json::json!(true)
+        );
+        assert!(
+            schema["$defs"]["SettingsSection"]["properties"]["background_color"]["description"]
+                .as_str()
+                .is_some_and(|copy| copy.contains("Blue Stage"))
         );
         let approval_mode = &schema["$defs"]["ApprovalModeValue"]["enum"];
         assert_eq!(

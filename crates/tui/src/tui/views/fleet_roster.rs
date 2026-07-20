@@ -373,18 +373,18 @@ impl FleetRosterView {
 
 fn member_role_mark(member: &AgentProfile) -> &'static str {
     match member.id.as_str() {
-        "manager" | "scout" => "◆",
-        "builder" => "■",
-        "reviewer" => "◇",
-        "verifier" => "●",
-        "synthesizer" => "▲",
+        "manager" | "scout" => crate::tui::glyphs::ROLE_MANAGER,
+        "builder" => crate::tui::glyphs::ROLE_BUILDER,
+        "reviewer" => crate::tui::glyphs::ROLE_REVIEWER,
+        "verifier" => crate::tui::glyphs::ROLE_VERIFIER,
+        "synthesizer" => crate::tui::glyphs::ROLE_SYNTHESIZER,
         _ => match roster_member_agent_type(member).as_str() {
-            "scout" | "manager" => "◆",
-            "builder" => "■",
-            "reviewer" => "◇",
-            "verifier" => "●",
-            "synthesizer" => "▲",
-            _ => "·",
+            "scout" | "manager" => crate::tui::glyphs::ROLE_MANAGER,
+            "builder" => crate::tui::glyphs::ROLE_BUILDER,
+            "reviewer" => crate::tui::glyphs::ROLE_REVIEWER,
+            "verifier" => crate::tui::glyphs::ROLE_VERIFIER,
+            "synthesizer" => crate::tui::glyphs::ROLE_SYNTHESIZER,
+            _ => crate::tui::glyphs::NEUTRAL,
         },
     }
 }

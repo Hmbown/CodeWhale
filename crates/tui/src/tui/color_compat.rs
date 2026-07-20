@@ -292,62 +292,18 @@ fn env_flag_enabled(value: Option<&str>) -> bool {
 /// letters, user and model content outside those decorative classes —
 /// passes through untouched.
 pub(crate) fn adapt_cell_symbol_for_ascii(cell: &mut Cell) {
-    // Braille (U+2800–U+28FF): the working bubble fills from the bottom and
-    // the verifying tick walks a ring. Map by dot density so the clock still
-    // reads as a rising fill in ASCII instead of collapsing to one glyph.
+    // Braille: preserve the rising-fill signal instead of collapsing every
+    // working/verifying frame to one glyph.
     let mut chars = cell.symbol().chars();
     if let (Some(ch), None) = (chars.next(), chars.next())
-        && ('\u{2800}'..='\u{28FF}').contains(&ch)
+        && let Some(replacement) = crate::tui::glyphs::braille_ascii_fallback(ch)
     {
-        let dots = ((ch as u32) - 0x2800).count_ones();
-        let replacement = match dots {
-            0 => " ",
-            1..=2 => ".",
-            3..=4 => ":",
-            5..=6 => "+",
-            _ => "#",
-        };
         cell.set_symbol(replacement);
         return;
     }
-    let replacement = match cell.symbol() {
-        "─" | "━" | "═" | "╌" | "╍" | "┄" | "┅" | "┈" | "┉" | "—" | "–" => {
-            "-"
-        }
-        "│" | "┃" | "║" | "╎" | "╏" | "▏" | "▎" | "▍" | "▌" | "▐" | "▕" => {
-            "|"
-        }
-        "┌" | "┐" | "└" | "┘" | "╭" | "╮" | "╰" | "╯" | "├" | "┤" | "┬" | "┴" | "┼" => {
-            "+"
-        }
-        // Block elements: the whale mark, context meter, and scroll thumbs.
-        "█" | "▉" | "▊" | "▋" | "▀" | "▄" | "▅" | "▆" | "▇" | "▙" | "▛" | "▜" | "▟" | "▰" => {
-            "#"
-        }
-        "▁" | "▂" | "▃" => "_",
-        "▖" | "▗" | "▘" | "▝" => ".",
-        "▚" => "\\",
-        "▞" => "/",
-        "░" | "▒" | "▓" => ":",
-        "▱" => "-",
-        "▶" | "▸" | "›" | "❯" | "→" | "↗" | "↘" | "»" => ">",
-        "◀" | "◂" | "‹" | "❮" | "←" | "↖" | "↙" | "«" => "<",
-        "▼" | "▾" | "▽" | "↓" => "v",
-        "▲" | "△" | "↑" => "^",
-        "◆" | "◇" | "♦" | "✦" | "◍" | "◉" | "★" | "☆" => "*",
-        "■" | "□" | "▪" | "▫" | "◼" | "◻" => "#",
-        "●" | "○" | "∘" | "•" | "·" | "☐" => ".",
-        "◌" | "˚" | "°" | "◦" => "o",
-        "✓" | "✔" | "☑" => "Y",
-        "✕" | "×" | "⊘" | "✗" | "✘" | "☒" => "X",
-        "⏸" => "=",
-        // The legacy opt-in whale status indicator; the brand mark survives
-        // as a letter rather than an emoji tofu box.
-        "🐳" | "🐋" => "w",
-        "…" => ".",
-        _ => return,
-    };
-    cell.set_symbol(replacement);
+    if let Some(replacement) = crate::tui::glyphs::ascii_fallback(cell.symbol()) {
+        cell.set_symbol(replacement);
+    }
 }
 
 fn render_debug_line(

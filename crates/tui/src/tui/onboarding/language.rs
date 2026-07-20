@@ -54,7 +54,11 @@ pub fn lines(app: &App) -> Vec<Line<'static>> {
 
     for (hotkey, tag, native, english) in LANGUAGE_OPTIONS {
         let is_current = current == *tag;
-        let bullet = if is_current { "●" } else { "○" };
+        let bullet = if is_current {
+            crate::tui::glyphs::CURRENT
+        } else {
+            crate::tui::glyphs::AVAILABLE
+        };
         let bullet_color = if is_current {
             palette::WHALE_ACTION
         } else {

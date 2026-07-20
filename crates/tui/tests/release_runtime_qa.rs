@@ -317,8 +317,8 @@ async fn underwater_theme_picker_emits_each_live_palette_to_the_terminal() -> Re
     let labels = [
         "System",
         "Terminal",
-        "Whale (Dark)",
-        "Whale Light",
+        "Blue Stage",
+        "Blue Stage Light",
         "Grayscale",
         "Catppuccin Mocha",
         "Tokyo Night",

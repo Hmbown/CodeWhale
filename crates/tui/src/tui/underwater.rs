@@ -352,9 +352,9 @@ pub(crate) fn phase_marker(app: &App, phase: ShellPhase) -> (&'static str, Cow<'
                     tr(locale, MessageId::PhaseFinishing),
                 )
             }
-            _ => ("✓", phase.label(locale)),
+            _ => (crate::tui::glyphs::DONE, phase.label(locale)),
         },
-        ShellPhase::Failed => ("✕", phase.label(locale)),
+        ShellPhase::Failed => (crate::tui::glyphs::FAILED, phase.label(locale)),
     }
 }
 

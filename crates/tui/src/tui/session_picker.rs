@@ -205,10 +205,10 @@ impl SessionPickerView {
         self.ensure_selected_visible();
         self.refresh_preview();
         if let Some(session) = self.selected_session() {
-            self.status = Some(format!(
-                "Opened history for {}",
-                crate::session_manager::truncate_id(&session.id)
-            ));
+            self.status = Some(
+                tr(self.locale, MessageId::SessionsOpenedHistory)
+                    .replace("{id}", crate::session_manager::truncate_id(&session.id)),
+            );
         }
         true
     }
@@ -285,21 +285,24 @@ impl SessionPickerView {
             SortMode::Size => SortMode::Recent,
         };
         self.apply_sort_and_filter();
-        self.status = Some(format!("Sort: {}", self.sort_label()));
+        self.status = Some(
+            tr(self.locale, MessageId::SessionsSortStatus).replace("{sort}", &self.sort_label()),
+        );
     }
 
-    fn sort_label(&self) -> &'static str {
+    fn sort_label(&self) -> String {
         match self.sort_mode {
-            SortMode::Recent => "recent",
-            SortMode::Name => "name",
-            SortMode::Size => "size",
+            SortMode::Recent => tr(self.locale, MessageId::SessionsSortRecent),
+            SortMode::Name => tr(self.locale, MessageId::SessionsSortName),
+            SortMode::Size => tr(self.locale, MessageId::SessionsSortSize),
         }
+        .into_owned()
     }
 
     fn enter_search(&mut self) {
         self.search_mode = true;
         self.search_input.clear();
-        self.status = Some("Search: type to filter, Enter to apply".to_string());
+        self.status = Some(tr(self.locale, MessageId::SessionsSearchPrompt).into_owned());
     }
 
     fn exit_search(&mut self) {
@@ -312,16 +315,19 @@ impl SessionPickerView {
         let session = self.selected_session().cloned()?;
         let manager = SessionManager::default_location().ok()?;
         if let Err(err) = manager.delete_session(&session.id) {
-            self.status = Some(format!("Delete failed: {err}"));
+            self.status = Some(
+                tr(self.locale, MessageId::SessionsDeleteFailed)
+                    .replace("{error}", &err.to_string()),
+            );
             return None;
         }
         self.sessions.retain(|s| s.id != session.id);
         self.apply_sort_and_filter();
         self.refresh_preview();
-        self.status = Some(format!(
-            "Deleted session {}",
-            crate::session_manager::truncate_id(&session.id)
-        ));
+        self.status = Some(
+            tr(self.locale, MessageId::SessionsDeleted)
+                .replace("{id}", crate::session_manager::truncate_id(&session.id)),
+        );
         Some(ViewEvent::SessionDeleted {
             session_id: session.id,
             title: session.title,
@@ -330,30 +336,38 @@ impl SessionPickerView {
 
     fn rename_selected(&mut self, new_title: &str) -> ViewAction {
         let Some(session) = self.selected_session().cloned() else {
-            self.status = Some("No session selected".to_string());
+            self.status = Some(tr(self.locale, MessageId::SessionsNoSelection).into_owned());
             return ViewAction::None;
         };
         if new_title.is_empty() || new_title.len() > 100 {
-            self.status = Some("Title must be 1–100 characters".to_string());
+            self.status = Some(tr(self.locale, MessageId::SessionsTitleLength).into_owned());
             return ViewAction::None;
         }
         let manager = match SessionManager::default_location() {
             Ok(m) => m,
             Err(e) => {
-                self.status = Some(format!("Could not open sessions: {e}"));
+                self.status = Some(
+                    tr(self.locale, MessageId::SessionsOpenFailed)
+                        .replace("{error}", &e.to_string()),
+                );
                 return ViewAction::None;
             }
         };
         let mut saved = match manager.load_session(&session.id) {
             Ok(s) => s,
             Err(e) => {
-                self.status = Some(format!("Could not load session: {e}"));
+                self.status = Some(
+                    tr(self.locale, MessageId::SessionsLoadFailed)
+                        .replace("{error}", &e.to_string()),
+                );
                 return ViewAction::None;
             }
         };
         saved.metadata.title = new_title.to_string();
         if let Err(e) = manager.save_session(&saved) {
-            self.status = Some(format!("Rename failed: {e}"));
+            self.status = Some(
+                tr(self.locale, MessageId::SessionsRenameFailed).replace("{error}", &e.to_string()),
+            );
             return ViewAction::None;
         }
         // Update our local metadata cache.
@@ -362,7 +376,8 @@ impl SessionPickerView {
         }
         self.apply_sort_and_filter();
         self.refresh_preview();
-        self.status = Some(format!("Renamed to \"{new_title}\""));
+        self.status =
+            Some(tr(self.locale, MessageId::SessionsRenamed).replace("{title}", new_title));
         ViewAction::Emit(ViewEvent::SessionRenamed {
             metadata: saved.metadata,
         })
@@ -370,7 +385,7 @@ impl SessionPickerView {
 
     fn refresh_preview(&mut self) {
         let Some(session) = self.selected_session() else {
-            self.current_preview = vec!["No sessions found.".to_string()];
+            self.current_preview = vec![tr(self.locale, MessageId::SessionsNoResults).into_owned()];
             self.scroll_history_to_latest();
             return;
         };
@@ -384,7 +399,8 @@ impl SessionPickerView {
         let manager = match SessionManager::default_location() {
             Ok(manager) => manager,
             Err(_) => {
-                self.current_preview = vec!["Failed to open sessions directory.".to_string()];
+                self.current_preview =
+                    vec![tr(self.locale, MessageId::SessionsDirectoryFailed).into_owned()];
                 self.scroll_history_to_latest();
                 return;
             }
@@ -393,13 +409,14 @@ impl SessionPickerView {
         let saved = match manager.load_session(&session.id) {
             Ok(saved) => saved,
             Err(_) => {
-                self.current_preview = vec!["Failed to load session preview.".to_string()];
+                self.current_preview =
+                    vec![tr(self.locale, MessageId::SessionsPreviewFailed).into_owned()];
                 self.scroll_history_to_latest();
                 return;
             }
         };
 
-        let preview = build_preview_lines(&saved);
+        let preview = build_preview_lines(&saved, self.locale);
         self.preview_cache
             .insert(session.id.clone(), preview.clone());
         self.current_preview = preview;
@@ -480,7 +497,8 @@ impl ModalView for SessionPickerView {
                 }
                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                     self.confirm_delete = false;
-                    self.status = Some("Delete cancelled".to_string());
+                    self.status =
+                        Some(tr(self.locale, MessageId::SessionsDeleteCancelled).into_owned());
                     return ViewAction::None;
                 }
                 _ => return ViewAction::None,
@@ -498,7 +516,8 @@ impl ModalView for SessionPickerView {
                 KeyCode::Esc => {
                     self.rename_mode = false;
                     self.rename_input.clear();
-                    self.status = Some("Rename cancelled".to_string());
+                    self.status =
+                        Some(tr(self.locale, MessageId::SessionsRenameCancelled).into_owned());
                     return ViewAction::None;
                 }
                 KeyCode::Backspace => {
@@ -626,7 +645,7 @@ impl ModalView for SessionPickerView {
                 visible_rows,
                 self.search_mode,
                 &self.search_input,
-                self.sort_label(),
+                &self.sort_label(),
                 self.confirm_delete,
                 self.rename_mode,
                 &self.rename_input,
@@ -697,7 +716,7 @@ impl ModalView for SessionPickerView {
             visible_rows,
             self.search_mode,
             &self.search_input,
-            self.sort_label(),
+            &self.sort_label(),
             self.confirm_delete,
             self.rename_mode,
             &self.rename_input,
@@ -810,7 +829,7 @@ fn build_list_lines(
         } else {
             "   ".to_string()
         };
-        let mut line = format!("{prefix}{}", format_session_line(session));
+        let mut line = format!("{prefix}{}", format_session_line(session, locale));
         line = truncate(&line, width);
         let style = if idx == selected {
             Style::default()
@@ -828,7 +847,10 @@ fn build_list_lines(
         let end = (scroll + visible_rows).min(sessions.len());
         lines.push(Line::from(Span::styled(
             truncate(
-                &format!("Showing {start}-{end} / {}", sessions.len()),
+                &tr(locale, MessageId::SessionsShowingRange)
+                    .replace("{start}", &start.to_string())
+                    .replace("{end}", &end.to_string())
+                    .replace("{total}", &sessions.len().to_string()),
                 width,
             ),
             Style::default().fg(palette::TEXT_DIM),
@@ -838,8 +860,8 @@ fn build_list_lines(
     lines
 }
 
-fn format_session_line(session: &SessionMetadata) -> String {
-    let age = format_relative_time(&session.updated_at);
+fn format_session_line(session: &SessionMetadata, locale: Locale) -> String {
+    let age = format_relative_time(&session.updated_at, locale);
     let updated = crate::session_manager::format_session_updated_at(&session.updated_at, &age);
     let raw_title = extract_title(&session.title);
     let title = if raw_title == "Session" {
@@ -850,46 +872,55 @@ fn format_session_line(session: &SessionMetadata) -> String {
     let mode = session
         .mode
         .as_deref()
-        .unwrap_or("unknown")
-        .to_ascii_lowercase();
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_else(|| tr(locale, MessageId::SessionsUnknownMode).into_owned());
+    let message_count = tr(locale, MessageId::SessionsMessageCountCompact)
+        .replace("{count}", &session.message_count.to_string());
     let fork_label = if session.parent_session_id.is_some() {
-        " | fork"
+        format!(" | {}", tr(locale, MessageId::SessionsForkCompact))
     } else {
-        ""
+        String::new()
     };
     format!(
-        "{} | {} | {} msgs{} | {} | {}",
+        "{} | {} | {}{} | {} | {}",
         crate::session_manager::truncate_id(&session.id),
         title,
-        session.message_count,
+        message_count,
         fork_label,
         mode,
         updated
     )
 }
 
-fn build_preview_lines(session: &SavedSession) -> Vec<String> {
+fn build_preview_lines(session: &SavedSession, locale: Locale) -> Vec<String> {
     let mut out = Vec::new();
-    out.push(format!("Title: {}", extract_title(&session.metadata.title)));
-    out.push(format!(
-        "Updated: {}",
-        session
-            .metadata
-            .updated_at
-            .with_timezone(&Local)
-            .format("%Y-%m-%d %H:%M")
-    ));
-    out.push(format!(
-        "Messages: {} | Model: {}",
-        session.metadata.message_count, session.metadata.model
-    ));
+    out.push(
+        tr(locale, MessageId::SessionsPreviewTitle)
+            .replace("{title}", extract_title(&session.metadata.title)),
+    );
+    out.push(
+        tr(locale, MessageId::SessionsPreviewUpdated).replace(
+            "{updated}",
+            &session
+                .metadata
+                .updated_at
+                .with_timezone(&Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string(),
+        ),
+    );
+    out.push(
+        tr(locale, MessageId::SessionsPreviewMessagesModel)
+            .replace("{count}", &session.metadata.message_count.to_string())
+            .replace("{model}", &session.metadata.model),
+    );
     if let Some(mode) = session.metadata.mode.as_deref() {
-        out.push(format!("Mode: {mode}"));
+        out.push(tr(locale, MessageId::SessionsPreviewMode).replace("{mode}", mode));
     }
     out.push("".to_string());
 
     for message in &session.messages {
-        let text = message_text_for_history(message);
+        let text = message_text_for_history(message, locale);
         if text.trim().is_empty() {
             continue;
         }
@@ -905,7 +936,7 @@ fn build_preview_lines(session: &SavedSession) -> Vec<String> {
     out
 }
 
-fn message_text_for_history(message: &crate::models::Message) -> String {
+fn message_text_for_history(message: &crate::models::Message, locale: Locale) -> String {
     let mut text = String::new();
     for block in &message.content {
         let part = match block {
@@ -918,26 +949,33 @@ fn message_text_for_history(message: &crate::models::Message) -> String {
             }
             crate::models::ContentBlock::Thinking { .. } => String::new(),
             crate::models::ContentBlock::ToolUse { name, input, .. } => {
-                format!("tool call: {name} {}", truncate(&input.to_string(), 180))
+                tr(locale, MessageId::SessionsToolCall)
+                    .replace("{name}", name)
+                    .replace("{input}", &truncate(&input.to_string(), 180))
             }
             crate::models::ContentBlock::ToolResult {
                 content, is_error, ..
             } => {
-                let label = if is_error.unwrap_or(false) {
-                    "tool error"
+                let id = if is_error.unwrap_or(false) {
+                    MessageId::SessionsToolError
                 } else {
-                    "tool result"
+                    MessageId::SessionsToolResult
                 };
-                format!("{label}: {}", truncate(&content.replace('\n', " "), 220))
+                tr(locale, id).replace("{content}", &truncate(&content.replace('\n', " "), 220))
             }
             crate::models::ContentBlock::ServerToolUse { name, input, .. } => {
-                format!("server tool: {name} {}", truncate(&input.to_string(), 180))
+                tr(locale, MessageId::SessionsServerTool)
+                    .replace("{name}", name)
+                    .replace("{input}", &truncate(&input.to_string(), 180))
             }
             crate::models::ContentBlock::ToolSearchToolResult { content, .. }
             | crate::models::ContentBlock::CodeExecutionToolResult { content, .. } => {
-                format!("tool result: {}", truncate(&content.to_string(), 220))
+                tr(locale, MessageId::SessionsToolResult)
+                    .replace("{content}", &truncate(&content.to_string(), 220))
             }
-            crate::models::ContentBlock::ImageUrl { .. } => String::from("[image]"),
+            crate::models::ContentBlock::ImageUrl { .. } => {
+                tr(locale, MessageId::SessionsImage).into_owned()
+            }
         };
         let part = part.trim();
         if !part.is_empty() {
@@ -1008,17 +1046,20 @@ fn visible_preview_lines(lines: &[String], scroll: usize, visible_rows: usize) -
     out
 }
 
-fn format_relative_time(dt: &DateTime<chrono::Utc>) -> String {
+fn format_relative_time(dt: &DateTime<chrono::Utc>, locale: Locale) -> String {
     let now = chrono::Utc::now();
     let duration = now.signed_duration_since(*dt);
     if duration.num_minutes() < 1 {
-        "just now".to_string()
+        tr(locale, MessageId::SessionsTimeJustNow).into_owned()
     } else if duration.num_hours() < 1 {
-        format!("{}m ago", duration.num_minutes())
+        tr(locale, MessageId::SessionsTimeMinutesAgo)
+            .replace("{count}", &duration.num_minutes().to_string())
     } else if duration.num_days() < 1 {
-        format!("{}h ago", duration.num_hours())
+        tr(locale, MessageId::SessionsTimeHoursAgo)
+            .replace("{count}", &duration.num_hours().to_string())
     } else {
-        format!("{}d ago", duration.num_days())
+        tr(locale, MessageId::SessionsTimeDaysAgo)
+            .replace("{count}", &duration.num_days().to_string())
     }
 }
 
@@ -1703,7 +1744,7 @@ mod tests {
             text_message("user", "Fourth prompt beyond old six-message preview"),
         ];
         let session = saved_session_with_messages(messages);
-        let lines = build_preview_lines(&session).join("\n");
+        let lines = build_preview_lines(&session, Locale::En).join("\n");
 
         assert!(lines.contains("Title: Clean session title"));
         assert!(lines.contains("First visible prompt"));

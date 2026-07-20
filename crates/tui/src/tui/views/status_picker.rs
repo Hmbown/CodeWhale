@@ -246,7 +246,7 @@ impl ModalView for StatusPickerView {
             } else {
                 Style::default().fg(palette::TEXT_DIM)
             };
-            let pointer = if is_cursor { "▸" } else { " " };
+            let pointer = crate::tui::glyphs::selection_marker(is_cursor);
 
             if is_cursor {
                 let selected_style = Style::default()

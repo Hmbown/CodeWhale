@@ -712,8 +712,8 @@ impl ThemeId {
         match self {
             Self::System => "System",
             Self::Terminal => "Terminal",
-            Self::Whale => "Whale (Dark)",
-            Self::WhaleLight => "Whale Light",
+            Self::Whale => "Blue Stage",
+            Self::WhaleLight => "Blue Stage Light",
             Self::Grayscale => "Grayscale",
             Self::CatppuccinMocha => "Catppuccin Mocha",
             Self::TokyoNight => "Tokyo Night",
@@ -731,8 +731,8 @@ impl ThemeId {
         match self {
             Self::System => "Follow terminal background (COLORFGBG / macOS appearance)",
             Self::Terminal => "Inherit terminal colors fully (transparent surfaces, ANSI accents)",
-            Self::Whale => "Whale dark — Blue Stage navy & action blue",
-            Self::WhaleLight => "Whale light — Blue Stage paper & cobalt",
+            Self::Whale => "Stage black, action blue, and one Signal Gold human beacon",
+            Self::WhaleLight => "Paper, cobalt action, and one Signal Gold human beacon",
             Self::Grayscale => "Color-minimal high contrast",
             Self::CatppuccinMocha => "Soft pastels on warm dark",
             Self::TokyoNight => "Deep blue/violet night palette",

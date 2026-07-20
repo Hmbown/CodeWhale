@@ -681,7 +681,7 @@ impl ModelPickerView {
                 idx,
             ));
             let is_selected = idx == state.selected;
-            let marker = if is_selected { "▸" } else { " " };
+            let marker = crate::tui::glyphs::selection_marker(is_selected);
             let label_style = if is_selected {
                 Style::default()
                     .fg(palette::SELECTION_TEXT)
@@ -711,9 +711,9 @@ impl ModelPickerView {
             // A search that matches nothing must say so, not render a bare
             // empty box (#3757 UX review).
             let message = if self.query.is_empty() {
-                "No models available.".to_string()
+                tr(self.locale, MessageId::RouteNoModels).into_owned()
             } else {
-                format!("No models match \"{}\" — Backspace to clear.", self.query)
+                tr(self.locale, MessageId::RouteNoModelMatch).replace("{query}", &self.query)
             };
             lines.push(Line::from(Span::styled(
                 message,
@@ -1717,15 +1717,15 @@ impl ModelPickerView {
             inner,
             buf,
             &[
-                ActionHint::new("↑↓", "move"),
-                ActionHint::new("Tab", "switch"),
+                ActionHint::new("↑↓", tr(self.locale, MessageId::PickerActionMove)),
+                ActionHint::new("Tab", tr(self.locale, MessageId::PickerActionSwitch)),
                 ActionHint::new(
                     tr(self.locale, MessageId::RouteActionType),
                     tr(self.locale, MessageId::RouteActionSearchAnyModel),
                 ),
-                ActionHint::new("Enter", "apply"),
+                ActionHint::new("Enter", tr(self.locale, MessageId::PickerActionApply)),
                 ActionHint::new("A", view_action),
-                ActionHint::new("Esc", "cancel"),
+                ActionHint::new("Esc", tr(self.locale, MessageId::PickerActionCancel)),
             ],
         );
 
@@ -4056,6 +4056,90 @@ mod tests {
             ViewAction::EmitAndClose(ViewEvent::ModelPickerDismissed { .. })
         ));
         assert_eq!(active, app.model);
+    }
+
+    #[test]
+    fn model_picker_empty_state_and_footer_localize_in_complete_locales() {
+        use crate::localization::{Locale, MessageId, tr};
+        use crate::tui::views::ViewStack;
+
+        // CJK/emoji cells occupy multiple columns; blank pad cells make a
+        // naive cell join insert spaces, so compare on whitespace-stripped text.
+        let compact = |s: &str| -> String { s.chars().filter(|c| !c.is_whitespace()).collect() };
+
+        for locale in Locale::shipped_complete() {
+            let (mut app, config, _lock) = create_test_app();
+            app.ui_locale = *locale;
+            // Force an empty model list by using a query that cannot match.
+            let mut view = ModelPickerView::new(&app, &config);
+            view.query = "zzz-no-such-model-xyzzy".into();
+            view.focus = Pane::Model;
+
+            let area = Rect::new(0, 0, 80, 24);
+            let mut buf = Buffer::empty(area);
+            let mut stack = ViewStack::new();
+            stack.push(view);
+            stack.render(area, &mut buf);
+            let mut text = String::new();
+            for y in 0..area.height {
+                for x in 0..area.width {
+                    text.push_str(buf[(x, y)].symbol());
+                }
+            }
+            let expected_match = tr(*locale, MessageId::RouteNoModelMatch)
+                .replace("{query}", "zzz-no-such-model-xyzzy");
+            let compact_text = compact(&text);
+            // Pane width may clip the trailing glyph of a long CJK sentence, so
+            // assert on the query plus the leading localized clause rather than
+            // the entire string.
+            assert!(
+                compact_text.contains("zzz-no-such-model-xyzzy"),
+                "{} missing empty-state query; got: {text}",
+                locale.tag()
+            );
+            let leading = expected_match
+                .split(['—', '–', '-'])
+                .next()
+                .unwrap_or(expected_match.as_str());
+            let leading_compact = compact(leading);
+            // Require a meaningful prefix so truncated tails still match.
+            let leading_prefix: String = leading_compact.chars().take(24).collect();
+            assert!(
+                !leading_prefix.is_empty() && compact_text.contains(&leading_prefix),
+                "{} missing localized no-match empty state prefix {leading_prefix:?}; got: {text}",
+                locale.tag()
+            );
+            if *locale != Locale::En {
+                let en_match = tr(Locale::En, MessageId::RouteNoModelMatch)
+                    .replace("{query}", "zzz-no-such-model-xyzzy");
+                assert_ne!(
+                    expected_match,
+                    en_match,
+                    "{} empty-state translation must not be English",
+                    locale.tag()
+                );
+                assert!(
+                    !compact_text.contains(&compact("No models match")),
+                    "{} leaked English empty-state copy",
+                    locale.tag()
+                );
+            }
+
+            // Footer action labels must resolve through the locale pack.
+            for id in [
+                MessageId::PickerActionMove,
+                MessageId::PickerActionSwitch,
+                MessageId::PickerActionApply,
+                MessageId::PickerActionCancel,
+            ] {
+                let label = tr(*locale, id);
+                assert!(
+                    compact_text.contains(&compact(label.as_ref())),
+                    "{} missing footer label for {id:?}: {label}",
+                    locale.tag()
+                );
+            }
+        }
     }
 
     #[test]

@@ -1893,11 +1893,11 @@ impl ProviderPickerView {
 
     fn render_list(&self, area: Rect, buf: &mut Buffer) {
         let enter_action = if !self.selected_route_is_valid() {
-            "unavailable"
+            self.tr(MessageId::PickerActionUnavailable)
         } else if self.selected_has_key() {
-            "apply"
+            self.tr(MessageId::PickerActionApply)
         } else {
-            "set key"
+            self.tr(MessageId::PickerActionSetKey)
         };
         let title = match (self.setup_mode, self.view) {
             (true, ProviderListView::Configured) => {
@@ -1927,8 +1927,8 @@ impl ProviderPickerView {
         outer.render(area, buf);
 
         let view_action = match self.view {
-            ProviderListView::Configured => "browse all",
-            ProviderListView::Catalog => "configured",
+            ProviderListView::Configured => self.tr(MessageId::PickerActionBrowseAll),
+            ProviderListView::Catalog => self.tr(MessageId::PickerActionConfigured),
         };
         let search_active = !self.query.trim().is_empty();
         // The action footer moves into the body so it wraps instead of clipping
@@ -1938,12 +1938,12 @@ impl ProviderPickerView {
                 inner,
                 buf,
                 &[
-                    ActionHint::new("Esc", "clear"),
-                    ActionHint::new("↑↓", "move"),
+                    ActionHint::new("Esc", self.tr(MessageId::PickerActionClear)),
+                    ActionHint::new("↑↓", self.tr(MessageId::PickerActionMove)),
                     ActionHint::new("Enter", enter_action),
-                    ActionHint::new("A", view_action),
-                    ActionHint::new("C", "custom"),
-                    ActionHint::new("Esc", "cancel"),
+                    ActionHint::new("A", view_action.clone()),
+                    ActionHint::new("C", self.tr(MessageId::PickerActionCustom)),
+                    ActionHint::new("Esc", self.tr(MessageId::PickerActionCancel)),
                 ],
             )
         } else {
@@ -1951,15 +1951,15 @@ impl ProviderPickerView {
                 inner,
                 buf,
                 &[
-                    ActionHint::new("↑↓", "move"),
-                    ActionHint::new("a-z", "jump"),
+                    ActionHint::new("↑↓", self.tr(MessageId::PickerActionMove)),
+                    ActionHint::new("a-z", self.tr(MessageId::PickerActionJump)),
                     ActionHint::new("Enter", enter_action),
                     ActionHint::new("A", view_action),
-                    ActionHint::new("C", "custom"),
-                    ActionHint::new("R", "edit key"),
+                    ActionHint::new("C", self.tr(MessageId::PickerActionCustom)),
+                    ActionHint::new("R", self.tr(MessageId::PickerActionEditKey)),
                     ActionHint::new("X", self.tr(MessageId::ProviderExternalActionRevoke)),
-                    ActionHint::new("M", "models"),
-                    ActionHint::new("Esc", "cancel"),
+                    ActionHint::new("M", self.tr(MessageId::PickerActionModels)),
+                    ActionHint::new("Esc", self.tr(MessageId::PickerActionCancel)),
                 ],
             )
         };
@@ -1968,18 +1968,18 @@ impl ProviderPickerView {
         if filtered.is_empty() {
             if search_active {
                 EmptyState::new(
-                    "No providers match",
-                    "Try a different search term or clear to browse.",
+                    self.tr(MessageId::ProviderNoMatchesTitle),
+                    self.tr(MessageId::ProviderNoMatchesHint),
                 )
-                .primary_action("Esc", "clear search")
+                .primary_action("Esc", self.tr(MessageId::PickerActionClearSearch))
                 .render(content, buf);
             } else {
                 EmptyState::new(
-                    "No providers configured yet",
-                    "Browse every supported provider or create a custom endpoint.",
+                    self.tr(MessageId::ProviderNoConfiguredTitle),
+                    self.tr(MessageId::ProviderNoConfiguredHint),
                 )
-                .primary_action("A", "browse all")
-                .secondary_action("C", "custom")
+                .primary_action("A", self.tr(MessageId::PickerActionBrowseAll))
+                .secondary_action("C", self.tr(MessageId::PickerActionCustom))
                 .render(content, buf);
             }
             return;
@@ -2002,7 +2002,7 @@ impl ProviderPickerView {
             let is_selected = *idx == self.selected_idx;
             debug_assert_eq!(is_selected, pos == selected_pos);
             let is_active = row.is_active;
-            let arrow = if is_selected { "▸" } else { " " };
+            let arrow = crate::tui::glyphs::selection_marker(is_selected);
             let active_dot = if is_active { " *" } else { "  " };
             let spacer_style = if is_selected {
                 Self::selected_row_bg_style()
@@ -2414,7 +2414,7 @@ impl ProviderPickerView {
         );
         let selected = self.external_consent_choice;
         let row = |choice, label: Cow<'static, str>, detail: Cow<'static, str>| {
-            let marker = if selected == choice { "▸" } else { " " };
+            let marker = crate::tui::glyphs::selection_marker(selected == choice);
             Line::from(vec![
                 Span::styled(
                     format!("{marker} {label}"),
@@ -2559,7 +2559,7 @@ impl ProviderPickerView {
             .take(visible_rows)
         {
             let is_selected = idx == self.model_selected_idx;
-            let arrow = if is_selected { "▸" } else { " " };
+            let arrow = crate::tui::glyphs::selection_marker(is_selected);
             let label_style = if is_selected {
                 Self::selected_row_style(palette::TEXT_PRIMARY)
             } else {
@@ -2596,7 +2596,7 @@ impl ProviderPickerView {
         }
         if lines.is_empty() {
             lines.push(Line::from(Span::styled(
-                "No catalog models available.",
+                self.tr(MessageId::ProviderNoCatalogModels),
                 Style::default().fg(palette::TEXT_MUTED),
             )));
         }
@@ -2743,7 +2743,7 @@ impl ProviderPickerView {
         placeholder: &str,
     ) {
         let selected = self.custom_provider_field == field;
-        let marker = if selected { "▸" } else { " " };
+        let marker = crate::tui::glyphs::selection_marker(selected);
         let value = self.custom_form_field_value(field);
         let display = if value.is_empty() { placeholder } else { value };
         let value_style = if selected {

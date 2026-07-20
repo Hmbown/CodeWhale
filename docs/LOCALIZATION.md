@@ -10,6 +10,10 @@ building, is planning, or has explicitly deferred.
 > `crates/tui/src/localization.rs`. Keep the two surfaces distinct when
 > updating status here.
 
+Customer-visible copy also follows the [Codewhale voice and terminal
+charter](VOICE.md); commands, key names, and glyphs remain code-owned around
+localized prose.
+
 Last updated: 2026-07-12.
 Source-of-truth README: `README.md` (English, post-#3087).
 

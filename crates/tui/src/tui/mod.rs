@@ -37,6 +37,7 @@ pub mod file_tree;
 pub mod footer_ui;
 pub mod format_helpers;
 pub mod frame_rate_limiter;
+pub mod glyphs;
 pub mod history;
 pub mod hotbar;
 pub mod key_actions;
