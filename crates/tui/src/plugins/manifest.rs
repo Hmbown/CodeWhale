@@ -1202,7 +1202,10 @@ fn hash_path(
         hasher.update(expected_len.to_le_bytes());
         let mut file_hasher = Sha256::new();
         file_hasher.update(b"codewhale-plugin-file-bytes-v1\0");
-        let mut buffer = [0_u8; 64 * 1024];
+        // Keep the read buffer off the stack. `hash_path` is recursive and the
+        // fixed-size array inflated every directory frame, which could exhaust
+        // a Tokio worker stack while revalidating a nested plugin bundle.
+        let mut buffer = vec![0_u8; 64 * 1024];
         let mut actual_len = 0_u64;
         loop {
             let read = file
@@ -1463,6 +1466,29 @@ mod tests {
         let second = PluginManifest::validate_from_path(&path).unwrap();
         assert_ne!(first.content_hash, second.content_hash);
         assert_eq!(first.capability_hash, second.capability_hash);
+    }
+
+    #[test]
+    fn validates_deep_bundle_on_small_stack() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manifest = write_manifest(tmp.path(), "");
+        let mut nested = tmp.path().join("nested");
+        for level in 0..8 {
+            nested = nested.join(format!("level-{level}"));
+        }
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("payload.txt"), "nested bundle payload").unwrap();
+
+        let worker = std::thread::Builder::new()
+            .name("plugin-small-stack-validation".to_string())
+            .stack_size(512 * 1024)
+            .spawn(move || PluginManifest::validate_from_path(&manifest))
+            .unwrap();
+        let validated = worker
+            .join()
+            .expect("nested plugin validation must not overflow a small stack")
+            .expect("nested plugin bundle must validate");
+        assert_eq!(validated.inventory.skills, 1);
     }
 
     #[test]
