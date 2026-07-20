@@ -62,6 +62,11 @@ const STREAM_DELTA_BATCH_MAX_LATENCY: Duration = Duration::from_millis(32);
 const STREAM_DELTA_BATCH_MAX_BYTES: usize = 16 * 1024;
 const REQUEST_USER_INPUT_TOOL_NAME: &str = "request_user_input";
 const REDACTED_USER_INPUT_RECEIPT: &str = "User input submitted";
+const HISTORY_SNAPSHOT_VERSION_KEY: &str = "history_snapshot_version";
+const HISTORY_SNAPSHOT_SCOPE_KEY: &str = "history_snapshot_scope";
+const HISTORY_SNAPSHOT_MESSAGES_KEY: &str = "compacted_messages";
+#[cfg(test)]
+const TEST_HISTORY_SNAPSHOT_SAVE_FAILURE_ITEM_ID: &str = "item_test_history_snapshot_save_failure";
 
 fn collect_sensitive_user_input_values(messages: &[Message], values: &mut HashSet<String>) {
     let sensitive_tool_ids = messages
@@ -83,16 +88,12 @@ fn collect_sensitive_user_input_values(messages: &[Message], values: &mut HashSe
         } = block
             && sensitive_tool_ids.contains(tool_use_id)
         {
-            match serde_json::from_str::<Value>(content) {
-                Ok(value) => collect_json_string_values(&value, values),
-                Err(_) if !content.trim().is_empty() => {
-                    values.insert(content.clone());
-                }
-                Err(_) => {}
+            if let Ok(value) = serde_json::from_str::<Value>(content) {
+                collect_typed_user_input_free_text_values(&value, values);
             }
             if let Some(content_blocks) = content_blocks {
                 for value in content_blocks {
-                    collect_json_string_values(value, values);
+                    collect_typed_user_input_free_text_values(value, values);
                 }
             }
         }
@@ -171,22 +172,63 @@ fn project_messages_for_durable_history_snapshot(
     projected
 }
 
-fn collect_json_string_values(value: &Value, values: &mut HashSet<String>) {
-    match value {
-        Value::String(value) if !value.is_empty() => {
-            values.insert(value.clone());
+fn collect_typed_user_input_free_text_values(value: &Value, values: &mut HashSet<String>) {
+    if let Ok(response) =
+        serde_json::from_value::<crate::tools::user_input::UserInputResponse>(value.clone())
+    {
+        for answer in response.answers {
+            if let Some(value) = meaningful_user_input_free_text(&answer) {
+                values.insert(value.to_string());
+            }
         }
+        return;
+    }
+    match value {
         Value::Array(items) => {
             for item in items {
-                collect_json_string_values(item, values);
+                collect_typed_user_input_free_text_values(item, values);
             }
         }
         Value::Object(object) => {
             for value in object.values() {
-                collect_json_string_values(value, values);
+                collect_typed_user_input_free_text_values(value, values);
             }
         }
         _ => {}
+    }
+}
+
+fn meaningful_user_input_free_text(
+    answer: &crate::tools::user_input::UserInputAnswer,
+) -> Option<&str> {
+    let value = answer.value.trim();
+    let label = answer.label.trim();
+    if value.is_empty() || value.eq_ignore_ascii_case(label) {
+        return None;
+    }
+    let normalized = value.to_ascii_lowercase();
+    if matches!(
+        normalized.as_str(),
+        "a" | "approve"
+            | "cancel"
+            | "continue"
+            | "default"
+            | "deny"
+            | "no"
+            | "other"
+            | "proceed"
+            | "retry"
+            | "scope"
+            | "skip"
+            | "stop"
+            | "yes"
+    ) {
+        return None;
+    }
+    if label.eq_ignore_ascii_case("other") || value.chars().count() >= 8 {
+        Some(value)
+    } else {
+        None
     }
 }
 
@@ -239,10 +281,35 @@ fn compaction_history_snapshot_metadata(
     sensitive_values: &HashSet<String>,
 ) -> Value {
     json!({
-        "history_snapshot_version": 1,
-        "history_snapshot_scope": scope,
-        "compacted_messages": project_messages_for_durable_history_snapshot(messages, sensitive_values),
+        HISTORY_SNAPSHOT_VERSION_KEY: 1,
+        HISTORY_SNAPSHOT_SCOPE_KEY: scope,
+        HISTORY_SNAPSHOT_MESSAGES_KEY: project_messages_for_durable_history_snapshot(messages, sensitive_values),
     })
+}
+
+fn item_has_compaction_history_snapshot(item: &TurnItemRecord) -> bool {
+    item.kind == TurnItemKind::ContextCompaction
+        && item
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get(HISTORY_SNAPSHOT_VERSION_KEY))
+            .and_then(Value::as_u64)
+            == Some(1)
+}
+
+fn strip_compaction_history_snapshot_metadata(item: &mut TurnItemRecord) {
+    if item.kind != TurnItemKind::ContextCompaction {
+        return;
+    }
+    let Some(Value::Object(metadata)) = item.metadata.as_mut() else {
+        return;
+    };
+    metadata.remove(HISTORY_SNAPSHOT_VERSION_KEY);
+    metadata.remove(HISTORY_SNAPSHOT_SCOPE_KEY);
+    metadata.remove(HISTORY_SNAPSHOT_MESSAGES_KEY);
+    if metadata.is_empty() {
+        item.metadata = None;
+    }
 }
 
 #[cfg(test)]
@@ -3487,7 +3554,7 @@ impl RuntimeThreadManager {
         // projection lock held by this snapshot.
         let store = self.store.clone();
         let snapshot_thread_id = id.to_string();
-        let (thread, turns, items) = tokio::task::spawn_blocking(move || {
+        let (thread, turns, mut items) = tokio::task::spawn_blocking(move || {
             let thread = store
                 .load_thread(&snapshot_thread_id)
                 .with_context(|| format!("Thread not found: {snapshot_thread_id}"))?;
@@ -3504,6 +3571,13 @@ impl RuntimeThreadManager {
         })
         .await
         .context("Runtime thread projection task failed")??;
+        // Durable compaction checkpoints are an internal reconstruction
+        // implementation detail. Public thread snapshots expose the typed
+        // lifecycle item, but never duplicate the private transcript-sized
+        // message checkpoint stored behind it.
+        for item in &mut items {
+            strip_compaction_history_snapshot_metadata(item);
+        }
         let (pending_approvals, pending_user_inputs) = self.pending_requests_for_thread(id);
         let pending_dynamic_tool_calls = self.pending_dynamic_tool_calls_for_thread(id);
         Ok(ThreadDetail {
@@ -3774,6 +3848,10 @@ impl RuntimeThreadManager {
             .load_thread(thread_id)
             .with_context(|| format!("Thread not found: {thread_id}"))?;
         let now = Utc::now();
+        let runtime_history_snapshot = messages
+            .iter()
+            .any(|message| message.role == crate::compaction::RUNTIME_HISTORY_ROLE)
+            .then(|| messages.to_vec());
 
         // Group messages into turns. A turn starts with a user message and
         // includes all subsequent assistant messages (which may contain
@@ -4060,6 +4138,75 @@ impl RuntimeThreadManager {
                 thread.latest_turn_id = Some(turn_id);
                 thread.updated_at = now;
             }
+        }
+
+        if let Some(runtime_history_snapshot) = runtime_history_snapshot {
+            // Runtime-owned messages cannot be flattened into public
+            // user/assistant turn items without losing their ownership role.
+            // Persist the complete, redacted history as the same private
+            // checkpoint used by normal compaction so restart and export share
+            // one reconstruction path even when the linked session vanishes.
+            let mut checkpoint_turn = if let Some(turn_id) = thread.latest_turn_id.as_deref() {
+                self.store.load_turn(turn_id)?
+            } else {
+                TurnRecord {
+                    schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
+                    id: format!("turn_{}", &Uuid::new_v4().to_string()[..8]),
+                    thread_id: thread_id.to_string(),
+                    status: RuntimeTurnStatus::Completed,
+                    input_summary: "Restored runtime history".to_string(),
+                    created_at: now,
+                    started_at: Some(now),
+                    ended_at: Some(now),
+                    duration_ms: Some(0),
+                    usage: None,
+                    effective_provider: None,
+                    effective_provider_id: None,
+                    effective_billing_surface: None,
+                    effective_model: None,
+                    error: None,
+                    item_ids: Vec::new(),
+                    steer_count: 0,
+                }
+            };
+            let checkpoint_text = runtime_history_snapshot
+                .iter()
+                .find_map(crate::compaction::compaction_summary_text)
+                .unwrap_or("Restored runtime history")
+                .to_string();
+            let mut checkpoint_item = TurnItemRecord {
+                schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
+                id: format!("item_{}", &Uuid::new_v4().to_string()[..8]),
+                turn_id: checkpoint_turn.id.clone(),
+                kind: TurnItemKind::ContextCompaction,
+                status: TurnItemLifecycleStatus::Completed,
+                summary: summarize_text(&checkpoint_text, SUMMARY_LIMIT),
+                detail: Some(checkpoint_text),
+                metadata: None,
+                artifact_refs: Vec::new(),
+                started_at: Some(now),
+                ended_at: Some(now),
+            };
+            let mut seeded_sensitive_values = HashSet::new();
+            collect_sensitive_user_input_values(
+                &runtime_history_snapshot,
+                &mut seeded_sensitive_values,
+            );
+            // Attach a metadata-free lifecycle item first. If publishing the
+            // new private checkpoint fails, any prior checkpoint remains
+            // referenced and recoverable.
+            self.store.save_item(&checkpoint_item)?;
+            checkpoint_turn.item_ids.push(checkpoint_item.id.clone());
+            self.store.save_turn(&checkpoint_turn)?;
+            self.set_latest_compaction_history_snapshot(
+                thread_id,
+                &mut checkpoint_item,
+                &runtime_history_snapshot,
+                "turn_terminal",
+                &seeded_sensitive_values,
+            )?;
+            thread.latest_turn_id = Some(checkpoint_turn.id);
+            thread.updated_at = now;
         }
 
         self.store.save_thread(&thread)?;
@@ -5292,6 +5439,72 @@ impl RuntimeThreadManager {
         self.ensure_engine_loaded(&thread).await
     }
 
+    /// Reconstruct the authoritative durable conversation for session export.
+    ///
+    /// This deliberately shares the same private checkpoint-aware path used
+    /// by engine restart. Public `ThreadDetail` projections strip checkpoint
+    /// payloads and must never be used to rebuild a model conversation.
+    pub async fn messages_for_session_export(&self, thread_id: &str) -> Result<Vec<Message>> {
+        self.flush_recovery_receipts_for_thread(thread_id).await?;
+        let projection_lock = self.projection_lock(thread_id);
+        let _projection = projection_lock.lock().await;
+        let manager = self.clone();
+        let thread_id = thread_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            manager
+                .store
+                .load_thread(&thread_id)
+                .with_context(|| format!("Thread not found: {thread_id}"))?;
+            let turns = manager.store.list_turns_for_thread(&thread_id)?;
+            manager.reconstruct_messages_from_turns(&turns)
+        })
+        .await
+        .context("Runtime session-export reconstruction task failed")?
+    }
+
+    fn clear_compaction_history_snapshots_for_thread(
+        &self,
+        thread_id: &str,
+        except_item_id: Option<&str>,
+    ) -> Result<()> {
+        for turn in self.store.list_turns_for_thread(thread_id)? {
+            for mut item in self.store.list_items_for_turn(&turn.id)? {
+                if except_item_id == Some(item.id.as_str())
+                    || !item_has_compaction_history_snapshot(&item)
+                {
+                    continue;
+                }
+                strip_compaction_history_snapshot_metadata(&mut item);
+                self.store.save_item(&item)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn set_latest_compaction_history_snapshot(
+        &self,
+        thread_id: &str,
+        item: &mut TurnItemRecord,
+        messages: &[Message],
+        scope: &str,
+        sensitive_values: &HashSet<String>,
+    ) -> Result<()> {
+        item.metadata = Some(compaction_history_snapshot_metadata(
+            messages,
+            scope,
+            sensitive_values,
+        ));
+        // Publish the replacement before retiring older checkpoints. A
+        // partial I/O failure may temporarily retain two private checkpoints,
+        // but can never erase the last recoverable conversation.
+        #[cfg(test)]
+        if item.id == TEST_HISTORY_SNAPSHOT_SAVE_FAILURE_ITEM_ID {
+            bail!("injected compaction history snapshot save failure");
+        }
+        self.store.save_item(item)?;
+        self.clear_compaction_history_snapshots_for_thread(thread_id, Some(&item.id))
+    }
+
     fn reconstruct_messages_from_turns(&self, turns: &[TurnRecord]) -> Result<Vec<Message>> {
         let mut messages = Vec::new();
         for turn in turns {
@@ -5424,7 +5637,7 @@ impl RuntimeThreadManager {
                         let compacted_messages = item
                             .metadata
                             .as_ref()
-                            .and_then(|metadata| metadata.get("compacted_messages"))
+                            .and_then(|metadata| metadata.get(HISTORY_SNAPSHOT_MESSAGES_KEY))
                             .cloned()
                             .and_then(|value| serde_json::from_value::<Vec<Message>>(value).ok());
                         if let Some(compacted_messages) = compacted_messages {
@@ -5438,7 +5651,7 @@ impl RuntimeThreadManager {
                             skip_remaining_items = item
                                 .metadata
                                 .as_ref()
-                                .and_then(|metadata| metadata.get("history_snapshot_scope"))
+                                .and_then(|metadata| metadata.get(HISTORY_SNAPSHOT_SCOPE_KEY))
                                 .and_then(Value::as_str)
                                 == Some("turn_terminal");
                         }
@@ -5456,14 +5669,7 @@ impl RuntimeThreadManager {
         for turn in turns {
             for item_id in &turn.item_ids {
                 let item = self.store.load_item(item_id)?;
-                if item.kind == TurnItemKind::ContextCompaction
-                    && item
-                        .metadata
-                        .as_ref()
-                        .and_then(|metadata| metadata.get("history_snapshot_version"))
-                        .and_then(Value::as_u64)
-                        == Some(1)
-                {
+                if item_has_compaction_history_snapshot(&item) {
                     return Ok(true);
                 }
             }
@@ -5844,11 +6050,13 @@ impl RuntimeThreadManager {
                         item.summary = summarize_text(&message, SUMMARY_LIMIT);
                         item.detail = Some(message);
                         if let Some(messages) = latest_session_messages.as_ref() {
-                            item.metadata = Some(compaction_history_snapshot_metadata(
+                            self.set_latest_compaction_history_snapshot(
+                                &thread_id,
+                                &mut item,
                                 messages,
                                 "compaction_point",
                                 &sensitive_user_input_values,
-                            ));
+                            )?;
                         }
                         item.ended_at = Some(Utc::now());
                         self.store.save_item(&item)?;
@@ -5883,11 +6091,13 @@ impl RuntimeThreadManager {
                             // history yet still miss its target budget. The
                             // failed status is truthful, but the durable
                             // reconstruction must retain that partial repair.
-                            item.metadata = Some(compaction_history_snapshot_metadata(
+                            self.set_latest_compaction_history_snapshot(
+                                &thread_id,
+                                &mut item,
                                 messages,
                                 "compaction_point",
                                 &sensitive_user_input_values,
-                            ));
+                            )?;
                         }
                         item.ended_at = Some(Utc::now());
                         self.store.save_item(&item)?;
@@ -6346,11 +6556,13 @@ impl RuntimeThreadManager {
                         // as covering the remainder of this turn so later item
                         // projections are not duplicated.
                         let mut item = self.store.load_item(item_id)?;
-                        item.metadata = Some(compaction_history_snapshot_metadata(
+                        self.set_latest_compaction_history_snapshot(
+                            &thread_id,
+                            &mut item,
                             messages,
                             "turn_terminal",
                             &sensitive_user_input_values,
-                        ));
+                        )?;
                         self.store.save_item(&item)?;
                     }
                     turn_usage = Some(usage);

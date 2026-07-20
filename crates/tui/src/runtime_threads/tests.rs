@@ -7321,9 +7321,204 @@ async fn restart_prefers_durable_compaction_snapshot_over_stale_linked_session()
     Ok(())
 }
 
+#[tokio::test]
+async fn latest_compaction_checkpoint_is_private_and_supersedes_prior_checkpoint() -> Result<()> {
+    let manager = test_manager(test_runtime_dir())?;
+    let thread = manager
+        .create_thread(CreateThreadRequest::default())
+        .await?;
+    let first_messages = vec![crate::compaction::compaction_summary_message(
+        format!(
+            "## {}\n\nfirst checkpoint",
+            crate::compaction::COMPACTION_SUMMARY_MARKER
+        ),
+        true,
+    )];
+    let second_messages = vec![
+        crate::compaction::compaction_summary_message(
+            format!(
+                "## {}\n\nsecond checkpoint",
+                crate::compaction::COMPACTION_SUMMARY_MARKER
+            ),
+            true,
+        ),
+        Message {
+            role: "assistant".to_string(),
+            content: vec![ContentBlock::Text {
+                text: "latest tail".to_string(),
+                cache_control: None,
+            }],
+        },
+    ];
+
+    let mut first_turn = sample_turn(
+        &thread.id,
+        "turn_first_checkpoint",
+        RuntimeTurnStatus::Completed,
+    );
+    first_turn.item_ids = vec!["item_first_checkpoint".to_string()];
+    manager.store.save_turn(&first_turn)?;
+    let mut first_item = TurnItemRecord {
+        schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
+        id: first_turn.item_ids[0].clone(),
+        turn_id: first_turn.id.clone(),
+        kind: TurnItemKind::ContextCompaction,
+        status: TurnItemLifecycleStatus::Completed,
+        summary: "first checkpoint".to_string(),
+        detail: Some("first checkpoint".to_string()),
+        metadata: None,
+        artifact_refs: Vec::new(),
+        started_at: first_turn.started_at,
+        ended_at: first_turn.ended_at,
+    };
+    manager.set_latest_compaction_history_snapshot(
+        &thread.id,
+        &mut first_item,
+        &first_messages,
+        "turn_terminal",
+        &HashSet::new(),
+    )?;
+    let mut unsavable_replacement = TurnItemRecord {
+        id: TEST_HISTORY_SNAPSHOT_SAVE_FAILURE_ITEM_ID.to_string(),
+        ..first_item.clone()
+    };
+    assert!(
+        manager
+            .set_latest_compaction_history_snapshot(
+                &thread.id,
+                &mut unsavable_replacement,
+                &second_messages,
+                "turn_terminal",
+                &HashSet::new(),
+            )
+            .is_err()
+    );
+    assert!(
+        item_has_compaction_history_snapshot(&manager.store.load_item(&first_item.id)?),
+        "a failed replacement save must not retire the last recoverable checkpoint"
+    );
+
+    let mut second_turn = sample_turn(
+        &thread.id,
+        "turn_second_checkpoint",
+        RuntimeTurnStatus::Completed,
+    );
+    second_turn.created_at = first_turn.created_at + chrono::Duration::milliseconds(1);
+    second_turn.item_ids = vec!["item_second_checkpoint".to_string()];
+    manager.store.save_turn(&second_turn)?;
+    let mut second_item = TurnItemRecord {
+        schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
+        id: second_turn.item_ids[0].clone(),
+        turn_id: second_turn.id.clone(),
+        kind: TurnItemKind::ContextCompaction,
+        status: TurnItemLifecycleStatus::Completed,
+        summary: "second checkpoint".to_string(),
+        detail: Some("second checkpoint".to_string()),
+        metadata: None,
+        artifact_refs: Vec::new(),
+        started_at: second_turn.started_at,
+        ended_at: second_turn.ended_at,
+    };
+    manager.set_latest_compaction_history_snapshot(
+        &thread.id,
+        &mut second_item,
+        &second_messages,
+        "turn_terminal",
+        &HashSet::new(),
+    )?;
+
+    assert!(!item_has_compaction_history_snapshot(
+        &manager.store.load_item(&first_item.id)?
+    ));
+    assert!(item_has_compaction_history_snapshot(
+        &manager.store.load_item(&second_item.id)?
+    ));
+    let turns = manager.store.list_turns_for_thread(&thread.id)?;
+    assert_eq!(
+        manager.reconstruct_messages_from_turns(&turns)?,
+        second_messages
+    );
+
+    let detail = manager.get_thread_detail(&thread.id).await?;
+    assert!(
+        detail
+            .items
+            .iter()
+            .all(|item| !item_has_compaction_history_snapshot(item))
+    );
+    assert!(!serde_json::to_string(&detail)?.contains(HISTORY_SNAPSHOT_MESSAGES_KEY));
+    Ok(())
+}
+
+#[tokio::test]
+async fn seeded_runtime_history_reconstructs_when_linked_session_is_missing() -> Result<()> {
+    let mut custom = std::collections::HashMap::new();
+    custom.insert(
+        "runtime-seed-test".to_string(),
+        crate::config::ProviderConfig {
+            kind: Some("openai-compatible".to_string()),
+            base_url: Some("http://127.0.0.1:18192/v1".to_string()),
+            model: Some("runtime-seed-model".to_string()),
+            ..Default::default()
+        },
+    );
+    let manager = RuntimeThreadManager::open(
+        Config {
+            provider: Some("runtime-seed-test".to_string()),
+            providers: Some(crate::config::ProvidersConfig {
+                custom,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        PathBuf::from("."),
+        test_manager_config(test_runtime_dir()),
+    )?;
+    let thread = manager
+        .create_thread(CreateThreadRequest {
+            model: Some("runtime-seed-model".to_string()),
+            model_provider: Some("runtime-seed-test".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let messages = vec![
+        crate::compaction::compaction_summary_message(
+            format!(
+                "## {}\n\nseeded compacted history",
+                crate::compaction::COMPACTION_SUMMARY_MARKER
+            ),
+            true,
+        ),
+        Message {
+            role: "assistant".to_string(),
+            content: vec![ContentBlock::Text {
+                text: "post-compaction tail".to_string(),
+                cache_control: None,
+            }],
+        },
+    ];
+    manager
+        .seed_thread_from_messages(&thread.id, &messages)
+        .await?;
+    manager
+        .set_thread_session_id(&thread.id, "session_file_does_not_exist")
+        .await?;
+
+    assert_eq!(
+        manager.messages_for_session_export(&thread.id).await?,
+        messages
+    );
+    let engine = manager.get_engine(&thread.id).await?;
+    let restored = engine.get_session_snapshot().await?;
+    assert_eq!(restored.messages, messages);
+    engine.send(Op::Shutdown).await?;
+    Ok(())
+}
+
 #[test]
 fn compaction_history_snapshot_redacts_request_user_input_answers() {
     let secret = "free-text-secret-that-must-not-persist";
+    let short_secret = "123456";
     let pre_compaction = vec![
         Message {
             role: "assistant".to_string(),
@@ -7338,9 +7533,23 @@ fn compaction_history_snapshot_redacts_request_user_input_answers() {
             role: "user".to_string(),
             content: vec![ContentBlock::ToolResult {
                 tool_use_id: "input-call".to_string(),
-                content: format!(r#"{{"answers":{{"continue":"{secret}"}}}}"#),
+                content: json!({
+                    "answers": [
+                        {
+                            "id": "continue",
+                            "label": "Other",
+                            "value": secret,
+                        },
+                        {
+                            "id": "pin",
+                            "label": "Other",
+                            "value": short_secret,
+                        }
+                    ]
+                })
+                .to_string(),
                 is_error: None,
-                content_blocks: Some(vec![json!({"text": secret})]),
+                content_blocks: None,
             }],
         },
     ];
@@ -7349,7 +7558,7 @@ fn compaction_history_snapshot_redacts_request_user_input_answers() {
     let compacted = vec![
         crate::compaction::compaction_summary_message(
             format!(
-                "## {}\n\nThe user answered {secret}.",
+                "## {}\n\nThe user answered {secret} with PIN {short_secret}.",
                 crate::compaction::COMPACTION_SUMMARY_MARKER
             ),
             true,
@@ -7367,6 +7576,7 @@ fn compaction_history_snapshot_redacts_request_user_input_answers() {
         compaction_history_snapshot_metadata(&compacted, "turn_terminal", &sensitive_values);
     let serialized = serde_json::to_string(&metadata).expect("serialize snapshot metadata");
     assert!(!serialized.contains(secret));
+    assert!(!serialized.contains(short_secret));
     assert!(serialized.contains("[redacted user input]"));
     assert!(serialized.contains("ordinary durable context"));
 }
@@ -7395,7 +7605,7 @@ fn summary_redaction_cannot_damage_runtime_ownership_sentinel() {
 }
 
 #[test]
-fn short_modal_answer_redaction_does_not_corrupt_summary_words() {
+fn modal_ids_labels_and_common_short_answers_do_not_corrupt_summary_words() {
     let pre_compaction = vec![
         Message {
             role: "assistant".to_string(),
@@ -7410,7 +7620,15 @@ fn short_modal_answer_redaction_does_not_corrupt_summary_words() {
             role: "user".to_string(),
             content: vec![ContentBlock::ToolResult {
                 tool_use_id: "short-answer".to_string(),
-                content: json!({"answer": "a"}).to_string(),
+                content: json!({
+                    "answers": [
+                        {"id": "scope", "label": "Continue", "value": "Continue"},
+                        {"id": "yes", "label": "Other", "value": "yes"},
+                        {"id": "letter", "label": "Other", "value": "a"},
+                        {"id": "scope-again", "label": "Other", "value": "scope"}
+                    ]
+                })
+                .to_string(),
                 is_error: None,
                 content_blocks: None,
             }],
@@ -7420,7 +7638,7 @@ fn short_modal_answer_redaction_does_not_corrupt_summary_words() {
     collect_sensitive_user_input_values(&pre_compaction, &mut sensitive_values);
     let compacted = vec![crate::compaction::compaction_summary_message(
         format!(
-            "## {}\n\nThe user chose a path and retained data.",
+            "## {}\n\nContinue with yes for scope a; the user chose a path and retained data.",
             crate::compaction::COMPACTION_SUMMARY_MARKER
         ),
         true,
@@ -7429,8 +7647,9 @@ fn short_modal_answer_redaction_does_not_corrupt_summary_words() {
     let metadata =
         compaction_history_snapshot_metadata(&compacted, "turn_terminal", &sensitive_values);
     let serialized = serde_json::to_string(&metadata).expect("serialize snapshot metadata");
-    assert!(serialized.contains("path and retained data"));
-    assert!(serialized.contains("[redacted user input] path"));
+    assert!(serialized.contains("Continue with yes for scope a"));
+    assert!(serialized.contains("chose a path and retained data"));
+    assert!(!serialized.contains("[redacted user input]"));
 }
 
 #[test]

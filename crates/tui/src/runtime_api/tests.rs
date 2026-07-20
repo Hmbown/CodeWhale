@@ -3864,6 +3864,110 @@ async fn session_create_from_completed_thread_saves_messages() -> Result<()> {
 }
 
 #[tokio::test]
+async fn runtime_compaction_session_export_resume_round_trip_is_exact_and_private() -> Result<()> {
+    let root = std::env::temp_dir().join(format!("deepseek-runtime-session-{}", Uuid::new_v4()));
+    let sessions_dir = root.join("sessions");
+    let Some((addr, runtime_threads, handle)) =
+        spawn_test_server_with_root(root.clone(), sessions_dir.clone()).await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+    let created: serde_json::Value = client
+        .post(format!("http://{addr}/v1/threads"))
+        .json(&json!({
+            "model": "deepseek-v4-pro",
+            "workspace": root.join("workspace")
+        }))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let thread_id = created["id"]
+        .as_str()
+        .context("missing source thread id")?
+        .to_string();
+    let messages = vec![
+        crate::compaction::compaction_summary_message(
+            format!(
+                "## {}\n\nexported compacted history",
+                crate::compaction::COMPACTION_SUMMARY_MARKER
+            ),
+            true,
+        ),
+        Message {
+            role: "assistant".to_string(),
+            content: vec![ContentBlock::Text {
+                text: "exact post-compaction tail".to_string(),
+                cache_control: None,
+            }],
+        },
+    ];
+    runtime_threads
+        .seed_thread_from_messages(&thread_id, &messages)
+        .await?;
+
+    let exported: serde_json::Value = client
+        .post(format!("http://{addr}/v1/sessions"))
+        .json(&json!({ "thread_id": thread_id }))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let session_id = exported["session_id"]
+        .as_str()
+        .context("missing exported session id")?
+        .to_string();
+    let sessions = crate::session_manager::SessionManager::new(sessions_dir)?;
+    let saved = sessions.load_session(&session_id)?;
+    assert_eq!(saved.messages, messages);
+
+    let resumed: serde_json::Value = client
+        .post(format!(
+            "http://{addr}/v1/sessions/{session_id}/resume-thread"
+        ))
+        .json(&json!({}))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let resumed_thread_id = resumed["thread_id"]
+        .as_str()
+        .context("missing resumed thread id")?
+        .to_string();
+    sessions.delete_session(&session_id)?;
+
+    assert_eq!(
+        runtime_threads
+            .messages_for_session_export(&resumed_thread_id)
+            .await?,
+        messages
+    );
+    let public_detail: serde_json::Value = client
+        .get(format!("http://{addr}/v1/threads/{resumed_thread_id}"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert!(
+        !serde_json::to_string(&public_detail)?.contains("compacted_messages"),
+        "public thread detail exposed the private runtime checkpoint"
+    );
+    assert!(public_detail["items"].as_array().is_some_and(|items| {
+        items.iter().any(|item| {
+            item["kind"] == "context_compaction" && item.get("metadata").is_none_or(Value::is_null)
+        })
+    }));
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
 async fn session_create_from_thread_returns_404_for_missing_thread() -> Result<()> {
     let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
         return Ok(());

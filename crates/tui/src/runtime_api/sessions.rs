@@ -1,3 +1,4 @@
+#[cfg(test)]
 use std::collections::HashMap;
 
 use axum::Json;
@@ -6,10 +7,12 @@ use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+#[cfg(test)]
 use crate::models::{ContentBlock, Message};
+#[cfg(test)]
+use crate::runtime_threads::TurnItemKind;
 use crate::runtime_threads::{
-    CreateThreadRequest, RuntimeTurnStatus, ThreadDetail, ThreadListFilter, TurnItemKind,
-    TurnItemLifecycleStatus,
+    CreateThreadRequest, RuntimeTurnStatus, ThreadDetail, ThreadListFilter, TurnItemLifecycleStatus,
 };
 use crate::session_manager::{
     SavedSession, SessionManager, SessionMetadata, create_saved_session_with_id_and_mode,
@@ -216,7 +219,11 @@ pub(super) async fn create_session_from_thread(
         });
     }
 
-    let messages = messages_from_thread_detail(&detail);
+    let messages = state
+        .runtime_threads
+        .messages_for_session_export(thread_id)
+        .await
+        .map_err(map_thread_err)?;
     if messages.is_empty() {
         return Err(ApiError::bad_request(format!(
             "Thread {thread_id} has no user or assistant messages to save"
@@ -341,6 +348,7 @@ fn thread_detail_has_live_work(detail: &ThreadDetail) -> bool {
     })
 }
 
+#[cfg(test)]
 pub(super) fn messages_from_thread_detail(detail: &ThreadDetail) -> Vec<Message> {
     let items_by_id: HashMap<&str, _> = detail
         .items
