@@ -137,8 +137,25 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
         section: KeybindingSection::Editing,
     },
     KeybindingEntry {
+        chord: "Shift+←/→ / Shift+Home/End",
+        description_id: crate::localization::MessageId::KbSelectText,
+        section: KeybindingSection::Editing,
+    },
+    KeybindingEntry {
+        // Ctrl+A keeps its readline meaning (start of input); select-all is
+        // the shifted chord, plus native Cmd+A on terminals that forward Cmd.
+        chord: "Ctrl+Shift+A / Cmd+A",
+        description_id: crate::localization::MessageId::KbSelectAllDraft,
+        section: KeybindingSection::Editing,
+    },
+    KeybindingEntry {
         chord: "Ctrl+U",
         description_id: crate::localization::MessageId::KbClearDraft,
+        section: KeybindingSection::Editing,
+    },
+    KeybindingEntry {
+        chord: "Ctrl+Z",
+        description_id: crate::localization::MessageId::KbRestoreClearedDraft,
         section: KeybindingSection::Editing,
     },
     KeybindingEntry {

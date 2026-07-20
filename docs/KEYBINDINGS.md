@@ -37,12 +37,19 @@ Editing the message you're about to send.
 | `Enter`                     | Send the message (or run the slash command)             |
 | `Alt-Enter` / `Ctrl-J`      | Insert a newline without sending (`Ctrl-J` force-steers while a turn is running) |
 | `Ctrl-Enter` / `Cmd-Enter`  | Force a live steer into the current turn when supported by the terminal |
-| `Ctrl-U`                    | Delete to start of line                                 |
+| `Ctrl-U`                    | Clear the whole draft (recoverable — see `Ctrl-Z`)      |
+| `Ctrl-Z`                    | Restore the cleared draft (only while the composer is empty) |
 | `Ctrl-W`                    | Delete previous word                                    |
-| `Ctrl-A` / `Home`           | Move to start of line                                   |
-| `Ctrl-E` / `End`            | Move to end of line                                     |
+| `Ctrl-A` / `Home`           | Move to start of input / start of line (readline convention) |
+| `Ctrl-E` / `End`            | Move to end of input / end of line                      |
 | `Ctrl-←` / `Alt-←`          | Move backward one word                                  |
 | `Ctrl-→` / `Alt-→`          | Move forward one word                                   |
+| `Shift-←` / `Shift-→`       | Extend the selection one grapheme at a time             |
+| `Ctrl-Shift-←/→` / `Alt-Shift-←/→` | Extend the selection one word at a time          |
+| `Shift-Home` / `Shift-End`  | Extend the selection to the start / end of the line     |
+| `Ctrl-Shift-Home` / `Ctrl-Shift-End` | Extend the selection to the start / end of the draft |
+| `Ctrl-Shift-A` / `Cmd-A`    | Select the whole draft (see note below)                 |
+| Mouse drag                  | Select composer text; click moves the cursor            |
 | `Cmd-V` / `Ctrl-Shift-V`    | Terminal-local paste (arrives as bracketed paste when supported) |
 | `Ctrl-V`                    | Direct clipboard paste in a local or forwarded graphical session |
 | `Ctrl-Y`                    | Yank (paste) from kill buffer                           |
@@ -53,6 +60,28 @@ Editing the message you're about to send.
 | `Tab`                       | Slash-command / `@`-mention completion (popup-aware)    |
 | `Ctrl-Shift-O` / `F4`       | Open the composer draft in `$VISUAL` / `$EDITOR`; F4 works when the terminal cannot distinguish Ctrl-Shift-O from Ctrl-O |
 | `! command`                 | Run a shell command through normal approval, sandbox, and output surfaces |
+
+### Selection semantics
+
+Typing, pasting, `Backspace`, or `Delete` with an active selection replaces or
+removes the selected text, like any GUI editor. Plain movement keys (arrows,
+`Home`/`End`, word motions) collapse the selection. When a selection covers the
+whole draft, deleting or typing over it stashes the outgoing text the same way
+`Ctrl-U` does, so `Ctrl-Z` (on an empty composer) or `Alt-R` draft recovery can
+bring it back.
+
+Cursor movement and deletion are grapheme-aware: one `←`/`→` step or one
+`Backspace` covers a full emoji ZWJ sequence, flag pair, or combining-mark
+cluster — never half of one. CJK text moves and deletes per character as
+expected.
+
+**Why select-all is not `Ctrl-A`:** the composer follows the readline
+convention, where `Ctrl-A` jumps to the start of the input (paired with
+`Ctrl-E`). Select-all is `Ctrl-Shift-A` on every platform (like
+`Ctrl-Shift-O` / `Ctrl-Shift-E`, it needs a terminal with an enhanced keyboard
+protocol). On macOS terminals that forward the Command key (kitty, WezTerm,
+iTerm2 with Command remapping), native `Cmd-A` also selects all; `Cmd-Shift-A`
+works everywhere on macOS because Cmd normalizes to Ctrl.
 
 ### Hotbar
 
