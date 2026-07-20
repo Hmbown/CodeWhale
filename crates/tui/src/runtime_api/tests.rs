@@ -3888,11 +3888,12 @@ async fn runtime_compaction_session_export_resume_round_trip_is_exact_and_privat
         .as_str()
         .context("missing source thread id")?
         .to_string();
+    let secret = "summary-only-request-user-input-secret";
     let messages = vec![
         crate::compaction::compaction_summary_message(
             format!(
-                "## {}\n\nexported compacted history",
-                crate::compaction::COMPACTION_SUMMARY_MARKER
+                "## {}\n\nexported compacted history retained {secret}",
+                crate::compaction::COMPACTION_SUMMARY_MARKER,
             ),
             true,
         ),
@@ -3953,15 +3954,41 @@ async fn runtime_compaction_session_export_resume_round_trip_is_exact_and_privat
         .error_for_status()?
         .json()
         .await?;
+    let serialized_public_detail = serde_json::to_string(&public_detail)?;
     assert!(
-        !serde_json::to_string(&public_detail)?.contains("compacted_messages"),
+        !serialized_public_detail.contains("compacted_messages"),
         "public thread detail exposed the private runtime checkpoint"
     );
-    assert!(public_detail["items"].as_array().is_some_and(|items| {
-        items.iter().any(|item| {
-            item["kind"] == "context_compaction" && item.get("metadata").is_none_or(Value::is_null)
+    assert!(
+        !serialized_public_detail.contains(secret),
+        "public thread detail exposed imported compaction-summary text"
+    );
+    let restored_lifecycle_item = public_detail["items"]
+        .as_array()
+        .and_then(|items| {
+            items
+                .iter()
+                .find(|item| item["kind"] == "context_compaction")
         })
-    }));
+        .context("missing restored compaction lifecycle item")?;
+    assert_eq!(
+        restored_lifecycle_item["summary"],
+        "Restored runtime history"
+    );
+    assert_eq!(
+        restored_lifecycle_item["detail"],
+        "Restored runtime history"
+    );
+    assert!(
+        restored_lifecycle_item
+            .get("metadata")
+            .is_none_or(Value::is_null)
+    );
+    let public_events = runtime_threads.events_since(&resumed_thread_id, None)?;
+    assert!(
+        !serde_json::to_string(&public_events)?.contains(secret),
+        "public runtime events exposed imported compaction-summary text"
+    );
 
     handle.abort();
     Ok(())

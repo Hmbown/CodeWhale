@@ -62,6 +62,7 @@ const STREAM_DELTA_BATCH_MAX_LATENCY: Duration = Duration::from_millis(32);
 const STREAM_DELTA_BATCH_MAX_BYTES: usize = 16 * 1024;
 const REQUEST_USER_INPUT_TOOL_NAME: &str = "request_user_input";
 const REDACTED_USER_INPUT_RECEIPT: &str = "User input submitted";
+const RESTORED_RUNTIME_HISTORY_RECEIPT: &str = "Restored runtime history";
 const HISTORY_SNAPSHOT_VERSION_KEY: &str = "history_snapshot_version";
 const HISTORY_SNAPSHOT_SCOPE_KEY: &str = "history_snapshot_scope";
 const HISTORY_SNAPSHOT_MESSAGES_KEY: &str = "compacted_messages";
@@ -799,6 +800,8 @@ pub struct RuntimeThreadStore {
     /// Serializes load-modify-save operations on turn records. Like the
     /// thread guard, it is synchronous and never crosses an `.await`.
     turn_mutation: Arc<parking_lot::Mutex<()>>,
+    #[cfg(test)]
+    item_directory_scans: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl RuntimeThreadStore {
@@ -835,7 +838,27 @@ impl RuntimeThreadStore {
             state: Arc::new(Mutex::new(state)),
             thread_mutation: Arc::new(parking_lot::Mutex::new(())),
             turn_mutation: Arc::new(parking_lot::Mutex::new(())),
+            #[cfg(test)]
+            item_directory_scans: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         })
+    }
+
+    #[cfg(test)]
+    fn reset_item_directory_scan_count(&self) {
+        self.item_directory_scans
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    fn item_directory_scan_count(&self) -> usize {
+        self.item_directory_scans
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    fn record_item_directory_scan(&self) {
+        self.item_directory_scans
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     fn record_path(base: &Path, id: &str, extension: &str, label: &str) -> Result<PathBuf> {
@@ -1003,6 +1026,8 @@ impl RuntimeThreadStore {
         validated_record_id(turn_id, "turn id")?;
         let mut out = Vec::new();
         let items_dir = checked_existing_runtime_store_dir(&self.items_dir)?;
+        #[cfg(test)]
+        self.record_item_directory_scan();
         for entry in fs::read_dir(&items_dir)
             .with_context(|| format!("Failed to read {}", items_dir.display()))?
         {
@@ -1045,6 +1070,8 @@ impl RuntimeThreadStore {
         let wanted: HashSet<&str> = turn_ids.iter().map(String::as_str).collect();
         let mut out: HashMap<String, Vec<TurnItemRecord>> = HashMap::new();
         let items_dir = checked_existing_runtime_store_dir(&self.items_dir)?;
+        #[cfg(test)]
+        self.record_item_directory_scan();
         for entry in fs::read_dir(&items_dir)
             .with_context(|| format!("Failed to read {}", items_dir.display()))?
         {
@@ -3840,6 +3867,7 @@ impl RuntimeThreadManager {
         thread_id: &str,
         messages: &[Message],
     ) -> Result<()> {
+        let mut checkpoint_retirement_item_id = None;
         // Session seeding writes turns/items and then advances the existing
         // thread pointer as one synchronous record transaction.
         let thread_mutation = self.store.thread_mutation.lock();
@@ -4154,7 +4182,7 @@ impl RuntimeThreadManager {
                     id: format!("turn_{}", &Uuid::new_v4().to_string()[..8]),
                     thread_id: thread_id.to_string(),
                     status: RuntimeTurnStatus::Completed,
-                    input_summary: "Restored runtime history".to_string(),
+                    input_summary: RESTORED_RUNTIME_HISTORY_RECEIPT.to_string(),
                     created_at: now,
                     started_at: Some(now),
                     ended_at: Some(now),
@@ -4169,19 +4197,18 @@ impl RuntimeThreadManager {
                     steer_count: 0,
                 }
             };
-            let checkpoint_text = runtime_history_snapshot
-                .iter()
-                .find_map(crate::compaction::compaction_summary_text)
-                .unwrap_or("Restored runtime history")
-                .to_string();
             let mut checkpoint_item = TurnItemRecord {
                 schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
                 id: format!("item_{}", &Uuid::new_v4().to_string()[..8]),
                 turn_id: checkpoint_turn.id.clone(),
                 kind: TurnItemKind::ContextCompaction,
                 status: TurnItemLifecycleStatus::Completed,
-                summary: summarize_text(&checkpoint_text, SUMMARY_LIMIT),
-                detail: Some(checkpoint_text),
+                // The restored transcript is private checkpoint data. Public
+                // lifecycle projections receive only this bounded receipt so
+                // a summary imported from an older saved session cannot fan
+                // request-user-input answers out through thread detail.
+                summary: RESTORED_RUNTIME_HISTORY_RECEIPT.to_string(),
+                detail: Some(RESTORED_RUNTIME_HISTORY_RECEIPT.to_string()),
                 metadata: None,
                 artifact_refs: Vec::new(),
                 started_at: Some(now),
@@ -4198,19 +4225,24 @@ impl RuntimeThreadManager {
             self.store.save_item(&checkpoint_item)?;
             checkpoint_turn.item_ids.push(checkpoint_item.id.clone());
             self.store.save_turn(&checkpoint_turn)?;
-            self.set_latest_compaction_history_snapshot(
-                thread_id,
+            if self.publish_compaction_history_snapshot(
                 &mut checkpoint_item,
                 &runtime_history_snapshot,
                 "turn_terminal",
                 &seeded_sensitive_values,
-            )?;
+            )? {
+                checkpoint_retirement_item_id = Some(checkpoint_item.id.clone());
+            }
             thread.latest_turn_id = Some(checkpoint_turn.id);
             thread.updated_at = now;
         }
 
         self.store.save_thread(&thread)?;
         drop(thread_mutation);
+        if let Some(item_id) = checkpoint_retirement_item_id {
+            self.retire_prior_compaction_history_snapshots(thread_id, item_id)
+                .await?;
+        }
         self.emit_event(
             thread_id,
             None,
@@ -5467,8 +5499,11 @@ impl RuntimeThreadManager {
         thread_id: &str,
         except_item_id: Option<&str>,
     ) -> Result<()> {
-        for turn in self.store.list_turns_for_thread(thread_id)? {
-            for mut item in self.store.list_items_for_turn(&turn.id)? {
+        let turns = self.store.list_turns_for_thread(thread_id)?;
+        let turn_ids = turns.iter().map(|turn| turn.id.clone()).collect::<Vec<_>>();
+        let mut items_by_turn = self.store.list_items_for_turns_map(&turn_ids)?;
+        for turn in turns {
+            for mut item in items_by_turn.remove(&turn.id).unwrap_or_default() {
                 if except_item_id == Some(item.id.as_str())
                     || !item_has_compaction_history_snapshot(&item)
                 {
@@ -5481,14 +5516,14 @@ impl RuntimeThreadManager {
         Ok(())
     }
 
-    fn set_latest_compaction_history_snapshot(
+    fn publish_compaction_history_snapshot(
         &self,
-        thread_id: &str,
         item: &mut TurnItemRecord,
         messages: &[Message],
         scope: &str,
         sensitive_values: &HashSet<String>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
+        let replaces_current_snapshot = item_has_compaction_history_snapshot(item);
         item.metadata = Some(compaction_history_snapshot_metadata(
             messages,
             scope,
@@ -5502,7 +5537,36 @@ impl RuntimeThreadManager {
             bail!("injected compaction history snapshot save failure");
         }
         self.store.save_item(item)?;
-        self.clear_compaction_history_snapshots_for_thread(thread_id, Some(&item.id))
+        Ok(!replaces_current_snapshot)
+    }
+
+    async fn retire_prior_compaction_history_snapshots(
+        &self,
+        thread_id: &str,
+        except_item_id: String,
+    ) -> Result<()> {
+        let manager = self.clone();
+        let thread_id = thread_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            manager.clear_compaction_history_snapshots_for_thread(&thread_id, Some(&except_item_id))
+        })
+        .await
+        .context("Runtime compaction-checkpoint retirement task failed")?
+    }
+
+    async fn set_latest_compaction_history_snapshot(
+        &self,
+        thread_id: &str,
+        item: &mut TurnItemRecord,
+        messages: &[Message],
+        scope: &str,
+        sensitive_values: &HashSet<String>,
+    ) -> Result<()> {
+        if self.publish_compaction_history_snapshot(item, messages, scope, sensitive_values)? {
+            self.retire_prior_compaction_history_snapshots(thread_id, item.id.clone())
+                .await?;
+        }
+        Ok(())
     }
 
     fn reconstruct_messages_from_turns(&self, turns: &[TurnRecord]) -> Result<Vec<Message>> {
@@ -6056,7 +6120,8 @@ impl RuntimeThreadManager {
                                 messages,
                                 "compaction_point",
                                 &sensitive_user_input_values,
-                            )?;
+                            )
+                            .await?;
                         }
                         item.ended_at = Some(Utc::now());
                         self.store.save_item(&item)?;
@@ -6097,7 +6162,8 @@ impl RuntimeThreadManager {
                                 messages,
                                 "compaction_point",
                                 &sensitive_user_input_values,
-                            )?;
+                            )
+                            .await?;
                         }
                         item.ended_at = Some(Utc::now());
                         self.store.save_item(&item)?;
@@ -6562,8 +6628,8 @@ impl RuntimeThreadManager {
                             messages,
                             "turn_terminal",
                             &sensitive_user_input_values,
-                        )?;
-                        self.store.save_item(&item)?;
+                        )
+                        .await?;
                     }
                     turn_usage = Some(usage);
                     turn_base_url = base_url;

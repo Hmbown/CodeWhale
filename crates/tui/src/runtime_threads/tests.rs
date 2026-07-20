@@ -7371,13 +7371,15 @@ async fn latest_compaction_checkpoint_is_private_and_supersedes_prior_checkpoint
         started_at: first_turn.started_at,
         ended_at: first_turn.ended_at,
     };
-    manager.set_latest_compaction_history_snapshot(
-        &thread.id,
-        &mut first_item,
-        &first_messages,
-        "turn_terminal",
-        &HashSet::new(),
-    )?;
+    manager
+        .set_latest_compaction_history_snapshot(
+            &thread.id,
+            &mut first_item,
+            &first_messages,
+            "turn_terminal",
+            &HashSet::new(),
+        )
+        .await?;
     let mut unsavable_replacement = TurnItemRecord {
         id: TEST_HISTORY_SNAPSHOT_SAVE_FAILURE_ITEM_ID.to_string(),
         ..first_item.clone()
@@ -7391,6 +7393,7 @@ async fn latest_compaction_checkpoint_is_private_and_supersedes_prior_checkpoint
                 "turn_terminal",
                 &HashSet::new(),
             )
+            .await
             .is_err()
     );
     assert!(
@@ -7419,13 +7422,15 @@ async fn latest_compaction_checkpoint_is_private_and_supersedes_prior_checkpoint
         started_at: second_turn.started_at,
         ended_at: second_turn.ended_at,
     };
-    manager.set_latest_compaction_history_snapshot(
-        &thread.id,
-        &mut second_item,
-        &second_messages,
-        "turn_terminal",
-        &HashSet::new(),
-    )?;
+    manager
+        .set_latest_compaction_history_snapshot(
+            &thread.id,
+            &mut second_item,
+            &second_messages,
+            "turn_terminal",
+            &HashSet::new(),
+        )
+        .await?;
 
     assert!(!item_has_compaction_history_snapshot(
         &manager.store.load_item(&first_item.id)?
@@ -7447,6 +7452,124 @@ async fn latest_compaction_checkpoint_is_private_and_supersedes_prior_checkpoint
             .all(|item| !item_has_compaction_history_snapshot(item))
     );
     assert!(!serde_json::to_string(&detail)?.contains(HISTORY_SNAPSHOT_MESSAGES_KEY));
+    Ok(())
+}
+
+#[tokio::test]
+async fn checkpoint_retirement_scans_items_once_and_same_item_update_skips_scan() -> Result<()> {
+    let manager = test_manager(test_runtime_dir())?;
+    let thread = manager
+        .create_thread(CreateThreadRequest::default())
+        .await?;
+    let old_messages = vec![crate::compaction::compaction_summary_message(
+        format!(
+            "## {}\n\nold checkpoint",
+            crate::compaction::COMPACTION_SUMMARY_MARKER
+        ),
+        true,
+    )];
+    let mut old_checkpoint_id = String::new();
+
+    for turn_index in 0..12 {
+        let mut turn = sample_turn(
+            &thread.id,
+            &format!("turn_checkpoint_scan_{turn_index}"),
+            RuntimeTurnStatus::Completed,
+        );
+        for item_index in 0..4 {
+            let item_id = format!("item_checkpoint_scan_{turn_index}_{item_index}");
+            let mut item = sample_item(&turn.id, &item_id, TurnItemLifecycleStatus::Completed);
+            if turn_index == 0 && item_index == 0 {
+                item.kind = TurnItemKind::ContextCompaction;
+                item.metadata = Some(compaction_history_snapshot_metadata(
+                    &old_messages,
+                    "turn_terminal",
+                    &HashSet::new(),
+                ));
+                old_checkpoint_id.clone_from(&item.id);
+            }
+            manager.store.save_item(&item)?;
+            turn.item_ids.push(item.id);
+        }
+        manager.store.save_turn(&turn)?;
+    }
+
+    let mut replacement_turn = sample_turn(
+        &thread.id,
+        "turn_checkpoint_scan_replacement",
+        RuntimeTurnStatus::Completed,
+    );
+    let mut replacement = sample_item(
+        &replacement_turn.id,
+        "item_checkpoint_scan_replacement",
+        TurnItemLifecycleStatus::Completed,
+    );
+    replacement.kind = TurnItemKind::ContextCompaction;
+    replacement_turn.item_ids.push(replacement.id.clone());
+    manager.store.save_turn(&replacement_turn)?;
+    manager.store.save_item(&replacement)?;
+
+    let replacement_messages = vec![crate::compaction::compaction_summary_message(
+        format!(
+            "## {}\n\nreplacement checkpoint",
+            crate::compaction::COMPACTION_SUMMARY_MARKER
+        ),
+        true,
+    )];
+    manager.store.reset_item_directory_scan_count();
+    manager
+        .set_latest_compaction_history_snapshot(
+            &thread.id,
+            &mut replacement,
+            &replacement_messages,
+            "compaction_point",
+            &HashSet::new(),
+        )
+        .await?;
+    assert_eq!(
+        manager.store.item_directory_scan_count(),
+        1,
+        "checkpoint replacement must scan the items directory once, independent of turn count"
+    );
+    assert!(!item_has_compaction_history_snapshot(
+        &manager.store.load_item(&old_checkpoint_id)?
+    ));
+
+    let terminal_messages = vec![
+        replacement_messages[0].clone(),
+        Message {
+            role: "assistant".to_string(),
+            content: vec![ContentBlock::Text {
+                text: "terminal tail".to_string(),
+                cache_control: None,
+            }],
+        },
+    ];
+    manager.store.reset_item_directory_scan_count();
+    manager
+        .set_latest_compaction_history_snapshot(
+            &thread.id,
+            &mut replacement,
+            &terminal_messages,
+            "turn_terminal",
+            &HashSet::new(),
+        )
+        .await?;
+    assert_eq!(
+        manager.store.item_directory_scan_count(),
+        0,
+        "updating the current checkpoint at turn completion must not repeat retirement"
+    );
+    let stored = manager.store.load_item(&replacement.id)?;
+    let stored_messages: Vec<Message> = serde_json::from_value(
+        stored
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get(HISTORY_SNAPSHOT_MESSAGES_KEY))
+            .cloned()
+            .context("missing terminal checkpoint messages")?,
+    )?;
+    assert_eq!(stored_messages, terminal_messages);
     Ok(())
 }
 
