@@ -55,18 +55,19 @@ pub fn handle_paste_burst_key(app: &mut App, key: &KeyEvent, now: Instant) -> bo
                 // Paste-burst buffering would lose characters when the IME
                 // commits slower than the burst heuristic's timing window.
                 //
-                // We still call note_plain_char + extend_window so that:
-                //   1. The burst timing counter advances for non-IME fast
-                //      typing on terminals without bracketed paste support.
-                //   2. The Enter-suppression window stays open during a rapid
-                //      non-ASCII sequence, preventing premature submission.
-                // But the character is inserted directly into the composer
-                // rather than placed into the paste-burst buffer.
+                // Keep advancing the burst timing counter, but only open the
+                // Enter-suppression window after two characters arrive inside
+                // the rapid-paste interval. Opening it after every individual
+                // IME commit made a normal Enter press look like a pasted
+                // newline for 120ms, so Enter appeared to lag or inserted a
+                // newline instead of sending (#4605). The character itself is
+                // inserted directly rather than placed in the burst buffer.
                 if let Some(pending) = app.paste_burst.flush_before_modified_input() {
                     app.insert_str(&pending);
                 }
-                app.paste_burst.note_plain_char(now);
-                app.paste_burst.extend_window(now);
+                if app.paste_burst.note_plain_char(now) {
+                    app.paste_burst.extend_window(now);
+                }
                 app.insert_char(c);
                 return true;
             }
@@ -284,6 +285,31 @@ mod tests {
         assert_eq!(
             app.cursor_position, 4,
             "cursor advances by one per codepoint, not per UTF-8 byte"
+        );
+    }
+
+    #[test]
+    fn enter_immediately_after_spaced_ime_input_submits() {
+        let mut app = test_app();
+        let t0 = Instant::now() - Duration::from_millis(200);
+
+        for (i, ch) in "你好世界".chars().enumerate() {
+            assert!(handle_paste_burst_key(
+                &mut app,
+                &plain(ch),
+                t0 + Duration::from_millis(50 * i as u64)
+            ));
+        }
+
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        assert!(
+            !handle_paste_burst_key(&mut app, &enter, t0 + Duration::from_millis(151)),
+            "a normal Enter after spaced IME commits must reach the submit path"
+        );
+        assert_eq!(
+            app.handle_composer_enter().as_deref(),
+            Some("你好世界"),
+            "IME text should submit immediately instead of gaining a newline"
         );
     }
 

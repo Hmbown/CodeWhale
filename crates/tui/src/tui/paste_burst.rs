@@ -95,7 +95,9 @@ impl PasteBurst {
         None
     }
 
-    pub(crate) fn note_plain_char(&mut self, now: Instant) {
+    /// Record a directly-inserted character and report whether it belongs to
+    /// a rapid sequence that looks like an unbracketed paste.
+    pub(crate) fn note_plain_char(&mut self, now: Instant) -> bool {
         match self.last_plain_char_time {
             Some(prev) if now.duration_since(prev) <= PASTE_BURST_CHAR_INTERVAL => {
                 self.consecutive_plain_char_burst =
@@ -104,6 +106,7 @@ impl PasteBurst {
             _ => self.consecutive_plain_char_burst = 1,
         }
         self.last_plain_char_time = Some(now);
+        self.consecutive_plain_char_burst >= 2
     }
 
     pub fn flush_if_due(&mut self, now: Instant) -> FlushResult {
