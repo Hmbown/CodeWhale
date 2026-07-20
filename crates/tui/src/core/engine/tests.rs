@@ -291,6 +291,7 @@ struct GatedGoalModelClient {
     requests: std::sync::Mutex<Vec<crate::models::MessageRequest>>,
     second_request_entered: std::sync::Arc<tokio::sync::Notify>,
     release_second_request: std::sync::Arc<tokio::sync::Notify>,
+    first_usage: Option<Usage>,
 }
 
 struct FirstRequestGatedGoalModelClient {
@@ -477,9 +478,16 @@ impl crate::core::model_client::ModelClient for GatedGoalModelClient {
             anyhow::bail!("unexpected goal model request #{call}");
         }
 
-        let events = crate::llm_client::mock::canned::simple_text_turn("still working")
-            .into_iter()
-            .map(Ok);
+        let mut events = crate::llm_client::mock::canned::simple_text_turn("still working");
+        if call == 1
+            && let Some(usage) = self.first_usage.clone()
+            && let Some(crate::models::StreamEvent::MessageDelta { usage: slot, .. }) = events
+                .iter_mut()
+                .find(|event| matches!(event, crate::models::StreamEvent::MessageDelta { .. }))
+        {
+            *slot = Some(usage);
+        }
+        let events = events.into_iter().map(Ok);
         Ok(Box::pin(futures_util::stream::iter(events)))
     }
 
@@ -499,6 +507,11 @@ async fn goal_continuation_preserves_goal_and_resolves_updated_authoritative_rou
         requests: std::sync::Mutex::new(Vec::new()),
         second_request_entered: std::sync::Arc::clone(&second_request_entered),
         release_second_request: std::sync::Arc::clone(&release_second_request),
+        first_usage: Some(Usage {
+            input_tokens: 3,
+            output_tokens: 2,
+            ..Usage::default()
+        }),
     });
     let mut custom = HashMap::new();
     custom.insert(
@@ -668,7 +681,23 @@ async fn goal_continuation_preserves_goal_and_resolves_updated_authoritative_rou
     }
     assert_eq!(starts, 2);
     assert!(verified_synthetic_goal);
-    assert_eq!(model.captured_requests().len(), 2);
+    let requests = model.captured_requests();
+    assert_eq!(requests.len(), 2);
+    let first_intra_turn_prompt = requests[1]
+        .messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .find_map(|block| match block {
+            ContentBlock::Text { text, .. } if text.contains("Continuation pass #1.") => {
+                Some(text.as_str())
+            }
+            _ => None,
+        })
+        .expect("first intra-turn goal snapshot must survive into the next request");
+    assert!(
+        first_intra_turn_prompt.contains("\"tokens_used\": 5"),
+        "current-turn usage must be rendered without waiting for durable recording: {first_intra_turn_prompt}"
+    );
 
     // The pause was queued while the second turn was still running. Wait for
     // that control operation, then put a snapshot receipt behind the already
@@ -974,6 +1003,291 @@ async fn queued_ordinary_turn_does_not_multiply_engine_goal_continuations() {
 }
 
 #[tokio::test]
+async fn queued_failed_turn_cancels_older_goal_continuation_without_third_call() {
+    let objective = "stop after the intervening failure";
+    let model = std::sync::Arc::new(FailingGoalModelClient {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        message: "deterministic queued turn failure".to_string(),
+    });
+    let config = goal_custom_route_config();
+    let client: crate::core::model_client::SharedModelClient = model.clone();
+    let (mut engine, handle) = Engine::new_with_model_client(
+        EngineConfig {
+            model: "local-model".to_string(),
+            snapshots_enabled: false,
+            terminal_chrome_enabled: false,
+            goal_objective: Some(objective.to_string()),
+            ..EngineConfig::default()
+        },
+        &config,
+        client,
+    );
+    let goal_state = engine.config.goal_state.clone();
+
+    handle
+        .send(active_goal_message_op(
+            &config,
+            "queued turn that will fail",
+            objective,
+            None,
+        ))
+        .await
+        .expect("queue failing ordinary turn");
+    engine.schedule_goal_continuation(Vec::new());
+    assert!(engine.has_scheduled_goal_continuation());
+    let run_task = tokio::spawn(engine.run());
+
+    let session = tokio::time::timeout(model_turn_event_timeout(), handle.get_session_snapshot())
+        .await
+        .expect("queued failure did not settle")
+        .expect("post-failure session snapshot");
+    assert_eq!(
+        model.calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the stale synthetic token must not make a third provider call"
+    );
+    let goal = goal_state.lock().expect("goal lock").snapshot();
+    assert_eq!(goal.status, "blocked");
+    assert!(
+        goal.blocker
+            .as_deref()
+            .is_some_and(|blocker| blocker.contains("deterministic queued turn failure")),
+        "{goal:?}"
+    );
+    let prompt = system_prompt_text(session.system_prompt.expect("blocked system prompt"));
+    assert!(!prompt.contains("<session_goal>"), "{prompt}");
+
+    handle.send(Op::Shutdown).await.expect("shutdown engine");
+    run_task.await.expect("engine task");
+}
+
+#[tokio::test]
+async fn queued_not_started_turn_cancels_older_goal_continuation() {
+    let objective = "stop when the queued turn cannot start";
+    let model = std::sync::Arc::new(FailingGoalModelClient {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        message: "model must never be called".to_string(),
+    });
+    let config = goal_custom_route_config();
+    let client: crate::core::model_client::SharedModelClient = model.clone();
+    let (mut engine, handle) = Engine::new_with_model_client(
+        EngineConfig {
+            model: "local-model".to_string(),
+            snapshots_enabled: false,
+            terminal_chrome_enabled: false,
+            goal_objective: Some(objective.to_string()),
+            ..EngineConfig::default()
+        },
+        &config,
+        client,
+    );
+    let goal_state = engine.config.goal_state.clone();
+    engine.model_client = None;
+    engine.deepseek_client_error = Some("deterministic missing model client".to_string());
+
+    handle
+        .send(active_goal_message_op(
+            &config,
+            "queued turn that cannot start",
+            objective,
+            None,
+        ))
+        .await
+        .expect("queue not-started ordinary turn");
+    engine.schedule_goal_continuation(Vec::new());
+    let run_task = tokio::spawn(engine.run());
+
+    let session = tokio::time::timeout(model_turn_event_timeout(), handle.get_session_snapshot())
+        .await
+        .expect("not-started turn did not settle")
+        .expect("post-rejection session snapshot");
+    assert_eq!(
+        model.calls.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "neither the rejected turn nor its stale token may call the provider"
+    );
+    let goal = goal_state.lock().expect("goal lock").snapshot();
+    assert_eq!(goal.status, "blocked");
+    assert!(
+        goal.blocker
+            .as_deref()
+            .is_some_and(|blocker| blocker.contains("could not be started")),
+        "{goal:?}"
+    );
+    let prompt = system_prompt_text(session.system_prompt.expect("blocked system prompt"));
+    assert!(!prompt.contains("<session_goal>"), "{prompt}");
+
+    handle.send(Op::Shutdown).await.expect("shutdown engine");
+    run_task.await.expect("engine task");
+}
+
+#[tokio::test]
+async fn queued_interrupted_turn_cancels_older_goal_continuation_without_third_call() {
+    let objective = "pause after the intervening cancellation";
+    let request_entered = std::sync::Arc::new(tokio::sync::Notify::new());
+    let release_request = std::sync::Arc::new(tokio::sync::Notify::new());
+    let model = std::sync::Arc::new(FirstRequestGatedGoalModelClient {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        request_entered: std::sync::Arc::clone(&request_entered),
+        release_request,
+    });
+    let config = goal_custom_route_config();
+    let client: crate::core::model_client::SharedModelClient = model.clone();
+    let (mut engine, handle) = Engine::new_with_model_client(
+        EngineConfig {
+            model: "local-model".to_string(),
+            snapshots_enabled: false,
+            terminal_chrome_enabled: false,
+            goal_objective: Some(objective.to_string()),
+            ..EngineConfig::default()
+        },
+        &config,
+        client,
+    );
+    let goal_state = engine.config.goal_state.clone();
+
+    handle
+        .send(active_goal_message_op(
+            &config,
+            "queued turn that will be cancelled",
+            objective,
+            None,
+        ))
+        .await
+        .expect("queue interruptible ordinary turn");
+    engine.schedule_goal_continuation(Vec::new());
+    let run_task = tokio::spawn(engine.run());
+    tokio::time::timeout(model_turn_event_timeout(), request_entered.notified())
+        .await
+        .expect("queued request was never entered");
+    handle.cancel();
+
+    let session = tokio::time::timeout(model_turn_event_timeout(), handle.get_session_snapshot())
+        .await
+        .expect("interrupted turn did not settle")
+        .expect("post-interruption session snapshot");
+    assert_eq!(
+        model.calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the stale synthetic token must not make a third provider call"
+    );
+    let goal = goal_state.lock().expect("goal lock").snapshot();
+    assert_eq!(goal.status, "paused");
+    assert_eq!(goal.blocker, None);
+    let prompt = system_prompt_text(session.system_prompt.expect("paused system prompt"));
+    assert!(!prompt.contains("<session_goal>"), "{prompt}");
+
+    handle.send(Op::Shutdown).await.expect("shutdown engine");
+    run_task.await.expect("engine task");
+}
+
+#[tokio::test]
+async fn initial_goal_failure_projects_blocked_state() {
+    let objective = "block the initial failed goal turn";
+    let leaked_secret = "sk-initial-goal-secret-123456";
+    let model = std::sync::Arc::new(FailingGoalModelClient {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        message: format!("initial provider failure: {leaked_secret}"),
+    });
+    let config = goal_custom_route_config();
+    let client: crate::core::model_client::SharedModelClient = model.clone();
+    let (engine, handle) = Engine::new_with_model_client(
+        EngineConfig {
+            model: "local-model".to_string(),
+            snapshots_enabled: false,
+            terminal_chrome_enabled: false,
+            ..EngineConfig::default()
+        },
+        &config,
+        client,
+    );
+    let goal_state = engine.config.goal_state.clone();
+    let run_task = tokio::spawn(engine.run());
+
+    handle
+        .send(active_goal_message_op(
+            &config,
+            "start a goal whose first turn fails",
+            objective,
+            None,
+        ))
+        .await
+        .expect("send initial goal turn");
+    let session = tokio::time::timeout(model_turn_event_timeout(), handle.get_session_snapshot())
+        .await
+        .expect("initial goal failure did not settle")
+        .expect("post-failure session snapshot");
+
+    assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let goal = goal_state.lock().expect("goal lock").snapshot();
+    assert_eq!(goal.objective.as_deref(), Some(objective));
+    assert_eq!(goal.status, "blocked");
+    let blocker = goal.blocker.as_deref().expect("failure blocker");
+    assert!(blocker.contains("initial provider failure"), "{blocker}");
+    assert!(!blocker.contains(leaked_secret), "{blocker}");
+    let prompt = system_prompt_text(session.system_prompt.expect("blocked system prompt"));
+    assert!(!prompt.contains("<session_goal>"), "{prompt}");
+
+    handle.send(Op::Shutdown).await.expect("shutdown engine");
+    run_task.await.expect("engine task");
+}
+
+#[tokio::test]
+async fn initial_goal_interruption_projects_paused_state() {
+    let objective = "pause the initial interrupted goal turn";
+    let request_entered = std::sync::Arc::new(tokio::sync::Notify::new());
+    let release_request = std::sync::Arc::new(tokio::sync::Notify::new());
+    let model = std::sync::Arc::new(FirstRequestGatedGoalModelClient {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        request_entered: std::sync::Arc::clone(&request_entered),
+        release_request,
+    });
+    let config = goal_custom_route_config();
+    let client: crate::core::model_client::SharedModelClient = model.clone();
+    let (engine, handle) = Engine::new_with_model_client(
+        EngineConfig {
+            model: "local-model".to_string(),
+            snapshots_enabled: false,
+            terminal_chrome_enabled: false,
+            ..EngineConfig::default()
+        },
+        &config,
+        client,
+    );
+    let goal_state = engine.config.goal_state.clone();
+    let run_task = tokio::spawn(engine.run());
+
+    handle
+        .send(active_goal_message_op(
+            &config,
+            "start a goal whose first turn is cancelled",
+            objective,
+            None,
+        ))
+        .await
+        .expect("send initial goal turn");
+    tokio::time::timeout(model_turn_event_timeout(), request_entered.notified())
+        .await
+        .expect("initial request was never entered");
+    handle.cancel();
+
+    let session = tokio::time::timeout(model_turn_event_timeout(), handle.get_session_snapshot())
+        .await
+        .expect("initial interruption did not settle")
+        .expect("post-interruption session snapshot");
+    assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let goal = goal_state.lock().expect("goal lock").snapshot();
+    assert_eq!(goal.objective.as_deref(), Some(objective));
+    assert_eq!(goal.status, "paused");
+    assert_eq!(goal.blocker, None);
+    let prompt = system_prompt_text(session.system_prompt.expect("paused system prompt"));
+    assert!(!prompt.contains("<session_goal>"), "{prompt}");
+
+    handle.send(Op::Shutdown).await.expect("shutdown engine");
+    run_task.await.expect("engine task");
+}
+
+#[tokio::test]
 async fn saturated_goal_controls_run_before_ready_idle_child_completion() {
     use crate::tools::subagent::SubAgentCompletion;
 
@@ -1023,8 +1337,8 @@ async fn saturated_goal_controls_run_before_ready_idle_child_completion() {
         .expect("queue ready idle child completion");
     engine.schedule_goal_continuation(vec![stale_tool]);
     assert!(
-        engine.draining_goal_continuation_backpressure(),
-        "full mailbox must activate temporary op priority"
+        engine.has_scheduled_goal_continuation(),
+        "a live schedule must activate temporary op priority"
     );
 
     // Inspect the exact production receive helper without running handlers:
@@ -1075,7 +1389,7 @@ async fn saturated_goal_controls_run_before_ready_idle_child_completion() {
         .take_scheduled_goal_continuation(engine_schedule_id, dynamic_tools)
         .expect("engine-owned continuation token must consume its schedule marker");
     assert_eq!(continued_tools, vec![fresh_tool]);
-    assert!(!engine.draining_goal_continuation_backpressure());
+    assert!(!engine.has_scheduled_goal_continuation());
 
     let child = engine
         .next_run_input(false)
@@ -1085,6 +1399,85 @@ async fn saturated_goal_controls_run_before_ready_idle_child_completion() {
         panic!("unexpected operation after backpressure drain");
     };
     assert_eq!(child.agent_id, "agent_ready_during_backpressure");
+}
+
+#[tokio::test]
+async fn unsaturated_goal_control_runs_before_ready_idle_child_completion() {
+    use crate::tools::subagent::SubAgentCompletion;
+
+    let config = goal_custom_route_config();
+    let (mut engine, handle) = Engine::new(
+        EngineConfig {
+            snapshots_enabled: false,
+            terminal_chrome_enabled: false,
+            ..EngineConfig::default()
+        },
+        &config,
+    );
+
+    handle
+        .tx_op
+        .try_send(Op::SetGoalStatus {
+            status: crate::tools::goal::GoalStatus::Paused,
+            clear: false,
+        })
+        .expect("queue unsaturated pause");
+    engine
+        .tx_subagent_completion
+        .send(SubAgentCompletion {
+            agent_id: "agent_ready_without_backpressure".to_string(),
+            payload: "ready child completion".to_string(),
+        })
+        .expect("queue ready idle child completion");
+    engine.schedule_goal_continuation(Vec::new());
+    assert!(engine.has_scheduled_goal_continuation());
+    assert!(
+        handle.tx_op.capacity() > 0,
+        "fixture must leave the mailbox unsaturated"
+    );
+
+    let first = engine
+        .next_run_input(false)
+        .await
+        .expect("queued pause must be selected");
+    let EngineRunInput::Operation(first) = first else {
+        panic!("ready child completion beat an unsaturated queued pause");
+    };
+    assert!(matches!(
+        *first,
+        Op::SetGoalStatus {
+            status: crate::tools::goal::GoalStatus::Paused,
+            clear: false
+        }
+    ));
+
+    let token = engine
+        .next_run_input(false)
+        .await
+        .expect("scheduled continuation token");
+    let EngineRunInput::Operation(token) = token else {
+        panic!("ready child completion beat the live continuation token");
+    };
+    let Op::ContinueGoal {
+        dynamic_tools,
+        engine_schedule_id,
+    } = *token
+    else {
+        panic!("expected continuation token behind pause");
+    };
+    engine
+        .take_scheduled_goal_continuation(engine_schedule_id, dynamic_tools)
+        .expect("consume live continuation schedule");
+    assert!(!engine.has_scheduled_goal_continuation());
+
+    let child = engine
+        .next_run_input(false)
+        .await
+        .expect("idle child completion after schedule consumption");
+    let EngineRunInput::SubAgentCompletion(child) = child else {
+        panic!("normal child fairness did not resume after schedule consumption");
+    };
+    assert_eq!(child.agent_id, "agent_ready_without_backpressure");
 }
 
 #[tokio::test]
@@ -1198,7 +1591,7 @@ async fn cross_turn_token_budget_exhaustion_blocks_goal_and_refreshes_prompt() {
                 );
                 saw_terminal_goal = true;
             }
-            Event::Status { message } if message.contains("Goal token budget reached") => {
+            Event::Status { message } if message.contains("automatic continuation stopped") => {
                 assert!(message.contains("11 / 10 tokens"), "{message}");
                 assert!(message.contains("goal is blocked"), "{message}");
                 saw_budget_status = true;
@@ -1228,6 +1621,96 @@ async fn cross_turn_token_budget_exhaustion_blocks_goal_and_refreshes_prompt() {
         1,
         "budget stop must not call the model again"
     );
+
+    handle.send(Op::Shutdown).await.expect("shutdown engine");
+    run_task.await.expect("engine task");
+}
+
+#[tokio::test]
+async fn current_turn_usage_stops_budgeted_goal_after_one_provider_call() {
+    use crate::llm_client::mock::{MockLlmClient, canned};
+
+    let objective = "stop before an intra-turn budget overspend";
+    let budget_turn = vec![
+        canned::message_start("mock_goal_current_turn_budget"),
+        canned::text_block_start(0),
+        canned::text_delta(0, "budget spent"),
+        canned::block_stop(0),
+        canned::message_delta(
+            "end_turn",
+            Some(Usage {
+                input_tokens: 8,
+                output_tokens: 3,
+                ..Usage::default()
+            }),
+        ),
+        canned::message_stop(),
+    ];
+    let model = std::sync::Arc::new(MockLlmClient::new(vec![budget_turn]));
+    let client: crate::core::model_client::SharedModelClient = model.clone();
+    let config = goal_custom_route_config();
+    let (engine, handle) = Engine::new_with_model_client(
+        EngineConfig {
+            model: "local-model".to_string(),
+            snapshots_enabled: false,
+            subagents_enabled: false,
+            terminal_chrome_enabled: false,
+            goal_objective: Some(objective.to_string()),
+            goal_token_budget: Some(10),
+            ..EngineConfig::default()
+        },
+        &config,
+        client,
+    );
+    let goal_state = engine.config.goal_state.clone();
+    let run_task = tokio::spawn(engine.run());
+
+    handle
+        .send(active_goal_message_op(
+            &config,
+            "start the budgeted goal",
+            objective,
+            Some(10),
+        ))
+        .await
+        .expect("send budgeted goal turn");
+    let mut saw_terminal_goal = false;
+    while !saw_terminal_goal {
+        let event = tokio::time::timeout(model_turn_event_timeout(), async {
+            handle.rx_event.write().await.recv().await
+        })
+        .await
+        .expect("current-turn budget stop did not settle")
+        .expect("current-turn budget event");
+        if let Event::GoalUpdated { snapshot } = event
+            && snapshot.status == "blocked"
+        {
+            saw_terminal_goal = true;
+        }
+    }
+    let session = handle
+        .get_session_snapshot()
+        .await
+        .expect("post-budget session snapshot");
+
+    assert_eq!(
+        model.call_count(),
+        1,
+        "current-turn usage must stop all additional provider calls"
+    );
+    assert_eq!(model.remaining_turns(), 0);
+    let goal = goal_state.lock().expect("goal lock").snapshot();
+    assert_eq!(goal.status, "blocked");
+    assert_eq!(goal.tokens_used, 11);
+    assert_eq!(goal.token_budget, Some(10));
+    assert!(
+        goal.blocker
+            .as_deref()
+            .is_some_and(|blocker| blocker.contains("11 / 10 tokens")),
+        "{goal:?}"
+    );
+    let prompt = system_prompt_text(session.system_prompt.expect("blocked system prompt"));
+    assert!(!prompt.contains("<session_goal>"), "{prompt}");
 
     handle.send(Op::Shutdown).await.expect("shutdown engine");
     run_task.await.expect("engine task");
@@ -2535,6 +3018,48 @@ fn resolved_route_for_test(
         resolve_runtime_route(config, config.api_provider(), Some(model))
             .expect("resolve test route"),
     )
+}
+
+fn active_goal_message_op(
+    config: &Config,
+    content: &str,
+    objective: &str,
+    token_budget: Option<u32>,
+) -> Op {
+    Op::SendMessage {
+        content: content.to_string(),
+        mode: AppMode::Agent,
+        route: resolved_route_for_test(config, "local-model"),
+        compaction: Box::new(CompactionConfig::default()),
+        goal_objective: Some(objective.to_string()),
+        goal_token_budget: token_budget,
+        goal_status: crate::tools::goal::GoalStatus::Active,
+        reasoning_effort: None,
+        reasoning_effort_auto: false,
+        auto_model: false,
+        allow_shell: false,
+        trust_mode: false,
+        auto_approve: false,
+        approval_mode: crate::tui::approval::ApprovalMode::Suggest,
+        translation_enabled: false,
+        show_thinking: false,
+        allowed_tools: None,
+        dynamic_tools: Vec::new(),
+        hook_executor: None,
+        verbosity: None,
+        provenance: UserInputProvenance::ExternalUser,
+    }
+}
+
+fn system_prompt_text(prompt: SystemPrompt) -> String {
+    match prompt {
+        SystemPrompt::Text(text) => text,
+        SystemPrompt::Blocks(blocks) => blocks
+            .into_iter()
+            .map(|block| block.text)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
 }
 
 fn external_user_message_op(content: &str, mode: AppMode, config: &Config) -> Op {

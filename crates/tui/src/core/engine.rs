@@ -739,14 +739,12 @@ struct ScheduledGoalContinuation {
     id: u64,
     dynamic_tools: Vec<DynamicToolSpec>,
     enqueued: bool,
-    /// Once a full mailbox delays this token, drain operations through the
-    /// token before selecting idle child completions. That preserves controls
-    /// already ahead of it without changing normal run-loop fairness.
-    draining_backpressure: bool,
 }
 
 enum SendMessageOutcome {
-    NotStarted,
+    NotStarted {
+        error: Option<String>,
+    },
     Finished {
         status: TurnOutcomeStatus,
         error: Option<String>,
@@ -1616,9 +1614,16 @@ impl Engine {
             id: self.goal_continuation_schedule_seq,
             dynamic_tools,
             enqueued: false,
-            draining_backpressure: false,
         });
         self.try_flush_pending_goal_continuation();
+    }
+
+    fn cancel_scheduled_goal_continuation(&mut self) {
+        if self.scheduled_goal_continuation.take().is_some() {
+            tracing::debug!(
+                "cancelled an outstanding goal continuation after a non-completed turn"
+            );
+        }
     }
 
     fn take_scheduled_goal_continuation(
@@ -1652,38 +1657,55 @@ impl Engine {
         Some(scheduled.dynamic_tools)
     }
 
-    fn draining_goal_continuation_backpressure(&self) -> bool {
-        self.scheduled_goal_continuation
-            .as_ref()
-            .is_some_and(|scheduled| scheduled.draining_backpressure)
+    fn has_scheduled_goal_continuation(&self) -> bool {
+        self.scheduled_goal_continuation.is_some()
+    }
+
+    fn bounded_redacted_goal_failure_detail(&self, detail: &str) -> Option<String> {
+        let detail = detail.trim();
+        if detail.is_empty() {
+            return None;
+        }
+        // This message becomes durable goal state. Reuse the model boundary's
+        // exact configured-secret redactor when available; that helper also
+        // applies the config persistence redactor as a universal backstop.
+        let detail = self.deepseek_client.as_ref().map_or_else(
+            || codewhale_config::persistence::redact_secrets(detail),
+            |client| client.redact_model_bound_text(detail),
+        );
+        Some(crate::utils::truncate_with_ellipsis(
+            &detail,
+            GOAL_CONTINUATION_FAILURE_DETAIL_MAX_BYTES,
+            "…",
+        ))
     }
 
     fn goal_continuation_failure_message(&self, error: Option<&str>) -> String {
-        let detail = error.map(str::trim).filter(|detail| !detail.is_empty());
-        match detail {
-            Some(detail) => {
-                // This message becomes durable goal state. Reuse the model
-                // boundary's exact configured-secret redactor when available,
-                // with the config persistence redactor as the universal
-                // backstop, before bounding the retained provider detail.
-                let detail = self.deepseek_client.as_ref().map_or_else(
-                    || codewhale_config::persistence::redact_secrets(detail),
-                    |client| client.redact_model_bound_text(detail),
-                );
-                let detail = crate::utils::truncate_with_ellipsis(
-                    &detail,
-                    GOAL_CONTINUATION_FAILURE_DETAIL_MAX_BYTES,
-                    "…",
-                );
+        self.bounded_redacted_goal_failure_detail(error.unwrap_or_default()).map_or_else(
+            || {
+                "Goal continuation blocked because the model turn failed without a provider reason. Fix the provider route or credentials, then resume the goal."
+                    .to_string()
+            },
+            |detail| {
                 format!(
                     "Goal continuation blocked because the model turn failed: {detail}. Fix the failure, then resume the goal."
                 )
-            }
-            None => {
-                "Goal continuation blocked because the model turn failed without a provider reason. Fix the provider route or credentials, then resume the goal."
+            },
+        )
+    }
+
+    fn goal_turn_not_started_message(&self, error: Option<&str>) -> String {
+        self.bounded_redacted_goal_failure_detail(error.unwrap_or_default()).map_or_else(
+            || {
+                "Goal continuation blocked because the next model turn could not be started. Fix the provider route or credentials, then resume the goal."
                     .to_string()
-            }
-        }
+            },
+            |detail| {
+                format!(
+                    "Goal continuation blocked because the next model turn could not be started: {detail}. Fix the provider route or credentials, then resume the goal."
+                )
+            },
+        )
     }
 
     fn try_flush_pending_goal_continuation(&mut self) {
@@ -1718,13 +1740,7 @@ impl Engine {
                     self.scheduled_goal_continuation = None;
                 }
             }
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                if let Some(scheduled) = self.scheduled_goal_continuation.as_mut()
-                    && scheduled.id == schedule_id
-                {
-                    scheduled.draining_backpressure = true;
-                }
-            }
+            Err(mpsc::error::TrySendError::Full(_)) => {}
         }
     }
 
@@ -1733,11 +1749,12 @@ impl Engine {
         // top of each receive appends the continuation behind the remaining
         // controls as soon as one slot becomes available.
         self.try_flush_pending_goal_continuation();
-        if self.draining_goal_continuation_backpressure() {
-            // The synthetic token sits behind the controls that filled the
-            // mailbox. Drain through that token before accepting an idle child
-            // completion; consuming the token clears this temporary priority
-            // so normal select fairness resumes immediately.
+        if self.has_scheduled_goal_continuation() {
+            // The synthetic token sits behind every operation that was already
+            // queued when it was scheduled. Drain FIFO operations through that
+            // token before accepting an idle child completion, whether or not
+            // the mailbox happened to be full. Consuming or cancelling the
+            // schedule marker restores normal select fairness immediately.
             self.rx_op
                 .recv()
                 .await
@@ -1864,7 +1881,7 @@ impl Engine {
                             }
                         };
 
-                        let outcome = self
+                        let _ = self
                             .handle_send_message(
                                 content,
                                 self.current_mode,
@@ -1889,28 +1906,6 @@ impl Engine {
                                 UserInputProvenance::Runtime,
                             )
                             .await;
-                        match outcome {
-                            SendMessageOutcome::NotStarted => {
-                                self.block_goal_continuation(
-                                    "Goal continuation blocked because the next model turn could not be started. Fix the provider route or credentials, then resume the goal."
-                                        .to_string(),
-                                )
-                                .await;
-                            }
-                            SendMessageOutcome::Finished {
-                                status: TurnOutcomeStatus::Failed,
-                                error,
-                            } => {
-                                let message =
-                                    self.goal_continuation_failure_message(error.as_deref());
-                                self.block_goal_continuation(message).await;
-                            }
-                            SendMessageOutcome::Finished {
-                                status:
-                                    TurnOutcomeStatus::Completed | TurnOutcomeStatus::Interrupted,
-                                ..
-                            } => {}
-                        }
                     }
                     Op::RunShellCommand {
                         command,
@@ -2370,6 +2365,12 @@ impl Engine {
                                         "Cannot edit the last turn because its provider route is no longer valid: {err}"
                                     ))))
                                     .await;
+                                let outcome = SendMessageOutcome::NotStarted {
+                                    error: Some(format!(
+                                        "provider route is no longer valid: {err}"
+                                    )),
+                                };
+                                self.reconcile_non_completed_goal_turn(&outcome).await;
                                 continue;
                             }
                         };
@@ -2812,6 +2813,10 @@ impl Engine {
                         "Cannot resume the turn because its provider route is no longer valid: {err}"
                     ))))
                     .await;
+                let outcome = SendMessageOutcome::NotStarted {
+                    error: Some(format!("provider route is no longer valid: {err}")),
+                };
+                self.reconcile_non_completed_goal_turn(&outcome).await;
                 return;
             }
         };
@@ -2950,6 +2955,64 @@ impl Engine {
         }
     }
 
+    /// Reconcile a turn that did not complete with the autonomous goal loop.
+    /// Hosted engines leave lifecycle decisions to their durable host. The
+    /// interactive engine must cancel any older queued synthetic token first,
+    /// then project an active goal into a truthful non-running state.
+    async fn reconcile_non_completed_goal_turn(&mut self, outcome: &SendMessageOutcome) {
+        if self.host_managed_turns() {
+            return;
+        }
+
+        self.cancel_scheduled_goal_continuation();
+        match outcome {
+            SendMessageOutcome::NotStarted { error } => {
+                let message = self.goal_turn_not_started_message(error.as_deref());
+                self.block_goal_continuation(message).await;
+            }
+            SendMessageOutcome::Finished {
+                status: TurnOutcomeStatus::Failed,
+                error,
+            } => {
+                let message = self.goal_continuation_failure_message(error.as_deref());
+                self.block_goal_continuation(message).await;
+            }
+            SendMessageOutcome::Finished {
+                status: TurnOutcomeStatus::Interrupted,
+                ..
+            } => self.pause_goal_after_interruption().await,
+            SendMessageOutcome::Finished {
+                status: TurnOutcomeStatus::Completed,
+                ..
+            } => {}
+        }
+    }
+
+    /// A route/client rejection can happen before normal turn setup copies the
+    /// host's just-declared goal into SharedGoalState. Seed only that goal
+    /// descriptor so the rejection can publish a truthful Blocked snapshot;
+    /// no user message or provider turn state is mutated here.
+    fn sync_unstarted_goal_for_terminal_projection(
+        &mut self,
+        objective: Option<&str>,
+        token_budget: Option<u32>,
+        status: GoalStatus,
+    ) {
+        let objective = normalized_goal_objective(objective);
+        if objective.is_none() || status != GoalStatus::Active {
+            return;
+        }
+        sync_goal_state_from_host(
+            &self.config.goal_state,
+            objective.as_deref(),
+            token_budget,
+            status,
+        );
+        self.config.goal_objective = objective;
+        self.config.goal_token_budget = token_budget;
+        self.config.goal_status = status;
+    }
+
     /// Transition a still-active interactive goal to Blocked and publish every
     /// host projection in one ordered path. Continuation failures happen
     /// outside a model tool call, so without this bridge the loop can stop while
@@ -2986,6 +3049,41 @@ impl Engine {
         self.emit_session_updated().await;
         let _ = self.tx_event.send(Event::GoalUpdated { snapshot }).await;
         let _ = self.tx_event.send(Event::status(message)).await;
+    }
+
+    /// A user cancellation is neither success nor a provider failure. Pause a
+    /// still-active goal so the sidebar and stable prompt do not claim that an
+    /// autonomous run remains live, and require an explicit `/goal resume`.
+    async fn pause_goal_after_interruption(&mut self) {
+        let snapshot = match self.config.goal_state.lock() {
+            Ok(mut state) => {
+                if !state.is_active() {
+                    return;
+                }
+                let objective = state.objective().map(str::to_string);
+                let budget = state.token_budget();
+                state.sync_from_host_status(objective.as_deref(), budget, GoalStatus::Paused);
+                state.snapshot()
+            }
+            Err(err) => {
+                tracing::warn!("goal state lock poisoned while pausing interruption: {err}");
+                return;
+            }
+        };
+
+        self.config.goal_objective.clone_from(&snapshot.objective);
+        self.config.goal_token_budget = snapshot.token_budget;
+        self.config.goal_status = GoalStatus::Paused;
+        self.refresh_system_prompt();
+        self.emit_session_updated().await;
+        let _ = self.tx_event.send(Event::GoalUpdated { snapshot }).await;
+        let _ = self
+            .tx_event
+            .send(Event::status(
+                "Goal paused because its model turn was interrupted; use /goal resume to continue."
+                    .to_string(),
+            ))
+            .await;
     }
 
     /// Handle `/goal pause|resume|clear|complete|blocked` by writing the new
@@ -3086,7 +3184,14 @@ impl Engine {
                     "Cannot start the turn because its provider route is not ready: {err}"
                 ))))
                 .await;
-            return SendMessageOutcome::NotStarted;
+            self.sync_unstarted_goal_for_terminal_projection(
+                goal_objective.as_deref(),
+                goal_token_budget,
+                goal_status,
+            );
+            let outcome = SendMessageOutcome::NotStarted { error: Some(err) };
+            self.reconcile_non_completed_goal_turn(&outcome).await;
+            return outcome;
         }
 
         let input_policy = effective_input_policy(
@@ -3184,12 +3289,21 @@ impl Engine {
                 .send(Event::TurnComplete {
                     usage: turn.usage.clone(),
                     status: TurnOutcomeStatus::Failed,
-                    error: Some(message),
+                    error: Some(message.clone()),
                     tool_catalog: None,
                     base_url: None,
                 })
                 .await;
-            return SendMessageOutcome::NotStarted;
+            self.sync_unstarted_goal_for_terminal_projection(
+                goal_objective.as_deref(),
+                goal_token_budget,
+                goal_status,
+            );
+            let outcome = SendMessageOutcome::NotStarted {
+                error: Some(message),
+            };
+            self.reconcile_non_completed_goal_turn(&outcome).await;
+            return outcome;
         }
 
         self.session
@@ -3538,13 +3652,24 @@ impl Engine {
         // its own op channel. RuntimeThreadManager engines instead yield here:
         // their host must create the next durable claim before dispatching any
         // further turn. A Failed or Interrupted turn never continues.
-        if !self.host_managed_turns() && status == TurnOutcomeStatus::Completed {
+        let outcome = SendMessageOutcome::Finished { status, error };
+        if !self.host_managed_turns()
+            && matches!(
+                &outcome,
+                SendMessageOutcome::Finished {
+                    status: TurnOutcomeStatus::Completed,
+                    ..
+                }
+            )
+        {
             // Queue a typed continuation instead of freezing an Active goal
             // snapshot into a generic message. The operation re-reads the live
             // state when consumed, after any already-queued goal controls.
             self.schedule_goal_continuation(dynamic_tools);
+        } else {
+            self.reconcile_non_completed_goal_turn(&outcome).await;
         }
-        SendMessageOutcome::Finished { status, error }
+        outcome
     }
 
     async fn handle_manual_compaction(&mut self) {

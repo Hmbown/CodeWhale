@@ -1549,6 +1549,7 @@ impl Engine {
                     .goal_continuation_message_if_needed(
                         tool_registry,
                         &mut goal_continuations_this_turn,
+                        &turn.usage,
                     )
                     .await
                 {
@@ -3005,6 +3006,7 @@ impl Engine {
         &self,
         tool_registry: Option<&crate::tools::ToolRegistry>,
         continuations_this_turn: &mut u32,
+        current_turn_usage: &Usage,
     ) -> Option<String> {
         let registry = tool_registry?;
         if !registry.contains("update_goal") {
@@ -3022,6 +3024,14 @@ impl Engine {
         if !snapshot.is_active() {
             return None;
         }
+
+        // GoalState is updated once, after the full engine turn finishes. Add
+        // the current turn's cumulative provider usage only to this transient
+        // decision/prompt snapshot so an already-spent budget cannot authorize
+        // more provider calls, without recording the same tokens twice later.
+        let current_turn_tokens = u64::from(current_turn_usage.input_tokens)
+            .saturating_add(u64::from(current_turn_usage.output_tokens));
+        snapshot.tokens_used = snapshot.tokens_used.saturating_add(current_turn_tokens);
 
         let per_turn_max = crate::tools::goal::MAX_GOAL_CONTINUATIONS_PER_TURN;
         if *continuations_this_turn >= per_turn_max {
@@ -3069,6 +3079,7 @@ impl Engine {
             Ok(mut state) => {
                 state.record_continuation();
                 snapshot = state.snapshot();
+                snapshot.tokens_used = snapshot.tokens_used.saturating_add(current_turn_tokens);
             }
             Err(err) => {
                 tracing::warn!("goal state lock poisoned while recording continuation: {err}")
