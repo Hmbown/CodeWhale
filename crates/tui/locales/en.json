@@ -941,5 +941,10 @@
     "ApprovalRepoLawWarning": "Repository law requires confirmation — even in Full Access.",
     "ApprovalRepoLawRuleLabel": "Rule  ",
     "FilePickerMatchSingular": "@ attach · 1 match",
-    "FilePickerMatchesPlural": "@ attach · {count} matches"
+    "FilePickerMatchesPlural": "@ attach · {count} matches",
+    "BehavioralTipPlanning": "Planning? {key} cycles to Plan mode",
+    "BehavioralTipBackgroundReceipt": "Receipts live in the Work panel — {key} opens the inspector",
+    "BehavioralTipClearedInput": "Cleared · {chord} restores",
+    "BehavioralTipMcpValidation": "{command} starts servers and shows why",
+    "BehavioralTipRepeatedCommand": "{command} can pin this"
 }

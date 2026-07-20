@@ -372,6 +372,11 @@ pub struct Settings {
     /// One-time YOLO deprecation toast has been shown. Suppresses the repeat
     /// toast after the first sighting per install (persisted across sessions).
     pub yolo_deprecation_shown: bool,
+    /// Persisted impression counts for action-triggered, ephemeral product
+    /// guidance. Keys are stable tip identifiers; values are bounded by the
+    /// behavioral-tip engine and omitted entirely before the first sighting.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub behavioral_tip_impressions: std::collections::BTreeMap<String, u8>,
     /// True only for the current load when `default_mode = "yolo"` was read
     /// from an older settings file. App startup uses this provenance to migrate
     /// the old bundled Full Access choice without weakening project or managed
@@ -432,6 +437,7 @@ impl Default for Settings {
             workspace_follow_symlinks: false,
             feature_intro_shown: false,
             yolo_deprecation_shown: false,
+            behavioral_tip_impressions: std::collections::BTreeMap::new(),
             legacy_yolo_default: false,
         }
     }
@@ -1826,6 +1832,26 @@ mod tests {
         assert_eq!(settings.tool_collapse_mode, "compact");
         // Thinking is opt-in so the transcript stays focused on the chat.
         assert!(!settings.show_thinking);
+    }
+
+    #[test]
+    fn behavioral_tip_impressions_are_backward_compatible_and_persist_when_seen() {
+        let default_body = toml::to_string_pretty(&Settings::default()).expect("serialize");
+        assert!(!default_body.contains("behavioral_tip_impressions"));
+
+        let mut settings = Settings::default();
+        settings
+            .behavioral_tip_impressions
+            .insert("planning_mode".to_string(), 1);
+        let body = toml::to_string_pretty(&settings).expect("serialize");
+        let restored: Settings = toml::from_str(&body).expect("restore settings");
+        assert_eq!(
+            restored
+                .behavioral_tip_impressions
+                .get("planning_mode")
+                .copied(),
+            Some(1)
+        );
     }
 
     #[test]

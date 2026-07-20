@@ -7080,6 +7080,16 @@ fn jobs_panel_ignores_completed_history_but_shows_for_real_jobs() {
 }
 
 #[test]
+fn background_receipt_tip_only_detects_a_visible_active_to_completed_transition() {
+    let active = HashSet::from(["task_running", "shell_running"]);
+    assert!(newly_completed_id(
+        active.clone(),
+        ["task_old", "task_running"]
+    ));
+    assert!(!newly_completed_id(active, ["task_old", "task_unseen"]));
+}
+
+#[test]
 fn ctrl_x_jobs_prefill_only_catches_running_shell_jobs_in_tasks_sidebar() {
     let mut app = create_test_app();
     app.sidebar_focus = SidebarFocus::Tasks;

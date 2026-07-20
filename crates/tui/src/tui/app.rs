@@ -2437,6 +2437,8 @@ pub struct App {
     pub workspace_context_refreshed_at: Option<Instant>,
     /// Cached background tasks for sidebar rendering.
     pub task_panel: Vec<TaskPanelEntry>,
+    /// Session-local quieting and command detectors for event-driven tips.
+    pub behavioral_tips: crate::tui::behavioral_tips::BehavioralTipState,
     /// Active decision card (v0.8.43 truth-surface). When set, keyboard input
     /// is routed through the card navigation instead of the composer.
     pub decision_card: Option<crate::tui::widgets::decision_card::DecisionCard>,
@@ -3456,6 +3458,7 @@ impl App {
             workspace_context_cell: std::sync::Arc::new(std::sync::Mutex::new(None)),
             workspace_context_refreshed_at: None,
             task_panel: Vec::new(),
+            behavioral_tips: crate::tui::behavioral_tips::BehavioralTipState::default(),
             decision_card: None,
             workflow_panel: None,
             session_started_at: chrono::Utc::now(),

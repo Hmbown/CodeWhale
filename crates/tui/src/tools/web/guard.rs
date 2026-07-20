@@ -228,6 +228,13 @@ mod tests {
             loop {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        // Accepted sockets inherit nonblocking from the listener
+                        // on several Unixes. Restore blocking mode before timed
+                        // header reads so a not-yet-ready socket is not treated
+                        // as a hard failure (WouldBlock / EAGAIN).
+                        stream
+                            .set_nonblocking(false)
+                            .expect("blocking probe stream");
                         if drain_http_headers {
                             stream
                                 .set_read_timeout(Some(Duration::from_secs(2)))
@@ -235,11 +242,27 @@ mod tests {
                             let mut request = Vec::new();
                             let mut chunk = [0_u8; 1024];
                             while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-                                let read = stream.read(&mut chunk).expect("read probe request");
+                                let read = match stream.read(&mut chunk) {
+                                    Ok(n) => n,
+                                    Err(err)
+                                        if matches!(
+                                            err.kind(),
+                                            std::io::ErrorKind::WouldBlock
+                                                | std::io::ErrorKind::TimedOut
+                                                | std::io::ErrorKind::Interrupted
+                                        ) =>
+                                    {
+                                        continue;
+                                    }
+                                    Err(err) => panic!("read probe request: {err}"),
+                                };
                                 if read == 0 {
                                     break;
                                 }
                                 request.extend_from_slice(&chunk[..read]);
+                                if Instant::now() >= deadline {
+                                    break;
+                                }
                             }
                         }
                         if respond_http {

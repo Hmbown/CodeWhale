@@ -941,5 +941,10 @@
     "ApprovalRepoLawWarning": "仓库规则要求确认 — 即使在 Full Access 下也不例外。",
     "ApprovalRepoLawRuleLabel": "规则  ",
     "FilePickerMatchSingular": "@ 附加 · 1 个匹配",
-    "FilePickerMatchesPlural": "@ 附加 · {count} 个匹配"
+    "FilePickerMatchesPlural": "@ 附加 · {count} 个匹配",
+    "BehavioralTipPlanning": "在规划？按 {key} 可切换到 Plan 模式",
+    "BehavioralTipBackgroundReceipt": "回执在 Work 面板中 — 按 {key} 打开检查器",
+    "BehavioralTipClearedInput": "已清空 · 按 {chord} 恢复",
+    "BehavioralTipMcpValidation": "{command} 会启动服务器并显示原因",
+    "BehavioralTipRepeatedCommand": "{command} 可以固定此命令"
 }

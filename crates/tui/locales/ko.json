@@ -941,5 +941,10 @@
     "ApprovalRepoLawWarning": "저장소 규칙은 확인이 필요합니다 — 전체 권한에서도 마찬가지입니다.",
     "ApprovalRepoLawRuleLabel": "규칙  ",
     "FilePickerMatchSingular": "@ 첨부 · 일치 1개",
-    "FilePickerMatchesPlural": "@ 첨부 · 일치 {count}개"
+    "FilePickerMatchesPlural": "@ 첨부 · 일치 {count}개",
+    "BehavioralTipPlanning": "계획 중인가요? {key} 키로 Plan 모드로 전환합니다",
+    "BehavioralTipBackgroundReceipt": "영수증은 Work 패널에 있습니다 — {key} 키로 검사기를 엽니다",
+    "BehavioralTipClearedInput": "지움 · {chord} 키로 복원",
+    "BehavioralTipMcpValidation": "{command} 명령은 서버를 시작하고 원인을 보여 줍니다",
+    "BehavioralTipRepeatedCommand": "{command} 명령으로 이 항목을 고정할 수 있습니다"
 }

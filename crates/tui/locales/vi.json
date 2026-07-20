@@ -941,5 +941,10 @@
     "ApprovalRepoLawWarning": "Luật repo yêu cầu xác nhận — kể cả trong Full Access.",
     "ApprovalRepoLawRuleLabel": "Quy tắc  ",
     "FilePickerMatchSingular": "@ đính kèm · 1 kết quả",
-    "FilePickerMatchesPlural": "@ đính kèm · {count} kết quả"
+    "FilePickerMatchesPlural": "@ đính kèm · {count} kết quả",
+    "BehavioralTipPlanning": "Đang lập kế hoạch? {key} chuyển sang chế độ Plan",
+    "BehavioralTipBackgroundReceipt": "Biên nhận nằm trong bảng Work — {key} mở trình kiểm tra",
+    "BehavioralTipClearedInput": "Đã xóa · {chord} để khôi phục",
+    "BehavioralTipMcpValidation": "{command} khởi động máy chủ và cho biết nguyên nhân",
+    "BehavioralTipRepeatedCommand": "{command} có thể ghim lệnh này"
 }

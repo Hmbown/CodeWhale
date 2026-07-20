@@ -1843,6 +1843,19 @@ pub(crate) fn select_work_sidebar_tasks(
 
 async fn refresh_active_task_panel(app: &mut App, task_manager: &SharedTaskManager) -> bool {
     let tasks = task_manager.list_tasks(None).await;
+    let previously_active_durable_ids = app
+        .task_panel
+        .iter()
+        .filter(|entry| matches!(entry.status.as_str(), "queued" | "running"))
+        .map(|entry| entry.id.as_str())
+        .collect::<HashSet<_>>();
+    let durable_background_completed = newly_completed_id(
+        previously_active_durable_ids,
+        tasks
+            .iter()
+            .filter(|task| task.status == TaskStatus::Completed)
+            .map(|task| task.id.as_str()),
+    );
     let mut lifecycle_changed = false;
     if let (Some(work), Some(session_id)) = (
         app.runtime_services.work.as_ref(),
@@ -1894,29 +1907,47 @@ async fn refresh_active_task_panel(app: &mut App, task_manager: &SharedTaskManag
         .filter(|entry| matches!(entry.kind, TaskPanelEntryKind::Background))
         .cloned()
         .collect();
-    let shell_entries: Vec<TaskPanelEntry> = match app.runtime_services.shell_manager.as_ref() {
-        Some(shell_mgr) => match shell_mgr.try_lock() {
-            Ok(mut mgr) => mgr
-                .list_jobs()
-                .into_iter()
-                .filter(|job| matches!(job.status, crate::tools::shell::ShellStatus::Running))
-                .map(|job| TaskPanelEntry {
-                    id: job.id,
-                    status: "running".to_string(),
-                    prompt_summary: format!("shell: {}", job.command),
-                    duration_ms: Some(job.elapsed_ms),
-                    kind: TaskPanelEntryKind::Background,
-                    stale: job.stale,
-                    elapsed_since_output_ms: job.elapsed_since_output_ms,
-                    owner_agent_id: job.owner_agent_id,
-                    owner_agent_name: job.owner_agent_name,
-                })
-                .collect(),
-            // Contended: keep the last known snapshot rather than blocking.
-            Err(_) => prev_shell_entries,
-        },
-        None => Vec::new(),
-    };
+    let prev_shell_ids = prev_shell_entries
+        .iter()
+        .map(|entry| entry.id.clone())
+        .collect::<HashSet<_>>();
+    let (shell_entries, shell_background_completed): (Vec<TaskPanelEntry>, bool) =
+        match app.runtime_services.shell_manager.as_ref() {
+            Some(shell_mgr) => match shell_mgr.try_lock() {
+                Ok(mut mgr) => {
+                    let jobs = mgr.list_jobs();
+                    let completed = newly_completed_id(
+                        prev_shell_ids.iter().map(String::as_str).collect(),
+                        jobs.iter()
+                            .filter(|job| {
+                                matches!(job.status, crate::tools::shell::ShellStatus::Completed)
+                            })
+                            .map(|job| job.id.as_str()),
+                    );
+                    let entries = jobs
+                        .into_iter()
+                        .filter(|job| {
+                            matches!(job.status, crate::tools::shell::ShellStatus::Running)
+                        })
+                        .map(|job| TaskPanelEntry {
+                            id: job.id,
+                            status: "running".to_string(),
+                            prompt_summary: format!("shell: {}", job.command),
+                            duration_ms: Some(job.elapsed_ms),
+                            kind: TaskPanelEntryKind::Background,
+                            stale: job.stale,
+                            elapsed_since_output_ms: job.elapsed_since_output_ms,
+                            owner_agent_id: job.owner_agent_id,
+                            owner_agent_name: job.owner_agent_name,
+                        })
+                        .collect();
+                    (entries, completed)
+                }
+                // Contended: keep the last known snapshot rather than blocking.
+                Err(_) => (prev_shell_entries, false),
+            },
+            None => (Vec::new(), false),
+        };
     entries.extend(shell_entries);
 
     // Report whether anything visible changed so the idle tick can skip the
@@ -1924,7 +1955,20 @@ async fn refresh_active_task_panel(app: &mut App, task_manager: &SharedTaskManag
     // quiescent (#3757).
     let changed = lifecycle_changed || app.task_panel != entries;
     app.task_panel = entries;
-    changed
+    let tip_shown = (durable_background_completed || shell_background_completed)
+        && app.maybe_show_behavioral_tip(
+            crate::tui::behavioral_tips::BehavioralTip::BackgroundJobReceipt,
+        );
+    changed || tip_shown
+}
+
+fn newly_completed_id<'a>(
+    previously_active_ids: HashSet<&'a str>,
+    completed_ids: impl IntoIterator<Item = &'a str>,
+) -> bool {
+    completed_ids
+        .into_iter()
+        .any(|id| previously_active_ids.contains(id))
 }
 
 fn refresh_shell_exec_live_output(app: &mut App) -> bool {
@@ -2691,6 +2735,16 @@ async fn run_event_loop(
                                 .retain(|(tool_id, _, _)| tool_id != &id);
                         }
                         handle_tool_call_complete(app, &id, &name, &result);
+                        if crate::mcp::McpPool::is_mcp_tool(&name)
+                            && match &result {
+                                Ok(output) => !output.success,
+                                Err(_) => true,
+                            }
+                        {
+                            let _ = app.maybe_show_behavioral_tip(
+                                crate::tui::behavioral_tips::BehavioralTip::McpValidation,
+                            );
+                        }
 
                         if result.is_ok()
                             && is_work_graph_mutation_tool(&name)
@@ -5613,6 +5667,9 @@ async fn run_event_loop(
                             app.backtrack.reset();
                             app.edit_in_progress = false;
                             app.clear_input_recoverable();
+                            let _ = app.maybe_show_behavioral_tip(
+                                crate::tui::behavioral_tips::BehavioralTip::ClearedInputRestore,
+                            );
                         }
                         EscapeAction::Noop => {
                             // Nothing else cares about this Esc — route it
@@ -6181,6 +6238,9 @@ async fn run_event_loop(
                 }
                 KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     app.clear_input_recoverable();
+                    let _ = app.maybe_show_behavioral_tip(
+                        crate::tui::behavioral_tips::BehavioralTip::ClearedInputRestore,
+                    );
                 }
                 KeyCode::Char('z')
                     if key.modifiers.contains(KeyModifiers::CONTROL)
@@ -8301,6 +8361,8 @@ async fn dispatch_user_message(
             }
         }
     }
+
+    let _ = app.maybe_nudge_for_planning_prompt(&message.display);
 
     // Plan paused-command changes without touching App or the engine pause
     // gate. Route selection can await and client preflight can fail; neither
@@ -10752,6 +10814,7 @@ async fn execute_command_input(
     web_config_session: &mut Option<WebConfigSession>,
     input: &str,
 ) -> Result<bool> {
+    let _ = app.note_manual_command_for_tip(input);
     if let Some(parsed_index) = parse_queue_send_command(input) {
         match parsed_index {
             Ok(index) => {

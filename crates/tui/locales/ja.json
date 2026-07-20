@@ -941,5 +941,10 @@
     "ApprovalRepoLawWarning": "リポジトリ憲法は確認を必須とします — Full Access でも同様です。",
     "ApprovalRepoLawRuleLabel": "ルール  ",
     "FilePickerMatchSingular": "@ 添付 · 1 件一致",
-    "FilePickerMatchesPlural": "@ 添付 · {count} 件一致"
+    "FilePickerMatchesPlural": "@ 添付 · {count} 件一致",
+    "BehavioralTipPlanning": "計画中ですか？ {key} で Plan モードへ切り替えられます",
+    "BehavioralTipBackgroundReceipt": "レシートは Work パネルにあります — {key} でインスペクターを開く",
+    "BehavioralTipClearedInput": "クリアしました · {chord} で復元",
+    "BehavioralTipMcpValidation": "{command} はサーバーを起動し、原因を表示します",
+    "BehavioralTipRepeatedCommand": "{command} でこれを固定できます"
 }

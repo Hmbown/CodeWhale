@@ -941,5 +941,10 @@
     "ApprovalRepoLawWarning": "A lei do repositório exige confirmação — mesmo em Full Access.",
     "ApprovalRepoLawRuleLabel": "Regra  ",
     "FilePickerMatchSingular": "@ anexar · 1 resultado",
-    "FilePickerMatchesPlural": "@ anexar · {count} resultados"
+    "FilePickerMatchesPlural": "@ anexar · {count} resultados",
+    "BehavioralTipPlanning": "Planejando? {key} alterna para o modo Plan",
+    "BehavioralTipBackgroundReceipt": "Os recibos ficam no painel Work — {key} abre o inspetor",
+    "BehavioralTipClearedInput": "Limpo · {chord} restaura",
+    "BehavioralTipMcpValidation": "{command} inicia os servidores e mostra o motivo",
+    "BehavioralTipRepeatedCommand": "{command} pode fixar isto"
 }
