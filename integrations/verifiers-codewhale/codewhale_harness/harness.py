@@ -27,6 +27,8 @@ DEFAULT_BINARY = f"{INSTALL_DIR}/bin/codewhale"
 RELEASE_ROOT = "https://github.com/Hmbown/CodeWhale/releases/download"
 STREAM_SCHEMA = "codewhale.exec-stream"
 STREAM_SCHEMA_VERSION = 1
+MAX_TERMINAL_RECEIPT_BYTES = 8_192
+MAX_TERMINAL_STRING_CHARS = 512
 _VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$")
 _TOOL = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -246,6 +248,27 @@ def _has_version(output: str, version: str) -> bool:
     )
 
 
+def _bounded_terminal(meta: dict[str, Any]) -> dict[str, Any]:
+    terminal: dict[str, Any] = {}
+    for key in _TERMINAL_FIELDS:
+        if key not in meta or meta[key] is None:
+            continue
+        value = meta[key]
+        if isinstance(value, str):
+            if len(value) > MAX_TERMINAL_STRING_CHARS:
+                raise RuntimeError("Codewhale terminal receipt exceeded its string bound")
+        elif isinstance(value, int) and not isinstance(value, bool):
+            if value < 0 or value > 2**63 - 1:
+                raise RuntimeError("Codewhale terminal receipt contained an invalid count")
+        else:
+            raise RuntimeError("Codewhale terminal receipt contained a non-scalar field")
+        terminal[key] = value
+    encoded = json.dumps(terminal, sort_keys=True, separators=(",", ":")).encode()
+    if len(encoded) > MAX_TERMINAL_RECEIPT_BYTES:
+        raise RuntimeError("Codewhale terminal receipt exceeded its total bound")
+    return terminal
+
+
 def _install_script(version: str) -> str:
     version_q = shlex.quote(version)
     install_q = shlex.quote(INSTALL_DIR)
@@ -347,7 +370,7 @@ def _parse_stream_receipt(stdout: str) -> dict[str, Any]:
             meta = event.get("meta")
             if not isinstance(meta, dict) or meta.get("receipt_kind") != "terminal":
                 raise RuntimeError("Codewhale metadata event was not a terminal receipt")
-            terminal = {key: meta[key] for key in _TERMINAL_FIELDS if key in meta}
+            terminal = _bounded_terminal(meta)
 
     if terminal is None:
         raise RuntimeError("Codewhale stream-json omitted terminal metadata")

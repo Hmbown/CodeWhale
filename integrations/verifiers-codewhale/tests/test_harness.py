@@ -260,6 +260,21 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
                 {},
             )
 
+    async def test_oversized_terminal_receipt_fails_closed_without_copying_content(self):
+        stdout = successful_stream().replace("test/model", "x" * 513)
+        runtime = FakeRuntime(result=ProgramResult(0, stdout, ""))
+        config = CodewhaleHarnessConfig(binary_path="/candidate/codewhale")
+
+        with self.assertRaisesRegex(RuntimeError, "exceeded its string bound"):
+            await CodewhaleHarness(config).launch(
+                SimpleNamespace(model="x" * 513),
+                trace(),
+                runtime,
+                "https://intercept.example/v1",
+                "secret-not-in-error",
+                {},
+            )
+
     def test_exact_version_rejects_prerelease_and_longer_tokens(self):
         has_version = harness_module._has_version
 
