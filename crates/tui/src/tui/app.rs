@@ -1713,6 +1713,14 @@ pub enum SidebarRowAction {
         body: String,
         stop_action: Option<Box<SidebarRowAction>>,
     },
+    /// Open an exceptional Auto-Review approval deliberately from Work.
+    ReviewApproval {
+        tool_id: String,
+    },
+    /// Open a model question deliberately from Work.
+    AnswerUserInput {
+        tool_id: String,
+    },
 }
 
 impl SidebarRowAction {
@@ -1725,7 +1733,9 @@ impl SidebarRowAction {
             | Self::ToggleAgentDetails { .. }
             | Self::OpenAgentDetail { .. }
             | Self::CancelAgent { .. }
-            | Self::InspectWork { .. } => None,
+            | Self::InspectWork { .. }
+            | Self::ReviewApproval { .. }
+            | Self::AnswerUserInput { .. } => None,
         }
     }
 
@@ -1738,6 +1748,8 @@ impl SidebarRowAction {
             Self::ToggleAgentDetails { .. }
             | Self::OpenAgentDetail { .. }
             | Self::InspectWork { .. }
+            | Self::ReviewApproval { .. }
+            | Self::AnswerUserInput { .. }
             | Self::HotbarSlot(_) => false,
         }
     }
@@ -2264,6 +2276,10 @@ pub struct App {
     pub approval_mode: ApprovalMode,
     // Modal view stack (approval/help/etc.)
     pub view_stack: ViewStack,
+    /// Exceptional Auto-Review decision waiting in Work. Routine calls are
+    /// settled automatically; this keeps elevated review discoverable without
+    /// throwing an unsolicited modal over the transcript.
+    pub pending_work_approval: Option<crate::tui::approval::ApprovalRequest>,
     /// Last `request_user_input` prompt, retained so a failed modal submit can reopen (#1198).
     pub pending_user_input_prompt: Option<(String, crate::tools::user_input::UserInputRequest)>,
     /// Esc-Esc backtrack state machine (#133). `Inactive` by default; first
@@ -3449,6 +3465,7 @@ impl App {
                 configured_approval_mode
             },
             view_stack: ViewStack::new(),
+            pending_work_approval: None,
             pending_user_input_prompt: None,
             backtrack: crate::tui::backtrack::BacktrackState::new(),
             current_session_id: None,
@@ -4089,6 +4106,7 @@ impl App {
     #[must_use]
     pub fn attention_hold_active(&self) -> bool {
         !self.view_stack.is_empty()
+            || self.pending_work_approval.is_some()
             || self.pending_user_input_prompt.is_some()
             || self.plan_prompt_pending
             || self
@@ -7490,6 +7508,9 @@ pub enum AppAction {
     OpenModePicker,
     /// Refresh the engine prompt after the UI operating mode changes.
     ModeChanged(AppMode),
+    /// A deliberate user mode selection that also becomes the next-session
+    /// default before the engine authority is refreshed.
+    UserModeChanged(AppMode),
     /// Synchronize a saved top-level approval policy into the live Config,
     /// then refresh the engine prompt from the App's updated permission mode.
     ApprovalPolicyPersisted {

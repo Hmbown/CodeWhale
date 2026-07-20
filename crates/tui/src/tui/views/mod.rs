@@ -1222,11 +1222,17 @@ impl ConfigView {
             },
             ApprovalPolicyControl::RootConfig => ConfigRow {
                 section: ConfigSection::Permissions,
-                key: "approval_policy".to_string(),
+                // The interactive surface owns one durable permission choice.
+                // Editing it migrates an editable user root policy into
+                // settings so Full Access is representable and the next
+                // launch cannot be shadowed by the stale config key.
+                key: "permission_posture".to_string(),
                 value: config
                     .approval_policy
                     .as_deref()
-                    .unwrap_or("ask")
+                    .and_then(crate::tui::approval::ApprovalMode::from_config_value)
+                    .unwrap_or(app.approval_mode)
+                    .permission_chip_label()
                     .to_string(),
                 editable: permission_control.editable_root(),
                 scope: ConfigScope::Saved,
@@ -2500,7 +2506,7 @@ fn config_hint_for_key(key: &str) -> &'static str {
         "ocean_treatment" => "ombre | flat (appearance; independent of motion)",
         "show_thinking" => "show or hide model reasoning in chat; task lists stay concise",
         "synchronized_output" => "auto | on | off; terminal redraw pacing, not model speed",
-        "default_mode" => "agent | plan",
+        "default_mode" => "act | plan | operate",
         "sidebar_width" => "10..=50",
         "sidebar_focus" => "auto | work | tasks | agents | context | hidden",
         "max_history" => "integer (0 allowed)",
@@ -2563,7 +2569,7 @@ fn config_choice_values(key: &str, provider: ApiProvider) -> Option<Vec<String>>
         "approval_mode" => vec!["ask", "auto-review", "full-access", "never"],
         "permission_posture" => vec!["ask", "auto-review", "full-access"],
         "approval_policy" => vec!["use-tui-default", "ask", "auto-review", "never"],
-        "default_mode" => vec!["agent", "plan"],
+        "default_mode" => vec!["agent", "plan", "operate"],
         "reasoning_effort" if provider == ApiProvider::OpenaiCodex => {
             vec!["default", "low", "medium", "high", "xhigh"]
         }
@@ -2633,8 +2639,8 @@ fn canonical_config_choice(key: &str, value: &str) -> String {
         },
         "default_mode" => match normalized.as_str() {
             "plan" => "plan".to_string(),
-            // Old saved Operate/YOLO values are represented by the safe
-            // startup workspace; permission posture is shown separately.
+            "operate" | "operation" | "ops" => "operate".to_string(),
+            // YOLO is a permission compatibility alias, not a startup mode.
             _ => "agent".to_string(),
         },
         _ => normalized,
@@ -2652,8 +2658,9 @@ fn config_choice_label(key: &str, value: &str) -> String {
         ("approval_policy", "use-tui-default") => "Use TUI permission default".to_string(),
         ("approval_mode" | "permission_posture", "full-access") => "Full Access".to_string(),
         ("approval_mode" | "approval_policy", "never") => "Never".to_string(),
-        ("default_mode", "agent") => "Agent".to_string(),
+        ("default_mode", "agent") => "Act".to_string(),
         ("default_mode", "plan") => "Plan (read only)".to_string(),
+        ("default_mode", "operate") => "Operate".to_string(),
         ("work_surface_placement", "top") => "Top".to_string(),
         ("work_surface_placement", "left") => "Left sidebar".to_string(),
         ("work_surface_placement", "right") => "Right sidebar".to_string(),
@@ -2675,7 +2682,7 @@ fn config_choice_detail(key: &str, value: &str) -> &'static str {
             "Ask before tools that can make consequential changes."
         }
         ("approval_mode" | "permission_posture" | "approval_policy", "auto-review") => {
-            "Review tool risk automatically and ask when a decision needs you."
+            "Routine work continues automatically; decisions that need you wait quietly in Work."
         }
         ("approval_policy", "use-tui-default") => {
             "Remove the root config override and use the saved TUI permission choice."
@@ -2686,8 +2693,9 @@ fn config_choice_detail(key: &str, value: &str) -> &'static str {
         ("approval_mode" | "approval_policy", "never") => {
             "Block every tool that requires approval."
         }
-        ("default_mode", "agent") => "Start ready to collaborate and use tools.",
+        ("default_mode", "agent") => "Start in Act, ready to collaborate and use tools.",
         ("default_mode", "plan") => "Start in a read-only planning workspace.",
+        ("default_mode", "operate") => "Start in Operate with the Fleet runtime active.",
         ("work_surface_placement", "top") => "Show Tasks, To-do, and Workers above the transcript.",
         ("work_surface_placement", "left") => {
             "Show Tasks, To-do, and Workers in a left sidebar when the terminal is wide enough."
@@ -4546,46 +4554,37 @@ consent_version = 1
         let row = explicit
             .rows
             .iter()
-            .find(|row| row.key == "approval_policy")
-            .expect("explicit approval policy row");
-        assert_eq!(row.value, "auto");
+            .find(|row| row.key == "permission_posture")
+            .expect("durable permission posture row");
+        assert_eq!(row.value, "Auto-Review");
         assert!(row.editable);
         assert_eq!(row.scope, ConfigScope::Saved);
-        assert!(
-            explicit
-                .rows
-                .iter()
-                .all(|row| row.key != "permission_posture")
-        );
+        assert!(explicit.rows.iter().all(|row| row.key != "approval_policy"));
         explicit.selected = explicit
             .rows
             .iter()
-            .position(|row| row.key == "approval_policy")
+            .position(|row| row.key == "permission_posture")
             .expect("approval row index");
         explicit.start_edit();
-        let use_tui_default = explicit
+        let full_access = explicit
             .editing
             .as_ref()
             .and_then(|edit| edit.choices.as_ref())
-            .and_then(|choices| {
-                choices
-                    .iter()
-                    .position(|choice| choice == "use-tui-default")
-            })
-            .expect("TUI default choice");
+            .and_then(|choices| choices.iter().position(|choice| choice == "full-access"))
+            .expect("Full Access choice");
         explicit
             .editing
             .as_mut()
             .expect("choice editor")
-            .selected_choice = use_tui_default;
+            .selected_choice = full_access;
         match explicit.handle_choice_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)) {
             ViewAction::Emit(ViewEvent::ConfigUpdated {
                 key,
                 value,
                 persist,
             }) => {
-                assert_eq!(key, "approval_policy");
-                assert_eq!(value, "use-tui-default");
+                assert_eq!(key, "permission_posture");
+                assert_eq!(value, "full-access");
                 assert!(persist);
             }
             other => panic!("expected saved ConfigUpdated event, got {other:?}"),
@@ -5313,14 +5312,20 @@ base_url = "https://api.xiaomimimo.com/v1"
         let edit = view.editing.as_ref().expect("choice editor");
         assert_eq!(
             edit.choices.as_deref(),
-            Some(&["agent".to_string(), "plan".to_string()][..])
+            Some(
+                &[
+                    "agent".to_string(),
+                    "plan".to_string(),
+                    "operate".to_string(),
+                ][..]
+            )
         );
         assert!(
             edit.choices
                 .as_ref()
                 .expect("startup choices")
                 .iter()
-                .all(|choice| choice != "operate" && choice != "yolo")
+                .all(|choice| choice != "yolo")
         );
 
         let _ = view.handle_key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
@@ -5337,6 +5342,24 @@ base_url = "https://api.xiaomimimo.com/v1"
             }
             other => panic!("expected startup choice update, got {other:?}"),
         }
+
+        let mut view = ConfigView::new_for_app(&app);
+        view.selected = view
+            .rows
+            .iter()
+            .position(|row| row.key == "default_mode")
+            .expect("default_mode row");
+        let _ = view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let _ = view.handle_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
+        let apply = view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(
+            apply,
+            ViewAction::Emit(ViewEvent::ConfigUpdated {
+                key,
+                value,
+                persist: true,
+            }) if key == "default_mode" && value == "operate"
+        ));
     }
 
     #[test]

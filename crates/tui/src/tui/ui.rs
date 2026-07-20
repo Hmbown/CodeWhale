@@ -323,18 +323,19 @@ fn should_auto_approve_approval_request(
     grouping_key: &str,
     approval_force_prompt: bool,
 ) -> bool {
-    // Full Access is an explicit no-ordinary-approval-prompt contract. This
-    // UI backstop resolves a request emitted just before a posture update or
-    // by a child turn. A forced policy hold is never converted into approval.
+    // Fresh Auto-Review decisions are resolved in the engine. This UI backstop
+    // applies the same no-modal contract to an ordinary request emitted just
+    // before a posture change or by a legacy child.
     !approval_force_prompt
         && (app_auto_approve_enabled(app)
+            || app_auto_review_enabled(app)
             || is_session_approved_for_tool(app, tool_name, grouping_key))
 }
 
 fn should_auto_deny_forced_approval_request(app: &App, approval_force_prompt: bool) -> bool {
-    // Repository/managed-policy holds cannot be bypassed by Full Access, but
-    // Full Access must not open a contradictory approval modal either. Fail
-    // closed and let the model surface the policy constraint.
+    // Repository/managed-policy holds cannot be bypassed by Full Access, and
+    // that posture cannot open a contradictory approval prompt. Auto-Review
+    // keeps the same hold as a deliberate Work decision instead.
     approval_force_prompt && app_auto_approve_enabled(app)
 }
 
@@ -342,16 +343,25 @@ fn app_auto_approve_enabled(app: &App) -> bool {
     app.mode == AppMode::Yolo || app.approval_mode == ApprovalMode::Bypass
 }
 
-fn should_suppress_user_input_prompt(app: &App) -> bool {
-    // Legacy hosts may still report Yolo/auto-approve with a stale `Auto`
-    // enum. Canonicalize that shape to Full Access before applying the one
-    // posture that suppresses questions: genuine Auto-Review.
-    let effective_posture = if app_auto_approve_enabled(app) {
-        ApprovalMode::Bypass
-    } else {
-        app.approval_mode
-    };
-    !crate::core::authority::permission_posture_allows_questions(effective_posture)
+fn app_auto_review_enabled(app: &App) -> bool {
+    !app_auto_approve_enabled(app) && app.approval_mode == ApprovalMode::Auto
+}
+
+fn should_queue_attention_in_work(app: &App) -> bool {
+    app_auto_review_enabled(app)
+}
+
+fn session_update_claims_app_session(app: &App, messages: &[Message]) -> bool {
+    // ChangeMode/SetModel emit a control-plane SessionUpdated even before the
+    // user has started or loaded a session. Keep syncing prompt/model facts,
+    // but do not let that empty receipt invent a session and open Work · empty.
+    // A loaded session already has an id; a real accepted turn is loading and
+    // has pinned its id at dispatch, so both substantive paths remain claimed.
+    app.current_session_id.is_some()
+        || !messages.is_empty()
+        || app.is_loading
+        || app.is_compacting
+        || app.is_purging
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2737,6 +2747,22 @@ async fn run_event_loop(
                     // pulse; it must not alter transcript or status copy.
                     EngineEvent::ToolCallHeartbeat => {}
                     EngineEvent::ToolCallComplete { id, name, result } => {
+                        if app
+                            .pending_work_approval
+                            .as_ref()
+                            .is_some_and(|request| request.id == id)
+                        {
+                            app.pending_work_approval = None;
+                            app.work_surface.opened = None;
+                        }
+                        if app
+                            .pending_user_input_prompt
+                            .as_ref()
+                            .is_some_and(|(tool_id, _)| tool_id == &id)
+                        {
+                            app.pending_user_input_prompt = None;
+                            app.work_surface.opened = None;
+                        }
                         if name == "update_plan" {
                             app.plan_tool_used_in_turn = true;
                         }
@@ -3407,7 +3433,9 @@ async fn run_event_loop(
                         model,
                         workspace,
                     } => {
-                        app.current_session_id = Some(session_id.clone());
+                        if session_update_claims_app_session(app, &messages) {
+                            app.current_session_id = Some(session_id.clone());
+                        }
                         app.api_messages = messages;
                         app.system_prompt = system_prompt;
                         if app.auto_model {
@@ -3811,7 +3839,7 @@ async fn run_event_loop(
                             approval_force_prompt,
                         ) {
                             log_sensitive_event(
-                                "tool.approval.auto_deny_full_access_policy",
+                                "tool.approval.auto_deny_autonomous_policy",
                                 serde_json::json!({
                                     "tool_name": tool_name,
                                     "session_id": app.current_session_id,
@@ -3851,6 +3879,39 @@ async fn run_event_loop(
                             let _ = engine_handle.deny_tool_call(id.clone()).await;
                             app.status_message =
                                 Some(format!("Blocked tool '{tool_name}' (approval_mode=never)"));
+                        } else if should_queue_attention_in_work(app) {
+                            queue_approval_request_in_work(
+                                app,
+                                &id,
+                                &tool_name,
+                                &description,
+                                &input,
+                                &approval_key,
+                                intent_summary.as_deref(),
+                            );
+                            log_sensitive_event(
+                                "tool.approval.queued_in_work",
+                                serde_json::json!({
+                                    "tool_name": tool_name,
+                                    "session_id": app.current_session_id,
+                                    "mode": app.mode.label(),
+                                }),
+                            );
+                            if let Some((method, _, _)) =
+                                crate::tui::notifications::settings(config)
+                            {
+                                let in_tmux = std::env::var("TMUX").is_ok_and(|v| !v.is_empty());
+                                let notice = app
+                                    .tr(MessageId::AutoReviewApprovalQueued)
+                                    .replace("{tool}", &tool_name);
+                                crate::tui::notifications::notify_done(
+                                    method,
+                                    in_tmux,
+                                    &notice,
+                                    Duration::ZERO,
+                                    Duration::ZERO,
+                                );
+                            }
                         } else {
                             let tool_input = input;
 
@@ -3890,25 +3951,30 @@ async fn run_event_loop(
                         }
                     }
                     EngineEvent::UserInputRequired { id, request } => {
-                        if should_suppress_user_input_prompt(app) {
-                            // A question may have been planned just before the
-                            // user switched to Auto-Review. Cancel the stale
-                            // request instead of opening a modal under an Auto
-                            // header; the tool result tells the model to keep
-                            // moving without inventing a user choice.
+                        app.pending_user_input_prompt = Some((id.clone(), request.clone()));
+                        if should_queue_attention_in_work(app) {
                             log_sensitive_event(
-                                "tool.user_input.auto_cancelled_auto_review",
+                                "tool.user_input.queued_in_work",
                                 serde_json::json!({
                                     "tool_id": id.clone(),
                                     "session_id": app.current_session_id,
                                 }),
                             );
-                            let _ = engine_handle.cancel_user_input(id).await;
-                            app.pending_user_input_prompt = None;
-                            let notice = app.tr(MessageId::AutoReviewQuestionSkipped).into_owned();
-                            app.push_status_toast(notice, StatusToastLevel::Info, Some(6_000));
+                            if let Some((method, _, _)) =
+                                crate::tui::notifications::settings(config)
+                            {
+                                let in_tmux = std::env::var("TMUX").is_ok_and(|v| !v.is_empty());
+                                crate::tui::notifications::notify_done(
+                                    method,
+                                    in_tmux,
+                                    app.tr(MessageId::AutoReviewQuestionQueued).as_ref(),
+                                    Duration::ZERO,
+                                    Duration::ZERO,
+                                );
+                            }
+                            app.status_message =
+                                Some(app.tr(MessageId::AutoReviewQuestionQueued).into_owned());
                         } else {
-                            app.pending_user_input_prompt = Some((id.clone(), request.clone()));
                             app.view_stack.push(UserInputView::new(id.clone(), request));
                             if let Some((method, _, _)) =
                                 crate::tui::notifications::settings(config)
@@ -4865,8 +4931,12 @@ async fn run_event_loop(
                         if app.onboarding == OnboardingState::MentalModels
                             && key.modifiers.is_empty() =>
                     {
+                        let prior_mode = app.mode;
                         app.cycle_mode();
-                        sync_mode_update(app, &engine_handle).await;
+                        if app.mode != prior_mode {
+                            persist_user_selected_mode(app);
+                            sync_mode_update(app, &engine_handle).await;
+                        }
                     }
                     // Language picker hotkeys select + persist (#566).
                     //
@@ -5894,6 +5964,7 @@ async fn run_event_loop(
                     let prior_mode = app.mode;
                     app.cycle_mode();
                     if app.mode != prior_mode {
+                        persist_user_selected_mode(app);
                         sync_mode_update(app, &engine_handle).await;
                     }
                     if app.model != prior_model {
@@ -6439,27 +6510,27 @@ async fn run_event_loop(
                     app.paste_from_clipboard();
                 }
                 KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::ALT) => {
-                    apply_mode_update(app, &engine_handle, AppMode::Agent).await;
+                    apply_mode_update(app, &engine_handle, AppMode::Agent, true).await;
                     continue;
                 }
                 KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::ALT) => {
-                    apply_mode_update(app, &engine_handle, AppMode::Yolo).await;
+                    apply_mode_update(app, &engine_handle, AppMode::Yolo, false).await;
                     continue;
                 }
                 KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::ALT) => {
-                    apply_mode_update(app, &engine_handle, AppMode::Plan).await;
+                    apply_mode_update(app, &engine_handle, AppMode::Plan, true).await;
                     continue;
                 }
                 KeyCode::Char('A') if key.modifiers.contains(KeyModifiers::ALT) => {
-                    apply_mode_update(app, &engine_handle, AppMode::Agent).await;
+                    apply_mode_update(app, &engine_handle, AppMode::Agent, true).await;
                     continue;
                 }
                 KeyCode::Char('Y') if key.modifiers.contains(KeyModifiers::ALT) => {
-                    apply_mode_update(app, &engine_handle, AppMode::Yolo).await;
+                    apply_mode_update(app, &engine_handle, AppMode::Yolo, false).await;
                     continue;
                 }
                 KeyCode::Char('P') if key.modifiers.contains(KeyModifiers::ALT) => {
-                    apply_mode_update(app, &engine_handle, AppMode::Plan).await;
+                    apply_mode_update(app, &engine_handle, AppMode::Plan, true).await;
                     continue;
                 }
                 // Vim composer: Normal-mode motion / operator keys.
@@ -8809,6 +8880,27 @@ async fn sync_mode_update(app: &App, engine_handle: &EngineHandle) {
         .await;
 }
 
+fn persist_user_selected_mode(app: &mut App) {
+    // Legacy YOLO is a transient compatibility shortcut for Act + Full Access,
+    // not a fourth startup mode. Permission persistence remains Shift+Tab's
+    // responsibility, so never turn a one-off shortcut into durable authority.
+    if app.yolo {
+        return;
+    }
+    let result = (|| -> anyhow::Result<()> {
+        let mut settings = Settings::load_persisted()?;
+        settings.set("default_mode", app.mode.as_setting())?;
+        settings.save()
+    })();
+    if let Err(err) = result {
+        app.push_status_toast(
+            format!("Mode changed for this session, but the startup mode was not saved: {err}"),
+            StatusToastLevel::Warning,
+            Some(8_000),
+        );
+    }
+}
+
 fn is_permission_cycle_shortcut(key: &KeyEvent) -> bool {
     let forbidden = KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER;
     if key.modifiers.intersects(forbidden) {
@@ -8842,8 +8934,16 @@ async fn cycle_permission_posture(
     }
 }
 
-async fn apply_mode_update(app: &mut App, engine_handle: &EngineHandle, mode: AppMode) -> bool {
+async fn apply_mode_update(
+    app: &mut App,
+    engine_handle: &EngineHandle,
+    mode: AppMode,
+    persist: bool,
+) -> bool {
     if app.set_mode(mode) {
+        if persist {
+            persist_user_selected_mode(app);
+        }
         sync_mode_update(app, engine_handle).await;
         true
     } else {
@@ -9921,6 +10021,10 @@ async fn apply_command_result(
                 }
             }
             AppAction::ModeChanged(_mode) => {
+                sync_mode_update(app, engine_handle).await;
+            }
+            AppAction::UserModeChanged(_mode) => {
+                persist_user_selected_mode(app);
                 sync_mode_update(app, engine_handle).await;
             }
             AppAction::ApprovalPolicyPersisted { policy } => {
@@ -11353,7 +11457,7 @@ async fn apply_plan_choice(
 
     match choice {
         PlanChoice::AcceptAgent => {
-            apply_mode_update(app, engine_handle, AppMode::Agent).await;
+            apply_mode_update(app, engine_handle, AppMode::Agent, false).await;
             app.add_message(HistoryCell::System {
                 content: "Plan accepted. Switching to Act mode and starting implementation."
                     .to_string(),
@@ -11367,7 +11471,7 @@ async fn apply_plan_choice(
             }
         }
         PlanChoice::AcceptYolo => {
-            apply_mode_update(app, engine_handle, AppMode::Yolo).await;
+            apply_mode_update(app, engine_handle, AppMode::Yolo, false).await;
             app.add_message(HistoryCell::System {
                 content:
                     "Plan accepted. Switching to Act + Full Access and starting implementation."
@@ -11389,7 +11493,7 @@ async fn apply_plan_choice(
             app.status_message = Some("Revise the plan and press Enter.".to_string());
         }
         PlanChoice::ExitPlan => {
-            apply_mode_update(app, engine_handle, AppMode::Agent).await;
+            apply_mode_update(app, engine_handle, AppMode::Agent, false).await;
             app.add_message(HistoryCell::System {
                 content: concat!(
                     "Exited Plan mode. Switched to Act mode.\n\n",
@@ -12356,6 +12460,14 @@ async fn handle_view_events(
                 approval_grouping_key,
                 persistent_ask_rules,
             } => {
+                if app
+                    .pending_work_approval
+                    .as_ref()
+                    .is_some_and(|request| request.id == tool_id)
+                {
+                    app.pending_work_approval = None;
+                    app.work_surface.opened = None;
+                }
                 apply_approval_decision(
                     app,
                     engine_handle,
@@ -12421,6 +12533,7 @@ async fn handle_view_events(
                 {
                     Ok(()) => {
                         app.pending_user_input_prompt = None;
+                        app.work_surface.opened = None;
                     }
                     Err(err) => {
                         tracing::warn!(tool_id = %tool_id, error = %err, "user input submit failed");
@@ -12439,6 +12552,8 @@ async fn handle_view_events(
             }
             ViewEvent::UserInputCancelled { tool_id } => {
                 let _ = engine_handle.cancel_user_input(tool_id).await;
+                app.pending_user_input_prompt = None;
+                app.work_surface.opened = None;
                 app.add_message(HistoryCell::System {
                     content: "User input cancelled".to_string(),
                 });
@@ -13110,6 +13225,7 @@ async fn handle_view_events(
                 let prior_mode = app.mode;
                 let msg = commands::switch_mode(app, mode);
                 if app.mode != prior_mode {
+                    persist_user_selected_mode(app);
                     sync_mode_update(app, engine_handle).await;
                 }
                 app.add_message(HistoryCell::System { content: msg });
@@ -13237,7 +13353,29 @@ fn push_approval_request_view(
         maybe_add_patch_preview(app, tool_input);
     }
 
-    let request = ApprovalRequest::new_with_intent(
+    let request = build_approval_request(
+        app,
+        id,
+        tool_name,
+        description,
+        tool_input,
+        approval_key,
+        intent_summary,
+    );
+    app.view_stack
+        .push(ApprovalView::new_for_locale(request, app.ui_locale));
+}
+
+fn build_approval_request(
+    app: &App,
+    id: &str,
+    tool_name: &str,
+    description: &str,
+    tool_input: &serde_json::Value,
+    approval_key: &str,
+    intent_summary: Option<&str>,
+) -> ApprovalRequest {
+    ApprovalRequest::new_with_intent(
         id,
         tool_name,
         description,
@@ -13245,9 +13383,32 @@ fn push_approval_request_view(
         approval_key,
         intent_summary,
         &app.workspace,
+    )
+}
+
+fn queue_approval_request_in_work(
+    app: &mut App,
+    id: &str,
+    tool_name: &str,
+    description: &str,
+    tool_input: &serde_json::Value,
+    approval_key: &str,
+    intent_summary: Option<&str>,
+) {
+    app.pending_work_approval = Some(build_approval_request(
+        app,
+        id,
+        tool_name,
+        description,
+        tool_input,
+        approval_key,
+        intent_summary,
+    ));
+    app.status_message = Some(
+        app.tr(MessageId::AutoReviewApprovalQueued)
+            .replace("{tool}", tool_name),
     );
-    app.view_stack
-        .push(ApprovalView::new_for_locale(request, app.ui_locale));
+    app.needs_redraw = true;
 }
 
 struct ApprovalDecisionEvent {

@@ -1021,7 +1021,7 @@ impl HotbarAction for AppHotbarAction {
             AppHotbarKind::Mode(mode) => {
                 let changed = app.set_mode(mode);
                 if changed {
-                    Ok(HotbarDispatch::AppAction(AppAction::ModeChanged(mode)))
+                    Ok(HotbarDispatch::AppAction(AppAction::UserModeChanged(mode)))
                 } else {
                     Ok(HotbarDispatch::Handled)
                 }
@@ -2371,7 +2371,7 @@ mod tests {
 
         assert_eq!(
             plan.dispatch(&mut app).expect("dispatch plan"),
-            HotbarDispatch::AppAction(AppAction::ModeChanged(AppMode::Plan))
+            HotbarDispatch::AppAction(AppAction::UserModeChanged(AppMode::Plan))
         );
         assert_eq!(app.mode, AppMode::Plan);
         assert!(plan.is_active(&app));
@@ -2379,7 +2379,7 @@ mod tests {
 
         assert_eq!(
             operate.dispatch(&mut app).expect("dispatch operate"),
-            HotbarDispatch::AppAction(AppAction::ModeChanged(AppMode::Operate))
+            HotbarDispatch::AppAction(AppAction::UserModeChanged(AppMode::Operate))
         );
         assert_eq!(app.mode, AppMode::Operate);
         assert!(operate.is_active(&app));

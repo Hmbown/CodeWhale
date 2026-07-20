@@ -3676,7 +3676,7 @@ async fn operate_conversation_reaches_provider_when_workers_are_disabled() {
 }
 
 #[test]
-fn auto_review_classifies_publish_and_force_prompts_it() {
+fn auto_review_routes_publish_to_deliberate_work_review() {
     let (decision, audit) = auto_review_plan_decision(
         &crate::tui::auto_review::AutoReviewPolicy::default(),
         "exec_shell",
@@ -3712,8 +3712,8 @@ fn auto_review_policy_does_not_force_prompt_for_shell_git_tag_list_probe() {
         false,
     );
 
-    assert_eq!(decision, AutoReviewPlanDecision::NoChange);
-    assert_eq!(audit["decision"], "ask_user");
+    assert_eq!(decision, AutoReviewPlanDecision::AutoApprove);
+    assert_eq!(audit["decision"], "allow");
     assert_eq!(audit["action_kind"], "shell");
 }
 
@@ -3812,7 +3812,7 @@ fn generic_required_tools_keep_auto_approve_behavior() {
 }
 
 #[test]
-fn auto_review_policy_does_not_change_generic_destructive_auto_approval_yet() {
+fn auto_review_auto_approves_ordinary_shell_despite_conservative_risk_badge() {
     let (decision, audit) = auto_review_plan_decision(
         &crate::tui::auto_review::AutoReviewPolicy::default(),
         "exec_shell",
@@ -3824,9 +3824,33 @@ fn auto_review_policy_does_not_change_generic_destructive_auto_approval_yet() {
         false,
     );
 
-    assert_eq!(decision, AutoReviewPlanDecision::NoChange);
-    assert_eq!(audit["decision"], "ask_user");
+    assert_eq!(decision, AutoReviewPlanDecision::AutoApprove);
+    assert_eq!(audit["decision"], "allow");
     assert_eq!(audit["risk"], "destructive");
+}
+
+#[test]
+fn auto_review_escalates_opaque_external_actions() {
+    let (decision, audit) = auto_review_plan_decision(
+        &crate::tui::auto_review::AutoReviewPolicy::default(),
+        "mcp_vendor_mutate_account",
+        &json!({"account": "example"}),
+        crate::tui::auto_review::RunOrigin::Interactive,
+        crate::tui::approval::ApprovalMode::Auto,
+        Some("change a remote account"),
+        true,
+        false,
+    );
+
+    assert_eq!(
+        decision,
+        AutoReviewPlanDecision::ForcePrompt(
+            "mcp_action action needs deliberate review".to_string()
+        )
+    );
+    assert_eq!(audit["decision"], "ask_user");
+    assert_eq!(audit["action_kind"], "mcp_action");
+    assert_eq!(audit["reason"], "mcp_action action needs deliberate review");
 }
 
 #[test]
@@ -5504,12 +5528,12 @@ fn request_user_input_stays_deferred_but_can_be_dynamically_activated() {
 }
 
 #[test]
-fn auto_review_hides_question_tool_while_other_postures_keep_it() {
+fn every_permission_posture_keeps_genuine_questions_available() {
     use crate::tui::approval::ApprovalMode;
 
     for (posture, expected) in [
         (ApprovalMode::Suggest, true),
-        (ApprovalMode::Auto, false),
+        (ApprovalMode::Auto, true),
         (ApprovalMode::Bypass, true),
         (ApprovalMode::Never, true),
     ] {
@@ -5989,15 +6013,15 @@ async fn run_shell_command_op_skips_approval_when_auto_approved() {
 }
 
 #[tokio::test]
-async fn run_shell_command_op_allows_readonly_shell_in_auto_mode() {
+async fn run_shell_command_op_auto_reviews_ordinary_shell_without_prompting() {
     let (mut engine, handle) = Engine::new(EngineConfig::default(), &Config::default());
     let handle_for_approval = handle.clone();
 
     let task = tokio::spawn(async move {
         engine
             .handle_run_shell_command(
-                "pwd".to_string(),
-                AppMode::Auto,
+                "echo bang-auto-review".to_string(),
+                AppMode::Agent,
                 true,
                 false,
                 false,
@@ -6035,9 +6059,72 @@ async fn run_shell_command_op_allows_readonly_shell_in_auto_mode() {
 
     assert!(
         !saw_approval,
-        "read-only shell shortcut should not request approval in Auto mode"
+        "ordinary shell shortcut should not request approval in Auto-Review"
     );
     assert!(saw_complete);
+}
+
+#[tokio::test]
+async fn run_shell_command_op_auto_review_preserves_typed_ask_for_work() {
+    let (mut engine, handle) = Engine::new(
+        EngineConfig {
+            exec_policy_engine: ask_rule_engine("echo"),
+            ..EngineConfig::default()
+        },
+        &Config::default(),
+    );
+    let approval_handle = handle.clone();
+
+    let task = tokio::spawn(async move {
+        engine
+            .handle_run_shell_command(
+                "echo auto-review-ask-rule".to_string(),
+                AppMode::Agent,
+                true,
+                false,
+                false,
+                crate::tui::approval::ApprovalMode::Auto,
+            )
+            .await;
+    });
+
+    let mut saw_review = false;
+    let mut saw_completion = false;
+    let mut rx = handle.rx_event.write().await;
+    while let Some(event) = rx.recv().await {
+        match event {
+            Event::ApprovalRequired {
+                id,
+                approval_force_prompt,
+                description,
+                ..
+            } => {
+                saw_review = true;
+                assert!(approval_force_prompt);
+                assert!(description.contains("echo"), "{description}");
+                approval_handle
+                    .approve_tool_call(id)
+                    .await
+                    .expect("approve queued Auto-Review decision");
+            }
+            Event::ToolCallComplete { result, .. } => {
+                let result = result.expect("approved Auto-Review ask result");
+                assert!(result.success, "{result:?}");
+                assert!(result.content.contains("auto-review-ask-rule"));
+                saw_completion = true;
+            }
+            Event::TurnComplete { status, .. } => {
+                assert_eq!(status, TurnOutcomeStatus::Completed);
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    drop(rx);
+    task.await.expect("shell task");
+    assert!(saw_review);
+    assert!(saw_completion);
 }
 
 #[tokio::test]
@@ -6596,7 +6683,7 @@ async fn full_access_blocks_repo_law_ask_without_prompt_or_write() {
 
 #[tokio::test]
 #[allow(clippy::await_holding_lock)]
-async fn auto_review_auto_resolves_hallucinated_question_without_prompting() {
+async fn auto_review_preserves_genuine_model_question_for_work() {
     use wiremock::matchers::{body_string_contains, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -6646,9 +6733,7 @@ async fn auto_review_auto_resolves_hallucinated_question_without_prompting() {
 
     Mock::given(method("POST"))
         .and(path("/v1/chat/completions"))
-        .and(body_string_contains(
-            "Auto-Review does not pause for user questions",
-        ))
+        .and(body_string_contains("answers"))
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
@@ -6714,6 +6799,7 @@ async fn auto_review_auto_resolves_hallucinated_question_without_prompting() {
         .await
         .expect("send Auto-Review model turn");
 
+    let mut saw_question = false;
     let mut saw_tool_result = false;
     let mut saw_turn_complete = false;
     let mut rx = handle.rx_event.write().await;
@@ -6722,35 +6808,31 @@ async fn auto_review_auto_resolves_hallucinated_question_without_prompting() {
         .expect("timed out waiting for Auto-Review question event")
     {
         match event {
-            Event::UserInputRequired { .. } => {
-                panic!("Auto-Review must not emit a user question")
+            Event::UserInputRequired { id, request } => {
+                saw_question = true;
+                assert_eq!(request.questions[0].question, "Which path should I take?");
+                handle
+                    .submit_user_input(
+                        id,
+                        crate::tools::user_input::UserInputResponse {
+                            answers: vec![crate::tools::user_input::UserInputAnswer {
+                                id: "choice".to_string(),
+                                label: "A".to_string(),
+                                value: "A".to_string(),
+                            }],
+                        },
+                    )
+                    .await
+                    .expect("answer queued Auto-Review question");
             }
             Event::ApprovalRequired { .. } => {
-                panic!("Auto-Review question guard must not become an approval")
+                panic!("a genuine question must not become a tool approval")
             }
             Event::ToolCallComplete { name, result, .. } if name == REQUEST_USER_INPUT_NAME => {
-                let result = result.expect("question should auto-resolve successfully");
+                let result = result.expect("answered question result");
                 assert!(result.success, "{result:?}");
-                assert!(
-                    result.content.contains("continue autonomously"),
-                    "{result:?}"
-                );
-                assert_eq!(
-                    result
-                        .metadata
-                        .as_ref()
-                        .and_then(|value| value.get("auto_resolved"))
-                        .and_then(serde_json::Value::as_bool),
-                    Some(true)
-                );
-                assert_eq!(
-                    result
-                        .metadata
-                        .as_ref()
-                        .and_then(|value| value.get("permission_posture"))
-                        .and_then(serde_json::Value::as_str),
-                    Some("auto-review")
-                );
+                assert!(result.content.contains("\"answers\""), "{result:?}");
+                assert!(result.content.contains("\"value\":\"A\""), "{result:?}");
                 saw_tool_result = true;
             }
             Event::TurnComplete { status, .. } => {
@@ -6765,6 +6847,8 @@ async fn auto_review_auto_resolves_hallucinated_question_without_prompting() {
 
     handle.send(Op::Shutdown).await.expect("shutdown engine");
     run_task.await.expect("engine task");
+    server.verify().await;
+    assert!(saw_question);
     assert!(saw_tool_result);
     assert!(saw_turn_complete);
 }
@@ -6930,6 +7014,135 @@ async fn full_access_blocks_background_catastrophic_shell_without_prompt_or_side
 
 #[tokio::test]
 #[allow(clippy::await_holding_lock)]
+async fn auto_review_model_shell_executes_without_approval_modal() {
+    use wiremock::matchers::{body_string_contains, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let _lock = lock_test_env();
+    let workspace = tempdir().expect("tempdir");
+    let server = MockServer::start().await;
+    let marker = "auto-review-model-no-prompt";
+    let tool_call_sse = concat!(
+        "data: {\"id\":\"chatcmpl-auto-tool\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[",
+        "{\"index\":0,\"id\":\"call_auto_shell\",\"type\":\"function\",\"function\":{\"name\":\"exec_shell\",",
+        "\"arguments\":\"{\\\"command\\\":\\\"echo auto-review-model-no-prompt\\\"}\"}}",
+        "]},\"finish_reason\":null}]}\n\n",
+        "data: {\"id\":\"chatcmpl-auto-tool\",\"choices\":[{\"index\":0,\"delta\":{},",
+        "\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let done_sse = concat!(
+        "data: {\"id\":\"chatcmpl-auto-done\",\"choices\":[{\"index\":0,",
+        "\"delta\":{\"content\":\"done\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"id\":\"chatcmpl-auto-done\",\"choices\":[{\"index\":0,\"delta\":{},",
+        "\"finish_reason\":\"stop\"}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .and(body_string_contains(marker))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(done_sse),
+        )
+        .expect(1)
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(tool_call_sse),
+        )
+        .expect(1)
+        .with_priority(2)
+        .mount(&server)
+        .await;
+
+    let api_config = Config {
+        api_key: Some("test-key".to_string()),
+        base_url: Some(server.uri()),
+        ..Config::default()
+    };
+    let (engine, handle) = Engine::new(
+        EngineConfig {
+            model: crate::config::DEFAULT_TEXT_MODEL.to_string(),
+            workspace: workspace.path().to_path_buf(),
+            snapshots_enabled: false,
+            subagents_enabled: false,
+            ..EngineConfig::default()
+        },
+        &api_config,
+    );
+    let run_task = tokio::spawn(engine.run());
+
+    handle
+        .send(Op::SendMessage {
+            content: "run the ordinary shell command".to_string(),
+            mode: AppMode::Agent,
+            route: resolved_route_for_test(&api_config, crate::config::DEFAULT_TEXT_MODEL),
+            compaction: Box::new(CompactionConfig::default()),
+            goal_objective: None,
+            goal_token_budget: None,
+            goal_status: crate::tools::goal::GoalStatus::Active,
+            reasoning_effort: None,
+            reasoning_effort_auto: false,
+            auto_model: false,
+            allow_shell: true,
+            trust_mode: false,
+            auto_approve: false,
+            approval_mode: crate::tui::approval::ApprovalMode::Auto,
+            translation_enabled: false,
+            show_thinking: true,
+            allowed_tools: None,
+            dynamic_tools: Vec::new(),
+            hook_executor: None,
+            verbosity: None,
+            provenance: UserInputProvenance::ExternalUser,
+        })
+        .await
+        .expect("send Auto-Review model turn");
+
+    let mut saw_shell_result = false;
+    let mut saw_complete = false;
+    let mut rx = handle.rx_event.write().await;
+    while let Some(event) = tokio::time::timeout(model_turn_event_timeout(), rx.recv())
+        .await
+        .expect("timed out waiting for Auto-Review tool event")
+    {
+        match event {
+            Event::ApprovalRequired { tool_name, .. } => {
+                panic!("Auto-Review must decide {tool_name} without an approval modal")
+            }
+            Event::ToolCallComplete { name, result, .. } if name == "exec_shell" => {
+                let result = result.expect("Auto-Review-approved shell result");
+                assert!(result.success, "{result:?}");
+                assert!(result.content.contains(marker), "{result:?}");
+                saw_shell_result = true;
+            }
+            Event::TurnComplete { status, .. } => {
+                assert_eq!(status, TurnOutcomeStatus::Completed);
+                saw_complete = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+    drop(rx);
+
+    handle.send(Op::Shutdown).await.expect("shutdown engine");
+    run_task.await.expect("engine task");
+    server.verify().await;
+    assert!(saw_shell_result);
+    assert!(saw_complete);
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn yolo_mode_does_not_prompt_for_background_shell() {
     // #3883: the durable-review floor keys on what the command does, not on
     // "not provably read-only". An ordinary background command in YOLO must
@@ -7069,9 +7282,9 @@ async fn yolo_mode_does_not_prompt_for_background_shell() {
 #[allow(clippy::await_holding_lock)]
 async fn yolo_mode_executes_publish_like_shell_without_prompt() {
     // #4595: Full Access (Bypass/YOLO) is truly full access — the publish
-    // floor prompts only in Ask/Auto-Review postures. The regression guard is
-    // the absence of ApprovalRequired; execution itself may fail (the tempdir
-    // is not a git repo), which is fine.
+    // floor prompts in Ask and queues deliberate review in Auto-Review. The regression
+    // guard here is the absence of ApprovalRequired under Full Access;
+    // execution itself may fail (the tempdir is not a git repo), which is fine.
     use wiremock::matchers::{body_string_contains, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -9806,7 +10019,7 @@ fn turn_metadata_projects_effective_permission_question_discipline() {
         (
             ApprovalMode::Auto,
             "Auto-Review",
-            "Do not ask the user questions or pause for a user decision",
+            "handles routine tool approvals without interrupting",
         ),
         (
             ApprovalMode::Bypass,

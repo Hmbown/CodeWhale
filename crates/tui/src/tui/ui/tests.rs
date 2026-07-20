@@ -2943,7 +2943,7 @@ fn session_approved_cache_keeps_tool_name_session_grants() {
 }
 
 #[test]
-fn forced_approval_prompt_bypasses_auto_mode_shortcut() {
+fn forced_approval_prompt_bypasses_auto_review_shortcut_without_hard_deny() {
     let mut app = create_test_app();
     app.approval_mode = ApprovalMode::Auto;
 
@@ -2953,6 +2953,8 @@ fn forced_approval_prompt_bypasses_auto_mode_shortcut() {
         "shell:exec_shell:cargo test",
         true,
     ));
+    assert!(!should_auto_deny_forced_approval_request(&app, true));
+    assert!(should_queue_attention_in_work(&app));
 }
 
 #[test]
@@ -2972,15 +2974,23 @@ fn forced_approval_prompt_bypasses_session_approval_shortcut() {
 }
 
 #[test]
-fn full_access_auto_approves_requests_while_auto_review_does_not() {
+fn auto_review_queues_forced_requests_while_full_access_fails_closed() {
     let mut app = create_test_app();
     app.approval_mode = ApprovalMode::Auto;
-    assert!(!should_auto_approve_approval_request(
+    assert!(should_auto_approve_approval_request(
         &app,
         "exec_shell",
         "shell:exec_shell:cargo test",
         false,
     ));
+    assert!(!should_auto_approve_approval_request(
+        &app,
+        "exec_shell",
+        "shell:exec_shell:cargo test",
+        true,
+    ));
+    assert!(!should_auto_deny_forced_approval_request(&app, true));
+    assert!(should_queue_attention_in_work(&app));
 
     app.approval_mode = ApprovalMode::Bypass;
     assert!(should_auto_approve_approval_request(
@@ -3034,9 +3044,11 @@ fn app_auto_approval_helper_covers_yolo_and_bypass_only() {
 
     app.approval_mode = ApprovalMode::Auto;
     assert!(!app_auto_approve_enabled(&app));
+    assert!(app_auto_review_enabled(&app));
 
     app.approval_mode = ApprovalMode::Bypass;
     assert!(app_auto_approve_enabled(&app));
+    assert!(!app_auto_review_enabled(&app));
 
     app.approval_mode = ApprovalMode::Suggest;
     app.mode = AppMode::Yolo;
@@ -3044,7 +3056,7 @@ fn app_auto_approval_helper_covers_yolo_and_bypass_only() {
 }
 
 #[test]
-fn auto_review_suppresses_stale_question_prompts_while_other_postures_allow_them() {
+fn auto_review_queues_real_questions_in_work_without_suppressing_them() {
     let mut app = create_test_app();
     for (posture, expected) in [
         (ApprovalMode::Suggest, false),
@@ -3054,17 +3066,49 @@ fn auto_review_suppresses_stale_question_prompts_while_other_postures_allow_them
     ] {
         app.approval_mode = posture;
         assert_eq!(
-            should_suppress_user_input_prompt(&app),
+            should_queue_attention_in_work(&app),
             expected,
             "{posture:?}"
         );
     }
 
-    // Compatibility shape: legacy Yolo hosts can carry a stale Auto enum,
-    // but their effective posture is Full Access, where questions are valid.
+    // Compatibility shape: legacy Yolo hosts can carry a stale Auto enum, but
+    // their effective posture is Full Access rather than queued Auto-Review.
     app.mode = AppMode::Yolo;
     app.approval_mode = ApprovalMode::Auto;
-    assert!(!should_suppress_user_input_prompt(&app));
+    assert!(!should_queue_attention_in_work(&app));
+}
+
+#[test]
+fn exceptional_auto_review_request_is_queued_without_opening_view() {
+    let mut app = create_test_app();
+    app.approval_mode = ApprovalMode::Auto;
+
+    queue_approval_request_in_work(
+        &mut app,
+        "approval-queued",
+        "mcp_vendor_mutate_account",
+        "Change a remote account",
+        &serde_json::json!({"account": "example"}),
+        "approval-key",
+        Some("Update the remote account"),
+    );
+
+    let request = app.pending_work_approval.as_ref().expect("queued approval");
+    assert_eq!(request.id, "approval-queued");
+    assert_eq!(request.tool_name, "mcp_vendor_mutate_account");
+    assert_eq!(
+        request.intent_summary.as_deref(),
+        Some("Update the remote account")
+    );
+    assert!(
+        app.view_stack.is_empty(),
+        "Auto-Review must not pop a modal"
+    );
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("Needs input in Work: review mcp_vendor_mutate_account to continue")
+    );
 }
 
 fn create_test_options() -> TuiOptions {
@@ -4454,7 +4498,15 @@ async fn mode_change_update_notifies_engine() {
     let _ = app.set_mode(crate::tui::app::AppMode::Plan);
     let mut engine = crate::core::engine::mock_engine_handle();
 
-    assert!(apply_mode_update(&mut app, &engine.handle, crate::tui::app::AppMode::Yolo).await);
+    assert!(
+        apply_mode_update(
+            &mut app,
+            &engine.handle,
+            crate::tui::app::AppMode::Yolo,
+            false,
+        )
+        .await
+    );
 
     match engine.rx_op.recv().await.expect("change mode op") {
         crate::core::ops::Op::ChangeMode {
@@ -4485,7 +4537,15 @@ async fn mode_change_update_sends_restored_agent_policy() {
     let _ = app.set_mode(crate::tui::app::AppMode::Plan);
     let mut engine = crate::core::engine::mock_engine_handle();
 
-    assert!(apply_mode_update(&mut app, &engine.handle, crate::tui::app::AppMode::Agent).await);
+    assert!(
+        apply_mode_update(
+            &mut app,
+            &engine.handle,
+            crate::tui::app::AppMode::Agent,
+            false,
+        )
+        .await
+    );
 
     match engine.rx_op.recv().await.expect("change mode op") {
         crate::core::ops::Op::ChangeMode {
@@ -4503,6 +4563,59 @@ async fn mode_change_update_sends_restored_agent_policy() {
         }
         other => panic!("expected ChangeMode, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn deliberate_operate_selection_becomes_the_restart_default() {
+    let _home = SettingsHomeGuard::new();
+    let mut app = create_test_app();
+    let mut engine = crate::core::engine::mock_engine_handle();
+
+    assert!(
+        apply_mode_update(
+            &mut app,
+            &engine.handle,
+            crate::tui::app::AppMode::Operate,
+            true,
+        )
+        .await
+    );
+
+    assert_eq!(Settings::load_persisted().unwrap().default_mode, "operate");
+    assert_eq!(
+        crate::tui::app::AppMode::from_setting(&Settings::load_persisted().unwrap().default_mode),
+        crate::tui::app::AppMode::Operate
+    );
+    assert!(matches!(
+        engine.rx_op.recv().await,
+        Some(crate::core::ops::Op::ChangeMode {
+            mode: crate::tui::app::AppMode::Operate,
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
+async fn transient_yolo_compat_does_not_replace_saved_mode() {
+    let _home = SettingsHomeGuard::new();
+    let mut settings = Settings::load_persisted().unwrap();
+    settings.set("default_mode", "operate").unwrap();
+    settings.save().unwrap();
+    let mut app = create_test_app();
+    let mut engine = crate::core::engine::mock_engine_handle();
+
+    assert!(
+        apply_mode_update(
+            &mut app,
+            &engine.handle,
+            crate::tui::app::AppMode::Yolo,
+            false,
+        )
+        .await
+    );
+
+    assert_eq!(Settings::load_persisted().unwrap().default_mode, "operate");
+    let _ = engine.rx_op.recv().await;
 }
 
 #[test]
@@ -6945,7 +7058,7 @@ fn hotbar_dispatches_bound_slot_and_ignores_empty_slot() {
     let dispatch = dispatch_hotbar_slot(&mut app, &config, 4).expect("hotbar dispatch");
     assert!(matches!(
         dispatch,
-        Some(HotbarDispatch::AppAction(AppAction::ModeChanged(
+        Some(HotbarDispatch::AppAction(AppAction::UserModeChanged(
             AppMode::Agent
         )))
     ));
@@ -8921,6 +9034,38 @@ fn local_cancel_marks_late_stream_events_for_suppression() {
             message: "Request cancelled".to_string(),
         }
     ));
+}
+
+#[test]
+fn empty_control_session_update_does_not_claim_a_pristine_session() {
+    let mut app = create_test_app();
+    app.current_session_id = None;
+    app.is_loading = false;
+
+    assert!(!session_update_claims_app_session(&app, &[]));
+
+    app.current_session_id = Some("loaded-empty-session".to_string());
+    assert!(
+        session_update_claims_app_session(&app, &[]),
+        "a deliberately loaded empty session remains real"
+    );
+}
+
+#[test]
+fn substantive_session_update_claims_the_session() {
+    let mut app = create_test_app();
+    app.current_session_id = None;
+    let messages = vec![Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::Text {
+            text: "start the task".to_string(),
+            cache_control: None,
+        }],
+    }];
+    assert!(session_update_claims_app_session(&app, &messages));
+
+    app.is_loading = true;
+    assert!(session_update_claims_app_session(&app, &[]));
 }
 
 #[test]

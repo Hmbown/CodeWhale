@@ -25,7 +25,7 @@ fn thread_route_credential_error_is_bad_request_not_not_found() {
 }
 
 #[test]
-fn runtime_tui_settings_reject_legacy_modes_and_do_not_save_env_overlays() -> Result<()> {
+fn runtime_tui_settings_preserve_visible_modes_and_do_not_save_env_overlays() -> Result<()> {
     let _lock = lock_test_env();
     let tmp = tempfile::tempdir()?;
     let settings_dir = tmp.path().join(".codewhale");
@@ -40,17 +40,21 @@ fn runtime_tui_settings_reject_legacy_modes_and_do_not_save_env_overlays() -> Re
     );
     let _no_animations = EnvVarGuard::set("NO_ANIMATIONS", "1");
 
-    for legacy in ["operate", "yolo"] {
-        let error = persist_runtime_tui_setting("default_mode", legacy)
-            .expect_err("legacy startup mode must be rejected");
-        assert_eq!(error.status, StatusCode::BAD_REQUEST);
-    }
+    let error = persist_runtime_tui_setting("default_mode", "yolo")
+        .expect_err("permission alias must be rejected as a startup mode");
+    assert_eq!(error.status, StatusCode::BAD_REQUEST);
     assert_eq!(
         crate::settings::Settings::load_persisted()?.default_mode,
         "plan",
-        "a rejected write must leave the saved startup mode intact"
+        "a rejected permission alias must leave the saved startup mode intact"
     );
 
+    persist_runtime_tui_setting("default_mode", "operate")
+        .expect("operate should be a valid startup mode");
+    assert_eq!(
+        crate::settings::Settings::load_persisted()?.default_mode,
+        "operate"
+    );
     persist_runtime_tui_setting("default_mode", "agent")
         .expect("agent should be a valid startup mode");
     persist_runtime_tui_setting("auto_compact", "false").expect("strict boolean should persist");

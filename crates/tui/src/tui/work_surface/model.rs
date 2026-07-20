@@ -219,7 +219,7 @@ pub(super) fn project(app: &mut App) -> Vec<WorkRow> {
         ),
     };
 
-    let rows = match graph {
+    let mut rows = match graph {
         Some(graph) => graph_rows(
             &graph,
             source_state.as_ref(),
@@ -235,6 +235,29 @@ pub(super) fn project(app: &mut App) -> Vec<WorkRow> {
             )]
         }),
     };
+    let attention_rows = pending_attention_rows(app);
+    if !attention_rows.is_empty() {
+        let count = attention_rows.len();
+        let count_label = app
+            .tr(MessageId::WorkSurfaceNeedsInputCount)
+            .replace("{count}", &count.to_string());
+        let detail = app.tr(MessageId::WorkSurfaceNeedsInputDetail).into_owned();
+        if rows.is_empty() {
+            rows.push(section_heading(
+                "work",
+                &format!("Work · {count_label}"),
+                &detail,
+            ));
+        } else if let Some(heading) = rows.first_mut() {
+            if heading.label == "Work · empty" {
+                heading.label = format!("Work · {count_label}");
+                heading.detail = detail;
+            } else {
+                heading.label.push_str(&format!(" · {count_label}"));
+            }
+        }
+        rows.splice(1..1, attention_rows);
+    }
     app.work_surface.latest_rows = rows.clone();
     if let Some(opened) = app.work_surface.opened.as_ref()
         && !rows.iter().any(|row| &row.id == opened)
@@ -242,6 +265,50 @@ pub(super) fn project(app: &mut App) -> Vec<WorkRow> {
         app.work_surface.opened = None;
     }
     rows
+}
+
+fn pending_attention_rows(app: &App) -> Vec<WorkRow> {
+    let mut rows = Vec::with_capacity(2);
+    let waiting_detail = app.tr(MessageId::WorkSurfaceDecisionWaiting).into_owned();
+    if let Some(request) = app.pending_work_approval.as_ref() {
+        rows.push(WorkRow {
+            id: WorkRowId(format!("approval:{}", request.id)),
+            mark: "?",
+            label: app
+                .tr(MessageId::WorkSurfaceReviewTool)
+                .replace("{tool}", &request.tool_name),
+            detail: waiting_detail.clone(),
+            tone: WorkTone::Attention,
+            selectable: true,
+            primary_action: Some(SidebarRowAction::ReviewApproval {
+                tool_id: request.id.clone(),
+            }),
+        });
+    }
+    if let Some((tool_id, request)) = app.pending_user_input_prompt.as_ref() {
+        let question = request
+            .questions
+            .first()
+            .map(|question| compact_attention_label(&question.question))
+            .filter(|question| !question.is_empty())
+            .unwrap_or_else(|| app.tr(MessageId::WorkSurfaceQuestionFallback).into_owned());
+        rows.push(WorkRow {
+            id: WorkRowId(format!("question:{tool_id}")),
+            mark: "?",
+            label: question,
+            detail: waiting_detail,
+            tone: WorkTone::Attention,
+            selectable: true,
+            primary_action: Some(SidebarRowAction::AnswerUserInput {
+                tool_id: tool_id.clone(),
+            }),
+        });
+    }
+    rows
+}
+
+fn compact_attention_label(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn graph_rows(

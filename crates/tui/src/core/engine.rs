@@ -816,7 +816,7 @@ impl Engine {
                 "Tool approvals and user decisions are separate. Ask a concise question when an unresolved choice materially affects authority, cost, requested scope, or outcome; otherwise continue under the active approval policy."
             }
             ApprovalMode::Auto => {
-                "Auto-Review is fully autonomous. Do not ask the user questions or pause for a user decision. Resolve ambiguity from the available context, choose the safest reversible interpretation that still advances the request, and continue; if no safe in-scope action exists, report the constraint without opening a question prompt."
+                "Auto-Review handles routine tool approvals without interrupting. Continue autonomously on safe, reversible implementation details. Ask one concise question only when an unresolved choice materially changes authority, cost, requested scope, or outcome; do not turn an ordinary tool approval into a user question."
             }
             ApprovalMode::Bypass => {
                 "Tool calls do not need approval, but Full Access does not authorize invented intent. Ask one concise, deliberate question when a consequential choice cannot be recovered safely from context; otherwise proceed autonomously within the current sandbox, repository, and managed-policy boundaries."
@@ -1389,6 +1389,7 @@ impl Engine {
                 && !registry.context().auto_approve;
             let mut approval_description = spec.description().to_string();
             let mut approval_force_prompt = false;
+            let mut review_error = None;
             let ask_rule_decision = exec_shell_ask_rule_decision(
                 &self.config,
                 &tool_name,
@@ -1396,18 +1397,58 @@ impl Engine {
                 &self.session.workspace,
                 self.session.approval_mode,
             );
-            if let Some(ToolAskRuleDecision::Prompt(reason)) = ask_rule_decision.as_ref() {
-                // YOLO mode (auto_approve) is the explicit "no approvals"
-                // contract: a typed ask-rule must not pop a modal in YOLO.
-                // A typed deny rule still blocks hard below.
-                if !self.session.auto_approve {
-                    approval_required = true;
-                    approval_description = reason.clone();
-                    approval_force_prompt = true;
+            if let Some(ToolAskRuleDecision::Prompt(reason)) = ask_rule_decision.as_ref()
+                && !self.session.auto_approve
+            {
+                approval_required = true;
+                approval_description = reason.clone();
+                approval_force_prompt = true;
+            }
+            if let Some(ToolAskRuleDecision::Block(reason)) = ask_rule_decision.as_ref() {
+                review_error = Some(ToolError::permission_denied(reason.clone()));
+            }
+            if review_error.is_none() {
+                let (decision, audit_event) = auto_review_plan_decision(
+                    &self.config.auto_review_policy,
+                    &tool_name,
+                    &tool_input,
+                    crate::tui::auto_review::RunOrigin::Interactive,
+                    self.session.approval_mode,
+                    None,
+                    crate::config::is_workspace_trusted(&self.session.workspace),
+                    false,
+                );
+                emit_tool_audit(json!({
+                    "event": "tool.auto_review_decision",
+                    "tool_id": tool_id.clone(),
+                    "auto_review": audit_event,
+                    "source": "composer_bang",
+                }));
+                match decision {
+                    AutoReviewPlanDecision::NoChange => {}
+                    AutoReviewPlanDecision::AutoApprove => {
+                        if !approval_force_prompt {
+                            approval_required = false;
+                            emit_tool_audit(json!({
+                                "event": "tool.auto_review_auto_approved",
+                                "tool_id": tool_id.clone(),
+                                "tool_name": tool_name.clone(),
+                                "source": "composer_bang",
+                            }));
+                        }
+                    }
+                    AutoReviewPlanDecision::ForcePrompt(reason) => {
+                        approval_required = true;
+                        approval_description = reason;
+                        approval_force_prompt = true;
+                    }
+                    AutoReviewPlanDecision::Block(reason) => {
+                        review_error = Some(ToolError::permission_denied(reason));
+                    }
                 }
             }
-            if let Some(ToolAskRuleDecision::Block(reason)) = ask_rule_decision {
-                Err(ToolError::permission_denied(reason))
+            if let Some(error) = review_error {
+                Err(error)
             } else if approval_required {
                 emit_tool_audit(json!({
                     "event": "tool.approval_required",
@@ -4689,6 +4730,7 @@ pub(super) enum ToolAskRuleDecision {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum AutoReviewPlanDecision {
     NoChange,
+    AutoApprove,
     ForcePrompt(String),
     Block(String),
 }
@@ -4729,8 +4771,24 @@ pub(super) fn auto_review_plan_decision(
     let decision = policy.evaluate(&context);
     let audit_event = policy.audit_event(&context, &decision);
     let plan_decision = match decision.action {
-        crate::tui::auto_review::AutoReviewAction::Allow
-        | crate::tui::auto_review::AutoReviewAction::AskUser => AutoReviewPlanDecision::NoChange,
+        crate::tui::auto_review::AutoReviewAction::Allow => {
+            if approval_mode == crate::tui::approval::ApprovalMode::Auto {
+                AutoReviewPlanDecision::AutoApprove
+            } else {
+                AutoReviewPlanDecision::NoChange
+            }
+        }
+        crate::tui::auto_review::AutoReviewAction::AskUser => {
+            if approval_mode == crate::tui::approval::ApprovalMode::Auto {
+                // Auto-Review approves the reversible path itself. An opaque
+                // or externally mutating call is a real decision boundary, so
+                // retain it for the Work attention queue instead of silently
+                // approving or discarding it.
+                AutoReviewPlanDecision::ForcePrompt(decision.reason.clone())
+            } else {
+                AutoReviewPlanDecision::NoChange
+            }
+        }
         crate::tui::auto_review::AutoReviewAction::HoldForReview => {
             // HoldForReview only originates from the built-in safety floor
             // (configured rules produce Allow/Block), so name the gate
@@ -4745,10 +4803,9 @@ pub(super) fn auto_review_plan_decision(
                 crate::tui::approval::ApprovalMode::Never
                     | crate::tui::approval::ApprovalMode::Bypass
             ) {
-                // Never and Full Access are both non-interactive postures for
-                // approval holds. Full Access auto-runs ordinary calls, but a
-                // non-bypassable safety floor fails closed instead of opening
-                // a contradictory modal or being silently auto-approved.
+                // Never and Full Access do not host approval decisions. A
+                // non-bypassable safety floor therefore fails closed instead
+                // of being silently auto-approved.
                 AutoReviewPlanDecision::Block(reason)
             } else {
                 AutoReviewPlanDecision::ForcePrompt(reason)
@@ -5063,9 +5120,10 @@ fn filter_tool_catalog_for_gates(
     });
 }
 
-/// Auto-Review is the one fully autonomous posture. Hiding the question tool
-/// keeps both the eager and deferred/tool-search surfaces aligned with the
-/// runtime question guard in `turn_loop`.
+/// Keep the eager and deferred/tool-search surfaces aligned with the active
+/// question discipline. Permission posture currently never removes genuine
+/// user questions; this helper remains the single policy seam for hosts that
+/// may introduce a non-interactive posture later.
 fn filter_tool_catalog_for_permission_posture(
     catalog: &mut Vec<Tool>,
     approval_mode: crate::tui::approval::ApprovalMode,

@@ -786,6 +786,51 @@ pub(crate) fn apply_sidebar_row_action(app: &mut App, action: SidebarRowAction) 
             app.needs_redraw = true;
             Vec::new()
         }
+        SidebarRowAction::ReviewApproval { tool_id } => {
+            let Some(request) = app
+                .pending_work_approval
+                .as_ref()
+                .filter(|request| request.id == tool_id)
+                .cloned()
+            else {
+                app.work_surface.opened = None;
+                app.status_message = Some(
+                    app.tr(MessageId::WorkSurfaceDecisionNoLongerWaiting)
+                        .into_owned(),
+                );
+                app.needs_redraw = true;
+                return Vec::new();
+            };
+            app.view_stack
+                .push(crate::tui::approval::ApprovalView::new_for_locale(
+                    request,
+                    app.ui_locale,
+                ));
+            app.status_message = None;
+            app.needs_redraw = true;
+            Vec::new()
+        }
+        SidebarRowAction::AnswerUserInput { tool_id } => {
+            let Some((id, request)) = app
+                .pending_user_input_prompt
+                .as_ref()
+                .filter(|(id, _)| id == &tool_id)
+                .cloned()
+            else {
+                app.work_surface.opened = None;
+                app.status_message = Some(
+                    app.tr(MessageId::WorkSurfaceDecisionNoLongerWaiting)
+                        .into_owned(),
+                );
+                app.needs_redraw = true;
+                return Vec::new();
+            };
+            app.view_stack
+                .push(crate::tui::user_input::UserInputView::new(id, request));
+            app.status_message = None;
+            app.needs_redraw = true;
+            Vec::new()
+        }
     }
 }
 
@@ -1562,8 +1607,8 @@ pub(crate) fn selection_to_text(app: &App) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_transcript_text, build_context_menu_entries, open_agent_chat_pager,
-        sidebar_click_action,
+        agent_transcript_text, apply_sidebar_row_action, build_context_menu_entries,
+        open_agent_chat_pager, sidebar_click_action,
     };
     use crate::config::Config;
     use crate::models::{ContentBlock, Message};
@@ -1571,7 +1616,7 @@ mod tests {
         App, SidebarHoverRow, SidebarHoverSection, SidebarRowAction, TuiOptions,
     };
     use crate::tui::pager::PagerView;
-    use crate::tui::views::ContextMenuAction;
+    use crate::tui::views::{ContextMenuAction, ModalKind};
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use ratatui::layout::Rect;
     use serde_json::json;
@@ -1667,6 +1712,67 @@ mod tests {
             entries.first().map(|entry| &entry.action),
             Some(ContextMenuAction::Paste)
         ));
+    }
+
+    #[test]
+    fn work_review_action_opens_only_the_selected_approval() {
+        let mut app = create_test_app();
+        app.pending_work_approval = Some(crate::tui::approval::ApprovalRequest::new(
+            "approval-1",
+            "mcp_vendor_mutate_account",
+            "Change a remote account",
+            &json!({"account": "example"}),
+            "approval-key",
+        ));
+
+        let events = apply_sidebar_row_action(
+            &mut app,
+            SidebarRowAction::ReviewApproval {
+                tool_id: "approval-1".to_string(),
+            },
+        );
+
+        assert!(events.is_empty());
+        assert_eq!(app.view_stack.top_kind(), Some(ModalKind::Approval));
+        assert!(app.pending_work_approval.is_some());
+    }
+
+    #[test]
+    fn work_question_action_opens_only_after_selection() {
+        let mut app = create_test_app();
+        app.pending_user_input_prompt = Some((
+            "question-1".to_string(),
+            crate::tools::user_input::UserInputRequest {
+                questions: vec![crate::tools::user_input::UserInputQuestion {
+                    header: "Choice".to_string(),
+                    id: "choice".to_string(),
+                    question: "Which path?".to_string(),
+                    options: vec![
+                        crate::tools::user_input::UserInputOption {
+                            label: "A".to_string(),
+                            description: "Path A".to_string(),
+                        },
+                        crate::tools::user_input::UserInputOption {
+                            label: "B".to_string(),
+                            description: "Path B".to_string(),
+                        },
+                    ],
+                    allow_free_text: false,
+                    multi_select: false,
+                }],
+            },
+        ));
+
+        assert!(app.view_stack.is_empty());
+        let events = apply_sidebar_row_action(
+            &mut app,
+            SidebarRowAction::AnswerUserInput {
+                tool_id: "question-1".to_string(),
+            },
+        );
+
+        assert!(events.is_empty());
+        assert_eq!(app.view_stack.top_kind(), Some(ModalKind::UserInput));
     }
 
     #[test]

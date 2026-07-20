@@ -1894,6 +1894,7 @@ impl Engine {
                 // ORs `approval_required`.
                 if hook_requires_approval && !self.session.auto_approve {
                     approval_required = true;
+                    approval_force_prompt = true;
                 }
 
                 if blocked_error.is_none() {
@@ -1916,10 +1917,10 @@ impl Engine {
                     if let Some(decision) = ask_rule_decision {
                         match decision {
                             ToolAskRuleDecision::Prompt(reason) => {
-                                // #3790: the mode is the sole authority — a typed
-                                // ask-rule prompts in Agent/Plan but never in YOLO
-                                // (auto_approve). A typed deny rule still blocks
-                                // hard, in every mode.
+                                // An explicit ask rule is itself the user's
+                                // durable review boundary. Auto-Review may
+                                // settle routine registry approvals, but it
+                                // must not erase this configured escalation.
                                 if !self.session.auto_approve {
                                     approval_required = true;
                                     approval_description = reason;
@@ -1953,11 +1954,20 @@ impl Engine {
                     }));
                     match decision {
                         AutoReviewPlanDecision::NoChange => {}
+                        AutoReviewPlanDecision::AutoApprove => {
+                            if !approval_force_prompt {
+                                approval_required = false;
+                                emit_tool_audit(json!({
+                                    "event": "tool.auto_review_auto_approved",
+                                    "tool_id": tool_id.clone(),
+                                    "tool_name": tool_name.clone(),
+                                }));
+                            }
+                        }
                         AutoReviewPlanDecision::ForcePrompt(reason) => {
-                            // The built-in safety floor is deliberately
-                            // non-bypassable. Ask/Auto-Review surface the hold;
-                            // Full Access turns this disposition into a hard
-                            // block below, without opening a modal.
+                            // Auto-Review keeps this exceptional decision in
+                            // Work; Ask opens it immediately. Full Access and
+                            // Never are converted to hard blocks by the planner.
                             approval_required = true;
                             approval_description = reason;
                             approval_force_prompt = true;
@@ -1999,7 +2009,7 @@ impl Engine {
                                 approval_required = false;
                                 approval_force_prompt = false;
                                 blocked_error = Some(ToolError::permission_denied(format!(
-                                    "Repository law blocked tool '{tool_name}' in Full Access: {reason}. Switch to Ask to review this protected change."
+                                    "Repository law blocked tool '{tool_name}' in Full Access: {reason}. Switch to Ask or Auto-Review to review this protected change."
                                 )));
                             } else {
                                 approval_required = true;
@@ -2466,30 +2476,16 @@ impl Engine {
 
                         if tool_name == REQUEST_USER_INPUT_NAME {
                             let started_at = Instant::now();
-                            let result =
-                                if crate::core::authority::permission_posture_allows_questions(
-                                    self.session.approval_mode,
-                                ) {
-                                    match UserInputRequest::from_value(&tool_input) {
-                                        Ok(request) => self
-                                            .await_user_input(&tool_id, request)
-                                            .await
-                                            .and_then(|response| {
-                                                ToolResult::json(&response).map_err(|e| {
-                                                    ToolError::execution_failed(e.to_string())
-                                                })
-                                            }),
-                                        Err(err) => Err(err),
-                                    }
-                                } else {
-                                    Ok(ToolResult::success(
-                                    "Auto-Review does not pause for user questions. Decide from the available context and continue autonomously.",
-                                )
-                                .with_metadata(json!({
-                                    "auto_resolved": true,
-                                    "permission_posture": "auto-review",
-                                })))
-                                };
+                            let result = match UserInputRequest::from_value(&tool_input) {
+                                Ok(request) => self
+                                    .await_user_input(&tool_id, request)
+                                    .await
+                                    .and_then(|response| {
+                                        ToolResult::json(&response)
+                                            .map_err(|e| ToolError::execution_failed(e.to_string()))
+                                    }),
+                                Err(err) => Err(err),
+                            };
 
                             let _ = self
                                 .tx_event

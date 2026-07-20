@@ -208,7 +208,8 @@ impl ShellPhase {
         {
             return Self::Failed;
         }
-        if app.pending_user_input_prompt.is_some()
+        if app.pending_work_approval.is_some()
+            || app.pending_user_input_prompt.is_some()
             || app.plan_prompt_pending
             || app
                 .task_panel
@@ -1320,6 +1321,19 @@ mod tests {
         assert_eq!(label, "waiting on you");
 
         app.plan_prompt_pending = false;
+        app.runtime_turn_status = Some("in_progress".to_string());
+        app.pending_work_approval = Some(crate::tui::approval::ApprovalRequest::new(
+            "review-1",
+            "mcp_vendor_mutate_account",
+            "Review remote account change",
+            &serde_json::json!({"account": "example"}),
+            "approval-key",
+        ));
+        let (marker, label) = phase_marker(&app, ShellPhase::from_app(&app));
+        assert_eq!(marker, "◆");
+        assert_eq!(label, "waiting on you");
+
+        app.pending_work_approval = None;
         app.runtime_turn_status = Some("failed".to_string());
         let (marker, label) = phase_marker(&app, ShellPhase::from_app(&app));
         assert_eq!(marker, "✕");

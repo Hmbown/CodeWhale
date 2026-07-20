@@ -1452,6 +1452,85 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                 },
             );
         }
+        "permission_posture" => {
+            if !persist {
+                return CommandResult::error(
+                    "permission_posture is the durable TUI permission choice; add --save, or use approval_mode for a session-only override.",
+                );
+            }
+            let Some(mode) = ApprovalMode::from_config_value(value) else {
+                return CommandResult::error(
+                    "Invalid permission_posture. Use: ask, auto-review, or full-access",
+                );
+            };
+            if mode == ApprovalMode::Never {
+                return CommandResult::error(
+                    "Never is a session/config policy, not a saved TUI posture. Use: ask, auto-review, or full-access",
+                );
+            }
+            let control = match load_command_config(app) {
+                Ok(config) => config.approval_policy_control(
+                    app.config_path.as_deref(),
+                    app.config_profile.as_deref(),
+                    &app.workspace,
+                ),
+                Err(err) => return CommandResult::error(err),
+            };
+            if !matches!(
+                control,
+                crate::config::ApprovalPolicyControl::RootConfig
+                    | crate::config::ApprovalPolicyControl::Unset
+            ) {
+                return CommandResult::error(format!(
+                    "Permission posture is controlled by {}; change that source first.",
+                    control.label()
+                ));
+            }
+
+            let mut settings = match Settings::load_persisted() {
+                Ok(settings) => settings,
+                Err(err) => {
+                    return CommandResult::error(format!(
+                        "Failed to load saved permission posture: {err}"
+                    ));
+                }
+            };
+            let previous = settings.permission_posture.clone();
+            let saved = match mode {
+                ApprovalMode::Suggest => "ask",
+                ApprovalMode::Auto => "auto-review",
+                ApprovalMode::Bypass => "full-access",
+                ApprovalMode::Never => unreachable!("Never rejected above"),
+            };
+            settings.permission_posture = Some(saved.to_string());
+            if let Err(err) = settings.save() {
+                return CommandResult::error(format!("Failed to save permission posture: {err}"));
+            }
+
+            if control == crate::config::ApprovalPolicyControl::RootConfig
+                && let Err(err) =
+                    persist_unset_root_key(app.config_path.as_deref(), "approval_policy")
+            {
+                settings.permission_posture = previous;
+                let rollback = settings.save().err();
+                let rollback_note = rollback
+                    .map(|rollback| format!("; settings rollback also failed: {rollback}"))
+                    .unwrap_or_default();
+                return CommandResult::error(format!(
+                    "Failed to release the root approval policy: {err}{rollback_note}"
+                ));
+            }
+
+            app.set_agent_approval_posture(mode);
+            app.clear_saved_approval_policy_lock();
+            return CommandResult::with_message_and_action(
+                format!(
+                    "permission_posture = {} (saved)",
+                    mode.permission_chip_label()
+                ),
+                AppAction::ApprovalPolicyPersisted { policy: None },
+            );
+        }
         "approval_mode" | "approval_policy" | "approval" => {
             let use_tui_default = matches!(
                 value
@@ -2069,7 +2148,7 @@ pub fn mode(app: &mut App, arg: Option<&str>) -> CommandResult {
         Some(mode) => {
             let (message, changed) = switch_mode_with_status(app, mode);
             if changed {
-                CommandResult::with_message_and_action(message, AppAction::ModeChanged(mode))
+                CommandResult::with_message_and_action(message, AppAction::UserModeChanged(mode))
             } else {
                 CommandResult::message(message)
             }
@@ -2833,7 +2912,10 @@ Parse error: permissions.toml at permissions.toml could not be parsed: expected 
         let result = mode(&mut app, Some("yolo"));
         // YOLO is invisible Act+Bypass shorthand — user-facing copy says Act.
         assert!(result.message.unwrap().contains("Switched to Act mode"));
-        assert_eq!(result.action, Some(AppAction::ModeChanged(AppMode::Yolo)));
+        assert_eq!(
+            result.action,
+            Some(AppAction::UserModeChanged(AppMode::Yolo))
+        );
         assert!(app.allow_shell);
         assert!(app.trust_mode);
         assert!(app.yolo);
@@ -2848,17 +2930,23 @@ Parse error: permissions.toml at permissions.toml could not be parsed: expected 
         let _ = mode(&mut app, Some("agent"));
         assert_eq!(app.mode, AppMode::Agent);
         let result = mode(&mut app, Some("2"));
-        assert_eq!(result.action, Some(AppAction::ModeChanged(AppMode::Plan)));
+        assert_eq!(
+            result.action,
+            Some(AppAction::UserModeChanged(AppMode::Plan))
+        );
         assert_eq!(app.mode, AppMode::Plan);
         let result = mode(&mut app, Some("act"));
-        assert_eq!(result.action, Some(AppAction::ModeChanged(AppMode::Agent)));
+        assert_eq!(
+            result.action,
+            Some(AppAction::UserModeChanged(AppMode::Agent))
+        );
         assert_eq!(app.mode, AppMode::Agent);
         let _ = mode(&mut app, Some("plan"));
         assert_eq!(app.mode, AppMode::Plan);
         let result = mode(&mut app, Some("3"));
         assert_eq!(
             result.action,
-            Some(AppAction::ModeChanged(AppMode::Operate))
+            Some(AppAction::UserModeChanged(AppMode::Operate))
         );
         assert_eq!(app.mode, AppMode::Operate);
         let result = mode(&mut app, Some("5"));
@@ -2868,7 +2956,10 @@ Parse error: permissions.toml at permissions.toml could not be parsed: expected 
         assert!(result.is_error);
         assert_eq!(app.mode, AppMode::Operate);
         let result = mode(&mut app, Some("4"));
-        assert_eq!(result.action, Some(AppAction::ModeChanged(AppMode::Yolo)));
+        assert_eq!(
+            result.action,
+            Some(AppAction::UserModeChanged(AppMode::Yolo))
+        );
         // "4" still parses as the deprecated YOLO alias, which lands in Agent
         // mode with bypass approvals (M6 compat shim).
         assert_eq!(app.mode, AppMode::Agent);
@@ -4043,6 +4134,50 @@ max_concurrent = 4
         let result = config_command(&mut app, Some("approval_mode never"));
         assert!(result.message.is_some());
         assert_eq!(app.approval_mode, ApprovalMode::Never);
+    }
+
+    #[test]
+    fn saved_permission_posture_releases_root_shadow_and_survives_restart() {
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-permission-posture-save-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        fs::create_dir_all(temp_root.join(".deepseek")).expect("settings dir");
+        let _guard = EnvGuard::new(&temp_root);
+        let config_path = temp_root.join(".deepseek").join("config.toml");
+        fs::write(&config_path, "# keep\napproval_policy = \"on-request\"\n").expect("root config");
+        let loaded = Config::load(Some(config_path.clone()), None).expect("load root config");
+        let mut app = create_test_app_with_config(&loaded);
+        app.config_path = Some(config_path.clone());
+
+        let result = set_config_value(&mut app, "permission_posture", "full-access", true);
+
+        assert!(!result.is_error, "{:?}", result.message);
+        assert_eq!(app.approval_mode, ApprovalMode::Bypass);
+        assert_eq!(
+            result.action,
+            Some(AppAction::ApprovalPolicyPersisted { policy: None })
+        );
+        let saved_config = fs::read_to_string(&config_path).expect("saved root config");
+        assert!(saved_config.contains("# keep"));
+        assert!(!saved_config.contains("approval_policy"));
+        assert_eq!(
+            Settings::load_persisted()
+                .expect("saved settings")
+                .permission_posture
+                .as_deref(),
+            Some("full-access")
+        );
+
+        let restarted_config = Config::load(Some(config_path), None).expect("restart config");
+        let mut restarted = create_test_app_with_config(&restarted_config);
+        restarted.config_path = app.config_path.clone();
+        assert_eq!(restarted.approval_mode, ApprovalMode::Bypass);
+        assert!(!restarted.approval_policy_locked());
     }
 
     #[test]

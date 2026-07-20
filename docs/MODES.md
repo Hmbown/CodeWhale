@@ -100,7 +100,7 @@ thread resume semantics.
 
 ## Permission Posture
 
-Permission posture controls tool approval and whether a turn may pause for a
+Permission posture controls tool approval, not whether the model may invent a
 missing user decision. Cycle it with `Shift+Tab`, or edit it at runtime:
 
 ```text
@@ -113,10 +113,11 @@ Legacy note: `/set approval_mode ...` was retired in favor of `/config`.
 - `suggest` (**Ask**, default): tool approvals may interrupt, and Codewhale asks
   when an unresolved user choice materially changes authority, cost, scope, or
   outcome.
-- `auto` (**Auto-Review**): the fully autonomous posture. It never opens a user
-  question; the model resolves ambiguity from context, chooses a safe reversible
-  interpretation, or reports that it cannot proceed safely. Tool safety holds
-  remain separate from user questions.
+- `auto` (**Auto-Review**): routine reversible work is reviewed and approved
+  automatically. Opaque, externally mutating, protected, or explicitly
+  ask-gated actions pause only that lane and appear as **Needs input** in Work;
+  selecting the row opens the review. Genuine consequential questions use the
+  same non-interrupting Work path. Explicit denies remain hard blocks.
 - `bypass` (**Full Access**): ordinary tool calls do not show approval prompts,
   while deliberate user questions remain available. Non-bypassable safety,
   repository-law, and managed-policy holds fail closed as hard blocks instead
@@ -124,8 +125,8 @@ Legacy note: `/set approval_mode ...` was retired in favor of `/config`.
 - `never`: blocks any tool that is not considered safe/read-only; deliberate
   user questions remain available.
 
-The effective posture and its question discipline are projected into every
-turn from the same runtime authority that gates tools. A mode/posture change is
+The effective posture and its question discipline are projected into every turn
+from the same runtime authority that gates tools. A mode/posture change is
 therefore visible to the next turn. Untrusted runtime-generated input is
 narrowed before metadata is built and cannot invent approval authority. An
 explicit Full Access sub-agent handoff preserves the parent's standing posture

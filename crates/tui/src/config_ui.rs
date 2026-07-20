@@ -262,6 +262,7 @@ pub enum WorkSurfacePlacementValue {
 pub enum DefaultModeValue {
     Agent,
     Plan,
+    Operate,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -1005,6 +1006,7 @@ impl DefaultModeValue {
         match self {
             Self::Agent => "agent",
             Self::Plan => "plan",
+            Self::Operate => "operate",
         }
     }
 }
@@ -1114,8 +1116,9 @@ impl From<&str> for TranscriptSpacingValue {
 impl From<&str> for DefaultModeValue {
     fn from(value: &str) -> Self {
         match AppMode::from_setting(value) {
-            AppMode::Agent | AppMode::Operate | AppMode::Yolo => Self::Agent,
+            AppMode::Agent | AppMode::Yolo => Self::Agent,
             AppMode::Plan => Self::Plan,
+            AppMode::Operate => Self::Operate,
             AppMode::Auto => Self::Agent,
         }
     }
@@ -1291,13 +1294,14 @@ mod tests {
     }
 
     #[test]
-    fn legacy_startup_mode_values_project_to_agent_in_config_ui() {
+    fn visible_startup_modes_round_trip_in_config_ui() {
         assert_eq!(DefaultModeValue::from("agent"), DefaultModeValue::Agent);
-        assert_eq!(DefaultModeValue::from("operate"), DefaultModeValue::Agent);
+        assert_eq!(DefaultModeValue::from("operate"), DefaultModeValue::Operate);
         assert_eq!(DefaultModeValue::from("yolo"), DefaultModeValue::Agent);
         assert_eq!(DefaultModeValue::from("plan"), DefaultModeValue::Plan);
         assert_eq!(DefaultModeValue::Agent.as_setting(), "agent");
         assert_eq!(DefaultModeValue::Plan.as_setting(), "plan");
+        assert_eq!(DefaultModeValue::Operate.as_setting(), "operate");
     }
 
     #[test]
@@ -1410,7 +1414,10 @@ background_color = "#1A1B26"
             &serde_json::json!(["auto", "bypass", "suggest", "never"])
         );
         let default_mode = &schema["$defs"]["DefaultModeValue"]["enum"];
-        assert_eq!(default_mode, &serde_json::json!(["agent", "plan"]));
+        assert_eq!(
+            default_mode,
+            &serde_json::json!(["agent", "plan", "operate"])
+        );
         let locale = &schema["$defs"]["UiLocale"]["enum"];
         assert_eq!(
             locale,

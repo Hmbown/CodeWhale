@@ -334,8 +334,9 @@ impl AutoReviewPolicy {
 }
 
 /// The non-bypassable floor beneath rules and modes. Ask and Auto-Review
-/// surface a hold for approval; Full Access and other non-interactive
-/// approval postures convert the same hold into a hard block. It keys on
+/// surface a hold for deliberate review; Full Access and other
+/// non-interactive approval postures convert the same hold into a hard block.
+/// It keys on
 /// `ToolActionKind` — what the call actually does — not on `RiskLevel`,
 /// whose `Destructive` bucket means "not provably read-only" and exists for
 /// modal styling. Keying the floor on that bucket held ordinary background
@@ -345,10 +346,10 @@ impl AutoReviewPolicy {
 fn safety_floor(ctx: &AutoReviewContext<'_>) -> Option<AutoReviewDecision> {
     match (ctx.action_kind, ctx.run_origin) {
         // Full Access (Bypass) means exactly that: the user granted publish
-        // authority to this session, so the publish floor prompts only in
-        // the Ask/Auto-Review postures (#4595). The catastrophic-destroyer
-        // floor below still applies in every posture — it guards against
-        // model error, not user intent.
+        // authority to this session, so the publish floor prompts only in the
+        // Ask/Auto-Review postures (#4595). The catastrophic-destroyer floor
+        // below still applies in every posture — it guards against model
+        // error, not user intent.
         (ToolActionKind::Publish, _) if ctx.approval_mode != ApprovalMode::Bypass => {
             Some(AutoReviewDecision::new(
                 AutoReviewAction::HoldForReview,
@@ -367,18 +368,59 @@ fn safety_floor(ctx: &AutoReviewContext<'_>) -> Option<AutoReviewDecision> {
 }
 
 fn deterministic_fallback(ctx: &AutoReviewContext<'_>) -> AutoReviewDecision {
-    match (ctx.category, ctx.risk, ctx.action_kind) {
-        (_, RiskLevel::Benign, _) => {
+    // The engine's posture-specific question discipline owns this synthetic
+    // tool (including hallucinated calls after it was removed from the
+    // catalog). Let that downstream guard return its structured autonomous
+    // resolution instead of misclassifying the control-plane call as an
+    // unknown remote action.
+    if ctx.tool_name == "request_user_input" {
+        return AutoReviewDecision::new(
+            AutoReviewAction::Allow,
+            "permission posture owns user-question resolution",
+        );
+    }
+
+    // Auto-Review is an actual deterministic review, not a second spelling of
+    // Full Access. Workspace-scoped reads, writes, ordinary shell work,
+    // read-like network access, local git operations, and child work are the
+    // reversible implementation path. Opaque or externally mutating actions
+    // need a deliberate user decision unless an explicit allow rule matched
+    // above. Publish and catastrophic actions were already caught by the
+    // safety floor when the floor is non-bypassable; interactive variants are
+    // escalated here rather than silently discarded.
+    match ctx.action_kind {
+        ToolActionKind::Read | ToolActionKind::McpRead => {
             AutoReviewDecision::new(AutoReviewAction::Allow, "read-only action is allowed")
         }
-        (ToolCategory::Unknown, _, _) => AutoReviewDecision::new(
-            AutoReviewAction::AskUser,
-            "unknown tool category requires explicit review",
+        ToolActionKind::Write
+        | ToolActionKind::Shell
+        | ToolActionKind::Network
+        | ToolActionKind::Git
+        | ToolActionKind::Agent => AutoReviewDecision::new(
+            AutoReviewAction::Allow,
+            format!(
+                "{} action is within the reversible automatic-review path",
+                ctx.action_kind.as_str()
+            ),
         ),
-        (_, RiskLevel::Destructive, _) => AutoReviewDecision::new(
-            AutoReviewAction::AskUser,
-            "destructive action requires explicit review",
-        ),
+        ToolActionKind::McpAction | ToolActionKind::Browser | ToolActionKind::Unknown => {
+            AutoReviewDecision::new(
+                AutoReviewAction::AskUser,
+                format!(
+                    "{} action needs deliberate review",
+                    ctx.action_kind.as_str()
+                ),
+            )
+        }
+        ToolActionKind::Secret | ToolActionKind::Publish | ToolActionKind::Destructive => {
+            AutoReviewDecision::new(
+                AutoReviewAction::AskUser,
+                format!(
+                    "{} action is too consequential for automatic approval",
+                    ctx.action_kind.as_str()
+                ),
+            )
+        }
     }
 }
 
@@ -863,7 +905,7 @@ mod tests {
         assert_eq!(ctx.category, ToolCategory::Shell);
         assert_eq!(ctx.risk, RiskLevel::Benign);
         assert_eq!(decision.action, AutoReviewAction::Allow);
-        assert!(decision.reason.contains("read-only"));
+        assert!(decision.reason.contains("reversible automatic-review path"));
     }
 
     #[test]
@@ -1101,9 +1143,9 @@ mod tests {
     }
 
     #[test]
-    fn mcp_read_allows_and_mcp_action_is_not_held_by_policy() {
-        // MCP actions are governed by the mode unless they are also classified
-        // as a publish-like action by name/arguments.
+    fn mcp_read_allows_and_mcp_action_needs_deliberate_review() {
+        // Read-only MCP stays routine. A mutating remote call is neither
+        // silently blocked nor treated like a local reversible edit.
         let policy = AutoReviewPolicy::default();
         let read_ctx = ctx_for(
             "read_mcp_resource",
@@ -1119,10 +1161,10 @@ mod tests {
         );
 
         assert_eq!(policy.evaluate(&read_ctx).action, AutoReviewAction::Allow);
-        assert_ne!(
+        assert_eq!(
             policy.evaluate(&action_ctx).action,
-            AutoReviewAction::HoldForReview,
-            "MCP actions are no longer held by the policy; the mode governs prompting"
+            AutoReviewAction::AskUser,
+            "mutating MCP actions require deliberate review unless explicitly allowed"
         );
     }
 

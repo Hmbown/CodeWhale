@@ -183,13 +183,13 @@ pub(crate) fn provenance_can_inherit_standing_auto_authority(
     )
 }
 
-/// Whether the active permission posture may pause the turn for a user
-/// decision. Auto-Review is the fully autonomous posture: it must decide from
-/// available context and keep moving. Tool approval and user-question policy
-/// stay deliberately separate in every other posture.
+/// Whether the active permission posture may pause the turn for a genuine user
+/// decision. Permission posture controls tool approval, not whether the model
+/// may invent a consequential choice. Auto-Review handles routine tool calls
+/// itself, but it must still be able to surface a real missing decision.
 #[must_use]
-pub(crate) fn permission_posture_allows_questions(approval_mode: ApprovalMode) -> bool {
-    approval_mode != ApprovalMode::Auto
+pub(crate) const fn permission_posture_allows_questions(_approval_mode: ApprovalMode) -> bool {
+    true
 }
 
 #[must_use]

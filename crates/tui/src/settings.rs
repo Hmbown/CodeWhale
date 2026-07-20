@@ -281,7 +281,7 @@ pub struct Settings {
     /// session directly; resume remains available in-session.
     #[serde(default)]
     pub launch_screen: bool,
-    /// Default mode: "agent" or "plan". Legacy permission
+    /// Default mode: "agent", "plan", or "operate". Legacy permission
     /// shorthands are accepted for migration but never advertised as modes.
     pub default_mode: String,
     /// Sidebar width as percentage of terminal width
@@ -639,7 +639,7 @@ impl Settings {
     /// Whether this load normalized a legacy `default_mode = "yolo"` value.
     ///
     /// This is migration provenance, not a user-facing mode. New writes accept
-    /// only Agent or Plan and serialize the independent permission posture.
+    /// Plan, Act, or Operate and serialize the independent permission posture.
     pub(crate) fn legacy_yolo_default_detected(&self) -> bool {
         self.legacy_yolo_default
     }
@@ -943,14 +943,15 @@ impl Settings {
                 self.workspace_follow_symlinks = parse_bool(value)?;
             }
             "default_mode" | "mode" => {
-                // Loading remains deliberately liberal so old `operate` and
-                // `yolo` files migrate safely. New writes are strict: these
-                // are session actions/permission aliases, not startup modes.
+                // Loading remains deliberately liberal so old aliases and
+                // `yolo` files migrate safely. New writes preserve each
+                // user-visible startup mode; permission aliases stay separate.
                 self.default_mode = match value.trim().to_ascii_lowercase().as_str() {
-                    "agent" | "normal" => "agent".to_string(),
+                    "agent" | "act" | "normal" => "agent".to_string(),
                     "plan" => "plan".to_string(),
+                    "operate" | "operation" | "ops" => "operate".to_string(),
                     _ => anyhow::bail!(
-                        "Failed to update setting: invalid mode '{value}'. Expected: agent or plan."
+                        "Failed to update setting: invalid mode '{value}'. Expected: act, plan, or operate."
                     ),
                 };
             }
@@ -1283,7 +1284,7 @@ impl Settings {
                 "workspace_follow_symlinks",
                 "Follow symbolic links during workspace file discovery walks: on/off (default off). Enable for symlink-based multi-project workspaces. Has built-in cycle detection but may increase latency on large symlinked trees.",
             ),
-            ("default_mode", "Default mode: agent or plan"),
+            ("default_mode", "Default mode: act, plan, or operate"),
             ("sidebar_width", "Sidebar width percentage: 10-50"),
             (
                 "sidebar_focus",
@@ -1576,9 +1577,7 @@ fn normalize_mode(value: &str) -> &str {
         "normal" => "agent",
         "agent" => "agent",
         "plan" => "plan",
-        // Operate is a session action, not a startup personality. Old saved
-        // values fall back to the safe general-purpose Agent startup mode.
-        "operate" | "operation" | "ops" => "agent",
+        "operate" | "operation" | "ops" => "operate",
         // Kept as a migration input in `load_persisted`; new settings never
         // advertise it as a mode because permission posture is separate.
         "yolo" => "agent",
@@ -3097,7 +3096,7 @@ mod tests {
     }
 
     #[test]
-    fn startup_mode_writes_only_accept_agent_or_plan() {
+    fn startup_mode_writes_accept_every_visible_mode() {
         let mut settings = Settings::default();
 
         settings.set("default_mode", "plan").expect("plan mode");
@@ -3106,12 +3105,16 @@ mod tests {
             .set("default_mode", "normal")
             .expect("legacy normal alias remains harmless");
         assert_eq!(settings.default_mode, "agent");
+        settings
+            .set("default_mode", "operate")
+            .expect("operate mode");
+        assert_eq!(settings.default_mode, "operate");
 
-        for removed in ["operate", "ops", "yolo"] {
+        for removed in ["yolo", "bypass"] {
             let err = settings
                 .set("default_mode", removed)
-                .expect_err("session actions must not become saved startup modes");
-            assert!(err.to_string().contains("agent or plan"), "{err}");
+                .expect_err("permission aliases must not become saved startup modes");
+            assert!(err.to_string().contains("act, plan, or operate"), "{err}");
         }
     }
 
@@ -3141,7 +3144,7 @@ mod tests {
         )
         .expect("legacy operate settings");
         let loaded = Settings::load_persisted().expect("load legacy operate settings");
-        assert_eq!(loaded.default_mode, "agent");
+        assert_eq!(loaded.default_mode, "operate");
         assert_eq!(loaded.permission_posture, None);
     }
 

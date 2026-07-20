@@ -1,7 +1,8 @@
 //! Ocean Work Graph surface ownership.
 //!
 //! Placement, scrolling, selection, and pager ownership remain local to this
-//! component. Every visible work row derives from the active-session graph.
+//! component. Durable work rows derive from the active-session graph; pending
+//! engine decisions are projected here as ephemeral attention rows.
 
 mod input;
 mod interaction;
@@ -234,6 +235,77 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].label, "Work · empty");
         assert!(!rows[0].selectable);
+    }
+
+    #[test]
+    fn auto_review_attention_replaces_empty_work_without_opening_a_modal() {
+        let mut app = app();
+        app.current_session_id = Some(SESSION.to_string());
+        app.pending_work_approval = Some(crate::tui::approval::ApprovalRequest::new(
+            "approval-1",
+            "mcp_vendor_mutate_account",
+            "Change a remote account",
+            &serde_json::json!({"account": "example"}),
+            "approval-key",
+        ));
+
+        let rows = super::model::project(&mut app);
+
+        assert_eq!(rows[0].label, "Work · 1 needs input");
+        assert_eq!(rows[1].mark, "?");
+        assert_eq!(rows[1].label, "Review mcp_vendor_mutate_account");
+        assert_eq!(rows[1].detail, "decision waiting");
+        assert!(rows[1].selectable);
+        assert!(matches!(
+            rows[1].primary_action.as_ref(),
+            Some(SidebarRowAction::ReviewApproval { tool_id }) if tool_id == "approval-1"
+        ));
+        assert!(
+            app.view_stack.is_empty(),
+            "projection must not throw a modal"
+        );
+    }
+
+    #[test]
+    fn genuine_question_is_selectable_from_work() {
+        let mut app = app();
+        app.current_session_id = Some(SESSION.to_string());
+        app.pending_user_input_prompt = Some((
+            "question-1".to_string(),
+            crate::tools::user_input::UserInputRequest {
+                questions: vec![crate::tools::user_input::UserInputQuestion {
+                    header: "Choice".to_string(),
+                    id: "choice".to_string(),
+                    question: "Which path\nshould I\ttake?".to_string(),
+                    options: vec![
+                        crate::tools::user_input::UserInputOption {
+                            label: "A".to_string(),
+                            description: "Take path A".to_string(),
+                        },
+                        crate::tools::user_input::UserInputOption {
+                            label: "B".to_string(),
+                            description: "Take path B".to_string(),
+                        },
+                    ],
+                    allow_free_text: false,
+                    multi_select: false,
+                }],
+            },
+        ));
+
+        let rows = super::model::project(&mut app);
+
+        assert_eq!(rows[0].label, "Work · 1 needs input");
+        assert_eq!(rows[1].label, "Which path should I take?");
+        assert_eq!(rows[1].detail, "decision waiting");
+        assert!(matches!(
+            rows[1].primary_action.as_ref(),
+            Some(SidebarRowAction::AnswerUserInput { tool_id }) if tool_id == "question-1"
+        ));
+        assert!(
+            app.view_stack.is_empty(),
+            "projection must not throw a modal"
+        );
     }
 
     #[test]
