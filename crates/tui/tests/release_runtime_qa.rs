@@ -86,6 +86,12 @@ fn fanout_tool_call_sse_n(count: usize) -> String {
                     "arguments": serde_json::to_string(&json!({
                         "message": format!("stay busy worker {worker} until the parent QA turn is cancelled"),
                         "agent_type": "explorer",
+                        // Explicit fresh context: this harness dispatches mock
+                        // responses on request content, and an auto-forked
+                        // child would carry the parent conversation (including
+                        // the parent prompt) in its requests. Explicit false
+                        // always wins over the auto-fork policy.
+                        "fork_context": false,
                         "session_name": format!("qa-worker-{worker}")
                     }))
                     .expect("agent arguments")
