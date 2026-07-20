@@ -29,7 +29,7 @@ Never poll status or `sleep` to wait — completion sentinels arrive on their ow
 
 Use `type: "explore"` for read-only scouting (defaults to `model_strength: "faster"`; use `model_strength: "same"` when the child needs parent-level capability). Open 2-4 `type: "explore"` sub-agents in parallel only when their outputs are independent. Brief sub-agents with a compact Subagent Brief: `QUESTION`, `SCOPE`, `ALREADY_KNOWN`, `EFFORT`, `STOP_CONDITION`, and `OUTPUT` (`VERDICT`, `EVIDENCE`, `GAPS`, `NEXT`). Explore briefs default to `quick`, read-only, about 3-5 tool calls. Review/verifier children stop after decisive evidence.
 
-`fork_context` is auto-chosen: read-only children on the parent's exact route fork the byte-identical parent prefix (shared context, DeepSeek prefix-cache reuse); write-capable, isolated, or re-routed children start fresh. Set `fork_context` only to override.
+`fork_context` is auto-chosen: read-only children on the parent's exact route fork the byte-identical parent prefix (shared context, DeepSeek prefix-cache reuse); write-capable, isolated, or re-routed children start fresh; set it explicitly only to override.
 
 ###### Large Context Tools
 
