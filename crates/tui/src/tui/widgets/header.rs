@@ -392,7 +392,6 @@ impl<'a> HeaderWidget<'a> {
             combined.extend(Self::version_spans(prefix));
             combined
         };
-
         let candidates = [
             pinned(self.status_variant(true, true, true)),
             pinned(self.status_variant(false, true, true)),

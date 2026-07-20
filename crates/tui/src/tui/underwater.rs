@@ -18,10 +18,12 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
+use crate::config::HeaderItem;
 use crate::localization::{Locale, MessageId, tr};
 use crate::tui::{
     app::{App, AppMode, OnboardingState},
     approval::ApprovalMode,
+    footer_ui::format_token_count_compact,
     views::ModalKind,
 };
 
@@ -640,6 +642,20 @@ fn compact_effort_label(label: &str) -> &'static str {
     }
 }
 
+fn session_token_breakdown(app: &App) -> Option<Span<'static>> {
+    app.header_items.contains(&HeaderItem::Tokens).then(|| {
+        Span::styled(
+            format!(
+                "{} in · {} cch · {} out",
+                format_token_count_compact(u64::from(app.session.total_input_tokens)),
+                format_token_count_compact(u64::from(app.session.total_cache_hit_tokens)),
+                format_token_count_compact(u64::from(app.session.total_output_tokens)),
+            ),
+            Style::default().fg(app.ui_theme.info),
+        )
+    })
+}
+
 /// Render the one-line shell header. Route, mode, requested/effective effort,
 /// permission, active-agent count, and context each have exactly one owner.
 pub fn render_header(area: Rect, buf: &mut Buffer, app: &App) {
@@ -706,34 +722,75 @@ pub fn render_header(area: Rect, buf: &mut Buffer, app: &App) {
         Style::default().fg(app.ui_theme.text_muted),
     ));
 
+    let context_meter = (tier != ShellTier::Compact)
+        .then(|| crate::tui::ui::context_usage_snapshot(app))
+        .flatten()
+        .map(|(used, max, percent)| {
+            let filled = ((percent / 100.0) * 5.0).ceil().clamp(0.0, 5.0) as usize;
+            Span::styled(
+                format!(
+                    "{}/{} [{}{}] {:.0}%",
+                    compact_tokens(used),
+                    compact_tokens(i64::from(max)),
+                    "▰".repeat(filled),
+                    "▱".repeat(5usize.saturating_sub(filled)),
+                    percent
+                ),
+                Style::default().fg(app.ui_theme.info),
+            )
+        });
+    let token_breakdown = (tier != ShellTier::Compact)
+        .then(|| session_token_breakdown(app))
+        .flatten();
+    let version = (tier == ShellTier::Wide).then(|| {
+        Span::styled(
+            format!("v{}", env!("DEEPSEEK_BUILD_VERSION")),
+            Style::default().fg(app.ui_theme.text_hint),
+        )
+    });
+    // Build the existing right-hand chrome exactly as before. Configured
+    // header items may use spare width, but falling back must restore this
+    // baseline rather than eliding context or version information.
     let mut right = Vec::new();
-    if tier != ShellTier::Compact
-        && let Some((used, max, percent)) = crate::tui::ui::context_usage_snapshot(app)
-    {
-        let filled = ((percent / 100.0) * 5.0).ceil().clamp(0.0, 5.0) as usize;
-        right.push(Span::styled(
-            format!(
-                "{}/{} [{}{}] {:.0}%",
-                compact_tokens(used),
-                compact_tokens(i64::from(max)),
-                "▰".repeat(filled),
-                "▱".repeat(5usize.saturating_sub(filled)),
-                percent
-            ),
-            Style::default().fg(app.ui_theme.info),
-        ));
+    if let Some(context_meter) = context_meter {
+        right.push(context_meter);
     }
-    if tier == ShellTier::Wide {
+    if let Some(version) = version {
         if !right.is_empty() {
             right.push(Span::raw("  "));
         }
-        right.push(Span::styled(
-            format!("v{}", env!("DEEPSEEK_BUILD_VERSION")),
-            Style::default().fg(app.ui_theme.text_hint),
-        ));
+        right.push(version);
     }
 
+    let minimum_effort = if tier == ShellTier::Compact {
+        compact_effort_label(&effort_label).to_string()
+    } else {
+        effort_label.clone()
+    };
+    let indicator_width = status_indicator.map_or(0, |indicator| 1 + indicator.width());
+    let minimum_left_width = 4usize
+        .saturating_add(indicator_width)
+        .saturating_add(3 + mode_label(app.ui_locale, app.mode).width())
+        .saturating_add(3 + minimum_effort.width())
+        .saturating_add(3 + permission_label(app).width());
     let available = usize::from(area.width);
+    if let Some(token_breakdown) = token_breakdown {
+        let mut enhanced_right = vec![token_breakdown];
+        if !right.is_empty() {
+            enhanced_right.push(Span::raw("  "));
+            enhanced_right.extend(right.iter().cloned());
+        }
+        let enhanced_width = span_width(&enhanced_right);
+        let gap = usize::from(enhanced_width > 0);
+        if minimum_left_width
+            .saturating_add(gap)
+            .saturating_add(enhanced_width)
+            <= available
+        {
+            right = enhanced_right;
+        }
+    }
+
     let right_width = span_width(&right);
     let left_budget = available.saturating_sub(right_width + usize::from(right_width > 0));
     if span_width(&left) > left_budget {
@@ -1078,6 +1135,73 @@ mod tests {
         let mut buf = Buffer::empty(area);
         render_header(area, &mut buf, app);
         (0..width).map(|x| buf[(x, 0)].symbol()).collect()
+    }
+
+    #[test]
+    fn configured_session_tokens_follow_underwater_header_width_priority() {
+        let mut app = test_app();
+        app.header_items = vec![HeaderItem::Tokens];
+        app.session.total_input_tokens = 18_000;
+        app.session.total_cache_hit_tokens = 12_000;
+        app.session.total_output_tokens = 6_000;
+        app.session.last_prompt_tokens = Some(48_000);
+
+        for (width, should_show_tokens, should_show_context) in [
+            (40, false, false),
+            (60, false, true),
+            (80, true, true),
+            (100, true, true),
+        ] {
+            let header = header_text(&app, width);
+            assert_eq!(
+                header.contains("18.0k in · 12.0k cch · 6.0k out"),
+                should_show_tokens,
+                "unexpected token visibility at width {width}: {header:?}",
+            );
+            assert_eq!(
+                header.contains('%'),
+                should_show_context,
+                "unexpected context visibility at width {width}: {header:?}",
+            );
+            assert!(
+                header.to_ascii_lowercase().contains("act"),
+                "mode must survive at width {width}: {header:?}",
+            );
+            assert!(
+                header.to_ascii_lowercase().contains("ask"),
+                "permission must survive at width {width}: {header:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn underwater_header_keeps_session_tokens_opt_in() {
+        let mut app = test_app();
+        app.header_items.clear();
+        app.session.total_input_tokens = 18_000;
+        app.session.total_cache_hit_tokens = 12_000;
+        app.session.total_output_tokens = 6_000;
+        app.session.last_prompt_tokens = Some(48_000);
+
+        let normal_header = header_text(&app, 60);
+        let wide_header = header_text(&app, 110);
+
+        assert!(
+            !normal_header.contains("18.0k in"),
+            "header: {normal_header:?}"
+        );
+        assert!(
+            normal_header.contains('%'),
+            "context meter missing: {normal_header:?}"
+        );
+        assert!(
+            wide_header.contains('%'),
+            "context meter missing: {wide_header:?}"
+        );
+        assert!(
+            wide_header.contains(&format!("v{}", env!("DEEPSEEK_BUILD_VERSION"))),
+            "version missing: {wide_header:?}"
+        );
     }
 
     #[test]

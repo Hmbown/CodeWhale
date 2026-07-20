@@ -2280,6 +2280,9 @@ pub struct App {
     /// live by `/statusline`. The renderer iterates this slice; no item is
     /// hardcoded in the footer code path.
     pub status_items: Vec<crate::config::StatusItem>,
+    /// Optional header items enabled from `tui.header_items` in `config.toml`
+    /// at startup. Built-in header content remains independent of this list.
+    pub header_items: Vec<crate::config::HeaderItem>,
     /// Project documentation (AGENTS.md or CLAUDE.md)
     #[allow(dead_code)]
     pub project_doc: Option<String>,
@@ -3438,6 +3441,11 @@ impl App {
                 .as_ref()
                 .and_then(|tui| tui.status_items.clone())
                 .unwrap_or_else(crate::config::StatusItem::default_footer),
+            header_items: config
+                .tui
+                .as_ref()
+                .and_then(|tui| tui.header_items.clone())
+                .unwrap_or_else(crate::config::HeaderItem::default_header),
             project_doc: None,
             plan_state,
             plan_prompt_pending: false,
