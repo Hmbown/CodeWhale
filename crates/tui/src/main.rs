@@ -1493,7 +1493,13 @@ async fn run_async_main(
                     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
                 });
                 let mut config = config.clone();
-                merge_user_workspace_config(&mut config, cli.config.clone(), &workspace);
+                // #4641: `--no-project-config` skips the workspace-specific
+                // `[workspace]`/`[projects]` user-config overlay so a headless
+                // launch (e.g. a future Verifiers harness) sees a reproducible
+                // config surface that depends only on the explicit `--config`.
+                if !cli.no_project_config {
+                    merge_user_workspace_config(&mut config, cli.config.clone(), &workspace);
+                }
                 if let Some(sandbox) = args.sandbox.as_deref() {
                     let _ = parse_sandbox_policy(sandbox, true, Vec::new(), false, false)?;
                     config.sandbox_mode = Some(sandbox.to_ascii_lowercase());
@@ -14901,6 +14907,39 @@ allow_shell = true
         merge_user_workspace_config_from_doc(&mut config, &doc, &workspace);
 
         assert_eq!(config.allow_shell, Some(true));
+    }
+
+    #[test]
+    fn exec_no_project_config_skips_user_workspace_overlay() {
+        // #4641: `codewhale --no-project-config exec` must skip the
+        // workspace-specific `[workspace]`/`[projects]` overlay so a headless
+        // launch sees a reproducible config surface. This documents the overlay
+        // the `Commands::Exec` gate skips; the end-to-end wiring is proven by
+        // `tests/verifiers_harness_contract.rs`.
+        let tmp = tempdir().expect("tempdir");
+        let workspace = tmp.path().join("project");
+        fs::create_dir_all(&workspace).expect("mkdir workspace");
+        let raw = format!(
+            "[workspace.'{}']\nallow_shell = true\n",
+            workspace.display()
+        );
+        let doc: toml::Value = toml::from_str(&raw).expect("parse config");
+
+        // Default (flag off): the overlay applies.
+        let mut applied = Config::default();
+        let no_project_config = false;
+        if !no_project_config {
+            merge_user_workspace_config_from_doc(&mut applied, &doc, &workspace);
+        }
+        assert_eq!(applied.allow_shell, Some(true));
+
+        // `--no-project-config`: Exec skips the overlay, leaving config untouched.
+        let mut skipped = Config::default();
+        let no_project_config = true;
+        if !no_project_config {
+            merge_user_workspace_config_from_doc(&mut skipped, &doc, &workspace);
+        }
+        assert_eq!(skipped.allow_shell, None);
     }
 
     #[test]

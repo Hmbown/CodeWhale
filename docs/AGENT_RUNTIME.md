@@ -182,3 +182,81 @@ Explicitly deferred by their own documents: external workflow memory (boundary
 only), automatic harness evolution, hosted workrooms, `constitution_modules`
 (needs sign-off), permission profiles (#3211, needs design), and plan-ceiling
 probing (needs a product decision).
+
+## Public launch contract for an external harness (#4641)
+
+An external evaluation harness (for example a future Verifiers v1 built-in
+harness) embeds CodeWhale by launching the public `codewhale exec` front door
+against an interception endpoint it owns. CodeWhale owns only its **launch
+contract**; the harness owns interception, traces, model-call timing, token
+accounting, retries, rollout limits, and runtime orchestration. Do not add a
+harness runtime, trace parser, or receipt schema to CodeWhale.
+
+A reproducible headless launch uses only existing generic surfaces:
+
+- an explicit temporary config that names the route and the credential
+  **environment variable**, never the secret itself:
+
+  ```toml
+  provider = "openai"
+
+  [providers.openai]
+  base_url = ""            # the harness fills in its interception endpoint
+  model = ""               # the harness fills in the target model
+  api_key_env = "VF_CODEWHALE_API_KEY"
+  ```
+
+- `CODEWHALE_HOME` set to a fresh per-run directory;
+- `CODEWHALE_SECRET_BACKEND=file`;
+- `CODEWHALE_MCP_CONFIG` pointing to a generated per-run MCP JSON file that
+  contains only the task servers the harness supplies
+  (`{"mcpServers":{"task-tools":{"url":""}}}`; the `mcpServers` alias and
+  URL-based Streamable HTTP / SSE transports already exist);
+- `CODEWHALE_MEMORY=false` and `CODEWHALE_TELEMETRY=false`;
+- `CODEWHALE_ALLOW_INSECURE_HTTP=1` **only** when the harness supplies a
+  trusted `http://` interception endpoint (container/tunnel endpoints are not
+  always loopback);
+- `--append-system-prompt` and `--disallowed-tools` when the caller supplies
+  them.
+
+The interception secret stays in the child environment (resolved through the
+route's `api_key_env`); it is never written into argv, the route config, logs,
+the `stream-json` stream, or any generated file.
+
+The exact argument order is:
+
+```sh
+codewhale \
+  --config .vf-codewhale/config.toml \
+  --workspace . \
+  --no-project-config \
+  --skip-onboarding \
+  exec \
+  --auto \
+  --sandbox danger-full-access \
+  --output-format stream-json \
+  -- "<task prompt>"
+```
+
+`--no-project-config` must appear **before** the subcommand (like
+`--skip-onboarding`). The public dispatcher parses it and forwards it ahead of
+the TUI subcommand; `Exec` then skips the workspace-specific
+`[workspace]`/`[projects]` user-config overlay so the config surface depends
+only on the explicit `--config`. `crates/tui/tests/verifiers_harness_contract.rs`
+is the provider-free acceptance lock for this contract.
+
+### Future upstream checklist (out of scope here — do not run)
+
+Actually adding CodeWhale as a built-in harness lives in the external Verifiers
+repository, **after** a public, immutable CodeWhale `v0.9.1` GitHub Release and
+checksum manifest exist. That upstream change is expected to be limited to a new
+`verifiers/v1/harnesses/codewhale/` package plus its test-matrix and docs
+registration, with `CodewhaleHarnessConfig` pinning `0.9.1`, `setup()`
+downloading and verifying the released archive, and `launch()` writing the
+temporary route/MCP files above and calling `runtime.run_program(...)`.
+
+Holdouts, explicitly **not** performed by this contract work: tagging,
+publishing, or creating a CodeWhale release; opening or submitting the upstream
+Verifiers PR; running its credentialed E2E matrix; or claiming
+runtime/architecture support before the exact released archive has run in that
+upstream runtime.

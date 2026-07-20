@@ -197,6 +197,11 @@ struct Cli {
     no_mouse_capture: bool,
     #[arg(long = "skip-onboarding")]
     skip_onboarding: bool,
+    /// Skip loading project-level config, including the workspace-specific
+    /// `[workspace]`/`[projects]` overlay from user config. Must appear before
+    /// the subcommand; it is forwarded to the TUI ahead of the subcommand.
+    #[arg(long = "no-project-config")]
+    no_project_config: bool,
     /// Legacy compatibility alias for Act + Full Access.
     #[arg(long, hide = true)]
     yolo: bool,
@@ -4243,6 +4248,9 @@ fn build_tui_command_with_paths(
     if cli.skip_onboarding {
         cmd.arg("--skip-onboarding");
     }
+    if cli.no_project_config {
+        cmd.arg("--no-project-config");
+    }
     cmd.args(passthrough);
 
     let uses_raw_tui_provider = cli
@@ -7564,6 +7572,84 @@ model = "qwen-2.5-7b"
             args.windows(2)
                 .any(|pair| pair == ["--workspace", "/tmp/codewhale-workspace"]),
             "expected workspace forwarding in args: {args:?}"
+        );
+    }
+
+    #[test]
+    fn parses_no_project_config_before_subcommand() {
+        let cli = parse_ok(&["codewhale", "--no-project-config", "exec", "list the files"]);
+        assert!(cli.no_project_config);
+        match cli.command {
+            Some(Commands::Exec(args)) => {
+                assert_eq!(args.args, vec!["list the files".to_string()]);
+            }
+            other => panic!("expected exec subcommand, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn no_project_config_after_passthrough_subcommand_is_not_the_dispatcher_flag() {
+        // `exec` captures trailing args (`trailing_var_arg`), so a misplaced
+        // `--no-project-config` is NOT honored as the dispatcher flag — it must
+        // appear before the subcommand, exactly like `--skip-onboarding`.
+        let cli = parse_ok(&["codewhale", "exec", "--no-project-config", "hi"]);
+        assert!(!cli.no_project_config);
+        match cli.command {
+            Some(Commands::Exec(args)) => {
+                assert!(args.args.iter().any(|a| a == "--no-project-config"));
+            }
+            other => panic!("expected exec subcommand, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_tui_command_forwards_no_project_config_before_subcommand() {
+        let _lock = env_lock();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let custom = dir
+            .path()
+            .join(format!("custom-tui{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&custom, b"").unwrap();
+        let custom_str = custom.to_string_lossy().into_owned();
+        let _bin = ScopedEnvVar::set("DEEPSEEK_TUI_BIN", &custom_str);
+
+        let cli = parse_ok(&["codewhale", "--no-project-config", "exec", "hi"]);
+        let resolved = ResolvedRuntimeOptions {
+            provider: ProviderKind::Openai,
+            provider_source: ProviderSource::Cli,
+            model: "glm-5".to_string(),
+            api_key: Some("resolved-openai-key".to_string()),
+            api_key_source: Some(RuntimeApiKeySource::Keyring),
+            base_url: "https://openai-compatible.example/v4".to_string(),
+            auth_mode: Some("api_key".to_string()),
+            insecure_skip_tls_verify: false,
+            output_mode: None,
+            log_level: None,
+            telemetry: false,
+            approval_policy: None,
+            sandbox_mode: None,
+            yolo: None,
+            verbosity: None,
+            http_headers: std::collections::BTreeMap::new(),
+        };
+
+        let cmd = build_tui_command(&cli, &resolved, vec!["exec".to_string(), "hi".to_string()])
+            .expect("command");
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let flag = args
+            .iter()
+            .position(|a| a == "--no-project-config")
+            .expect("--no-project-config forwarded");
+        let subcommand = args
+            .iter()
+            .position(|a| a == "exec")
+            .expect("exec forwarded");
+        assert!(
+            flag < subcommand,
+            "--no-project-config must be forwarded before the subcommand: {args:?}"
         );
     }
 
