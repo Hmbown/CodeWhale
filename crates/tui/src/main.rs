@@ -12174,7 +12174,7 @@ mod doctor_endpoint_tests {
         let report = doctor_route_report(&config);
         let serialized = report.to_string();
 
-        assert_eq!(report["context_window"]["tokens"], 262_144);
+        assert_eq!(report["context_window"]["tokens"], 1_048_576);
         assert_eq!(
             report["context_window"]["source"],
             "static Kimi Code safe floor"

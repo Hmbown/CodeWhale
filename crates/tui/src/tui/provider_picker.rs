@@ -4117,7 +4117,7 @@ mod tests {
         );
         assert_eq!(
             row.capabilities.context_window,
-            Some(262_144),
+            Some(1_048_576),
             "the picker must show the route-effective K3 baseline, not the generic fallback"
         );
         assert_eq!(
@@ -4127,7 +4127,7 @@ mod tests {
         );
         assert!(
             row.compact_hint()
-                .contains("ctx:262K(static Kimi Code safe floor)"),
+                .contains("ctx:1.0M(static Kimi Code safe floor)"),
             "the compact picker receipt must retain context provenance"
         );
 

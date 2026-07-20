@@ -939,12 +939,12 @@ mod tests {
 
         let report = build_headless_context_report(&config, tmp.path());
 
-        assert_eq!(report.context_window_tokens, Some(262_144));
+        assert_eq!(report.context_window_tokens, Some(1_048_576));
         assert_eq!(
             report.context_window_source.as_deref(),
             Some("static Kimi Code safe floor")
         );
-        assert!(context_report_json(&report).contains("\"context_window_tokens\": 262144"));
+        assert!(context_report_json(&report).contains("\"context_window_tokens\": 1048576"));
     }
 
     #[test]
