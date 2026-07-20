@@ -1899,6 +1899,7 @@ fn auto_fork_context_default_forks_only_same_route_read_only_engine_children() {
     runtime.fork_context = Some(SubAgentForkContext {
         messages: Vec::new(),
         structured_state_block: None,
+        sensitive_user_input_values: std::collections::HashSet::new(),
     });
 
     // Read-only postures on the parent route in the parent workspace fork.
@@ -1971,6 +1972,7 @@ fn auto_fork_context_default_forks_only_same_route_read_only_engine_children() {
             }],
         }],
         structured_state_block: None,
+        sensitive_user_input_values: std::collections::HashSet::new(),
     });
     assert!(!auto_fork_context_default(
         &SubAgentType::Explore,
@@ -1984,6 +1986,7 @@ fn auto_fork_context_default_forks_only_same_route_read_only_engine_children() {
     runtime.fork_context = Some(SubAgentForkContext {
         messages: Vec::new(),
         structured_state_block: None,
+        sensitive_user_input_values: std::collections::HashSet::new(),
     });
 
     // Nested spawners stay fresh — their snapshot is the root prefix, not
@@ -2039,6 +2042,7 @@ fn forked_subagent_messages_preserve_parent_prefix_then_append_task() {
     let fork_context = SubAgentForkContext {
         messages: vec![parent_message.clone()],
         structured_state_block: Some("## Fork State\n- Mode: `AGENT`".to_string()),
+        sensitive_user_input_values: std::collections::HashSet::new(),
     };
 
     let assignment = SubAgentAssignment::new("inspect parser".to_string(), Some("worker".into()));
@@ -5085,6 +5089,7 @@ fn fresh_forked_and_nested_subagents_share_authority_bound_skill_catalogs() {
             }],
         }],
         structured_state_block: None,
+        sensitive_user_input_values: std::collections::HashSet::new(),
     };
     let forked = build_initial_subagent_messages_with_system(
         "review",
@@ -5109,6 +5114,7 @@ fn fresh_forked_and_nested_subagents_share_authority_bound_skill_catalogs() {
         SubAgentForkContext {
             messages: Vec::new(),
             structured_state_block: None,
+            sensitive_user_input_values: std::collections::HashSet::new(),
         },
     );
     let nested_system = build_subagent_system_prompt_with_skills(
@@ -6229,6 +6235,7 @@ fn live_fork_context_freezes_compaction_and_goal_history_at_spawn_boundary() {
     let shared = Arc::new(parking_lot::RwLock::new(SubAgentForkContext {
         messages: vec![summary.clone(), goal_continuation.clone()],
         structured_state_block: Some("stable state".to_string()),
+        sensitive_user_input_values: std::collections::HashSet::new(),
     }));
     let mut runtime = stub_runtime().with_live_fork_context(Arc::clone(&shared));
 
@@ -7576,6 +7583,7 @@ fn nested_tool_runtime_routes_child_completions_to_local_inbox() {
     let fork_context = SubAgentForkContext {
         messages: Vec::new(),
         structured_state_block: None,
+        sensitive_user_input_values: std::collections::HashSet::new(),
     };
 
     let (tool_runtime, mut local_rx) =
@@ -8943,9 +8951,13 @@ async fn complete_transcript_artifact_survives_resident_handle_compaction() {
         text_message("user", &early),
         text_message("assistant", "LAST-TURN-MARKER"),
     ];
-    let mut artifact = SubAgentTranscriptArtifactWriter::for_runtime(&runtime, agent_id)
-        .await
-        .expect("create private transcript artifact");
+    let mut artifact = SubAgentTranscriptArtifactWriter::for_runtime(
+        &runtime,
+        agent_id,
+        std::collections::HashSet::new(),
+    )
+    .await
+    .expect("create private transcript artifact");
     let artifact_path = artifact.path.clone();
 
     let handle = insert_subagent_full_transcript_handle(
@@ -9001,6 +9013,169 @@ async fn complete_transcript_artifact_survives_resident_handle_compaction() {
             "worker chats may contain credentials and must stay private"
         );
     }
+}
+
+#[tokio::test]
+async fn forked_child_transcript_redacts_typed_secret_and_echo_but_provider_context_stays_raw() {
+    const SECRET: &str = "fork-secret-739204";
+    let tmp = tempdir().expect("tempdir");
+    let mut runtime = stub_runtime();
+    runtime.context = ToolContext::new(tmp.path().to_path_buf());
+    runtime.manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 2);
+    let agent_id = "agent_forked_secret_transcript";
+    let parent_messages = vec![
+        Message {
+            role: "assistant".to_string(),
+            content: vec![ContentBlock::ToolUse {
+                id: "typed-input".to_string(),
+                name: "request_user_input".to_string(),
+                input: json!({
+                    "questions": [{
+                        "header": "PIN",
+                        "id": "pin",
+                        "question": "Enter the temporary PIN",
+                        "options": [
+                            {"label": "Skip", "description": "Continue without it"},
+                            {"label": "Cancel", "description": "Stop the operation"}
+                        ],
+                        "allow_free_text": true,
+                        "multi_select": false
+                    }]
+                }),
+                caller: None,
+            }],
+        },
+        Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "typed-input".to_string(),
+                content: json!({
+                    "answers": [{"id": "pin", "label": "Other", "value": SECRET}]
+                })
+                .to_string(),
+                is_error: None,
+                content_blocks: None,
+            }],
+        },
+    ];
+    let fork_context = SubAgentForkContext::new(parent_messages, None);
+    assert!(fork_context.sensitive_user_input_values.contains(SECRET));
+    let assignment = SubAgentAssignment::new(
+        format!("inspect the parent state containing {SECRET}"),
+        Some(format!("verifier for {SECRET}")),
+    );
+    let mut provider_messages = build_initial_subagent_messages(
+        "inspect the parent state",
+        &assignment,
+        &SubAgentType::Explore,
+        Some(&fork_context),
+    );
+    assert!(
+        serde_json::to_string(&provider_messages)
+            .expect("serialize raw provider messages")
+            .contains(SECRET),
+        "forked provider context must retain the user's exact answer"
+    );
+
+    let mut artifact = SubAgentTranscriptArtifactWriter::for_runtime(
+        &runtime,
+        agent_id,
+        fork_context.sensitive_user_input_values.clone(),
+    )
+    .await
+    .expect("create private transcript artifact");
+    artifact
+        .sync_messages(&provider_messages, false)
+        .expect("persist redacted inherited prefix");
+    provider_messages.push(text_message(
+        "assistant",
+        &format!("The forked child echoed the temporary PIN: {SECRET}"),
+    ));
+    let checkpoint = build_subagent_checkpoint_with_sensitive_values(
+        agent_id,
+        format!("checkpoint after reading {SECRET}"),
+        &provider_messages,
+        1,
+        true,
+        &fork_context.sensitive_user_input_values,
+    );
+    assert!(
+        !serde_json::to_string(&checkpoint)
+            .expect("serialize redacted checkpoint")
+            .contains(SECRET),
+        "durable continuation checkpoints must not retain inherited typed input"
+    );
+
+    // Handle publication must fail closed even when artifact initialization
+    // is unavailable: the resident tail, assignment, result, and checkpoint
+    // are all inspectable transcript surfaces in their own right.
+    let handle_without_artifact = insert_subagent_full_transcript_handle(
+        &runtime,
+        agent_id,
+        &SubAgentType::Explore,
+        &assignment,
+        &SubAgentStatus::Completed,
+        Some(&format!("child result echoed {SECRET}")),
+        Some(&checkpoint),
+        None,
+        &provider_messages,
+        1,
+        10,
+        true,
+    )
+    .await;
+    {
+        let store = runtime.context.runtime.handle_store.lock().await;
+        let record = store
+            .get(&handle_without_artifact)
+            .expect("resident transcript handle without artifact");
+        let crate::tools::handle::HandleValue::Json(payload) = &record.value else {
+            panic!("sub-agent transcript handle must remain JSON");
+        };
+        assert!(!payload.to_string().contains(SECRET));
+    }
+
+    let handle = insert_subagent_full_transcript_handle(
+        &runtime,
+        agent_id,
+        &SubAgentType::Explore,
+        &assignment,
+        &SubAgentStatus::Completed,
+        Some(&format!("child result echoed {SECRET}")),
+        Some(&checkpoint),
+        Some(&mut artifact),
+        &provider_messages,
+        1,
+        10,
+        true,
+    )
+    .await;
+
+    let disk_jsonl = std::fs::read_to_string(&artifact.path).expect("read transcript artifact");
+    assert!(!disk_jsonl.contains(SECRET));
+    assert!(disk_jsonl.contains("User input submitted"));
+    assert!(disk_jsonl.contains("[redacted user input]"));
+    let restored = load_subagent_transcript_artifact(tmp.path(), agent_id)
+        .expect("load redacted transcript artifact");
+    assert!(!serde_json::to_string(&restored).unwrap().contains(SECRET));
+
+    let store = runtime.context.runtime.handle_store.lock().await;
+    let record = store.get(&handle).expect("resident transcript handle");
+    let crate::tools::handle::HandleValue::Json(payload) = &record.value else {
+        panic!("sub-agent transcript handle must remain JSON");
+    };
+    assert!(!payload.to_string().contains(SECRET));
+    drop(store);
+    assert!(
+        artifact.sensitive_user_input_values.is_empty(),
+        "terminal transcript publication must clear its runtime-only taint"
+    );
+    assert!(
+        serde_json::to_string(&provider_messages)
+            .expect("serialize raw provider messages after persistence")
+            .contains(SECRET),
+        "durable redaction must never mutate the provider request history"
+    );
 }
 
 #[test]

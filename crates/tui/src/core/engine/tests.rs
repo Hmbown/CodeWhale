@@ -10738,6 +10738,7 @@ fn live_child_fork_context_tracks_compaction_and_goal_request_history() {
     let shared = std::sync::Arc::new(parking_lot::RwLock::new(SubAgentForkContext {
         messages: vec![initial],
         structured_state_block: None,
+        sensitive_user_input_values: std::collections::HashSet::new(),
     }));
     let summary = compaction_summary_message(
         format!("## {COMPACTION_SUMMARY_MARKER}\ncompacted history"),

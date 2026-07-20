@@ -3395,10 +3395,12 @@ impl Engine {
                 Some(&self.subagent_manager),
             )
             .await;
-            Some(Arc::new(parking_lot::RwLock::new(SubAgentForkContext {
-                messages: self.messages_with_turn_metadata(),
-                structured_state_block: state.to_system_block(),
-            })))
+            Some(Arc::new(parking_lot::RwLock::new(
+                SubAgentForkContext::new(
+                    self.messages_with_turn_metadata(),
+                    state.to_system_block(),
+                ),
+            )))
         } else {
             None
         };

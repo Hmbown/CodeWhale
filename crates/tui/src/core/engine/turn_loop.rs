@@ -116,7 +116,7 @@ pub(super) fn update_live_fork_context_from_request(
     request: &MessageRequest,
 ) {
     if let Some(context) = context {
-        context.write().messages.clone_from(&request.messages);
+        context.write().update_messages(&request.messages);
     }
 }
 

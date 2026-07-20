@@ -7674,6 +7674,52 @@ async fn export_and_engine_load_scan_once_without_blocking_runtime_heartbeat() -
     Ok(())
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn linked_session_load_does_not_block_runtime_heartbeat() -> Result<()> {
+    let expected = vec![Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::Text {
+            text: "linked session history".to_string(),
+            cache_control: None,
+        }],
+    }];
+    let returned = expected.clone();
+    let (entered_tx, entered_rx) = oneshot::channel();
+    let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+    let load = tokio::spawn(load_linked_session_messages_with(
+        "linked-session-heartbeat".to_string(),
+        move |session_id| {
+            assert_eq!(session_id, "linked-session-heartbeat");
+            entered_tx
+                .send(())
+                .map_err(|_| anyhow!("linked-session load entry receiver closed"))?;
+            resume_rx
+                .recv()
+                .map_err(|_| anyhow!("linked-session load resume sender closed"))?;
+            Ok(returned)
+        },
+    ));
+    tokio::time::timeout(Duration::from_secs(2), entered_rx)
+        .await?
+        .context("linked-session load did not enter its blocking worker")?;
+
+    // A single-thread runtime can service this timer only when session-file
+    // I/O is outside the async worker used by engine admission.
+    tokio::time::timeout(Duration::from_millis(250), async {
+        sleep(Duration::from_millis(10)).await;
+    })
+    .await
+    .context("runtime heartbeat stalled behind linked-session loading")?;
+    resume_tx
+        .send(())
+        .map_err(|_| anyhow!("linked-session load resume receiver closed"))?;
+    assert_eq!(
+        load.await.context("linked-session load task panicked")??,
+        expected
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn completed_export_conflicts_when_turn_starts_after_prevalidation() -> Result<()> {
     let manager = test_manager(test_runtime_dir())?;

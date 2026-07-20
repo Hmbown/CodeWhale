@@ -69,7 +69,30 @@ const HISTORY_SNAPSHOT_MESSAGES_KEY: &str = "compacted_messages";
 #[cfg(test)]
 const TEST_HISTORY_SNAPSHOT_SAVE_FAILURE_ITEM_ID: &str = "item_test_history_snapshot_save_failure";
 
-fn collect_sensitive_user_input_values(messages: &[Message], values: &mut HashSet<String>) {
+async fn load_linked_session_messages_with<F>(session_id: String, load: F) -> Result<Vec<Message>>
+where
+    F: FnOnce(&str) -> Result<Vec<Message>> + Send + 'static,
+{
+    tokio::task::spawn_blocking(move || load(&session_id))
+        .await
+        .context("Runtime linked-session load task failed")?
+}
+
+async fn load_linked_session_messages(session_id: String) -> Result<Vec<Message>> {
+    load_linked_session_messages_with(session_id, |session_id| {
+        let sessions_dir = crate::session_manager::default_sessions_dir()
+            .context("Failed to resolve sessions dir")?;
+        let manager = crate::session_manager::SessionManager::new(sessions_dir)
+            .context("Failed to open sessions dir")?;
+        Ok(manager.load_session(session_id)?.messages)
+    })
+    .await
+}
+
+pub(crate) fn collect_sensitive_user_input_values(
+    messages: &[Message],
+    values: &mut HashSet<String>,
+) {
     let sensitive_tools = messages
         .iter()
         .flat_map(|message| message.content.iter())
@@ -105,7 +128,7 @@ fn collect_sensitive_user_input_values(messages: &[Message], values: &mut HashSe
     }
 }
 
-fn redacted_durable_history_clone(
+pub(crate) fn redacted_durable_history_clone(
     messages: &[Message],
     prior_sensitive_values: &HashSet<String>,
 ) -> Vec<Message> {
@@ -326,6 +349,17 @@ fn redact_sensitive_json_string_leaves(value: &mut Value, sensitive_values: &[St
         }
         Value::Null | Value::Bool(_) | Value::Number(_) => false,
     }
+}
+
+pub(crate) fn redacted_sensitive_user_input_text(
+    text: &str,
+    sensitive_values: &HashSet<String>,
+) -> String {
+    let mut sensitive_values = sensitive_values.iter().cloned().collect::<Vec<_>>();
+    sensitive_values.sort_by_key(|value| std::cmp::Reverse(value.len()));
+    let mut redacted = text.to_string();
+    let _ = redact_sensitive_user_input_values(&mut redacted, &sensitive_values);
+    redacted
 }
 
 fn redact_sensitive_user_input_values(text: &mut String, sensitive_values: &[String]) -> bool {
@@ -5578,31 +5612,13 @@ impl RuntimeThreadManager {
             let session_messages = if has_durable_history_snapshot {
                 durable_messages
             } else if let Some(ref sid) = thread.session_id {
-                match crate::session_manager::default_sessions_dir() {
-                    Ok(sessions_dir) => {
-                        match crate::session_manager::SessionManager::new(sessions_dir) {
-                            Ok(manager) => match manager.load_session(sid) {
-                                Ok(session) => session.messages,
-                                Err(e) => {
-                                    tracing::warn!(
-                                        "Failed to load session {} for thread {}: {e}; falling back to turn reconstruction",
-                                        sid,
-                                        thread.id
-                                    );
-                                    durable_messages.clone()
-                                }
-                            },
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Failed to open sessions dir: {e}; falling back to turn reconstruction"
-                                );
-                                durable_messages.clone()
-                            }
-                        }
-                    }
+                match load_linked_session_messages(sid.clone()).await {
+                    Ok(messages) => messages,
                     Err(e) => {
                         tracing::warn!(
-                            "Failed to resolve sessions dir: {e}; falling back to turn reconstruction"
+                            "Failed to load linked session {} for thread {}: {e:#}; falling back to turn reconstruction",
+                            sid,
+                            thread.id
                         );
                         durable_messages.clone()
                     }
