@@ -342,9 +342,13 @@ fn redact_sensitive_json_string_leaves(value: &mut Value, sensitive_values: &[St
         }
         Value::Object(values) => {
             let mut changed = false;
-            for value in values.values_mut() {
-                changed |= redact_sensitive_json_string_leaves(value, sensitive_values);
+            let mut projected = serde_json::Map::new();
+            for (mut key, mut value) in std::mem::take(values) {
+                changed |= redact_sensitive_user_input_values(&mut key, sensitive_values);
+                changed |= redact_sensitive_json_string_leaves(&mut value, sensitive_values);
+                projected.insert(key, value);
             }
+            *values = projected;
             changed
         }
         Value::Null | Value::Bool(_) | Value::Number(_) => false,
@@ -422,11 +426,21 @@ where
     if sensitive_values.is_empty() {
         return serde_json::from_value(serde_json::to_value(value)?).map_err(Into::into);
     }
-    let mut projected = serde_json::to_value(value)?;
+    let mut projected = serde_json::to_value(value).map_err(|error| {
+        anyhow!(
+            "Failed to serialize value for sensitive projection: {}",
+            redacted_sensitive_user_input_text(&error.to_string(), sensitive_values)
+        )
+    })?;
     let mut sorted_values = sensitive_values.iter().cloned().collect::<Vec<_>>();
     sorted_values.sort_by_key(|value| std::cmp::Reverse(value.len()));
     let _ = redact_sensitive_json_string_leaves(&mut projected, &sorted_values);
-    serde_json::from_value(projected).map_err(Into::into)
+    serde_json::from_value(projected).map_err(|error| {
+        anyhow!(
+            "Failed to restore value after sensitive projection: {}",
+            redacted_sensitive_user_input_text(&error.to_string(), sensitive_values)
+        )
+    })
 }
 
 #[derive(Default)]
@@ -549,6 +563,36 @@ pub(crate) enum EventAppendTestFault {
 #[cfg(test)]
 static TEST_EVENT_APPEND_FAULTS: std::sync::Mutex<Vec<(String, EventAppendTestFault, usize)>> =
     std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+static TEST_SENSITIVE_REWRITE_FAILURES: std::sync::Mutex<Vec<(String, usize)>> =
+    std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+fn set_test_sensitive_rewrite_failure(thread_id: &str, after_replacements: usize) {
+    assert!(after_replacements > 0);
+    TEST_SENSITIVE_REWRITE_FAILURES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push((thread_id.to_string(), after_replacements));
+}
+
+#[cfg(test)]
+fn take_test_sensitive_rewrite_failure(thread_id: &str) -> bool {
+    let mut failures = TEST_SENSITIVE_REWRITE_FAILURES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(index) = failures.iter().position(|(target, _)| target == thread_id) else {
+        return false;
+    };
+    if failures[index].1 > 1 {
+        failures[index].1 -= 1;
+        false
+    } else {
+        failures.remove(index);
+        true
+    }
+}
 
 #[cfg(test)]
 pub(crate) type EventAppendTestFaultRestore = (String, Option<(EventAppendTestFault, usize)>);
@@ -965,6 +1009,31 @@ impl Default for RuntimeStoreState {
     }
 }
 
+const SENSITIVE_REWRITE_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SensitiveRewriteTarget {
+    Thread,
+    Turn,
+    Item,
+    Events,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SensitiveRewriteReplacement {
+    target: SensitiveRewriteTarget,
+    id: String,
+    contents: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PendingSensitiveRewrite {
+    schema_version: u32,
+    thread_id: String,
+    replacements: Vec<SensitiveRewriteReplacement>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EventAppendFailureDisposition {
     RolledBack,
@@ -1017,6 +1086,7 @@ pub struct RuntimeThreadStore {
     turns_dir: PathBuf,
     items_dir: PathBuf,
     events_dir: PathBuf,
+    sensitive_rewrites_dir: PathBuf,
     state_path: PathBuf,
     state: Arc<Mutex<RuntimeStoreState>>,
     /// Serializes load-modify-save operations on thread records. The guard is
@@ -1046,10 +1116,12 @@ impl RuntimeThreadStore {
         let turns_dir = root.join("turns");
         let items_dir = root.join("items");
         let events_dir = root.join("events");
+        let sensitive_rewrites_dir = root.join("sensitive_rewrites");
         ensure_runtime_store_dir(&threads_dir)?;
         ensure_runtime_store_dir(&turns_dir)?;
         ensure_runtime_store_dir(&items_dir)?;
         ensure_runtime_store_dir(&events_dir)?;
+        ensure_runtime_store_dir(&sensitive_rewrites_dir)?;
         repair_torn_event_log_tails(&events_dir)?;
 
         let state_path = root.join("state.json");
@@ -1064,11 +1136,12 @@ impl RuntimeThreadStore {
             default
         };
 
-        Ok(Self {
+        let store = Self {
             threads_dir,
             turns_dir,
             items_dir,
             events_dir,
+            sensitive_rewrites_dir,
             state_path,
             state: Arc::new(Mutex::new(state)),
             thread_mutation: Arc::new(parking_lot::Mutex::new(())),
@@ -1077,7 +1150,9 @@ impl RuntimeThreadStore {
             item_directory_scans: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             #[cfg(test)]
             item_directory_scan_test_hook: Arc::new(std::sync::Mutex::new(None)),
-        })
+        };
+        store.recover_pending_sensitive_rewrites()?;
+        Ok(store)
     }
 
     #[cfg(test)]
@@ -1139,6 +1214,10 @@ impl RuntimeThreadStore {
 
     fn events_path(&self, thread_id: &str) -> Result<PathBuf> {
         Self::record_path(&self.events_dir, thread_id, "jsonl", "thread id")
+    }
+
+    fn sensitive_rewrite_path(&self, thread_id: &str) -> Result<PathBuf> {
+        Self::record_path(&self.sensitive_rewrites_dir, thread_id, "json", "thread id")
     }
 
     pub fn save_thread(&self, thread: &ThreadRecord) -> Result<()> {
@@ -1489,20 +1568,192 @@ impl RuntimeThreadStore {
         Ok(out)
     }
 
+    fn rewrite_sensitive_projection(
+        &self,
+        thread_id: &str,
+        sensitive_values: &HashSet<String>,
+    ) -> Result<()> {
+        if sensitive_values.is_empty() {
+            return Ok(());
+        }
+
+        let rewrite_path = self.sensitive_rewrite_path(thread_id)?;
+        if rewrite_path.exists() {
+            self.recover_pending_sensitive_rewrite(&rewrite_path)?;
+        }
+
+        // Build every replacement before mutating any root record. JSON projection
+        // intentionally works on the untyped representation so classified
+        // bytes in dynamic object keys are removed as well as string values.
+        // If a very short answer collides with a structural field name, the
+        // record becomes unreadable instead of retaining the classified bytes:
+        // late taint discovery is a privacy boundary and must fail closed.
+        let thread = self.load_thread(thread_id)?;
+        let turns = self.list_turns_for_thread(thread_id)?;
+        let turn_ids = turns.iter().map(|turn| turn.id.clone()).collect::<Vec<_>>();
+        let items_by_turn = self.list_items_for_turns_map(&turn_ids)?;
+        let events = self.events_since(thread_id, None)?;
+
+        let mut replacements = vec![SensitiveRewriteReplacement {
+            target: SensitiveRewriteTarget::Thread,
+            id: thread_id.to_string(),
+            contents: serde_json::to_string_pretty(&redacted_sensitive_user_input_json(
+                &serde_json::to_value(&thread)?,
+                sensitive_values,
+            ))?,
+        }];
+        replacements.extend(
+            turns
+                .iter()
+                .map(|turn| {
+                    Ok::<_, anyhow::Error>(SensitiveRewriteReplacement {
+                        target: SensitiveRewriteTarget::Turn,
+                        id: turn.id.clone(),
+                        contents: serde_json::to_string_pretty(
+                            &redacted_sensitive_user_input_json(
+                                &serde_json::to_value(turn)?,
+                                sensitive_values,
+                            ),
+                        )?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?,
+        );
+        replacements.extend(
+            turn_ids
+                .iter()
+                .flat_map(|turn_id| items_by_turn.get(turn_id).into_iter().flatten())
+                .map(|item| {
+                    Ok::<_, anyhow::Error>(SensitiveRewriteReplacement {
+                        target: SensitiveRewriteTarget::Item,
+                        id: item.id.clone(),
+                        contents: serde_json::to_string_pretty(
+                            &redacted_sensitive_user_input_json(
+                                &serde_json::to_value(item)?,
+                                sensitive_values,
+                            ),
+                        )?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?,
+        );
+        let mut event_projection = Vec::new();
+        for event in events {
+            let event =
+                redacted_sensitive_user_input_json(&serde_json::to_value(event)?, sensitive_values);
+            serde_json::to_writer(&mut event_projection, &event)?;
+            event_projection.push(b'\n');
+        }
+        let events_path = self.events_path(thread_id)?;
+        if events_path.exists() {
+            replacements.push(SensitiveRewriteReplacement {
+                target: SensitiveRewriteTarget::Events,
+                id: thread_id.to_string(),
+                contents: String::from_utf8(event_projection)
+                    .context("Projected Runtime event log was not UTF-8")?,
+            });
+        }
+
+        // Persist one complete, already-redacted recovery manifest before the
+        // first root-file replacement. If any later atomic replacement fails
+        // or the process exits, startup can finish the exact safe rewrite
+        // without persisting the raw taint values themselves.
+        write_json_atomic(
+            &rewrite_path,
+            &PendingSensitiveRewrite {
+                schema_version: SENSITIVE_REWRITE_SCHEMA_VERSION,
+                thread_id: thread_id.to_string(),
+                replacements,
+            },
+        )?;
+        self.recover_pending_sensitive_rewrite(&rewrite_path)
+    }
+
+    fn apply_pending_sensitive_rewrite(&self, pending: &PendingSensitiveRewrite) -> Result<()> {
+        if pending.schema_version != SENSITIVE_REWRITE_SCHEMA_VERSION {
+            bail!(
+                "Sensitive rewrite schema v{} is unsupported",
+                pending.schema_version
+            );
+        }
+        validated_record_id(&pending.thread_id, "thread id")?;
+        for replacement in &pending.replacements {
+            let path = match replacement.target {
+                SensitiveRewriteTarget::Thread => {
+                    if replacement.id != pending.thread_id {
+                        bail!("Sensitive rewrite thread target does not match its owner");
+                    }
+                    self.thread_path(&replacement.id)?
+                }
+                SensitiveRewriteTarget::Turn => self.turn_path(&replacement.id)?,
+                SensitiveRewriteTarget::Item => self.item_path(&replacement.id)?,
+                SensitiveRewriteTarget::Events => {
+                    if replacement.id != pending.thread_id {
+                        bail!("Sensitive rewrite event target does not match its owner");
+                    }
+                    self.events_path(&replacement.id)?
+                }
+            };
+            crate::utils::write_atomic(&path, replacement.contents.as_bytes()).with_context(
+                || format!("Failed to apply sensitive rewrite to {}", path.display()),
+            )?;
+            #[cfg(test)]
+            if take_test_sensitive_rewrite_failure(&pending.thread_id) {
+                bail!("injected sensitive rewrite failure");
+            }
+        }
+        Ok(())
+    }
+
+    fn recover_pending_sensitive_rewrite(&self, path: &Path) -> Result<()> {
+        let pending: PendingSensitiveRewrite = serde_json::from_str(&read_store_file(path)?)
+            .with_context(|| format!("Failed to parse sensitive rewrite {}", path.display()))?;
+        self.apply_pending_sensitive_rewrite(&pending)?;
+        remove_file_if_exists(path)
+    }
+
+    fn recover_pending_sensitive_rewrites(&self) -> Result<()> {
+        let directory = checked_existing_runtime_store_dir(&self.sensitive_rewrites_dir)?;
+        for entry in fs::read_dir(&directory)
+            .with_context(|| format!("Failed to read {}", directory.display()))?
+        {
+            let path = entry?.path();
+            if path
+                .extension()
+                .is_some_and(|extension| extension == "json")
+            {
+                self.recover_pending_sensitive_rewrite(&path)?;
+            }
+        }
+        Ok(())
+    }
+
     fn publish_event_replay(
         &self,
         thread_id: &str,
         since_seq: Option<u64>,
         tail_limit: Option<usize>,
+        sensitive_values: &HashSet<String>,
         base_tx: oneshot::Sender<std::result::Result<u64, String>>,
         batch_tx: mpsc::Sender<std::result::Result<Vec<RuntimeEventRecord>, String>>,
     ) {
         let mut base_tx = Some(base_tx);
         let result = match tail_limit {
-            Some(limit) => {
-                self.publish_tail_event_replay(thread_id, since_seq, limit, &mut base_tx, &batch_tx)
-            }
-            None => self.publish_full_event_replay(thread_id, since_seq, &mut base_tx, &batch_tx),
+            Some(limit) => self.publish_tail_event_replay(
+                thread_id,
+                since_seq,
+                limit,
+                sensitive_values,
+                &mut base_tx,
+                &batch_tx,
+            ),
+            None => self.publish_full_event_replay(
+                thread_id,
+                since_seq,
+                sensitive_values,
+                &mut base_tx,
+                &batch_tx,
+            ),
         };
         if let Err(error) = result {
             let message = format!("{error:#}");
@@ -1557,6 +1808,7 @@ impl RuntimeThreadStore {
         &self,
         thread_id: &str,
         since_seq: Option<u64>,
+        sensitive_values: &HashSet<String>,
         base_tx: &mut Option<oneshot::Sender<std::result::Result<u64, String>>>,
         batch_tx: &mpsc::Sender<std::result::Result<Vec<RuntimeEventRecord>, String>>,
     ) -> Result<()> {
@@ -1579,6 +1831,7 @@ impl RuntimeThreadStore {
             if since_seq.is_some_and(|since| event.seq <= since) {
                 continue;
             }
+            let event = redacted_serializable_clone(&event, sensitive_values)?;
             batch.push(event);
             if batch.len() == RUNTIME_EVENT_REPLAY_BATCH_SIZE {
                 if batch_tx.blocking_send(Ok(batch)).is_err() {
@@ -1598,6 +1851,7 @@ impl RuntimeThreadStore {
         thread_id: &str,
         since_seq: Option<u64>,
         tail_limit: usize,
+        sensitive_values: &HashSet<String>,
         base_tx: &mut Option<oneshot::Sender<std::result::Result<u64, String>>>,
         batch_tx: &mpsc::Sender<std::result::Result<Vec<RuntimeEventRecord>, String>>,
     ) -> Result<()> {
@@ -1614,6 +1868,7 @@ impl RuntimeThreadStore {
             if since_seq.is_some_and(|since| event.seq <= since) {
                 continue;
             }
+            let event = redacted_serializable_clone(&event, sensitive_values)?;
             if tail_limit == 0 {
                 base_seq = event.seq;
                 continue;
@@ -1940,19 +2195,23 @@ struct RecoveredTurnReceipt {
 ///
 /// # Lock ordering invariant
 ///
-/// Runtime state uses nine lock classes:
+/// Runtime state uses ten lock classes:
 /// - `RuntimeThreadManager::engine_load` — serializes cache-miss engine builds.
 ///   It may cross awaits and is always acquired before `active`.
 /// - `RuntimeThreadManager::event_emit` — preserves append-to-broadcast event
 ///   order and is only acquired after all record/engine guards are released.
 /// - `RuntimeThreadManager::projection_locks` — one async lock per thread,
-///   held while a streamed item checkpoint and its event are published or
-///   while a terminal turn projection, receipt, and active-claim cleanup are
-///   published, or while a snapshot captures its cursor and reads projections.
+///   held across every durable thread/turn/item load-project-save transaction,
+///   while a streamed item checkpoint and its event are published, while a
+///   terminal turn projection, receipt, and active-claim cleanup are published,
+///   or while a snapshot captures its cursor and reads projections.
+/// - `RuntimeThreadManager::sensitive_projection_guard` — a short synchronous
+///   read/write boundary that linearizes volatile taint registration with
+///   synchronous public readers; it never crosses an await.
 /// - `RuntimeThreadManager::admission_locks` — one async lock per thread,
 ///   serializing turn/compaction claims with completed-thread exports. Export
-///   acquires admission before projection; turn admission never acquires
-///   projection while holding this gate.
+///   and turn admission both acquire admission before projection and then
+///   acquire `active` only after the projection boundary is held.
 /// - `RuntimeThreadManager::recovery_flush` — serializes deferred receipt
 ///   reconciliation before it acquires a projection lock and `event_emit`.
 /// - `RuntimeThreadStore::state` — protects the monotonic event sequence counter.
@@ -1982,6 +2241,7 @@ pub struct RuntimeThreadManager {
     /// is intentionally never serialized. After a process restart, every
     /// durable/provider reconstruction source has already been projected.
     sensitive_user_input_values: Arc<parking_lot::Mutex<HashMap<String, HashSet<String>>>>,
+    sensitive_projection_guard: Arc<parking_lot::RwLock<()>>,
     event_emit: Arc<Mutex<()>>,
     projection_locks: Arc<parking_lot::Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     admission_locks: Arc<parking_lot::Mutex<HashMap<String, Arc<Mutex<()>>>>>,
@@ -2001,6 +2261,9 @@ pub struct RuntimeThreadManager {
     #[cfg(test)]
     export_snapshot_test_hook:
         Arc<parking_lot::Mutex<Option<mpsc::UnboundedSender<ExportSnapshotTestPoint>>>>,
+    #[cfg(test)]
+    public_item_save_test_hook:
+        Arc<parking_lot::Mutex<Option<mpsc::UnboundedSender<PublicItemSaveTestPoint>>>>,
 }
 
 #[cfg(test)]
@@ -2013,6 +2276,13 @@ pub(crate) struct SnapshotTestPoint {
 #[cfg(test)]
 pub(crate) struct ExportSnapshotTestPoint {
     pub thread_id: String,
+    pub resume: oneshot::Sender<()>,
+}
+
+#[cfg(test)]
+pub(crate) struct PublicItemSaveTestPoint {
+    pub thread_id: String,
+    pub item_id: String,
     pub resume: oneshot::Sender<()>,
 }
 
@@ -2324,6 +2594,7 @@ impl RuntimeThreadManager {
             engine_load: Arc::new(Mutex::new(())),
             active: Arc::new(Mutex::new(ActiveThreads::default())),
             sensitive_user_input_values: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            sensitive_projection_guard: Arc::new(parking_lot::RwLock::new(())),
             event_emit: Arc::new(Mutex::new(())),
             projection_locks: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             admission_locks: Arc::new(parking_lot::Mutex::new(HashMap::new())),
@@ -2341,6 +2612,8 @@ impl RuntimeThreadManager {
             snapshot_test_hook: Arc::new(parking_lot::Mutex::new(None)),
             #[cfg(test)]
             export_snapshot_test_hook: Arc::new(parking_lot::Mutex::new(None)),
+            #[cfg(test)]
+            public_item_save_test_hook: Arc::new(parking_lot::Mutex::new(None)),
         };
         manager.recover_interrupted_state()?;
         Ok(manager)
@@ -2408,12 +2681,14 @@ impl RuntimeThreadManager {
     }
 
     async fn sensitive_user_input_values_for_thread(&self, thread_id: &str) -> HashSet<String> {
-        let mut values = self
-            .sensitive_user_input_values
-            .lock()
-            .get(thread_id)
-            .cloned()
-            .unwrap_or_default();
+        let mut values = {
+            let _sensitive_projection = self.sensitive_projection_guard.read();
+            self.sensitive_user_input_values
+                .lock()
+                .get(thread_id)
+                .cloned()
+                .unwrap_or_default()
+        };
         values.extend(
             self.active
                 .lock()
@@ -2430,19 +2705,59 @@ impl RuntimeThreadManager {
         &self,
         thread_id: &str,
         values: impl IntoIterator<Item = String>,
-    ) {
-        let values = values.into_iter().collect::<Vec<_>>();
-        self.sensitive_user_input_values
-            .lock()
-            .entry(thread_id.to_string())
-            .or_default()
-            .extend(values.iter().cloned());
+    ) -> Result<()> {
+        let values = values
+            .into_iter()
+            .filter(|value| !value.is_empty())
+            .collect::<HashSet<_>>();
+        if values.is_empty() {
+            return Ok(());
+        }
+        let projection_lock = self.projection_lock(thread_id);
+        let _projection = projection_lock.lock().await;
+        self.extend_sensitive_user_input_values_under_projection(thread_id, values)
+            .await
+    }
+
+    /// Register and rewrite late taint while the caller owns the per-thread
+    /// projection lock. This is used by seed/import transactions that discover
+    /// provenance while already holding the non-reentrant boundary.
+    async fn extend_sensitive_user_input_values_under_projection(
+        &self,
+        thread_id: &str,
+        values: HashSet<String>,
+    ) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+        let combined_values = {
+            let _sensitive_projection = self.sensitive_projection_guard.write();
+            let mut values_by_thread = self.sensitive_user_input_values.lock();
+            let combined = values_by_thread.entry(thread_id.to_string()).or_default();
+            combined.extend(values.iter().cloned());
+            combined.clone()
+        };
         let mut active = self.active.lock().await;
         if let Some(state) = active.engines.get_mut(thread_id) {
             state
                 .sensitive_user_input_values
                 .extend(values.iter().cloned());
         }
+        drop(active);
+        // Taint can be learned after a model happened to emit the same bytes.
+        // Register it before rewriting so every concurrent future sink is
+        // projected, then replace the existing durable root transcript while
+        // event append order is paused. The live engine still receives the raw
+        // answer only after this function returns.
+        let _emit_order = self.event_emit.lock().await;
+        let store = self.store.clone();
+        let thread_id = thread_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            store.rewrite_sensitive_projection(&thread_id, &combined_values)
+        })
+        .await
+        .context("Runtime late-taint rewrite task failed")??;
+        Ok(())
     }
 
     fn claim_pending_user_input(&self, thread_id: &str, input_id: &str) -> PendingUserInputClaim {
@@ -2887,8 +3202,13 @@ impl RuntimeThreadManager {
             // Record provenance before any public settlement projection or
             // engine delivery. A failed receipt may over-redact for this live
             // engine lifetime, which is the safe failure direction.
-            self.extend_sensitive_user_input_values(thread_id, sensitive_values)
-                .await;
+            if let Err(error) = self
+                .extend_sensitive_user_input_values(thread_id, sensitive_values)
+                .await
+            {
+                self.restore_pending_user_input_claim(thread_id, &request);
+                return Err(error);
+            }
         }
         let projection_lock = self.projection_lock(thread_id);
         let _projection = projection_lock.lock().await;
@@ -3015,6 +3335,8 @@ impl RuntimeThreadManager {
     }
 
     async fn remember_thread_auto_approve(&self, thread_id: &str) {
+        let projection_lock = self.projection_lock(thread_id);
+        let _projection = projection_lock.lock().await;
         {
             let _thread_mutation = self.store.thread_mutation.lock();
             let Ok(mut thread) = self.store.load_thread(thread_id) else {
@@ -3025,7 +3347,8 @@ impl RuntimeThreadManager {
             }
             thread.auto_approve = true;
             thread.updated_at = Utc::now();
-            if let Err(err) = self.store.save_thread(&thread) {
+            let public_thread = self.project_registered_sensitive_clone(thread_id, &thread);
+            if let Err(err) = public_thread.and_then(|thread| self.store.save_thread(&thread)) {
                 tracing::warn!(
                     "Failed to persist auto_approve flip for thread {}: {}",
                     thread_id,
@@ -3033,6 +3356,7 @@ impl RuntimeThreadManager {
                 );
             }
         }
+        drop(_projection);
 
         {
             let mut active = self.active.lock().await;
@@ -3056,6 +3380,26 @@ impl RuntimeThreadManager {
                 .entry(thread_id.to_string())
                 .or_insert_with(|| Arc::new(Mutex::new(()))),
         )
+    }
+
+    /// Clone one public value through the taint set registered for its thread.
+    ///
+    /// Callers that read or publish durable thread state must own that
+    /// thread's `projection_lock` for the whole read/project operation. This
+    /// short synchronous guard then makes the taint snapshot atomic with a
+    /// concurrent late registration without ever crossing an await.
+    fn project_registered_sensitive_clone<T>(&self, thread_id: &str, value: &T) -> Result<T>
+    where
+        T: Serialize + DeserializeOwned,
+    {
+        let _sensitive_projection = self.sensitive_projection_guard.read();
+        let sensitive_values = self
+            .sensitive_user_input_values
+            .lock()
+            .get(thread_id)
+            .cloned()
+            .unwrap_or_default();
+        redacted_serializable_clone(value, &sensitive_values)
     }
 
     fn admission_lock(&self, thread_id: &str) -> Arc<Mutex<()>> {
@@ -3487,9 +3831,38 @@ impl RuntimeThreadManager {
     /// expose stale text. Keeping the full record in memory avoids rereading
     /// and reparsing the same item for every provider chunk.
     async fn save_public_item(&self, thread_id: &str, item: &TurnItemRecord) -> Result<()> {
-        let sensitive_values = self.sensitive_user_input_values_for_thread(thread_id).await;
+        let projection_lock = self.projection_lock(thread_id);
+        let _projection = projection_lock.lock().await;
+        self.save_public_item_under_projection(thread_id, item)
+            .await
+    }
+
+    /// Inner persistence primitive for callers that already own the thread's
+    /// projection boundary. Keeping this separate avoids re-entering the
+    /// non-reentrant async mutex while a stream checkpoint and event are
+    /// published atomically.
+    async fn save_public_item_under_projection(
+        &self,
+        thread_id: &str,
+        item: &TurnItemRecord,
+    ) -> Result<()> {
         let store = self.store.clone();
-        let item = redacted_serializable_clone(item, &sensitive_values)?;
+        let item = self.project_registered_sensitive_clone(thread_id, item)?;
+        #[cfg(test)]
+        let public_item_save_test_hook = { self.public_item_save_test_hook.lock().take() };
+        #[cfg(test)]
+        if let Some(hook) = public_item_save_test_hook {
+            let (resume, wait_for_resume) = oneshot::channel();
+            hook.send(PublicItemSaveTestPoint {
+                thread_id: thread_id.to_string(),
+                item_id: item.id.clone(),
+                resume,
+            })
+            .map_err(|_| anyhow!("public item save test hook closed"))?;
+            wait_for_resume
+                .await
+                .map_err(|_| anyhow!("public item save test hook dropped resume"))?;
+        }
         tokio::task::spawn_blocking(move || store.save_item(&item))
             .await
             .context("Runtime public item persistence task failed")??;
@@ -3517,7 +3890,8 @@ impl RuntimeThreadManager {
         item.summary = summarize_text(text, SUMMARY_LIMIT);
         let projection_lock = self.projection_lock(thread_id);
         let _projection = projection_lock.lock().await;
-        self.save_streaming_item(thread_id, item).await?;
+        self.save_public_item_under_projection(thread_id, item)
+            .await?;
         self.emit_event(
             thread_id,
             Some(turn_id),
@@ -3552,6 +3926,14 @@ impl RuntimeThreadManager {
         hook: mpsc::UnboundedSender<ExportSnapshotTestPoint>,
     ) {
         *self.export_snapshot_test_hook.lock() = Some(hook);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_public_item_save_test_hook(
+        &self,
+        hook: mpsc::UnboundedSender<PublicItemSaveTestPoint>,
+    ) {
+        *self.public_item_save_test_hook.lock() = Some(hook);
     }
 
     pub async fn create_thread(&self, req: CreateThreadRequest) -> Result<ThreadRecord> {
@@ -3638,7 +4020,14 @@ impl RuntimeThreadManager {
         filter: ThreadListFilter,
         limit: Option<usize>,
     ) -> Result<Vec<ThreadRecord>> {
+        let _sensitive_projection = self.sensitive_projection_guard.read();
         let mut threads = self.store.list_threads()?;
+        let sensitive_values_by_thread = self.sensitive_user_input_values.lock().clone();
+        for thread in &mut threads {
+            if let Some(sensitive_values) = sensitive_values_by_thread.get(&thread.id) {
+                *thread = redacted_serializable_clone(thread, sensitive_values)?;
+            }
+        }
         match filter {
             ThreadListFilter::ActiveOnly => threads.retain(|t| !t.archived),
             ThreadListFilter::ArchivedOnly => threads.retain(|t| t.archived),
@@ -3667,11 +4056,23 @@ impl RuntimeThreadManager {
     ) -> Result<UsageAggregation> {
         use std::collections::BTreeMap;
 
+        // Usage grouping exposes persisted model/provider labels. Keep the
+        // complete synchronous scan on the same read/register boundary as
+        // other public projections, then project each thread and turn through
+        // its own taint set before deriving bucket keys or prices.
+        let _sensitive_projection = self.sensitive_projection_guard.read();
+        let sensitive_values_by_thread = self.sensitive_user_input_values.lock().clone();
         let mut buckets: BTreeMap<String, UsageBucket> = BTreeMap::new();
         let mut totals = UsageTotals::default();
-        for thread in self.store.list_threads()? {
-            let turns = self.store.list_turns_for_thread(&thread.id)?;
-            for turn in turns {
+        for raw_thread in self.store.list_threads()? {
+            let sensitive_values = sensitive_values_by_thread
+                .get(&raw_thread.id)
+                .cloned()
+                .unwrap_or_default();
+            let turns = self.store.list_turns_for_thread(&raw_thread.id)?;
+            let thread = redacted_serializable_clone(&raw_thread, &sensitive_values)?;
+            for raw_turn in turns {
+                let turn = redacted_serializable_clone(&raw_turn, &sensitive_values)?;
                 if let Some(s) = since
                     && turn.created_at < s
                 {
@@ -3759,12 +4160,23 @@ impl RuntimeThreadManager {
 
     pub async fn get_thread(&self, id: &str) -> Result<ThreadRecord> {
         self.flush_recovery_receipts_for_thread(id).await?;
-        self.store
+        let projection_lock = self.projection_lock(id);
+        let _projection = projection_lock.lock().await;
+        let _sensitive_projection = self.sensitive_projection_guard.read();
+        let sensitive_values = self.sensitive_user_input_values.lock();
+        let sensitive_values = sensitive_values.get(id).cloned().unwrap_or_default();
+        let thread = self
+            .store
             .load_thread(id)
-            .with_context(|| format!("Thread not found: {id}"))
+            .with_context(|| format!("Thread not found: {id}"))?;
+        redacted_serializable_clone(&thread, &sensitive_values)
     }
 
-    pub async fn update_thread(&self, id: &str, req: UpdateThreadRequest) -> Result<ThreadRecord> {
+    pub async fn update_thread(
+        &self,
+        id: &str,
+        mut req: UpdateThreadRequest,
+    ) -> Result<ThreadRecord> {
         if req.archived.is_none()
             && req.allow_shell.is_none()
             && req.trust_mode.is_none()
@@ -3776,6 +4188,35 @@ impl RuntimeThreadManager {
             && req.workspace.is_none()
         {
             bail!("At least one thread field is required");
+        }
+
+        let projection_lock = self.projection_lock(id);
+        let _projection = projection_lock.lock().await;
+        let sensitive_values = {
+            let _sensitive_projection = self.sensitive_projection_guard.read();
+            self.sensitive_user_input_values
+                .lock()
+                .get(id)
+                .cloned()
+                .unwrap_or_default()
+        };
+        if let Some(model) = req.model.as_mut() {
+            *model = redacted_sensitive_user_input_text(model, &sensitive_values);
+        }
+        if let Some(mode) = req.mode.as_mut() {
+            *mode = redacted_sensitive_user_input_text(mode, &sensitive_values);
+        }
+        if let Some(title) = req.title.as_mut() {
+            *title = redacted_sensitive_user_input_text(title, &sensitive_values);
+        }
+        if let Some(system_prompt) = req.system_prompt.as_mut() {
+            *system_prompt = redacted_sensitive_user_input_text(system_prompt, &sensitive_values);
+        }
+        if let Some(workspace) = req.workspace.as_mut() {
+            *workspace = PathBuf::from(redacted_sensitive_user_input_text(
+                &workspace.to_string_lossy(),
+                &sensitive_values,
+            ));
         }
 
         if let Some(model) = req.model.as_ref()
@@ -3800,10 +4241,13 @@ impl RuntimeThreadManager {
             // Using the same order as start/compact avoids lock inversion.
             let mut active = self.active.lock().await;
             let _thread_mutation = self.store.thread_mutation.lock();
-            let mut thread = self
-                .store
-                .load_thread(id)
-                .with_context(|| format!("Thread not found: {id}"))?;
+            let mut thread = redacted_serializable_clone(
+                &self
+                    .store
+                    .load_thread(id)
+                    .with_context(|| format!("Thread not found: {id}"))?,
+                &sensitive_values,
+            )?;
             let mut changes = serde_json::Map::new();
 
             if let Some(archived) = req.archived
@@ -3902,6 +4346,7 @@ impl RuntimeThreadManager {
             let _ = engine.send(Op::Shutdown).await;
         }
 
+        let thread = redacted_serializable_clone(&thread, &sensitive_values)?;
         if !changes.is_empty() {
             self.emit_event(
                 &thread.id,
@@ -3923,16 +4368,23 @@ impl RuntimeThreadManager {
     /// the full message history (including thinking/tool blocks) from the
     /// session file instead of reconstructing from turns.
     pub async fn set_thread_session_id(&self, thread_id: &str, session_id: &str) -> Result<()> {
+        let projection_lock = self.projection_lock(thread_id);
+        let _projection = projection_lock.lock().await;
+        let session_id =
+            self.project_registered_sensitive_clone(thread_id, &session_id.to_string())?;
         let thread = {
             let _thread_mutation = self.store.thread_mutation.lock();
-            let mut thread = self
-                .store
-                .load_thread(thread_id)
-                .with_context(|| format!("Thread not found: {thread_id}"))?;
-            if thread.session_id.as_deref() == Some(session_id) {
+            let mut thread = self.project_registered_sensitive_clone(
+                thread_id,
+                &self
+                    .store
+                    .load_thread(thread_id)
+                    .with_context(|| format!("Thread not found: {thread_id}"))?,
+            )?;
+            if thread.session_id.as_deref() == Some(session_id.as_str()) {
                 return Ok(());
             }
-            thread.session_id = Some(session_id.to_string());
+            thread.session_id = Some(session_id.clone());
             thread.updated_at = Utc::now();
             self.store.save_thread(&thread)?;
             thread
@@ -4043,37 +4495,62 @@ impl RuntimeThreadManager {
     }
 
     pub async fn fork_thread(&self, id: &str) -> Result<ThreadRecord> {
-        let source = self.get_thread(id).await?;
-        let mut forked = source.clone();
-        let now = Utc::now();
-        forked.id = format!("thr_{}", &Uuid::new_v4().to_string()[..8]);
-        forked.created_at = now;
-        forked.updated_at = now;
-        forked.latest_turn_id = None;
-        forked.archived = false;
-
-        let source_turns = self.store.list_turns_for_thread(&source.id)?;
-        let mut cloned_records = Vec::with_capacity(source_turns.len());
-        for source_turn in source_turns {
-            let mut cloned_turn = source_turn.clone();
-            cloned_turn.id = format!("turn_{}", &Uuid::new_v4().to_string()[..8]);
-            cloned_turn.thread_id = forked.id.clone();
-            cloned_turn.item_ids.clear();
-
-            let items = self.store.list_items_for_turn(&source_turn.id)?;
-            let mut cloned_items = Vec::with_capacity(items.len());
-            for item in items {
-                let mut cloned_item = item.clone();
-                cloned_item.id = format!("item_{}", &Uuid::new_v4().to_string()[..8]);
-                cloned_item.turn_id = cloned_turn.id.clone();
-                cloned_turn.item_ids.push(cloned_item.id.clone());
-                cloned_items.push(cloned_item);
-            }
-            forked.latest_turn_id = Some(cloned_turn.id.clone());
+        self.flush_recovery_receipts_for_thread(id).await?;
+        let projection_lock = self.projection_lock(id);
+        let _projection = projection_lock.lock().await;
+        let (source, forked) = {
+            // Keep source reads, projection, fork publication, and inherited
+            // taint registration on one boundary. A late registration either
+            // rewrites first or waits until no raw source record can be copied.
+            let _sensitive_projection = self.sensitive_projection_guard.read();
+            let sensitive_values = self
+                .sensitive_user_input_values
+                .lock()
+                .get(id)
+                .cloned()
+                .unwrap_or_default();
+            let source = redacted_serializable_clone(
+                &self
+                    .store
+                    .load_thread(id)
+                    .with_context(|| format!("Thread not found: {id}"))?,
+                &sensitive_values,
+            )?;
+            let mut forked = source.clone();
+            let now = Utc::now();
+            forked.id = format!("thr_{}", &Uuid::new_v4().to_string()[..8]);
+            forked.created_at = now;
             forked.updated_at = now;
-            cloned_records.push((cloned_turn, cloned_items));
-        }
-        self.publish_fork(&forked, &cloned_records)?;
+            forked.latest_turn_id = None;
+            forked.archived = false;
+
+            let source_turns = self.store.list_turns_for_thread(id)?;
+            let mut cloned_records = Vec::with_capacity(source_turns.len());
+            for source_turn in source_turns {
+                let source_turn_id = source_turn.id.clone();
+                let source_turn = redacted_serializable_clone(&source_turn, &sensitive_values)?;
+                let mut cloned_turn = source_turn.clone();
+                cloned_turn.id = format!("turn_{}", &Uuid::new_v4().to_string()[..8]);
+                cloned_turn.thread_id = forked.id.clone();
+                cloned_turn.item_ids.clear();
+
+                let items = self.store.list_items_for_turn(&source_turn_id)?;
+                let mut cloned_items = Vec::with_capacity(items.len());
+                for item in items {
+                    let mut cloned_item = redacted_serializable_clone(&item, &sensitive_values)?;
+                    cloned_item.id = format!("item_{}", &Uuid::new_v4().to_string()[..8]);
+                    cloned_item.turn_id = cloned_turn.id.clone();
+                    cloned_turn.item_ids.push(cloned_item.id.clone());
+                    cloned_items.push(cloned_item);
+                }
+                forked.latest_turn_id = Some(cloned_turn.id.clone());
+                forked.updated_at = now;
+                cloned_records.push((cloned_turn, cloned_items));
+            }
+            self.publish_fork_with_inherited_taint(&forked, &cloned_records, &sensitive_values)?;
+            (source, forked)
+        };
+        drop(_projection);
 
         self.emit_event(
             &forked.id,
@@ -4122,75 +4599,96 @@ impl RuntimeThreadManager {
         id: &str,
         depth_from_tail: usize,
     ) -> Result<(ThreadRecord, Option<String>)> {
-        let source = self.get_thread(id).await?;
-        let source_turns = self.store.list_turns_for_thread(&source.id)?;
+        self.flush_recovery_receipts_for_thread(id).await?;
+        let projection_lock = self.projection_lock(id);
+        let _projection = projection_lock.lock().await;
+        let (source, forked, original_user_text, target_turn_id) = {
+            let _sensitive_projection = self.sensitive_projection_guard.read();
+            let sensitive_values = self
+                .sensitive_user_input_values
+                .lock()
+                .get(id)
+                .cloned()
+                .unwrap_or_default();
+            let source = redacted_serializable_clone(
+                &self
+                    .store
+                    .load_thread(id)
+                    .with_context(|| format!("Thread not found: {id}"))?,
+                &sensitive_values,
+            )?;
+            let source_turns = self.store.list_turns_for_thread(id)?;
 
-        // Walk turns from newest to oldest. For each turn, ask: does it
-        // contain a UserMessage item? If yes, it counts toward the depth.
-        let mut user_turn_indices: Vec<usize> = Vec::new();
-        for (idx, turn) in source_turns.iter().enumerate().rev() {
-            let items = self.store.list_items_for_turn(&turn.id)?;
-            if items
+            // Walk turns from newest to oldest. For each turn, ask: does it
+            // contain a UserMessage item? If yes, it counts toward the depth.
+            let mut user_turn_indices: Vec<usize> = Vec::new();
+            for (idx, turn) in source_turns.iter().enumerate().rev() {
+                let items = self.store.list_items_for_turn(&turn.id)?;
+                if items
+                    .iter()
+                    .any(|item| item.kind == TurnItemKind::UserMessage)
+                {
+                    user_turn_indices.push(idx);
+                }
+            }
+            if depth_from_tail >= user_turn_indices.len() {
+                bail!(
+                    "fork_at_user_message: depth {} exceeds {} user turn(s)",
+                    depth_from_tail,
+                    user_turn_indices.len()
+                );
+            }
+            // `user_turn_indices` is newest-first because we iterated in
+            // reverse, so the Nth element is exactly the Nth-from-tail user
+            // turn in the original chronological list.
+            let target_turn_idx = user_turn_indices[depth_from_tail];
+            let raw_target_turn_id = source_turns[target_turn_idx].id.clone();
+            let target_turn_id =
+                redacted_sensitive_user_input_text(&raw_target_turn_id, &sensitive_values);
+
+            // Pull the original user-message text out of the dropped turn so
+            // the caller can drop it back into the composer, but never return
+            // a value that late registration has classified.
+            let target_items = self.store.list_items_for_turn(&raw_target_turn_id)?;
+            let original_user_text = target_items
                 .iter()
-                .any(|item| item.kind == TurnItemKind::UserMessage)
-            {
-                user_turn_indices.push(idx);
-            }
-        }
-        if depth_from_tail >= user_turn_indices.len() {
-            bail!(
-                "fork_at_user_message: depth {} exceeds {} user turn(s)",
-                depth_from_tail,
-                user_turn_indices.len()
-            );
-        }
-        // `user_turn_indices` is newest-first because we iterated in
-        // reverse, so the Nth element is exactly the Nth-from-tail user
-        // turn in the original chronological list.
-        let target_turn_idx = user_turn_indices[depth_from_tail];
-        let target_turn_id = source_turns[target_turn_idx].id.clone();
+                .find(|item| item.kind == TurnItemKind::UserMessage)
+                .and_then(|item| item.detail.as_ref())
+                .map(|detail| redacted_sensitive_user_input_text(detail, &sensitive_values));
 
-        // Pull the original user-message text out of the dropped turn so
-        // the caller can drop it back into the composer.
-        let target_items = self.store.list_items_for_turn(&target_turn_id)?;
-        let original_user_text = target_items
-            .iter()
-            .find(|item| item.kind == TurnItemKind::UserMessage)
-            .and_then(|item| item.detail.clone());
-
-        // Copy turns strictly before `target_turn_idx` into a new thread.
-        // Mirrors `fork_thread` but stops at the cutoff instead of copying
-        // every turn. Kept structurally close so future parity reviews
-        // can spot drift between the two paths.
-        let mut forked = source.clone();
-        let now = Utc::now();
-        forked.id = format!("thr_{}", &Uuid::new_v4().to_string()[..8]);
-        forked.created_at = now;
-        forked.updated_at = now;
-        forked.latest_turn_id = None;
-        forked.archived = false;
-
-        let mut cloned_records = Vec::with_capacity(target_turn_idx);
-        for source_turn in source_turns.iter().take(target_turn_idx) {
-            let mut cloned_turn = source_turn.clone();
-            cloned_turn.id = format!("turn_{}", &Uuid::new_v4().to_string()[..8]);
-            cloned_turn.thread_id = forked.id.clone();
-            cloned_turn.item_ids.clear();
-
-            let items = self.store.list_items_for_turn(&source_turn.id)?;
-            let mut cloned_items = Vec::with_capacity(items.len());
-            for item in items {
-                let mut cloned_item = item.clone();
-                cloned_item.id = format!("item_{}", &Uuid::new_v4().to_string()[..8]);
-                cloned_item.turn_id = cloned_turn.id.clone();
-                cloned_turn.item_ids.push(cloned_item.id.clone());
-                cloned_items.push(cloned_item);
-            }
-            forked.latest_turn_id = Some(cloned_turn.id.clone());
+            // Copy turns strictly before `target_turn_idx` into a new thread.
+            let mut forked = source.clone();
+            let now = Utc::now();
+            forked.id = format!("thr_{}", &Uuid::new_v4().to_string()[..8]);
+            forked.created_at = now;
             forked.updated_at = now;
-            cloned_records.push((cloned_turn, cloned_items));
-        }
-        self.publish_fork(&forked, &cloned_records)?;
+            forked.latest_turn_id = None;
+            forked.archived = false;
+
+            let mut cloned_records = Vec::with_capacity(target_turn_idx);
+            for source_turn in source_turns.iter().take(target_turn_idx) {
+                let mut cloned_turn = redacted_serializable_clone(source_turn, &sensitive_values)?;
+                cloned_turn.id = format!("turn_{}", &Uuid::new_v4().to_string()[..8]);
+                cloned_turn.thread_id = forked.id.clone();
+                cloned_turn.item_ids.clear();
+
+                let items = self.store.list_items_for_turn(&source_turn.id)?;
+                let mut cloned_items = Vec::with_capacity(items.len());
+                for item in items {
+                    let mut cloned_item = redacted_serializable_clone(&item, &sensitive_values)?;
+                    cloned_item.id = format!("item_{}", &Uuid::new_v4().to_string()[..8]);
+                    cloned_item.turn_id = cloned_turn.id.clone();
+                    cloned_turn.item_ids.push(cloned_item.id.clone());
+                    cloned_items.push(cloned_item);
+                }
+                forked.latest_turn_id = Some(cloned_turn.id.clone());
+                forked.updated_at = now;
+                cloned_records.push((cloned_turn, cloned_items));
+            }
+            self.publish_fork_with_inherited_taint(&forked, &cloned_records, &sensitive_values)?;
+            (source, forked, original_user_text, target_turn_id)
+        };
+        drop(_projection);
 
         self.emit_event(
             &forked.id,
@@ -4256,6 +4754,36 @@ impl RuntimeThreadManager {
         Ok(())
     }
 
+    /// Register inherited taint before the final thread save makes a fork
+    /// discoverable. A failed publication restores the prior volatile entry,
+    /// so an unpublished random-id collision cannot poison unrelated state.
+    fn publish_fork_with_inherited_taint(
+        &self,
+        thread: &ThreadRecord,
+        records: &[(TurnRecord, Vec<TurnItemRecord>)],
+        sensitive_values: &HashSet<String>,
+    ) -> Result<()> {
+        let previous_values = if sensitive_values.is_empty() {
+            None
+        } else {
+            self.sensitive_user_input_values
+                .lock()
+                .insert(thread.id.clone(), sensitive_values.clone())
+        };
+        if let Err(error) = self.publish_fork(thread, records) {
+            if !sensitive_values.is_empty() {
+                let mut values_by_thread = self.sensitive_user_input_values.lock();
+                if let Some(previous_values) = previous_values {
+                    values_by_thread.insert(thread.id.clone(), previous_values);
+                } else {
+                    values_by_thread.remove(&thread.id);
+                }
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
     /// Seed a thread with messages from a saved session so subsequent turns
     /// continue with the prior conversation context.
     ///
@@ -4269,20 +4797,34 @@ impl RuntimeThreadManager {
         messages: &[Message],
     ) -> Result<()> {
         let mut checkpoint_retirement_item_id = None;
+        let mut seeded_sensitive_values = HashSet::new();
+        collect_sensitive_user_input_values(messages, &mut seeded_sensitive_values);
+        let projection_lock = self.projection_lock(thread_id);
+        let projection = projection_lock.lock().await;
+        let mut durable_sensitive_values = {
+            let _sensitive_projection = self.sensitive_projection_guard.read();
+            self.sensitive_user_input_values
+                .lock()
+                .get(thread_id)
+                .cloned()
+                .unwrap_or_default()
+        };
+        durable_sensitive_values.extend(seeded_sensitive_values.iter().cloned());
         // Session seeding writes turns/items and then advances the existing
         // thread pointer as one synchronous record transaction.
         let thread_mutation = self.store.thread_mutation.lock();
-        let mut thread = self
-            .store
-            .load_thread(thread_id)
-            .with_context(|| format!("Thread not found: {thread_id}"))?;
+        let mut thread = redacted_serializable_clone(
+            &self
+                .store
+                .load_thread(thread_id)
+                .with_context(|| format!("Thread not found: {thread_id}"))?,
+            &durable_sensitive_values,
+        )?;
         let now = Utc::now();
-        let mut seeded_sensitive_values = HashSet::new();
-        collect_sensitive_user_input_values(messages, &mut seeded_sensitive_values);
         // Public seed items and the private checkpoint must be projections of
         // the same redacted clone. Never flatten the raw imported transcript
         // before discovering request/response provenance.
-        let redacted_messages = redacted_durable_history_clone(messages, &seeded_sensitive_values);
+        let redacted_messages = redacted_durable_history_clone(messages, &durable_sensitive_values);
         let runtime_history_snapshot = (messages
             .iter()
             .any(|message| message.role == crate::compaction::RUNTIME_HISTORY_ROLE)
@@ -4582,7 +5124,7 @@ impl RuntimeThreadManager {
             // Persist the complete, redacted history as the same private
             // checkpoint used by normal compaction so restart and export share
             // one reconstruction path even when the linked session vanishes.
-            let mut checkpoint_turn = if let Some(turn_id) = thread.latest_turn_id.as_deref() {
+            let checkpoint_turn = if let Some(turn_id) = thread.latest_turn_id.as_deref() {
                 self.store.load_turn(turn_id)?
             } else {
                 TurnRecord {
@@ -4605,6 +5147,8 @@ impl RuntimeThreadManager {
                     steer_count: 0,
                 }
             };
+            let mut checkpoint_turn =
+                redacted_serializable_clone(&checkpoint_turn, &durable_sensitive_values)?;
             let mut checkpoint_item = TurnItemRecord {
                 schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
                 id: format!("item_{}", &Uuid::new_v4().to_string()[..8]),
@@ -4632,7 +5176,7 @@ impl RuntimeThreadManager {
                 &mut checkpoint_item,
                 &runtime_history_snapshot,
                 "turn_terminal",
-                &seeded_sensitive_values,
+                &durable_sensitive_values,
             )? {
                 checkpoint_retirement_item_id = Some(checkpoint_item.id.clone());
             }
@@ -4642,11 +5186,12 @@ impl RuntimeThreadManager {
 
         self.store.save_thread(&thread)?;
         drop(thread_mutation);
-        self.sensitive_user_input_values
-            .lock()
-            .entry(thread_id.to_string())
-            .or_default()
-            .extend(seeded_sensitive_values.iter().cloned());
+        self.extend_sensitive_user_input_values_under_projection(
+            thread_id,
+            seeded_sensitive_values.clone(),
+        )
+        .await?;
+        drop(projection);
         if let Some(item_id) = checkpoint_retirement_item_id {
             self.retire_prior_compaction_history_snapshots(thread_id, item_id)
                 .await?;
@@ -4736,8 +5281,6 @@ impl RuntimeThreadManager {
     }
 
     async fn settle_claimed_turn_failure(&self, thread_id: &str, turn_id: &str, reason: &str) {
-        let sensitive_values = self.sensitive_user_input_values_for_thread(thread_id).await;
-        let reason = redacted_sensitive_user_input_text(reason, &sensitive_values);
         // Block steer attempts while terminal receipts are being settled; the
         // active claim remains present so a replacement turn cannot start.
         {
@@ -4752,6 +5295,17 @@ impl RuntimeThreadManager {
             }
         }
         let now = Utc::now();
+        let projection_lock = self.projection_lock(thread_id);
+        let item_projection = projection_lock.lock().await;
+        let sensitive_values = {
+            let _sensitive_projection = self.sensitive_projection_guard.read();
+            self.sensitive_user_input_values
+                .lock()
+                .get(thread_id)
+                .cloned()
+                .unwrap_or_default()
+        };
+        let reason = redacted_sensitive_user_input_text(reason, &sensitive_values);
         let mut terminal_items = Vec::new();
         match self.store.list_items_for_turn(turn_id) {
             Ok(items) => {
@@ -4762,8 +5316,12 @@ impl RuntimeThreadManager {
                     ) {
                         item.status = TurnItemLifecycleStatus::Failed;
                         item.ended_at = Some(now);
-                        match self.store.save_item(&item) {
-                            Ok(()) => terminal_items.push(item),
+                        let public_item = redacted_serializable_clone(&item, &sensitive_values);
+                        match public_item.and_then(|item| {
+                            self.store.save_item(&item)?;
+                            Ok(item)
+                        }) {
+                            Ok(item) => terminal_items.push(item),
                             Err(err) => tracing::error!(
                                 item_id = %item.id,
                                 "Failed to terminalize item after monitor failure: {err}"
@@ -4776,31 +5334,7 @@ impl RuntimeThreadManager {
                 "Failed to list turn items after monitor failure for {turn_id}: {err}"
             ),
         }
-        let terminal_turn = {
-            let _turn_mutation = self.store.turn_mutation.lock();
-            match self.store.load_turn(turn_id) {
-                Ok(mut turn) => {
-                    if turn.status == RuntimeTurnStatus::InProgress {
-                        turn.status = RuntimeTurnStatus::Failed;
-                        turn.ended_at = Some(now);
-                        turn.duration_ms = turn.started_at.map(|start| duration_ms(start, now));
-                        turn.error = Some(reason.clone());
-                    }
-                    matches!(
-                        turn.status,
-                        RuntimeTurnStatus::Completed
-                            | RuntimeTurnStatus::Failed
-                            | RuntimeTurnStatus::Interrupted
-                            | RuntimeTurnStatus::Canceled
-                    )
-                    .then_some(turn)
-                }
-                Err(err) => {
-                    tracing::error!("Failed to load turn after monitor failure: {err}");
-                    None
-                }
-            }
-        };
+        drop(item_projection);
 
         for item in terminal_items {
             if let Err(err) = self
@@ -4852,18 +5386,38 @@ impl RuntimeThreadManager {
         // Keep snapshots outside that boundary until its terminal receipt and
         // active-claim cleanup are also ordered. The dedupe scan may yield to
         // a blocking worker while this projection guard remains held.
-        let projection_lock = self.projection_lock(thread_id);
         let _projection = projection_lock.lock().await;
-        let terminal_turn = terminal_turn.and_then(|turn| {
+        let terminal_turn = {
             let _turn_mutation = self.store.turn_mutation.lock();
-            match self.store.save_turn(&turn) {
-                Ok(()) => Some(turn),
+            let terminal_turn = (|| -> Result<Option<TurnRecord>> {
+                let mut turn = self.store.load_turn(turn_id)?;
+                if turn.status == RuntimeTurnStatus::InProgress {
+                    turn.status = RuntimeTurnStatus::Failed;
+                    turn.ended_at = Some(now);
+                    turn.duration_ms = turn.started_at.map(|start| duration_ms(start, now));
+                    turn.error = Some(reason.clone());
+                }
+                let turn = self.project_registered_sensitive_clone(thread_id, &turn)?;
+                if !matches!(
+                    turn.status,
+                    RuntimeTurnStatus::Completed
+                        | RuntimeTurnStatus::Failed
+                        | RuntimeTurnStatus::Interrupted
+                        | RuntimeTurnStatus::Canceled
+                ) {
+                    return Ok(None);
+                }
+                self.store.save_turn(&turn)?;
+                Ok(Some(turn))
+            })();
+            match terminal_turn {
+                Ok(turn) => turn,
                 Err(err) => {
                     tracing::error!("Failed to persist terminal monitor failure: {err}");
                     None
                 }
             }
-        });
+        };
         if let Some(turn) = terminal_turn.as_ref() {
             if user_inputs_settled && dynamic_tools_settled {
                 if let Err(err) = self.emit_turn_completed_if_missing(turn, false).await {
@@ -4961,6 +5515,8 @@ impl RuntimeThreadManager {
         let manager = Arc::new(self.clone());
         tokio::spawn(async move {
             use futures_util::FutureExt;
+            let projection_lock = manager.projection_lock(&turn.thread_id);
+            let _projection = projection_lock.lock().await;
             let start_events = std::panic::AssertUnwindSafe(manager.emit_claimed_turn_started(
                 &turn,
                 user_item.as_ref(),
@@ -4979,7 +5535,11 @@ impl RuntimeThreadManager {
                     .await;
                 let failure = redacted_sensitive_user_input_text(&failure, &sensitive_values);
                 tracing::error!("{failure}");
-                let _ = acceptance_tx.send(Ok(turn.clone()));
+                let accepted_turn = manager
+                    .project_registered_sensitive_clone(&turn.thread_id, &turn)
+                    .map_err(|error| format!("Failed to project accepted turn: {error}"));
+                let _ = acceptance_tx.send(accepted_turn);
+                drop(_projection);
                 engine.cancel_with_reason(crate::core::engine::CancelReason::Internal);
                 manager
                     .settle_claimed_turn_failure(&turn.thread_id, &turn.id, &failure)
@@ -4987,7 +5547,11 @@ impl RuntimeThreadManager {
                 return;
             }
 
-            let _ = acceptance_tx.send(Ok(turn.clone()));
+            let accepted_turn = manager
+                .project_registered_sensitive_clone(&turn.thread_id, &turn)
+                .map_err(|error| format!("Failed to project accepted turn: {error}"));
+            let _ = acceptance_tx.send(accepted_turn);
+            drop(_projection);
             manager
                 .monitor_claimed_turn(turn.thread_id.clone(), turn.id.clone(), engine, kind)
                 .await;
@@ -5000,11 +5564,13 @@ impl RuntimeThreadManager {
         turn: TurnRecord,
         item: TurnItemRecord,
         prompt: String,
-    ) -> oneshot::Receiver<TurnRecord> {
+    ) -> oneshot::Receiver<std::result::Result<TurnRecord, String>> {
         let (receipt_tx, receipt_rx) = oneshot::channel();
         let manager = Arc::new(self.clone());
         tokio::spawn(async move {
             use futures_util::FutureExt;
+            let projection_lock = manager.projection_lock(&turn.thread_id);
+            let _projection = projection_lock.lock().await;
             let receipts = std::panic::AssertUnwindSafe(async {
                 if let Err(err) = manager
                     .emit_event(
@@ -5043,7 +5609,10 @@ impl RuntimeThreadManager {
                     panic_payload_message(&*payload)
                 );
             }
-            let _ = receipt_tx.send(turn);
+            let public_turn = manager
+                .project_registered_sensitive_clone(&turn.thread_id, &turn)
+                .map_err(|error| format!("Failed to project steered turn: {error}"));
+            let _ = receipt_tx.send(public_turn);
         });
         receipt_rx
     }
@@ -5225,6 +5794,8 @@ impl RuntimeThreadManager {
 
         let admission_lock = self.admission_lock(thread_id);
         let admission = admission_lock.lock().await;
+        let persistence_projection_lock = self.projection_lock(thread_id);
+        let persistence_projection = persistence_projection_lock.lock().await;
         let acceptance_rx = {
             // Lock order is active -> thread_mutation. Neither guard crosses
             // an await, and spawning the owned lifecycle task is synchronous.
@@ -5236,7 +5807,10 @@ impl RuntimeThreadManager {
                 bail!("Thread already has an active turn");
             }
             let _thread_mutation = self.store.thread_mutation.lock();
-            let mut current_thread = self.store.load_thread(thread_id)?;
+            let mut current_thread = redacted_serializable_clone(
+                &self.store.load_thread(thread_id)?,
+                &state.sensitive_user_input_values,
+            )?;
             if !thread_execution_state_matches(&thread, &current_thread) {
                 bail!("Thread execution settings changed while preparing the turn; retry");
             }
@@ -5289,6 +5863,7 @@ impl RuntimeThreadManager {
                 ClaimedTurnKind::Message,
             )
         };
+        drop(persistence_projection);
         drop(admission);
 
         acceptance_rx
@@ -5323,7 +5898,10 @@ impl RuntimeThreadManager {
         )
         .await?;
 
-        self.store.load_turn(turn_id)
+        let projection_lock = self.projection_lock(thread_id);
+        let _projection = projection_lock.lock().await;
+        let turn = self.store.load_turn(turn_id)?;
+        self.project_registered_sensitive_clone(thread_id, &turn)
     }
 
     pub async fn steer_turn(
@@ -5377,6 +5955,8 @@ impl RuntimeThreadManager {
             started_at: Some(now),
             ended_at: Some(now),
         };
+        let persistence_projection_lock = self.projection_lock(thread_id);
+        let persistence_projection = persistence_projection_lock.lock().await;
         let receipt_rx = {
             let mut active = self.active.lock().await;
             let Some(active_thread) = active.engines.get(thread_id) else {
@@ -5407,7 +5987,9 @@ impl RuntimeThreadManager {
                 if !turn.item_ids.iter().any(|id| id == &item.id) {
                     turn.item_ids.push(item.id.clone());
                 }
-                self.store.save_turn(&turn)?;
+                let public_turn =
+                    redacted_serializable_clone(&turn, &active_thread.sensitive_user_input_values)?;
+                self.store.save_turn(&public_turn)?;
                 Ok(turn)
             })();
             let turn = match persistence {
@@ -5428,9 +6010,11 @@ impl RuntimeThreadManager {
             touch_lru(&mut active.lru, thread_id);
             self.spawn_steer_receipts(turn, item, prompt)
         };
+        drop(persistence_projection);
         receipt_rx
             .await
-            .map_err(|_| anyhow!("Steer receipt task ended before acknowledgement"))
+            .map_err(|_| anyhow!("Steer receipt task ended before acknowledgement"))?
+            .map_err(anyhow::Error::msg)
     }
 
     pub async fn compact_thread(
@@ -5508,6 +6092,8 @@ impl RuntimeThreadManager {
 
         let admission_lock = self.admission_lock(thread_id);
         let admission = admission_lock.lock().await;
+        let persistence_projection_lock = self.projection_lock(thread_id);
+        let persistence_projection = persistence_projection_lock.lock().await;
         let acceptance_rx = {
             let mut active = self.active.lock().await;
             let Some(state) = active.engines.get_mut(thread_id) else {
@@ -5517,7 +6103,10 @@ impl RuntimeThreadManager {
                 bail!("Thread already has an active turn");
             }
             let _thread_mutation = self.store.thread_mutation.lock();
-            let mut current_thread = self.store.load_thread(thread_id)?;
+            let mut current_thread = redacted_serializable_clone(
+                &self.store.load_thread(thread_id)?,
+                &state.sensitive_user_input_values,
+            )?;
             if !thread_execution_state_matches(&thread, &current_thread) {
                 bail!("Thread execution settings changed while preparing compaction; retry");
             }
@@ -5561,6 +6150,7 @@ impl RuntimeThreadManager {
                 ClaimedTurnKind::Compaction,
             )
         };
+        drop(persistence_projection);
         drop(admission);
 
         acceptance_rx
@@ -5574,7 +6164,22 @@ impl RuntimeThreadManager {
         thread_id: &str,
         since_seq: Option<u64>,
     ) -> Result<Vec<RuntimeEventRecord>> {
-        self.store.events_since(thread_id, since_seq)
+        // Read the store before snapshotting the volatile taint set. A late
+        // registration that wins this boundary is therefore applied to every
+        // record just read; one that starts afterward linearizes after this
+        // synchronous snapshot and owns the durable rewrite before later reads.
+        let _sensitive_projection = self.sensitive_projection_guard.read();
+        let events = self.store.events_since(thread_id, since_seq)?;
+        let sensitive_values = self
+            .sensitive_user_input_values
+            .lock()
+            .get(thread_id)
+            .cloned()
+            .unwrap_or_default();
+        events
+            .into_iter()
+            .map(|event| redacted_serializable_clone(&event, &sensitive_values))
+            .collect()
     }
 
     async fn events_since_offloaded(
@@ -5582,11 +6187,15 @@ impl RuntimeThreadManager {
         thread_id: &str,
         since_seq: Option<u64>,
     ) -> Result<Vec<RuntimeEventRecord>> {
-        let store = self.store.clone();
+        let manager = self.clone();
         let thread_id = thread_id.to_string();
-        tokio::task::spawn_blocking(move || store.events_since(&thread_id, since_seq))
-            .await
-            .context("Runtime event history task failed")?
+        tokio::task::spawn_blocking(move || {
+            let projection_lock = manager.projection_lock(&thread_id);
+            let _projection = projection_lock.blocking_lock();
+            manager.events_since(&thread_id, since_seq)
+        })
+        .await
+        .context("Runtime event history task failed")?
     }
 
     pub(crate) async fn replay_events(
@@ -5600,10 +6209,21 @@ impl RuntimeThreadManager {
         }
         let (base_tx, base_rx) = oneshot::channel();
         let (batch_tx, batches) = mpsc::channel(2);
-        let store = self.store.clone();
+        let manager = self.clone();
         let thread_id = thread_id.to_string();
         tokio::task::spawn_blocking(move || {
-            store.publish_event_replay(&thread_id, since_seq, tail_limit, base_tx, batch_tx);
+            let projection_lock = manager.projection_lock(&thread_id);
+            let _projection = projection_lock.blocking_lock();
+            let _sensitive_projection = manager.sensitive_projection_guard.read();
+            let values = manager
+                .sensitive_user_input_values
+                .lock()
+                .get(&thread_id)
+                .cloned()
+                .unwrap_or_default();
+            manager.store.publish_event_replay(
+                &thread_id, since_seq, tail_limit, &values, base_tx, batch_tx,
+            );
         });
         let base_seq = base_rx
             .await
@@ -5824,10 +6444,11 @@ impl RuntimeThreadManager {
                 &session_messages,
                 &mut restored_sensitive_user_input_values,
             );
-            self.sensitive_user_input_values.lock().insert(
-                thread.id.clone(),
-                restored_sensitive_user_input_values.clone(),
-            );
+            self.extend_sensitive_user_input_values(
+                &thread.id,
+                restored_sensitive_user_input_values.iter().cloned(),
+            )
+            .await?;
             if !session_messages.is_empty() || sys_prompt.is_some() {
                 engine
                     .send(Op::SyncSession {
@@ -6018,6 +6639,7 @@ impl RuntimeThreadManager {
         &self,
         thread_id: &str,
         except_item_id: Option<&str>,
+        sensitive_values: &HashSet<String>,
     ) -> Result<()> {
         let turns = self.store.list_turns_for_thread(thread_id)?;
         let turn_ids = turns.iter().map(|turn| turn.id.clone()).collect::<Vec<_>>();
@@ -6030,6 +6652,7 @@ impl RuntimeThreadManager {
                     continue;
                 }
                 strip_compaction_history_snapshot_metadata(&mut item);
+                let item = redacted_serializable_clone(&item, sensitive_values)?;
                 self.store.save_item(&item)?;
             }
         }
@@ -6066,10 +6689,38 @@ impl RuntimeThreadManager {
         thread_id: &str,
         except_item_id: String,
     ) -> Result<()> {
+        let projection_lock = self.projection_lock(thread_id);
+        let _projection = projection_lock.lock().await;
+        let sensitive_values = {
+            let _sensitive_projection = self.sensitive_projection_guard.read();
+            self.sensitive_user_input_values
+                .lock()
+                .get(thread_id)
+                .cloned()
+                .unwrap_or_default()
+        };
+        self.retire_prior_compaction_history_snapshots_under_projection(
+            thread_id,
+            except_item_id,
+            sensitive_values,
+        )
+        .await
+    }
+
+    async fn retire_prior_compaction_history_snapshots_under_projection(
+        &self,
+        thread_id: &str,
+        except_item_id: String,
+        sensitive_values: HashSet<String>,
+    ) -> Result<()> {
         let manager = self.clone();
         let thread_id = thread_id.to_string();
         tokio::task::spawn_blocking(move || {
-            manager.clear_compaction_history_snapshots_for_thread(&thread_id, Some(&except_item_id))
+            manager.clear_compaction_history_snapshots_for_thread(
+                &thread_id,
+                Some(&except_item_id),
+                &sensitive_values,
+            )
         })
         .await
         .context("Runtime compaction-checkpoint retirement task failed")?
@@ -6083,9 +6734,24 @@ impl RuntimeThreadManager {
         scope: &str,
         sensitive_values: &HashSet<String>,
     ) -> Result<()> {
-        if self.publish_compaction_history_snapshot(item, messages, scope, sensitive_values)? {
-            self.retire_prior_compaction_history_snapshots(thread_id, item.id.clone())
-                .await?;
+        let projection_lock = self.projection_lock(thread_id);
+        let _projection = projection_lock.lock().await;
+        let mut sensitive_values = sensitive_values.clone();
+        sensitive_values.extend(
+            self.sensitive_user_input_values
+                .lock()
+                .get(thread_id)
+                .into_iter()
+                .flatten()
+                .cloned(),
+        );
+        if self.publish_compaction_history_snapshot(item, messages, scope, &sensitive_values)? {
+            self.retire_prior_compaction_history_snapshots_under_projection(
+                thread_id,
+                item.id.clone(),
+                sensitive_values,
+            )
+            .await?;
         }
         Ok(())
     }
@@ -6409,7 +7075,8 @@ impl RuntimeThreadManager {
                         ended_at: None,
                     };
                     self.save_public_item(&thread_id, &item).await?;
-                    self.attach_item_to_turn(&turn_id, &item.id)?;
+                    self.attach_item_to_turn(&thread_id, &turn_id, &item.id)
+                        .await?;
                     self.emit_event(
                         &thread_id,
                         Some(&turn_id),
@@ -6485,7 +7152,8 @@ impl RuntimeThreadManager {
                         ended_at: None,
                     };
                     self.save_public_item(&thread_id, &item).await?;
-                    self.attach_item_to_turn(&turn_id, &item.id)?;
+                    self.attach_item_to_turn(&thread_id, &turn_id, &item.id)
+                        .await?;
                     self.emit_event(
                         &thread_id,
                         Some(&turn_id),
@@ -6563,7 +7231,8 @@ impl RuntimeThreadManager {
                         ended_at: None,
                     };
                     self.save_public_item(&thread_id, &item).await?;
-                    self.attach_item_to_turn(&turn_id, &item.id)?;
+                    self.attach_item_to_turn(&thread_id, &turn_id, &item.id)
+                        .await?;
                     self.emit_event(
                         &thread_id,
                         Some(&turn_id),
@@ -6649,7 +7318,8 @@ impl RuntimeThreadManager {
                         ended_at: None,
                     };
                     self.save_public_item(&thread_id, &item).await?;
-                    self.attach_item_to_turn(&turn_id, &item.id)?;
+                    self.attach_item_to_turn(&thread_id, &turn_id, &item.id)
+                        .await?;
                     self.emit_event(
                         &thread_id,
                         Some(&turn_id),
@@ -6765,7 +7435,8 @@ impl RuntimeThreadManager {
                         ended_at: Some(Utc::now()),
                     };
                     self.save_public_item(&thread_id, &item).await?;
-                    self.attach_item_to_turn(&turn_id, &item.id)?;
+                    self.attach_item_to_turn(&thread_id, &turn_id, &item.id)
+                        .await?;
                     self.emit_event(
                         &thread_id,
                         Some(&turn_id),
@@ -6791,7 +7462,8 @@ impl RuntimeThreadManager {
                         ended_at: Some(Utc::now()),
                     };
                     self.save_public_item(&thread_id, &item).await?;
-                    self.attach_item_to_turn(&turn_id, &item.id)?;
+                    self.attach_item_to_turn(&thread_id, &turn_id, &item.id)
+                        .await?;
                     self.emit_event(
                         &thread_id,
                         Some(&turn_id),
@@ -6820,7 +7492,8 @@ impl RuntimeThreadManager {
                         ended_at: Some(Utc::now()),
                     };
                     self.save_public_item(&thread_id, &item).await?;
-                    self.attach_item_to_turn(&turn_id, &item.id)?;
+                    self.attach_item_to_turn(&thread_id, &turn_id, &item.id)
+                        .await?;
                     self.emit_event(
                         &thread_id,
                         Some(&turn_id),
@@ -6861,7 +7534,8 @@ impl RuntimeThreadManager {
                         ended_at: Some(Utc::now()),
                     };
                     self.save_public_item(&thread_id, &item).await?;
-                    self.attach_item_to_turn(&turn_id, &item.id)?;
+                    self.attach_item_to_turn(&thread_id, &turn_id, &item.id)
+                        .await?;
                     self.emit_event(
                         &thread_id,
                         Some(&turn_id),
@@ -7120,7 +7794,7 @@ impl RuntimeThreadManager {
                         &thread_id,
                         sensitive_user_input_values.iter().cloned(),
                     )
-                    .await;
+                    .await?;
                     latest_session_messages = Some(messages);
                 }
                 EngineEvent::Status { message } => {
@@ -7138,7 +7812,8 @@ impl RuntimeThreadManager {
                         ended_at: Some(Utc::now()),
                     };
                     self.save_public_item(&thread_id, &item).await?;
-                    self.attach_item_to_turn(&turn_id, &item.id)?;
+                    self.attach_item_to_turn(&thread_id, &turn_id, &item.id)
+                        .await?;
                     self.emit_event(
                         &thread_id,
                         Some(&turn_id),
@@ -7166,7 +7841,8 @@ impl RuntimeThreadManager {
                         ended_at: Some(Utc::now()),
                     };
                     self.save_public_item(&thread_id, &item).await?;
-                    self.attach_item_to_turn(&turn_id, &item.id)?;
+                    self.attach_item_to_turn(&thread_id, &turn_id, &item.id)
+                        .await?;
                     self.emit_event(
                         &thread_id,
                         Some(&turn_id),
@@ -7330,7 +8006,8 @@ impl RuntimeThreadManager {
                 ended_at: Some(Utc::now()),
             };
             self.save_public_item(&thread_id, &item).await?;
-            self.attach_item_to_turn(&turn_id, &item.id)?;
+            self.attach_item_to_turn(&thread_id, &turn_id, &item.id)
+                .await?;
             self.emit_event(
                 &thread_id,
                 Some(&turn_id),
@@ -7342,24 +8019,6 @@ impl RuntimeThreadManager {
         }
 
         let ended_at = Utc::now();
-        let turn = {
-            let _turn_mutation = self.store.turn_mutation.lock();
-            let mut turn = self.store.load_turn(&turn_id)?;
-            turn.status = turn_status;
-            turn.ended_at = Some(ended_at);
-            turn.duration_ms = turn.started_at.map(|start| duration_ms(start, ended_at));
-            turn.usage = turn_usage;
-            turn.effective_billing_surface = turn
-                .effective_provider
-                .as_deref()
-                .and_then(ApiProvider::parse)
-                .and_then(|provider| {
-                    crate::pricing::billing_surface_for_route(provider, turn_base_url.as_deref())
-                })
-                .map(str::to_string);
-            turn.error = turn_error;
-            turn
-        };
 
         // A terminal turn can no longer answer an outstanding prompt. Commit
         // each cancellation while the request remains snapshot-authoritative,
@@ -7380,19 +8039,38 @@ impl RuntimeThreadManager {
             self.sensitive_user_input_values_for_thread(&thread_id)
                 .await,
         );
-        let public_turn = redacted_serializable_clone(&turn, &sensitive_user_input_values)?;
-        {
+        let public_turn = {
             let _turn_mutation = self.store.turn_mutation.lock();
+            let mut turn = self.store.load_turn(&turn_id)?;
+            turn.status = turn_status;
+            turn.ended_at = Some(ended_at);
+            turn.duration_ms = turn.started_at.map(|start| duration_ms(start, ended_at));
+            turn.usage = turn_usage;
+            turn.effective_billing_surface = turn
+                .effective_provider
+                .as_deref()
+                .and_then(ApiProvider::parse)
+                .and_then(|provider| {
+                    crate::pricing::billing_surface_for_route(provider, turn_base_url.as_deref())
+                })
+                .map(str::to_string);
+            turn.error = turn_error;
+            let public_turn = redacted_serializable_clone(&turn, &sensitive_user_input_values)?;
             self.store.save_turn(&public_turn)?;
-        }
+            public_turn
+        };
         {
             let _thread_mutation = self.store.thread_mutation.lock();
-            let mut thread = self.store.load_thread(&thread_id)?;
+            let mut thread = redacted_serializable_clone(
+                &self.store.load_thread(&thread_id)?,
+                &sensitive_user_input_values,
+            )?;
             thread.latest_turn_id = Some(turn_id.clone());
             thread.updated_at = Utc::now();
             self.store.save_thread(&thread)?;
         }
-        self.emit_turn_completed_if_missing(&turn, false).await?;
+        self.emit_turn_completed_if_missing(&public_turn, false)
+            .await?;
 
         {
             let mut active = self.active.lock().await;
@@ -7410,9 +8088,17 @@ impl RuntimeThreadManager {
         Ok(())
     }
 
-    fn attach_item_to_turn(&self, turn_id: &str, item_id: &str) -> Result<()> {
+    async fn attach_item_to_turn(
+        &self,
+        thread_id: &str,
+        turn_id: &str,
+        item_id: &str,
+    ) -> Result<()> {
+        let projection_lock = self.projection_lock(thread_id);
+        let _projection = projection_lock.lock().await;
         let _turn_mutation = self.store.turn_mutation.lock();
-        let mut turn = self.store.load_turn(turn_id)?;
+        let mut turn =
+            self.project_registered_sensitive_clone(thread_id, &self.store.load_turn(turn_id)?)?;
         if !turn.item_ids.iter().any(|id| id == item_id) {
             turn.item_ids.push(item_id.to_string());
             self.store.save_turn(&turn)?;

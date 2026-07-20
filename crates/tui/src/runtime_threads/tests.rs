@@ -8023,6 +8023,29 @@ fn redaction_marker_never_reintroduces_a_classified_value() {
 }
 
 #[test]
+fn classified_values_redact_nested_json_object_keys_and_values() -> Result<()> {
+    const SECRET: &str = "object-key-secret-482915";
+    let sensitive_values = HashSet::from([SECRET.to_string()]);
+    let mut nested = serde_json::Map::new();
+    nested.insert(
+        format!("nested-{SECRET}-key"),
+        Value::String(format!("nested value {SECRET}")),
+    );
+    nested.insert("safe-key".to_string(), json!([format!("array {SECRET}")]));
+    let mut root = serde_json::Map::new();
+    root.insert(format!("root-{SECRET}-key"), Value::Object(nested));
+
+    let projected = redacted_sensitive_user_input_json(&Value::Object(root), &sensitive_values);
+    let serialized = serde_json::to_string(&projected)?;
+
+    assert!(!serialized.contains(SECRET));
+    assert!(serialized.contains("root-[redacted user input]-key"));
+    assert!(serialized.contains("nested-[redacted user input]-key"));
+    assert!(serialized.contains("safe-key"));
+    Ok(())
+}
+
+#[test]
 fn sensitive_stream_projection_never_emits_split_or_adjacent_secret_bytes() {
     const SECRET: &str = "482915";
     let sensitive_values = HashSet::from([SECRET.to_string()]);
@@ -8048,6 +8071,11 @@ fn durable_history_clone_redacts_every_structured_string_leaf() -> Result<()> {
     const SECRET: &str = "structured-secret-493812";
     let mut sensitive_values = HashSet::new();
     sensitive_values.insert(SECRET.to_string());
+    let mut tool_input = serde_json::Map::new();
+    tool_input.insert(
+        format!("nested-{SECRET}-key"),
+        json!([{"command": format!("echo {SECRET}")}]),
+    );
     let messages = vec![
         crate::compaction::compaction_summary_message(
             format!(
@@ -8075,7 +8103,7 @@ fn durable_history_clone_redacts_every_structured_string_leaf() -> Result<()> {
                 ContentBlock::ToolUse {
                     id: "tool-structural-id".to_string(),
                     name: "exec_shell".to_string(),
-                    input: json!({"nested": [{"command": format!("echo {SECRET}")}]}),
+                    input: Value::Object(tool_input),
                     caller: None,
                 },
                 ContentBlock::ServerToolUse {
@@ -8115,6 +8143,399 @@ fn durable_history_clone_redacts_every_structured_string_leaf() -> Result<()> {
         ContentBlock::Thinking { thinking, signature }
             if thinking == "[redacted user input]" && signature.is_none()
     ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn late_root_taint_rewrites_thread_metadata_and_event_replay() -> Result<()> {
+    const SECRET: &str = "late-root-secret-482915";
+    let data_dir = test_runtime_dir();
+    let manager = test_manager(data_dir.clone())?;
+    let thread = manager
+        .create_thread(CreateThreadRequest::default())
+        .await?;
+
+    let raw_update = manager
+        .update_thread(
+            &thread.id,
+            UpdateThreadRequest {
+                title: Some(format!("guessed title {SECRET}")),
+                system_prompt: Some(format!("guessed system prompt {SECRET}")),
+                workspace: Some(PathBuf::from(format!("/tmp/guessed-{SECRET}"))),
+                ..UpdateThreadRequest::default()
+            },
+        )
+        .await?;
+    assert!(serde_json::to_string(&raw_update)?.contains(SECRET));
+    assert!(serde_json::to_string(&manager.store.load_thread(&thread.id)?)?.contains(SECRET));
+    assert!(
+        serde_json::to_string(&manager.store.events_since(&thread.id, None)?)?.contains(SECRET)
+    );
+
+    manager
+        .extend_sensitive_user_input_values(&thread.id, [SECRET.to_string()])
+        .await?;
+
+    let durable_thread = manager.store.load_thread(&thread.id)?;
+    let durable_events = manager.store.events_since(&thread.id, None)?;
+    assert!(!serde_json::to_string(&durable_thread)?.contains(SECRET));
+    assert!(!serde_json::to_string(&durable_events)?.contains(SECRET));
+    assert!(
+        !std::fs::read_to_string(data_dir.join("threads").join(format!("{}.json", thread.id)))?
+            .contains(SECRET)
+    );
+    assert!(
+        !std::fs::read_to_string(data_dir.join("events").join(format!("{}.jsonl", thread.id)))?
+            .contains(SECRET)
+    );
+    assert!(!serde_json::to_string(&manager.get_thread(&thread.id).await?)?.contains(SECRET));
+    assert!(
+        !serde_json::to_string(
+            &manager
+                .list_threads(ThreadListFilter::IncludeArchived, None)
+                .await?
+        )?
+        .contains(SECRET)
+    );
+
+    let projected_update = manager
+        .update_thread(
+            &thread.id,
+            UpdateThreadRequest {
+                title: Some(format!("new title {SECRET}")),
+                system_prompt: Some(format!("new system prompt {SECRET}")),
+                workspace: Some(PathBuf::from(format!("/tmp/new-{SECRET}"))),
+                ..UpdateThreadRequest::default()
+            },
+        )
+        .await?;
+    assert!(!serde_json::to_string(&projected_update)?.contains(SECRET));
+    assert!(!serde_json::to_string(&manager.store.load_thread(&thread.id)?)?.contains(SECRET));
+    assert!(
+        !serde_json::to_string(&manager.store.events_since(&thread.id, None)?)?.contains(SECRET)
+    );
+
+    let mut replay = manager.replay_events(&thread.id, None, None).await?;
+    let mut replayed = Vec::new();
+    while let Some(batch) = replay.batches.recv().await {
+        replayed.extend(batch.map_err(anyhow::Error::msg)?);
+    }
+    assert!(!serde_json::to_string(&replayed)?.contains(SECRET));
+    Ok(())
+}
+
+#[tokio::test]
+async fn partial_late_taint_rewrite_recovers_from_safe_manifest_on_restart() -> Result<()> {
+    const SECRET: &str = "restart-safe-rewrite-482915";
+    let data_dir = test_runtime_dir();
+    let manager = test_manager(data_dir.clone())?;
+    let thread = manager
+        .create_thread(CreateThreadRequest::default())
+        .await?;
+    manager
+        .update_thread(
+            &thread.id,
+            UpdateThreadRequest {
+                title: Some(format!("guessed {SECRET}")),
+                system_prompt: Some(format!("guessed {SECRET}")),
+                ..UpdateThreadRequest::default()
+            },
+        )
+        .await?;
+    set_test_sensitive_rewrite_failure(&thread.id, 1);
+    manager
+        .extend_sensitive_user_input_values(&thread.id, [SECRET.to_string()])
+        .await
+        .expect_err("injected replacement failure must leave a recovery manifest");
+    let rewrite_path = manager.store.sensitive_rewrite_path(&thread.id)?;
+    assert!(rewrite_path.exists());
+    assert!(
+        !std::fs::read_to_string(&rewrite_path)?.contains(SECRET),
+        "restart recovery metadata must contain only projected replacements"
+    );
+    assert!(
+        std::fs::read_to_string(data_dir.join("events").join(format!("{}.jsonl", thread.id)))?
+            .contains(SECRET),
+        "fault must prove at least one root file still needed recovery"
+    );
+
+    drop(manager);
+    let restarted = test_manager(data_dir.clone())?;
+    assert!(!restarted.store.sensitive_rewrite_path(&thread.id)?.exists());
+    assert!(!serde_json::to_string(&restarted.store.load_thread(&thread.id)?)?.contains(SECRET));
+    assert!(
+        !serde_json::to_string(&restarted.store.events_since(&thread.id, None)?)?.contains(SECRET)
+    );
+    for directory in ["threads", "turns", "items", "events", "sensitive_rewrites"] {
+        for entry in std::fs::read_dir(data_dir.join(directory))? {
+            let entry = entry?;
+            if entry.file_type()?.is_file() {
+                assert!(!std::fs::read_to_string(entry.path())?.contains(SECRET));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn concurrent_public_item_write_linearizes_before_late_taint_rewrite() -> Result<()> {
+    const SECRET: &str = "writer-race-secret-482915";
+    let manager = test_manager(test_runtime_dir())?;
+    let thread = manager
+        .create_thread(CreateThreadRequest::default())
+        .await?;
+    let turn_ids = seed_turns_with_user_messages(&manager, &thread.id, &["safe prompt"])?;
+    let mut item = manager
+        .store
+        .list_items_for_turn(&turn_ids[0])?
+        .into_iter()
+        .find(|item| item.kind == TurnItemKind::UserMessage)
+        .context("seeded user item missing")?;
+    item.summary = format!("writer guessed {SECRET}");
+    item.detail = Some(format!("writer guessed {SECRET}"));
+
+    let (hook_tx, mut hook_rx) = mpsc::unbounded_channel();
+    manager.set_public_item_save_test_hook(hook_tx);
+    let writer_manager = manager.clone();
+    let writer_thread_id = thread.id.clone();
+    let writer = tokio::spawn(async move {
+        writer_manager
+            .save_public_item(&writer_thread_id, &item)
+            .await
+    });
+    let point = hook_rx
+        .recv()
+        .await
+        .context("public item save hook closed")?;
+    assert_eq!(point.thread_id, thread.id);
+    let item_id = point.item_id.clone();
+
+    let (registration_started_tx, registration_started_rx) = oneshot::channel();
+    let registration_manager = manager.clone();
+    let registration_thread_id = thread.id.clone();
+    let registration = tokio::spawn(async move {
+        let _ = registration_started_tx.send(());
+        registration_manager
+            .extend_sensitive_user_input_values(&registration_thread_id, [SECRET.to_string()])
+            .await
+    });
+    registration_started_rx.await?;
+    tokio::task::yield_now().await;
+    assert!(
+        !manager
+            .sensitive_user_input_values
+            .lock()
+            .contains_key(&thread.id),
+        "late registration must wait while the writer owns projection"
+    );
+
+    point
+        .resume
+        .send(())
+        .map_err(|_| anyhow!("public item writer dropped hook resume"))?;
+    writer.await.context("public item writer task failed")??;
+    registration
+        .await
+        .context("late registration task failed")??;
+    assert!(!serde_json::to_string(&manager.store.load_item(&item_id)?)?.contains(SECRET));
+    assert!(
+        !std::fs::read_to_string(manager.store.item_path(&item_id)?)?.contains(SECRET),
+        "registration that follows the serialized writer must rewrite its raw bytes"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn pending_late_taint_manifest_projects_forks_and_usage_keys() -> Result<()> {
+    const SECRET: &str = "pending-fork-secret-482915";
+    let data_dir = test_runtime_dir();
+    let manager = test_manager(data_dir.clone())?;
+    let thread = manager
+        .create_thread(CreateThreadRequest::default())
+        .await?;
+    let turn_ids = seed_turns_with_user_messages(
+        &manager,
+        &thread.id,
+        &[
+            &format!("first guessed {SECRET}"),
+            &format!("second guessed {SECRET}"),
+        ],
+    )?;
+    let mut usage_turn = manager.store.load_turn(&turn_ids[0])?;
+    usage_turn.usage = Some(Usage {
+        input_tokens: 3,
+        output_tokens: 2,
+        ..Usage::default()
+    });
+    usage_turn.effective_model = Some(format!("model-{SECRET}"));
+    usage_turn.effective_provider = Some(format!("provider-{SECRET}"));
+    manager.store.save_turn(&usage_turn)?;
+    let mut raw_thread = manager.store.load_thread(&thread.id)?;
+    raw_thread.model = format!("thread-model-{SECRET}");
+    manager.store.save_thread(&raw_thread)?;
+
+    // Fail after replacing only the thread record. Source turns, items, and
+    // the event log remain raw while the safe manifest and volatile taint set
+    // are authoritative.
+    set_test_sensitive_rewrite_failure(&thread.id, 1);
+    manager
+        .extend_sensitive_user_input_values(&thread.id, [SECRET.to_string()])
+        .await
+        .expect_err("injected rewrite failure must leave projected recovery work pending");
+    let rewrite_path = manager.store.sensitive_rewrite_path(&thread.id)?;
+    assert!(rewrite_path.exists());
+    assert!(!std::fs::read_to_string(&rewrite_path)?.contains(SECRET));
+    assert!(serde_json::to_string(&manager.store.load_turn(&turn_ids[0])?)?.contains(SECRET));
+    assert!(
+        serde_json::to_string(&manager.store.list_items_for_turn(&turn_ids[0])?)?.contains(SECRET)
+    );
+
+    for group_by in [UsageGroupBy::Model, UsageGroupBy::Provider] {
+        let usage = manager.aggregate_usage(None, None, group_by).await?;
+        let serialized = serde_json::to_string(&usage)?;
+        assert!(!serialized.contains(SECRET));
+        assert_eq!(usage.buckets.len(), 1);
+    }
+
+    let forked = manager.fork_thread(&thread.id).await?;
+    assert!(!serde_json::to_string(&forked)?.contains(SECRET));
+    for turn in manager.store.list_turns_for_thread(&forked.id)? {
+        assert!(!serde_json::to_string(&turn)?.contains(SECRET));
+        assert!(
+            !serde_json::to_string(&manager.store.list_items_for_turn(&turn.id)?)?.contains(SECRET)
+        );
+    }
+
+    let (backtracked, original_text) = manager.fork_at_user_message(&thread.id, 0).await?;
+    assert!(
+        !original_text
+            .as_deref()
+            .unwrap_or_default()
+            .contains(SECRET)
+    );
+    assert!(
+        original_text
+            .as_deref()
+            .is_some_and(|text| text.contains("[redacted user input]"))
+    );
+    for turn in manager.store.list_turns_for_thread(&backtracked.id)? {
+        assert!(!serde_json::to_string(&turn)?.contains(SECRET));
+        assert!(
+            !serde_json::to_string(&manager.store.list_items_for_turn(&turn.id)?)?.contains(SECRET)
+        );
+    }
+
+    // Forks inherit the source taint set, so a later metadata write cannot
+    // reintroduce the classified bytes into the new root.
+    manager
+        .set_thread_session_id(&forked.id, &format!("linked-{SECRET}"))
+        .await?;
+    assert!(!serde_json::to_string(&manager.store.load_thread(&forked.id)?)?.contains(SECRET));
+    assert!(
+        !serde_json::to_string(&manager.store.events_since(&forked.id, None)?)?.contains(SECRET)
+    );
+    assert!(
+        rewrite_path.exists(),
+        "forking must not discard pending source recovery"
+    );
+    Ok(())
+}
+
+#[test]
+fn failed_sensitive_fork_publication_removes_orphan_taint_state() -> Result<()> {
+    const SECRET: &str = "failed-fork-secret-482915";
+    let manager = test_manager(test_runtime_dir())?;
+    let invalid_thread = sample_thread("../invalid-fork-id");
+    manager
+        .publish_fork_with_inherited_taint(
+            &invalid_thread,
+            &[],
+            &HashSet::from([SECRET.to_string()]),
+        )
+        .expect_err("invalid child id must fail before publication");
+    assert!(
+        !manager
+            .sensitive_user_input_values
+            .lock()
+            .contains_key(&invalid_thread.id)
+    );
+    assert!(
+        !manager
+            .projection_locks
+            .lock()
+            .contains_key(&invalid_thread.id),
+        "failed publication must not leave a child projection-lock entry"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn registered_taint_projects_session_and_turn_api_returns() -> Result<()> {
+    const SECRET: &str = "api-return-secret-482915";
+    let manager = test_manager(test_runtime_dir())?;
+    let thread = manager
+        .create_thread(CreateThreadRequest::default())
+        .await?;
+    manager
+        .extend_sensitive_user_input_values(&thread.id, [SECRET.to_string()])
+        .await?;
+
+    manager
+        .set_thread_session_id(&thread.id, &format!("session-{SECRET}"))
+        .await?;
+    assert!(!serde_json::to_string(&manager.store.load_thread(&thread.id)?)?.contains(SECRET));
+    assert!(
+        !serde_json::to_string(&manager.store.events_since(&thread.id, None)?)?.contains(SECRET)
+    );
+
+    let mut harness = install_mock_engine(&manager, &thread.id).await;
+    let accepted = manager
+        .start_turn(
+            &thread.id,
+            StartTurnRequest {
+                prompt: format!("provider receives {SECRET}"),
+                input_summary: Some(format!("public summary {SECRET}")),
+                ..Default::default()
+            },
+        )
+        .await?;
+    assert!(!serde_json::to_string(&accepted)?.contains(SECRET));
+    assert!(!serde_json::to_string(&manager.store.load_turn(&accepted.id)?)?.contains(SECRET));
+    match harness.rx_op.recv().await {
+        Some(Op::SendMessage { content, .. }) => assert!(content.contains(SECRET)),
+        other => panic!("expected provider-bound message, got {other:?}"),
+    }
+
+    // Simulate a stale raw root record left by an interrupted cleanup. Both
+    // mutation and read-style TurnRecord API returns must still project it.
+    let mut stale_turn = manager.store.load_turn(&accepted.id)?;
+    stale_turn.input_summary = format!("stale steer summary {SECRET}");
+    manager.store.save_turn(&stale_turn)?;
+    let steered = manager
+        .steer_turn(
+            &thread.id,
+            &accepted.id,
+            SteerTurnRequest {
+                prompt: format!("steer provider with {SECRET}"),
+            },
+        )
+        .await?;
+    assert!(!serde_json::to_string(&steered)?.contains(SECRET));
+    assert!(!serde_json::to_string(&manager.store.load_turn(&accepted.id)?)?.contains(SECRET));
+    assert!(
+        harness
+            .rx_steer
+            .recv()
+            .await
+            .is_some_and(|prompt| prompt.contains(SECRET))
+    );
+
+    let mut stale_turn = manager.store.load_turn(&accepted.id)?;
+    stale_turn.input_summary = format!("stale interrupt summary {SECRET}");
+    manager.store.save_turn(&stale_turn)?;
+    let interrupted = manager.interrupt_turn(&thread.id, &accepted.id).await?;
+    assert!(!serde_json::to_string(&interrupted)?.contains(SECRET));
+    assert!(!serde_json::to_string(&manager.events_since(&thread.id, None)?)?.contains(SECRET));
     Ok(())
 }
 
@@ -8497,6 +8918,24 @@ async fn sensitive_answer_taint_survives_turns_recompaction_and_restart() -> Res
             route: None,
         })
         .await?;
+    // The provider happens to guess both future answers before the user has
+    // submitted them. Late taint registration must retroactively rewrite the
+    // already-persisted root item/event history, not only future echoes.
+    harness
+        .tx_event
+        .send(EngineEvent::MessageStarted { index: 0 })
+        .await?;
+    harness
+        .tx_event
+        .send(EngineEvent::MessageDelta {
+            index: 0,
+            content: format!("guessed before answer: {SECRET} and {UNKNOWN_ID_SECRET}"),
+        })
+        .await?;
+    harness
+        .tx_event
+        .send(EngineEvent::MessageComplete { index: 0 })
+        .await?;
     harness
         .tx_event
         .send(EngineEvent::UserInputRequired {
@@ -8517,6 +8956,10 @@ async fn sensitive_answer_taint_survives_turns_recompaction_and_restart() -> Res
         }
     })
     .await?;
+    assert!(
+        serde_json::to_string(&manager.store.events_since(&thread.id, None)?)?.contains(SECRET),
+        "negative control must prove the pre-answer guess reached durable history"
+    );
     manager
         .submit_user_input(
             &thread.id,
@@ -8537,6 +8980,14 @@ async fn sensitive_answer_taint_survives_turns_recompaction_and_restart() -> Res
             },
         )
         .await?;
+    assert!(
+        !serde_json::to_string(&manager.store.events_since(&thread.id, None)?)?.contains(SECRET),
+        "late taint registration must rewrite prior root events"
+    );
+    for item in manager.store.list_items_for_turn(&first.id)? {
+        assert!(!serde_json::to_string(&item)?.contains(SECRET));
+        assert!(!serde_json::to_string(&item)?.contains(UNKNOWN_ID_SECRET));
+    }
     let (submitted_id, submitted_response) = harness
         .recv_user_input_submission()
         .await
@@ -8545,6 +8996,48 @@ async fn sensitive_answer_taint_survives_turns_recompaction_and_restart() -> Res
     let live_provider_payload = serde_json::to_string(&submitted_response)?;
     assert!(live_provider_payload.contains(SECRET));
     assert!(live_provider_payload.contains(UNKNOWN_ID_SECRET));
+    let mut echoed_tool_input = serde_json::Map::new();
+    echoed_tool_input.insert(
+        format!("echoed-{SECRET}-key"),
+        json!({"nested": format!("value {UNKNOWN_ID_SECRET}")}),
+    );
+    harness
+        .tx_event
+        .send(EngineEvent::ToolCallStarted {
+            id: "echoed-key-tool".to_string(),
+            name: "read_file".to_string(),
+            input: Value::Object(echoed_tool_input),
+        })
+        .await?;
+    let started_tool_event = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Some(event) = manager
+                .events_since(&thread.id, None)?
+                .into_iter()
+                .find(|event| {
+                    event.event == "item.started"
+                        && event.payload.pointer("/tool/id").and_then(Value::as_str)
+                            == Some("echoed-key-tool")
+                })
+            {
+                break Ok::<_, anyhow::Error>(event);
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .context("tool item with a classified object key was not published")??;
+    let started_tool_payload = serde_json::to_string(&started_tool_event.payload)?;
+    assert!(!started_tool_payload.contains(SECRET));
+    assert!(!started_tool_payload.contains(UNKNOWN_ID_SECRET));
+    harness
+        .tx_event
+        .send(EngineEvent::ToolCallComplete {
+            id: "echoed-key-tool".to_string(),
+            name: "read_file".to_string(),
+            result: Ok(crate::tools::spec::ToolResult::success("safe result")),
+        })
+        .await?;
     harness
         .tx_event
         .send(EngineEvent::CompactionStarted {
