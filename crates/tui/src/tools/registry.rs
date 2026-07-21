@@ -519,7 +519,6 @@ pub struct AgentToolSurfaceOptions {
     pub shell_policy: crate::worker_profile::ShellPolicy,
     pub apply_patch_enabled: bool,
     pub web_search_enabled: bool,
-    pub memory_tool_enabled: bool,
     pub vision_config: Option<crate::config::VisionModelConfig>,
     pub speech_output_dir: Option<PathBuf>,
     pub goal_state: Option<SharedGoalState>,
@@ -532,7 +531,6 @@ impl AgentToolSurfaceOptions {
             shell_policy,
             apply_patch_enabled: false,
             web_search_enabled: false,
-            memory_tool_enabled: false,
             vision_config: None,
             speech_output_dir: None,
             goal_state: None,
@@ -994,16 +992,6 @@ impl ToolRegistryBuilder {
         self.with_tool(Arc::new(FimEditTool::new(client, model)))
     }
 
-    /// Include the `remember` tool — model-callable bullet-add into the
-    /// user memory file (#489). Only register when the user has opted
-    /// in to the memory feature; without that, the tool would surface
-    /// in the model's catalog but always fail with "memory disabled".
-    #[must_use]
-    pub fn with_remember_tool(self) -> Self {
-        use super::remember::RememberTool;
-        self.with_tool(Arc::new(RememberTool))
-    }
-
     /// Include the slop ledger tools (#2127) — durable tracking of
     /// unresolved architectural residue: append, query, update, export.
     /// Registered unconditionally; the ledger JSON file is auto-created
@@ -1158,9 +1146,6 @@ impl ToolRegistryBuilder {
         }
         if options.web_search_enabled {
             builder = builder.with_web_tools();
-        }
-        if options.memory_tool_enabled {
-            builder = builder.with_remember_tool();
         }
         if let Some(vision_config) = options.vision_config {
             builder = builder.with_vision_tools(vision_config);

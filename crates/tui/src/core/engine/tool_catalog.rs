@@ -55,7 +55,6 @@ pub(super) const DEFAULT_ACTIVE_NATIVE_TOOLS: &[&str] = &[
     "grep_files",
     "list_dir",
     "read_file",
-    "remember",
     "run_tests",
     "run_verifiers",
     // Piagent phase B: the model-facing durable-task tool is `tasks`; the
