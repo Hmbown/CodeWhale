@@ -3457,20 +3457,6 @@ fn persist_runtime_tui_setting(key: &str, value: &str) -> Result<(), ApiError> {
         .map_err(|e| ApiError::internal(format!("Failed to save settings: {e}")))
 }
 
-fn persisted_or_active_provider(state: &RuntimeApiState) -> ApiProvider {
-    if let Ok(config) = Config::load(state.config_path.clone(), None) {
-        return config.api_provider();
-    }
-    state.config.read().api_provider()
-}
-
-fn effective_model_for_provider(config: &Config, provider: ApiProvider) -> String {
-    if provider == config.api_provider() {
-        return config.default_model();
-    }
-    provider_default_model_for_api(config, config.api_provider(), provider)
-}
-
 /// Response for `POST /v1/config/reload`.
 #[derive(Debug, Serialize)]
 struct ReloadConfigResponse {
@@ -3550,10 +3536,24 @@ async fn set_config(
     // Validate model keys even for dry-run requests. Model ids are provider
     // owned; accepting a DeepSeek id while Z.ai is active creates a saved
     // route that cannot execute after reload.
+    //
+    // Read from the persisted config so that a prior
+    // `set_config(provider=X)` in the same pre-reload sequence is honored
+    // when validating and persisting a model key. The in-memory config is
+    // only swapped on `/v1/config/reload`, so using it here would write the
+    // model under the stale provider's table (e.g. clobbering DeepSeek's
+    // root `default_text_model` after switching to volcengine).
     let active_route = {
-        let config = state.config.read();
-        let provider = config.api_provider();
-        (provider, config.provider_identity_for(provider))
+        if let Ok(persisted) =
+            Config::load(state.config_path.clone(), state.config_profile.as_deref())
+        {
+            let provider = persisted.api_provider();
+            (provider, persisted.provider_identity_for(provider))
+        } else {
+            let config = state.config.read();
+            let provider = config.api_provider();
+            (provider, config.provider_identity_for(provider))
+        }
     };
     match key.as_str() {
         "model" => {

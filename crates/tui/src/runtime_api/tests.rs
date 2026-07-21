@@ -6655,7 +6655,12 @@ async fn set_config_model_follows_persisted_provider_before_reload() -> Result<(
     let (status, body) = post_set_config(&client, &addr, "provider", "volcengine", true).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
 
-    let target_model = crate::config::DEFAULT_VOLCENGINE_FLASH_MODEL;
+    // Use the wire slug ("deepseek-v4-flash") that the runtime normalizes
+    // `DEFAULT_VOLCENGINE_FLASH_MODEL` ("DeepSeek-V4-Flash") to. The set_config
+    // handler canonicalizes model ids for the active provider before
+    // persisting, so the on-disk value is the lowercase wire form — matching
+    // `switch_provider_with_explicit_model_arg_persists_model`.
+    let target_model = "deepseek-v4-flash";
     let (status, body) = post_set_config(&client, &addr, "model", target_model, true).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
 
@@ -6666,11 +6671,13 @@ async fn set_config_model_follows_persisted_provider_before_reload() -> Result<(
     );
     assert!(
         config_body.contains(&format!("model = \"{target_model}\"")),
-        "volcengine model should be written to the provider table"
+        "volcengine model should be written to the provider table. \
+         Actual config:\n{config_body}"
     );
     assert!(
         config_body.contains("default_text_model = \"deepseek-v4-pro\""),
-        "switching provider model must not overwrite DeepSeek's root default_text_model"
+        "switching provider model must not overwrite DeepSeek's root default_text_model. \
+         Actual config:\n{config_body}"
     );
 
     let reload_resp = client
