@@ -78,9 +78,23 @@ pub(crate) fn effective_max_output_tokens_for_route(
     model: &str,
     route_limits: Option<RouteLimits>,
 ) -> u32 {
-    let cap =
-        effective_max_output_tokens(model).min(provider_capability(provider, model).max_output);
-    let cap = route_output_limit_tokens(route_limits).map_or(cap, |route_cap| cap.min(route_cap));
+    let requested_cap = effective_max_output_tokens(model);
+    let compatibility_cap = provider_capability(provider, model).max_output;
+    let route_cap = route_output_limit_tokens(route_limits);
+    // Arbitrary wire aliases on self-hosted engines cannot appear in the
+    // static model catalogue. When that is the only reason the compatibility
+    // cap fell back to 4K, a concrete route limit is the stronger fact. Known
+    // model and hosted-provider caps remain authoritative and are still
+    // intersected with any route maximum.
+    let cap = if provider.is_self_hosted()
+        && crate::models::max_output_tokens_for_model(model).is_none()
+        && let Some(route_cap) = route_cap
+    {
+        requested_cap.min(route_cap)
+    } else {
+        let cap = requested_cap.min(compatibility_cap);
+        route_cap.map_or(cap, |route_cap| cap.min(route_cap))
+    };
     let Some(window) = route_limits
         .and_then(|limits| limits.context_tokens)
         .and_then(|tokens| u32::try_from(tokens).ok())
@@ -225,6 +239,48 @@ mod tests {
         assert!(
             trigger < 209_715,
             "must fire before the old window-relative trigger"
+        );
+    }
+
+    #[test]
+    fn explicit_route_output_limit_beats_unknown_model_name_fallback() {
+        let _lock = crate::test_support::lock_test_env();
+        let _max_output =
+            crate::test_support::EnvVarGuard::set("CODEWHALE_MAX_OUTPUT_TOKENS", "65536");
+        let limits = RouteLimits {
+            context_tokens: Some(262_144),
+            output_tokens: Some(24_576),
+            ..RouteLimits::default()
+        };
+
+        assert_eq!(
+            effective_max_output_tokens_for_route(
+                ApiProvider::Vllm,
+                "arbitrary-local-wire-alias",
+                Some(limits),
+            ),
+            24_576
+        );
+        assert_eq!(
+            effective_max_output_tokens_for_route(
+                ApiProvider::Vllm,
+                "arbitrary-local-wire-alias",
+                None,
+            ),
+            4_096,
+            "missing route facts must retain the conservative fallback"
+        );
+        assert_eq!(
+            effective_max_output_tokens_for_route(
+                ApiProvider::Vllm,
+                "kimi-k2.7-code",
+                Some(RouteLimits {
+                    output_tokens: Some(262_144),
+                    ..RouteLimits::default()
+                }),
+            ),
+            32_768,
+            "known model caps must remain authoritative on self-hosted routes"
         );
     }
 }
