@@ -72,9 +72,17 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - name: Install dependencies
         run: npm ci
+      - name: Record deployed/source drift
+        # Read-only and credential-free. A mismatch is expected before a
+        # maintainer-approved deployment, so this step reports without gating.
+        run: npm run compare:deployed-facts -- --expected-revision "$GITHUB_SHA"
       - name: Check Cloudflare deploy environment
         run: npm run check:deploy-env
       - name: Build OpenNext bundle
         run: npm run build && npx opennextjs-cloudflare build
       - name: Deploy
         run: npm run deploy
+      - name: Verify exact deployed revision
+        # The public /api/facts receipt must identify this workflow's exact
+        # checkout before the manual deployment run can finish green.
+        run: npm run check:deployed-facts -- --expected-revision "$GITHUB_SHA" --attempts 10 --retry-delay-ms 3000

@@ -31,6 +31,26 @@ The site renders fine without any of them — `Today's Dispatch` falls back to a
 
 ## Deploy to Cloudflare
 
+Ordinary pushes and pull requests run the web checks and production build, but
+they do **not** deploy. The `deploy` job in `.github/workflows/web.yml` runs
+only for a maintainer-triggered `workflow_dispatch` on `main`. Before approval,
+record the exact 40-character `origin/main` SHA and trigger that ref:
+
+```bash
+git fetch origin main
+git rev-parse origin/main
+gh workflow run web.yml --repo Hmbown/CodeWhale --ref main
+```
+
+The manual job records the pre-deploy source drift, builds the OpenNext bundle,
+deploys only after the protected Cloudflare inputs pass, and then requires the
+public `/api/facts` receipt to report the exact workflow SHA. A credential-free
+local comparison is available without starting a deployment:
+
+```bash
+npm run compare:deployed-facts -- --expected-revision <exact-40-character-sha>
+```
+
 You already own `codewhale.net` on Cloudflare and have a Workers Paid plan. The deploy is two steps:
 
 1. **Provision KV namespaces once:**
@@ -83,8 +103,11 @@ web/
 │   │   └── admin/              maintainer panel (page.tsx + admin-client.tsx)
 │   └── api/
 │       ├── cron/route.ts          cron tasks: curate, triage, facts-drift, …
+│       ├── facts/route.ts         public source/deployment receipt
 │       ├── github/feed/route.ts   cached JSON endpoint
 │       └── admin/                 login, logout, post (MAINTAINER_TOKEN-gated)
+├── data/
+│   └── latest-published-release.json  manually advanced only after publication
 ├── components/
 │   ├── nav.tsx                 sticky header w/ date strip + CJK accents
 │   ├── footer.tsx              dense 5-column footer
@@ -106,6 +129,7 @@ web/
 │   └── kv.ts                   Cloudflare KV access via OpenNext bindings
 ├── scripts/
 │   ├── derive-facts.mjs        prebuild: repo sources → lib/facts.generated.ts
+│   ├── compare-deployed-facts.mjs credential-free exact-SHA receipt check
 │   └── check-kv-id.mjs         predeploy guard for KV namespace ids
 ├── wrangler.jsonc              CF Worker config + cron + KV binding
 ├── open-next.config.ts         OpenNext adapter config
@@ -121,12 +145,22 @@ default model, Node engines) are never hand-written into pages:
    `npm run dev`), parses the parent repo (`Cargo.toml`, `crates/tui/src/config.rs`,
    `crates/tui/src/sandbox/`, `npm/codewhale/package.json`) and writes
    `lib/facts.generated.ts`. Never edit that file by hand.
-2. **Runtime** — the `/api/cron?task=facts-drift` cron (`lib/facts-drift.ts`)
-   re-derives the same facts from `raw.githubusercontent.com` on a schedule and
-   writes changes to `CURATED_KV` under `facts:current`. Pages call
-   `getFacts()` (`lib/facts.ts`), which prefers the KV value over the
-   build-time constant — so a version bump or new provider self-corrects
-   within one cron tick, without a redeploy.
+2. **Published release** — `data/latest-published-release.json` records the
+   latest GitHub Release separately from the source candidate. Install commands
+   use this published tag; they never turn the workspace version into a release
+   before publication. The credential-free deployed-facts comparison checks the
+   record against the public receipt.
+3. **Runtime** — the `/api/cron?task=facts-drift` cron (`lib/facts-drift.ts`)
+   resolves an exact `main` revision, derives every source fact from that SHA,
+   and writes changes to `CURATED_KV` under `facts:current`. Pages accept that
+   snapshot only when its source provenance is the same as or newer than the
+   deployed build. Legacy, malformed, or older KV data cannot replace newer
+   build facts; published-release metadata is resolved independently. Public
+   fact pages revalidate their cached HTML every five minutes.
+
+`/api/facts` exposes only public provenance and counts: deployed/resolved source
+revision, version, provider count, tool count, selection reason, and latest
+published release. It contains no environment values, tokens, or KV contents.
 
 When a new `ApiProvider` variant lands in `crates/tui/src/config.rs`, it must
 be added to the `labelMap` in **both** `scripts/derive-facts.mjs` and

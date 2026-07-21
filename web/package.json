@@ -12,6 +12,8 @@
     "check:facts": "node scripts/check-facts.mjs",
     "check:docs": "node scripts/check-docs.mjs",
     "check:deploy-env": "node scripts/check-cloudflare-deploy-env.mjs",
+    "compare:deployed-facts": "node scripts/compare-deployed-facts.mjs",
+    "check:deployed-facts": "node scripts/compare-deployed-facts.mjs --require-current",
     "lint": "eslint .",
     "preview": "opennextjs-cloudflare preview",
     "predeploy": "node scripts/check-kv-id.mjs",
