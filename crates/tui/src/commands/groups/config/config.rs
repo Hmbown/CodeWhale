@@ -1907,6 +1907,11 @@ pub fn switch_mode(app: &mut App, mode: AppMode) -> String {
 
 fn switch_mode_with_status(app: &mut App, mode: AppMode) -> (String, bool) {
     if app.set_mode(mode) {
+        // Persist so the mode survives across sessions (#4628).
+        if let Ok(mut settings) = crate::settings::Settings::load() {
+            settings.default_mode = app.mode.as_setting().to_string();
+            let _ = settings.save();
+        }
         (format!("Switched to {} mode.", mode.display_name()), true)
     } else {
         (format!("Already in {} mode.", mode.display_name()), false)

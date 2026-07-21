@@ -2171,7 +2171,16 @@ fn set_mode_captures_agent_edits_as_the_durable_baseline() {
 
 #[test]
 fn yolo_start_with_default_config_restores_interactive_agent_shell_baseline() {
-    let mut app = App::new(test_options(true), &Config::default());
+    // Isolate from the developer's live settings.toml — a saved
+    // `permission_posture` (e.g. full-access) must not leak into the
+    // durable baseline these assertions depend on.
+    let _env_lock = lock_test_env();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_path = tmp.path().join("config.toml");
+    let _config_env = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+    let mut options = test_options(true);
+    options.config_path = Some(config_path);
+    let mut app = App::new(options, &Config::default());
     // --yolo starts in Agent mode with the full-access compat shim (M6).
     assert_eq!(app.mode, AppMode::Agent);
     assert!(app.yolo);
@@ -2190,12 +2199,21 @@ fn yolo_start_with_default_config_restores_interactive_agent_shell_baseline() {
 
 #[test]
 fn leaving_yolo_after_startup_restores_baseline_policies() {
+    // Isolate from the developer's live settings.toml — a saved
+    // `permission_posture` (e.g. full-access) must not leak into the
+    // durable baseline these assertions depend on.
+    let _env_lock = lock_test_env();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_path = tmp.path().join("config.toml");
+    let _config_env = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
     let config = Config {
         allow_shell: Some(false),
         ..Default::default()
     };
 
-    let mut app = App::new(test_options(true), &config);
+    let mut options = test_options(true);
+    options.config_path = Some(config_path);
+    let mut app = App::new(options, &config);
     // --yolo starts in Agent mode with the full-access compat shim (M6).
     assert_eq!(app.mode, AppMode::Agent);
     assert!(app.yolo);
