@@ -106,6 +106,45 @@ class CheckCoauthorTrailersTests(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("unknown@example.com", errors[0])
 
+    def test_preserved_hunter_credit_resolves_only_for_exact_commit(self) -> None:
+        preserved = mod.Commit(
+            sha="5087269606fc8847487b0a8b51ef6adffa8eb2ca",
+            parents="parent",
+            author_name="Hunter B",
+            author_email="hmbown@gmail.com",
+            subject="docs(public): refresh v0.9.1 product truth",
+            body=(
+                "Harvested from PR #4508 by @Hmbown.\n\n"
+                "Co-authored-by: Hunter Bown <hmbown@gmail.com>"
+            ),
+        )
+        errors = mod.validate([preserved], self.aliases, True)
+        self.assertEqual(errors, [])
+
+        rewritten = mod.Commit(
+            sha="deadbeef" * 5,
+            parents=preserved.parents,
+            author_name=preserved.author_name,
+            author_email=preserved.author_email,
+            subject=preserved.subject,
+            body=preserved.body,
+        )
+        errors = mod.validate([rewritten], self.aliases, True)
+        self.assertTrue(errors)
+        self.assertTrue(any("not GitHub-mappable" in error for error in errors))
+
+    def test_preserved_web_credit_resolves_without_rewriting_commit(self) -> None:
+        preserved = mod.Commit(
+            sha="e37df06caeb3064b2bb9263c1c98a903738f3a0a",
+            parents="parent",
+            author_name="Hunter B",
+            author_email="hmbown@gmail.com",
+            subject="docs(web): make the homepage product first",
+            body="Co-authored-by: Hunter Bown <hmbown@gmail.com>",
+        )
+        errors = mod.validate([preserved], self.aliases, True)
+        self.assertEqual(errors, [])
+
 
 if __name__ == "__main__":
     raise SystemExit(unittest.main())

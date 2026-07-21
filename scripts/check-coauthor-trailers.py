@@ -4,7 +4,8 @@
 The check is intentionally scoped to new commits. Historical commits may carry
 raw or local emails, but new harvested commits should use GitHub's numeric
 `id+login@users.noreply.github.com` address so co-author credit lands in the
-contributor graph.
+contributor graph. Preserved integration commits may resolve a mapped identity
+without a history rewrite only through an exact-SHA exception below.
 """
 
 from __future__ import annotations
@@ -49,6 +50,31 @@ LEGACY_AUTOMATION_TRAILER_EXCEPTIONS = {
         "9a74825cd182a62465943bcbbcbcf591d1ce99ee",
         "codewhale agent",
         "codewhale-agent@hmbown.local",
+    ),
+}
+
+# These public-surface commits were merged into the v0.9.1 integration graph
+# before the credit gate ran. Rewriting them would replace the original commits
+# and every descendant merge. Resolve only their exact Hunter identities through
+# AUTHOR_MAP; a changed SHA, role, name, or email remains a hard failure.
+PRESERVED_MAPPED_IDENTITY_EXCEPTIONS = {
+    (
+        "5087269606fc8847487b0a8b51ef6adffa8eb2ca",
+        "author",
+        "hunter b",
+        "hmbown@gmail.com",
+    ),
+    (
+        "5087269606fc8847487b0a8b51ef6adffa8eb2ca",
+        "coauthor",
+        "hunter bown",
+        "hmbown@gmail.com",
+    ),
+    (
+        "e37df06caeb3064b2bb9263c1c98a903738f3a0a",
+        "coauthor",
+        "hunter bown",
+        "hmbown@gmail.com",
     ),
 }
 
@@ -168,6 +194,15 @@ def lookup_identity(aliases: dict[str, Identity], *values: str) -> Identity | No
     return None
 
 
+def is_preserved_mapped_identity(commit: Commit, role: str, identity: Identity) -> bool:
+    return (
+        commit.sha.strip().lower(),
+        role,
+        norm_key(identity.name),
+        norm_key(identity.email),
+    ) in PRESERVED_MAPPED_IDENTITY_EXCEPTIONS
+
+
 def validate(commits: list[Commit], aliases: dict[str, Identity], check_authors: bool) -> list[str]:
     errors: list[str] = []
     for commit in commits:
@@ -191,6 +226,11 @@ def validate(commits: list[Commit], aliases: dict[str, Identity], check_authors:
                 is_harvested_commit
                 and mapped_author
                 and norm_key(commit.author_email) != norm_key(mapped_author.email)
+                and not is_preserved_mapped_identity(
+                    commit,
+                    "author",
+                    Identity(commit.author_name, commit.author_email),
+                )
             ):
                 errors.append(
                     f"{prefix}: author {commit.author_name} <{commit.author_email}> "
@@ -215,10 +255,11 @@ def validate(commits: list[Commit], aliases: dict[str, Identity], check_authors:
                 continue
             expected = lookup_identity(aliases, coauthor.email, coauthor.name)
             if expected:
-                errors.append(
-                    f"{prefix}: co-author {coauthor.name} <{coauthor.email}> is not "
-                    f"GitHub-mappable. Use `{expected.trailer()}`."
-                )
+                if not is_preserved_mapped_identity(commit, "coauthor", coauthor):
+                    errors.append(
+                        f"{prefix}: co-author {coauthor.name} <{coauthor.email}> is not "
+                        f"GitHub-mappable. Use `{expected.trailer()}`."
+                    )
             else:
                 errors.append(
                     f"{prefix}: co-author {coauthor.name} <{coauthor.email}> is not "
@@ -226,7 +267,12 @@ def validate(commits: list[Commit], aliases: dict[str, Identity], check_authors:
                     "or use `gh api users/<login> --jq '\"\\(.id)+\\(.login)@users.noreply.github.com\"'`."
                 )
 
-        coauthor_emails = {norm_key(coauthor.email) for coauthor in coauthors}
+        coauthor_emails: set[str] = set()
+        for coauthor in coauthors:
+            coauthor_emails.add(norm_key(coauthor.email))
+            expected = lookup_identity(aliases, coauthor.email, coauthor.name)
+            if expected and is_preserved_mapped_identity(commit, "coauthor", coauthor):
+                coauthor_emails.add(norm_key(expected.email))
         for login in harvested_logins:
             expected = lookup_identity(aliases, login)
             if expected is None:
