@@ -48,6 +48,22 @@ fn stream_open_timeout_from_env(value: Option<&str>) -> Duration {
     Duration::from_secs(secs)
 }
 
+fn stream_idle_timeout_message(
+    idle: Duration,
+    bytes_received: usize,
+    stream_age: Duration,
+    since_last_chunk: Duration,
+) -> String {
+    format!(
+        "SSE stream idle timeout after {}s — no data received \
+         (bytes_received={}, stream_age_ms={}, ms_since_last_chunk={})",
+        idle.as_secs(),
+        bytes_received,
+        stream_age.as_millis(),
+        since_last_chunk.as_millis(),
+    )
+}
+
 use crate::config::ApiProvider;
 use crate::llm_client::StreamEventBox;
 use crate::llm_client::sanitize_http_error_body;
@@ -696,10 +712,12 @@ impl DeepSeekClient {
                     Ok(Some(result)) => result,
                     Ok(None) => break, // Stream ended normally
                     Err(_elapsed) => {
-                        yield Err(anyhow::anyhow!(
-                            "SSE stream idle timeout after {}s — no data received",
-                            idle.as_secs(),
-                        ));
+                        yield Err(anyhow::anyhow!(stream_idle_timeout_message(
+                            idle,
+                            bytes_received,
+                            stream_start.elapsed(),
+                            last_event_at.elapsed(),
+                        )));
                         break;
                     }
                 };
@@ -3301,6 +3319,22 @@ mod stream_diagnostics_tests {
         assert_eq!(
             stream_open_timeout_from_env(Some("999")),
             Duration::from_secs(300)
+        );
+    }
+
+    #[test]
+    fn stream_idle_timeout_reports_progress_and_timing() {
+        let message = stream_idle_timeout_message(
+            Duration::from_secs(240),
+            8192,
+            Duration::from_millis(73_500),
+            Duration::from_millis(41_250),
+        );
+
+        assert_eq!(
+            message,
+            "SSE stream idle timeout after 240s — no data received \
+             (bytes_received=8192, stream_age_ms=73500, ms_since_last_chunk=41250)"
         );
     }
 
