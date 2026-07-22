@@ -15,6 +15,8 @@ use serde_json::{Value, json};
 use super::ledger::FleetLedger;
 
 const MAX_SCORER_READ_BYTES: u64 = 1_000_000;
+const MAX_FLEET_ID_BYTES: usize = 128;
+const MAX_FLEET_NAME_BYTES: usize = 256;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FleetTaskSpecDocument {
@@ -115,15 +117,11 @@ pub fn validate_task_spec_document(doc: &FleetTaskSpecDocument) -> Result<()> {
     }
     let mut ids = BTreeSet::new();
     for task in &doc.tasks {
-        if task.id.trim().is_empty() {
-            bail!("fleet task id cannot be empty");
-        }
+        validate_fleet_identity("task id", &task.id)?;
         if !ids.insert(task.id.clone()) {
             bail!("duplicate fleet task id {}", task.id);
         }
-        if task.name.trim().is_empty() {
-            bail!("fleet task {} name cannot be empty", task.id);
-        }
+        validate_fleet_name(&format!("task {} name", task.id), &task.name)?;
         if task.instructions.trim().is_empty() {
             bail!("fleet task {} instructions cannot be empty", task.id);
         }
@@ -135,6 +133,38 @@ pub fn validate_task_spec_document(doc: &FleetTaskSpecDocument) -> Result<()> {
         validate_worker_profile(&task.id, task.worker.as_ref())?;
         validate_tags(&task.id, &task.tags)?;
         validate_workspace_requirements(task)?;
+    }
+    let mut worker_ids = BTreeSet::new();
+    for worker in &doc.workers {
+        validate_fleet_identity("worker id", &worker.id)?;
+        if !worker_ids.insert(worker.id.clone()) {
+            bail!("duplicate fleet worker id {}", worker.id);
+        }
+        validate_fleet_name(&format!("worker {} name", worker.id), &worker.name)?;
+    }
+    Ok(())
+}
+
+fn validate_fleet_identity(field: &str, value: &str) -> Result<()> {
+    if value.is_empty() {
+        bail!("fleet {field} cannot be empty");
+    }
+    if value.len() > MAX_FLEET_ID_BYTES || !value.chars().all(is_worker_token_char) {
+        bail!(
+            "fleet {field} must be a simple ASCII token no longer than {MAX_FLEET_ID_BYTES} bytes"
+        );
+    }
+    Ok(())
+}
+
+fn validate_fleet_name(field: &str, value: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        bail!("fleet {field} cannot be empty");
+    }
+    if value.len() > MAX_FLEET_NAME_BYTES || value.chars().any(char::is_control) {
+        bail!(
+            "fleet {field} must be one printable line no longer than {MAX_FLEET_NAME_BYTES} bytes"
+        );
     }
     Ok(())
 }
@@ -785,6 +815,47 @@ mod tests {
 
         assert!(
             err.contains("worker.model must be a visible model id"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn fleet_task_spec_rejects_unbounded_or_multiline_task_and_worker_identities() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("unsafe-identities.json");
+        let doc = json!({
+            "workers": [{
+                "id": "worker\r\nforged",
+                "name": "forged worker",
+                "host": {"kind": "local"}
+            }],
+            "tasks": [{
+                "id": "review",
+                "name": "review",
+                "instructions": "review the patch"
+            }]
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&doc).unwrap()).unwrap();
+
+        let err = load_task_spec_document(&path).unwrap_err().to_string();
+        assert!(
+            err.contains("worker id must be a simple ASCII token"),
+            "unexpected error: {err}"
+        );
+
+        let mut doc = task("review", None);
+        doc.id = "a".repeat(MAX_FLEET_ID_BYTES + 1);
+        let err = validate_task_spec_document(&FleetTaskSpecDocument {
+            name: None,
+            labels: BTreeMap::new(),
+            security_policy: None,
+            workers: Vec::new(),
+            tasks: vec![doc],
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("task id must be a simple ASCII token"),
             "unexpected error: {err}"
         );
     }

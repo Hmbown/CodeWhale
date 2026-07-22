@@ -200,6 +200,8 @@ pub struct FleetLedger {
     /// The ledger itself is replaced during compaction, so locking
     /// `fleet.jsonl` would leave appenders holding a lock on the old inode.
     lock_path: PathBuf,
+    #[cfg(test)]
+    fail_start_append_after_callback: std::sync::atomic::AtomicBool,
 }
 
 impl FleetLedger {
@@ -225,11 +227,19 @@ impl FleetLedger {
         Ok(Self {
             ledger_path,
             lock_path,
+            #[cfg(test)]
+            fail_start_append_after_callback: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
     pub fn path(&self) -> &Path {
         &self.ledger_path
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_start_append_after_callback(&self) {
+        self.fail_start_append_after_callback
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     fn open_lock_file(&self) -> Result<std::fs::File> {
@@ -396,16 +406,16 @@ impl FleetLedger {
             max_active_for_run,
             Vec::new(),
             false,
-            || {},
+            || Ok(()),
         )
     }
 
     /// Atomically claim a queued task and publish its initial lifecycle.
     ///
-    /// The callback runs after the durable transaction while the same ledger
-    /// lock is still held. Fleet uses it for its in-memory runtime projection,
-    /// so cancellation cannot land between the durable claim and projection
-    /// registration and leave a worker that was never actually started.
+    /// The callback runs before the durable transaction while the same ledger
+    /// lock is held. Fleet uses it to synchronously persist the exact launch
+    /// projection; a callback failure leaves the task Enqueued. Callers must
+    /// compensate the projection if the subsequent ledger append fails.
     #[allow(clippy::too_many_arguments)]
     pub fn start_task_if_enqueued(
         &self,
@@ -416,7 +426,7 @@ impl FleetLedger {
         lease_expires_at: Option<&str>,
         max_active_for_run: Option<usize>,
         initial_events: Vec<FleetWorkerEventPayload>,
-        on_started: impl FnOnce(),
+        on_started: impl FnOnce() -> Result<()>,
     ) -> Result<bool> {
         self.lease_task_if_enqueued_with_events(
             run_id,
@@ -442,7 +452,7 @@ impl FleetLedger {
         max_active_for_run: Option<usize>,
         initial_events: Vec<FleetWorkerEventPayload>,
         record_heartbeat: bool,
-        on_started: impl FnOnce(),
+        on_started: impl FnOnce() -> Result<()>,
     ) -> Result<bool> {
         self.with_write_lock(move || {
             let state = self.rebuild_state_unlocked()?;
@@ -504,8 +514,18 @@ impl FleetLedger {
                     memory_mb: None,
                 });
             }
+            // Persist the exact launch/coordination projection before making
+            // the lease visible. A failed callback leaves the task Enqueued
+            // with attempt 0 rather than a Running lease that cannot launch.
+            on_started()?;
+            #[cfg(test)]
+            if self
+                .fail_start_append_after_callback
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                bail!("forced Fleet ledger append failure after coordination callback");
+            }
             self.append_records_unlocked(&records)?;
-            on_started();
             Ok(true)
         })
     }
@@ -1822,6 +1842,7 @@ fn sanitize_run_for_ledger(run: &FleetRun) -> FleetRun {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::anyhow;
     use std::sync::{
         Arc, Barrier,
         atomic::{AtomicBool, Ordering},
@@ -2035,7 +2056,7 @@ mod tests {
                         }),
                         FleetWorkerEventPayload::Running,
                     ],
-                    || {},
+                    || Ok(()),
                 )
                 .unwrap()
         });
@@ -2128,11 +2149,45 @@ mod tests {
                     None,
                     Some(1),
                     vec![FleetWorkerEventPayload::Running],
-                    || callback_ran.store(true, Ordering::SeqCst),
+                    || {
+                        callback_ran.store(true, Ordering::SeqCst);
+                        Ok(())
+                    },
                 )
                 .unwrap()
         );
         assert!(!callback_ran.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn failed_start_projection_leaves_task_unleased_and_without_events() {
+        let tmp = TempDir::new().unwrap();
+        let ledger = FleetLedger::open(tmp.path()).unwrap();
+        ledger.create_run(&sample_run("run-1")).unwrap();
+        ledger.enqueue(sample_entry("run-1", "task-a")).unwrap();
+
+        let error = ledger
+            .start_task_if_enqueued(
+                &FleetRunId::from("run-1"),
+                "task-a",
+                "worker-1",
+                "2026-06-12T17:02:00Z",
+                None,
+                Some(1),
+                vec![FleetWorkerEventPayload::Running],
+                || Err(anyhow!("forced coordination persistence failure")),
+            )
+            .expect_err("projection failure must abort the lease");
+        assert!(error.to_string().contains("forced coordination"));
+
+        let state = ledger.rebuild_state().unwrap();
+        let task = &state.tasks["run-1:task-a"];
+        assert_eq!(task.status, FleetTaskLedgerStatus::Enqueued);
+        assert_eq!(task.entry.attempts, 0);
+        assert!(task.leased_to.is_none());
+        assert!(state.latest_events.is_empty());
+        assert!(state.latest_seq.is_empty());
+        assert!(!state.heartbeats.contains_key("worker-1"));
     }
 
     #[test]
@@ -2151,7 +2206,7 @@ mod tests {
                     None,
                     Some(1),
                     vec![FleetWorkerEventPayload::Running],
-                    || {},
+                    || Ok(()),
                 )
                 .unwrap()
         );
@@ -2213,7 +2268,7 @@ mod tests {
                     None,
                     Some(1),
                     vec![FleetWorkerEventPayload::Running],
-                    || {},
+                    || Ok(()),
                 )
                 .unwrap()
         );
@@ -2288,7 +2343,7 @@ mod tests {
                     None,
                     Some(1),
                     vec![FleetWorkerEventPayload::Running],
-                    || {},
+                    || Ok(()),
                 )
                 .unwrap()
         );
@@ -2441,7 +2496,7 @@ mod tests {
                     None,
                     Some(1),
                     vec![FleetWorkerEventPayload::Running],
-                    || {},
+                    || Ok(()),
                 )
                 .unwrap()
         );
@@ -2499,7 +2554,7 @@ mod tests {
                     None,
                     Some(1),
                     vec![FleetWorkerEventPayload::Running],
-                    || {},
+                    || Ok(()),
                 )
                 .unwrap()
         );
@@ -2903,7 +2958,7 @@ mod tests {
                     None,
                     Some(1),
                     vec![FleetWorkerEventPayload::Running],
-                    || {},
+                    || Ok(()),
                 )
                 .unwrap()
         );
@@ -2976,7 +3031,7 @@ mod tests {
                     None,
                     Some(1),
                     vec![FleetWorkerEventPayload::Running],
-                    || {},
+                    || Ok(()),
                 )
                 .unwrap()
         );

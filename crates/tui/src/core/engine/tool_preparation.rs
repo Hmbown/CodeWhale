@@ -33,6 +33,15 @@ pub(super) fn prepare_tool_call(
 ) -> Result<PreparedToolPolicy, ToolError> {
     if McpPool::is_mcp_tool(name) {
         let read_only = mcp_tool_is_read_only(name);
+        if !read_only
+            && let Some(authority) =
+                registry.and_then(|registry| registry.context().tool_authority.as_ref())
+        {
+            return Err(ToolError::permission_denied(format!(
+                "worker '{}' cannot run mutating MCP tool {name}: it has no bounded file target under the machine-readable authority envelope",
+                authority.owner
+            )));
+        }
         return Ok(PreparedToolPolicy {
             call: PreparedToolCall {
                 name: name.to_string(),
@@ -64,6 +73,7 @@ pub(super) fn prepare_tool_call(
     }
 
     if name == CODE_EXECUTION_TOOL_NAME {
+        reject_unbounded_execution_under_authority(name, registry)?;
         return Ok(conservative_execution_policy(
             name,
             input,
@@ -73,6 +83,7 @@ pub(super) fn prepare_tool_call(
     }
 
     if name == JS_EXECUTION_TOOL_NAME {
+        reject_unbounded_execution_under_authority(name, registry)?;
         return Ok(conservative_execution_policy(
             name,
             input,
@@ -99,6 +110,20 @@ pub(super) fn prepare_tool_call(
 
     Err(ToolError::not_available(format!(
         "tool '{name}' has no preparation path"
+    )))
+}
+
+fn reject_unbounded_execution_under_authority(
+    name: &str,
+    registry: Option<&ToolRegistry>,
+) -> Result<(), ToolError> {
+    let Some(authority) = registry.and_then(|registry| registry.context().tool_authority.as_ref())
+    else {
+        return Ok(());
+    };
+    Err(ToolError::permission_denied(format!(
+        "worker '{}' cannot run {name}: arbitrary code execution cannot prove a bounded file target under the machine-readable authority envelope",
+        authority.owner
     )))
 }
 

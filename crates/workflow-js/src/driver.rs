@@ -52,6 +52,25 @@ pub struct TaskRequest {
     pub thinking: Option<String>,
     /// Run the child in a fresh git worktree for parallel edits.
     pub worktree: bool,
+    /// Explicit child mutation authority. A write-capable value remains
+    /// fail-closed unless at least one bounded scope below is declared.
+    #[serde(default)]
+    pub write_authority: Option<String>,
+    /// Repo-relative directory trees the child expects to mutate.
+    #[serde(default)]
+    pub write_roots: Vec<String>,
+    /// Repo-relative exact files the child expects to mutate.
+    #[serde(default)]
+    pub exact_files: Vec<String>,
+    /// Named shared contracts owned by this child while active.
+    #[serde(default)]
+    pub coordination_contracts: Vec<String>,
+    /// Bounded prerequisite facts relevant to this child.
+    #[serde(default)]
+    pub dependencies: Vec<String>,
+    /// Bounded observable checks for child completion.
+    #[serde(default)]
+    pub acceptance: Vec<String>,
     /// Explicit tool allowlist; required by the driver for `custom` roles.
     pub allowed_tools: Option<Vec<String>>,
     /// Per-call spawn-depth override (driver clamps to its ceiling).
@@ -231,5 +250,35 @@ mod tests {
         };
         assert_eq!(drained.remaining(), Some(0));
         assert!(drained.exhausted());
+    }
+
+    #[test]
+    fn legacy_task_request_defaults_new_coordination_fields() {
+        let legacy = serde_json::json!({
+            "description": "inspect the candidate",
+            "subagent_type": null,
+            "role": "reviewer",
+            "profile": null,
+            "model": null,
+            "model_strength": null,
+            "thinking": null,
+            "worktree": false,
+            "allowed_tools": null,
+            "max_depth": null,
+            "token_budget": null,
+            "max_steps": null,
+            "wall_time_secs": null,
+            "response_schema": null,
+            "label": null,
+            "phase": null
+        });
+
+        let request: TaskRequest = serde_json::from_value(legacy).unwrap();
+        assert_eq!(request.write_authority, None);
+        assert!(request.write_roots.is_empty());
+        assert!(request.exact_files.is_empty());
+        assert!(request.coordination_contracts.is_empty());
+        assert!(request.dependencies.is_empty());
+        assert!(request.acceptance.is_empty());
     }
 }

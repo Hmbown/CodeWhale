@@ -110,6 +110,7 @@ impl ToolRegistry {
             .get(name)
             .ok_or_else(|| ToolError::not_available(format!("tool '{name}' is not registered")))?;
 
+        enforce_tool_authority(name, &input, tool.as_ref(), &self.context)?;
         let result = tool.execute(input, &self.context).await?;
         Ok(result.content)
     }
@@ -120,6 +121,7 @@ impl ToolRegistry {
             .get(name)
             .ok_or_else(|| ToolError::not_available(format!("tool '{name}' is not registered")))?;
 
+        enforce_tool_authority(name, &input, tool.as_ref(), &self.context)?;
         tool.execute(input, &self.context).await
     }
 
@@ -138,6 +140,7 @@ impl ToolRegistry {
             .ok_or_else(|| ToolError::not_available(format!("tool '{name}' is not registered")))?;
 
         let ctx = context_override.unwrap_or(&self.context);
+        enforce_tool_authority(name, &input, tool.as_ref(), ctx)?;
         let mut result = tool.execute(input.clone(), ctx).await?;
 
         // Adaptive evidence routing (#4619) is storage-free here because this
@@ -502,6 +505,93 @@ impl ToolRegistry {
             );
         }
     }
+}
+
+fn enforce_tool_authority(
+    name: &str,
+    input: &Value,
+    tool: &dyn ToolSpec,
+    context: &ToolContext,
+) -> Result<(), ToolError> {
+    let Some(authority) = context.tool_authority.as_ref() else {
+        return Ok(());
+    };
+    let capabilities = tool.capabilities();
+    if matches!(name, "Bash" | "exec_shell" | "Run") {
+        return Err(ToolError::permission_denied(format!(
+            "worker '{}' cannot run {name}: arbitrary command execution is outside its machine-readable authority envelope",
+            authority.owner
+        )));
+    }
+    if name == "Git" || name.starts_with("git_") || name == "review" {
+        return Err(ToolError::permission_denied(format!(
+            "worker '{}' cannot run {name}: repository-configured Git helpers cannot prove read-only execution under its machine-readable authority envelope",
+            authority.owner
+        )));
+    }
+    if tool.is_read_only_for(input) {
+        return Ok(());
+    }
+    if capabilities.contains(&ToolCapability::ExecutesCode) {
+        return Err(ToolError::permission_denied(format!(
+            "worker '{}' cannot run {name}: code or child execution is outside its machine-readable authority envelope",
+            authority.owner
+        )));
+    }
+    if let Some(paths) = authority_mutation_paths(name, input)? {
+        if paths.is_empty() {
+            return Err(ToolError::permission_denied(format!(
+                "worker '{}' mutation through {name} did not expose a bounded file target",
+                authority.owner
+            )));
+        }
+        for path in paths {
+            if !authority.permits_mutation_path(context, &path)? {
+                return Err(ToolError::permission_denied(format!(
+                    "worker '{}' cannot mutate '{path}' outside its machine-readable authority envelope",
+                    authority.owner
+                )));
+            }
+        }
+        return Ok(());
+    }
+    Err(ToolError::permission_denied(format!(
+        "worker '{}' cannot run mutating tool {name}: the call has no authorized file target",
+        authority.owner
+    )))
+}
+
+fn authority_mutation_paths(name: &str, input: &Value) -> Result<Option<Vec<String>>, ToolError> {
+    let is_patch = name == "apply_patch"
+        || (name == "File" && input.get("action").and_then(Value::as_str) == Some("patch"));
+    if is_patch {
+        let mut patch_input = input.clone();
+        if let Some(object) = patch_input.as_object_mut() {
+            object.remove("action");
+        }
+        let paths = crate::tools::apply_patch::preflight_apply_patch(&patch_input)
+            .map_err(|error| ToolError::invalid_input(error.to_string()))?
+            .touched_files;
+        return Ok(Some(paths));
+    }
+    let path_bound = matches!(name, "write_file" | "edit_file" | "fim_edit")
+        || (name == "File"
+            && input
+                .get("action")
+                .and_then(Value::as_str)
+                .is_some_and(|action| matches!(action, "write" | "edit")))
+        || (name == "pandoc_convert" && input.get("output_path").is_some());
+    if !path_bound {
+        return Ok(None);
+    }
+    Ok(Some(
+        input
+            .get("path")
+            .or_else(|| input.get("output_path"))
+            .and_then(Value::as_str)
+            .map(|path| vec![path.to_string()])
+            .unwrap_or_default(),
+    ))
 }
 
 /// Builder for constructing a `ToolRegistry` with common tools.
@@ -1441,8 +1531,8 @@ mod tests {
     use crate::config::ToolOverride;
     use crate::tools::ToolRegistryBuilder;
     use crate::tools::spec::{
-        ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec,
-        required_str,
+        ApprovalRequirement, ToolAuthorityEnvelope, ToolCapability, ToolContext, ToolError,
+        ToolMutationAuthority, ToolResult, ToolSpec, required_str,
     };
 
     use super::{ToolRegistry, mcp_tool_adapter_for_test};
@@ -1920,6 +2010,230 @@ mod tests {
 
         let result = registry.execute("nonexistent", json!({})).await;
         assert!(result.is_err());
+    }
+
+    fn scoped_context(workspace: &std::path::Path) -> ToolContext {
+        ToolContext::new(workspace.to_path_buf())
+            .with_tool_authority(
+                ToolAuthorityEnvelope {
+                    schema_version: 1,
+                    owner: "fleet-worker-1".to_string(),
+                    authority: ToolMutationAuthority::ScopedWrite,
+                    writable_roots: vec!["src".to_string()],
+                    writable_files: Vec::new(),
+                    coordination_contracts: Vec::new(),
+                }
+                .normalized()
+                .expect("test authority"),
+            )
+            .expect("test context authority")
+    }
+
+    #[tokio::test]
+    async fn fleet_authority_allows_scoped_file_writes_and_rejects_outside_paths() {
+        let tmp = tempdir().expect("tempdir");
+        std::fs::create_dir(tmp.path().join("src")).expect("src");
+        std::fs::create_dir(tmp.path().join("docs")).expect("docs");
+        let registry = ToolRegistryBuilder::new()
+            .with_file_tools()
+            .with_patch_tools()
+            .build(scoped_context(tmp.path()));
+
+        registry
+            .execute_full(
+                "File",
+                json!({"action": "write", "path": "src/ok.txt", "content": "ok\n"}),
+            )
+            .await
+            .expect("scoped File write");
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("src/ok.txt")).expect("written file"),
+            "ok\n"
+        );
+
+        let error = registry
+            .execute_full(
+                "File",
+                json!({"action": "write", "path": "docs/no.txt", "content": "no\n"}),
+            )
+            .await
+            .expect_err("out-of-scope File write")
+            .to_string();
+        assert!(error.contains("outside its machine-readable"), "{error}");
+        assert!(!tmp.path().join("docs/no.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn fleet_authority_denies_bash_even_when_command_classifier_calls_it_read_only() {
+        let tmp = tempdir().expect("tempdir");
+        std::fs::create_dir(tmp.path().join("src")).expect("src");
+        let registry = ToolRegistryBuilder::new()
+            .with_shell_tools()
+            .build(scoped_context(tmp.path()));
+
+        let error = registry
+            .execute_full("Bash", json!({"action": "run", "command": "git status"}))
+            .await
+            .expect_err("Bash remains unprovable under a file scope")
+            .to_string();
+        assert!(error.contains("arbitrary command execution"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn fleet_authority_denies_git_even_when_the_action_is_nominally_read_only() {
+        let tmp = tempdir().expect("tempdir");
+        std::fs::create_dir(tmp.path().join("src")).expect("src");
+        let registry = ToolRegistryBuilder::new()
+            .with_git_tools()
+            .with_git_history_tools()
+            .with_review_tool(None, "fixture-model".to_string())
+            .build(scoped_context(tmp.path()));
+
+        for (name, input) in [
+            ("Git", json!({"action": "status"})),
+            ("git_diff", json!({})),
+            ("git_show", json!({"revision": "HEAD"})),
+            ("git_blame", json!({"path": "src/lib.rs"})),
+            ("review", json!({"target": "diff"})),
+        ] {
+            let error = registry
+                .execute_full(name, input)
+                .await
+                .expect_err("Git subprocesses remain unprovable under Fleet authority")
+                .to_string();
+            assert!(error.contains("Git helpers"), "{name}: {error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn fleet_authority_rejects_fim_edit_outside_its_write_scope() {
+        let tmp = tempdir().expect("tempdir");
+        std::fs::create_dir(tmp.path().join("src")).expect("src");
+        std::fs::create_dir(tmp.path().join("docs")).expect("docs");
+        std::fs::write(tmp.path().join("docs/outside.txt"), "before\nafter\n").expect("fixture");
+        let registry = ToolRegistryBuilder::new()
+            .with_fim_tool(None, "fixture-model".to_string())
+            .build(scoped_context(tmp.path()));
+
+        let error = registry
+            .execute_full(
+                "fim_edit",
+                json!({
+                    "path": "docs/outside.txt",
+                    "prefix_anchor": "before\n",
+                    "suffix_anchor": "after\n"
+                }),
+            )
+            .await
+            .expect_err("FIM mutation must be checked before model execution")
+            .to_string();
+        assert!(error.contains("outside its machine-readable"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("docs/outside.txt")).unwrap(),
+            "before\nafter\n"
+        );
+    }
+
+    struct MixedExecutionTool;
+
+    #[async_trait::async_trait]
+    impl ToolSpec for MixedExecutionTool {
+        fn name(&self) -> &str {
+            "mixed_execution"
+        }
+
+        fn description(&self) -> &str {
+            "inspect or start a child"
+        }
+
+        fn input_schema(&self) -> Value {
+            json!({"type": "object"})
+        }
+
+        fn capabilities(&self) -> Vec<ToolCapability> {
+            vec![ToolCapability::ExecutesCode]
+        }
+
+        fn is_read_only_for(&self, input: &Value) -> bool {
+            input.get("action").and_then(Value::as_str) == Some("inspect")
+        }
+
+        async fn execute(
+            &self,
+            _input: Value,
+            _context: &ToolContext,
+        ) -> Result<ToolResult, ToolError> {
+            Ok(ToolResult::success("observed"))
+        }
+    }
+
+    #[tokio::test]
+    async fn fleet_authority_allows_read_only_actions_but_denies_mixed_family_starts() {
+        let tmp = tempdir().expect("tempdir");
+        std::fs::create_dir(tmp.path().join("src")).expect("src");
+        let registry = ToolRegistryBuilder::new()
+            .with_tool(Arc::new(MixedExecutionTool))
+            .build(scoped_context(tmp.path()));
+
+        registry
+            .execute_full("mixed_execution", json!({"action": "inspect"}))
+            .await
+            .expect("read-only status/inspect actions remain usable");
+        let error = registry
+            .execute_full("mixed_execution", json!({"action": "start"}))
+            .await
+            .expect_err("child/code starts remain denied")
+            .to_string();
+        assert!(error.contains("child execution"), "{error}");
+    }
+
+    struct UnscopedMutator;
+
+    #[async_trait::async_trait]
+    impl ToolSpec for UnscopedMutator {
+        fn name(&self) -> &str {
+            "unscoped_mutator"
+        }
+
+        fn description(&self) -> &str {
+            "mutates state without a file target"
+        }
+
+        fn input_schema(&self) -> Value {
+            json!({"type": "object"})
+        }
+
+        fn capabilities(&self) -> Vec<ToolCapability> {
+            Vec::new()
+        }
+
+        fn is_read_only_for(&self, _input: &Value) -> bool {
+            false
+        }
+
+        async fn execute(
+            &self,
+            _input: Value,
+            _context: &ToolContext,
+        ) -> Result<ToolResult, ToolError> {
+            Ok(ToolResult::success("mutated"))
+        }
+    }
+
+    #[tokio::test]
+    async fn fleet_authority_denies_every_unscoped_mutator_not_only_file_capabilities() {
+        let tmp = tempdir().expect("tempdir");
+        std::fs::create_dir(tmp.path().join("src")).expect("src");
+        let registry = ToolRegistryBuilder::new()
+            .with_tool(Arc::new(UnscopedMutator))
+            .build(scoped_context(tmp.path()));
+
+        let error = registry
+            .execute_full("unscoped_mutator", json!({}))
+            .await
+            .expect_err("unscoped mutation must fail closed")
+            .to_string();
+        assert!(error.contains("mutating tool"), "{error}");
     }
 
     #[test]

@@ -23,7 +23,7 @@ use super::profile::AgentProfile;
 use crate::config::{ApiProvider, Config};
 use crate::route_runtime::{resolve_route_candidate, resolve_runtime_route};
 use crate::tools::subagent::{AgentWorkerSpec, AgentWorkerToolProfile, SubAgentType};
-use crate::worker_profile::{ModelRoute, ToolScope, WorkerRuntimeProfile};
+use crate::worker_profile::{ChildLaunchManifest, ModelRoute, ToolScope, WorkerRuntimeProfile};
 
 /// Validate that every task referencing a workspace agent profile can resolve it.
 ///
@@ -85,12 +85,42 @@ pub fn fleet_task_to_worker_spec_with_profiles(
     let runtime_profile = parent_runtime_profile
         .map(|parent| parent.derive_child(&requested_runtime))
         .unwrap_or(requested_runtime);
+    let writable_roots = fleet_write_roots(task_spec)?;
+    let coordination_contracts = fleet_coordination_contracts(task_spec)?;
+    if runtime_profile.permissions.write
+        && writable_roots.is_empty()
+        && coordination_contracts.is_empty()
+    {
+        bail!(
+            "fleet task '{}' is write-capable but declares no workspace.writable_paths or metadata.coordination_contracts",
+            task_spec.id
+        );
+    }
+    let session_name = format!("fleet-{}-{}", worker_id, task_spec.id);
+    let launch_manifest = ChildLaunchManifest {
+        owner_session: run_id.to_string(),
+        child_id: worker_id.to_string(),
+        profile: runtime_profile.clone(),
+        prompt: objective.clone(),
+        cwd: Some(workspace.display().to_string()),
+        worktree: false,
+        writable_roots,
+        writable_files: Vec::new(),
+        coordination_contracts,
+        expected_artifact: None,
+        token_budget: task_spec
+            .budget
+            .as_ref()
+            .and_then(|budget| budget.max_tokens),
+        resume_identity: Some(session_name.clone()),
+        generation: 1,
+    };
 
     Ok(AgentWorkerSpec {
         worker_id: worker_id.to_string(),
         run_id: run_id.to_string(),
         parent_run_id: None,
-        session_name: Some(format!("fleet-{}-{}", worker_id, task_spec.id)),
+        session_name: Some(session_name),
         objective,
         role,
         agent_type,
@@ -108,8 +138,131 @@ pub fn fleet_task_to_worker_spec_with_profiles(
             .unwrap_or(u32::MAX),
         spawn_depth: 0,
         max_spawn_depth: runtime_profile.max_spawn_depth,
-        launch_manifest: None,
+        launch_manifest: Some(launch_manifest),
     })
+}
+
+fn fleet_write_roots(task_spec: &FleetTaskSpec) -> Result<Vec<String>> {
+    let task_root = normalize_fleet_relative_path(
+        task_spec
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.root.as_deref())
+            .unwrap_or_else(|| std::path::Path::new(".")),
+        &task_spec.id,
+        "workspace.root",
+    )?;
+    let mut roots = Vec::new();
+    for runtime_root in fleet_runtime_write_roots(task_spec)? {
+        let claim_root = match (task_root.as_str(), runtime_root.as_str()) {
+            (".", path) | (path, ".") => path.to_string(),
+            (root, path) => format!("{root}/{path}"),
+        };
+        if !roots.contains(&claim_root) {
+            roots.push(claim_root);
+        }
+    }
+    Ok(roots)
+}
+
+pub(crate) fn fleet_runtime_write_roots(task_spec: &FleetTaskSpec) -> Result<Vec<String>> {
+    let mut roots = Vec::new();
+    for path in task_spec
+        .workspace
+        .as_ref()
+        .into_iter()
+        .flat_map(|workspace| &workspace.writable_paths)
+    {
+        let normalized =
+            normalize_fleet_relative_path(path, &task_spec.id, "workspace.writable_paths")?;
+        if !roots.contains(&normalized) {
+            roots.push(normalized);
+        }
+    }
+    Ok(roots)
+}
+
+fn normalize_fleet_relative_path(
+    path: &std::path::Path,
+    task_id: &str,
+    field: &str,
+) -> Result<String> {
+    let raw = path.to_string_lossy().replace('\\', "/");
+    if raw.chars().any(|ch| matches!(ch, '\0' | '\r' | '\n'))
+        || path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
+    {
+        bail!(
+            "fleet task '{task_id}' {field} path '{}' must be one repo-relative line and cannot escape the workspace",
+            path.display()
+        );
+    }
+    let mut segments = Vec::new();
+    for segment in raw.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                bail!(
+                    "fleet task '{task_id}' {field} path '{}' cannot contain parent traversal",
+                    path.display()
+                );
+            }
+            value => segments.push(value),
+        }
+    }
+    Ok(if segments.is_empty() {
+        ".".to_string()
+    } else {
+        segments.join("/")
+    })
+}
+
+fn fleet_coordination_contracts(task_spec: &FleetTaskSpec) -> Result<Vec<String>> {
+    let Some(value) = task_spec.metadata.get("coordination_contracts") else {
+        return Ok(Vec::new());
+    };
+    let Some(values) = value.as_array() else {
+        bail!(
+            "fleet task '{}' metadata.coordination_contracts must be an array of strings",
+            task_spec.id
+        );
+    };
+    if values.len() > 16 {
+        bail!(
+            "fleet task '{}' metadata.coordination_contracts accepts at most 16 entries",
+            task_spec.id
+        );
+    }
+    let mut contracts = Vec::new();
+    for value in values {
+        let Some(value) = value.as_str() else {
+            bail!(
+                "fleet task '{}' metadata.coordination_contracts must contain only strings",
+                task_spec.id
+            );
+        };
+        let value = value.trim();
+        if value.is_empty()
+            || value.chars().count() > 128
+            || value.chars().any(|ch| matches!(ch, '\0' | '\r' | '\n'))
+        {
+            bail!(
+                "fleet task '{}' coordination contracts must be one non-empty line of at most 128 characters",
+                task_spec.id
+            );
+        }
+        if !contracts.iter().any(|contract| contract == value) {
+            contracts.push(value.to_string());
+        }
+    }
+    Ok(contracts)
 }
 
 /// Mint a [`FleetResolvedRoute`] snapshot for a fleet task (#3154).
@@ -918,7 +1071,8 @@ fn filter_tool_profile(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codewhale_protocol::fleet::FleetHostSpec;
+    use codewhale_protocol::fleet::{FleetHostSpec, FleetWorkspaceRequirements};
+    use std::path::{Path, PathBuf};
 
     fn fleet_task(id: &str, worker: Option<FleetTaskWorkerProfile>) -> FleetTaskSpec {
         FleetTaskSpec {
@@ -928,7 +1082,12 @@ mod tests {
             objective: Some(format!("Complete {id}")),
             instructions: format!("do {id}"),
             worker,
-            workspace: None,
+            workspace: Some(FleetWorkspaceRequirements {
+                root: Some(PathBuf::from(".")),
+                required_files: Vec::new(),
+                writable_paths: vec![PathBuf::from(".")],
+                environment: None,
+            }),
             input_files: Vec::new(),
             context: Vec::new(),
             budget: None,
@@ -940,6 +1099,157 @@ mod tests {
             timeout_seconds: None,
             metadata: Default::default(),
         }
+    }
+
+    #[test]
+    fn write_capable_fleet_worker_requires_and_persists_a_bounded_claim() {
+        let worker = FleetWorkerSpec {
+            id: "worker-1".to_string(),
+            name: "Worker".to_string(),
+            host: FleetHostSpec::Local,
+            trust_level: None,
+            labels: Default::default(),
+            capabilities: vec![],
+            max_concurrent_tasks: None,
+        };
+        let mut unscoped = fleet_task("write", None);
+        unscoped.workspace = None;
+        let error = fleet_task_to_worker_spec_with_profiles(
+            "worker-1",
+            "run-1",
+            &unscoped,
+            &worker,
+            "auto",
+            Path::new("/tmp"),
+            &[],
+            None,
+        )
+        .expect_err("unscoped Fleet writer must fail before registration");
+        assert!(error.to_string().contains("declares no"), "{error:#}");
+
+        let scoped = fleet_task_to_worker_spec_with_profiles(
+            "worker-1",
+            "run-1",
+            &fleet_task("write", None),
+            &worker,
+            "auto",
+            Path::new("/tmp"),
+            &[],
+            None,
+        )
+        .expect("bounded Fleet writer");
+        let manifest = scoped.launch_manifest.expect("launch manifest");
+        assert_eq!(manifest.child_id, "worker-1");
+        assert_eq!(manifest.writable_roots, ["."]);
+        assert_eq!(manifest.prompt, scoped.objective);
+    }
+
+    #[test]
+    fn fleet_claim_roots_share_one_manager_workspace_namespace() {
+        let worker = FleetWorkerSpec {
+            id: "worker-1".to_string(),
+            name: "Worker".to_string(),
+            host: FleetHostSpec::Local,
+            trust_level: None,
+            labels: Default::default(),
+            capabilities: vec![],
+            max_concurrent_tasks: None,
+        };
+        let mut nested = fleet_task("nested", None);
+        nested.workspace = Some(FleetWorkspaceRequirements {
+            root: Some(PathBuf::from("pkg-a")),
+            writable_paths: vec![PathBuf::from("src")],
+            ..FleetWorkspaceRequirements::default()
+        });
+        let mut root = fleet_task("root", None);
+        root.workspace = Some(FleetWorkspaceRequirements {
+            root: Some(PathBuf::from(".")),
+            writable_paths: vec![PathBuf::from("pkg-a/src")],
+            ..FleetWorkspaceRequirements::default()
+        });
+
+        let nested_spec = fleet_task_to_worker_spec_with_profiles(
+            "worker-1",
+            "run-1",
+            &nested,
+            &worker,
+            "auto",
+            Path::new("/repo/pkg-a"),
+            &[],
+            None,
+        )
+        .unwrap();
+        let root_spec = fleet_task_to_worker_spec_with_profiles(
+            "worker-2",
+            "run-1",
+            &root,
+            &worker,
+            "auto",
+            Path::new("/repo"),
+            &[],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            nested_spec.launch_manifest.unwrap().writable_roots,
+            ["pkg-a/src"]
+        );
+        assert_eq!(
+            root_spec.launch_manifest.unwrap().writable_roots,
+            ["pkg-a/src"]
+        );
+        assert_eq!(fleet_runtime_write_roots(&nested).unwrap(), ["src"]);
+    }
+
+    #[test]
+    fn fleet_manifest_rejects_control_characters_before_lease() {
+        let worker = FleetWorkerSpec {
+            id: "worker-1".to_string(),
+            name: "Worker".to_string(),
+            host: FleetHostSpec::Local,
+            trust_level: None,
+            labels: Default::default(),
+            capabilities: vec![],
+            max_concurrent_tasks: None,
+        };
+        let mut bad_contract = fleet_task("bad-contract", None);
+        bad_contract.metadata.insert(
+            "coordination_contracts".to_string(),
+            serde_json::json!(["api\ncontract"]),
+        );
+        assert!(
+            fleet_task_to_worker_spec_with_profiles(
+                "worker-1",
+                "run-1",
+                &bad_contract,
+                &worker,
+                "auto",
+                Path::new("/repo"),
+                &[],
+                None,
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("one non-empty line")
+        );
+
+        let mut bad_path = fleet_task("bad-path", None);
+        bad_path.workspace.as_mut().unwrap().writable_paths = vec![PathBuf::from("src\nother")];
+        assert!(
+            fleet_task_to_worker_spec_with_profiles(
+                "worker-1",
+                "run-1",
+                &bad_path,
+                &worker,
+                "auto",
+                Path::new("/repo"),
+                &[],
+                None,
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("one repo-relative line")
+        );
     }
 
     fn worker_profile(

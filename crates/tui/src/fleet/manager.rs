@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 use super::executor::{
     FleetExecutor, FleetExecutorAttempt, FleetWorkerReportedRoute, FleetWorkerTerminalEvent,
-    build_worker_exec_command_with_profiles,
+    authority_envelope_for_worker, build_worker_exec_command_with_launch_spec,
 };
 use super::host::FleetHostErrorKind;
 use super::ledger::{FleetLedger, FleetLedgerState, FleetTaskLedgerStatus, FleetTaskState};
@@ -31,7 +31,7 @@ use super::task_spec::{
 };
 use super::worker_runtime;
 use crate::config::Config;
-use crate::tools::subagent::SharedSubAgentManager;
+use crate::tools::subagent::{AgentWorkerSpec, SharedSubAgentManager};
 
 const DEFAULT_STALE_AFTER_SECONDS: u64 = 300;
 
@@ -362,6 +362,7 @@ impl FleetManager {
         max_workers: usize,
         unavailable_workers: &BTreeSet<String>,
     ) -> Result<FleetTickReport> {
+        self.reconcile_coordination_worker_statuses()?;
         let max_workers = max_workers.clamp(1, 128);
         let mut report = FleetTickReport::default();
         let state = self.ledger.rebuild_state()?;
@@ -406,6 +407,57 @@ impl FleetManager {
 
         self.refresh_run_status(run_id)?;
         Ok(report)
+    }
+
+    fn reconcile_coordination_worker_statuses(&self) -> Result<()> {
+        let Some(manager) = self.sub_agent_manager.as_ref() else {
+            return Ok(());
+        };
+        let Ok(mut guard) = manager.try_write() else {
+            // The next scheduler tick retries before leasing more work.
+            return Ok(());
+        };
+        let state = self.ledger.rebuild_state()?;
+        for record in guard.list_worker_records() {
+            let current = state
+                .tasks
+                .values()
+                .filter(|task| task.entry.run_id.0 == record.spec.run_id)
+                .filter(|task| task.leased_to.as_deref() == Some(record.spec.worker_id.as_str()))
+                .max_by_key(|task| task.lifecycle_seq);
+            let Some(current) = current else {
+                continue;
+            };
+            let (status, status_label) = match current.status {
+                FleetTaskLedgerStatus::Enqueued => {
+                    (crate::tools::subagent::AgentWorkerStatus::Queued, "queued")
+                }
+                FleetTaskLedgerStatus::Leased => (
+                    crate::tools::subagent::AgentWorkerStatus::Running,
+                    "running",
+                ),
+                FleetTaskLedgerStatus::Completed => (
+                    crate::tools::subagent::AgentWorkerStatus::Completed,
+                    "completed",
+                ),
+                FleetTaskLedgerStatus::Failed => {
+                    (crate::tools::subagent::AgentWorkerStatus::Failed, "failed")
+                }
+                FleetTaskLedgerStatus::Cancelled => (
+                    crate::tools::subagent::AgentWorkerStatus::Cancelled,
+                    "cancelled",
+                ),
+            };
+            guard.project_external_worker_status(
+                &record.spec.worker_id,
+                status,
+                Some(format!(
+                    "Fleet task {} is {}",
+                    current.entry.task_id, status_label
+                )),
+            );
+        }
+        Ok(())
     }
 
     pub fn status(&self) -> Result<FleetStatusSnapshot> {
@@ -889,45 +941,63 @@ impl FleetManager {
         task_spec: &FleetTaskSpec,
         max_active_for_run: Option<usize>,
     ) -> Result<bool> {
-        let sub_agent_worker = if self.sub_agent_manager.is_some() {
-            let run = self
-                .ledger
-                .rebuild_state()
-                .ok()
-                .and_then(|state| state.runs.get(&entry.run_id.0).cloned());
-            let worker_spec = run
-                .as_ref()
-                .and_then(|r| r.worker_specs.iter().find(|w| w.id == worker_id).cloned())
-                .unwrap_or_else(|| FleetWorkerSpec {
-                    id: worker_id.to_string(),
-                    name: worker_id.to_string(),
-                    host: FleetHostSpec::Local,
-                    trust_level: Some(FleetTrustLevel::Local),
-                    labels: BTreeMap::new(),
-                    capabilities: vec![],
-                    max_concurrent_tasks: Some(1),
-                });
-            let roster = self.agent_roster();
-            let worker = worker_runtime::fleet_task_to_worker_spec_with_profiles(
-                worker_id,
-                &entry.run_id.0,
-                task_spec,
-                &worker_spec,
-                self.run_model(),
-                &self.workspace,
-                roster.members(),
-                None,
-            )?;
-            Some(worker_runtime::apply_exec_hardening(
-                worker,
+        let run = self
+            .ledger
+            .rebuild_state()?
+            .runs
+            .get(&entry.run_id.0)
+            .cloned()
+            .ok_or_else(|| anyhow!("fleet run {} does not exist", entry.run_id.0))?;
+        let worker_spec = run
+            .worker_specs
+            .iter()
+            .find(|worker| worker.id == worker_id)
+            .cloned()
+            .unwrap_or_else(|| default_local_worker(worker_id));
+        let worker_workspace = resolve_task_cwd(&self.workspace, task_spec)?;
+        validate_task_cwd_for_host(&self.workspace, &worker_spec.host, &worker_workspace)?;
+        let roster = self.agent_roster();
+        let sub_agent_worker = bind_fleet_launch_attempt(
+            worker_runtime::apply_exec_hardening(
+                worker_runtime::fleet_task_to_worker_spec_with_profiles(
+                    worker_id,
+                    &entry.run_id.0,
+                    task_spec,
+                    &worker_spec,
+                    self.run_model(),
+                    &worker_workspace,
+                    roster.members(),
+                    None,
+                )?,
                 &self.exec_config,
-            ))
-        } else {
-            None
-        };
+            ),
+            entry.attempts.saturating_add(1),
+        );
+        authority_envelope_for_worker(&sub_agent_worker, task_spec)?;
         let log_artifact = self.write_log_artifact(&entry.run_id, worker_id, task_spec)?;
+        // Hold the coordination manager from pure preflight through the
+        // ledger's pre-commit projection callback and any append compensation. This keeps a concurrent
+        // agent/Fleet registration from invalidating the overlap decision in
+        // between, while a busy manager simply leaves the task queued for the
+        // next scheduler tick.
+        let mut coordination_guard = match &self.sub_agent_manager {
+            Some(manager) => {
+                let Ok(mut guard) = manager.try_write() else {
+                    return Ok(false);
+                };
+                guard
+                    .preflight_worker_coordination(&sub_agent_worker)
+                    .map_err(anyhow::Error::msg)?;
+                Some(guard)
+            }
+            None => None,
+        };
+        let registration_snapshot = coordination_guard
+            .as_ref()
+            .map(|guard| guard.coordination_registration_snapshot());
+        let mut registration_succeeded = false;
         let now = timestamp();
-        if !self.ledger.start_task_if_enqueued(
+        let start_result = self.ledger.start_task_if_enqueued(
             &entry.run_id,
             &entry.task_id,
             worker_id,
@@ -945,14 +1015,30 @@ impl FleetManager {
             || {
                 // Registration shares the durable transition lock, so a
                 // cancellation cannot win between claim and projection setup.
-                if let Some(ref mgr) = self.sub_agent_manager
-                    && let Some(worker) = sub_agent_worker
-                    && let Ok(mut guard) = mgr.try_write()
-                {
-                    guard.register_worker(worker);
+                if let Some(guard) = coordination_guard.as_mut() {
+                    guard
+                        .register_worker_with_coordination(sub_agent_worker)
+                        .map_err(anyhow::Error::msg)?;
+                    registration_succeeded = true;
                 }
+                Ok(())
             },
-        )? {
+        );
+        let started = match start_result {
+            Ok(started) => started,
+            Err(start_error) => {
+                if registration_succeeded
+                    && let (Some(guard), Some(snapshot)) =
+                        (coordination_guard.as_mut(), registration_snapshot)
+                    && let Err(rollback_error) =
+                        guard.restore_coordination_registration_snapshot(snapshot)
+                {
+                    return Err(anyhow!("{start_error:#}; additionally {rollback_error}"));
+                }
+                return Err(start_error);
+            }
+        };
+        if !started {
             return Ok(false);
         }
 
@@ -995,18 +1081,79 @@ impl FleetManager {
                 .find(|worker| worker.id == worker_id)
                 .cloned()
                 .unwrap_or_else(|| default_local_worker(worker_id));
-            let command = build_worker_exec_command_with_profiles(
-                codewhale_binary,
-                &task_spec,
-                &self.exec_config,
-                model,
-                roster.members(),
-            )?;
-            let cwd = resolve_task_cwd(&self.workspace, &task_spec);
+            let coordination_record = if let Some(manager) = self.sub_agent_manager.as_ref() {
+                let Ok(guard) = manager.try_read() else {
+                    continue;
+                };
+                Some(guard.get_worker_record(worker_id))
+            } else {
+                None
+            };
+            let preparation = (|| -> Result<_> {
+                let cwd = resolve_task_cwd(&self.workspace, &task_spec)?;
+                validate_task_cwd_for_host(&self.workspace, &worker_spec.host, &cwd)?;
+                let expected_launch_spec = bind_fleet_launch_attempt(
+                    worker_runtime::apply_exec_hardening(
+                        worker_runtime::fleet_task_to_worker_spec_with_profiles(
+                            worker_id,
+                            &run_id.0,
+                            &task_spec,
+                            &worker_spec,
+                            self.run_model(),
+                            &cwd,
+                            roster.members(),
+                            None,
+                        )?,
+                        &self.exec_config,
+                    ),
+                    task.entry.attempts,
+                );
+                let launch_spec = match coordination_record {
+                    Some(Some(record)) => {
+                        validate_registered_launch_spec(&record.spec, &expected_launch_spec)?;
+                        record.spec
+                    }
+                    Some(None) => {
+                        bail!("Fleet worker {worker_id} has no coordination-registered launch spec")
+                    }
+                    None => expected_launch_spec,
+                };
+                let command = build_worker_exec_command_with_launch_spec(
+                    codewhale_binary,
+                    &task_spec,
+                    &launch_spec,
+                    &self.exec_config,
+                    model,
+                    roster.members(),
+                )?;
+                Ok((cwd, command))
+            })();
             let attempt = FleetExecutorAttempt {
                 run_id: task.entry.run_id.clone(),
                 task_id: task.entry.task_id.clone(),
                 attempt: task.entry.attempts,
+            };
+            let (cwd, command) = match preparation {
+                Ok(prepared) => prepared,
+                Err(err) => {
+                    let task = FleetExecutorTaskContext {
+                        entry: task.entry.clone(),
+                        task_spec,
+                        worker_id: worker_id.to_string(),
+                    };
+                    let terminal = FleetWorkerTerminalEvent {
+                        payload: FleetWorkerEventPayload::Failed {
+                            reason: format!("worker launch preparation failed: {err:#}"),
+                            recoverable: false,
+                        },
+                        exit_code: None,
+                        tail_payloads: Vec::new(),
+                        reported_route: None,
+                        requires_reported_route: false,
+                    };
+                    let _ = self.record_task_outcome(&task, terminal)?;
+                    continue;
+                }
             };
             match executor.start_worker_attempt_on_host(
                 worker_id,
@@ -1333,7 +1480,10 @@ impl FleetManager {
             None,
         )
         .ok()?;
-        let worker = worker_runtime::apply_exec_hardening(worker, &self.exec_config);
+        let worker = bind_fleet_launch_attempt(
+            worker_runtime::apply_exec_hardening(worker, &self.exec_config),
+            task.entry.attempts,
+        );
         Some(worker_runtime::fleet_effective_permissions_for_task(
             &task.task_spec,
             roster.members(),
@@ -1785,19 +1935,122 @@ fn task_priority(task: &FleetTaskSpec) -> i32 {
         .unwrap_or(0)
 }
 
-fn resolve_task_cwd(workspace: &Path, task: &FleetTaskSpec) -> PathBuf {
+fn resolve_task_cwd(workspace: &Path, task: &FleetTaskSpec) -> Result<PathBuf> {
     let Some(root) = task
         .workspace
         .as_ref()
         .and_then(|workspace| workspace.root.as_ref())
     else {
-        return workspace.to_path_buf();
+        return crate::tools::spec::resolve_strict_authority_path(
+            &crate::tools::ToolContext::new(workspace.to_path_buf()),
+            ".",
+        )
+        .map_err(anyhow::Error::new);
     };
-    if root.is_absolute() {
-        root.clone()
-    } else {
-        workspace.join(root)
+    crate::tools::spec::resolve_strict_authority_path(
+        &crate::tools::ToolContext::new(workspace.to_path_buf()),
+        &root.to_string_lossy(),
+    )
+    .map_err(anyhow::Error::new)
+}
+
+fn bind_fleet_launch_attempt(mut spec: AgentWorkerSpec, attempt: u32) -> AgentWorkerSpec {
+    // The outer machine-readable cap is workspace-relative and cannot yet be
+    // intersected into a grandchild's narrower launch context. Fleet workers
+    // are therefore truthful leaves in v0.9.1: the nested-agent surface is
+    // disabled for the authority-bound subprocess.
+    spec.max_spawn_depth = 0;
+    spec.runtime_profile.max_spawn_depth = 0;
+    if let Some(manifest) = spec.launch_manifest.as_mut() {
+        manifest.generation = attempt.max(1);
+        manifest.profile.max_spawn_depth = 0;
     }
+    spec
+}
+
+fn validate_registered_launch_spec(
+    registered: &AgentWorkerSpec,
+    expected: &AgentWorkerSpec,
+) -> Result<()> {
+    let Some(registered_manifest) = registered.launch_manifest.as_ref() else {
+        bail!(
+            "Fleet worker {} has no persisted launch manifest",
+            registered.worker_id
+        );
+    };
+    if registered_manifest.prompt != registered.objective
+        || !registered_prompt_matches_expected(&registered.objective, &expected.objective)
+    {
+        bail!(
+            "Fleet worker {} has an inconsistent persisted prompt",
+            registered.worker_id
+        );
+    }
+
+    // Coordination may append a bounded decision projection to the prompt.
+    // Every identity, route, permission, workspace, scope, and attempt field
+    // must otherwise match a fresh derivation from this exact leased task.
+    let mut registered_identity = registered.clone();
+    let mut expected_identity = expected.clone();
+    registered_identity.objective.clear();
+    expected_identity.objective.clear();
+    if let Some(manifest) = registered_identity.launch_manifest.as_mut() {
+        manifest.prompt.clear();
+    }
+    if let Some(manifest) = expected_identity.launch_manifest.as_mut() {
+        manifest.prompt.clear();
+    }
+    if registered_identity != expected_identity {
+        bail!(
+            "Fleet worker {} persisted launch spec does not match the exact task lease and attempt",
+            registered.worker_id
+        );
+    }
+    Ok(())
+}
+
+fn registered_prompt_matches_expected(registered: &str, expected: &str) -> bool {
+    const HEADER: &str = "Accepted coordination decisions relevant to this child (bounded):\n";
+    if registered == expected {
+        return true;
+    }
+    let Some(projection) = registered
+        .strip_prefix(expected)
+        .and_then(|suffix| suffix.strip_prefix("\n\n"))
+    else {
+        return false;
+    };
+    let Some(lines) = projection.strip_prefix(HEADER) else {
+        return false;
+    };
+    !lines.is_empty()
+        && projection.len() <= 4096
+        && lines.lines().count() <= 8
+        && lines
+            .lines()
+            .all(|line| line.starts_with("- ") && line.len() <= 512)
+}
+
+fn validate_task_cwd_for_host(
+    workspace: &Path,
+    host: &FleetHostSpec,
+    task_cwd: &Path,
+) -> Result<()> {
+    if !matches!(host, FleetHostSpec::Ssh { .. }) {
+        return Ok(());
+    }
+    let workspace_root = crate::tools::spec::resolve_strict_authority_path(
+        &crate::tools::ToolContext::new(workspace.to_path_buf()),
+        ".",
+    )
+    .map_err(anyhow::Error::new)?;
+    if task_cwd != workspace_root {
+        bail!(
+            "SSH Fleet workers do not yet support nested workspace.root values; task cwd '{}' cannot be mapped safely beneath the remote working_directory",
+            task_cwd.display()
+        );
+    }
+    Ok(())
 }
 
 fn task_receipt_outcome(
@@ -1887,6 +2140,303 @@ mod tests {
             timeout_seconds: None,
             metadata: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn ssh_workers_fail_closed_for_nested_task_roots() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir(tmp.path().join("nested")).unwrap();
+        let mut nested = task("nested");
+        nested.workspace = Some(FleetWorkspaceRequirements {
+            root: Some(PathBuf::from("nested")),
+            ..FleetWorkspaceRequirements::default()
+        });
+        let nested_cwd = resolve_task_cwd(tmp.path(), &nested).unwrap();
+        let ssh = FleetHostSpec::Ssh {
+            host: "builder.example.test".to_string(),
+            port: None,
+            user: None,
+            identity: None,
+            known_hosts: None,
+            host_key_fingerprint: None,
+            working_directory: Some(PathBuf::from("/srv/codewhale")),
+            env_allowlist: Vec::new(),
+            codewhale_binary: Some("/usr/local/bin/codewhale".to_string()),
+        };
+
+        let error = validate_task_cwd_for_host(tmp.path(), &ssh, &nested_cwd)
+            .expect_err("nested SSH task roots must fail closed");
+        assert!(error.to_string().contains("cannot be mapped safely"));
+
+        let root_cwd = resolve_task_cwd(tmp.path(), &task("root")).unwrap();
+        validate_task_cwd_for_host(tmp.path(), &ssh, &root_cwd).unwrap();
+        validate_task_cwd_for_host(tmp.path(), &FleetHostSpec::Local, &nested_cwd).unwrap();
+    }
+
+    #[test]
+    fn ssh_nested_root_failure_commits_neither_lease_nor_coordination_record() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir(tmp.path().join("nested")).unwrap();
+        let coordination =
+            crate::tools::subagent::new_shared_subagent_manager(tmp.path().to_path_buf(), 4);
+        let manager = FleetManager::open(tmp.path())
+            .unwrap()
+            .with_sub_agent_manager(coordination.clone());
+        let mut nested = task("nested");
+        nested.worker = Some(FleetTaskWorkerProfile {
+            agent_profile: None,
+            role: Some("reviewer".to_string()),
+            loadout: None,
+            model_class: None,
+            model: None,
+            tool_profile: Some("read-only".to_string()),
+            tools: Vec::new(),
+            capabilities: Vec::new(),
+        });
+        nested.workspace = Some(FleetWorkspaceRequirements {
+            root: Some(PathBuf::from("nested")),
+            ..FleetWorkspaceRequirements::default()
+        });
+        let worker = FleetWorkerSpec {
+            id: "ssh-worker".to_string(),
+            name: "SSH worker".to_string(),
+            host: FleetHostSpec::Ssh {
+                host: "builder.example.test".to_string(),
+                port: None,
+                user: None,
+                identity: None,
+                known_hosts: None,
+                host_key_fingerprint: None,
+                working_directory: Some(PathBuf::from("/srv/codewhale")),
+                env_allowlist: Vec::new(),
+                codewhale_binary: Some("/usr/local/bin/codewhale".to_string()),
+            },
+            trust_level: None,
+            labels: BTreeMap::new(),
+            capabilities: Vec::new(),
+            max_concurrent_tasks: Some(1),
+        };
+        let error = manager
+            .create_run(
+                FleetTaskSpecDocument {
+                    name: Some("nested SSH".to_string()),
+                    labels: BTreeMap::new(),
+                    security_policy: None,
+                    workers: vec![worker],
+                    tasks: vec![nested],
+                },
+                1,
+            )
+            .expect_err("nested SSH root must fail before leasing");
+        assert!(error.to_string().contains("cannot be mapped safely"));
+
+        let state = manager.rebuild_state().unwrap();
+        let task = state.tasks.values().next().expect("queued task remains");
+        assert_eq!(task.status, FleetTaskLedgerStatus::Enqueued);
+        assert_eq!(task.entry.attempts, 0);
+        assert!(task.leased_to.is_none());
+        assert!(
+            coordination
+                .try_read()
+                .unwrap()
+                .list_worker_records()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn ledger_append_failure_rolls_back_coordination_registration() {
+        let tmp = TempDir::new().unwrap();
+        let coordination =
+            crate::tools::subagent::new_shared_subagent_manager(tmp.path().to_path_buf(), 4);
+        let manager = FleetManager::open(tmp.path())
+            .unwrap()
+            .with_sub_agent_manager(coordination.clone());
+        let mut spec = task("read-only");
+        spec.worker = Some(FleetTaskWorkerProfile {
+            agent_profile: None,
+            role: Some("reviewer".to_string()),
+            loadout: None,
+            model_class: None,
+            model: None,
+            tool_profile: Some("read-only".to_string()),
+            tools: Vec::new(),
+            capabilities: Vec::new(),
+        });
+        manager.ledger.fail_next_start_append_after_callback();
+
+        let error = manager
+            .create_run(
+                FleetTaskSpecDocument {
+                    name: Some("forced rollback".to_string()),
+                    labels: BTreeMap::new(),
+                    security_policy: None,
+                    workers: Vec::new(),
+                    tasks: vec![spec],
+                },
+                1,
+            )
+            .expect_err("forced append failure");
+        assert!(error.to_string().contains("forced Fleet ledger append"));
+
+        let state = manager.rebuild_state().unwrap();
+        let task = state.tasks.values().next().expect("queued task remains");
+        assert_eq!(task.status, FleetTaskLedgerStatus::Enqueued);
+        assert_eq!(task.entry.attempts, 0);
+        assert!(task.leased_to.is_none());
+        let guard = coordination.try_read().unwrap();
+        assert!(guard.list_worker_records().is_empty());
+        assert!(guard.coordination_snapshot().write_claims.is_empty());
+    }
+
+    #[test]
+    fn invalid_worker_identity_is_rejected_before_run_journal_creation() {
+        let tmp = TempDir::new().unwrap();
+        let manager = FleetManager::open(tmp.path()).unwrap();
+        let error = manager
+            .create_run(
+                FleetTaskSpecDocument {
+                    name: Some("invalid identity".to_string()),
+                    labels: BTreeMap::new(),
+                    security_policy: None,
+                    workers: vec![resume_worker_spec("worker\r\nforged")],
+                    tasks: vec![task("task-a")],
+                },
+                1,
+            )
+            .expect_err("multiline worker identity must fail before journaling");
+        assert!(
+            error
+                .to_string()
+                .contains("worker id must be a simple ASCII token")
+        );
+
+        let state = manager.rebuild_state().unwrap();
+        assert!(state.runs.is_empty());
+        assert!(state.tasks.is_empty());
+    }
+
+    #[test]
+    fn restored_lease_without_launch_record_fails_durably_instead_of_poisoning_ticks() {
+        let tmp = TempDir::new().unwrap();
+        let coordination =
+            crate::tools::subagent::new_shared_subagent_manager(tmp.path().to_path_buf(), 4);
+        let empty_snapshot = coordination
+            .try_read()
+            .unwrap()
+            .coordination_registration_snapshot();
+        let manager = FleetManager::open(tmp.path())
+            .unwrap()
+            .with_sub_agent_manager(coordination.clone());
+        let mut spec = task("task-a");
+        spec.worker = Some(FleetTaskWorkerProfile {
+            agent_profile: None,
+            role: Some("reviewer".to_string()),
+            loadout: None,
+            model_class: None,
+            model: None,
+            tool_profile: Some("read-only".to_string()),
+            tools: Vec::new(),
+            capabilities: Vec::new(),
+        });
+        let report = manager
+            .create_run(
+                FleetTaskSpecDocument {
+                    name: Some("restored lease".to_string()),
+                    labels: BTreeMap::new(),
+                    security_policy: None,
+                    workers: Vec::new(),
+                    tasks: vec![spec],
+                },
+                1,
+            )
+            .unwrap();
+        coordination
+            .try_write()
+            .unwrap()
+            .restore_coordination_registration_snapshot(empty_snapshot)
+            .unwrap();
+
+        let mut executor = FleetExecutor::new(tmp.path());
+        manager
+            .drive_executor_tick(&report.run_id, &mut executor, "unused-codewhale", None)
+            .expect("missing restored launch state must become a durable task failure");
+        manager
+            .drive_executor_tick(&report.run_id, &mut executor, "unused-codewhale", None)
+            .expect("the next scheduler tick must not remain poisoned");
+
+        let state = manager.rebuild_state().unwrap();
+        let key = task_key(&report.run_id.0, "task-a");
+        assert_eq!(state.tasks[&key].status, FleetTaskLedgerStatus::Failed);
+        assert_eq!(state.receipts[&key].result, FleetTaskResult::Fail);
+        assert!(
+            latest_error_for_worker(&state, &report.worker_ids[0])
+                .is_some_and(|error| error.contains("no coordination-registered launch spec"))
+        );
+    }
+
+    fn read_only_launch_spec(workspace: &Path, task_id: &str, attempt: u32) -> AgentWorkerSpec {
+        let mut spec = task(task_id);
+        spec.worker = Some(FleetTaskWorkerProfile {
+            agent_profile: None,
+            role: Some("reviewer".to_string()),
+            loadout: None,
+            model_class: None,
+            model: None,
+            tool_profile: Some("read-only".to_string()),
+            tools: Vec::new(),
+            capabilities: Vec::new(),
+        });
+        bind_fleet_launch_attempt(
+            worker_runtime::fleet_task_to_worker_spec_with_profiles(
+                "worker-1",
+                "run-1",
+                &spec,
+                &default_local_worker("worker-1"),
+                "auto",
+                workspace,
+                &[],
+                None,
+            )
+            .unwrap(),
+            attempt,
+        )
+    }
+
+    #[test]
+    fn persisted_launch_identity_is_bound_to_task_and_attempt() {
+        let tmp = TempDir::new().unwrap();
+        let task_a = read_only_launch_spec(tmp.path(), "task-a", 1);
+        let task_b = read_only_launch_spec(tmp.path(), "task-b", 1);
+        let task_b_retry = read_only_launch_spec(tmp.path(), "task-b", 2);
+
+        assert_eq!(task_b.max_spawn_depth, 0);
+        assert_eq!(task_b.runtime_profile.max_spawn_depth, 0);
+        assert_eq!(
+            task_b
+                .launch_manifest
+                .as_ref()
+                .unwrap()
+                .profile
+                .max_spawn_depth,
+            0
+        );
+        validate_registered_launch_spec(&task_b, &task_b).unwrap();
+        assert!(validate_registered_launch_spec(&task_a, &task_b).is_err());
+        assert!(validate_registered_launch_spec(&task_b, &task_b_retry).is_err());
+
+        let mut projected = task_b.clone();
+        projected.objective.push_str(
+            "\n\nAccepted coordination decisions relevant to this child (bounded):\n- api v1 [decision-1] owner=planner: keep scope bounded",
+        );
+        projected.launch_manifest.as_mut().unwrap().prompt = projected.objective.clone();
+        validate_registered_launch_spec(&projected, &task_b)
+            .expect("a bounded coordination prompt projection preserves launch identity");
+
+        let mut corrupt = task_b.clone();
+        corrupt.objective.push_str("\n\narbitrary stale prompt");
+        corrupt.launch_manifest.as_mut().unwrap().prompt = corrupt.objective.clone();
+        assert!(validate_registered_launch_spec(&corrupt, &task_b).is_err());
     }
 
     #[test]

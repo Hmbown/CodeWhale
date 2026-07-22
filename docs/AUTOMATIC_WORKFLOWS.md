@@ -51,6 +51,14 @@ Elevated work (writes, shell beyond read-only, network, secrets, worktrees, high
 budget) should surface an approval card with goal, child summary, capability
 flags, and budget before launch (#4126).
 
+Worktree isolation and write ownership are separate. A write-capable `task()`
+declares `writeAuthority: "workspace_write"` or `"worktree_write"` plus at
+least one repo-relative `writeRoots`, `exactFiles`, or
+`coordinationContracts` value. `worktree: true` selects isolation but does not
+silently grant mutation authority. A prompt-only general task is read-only.
+`dependencies` and `acceptance` carry bounded child-specific prerequisites and
+observable completion checks; they are not a parent-transcript copy.
+
 ## What you see while it runs
 
 - **Workflow panel** — phases, children, status, budget

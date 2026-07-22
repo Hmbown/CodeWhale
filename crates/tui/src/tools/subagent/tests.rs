@@ -196,6 +196,53 @@ fn make_worker_spec(worker_id: &str, workspace: PathBuf) -> AgentWorkerSpec {
     }
 }
 
+fn make_write_worker_spec(worker_id: &str, workspace: PathBuf, root: &str) -> AgentWorkerSpec {
+    let mut spec = make_worker_spec(worker_id, workspace.clone());
+    spec.agent_type = SubAgentType::Implementer;
+    spec.role = Some("implementer".to_string());
+    spec.runtime_profile = WorkerRuntimeProfile::for_role(SubAgentType::Implementer);
+    spec.launch_manifest = Some(ChildLaunchManifest {
+        owner_session: "root".to_string(),
+        child_id: worker_id.to_string(),
+        profile: spec.runtime_profile.clone(),
+        prompt: spec.objective.clone(),
+        cwd: Some(workspace.display().to_string()),
+        worktree: false,
+        writable_roots: vec![root.to_string()],
+        writable_files: Vec::new(),
+        coordination_contracts: Vec::new(),
+        expected_artifact: Some("tested patch".to_string()),
+        token_budget: None,
+        resume_identity: Some(worker_id.to_string()),
+        generation: 1,
+    });
+    spec
+}
+
+#[test]
+fn active_worker_records_are_never_pruned_by_history_retention() {
+    let tmp = tempdir().expect("tempdir");
+    let mut manager = SubAgentManager::new(tmp.path().to_path_buf(), 4);
+    for index in 0..=MAX_AGENT_WORKER_RECORDS {
+        manager.register_worker(make_worker_spec(
+            &format!("active-worker-{index:03}"),
+            tmp.path().to_path_buf(),
+        ));
+    }
+
+    assert_eq!(
+        manager.list_worker_records().len(),
+        MAX_AGENT_WORKER_RECORDS + 1
+    );
+    assert!(manager.get_worker_record("active-worker-000").is_some());
+    assert!(
+        manager
+            .list_worker_records()
+            .iter()
+            .all(|record| !record.status.is_terminal())
+    );
+}
+
 #[test]
 fn headless_worker_record_tracks_lifecycle_without_tui_projection() {
     let tmp = tempdir().expect("tempdir");
@@ -623,6 +670,594 @@ fn coordination_ledger_persists_and_replays_bounded_contracts() {
     assert_eq!(inspect["write_claims"][0]["claim"]["owner"], "agent_writer");
 }
 
+#[test]
+fn invalid_decision_and_reconciliation_inputs_cannot_poison_persisted_replay() {
+    let tmp = tempdir().expect("tempdir");
+    let state_path = tmp.path().join("subagents.v1.json");
+    let mut manager =
+        SubAgentManager::new(tmp.path().to_path_buf(), 4).with_state_path(state_path.clone());
+
+    for bad_id in ["bad\ndecision".to_string(), "x".repeat(513)] {
+        let error = manager
+            .record_coordination_decision(DecisionRecord {
+                decision_id: bad_id,
+                subject: "safe-subject".into(),
+                status: DecisionStatus::Proposed,
+                owner: "agent-a".into(),
+                scope: vec!["path:src".into()],
+                constraints: vec!["bounded".into()],
+                evidence_handles: vec!["receipt:test".into()],
+                version: 1,
+                sequence: 0,
+            })
+            .expect_err("invalid decision id must fail before mutation");
+        assert!(error.contains("decision id"), "{error}");
+        assert!(manager.coordination.decisions.is_empty());
+    }
+
+    for (id, owner) in [("candidate-a", "agent-a"), ("candidate-b", "agent-b")] {
+        manager
+            .record_coordination_decision(DecisionRecord {
+                decision_id: id.into(),
+                subject: "safe-subject".into(),
+                status: DecisionStatus::Proposed,
+                owner: owner.into(),
+                scope: vec!["path:src".into()],
+                constraints: vec!["bounded".into()],
+                evidence_handles: vec![format!("receipt:{id}")],
+                version: 1,
+                sequence: 0,
+            })
+            .expect("valid candidate decision");
+    }
+    let duplicate_candidate = manager
+        .coordination
+        .reconcile(
+            "safe-subject".into(),
+            "root".into(),
+            vec!["candidate-a".into(), "candidate-b".into()],
+            "preserve both".into(),
+            vec!["receipt:fan-in".into()],
+            vec!["branch:a".into(), " branch:a ".into()],
+            0,
+            3,
+            vec!["review:independent".into()],
+            vec!["verify:locked".into()],
+            "verified".into(),
+        )
+        .expect_err("whitespace aliases must not satisfy two-candidate fan-in");
+    assert!(
+        duplicate_candidate.contains("distinct normalized candidate"),
+        "{duplicate_candidate}"
+    );
+    let duplicate_input = manager
+        .coordination
+        .reconcile(
+            "safe-subject".into(),
+            "root".into(),
+            vec!["candidate-a".into(), " candidate-a ".into()],
+            "preserve both".into(),
+            vec!["receipt:fan-in".into()],
+            vec!["branch:a".into(), "branch:b".into()],
+            0,
+            3,
+            vec!["review:independent".into()],
+            vec!["verify:locked".into()],
+            "verified".into(),
+        )
+        .expect_err("whitespace aliases must not satisfy two-decision fan-in");
+    assert!(
+        duplicate_input.contains("distinct normalized input decisions"),
+        "{duplicate_input}"
+    );
+    assert!(manager.coordination.reconciliations.is_empty());
+
+    manager.persist_state().unwrap().join().unwrap();
+    let mut replayed =
+        SubAgentManager::new(tmp.path().to_path_buf(), 4).with_state_path(state_path);
+    replayed
+        .load_state()
+        .expect("valid state survives restart after rejected poison inputs");
+    assert_eq!(replayed.coordination.decisions.len(), 2);
+    assert!(replayed.coordination.reconciliations.is_empty());
+}
+
+#[test]
+fn coordination_hot_paths_count_only_active_authoritative_owners() {
+    let tmp = tempdir().expect("tempdir");
+    let mut manager = SubAgentManager::new(tmp.path().to_path_buf(), 4);
+    manager.register_worker(make_worker_spec("agent-live", tmp.path().to_path_buf()));
+    manager.register_worker(make_worker_spec("agent-done", tmp.path().to_path_buf()));
+    manager
+        .worker_records
+        .get_mut("agent-done")
+        .expect("terminal worker")
+        .status = AgentWorkerStatus::Completed;
+    for (owner, root) in [("agent-live", "src/live"), ("agent-done", "src/history")] {
+        manager
+            .coordination
+            .register_claim(
+                WriteScopeClaim {
+                    owner: owner.into(),
+                    roots: vec![root.into()],
+                    exact_files: Vec::new(),
+                    contracts: Vec::new(),
+                },
+                false,
+                |_| false,
+            )
+            .expect("bounded non-overlapping claim");
+    }
+
+    let projection = manager.coordination_detail_projection(None, 24);
+    assert_eq!(
+        projection.metrics.hottest_paths,
+        vec![CoordinationHotPath {
+            path: "src/live".into(),
+            active_claims: 1,
+        }]
+    );
+}
+
+#[test]
+fn headless_worker_registration_enforces_live_claims_and_projects_context() {
+    let tmp = tempdir().expect("tempdir");
+    let mut manager = SubAgentManager::new(tmp.path().to_path_buf(), 8);
+    manager
+        .record_coordination_decision(DecisionRecord {
+            decision_id: "decision-src-a".into(),
+            subject: "src-a-contract".into(),
+            status: DecisionStatus::Accepted,
+            owner: "planner".into(),
+            scope: vec!["path:src/a".into()],
+            constraints: vec!["preserve the public API".into()],
+            evidence_handles: vec!["receipt:planner".into()],
+            version: 1,
+            sequence: 0,
+        })
+        .expect("accepted decision");
+
+    let worker = |id: &str, root: &str| {
+        let mut spec = make_worker_spec(id, tmp.path().to_path_buf());
+        spec.agent_type = SubAgentType::Implementer;
+        spec.role = Some("worker".into());
+        spec.runtime_profile = WorkerRuntimeProfile::for_role(SubAgentType::Implementer);
+        spec.launch_manifest = Some(ChildLaunchManifest {
+            owner_session: "fleet-run".into(),
+            child_id: id.into(),
+            profile: spec.runtime_profile.clone(),
+            prompt: spec.objective.clone(),
+            cwd: Some(tmp.path().display().to_string()),
+            worktree: false,
+            writable_roots: vec![root.into()],
+            writable_files: Vec::new(),
+            coordination_contracts: Vec::new(),
+            expected_artifact: None,
+            token_budget: None,
+            resume_identity: Some(format!("fleet-{id}")),
+            generation: 1,
+        });
+        spec
+    };
+
+    let worker_a = worker("worker-a", "src/a");
+    manager
+        .preflight_worker_coordination(&worker_a)
+        .expect("first worker preflight");
+    manager
+        .register_worker_with_coordination(worker_a)
+        .expect("first worker registration");
+    let record = manager
+        .get_worker_record("worker-a")
+        .expect("worker record");
+    assert!(record.spec.objective.contains("src-a-contract"));
+    assert!(
+        record
+            .spec
+            .launch_manifest
+            .as_ref()
+            .expect("launch manifest")
+            .prompt
+            .contains("src-a-contract")
+    );
+
+    let overlap = manager
+        .preflight_worker_coordination(&worker("worker-b", "src/a/nested"))
+        .expect_err("overlapping live Fleet writer must remain queued");
+    assert!(overlap.contains("worker-a"), "{overlap}");
+    assert_eq!(manager.coordination.contentions.len(), 1);
+    assert!(manager.get_worker_record("worker-b").is_none());
+
+    let worker_c = worker("worker-c", "src/b");
+    manager
+        .preflight_worker_coordination(&worker_c)
+        .expect("non-overlapping worker preflight");
+    manager
+        .register_worker_with_coordination(worker_c)
+        .expect("non-overlapping workers may proceed concurrently");
+    assert_eq!(manager.coordination.write_claims.len(), 2);
+}
+
+#[test]
+fn neutral_reconciliation_requires_the_nearest_common_planner() {
+    let tmp = tempdir().expect("tempdir");
+    let mut manager = SubAgentManager::new(tmp.path().to_path_buf(), 8);
+
+    let mut planner = make_worker_spec("planner", tmp.path().to_path_buf());
+    planner.agent_type = SubAgentType::Plan;
+    planner.role = Some("planner".into());
+    manager.register_worker(planner);
+    for worker_id in ["worker-a", "worker-b"] {
+        let mut worker = make_worker_spec(worker_id, tmp.path().to_path_buf());
+        worker.parent_run_id = Some("planner".into());
+        worker.agent_type = SubAgentType::Implementer;
+        worker.role = Some("worker".into());
+        manager.register_worker(worker);
+        manager
+            .record_coordination_decision(DecisionRecord {
+                decision_id: format!("decision-{worker_id}"),
+                subject: "public-api".into(),
+                status: DecisionStatus::Proposed,
+                owner: worker_id.into(),
+                scope: vec!["contract:public-api".into()],
+                constraints: vec!["preserve candidate".into()],
+                evidence_handles: vec![format!("branch:{worker_id}")],
+                version: 1,
+                sequence: 0,
+            })
+            .expect("record candidate decision");
+    }
+    for (worker_id, agent_type, role) in [
+        ("reviewer", SubAgentType::Review, "reviewer"),
+        ("verifier", SubAgentType::Verifier, "verifier"),
+    ] {
+        let mut worker = make_worker_spec(worker_id, tmp.path().to_path_buf());
+        worker.parent_run_id = Some("planner".into());
+        worker.agent_type = agent_type;
+        worker.role = Some(role.into());
+        manager.register_worker(worker);
+        manager.record_worker_event(
+            worker_id,
+            AgentWorkerStatus::Completed,
+            Some(format!("{role} evidence complete")),
+            None,
+            None,
+        );
+    }
+
+    let input_decisions = vec!["decision-worker-a".into(), "decision-worker-b".into()];
+    let error = manager
+        .reconcile_coordination(
+            "public-api".into(),
+            "worker-a".into(),
+            input_decisions.clone(),
+            "combine both candidates".into(),
+            vec!["receipt:fanin".into()],
+            vec!["branch:worker-a".into(), "branch:worker-b".into()],
+            1,
+            3,
+            vec!["agent:reviewer:review-pass".into()],
+            vec!["agent:verifier:locked-tests".into()],
+            "verified".into(),
+        )
+        .unwrap_err();
+    assert!(error.contains("'planner'"), "{error}");
+
+    let receipt = manager
+        .reconcile_coordination(
+            "public-api".into(),
+            "planner".into(),
+            input_decisions,
+            "combine both candidates".into(),
+            vec!["receipt:fanin".into()],
+            vec!["branch:worker-a".into(), "branch:worker-b".into()],
+            1,
+            3,
+            vec!["agent:reviewer:review-pass".into()],
+            vec!["agent:verifier:locked-tests".into()],
+            "verified".into(),
+        )
+        .expect("nearest common planner may reconcile");
+    assert_eq!(receipt.owner, "planner");
+    assert_eq!(receipt.retry_limit, 3);
+    assert_eq!(receipt.candidate_handles.len(), 2);
+}
+
+#[test]
+fn coordination_acceptance_preserves_scopes_candidates_and_replay() {
+    let repo = init_subagent_git_repo();
+    let state_path = repo.path().join("coordination-state.json");
+    let base_branch = {
+        let output = Command::new("git")
+            .args(["branch", "--show-current"])
+            .current_dir(repo.path())
+            .output()
+            .expect("current branch");
+        assert!(output.status.success());
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    };
+    std::fs::create_dir_all(repo.path().join("src")).expect("src directory");
+
+    git(repo.path(), &["switch", "-c", "candidate-a"]);
+    std::fs::write(repo.path().join("src/a.rs"), "pub const A: u8 = 1;\n")
+        .expect("candidate A edit");
+    git(repo.path(), &["add", "src/a.rs"]);
+    git(
+        repo.path(),
+        &[
+            "-c",
+            "user.name=codewhale Tests",
+            "-c",
+            "user.email=tests@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "candidate A",
+        ],
+    );
+    let candidate_a = git_stdout(repo.path(), &["rev-parse", "candidate-a"]);
+
+    git(repo.path(), &["switch", &base_branch]);
+    git(repo.path(), &["switch", "-c", "candidate-b"]);
+    std::fs::create_dir_all(repo.path().join("src")).expect("candidate B src directory");
+    std::fs::write(repo.path().join("src/b.rs"), "pub const B: u8 = 2;\n")
+        .expect("candidate B edit");
+    git(repo.path(), &["add", "src/b.rs"]);
+    git(
+        repo.path(),
+        &[
+            "-c",
+            "user.name=codewhale Tests",
+            "-c",
+            "user.email=tests@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "candidate B",
+        ],
+    );
+    let candidate_b = git_stdout(repo.path(), &["rev-parse", "candidate-b"]);
+
+    let mut manager =
+        SubAgentManager::new(repo.path().to_path_buf(), 8).with_state_path(state_path.clone());
+    let mut planner = make_worker_spec("parent_session", repo.path().to_path_buf());
+    planner.agent_type = SubAgentType::Plan;
+    planner.role = Some("planner".into());
+    manager.register_worker(planner);
+    let agent_a = manager.insert_test_running_agent("a", repo.path());
+    let agent_b = manager.insert_test_running_agent("b", repo.path());
+    let agent_c = manager.insert_test_running_agent("c", repo.path());
+
+    let claim = |owner: &str, path: &str| WriteScopeClaim {
+        owner: owner.into(),
+        roots: vec![],
+        exact_files: vec![path.into()],
+        contracts: vec![],
+    };
+    manager
+        .coordination
+        .register_claim(claim(&agent_a, "src/a.rs"), false, |_| false)
+        .expect("A claim");
+    manager
+        .coordination
+        .register_claim(claim(&agent_b, "src/b.rs"), false, |_| false)
+        .expect("B claim");
+    let contention = manager
+        .coordination
+        .register_claim(claim(&agent_c, "src/a.rs"), false, |owner| {
+            owner == agent_a || owner == agent_b
+        })
+        .expect_err("C cannot collide silently with A");
+    assert!(contention.contains(&agent_a), "{contention}");
+    assert_eq!(manager.coordination.contentions.len(), 1);
+
+    let scope_expansion = manager
+        .expand_write_claim(&agent_a, vec![], vec!["src/b.rs".into()], vec![])
+        .expect_err("A expansion into B must visibly replan");
+    assert!(scope_expansion.contains("contention"), "{scope_expansion}");
+
+    for (id, subject, owner, scope) in [
+        ("accepted-a", "api-a", agent_a.as_str(), "path:src/a.rs"),
+        ("accepted-b", "api-b", agent_b.as_str(), "path:src/b.rs"),
+    ] {
+        manager
+            .record_coordination_decision(DecisionRecord {
+                decision_id: id.into(),
+                subject: subject.into(),
+                status: DecisionStatus::Accepted,
+                owner: owner.into(),
+                scope: vec![scope.into()],
+                constraints: vec!["preserve public behavior".into()],
+                evidence_handles: vec![format!("commit:{id}")],
+                version: 1,
+                sequence: 0,
+            })
+            .expect("accepted scoped decision");
+    }
+    for (id, owner) in [("merge-a", agent_a.as_str()), ("merge-b", agent_b.as_str())] {
+        manager
+            .record_coordination_decision(DecisionRecord {
+                decision_id: id.into(),
+                subject: "merge-strategy".into(),
+                status: DecisionStatus::Proposed,
+                owner: owner.into(),
+                scope: vec!["contract:public-api".into()],
+                constraints: vec!["retain both edits".into()],
+                evidence_handles: vec![format!("commit:{id}")],
+                version: 1,
+                sequence: 0,
+            })
+            .expect("candidate decision");
+    }
+    let merge_a = manager
+        .coordination
+        .decisions
+        .iter()
+        .find(|decision| decision.decision_id == "merge-a")
+        .cloned()
+        .expect("merge A decision");
+    let merge_b = manager
+        .coordination
+        .decisions
+        .iter()
+        .find(|decision| decision.decision_id == "merge-b")
+        .cloned()
+        .expect("merge B decision");
+    assert_eq!(merge_a.version, 1);
+    assert_eq!(merge_b.version, 2);
+    let stale_version = manager
+        .update_coordination_decision(
+            "merge-b",
+            DecisionStatus::Accepted,
+            &agent_b,
+            merge_a.version,
+        )
+        .expect_err("a competing stale version cannot replace either candidate");
+    assert!(stale_version.contains("version changed"), "{stale_version}");
+    assert_eq!(
+        manager
+            .coordination
+            .decisions
+            .iter()
+            .filter(|decision| {
+                decision.subject == "merge-strategy" && decision.status == DecisionStatus::Proposed
+            })
+            .count(),
+        2,
+        "both conflicting candidates remain preserved"
+    );
+    let claim_a = manager
+        .coordination
+        .write_claims
+        .iter()
+        .find(|claim| claim.claim.owner == agent_a)
+        .expect("claim A")
+        .claim
+        .clone();
+    let claim_b = manager
+        .coordination
+        .write_claims
+        .iter()
+        .find(|claim| claim.claim.owner == agent_b)
+        .expect("claim B")
+        .claim
+        .clone();
+    let (projection_a, projection_a_receipt) =
+        manager
+            .coordination
+            .project_relevant_decisions(&agent_a, Some(&claim_a), &["File".into()]);
+    let (projection_b, projection_b_receipt) =
+        manager
+            .coordination
+            .project_relevant_decisions(&agent_b, Some(&claim_b), &["File".into()]);
+    assert!(projection_a.contains("api-a") && !projection_a.contains("api-b"));
+    assert!(projection_b.contains("api-b") && !projection_b.contains("api-a"));
+    for receipt in [&projection_a_receipt, &projection_b_receipt] {
+        assert!(
+            receipt.projected_bytes <= coord::COORDINATION_PROJECTION_BYTE_LIMIT,
+            "projection byte cap is durable"
+        );
+        assert!(
+            receipt.decision_ids.len() <= coord::COORDINATION_PROJECTION_DECISION_LIMIT,
+            "projection decision cap is durable"
+        );
+        assert_eq!(
+            receipt
+                .decision_ids
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            receipt.decision_ids.len(),
+            "projection ids are deduplicated"
+        );
+        assert_eq!(receipt.deduplicated, 0);
+        assert_eq!(receipt.omitted, 0);
+    }
+
+    for (worker_id, agent_type, role) in [
+        ("reviewer-agent", SubAgentType::Review, "reviewer"),
+        ("verifier-agent", SubAgentType::Verifier, "verifier"),
+    ] {
+        let mut worker = make_worker_spec(worker_id, repo.path().to_path_buf());
+        worker.parent_run_id = Some("parent_session".into());
+        worker.agent_type = agent_type;
+        worker.role = Some(role.into());
+        manager.register_worker(worker);
+        manager.record_worker_event(
+            worker_id,
+            AgentWorkerStatus::Completed,
+            Some(format!("{role} evidence complete")),
+            None,
+            None,
+        );
+    }
+
+    let receipt = manager
+        .reconcile_coordination(
+            "merge-strategy".into(),
+            "parent_session".into(),
+            vec!["merge-a".into(), "merge-b".into()],
+            "retry budget exhausted; preserve both candidates for explicit disposition".into(),
+            vec!["receipt:neutral-fan-in".into()],
+            vec![
+                format!("branch:candidate-a@{candidate_a}"),
+                format!("branch:candidate-b@{candidate_b}"),
+            ],
+            3,
+            3,
+            vec!["agent:reviewer-agent:review-pass".into()],
+            vec!["agent:verifier-agent:locked-tests".into()],
+            "blocked".into(),
+        )
+        .expect("nearest common Planner records terminal retry exhaustion");
+    assert_eq!(receipt.retry_count, receipt.retry_limit);
+    assert_eq!(receipt.candidate_handles.len(), 2);
+
+    manager.persist_state().unwrap().join().unwrap();
+    let mut replayed =
+        SubAgentManager::new(repo.path().to_path_buf(), 8).with_state_path(state_path);
+    replayed.load_state().expect("restart/replay");
+    assert_eq!(
+        replayed.coordination.schema_version,
+        coord::COORDINATION_SCHEMA_VERSION
+    );
+    assert_eq!(replayed.coordination.contentions.len(), 2);
+    assert_eq!(replayed.coordination.projections.len(), 2);
+    assert_eq!(replayed.coordination.reconciliations.len(), 1);
+    assert!(
+        replayed
+            .coordination
+            .write_claims
+            .iter()
+            .any(|claim| claim.claim.owner == agent_a)
+    );
+    let sequences = replayed
+        .coordination
+        .decisions
+        .iter()
+        .map(|decision| decision.sequence)
+        .chain(
+            replayed
+                .coordination
+                .reconciliations
+                .iter()
+                .map(|receipt| receipt.sequence),
+        )
+        .collect::<Vec<_>>();
+    assert!(sequences.windows(2).all(|window| window[0] < window[1]));
+
+    assert_eq!(
+        git_stdout(repo.path(), &["show", "candidate-a:src/a.rs"]),
+        "pub const A: u8 = 1;"
+    );
+    assert_eq!(
+        git_stdout(repo.path(), &["show", "candidate-b:src/b.rs"]),
+        "pub const B: u8 = 2;"
+    );
+}
+
 fn init_subagent_git_repo() -> tempfile::TempDir {
     let dir = tempdir().expect("tempdir");
 
@@ -684,6 +1319,20 @@ fn git(repo: &Path, args: &[&str]) {
         "git {args:?} failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn git_stdout(repo: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .output()
+        .expect("git command should run");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
 fn text_message(role: &str, text: &str) -> Message {
@@ -1294,9 +1943,61 @@ fn declared_write_authority_parses_and_worktree_write_requires_isolation() {
         "prompt": "write in a worktree",
         "write_authority": "worktree_write",
         "worktree": true,
+        "write_roots": ["."],
     }))
     .expect("worktree_write with isolation parses");
     assert_eq!(ok.write_authority, Some(SpawnWriteAuthority::WorktreeWrite));
+}
+
+#[test]
+fn prompt_only_general_children_default_read_only_instead_of_claiming_the_repo() {
+    let request = parse_spawn_request(&json!({
+        "prompt": "inspect the subsystem",
+    }))
+    .expect("prompt-only child remains ergonomic");
+    assert_eq!(request.write_authority, Some(SpawnWriteAuthority::ReadOnly));
+    assert!(request.write_roots.is_empty());
+
+    let error = parse_spawn_request(&json!({
+        "prompt": "edit without a claim",
+        "write_authority": "workspace_write",
+    }))
+    .expect_err("explicit write authority requires an explicit bounded claim")
+    .to_string();
+    assert!(error.contains("must declare"), "{error}");
+
+    for explicit in [
+        json!({"prompt": "implement", "type": "implementer"}),
+        json!({"prompt": "general but explicit", "type": "general"}),
+        json!({"prompt": "fleet role", "role": "release_lead"}),
+    ] {
+        let error = parse_spawn_request(&explicit)
+            .expect_err("explicit write-capable identity must not silently become read-only")
+            .to_string();
+        assert!(error.contains("must declare"), "{error}");
+    }
+}
+
+#[test]
+fn spawn_role_and_write_authority_cannot_contradict() {
+    let reviewer = parse_spawn_request(&json!({
+        "prompt": "review while writing",
+        "type": "review",
+        "write_authority": "workspace_write",
+        "write_roots": ["src"]
+    }))
+    .expect_err("read-only role cannot request writes")
+    .to_string();
+    assert!(reviewer.contains("read-only role"), "{reviewer}");
+
+    let implementer = parse_spawn_request(&json!({
+        "prompt": "implement without writes",
+        "type": "implementer",
+        "write_authority": "read_only"
+    }))
+    .expect_err("implementer cannot claim read-only authority")
+    .to_string();
+    assert!(implementer.contains("write-capable role"), "{implementer}");
 }
 
 #[test]
@@ -1306,12 +2007,16 @@ fn declared_write_scope_is_normalized_and_rejects_traversal() {
         "write_authority": "workspace_write",
         "write_roots": ["./crates/tui/src/", "docs"],
         "exact_files": ["Cargo.toml"],
-        "coordination_contracts": ["public-api"]
+        "coordination_contracts": ["public-api"],
+        "dependencies": ["#4619", "#4619"],
+        "acceptance": ["locked tests pass"]
     }))
     .expect("bounded scope parses");
     assert_eq!(request.write_roots, vec!["crates/tui/src", "docs"]);
     assert_eq!(request.exact_files, vec!["Cargo.toml"]);
     assert_eq!(request.coordination_contracts, vec!["public-api"]);
+    assert_eq!(request.dependencies, vec!["#4619"]);
+    assert_eq!(request.acceptance, vec!["locked tests pass"]);
 
     let err = parse_spawn_request(&json!({
         "prompt": "escape",
@@ -1323,6 +2028,170 @@ fn declared_write_scope_is_normalized_and_rejects_traversal() {
         err.contains("repo-relative") || err.contains("traversal"),
         "{err}"
     );
+}
+
+#[test]
+fn shared_child_cwd_claims_use_one_root_namespace_for_collisions_and_mutations() {
+    let repo = tempdir().expect("repo");
+    let package = repo.path().join("pkg");
+    std::fs::create_dir_all(package.join("src")).expect("package tree");
+    std::fs::write(
+        package.join("Cargo.toml"),
+        "[package]\nname='pkg'\nversion='0.1.0'\n",
+    )
+    .expect("package manifest");
+
+    let mut manager = SubAgentManager::new(repo.path().to_path_buf(), 4);
+    let root_owner = manager.insert_test_running_agent("root_writer", repo.path());
+    let child_owner = manager.insert_test_running_agent("child_writer", &package);
+    let root_claim = manager
+        .namespace_write_claim(
+            repo.path(),
+            false,
+            WriteScopeClaim {
+                owner: root_owner.clone(),
+                roots: Vec::new(),
+                exact_files: vec!["pkg/Cargo.toml".into()],
+                contracts: Vec::new(),
+            },
+        )
+        .expect("root claim namespace");
+    manager
+        .coordination
+        .register_claim(root_claim, false, |_| true)
+        .expect("root writer claim");
+    let child_alias = manager
+        .namespace_write_claim(
+            &package,
+            false,
+            WriteScopeClaim {
+                owner: child_owner.clone(),
+                roots: Vec::new(),
+                exact_files: vec!["Cargo.toml".into()],
+                contracts: Vec::new(),
+            },
+        )
+        .expect("child claim namespace");
+    assert_eq!(child_alias.exact_files, vec!["pkg/Cargo.toml"]);
+    let active = manager.active_coordination_owners();
+    let collision = manager
+        .coordination
+        .register_claim(child_alias, false, |owner| active.contains(owner))
+        .expect_err("root and child cwd aliases must collide");
+    assert!(collision.contains(&root_owner), "{collision}");
+
+    let mut scoped = SubAgentManager::new(repo.path().to_path_buf(), 4);
+    let child_owner = scoped.insert_test_running_agent("scoped_child", &package);
+    let claim = scoped
+        .namespace_write_claim(
+            &package,
+            false,
+            WriteScopeClaim {
+                owner: child_owner.clone(),
+                roots: vec!["src".into()],
+                exact_files: Vec::new(),
+                contracts: Vec::new(),
+            },
+        )
+        .expect("scoped child claim namespace");
+    assert_eq!(claim.roots, vec!["pkg/src"]);
+    scoped
+        .coordination
+        .register_claim(claim, false, |_| true)
+        .expect("scoped child claim");
+    scoped
+        .validate_write_scope(&child_owner, &["src/lib.rs".into()])
+        .expect("child-relative mutation resolves inside persisted root scope");
+    let outside = scoped
+        .validate_write_scope(&child_owner, &["../other/lib.rs".into()])
+        .expect_err("child cwd traversal must remain outside authority");
+    assert!(
+        outside.contains("repo-relative") || outside.contains("traversal"),
+        "{outside}"
+    );
+}
+
+#[test]
+fn resident_file_context_is_workspace_relative_bounded_and_exclusive() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("context.txt"), "bounded context").unwrap();
+    let context = ToolContext::new(tmp.path());
+
+    let resident = read_bounded_resident_context(&context, "context.txt")
+        .expect("regular in-workspace resident context");
+    assert_eq!(resident.display_path, "context.txt");
+    assert_eq!(resident.contents, "bounded context");
+    assert_eq!(
+        resident.lease_key,
+        tmp.path()
+            .join("context.txt")
+            .canonicalize()
+            .expect("canonical test resident")
+            .display()
+            .to_string()
+    );
+
+    let absolute = read_bounded_resident_context(
+        &context,
+        &tmp.path().join("context.txt").display().to_string(),
+    )
+    .expect_err("absolute resident paths must fail closed")
+    .to_string();
+    assert!(absolute.contains("repo-relative"), "{absolute}");
+    let traversal = read_bounded_resident_context(&context, "../context.txt")
+        .expect_err("resident traversal must fail closed")
+        .to_string();
+    assert!(
+        traversal.contains("repo-relative") || traversal.contains("parent traversal"),
+        "{traversal}"
+    );
+
+    std::fs::write(
+        tmp.path().join("oversize.txt"),
+        vec![b'x'; usize::try_from(MAX_RESIDENT_CONTEXT_BYTES + 1).unwrap()],
+    )
+    .unwrap();
+    let oversize = read_bounded_resident_context(&context, "oversize.txt")
+        .expect_err("oversize resident context must fail closed")
+        .to_string();
+    assert!(oversize.contains("bounded context limit"), "{oversize}");
+
+    let lease_key = format!("resident-test-{}", uuid::Uuid::new_v4());
+    reserve_resident_lease(&lease_key, "context.txt").expect("first resident owner reserves");
+    let duplicate = reserve_resident_lease(&lease_key, "context.txt")
+        .expect_err("a second resident owner must be rejected")
+        .to_string();
+    assert!(duplicate.contains("already leased"), "{duplicate}");
+    rollback_pending_resident_lease(&lease_key);
+    reserve_resident_lease(&lease_key, "context.txt").expect("rollback releases pending lease");
+    rollback_pending_resident_lease(&lease_key);
+
+    let other_workspace = tempdir().expect("second workspace");
+    std::fs::write(other_workspace.path().join("context.txt"), "other context").unwrap();
+    let other =
+        read_bounded_resident_context(&ToolContext::new(other_workspace.path()), "context.txt")
+            .expect("same relative path in another workspace");
+    assert_ne!(resident.lease_key, other.lease_key);
+    reserve_resident_lease(&resident.lease_key, &resident.display_path)
+        .expect("first workspace lease");
+    reserve_resident_lease(&other.lease_key, &other.display_path)
+        .expect("unrelated workspace must not falsely collide");
+    rollback_pending_resident_lease(&resident.lease_key);
+    rollback_pending_resident_lease(&other.lease_key);
+}
+
+#[cfg(unix)]
+#[test]
+fn resident_file_context_rejects_symlink_aliases() {
+    use std::os::unix::fs::symlink;
+
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("target.txt"), "secret alias").unwrap();
+    symlink("target.txt", tmp.path().join("alias.txt")).unwrap();
+    let error = read_bounded_resident_context(&ToolContext::new(tmp.path()), "alias.txt")
+        .expect_err("resident context must not traverse symlinks")
+        .to_string();
+    assert!(error.contains("must not traverse symlinks"), "{error}");
 }
 
 #[test]
@@ -2004,127 +2873,6 @@ fn test_delegate_defaults_to_fork_context() {
 }
 
 #[test]
-fn auto_fork_context_default_forks_only_same_route_read_only_engine_children() {
-    let mut runtime = stub_runtime();
-    let provider = runtime.client.api_provider();
-    let model = runtime.model.clone();
-
-    // No captured parent snapshot: never auto-fork.
-    assert!(!auto_fork_context_default(
-        &SubAgentType::Explore,
-        None,
-        false,
-        false,
-        &runtime,
-        provider,
-        &model
-    ));
-
-    runtime.fork_context = Some(SubAgentForkContext {
-        messages: Vec::new(),
-        structured_state_block: None,
-    });
-
-    // Read-only postures on the parent route in the parent workspace fork.
-    for agent_type in [
-        SubAgentType::Explore,
-        SubAgentType::Plan,
-        SubAgentType::Review,
-        SubAgentType::Verifier,
-    ] {
-        assert!(
-            auto_fork_context_default(&agent_type, None, false, false, &runtime, provider, &model),
-            "{agent_type:?} should auto-fork"
-        );
-    }
-    // Explicit read_only authority upgrades a General child.
-    assert!(auto_fork_context_default(
-        &SubAgentType::General,
-        Some(SpawnWriteAuthority::ReadOnly),
-        false,
-        false,
-        &runtime,
-        provider,
-        &model
-    ));
-    // Write-capable children stay fresh.
-    for agent_type in [SubAgentType::General, SubAgentType::Implementer] {
-        assert!(
-            !auto_fork_context_default(&agent_type, None, false, false, &runtime, provider, &model),
-            "{agent_type:?} must stay fresh"
-        );
-    }
-    // Worktree or cwd isolation stays fresh.
-    assert!(!auto_fork_context_default(
-        &SubAgentType::Explore,
-        None,
-        true,
-        false,
-        &runtime,
-        provider,
-        &model
-    ));
-    assert!(!auto_fork_context_default(
-        &SubAgentType::Explore,
-        None,
-        false,
-        true,
-        &runtime,
-        provider,
-        &model
-    ));
-    // A different model route pays a cold prefill of the parent context.
-    assert!(!auto_fork_context_default(
-        &SubAgentType::Explore,
-        None,
-        false,
-        false,
-        &runtime,
-        provider,
-        "some-other-model"
-    ));
-    // A huge parent prefix stays fresh: cached fork reads on every child
-    // step would cost more than a fresh brief.
-    let huge_text = "token ".repeat(400_000);
-    runtime.fork_context = Some(SubAgentForkContext {
-        messages: vec![crate::models::Message {
-            role: "user".to_string(),
-            content: vec![crate::models::ContentBlock::Text {
-                text: huge_text,
-                cache_control: None,
-            }],
-        }],
-        structured_state_block: None,
-    });
-    assert!(!auto_fork_context_default(
-        &SubAgentType::Explore,
-        None,
-        false,
-        false,
-        &runtime,
-        provider,
-        &model
-    ));
-    runtime.fork_context = Some(SubAgentForkContext {
-        messages: Vec::new(),
-        structured_state_block: None,
-    });
-
-    // Nested spawners stay fresh — their snapshot is the root prefix, not
-    // their own conversation.
-    runtime.parent_agent_id = Some("agent_parent".to_string());
-    assert!(!auto_fork_context_default(
-        &SubAgentType::Explore,
-        None,
-        false,
-        false,
-        &runtime,
-        provider,
-        &model
-    ));
-}
-
-#[test]
 fn spawn_request_parses_token_budget_override() {
     let parsed = parse_spawn_request(&json!({
         "prompt": "fan out safely",
@@ -2735,7 +3483,10 @@ async fn coordination_interrupt_fans_in_once_and_preserves_checkpoint() {
     runtime.event_tx = Some(event_tx);
     agent.terminal_delivery = Some(SubAgentTerminalDeliveryContext::from_runtime(&runtime));
     manager.agents.insert(agent_id.clone(), agent);
-    manager.register_worker(make_worker_spec(&agent_id, tmp.path().to_path_buf()));
+    manager.register_worker(make_worker_spec("agent_parent", tmp.path().to_path_buf()));
+    let mut child_spec = make_worker_spec(&agent_id, tmp.path().to_path_buf());
+    child_spec.parent_run_id = Some("agent_parent".to_string());
+    manager.register_worker(child_spec);
     manager.record_worker_event(
         &agent_id,
         AgentWorkerStatus::RunningTool,
@@ -4072,6 +4823,129 @@ async fn shared_write_claim_is_registered_before_parallel_launch_and_manifested(
     assert_eq!(manifest.writable_roots, vec!["src"]);
     assert_eq!(manifest.coordination_contracts, vec!["public-api"]);
     assert_eq!(manifest.expected_artifact.as_deref(), Some("tested patch"));
+}
+
+#[tokio::test]
+async fn write_capable_agent_does_not_launch_when_durable_registration_fails() {
+    let tmp = tempdir().expect("tempdir");
+    let blocked_state_path = tmp.path().join("blocked-state.json");
+    std::fs::create_dir(&blocked_state_path).expect("directory blocks atomic state rename");
+    let manager = Arc::new(RwLock::new(
+        SubAgentManager::new(tmp.path().to_path_buf(), 4)
+            .with_state_path(blocked_state_path.clone()),
+    ));
+    let mut runtime = stub_runtime();
+    runtime.manager = Arc::clone(&manager);
+    runtime.context = ToolContext::new(tmp.path());
+
+    let error = manager
+        .write()
+        .await
+        .spawn_background_with_assignment_options(
+            Arc::clone(&manager),
+            runtime,
+            SubAgentType::Implementer,
+            "must never execute".into(),
+            make_assignment(),
+            Some(vec![]),
+            SubAgentSpawnOptions {
+                name: Some("durable-writer".into()),
+                write_claim: Some(WriteScopeClaim {
+                    owner: String::new(),
+                    roots: vec!["src".into()],
+                    exact_files: Vec::new(),
+                    contracts: Vec::new(),
+                }),
+                ..Default::default()
+            },
+        )
+        .expect_err("writer must fail before spawn when its durable claim cannot commit")
+        .to_string();
+    assert!(error.contains("durably register"), "{error}");
+
+    let guard = manager.read().await;
+    assert!(guard.agents.is_empty(), "no child task was admitted");
+    assert!(
+        guard.list_worker_records().is_empty(),
+        "failed durable registration rolls back worker identity"
+    );
+    assert!(
+        guard.coordination_snapshot().write_claims.is_empty(),
+        "failed durable registration rolls back write ownership"
+    );
+    assert!(blocked_state_path.is_dir());
+}
+
+#[tokio::test]
+async fn write_scope_contention_covers_regular_agent_and_active_fleet_writer() {
+    let tmp = tempdir().expect("tempdir");
+    let mut inner = SubAgentManager::new(tmp.path().to_path_buf(), 4);
+    inner
+        .register_worker_with_coordination(make_write_worker_spec(
+            "fleet-writer",
+            tmp.path().to_path_buf(),
+            "src/shared",
+        ))
+        .expect("active Fleet writer claim");
+
+    let regular_id = inner.insert_test_running_agent("regular", tmp.path());
+    inner
+        .coordination
+        .register_claim(
+            WriteScopeClaim {
+                owner: regular_id.clone(),
+                roots: vec!["docs".into()],
+                exact_files: Vec::new(),
+                contracts: Vec::new(),
+            },
+            false,
+            |_| false,
+        )
+        .expect("regular agent initial claim");
+    let expansion = inner
+        .expand_write_claim(
+            &regular_id,
+            vec!["src/shared/api".into()],
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect_err("regular-agent scope expansion must see active Fleet ownership");
+    assert!(
+        expansion.contains("fleet-writer") && expansion.contains("contention"),
+        "{expansion}"
+    );
+
+    let manager = Arc::new(RwLock::new(inner));
+    let mut runtime = stub_runtime();
+    runtime.manager = Arc::clone(&manager);
+    runtime.context = ToolContext::new(tmp.path());
+    let launch = manager
+        .write()
+        .await
+        .spawn_background_with_assignment_options(
+            Arc::clone(&manager),
+            runtime,
+            SubAgentType::Implementer,
+            "edit Fleet-owned scope".into(),
+            make_assignment(),
+            Some(vec![]),
+            SubAgentSpawnOptions {
+                name: Some("regular-writer".into()),
+                write_claim: Some(WriteScopeClaim {
+                    owner: String::new(),
+                    roots: vec!["src/shared".into()],
+                    exact_files: Vec::new(),
+                    contracts: Vec::new(),
+                }),
+                ..Default::default()
+            },
+        )
+        .expect_err("regular-agent launch must see active Fleet ownership");
+    let launch = launch.to_string();
+    assert!(
+        launch.contains("fleet-writer") && launch.contains("contention"),
+        "{launch}"
+    );
 }
 
 #[tokio::test]
@@ -5832,6 +6706,13 @@ async fn child_write_tool_fails_closed_outside_registered_scope() {
                 |_| false,
             )
             .unwrap();
+        guard
+            .register_worker_with_coordination(make_write_worker_spec(
+                "other-writer",
+                tmp.path().to_path_buf(),
+                "conflict",
+            ))
+            .expect("active conflicting writer");
     }
     let mut runtime = stub_runtime();
     runtime.manager = Arc::clone(&manager);
@@ -5843,7 +6724,15 @@ async fn child_write_tool_fails_closed_outside_registered_scope() {
         SubAgentType::Implementer,
         "agent_scoped".into(),
         "implementer".into(),
-        Some(vec!["write_file".into(), "exec_shell".into()]),
+        Some(vec![
+            "write_file".into(),
+            "exec_shell".into(),
+            "Bash".into(),
+            "Run".into(),
+            "agents/coordinate".into(),
+            "work_update".into(),
+            "agent".into(),
+        ]),
         Arc::new(Mutex::new(TodoList::new())),
         Arc::new(Mutex::new(PlanState::default())),
     );
@@ -5855,6 +6744,81 @@ async fn child_write_tool_fails_closed_outside_registered_scope() {
         )
         .await
         .expect("in-scope write");
+    registry
+        .execute(
+            "agent_scoped",
+            "agents/coordinate",
+            json!({"action": "claim", "roots": ["docs/guides"]}),
+        )
+        .await
+        .expect("coordination-only non-overlapping scope expansion stays available");
+    let claim_collision = registry
+        .execute(
+            "agent_scoped",
+            "agents/coordinate",
+            json!({"action": "claim", "roots": ["conflict/nested"]}),
+        )
+        .await
+        .expect_err("coordination scope expansion still rejects live overlap")
+        .to_string();
+    assert!(
+        claim_collision.contains("contention") && claim_collision.contains("other-writer"),
+        "{claim_collision}"
+    );
+    registry
+        .execute(
+            "agent_scoped",
+            "work_update",
+            json!({
+                "todos": [{"content": "bounded edit", "status": "in_progress"}]
+            }),
+        )
+        .await
+        .expect("shared writers can still publish internal Work progress");
+    let child_collision = registry
+        .execute(
+            "agent_scoped",
+            "agent",
+            json!({
+                "prompt": "edit the same scope",
+                "type": "implementer",
+                "workspace_policy": "shared",
+                "write_authority": "workspace_write",
+                "write_roots": ["conflict"],
+                "expected_artifact": "tested patch"
+            }),
+        )
+        .await
+        .expect_err("agent exemption still subjects child writers to coordination")
+        .to_string();
+    assert!(
+        child_collision.contains("contention") && child_collision.contains("other-writer"),
+        "{child_collision}"
+    );
+    registry
+        .execute(
+            "agent_scoped",
+            "agent",
+            json!({
+                "prompt": "inspect without mutation",
+                "write_authority": "read_only"
+            }),
+        )
+        .await
+        .expect("shared writers may still delegate a read-only child");
+    let spawned_id = manager
+        .read()
+        .await
+        .agents
+        .keys()
+        .next()
+        .cloned()
+        .expect("read-only child registered");
+    manager
+        .write()
+        .await
+        .cancel_agent(&spawned_id)
+        .expect("stop test child");
     let err = registry
         .execute(
             "agent_scoped",
@@ -5895,6 +6859,27 @@ async fn child_write_tool_fails_closed_outside_registered_scope() {
             "{tool_name} created {target} outside its registered claim"
         );
     }
+    let run_err = registry
+        .execute(
+            "agent_scoped",
+            "Run",
+            json!({
+                "action": "verifiers",
+                "commands": [{
+                    "name": "escape",
+                    "program": "/bin/sh",
+                    "args": ["-c", "touch docs/run-escape.txt"]
+                }]
+            }),
+        )
+        .await
+        .expect_err("custom verifier commands cannot bypass shared write ownership")
+        .to_string();
+    assert!(
+        run_err.contains("cannot prove a bounded file target"),
+        "{run_err}"
+    );
+    assert!(!tmp.path().join("docs/run-escape.txt").exists());
 }
 
 #[test]
@@ -9512,7 +10497,10 @@ fn write_json_atomic_survives_concurrent_writers() {
         let ws = Arc::clone(&workspace);
         let p = Arc::clone(&path);
         handles.push(std::thread::spawn(move || {
-            let payload = serde_json::json!({ "writer": i, "blob": "x".repeat(8192) });
+            let payload = PersistedSubAgentState {
+                snapshot_sequence: i + 1,
+                ..PersistedSubAgentState::default()
+            };
             let _ = write_json_atomic(&ws, &p, &payload);
         }));
     }
@@ -9523,7 +10511,7 @@ fn write_json_atomic_survives_concurrent_writers() {
     let contents = std::fs::read_to_string(&*path).expect("read state.json");
     let parsed: serde_json::Value =
         serde_json::from_str(&contents).expect("state.json must be complete/valid JSON");
-    assert!(parsed.get("writer").is_some());
+    assert!(parsed.get("snapshot_sequence").is_some());
     // No stray temp files left behind.
     let leftover: Vec<_> = std::fs::read_dir(path.parent().unwrap())
         .expect("read subagents dir")
@@ -9531,6 +10519,98 @@ fn write_json_atomic_survives_concurrent_writers() {
         .filter(|e| e.file_name().to_string_lossy().contains(".tmp"))
         .collect();
     assert!(leftover.is_empty(), "temp files leaked: {leftover:?}");
+}
+
+#[test]
+fn coordination_process_lock_rejects_second_process() {
+    const ROLE_ENV: &str = "CODEWHALE_TEST_COORDINATION_LOCK_ROLE";
+    const WORKSPACE_ENV: &str = "CODEWHALE_TEST_COORDINATION_LOCK_WORKSPACE";
+    const TEST_NAME: &str =
+        "tools::subagent::tests::coordination_process_lock_rejects_second_process";
+
+    if let Some(role) = std::env::var_os(ROLE_ENV) {
+        let workspace = PathBuf::from(std::env::var_os(WORKSPACE_ENV).expect("workspace env"));
+        let manager = new_shared_subagent_manager_with_timeout(
+            workspace.clone(),
+            4,
+            4,
+            Duration::from_secs(30),
+            4,
+            None,
+        );
+        if role == "holder" {
+            manager
+                .try_read()
+                .unwrap()
+                .ensure_coordination_process_lock()
+                .expect("holder owns lock");
+            std::fs::write(workspace.join("holder.ready"), b"ready").unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !workspace.join("holder.release").exists() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert!(workspace.join("holder.release").exists(), "release timeout");
+        } else {
+            let error = manager
+                .try_read()
+                .unwrap()
+                .ensure_coordination_process_lock()
+                .expect_err("second process must fail closed");
+            assert!(error.contains("another Codewhale process"), "{error}");
+        }
+        return;
+    }
+
+    let dir = tempdir().expect("tempdir");
+    let workspace = dir.path().canonicalize().expect("canonical workspace");
+    let test_binary = std::env::current_exe().expect("test binary");
+    let mut holder = std::process::Command::new(&test_binary)
+        .arg("--exact")
+        .arg(TEST_NAME)
+        .arg("--nocapture")
+        .env(ROLE_ENV, "holder")
+        .env(WORKSPACE_ENV, &workspace)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn lock holder");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !workspace.join("holder.ready").exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if !workspace.join("holder.ready").exists() {
+        let _ = holder.kill();
+        let output = holder.wait_with_output().expect("holder output");
+        panic!(
+            "holder never acquired lock:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let contender = std::process::Command::new(&test_binary)
+        .arg("--exact")
+        .arg(TEST_NAME)
+        .arg("--nocapture")
+        .env(ROLE_ENV, "contender")
+        .env(WORKSPACE_ENV, &workspace)
+        .output()
+        .expect("spawn lock contender");
+    assert!(
+        contender.status.success(),
+        "contender failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&contender.stdout),
+        String::from_utf8_lossy(&contender.stderr)
+    );
+
+    std::fs::write(workspace.join("holder.release"), b"release").unwrap();
+    let output = holder.wait_with_output().expect("holder output");
+    assert!(
+        output.status.success(),
+        "holder failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 // === agent(action="wait") + peek throttling (#4097) ===

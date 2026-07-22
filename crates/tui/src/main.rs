@@ -412,6 +412,9 @@ struct ExecArgs {
     /// Extra text appended to the system prompt for this run.
     #[arg(long)]
     append_system_prompt: Option<String>,
+    /// Internal Fleet worker authority envelope. Non-secret, versioned JSON.
+    #[arg(long, value_name = "JSON", hide = true)]
+    tool_authority_json: Option<String>,
     /// Prompt to send to the model
     #[arg(
         value_name = "PROMPT",
@@ -1541,6 +1544,10 @@ async fn run_async_main(
                 }
                 let prompt = join_prompt_parts(&args.prompt);
                 let resume_session_id = resolve_exec_resume_session_id(&args, &workspace)?;
+                validate_exec_tool_authority_resume(
+                    args.tool_authority_json.as_deref(),
+                    resume_session_id.is_some(),
+                )?;
                 let resume_session = resume_session_id
                     .as_deref()
                     .map(load_exec_resume_session)
@@ -1578,6 +1585,7 @@ async fn run_async_main(
                     || args.allowed_tools.is_some()
                     || args.disallowed_tools.is_some()
                     || args.append_system_prompt.is_some()
+                    || args.tool_authority_json.is_some()
                     || args.sandbox.is_some()
                     || args.allow_sandbox_elevation
                     || env_tool_surface.is_some();
@@ -1613,6 +1621,7 @@ async fn run_async_main(
                         allowed_tools,
                         disallowed_tools,
                         args.append_system_prompt.clone(),
+                        args.tool_authority_json.clone(),
                         std::sync::Arc::clone(&plugin_registry),
                     )
                     .await
@@ -2520,11 +2529,24 @@ async fn run_fleet_command(workspace: &Path, config: &Config, args: FleetArgs) -
     }
 
     let fleet_config = config.fleet_config();
+    let provider = config.api_provider();
+    let max_subagents = config.max_subagents_for_provider(provider);
+    let coordination_manager = crate::tools::subagent::new_shared_subagent_manager_with_timeout(
+        workspace.to_path_buf(),
+        max_subagents,
+        config
+            .max_admitted_subagents_for_provider(provider)
+            .max(max_subagents),
+        Duration::from_secs(config.subagent_heartbeat_timeout_secs_for_provider(provider)),
+        config.launch_concurrency_for_provider(provider),
+        config.subagent_token_budget_for_provider(provider),
+    );
     // The configured route is the operator: fleet workers without a
     // task/profile model pin inherit the session's active model.
     let manager = FleetManager::open(workspace)?
         .with_exec_config(fleet_config.exec.clone())
         .with_fleet_config(fleet_config)
+        .with_sub_agent_manager(coordination_manager)
         .with_session_model(config.default_model())
         .with_route_config(config.clone());
     match args.command {
@@ -10175,6 +10197,18 @@ struct ExecSummary {
     error: Option<String>,
 }
 
+fn validate_exec_tool_authority_resume(
+    tool_authority_json: Option<&str>,
+    resuming: bool,
+) -> Result<()> {
+    if tool_authority_json.is_some() && resuming {
+        bail!(
+            "Fleet tool authority cannot be combined with exec --resume, --session-id, or --continue"
+        );
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_exec_agent(
     config: &Config,
@@ -10194,6 +10228,7 @@ async fn run_exec_agent(
     allowed_tools: Option<Vec<String>>,
     disallowed_tools: Option<Vec<String>>,
     append_system_prompt: Option<String>,
+    tool_authority_json: Option<String>,
     plugin_registry: std::sync::Arc<crate::plugins::PluginRegistry>,
 ) -> Result<()> {
     use crate::compaction::CompactionConfig;
@@ -10203,6 +10238,15 @@ async fn run_exec_agent(
     use crate::tools::plan::new_shared_plan_state;
     use crate::tools::todo::new_shared_todo_list;
     use crate::tui::app::AppMode;
+
+    validate_exec_tool_authority_resume(tool_authority_json.as_deref(), resume_session.is_some())?;
+    let fleet_authority_active = tool_authority_json.is_some();
+
+    if let Some(raw) = tool_authority_json.as_deref() {
+        let envelope = crate::tools::spec::ToolAuthorityEnvelope::from_json(raw)
+            .map_err(anyhow::Error::msg)?;
+        crate::tools::spec::install_process_tool_authority(envelope).map_err(anyhow::Error::msg)?;
+    }
 
     let route = resolve_cli_exec_route(config, model, prompt, force_configured_route).await?;
     let execution_config = config_for_cli_route(config, &route);
@@ -10277,16 +10321,32 @@ async fn run_exec_agent(
         crate::network_policy::NetworkPolicyDecider::with_default_audit(toml_cfg.into_runtime())
     });
 
-    let lsp_config = execution_config
-        .lsp
-        .clone()
-        .map(crate::config::LspConfigToml::into_runtime);
+    let lsp_config = (!fleet_authority_active)
+        .then(|| {
+            execution_config
+                .lsp
+                .clone()
+                .map(crate::config::LspConfigToml::into_runtime)
+        })
+        .flatten();
+    let mut engine_features = execution_config.features();
+    if fleet_authority_active {
+        engine_features
+            .disable(crate::features::Feature::ShellTool)
+            .disable(crate::features::Feature::Subagents)
+            .disable(crate::features::Feature::Mcp);
+    }
+    let engine_plugin_registry = if fleet_authority_active {
+        std::sync::Arc::new(crate::plugins::PluginRegistry::empty(&workspace))
+    } else {
+        plugin_registry
+    };
     let engine_config = EngineConfig {
         model: effective_model.clone(),
         active_route_limits,
         workspace: workspace.clone(),
-        plugin_registry: Some(plugin_registry),
-        allow_shell: auto_approve || execution_config.allow_shell(),
+        plugin_registry: Some(engine_plugin_registry),
+        allow_shell: !fleet_authority_active && (auto_approve || execution_config.allow_shell()),
         trust_mode,
         notes_path: execution_config.notes_path(),
         mcp_config_path: execution_config.mcp_config_path(),
@@ -10315,18 +10375,23 @@ async fn run_exec_agent(
             .max_admitted_subagents_for_provider(effective_provider)
             .max(max_subagents),
         launch_concurrency: execution_config.launch_concurrency_for_provider(effective_provider),
-        subagents_enabled: execution_config.subagents_enabled_for_provider(effective_provider),
-        features: execution_config.features(),
+        subagents_enabled: !fleet_authority_active
+            && execution_config.subagents_enabled_for_provider(effective_provider),
+        features: engine_features,
         auto_review_policy: execution_config.auto_review_policy(),
         compaction: compaction.clone(),
         todos: new_shared_todo_list(),
         plan_state: new_shared_plan_state(),
         goal_state: crate::tools::goal::new_shared_goal_state(),
-        max_spawn_depth: execution_config.subagent_max_spawn_depth_for_provider(effective_provider),
+        max_spawn_depth: if fleet_authority_active {
+            0
+        } else {
+            execution_config.subagent_max_spawn_depth_for_provider(effective_provider)
+        },
         subagent_token_budget: execution_config
             .subagent_token_budget_for_provider(effective_provider),
         network_policy,
-        snapshots_enabled: execution_config.snapshots_config().enabled,
+        snapshots_enabled: !fleet_authority_active && execution_config.snapshots_config().enabled,
         snapshots_max_workspace_bytes: execution_config
             .snapshots_config()
             .max_workspace_gb
@@ -10373,8 +10438,16 @@ async fn run_exec_agent(
             .search
             .as_ref()
             .and_then(|s| s.base_url.clone()),
-        tools_always_load: execution_config.tools_always_load(),
-        tools: execution_config.tools.clone(),
+        tools_always_load: if fleet_authority_active {
+            std::collections::HashSet::new()
+        } else {
+            execution_config.tools_always_load()
+        },
+        tools: if fleet_authority_active {
+            None
+        } else {
+            execution_config.tools.clone()
+        },
         verbosity: execution_config.verbosity.clone(),
         workspace_follow_symlinks: settings.workspace_follow_symlinks,
         exec_policy_engine: execution_config.exec_policy_engine.clone(),
@@ -13496,6 +13569,7 @@ mod terminal_mode_tests {
 
     #[test]
     fn exec_parses_tool_gate_and_hardening_flags() {
+        let envelope = r#"{"schema_version":1,"owner":"fleet-worker-1","authority":"read_only"}"#;
         let cli = parse_cli(&[
             "codewhale",
             "exec",
@@ -13507,6 +13581,8 @@ mod terminal_mode_tests {
             "7",
             "--append-system-prompt",
             "extra rules",
+            "--tool-authority-json",
+            envelope,
             "do the thing",
         ]);
         let Some(Commands::Exec(args)) = cli.command else {
@@ -13523,7 +13599,18 @@ mod terminal_mode_tests {
         );
         assert_eq!(args.max_turns, Some(7));
         assert_eq!(args.append_system_prompt.as_deref(), Some("extra rules"));
+        assert_eq!(args.tool_authority_json.as_deref(), Some(envelope));
         assert_eq!(args.prompt, vec!["do the thing"]);
+    }
+
+    #[test]
+    fn fleet_tool_authority_cannot_cross_an_exec_resume_boundary() {
+        assert!(validate_exec_tool_authority_resume(None, true).is_ok());
+        assert!(validate_exec_tool_authority_resume(Some("{}"), false).is_ok());
+        let error = validate_exec_tool_authority_resume(Some("{}"), true)
+            .expect_err("authority must remain bound to its fresh Fleet launch")
+            .to_string();
+        assert!(error.contains("cannot be combined with exec --resume"));
     }
 
     #[test]

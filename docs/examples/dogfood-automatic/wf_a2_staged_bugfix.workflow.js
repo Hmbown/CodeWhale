@@ -21,6 +21,14 @@ export default async function (args) {
     type: "implementer",
     // Prefer worktree isolation for write children (product default #4120).
     worktree: true,
+    writeAuthority: "worktree_write",
+    exactFiles: [target],
+    coordinationContracts: ["wf-a2-doc-fix"],
+    dependencies: ["The parent workspace must remain unchanged."],
+    acceptance: [
+      `Only ${target} changes in the isolated worktree.`,
+      "The handoff reports the exact path and diff summary.",
+    ],
     prompt: [
       `Edit only ${target}.`,
       change,

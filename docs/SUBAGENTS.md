@@ -95,6 +95,12 @@ session projection and worker record. By default the branch is
 `codex/agent-<name>-<id>` and the checkout lives beside the parent repo under
 `.codewhale-worktrees/`, so the parent checkout stays clean.
 
+Isolation is not write authority. A prompt-only general child starts read-only.
+A writer also declares `write_authority: "workspace_write"` or
+`"worktree_write"` and at least one normalized repo-relative `write_roots`,
+`exact_files`, or `coordination_contracts` value. Active overlapping shared
+claims fail before mutation; a real isolated worktree may proceed in parallel.
+
 Optional fields:
 
 - `worktree_branch`: exact branch to create.
@@ -107,9 +113,10 @@ an already-created directory inside the parent workspace.
 
 ## Delegation briefs
 
-The parent should pass a compact brief instead of a loose paragraph. The current
-model-facing `agent` tool still accepts a single `prompt` string, so put these
-fields in that string:
+The parent should pass a compact brief instead of a loose paragraph. Use the
+structured `dependencies` and `acceptance` arrays for bounded prerequisite facts
+and observable checks; keep the focused objective in `prompt`. Do not copy raw
+parent reasoning or an unbounded transcript.
 
 ```
 QUESTION:

@@ -720,6 +720,17 @@ struct TaskOptions {
     thinking: Option<String>,
     #[serde(default)]
     worktree: bool,
+    write_authority: Option<String>,
+    #[serde(default)]
+    write_roots: Vec<String>,
+    #[serde(default)]
+    exact_files: Vec<String>,
+    #[serde(default)]
+    coordination_contracts: Vec<String>,
+    #[serde(default)]
+    dependencies: Vec<String>,
+    #[serde(default)]
+    acceptance: Vec<String>,
     allowed_tools: Option<Vec<String>>,
     max_depth: Option<u32>,
     token_budget: Option<u64>,
@@ -731,7 +742,7 @@ struct TaskOptions {
 }
 
 fn parse_task_options(opts_json: &str) -> Result<TaskRequest, String> {
-    let options: TaskOptions =
+    let mut options: TaskOptions =
         serde_json::from_str(opts_json).map_err(|err| format!("task(): invalid options: {err}"))?;
     let description = options
         .prompt
@@ -750,6 +761,73 @@ fn parse_task_options(opts_json: &str) -> Result<TaskRequest, String> {
         .map(normalize_profile)
         .transpose()
         .map_err(|err| format!("task(): {err}"))?;
+    options.write_roots = normalize_task_paths("writeRoots", options.write_roots, 32)?;
+    options.exact_files = normalize_task_paths("exactFiles", options.exact_files, 32)?;
+    options.coordination_contracts =
+        normalize_task_string_list("coordinationContracts", options.coordination_contracts, 16)?;
+    options.dependencies = normalize_task_string_list("dependencies", options.dependencies, 8)?;
+    options.acceptance = normalize_task_string_list("acceptance", options.acceptance, 8)?;
+    let write_authority = options
+        .write_authority
+        .as_deref()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .map(|value| match value.as_str() {
+            "read_only" | "workspace_write" | "worktree_write" => Ok(value),
+            _ => Err(format!(
+                "task(): writeAuthority must be read_only, workspace_write, or worktree_write; got {value:?}"
+            )),
+        })
+        .transpose()?;
+    if write_authority.as_deref() == Some("worktree_write") && !options.worktree {
+        return Err("task(): writeAuthority worktree_write requires worktree: true".to_string());
+    }
+    let role_kind = role.as_deref().and_then(task_role_kind);
+    let type_kind = options.subagent_type.as_deref().and_then(task_role_kind);
+    if let (Some(role_kind), Some(type_kind)) = (role_kind, type_kind)
+        && role_kind != type_kind
+    {
+        return Err("task(): role and subagentType declare contradictory authorities".to_string());
+    }
+    let declared_kind = role_kind.or(type_kind);
+    if matches!(declared_kind, Some(TaskRoleKind::ReadOnly))
+        && write_authority
+            .as_deref()
+            .is_some_and(|authority| authority != "read_only")
+    {
+        return Err("task(): read-only roles cannot declare write-capable authority".to_string());
+    }
+    if declared_kind == Some(TaskRoleKind::Implementer)
+        && write_authority.as_deref() == Some("read_only")
+    {
+        return Err("task(): implementer cannot declare read_only authority".to_string());
+    }
+    if write_authority
+        .as_deref()
+        .is_some_and(|authority| authority != "read_only")
+        && options.write_roots.is_empty()
+        && options.exact_files.is_empty()
+        && options.coordination_contracts.is_empty()
+    {
+        return Err(
+            "task(): write-capable authority requires writeRoots, exactFiles, or coordinationContracts"
+                .to_string(),
+        );
+    }
+    let explicit_write_identity = declared_kind == Some(TaskRoleKind::Implementer)
+        || (declared_kind == Some(TaskRoleKind::General)
+            && (role.is_some() || options.subagent_type.is_some()))
+        || (profile.is_some() && declared_kind.is_none());
+    if explicit_write_identity
+        && write_authority.as_deref() != Some("read_only")
+        && options.write_roots.is_empty()
+        && options.exact_files.is_empty()
+        && options.coordination_contracts.is_empty()
+    {
+        return Err(
+            "task(): explicit write-capable identities require writeRoots, exactFiles, or coordinationContracts"
+                .to_string(),
+        );
+    }
     Ok(TaskRequest {
         description,
         subagent_type: options.subagent_type,
@@ -759,6 +837,12 @@ fn parse_task_options(opts_json: &str) -> Result<TaskRequest, String> {
         model_strength: options.model_strength,
         thinking: options.thinking,
         worktree: options.worktree,
+        write_authority,
+        write_roots: options.write_roots,
+        exact_files: options.exact_files,
+        coordination_contracts: options.coordination_contracts,
+        dependencies: options.dependencies,
+        acceptance: options.acceptance,
         allowed_tools: options.allowed_tools,
         max_depth: options.max_depth,
         token_budget: options.token_budget,
@@ -768,6 +852,94 @@ fn parse_task_options(opts_json: &str) -> Result<TaskRequest, String> {
         label: options.label,
         phase: options.phase,
     })
+}
+
+fn normalize_task_string_list(
+    field: &str,
+    values: Vec<String>,
+    limit: usize,
+) -> Result<Vec<String>, String> {
+    if values.len() > limit {
+        return Err(format!("task(): {field} accepts at most {limit} entries"));
+    }
+    let mut normalized = Vec::new();
+    for value in values {
+        let value = value.trim();
+        if value.is_empty() || value.chars().count() > 512 {
+            return Err(format!(
+                "task(): {field} entries must be 1..=512 characters"
+            ));
+        }
+        if !normalized.iter().any(|existing| existing == value) {
+            normalized.push(value.to_string());
+        }
+    }
+    Ok(normalized)
+}
+
+fn normalize_task_paths(
+    field: &str,
+    values: Vec<String>,
+    limit: usize,
+) -> Result<Vec<String>, String> {
+    if values.len() > limit {
+        return Err(format!("task(): {field} accepts at most {limit} entries"));
+    }
+    let mut normalized = Vec::new();
+    for raw in values {
+        let raw = raw.trim().replace('\\', "/");
+        let windows_drive = raw.as_bytes().get(1) == Some(&b':')
+            && raw.as_bytes().first().is_some_and(u8::is_ascii_alphabetic);
+        if raw.is_empty()
+            || raw.chars().count() > 512
+            || raw.starts_with('/')
+            || raw.starts_with("//")
+            || windows_drive
+            || raw.chars().any(|ch| matches!(ch, '\0' | '\r' | '\n'))
+        {
+            return Err(format!(
+                "task(): {field} entries must be bounded repo-relative paths"
+            ));
+        }
+        let mut segments = Vec::new();
+        for segment in raw.split('/') {
+            match segment {
+                "" | "." => {}
+                ".." => {
+                    return Err(format!(
+                        "task(): {field} paths cannot contain parent traversal"
+                    ));
+                }
+                value => segments.push(value),
+            }
+        }
+        let path = if segments.is_empty() {
+            ".".to_string()
+        } else {
+            segments.join("/")
+        };
+        if !normalized.contains(&path) {
+            normalized.push(path);
+        }
+    }
+    Ok(normalized)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskRoleKind {
+    ReadOnly,
+    General,
+    Implementer,
+}
+
+fn task_role_kind(value: &str) -> Option<TaskRoleKind> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "explore" | "explorer" | "plan" | "planner" | "review" | "reviewer" | "verify"
+        | "verifier" => Some(TaskRoleKind::ReadOnly),
+        "general" | "worker" => Some(TaskRoleKind::General),
+        "implement" | "implementer" => Some(TaskRoleKind::Implementer),
+        _ => None,
+    }
 }
 
 /// The JS prelude injected before every script: determinism bans, the

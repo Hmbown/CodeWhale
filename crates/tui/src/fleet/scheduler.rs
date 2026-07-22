@@ -386,7 +386,7 @@ impl FleetScheduler {
                     FleetWorkerEventPayload::Starting,
                     FleetWorkerEventPayload::Running,
                 ],
-                || {},
+                || Ok(()),
             )? {
                 continue;
             }

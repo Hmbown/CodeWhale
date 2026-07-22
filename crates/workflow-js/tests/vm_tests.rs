@@ -64,13 +64,19 @@ async fn task_round_trip_carries_all_options_and_normalizes_profile() {
         &driver,
         r#"
         return await task({
-            description: "explore the code",
-            subagentType: "explore",
+            description: "implement the bounded change",
+            subagentType: "implementer",
             profile: "  ALpha-1  ",
             model: "deepseek-chat",
             modelStrength: "faster",
             thinking: "low",
             worktree: true,
+            writeAuthority: "worktree_write",
+            writeRoots: ["crates/tui/src"],
+            exactFiles: ["Cargo.toml"],
+            coordinationContracts: ["public-api"],
+            dependencies: ["issue-4619"],
+            acceptance: ["locked tests pass"],
             allowedTools: ["read", "grep"],
             maxDepth: 2,
             tokenBudget: 5000,
@@ -84,18 +90,24 @@ async fn task_round_trip_carries_all_options_and_normalizes_profile() {
     )
     .await
     .unwrap();
-    assert_eq!(value, json!("done:explore the code"));
+    assert_eq!(value, json!("done:implement the bounded change"));
 
     let requests = driver.requests();
     assert_eq!(requests.len(), 1);
     let request = &requests[0];
-    assert_eq!(request.description, "explore the code");
-    assert_eq!(request.subagent_type.as_deref(), Some("explore"));
+    assert_eq!(request.description, "implement the bounded change");
+    assert_eq!(request.subagent_type.as_deref(), Some("implementer"));
     assert_eq!(request.profile.as_deref(), Some("alpha-1"));
     assert_eq!(request.model.as_deref(), Some("deepseek-chat"));
     assert_eq!(request.model_strength.as_deref(), Some("faster"));
     assert_eq!(request.thinking.as_deref(), Some("low"));
     assert!(request.worktree);
+    assert_eq!(request.write_authority.as_deref(), Some("worktree_write"));
+    assert_eq!(request.write_roots, ["crates/tui/src"]);
+    assert_eq!(request.exact_files, ["Cargo.toml"]);
+    assert_eq!(request.coordination_contracts, ["public-api"]);
+    assert_eq!(request.dependencies, ["issue-4619"]);
+    assert_eq!(request.acceptance, ["locked tests pass"]);
     assert_eq!(
         request.allowed_tools.as_deref(),
         Some(["read".to_string(), "grep".to_string()].as_slice())
@@ -107,6 +119,113 @@ async fn task_round_trip_carries_all_options_and_normalizes_profile() {
     assert_eq!(request.response_schema, None);
     assert_eq!(request.label.as_deref(), Some("L1"));
     assert_eq!(request.phase.as_deref(), Some("P1"));
+}
+
+#[tokio::test]
+async fn task_write_authority_requires_bounded_coordination_scope() {
+    let driver = Arc::new(FakeDriver::new());
+    let error = run(
+        &driver,
+        r#"
+        return await task({
+            prompt: "edit without a claim",
+            type: "implementer",
+            writeAuthority: "workspace_write",
+        });
+        "#,
+        json!(null),
+    )
+    .await
+    .expect_err("unscoped Workflow writer must fail before driver dispatch")
+    .to_string();
+    assert!(error.contains("requires writeRoots"), "{error}");
+    assert!(driver.requests().is_empty());
+}
+
+#[tokio::test]
+async fn task_coordination_lists_deduplicate_with_hard_count_bounds() {
+    let driver = Arc::new(FakeDriver::new());
+    run(
+        &driver,
+        r#"
+        return await task({
+            prompt: "bounded edit",
+            type: "implementer",
+            writeAuthority: "workspace_write",
+            exactFiles: ["src/a.rs", "src/a.rs"],
+            dependencies: ["A", "A"],
+            acceptance: ["tests pass", "tests pass"],
+        });
+        "#,
+        json!(null),
+    )
+    .await
+    .expect("bounded unique coordination values");
+    let request = driver.requests().pop().expect("request");
+    assert_eq!(request.exact_files, ["src/a.rs"]);
+    assert_eq!(request.dependencies, ["A"]);
+    assert_eq!(request.acceptance, ["tests pass"]);
+}
+
+#[tokio::test]
+async fn task_write_paths_normalize_and_reject_escape_spellings() {
+    let driver = Arc::new(FakeDriver::new());
+    run(
+        &driver,
+        r#"return await task({
+            prompt: "bounded edit",
+            type: "implementer",
+            writeRoots: ["./src//", "src"],
+            exactFiles: ["src\\lib.rs"]
+        });"#,
+        json!(null),
+    )
+    .await
+    .expect("normalized repo-relative paths");
+    let request = driver.requests().pop().expect("request");
+    assert_eq!(request.write_roots, ["src"]);
+    assert_eq!(request.exact_files, ["src/lib.rs"]);
+
+    for path in [
+        "../outside",
+        "/tmp/outside",
+        "C:\\outside",
+        "src/../../outside",
+    ] {
+        let driver = Arc::new(FakeDriver::new());
+        let source = format!(
+            "return await task({{ prompt: 'escape', type: 'implementer', writeRoots: [{}] }});",
+            serde_json::to_string(path).expect("path json")
+        );
+        let message = script_message(run(&driver, &source, json!(null)).await);
+        assert!(
+            message.contains("repo-relative") || message.contains("traversal"),
+            "{path}: {message}"
+        );
+        assert!(driver.requests().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn task_explicit_write_roles_fail_closed_without_scope_and_reject_contradictions() {
+    for source in [
+        r#"return await task({prompt: "no scope", type: "implementer"});"#,
+        r#"return await task({prompt: "no scope", type: "general"});"#,
+        r#"return await task({prompt: "no scope", profile: "release-lead"});"#,
+        r#"return await task({prompt: "wrong authority", type: "reviewer", writeAuthority: "workspace_write", writeRoots: ["src"]});"#,
+        r#"return await task({prompt: "wrong role", type: "implementer", writeAuthority: "read_only"});"#,
+        r#"return await task({prompt: "role conflict", type: "implementer", role: "reviewer", writeRoots: ["src"]});"#,
+    ] {
+        let driver = Arc::new(FakeDriver::new());
+        let message = script_message(run(&driver, source, json!(null)).await);
+        assert!(
+            message.contains("require")
+                || message.contains("cannot")
+                || message.contains("contradictory"),
+            "{message}"
+        );
+        assert!(driver.requests().is_empty());
+    }
 }
 
 #[tokio::test]

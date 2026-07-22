@@ -30,6 +30,8 @@ use super::worker_runtime::{
     fleet_task_prompt, fleet_task_prompt_with_profiles, fleet_worker_launch_reasoning_effort,
     fleet_worker_launch_route,
 };
+use crate::tools::spec::{ToolAuthorityEnvelope, ToolMutationAuthority};
+use crate::tools::subagent::AgentWorkerSpec;
 
 /// Resolve the executable used for Fleet worker subprocesses.
 ///
@@ -48,8 +50,10 @@ pub fn configured_codewhale_binary() -> String {
 /// `--auto` is always passed: a headless worker has no human to approve tool
 /// calls, so it runs with full (policy-gated) tool access. `--output-format
 /// stream-json` makes the worker emit the NDJSON event stream this module
-/// parses. Fleet recursion depth is inherited from the worker's own config
-/// (`[fleet.exec] max_spawn_depth`, default [`codewhale_config::DEFAULT_SPAWN_DEPTH`]).
+/// parses. A worker launched with the v0.9.1 machine-readable outer authority
+/// cap is a truthful leaf (`max_spawn_depth = 0`): the nested-agent surface is
+/// disabled until authority scopes can be intersected across
+/// process/workspace boundaries.
 ///
 /// Secrets are NEVER placed on the argv: provider credentials are resolved by
 /// the worker process from its own config/keyring exactly like an interactive
@@ -69,6 +73,7 @@ pub fn build_worker_exec_command(
         fleet_task_prompt(task_spec),
         exec_config,
         model,
+        None,
         None,
         None,
     )
@@ -101,7 +106,73 @@ pub fn build_worker_exec_command_with_profiles(
         Some(worker_model.as_str()),
         worker_provider.as_deref(),
         worker_reasoning_effort.as_deref(),
+        None,
     ))
+}
+
+/// Build the exact Fleet subprocess command from the coordination-registered
+/// worker spec. Unlike the compatibility helpers above, production dispatch
+/// uses the projected objective and carries a machine-readable outer authority
+/// envelope into the child process.
+pub fn build_worker_exec_command_with_launch_spec(
+    codewhale_binary: &str,
+    task_spec: &FleetTaskSpec,
+    launch_spec: &AgentWorkerSpec,
+    exec_config: &FleetExecConfig,
+    model: Option<&str>,
+    agent_profiles: &[AgentProfile],
+) -> Result<FleetWorkerCommand> {
+    let (worker_model, worker_provider) =
+        fleet_worker_launch_route(task_spec, agent_profiles, model.unwrap_or_default());
+    let worker_reasoning_effort = fleet_worker_launch_reasoning_effort(task_spec, agent_profiles);
+    let authority = authority_envelope_for_worker(launch_spec, task_spec)?;
+    Ok(build_worker_exec_command_from_prompt(
+        codewhale_binary,
+        launch_spec.objective.clone(),
+        exec_config,
+        Some(worker_model.as_str()),
+        worker_provider.as_deref(),
+        worker_reasoning_effort.as_deref(),
+        Some(&authority),
+    ))
+}
+
+pub(crate) fn authority_envelope_for_worker(
+    spec: &AgentWorkerSpec,
+    task_spec: &FleetTaskSpec,
+) -> Result<ToolAuthorityEnvelope> {
+    let (authority, writable_roots, writable_files, coordination_contracts) =
+        if spec.runtime_profile.permissions.write {
+            let manifest = spec.launch_manifest.as_ref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "write-capable Fleet worker '{}' has no launch manifest",
+                    spec.worker_id
+                )
+            })?;
+            (
+                ToolMutationAuthority::ScopedWrite,
+                super::worker_runtime::fleet_runtime_write_roots(task_spec)?,
+                manifest.writable_files.clone(),
+                manifest.coordination_contracts.clone(),
+            )
+        } else {
+            (
+                ToolMutationAuthority::ReadOnly,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            )
+        };
+    ToolAuthorityEnvelope {
+        schema_version: 1,
+        owner: spec.worker_id.clone(),
+        authority,
+        writable_roots,
+        writable_files,
+        coordination_contracts,
+    }
+    .normalized()
+    .map_err(anyhow::Error::msg)
 }
 
 fn build_worker_exec_command_from_prompt(
@@ -111,6 +182,7 @@ fn build_worker_exec_command_from_prompt(
     model: Option<&str>,
     provider: Option<&str>,
     reasoning_effort: Option<&str>,
+    authority: Option<&ToolAuthorityEnvelope>,
 ) -> FleetWorkerCommand {
     let mut args: Vec<String> = Vec::new();
 
@@ -162,6 +234,14 @@ fn build_worker_exec_command_from_prompt(
     if !exec_config.append_system_prompt.trim().is_empty() {
         args.push("--append-system-prompt".to_string());
         args.push(exec_config.append_system_prompt.clone());
+    }
+
+    if let Some(authority) = authority {
+        args.push("--tool-authority-json".to_string());
+        args.push(
+            serde_json::to_string(authority)
+                .expect("validated Fleet tool authority envelope must serialize"),
+        );
     }
 
     // The composed task prompt is the final positional argument.
@@ -667,8 +747,12 @@ mod tests {
         FleetDelegationHints, FleetLoadout, FleetProfile, FleetProfilePermissions, FleetRole,
         FleetSlot,
     };
-    use codewhale_protocol::fleet::{FleetTaskSpec, FleetTaskWorkerProfile};
+    use codewhale_protocol::fleet::{
+        FleetHostSpec, FleetTaskSpec, FleetTaskWorkerProfile, FleetWorkerSpec,
+        FleetWorkspaceRequirements,
+    };
     use std::collections::BTreeMap;
+    use tempfile::TempDir;
 
     fn task(instructions: &str) -> FleetTaskSpec {
         FleetTaskSpec {
@@ -723,6 +807,29 @@ mod tests {
             source: std::path::PathBuf::from(format!("{id}.toml")),
             origin: crate::fleet::roster::ProfileOrigin::Workspace,
         }
+    }
+
+    fn launch_spec(task: &FleetTaskSpec, workspace: &std::path::Path) -> AgentWorkerSpec {
+        let worker = FleetWorkerSpec {
+            id: "worker-1".to_string(),
+            name: "Worker 1".to_string(),
+            host: FleetHostSpec::Local,
+            trust_level: None,
+            labels: BTreeMap::new(),
+            capabilities: Vec::new(),
+            max_concurrent_tasks: Some(1),
+        };
+        crate::fleet::worker_runtime::fleet_task_to_worker_spec_with_profiles(
+            "worker-1",
+            "run-1",
+            task,
+            &worker,
+            "auto",
+            workspace,
+            &[],
+            None,
+        )
+        .unwrap()
     }
 
     fn track_test_stream(
@@ -822,6 +929,72 @@ mod tests {
 
         assert!(prompt.contains("Fleet profile: reviewer"));
         assert!(prompt.contains("Focus on defects, regressions, and missing tests."));
+    }
+
+    #[test]
+    fn launch_spec_command_uses_projected_prompt_and_read_only_authority() {
+        let tmp = TempDir::new().unwrap();
+        let task = task("inspect the release candidate");
+        let launch_spec = launch_spec(&task, tmp.path());
+
+        let cmd = build_worker_exec_command_with_launch_spec(
+            "codewhale",
+            &task,
+            &launch_spec,
+            &FleetExecConfig::default(),
+            None,
+            &[],
+        )
+        .unwrap();
+
+        assert_eq!(cmd.args.last(), Some(&launch_spec.objective));
+        let authority_index = cmd
+            .args
+            .iter()
+            .position(|arg| arg == "--tool-authority-json")
+            .expect("launch command must carry machine-readable authority");
+        let authority = ToolAuthorityEnvelope::from_json(&cmd.args[authority_index + 1]).unwrap();
+        assert_eq!(authority.owner, "worker-1");
+        assert_eq!(authority.authority, ToolMutationAuthority::ReadOnly);
+        assert!(authority.writable_roots.is_empty());
+        assert!(authority.writable_files.is_empty());
+        assert!(authority.coordination_contracts.is_empty());
+    }
+
+    #[test]
+    fn launch_spec_command_preserves_exact_write_scope() {
+        let tmp = TempDir::new().unwrap();
+        let mut task = task("edit the bounded source tree");
+        let worker = task.worker.as_mut().unwrap();
+        worker.role = Some("implementer".to_string());
+        worker.tool_profile = None;
+        task.workspace = Some(FleetWorkspaceRequirements {
+            writable_paths: vec![std::path::PathBuf::from("src")],
+            ..FleetWorkspaceRequirements::default()
+        });
+        let launch_spec = launch_spec(&task, tmp.path());
+
+        let cmd = build_worker_exec_command_with_launch_spec(
+            "codewhale",
+            &task,
+            &launch_spec,
+            &FleetExecConfig::default(),
+            None,
+            &[],
+        )
+        .unwrap();
+        let authority_index = cmd
+            .args
+            .iter()
+            .position(|arg| arg == "--tool-authority-json")
+            .expect("launch command must carry machine-readable authority");
+        let authority = ToolAuthorityEnvelope::from_json(&cmd.args[authority_index + 1]).unwrap();
+
+        assert_eq!(authority.authority, ToolMutationAuthority::ScopedWrite);
+        assert_eq!(authority.writable_roots, ["src"]);
+        assert!(authority.writable_files.is_empty());
+        assert!(authority.coordination_contracts.is_empty());
+        assert_eq!(cmd.args.last(), Some(&launch_spec.objective));
     }
 
     /// #4093 AC #4 at the LAUNCH boundary (not just the receipt): a worker whose

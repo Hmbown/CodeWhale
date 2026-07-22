@@ -9,12 +9,14 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
+use unicode_normalization::UnicodeNormalization;
 
 use crate::features::Features;
 use crate::lsp::LspManager;
@@ -145,6 +147,271 @@ pub enum SandboxPolicy {
     None,
 }
 
+/// Machine-readable mutation boundary for a headless worker process.
+///
+/// Fleet serializes this envelope onto the exact `codewhale exec` argv. The
+/// child installs it before constructing its engine, and every ToolContext in
+/// that process inherits the same outer cap. Nested agents may narrow this
+/// boundary, but cannot remove or expand it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolAuthorityEnvelope {
+    pub schema_version: u32,
+    pub owner: String,
+    pub authority: ToolMutationAuthority,
+    #[serde(default)]
+    pub writable_roots: Vec<String>,
+    #[serde(default)]
+    pub writable_files: Vec<String>,
+    #[serde(default)]
+    pub coordination_contracts: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolMutationAuthority {
+    ReadOnly,
+    ScopedWrite,
+}
+
+static PROCESS_TOOL_AUTHORITY: OnceLock<Arc<ToolAuthorityEnvelope>> = OnceLock::new();
+
+impl ToolAuthorityEnvelope {
+    pub fn normalized(mut self) -> Result<Self, String> {
+        if self.schema_version != 1 {
+            return Err(format!(
+                "unsupported tool authority schema version {}",
+                self.schema_version
+            ));
+        }
+        self.owner = bounded_authority_value("owner", &self.owner, 128)?;
+        self.writable_roots = normalize_authority_paths(&self.writable_roots, "writable_roots")?;
+        self.writable_files = normalize_authority_paths(&self.writable_files, "writable_files")?;
+        self.coordination_contracts = normalize_authority_values(
+            &self.coordination_contracts,
+            "coordination_contracts",
+            16,
+            128,
+        )?;
+        if self.authority == ToolMutationAuthority::ScopedWrite
+            && self.writable_roots.is_empty()
+            && self.writable_files.is_empty()
+            && self.coordination_contracts.is_empty()
+        {
+            return Err(
+                "scoped_write authority requires a writable root, exact file, or coordination contract"
+                    .to_string(),
+            );
+        }
+        if self.authority == ToolMutationAuthority::ReadOnly
+            && (!self.writable_roots.is_empty()
+                || !self.writable_files.is_empty()
+                || !self.coordination_contracts.is_empty())
+        {
+            return Err("read_only authority cannot carry mutation scope".to_string());
+        }
+        Ok(self)
+    }
+
+    pub fn from_json(raw: &str) -> Result<Self, String> {
+        serde_json::from_str::<Self>(raw)
+            .map_err(|error| format!("invalid tool authority envelope: {error}"))?
+            .normalized()
+    }
+
+    #[cfg(test)]
+    fn is_within(&self, outer: &Self) -> bool {
+        if self.authority == ToolMutationAuthority::ReadOnly {
+            return true;
+        }
+        if outer.authority != ToolMutationAuthority::ScopedWrite {
+            return false;
+        }
+        self.writable_roots.iter().all(|path| {
+            outer
+                .writable_roots
+                .iter()
+                .any(|root| authority_path_is_within_root(path, root))
+        }) && self.writable_files.iter().all(|path| {
+            outer.writable_files.contains(path)
+                || outer
+                    .writable_roots
+                    .iter()
+                    .any(|root| authority_path_is_within_root(path, root))
+        }) && self
+            .coordination_contracts
+            .iter()
+            .all(|contract| outer.coordination_contracts.contains(contract))
+    }
+
+    pub fn permits_mutation_path(
+        &self,
+        context: &ToolContext,
+        raw_path: &str,
+    ) -> Result<bool, ToolError> {
+        if self.authority == ToolMutationAuthority::ReadOnly {
+            return Ok(false);
+        }
+        let target = resolve_strict_authority_path(context, raw_path)?;
+        for file in &self.writable_files {
+            if resolve_strict_authority_path(context, file)? == target {
+                return Ok(true);
+            }
+        }
+        for root in &self.writable_roots {
+            if target.starts_with(resolve_strict_authority_path(context, root)?) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+}
+
+#[cfg(test)]
+fn authority_path_is_within_root(path: &str, root: &str) -> bool {
+    root == "."
+        || path == root
+        || path
+            .strip_prefix(root)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+pub fn install_process_tool_authority(envelope: ToolAuthorityEnvelope) -> Result<(), String> {
+    let envelope = Arc::new(envelope.normalized()?);
+    if let Some(existing) = PROCESS_TOOL_AUTHORITY.get() {
+        return if existing.as_ref() == envelope.as_ref() {
+            Ok(())
+        } else {
+            Err("tool authority envelope was already installed for this process".to_string())
+        };
+    }
+    PROCESS_TOOL_AUTHORITY
+        .set(envelope)
+        .map_err(|_| "tool authority envelope was already installed for this process".to_string())
+}
+
+fn process_tool_authority() -> Option<Arc<ToolAuthorityEnvelope>> {
+    PROCESS_TOOL_AUTHORITY.get().cloned()
+}
+
+fn bounded_authority_value(field: &str, value: &str, max_chars: usize) -> Result<String, String> {
+    let value = value.trim().nfc().collect::<String>();
+    if value.is_empty()
+        || value.chars().count() > max_chars
+        || value.chars().any(|ch| matches!(ch, '\0' | '\r' | '\n'))
+    {
+        return Err(format!(
+            "tool authority {field} must be one non-empty line of at most {max_chars} characters"
+        ));
+    }
+    Ok(value)
+}
+
+fn normalize_authority_paths(values: &[String], field: &str) -> Result<Vec<String>, String> {
+    if values.len() > 32 {
+        return Err(format!("tool authority {field} accepts at most 32 entries"));
+    }
+    let mut normalized = Vec::new();
+    for raw in values {
+        let raw = bounded_authority_value(field, raw, 512)?.replace('\\', "/");
+        let windows_drive = raw.as_bytes().get(1) == Some(&b':')
+            && raw.as_bytes().first().is_some_and(u8::is_ascii_alphabetic);
+        if raw.starts_with('/') || raw.starts_with("//") || windows_drive {
+            return Err(format!(
+                "tool authority {field} entries must be repo-relative"
+            ));
+        }
+        let mut segments = Vec::new();
+        for segment in raw.split('/') {
+            match segment {
+                "" | "." => {}
+                ".." => {
+                    return Err(format!(
+                        "tool authority {field} cannot contain parent traversal"
+                    ));
+                }
+                value => segments.push(value),
+            }
+        }
+        let path = if segments.is_empty() {
+            ".".to_string()
+        } else {
+            segments.join("/")
+        };
+        if !normalized.contains(&path) {
+            normalized.push(path);
+        }
+    }
+    Ok(normalized)
+}
+
+fn normalize_authority_values(
+    values: &[String],
+    field: &str,
+    max_entries: usize,
+    max_chars: usize,
+) -> Result<Vec<String>, String> {
+    if values.len() > max_entries {
+        return Err(format!(
+            "tool authority {field} accepts at most {max_entries} entries"
+        ));
+    }
+    let mut normalized = Vec::new();
+    for value in values {
+        let value = bounded_authority_value(field, value, max_chars)?;
+        if !normalized.contains(&value) {
+            normalized.push(value);
+        }
+    }
+    Ok(normalized)
+}
+
+pub(crate) fn resolve_strict_authority_path(
+    context: &ToolContext,
+    raw_path: &str,
+) -> Result<PathBuf, ToolError> {
+    let normalized = normalize_authority_paths(&[raw_path.to_string()], "mutation_path")
+        .map_err(ToolError::permission_denied)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| ToolError::permission_denied("mutation path cannot be empty"))?;
+    let workspace = context.workspace.canonicalize().map_err(|error| {
+        ToolError::execution_failed(format!(
+            "Failed to canonicalize authority workspace {}: {error}",
+            context.workspace.display()
+        ))
+    })?;
+    let mut current = workspace.clone();
+    if normalized != "." {
+        for segment in normalized.split('/') {
+            current.push(segment);
+            match fs::symlink_metadata(&current) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(ToolError::permission_denied(format!(
+                        "machine-readable authority paths must not traverse symlinks: {}",
+                        current.display()
+                    )));
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(ToolError::execution_failed(format!(
+                        "Failed to inspect authority path {}: {error}",
+                        current.display()
+                    )));
+                }
+            }
+        }
+    }
+    if !current.starts_with(&workspace) {
+        return Err(ToolError::permission_denied(format!(
+            "machine-readable authority path escapes workspace: {}",
+            current.display()
+        )));
+    }
+    Ok(current)
+}
+
 /// Context passed to tools during execution.
 #[derive(Clone)]
 pub struct ToolContext {
@@ -174,6 +441,9 @@ pub struct ToolExecutionState {
     /// jobs can be attributed in UI surfaces.
     pub owner_agent_id: Option<String>,
     pub owner_agent_name: Option<String>,
+    /// Outer process authority cap installed by Fleet/headless dispatch.
+    /// `None` for ordinary interactive/root sessions.
+    pub(crate) tool_authority: Option<Arc<ToolAuthorityEnvelope>>,
     /// Whether to allow paths outside workspace
     pub trust_mode: bool,
     /// Current sandbox policy
@@ -328,6 +598,7 @@ impl ToolContext {
                 file_read_tracker: new_shared_file_read_tracker(),
                 owner_agent_id: None,
                 owner_agent_name: None,
+                tool_authority: process_tool_authority(),
                 trust_mode,
                 sandbox_policy: SandboxPolicy::None,
                 notes_path: notes_path.into(),
@@ -410,6 +681,23 @@ impl ToolContext {
         self.owner_agent_id = (!agent_id.trim().is_empty()).then_some(agent_id);
         self.owner_agent_name = (!agent_name.trim().is_empty()).then_some(agent_name);
         self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_tool_authority(
+        mut self,
+        envelope: ToolAuthorityEnvelope,
+    ) -> Result<Self, String> {
+        let envelope = envelope.normalized()?;
+        if let Some(outer) = self.tool_authority.as_ref()
+            && !envelope.is_within(outer)
+        {
+            return Err(
+                "nested tool authority cannot expand its process authority cap".to_string(),
+            );
+        }
+        self.tool_authority = Some(Arc::new(envelope));
+        Ok(self)
     }
 
     /// Attach skill discovery settings for tools that need to resolve
@@ -1165,6 +1453,166 @@ mod tests {
             .expect_err("default mode should still reject workspace symlink escapes");
 
         assert!(matches!(err, ToolError::PathEscape { .. }));
+    }
+
+    fn scoped_authority(roots: &[&str], files: &[&str]) -> ToolAuthorityEnvelope {
+        ToolAuthorityEnvelope {
+            schema_version: 1,
+            owner: "fleet-worker-1".to_string(),
+            authority: ToolMutationAuthority::ScopedWrite,
+            writable_roots: roots.iter().map(|value| (*value).to_string()).collect(),
+            writable_files: files.iter().map(|value| (*value).to_string()).collect(),
+            coordination_contracts: Vec::new(),
+        }
+        .normalized()
+        .expect("valid test authority")
+    }
+
+    #[test]
+    fn tool_authority_allows_normal_nonexistent_children_only_inside_scope() {
+        let tmp = tempdir().expect("tempdir");
+        std::fs::create_dir(tmp.path().join("src")).expect("src");
+        let context = ToolContext::new(tmp.path().to_path_buf());
+        let authority = scoped_authority(&["src"], &[]);
+
+        assert!(
+            authority
+                .permits_mutation_path(&context, "src/new/nested.rs")
+                .expect("normal nonexistent child")
+        );
+        assert!(
+            !authority
+                .permits_mutation_path(&context, "docs/outside.md")
+                .expect("ordinary out-of-scope path")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tool_authority_rejects_exact_file_symlink_aliases() {
+        let tmp = tempdir().expect("tempdir");
+        std::fs::create_dir(tmp.path().join("src")).expect("src");
+        std::fs::create_dir(tmp.path().join("other")).expect("other");
+        std::fs::write(tmp.path().join("other/target.rs"), "outside scope\n").expect("target");
+        symlink("../other/target.rs", tmp.path().join("src/alias.rs")).expect("alias");
+        let context = ToolContext::new(tmp.path().to_path_buf());
+        let authority = scoped_authority(&[], &["src/alias.rs"]);
+
+        let error = authority
+            .permits_mutation_path(&context, "src/alias.rs")
+            .expect_err("an exact-file claim must not authorize a symlink target")
+            .to_string();
+        assert!(error.contains("must not traverse symlinks"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tool_authority_rejects_claimed_root_and_child_symlink_aliases() {
+        let tmp = tempdir().expect("tempdir");
+        std::fs::create_dir(tmp.path().join("real")).expect("real");
+        symlink("real", tmp.path().join("linked")).expect("linked root");
+        let context = ToolContext::new(tmp.path().to_path_buf());
+        let claimed_alias = scoped_authority(&["linked"], &[]);
+        let claimed_real = scoped_authority(&["real"], &[]);
+
+        for (authority, path) in [
+            (&claimed_alias, "linked/new.rs"),
+            (&claimed_real, "linked/new.rs"),
+        ] {
+            let error = authority
+                .permits_mutation_path(&context, path)
+                .expect_err("symlinked roots and mutation paths must fail closed")
+                .to_string();
+            assert!(error.contains("must not traverse symlinks"), "{error}");
+        }
+    }
+
+    #[test]
+    fn nested_tool_authority_may_only_narrow_the_outer_cap() {
+        let tmp = tempdir().expect("tempdir");
+        let outer = scoped_authority(&["src"], &["Cargo.toml"]);
+        let narrower = scoped_authority(&["src/parser"], &[]);
+        let expansion = scoped_authority(&["docs"], &[]);
+        ToolContext::new(tmp.path().to_path_buf())
+            .with_tool_authority(outer.clone())
+            .unwrap()
+            .with_tool_authority(narrower)
+            .expect("nested scope may narrow");
+        let error = ToolContext::new(tmp.path().to_path_buf())
+            .with_tool_authority(outer.clone())
+            .unwrap()
+            .with_tool_authority(expansion)
+            .err()
+            .expect("nested scope expansion must fail closed");
+        assert!(error.contains("cannot expand"), "{error}");
+
+        let read_only = ToolAuthorityEnvelope {
+            schema_version: 1,
+            owner: "read-only-child".to_string(),
+            authority: ToolMutationAuthority::ReadOnly,
+            writable_roots: Vec::new(),
+            writable_files: Vec::new(),
+            coordination_contracts: Vec::new(),
+        };
+        ToolContext::new(tmp.path().to_path_buf())
+            .with_tool_authority(outer)
+            .unwrap()
+            .with_tool_authority(read_only)
+            .expect("read-only always narrows a write cap");
+    }
+
+    #[test]
+    fn process_tool_authority_inherits_into_all_context_constructors() {
+        const CHILD_ENV: &str = "CODEWHALE_TEST_PROCESS_TOOL_AUTHORITY_CHILD";
+        if std::env::var_os(CHILD_ENV).is_some() {
+            let tmp = tempdir().expect("tempdir");
+            install_process_tool_authority(ToolAuthorityEnvelope {
+                schema_version: 1,
+                owner: "fleet-worker-child-process".to_string(),
+                authority: ToolMutationAuthority::ReadOnly,
+                writable_roots: Vec::new(),
+                writable_files: Vec::new(),
+                coordination_contracts: Vec::new(),
+            })
+            .expect("install process authority once in isolated child");
+            let notes = tmp.path().join("notes.md");
+            let mcp = tmp.path().join("mcp.json");
+            let contexts = [
+                ToolContext::new(tmp.path().to_path_buf()),
+                ToolContext::with_options(
+                    tmp.path().to_path_buf(),
+                    false,
+                    notes.clone(),
+                    mcp.clone(),
+                ),
+                ToolContext::with_auto_approve(tmp.path().to_path_buf(), false, notes, mcp, true),
+            ];
+            for context in contexts {
+                let authority = context
+                    .tool_authority
+                    .as_ref()
+                    .expect("every constructor inherits process authority");
+                assert_eq!(authority.owner, "fleet-worker-child-process");
+                assert_eq!(authority.authority, ToolMutationAuthority::ReadOnly);
+            }
+            return;
+        }
+
+        let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .arg("--exact")
+            .arg(
+                "tools::spec::tests::process_tool_authority_inherits_into_all_context_constructors",
+            )
+            .arg("--nocapture")
+            .env(CHILD_ENV, "1")
+            .output()
+            .expect("spawn isolated authority test child");
+        assert!(
+            output.status.success(),
+            "child failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]

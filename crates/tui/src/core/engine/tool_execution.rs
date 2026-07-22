@@ -403,6 +403,30 @@ impl Engine {
         // cancelled interactive tool).
         let _terminal = InteractiveTerminalGuard::engage(tx_event, interactive).await;
 
+        let tool_authority = context_override
+            .as_ref()
+            .and_then(|context| context.tool_authority.as_ref())
+            .or_else(|| registry.and_then(|registry| registry.context().tool_authority.as_ref()));
+        if let Some(authority) = tool_authority {
+            if McpPool::is_mcp_tool(&tool_name)
+                && !super::dispatch::mcp_tool_is_read_only(&tool_name)
+            {
+                return Err(ToolError::permission_denied(format!(
+                    "worker '{}' cannot run mutating MCP tool {tool_name}: it has no authorized file target",
+                    authority.owner
+                )));
+            }
+            if matches!(
+                tool_name.as_str(),
+                CODE_EXECUTION_TOOL_NAME | JS_EXECUTION_TOOL_NAME
+            ) {
+                return Err(ToolError::permission_denied(format!(
+                    "worker '{}' cannot run {tool_name}: arbitrary code execution is outside its machine-readable authority envelope",
+                    authority.owner
+                )));
+            }
+        }
+
         let outcome = if McpPool::is_mcp_tool(&tool_name) {
             if let Some(pool) = mcp_pool {
                 Engine::execute_mcp_tool_with_pool(pool, &tool_name, tool_input).await
