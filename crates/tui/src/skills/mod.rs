@@ -1090,6 +1090,18 @@ fn sanitize_prompt_path_text(text: &str, workspace: &Path) -> String {
     {
         out = out.replace(home_str, "~");
     }
+    // Environment variables are process-global, and concurrent embedders or
+    // tests may temporarily redirect HOME after discovery recorded a warning.
+    // Scrub conventional home roots by shape as a final privacy boundary.
+    for marker in ["/Users/", "/home/"] {
+        while let Some(start) = out.find(marker) {
+            let user_start = start + marker.len();
+            let user_len = out[user_start..]
+                .find(|ch: char| ch == '/' || ch.is_whitespace())
+                .unwrap_or(out.len() - user_start);
+            out.replace_range(start..user_start + user_len, "~");
+        }
+    }
     out
 }
 
@@ -1221,6 +1233,17 @@ mod tests {
         let skill_dir = tmpdir.path().join("skills").join(skill_name);
         std::fs::create_dir_all(&skill_dir).unwrap();
         std::fs::write(skill_dir.join("SKILL.md"), skill_content).unwrap();
+    }
+
+    #[test]
+    fn prompt_warning_sanitizer_scrubs_stale_conventional_home_roots() {
+        let workspace = std::path::Path::new("/tmp/workspace");
+        let warning = "Skill at /Users/private-name/.agents/skills/a/SKILL.md is shadowed by /home/other/.skills/a/SKILL.md";
+        let sanitized = super::sanitize_prompt_path_text(warning, workspace);
+        assert_eq!(
+            sanitized,
+            "Skill at ~/.agents/skills/a/SKILL.md is shadowed by ~/.skills/a/SKILL.md"
+        );
     }
 
     #[test]
