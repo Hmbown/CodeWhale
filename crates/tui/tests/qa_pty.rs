@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 
 use qa_harness::harness::{Harness, make_sealed_workspace};
 use qa_harness::keys;
+use sha2::{Digest, Sha256};
 use unicode_width::UnicodeWidthStr;
 
 const BOOT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -1956,8 +1957,9 @@ fn pty_text_sse(content: &str) -> String {
 
 /// Three-turn loopback fixture for the real screen acceptance path:
 /// `work_update` establishes canonical To-do/Work state, then an actual Bash
-/// call waits on a test-owned workspace sentinel, then a long final answer
-/// makes transcript retention and scrolling observable.
+/// call waits on a test-owned workspace sentinel before emitting enough exact
+/// output to exercise adaptive evidence, then a long final answer makes
+/// transcript retention and scrolling observable.
 fn spawn_tool_lifecycle_screen_fixture(
     release_signal: &str,
     final_answer: String,
@@ -1966,7 +1968,7 @@ fn spawn_tool_lifecycle_screen_fixture(
     listener.set_nonblocking(true)?;
     let address = listener.local_addr()?;
     let shell_command = format!(
-        "printf 'PTY-TOOL-START\\n'; while [ ! -f {release_signal} ]; do sleep 0.05; done; printf 'PTY-TOOL-END\\n'"
+        "printf 'PTY-TOOL-START\\n'; while [ ! -f {release_signal} ]; do sleep 0.05; done; i=0; while [ \"$i\" -lt 2800 ]; do if [ \"$i\" -eq 120 ]; then printf 'PTY-EVIDENCE-DEEP-SENTINEL\\n'; fi; printf 'PTY-EVIDENCE-%04d-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n' \"$i\"; i=$((i + 1)); done; printf 'PTY-TOOL-END\\n'"
     );
     let replies = [
         pty_tool_call_sse(
@@ -2030,11 +2032,31 @@ fn spawn_tool_lifecycle_screen_fixture(
                                 && request_contract.contains("\"role\":\"tool\""),
                             "second request omitted the work_update result"
                         ),
-                        2 => anyhow::ensure!(
-                            request_contract.contains("call_bash_pty")
-                                && request_contract.contains("PTY-TOOL-END"),
-                            "final request omitted the completed Bash result"
-                        ),
+                        2 => {
+                            let bash_result = request_json
+                                .get("messages")
+                                .and_then(serde_json::Value::as_array)
+                                .and_then(|messages| {
+                                    messages.iter().find(|message| {
+                                        message.get("role").and_then(serde_json::Value::as_str)
+                                            == Some("tool")
+                                            && message
+                                                .get("tool_call_id")
+                                                .and_then(serde_json::Value::as_str)
+                                                == Some("call_bash_pty")
+                                    })
+                                })
+                                .and_then(|message| message.get("content"))
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or_default();
+                            anyhow::ensure!(
+                                bash_result.contains("Exact evidence retained")
+                                    && bash_result.contains("art_call_bash_pty")
+                                    && !bash_result.contains("PTY-EVIDENCE-DEEP-SENTINEL")
+                                    && !bash_result.contains("/artifacts/"),
+                                "final request omitted the bounded session-owned Bash receipt"
+                            )
+                        }
                         _ => unreachable!("bounded lifecycle fixture"),
                     }
                     let body = replies[chat_index].clone();
@@ -2438,7 +2460,7 @@ fn real_tool_lifecycle_crosses_work_status_resize_and_scroll_in_a_unix_pty() -> 
         h.frame().debug_dump()
     );
 
-    for (cols, rows) in [(80_u16, 24_u16), (100, 30), (140, 40)] {
+    for (cols, rows) in [(80_u16, 24_u16), (100, 32), (140, 40)] {
         resize_and_wait_for_composition(
             &mut h,
             rows,
@@ -2512,7 +2534,7 @@ fn real_tool_lifecycle_crosses_work_status_resize_and_scroll_in_a_unix_pty() -> 
     );
 
     let mut live_colors = None;
-    for (cols, rows) in [(80_u16, 24_u16), (100, 30), (140, 40)] {
+    for (cols, rows) in [(80_u16, 24_u16), (100, 32), (140, 40)] {
         resize_and_wait_for_composition(
             &mut h,
             rows,
@@ -2588,7 +2610,7 @@ fn real_tool_lifecycle_crosses_work_status_resize_and_scroll_in_a_unix_pty() -> 
         "settled transcript head is not reviewable at 140x40:\n{}",
         h.frame().debug_dump()
     );
-    for (cols, rows) in [(100_u16, 30_u16), (80, 24)] {
+    for (cols, rows) in [(100_u16, 32_u16), (80, 24)] {
         resize_and_wait_for_composition(
             &mut h,
             rows,
@@ -2614,13 +2636,70 @@ fn real_tool_lifecycle_crosses_work_status_resize_and_scroll_in_a_unix_pty() -> 
         "settled Bash card reverted to live state:\n{}",
         h.frame().debug_dump()
     );
+
+    // The path-free evidence receipt is a real transcript row at every release
+    // geometry. Select that row with terminal mouse bytes, then exercise the
+    // shipped Alt/Option+V detail shortcut; screenshots remain genuine PTY
+    // frames and never include a fabricated product surface.
+    for (cols, rows) in [(80_u16, 24_u16), (100, 32), (140, 40)] {
+        resize_and_wait_for_composition(
+            &mut h,
+            rows,
+            cols,
+            |frame| frame.rows() == rows && frame.cols() == cols,
+            KEY_TIMEOUT,
+        )?;
+        let receipt_visible = h.frame().contains("Exact evidence retained")
+            || scroll_until_with_motion(&mut h, ScrollDir::Up, "Exact evidence retained")
+            || scroll_until_with_motion(&mut h, ScrollDir::Down, "Exact evidence retained");
+        assert!(
+            receipt_visible,
+            "evidence receipt is not reviewable at {cols}x{rows}:\n{}",
+            h.frame().debug_dump()
+        );
+        let (row, col) = h
+            .frame()
+            .find_text("Exact evidence retained")
+            .expect("visible selectable evidence receipt");
+        h.send(keys::mouse::click(row, col))?;
+        h.send(keys::key::alt('v'))?;
+        h.wait_for(
+            |frame| {
+                frame.contains("Raw detail — Bash")
+                    && frame.contains("Raw detail for the selected item")
+            },
+            KEY_TIMEOUT,
+        )?;
+        let frame = h.frame();
+        assert_real_pty_frame_geometry(frame, cols, rows);
+        assert!(!frame.contains("/artifacts/"));
+        assert!(!frame.contains(".codewhale/sessions"));
+        assert!(!frame.contains(ws.home().to_string_lossy().as_ref()));
+        write_real_pty_evidence(
+            &format!("tool-lifecycle-evidence-detail-{cols}x{rows}"),
+            &format!(
+                "size={cols}x{rows}\nreal_pty=true\nreceipt=selected\nshortcut=Alt+V\npath_leak=false"
+            ),
+            frame,
+        )?;
+        h.send(keys::key::ch('q'))?;
+        h.wait_for(|frame| !frame.contains("Raw detail — Bash"), KEY_TIMEOUT)?;
+    }
+
+    resize_and_wait_for_composition(
+        &mut h,
+        24,
+        80,
+        |frame| frame.rows() == 24 && frame.cols() == 80,
+        KEY_TIMEOUT,
+    )?;
     assert!(
         scroll_until_with_motion(&mut h, ScrollDir::Down, "PTY-LIFECYCLE-TAIL"),
         "follow-tail is not restorable at 80x24:\n{}",
         h.frame().debug_dump()
     );
 
-    for (cols, rows) in [(100_u16, 30_u16), (140, 40)] {
+    for (cols, rows) in [(100_u16, 32_u16), (140, 40)] {
         resize_and_wait_for_composition(
             &mut h,
             rows,
@@ -2638,6 +2717,32 @@ fn real_tool_lifecycle_crosses_work_status_resize_and_scroll_in_a_unix_pty() -> 
         assert_real_pty_frame_geometry(frame, cols, rows);
         assert!(frame.contains("Work ·"), "Work missing at {cols}x{rows}");
     }
+
+    let artifact_dir = std::fs::read_dir(ws.home().join(".codewhale/sessions"))?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path().join("artifacts"))
+        .find(|path| path.join("art_call_bash_pty.txt").is_file())
+        .ok_or_else(|| anyhow::anyhow!("real PTY Bash evidence artifact was not retained"))?;
+    let exact = std::fs::read(artifact_dir.join("art_call_bash_pty.txt"))?;
+    assert!(
+        String::from_utf8_lossy(&exact).contains("PTY-EVIDENCE-DEEP-SENTINEL"),
+        "real PTY artifact lost its deep sentinel"
+    );
+    let metadata: serde_json::Value = serde_json::from_slice(&std::fs::read(
+        artifact_dir.join("art_call_bash_pty.evidence.json"),
+    )?)?;
+    assert_eq!(metadata["handle"], "art_call_bash_pty");
+    assert_eq!(metadata["call_id"], "call_bash_pty");
+    assert_eq!(metadata["tool_name"], "Bash");
+    assert_eq!(metadata["size_bytes"], exact.len() as u64);
+    let digest = Sha256::digest(&exact)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    assert_eq!(
+        metadata["digest"], digest,
+        "real PTY metadata digest must bind the exact bytes"
+    );
 
     let _ = h.shutdown();
     server

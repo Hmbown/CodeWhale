@@ -723,6 +723,15 @@ impl ExecCell {
         // to the single header line in live mode. The bottom shell strip owns
         // live/background detail, failures stay fully verbose so errors remain
         // visible, and Transcript mode keeps everything for the pager/clipboard.
+        if mode == RenderMode::Live
+            && self
+                .output
+                .as_deref()
+                .is_some_and(is_exact_evidence_receipt)
+        {
+            lines.push(render_spillover_annotation(std::path::Path::new(""), width));
+            return wrap_card_rail(lines);
+        }
         if mode == RenderMode::Live && self.status == ToolStatus::Success {
             if let Some(duration_ms) = self.duration_ms
                 && duration_ms >= 1000
@@ -1202,6 +1211,10 @@ impl McpToolCell {
         }
 
         if let Some(content) = self.content.as_ref() {
+            if mode == RenderMode::Live && is_exact_evidence_receipt(content) {
+                lines.push(render_spillover_annotation(std::path::Path::new(""), width));
+                return lines;
+            }
             lines.extend(render_tool_output_mode(
                 content,
                 width,
@@ -1410,19 +1423,23 @@ impl GenericToolCell {
             );
             let should_collapse = self.status == ToolStatus::Success
                 || (self.status != ToolStatus::Failed && !is_read_family);
-            if should_collapse {
+            if should_collapse || self.spillover_path.is_some() {
                 let header_summary = crate::tui::widgets::tool_card::tool_header_summary_for_name(
                     &self.name,
                     self.input_summary.as_deref(),
                 );
-                return wrap_card_rail(vec![render_tool_header_with_family_and_summary(
+                let mut collapsed = vec![render_tool_header_with_family_and_summary(
                     family,
                     header_summary.as_deref(),
                     tool_status_label(self.status),
                     self.status,
                     None,
                     low_motion,
-                )]);
+                )];
+                if let Some(path) = self.spillover_path.as_ref() {
+                    collapsed.push(render_spillover_annotation(path, width));
+                }
+                return wrap_card_rail(collapsed);
             }
         }
 
@@ -1709,6 +1726,10 @@ fn render_spillover_annotation(_path: &std::path::Path, width: u16) -> Line<'sta
         truncate_text(receipt, usize::from(width).max(8)),
         Style::default().fg(palette::TEXT_MUTED).italic(),
     ))
+}
+
+fn is_exact_evidence_receipt(content: &str) -> bool {
+    content.trim_start().starts_with("[Exact evidence retained")
 }
 
 fn render_command_mode(command: &str, width: u16, mode: RenderMode) -> Vec<Line<'static>> {

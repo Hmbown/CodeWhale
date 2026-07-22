@@ -1147,15 +1147,9 @@ const TOOL_RESULT_SENT_CHAR_BUDGET: usize = 12_000;
 const TOOL_RESULT_HEAD_CHARS: usize = 4_000;
 const TOOL_RESULT_TAIL_CHARS: usize = 4_000;
 /// Tool results shorter than this stay inline even when repeated. The
-/// extra prompt bytes are cheaper than forcing the model through an
-/// unnecessary retrieval hop for tiny command outputs.
+/// extra prompt bytes are cheaper than adding an earlier-message reference
+/// for tiny command outputs.
 const TOOL_RESULT_DEDUP_MIN_CHARS: usize = 1_024;
-/// Tool results shorter than this are also exempt from disk persistence —
-/// no SHA file is written. The wire-dedup path won't fire for them
-/// anyway (see `TOOL_RESULT_DEDUP_MIN_CHARS`), so there's no retrieval
-/// burden to satisfy. Keeps `~/.deepseek/tool_outputs/` from filling
-/// up with tiny `gh auth status` and `cat package.json` files.
-const TOOL_RESULT_SHA_PERSIST_MIN_CHARS: usize = 1_024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PromptInspection {
@@ -1556,34 +1550,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
     crate::hashing::sha256_hex(bytes)
 }
 
-/// Persist a SHA-addressed copy of `content` to
-/// `~/.deepseek/tool_outputs/sha_<sha>.txt` so the model can retrieve
-/// the original bytes after the wire-dedup compactor has replaced
-/// later occurrences with a `<TOOL_RESULT_REF sha="..." />` block.
-///
-/// Returns `true` when the persist succeeded (or the content is
-/// below `TOOL_RESULT_SHA_PERSIST_MIN_CHARS` — there's no retrieval
-/// need to satisfy). Returns `false` when the write failed and the
-/// caller MUST skip dedup, because emitting a SHA ref the model
-/// can't retrieve is worse than inlining the content twice. The
-/// no-home-dir edge case (InvalidInput) is treated as a real
-/// failure: we can't promise retrieval works without a writable
-/// store.
-fn persist_tool_result_for_sha(sha: &str, content: &str) -> bool {
-    if content.chars().count() < TOOL_RESULT_SHA_PERSIST_MIN_CHARS {
-        return true;
-    }
-    match crate::tools::truncate::write_sha_spillover(sha, content) {
-        Ok(_) => true,
-        Err(err) => {
-            logging::warn(format!(
-                "tool-result SHA spillover write failed for sha={sha}: {err} — dedup skipped"
-            ));
-            false
-        }
-    }
-}
-
 #[derive(Clone)]
 struct PendingToolCallInfo {
     tool_name: String,
@@ -1671,8 +1637,10 @@ fn turn_meta_budget_json(turn_meta: &TurnMetaBudget) -> Value {
 /// their full confirmation inline: collapsing the later one to a
 /// `<TOOL_RESULT_REF sha="..." />` makes the model lose the write-success
 /// context and behave as if the file is missing (issue #1695). Read-style
-/// tools (`read_file`, `grep_files`, `exec_shell`, …) are unaffected and
-/// still dedup normally.
+/// tools (`read_file`, `grep_files`, `exec_shell`, …) may deduplicate medium
+/// outputs by pointing at an earlier full message in the same request. They
+/// never advertise a process-wide SHA as retrievable: that store cannot prove
+/// session ownership.
 fn is_mutation_tool(tool_name: &str) -> bool {
     matches!(tool_name, "write_file" | "edit_file" | "apply_patch")
 }
@@ -1687,43 +1655,17 @@ fn compact_tool_result_for_wire(
     let original_chars = content.chars().count();
     let sha = sha256_hex(content.as_bytes());
 
-    // Two independent size-and-kind predicates, deliberately decoupled:
-    //
-    // * `persist_eligible` — size only. Any large result (including a
-    //   mutation tool's big diff) is written to the SHA-addressed store
-    //   so that, if it gets truncated below, the elided middle stays
-    //   retrievable via `retrieve_tool_result`. Mutation tools must NOT
-    //   be excluded here: a >12k-char `write_file` diff that we truncate
-    //   without persisting would leave the model unable to recover it.
-    // * `dedup_eligible` — size AND non-mutation. Only this predicate
-    //   gates collapsing a later identical result to a
-    //   `<TOOL_RESULT_REF>`. Mutation-tool results are write
-    //   *confirmations*, never dedup-eligible (#1695): two identical
-    //   large `write_file` calls must each keep their full confirmation
-    //   inline.
-    //
-    // Below the threshold, repeating the content is safer than asking
-    // the model to chase a reference, and there's no retrieval burden to
-    // satisfy, so both predicates are false.
-    let persist_eligible = original_chars >= TOOL_RESULT_DEDUP_MIN_CHARS;
-    let dedup_eligible = persist_eligible && !is_mutation_tool(tool_name);
+    // Only medium, non-mutation results can point back to a full earlier
+    // message in this one request. Oversized results are already excerpts, so
+    // a back-reference would falsely imply the exact bytes remain available.
+    let dedup_eligible = original_chars >= TOOL_RESULT_DEDUP_MIN_CHARS
+        && original_chars <= TOOL_RESULT_SENT_CHAR_BUDGET
+        && !is_mutation_tool(tool_name);
 
     if dedup_eligible && let Some(previous) = seen_tool_results.get(&sha) {
-        // Re-check persistence before emitting a ref. If the file is
-        // already present this is a cheap no-op; if the write now fails,
-        // inline the content rather than producing an orphan reference.
-        if !persist_tool_result_for_sha(&sha, content) {
-            return WireToolResult {
-                content: content.to_string(),
-                original_chars,
-                sent_chars: original_chars,
-                truncated: false,
-                deduplicated: false,
-            };
-        }
         let content = format!(
             "<TOOL_RESULT_REF sha=\"{sha}\" original_message=\"{label}\" chars=\"{chars}\">\n\
-             retrieve: retrieve_tool_result ref=sha:{sha}\n\
+             source: full content appears in {label} earlier in this request\n\
              </TOOL_RESULT_REF>",
             label = previous.message_label,
             chars = previous.original_chars,
@@ -1737,25 +1679,14 @@ fn compact_tool_result_for_wire(
         };
     }
 
-    if persist_eligible {
-        // Persist any large result so a later truncation below stays
-        // retrievable by SHA — this includes mutation tools, whose big
-        // diffs are NOT dedup-eligible but still must be recoverable
-        // when elided. Only register the SHA as dedup-able (eligible to
-        // be replaced by a back-reference later) when `dedup_eligible`:
-        // if the write fails, skip registration so later occurrences
-        // stay inline instead of pointing at a file that was never
-        // created.
-        let persisted = persist_tool_result_for_sha(&sha, content);
-        if persisted && dedup_eligible {
-            seen_tool_results.insert(
-                sha.clone(),
-                SeenToolResult {
-                    message_label: message_label.to_string(),
-                    original_chars,
-                },
-            );
-        }
+    if dedup_eligible {
+        seen_tool_results.insert(
+            sha.clone(),
+            SeenToolResult {
+                message_label: message_label.to_string(),
+                original_chars,
+            },
+        );
     }
 
     if original_chars <= TOOL_RESULT_SENT_CHAR_BUDGET {
@@ -1779,7 +1710,7 @@ fn compact_tool_result_for_wire(
          exit_status: {}\n\
          original_chars: {original_chars}\n\
          sha256: {sha}\n\
-         retrieve: retrieve_tool_result ref=sha:{sha}\n\
+         exact_detail: unavailable; no session-owned artifact was recorded\n\
          first_chars:\n\
          {head}\n\n\
          [... truncated {omitted} chars from middle ...]\n\n\
@@ -4549,9 +4480,10 @@ mod stream_decoder_tests {
         assert!(sent.contains("original_chars: 14000"), "got: {sent}");
         assert!(sent.contains("sha256:"), "got: {sent}");
         assert!(
-            sent.contains("retrieve: retrieve_tool_result ref=sha:"),
+            sent.contains("exact_detail: unavailable; no session-owned artifact was recorded"),
             "got: {sent}"
         );
+        assert!(!sent.contains("retrieve_tool_result"), "got: {sent}");
         assert!(sent.contains(&"A".repeat(4_000)), "got: {sent}");
         assert!(sent.contains(&"Z".repeat(4_000)), "got: {sent}");
         assert!(
@@ -4562,7 +4494,7 @@ mod stream_decoder_tests {
     }
 
     #[test]
-    fn request_builder_keeps_extreme_tool_output_bounded_and_retrievable() {
+    fn request_builder_keeps_unowned_extreme_tool_output_bounded_without_false_hint() {
         with_tool_result_sha_spillover_root(|| {
             let huge_output = format!(
                 "{}{}{}",
@@ -4583,10 +4515,8 @@ mod stream_decoder_tests {
             assert!(sent.contains("tool_name: exec_shell"), "got: {sent}");
             assert!(sent.contains("command_or_query: git diff"), "got: {sent}");
             assert!(sent.contains(&format!("sha256: {sha}")), "got: {sent}");
-            assert!(
-                sent.contains(&format!("retrieve: retrieve_tool_result ref=sha:{sha}")),
-                "got: {sent}"
-            );
+            assert!(sent.contains("exact_detail: unavailable"), "got: {sent}");
+            assert!(!sent.contains("retrieve_tool_result"), "got: {sent}");
             assert!(
                 sent.chars().count() <= TOOL_RESULT_SENT_CHAR_BUDGET,
                 "truncated result should stay bounded, sent {} chars",
@@ -4620,7 +4550,7 @@ mod stream_decoder_tests {
     }
 
     #[test]
-    fn request_builder_deduplicates_medium_identical_tool_results_with_retrieval_hint() {
+    fn request_builder_deduplicates_medium_identical_tool_results_to_earlier_message() {
         with_tool_result_sha_spillover_root(|| {
             // 2,000 chars is intentionally above TOOL_RESULT_DEDUP_MIN_CHARS
             // (1,024) but below TOOL_RESULT_SENT_CHAR_BUDGET (12,000). This
@@ -4650,9 +4580,11 @@ mod stream_decoder_tests {
             );
             assert!(second.contains("chars=\"2000\""), "got: {second}");
             assert!(
-                second.contains("retrieve: retrieve_tool_result ref=sha:"),
+                second
+                    .contains("source: full content appears in Message #1 earlier in this request"),
                 "got: {second}"
             );
+            assert!(!second.contains("retrieve_tool_result"), "got: {second}");
         });
     }
 
@@ -4680,8 +4612,8 @@ mod stream_decoder_tests {
             assert_eq!(second, output);
             assert!(!second.contains("<TOOL_RESULT_REF"), "got: {second}");
 
-            // Non-mutation tools still dedup: an identical large read_file
-            // result collapses to a retrievable SHA ref.
+            // Non-mutation tools still dedup: an identical medium read_file
+            // result points back to the first full message in this request.
             let read_messages = vec![
                 tool_use_message("read-1", "read_file", json!({"path": "README.md"})),
                 tool_result_message("read-1", &output),
@@ -4696,36 +4628,17 @@ mod stream_decoder_tests {
                 read_second.starts_with("<TOOL_RESULT_REF sha=\""),
                 "got: {read_second}"
             );
+            assert!(read_second.contains("source: full content appears in Message #1"));
+            assert!(!read_second.contains("retrieve_tool_result"));
         });
     }
 
     #[test]
-    fn large_write_file_result_stays_inline_but_is_persisted_for_retrieval() {
-        // Decoupling regression (#1695 follow-up): a SINGLE very large
-        // `write_file` result must (a) never collapse to a
-        // `<TOOL_RESULT_REF>` (mutation confirmations stay inline) yet
-        // (b) still be persisted to the SHA store so the content elided
-        // by truncation remains retrievable via `retrieve_tool_result`.
-        // Before the fix, folding `!is_mutation_tool` into the single
-        // `dedup_eligible` gate also disabled persistence, so a >12k
-        // mutation diff was truncated AND unrecoverable.
-        let _guard = crate::tools::truncate::TEST_SPILLOVER_GUARD
-            .lock()
-            .unwrap_or_else(|err| err.into_inner());
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let prior = crate::tools::truncate::set_test_spillover_root(Some(
-            tmp.path().join(".deepseek").join("tool_outputs"),
-        ));
-        struct Restore(Option<std::path::PathBuf>);
-        impl Drop for Restore {
-            fn drop(&mut self) {
-                crate::tools::truncate::set_test_spillover_root(self.0.take());
-            }
-        }
-        let _restore = Restore(prior);
-
-        // > TOOL_RESULT_SENT_CHAR_BUDGET (12_000) so the wire path
-        // truncates and would need a SHA to recover the middle.
+    fn large_unowned_results_stay_bounded_without_false_retrieval_handles() {
+        // The adaptive router normally replaces a large result with a
+        // session-owned artifact receipt before this provider-wire fallback.
+        // If legacy/raw history reaches here, it may be excerpted but must not
+        // advertise the process-wide SHA store as retrievable.
         let big_diff = "D".repeat(20_000);
         let sha = sha256_hex(big_diff.as_bytes());
 
@@ -4739,7 +4652,7 @@ mod stream_decoder_tests {
         let first = tool_message_content(&built, 0);
         let second = tool_message_content(&built, 1);
 
-        // (a) Both confirmations stay inline — truncated, never a ref.
+        // Mutation confirmations are independently excerpted, never deduped.
         assert!(
             first.contains("[TOOL_RESULT_TRUNCATED]"),
             "first should be truncated, got: {first}"
@@ -4758,31 +4671,14 @@ mod stream_decoder_tests {
         );
         assert!(
             first.contains(&format!("sha256: {sha}")),
-            "truncation block should advertise the recovery SHA, got: {first}"
+            "truncation block should retain an integrity digest, got: {first}"
         );
-        assert!(
-            first.contains(&format!("retrieve: retrieve_tool_result ref=sha:{sha}")),
-            "truncation block should advertise the recovery command, got: {first}"
-        );
+        assert!(first.contains("exact_detail: unavailable"));
+        assert!(!first.contains("retrieve_tool_result"));
 
-        // (b) The full content was persisted to the SHA store and is
-        // retrievable — the seam `persist_tool_result_for_sha` writes
-        // to and `retrieve_tool_result ref=sha:` reads back from.
-        let path = crate::tools::truncate::sha_spillover_path(&sha)
-            .expect("sha spillover path resolvable under test root");
-        assert!(
-            path.exists(),
-            "large write_file output not persisted: {path:?}"
-        );
-        let persisted = std::fs::read_to_string(&path).expect("read persisted spillover");
-        assert_eq!(
-            persisted, big_diff,
-            "persisted content must match the original write_file result verbatim"
-        );
-
-        // Sanity: a large NON-mutation result still dedups (back-ref on
-        // the second sighting) — decoupling didn't regress #1695's
-        // preserved read-path behavior.
+        // A huge non-mutation result cannot refer to an earlier *full* message,
+        // because both wire messages are excerpts. It therefore stays a
+        // truthful bounded excerpt too.
         let read_messages = vec![
             tool_use_message("r-1", "read_file", json!({"path": "huge.rs"})),
             tool_result_message("r-1", &big_diff),
@@ -4791,10 +4687,9 @@ mod stream_decoder_tests {
         ];
         let read_built = build_chat_messages(None, &read_messages, "deepseek-v4-flash");
         let read_second = tool_message_content(&read_built, 1);
-        assert!(
-            read_second.starts_with("<TOOL_RESULT_REF sha=\""),
-            "large read_file must still dedup to a ref, got: {read_second}"
-        );
+        assert!(read_second.contains("[TOOL_RESULT_TRUNCATED]"));
+        assert!(!read_second.contains("<TOOL_RESULT_REF"));
+        assert!(!read_second.contains("retrieve_tool_result"));
     }
 
     #[test]
@@ -4820,52 +4715,42 @@ mod stream_decoder_tests {
     }
 
     #[test]
-    fn cache_inspect_reports_tool_result_budget_metadata() {
-        with_tool_result_sha_spillover_root(|| {
-            let long_output = format!("{}{}", "A".repeat(7_000), "Z".repeat(7_000));
-            let request = MessageRequest {
-                model: "deepseek-v4-flash".to_string(),
-                messages: vec![
-                    tool_use_message("tool-1", "shell_command", json!({"command": "cargo test"})),
-                    tool_result_message("tool-1", &long_output),
-                    tool_use_message("tool-2", "shell_command", json!({"command": "cargo test"})),
-                    tool_result_message("tool-2", &long_output),
-                ],
-                max_tokens: 0,
-                system: None,
-                tools: None,
-                tool_choice: None,
-                metadata: None,
-                thinking: None,
-                reasoning_effort: None,
-                stream: None,
-                temperature: None,
-                top_p: None,
-            };
+    fn cache_inspect_reports_bounded_unowned_tool_result_metadata() {
+        let long_output = format!("{}{}", "A".repeat(7_000), "Z".repeat(7_000));
+        let request = MessageRequest {
+            model: "deepseek-v4-flash".to_string(),
+            messages: vec![
+                tool_use_message("tool-1", "shell_command", json!({"command": "cargo test"})),
+                tool_result_message("tool-1", &long_output),
+                tool_use_message("tool-2", "shell_command", json!({"command": "cargo test"})),
+                tool_result_message("tool-2", &long_output),
+            ],
+            max_tokens: 0,
+            system: None,
+            tools: None,
+            tool_choice: None,
+            metadata: None,
+            thinking: None,
+            reasoning_effort: None,
+            stream: None,
+            temperature: None,
+            top_p: None,
+        };
 
-            let inspection = inspect_prompt_for_request(&request);
-            let tool_layers: Vec<_> = inspection
-                .layers
-                .iter()
-                .filter_map(|layer| layer.tool_result.as_ref())
-                .collect();
+        let inspection = inspect_prompt_for_request(&request);
+        let tool_layers: Vec<_> = inspection
+            .layers
+            .iter()
+            .filter_map(|layer| layer.tool_result.as_ref())
+            .collect();
 
-            assert_eq!(tool_layers.len(), 2);
-            assert_eq!(tool_layers[0].original_chars, 14_000);
-            assert!(tool_layers[0].sent_chars < tool_layers[0].original_chars);
-            assert!(tool_layers[0].truncated);
-            assert!(!tool_layers[0].deduplicated);
-            assert_eq!(tool_layers[1].original_chars, 14_000);
-            // Keep the reference far smaller than the original 14K output
-            // even with a copyable retrieval hint included.
-            assert!(
-                tool_layers[1].sent_chars < 300,
-                "deduplicated ref grew unexpectedly large: {}",
-                tool_layers[1].sent_chars
-            );
-            assert!(!tool_layers[1].truncated);
-            assert!(tool_layers[1].deduplicated);
-        });
+        assert_eq!(tool_layers.len(), 2);
+        for layer in tool_layers {
+            assert_eq!(layer.original_chars, 14_000);
+            assert!(layer.sent_chars < layer.original_chars);
+            assert!(layer.truncated);
+            assert!(!layer.deduplicated);
+        }
     }
 }
 

@@ -440,9 +440,6 @@ fn record_spillover_artifact_if_any(
     result: &Result<ToolResult, ToolError>,
 ) {
     let Ok(tool_result) = result else { return };
-    if !tool_result.success {
-        return;
-    }
     let Some(path) = tool_result
         .metadata
         .as_ref()

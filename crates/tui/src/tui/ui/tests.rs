@@ -3008,6 +3008,21 @@ async fn session_denied_cache_notice_preserves_parallel_tool_indices() {
         app.history.get(history_len + 2),
         Some(HistoryCell::System { content }) if content.contains("Auto-denied")
     ));
+    let first_detail = app
+        .tool_detail_record_for_cell(history_len)
+        .expect("first completed tool keeps its own raw detail record");
+    assert_eq!(first_detail.tool_id, "tool-first");
+    assert_eq!(first_detail.output.as_deref(), Some("first output"));
+    let denied_detail = app
+        .tool_detail_record_for_cell(history_len + 1)
+        .expect("second completed tool keeps its own raw detail record");
+    assert_eq!(denied_detail.tool_id, "tool-denied");
+    assert!(
+        denied_detail
+            .output
+            .as_deref()
+            .is_some_and(|output| output.contains("cached approval"))
+    );
 }
 
 #[tokio::test]
@@ -3845,25 +3860,7 @@ fn setup_presets_cannot_override_managed_runtime_requirements() {
 }
 
 #[tokio::test]
-// This test intentionally pins the process-global spillover root until the
-// async receipt path finishes.
-#[allow(clippy::await_holding_lock)]
-async fn tool_result_api_content_receipts_large_live_output() {
-    let _guard = crate::tools::truncate::TEST_SPILLOVER_GUARD
-        .lock()
-        .unwrap_or_else(|err| err.into_inner());
-    let tmp = TempDir::new().expect("spillover tempdir");
-    let prior = crate::tools::truncate::set_test_spillover_root(Some(
-        tmp.path().join(".deepseek").join("tool_outputs"),
-    ));
-    struct Restore(Option<PathBuf>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            crate::tools::truncate::set_test_spillover_root(self.0.take());
-        }
-    }
-    let _restore = Restore(prior);
-
+async fn tool_result_api_content_never_advertises_unowned_live_output_as_retrievable() {
     let mut app = App::new(create_test_options(), &Config::default());
     app.api_messages.push(Message {
         role: "assistant".to_string(),
@@ -3883,8 +3880,10 @@ async fn tool_result_api_content_receipts_large_live_output() {
     assert!(content.contains("[TOOL_OUTPUT_RECEIPT]"));
     assert!(content.contains("tool: exec_shell"));
     assert!(content.contains("tool_call_id: call-live-big"));
-    assert!(content.contains("detail_handle: sha:"));
-    assert!(content.contains("retrieve: retrieve_tool_result ref=sha:"));
+    assert!(content.contains("detail_handle: unavailable (sha256:"));
+    assert!(content.contains("retrieve: unavailable"));
+    assert!(content.contains("storage: no session-owned artifact was recorded"));
+    assert!(!content.contains("retrieve_tool_result"));
     assert!(!content.contains(&raw));
     assert!(
         content.chars().count()
@@ -11171,13 +11170,27 @@ fn spillover_pager_section_returns_none_when_no_spillover() {
 
 #[test]
 fn spillover_pager_section_loads_file_when_present() {
-    use std::io::Write;
+    let _spillover_guard = crate::tools::truncate::TEST_SPILLOVER_GUARD
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("call-test.txt");
-    let mut f = std::fs::File::create(&path).unwrap();
-    writeln!(f, "FULL_OUTPUT_BYTES_HERE").unwrap();
+    let prior =
+        crate::tools::truncate::set_test_spillover_root(Some(dir.path().join("tool_outputs")));
+    struct RestoreSpilloverRoot(Option<PathBuf>);
+    impl Drop for RestoreSpilloverRoot {
+        fn drop(&mut self) {
+            crate::tools::truncate::set_test_spillover_root(self.0.take());
+        }
+    }
+    let _restore = RestoreSpilloverRoot(prior);
+    let session_id = "session-pager";
+    let body = "FULL_OUTPUT_BYTES_HERE\n";
+    let path = crate::tools::truncate::write_spillover("call-test", body).unwrap();
+    crate::tools::truncate::publish_legacy_spillover_ownership(&path, session_id, body.as_bytes())
+        .unwrap();
 
     let mut app = create_test_app();
+    app.current_session_id = Some(session_id.to_string());
     app.history = vec![HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
         name: "exec_shell".to_string(),
         status: ToolStatus::Success,
@@ -11196,13 +11209,16 @@ fn spillover_pager_section_loads_file_when_present() {
         section.contains("FULL_OUTPUT_BYTES_HERE"),
         "section missing file body: {section}"
     );
-    assert!(section.contains(&path.display().to_string()));
+    assert!(
+        !section.contains(&path.display().to_string()),
+        "pager must not expose the artifact path: {section}"
+    );
 }
 
 #[test]
 fn spillover_pager_section_returns_notice_when_file_missing() {
     let mut app = create_test_app();
-    let bogus = std::path::PathBuf::from("/tmp/this/path/does/not/exist-spill.txt");
+    let bogus = std::path::PathBuf::from("/private/sensitive/session/does-not-exist.txt");
     app.history = vec![HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
         name: "exec_shell".to_string(),
         status: ToolStatus::Success,
@@ -11216,7 +11232,90 @@ fn spillover_pager_section_returns_notice_when_file_missing() {
     app.resync_history_revisions();
 
     let section = spillover_pager_section(&app, 0).expect("still emits a notice section");
-    assert!(section.contains("could not read spillover file"));
+    assert!(section.contains("retained output is unavailable"));
+    assert!(!section.contains("/private/sensitive"));
+    assert!(!section.contains("No such file"));
+}
+
+#[test]
+fn spillover_pager_uses_session_artifact_for_specialized_bash_cell() {
+    let _artifact_guard = crate::artifacts::TEST_ARTIFACT_SESSIONS_GUARD
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    let prior =
+        crate::artifacts::set_test_artifact_sessions_root(Some(dir.path().join("sessions")));
+    struct RestoreArtifactRoot(Option<PathBuf>);
+    impl Drop for RestoreArtifactRoot {
+        fn drop(&mut self) {
+            crate::artifacts::set_test_artifact_sessions_root(self.0.take());
+        }
+    }
+    let _restore = RestoreArtifactRoot(prior);
+    let session_id = "session-bash";
+    let relative_path = PathBuf::from("artifacts/art_call-bash.txt");
+    let path = crate::artifacts::session_artifact_absolute_path(session_id, &relative_path)
+        .expect("isolated artifact path");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "BASH_EXACT_DEEP_SENTINEL\n").unwrap();
+
+    let mut app = create_test_app();
+    app.current_session_id = Some(session_id.to_string());
+    app.history = vec![HistoryCell::Tool(ToolCell::Exec(ExecCell {
+        command: "cargo test".to_string(),
+        status: ToolStatus::Success,
+        output: Some("[Exact evidence retained · 23 B]".to_string()),
+        live_output: None,
+        shell_task_id: None,
+        owner_agent_id: None,
+        owner_agent_name: None,
+        started_at: None,
+        duration_ms: None,
+        source: ExecSource::Assistant,
+        interaction: None,
+        output_summary: None,
+    }))];
+    app.tool_details_by_cell.insert(
+        0,
+        ToolDetailRecord {
+            tool_id: "call-bash".to_string(),
+            tool_name: "Bash".to_string(),
+            input: serde_json::json!({"action": "run", "command": "cargo test"}),
+            output: Some("[Exact evidence retained · 23 B]".to_string()),
+        },
+    );
+    let artifact = crate::artifacts::ArtifactRecord {
+        id: "art_call-bash".to_string(),
+        kind: crate::artifacts::ArtifactKind::ToolOutput,
+        session_id: session_id.to_string(),
+        tool_call_id: "call-bash".to_string(),
+        tool_name: "Bash".to_string(),
+        created_at: chrono::Utc::now(),
+        byte_size: 25,
+        preview: "BASH_EXACT_DEEP_SENTINEL".to_string(),
+        storage_path: relative_path.clone(),
+    };
+    app.session_artifacts.push(artifact.clone());
+    app.resync_history_revisions();
+
+    let section = spillover_pager_section(&app, 0).expect("session artifact section");
+    assert!(section.contains("BASH_EXACT_DEEP_SENTINEL"));
+    assert!(!section.contains(&path.display().to_string()));
+
+    app.session_artifacts[0].storage_path = path.clone();
+    let absolute = spillover_pager_section(&app, 0).expect("unavailable absolute-path section");
+    assert!(absolute.contains("retained output is unavailable"));
+    assert!(!absolute.contains("BASH_EXACT_DEEP_SENTINEL"));
+
+    app.session_artifacts[0] = crate::artifacts::ArtifactRecord {
+        session_id: "foreign-session".to_string(),
+        storage_path: relative_path,
+        ..artifact
+    };
+    assert!(
+        spillover_pager_section(&app, 0).is_none(),
+        "a foreign artifact record must not become an Option+V detail source"
+    );
 }
 
 #[test]

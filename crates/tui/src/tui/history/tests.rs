@@ -1,6 +1,6 @@
 use super::{
-    ASSISTANT_GLYPH, ExecCell, ExecSource, GenericToolCell, HistoryCell, PlanUpdateCell,
-    REASONING_CURSOR, REASONING_OPENER, REASONING_RAIL, TOOL_RUNNING_SYMBOLS,
+    ASSISTANT_GLYPH, ExecCell, ExecSource, GenericToolCell, HistoryCell, McpToolCell,
+    PlanUpdateCell, REASONING_CURSOR, REASONING_OPENER, REASONING_RAIL, TOOL_RUNNING_SYMBOLS,
     TOOL_STATUS_SYMBOL_MS, ToolCell, ToolStatus, TranscriptRenderOptions, USER_GLYPH,
     WebSearchCell, assistant_label_style_for, extract_reasoning_summary,
     render_spillover_annotation, render_thinking, running_status_label_with_elapsed,
@@ -418,9 +418,44 @@ fn render_spillover_annotation_truncates_to_width() {
         .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
         .collect();
     assert!(
-        !rendered.contains("full output:"),
-        "compact live rows should omit spillover annotations: {rendered:?}"
+        rendered.contains("Exact evidence retained"),
+        "compact live rows should expose the calm path-free receipt: {rendered:?}"
     );
+    assert!(!rendered.contains(long_path));
+}
+
+#[test]
+fn specialized_bash_and_mcp_cells_share_the_calm_evidence_receipt() {
+    let receipt = "[Exact evidence retained · 200 KiB · inspect with `retrieve_tool_result ref=art_call-big`]\n\nhead\n\n[final excerpt]\ntail";
+    let bash = ExecCell {
+        command: "cargo test".to_string(),
+        status: ToolStatus::Failed,
+        output: Some(receipt.to_string()),
+        live_output: None,
+        shell_task_id: None,
+        owner_agent_id: None,
+        owner_agent_name: None,
+        started_at: None,
+        duration_ms: Some(50),
+        source: ExecSource::Assistant,
+        interaction: None,
+        output_summary: None,
+    };
+    let mcp = McpToolCell {
+        tool: "mcp_fixture".to_string(),
+        status: ToolStatus::Failed,
+        content: Some(receipt.to_string()),
+        is_image: false,
+    };
+    for rendered in [
+        lines_text(&ToolCell::Exec(bash).lines_with_motion(80, true)),
+        lines_text(&ToolCell::Mcp(mcp).lines_with_motion(80, true)),
+    ] {
+        assert!(rendered.contains("Exact evidence retained"), "{rendered}");
+        assert!(rendered.contains("Option+V to inspect"), "{rendered}");
+        assert!(!rendered.contains("retrieve_tool_result"), "{rendered}");
+        assert!(!rendered.contains("head"), "{rendered}");
+    }
 }
 
 #[test]

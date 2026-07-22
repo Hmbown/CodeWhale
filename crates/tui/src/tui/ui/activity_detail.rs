@@ -556,30 +556,92 @@ pub(super) fn open_tool_details_pager(app: &mut App) -> bool {
 }
 
 /// Build the trailing "Spillover" section for the tool-details pager
-/// (#500). Returns `None` when the cell at `cell_index` is not a
-/// `GenericToolCell` with a recorded spillover path, or when the
-/// spillover file is missing or unreadable. Failures fall back to a
-/// short notice in the section so the user understands why the full
-/// content can't be loaded — better than silent truncation.
+/// (#500). Session artifact records are authoritative for every tool family
+/// (including specialized Bash and MCP cells); the historical generic-cell
+/// path is only a UI compatibility fallback. The pager deliberately keeps the
+/// backing path and operating-system error private: a detail surface may be
+/// captured or shared, and neither is useful evidence for the user.
 pub(super) fn spillover_pager_section(app: &App, cell_index: usize) -> Option<String> {
     use crate::tui::history::{GenericToolCell, HistoryCell, ToolCell};
 
     let cell = app.cell_at_virtual_index(cell_index)?;
-    let HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
-        spillover_path: Some(path),
-        ..
-    })) = cell
-    else {
+    let current_session = app.current_session_id.as_deref();
+    let session_artifact = app
+        .tool_detail_record_for_cell(cell_index)
+        .and_then(|detail| {
+            app.session_artifacts.iter().find(|artifact| {
+                artifact.kind == crate::artifacts::ArtifactKind::ToolOutput
+                    && artifact.tool_call_id == detail.tool_id
+                    && current_session == Some(artifact.session_id.as_str())
+            })
+        });
+    let legacy_path = match cell {
+        HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+            spillover_path: Some(path),
+            ..
+        })) => Some(path.clone()),
+        _ => None,
+    };
+    if session_artifact.is_none() && legacy_path.is_none() {
         return None;
-    };
-    let path_str = path.display().to_string();
-    let body = match std::fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(err) => format!("(could not read spillover file: {err})"),
-    };
-    Some(format!(
-        "── Full output (spillover) ──\nFile: {path_str}\n\n{body}"
-    ))
+    }
+    let body = session_artifact
+        .and_then(|artifact| read_owned_session_artifact(artifact))
+        .or_else(|| {
+            legacy_path.as_deref().and_then(|path| {
+                current_session.and_then(|session_id| read_owned_legacy_spillover(path, session_id))
+            })
+        })
+        .unwrap_or_else(|| "(retained output is unavailable)".to_string());
+    Some(format!("── Full output (spillover) ──\n\n{body}"))
+}
+
+fn read_owned_session_artifact(artifact: &crate::artifacts::ArtifactRecord) -> Option<String> {
+    if artifact.storage_path.is_absolute() {
+        return None;
+    }
+    let root = crate::artifacts::session_artifact_absolute_path(
+        &artifact.session_id,
+        std::path::Path::new(crate::artifacts::ARTIFACTS_DIR_NAME),
+    )?;
+    let candidate = crate::artifacts::session_artifact_absolute_path(
+        &artifact.session_id,
+        &artifact.storage_path,
+    )?;
+    let path = canonical_owned_file(&candidate, &root)?;
+    std::fs::read_to_string(path).ok()
+}
+
+fn read_owned_legacy_spillover(path: &std::path::Path, session_id: &str) -> Option<String> {
+    let root = crate::tools::truncate::spillover_root()?;
+    let path = canonical_owned_file(path, &root)?;
+    let ownership = crate::tools::truncate::read_legacy_spillover_ownership(&path).ok()?;
+    if ownership.origin_session != session_id {
+        return None;
+    }
+    let bytes = std::fs::read(path).ok()?;
+    if ownership.size_bytes != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+        || ownership.digest != crate::hashing::sha256_hex(&bytes)
+    {
+        return None;
+    }
+    String::from_utf8(bytes).ok()
+}
+
+fn canonical_owned_file(
+    candidate: &std::path::Path,
+    root: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    if std::fs::symlink_metadata(candidate)
+        .ok()?
+        .file_type()
+        .is_symlink()
+    {
+        return None;
+    }
+    let root = root.canonicalize().ok()?;
+    let candidate = candidate.canonicalize().ok()?;
+    (candidate.is_file() && candidate.starts_with(root)).then_some(candidate)
 }
 
 pub(crate) fn open_details_pager_for_cell(app: &mut App, cell_index: usize) -> bool {

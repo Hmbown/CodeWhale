@@ -4995,14 +4995,33 @@ impl App {
             *streaming = false;
         }
 
-        let drained = active.drain();
         let base_index = self.history.len();
+        // Completed tools are removed from `tool_cells` before the active
+        // group flushes, but `ActiveCell` deliberately keeps the stable
+        // tool-to-entry binding until drain. Capture that binding first so
+        // sequential or parallel tools in one model turn retain distinct raw
+        // detail records instead of all falling back to the first cell.
+        let detail_cell_indices: HashMap<String, usize> = self
+            .active_tool_details
+            .keys()
+            .filter_map(|tool_id| {
+                active
+                    .entry_index_for_tool(tool_id)
+                    .map(|entry_idx| (tool_id.clone(), base_index + entry_idx))
+            })
+            .collect();
+        let drained = active.drain();
 
         let mut details = std::mem::take(&mut self.active_tool_details);
         self.active_tool_entry_completed_at.clear();
         for (tool_id, detail) in details.drain() {
+            let cell_index = detail_cell_indices
+                .get(&tool_id)
+                .copied()
+                .or_else(|| self.tool_cells.get(&tool_id).copied())
+                .unwrap_or(base_index);
             self.tool_details_by_cell
-                .entry(self.tool_cells.get(&tool_id).copied().unwrap_or(base_index))
+                .entry(cell_index)
                 .or_insert(detail);
         }
 

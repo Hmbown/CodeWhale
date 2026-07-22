@@ -5,7 +5,6 @@ use serde_json::Value;
 use crate::artifacts::{ArtifactKind, ArtifactRecord, format_artifact_relative_path};
 use crate::fast_hash::FastHashMap;
 use crate::models::{ContentBlock, Message};
-use crate::tools::truncate;
 
 /// Match the provider-wire budget so persisted/resumed history does not keep a
 /// larger raw body than the model would receive on a fresh request.
@@ -38,13 +37,14 @@ struct ToolUseInfo {
 #[derive(Debug, Clone)]
 enum DetailHandle {
     Artifact(ArtifactRecord),
-    Sha { sha: String, persisted: bool },
+    Unavailable { sha256: String },
 }
 
 /// Return a copy of `messages` with oversized raw tool-result bodies replaced
 /// by compact receipts. Full output is kept behind existing session artifacts
-/// when available; otherwise a SHA-addressed spillover copy is written for
-/// `retrieve_tool_result`.
+/// when available. Raw legacy results without a session-owned artifact are
+/// compacted truthfully, but never receive a retrieval handle: a process-wide
+/// SHA store cannot prove which session owns the bytes.
 pub fn compact_messages_for_persistence(
     messages: &[Message],
     artifacts: &[ArtifactRecord],
@@ -89,18 +89,12 @@ pub fn compact_messages_for_persistence(
                         .get(tool_use_id.as_str())
                         .cloned()
                         .map(|artifact| DetailHandle::Artifact((*artifact).clone()))
-                        .unwrap_or_else(|| DetailHandle::Sha {
-                            sha: sha256_hex(content.as_bytes()),
-                            persisted: persist_sha_tool_result(content),
+                        .unwrap_or_else(|| DetailHandle::Unavailable {
+                            sha256: sha256_hex(content.as_bytes()),
                         });
                     let source = match &handle {
                         DetailHandle::Artifact(_) => ReceiptSource::Artifact,
-                        DetailHandle::Sha {
-                            persisted: true, ..
-                        } => ReceiptSource::Sha,
-                        DetailHandle::Sha {
-                            persisted: false, ..
-                        } => ReceiptSource::Unavailable,
+                        DetailHandle::Unavailable { .. } => ReceiptSource::Unavailable,
                     };
 
                     *content = render_tool_output_receipt(
@@ -114,7 +108,6 @@ pub fn compact_messages_for_persistence(
                     stats.original_chars = stats.original_chars.saturating_add(char_count);
                     match source {
                         ReceiptSource::Artifact => stats.artifact_receipts += 1,
-                        ReceiptSource::Sha => stats.sha_receipts += 1,
                         ReceiptSource::Unavailable => stats.unavailable_receipts += 1,
                     }
                 }
@@ -193,7 +186,6 @@ fn artifacts_by_tool_call(artifacts: &[ArtifactRecord]) -> FastHashMap<&str, &Ar
 #[derive(Debug, Clone, Copy)]
 enum ReceiptSource {
     Artifact,
-    Sha,
     Unavailable,
 }
 
@@ -231,19 +223,11 @@ fn render_tool_output_receipt(
             format!("retrieve_tool_result ref={}", record.id),
             format_artifact_relative_path(&record.storage_path),
         ),
-        DetailHandle::Sha { sha, persisted } => {
-            let handle = format!("sha:{sha}");
-            let storage = if *persisted {
-                "content-addressed spillover".to_string()
-            } else {
-                "unavailable; spillover write failed".to_string()
-            };
-            (
-                handle.clone(),
-                format!("retrieve_tool_result ref={handle}"),
-                storage,
-            )
-        }
+        DetailHandle::Unavailable { sha256 } => (
+            format!("unavailable (sha256:{sha256})"),
+            "unavailable".to_string(),
+            "no session-owned artifact was recorded".to_string(),
+        ),
     };
 
     format!(
@@ -265,19 +249,6 @@ fn render_tool_output_receipt(
         chars = format_count(original_chars),
         tokens = format_count(approx_tokens(original_chars)),
     )
-}
-
-fn persist_sha_tool_result(content: &str) -> bool {
-    let sha = sha256_hex(content.as_bytes());
-    match truncate::write_sha_spillover(&sha, content) {
-        Ok(_) => true,
-        Err(err) => {
-            crate::logging::warn(format!(
-                "tool-output receipt SHA spillover write failed for sha={sha}: {err}"
-            ));
-            false
-        }
-    }
 }
 
 fn preview_for_receipt(handle: &DetailHandle, original_content: &str) -> String {
@@ -351,11 +322,9 @@ fn format_count(value: usize) -> String {
 mod tests {
     use std::path::{Path, PathBuf};
 
+    use super::*;
     use chrono::Utc;
     use serde_json::json;
-    use tempfile::tempdir;
-
-    use super::*;
 
     fn tool_use_message(id: &str, name: &str, input: Value) -> Message {
         Message {
@@ -426,22 +395,7 @@ mod tests {
     }
 
     #[test]
-    fn compacts_large_tool_result_to_sha_receipt_when_no_artifact_exists() {
-        let _guard = crate::tools::truncate::TEST_SPILLOVER_GUARD
-            .lock()
-            .unwrap_or_else(|err| err.into_inner());
-        let tmp = tempdir().expect("tempdir");
-        let prior = crate::tools::truncate::set_test_spillover_root(Some(
-            tmp.path().join(".deepseek").join("tool_outputs"),
-        ));
-        struct Restore(Option<PathBuf>);
-        impl Drop for Restore {
-            fn drop(&mut self) {
-                crate::tools::truncate::set_test_spillover_root(self.0.take());
-            }
-        }
-        let _restore = Restore(prior);
-
+    fn compacts_unowned_large_tool_result_without_false_retrieval_handle() {
         let raw = format!("{}\n{}", "H".repeat(320), "NO_ARTIFACT_RAW\n".repeat(2_000));
         let sha = sha256_hex(raw.as_bytes());
         let messages = vec![
@@ -455,12 +409,13 @@ mod tests {
         };
 
         assert_eq!(stats.compacted_count, 1);
-        assert_eq!(stats.sha_receipts, 1);
+        assert_eq!(stats.sha_receipts, 0);
+        assert_eq!(stats.unavailable_receipts, 1);
         assert!(!content.contains("NO_ARTIFACT_RAW"));
-        assert!(content.contains(&format!("detail_handle: sha:{sha}")));
-        assert!(content.contains(&format!("retrieve: retrieve_tool_result ref=sha:{sha}")));
-        let path = crate::tools::truncate::sha_spillover_path(&sha).expect("sha path");
-        assert_eq!(std::fs::read_to_string(path).expect("read sha"), raw);
+        assert!(content.contains(&format!("detail_handle: unavailable (sha256:{sha})")));
+        assert!(content.contains("retrieve: unavailable"));
+        assert!(content.contains("storage: no session-owned artifact was recorded"));
+        assert!(!content.contains("retrieve_tool_result"));
     }
 
     #[test]

@@ -3704,6 +3704,12 @@ mod tests {
         let mut spilled = crate::tools::spec::ToolResult::success(raw.clone());
         let path = crate::tools::truncate::apply_spillover(&mut spilled, "call-local-secret")
             .expect("turn-loop spillover");
+        crate::tools::truncate::publish_legacy_spillover_ownership(
+            &path,
+            "workspace",
+            raw.as_bytes(),
+        )
+        .expect("publish compatibility ownership proof");
         assert_eq!(path.parent(), Some(spillover_root.as_path()));
         assert!(
             std::fs::read_to_string(&path)
@@ -3740,7 +3746,7 @@ mod tests {
     }
 
     #[test]
-    fn sha_spillover_persists_only_sanitized_tool_result() {
+    fn wire_adapter_does_not_persist_sessionless_sha_spillover() {
         let _guard = crate::tools::truncate::TEST_SPILLOVER_GUARD
             .lock()
             .unwrap_or_else(|err| err.into_inner());
@@ -3763,7 +3769,7 @@ mod tests {
             CONFIG_SECRET_SENTINELS[6],
             "tail ".repeat(80)
         );
-        assert!(raw.len() > 1024, "fixture must enter SHA persistence path");
+        assert!(raw.len() > 1024, "fixture must enter wire dedup size class");
         let raw_sha = crate::hashing::sha256_hex(raw.as_bytes());
         let prepared = client.prepare_model_bound_request(request_with_tool_result(raw));
         let sanitized = tool_result_content(&prepared).to_string();
@@ -3775,11 +3781,10 @@ mod tests {
 
         let sanitized_path = crate::tools::truncate::sha_spillover_path(&sanitized_sha)
             .expect("sanitized spillover path");
-        let persisted = std::fs::read_to_string(&sanitized_path)
-            .expect("sanitized tool output should be persisted");
-        assert_eq!(persisted, sanitized);
-        assert!(!persisted.contains(CONFIG_SECRET_SENTINELS[6]));
-        assert!(persisted.contains(codewhale_config::persistence::REDACTED));
+        assert!(
+            !sanitized_path.exists(),
+            "sessionless wire fallback must not create an ownerless SHA artifact"
+        );
 
         let raw_path =
             crate::tools::truncate::sha_spillover_path(&raw_sha).expect("raw spillover path");
@@ -3787,6 +3792,7 @@ mod tests {
             !raw_path.exists(),
             "unsanitized tool output must never be persisted by the wire adapter"
         );
+        assert!(!serialized.contains("retrieve_tool_result ref=sha:"));
     }
 
     fn deepseek_anthropic_client(server: &MockServer) -> DeepSeekClient {

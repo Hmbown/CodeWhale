@@ -1,8 +1,17 @@
 //! Process-level acceptance for adaptive exact-evidence routing (#4619).
+//!
+//! "Exact" begins at the common engine routing seam: tool adapters such as
+//! Bash intentionally bound their own operating-system stream and annotate
+//! that truncation before returning a `ToolResult`. Adaptive evidence binds
+//! every byte of that returned result. Root streaming, sequential/deferred
+//! completion, and MCP all converge on the same engine seam; sub-agents have a
+//! separate call site covered by `tools::subagent::tests`.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -10,26 +19,18 @@ use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use wait_timeout::ChildExt;
 use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, Request, ResponseTemplate};
+use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 const MODEL: &str = "adaptive-evidence-test";
-const CALL_ID: &str = "call_evidence";
-const DEEP_SENTINEL: &str = "DEEP_EXACT_EVIDENCE_SENTINEL_4619";
+const SUCCESS_CALL_ID: &str = "call_bash_success";
+const FAILURE_CALL_ID: &str = "call_bash_failure";
+const SUCCESS_SENTINEL: &str = "DEEP_SUCCESS_EVIDENCE_SENTINEL_4619";
+const FAILURE_SENTINEL: &str = "DEEP_FAILURE_EVIDENCE_SENTINEL_4619";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn headless_tool_output_is_bounded_while_exact_origin_artifact_is_retained() {
+async fn headless_bash_success_and_failure_are_distinct_bounded_exact_evidence() {
     let workspace = TempDir::new().expect("workspace");
     let home = TempDir::new().expect("home");
-    let mut source = String::new();
-    for line in 0..500 {
-        let marker = if line == 80 {
-            DEEP_SENTINEL
-        } else {
-            "ordinary"
-        };
-        source.push_str(&format!("{line:04} {marker} {}\n", "x".repeat(96)));
-    }
-    std::fs::write(workspace.path().join("large.txt"), source).expect("large fixture");
 
     let server = mock_llm().await;
     let output = run_exec(workspace.path(), home.path(), &server);
@@ -41,49 +42,73 @@ async fn headless_tool_output_is_bounded_while_exact_origin_artifact_is_retained
     );
 
     let requests = server.received_requests().await.expect("recorded requests");
-    let tool_content = requests
+    let success_receipt = requests
         .iter()
         .filter_map(|request| request.body_json::<Value>().ok())
-        .find_map(|body| tool_result_content(&body).map(str::to_owned))
-        .expect("model-visible tool result");
-    assert!(tool_content.starts_with("[Exact evidence retained"));
-    assert!(tool_content.contains("retrieve_tool_result ref=art_call_evidence"));
-    assert!(!tool_content.contains(DEEP_SENTINEL));
-    assert!(!tool_content.contains("/artifacts/"));
-    assert!(
-        tool_content.len() <= 3_200,
-        "handle-only receipt must stay bounded"
-    );
+        .find_map(|body| tool_result_content_for(&body, SUCCESS_CALL_ID).map(str::to_owned))
+        .expect("model-visible Bash success receipt");
+    let failure_receipt = requests
+        .iter()
+        .filter_map(|request| request.body_json::<Value>().ok())
+        .find_map(|body| tool_result_content_for(&body, FAILURE_CALL_ID).map(str::to_owned))
+        .expect("model-visible Bash failure receipt");
+    for (receipt, call_id, sentinel) in [
+        (&success_receipt, SUCCESS_CALL_ID, SUCCESS_SENTINEL),
+        (&failure_receipt, FAILURE_CALL_ID, FAILURE_SENTINEL),
+    ] {
+        assert!(receipt.starts_with("[Exact evidence retained"));
+        assert!(receipt.contains(&format!("retrieve_tool_result ref=art_{call_id}")));
+        assert!(!receipt.contains(sentinel));
+        assert!(!receipt.contains("/artifacts/"));
+        assert!(
+            receipt.len() <= 3_200,
+            "handle-only receipt must stay bounded"
+        );
+    }
+    assert_ne!(success_receipt, failure_receipt);
 
     let artifact_dir = find_artifact_dir(home.path()).expect("origin-session artifacts");
-    let payloads: Vec<_> = std::fs::read_dir(&artifact_dir)
+    let payloads = std::fs::read_dir(&artifact_dir)
         .expect("artifact directory")
         .filter_map(Result::ok)
         .map(|entry| entry.path())
         .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("txt"))
-        .collect();
-    assert_eq!(payloads.len(), 1, "exactly one evidence payload per result");
-    assert_eq!(
-        payloads[0].file_name().and_then(|name| name.to_str()),
-        Some("art_call_evidence.txt")
+        .count();
+    assert_eq!(payloads, 2, "exactly one evidence payload per result");
+
+    let success = assert_exact_artifact(&artifact_dir, SUCCESS_CALL_ID, SUCCESS_SENTINEL, "Bash");
+    let failure = assert_exact_artifact(&artifact_dir, FAILURE_CALL_ID, FAILURE_SENTINEL, "Bash");
+    assert_ne!(
+        success, failure,
+        "success and failure bytes must stay distinct"
     );
-    let exact = std::fs::read(&payloads[0]).expect("exact evidence bytes");
+}
+
+fn assert_exact_artifact(
+    artifact_dir: &Path,
+    call_id: &str,
+    sentinel: &str,
+    tool_name: &str,
+) -> Vec<u8> {
+    let handle = format!("art_{call_id}");
+    let exact =
+        std::fs::read(artifact_dir.join(format!("{handle}.txt"))).expect("exact evidence bytes");
     assert!(
-        String::from_utf8_lossy(&exact).contains(DEEP_SENTINEL),
+        String::from_utf8_lossy(&exact).contains(sentinel),
         "deep content omitted from context must remain retrievable"
     );
-
-    let metadata_path = artifact_dir.join("art_call_evidence.evidence.json");
-    let metadata: Value =
-        serde_json::from_slice(&std::fs::read(&metadata_path).expect("evidence metadata"))
-            .expect("valid evidence metadata");
+    let metadata: Value = serde_json::from_slice(
+        &std::fs::read(artifact_dir.join(format!("{handle}.evidence.json")))
+            .expect("evidence metadata"),
+    )
+    .expect("valid evidence metadata");
     let digest = Sha256::digest(&exact)
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
-    assert_eq!(metadata["handle"], "art_call_evidence");
-    assert_eq!(metadata["call_id"], CALL_ID);
-    assert_eq!(metadata["tool_name"], "read_file");
+    assert_eq!(metadata["handle"], handle);
+    assert_eq!(metadata["call_id"], call_id);
+    assert_eq!(metadata["tool_name"], tool_name);
     assert_eq!(metadata["digest"], digest);
     assert_eq!(metadata["size_bytes"], exact.len() as u64);
     assert_eq!(metadata["generation"], 1);
@@ -95,6 +120,7 @@ async fn headless_tool_output_is_bounded_while_exact_origin_artifact_is_retained
             .as_str()
             .is_some_and(|id| !id.is_empty())
     );
+    exact
 }
 
 async fn mock_llm() -> MockServer {
@@ -109,22 +135,47 @@ async fn mock_llm() -> MockServer {
         .await;
     Mock::given(method("POST"))
         .and(path("/v1/chat/completions"))
-        .and(has_tool_result)
-        .respond_with(sse_response(final_sse()))
-        .mount(&server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/v1/chat/completions"))
-        .and(has_no_tool_result)
-        .respond_with(sse_response(tool_sse()))
+        .respond_with(EvidenceScenario {
+            requests: Arc::new(AtomicUsize::new(0)),
+        })
         .mount(&server)
         .await;
     server
 }
 
+#[derive(Clone)]
+struct EvidenceScenario {
+    requests: Arc<AtomicUsize>,
+}
+
+impl Respond for EvidenceScenario {
+    fn respond(&self, request: &Request) -> ResponseTemplate {
+        let sequence = self.requests.fetch_add(1, Ordering::SeqCst);
+        let body = request.body_json::<Value>().unwrap_or(Value::Null);
+        let raw = body.to_string();
+        let response = if raw.contains(FAILURE_CALL_ID) {
+            final_sse()
+        } else if raw.contains(SUCCESS_CALL_ID) {
+            bash_tool_sse(FAILURE_CALL_ID, false)
+        } else {
+            bash_tool_sse(SUCCESS_CALL_ID, true)
+        };
+        assert!(
+            sequence < 3,
+            "unexpected extra model request #{sequence}: {raw}"
+        );
+        sse_response(response)
+    }
+}
+
 fn run_exec(workspace: &Path, home: &Path, server: &MockServer) -> std::process::Output {
     std::fs::create_dir_all(home.join(".codewhale")).expect("config directory");
     std::fs::create_dir_all(home.join(".deepseek")).expect("legacy config directory");
+    std::fs::write(
+        home.join(".codewhale/config.toml"),
+        "allow_shell = true\n\n[retry]\nenabled = false\n",
+    )
+    .expect("headless test config");
     let mut command = Command::new(binary());
     preserve_host_env(&mut command);
     command
@@ -139,7 +190,7 @@ fn run_exec(workspace: &Path, home: &Path, server: &MockServer) -> std::process:
             "--output-format",
             "stream-json",
         ])
-        .arg("read the complete large.txt file")
+        .arg("run both provider-fixtured Bash evidence probes")
         .env("HOME", home)
         .env("USERPROFILE", home)
         .env("XDG_CONFIG_HOME", home.join(".config"))
@@ -169,32 +220,40 @@ fn find_artifact_dir(home: &Path) -> Option<PathBuf> {
         })
 }
 
-fn tool_result_content(body: &Value) -> Option<&str> {
+fn tool_result_content_for<'a>(body: &'a Value, call_id: &str) -> Option<&'a str> {
     body.get("messages")?
         .as_array()?
         .iter()
-        .find(|message| message.get("role").and_then(Value::as_str) == Some("tool"))?
+        .find(|message| {
+            message.get("role").and_then(Value::as_str) == Some("tool")
+                && message.get("tool_call_id").and_then(Value::as_str) == Some(call_id)
+        })?
         .get("content")?
         .as_str()
 }
 
-fn has_tool_result(request: &Request) -> bool {
-    request
-        .body_json::<Value>()
-        .ok()
-        .and_then(|body| tool_result_content(&body).map(str::to_owned))
-        .is_some()
-}
-
-fn has_no_tool_result(request: &Request) -> bool {
-    !has_tool_result(request)
-}
-
-fn tool_sse() -> String {
-    let arguments = serde_json::to_string(&json!({"path": "large.txt", "max_lines": 500}))
-        .expect("tool arguments");
+fn bash_tool_sse(call_id: &str, success: bool) -> String {
+    let (sentinel, prefix, trailer) = if success {
+        (SUCCESS_SENTINEL, "BASH-SUCCESS", "")
+    } else {
+        (FAILURE_SENTINEL, "BASH-FAILURE", "; exit 7")
+    };
+    let body = format!(
+        "i=0; while [ \"$i\" -lt 2800 ]; do if [ \"$i\" -eq 120 ]; then printf '%s\\n' '{sentinel}'; fi; printf '{prefix}-%04d-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n' \"$i\"; i=$((i + 1)); done{trailer}"
+    );
+    let command = if success {
+        body
+    } else {
+        format!("{{ {body}; }} >&2")
+    };
+    let arguments = serde_json::to_string(&json!({
+        "action": "run",
+        "command": command,
+        "timeout_ms": 30_000
+    }))
+    .expect("tool arguments");
     [
-        chunk(json!({"id":"tool","object":"chat.completion.chunk","model":MODEL,"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":CALL_ID,"type":"function","function":{"name":"read_file","arguments":arguments}}]},"finish_reason":null}]})),
+        chunk(json!({"id":"tool","object":"chat.completion.chunk","model":MODEL,"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":call_id,"type":"function","function":{"name":"Bash","arguments":arguments}}]},"finish_reason":null}]})),
         chunk(json!({"id":"tool","object":"chat.completion.chunk","model":MODEL,"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}})),
         "data: [DONE]\n\n".to_string(),
     ].join("")
