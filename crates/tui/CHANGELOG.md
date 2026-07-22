@@ -78,6 +78,14 @@ surface.
 
 ### Changed
 
+- Keep the top activity bar literal and actionable: active To-dos appear first,
+  followed by Sub-agents, while generic operations and coordination stay in
+  the detail surface. Completed-only bars auto-hide, and top/side layouts can
+  be resized by dragging their divider and retain the chosen size (#4700,
+  #4702).
+- Use each theme's semantic colors for composer mode and permission rails, and
+  show a larger inline reasoning preview with clearer local/full expansion
+  affordances (#4699, #4701).
 - Simplify the model-facing runtime around stable action tools (`File`, `Git`,
   `Run`, deferred `Web`, and durable task and automation families), with legacy
   spellings hidden for replay. Fresh sessions no longer reserve a Work surface
@@ -120,6 +128,8 @@ surface.
 
 ### Fixed
 
+- Restore `uwu` theme config round-tripping and keep header permission colors
+  and authored idle-whale geometry aligned with the selected theme (#4696).
 - Default canonical `Bash` runs with no explicit `cwd` to the active
   `ToolContext.workspace`, including an isolated sub-agent worktree, instead of
   falling through to the shared shell manager's parent workspace. The regression
