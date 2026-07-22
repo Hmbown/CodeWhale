@@ -1,5 +1,8 @@
 //! Linux Landlock sandbox implementation.
 //!
+//! This module is dormant in v0.9.1: command execution does not call it. An
+//! ABI probe succeeding therefore does not mean that a command is sandboxed.
+//!
 //! Landlock is a security mechanism introduced in Linux kernel 5.13 that allows
 //! processes to restrict their own access rights. Unlike Seatbelt on macOS which
 //! uses an external sandbox-exec wrapper, Landlock applies restrictions directly

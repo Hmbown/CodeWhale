@@ -3123,7 +3123,9 @@ fn run_setup(
         println!("    Next: run `/plugin validate`, review `example`, then trust and enable it.");
     }
 
-    let sandbox = crate::sandbox::get_platform_sandbox();
+    let sandbox = crate::sandbox::get_platform_sandbox_with_bwrap_preference(
+        config.prefer_bwrap.unwrap_or(false),
+    );
     if let Some(kind) = sandbox {
         println!("  ✓ Sandbox available: {kind}");
     } else {
@@ -3439,7 +3441,9 @@ fn run_setup_status(
         crate::utils::display_path(&plugins_dir)
     );
 
-    let sandbox = crate::sandbox::get_platform_sandbox();
+    let sandbox = crate::sandbox::get_platform_sandbox_with_bwrap_preference(
+        config.prefer_bwrap.unwrap_or(false),
+    );
     match sandbox {
         Some(kind) => println!(
             "  {} sandbox: {kind}",
@@ -4497,7 +4501,9 @@ async fn run_doctor(
     println!("  OS: {}", std::env::consts::OS);
     println!("  Arch: {}", std::env::consts::ARCH);
 
-    let sandbox = crate::sandbox::get_platform_sandbox();
+    let sandbox = crate::sandbox::get_platform_sandbox_with_bwrap_preference(
+        config.prefer_bwrap.unwrap_or(false),
+    );
     if let Some(kind) = sandbox {
         println!(
             "  {} sandbox available: {}",
@@ -6054,7 +6060,9 @@ fn run_doctor_json(
                 "error": stash.error,
             },
         },
-        "sandbox": match crate::sandbox::get_platform_sandbox() {
+        "sandbox": match crate::sandbox::get_platform_sandbox_with_bwrap_preference(
+            config.prefer_bwrap.unwrap_or(false),
+        ) {
             Some(kind) => json!({"available": true, "kind": kind.to_string()}),
             None => json!({"available": false, "kind": null}),
         },

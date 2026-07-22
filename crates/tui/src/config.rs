@@ -2106,8 +2106,8 @@ pub struct Config {
     /// Optional API key for the external sandbox backend (sent as Bearer token).
     #[serde(alias = "sandboxApiKey")]
     pub sandbox_api_key: Option<String>,
-    /// When true and `/usr/bin/bwrap` is present on Linux, route exec_shell
-    /// through bubblewrap instead of relying solely on Landlock (#2184).
+    /// When true and `/usr/bin/bwrap` is executable on Linux, route exec_shell
+    /// through bubblewrap (#2184).
     /// Defaults to false. Requires the `bubblewrap` package to be installed
     /// separately — we do NOT vendor bwrap.
     #[serde(alias = "preferBwrap")]

@@ -439,9 +439,8 @@ pub struct EngineConfig {
     /// Native tools that should stay in the model-visible catalog even when
     /// they are outside the small default core surface (#2076).
     pub tools_always_load: HashSet<String>,
-    /// When true and `/usr/bin/bwrap` is present on Linux, route exec_shell
-    /// through bubblewrap instead of relying solely on Landlock (#2184).
-    #[allow(dead_code)] // Wired through ShellManager in follow-up PR
+    /// When true and `/usr/bin/bwrap` is executable on Linux, route exec_shell
+    /// through bubblewrap (#2184).
     pub prefer_bwrap: bool,
     /// Tool override and plugin configuration (`[tools]` table in config.toml).
     /// Applied to the per-turn tool registry after built-in tools are registered.
@@ -1165,6 +1164,10 @@ impl Engine {
             .shell_manager
             .clone()
             .unwrap_or_else(|| new_shared_shell_manager(config.workspace.clone()));
+        match shell_manager.lock() {
+            Ok(mut manager) => manager.set_prefer_bwrap(config.prefer_bwrap),
+            Err(poisoned) => poisoned.into_inner().set_prefer_bwrap(config.prefer_bwrap),
+        }
         let file_read_tracker = new_shared_file_read_tracker();
         // Create Flash seam manager for layered context (#159). v0.7.5 keeps
         // this opt-in until the prefix-cache audit proves when seam production

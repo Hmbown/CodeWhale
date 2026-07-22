@@ -2,7 +2,7 @@
 //!
 //! External sandbox backends route shell command execution to a remote service
 //! (e.g. Alibaba OpenSandbox) instead of spawning a local process. This is
-//! complementary to the OS-level sandbox module (Seatbelt / Landlock / Windows)
+//! complementary to the OS-level sandbox module (Seatbelt / opt-in bubblewrap)
 //! — the external backend *replaces* local execution entirely when configured.
 
 use std::collections::HashMap;

@@ -369,9 +369,9 @@ impl WritableRoot {
 
 /// Unified trait for platform-specific sandbox executors (#2186).
 ///
-/// Each platform module (seatbelt, landlock, windows) provides an
-/// implementation of this trait. The `SandboxManager` dispatches through
-/// the trait instead of calling platform-specific functions directly.
+/// Platform implementations can use this trait to convert a policy into
+/// wrapper-specific rules. The current `SandboxManager` command path does not
+/// dispatch through this trait yet.
 pub trait SandboxExecutor {
     /// Prepare a sandboxed execution environment from a command spec.
     ///

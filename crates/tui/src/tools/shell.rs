@@ -5,7 +5,7 @@
 //! - Background process execution
 //! - Process output retrieval
 //! - Process termination
-//! - Sandbox support (macOS Seatbelt)
+//! - Sandbox support (macOS Seatbelt and opt-in Linux bubblewrap)
 //! - Streaming output (future)
 
 use anyhow::{Context, Result, anyhow};
@@ -1094,11 +1094,16 @@ impl ShellManager {
 
     /// Enable or disable bubblewrap passthrough (#2184).
     ///
-    /// When enabled and `/usr/bin/bwrap` is present on Linux, exec_shell
+    /// When enabled and `/usr/bin/bwrap` is executable on Linux, exec_shell
     /// commands are routed through bubblewrap for filesystem isolation.
-    #[allow(dead_code)] // Wired from EngineConfig in follow-up PR
     pub fn set_prefer_bwrap(&mut self, prefer: bool) {
         self.sandbox_manager.set_prefer_bwrap(prefer);
+    }
+
+    /// Return the OS sandbox wrapper this shell manager is configured and able
+    /// to apply to commands.
+    pub fn configured_sandbox_type(&self) -> Option<SandboxType> {
+        self.sandbox_manager.configured_sandbox()
     }
 
     /// Request that the active foreground shell wait detach and leave its

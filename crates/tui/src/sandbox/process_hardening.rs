@@ -1,9 +1,10 @@
 //! Process hardening for Linux sandbox defense-in-depth (#2183).
 //!
 //! This module applies kernel-level restrictions to the codewhale-tui process
-//! itself. Unlike Landlock/seccomp which restrict child processes spawned for
-//! shell commands, these hardening measures protect the *parent* TUI process
-//! from information leaks and privilege-escalation vectors.
+//! itself. These hardening measures protect the *parent* TUI process and its
+//! descendants from information leaks and privilege-escalation vectors; they
+//! are not a filesystem or network sandbox for child commands. The Landlock
+//! and seccomp source modules are not wired into child execution yet.
 //!
 //! # Ordering constraints
 //!
@@ -42,8 +43,9 @@
 /// # Panics
 ///
 /// Does NOT panic. Failures are logged via `tracing::warn` because the
-/// hardening is defense-in-depth — the sandbox still protects child processes
-/// even if these prctls fail (e.g., in a container where some are restricted).
+/// hardening is defense-in-depth. A failure does not abort startup or change
+/// whether a separately configured Seatbelt/bubblewrap command wrapper is
+/// available.
 pub fn apply_process_hardening() {
     #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
     {

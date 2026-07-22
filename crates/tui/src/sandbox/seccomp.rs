@@ -1,11 +1,14 @@
 //! Linux seccomp (Secure Computing) filter layer (#2182).
 //!
+//! This module is dormant in v0.9.1: command execution does not install this
+//! filter. Kernel support therefore does not mean that a command is sandboxed.
+//!
 //! Seccomp BPF (Berkeley Packet Filter) is a kernel facility that allows a
 //! process to restrict the system calls it (and its descendants) can make.
-//! This module applies a seccomp filter on top of Landlock to provide a
-//! second layer of defense — even if Landlock misbehaves or is configured
-//! too permissively, the seccomp filter blocks entire *classes* of dangerous
-//! syscalls like `ptrace`, `mount`, `kexec_load`, etc.
+//! The implementation here is intended to apply a seccomp filter on top of
+//! Landlock as a second layer of defense. Once it is wired, the filter can
+//! block entire *classes* of dangerous syscalls like `ptrace`, `mount`, and
+//! `kexec_load`.
 //!
 //! # Architecture
 //!
