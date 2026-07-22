@@ -308,6 +308,14 @@ pub const fn credential_help(kind: ProviderKind) -> CredentialHelp {
             docs_url: Some("https://platform.minimax.io/docs/api-reference/api-overview"),
             guidance: "Create a MiniMax API key or subscription-plan key in the user center.",
         },
+        ProviderKind::MinimaxCN | ProviderKind::MinimaxAnthropicCN => CredentialHelp {
+            acquisition: ApiKey,
+            credential_url: Some(
+                "https://platform.minimaxi.com/user-center/basic-information",
+            ),
+            docs_url: Some("https://platform.minimaxi.com/docs/api-reference"),
+            guidance: "Create a MiniMax Token Plan or pay-as-you-go key at platform.minimaxi.com; the api.minimaxi.com endpoint is auto-selected.",
+        },
         ProviderKind::Deepinfra => CredentialHelp {
             acquisition: ApiKey,
             credential_url: Some("https://deepinfra.com/dash/api_keys"),
@@ -921,6 +929,25 @@ provider!(
     aliases: ["mini-max", "mini_max"]
 );
 
+provider!(
+    MinimaxCN,
+    MinimaxCN,
+    "minimax-cn",
+    "MiniMax (China / Token Plan)",
+    DEFAULT_MINIMAX_CN_BASE_URL,
+    DEFAULT_MINIMAX_MODEL,
+    ["MINIMAX_API_KEY"],
+    "minimax_cn",
+    aliases: [
+        "minimax-CN",
+        "minimax_CN",
+        "minimax-china",
+        "minimax_china",
+        "minimax-token-plan",
+        "minimax_token_plan"
+    ]
+);
+
 /// MiniMax route that speaks the Anthropic Messages wire protocol.
 pub struct MinimaxAnthropic;
 
@@ -958,6 +985,62 @@ impl Provider for MinimaxAnthropic {
             "minimax_anthropic",
             "mini-max-anthropic",
             "mini_max_anthropic",
+        ]
+    }
+
+    fn wire(&self) -> WireFormat {
+        WireFormat::AnthropicMessages
+    }
+}
+
+/// MiniMax route hosted at `api.minimaxi.com` that speaks the Anthropic Messages
+/// wire protocol. This is the regional / Token Plan sibling of [`MinimaxAnthropic`]:
+/// users with `platform.minimaxi.com` keys (Token Plan subscriptions issued under
+/// the Chinese platform) point this provider at the same wire endpoint without
+/// having to override `base_url` manually.
+pub struct MinimaxAnthropicCN;
+
+impl Provider for MinimaxAnthropicCN {
+    fn id(&self) -> &'static str {
+        "minimax-anthropic-cn"
+    }
+
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::MinimaxAnthropicCN
+    }
+
+    fn display_name(&self) -> &'static str {
+        "MiniMax Anthropic-compatible (China / Token Plan)"
+    }
+
+    fn default_base_url(&self) -> &'static str {
+        DEFAULT_MINIMAX_ANTHROPIC_CN_BASE_URL
+    }
+
+    fn default_model(&self) -> &'static str {
+        DEFAULT_MINIMAX_MODEL
+    }
+
+    fn env_vars(&self) -> &'static [&'static str] {
+        // Token Plan keys share the same env var as pay-as-you-go keys; codewhale
+        // does not currently distinguish subscription vs. pay-as-you-go routing
+        // — the base URL is what selects the surface.
+        &["MINIMAX_API_KEY"]
+    }
+
+    fn provider_config_key(&self) -> &'static str {
+        "minimax_anthropic_cn"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[
+            "minimax_anthropic_cn",
+            "minimax-anthropic-CN",
+            "minimax_anthropic_CN",
+            "minimax-anthropic-china",
+            "minimax-china-anthropic",
+            "minimax-token-plan",
+            "minimax_token_plan",
         ]
     }
 
@@ -1125,7 +1208,9 @@ static OPENMODEL: Openmodel = Openmodel;
 static ZAI: Zai = Zai;
 static STEPFUN: Stepfun = Stepfun;
 static MINIMAX: Minimax = Minimax;
+static MINIMAX_CN: MinimaxCN = MinimaxCN;
 static MINIMAX_ANTHROPIC: MinimaxAnthropic = MinimaxAnthropic;
+static MINIMAX_ANTHROPIC_CN: MinimaxAnthropicCN = MinimaxAnthropicCN;
 static DEEPINFRA: Deepinfra = Deepinfra;
 static SAKANA: Sakana = Sakana;
 static LONGCAT: LongCat = LongCat;
@@ -1162,7 +1247,9 @@ static PROVIDER_REGISTRY: [&dyn Provider; 35] = [
     &ZAI,
     &STEPFUN,
     &MINIMAX,
+    &MINIMAX_CN,
     &MINIMAX_ANTHROPIC,
+    &MINIMAX_ANTHROPIC_CN,
     &DEEPINFRA,
     &SAKANA,
     &LONGCAT,

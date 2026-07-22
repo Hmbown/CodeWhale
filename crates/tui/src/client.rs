@@ -464,6 +464,8 @@ fn model_bound_secret_store_slot(provider: ApiProvider) -> Option<&'static str> 
     match provider {
         ApiProvider::DeepseekCN => Some("deepseek"),
         ApiProvider::SiliconflowCn => Some("siliconflow"),
+        ApiProvider::MinimaxCn => Some("minimax"),
+        ApiProvider::MinimaxAnthropicCn => Some("minimax_anthropic"),
         ApiProvider::Custom => None,
         _ => Some(provider.as_str()),
     }
@@ -1250,6 +1252,7 @@ fn api_provider_uses_anthropic_messages(api_provider: ApiProvider) -> bool {
         ApiProvider::Anthropic
             | ApiProvider::DeepseekAnthropic
             | ApiProvider::MinimaxAnthropic
+            | ApiProvider::MinimaxAnthropicCn
             | ApiProvider::Openmodel
     )
 }
@@ -2273,7 +2276,7 @@ pub(super) fn apply_reasoning_effort(
     effort: Option<&str>,
     provider: ApiProvider,
 ) {
-    if matches!(provider, ApiProvider::Minimax) {
+    if matches!(provider, ApiProvider::Minimax | ApiProvider::MinimaxCn) {
         // MiniMax's OpenAI-compatible API keeps thinking inside `content`
         // unless reasoning_split is enabled. Always request the split shape
         // so private thinking renders as Thinking cells rather than answer
@@ -2336,6 +2339,7 @@ pub(super) fn apply_reasoning_effort(
             ApiProvider::Anthropic
             | ApiProvider::DeepseekAnthropic
             | ApiProvider::MinimaxAnthropic
+            | ApiProvider::MinimaxAnthropicCn
             | ApiProvider::Openmodel => {
                 // Thinking shaping happens in the Messages adapter, which
                 // applies each provider's supported control fields.
@@ -2345,7 +2349,7 @@ pub(super) fn apply_reasoning_effort(
                     "thinking": false,
                 });
             }
-            ApiProvider::Minimax => {
+            ApiProvider::Minimax | ApiProvider::MinimaxCn => {
                 body["thinking"] = json!({ "type": "disabled" });
             }
             ApiProvider::Stepfun => {}
@@ -2424,6 +2428,7 @@ pub(super) fn apply_reasoning_effort(
             ApiProvider::Anthropic
             | ApiProvider::DeepseekAnthropic
             | ApiProvider::MinimaxAnthropic
+            | ApiProvider::MinimaxAnthropicCn
             | ApiProvider::Openmodel => {
                 // Thinking shaping happens in the Messages adapter, which
                 // applies each provider's supported control fields.
@@ -2434,7 +2439,7 @@ pub(super) fn apply_reasoning_effort(
                     "reasoning_effort": "high",
                 });
             }
-            ApiProvider::Minimax => {
+            ApiProvider::Minimax | ApiProvider::MinimaxCn => {
                 body["thinking"] = json!({ "type": "adaptive" });
             }
             ApiProvider::Zai => {
@@ -2499,6 +2504,7 @@ pub(super) fn apply_reasoning_effort(
             ApiProvider::Anthropic
             | ApiProvider::DeepseekAnthropic
             | ApiProvider::MinimaxAnthropic
+            | ApiProvider::MinimaxAnthropicCn
             | ApiProvider::Openmodel => {
                 // Thinking shaping happens in the Messages adapter, which
                 // applies each provider's supported control fields.
@@ -2509,7 +2515,7 @@ pub(super) fn apply_reasoning_effort(
                     "reasoning_effort": "max",
                 });
             }
-            ApiProvider::Minimax => {
+            ApiProvider::Minimax | ApiProvider::MinimaxCn => {
                 body["thinking"] = json!({ "type": "adaptive" });
             }
             ApiProvider::Zai => {

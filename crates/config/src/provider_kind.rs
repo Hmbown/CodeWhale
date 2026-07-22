@@ -105,6 +105,21 @@ pub enum ProviderKind {
         alias = "mini_max_anthropic"
     )]
     MinimaxAnthropic,
+    #[serde(
+        alias = "minimax-cn",
+        alias = "minimax_CN",
+        alias = "minimax-china"
+    )]
+    MinimaxCN,
+    #[serde(
+        alias = "minimax_anthropic_cn",
+        alias = "minimax-anthropic-cn",
+        alias = "minimax-anthropic-CN",
+        alias = "minimax_anthropic_CN",
+        alias = "minimax-china-anthropic",
+        alias = "minimax-token-plan"
+    )]
+    MinimaxAnthropicCN,
     #[serde(alias = "deep-infra", alias = "deep_infra")]
     Deepinfra,
     #[serde(alias = "sakana-ai", alias = "sakana_ai", alias = "fugu")]
@@ -164,6 +179,8 @@ impl ProviderKind {
         Self::Stepfun,
         Self::Minimax,
         Self::MinimaxAnthropic,
+        Self::MinimaxCN,
+        Self::MinimaxAnthropicCN,
         Self::Deepinfra,
         Self::Sakana,
         Self::LongCat,
@@ -207,6 +224,14 @@ impl ProviderKind {
     #[must_use]
     pub fn is_siliconflow(self) -> bool {
         matches!(self, Self::Siliconflow | Self::SiliconflowCN)
+    }
+
+    #[must_use]
+    pub fn is_minimax(self) -> bool {
+        matches!(
+            self,
+            Self::Minimax | Self::MinimaxAnthropic | Self::MinimaxCN | Self::MinimaxAnthropicCN
+        )
     }
 
     /// Return the built-in metadata entry for this provider.

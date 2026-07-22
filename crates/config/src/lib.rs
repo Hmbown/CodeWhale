@@ -288,6 +288,24 @@ pub struct ProvidersToml {
     #[serde(
         default,
         skip_serializing_if = "ProviderConfigToml::is_empty",
+        alias = "minimax-cn",
+        alias = "minimax_CN",
+        alias = "minimax-china"
+    )]
+    pub minimax_cn: ProviderConfigToml,
+    #[serde(
+        default,
+        skip_serializing_if = "ProviderConfigToml::is_empty",
+        alias = "minimax-anthropic-cn",
+        alias = "minimax_anthropic_cn",
+        alias = "minimax-anthropic-CN",
+        alias = "minimax_anthropic_CN",
+        alias = "minimax-token-plan"
+    )]
+    pub minimax_anthropic_cn: ProviderConfigToml,
+    #[serde(
+        default,
+        skip_serializing_if = "ProviderConfigToml::is_empty",
         alias = "deep-infra",
         alias = "deep_infra"
     )]
@@ -443,6 +461,8 @@ impl ProvidersToml {
             ProviderKind::Stepfun => &self.stepfun,
             ProviderKind::Minimax => &self.minimax,
             ProviderKind::MinimaxAnthropic => &self.minimax_anthropic,
+            ProviderKind::MinimaxCN => &self.minimax_cn,
+            ProviderKind::MinimaxAnthropicCN => &self.minimax_anthropic_cn,
             ProviderKind::Deepinfra => &self.deepinfra,
             ProviderKind::Sakana => &self.sakana,
             ProviderKind::LongCat => &self.longcat,
@@ -483,6 +503,8 @@ impl ProvidersToml {
             ProviderKind::Stepfun => &mut self.stepfun,
             ProviderKind::Minimax => &mut self.minimax,
             ProviderKind::MinimaxAnthropic => &mut self.minimax_anthropic,
+            ProviderKind::MinimaxCN => &mut self.minimax_cn,
+            ProviderKind::MinimaxAnthropicCN => &mut self.minimax_anthropic_cn,
             ProviderKind::Deepinfra => &mut self.deepinfra,
             ProviderKind::Sakana => &mut self.sakana,
             ProviderKind::LongCat => &mut self.longcat,
@@ -2346,6 +2368,8 @@ impl ConfigToml {
                 ProviderKind::Stepfun => DEFAULT_STEPFUN_BASE_URL.to_string(),
                 ProviderKind::Minimax => DEFAULT_MINIMAX_BASE_URL.to_string(),
                 ProviderKind::MinimaxAnthropic => DEFAULT_MINIMAX_ANTHROPIC_BASE_URL.to_string(),
+                ProviderKind::MinimaxCN => DEFAULT_MINIMAX_CN_BASE_URL.to_string(),
+                ProviderKind::MinimaxAnthropicCN => DEFAULT_MINIMAX_ANTHROPIC_CN_BASE_URL.to_string(),
                 ProviderKind::Deepinfra => DEFAULT_DEEPINFRA_BASE_URL.to_string(),
                 ProviderKind::Sakana => DEFAULT_SAKANA_BASE_URL.to_string(),
                 ProviderKind::LongCat => DEFAULT_LONGCAT_BASE_URL.to_string(),
@@ -2616,7 +2640,10 @@ fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
     }
     if matches!(
         provider,
-        ProviderKind::Minimax | ProviderKind::MinimaxAnthropic
+        ProviderKind::Minimax
+            | ProviderKind::MinimaxAnthropic
+            | ProviderKind::MinimaxCN
+            | ProviderKind::MinimaxAnthropicCN
     ) && let Some(canonical) = canonical_minimax_model_id(model)
     {
         return canonical.to_string();
@@ -2637,6 +2664,8 @@ fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
             | ProviderKind::Stepfun
             | ProviderKind::Minimax
             | ProviderKind::MinimaxAnthropic
+            | ProviderKind::MinimaxCN
+            | ProviderKind::MinimaxAnthropicCN
             | ProviderKind::Qianfan
             | ProviderKind::Ollama
             | ProviderKind::Meta
@@ -3014,7 +3043,10 @@ fn default_model_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Openmodel => DEFAULT_OPENMODEL_MODEL,
         ProviderKind::Zai => DEFAULT_ZAI_MODEL,
         ProviderKind::Stepfun => DEFAULT_STEPFUN_MODEL,
-        ProviderKind::Minimax | ProviderKind::MinimaxAnthropic => DEFAULT_MINIMAX_MODEL,
+        ProviderKind::Minimax
+        | ProviderKind::MinimaxAnthropic
+        | ProviderKind::MinimaxCN
+        | ProviderKind::MinimaxAnthropicCN => DEFAULT_MINIMAX_MODEL,
         ProviderKind::Deepinfra => DEFAULT_DEEPINFRA_MODEL,
         ProviderKind::Sakana => DEFAULT_SAKANA_MODEL,
         ProviderKind::LongCat => DEFAULT_LONGCAT_MODEL,
@@ -3056,6 +3088,8 @@ fn default_base_url_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Stepfun => DEFAULT_STEPFUN_BASE_URL,
         ProviderKind::Minimax => DEFAULT_MINIMAX_BASE_URL,
         ProviderKind::MinimaxAnthropic => DEFAULT_MINIMAX_ANTHROPIC_BASE_URL,
+        ProviderKind::MinimaxCN => DEFAULT_MINIMAX_CN_BASE_URL,
+        ProviderKind::MinimaxAnthropicCN => DEFAULT_MINIMAX_ANTHROPIC_CN_BASE_URL,
         ProviderKind::Deepinfra => DEFAULT_DEEPINFRA_BASE_URL,
         ProviderKind::Sakana => DEFAULT_SAKANA_BASE_URL,
         ProviderKind::LongCat => DEFAULT_LONGCAT_BASE_URL,
@@ -5055,8 +5089,10 @@ impl EnvRuntimeOverrides {
             ProviderKind::Openmodel => self.openmodel_base_url.clone(),
             ProviderKind::Zai => self.zai_base_url.clone(),
             ProviderKind::Stepfun => self.stepfun_base_url.clone(),
-            ProviderKind::Minimax => self.minimax_base_url.clone(),
-            ProviderKind::MinimaxAnthropic => self.minimax_anthropic_base_url.clone(),
+            ProviderKind::Minimax | ProviderKind::MinimaxCN => self.minimax_base_url.clone(),
+            ProviderKind::MinimaxAnthropic | ProviderKind::MinimaxAnthropicCN => {
+                self.minimax_anthropic_base_url.clone()
+            }
             ProviderKind::Deepinfra => self.deepinfra_base_url.clone(),
             ProviderKind::Sakana => self.sakana_base_url.clone(),
             ProviderKind::LongCat => self.longcat_base_url.clone(),
@@ -5090,7 +5126,10 @@ impl EnvRuntimeOverrides {
             ProviderKind::Openmodel => self.openmodel_model.clone(),
             ProviderKind::Zai => self.zai_model.clone(),
             ProviderKind::Stepfun => self.stepfun_model.clone(),
-            ProviderKind::Minimax | ProviderKind::MinimaxAnthropic => self.minimax_model.clone(),
+            ProviderKind::Minimax
+            | ProviderKind::MinimaxAnthropic
+            | ProviderKind::MinimaxCN
+            | ProviderKind::MinimaxAnthropicCN => self.minimax_model.clone(),
             ProviderKind::Deepinfra => self.deepinfra_model.clone(),
             ProviderKind::Sakana => self.sakana_model.clone(),
             ProviderKind::LongCat => self.longcat_model.clone(),
