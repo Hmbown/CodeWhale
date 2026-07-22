@@ -2,11 +2,13 @@
 //! workspace-local `<workspace>/.codewhale/commands/<name>.md`.
 //!
 //! Users drop `.md` files into a commands directory and the filename
-//! (without `.md` extension) becomes a slash command. When invoked via
-//! `/name`, the file contents are sent as a user message.
+//! (without `.md` extension) becomes the default slash-command name. A
+//! frontmatter `name` may replace it. When invoked, the file contents are sent
+//! as a user message.
 //!
 //! Files may include optional YAML-like frontmatter between `---` markers.
-//! Supported fields are `description`, `argument-hint`, `allowed-tools`, and `pausable`.
+//! Supported fields are `name`, `description`, `usage`, `arguments`,
+//! `argument-hint`, `allowed-tools`, `pausable`, `alias`/`aliases`, and `hidden`.
 //! Frontmatter is stripped before the command body is sent to the model.
 //!
 //! ## Precedence
@@ -794,5 +796,23 @@ mod tests {
             "Scan nested git repositories".to_string()
         )));
         assert!(metadata.contains(&("argument-hint".to_string(), "<root>".to_string())));
+    }
+
+    #[test]
+    fn parser_preserves_layer_5_1_frontmatter_fields() {
+        let (metadata, body) = parse_frontmatter(
+            "---\nname: inspect\ndescription: Inspect a target\nusage: /inspect <path>\narguments: <path>\nhidden: false\nallowed-tools: Read_File, Grep_Files\n---\ninspect $ARGUMENTS",
+        );
+
+        assert!(metadata.contains(&("name".to_string(), "inspect".to_string())));
+        assert!(metadata.contains(&("description".to_string(), "Inspect a target".to_string())));
+        assert!(metadata.contains(&("usage".to_string(), "/inspect <path>".to_string())));
+        assert!(metadata.contains(&("arguments".to_string(), "<path>".to_string())));
+        assert!(metadata.contains(&("hidden".to_string(), "false".to_string())));
+        assert!(metadata.contains(&(
+            "allowed-tools".to_string(),
+            "Read_File, Grep_Files".to_string()
+        )));
+        assert_eq!(body, "inspect $ARGUMENTS");
     }
 }

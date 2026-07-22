@@ -81,12 +81,23 @@ pub fn apply_slash_menu_selection(
 
     let mut command = selected.name.clone();
 
+    let command_key = command.trim_start_matches('/');
+    let user_takes_arguments =
+        commands::user_registry::with_registry_for_workspace(Some(&app.workspace), |registry| {
+            registry
+                .get(command_key)
+                .map(|metadata| metadata.takes_arguments())
+        });
+    let takes_arguments = user_takes_arguments.unwrap_or_else(|| {
+        commands::get_command_info(command_key).is_some_and(|info| {
+            info.name != "change" && (info.usage.contains('<') || info.usage.contains('['))
+        })
+    });
+
     if append_space
         && !command.ends_with(' ')
         && !command.contains(char::is_whitespace)
-        && let Some(info) = commands::get_command_info(command.trim_start_matches('/'))
-        && info.name != "change"
-        && (info.usage.contains('<') || info.usage.contains('['))
+        && takes_arguments
     {
         command.push(' ');
     }

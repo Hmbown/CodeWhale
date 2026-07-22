@@ -9715,6 +9715,46 @@ fn apply_slash_menu_selection_appends_space_for_arg_commands() {
 }
 
 #[test]
+fn apply_slash_menu_selection_honors_user_argument_metadata_and_builtin_override() {
+    let tmp = TempDir::new().expect("tempdir");
+    let commands_dir = tmp.path().join(".codewhale").join("commands");
+    std::fs::create_dir_all(&commands_dir).expect("create commands dir");
+    std::fs::write(
+        commands_dir.join("custom-model.md"),
+        "---\nname: model\n---\ncustom model",
+    )
+    .expect("write no-argument builtin override");
+    std::fs::write(
+        commands_dir.join("inspect.md"),
+        "---\narguments: <path>\n---\ninspect",
+    )
+    .expect("write argument command");
+    let mut app = create_test_app();
+    app.workspace = tmp.path().to_path_buf();
+    let entries = vec![
+        crate::tui::widgets::SlashMenuEntry {
+            name: "/model".to_string(),
+            description: String::new(),
+            is_skill: false,
+            alias_hint: None,
+        },
+        crate::tui::widgets::SlashMenuEntry {
+            name: "/inspect".to_string(),
+            description: String::new(),
+            is_skill: false,
+            alias_hint: None,
+        },
+    ];
+
+    assert!(apply_slash_menu_selection(&mut app, &entries, true));
+    assert_eq!(app.input, "/model");
+
+    app.slash_menu_selected = 1;
+    assert!(apply_slash_menu_selection(&mut app, &entries, true));
+    assert_eq!(app.input, "/inspect ");
+}
+
+#[test]
 fn apply_slash_menu_selection_keeps_change_executable_without_version() {
     let mut app = create_test_app();
     let entries = vec![crate::tui::widgets::SlashMenuEntry {

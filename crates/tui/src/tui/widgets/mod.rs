@@ -3917,11 +3917,9 @@ fn push_command_entry(
             .description
             .clone()
             .unwrap_or_else(|| String::from("User-defined command"));
-        if let Some(hint) = &command.argument_hint
-            && !hint.trim().is_empty()
-        {
+        if let Some(hint) = command.display_usage() {
             description.push_str("  ");
-            description.push_str(hint.trim());
+            description.push_str(hint);
         }
         let alias_hint = if !command_key.to_ascii_lowercase().starts_with(prefix_lower) {
             command
@@ -5093,6 +5091,61 @@ mod tests {
     }
 
     #[test]
+    fn slash_completion_uses_frontmatter_name_and_usage() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let commands_dir = tmp.path().join(".codewhale").join("commands");
+        std::fs::create_dir_all(&commands_dir).unwrap();
+        std::fs::write(
+            commands_dir.join("workflow-file.md"),
+            "---\nname: inspect\ndescription: Inspect target\nusage: /inspect <path>\narguments: <path>\n---\ninspect",
+        )
+        .unwrap();
+
+        let hints = slash_completion_hints(
+            "/ins",
+            128,
+            &[],
+            Locale::En,
+            Some(tmp.path()),
+            ApiProvider::Deepseek,
+        );
+        let entry = hints
+            .iter()
+            .find(|hint| hint.name == "/inspect")
+            .expect("frontmatter name should complete");
+
+        assert_eq!(entry.description, "Inspect target  /inspect <path>");
+        assert!(!hints.iter().any(|hint| hint.name == "/workflow-file"));
+    }
+
+    #[test]
+    fn slash_completion_uses_arguments_when_usage_and_legacy_hint_are_absent() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let commands_dir = tmp.path().join(".codewhale").join("commands");
+        std::fs::create_dir_all(&commands_dir).unwrap();
+        std::fs::write(
+            commands_dir.join("deploy.md"),
+            "---\ndescription: Deploy target\narguments: <environment>\n---\ndeploy",
+        )
+        .unwrap();
+
+        let hints = slash_completion_hints(
+            "/deploy",
+            128,
+            &[],
+            Locale::En,
+            Some(tmp.path()),
+            ApiProvider::Deepseek,
+        );
+        let entry = hints
+            .iter()
+            .find(|hint| hint.name == "/deploy")
+            .expect("custom command should be present");
+
+        assert_eq!(entry.description, "Deploy target  <environment>");
+    }
+
+    #[test]
     fn slash_completion_hints_exclude_hidden_user_commands() {
         let tmp = tempfile::TempDir::new().unwrap();
         let commands_dir = tmp.path().join(".codewhale").join("commands");
@@ -5113,6 +5166,29 @@ mod tests {
         );
 
         assert!(!hints.iter().any(|hint| hint.name == "/secret"));
+    }
+
+    #[test]
+    fn hidden_name_override_filters_shadowed_builtin_from_slash_completion() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let commands_dir = tmp.path().join(".codewhale").join("commands");
+        std::fs::create_dir_all(&commands_dir).unwrap();
+        std::fs::write(
+            commands_dir.join("private-help.md"),
+            "---\nname: help\nhidden: true\n---\nprivate help",
+        )
+        .unwrap();
+
+        let hints = slash_completion_hints(
+            "/help",
+            128,
+            &[],
+            Locale::En,
+            Some(tmp.path()),
+            ApiProvider::Deepseek,
+        );
+
+        assert!(!hints.iter().any(|hint| hint.name == "/help"));
     }
 
     #[test]

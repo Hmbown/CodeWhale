@@ -130,14 +130,12 @@ pub fn build_entries_with_plugins(
                 .description
                 .clone()
                 .unwrap_or_else(|| "User-defined command".to_string());
-            if let Some(hint) = &command.argument_hint
-                && !hint.trim().is_empty()
-            {
+            if let Some(hint) = command.display_usage() {
                 description.push_str("  ");
-                description.push_str(hint.trim());
+                description.push_str(hint);
             }
             let slash_command = format!("/{}", command.name);
-            let action = if command.argument_hint.is_some() {
+            let action = if command.takes_arguments() {
                 CommandPaletteAction::InsertText {
                     text: format!("{slash_command} "),
                 }
@@ -1482,6 +1480,41 @@ mod tests {
     }
 
     #[test]
+    fn command_palette_uses_frontmatter_name_usage_and_arguments() {
+        let tmp = TempDir::new().expect("tempdir");
+        let workspace = tmp.path().join("workspace");
+        let commands_dir = workspace.join(".codewhale").join("commands");
+        std::fs::create_dir_all(&commands_dir).expect("create commands dir");
+        std::fs::write(
+            commands_dir.join("workflow-file.md"),
+            "---\nname: inspect\ndescription: Inspect a target\nusage: /inspect <path>\narguments: <path>\nargument-hint: <legacy>\n---\nInspect $ARGUMENTS",
+        )
+        .expect("write user command");
+
+        let entries = build_entries(
+            Locale::En,
+            tmp.path().join("skills").as_path(),
+            false,
+            workspace.as_path(),
+            tmp.path().join("mcp.json").as_path(),
+            None,
+        );
+        let user_entry = entries
+            .iter()
+            .find(|entry| entry.section == PaletteSection::Command && entry.label == "/inspect")
+            .expect("frontmatter name should be the palette command");
+
+        assert_eq!(user_entry.description, "Inspect a target  /inspect <path>");
+        assert!(matches!(
+            &user_entry.action,
+            CommandPaletteAction::InsertText { text } if text == "/inspect "
+        ));
+        assert!(!entries.iter().any(|entry| {
+            entry.section == PaletteSection::Command && entry.label == "/workflow-file"
+        }));
+    }
+
+    #[test]
     fn command_palette_excludes_hidden_user_commands() {
         let tmp = TempDir::new().expect("tempdir");
         let workspace = tmp.path().join("workspace");
@@ -1507,6 +1540,33 @@ mod tests {
                 .iter()
                 .any(|entry| entry.section == PaletteSection::Command && entry.label == "/secret")
         );
+    }
+
+    #[test]
+    fn hidden_frontmatter_name_override_suppresses_shadowed_builtin() {
+        let tmp = TempDir::new().expect("tempdir");
+        let workspace = tmp.path().join("workspace");
+        let commands_dir = workspace.join(".codewhale").join("commands");
+        std::fs::create_dir_all(&commands_dir).expect("create commands dir");
+        std::fs::write(
+            commands_dir.join("private-help.md"),
+            "---\nname: help\nhidden: true\n---\nprivate help",
+        )
+        .expect("write hidden user command");
+
+        let entries = build_entries(
+            Locale::En,
+            tmp.path().join("skills").as_path(),
+            false,
+            workspace.as_path(),
+            tmp.path().join("mcp.json").as_path(),
+            None,
+        );
+
+        assert!(!entries.iter().any(|entry| {
+            entry.section == PaletteSection::Command
+                && matches!(entry.label.as_str(), "/help" | "/private-help")
+        }));
     }
 
     #[test]
