@@ -1,3 +1,4 @@
+# auto-fix: v0.9.1: Ship the model-invoked default CodeWhale skill pack
 //! System-skill installer: bundles first-party skills and auto-installs them
 //! on first launch.
 
