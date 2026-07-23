@@ -438,6 +438,7 @@ impl WorkBucket {
 struct RankedWorkRow {
     bucket: WorkBucket,
     order: usize,
+    is_plan_step: bool,
     row: WorkRow,
 }
 
@@ -483,6 +484,7 @@ fn ordered_rows(
                 .map(|(order, node)| RankedWorkRow {
                     bucket: node_bucket(node),
                     order: 10_000usize.saturating_add(order),
+                    is_plan_step: node.kind == NodeKind::PlanStep,
                     row: graph_node_row(snapshot, node),
                 }),
         );
@@ -495,7 +497,19 @@ fn ordered_rows(
         ranked.push(row);
     }
 
-    ranked.sort_by_key(|item| (item.bucket.rank(), item.order));
+    ranked.sort_by(|a, b| match (a.is_plan_step, b.is_plan_step) {
+        // To-do (plan step) rows keep canonical order: a completed step must
+        // not sink below a later pending step and lose its identity. Agent and
+        // operation rows still sort by status bucket (#4689).
+        (true, true) => a.order.cmp(&b.order),
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        (false, false) => a
+            .bucket
+            .rank()
+            .cmp(&b.bucket.rank())
+            .then_with(|| a.order.cmp(&b.order)),
+    });
 
     let active = ranked
         .iter()
@@ -720,6 +734,7 @@ fn coordination_row(app: &App) -> Option<RankedWorkRow> {
         // Coordination is a session-wide receipt, before individual workers
         // within the same bucket but after live/attention priority sorting.
         order: 100,
+        is_plan_step: false,
         row: WorkRow {
             id: WorkRowId("coordination".to_string()),
             mark: if attention {
@@ -825,6 +840,7 @@ fn agent_rows(app: &App) -> Vec<RankedWorkRow> {
             RankedWorkRow {
                 bucket,
                 order,
+                is_plan_step: false,
                 row: WorkRow {
                     id: WorkRowId(format!("worker:{}", agent.agent_id)),
                     mark: agent_mark(bucket),
@@ -887,6 +903,7 @@ fn agent_rows(app: &App) -> Vec<RankedWorkRow> {
                 RankedWorkRow {
                     bucket,
                     order: 5_000usize.saturating_add(order),
+                    is_plan_step: false,
                     row: WorkRow {
                         id: WorkRowId(format!("worker:{id}")),
                         mark: agent_mark(bucket),
@@ -1120,6 +1137,7 @@ fn aggregate_activity_row(activity: &SettledFileActivity) -> Option<RankedWorkRo
     Some(RankedWorkRow {
         bucket: WorkBucket::Recent,
         order: 20_000,
+        is_plan_step: false,
         row: WorkRow {
             id: WorkRowId("activity:aggregate".to_string()),
             mark: crate::tui::glyphs::DONE,
