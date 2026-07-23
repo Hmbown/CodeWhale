@@ -4619,15 +4619,93 @@ fn shell_live_output_update_matches_exact_task_id_only() {
     );
 
     assert!(shell_exec_live_update(&app, 0, &jobs).is_none());
-    let (_task_id, status, output, duration) =
+    let (_task_id, status, output, duration, finalized) =
         shell_exec_live_update(&app, 1, &jobs).expect("matching task id updates");
 
     assert_eq!(status, ToolStatus::Running);
     assert_eq!(duration, 777);
+    assert!(!finalized);
     assert_eq!(
         output.as_deref(),
         Some("stdout tail\n\n\nSTDERR:\nstderr tail\n")
     );
+}
+
+#[test]
+fn shell_live_output_update_finalizes_background_exec_output() {
+    let mut app = create_test_app();
+    app.push_history_cell(HistoryCell::Tool(ToolCell::Exec(ExecCell {
+        command: "cargo test --workspace".to_string(),
+        status: ToolStatus::Running,
+        output: None,
+        live_output: Some("previous output".to_string()),
+        shell_task_id: Some("shell_a".to_string()),
+        owner_agent_id: None,
+        owner_agent_name: None,
+        started_at: None,
+        duration_ms: None,
+        source: ExecSource::Assistant,
+        interaction: None,
+        output_summary: None,
+    })));
+
+    let mut jobs = std::collections::HashMap::new();
+    jobs.insert(
+        "shell_a".to_string(),
+        ShellJobSnapshot {
+            id: "shell_a".to_string(),
+            job_id: "shell_a".to_string(),
+            command: "cargo test --workspace".to_string(),
+            cwd: PathBuf::from("/tmp/repo"),
+            status: ShellStatus::Completed,
+            exit_code: Some(0),
+            elapsed_ms: 999,
+            stdout_tail: "final stdout\n".to_string(),
+            stderr_tail: "final stderr\n".to_string(),
+            stdout_len: 13,
+            stderr_len: 13,
+            stdin_available: false,
+            stale: false,
+            elapsed_since_output_ms: None,
+            linked_task_id: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
+        },
+    );
+
+    let (task_id, status, output, duration, finalized) =
+        shell_exec_live_update(&app, 0, &jobs).expect("completed shell updates");
+    assert_eq!(task_id, "shell_a");
+    assert_eq!(status, ToolStatus::Success);
+    assert_eq!(duration, 999);
+    assert!(finalized);
+    assert_eq!(
+        output.as_deref(),
+        Some("final stdout\n\n\nSTDERR:\nfinal stderr\n")
+    );
+
+    let HistoryCell::Tool(ToolCell::Exec(exec)) =
+        app.cell_at_virtual_index_mut(0).expect("exec cell")
+    else {
+        panic!("expected exec cell");
+    };
+    exec.status = status;
+    exec.duration_ms = Some(duration);
+    exec.output = output;
+    exec.output_summary = exec
+        .output
+        .as_deref()
+        .map(crate::tui::history::summarize_tool_output);
+    exec.live_output = None;
+
+    assert_eq!(exec.status, ToolStatus::Success);
+    assert_eq!(
+        exec.output.as_deref(),
+        Some("final stdout\n\n\nSTDERR:\nfinal stderr\n")
+    );
+    assert!(exec.live_output.is_none());
+    assert_eq!(exec.duration_ms, Some(999));
+    assert!(exec.output_summary.is_some());
 }
 
 #[test]

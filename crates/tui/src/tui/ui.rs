@@ -2047,7 +2047,7 @@ fn refresh_shell_exec_live_output(app: &mut App) -> bool {
 
     let mut changed = false;
     for index in 0..app.virtual_cell_count() {
-        let Some((task_id, next_status, next_live, next_duration)) =
+        let Some((task_id, next_status, next_live, next_duration, finalized)) =
             shell_exec_live_update(app, index, &jobs)
         else {
             continue;
@@ -2060,8 +2060,17 @@ fn refresh_shell_exec_live_output(app: &mut App) -> bool {
             continue;
         }
         exec.status = next_status;
-        exec.live_output = next_live;
         exec.duration_ms = Some(next_duration);
+        if finalized {
+            exec.output = next_live;
+            exec.output_summary = exec
+                .output
+                .as_deref()
+                .map(super::history::summarize_tool_output);
+            exec.live_output = None;
+        } else {
+            exec.live_output = next_live;
+        }
         changed = true;
     }
     changed
@@ -2071,7 +2080,7 @@ fn shell_exec_live_update(
     app: &App,
     index: usize,
     jobs: &std::collections::HashMap<String, ShellJobSnapshot>,
-) -> Option<(String, ToolStatus, Option<String>, u64)> {
+) -> Option<(String, ToolStatus, Option<String>, u64, bool)> {
     let HistoryCell::Tool(ToolCell::Exec(exec)) = app.cell_at_virtual_index(index)? else {
         return None;
     };
@@ -2082,13 +2091,20 @@ fn shell_exec_live_update(
     let job = jobs.get(task_id)?;
     let next_status = shell_job_tool_status(&job.status);
     let next_live = shell_job_live_output(job).or_else(|| exec.live_output.clone());
+    let finalized = !matches!(job.status, ShellStatus::Running);
     if exec.status == next_status
         && exec.live_output == next_live
         && exec.duration_ms == Some(job.elapsed_ms)
     {
         return None;
     }
-    Some((task_id.to_string(), next_status, next_live, job.elapsed_ms))
+    Some((
+        task_id.to_string(),
+        next_status,
+        next_live,
+        job.elapsed_ms,
+        finalized,
+    ))
 }
 
 fn shell_job_tool_status(status: &ShellStatus) -> ToolStatus {
