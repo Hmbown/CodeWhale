@@ -4749,6 +4749,7 @@ fn terminal_probe_timeout_uses_tui_config_and_clamps() {
             terminal_probe_timeout_ms: Some(750),
             stream_chunk_timeout_secs: None,
             status_items: None,
+            header_items: None,
             osc8_links: None,
             notification_condition: None,
             composer_arrows_scroll: None,

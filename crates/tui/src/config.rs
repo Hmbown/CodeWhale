@@ -1370,6 +1370,31 @@ where
     }))
 }
 
+/// Deserialize `header_items` tolerantly: skip keys unknown to this build
+/// instead of failing with an "unknown variant" error.
+///
+/// This keeps configuration files forward-compatible. For example, a newer
+/// CodeWhale build may write a header item that an older build does not yet
+/// understand; the older build will ignore that item while preserving the
+/// remaining supported entries.
+fn deser_header_items<'de, D>(deserializer: D) -> Result<Option<Vec<HeaderItem>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw: Option<Vec<String>> = Option::deserialize(deserializer)?;
+    Ok(raw.map(|strings| {
+        strings
+            .into_iter()
+            .filter_map(|s| {
+                HeaderItem::from_key(&s).or_else(|| {
+                    tracing::warn!("ignoring unknown header item {s:?} in config");
+                    None
+                })
+            })
+            .collect()
+    }))
+}
+
 /// UI configuration loaded from config files.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct TuiConfig {
@@ -1389,6 +1414,22 @@ pub struct TuiConfig {
     /// in `~/.deepseek/config.toml`.
     #[serde(default, deserialize_with = "deser_status_items")]
     pub status_items: Option<Vec<StatusItem>>,
+    /// Ordered list of optional header items the user wants visible.
+    ///
+    /// `None` (the field missing from `config.toml`) preserves the built-in
+    /// header unchanged. An empty `Some(vec![])` likewise enables no additional
+    /// header items, while configured entries enable their corresponding
+    /// optional header content.
+    ///
+    /// The existing context-utilisation display remains part of the built-in
+    /// header and is not controlled by this list.
+    ///
+    /// Unknown items are ignored during deserialization so configurations written
+    /// by newer CodeWhale versions remain loadable by older versions.
+    ///
+    /// Persisted to `tui.header_items` in `~/.deepseek/config.toml`.
+    #[serde(default, deserialize_with = "deser_header_items")]
+    pub header_items: Option<Vec<HeaderItem>>,
     /// Emit OSC 8 hyperlink escape sequences around URLs in the transcript so
     /// supporting terminals (iTerm2, Terminal.app 13+, Ghostty, Kitty,
     /// WezTerm, Alacritty, recent gnome-terminal/konsole) make them clickable
@@ -1825,6 +1866,43 @@ impl StatusItem {
                 matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN)
             }
             _ => true,
+        }
+    }
+}
+
+/// One configurable header item
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum HeaderItem {
+    /// Session token usage: input / cache-hit / output.
+    Tokens,
+}
+
+impl HeaderItem {
+    /// Default header composition for the always-on status line. Used when
+    /// `tui.header_items` is missing from `config.toml` so upgraders see a
+    /// concise header by default; diagnostic chips remain available through
+    /// explicit configuration without crowding the main UI.
+    #[must_use]
+    pub fn default_header() -> Vec<HeaderItem> {
+        Vec::new()
+    }
+
+    /// Stable canonical name used in TOML.
+    #[must_use]
+    pub fn key(self) -> &'static str {
+        match self {
+            HeaderItem::Tokens => "tokens",
+        }
+    }
+
+    /// Parse a config string while ignoring unknown items.
+    #[must_use]
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "tokens" => Some(Self::Tokens),
+            _ => None,
         }
     }
 }
