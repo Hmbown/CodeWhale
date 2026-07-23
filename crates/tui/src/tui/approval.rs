@@ -818,12 +818,12 @@ fn edit_file_preview_lines(params: &Value, max_lines: usize) -> Option<Vec<Strin
     Some(lines)
 }
 
-fn exact_edit_file_preview_lines(params: &Value) -> Option<Vec<String>> {
+fn exact_edit_file_preview_lines(params: &Value, locale: Locale) -> Option<Vec<String>> {
     let search = param_text(params, &["search"])?;
     let replace = param_text(params, &["replace"])?;
-    let mut lines = vec!["replace this".to_string()];
+    let mut lines = vec![tr(locale, MessageId::ApprovalLabelReplaceThis).into_owned()];
     lines.extend(exact_preview_body_lines("- ", &search));
-    lines.push("with this".to_string());
+    lines.push(tr(locale, MessageId::ApprovalLabelWithThis).into_owned());
     lines.extend(exact_preview_body_lines("+ ", &replace));
     Some(lines)
 }
@@ -1409,12 +1409,12 @@ impl ApprovalView {
         }
         content.push('\n');
         if canonical_action_alias(&self.request.tool_name, &self.request.params) == "edit_file"
-            && let Some(preview_lines) = exact_edit_file_preview_lines(&self.request.params)
+            && let Some(preview_lines) = exact_edit_file_preview_lines(&self.request.params, locale)
         {
-            content.push_str(&localize_detail_label("Preview", locale));
+            content.push_str(&tr(locale, MessageId::ApprovalLabelPreview));
             content.push_str(":\n");
             for line in preview_lines {
-                content.push_str(&localize_preview_shell_line("edit_file", &line, locale));
+                content.push_str(&line);
                 content.push('\n');
             }
             content.push('\n');
@@ -3141,6 +3141,40 @@ diff --git a/src/b.rs b/src/b.rs
             displayed.contains(&expected_preview),
             "details pager display changed exact whitespace or line endings:\n{displayed}"
         );
+    }
+
+    #[test]
+    fn edit_file_details_pager_localizes_preview_headers_for_every_locale() {
+        for &locale in Locale::shipped() {
+            let request = ApprovalRequest::new(
+                "test-id",
+                "edit_file",
+                "Edit a file on disk",
+                &json!({
+                    "path": "src/lib.rs",
+                    "search": "old();",
+                    "replace": "new();"
+                }),
+                "tool:edit_file",
+            );
+            let mut view = ApprovalView::new_for_locale(request, locale);
+
+            let action = view.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::ALT));
+            let ViewAction::Emit(ViewEvent::OpenTextPager { content, .. }) = action else {
+                panic!("Alt+V should open the edit details pager for {locale:?}");
+            };
+            let expected_headers = format!(
+                "{}:\n{}\n- \"old();\"\n{}\n+ \"new();\"",
+                tr(locale, MessageId::ApprovalLabelPreview),
+                tr(locale, MessageId::ApprovalLabelReplaceThis),
+                tr(locale, MessageId::ApprovalLabelWithThis),
+            );
+
+            assert!(
+                content.contains(&expected_headers),
+                "details pager did not localize edit preview headers for {locale:?}:\n{content}"
+            );
+        }
     }
 
     #[test]
