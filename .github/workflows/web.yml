@@ -56,7 +56,20 @@ jobs:
     name: Deploy to Cloudflare
     runs-on: ubuntu-latest
     needs: lint
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    # Auto-deploy every push to main once `lint` is green, and still allow a
+    # manual dispatch for redeploys that do not correspond to a new commit
+    # (rotated secrets, a reverted KV namespace, a Cloudflare-side incident).
+    # `needs: lint` is the gate: facts drift, docs parity, tests, ESLint, tsc,
+    # and a production build all pass before anything reaches Cloudflare.
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      && github.ref == 'refs/heads/main'
+    # Serialize deploys so two pushes landing close together cannot race and
+    # leave Cloudflare serving the older bundle. Never cancel in progress: a
+    # half-finished OpenNext upload is worse than a queued one.
+    concurrency:
+      group: deploy-codewhale-web
+      cancel-in-progress: false
     defaults:
       run:
         working-directory: web
@@ -73,8 +86,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Record deployed/source drift
-        # Read-only and credential-free. A mismatch is expected before a
-        # maintainer-approved deployment, so this step reports without gating.
+        # Read-only and credential-free. A mismatch is the normal state here —
+        # it is the gap this run is about to close — so this step reports
+        # without gating. The real assertion is the post-deploy verification
+        # below, which must observe this exact revision on the public receipt.
         run: npm run compare:deployed-facts -- --expected-revision "$GITHUB_SHA"
       - name: Check Cloudflare deploy environment
         run: npm run check:deploy-env
