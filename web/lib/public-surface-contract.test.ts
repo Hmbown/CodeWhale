@@ -142,7 +142,9 @@ describe("public surface contracts", () => {
     expect(matrix.product.name).toBe("Codewhale");
     expect(matrix.product.license).toBe("MIT");
     expect(matrix.product.description).toBe(npmPackage.description);
-    expect(readme).toMatch(/supported hosted\s+and local models/);
+    // The README intro was simplified; assert the hosted-and-local claim rather
+    // than the verbatim product tagline (kept in page-meta.ts / public-surface-facts.json).
+    expect(readme).toMatch(/hosted or local/);
     expect(license).toContain("MIT License");
     expect(matrix.install.recommended).toBe("npm install -g codewhale");
     expect(readme).toContain(matrix.install.recommended);

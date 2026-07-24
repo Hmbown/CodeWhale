@@ -1,32 +1,23 @@
-<!-- source: README.md sha256:a14f7d3aa7d1 -->
+<!-- source: README.md sha256:797a23968c31 -->
 # Codewhale
 
-**Một runtime. Các model hosted và local được hỗ trợ. Máy của bạn.**
+Một coding agent mã nguồn mở cho terminal của bạn — mang theo model của riêng bạn.
 
-Codewhale là một coding agent cho terminal của bạn. Hoạt động với các model
-hosted và local được hỗ trợ; ưu tiên model mở. Đưa cho nó một provider, một model và một nhiệm vụ: nó đọc
-code của bạn, sửa file, chạy lệnh, kiểm tra công việc của mình, và dừng lại
-khi nhiệm vụ hoàn thành hoặc cần đến bạn. Đổi model giữa chừng bằng `/model`.
-Dùng TUI cho công việc tương tác, `codewhale exec` cho script và CI. Viết
-bằng Rust, giấy phép MIT, chạy trên máy của bạn.
+Codewhale khởi đầu là một trải nghiệm gốc (native) cho DeepSeek. Từ đó, nó đã
+phát triển thành một dự án do cộng đồng dẫn dắt: một coding harness hợp với một
+cộng đồng quốc tế đang lớn dần và hỗ trợ càng nhiều model cùng provider càng
+tốt — model mở trước tiên, hosted hay local, không cái nào được ưu ái hơn cái
+nào.
 
-**Vì sao chọn Codewhale:**
-- **Không bị khóa chân.** DeepSeek, Claude, GPT, Kimi, GLM, hơn 30 provider,
-  và vLLM, SGLang hay Ollama của riêng bạn — không cần key — đều chạy qua một
-  runtime và một bộ công cụ. Ngân sách ngữ cảnh và giá lấy từ route thật; giá
-  chưa rõ hiển thị là chưa rõ, không bao giờ là $0.
-- **An toàn từ thiết kế.** Chế độ Plan chỉ đọc. Mọi lệnh gọi rủi ro đều qua
-  phê duyệt. Codewhale chỉ báo sandbox lệnh của hệ điều hành khi lệnh thực sự
-  được bọc: Seatbelt trên macOS khi khả dụng và bubblewrap trên Linux khi đã
-  cài đặt và bật rõ ràng. Windows hiện báo không có sandbox. `constitution.json`
-  của repo được biên dịch thành các chốt chặn ghi mà ngay cả Full Access cũng
-  không thể bỏ qua.
-- **Công việc không mất.** Fleet ghi lại từng bước vào sổ cái chỉ ghi thêm;
-  `fleet resume` tiếp tục từ chỗ bạn dừng. Mỗi lượt đều để lại một biên nhận
-  bạn có thể kiểm tra.
+Đưa cho nó một provider, một model và một nhiệm vụ. Nó đọc code của bạn, sửa
+file, chạy lệnh, kiểm tra công việc của mình, rồi dừng lại khi nhiệm vụ hoàn
+thành hoặc cần đến bạn. Đổi model giữa chừng bằng `/model`. Làm việc tương tác
+trong TUI, hoặc chạy `codewhale exec` trong script và CI. Viết bằng Rust, giấy
+phép MIT, và chạy trên máy của bạn.
 
-Sinh ra từ `deepseek-tui`. Cộng đồng của nó cần nhiều provider hơn, nên chúng
-tôi xây một runtime nơi model là một linh kiện, không phải sản phẩm.
+Chúng tôi luôn tìm kiếm người đóng góp và cách cải thiện. Nếu một model hay
+provider bạn dùng còn thiếu, hoặc có gì đó hỏng, báo cho chúng tôi biết là một
+trong những điều hữu ích nhất bạn có thể làm — xem [Đóng góp](#đóng-góp).
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja-JP.md) · [한국어](README.ko-KR.md) · [Español](README.es-419.md) · [Português](README.pt-BR.md) · [codewhale.net](https://codewhale.net/) · [Docs](docs) · [Changelog](CHANGELOG.md)
 
@@ -62,6 +53,20 @@ chuyển vòng qua Plan / Act / Operate và `Shift+Tab` chuyển vòng qua tư t
 quyền Ask / Auto-Review / Full Access. `!` chạy một lệnh shell qua đường phê
 duyệt bình thường.
 
+## Tính năng
+
+- **Model nào cũng được, provider nào cũng được.** DeepSeek, Claude, GPT, Kimi,
+  GLM, hơn 30 provider, và vLLM, SGLang hay Ollama của riêng bạn — không cần
+  key — đều chạy qua một runtime và một bộ công cụ. Ngân sách ngữ cảnh và giá
+  lấy từ route thật; giá chưa rõ hiển thị là chưa rõ, chứ không phải $0.
+- **Chỉ đọc cho tới khi bạn cho phép thêm.** Chế độ Plan không đổi file, và mọi
+  lệnh rủi ro đều qua phê duyệt. Khi một sandbox của hệ điều hành thực sự bọc
+  lệnh, Codewhale nói rõ điều đó: Seatbelt trên macOS khi khả dụng, bubblewrap
+  tùy chọn trên Linux. `constitution.json` của repo được biên dịch thành các
+  chốt chặn ghi mà ngay cả Full Access cũng không thể bỏ qua.
+- **Công việc bạn có thể tiếp tục.** Fleet ghi lại từng bước vào sổ cái chỉ ghi
+  thêm, nên `fleet resume` tiếp tục từ chỗ bạn dừng.
+
 ## Tìm hiểu thêm
 
 - [docs/PROVIDERS.md](docs/PROVIDERS.md) — mọi route provider: dịch vụ,
@@ -77,13 +82,11 @@ trúc — nằm trong [docs](docs) và trên [codewhale.net](https://codewhale.n
 
 ## Đóng góp
 
-Mọi phản hồi đều là một món quà. Issue, PR, các bước tái hiện lỗi, log, yêu
-cầu tính năng và những đóng góp đầu tiên đều là công việc thực sự của dự án.
-Khi một PR không thể merge nguyên trạng, maintainer sẽ harvest phần dùng được
-và tác giả vẫn được ghi công — trong commit, trong changelog và trong
-[docs/CONTRIBUTORS.md](docs/CONTRIBUTORS.md). Nếu một model hay provider bạn
-dùng còn thiếu, hoặc có gì đó hỏng trên máy của bạn, báo cho chúng tôi biết là
-điều hữu ích nhất bạn có thể làm.
+Issue, PR, các bước tái hiện lỗi, log và yêu cầu tính năng đều là công việc
+thực sự của dự án ở đây, và những đóng góp đầu tiên luôn được chào đón. Khi một
+PR không thể merge nguyên trạng, maintainer sẽ harvest phần dùng được và tác
+giả vẫn được ghi công — trong commit, trong changelog và trong
+[docs/CONTRIBUTORS.md](docs/CONTRIBUTORS.md).
 
 - [Issue đang mở](https://github.com/Hmbown/CodeWhale/issues) — những đóng góp
   đầu tiên phù hợp nằm ở đây

@@ -1,31 +1,21 @@
 # Codewhale
 
-**One runtime. Supported hosted and local models. Your machine.**
+An open source coding agent for your terminal — bring your own model.
 
-Codewhale is a coding agent for your terminal. It works with supported hosted
-and local models; open models first. Give it a provider, a model, and a task: it reads your
-code, edits files, runs commands, checks its work, and stops when the job
-is done or it needs you. Switch models mid-task with `/model`. Use the TUI
-for interactive work, `codewhale exec` for scripts and CI. Rust, MIT,
-runs on your machine.
+Codewhale started as a native experience for DeepSeek. It has since grown into a
+community-driven project: one coding harness that fits a growing international
+community and supports as many models and providers as possible — open models
+first, hosted or local, none privileged over the rest.
 
-**Why Codewhale:**
-- **No lock-in.** DeepSeek, Claude, GPT, Kimi, GLM, 30+ providers, and your
-  own vLLM, SGLang, or Ollama — no key required — run through one runtime
-  and one toolset. Context budgets and prices come from the real route. An
-  unknown price shows as unknown, never as $0.
-- **Safe by construction.** Plan mode is read-only. Approvals gate every
-  risky call. Codewhale reports an OS command sandbox only when it actually
-  wraps the command: Seatbelt on macOS when available, and opt-in bubblewrap
-  on Linux when installed. Windows currently reports none. A repo's
-  `constitution.json` compiles into write holds that even Full Access cannot
-  skip.
-- **Work that survives.** Fleets record every step in an append-only
-  ledger; `fleet resume` picks up where you stopped. Every turn leaves a
-  receipt you can inspect.
+Give it a provider, a model, and a task. It reads your code, edits files, runs
+commands, and checks its own work, then stops when the job is done or it needs
+you. Switch models mid-task with `/model`. Work interactively in the TUI, or run
+`codewhale exec` in scripts and CI. It's written in Rust, licensed MIT, and runs
+on your machine.
 
-Born as `deepseek-tui`. Its community needed more providers, so we built
-one where the model is a component, not the product.
+We're always looking for contributors and ways to improve. If a model or
+provider you use is missing, or something breaks, telling us is one of the most
+useful things you can do — see [Contributing](#contributing).
 
 [简体中文](README.zh-CN.md) · [日本語](README.ja-JP.md) · [Tiếng Việt](README.vi.md) · [한국어](README.ko-KR.md) · [Español](README.es-419.md) · [Português](README.pt-BR.md) · [codewhale.net](https://codewhale.net/) · [Docs](docs) · [Changelog](CHANGELOG.md)
 
@@ -42,7 +32,7 @@ npm install -g codewhale
 ```
 
 Cargo, Docker, Nix, Scoop, prebuilt archives, Android/Termux, and a CNB mirror
-for users who cannot reach GitHub are covered in
+for anyone who can't reach GitHub are covered in
 [docs/INSTALL.md](docs/INSTALL.md). Coming from `deepseek-tui`? Your config and
 sessions carry over — see [docs/REBRAND.md](docs/REBRAND.md).
 
@@ -61,6 +51,20 @@ cycles Plan / Act / Operate and `Shift+Tab` cycles the Ask / Auto-Review / Full
 Access permission posture. `!` runs a shell command through the normal approval
 path.
 
+## What it does
+
+- **Any model, any provider.** DeepSeek, Claude, GPT, Kimi, GLM, and 30+
+  providers, plus your own vLLM, SGLang, or Ollama with no key — all through one
+  runtime and one toolset. Context limits and prices come from the real route,
+  and an unknown price shows as unknown rather than $0.
+- **Read-only until you allow more.** Plan mode can't change files, and
+  approvals gate risky commands. When an OS sandbox actually wraps a command,
+  Codewhale says so: Seatbelt on macOS where available, opt-in bubblewrap on
+  Linux. A repo's `constitution.json` compiles into write holds that even Full
+  Access can't skip.
+- **Work you can resume.** A fleet records every step to an append-only ledger,
+  so `fleet resume` picks up where you left off.
+
 ## Learn more
 
 - [docs/PROVIDERS.md](docs/PROVIDERS.md) — every provider route: hosted,
@@ -68,21 +72,19 @@ path.
 - [docs/FLEET.md](docs/FLEET.md) — fleets, the ledger, and resume
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — `config.toml`, hooks, and
   the constitution
-- [docs/WEB.md](docs/WEB.md) — the loopback-only embedded browser client and
-  its one-time authentication boundary
+- [docs/WEB.md](docs/WEB.md) — the loopback-only browser client and its one-time
+  authentication boundary
 
 Everything else — modes, keybindings, sandbox details, MCP, the runtime API,
-architecture — is in [docs](docs) and on
+and architecture — lives in [docs](docs) and on
 [codewhale.net](https://codewhale.net/).
 
 ## Contributing
 
-All feedback is a gift. Issues, PRs, repro steps, logs, feature requests, and
-first contributions are all real project work here. When a PR can't merge
-as-is, maintainers harvest what works and the author stays credited — in the
-commit, the changelog, and [docs/CONTRIBUTORS.md](docs/CONTRIBUTORS.md). If a
-model or provider you use is missing, or something breaks on your machine,
-telling us is the most useful thing you can do.
+Issues, PRs, repro steps, logs, and feature requests are all real project work,
+and first contributions are welcome. When a PR can't merge as-is, maintainers
+harvest what works and keep the author credited — in the commit, the changelog,
+and [docs/CONTRIBUTORS.md](docs/CONTRIBUTORS.md).
 
 - [Open issues](https://github.com/Hmbown/CodeWhale/issues) — good first
   contributions live here
@@ -99,7 +101,7 @@ terminal-agent experience.
 
 ## License
 
-[MIT](LICENSE). Independent community project; not affiliated with any model
+[MIT](LICENSE). An independent community project, not affiliated with any model
 provider.
 
 [![Star History Chart](https://api.star-history.com/chart?repos=Hmbown/CodeWhale&type=date&legend=top-left)](https://www.star-history.com/?repos=Hmbown%2FCodeWhale&type=date)
