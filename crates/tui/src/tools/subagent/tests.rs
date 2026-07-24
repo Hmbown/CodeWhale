@@ -3305,6 +3305,96 @@ fn subagent_tool_schemas_advertise_real_type_and_role_vocabulary() {
 }
 
 #[test]
+fn agent_tool_role_schema_is_a_closed_canonical_enum() {
+    let tmp = tempdir().expect("tempdir");
+    let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 1);
+    let agent_schema = AgentTool::new(manager, stub_runtime()).input_schema();
+
+    // Exact canonical values, exact order. New models are told the closed
+    // Fleet vocabulary and nothing else.
+    let expected = json!([
+        "worker", "scout", "planner", "reviewer", "builder", "verifier", "custom"
+    ]);
+    assert_eq!(
+        agent_schema["properties"]["type"]["enum"], expected,
+        "model-facing role schema must advertise exactly the canonical Fleet enum"
+    );
+
+    // The description teaches each canonical role and never advertises
+    // legacy aliases; those stay at replay/deserialization boundaries.
+    let description = schema_property_description(&agent_schema, "type");
+    assert!(
+        description.starts_with("Fleet role for this delegated worker."),
+        "type description should lead with the Fleet role contract: {description}"
+    );
+    let lowered = description.to_ascii_lowercase();
+    for legacy in [
+        "general",
+        "explore",
+        "implementer",
+        "awaiter",
+        "legacy",
+        "alias",
+    ] {
+        assert!(
+            !lowered.contains(legacy),
+            "type description must not advertise legacy vocabulary {legacy:?}: {description}"
+        );
+    }
+}
+
+#[test]
+fn provider_schema_sanitizers_preserve_the_closed_fleet_role_enum() {
+    use crate::tools::schema_sanitize;
+
+    let tmp = tempdir().expect("tempdir");
+    let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 1);
+    let agent_schema = AgentTool::new(manager, stub_runtime()).input_schema();
+    let expected = json!([
+        "worker", "scout", "planner", "reviewer", "builder", "verifier", "custom"
+    ]);
+
+    // Generic Chat Completions sanitize pass.
+    let mut plain = agent_schema.clone();
+    schema_sanitize::sanitize(&mut plain);
+    assert_eq!(
+        plain["properties"]["type"]["enum"], expected,
+        "chat completions sanitize must not erase or widen the role enum"
+    );
+
+    // Strict-mode structured outputs pass.
+    let mut strict = agent_schema.clone();
+    schema_sanitize::sanitize_for_strict(&mut strict);
+    assert_eq!(
+        strict["properties"]["type"]["enum"], expected,
+        "strict-mode sanitize must not erase or widen the role enum"
+    );
+
+    // Anthropic Messages and OpenAI Responses (and xAI, an alias of the
+    // Responses pass) share sanitize_for_responses; it strips root-level
+    // enum keywords only and must keep this nested property enum intact.
+    let mut responses = agent_schema.clone();
+    let note = schema_sanitize::sanitize_for_responses(&mut responses);
+    assert!(
+        note.is_none(),
+        "agent schema has no root composition to drop"
+    );
+    assert_eq!(
+        responses["properties"]["type"]["enum"], expected,
+        "responses/anthropic sanitize must not erase or widen the role enum"
+    );
+
+    // Moonshot/Kimi validating sanitizer must accept the schema unchanged.
+    let mut kimi = agent_schema.clone();
+    schema_sanitize::sanitize_for_kimi_parameters(&mut kimi)
+        .expect("agent schema must stay Kimi-compatible");
+    assert_eq!(
+        kimi["properties"]["type"]["enum"], expected,
+        "kimi sanitize must not erase or widen the role enum"
+    );
+}
+
+#[test]
 fn agent_tool_prompt_schema_keeps_ordinary_starts_message_first() {
     let tmp = tempdir().expect("tempdir");
     let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 1);

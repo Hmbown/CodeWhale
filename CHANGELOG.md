@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Close the model-facing `agent` tool role schema: the `type` property now
+  publishes the canonical JSON Schema enum `["worker", "scout", "planner",
+  "reviewer", "builder", "verifier", "custom"]` instead of describing the
+  accepted values in prose. Legacy aliases are no longer advertised to
+  models; they remain accepted only at replay/deserialization boundaries.
+  Provider schema sanitizers (Chat Completions, strict mode, Anthropic
+  Messages / OpenAI Responses, Moonshot/Kimi) are pinned by test to
+  preserve the closed enum.
+
 ### Changed
 
 - Rename the internal delegated-worker role type from `SubAgentType` to

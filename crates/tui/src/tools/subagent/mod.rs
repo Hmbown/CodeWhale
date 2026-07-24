@@ -324,7 +324,14 @@ const VALID_SUBAGENT_TYPES: &str = "worker, scout, planner, reviewer, builder, v
 /// resolves to a canonical role (avoids the dual-validation rejection in #2649).
 const VALID_ROLE_ALIASES: &str = "default; worker; scout; planner; reviewer; builder; verifier; custom \
      (legacy aliases remain accepted)";
-const SUBAGENT_TYPE_DESCRIPTION: &str = "Fleet role for this delegated worker: worker, scout, planner, reviewer, builder, verifier, or custom. Legacy sub-agent type aliases remain accepted for v0.9.x compatibility.";
+/// Canonical model-facing Fleet role values, in schema order. This is the
+/// closed `enum` advertised on the Agent tool's `type` property. Legacy
+/// aliases are accepted only at replay/deserialization boundaries
+/// ([`migrate_legacy_role_token`]) and are never advertised to models.
+const FLEET_ROLE_SCHEMA_VALUES: [&str; 7] = [
+    "worker", "scout", "planner", "reviewer", "builder", "verifier", "custom",
+];
+const SUBAGENT_TYPE_DESCRIPTION: &str = "Fleet role for this delegated worker. worker: full tool access for multi-step tasks. scout: fast read-only exploration. planner: analysis-only planning. reviewer: reads and grades code. builder: lands focused code changes. verifier: runs tests/validation gates and reports evidence. custom: exactly the tools listed in allowed_tools.";
 /// Whale species used as friendly names for sub-agents in the UI. The full
 /// Cetacea infraorder — baleen whales (Mysticeti), toothed whales
 /// (Odontoceti), plus select dolphin species (family Delphinidae) that
@@ -755,14 +762,8 @@ impl<'de> Deserialize<'de> for FleetRole {
         D: serde::Deserializer<'de>,
     {
         let raw = String::deserialize(deserializer)?;
-        Self::from_str(&raw).ok_or_else(|| {
-            serde::de::Error::unknown_variant(
-                &raw,
-                &[
-                    "worker", "scout", "planner", "reviewer", "builder", "verifier", "custom",
-                ],
-            )
-        })
+        Self::from_str(&raw)
+            .ok_or_else(|| serde::de::Error::unknown_variant(&raw, &FLEET_ROLE_SCHEMA_VALUES))
     }
 }
 
@@ -6371,6 +6372,7 @@ impl ToolSpec for AgentTool {
                 },
                 "type": {
                     "type": "string",
+                    "enum": FLEET_ROLE_SCHEMA_VALUES,
                     "description": SUBAGENT_TYPE_DESCRIPTION
                 },
                 "profile": {
