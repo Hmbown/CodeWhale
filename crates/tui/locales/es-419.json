@@ -414,7 +414,7 @@
     "OnboardLanguageFooter": "Presiona 1-9 para elegir, o Enter para mantener la configuración actual",
     "OnboardProviderTitle": "Elige tu proveedor de modelos",
     "OnboardProviderBlurb": "Elige dónde se ejecutará tu modelo. Los proveedores alojados necesitan una clave; los runtimes locales pueden continuar sin ella.",
-    "OnboardProviderFooter": "Presiona 0-9 para elegir, ↑/↓ para mover, Enter para continuar, Esc para volver.",
+    "OnboardProviderFooter": "Enter abre la lista de proveedores · Esc vuelve · Ctrl+C sale.",
     "OnboardApiKeyTitle": "Conecta tu clave API",
     "OnboardApiKeyStep1": "Paso 1.  Abre la página de credenciales de tu proveedor y crea una clave para",
     "OnboardApiKeyLocalHint": "Los runtimes locales normalmente no requieren pegar una clave — inicia el servidor y presiona Enter.",

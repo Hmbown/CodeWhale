@@ -414,7 +414,7 @@
     "OnboardLanguageFooter": "1〜9 で選択、または Enter で現在の設定を維持",
     "OnboardProviderTitle": "モデルプロバイダーを選択",
     "OnboardProviderBlurb": "モデルの実行先を選びます。ホステッドプロバイダーにはキーが必要ですが、ローカルランタイムはキーなしで続行できます。",
-    "OnboardProviderFooter": "0-9 で選択、↑/↓ で移動、Enter で続行、Esc で戻る。",
+    "OnboardProviderFooter": "Enter でプロバイダー一覧を開く · Esc で戻る · Ctrl+C で終了。",
     "OnboardApiKeyTitle": "API キーを接続",
     "OnboardApiKeyStep1": "ステップ 1.  プロバイダーの認証情報ページを開き、次のキーを作成:",
     "OnboardApiKeyLocalHint": "ローカルランタイムは通常キーの貼り付け不要 — サーバーを起動して Enter。",

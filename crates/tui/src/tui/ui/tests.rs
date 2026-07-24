@@ -10978,6 +10978,102 @@ fn mental_models_backtracks_to_the_last_first_run_decision() {
     assert_eq!(app.onboarding, OnboardingState::Language);
 }
 
+// ---- Issue #4763: provider onboarding must never be a trap ----
+
+/// Ctrl+C quits from every onboarding state, including while the provider
+/// picker owns the keys. Before #4763 the picker swallowed it and the only
+/// exit was Escape-then-Ctrl+C.
+#[test]
+fn onboarding_ctrl_c_quits_even_with_the_provider_picker_on_the_view_stack() {
+    let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+
+    assert_eq!(
+        onboarding_key_route(
+            OnboardingState::Provider,
+            Some(ModalKind::ProviderPicker),
+            &ctrl_c,
+        ),
+        OnboardingKeyRoute::Quit,
+    );
+    assert_eq!(
+        onboarding_key_route(OnboardingState::Provider, None, &ctrl_c),
+        OnboardingKeyRoute::Quit,
+    );
+    assert_eq!(
+        onboarding_key_route(OnboardingState::Language, None, &ctrl_c),
+        OnboardingKeyRoute::Quit,
+    );
+    assert_eq!(
+        onboarding_key_route(
+            OnboardingState::MentalModels,
+            Some(ModalKind::Help),
+            &ctrl_c,
+        ),
+        OnboardingKeyRoute::Quit,
+    );
+}
+
+/// Escape is no longer intercepted on the picker's behalf, so the picker can
+/// back out one stage (key/OAuth entry → list) and only dismiss from the
+/// list. Non-onboarding keys still reach the legacy switch.
+#[test]
+fn onboarding_escape_is_routed_to_the_provider_picker_not_intercepted() {
+    let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+
+    assert_eq!(
+        onboarding_key_route(
+            OnboardingState::Provider,
+            Some(ModalKind::ProviderPicker),
+            &esc
+        ),
+        OnboardingKeyRoute::ProviderPicker,
+        "the picker owns Escape so it can back out one stage at a time"
+    );
+    assert_eq!(
+        onboarding_key_route(OnboardingState::Provider, None, &esc),
+        OnboardingKeyRoute::Legacy,
+        "without the picker the legacy onboarding switch still handles Escape"
+    );
+    assert_eq!(
+        onboarding_key_route(
+            OnboardingState::ApiKey,
+            Some(ModalKind::ProviderPicker),
+            &esc
+        ),
+        OnboardingKeyRoute::Legacy,
+    );
+    assert_eq!(
+        onboarding_key_route(OnboardingState::None, Some(ModalKind::ProviderPicker), &esc),
+        OnboardingKeyRoute::Legacy,
+        "a picker outside onboarding is not an onboarding route"
+    );
+}
+
+/// #4763: reusing an external Grok CLI grant must finish provider onboarding
+/// the same way a submitted key does. The consent handler used to switch the
+/// route and stop there, returning the user to the provider step they had
+/// just satisfied.
+#[test]
+fn external_grant_reuse_completes_provider_onboarding() {
+    let mut app = create_test_app();
+    app.onboarding = OnboardingState::Provider;
+    app.onboarding_needs_api_key = true;
+    app.onboarding_missing_key_recovery = true;
+    app.offline_mode = true;
+    app.trust_mode = true;
+
+    complete_provider_picker_onboarding(&mut app, crate::config::ApiProvider::Xai);
+
+    assert_ne!(
+        app.onboarding,
+        OnboardingState::Provider,
+        "a satisfied provider must not return to the provider step"
+    );
+    assert_eq!(app.onboarding_provider, crate::config::ApiProvider::Xai);
+    assert!(!app.onboarding_needs_api_key);
+    assert!(!app.offline_mode);
+}
+
 #[test]
 fn api_key_escape_returns_to_provider_step() {
     let mut app = create_test_app();

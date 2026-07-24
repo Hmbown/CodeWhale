@@ -1458,6 +1458,31 @@ impl ProviderPickerView {
         config: &Config,
         runtime_status: Option<ProviderRuntimeStatus>,
     ) -> Self {
+        Self::new_for_setup_inner(active, target, config, runtime_status, true)
+    }
+
+    /// Open the setup catalog for first-run/recovery onboarding (#4763).
+    /// Identical to [`Self::new_for_setup`] except that a missing-auth
+    /// `target` is only *focused*: onboarding must show the navigable
+    /// provider list before it asks for a secret, so key/OAuth entry is
+    /// reached by picking a row, never by opening straight into it.
+    #[must_use]
+    pub fn new_for_onboarding(
+        active: ApiProvider,
+        target: Option<ApiProvider>,
+        config: &Config,
+        runtime_status: Option<ProviderRuntimeStatus>,
+    ) -> Self {
+        Self::new_for_setup_inner(active, target, config, runtime_status, false)
+    }
+
+    fn new_for_setup_inner(
+        active: ApiProvider,
+        target: Option<ApiProvider>,
+        config: &Config,
+        runtime_status: Option<ProviderRuntimeStatus>,
+        key_entry_for_missing_auth: bool,
+    ) -> Self {
         let mut picker = Self::new_with_runtime_status(active, config, runtime_status);
         picker.view = ProviderListView::Catalog;
         picker.setup_mode = true;
@@ -1465,7 +1490,7 @@ impl ProviderPickerView {
             && let Some(idx) = picker.rows.iter().position(|row| row.provider == target)
         {
             picker.selected_idx = idx;
-            if !picker.selected_has_key() {
+            if key_entry_for_missing_auth && !picker.selected_has_key() {
                 picker.enter_key_entry();
             }
         }
@@ -5119,6 +5144,68 @@ mod tests {
         assert_eq!(picker.stage, Stage::KeyEntry);
         assert_eq!(picker.selected_provider(), ApiProvider::Anthropic);
         assert!(picker.api_key_input.is_empty());
+    }
+
+    /// #4763: onboarding focuses the persisted route but must still open on
+    /// the navigable list. Jumping straight into key/OAuth entry hid the
+    /// provider catalog from returning users with a missing key.
+    #[test]
+    fn onboarding_catalog_focuses_missing_provider_without_leaving_the_list() {
+        let _lock = crate::test_support::lock_test_env();
+        let _anthropic_key = crate::test_support::EnvVarGuard::remove("ANTHROPIC_API_KEY");
+        let config = Config::default();
+        let picker = ProviderPickerView::new_for_onboarding(
+            ApiProvider::Deepseek,
+            Some(ApiProvider::Anthropic),
+            &config,
+            None,
+        );
+
+        assert_eq!(picker.stage, Stage::List);
+        assert_eq!(picker.view, ProviderListView::Catalog);
+        assert_eq!(picker.selected_provider(), ApiProvider::Anthropic);
+        assert_eq!(
+            picker.visible_row_count(),
+            picker.rows.len(),
+            "onboarding must show the whole provider catalog"
+        );
+    }
+
+    /// #4763: Escape backs out one stage at a time — key entry returns to the
+    /// list, and only the list dismisses the picker.
+    #[test]
+    fn onboarding_escape_walks_key_entry_back_to_the_list_then_dismisses() {
+        let _lock = crate::test_support::lock_test_env();
+        let _anthropic_key = crate::test_support::EnvVarGuard::remove("ANTHROPIC_API_KEY");
+        let config = Config::default();
+        let mut picker = ProviderPickerView::new_for_onboarding(
+            ApiProvider::Deepseek,
+            Some(ApiProvider::Anthropic),
+            &config,
+            None,
+        );
+        assert_eq!(picker.stage, Stage::List);
+
+        picker.enter_key_entry();
+        assert_eq!(picker.stage, Stage::KeyEntry);
+
+        assert!(matches!(
+            picker.handle_key(key(KeyCode::Esc)),
+            ViewAction::None
+        ));
+        assert_eq!(
+            picker.stage,
+            Stage::List,
+            "Escape from key entry returns to the provider list"
+        );
+
+        assert!(
+            matches!(
+                picker.handle_key(key(KeyCode::Esc)),
+                ViewAction::EmitAndClose(ViewEvent::ProviderPickerDismissed { .. })
+            ),
+            "Escape from the list dismisses the picker"
+        );
     }
 
     #[test]

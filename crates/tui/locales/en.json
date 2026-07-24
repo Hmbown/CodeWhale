@@ -414,7 +414,7 @@
     "OnboardLanguageFooter": "Press 1-9 to choose, or Enter to keep the current setting",
     "OnboardProviderTitle": "Choose your model provider",
     "OnboardProviderBlurb": "Pick where your model runs. Hosted providers need a key; local runtimes can continue without one.",
-    "OnboardProviderFooter": "Press 0-9 to choose, ↑/↓ to move, Enter to continue, Esc to go back.",
+    "OnboardProviderFooter": "Enter opens the provider list · Esc goes back · Ctrl+C quits.",
     "OnboardApiKeyTitle": "Connect your API key",
     "OnboardApiKeyStep1": "Step 1.  Open your provider credential page and create a key for",
     "OnboardApiKeyLocalHint": "Local runtimes usually need no pasted key — start the server, then press Enter.",

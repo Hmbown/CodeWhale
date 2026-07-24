@@ -414,7 +414,7 @@
     "OnboardLanguageFooter": "按 1-9 选择，或按 Enter 保留当前设置",
     "OnboardProviderTitle": "选择模型提供商",
     "OnboardProviderBlurb": "选择模型运行的位置。托管提供商需要密钥；本地运行时无需密钥即可继续。",
-    "OnboardProviderFooter": "按 0-9 选择，↑/↓ 移动，Enter 继续，Esc 返回。",
+    "OnboardProviderFooter": "Enter 打开提供商列表 · Esc 返回 · Ctrl+C 退出。",
     "OnboardApiKeyTitle": "连接你的 API 密钥",
     "OnboardApiKeyStep1": "步骤 1.  打开你的提供商凭据页面并为",
     "OnboardApiKeyLocalHint": "本地运行时通常无需粘贴密钥——启动服务器后按 Enter。",
