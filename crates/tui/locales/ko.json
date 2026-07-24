@@ -414,7 +414,7 @@
     "OnboardLanguageFooter": "1-9를 눌러 선택하거나 Enter로 현재 설정을 유지하세요",
     "OnboardProviderTitle": "모델 프로바이더를 선택하세요",
     "OnboardProviderBlurb": "모델이 실행될 위치를 선택하세요. 호스팅 프로바이더는 키가 필요하지만 로컬 런타임은 키 없이 계속할 수 있습니다.",
-    "OnboardProviderFooter": "0-9를 눌러 선택하거나 ↑/↓로 이동, Enter로 계속, Esc로 뒤로 가세요.",
+    "OnboardProviderFooter": "Enter로 프로바이더 목록을 열고 · Esc로 뒤로 가며 · Ctrl+C로 종료합니다.",
     "OnboardApiKeyTitle": "API 키를 연결하세요",
     "OnboardApiKeyStep1": "1단계.  프로바이더의 자격 증명 페이지를 열고 다음의 키를 생성하세요:",
     "OnboardApiKeyLocalHint": "로컬 런타임은 보통 키를 붙여넣을 필요가 없습니다. 서버를 시작한 뒤 Enter를 누르세요.",

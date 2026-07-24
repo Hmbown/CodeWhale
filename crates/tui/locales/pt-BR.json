@@ -414,7 +414,7 @@
     "OnboardLanguageFooter": "Pressione 1-9 para escolher, ou Enter para manter a configuração atual",
     "OnboardProviderTitle": "Escolha seu provedor de modelos",
     "OnboardProviderBlurb": "Escolha onde o modelo será executado. Provedores hospedados precisam de chave; runtimes locais podem continuar sem uma.",
-    "OnboardProviderFooter": "Pressione 0-9 para escolher, ↑/↓ para mover, Enter para continuar, Esc para voltar.",
+    "OnboardProviderFooter": "Enter abre a lista de provedores · Esc volta · Ctrl+C sai.",
     "OnboardApiKeyTitle": "Conecte sua chave API",
     "OnboardApiKeyStep1": "Passo 1.  Abra a página de credenciais do provedor e crie uma chave para",
     "OnboardApiKeyLocalHint": "Runtimes locais geralmente não precisam de chave colada — inicie o servidor e pressione Enter.",

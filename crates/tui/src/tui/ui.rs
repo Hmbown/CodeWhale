@@ -804,6 +804,41 @@ fn back_from_api_key_onboarding(app: &mut App) {
     app.status_message = None;
 }
 
+/// Where a key goes while onboarding owns the screen (#4763).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OnboardingKeyRoute {
+    /// Terminate the session. Ctrl+C is unconditional during onboarding.
+    Quit,
+    /// Hand the key to the provider picker on the view stack.
+    ProviderPicker,
+    /// Fall through to the legacy onboarding key switch.
+    Legacy,
+}
+
+/// Decide the onboarding route for one key press.
+///
+/// Two invariants this encodes, both regressions reported in #4763:
+/// Ctrl+C quits from *any* onboarding state — a modal on the stack must not
+/// swallow it — and Escape is never intercepted on the picker's behalf, so
+/// the picker can back out one stage at a time instead of the shell popping
+/// the whole modal from a key/OAuth sub-stage.
+fn onboarding_key_route(
+    onboarding: OnboardingState,
+    top_kind: Option<ModalKind>,
+    key: &KeyEvent,
+) -> OnboardingKeyRoute {
+    if onboarding == OnboardingState::None {
+        return OnboardingKeyRoute::Legacy;
+    }
+    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        return OnboardingKeyRoute::Quit;
+    }
+    if onboarding == OnboardingState::Provider && top_kind == Some(ModalKind::ProviderPicker) {
+        return OnboardingKeyRoute::ProviderPicker;
+    }
+    OnboardingKeyRoute::Legacy
+}
+
 fn back_from_provider_onboarding(app: &mut App) {
     if app.onboarding_missing_key_recovery {
         // A returning user declined missing-key recovery: leave onboarding
@@ -4960,35 +4995,39 @@ async fn run_event_loop(
             // parallel ten-provider key handler. Route its keys before the
             // legacy onboarding switch so List/Key/Model/Confirm retain the
             // same behavior as `/provider` and `/setup`.
-            if app.onboarding == OnboardingState::Provider
-                && app.view_stack.top_kind() == Some(ModalKind::ProviderPicker)
-            {
-                if key.code == KeyCode::Esc {
-                    // Onboarding has no committed provider choice yet. A
-                    // single Escape always abandons the whole setup modal and
-                    // returns to Language; do not let an inner key/model
-                    // stage mutate config or mark onboarding complete.
-                    app.view_stack.pop();
-                    back_from_provider_onboarding(app);
-                    app.needs_redraw = true;
-                    continue;
-                }
-                let events = app.view_stack.handle_key(key);
-                app.needs_redraw = true;
-                if handle_view_events_boxed(
-                    terminal,
-                    app,
-                    config,
-                    &task_manager,
-                    &mut engine_handle,
-                    &mut web_config_session,
-                    events,
-                )
-                .await?
-                {
+            match onboarding_key_route(app.onboarding, app.view_stack.top_kind(), &key) {
+                // #4763: onboarding must never be a trap. Ctrl+C terminates
+                // from every onboarding state, including while the picker
+                // owns the keys — the legacy handler below is unreachable
+                // once a modal is on the stack.
+                OnboardingKeyRoute::Quit => {
+                    let _ = engine_handle.send(Op::Shutdown).await;
                     return Ok(());
                 }
-                continue;
+                // Every other key, Escape included, belongs to the picker.
+                // The picker's own per-stage Escape walks key/OAuth entry
+                // back to the list and only dismisses from the list, where
+                // `ProviderPickerDismissed` runs the same non-mutating
+                // onboarding back-transition the shell used to force.
+                OnboardingKeyRoute::ProviderPicker => {
+                    let events = app.view_stack.handle_key(key);
+                    app.needs_redraw = true;
+                    if handle_view_events_boxed(
+                        terminal,
+                        app,
+                        config,
+                        &task_manager,
+                        &mut engine_handle,
+                        &mut web_config_session,
+                        events,
+                    )
+                    .await?
+                    {
+                        return Ok(());
+                    }
+                    continue;
+                }
+                OnboardingKeyRoute::Legacy => {}
             }
 
             // Handle onboarding flow
@@ -10155,7 +10194,9 @@ async fn query_provider_runtime_status(
 /// Open the one canonical provider setup surface for onboarding.  Fresh
 /// onboarding starts at the full catalog; missing-key recovery focuses the
 /// current route so an exact Kimi Code K3 configuration can expose its plan
-/// route before a secret is entered.
+/// route before a secret is entered.  Either way the picker opens on the
+/// navigable list (#4763): onboarding never drops a user straight into a
+/// key/OAuth prompt for a route they were not shown.
 async fn open_onboarding_provider_picker(
     app: &mut App,
     config: &Config,
@@ -10169,7 +10210,7 @@ async fn open_onboarding_provider_picker(
     }
     let runtime_status = query_provider_runtime_status(engine_handle).await;
     app.view_stack.push(
-        crate::tui::provider_picker::ProviderPickerView::new_for_setup(
+        crate::tui::provider_picker::ProviderPickerView::new_for_onboarding(
             app.api_provider,
             focus_current_route.then_some(app.onboarding_provider),
             config,
@@ -13809,7 +13850,16 @@ async fn handle_view_events(
                         .replace("{provider}", provider.as_str());
                     app.push_status_toast(toast, StatusToastLevel::Success, Some(8_000));
                     let model_override = provider_picker_model_override(app, config, provider);
-                    switch_provider(app, engine_handle, config, provider, model_override).await;
+                    let switched =
+                        switch_provider(app, engine_handle, config, provider, model_override).await;
+                    // #4763: reusing an external CLI grant completes provider
+                    // onboarding exactly like a submitted key or an applied
+                    // route. Without this the picker closes on success and
+                    // the user is returned to the provider step they just
+                    // satisfied — the second half of the reported loop.
+                    if switched && app.onboarding == OnboardingState::Provider {
+                        complete_provider_picker_onboarding(app, provider);
+                    }
                     refresh_config_view_if_open(app, "provider");
                 }
                 Err(error) => app.push_status_toast(
