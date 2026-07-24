@@ -177,6 +177,23 @@ fn permissions_ruleset_populates_denied_and_trusted_prefixes() {
 }
 
 #[test]
+fn exact_workspace_command_allow_is_not_promoted_to_global_prefix() {
+    let rule =
+        ToolAskRule::exec_shell("cargo test").into_exact_workspace_allow("/workspace/project");
+    let permissions = PermissionsToml {
+        rules: vec![rule.clone()],
+    };
+
+    let ruleset = permissions.ruleset();
+
+    assert!(
+        ruleset.trusted_prefixes.is_empty(),
+        "an exact repo grant must not become a global trusted prefix"
+    );
+    assert_eq!(ruleset.ask_rules, vec![rule]);
+}
+
+#[test]
 fn permissions_ruleset_deny_without_command_stays_in_ask_rules() {
     // Tool-only deny (no command) can't be promoted to denied_prefixes.
     let permissions: PermissionsToml = toml::from_str(
@@ -692,6 +709,103 @@ fn config_store_appends_ask_rule_to_inline_rules_array() {
             ToolAskRule::exec_shell("cargo check"),
             ToolAskRule::file_path("read_file", "README.md"),
         ]
+    );
+}
+
+#[test]
+fn config_store_appends_exact_workspace_allow_rules() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = dir.path().join(CONFIG_FILE_NAME);
+    let permissions_path = dir.path().join(PERMISSIONS_FILE_NAME);
+    fs::write(&permissions_path, "# remembered grants stay user-owned\n")
+        .expect("write permissions");
+    let mut store = ConfigStore::load(Some(config_path.clone())).expect("load config store");
+    let rule = ToolAskRule::exec_shell("cargo test")
+        .into_exact_workspace_allow(dir.path().to_string_lossy());
+
+    assert_eq!(
+        store
+            .append_allow_rules(&[rule.clone(), rule.clone()])
+            .expect("append allow rule"),
+        1
+    );
+
+    let body = fs::read_to_string(&permissions_path).expect("read permissions");
+    assert!(body.contains("# remembered grants stay user-owned"));
+    assert!(body.contains("action = \"allow\""));
+    assert!(body.contains("command_exact = true"));
+    assert!(body.contains(&format!("workspace = {:?}", dir.path().to_string_lossy())));
+    let parsed: PermissionsToml = toml::from_str(&body).expect("parse permissions");
+    assert_eq!(parsed.rules, vec![rule.clone()]);
+
+    let exact = store
+        .exec_policy_engine()
+        .check(codewhale_execpolicy::ExecPolicyContext {
+            command: "cargo test",
+            cwd: dir.path().to_string_lossy().as_ref(),
+            tool: Some("exec_shell"),
+            path: None,
+            ask_for_approval: codewhale_execpolicy::AskForApproval::OnRequest,
+            sandbox_mode: Some("workspace-write"),
+        })
+        .expect("check exact grant");
+    assert_eq!(
+        exact.matched_action,
+        Some(codewhale_execpolicy::PermissionAction::Allow)
+    );
+    assert!(!exact.requires_approval);
+
+    let extra_args = store
+        .exec_policy_engine()
+        .check(codewhale_execpolicy::ExecPolicyContext {
+            command: "cargo test --workspace",
+            cwd: dir.path().to_string_lossy().as_ref(),
+            tool: Some("exec_shell"),
+            path: None,
+            ask_for_approval: codewhale_execpolicy::AskForApproval::OnRequest,
+            sandbox_mode: Some("workspace-write"),
+        })
+        .expect("check extra args");
+    assert!(extra_args.requires_approval);
+
+    let reloaded = ConfigStore::load(Some(config_path)).expect("reload config store");
+    assert_eq!(reloaded.permissions().rules, vec![rule]);
+}
+
+#[test]
+fn config_store_rejects_broad_or_unscoped_allow_rules() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = dir.path().join(CONFIG_FILE_NAME);
+    let mut store = ConfigStore::load(Some(config_path)).expect("load config store");
+
+    let mut unscoped = ToolAskRule::exec_shell("cargo test");
+    unscoped.action = codewhale_execpolicy::PermissionAction::Allow;
+    assert!(
+        store
+            .append_allow_rules(&[unscoped])
+            .expect_err("unscoped allow must fail")
+            .to_string()
+            .contains("scoped to a workspace")
+    );
+
+    let mut prefix = ToolAskRule::exec_shell("cargo test");
+    prefix.action = codewhale_execpolicy::PermissionAction::Allow;
+    prefix.workspace = Some(dir.path().to_string_lossy().into_owned());
+    assert!(
+        store
+            .append_allow_rules(&[prefix])
+            .expect_err("prefix allow must fail")
+            .to_string()
+            .contains("exact matching")
+    );
+
+    assert!(
+        store
+            .append_allow_rules(&[ToolAskRule::new("exec_shell")
+                .into_exact_workspace_allow(dir.path().to_string_lossy())])
+            .expect_err("tool-wide allow must fail")
+            .to_string()
+            .contains("exact command or path")
     );
 }
 

@@ -34,6 +34,7 @@ use crate::tools::canonical_action::canonical_action_alias;
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
 use crate::tui::widgets::{ApprovalWidget, ElevationWidget, Renderable};
 use codewhale_config::ToolAskRule;
+use codewhale_execpolicy::PermissionAction;
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 use serde_json::Value;
@@ -149,6 +150,8 @@ pub struct ApprovalRequest {
     pub intent_summary: Option<String>,
     /// Ask-only persistent rules that can be saved with the approval.
     pub persistent_ask_rules: Vec<ToolAskRule>,
+    /// Exact repo-scoped allow rules available for safe approval requests.
+    pub persistent_allow_rules: Vec<ToolAskRule>,
 }
 
 /// Key approval details rendered prominently in the approval card.
@@ -161,25 +164,32 @@ pub struct ApprovalDetail {
     pub shell_lines: Option<Vec<String>>,
 }
 
-/// Human-readable preview of ask-only rules the `S` approval shortcut would
-/// append. This is intentionally derived from `persistent_ask_rules` only; the
-/// approval UI must not re-parse tool inputs such as patches.
+/// Human-readable preview of rules an approval action would append.
+///
+/// This is intentionally derived from the already validated persistent-rule
+/// candidates; the approval UI must not re-parse tool inputs such as patches.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AskRuleSavePreview {
+pub struct PermissionRuleSavePreview {
+    pub action: PermissionAction,
     pub rule_count: usize,
     pub entries: Vec<String>,
     pub omitted: usize,
 }
 
-impl AskRuleSavePreview {
+impl PermissionRuleSavePreview {
     #[must_use]
     pub fn summary(&self) -> String {
+        let action = match self.action {
+            PermissionAction::Allow => "allow",
+            PermissionAction::Ask => "ask",
+            PermissionAction::Deny => "deny",
+        };
         let noun = if self.rule_count == 1 {
             "rule"
         } else {
             "rules"
         };
-        format!("{} ask {noun}", self.rule_count)
+        format!("{} {action} {noun}", self.rule_count)
     }
 }
 
@@ -191,8 +201,7 @@ impl ApprovalRequest {
     /// `.codewhale/constitution.json` ask rule forces review.
     #[must_use]
     pub fn is_repo_law_prompt(&self) -> bool {
-        self.description.starts_with("Repo law holds this write:")
-            && self.description.contains(".codewhale/constitution.json")
+        description_is_repo_law_prompt(&self.description)
     }
 
     /// Presentation stakes for this request (see [`ApprovalStakes`]).
@@ -234,6 +243,21 @@ impl ApprovalRequest {
         let risk = classify_risk(tool_name, category, params);
         let approval_grouping_key =
             crate::tools::approval_cache::build_approval_grouping_key(tool_name, params).0;
+        let persistent_ask_rules =
+            build_persistent_ask_rules(semantic_tool_name, params, workspace);
+        let persistent_allow_rules = if classify_stakes(tool_name, category, risk, params)
+            == ApprovalStakes::Critical
+            || description_is_repo_law_prompt(description)
+        {
+            Vec::new()
+        } else {
+            build_persistent_allow_rules(
+                semantic_tool_name,
+                params,
+                workspace,
+                &persistent_ask_rules,
+            )
+        };
 
         Self {
             id: id.to_string(),
@@ -253,7 +277,8 @@ impl ApprovalRequest {
                     Some(summary.to_string())
                 }
             }),
-            persistent_ask_rules: build_persistent_ask_rules(semantic_tool_name, params, workspace),
+            persistent_ask_rules,
+            persistent_allow_rules,
         }
     }
 
@@ -289,11 +314,29 @@ impl ApprovalRequest {
     }
 
     #[must_use]
-    pub fn ask_rule_save_preview(&self) -> Option<AskRuleSavePreview> {
-        build_ask_rule_save_preview(
+    pub fn can_save_allow_rule(&self) -> bool {
+        !self.persistent_allow_rules.is_empty()
+            && self.stakes() != ApprovalStakes::Critical
+            && !self.is_repo_law_prompt()
+    }
+
+    #[must_use]
+    pub fn ask_rule_save_preview(&self) -> Option<PermissionRuleSavePreview> {
+        build_permission_rule_save_preview(
             &self.persistent_ask_rules,
             ASK_RULE_SAVE_PREVIEW_MAX_ENTRIES,
         )
+    }
+
+    #[must_use]
+    pub fn allow_rule_save_preview(&self) -> Option<PermissionRuleSavePreview> {
+        self.can_save_allow_rule().then(|| {
+            build_permission_rule_save_preview(
+                &self.persistent_allow_rules,
+                ASK_RULE_SAVE_PREVIEW_MAX_ENTRIES,
+            )
+            .expect("eligible allow rules are non-empty")
+        })
     }
 
     #[must_use]
@@ -330,11 +373,16 @@ impl ApprovalRequest {
     }
 }
 
+fn description_is_repo_law_prompt(description: &str) -> bool {
+    description.starts_with("Repo law holds this write:")
+        && description.contains(".codewhale/constitution.json")
+}
+
 #[must_use]
-fn build_ask_rule_save_preview(
+fn build_permission_rule_save_preview(
     rules: &[ToolAskRule],
     max_entries: usize,
-) -> Option<AskRuleSavePreview> {
+) -> Option<PermissionRuleSavePreview> {
     if rules.is_empty() {
         return None;
     }
@@ -342,9 +390,10 @@ fn build_ask_rule_save_preview(
     let entries = rules
         .iter()
         .take(max_entries)
-        .map(format_ask_rule_save_entry)
+        .map(format_permission_rule_save_entry)
         .collect();
-    Some(AskRuleSavePreview {
+    Some(PermissionRuleSavePreview {
+        action: rules[0].action,
         rule_count: rules.len(),
         entries,
         omitted: rules.len().saturating_sub(max_entries),
@@ -352,7 +401,7 @@ fn build_ask_rule_save_preview(
 }
 
 #[must_use]
-fn format_ask_rule_save_entry(rule: &ToolAskRule) -> String {
+fn format_permission_rule_save_entry(rule: &ToolAskRule) -> String {
     let mut parts = vec![format!(
         "tool={}",
         sanitize_ask_rule_preview_value(&rule.tool)
@@ -365,6 +414,15 @@ fn format_ask_rule_save_entry(rule: &ToolAskRule) -> String {
     }
     if let Some(path) = &rule.path {
         parts.push(format!("path={}", sanitize_ask_rule_preview_value(path)));
+    }
+    if rule.command_exact {
+        parts.push("command_exact=true".to_string());
+    }
+    if let Some(workspace) = &rule.workspace {
+        parts.push(format!(
+            "workspace={}",
+            sanitize_ask_rule_preview_value(workspace)
+        ));
     }
     parts.join(" ")
 }
@@ -393,6 +451,43 @@ fn build_persistent_ask_rules(
         "apply_patch" => build_apply_patch_ask_rules(params, workspace),
         _ => Vec::new(),
     }
+}
+
+#[must_use]
+fn build_persistent_allow_rules(
+    tool_name: &str,
+    params: &Value,
+    workspace: &Path,
+    exact_rules: &[ToolAskRule],
+) -> Vec<ToolAskRule> {
+    if exact_rules.is_empty() {
+        return Vec::new();
+    }
+
+    if tool_name == "exec_shell" {
+        let Some(command) = params.get("command").and_then(Value::as_str) else {
+            return Vec::new();
+        };
+        if !matches!(
+            crate::command_safety::analyze_command(command).level,
+            crate::command_safety::SafetyLevel::Safe
+                | crate::command_safety::SafetyLevel::WorkspaceSafe
+        ) {
+            return Vec::new();
+        }
+    }
+
+    let workspace = workspace.to_string_lossy();
+    let Some(workspace) = codewhale_execpolicy::normalize_workspace_scope(workspace.as_ref())
+    else {
+        return Vec::new();
+    };
+
+    exact_rules
+        .iter()
+        .cloned()
+        .map(|rule| rule.into_exact_workspace_allow(workspace.clone()))
+        .collect()
 }
 
 #[must_use]
@@ -1236,6 +1331,7 @@ fn split_unquoted_redirect(command: &str) -> Option<(&str, &str)> {
 pub enum ApprovalOption {
     ApproveOnce,
     ApproveAlways,
+    AllowExactRepo,
     Deny,
     Abort,
 }
@@ -1247,6 +1343,13 @@ impl ApprovalOption {
         ApprovalOption::Deny,
         ApprovalOption::Abort,
     ];
+    const ORDER_WITH_PERSISTENT_ALLOW: [ApprovalOption; 5] = [
+        ApprovalOption::ApproveOnce,
+        ApprovalOption::ApproveAlways,
+        ApprovalOption::AllowExactRepo,
+        ApprovalOption::Deny,
+        ApprovalOption::Abort,
+    ];
 
     /// Workflow elevated-plan card (#4126): Approve / Edit plan / Cancel.
     const WORKFLOW_ORDER: [ApprovalOption; 3] = [
@@ -1255,32 +1358,35 @@ impl ApprovalOption {
         ApprovalOption::Abort,
     ];
 
-    fn order_for(tool_name: &str) -> &'static [ApprovalOption] {
-        if tool_name == "workflow" {
+    fn order_for(request: &ApprovalRequest) -> &'static [ApprovalOption] {
+        if request.tool_name == "workflow" {
             &Self::WORKFLOW_ORDER
+        } else if request.can_save_allow_rule() {
+            &Self::ORDER_WITH_PERSISTENT_ALLOW
         } else {
             &Self::ORDER
         }
     }
 
-    fn from_index_for(tool_name: &str, idx: usize) -> ApprovalOption {
-        Self::order_for(tool_name)
+    fn from_index_for(request: &ApprovalRequest, idx: usize) -> ApprovalOption {
+        Self::order_for(request)
             .get(idx)
             .copied()
             .unwrap_or(Self::Abort)
     }
 
-    fn index_for(self, tool_name: &str) -> usize {
-        Self::order_for(tool_name)
+    fn index_for(self, request: &ApprovalRequest) -> usize {
+        Self::order_for(request)
             .iter()
             .position(|o| *o == self)
-            .unwrap_or(Self::order_for(tool_name).len().saturating_sub(1))
+            .unwrap_or(Self::order_for(request).len().saturating_sub(1))
     }
 
     fn decision(self) -> ReviewDecision {
         match self {
             ApprovalOption::ApproveOnce => ReviewDecision::Approved,
             ApprovalOption::ApproveAlways => ReviewDecision::ApprovedForSession,
+            ApprovalOption::AllowExactRepo => ReviewDecision::Approved,
             // Workflow maps Deny → "Edit plan" (model revises plan).
             ApprovalOption::Deny => ReviewDecision::Denied,
             ApprovalOption::Abort => ReviewDecision::Abort,
@@ -1324,14 +1430,14 @@ impl ApprovalView {
     }
 
     fn select_next(&mut self) {
-        let max = ApprovalOption::order_for(&self.request.tool_name)
+        let max = ApprovalOption::order_for(&self.request)
             .len()
             .saturating_sub(1);
         self.selected = (self.selected + 1).min(max);
     }
 
     fn current_option(&self) -> ApprovalOption {
-        ApprovalOption::from_index_for(&self.request.tool_name, self.selected)
+        ApprovalOption::from_index_for(&self.request, self.selected)
     }
 
     /// Whether this approval is the elevated Workflow plan card (#4126).
@@ -1367,8 +1473,16 @@ impl ApprovalView {
 
     /// Commit the given option and close the approval modal.
     fn commit_option(&mut self, option: ApprovalOption) -> ViewAction {
-        self.selected = option.index_for(&self.request.tool_name);
-        self.emit_decision(option.decision(), false)
+        self.selected = option.index_for(&self.request);
+        if option == ApprovalOption::AllowExactRepo && self.request.can_save_allow_rule() {
+            self.emit_decision_with_rules(
+                option.decision(),
+                false,
+                self.request.persistent_allow_rules.clone(),
+            )
+        } else {
+            self.emit_decision(option.decision(), false)
+        }
     }
 
     fn emit_decision(&self, decision: ReviewDecision, timed_out: bool) -> ViewAction {
@@ -1379,7 +1493,7 @@ impl ApprovalView {
         &self,
         decision: ReviewDecision,
         timed_out: bool,
-        persistent_ask_rules: Vec<ToolAskRule>,
+        persistent_rules: Vec<ToolAskRule>,
     ) -> ViewAction {
         ViewAction::EmitAndClose(ViewEvent::ApprovalDecision {
             tool_id: self.request.id.clone(),
@@ -1388,7 +1502,7 @@ impl ApprovalView {
             timed_out,
             approval_key: self.request.approval_key.clone(),
             approval_grouping_key: self.request.approval_grouping_key.clone(),
-            persistent_ask_rules,
+            persistent_rules,
         })
     }
 
@@ -1471,6 +1585,9 @@ impl ModalView for ApprovalView {
             {
                 self.commit_option(ApprovalOption::ApproveAlways)
             }
+            KeyCode::Char('p') | KeyCode::Char('P') if self.request.can_save_allow_rule() => {
+                self.commit_option(ApprovalOption::AllowExactRepo)
+            }
             // Workflow plan card (#4126): [2/e] Edit plan, [3/n/d] Cancel.
             KeyCode::Char('e') | KeyCode::Char('E') | KeyCode::Char('2')
                 if self.is_workflow_plan_approval() =>
@@ -1519,10 +1636,8 @@ impl ModalView for ApprovalView {
                     rect.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
                 });
                 if let Some(index) = clicked {
-                    return self.commit_option(ApprovalOption::from_index_for(
-                        &self.request.tool_name,
-                        index,
-                    ));
+                    return self
+                        .commit_option(ApprovalOption::from_index_for(&self.request, index));
                 }
                 ViewAction::None
             }
@@ -2504,6 +2619,48 @@ mod tests {
     }
 
     #[test]
+    fn safe_shell_request_builds_exact_workspace_allow_rule() {
+        let request = shell_request();
+        let expected = ToolAskRule::exec_shell("cargo test --workspace")
+            .into_exact_workspace_allow("/workspace");
+
+        assert!(request.can_save_allow_rule());
+        assert_eq!(request.persistent_allow_rules, vec![expected]);
+        let preview = request.allow_rule_save_preview().expect("allow preview");
+        assert_eq!(preview.summary(), "1 allow rule");
+        assert_eq!(
+            preview.entries,
+            vec![
+                "tool=exec_shell command=cargo test --workspace command_exact=true workspace=/workspace"
+            ]
+        );
+    }
+
+    #[test]
+    fn unsafe_shell_requests_cannot_persist_allow_rules() {
+        for command in [
+            "rm -rf ~/",
+            "git push origin main",
+            "curl https://example.com",
+            "cargo test && git status",
+        ] {
+            let request = ApprovalRequest::new(
+                "test-id",
+                "exec_shell",
+                "Run a shell command",
+                &json!({"command": command}),
+                "tool:exec_shell",
+            );
+            assert!(
+                request.persistent_allow_rules.is_empty(),
+                "{command:?} must not produce a remembered allow grant"
+            );
+            assert!(!request.can_save_allow_rule(), "{command:?}");
+            assert_eq!(request.allow_rule_save_preview(), None, "{command:?}");
+        }
+    }
+
+    #[test]
     fn file_ask_rule_saved_for_write_file_approval() {
         // A write_file approval offers an exact, workspace-relative file rule
         // plus a preview so `S` can persist it.
@@ -2518,6 +2675,23 @@ mod tests {
         assert!(preview.contains("[[rules]]"));
         assert!(preview.contains("tool = \"write_file\""));
         assert!(preview.contains("path = \"src/main.rs\""));
+    }
+
+    #[test]
+    fn file_write_builds_exact_workspace_allow_rule() {
+        let request = destructive_request();
+        let expected = ToolAskRule::file_path("write_file", "src/main.rs")
+            .into_exact_workspace_allow("/workspace");
+
+        assert!(request.can_save_allow_rule());
+        assert_eq!(request.persistent_allow_rules, vec![expected]);
+        assert_eq!(
+            request
+                .allow_rule_save_preview()
+                .expect("allow preview")
+                .entries,
+            vec!["tool=write_file path=src/main.rs workspace=/workspace"]
+        );
     }
 
     #[test]
@@ -2639,6 +2813,15 @@ diff --git a/src/b.rs b/src/b.rs
                 "tool=apply_patch path=src/b.rs"
             ]
         );
+        assert_eq!(
+            request.persistent_allow_rules,
+            vec![
+                ToolAskRule::file_path("apply_patch", "src/a.rs")
+                    .into_exact_workspace_allow("/workspace"),
+                ToolAskRule::file_path("apply_patch", "src/b.rs")
+                    .into_exact_workspace_allow("/workspace"),
+            ]
+        );
     }
 
     #[test]
@@ -2754,7 +2937,7 @@ diff --git a/src/b.rs b/src/b.rs
             ToolAskRule::file_path("apply_patch", "src/d.rs"),
         ];
 
-        let preview = build_ask_rule_save_preview(&rules, 2).expect("save preview");
+        let preview = build_permission_rule_save_preview(&rules, 2).expect("save preview");
         assert_eq!(preview.rule_count, 4);
         assert_eq!(preview.summary(), "4 ask rules");
         assert_eq!(
@@ -2833,7 +3016,7 @@ diff --git a/src/b.rs b/src/b.rs
         let action = view.handle_key(create_key_event(KeyCode::Char('s')));
         let ViewAction::EmitAndClose(ViewEvent::ApprovalDecision {
             decision,
-            persistent_ask_rules,
+            persistent_rules,
             ..
         }) = action
         else {
@@ -2842,7 +3025,7 @@ diff --git a/src/b.rs b/src/b.rs
 
         assert_eq!(decision, ReviewDecision::Approved);
         assert_eq!(
-            persistent_ask_rules,
+            persistent_rules,
             vec![ToolAskRule::exec_shell("cargo test --workspace")]
         );
     }
@@ -2856,7 +3039,7 @@ diff --git a/src/b.rs b/src/b.rs
         let action = view.handle_key(create_key_event(KeyCode::Char('S')));
         let ViewAction::EmitAndClose(ViewEvent::ApprovalDecision {
             decision,
-            persistent_ask_rules,
+            persistent_rules,
             ..
         }) = action
         else {
@@ -2865,9 +3048,61 @@ diff --git a/src/b.rs b/src/b.rs
 
         assert_eq!(decision, ReviewDecision::Approved);
         assert_eq!(
-            persistent_ask_rules,
+            persistent_rules,
             vec![ToolAskRule::file_path("write_file", "src/main.rs")]
         );
+    }
+
+    #[test]
+    fn persistent_allow_option_approves_once_with_exact_repo_rule() {
+        let mut view = ApprovalView::new(shell_request());
+
+        let action = view.handle_key(create_key_event(KeyCode::Char('p')));
+        let ViewAction::EmitAndClose(ViewEvent::ApprovalDecision {
+            decision,
+            persistent_rules,
+            ..
+        }) = action
+        else {
+            panic!("expected approval decision");
+        };
+
+        assert_eq!(decision, ReviewDecision::Approved);
+        assert_eq!(
+            persistent_rules,
+            vec![
+                ToolAskRule::exec_shell("cargo test --workspace")
+                    .into_exact_workspace_allow("/workspace")
+            ]
+        );
+    }
+
+    #[test]
+    fn persistent_allow_shortcut_is_ignored_for_dangerous_command() {
+        let request = critical_request();
+        assert!(request.persistent_allow_rules.is_empty());
+        let mut view = ApprovalView::new(request);
+
+        assert!(matches!(
+            view.handle_key(create_key_event(KeyCode::Char('p'))),
+            ViewAction::None
+        ));
+    }
+
+    #[test]
+    fn repo_law_request_does_not_build_a_persistent_allow_candidate() {
+        let request = ApprovalRequest::new(
+            "test-id",
+            "edit_file",
+            "Repo law holds this write: protected path (matched Cargo.toml, .codewhale/constitution.json)",
+            &json!({"path": "Cargo.toml", "old": "a", "new": "b"}),
+            "tool:edit_file",
+        );
+
+        assert!(request.is_repo_law_prompt());
+        assert!(request.persistent_allow_rules.is_empty());
+        assert!(!request.can_save_allow_rule());
+        assert_eq!(request.allow_rule_save_preview(), None);
     }
 
     #[test]
@@ -2935,6 +3170,7 @@ diff --git a/src/b.rs b/src/b.rs
         let expected = [
             ReviewDecision::Approved,
             ReviewDecision::ApprovedForSession,
+            ReviewDecision::Approved,
             ReviewDecision::Denied,
             ReviewDecision::Abort,
         ];
@@ -3557,7 +3793,7 @@ diff --git a/src/b.rs b/src/b.rs
             "impact dossier is critical-only:\n{joined}"
         );
         assert!(
-            joined.contains("仅本次批准"),
+            joined.contains("仅允许本次"),
             "missing zh approve option:\n{joined}"
         );
     }
@@ -3605,7 +3841,7 @@ diff --git a/src/b.rs b/src/b.rs
             "missing zh policy semantics:\n{joined}"
         );
         assert!(
-            joined.contains("仅本次批准"),
+            joined.contains("仅允许本次"),
             "missing zh approve option:\n{joined}"
         );
     }

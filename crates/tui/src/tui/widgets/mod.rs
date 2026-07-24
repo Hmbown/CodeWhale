@@ -1916,10 +1916,23 @@ impl<'a> ApprovalWidget<'a> {
             ]));
         }
 
-        // Preview of the persistent ask-rule the `[s]` shortcut would save
-        // (#3766). Informational, so it lives in the (scrollable) body.
+        // Preview the validated persistent-rule candidates. Informational, so
+        // they live in the scrollable body rather than the action rows.
         if let Some(preview) = self.request.ask_rule_save_preview() {
-            push_ask_rule_save_preview(&mut body, &preview, palette_colors.shortcut, area.width);
+            push_permission_rule_save_preview(
+                &mut body,
+                &preview,
+                palette_colors.shortcut,
+                area.width,
+            );
+        }
+        if let Some(preview) = self.request.allow_rule_save_preview() {
+            push_permission_rule_save_preview(
+                &mut body,
+                &preview,
+                palette_colors.shortcut,
+                area.width,
+            );
         }
 
         let controls = build_approval_controls(
@@ -2141,9 +2154,10 @@ fn inline_region_for(area: Rect, body: &[Line<'static>], controls: &[Line<'stati
     // Never shrink below the rule + controls. At normal terminal heights,
     // reserve four body rows: header, detail label, at least one command or
     // preview row, and the truncation hint. Half a viewport is the preferred
-    // cap; up to three quarters is allowed only when necessary to retain that
-    // load-bearing preview on a short frame. Truly tiny frames prioritize the
-    // complete action set and details chord.
+    // cap; up to four fifths is allowed only when necessary to retain that
+    // load-bearing preview on a short frame. The extra permanent-grant row
+    // needs one more reserved line than the legacy four-action card. Truly
+    // tiny frames prioritize the complete action set and details chord.
     let controls_floor = 1u16.saturating_add(control_rows).min(area.height);
     let preview_rows = if area.height >= 16 {
         body_rows.min(4)
@@ -2152,7 +2166,7 @@ fn inline_region_for(area: Rect, body: &[Line<'static>], controls: &[Line<'stati
     };
     let preview_floor = controls_floor.saturating_add(preview_rows).min(area.height);
     let preferred_cap = area.height.div_ceil(2);
-    let short_frame_cap = area.height.saturating_mul(3).div_ceil(4);
+    let short_frame_cap = area.height.saturating_mul(4).div_ceil(5);
     let max_height = preferred_cap
         .max(preview_floor.min(short_frame_cap))
         .max(controls_floor)
@@ -2394,9 +2408,9 @@ fn push_params_detail_line(
     ]));
 }
 
-fn push_ask_rule_save_preview(
+fn push_permission_rule_save_preview(
     lines: &mut Vec<Line<'static>>,
-    preview: &crate::tui::approval::AskRuleSavePreview,
+    preview: &crate::tui::approval::PermissionRuleSavePreview,
     shortcut: Color,
     card_width: u16,
 ) {
@@ -2644,11 +2658,8 @@ fn footer_controls(locale: Locale) -> Cow<'static, str> {
     Cow::Owned(tr(locale, MessageId::ApprovalControlsHint).replace("{details}", details.as_ref()))
 }
 
-fn save_ask_rule_hint(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "  s 批准并保存询问规则",
-        _ => "  s approve + save ask rule",
-    }
+fn save_ask_rule_hint(locale: Locale) -> Cow<'static, str> {
+    tr(locale, MessageId::ApprovalSaveAskRuleHint)
 }
 
 #[derive(Clone)]
@@ -2714,7 +2725,18 @@ fn approval_options_for_request(
     if request.tool_name == "workflow" {
         workflow_approval_options(risk, locale).to_vec()
     } else {
-        approval_options_for(risk, locale).to_vec()
+        let mut options = approval_options_for(risk, locale).to_vec();
+        if request.can_save_allow_rule() {
+            options.insert(
+                2,
+                ApprovalOptionRow {
+                    label: tr(locale, MessageId::ApprovalOptionAllowExactRepo),
+                    key_hint: "p",
+                    dangerous: false,
+                },
+            );
+        }
+        options
     }
 }
 
@@ -7118,8 +7140,8 @@ mod tests {
     fn approval_option_two_reads_as_session_scoped_not_always() {
         // #3766: option 2 / `a` maps to ReviewDecision::ApprovedForSession, so
         // neither the full option rows nor the compact controls may tell the
-        // user the approval is "always"/permanent. Persisting is the separate
-        // `s` save-rule action.
+        // user that particular option is "always"/permanent. The distinct
+        // `[p]` row may use that word for an exact repo-scoped grant.
         let request = crate::tui::approval::ApprovalRequest::new(
             "approval-1",
             "exec_shell",
@@ -7130,25 +7152,27 @@ mod tests {
 
         // Full card (tall): full option rows render the session-scoped label.
         let full = render_approval_request(&request, Rect::new(0, 0, 100, 30));
+        let full_session_option = full
+            .lines()
+            .find(|line| line.contains("[2 / a]"))
+            .expect("full approval card should render the session option");
         assert!(
-            full.to_lowercase().contains("this session"),
-            "full approval option must state session scope:\n{full}"
-        );
-        assert!(
-            !full.to_lowercase().contains("always"),
-            "full approval card must not call the session option 'always':\n{full}"
+            full_session_option.to_lowercase().contains("this session")
+                && !full_session_option.to_lowercase().contains("always"),
+            "full approval option must state session scope without saying always:\n{full}"
         );
 
         // Short terminal: the reserved controls still render the session-scoped
-        // option `[2 / a]` and never call it "always".
+        // option `[2 / a]` without calling that option "always".
         let compact = render_approval_request(&request, Rect::new(0, 0, 60, 17));
+        let compact_session_option = compact
+            .lines()
+            .find(|line| line.contains("[2 / a]"))
+            .expect("short approval card should render the session option");
         assert!(
-            compact.contains("[2 / a]") && compact.to_lowercase().contains("session"),
+            compact_session_option.to_lowercase().contains("session")
+                && !compact_session_option.to_lowercase().contains("always"),
             "short-terminal controls must label [2 / a] as session-scoped:\n{compact}"
-        );
-        assert!(
-            !compact.to_lowercase().contains("always"),
-            "short-terminal controls must not label the session option 'always':\n{compact}"
         );
     }
 
@@ -7195,13 +7219,23 @@ mod tests {
 
         let rendered = render_approval_request(&request, Rect::new(0, 0, 120, 40));
 
-        assert!(rendered.contains("s approve + save ask rule"), "{rendered}");
+        assert!(
+            rendered.contains("s allow once + always ask exact rule"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("Always allow this exact rule in this repo"),
+            "{rendered}"
+        );
         assert!(rendered.contains("Save:"), "{rendered}");
         assert!(rendered.contains("1 ask rule"), "{rendered}");
+        assert!(rendered.contains("1 allow rule"), "{rendered}");
         assert!(
             rendered.contains("tool=exec_shell command=cargo test --workspace"),
             "{rendered}"
         );
+        assert!(rendered.contains("command_exact=true"), "{rendered}");
+        assert!(rendered.contains("workspace=/workspace"), "{rendered}");
     }
 
     #[test]
@@ -7240,6 +7274,10 @@ mod tests {
             assert!(rendered.contains("Save:"), "{tool_name}:\n{rendered}");
             assert!(rendered.contains("1 ask rule"), "{tool_name}:\n{rendered}");
             assert!(
+                rendered.contains("1 allow rule"),
+                "{tool_name}:\n{rendered}"
+            );
+            assert!(
                 rendered.contains(expected_rule),
                 "{tool_name} should preview {expected_rule}:\n{rendered}"
             );
@@ -7272,6 +7310,7 @@ diff --git a/src/b.rs b/src/b.rs\n\
 
         assert!(rendered.contains("Save:"), "{rendered}");
         assert!(rendered.contains("2 ask rules"), "{rendered}");
+        assert!(rendered.contains("2 allow rules"), "{rendered}");
         assert!(
             rendered.contains("tool=apply_patch path=src/a.rs"),
             "{rendered}"
@@ -7338,7 +7377,7 @@ diff --git a/src/b.rs b/src/b.rs\n\
             let rendered = render_approval_request(&request, Rect::new(0, 0, 120, 40));
 
             assert!(
-                !rendered.contains("s approve + save ask rule"),
+                !rendered.contains("s allow once + always ask exact rule"),
                 "S shortcut should stay hidden:\n{rendered}"
             );
             assert!(

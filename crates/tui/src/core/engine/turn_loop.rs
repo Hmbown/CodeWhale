@@ -1919,6 +1919,16 @@ impl Engine {
                     });
                     if let Some(decision) = ask_rule_decision {
                         match decision {
+                            ToolAskRuleDecision::Allow => {
+                                // Remembered grants bypass ordinary registry
+                                // approval only. Hook asks and non-bypassable
+                                // tool requirements remain monotonic, while
+                                // auto-review and repo-law floors below can
+                                // still force review or block.
+                                if !hook_requires_approval && !approval_force_prompt {
+                                    approval_required = false;
+                                }
+                            }
                             ToolAskRuleDecision::Prompt(reason) => {
                                 // #3790: the mode is the sole authority — a typed
                                 // ask-rule prompts in Agent/Plan but never in YOLO

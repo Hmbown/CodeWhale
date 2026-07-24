@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Approval cards can now remember eligible safe shell and file-write approvals
+  as exact `allow` rules scoped to the current repository. Remembered shell
+  commands use complete-command matching, validated file and patch paths remain
+  workspace-relative, and dangerous, critical, or repo-law-held requests stay
+  ineligible and continue to require review.
 
 ## [0.9.1] - 2026-07-24
 

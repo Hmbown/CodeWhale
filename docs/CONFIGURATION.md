@@ -1316,8 +1316,12 @@ If you are upgrading from older releases:
 - `permissions.toml` (sibling file, optional): typed permission rule records
   loaded next to `config.toml`, for example `~/.codewhale/permissions.toml`.
   Manually authored `[[rules]]` entries accept `tool`, optional `command` or
-  `path`, and optional `action = "deny" | "ask" | "allow"`; omitted `action`
-  defaults to `"ask"`. `deny` blocks matching invocations before mode-based
+  `path`, optional absolute `workspace`, optional `command_exact = true`, and
+  optional `action = "deny" | "ask" | "allow"`; omitted `action` defaults to
+  `"ask"`. `workspace` limits a rule to that repository, while
+  `command_exact = true` changes a command rule from the historical
+  arity-aware prefix match to a complete-command match. `deny` blocks matching
+  invocations before mode-based
   approval handling, `allow` skips approval for matching invocations, and
   `ask` forces approval only in modes that can prompt. Outside the TUI
   auto-approve path, a matching `ask` rule under `approval_policy = "never"`
@@ -1325,20 +1329,28 @@ If you are upgrading from older releases:
   `ask` rules do not downgrade the session into prompting or blocking; explicit
   `deny` rules still block according to the current execution-policy logic.
 
-  In a supported approval card, press `S` to approve the request once and
-  append exact `action = "ask"` rules to this file. Supported saves are
-  intentionally narrow:
+  In a supported approval card, press `S` to allow the request once and append
+  exact `action = "ask"` rules to this file. For eligible safe requests, choose
+  **Always allow this exact rule in this repo** (shortcut `P`) to append an
+  `action = "allow"` rule with the current absolute `workspace` scope.
+  Remembered shell grants set `command_exact = true`, so later commands with
+  extra arguments do not inherit the grant. File and patch grants retain the
+  exact workspace-relative paths produced by the existing validation path.
+  Supported saves are intentionally narrow:
   `exec_shell` stores the exact approved command string; `write_file` and
   `edit_file` store the exact workspace-relative file path; `apply_patch`
   stores one exact workspace-relative `path` rule per validated touched file
   from apply-patch preflight. Existing exec command matching remains
-  arity-aware, and file paths are normalized to the same workspace-relative
-  form used by runtime matching.
+  arity-aware for manually authored prefix rules; approval-card allow grants
+  use complete-command matching. File paths are normalized to the same
+  workspace-relative form used by runtime matching.
 
   `read_file` rules can still be authored manually when you want future reads
   of a specific path to ask, allow, or deny, but the approval UI does not save
-  `read_file` rules. The UI is not a policy editor: it does not save
-  `allow`/`deny`, edit or delete rules, expand globs, or create broad
+  `read_file` rules. Commands classified as requiring approval or dangerous,
+  critical approval cards, and repo-law prompts cannot save allow grants and
+  continue to require review. The UI is not a policy editor: it does not save
+  deny rules, edit or delete rules, expand globs, or create broad
   directory/recursive rules.
 - `[[hotbar]]` (array of tables, optional): user-owned 1-8 slot bindings for
   the TUI hotbar. Each entry has `slot`, `action`, and optional `label`.

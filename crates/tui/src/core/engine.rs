@@ -1291,15 +1291,22 @@ impl Engine {
                 &self.session.workspace,
                 self.session.approval_mode,
             );
-            if let Some(ToolAskRuleDecision::Prompt(reason)) = ask_rule_decision.as_ref() {
-                // YOLO mode (auto_approve) is the explicit "no approvals"
-                // contract: a typed ask-rule must not pop a modal in YOLO.
-                // A typed deny rule still blocks hard below.
-                if !self.session.auto_approve {
-                    approval_required = true;
-                    approval_description = reason.clone();
-                    approval_force_prompt = true;
+            match ask_rule_decision.as_ref() {
+                Some(ToolAskRuleDecision::Allow) => {
+                    approval_required = false;
+                    approval_force_prompt = false;
                 }
+                Some(ToolAskRuleDecision::Prompt(reason)) => {
+                    // YOLO mode (auto_approve) is the explicit "no approvals"
+                    // contract: a typed ask-rule must not pop a modal in YOLO.
+                    // A typed deny rule still blocks hard below.
+                    if !self.session.auto_approve {
+                        approval_required = true;
+                        approval_description = reason.clone();
+                        approval_force_prompt = true;
+                    }
+                }
+                Some(ToolAskRuleDecision::Block(_)) | None => {}
             }
             if let Some(ToolAskRuleDecision::Block(reason)) = ask_rule_decision {
                 Err(ToolError::permission_denied(reason))
@@ -4555,6 +4562,7 @@ fn goal_objective_for_prompt(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ToolAskRuleDecision {
+    Allow,
     Prompt(String),
     Block(String),
 }
@@ -4680,6 +4688,7 @@ pub(super) fn file_tool_ask_rule_decision(
     }
 
     let mut prompt: Option<String> = None;
+    let mut all_allowed = true;
     for path in paths {
         match tool_ask_rule_decision_for_context(
             config,
@@ -4694,11 +4703,19 @@ pub(super) fn file_tool_ask_rule_decision(
             }
             Some(ToolAskRuleDecision::Prompt(reason)) => {
                 prompt.get_or_insert(reason);
+                all_allowed = false;
             }
-            None => {}
+            Some(ToolAskRuleDecision::Allow) => {}
+            None => all_allowed = false,
         }
     }
-    prompt.map(ToolAskRuleDecision::Prompt)
+    if let Some(prompt) = prompt {
+        Some(ToolAskRuleDecision::Prompt(prompt))
+    } else if all_allowed {
+        Some(ToolAskRuleDecision::Allow)
+    } else {
+        None
+    }
 }
 
 fn tool_ask_rule_decision_for_context(
@@ -4731,6 +4748,8 @@ fn tool_ask_rule_decision_for_context(
         Some(ToolAskRuleDecision::Block(decision.reason().to_string()))
     } else if decision.requires_approval {
         Some(ToolAskRuleDecision::Prompt(decision.reason().to_string()))
+    } else if decision.matched_action == Some(codewhale_execpolicy::PermissionAction::Allow) {
+        Some(ToolAskRuleDecision::Allow)
     } else {
         None
     }

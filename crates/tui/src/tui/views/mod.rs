@@ -640,8 +640,8 @@ pub enum ViewEvent {
         approval_key: String,
         /// Lossy / arity-aware fingerprint, used to scope *approvals*.
         approval_grouping_key: String,
-        /// Ask-only permission rules to append when the decision approves.
-        persistent_ask_rules: Vec<codewhale_config::ToolAskRule>,
+        /// Permission rules to append when the decision approves.
+        persistent_rules: Vec<codewhale_config::ToolAskRule>,
     },
     ElevationDecision {
         tool_id: String,
