@@ -317,11 +317,15 @@ impl NetworkAuditor {
         Self { path, enabled }
     }
 
-    /// Auditor pointing at `~/.codewhale/audit.log`. Returns `None` if the
-    /// home directory can't be resolved.
+    /// NOTE: This file is `#[path]`-included from integration tests
+    /// (`tests/skill_cli.rs`), so we cannot use
+    /// `crate::config::effective_home_dir()` here (the `config` module
+    /// does not exist in the test binary crate).  `dirs::home_dir()` is
+    /// safe: the integration tests do not fake $HOME, and the audit-log
+    /// default path is not test-fakability-critical.
     #[must_use]
     pub fn default_path(enabled: bool) -> Option<Self> {
-        let home = crate::config::effective_home_dir()?;
+        let home = dirs::home_dir()?;
         Some(Self::new(
             home.join(".codewhale").join("audit.log"),
             enabled,

@@ -56,12 +56,14 @@ fn reqwest_client() -> reqwest::Client {
         .expect("build platform HTTP client")
 }
 
-/// Cache directory for registry-synced skills.
-///
-/// Lives at `~/.codewhale/cache/skills/` so it's separate from user-installed
-/// skills and can be blown away without losing anything irreplaceable.
+/// NOTE: This file is `#[path]`-included from integration tests
+/// (`tests/skill_cli.rs`), so we cannot use
+/// `crate::config::effective_home_dir()` here (the `config` module
+/// does not exist in the test binary crate).  `dirs::home_dir()` is
+/// safe: the integration tests supply an explicit temp directory for
+/// the install target, so the cache path is not exercised at runtime.
 pub fn default_cache_skills_dir() -> PathBuf {
-    crate::config::effective_home_dir().map_or_else(
+    dirs::home_dir().map_or_else(
         || PathBuf::from("/tmp/codewhale/cache/skills"),
         |p| p.join(".codewhale").join("cache").join("skills"),
     )
