@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+## [0.9.1] - 2026-07-24
+
+### Dogfood follow-ups (2026-07-24)
+
 ### Added
 
 - `/compact [focus]`: the manual compaction command now accepts an
@@ -80,7 +85,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unknown role tokens still fail closed with the canonical vocabulary in
   the error.
 
-## [0.9.1] - 2026-07-22
 
 The Codewhale v0.9.1 source candidate includes a first-class local web client over the Runtime API,
 first-class OpenCode Go and TelecomJS TokenHub providers and restored xAI device login,
