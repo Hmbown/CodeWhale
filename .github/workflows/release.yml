@@ -9,6 +9,11 @@ on:
         description: 'Release version, without v; dispatch from the matching existing vX.Y.Z tag ref'
         required: true
         type: string
+      republish_channels:
+        description: 'Recovery: skip build/asset publication and only (re)publish the container image and Homebrew tap for an already-released tag.'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: release-${{ github.ref_name }}
@@ -103,6 +108,10 @@ jobs:
       - name: Require release source on main
         run: ./scripts/release/ensure-release-on-main.sh "${{ steps.release.outputs.sha }}"
       - name: Refuse an existing public asset set
+        # In recovery mode the assets are *expected* to exist -- that is the
+        # whole premise -- and nothing downstream writes them, so this guard
+        # would only deadlock the recovery it is meant to protect.
+        if: ${{ !inputs.republish_channels }}
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}
@@ -110,6 +119,7 @@ jobs:
 
   parity:
     needs: resolve
+    if: ${{ !inputs.republish_channels }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -168,7 +178,7 @@ jobs:
 
   artifacts:
     needs: [parity, resolve]
-    if: ${{ !cancelled() && needs.resolve.result == 'success' && needs.parity.result == 'success' }}
+    if: ${{ !cancelled() && !inputs.republish_channels && needs.resolve.result == 'success' && needs.parity.result == 'success' }}
     uses: ./.github/workflows/release-artifacts.yml
     with:
       source_sha: ${{ needs.resolve.outputs.sha }}
@@ -177,7 +187,10 @@ jobs:
 
   docker:
     needs: [artifacts, resolve]
-    if: ${{ !cancelled() && needs.artifacts.result == 'success' }}
+    if: >-
+      ${{ !cancelled() && needs.resolve.result == 'success'
+      && (needs.artifacts.result == 'success'
+          || (inputs.republish_channels && needs.artifacts.result == 'skipped')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -262,7 +275,9 @@ jobs:
 
   release:
     needs: [artifacts, docker, resolve]
-    if: ${{ !cancelled() && needs.artifacts.result == 'success' && needs.docker.result == 'success' }}
+    # Never runs in recovery mode: the GitHub Release already exists and its
+    # bytes are immutable. Recovery republishes only the derived channels.
+    if: ${{ !cancelled() && !inputs.republish_channels && needs.artifacts.result == 'success' && needs.docker.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -310,7 +325,10 @@ jobs:
 
   homebrew:
     needs: [release, resolve]
-    if: ${{ !cancelled() && needs.release.result == 'success' }}
+    if: >-
+      ${{ !cancelled() && needs.resolve.result == 'success'
+      && (needs.release.result == 'success'
+          || (inputs.republish_channels && needs.release.result == 'skipped')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
