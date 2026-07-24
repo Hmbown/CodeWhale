@@ -499,7 +499,7 @@ impl ModelPickerView {
             .min(efforts.len().saturating_sub(1))]
     }
 
-    fn current_efforts(&self) -> &'static [ReasoningEffort] {
+    fn current_efforts(&self) -> Vec<ReasoningEffort> {
         let provider = self.resolved_provider().unwrap_or(self.initial_provider);
         let model = self.resolved_model();
         let base_url = self.resolved_base_url_for_provider(provider, &model);
@@ -2027,16 +2027,89 @@ fn picker_efforts_for_route(
     base_url: &str,
     wire_model: &str,
     model_is_auto: bool,
-) -> &'static [ReasoningEffort] {
+) -> Vec<ReasoningEffort> {
     if model_is_auto {
-        return AUTO_MODEL_PICKER_EFFORTS;
+        return AUTO_MODEL_PICKER_EFFORTS.to_vec();
     }
+    // Exact-route overrides still win over catalog metadata: Kimi Code K3 and
+    // OpenAI Codex have wire dialects the generic Models.dev shape does not
+    // fully describe.
     if crate::config::is_exact_kimi_code_k3_route(provider, base_url, wire_model) {
-        return KIMI_CODE_K3_PICKER_EFFORTS;
+        return KIMI_CODE_K3_PICKER_EFFORTS.to_vec();
     }
-    match provider {
-        ApiProvider::OpenaiCodex => CODEX_PICKER_EFFORTS,
-        _ => DEFAULT_PICKER_EFFORTS,
+    if provider == ApiProvider::OpenaiCodex {
+        return CODEX_PICKER_EFFORTS.to_vec();
+    }
+    if let Some(catalog_efforts) = catalog_picker_efforts(provider, wire_model) {
+        return catalog_efforts;
+    }
+    DEFAULT_PICKER_EFFORTS.to_vec()
+}
+
+/// Build thinking-tier rows from Models.dev `reasoning_options` when present.
+///
+/// Expected shape (already parsed onto the catalog offering):
+/// `[{ "type": "effort", "values": ["high", "max"] }]`.
+/// Non-effort option types (e.g. MiniMax `thinking`) are mapped when their
+/// values collapse cleanly onto our tier vocabulary; unknown values are
+/// skipped. Returns `None` when the catalog has no usable effort list so the
+/// caller can keep the provider default rather than inventing tiers.
+fn catalog_picker_efforts(
+    provider: ApiProvider,
+    wire_model: &str,
+) -> Option<Vec<ReasoningEffort>> {
+    let offering = catalog_offering_for_model(provider, wire_model)?;
+    let mut efforts = Vec::new();
+    let mut saw_effort_list = false;
+    for option in &offering.reasoning_options {
+        let option_type = option
+            .get("type")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        // Prefer explicit effort lists; also accept thinking-mode lists whose
+        // values map onto our tiers (adaptive→auto, disabled→off, always_on→max).
+        if option_type != "effort" && option_type != "thinking" {
+            continue;
+        }
+        let Some(values) = option.get("values").and_then(|value| value.as_array()) else {
+            continue;
+        };
+        saw_effort_list = true;
+        for value in values {
+            let Some(raw) = value.as_str() else {
+                continue;
+            };
+            if let Some(effort) = catalog_effort_value(raw)
+                && !efforts.contains(&effort)
+            {
+                efforts.push(effort);
+            }
+        }
+    }
+    if !saw_effort_list || efforts.is_empty() {
+        return None;
+    }
+    // Always offer Auto when the catalog published discrete tiers so the
+    // operator can still leave the choice to the route default. Do not invent
+    // Off unless the catalog said so — some models are always-on.
+    if !efforts.contains(&ReasoningEffort::Auto) {
+        efforts.insert(0, ReasoningEffort::Auto);
+    }
+    Some(efforts)
+}
+
+fn catalog_effort_value(raw: &str) -> Option<ReasoningEffort> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "off" | "disabled" | "none" | "false" => Some(ReasoningEffort::Off),
+        "low" | "minimum" | "minimal" | "light" => Some(ReasoningEffort::Low),
+        "medium" | "mid" => Some(ReasoningEffort::Medium),
+        "high" => Some(ReasoningEffort::High),
+        "auto" | "automatic" | "adaptive" => Some(ReasoningEffort::Auto),
+        "max" | "maximum" | "xhigh" | "ultra" | "ultracode" | "always_on" | "always-on" => {
+            Some(ReasoningEffort::Max)
+        }
+        _ => None,
     }
 }
 
@@ -2050,7 +2123,36 @@ fn normalize_picker_effort(
     if model_is_auto {
         return ReasoningEffort::Auto;
     }
-    effort.normalize_for_route(provider, base_url, wire_model)
+    let normalized = effort.normalize_for_route(provider, base_url, wire_model);
+    let efforts = picker_efforts_for_route(provider, base_url, wire_model, false);
+    if efforts.contains(&normalized) {
+        return normalized;
+    }
+    // Catalog-driven lists may keep Low/Medium that route normalization would
+    // otherwise collapse. Prefer the operator's exact choice when the picker
+    // still shows it.
+    if efforts.contains(&effort) {
+        return effort;
+    }
+    default_picker_effort(provider, &efforts)
+}
+
+fn default_picker_effort(provider: ApiProvider, efforts: &[ReasoningEffort]) -> ReasoningEffort {
+    let preferred = if provider == ApiProvider::OpenaiCodex {
+        ReasoningEffort::Medium
+    } else {
+        ReasoningEffort::High
+    };
+    if efforts.contains(&preferred) {
+        preferred
+    } else {
+        efforts
+            .iter()
+            .copied()
+            .find(|effort| *effort != ReasoningEffort::Auto && *effort != ReasoningEffort::Off)
+            .or_else(|| efforts.first().copied())
+            .unwrap_or(preferred)
+    }
 }
 
 fn default_picker_effort_idx(
@@ -2059,14 +2161,12 @@ fn default_picker_effort_idx(
     wire_model: &str,
     model_is_auto: bool,
 ) -> usize {
-    let default_effort = if model_is_auto {
-        ReasoningEffort::Auto
-    } else if provider == ApiProvider::OpenaiCodex {
-        ReasoningEffort::Medium
-    } else {
-        ReasoningEffort::High
-    };
-    picker_efforts_for_route(provider, base_url, wire_model, model_is_auto)
+    if model_is_auto {
+        return 0;
+    }
+    let efforts = picker_efforts_for_route(provider, base_url, wire_model, false);
+    let default_effort = default_picker_effort(provider, &efforts);
+    efforts
         .iter()
         .position(|effort| *effort == default_effort)
         .unwrap_or(0)
@@ -3069,7 +3169,7 @@ mod tests {
         assert_eq!(view.resolved_effort(), ReasoningEffort::Medium);
         assert_eq!(
             view.current_efforts(),
-            KIMI_CODE_K3_PICKER_EFFORTS,
+            KIMI_CODE_K3_PICKER_EFFORTS.to_vec(),
             "the official K3 route must expose low/medium before sending a secret"
         );
 
@@ -3081,7 +3181,7 @@ mod tests {
             .base_url = Some(crate::config::DEFAULT_MOONSHOT_BASE_URL.to_string());
         let generic = ModelPickerView::new(&app, &config);
         assert_eq!(generic.resolved_effort(), ReasoningEffort::High);
-        assert_eq!(generic.current_efforts(), DEFAULT_PICKER_EFFORTS);
+        assert_eq!(generic.current_efforts(), DEFAULT_PICKER_EFFORTS.to_vec());
     }
 
     #[test]
@@ -4522,6 +4622,69 @@ mod tests {
         .map(|effort| effort.short_label())
         .collect();
         assert_eq!(labels, vec!["auto", "off", "high", "max"]);
+    }
+
+    #[test]
+    fn catalog_effort_values_map_provider_vocabularies() {
+        assert_eq!(catalog_effort_value("none"), Some(ReasoningEffort::Off));
+        assert_eq!(catalog_effort_value("minimal"), Some(ReasoningEffort::Low));
+        assert_eq!(catalog_effort_value("adaptive"), Some(ReasoningEffort::Auto));
+        assert_eq!(catalog_effort_value("xhigh"), Some(ReasoningEffort::Max));
+        assert_eq!(catalog_effort_value("always_on"), Some(ReasoningEffort::Max));
+        assert_eq!(catalog_effort_value("mystery"), None);
+    }
+
+    #[test]
+    fn picker_uses_catalog_reasoning_options_when_present() {
+        // GLM-5.2 ships effort values high/max in the bundled Models.dev catalog.
+        let labels: Vec<&str> = picker_efforts_for_route(
+            crate::config::ApiProvider::Zai,
+            crate::config::ApiProvider::Zai.default_base_url(),
+            "GLM-5.2",
+            false,
+        )
+        .iter()
+        .map(|effort| effort.as_setting())
+        .collect();
+        assert_eq!(
+            labels,
+            vec!["auto", "high", "max"],
+            "catalog effort list must drive the Thinking pane (plus Auto)"
+        );
+    }
+
+    #[test]
+    fn picker_uses_catalog_thinking_options_for_minimax() {
+        let labels: Vec<&str> = picker_efforts_for_route(
+            crate::config::ApiProvider::Minimax,
+            crate::config::ApiProvider::Minimax.default_base_url(),
+            "MiniMax-M3",
+            false,
+        )
+        .iter()
+        .map(|effort| effort.as_setting())
+        .collect();
+        // adaptive→auto, disabled→off; Auto is already first so no duplicate.
+        assert_eq!(labels, vec!["auto", "off"]);
+    }
+
+    #[test]
+    fn picker_keeps_default_when_catalog_has_no_reasoning_options() {
+        // grok-4.5 is reasoning-capable but ships no reasoning_options list.
+        let labels: Vec<&str> = picker_efforts_for_route(
+            crate::config::ApiProvider::Xai,
+            crate::config::ApiProvider::Xai.default_base_url(),
+            "grok-4.5",
+            false,
+        )
+        .iter()
+        .map(|effort| effort.as_setting())
+        .collect();
+        assert_eq!(
+            labels,
+            vec!["auto", "off", "high", "max"],
+            "absent reasoning_options must keep DEFAULT_PICKER_EFFORTS, not invent Low/Medium"
+        );
     }
 
     #[test]
