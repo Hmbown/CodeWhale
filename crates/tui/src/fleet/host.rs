@@ -11,6 +11,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+#[cfg(unix)]
 use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
