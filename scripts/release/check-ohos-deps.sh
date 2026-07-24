@@ -118,7 +118,7 @@ cargo_tree_with_retry() {
 tree="$(cargo_tree_with_retry "${package}" --all-features --no-dedupe)"
 
 disallowed="$(
-  grep -E '^(nix v0\.(28|29)\.|portable-pty v|starlark v|arboard v|keyring v)' <<<"${tree}" || true
+  grep -E '^(starlark v|arboard v|keyring v)' <<<"${tree}" || true
 )"
 
 if [[ -n "${disallowed}" ]]; then
@@ -126,9 +126,10 @@ if [[ -n "${disallowed}" ]]; then
     echo "::error::OHOS target graph for ${package} includes unsupported dependencies:"
     echo "${disallowed}"
     echo
-    echo "The OpenHarmony port avoids the rustyline/starlark/portable-pty/nix chain"
-    echo "by target-gating those crates away from target_env=ohos. Keep this graph"
-    echo "clean unless a real OHOS-compatible dependency update lands."
+    echo "The OpenHarmony port avoids the rustyline/starlark/arboard/keyring chain"
+    echo "by target-gating those crates away from target_env=ohos. portable-pty (and"
+    echo "its transitive nix dep) are now included via cfg(unix) for OHOS PTY support."
+    echo "Keep this graph clean unless a real OHOS-compatible dependency update lands."
   } >&2
   exit 1
 fi
