@@ -66,6 +66,8 @@ pub enum ApiProvider {
     Stepfun,
     Minimax,
     MinimaxAnthropic,
+    MinimaxCn,
+    MinimaxAnthropicCn,
     Deepinfra,
     Sakana,
     LongCat,

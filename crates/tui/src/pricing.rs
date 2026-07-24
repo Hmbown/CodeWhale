@@ -590,7 +590,10 @@ pub(crate) fn calculate_turn_cost_estimate_for_provider_at(
     // been canonicalized.
     if matches!(
         provider,
-        ApiProvider::Minimax | ApiProvider::MinimaxAnthropic
+        ApiProvider::Minimax
+            | ApiProvider::MinimaxAnthropic
+            | ApiProvider::MinimaxCn
+            | ApiProvider::MinimaxAnthropicCn
     ) && catalog_model.eq_ignore_ascii_case("minimax-m3")
     {
         let pricing = pricing_for_model_and_usage(&catalog_model, usage)?;
@@ -688,7 +691,10 @@ fn provider_owned_hand_pricing_at(
         ApiProvider::Moonshot => {
             matches!(model_lower.as_str(), "kimi-k2.6" | "kimi-k2.7-code")
         }
-        ApiProvider::Minimax | ApiProvider::MinimaxAnthropic => {
+        ApiProvider::Minimax
+        | ApiProvider::MinimaxAnthropic
+        | ApiProvider::MinimaxCn
+        | ApiProvider::MinimaxAnthropicCn => {
             matches!(model_lower.as_str(), "minimax-m3" | "minimax-m2.7")
         }
         ApiProvider::Arcee => model_lower == "trinity-large-thinking",

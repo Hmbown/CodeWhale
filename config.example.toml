@@ -21,7 +21,7 @@
 # `api_key` / `base_url` are
 # still read as DeepSeek defaults when `[providers.deepseek]` is absent
 # (backward compatibility).
-provider = "deepseek" # deepseek | deepseek-cn | deepseek-anthropic | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | siliconflow-CN | arcee | moonshot | zai | stepfun | minimax | sglang | vllm | ollama | huggingface | together | qianfan | openai-codex | anthropic | openmodel | deepinfra | sakana | longcat | opencode-go | meta | xai
+provider = "deepseek" # deepseek | deepseek-cn | deepseek-anthropic | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | siliconflow-CN | arcee | moonshot | zai | stepfun | minimax | minimax-cn | minimax-anthropic | minimax-anthropic-cn | sglang | vllm | ollama | huggingface | together | qianfan | openai-codex | anthropic | openmodel | deepinfra | sakana | longcat | opencode-go | meta | xai
 api_key = "YOUR_DEEPSEEK_API_KEY" # must be non-empty
 base_url = "https://api.deepseek.com/beta"
 # provider = "deepseek-cn"                       # legacy alias (official host is still https://api.deepseek.com)
@@ -528,6 +528,27 @@ max_subagents = 10 # optional (1-20)
 # model = "MiniMax-M3"                          # or MiniMax-M2.7, MiniMax-M2.7-highspeed
 # # MiniMax also publishes Anthropic-compatible endpoints:
 # # global https://api.minimax.io/anthropic, China https://api.minimaxi.com/anthropic.
+
+# MiniMax direct OpenAI-compatible endpoint for China / Token Plan keys
+# (https://platform.minimaxi.com). Use this when your API key was issued under
+# platform.minimaxi.com. Falls back to [providers.minimax] for model when unset.
+[providers.minimax-cn]
+# api_key = "YOUR_MINIMAX_TOKEN_PLAN_KEY"
+# base_url = "https://api.minimaxi.com/v1"
+# model = "MiniMax-M3"
+
+# MiniMax Anthropic-compatible endpoint (https://platform.minimax.io)
+[providers.minimax-anthropic]
+# api_key = "YOUR_MINIMAX_API_KEY"
+# base_url = "https://api.minimax.io/anthropic"
+# model = "MiniMax-M3"
+
+# MiniMax Anthropic-compatible endpoint for China / Token Plan keys
+# (https://platform.minimaxi.com). Pair with MINIMAX_API_KEY (Token Plan key).
+[providers.minimax-anthropic-cn]
+# api_key = "YOUR_MINIMAX_TOKEN_PLAN_KEY"
+# base_url = "https://api.minimaxi.com/anthropic"
+# model = "MiniMax-M3"
 
 # Self-hosted SGLang OpenAI-compatible server
 [providers.sglang]
