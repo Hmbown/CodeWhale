@@ -22,11 +22,19 @@ jobs:
             const text = `${title}\n${body}`;
             const labels = new Set();
 
-            // Type
-            if (/\b(bug|crash|panic|broken|stack ?trace|regression|err(?:or)?|fail(?:ed|ure)?)\b/.test(text)) labels.add('bug');
-            if (/\b(feat(?:ure)?|request|enhancement|wishlist|proposal|please add|would be nice|support for)\b/.test(text)) labels.add('enhancement');
-            if (/\b(docs?|readme|documentation|typo|grammar|wording|spelling)\b/.test(text)) labels.add('documentation');
-            if (/\b(question|how (?:do|to)|why does|what does|is it possible)\b/.test(text)) labels.add('question');
+            // Type — matched against the TITLE only.
+            //
+            // These ran against title+body and mislabelled long, well-specified
+            // issues. Any body containing an acceptance criterion like "fails
+            // when a pack drifts" matched the bug rule, and a "How to add a
+            // locale" heading matched the question rule, so planned work landed
+            // tagged `bug, question`. A title states the type; a body just
+            // discusses it. `error`/`fail` are dropped entirely — they describe
+            // what almost every issue talks about, not what any issue *is*.
+            if (/\b(bug|crash|panic|broken|stack ?trace|regression)\b/.test(title)) labels.add('bug');
+            if (/\b(feat(?:ure)?|request|enhancement|wishlist|proposal|please add|would be nice|support for)\b/.test(title)) labels.add('enhancement');
+            if (/\b(docs?|readme|documentation|typo|grammar|wording|spelling)\b/.test(title)) labels.add('documentation');
+            if (/\b(question|how (?:do|to)|why does|what does|is it possible)\b/.test(title)) labels.add('question');
 
             // Locale — title contains CJK (Chinese, Japanese, Korean) characters
             if (/[぀-ヿ㐀-鿿가-힯]/.test(issue.title || '')) labels.add('lang:zh');
