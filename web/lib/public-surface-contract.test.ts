@@ -105,6 +105,11 @@ function pngDimensions(image: Buffer): [number, number] {
   return [image.readUInt32BE(16), image.readUInt32BE(20)];
 }
 
+function comparableVersion(value: string): number {
+  const [major = 0, minor = 0, patch = 0] = value.split(".").map((n) => Number.parseInt(n, 10) || 0);
+  return major * 1_000_000 + minor * 1_000 + patch;
+}
+
 describe("public surface contracts", () => {
   it("keeps source-candidate and published-release facts distinct and aligned", () => {
     expect(matrix.schemaVersion).toBe(2);
@@ -118,7 +123,14 @@ describe("public surface contracts", () => {
       publishedAt: matrix.latestPublishedRelease.publishedAt,
       url: matrix.latestPublishedRelease.url,
     }).toEqual(FACTS.latestPublishedRelease);
-    expect(matrix.latestPublishedRelease.version).not.toBe(matrix.sourceCandidate.version);
+    // The published release may equal the source candidate: that is the normal
+    // state in the window between shipping vX.Y.Z and opening the next lane.
+    // What must never happen is the site advertising a version that is not
+    // published yet, so assert published <= source candidate rather than
+    // asserting they differ.
+    expect(comparableVersion(matrix.latestPublishedRelease.version)).toBeLessThanOrEqual(
+      comparableVersion(matrix.sourceCandidate.version),
+    );
     expect(matrix.latestPublishedRelease).not.toHaveProperty("providerCount");
     expect(matrix.latestPublishedRelease).not.toHaveProperty("toolCount");
     expect(matrix.surfaces).not.toHaveProperty("stable");
