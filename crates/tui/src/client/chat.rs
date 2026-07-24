@@ -48,6 +48,32 @@ fn stream_open_timeout_from_env(value: Option<&str>) -> Duration {
     Duration::from_secs(secs)
 }
 
+/// Default timeout for a complete non-streaming chat response.
+///
+/// Unlike the SSE open wait, a non-streaming server (Ollama, llama-server,
+/// vLLM without stream) only returns response headers after the FULL
+/// generation finishes, so this budget must cover model thinking and
+/// generation time, not just connection setup.
+const DEFAULT_NONSTREAM_RESPONSE_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// Reads `CODEWHALE_NONSTREAM_TIMEOUT_SECS` as a bounded override for the
+/// non-streaming full-response wait.
+fn nonstream_response_timeout() -> Duration {
+    nonstream_response_timeout_from_env(
+        std::env::var("CODEWHALE_NONSTREAM_TIMEOUT_SECS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn nonstream_response_timeout_from_env(value: Option<&str>) -> Duration {
+    let secs = value
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_NONSTREAM_RESPONSE_TIMEOUT.as_secs())
+        .clamp(30, 3600);
+    Duration::from_secs(secs)
+}
+
 fn stream_idle_timeout_message(
     idle: Duration,
     bytes_received: usize,
@@ -470,20 +496,23 @@ impl DeepSeekClient {
             self.path_suffix.as_deref(),
             &body,
         );
-        let open_timeout = stream_open_timeout();
-        let response = match tokio_timeout(open_timeout, self.send_json_with_retry(&url, &body))
-            .await
-        {
-            Ok(result) => result?,
-            Err(_elapsed) => {
-                anyhow::bail!(
-                    "SSE stream request did not receive response headers after {}s. \
-                     `codewhale doctor` can still pass when non-streaming requests work; \
-                     on Windows or proxy networks, try `DEEPSEEK_FORCE_HTTP1=1` and rerun `codewhale`.",
-                    open_timeout.as_secs()
-                );
-            }
-        };
+        // A non-streaming server holds the response (headers included) until
+        // the full generation is done, so this wait is bounded by the
+        // generation budget, not the SSE open timeout.
+        let response_timeout = nonstream_response_timeout();
+        let response =
+            match tokio_timeout(response_timeout, self.send_json_with_retry(&url, &body)).await {
+                Ok(result) => result?,
+                Err(_elapsed) => {
+                    anyhow::bail!(
+                        "Non-streaming chat request did not complete after {}s. \
+                     The server generates the entire response before replying, so slow \
+                     local models can legitimately take minutes; raise \
+                     `CODEWHALE_NONSTREAM_TIMEOUT_SECS` to wait longer.",
+                        response_timeout.as_secs()
+                    );
+                }
+            };
 
         let status = response.status();
         if !status.is_success() {
@@ -628,7 +657,23 @@ impl DeepSeekClient {
             self.path_suffix.as_deref(),
             &body,
         );
-        let response = self.send_json_with_retry(&url, &body).await?;
+        // Streaming servers send headers before generating, so a bounded open
+        // wait only guards connection setup — the hang this timeout was
+        // written for — and never races model thinking time.
+        let open_timeout = stream_open_timeout();
+        let response = match tokio_timeout(open_timeout, self.send_json_with_retry(&url, &body))
+            .await
+        {
+            Ok(result) => result?,
+            Err(_elapsed) => {
+                anyhow::bail!(
+                    "SSE stream request did not receive response headers after {}s. \
+                     `codewhale doctor` can still pass when non-streaming requests work; \
+                     on Windows or proxy networks, try `DEEPSEEK_FORCE_HTTP1=1` and rerun `codewhale`.",
+                    open_timeout.as_secs()
+                );
+            }
+        };
 
         let status = response.status();
         if !status.is_success() {
@@ -3254,6 +3299,30 @@ mod stream_diagnostics_tests {
         assert_eq!(
             stream_open_timeout_from_env(Some("999")),
             Duration::from_secs(300)
+        );
+    }
+
+    #[test]
+    fn nonstream_response_timeout_defaults_and_clamps_env_values() {
+        assert_eq!(
+            nonstream_response_timeout_from_env(None),
+            Duration::from_secs(600)
+        );
+        assert_eq!(
+            nonstream_response_timeout_from_env(Some("not-a-number")),
+            Duration::from_secs(600)
+        );
+        assert_eq!(
+            nonstream_response_timeout_from_env(Some("1")),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            nonstream_response_timeout_from_env(Some("1200")),
+            Duration::from_secs(1200)
+        );
+        assert_eq!(
+            nonstream_response_timeout_from_env(Some("99999")),
+            Duration::from_secs(3600)
         );
     }
 
