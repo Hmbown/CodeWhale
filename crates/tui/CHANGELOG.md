@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Approval cards can now remember eligible safe shell and file-write approvals
+  as exact `allow` rules scoped to the current repository. Remembered shell
+  commands use complete-command matching, validated file and patch paths remain
+  workspace-relative, and dangerous, critical, or repo-law-held requests stay
+  ineligible and continue to require review.
+
+## [0.9.1] - 2026-07-24
+
+### Dogfood follow-ups (2026-07-24)
+
+### Added
+
 - `/compact [focus]`: the manual compaction command now accepts an
   optional focus argument that is injected into the summary prompt, and
   the compaction summary itself becomes a structured nine-section
@@ -80,7 +92,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unknown role tokens still fail closed with the canonical vocabulary in
   the error.
 
-## [0.9.1] - 2026-07-22
 
 The Codewhale v0.9.1 source candidate includes a first-class local web client over the Runtime API,
 first-class OpenCode Go and TelecomJS TokenHub providers and restored xAI device login,

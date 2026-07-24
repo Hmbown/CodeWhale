@@ -1278,7 +1278,7 @@ fn approval_modal_keeps_wheel_for_review_and_denies_without_side_effect() -> any
     h.wait_for_text(prompt, KEY_TIMEOUT)?;
     h.wait_for_idle(Duration::from_millis(100), Duration::from_secs(2))?;
     h.send(keys::key::enter())?;
-    h.wait_for_text("Approve once", Duration::from_secs(10))?;
+    h.wait_for_text("Allow once", Duration::from_secs(10))?;
     h.wait_for_text("Deny this call", KEY_TIMEOUT)?;
 
     let (deny_row, deny_col) = h
@@ -1302,6 +1302,7 @@ fn approval_modal_keeps_wheel_for_review_and_denies_without_side_effect() -> any
         .expect("denial option survived resize");
     h.send(keys::mouse::wheel_down(deny_row, deny_col))?;
     h.wait_for_text("❯ [1 / y]", KEY_TIMEOUT)?;
+    h.send(keys::key::down())?;
     h.send(keys::key::down())?;
     h.send(keys::key::down())?;
     h.wait_for_text("❯ [3 / d / n]", KEY_TIMEOUT)?;
@@ -2471,7 +2472,7 @@ fn work_surface_file_mutation_modes_are_truthful_in_real_pty_frames() -> anyhow:
         h.wait_for_text(prompt, KEY_TIMEOUT)?;
         h.send(keys::key::enter())?;
         if approve_once {
-            h.wait_for_text("Approve once", Duration::from_secs(10))?;
+            h.wait_for_text("Allow once", Duration::from_secs(10))?;
             h.send(b"y")?;
         }
         h.wait_for_text("FILE-MUTATION-FIXTURE-DONE", Duration::from_secs(20))?;

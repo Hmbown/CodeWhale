@@ -11,7 +11,6 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -22,6 +21,8 @@ use thiserror::Error;
 use std::os::unix::process::CommandExt;
 #[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
+#[cfg(unix)]
+use std::sync::OnceLock;
 #[cfg(windows)]
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 #[cfg(windows)]

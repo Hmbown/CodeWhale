@@ -53,7 +53,7 @@ use std::sync::OnceLock;
 use anyhow::{Context, Result, bail};
 pub use auth_source::{AuthSourceKind, ProviderAuthSourceToml};
 pub use codewhale_execpolicy::ToolAskRule;
-use codewhale_execpolicy::{ExecPolicyEngine, Ruleset};
+use codewhale_execpolicy::{ExecPolicyEngine, PermissionAction, Ruleset};
 use codewhale_secrets::SecretSource;
 pub use codewhale_secrets::Secrets;
 pub use external_credentials::{
@@ -360,8 +360,8 @@ pub struct ProvidersToml {
 /// Sibling `permissions.toml` schema.
 ///
 /// Each rule is a typed condition that can deny, allow, or ask before a tool
-/// invocation. UI actions that persist deny/allow rules are future work; the
-/// approval card still saves ask rules.
+/// invocation. The approval card persists ask rules and narrowly scoped,
+/// exact allow grants; deny rules remain manually authored.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PermissionsToml {
@@ -377,7 +377,6 @@ impl PermissionsToml {
 
     #[must_use]
     pub fn ruleset(&self) -> Ruleset {
-        use codewhale_execpolicy::PermissionAction;
         let mut denied = Vec::new();
         let mut trusted = Vec::new();
         let mut ask_rules = Vec::new();
@@ -387,7 +386,10 @@ impl PermissionsToml {
                 PermissionAction::Deny => {
                     // Command-based deny rules are promoted to denied_prefixes
                     // so they are caught by execpolicy's deny-always-wins check.
-                    if let Some(cmd) = &rule.command {
+                    if let Some(cmd) = &rule.command
+                        && !rule.command_exact
+                        && rule.workspace.is_none()
+                    {
                         denied.push(cmd.clone());
                     }
                     // Always keep in ask_rules for path-based and tool-only matching.
@@ -397,7 +399,10 @@ impl PermissionsToml {
                     // Command-based allow rules are promoted to trusted_prefixes
                     // for arity-aware matching.  Path-only allow rules are
                     // handled through ask_rules (they skip the approval prompt).
-                    if let Some(cmd) = &rule.command {
+                    if let Some(cmd) = &rule.command
+                        && !rule.command_exact
+                        && rule.workspace.is_none()
+                    {
                         trusted.push(cmd.clone());
                     }
                     // Keep in ask_rules so path-only allow rules also work.
@@ -3684,8 +3689,61 @@ impl ConfigStore {
     /// are ignored, and the in-memory permissions snapshot is refreshed after
     /// a successful write.
     pub fn append_ask_rules(&mut self, rules: &[ToolAskRule]) -> Result<usize> {
+        self.append_permission_rules(rules, PermissionAction::Ask)
+    }
+
+    /// Atomically append exact, repo-scoped allow rules to the sibling
+    /// `permissions.toml` file.
+    ///
+    /// The caller is responsible for deciding which tool calls are eligible;
+    /// this boundary rejects broad or incorrectly typed records so a UI bug
+    /// cannot persist an unscoped allow grant.
+    pub fn append_allow_rules(&mut self, rules: &[ToolAskRule]) -> Result<usize> {
+        for rule in rules {
+            if rule.action != PermissionAction::Allow {
+                bail!("append_allow_rules only accepts action = \"allow\"");
+            }
+            let Some(workspace) = rule
+                .workspace
+                .as_deref()
+                .and_then(codewhale_execpolicy::normalize_workspace_scope)
+            else {
+                bail!("persistent allow rules must be scoped to a workspace");
+            };
+            if rule.command.is_some() && !rule.command_exact {
+                bail!("persistent command allow rules must use exact matching");
+            }
+            if rule.command.is_none() && rule.path.is_none() {
+                bail!("persistent allow rules must match an exact command or path");
+            }
+            if let Some(command) = rule.command.as_deref()
+                && command.trim().is_empty()
+            {
+                bail!("persistent command allow rules must not be empty");
+            }
+            if let Some(path) = rule.path.as_deref()
+                && codewhale_execpolicy::normalize_workspace_relative_path(path, &workspace)
+                    .is_none_or(|path| path.is_empty())
+            {
+                bail!("persistent path allow rules must stay within the workspace");
+            }
+        }
+        self.append_permission_rules(rules, PermissionAction::Allow)
+    }
+
+    fn append_permission_rules(
+        &mut self,
+        rules: &[ToolAskRule],
+        expected_action: PermissionAction,
+    ) -> Result<usize> {
         if rules.is_empty() {
             return Ok(0);
+        }
+        if rules.iter().any(|rule| rule.action != expected_action) {
+            bail!(
+                "permission rule action does not match requested {:?} persistence",
+                expected_action
+            );
         }
 
         let path = checked_permissions_path_for_config_path(&self.path)?;
@@ -3727,7 +3785,7 @@ impl ConfigStore {
             if permissions.rules.contains(rule) {
                 continue;
             }
-            append_ask_rule(rules_item, rule)?;
+            append_permission_rule(rules_item, rule)?;
             permissions.rules.push(rule.clone());
             added += 1;
         }
@@ -4350,43 +4408,74 @@ fn load_sibling_permissions(config_path: &Path) -> Result<PermissionsToml> {
     })
 }
 
-fn append_ask_rule(item: &mut toml_edit::Item, rule: &ToolAskRule) -> Result<()> {
+fn append_permission_rule(item: &mut toml_edit::Item, rule: &ToolAskRule) -> Result<()> {
     match item {
         toml_edit::Item::ArrayOfTables(rules) => {
-            rules.push(ask_rule_table(rule));
+            rules.push(permission_rule_table(rule));
             Ok(())
         }
         toml_edit::Item::Value(value) => {
             let Some(rules) = value.as_array_mut() else {
                 bail!("`rules` in permissions.toml must be an array");
             };
-            rules.push(toml_edit::Value::InlineTable(ask_rule_inline_table(rule)));
+            rules.push(toml_edit::Value::InlineTable(permission_rule_inline_table(
+                rule,
+            )));
             Ok(())
         }
         _ => bail!("`rules` in permissions.toml must be an array"),
     }
 }
 
-fn ask_rule_table(rule: &ToolAskRule) -> toml_edit::Table {
+fn permission_rule_table(rule: &ToolAskRule) -> toml_edit::Table {
     let mut table = toml_edit::Table::new();
     table["tool"] = toml_edit::value(rule.tool.clone());
     if let Some(command) = rule.command.as_deref() {
         table["command"] = toml_edit::value(command);
     }
+    if rule.command_exact {
+        table["command_exact"] = toml_edit::value(true);
+    }
     if let Some(path) = rule.path.as_deref() {
         table["path"] = toml_edit::value(path);
+    }
+    if let Some(workspace) = rule.workspace.as_deref() {
+        table["workspace"] = toml_edit::value(workspace);
+    }
+    if rule.action != PermissionAction::Ask {
+        table["action"] = toml_edit::value(match rule.action {
+            PermissionAction::Allow => "allow",
+            PermissionAction::Ask => "ask",
+            PermissionAction::Deny => "deny",
+        });
     }
     table
 }
 
-fn ask_rule_inline_table(rule: &ToolAskRule) -> toml_edit::InlineTable {
+fn permission_rule_inline_table(rule: &ToolAskRule) -> toml_edit::InlineTable {
     let mut table = toml_edit::InlineTable::new();
     table.insert("tool", toml_edit::Value::from(rule.tool.clone()));
     if let Some(command) = rule.command.as_deref() {
         table.insert("command", toml_edit::Value::from(command));
     }
+    if rule.command_exact {
+        table.insert("command_exact", toml_edit::Value::from(true));
+    }
     if let Some(path) = rule.path.as_deref() {
         table.insert("path", toml_edit::Value::from(path));
+    }
+    if let Some(workspace) = rule.workspace.as_deref() {
+        table.insert("workspace", toml_edit::Value::from(workspace));
+    }
+    if rule.action != PermissionAction::Ask {
+        table.insert(
+            "action",
+            toml_edit::Value::from(match rule.action {
+                PermissionAction::Allow => "allow",
+                PermissionAction::Ask => "ask",
+                PermissionAction::Deny => "deny",
+            }),
+        );
     }
     table
 }

@@ -15282,7 +15282,7 @@ async fn approval_decision_persists_ask_rules_to_permissions_file() {
             timed_out: false,
             approval_key: "approval-key".to_string(),
             approval_grouping_key: "approval-group".to_string(),
-            persistent_ask_rules: vec![rule.clone()],
+            persistent_rules: vec![rule.clone()],
         },
     )
     .await;
@@ -15313,6 +15313,79 @@ async fn approval_decision_persists_ask_rules_to_permissions_file() {
         })
         .expect("check persisted runtime policy");
     assert!(decision.requires_approval);
+}
+
+#[tokio::test]
+async fn approval_decision_persists_exact_workspace_allow_rule() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = tmp.path().join("config.toml");
+    let mut app = create_test_app();
+    app.workspace = tmp.path().to_path_buf();
+    app.config_path = Some(config_path.clone());
+    let mut config = Config::default();
+    let mut engine = mock_engine_handle();
+    let rule = codewhale_config::ToolAskRule::exec_shell("cargo test")
+        .into_exact_workspace_allow(tmp.path().to_string_lossy());
+
+    apply_approval_decision(
+        &mut app,
+        &mut engine.handle,
+        &mut config,
+        ApprovalDecisionEvent {
+            tool_id: "tool-allow".to_string(),
+            tool_name: "exec_shell".to_string(),
+            decision: ReviewDecision::Approved,
+            timed_out: false,
+            approval_key: "approval-key".to_string(),
+            approval_grouping_key: "approval-group".to_string(),
+            persistent_rules: vec![rule.clone()],
+        },
+    )
+    .await;
+
+    assert_eq!(
+        engine.recv_approval_event().await,
+        Some(crate::core::engine::MockApprovalEvent::Approved {
+            id: "tool-allow".to_string()
+        })
+    );
+    let store = codewhale_config::ConfigStore::load(Some(config_path)).expect("load config store");
+    assert_eq!(store.permissions().rules, vec![rule]);
+    assert!(
+        app.status_message
+            .as_deref()
+            .is_some_and(|message| message.contains("Saved 1 allow permission rule"))
+    );
+
+    let exact = config
+        .exec_policy_engine
+        .check(codewhale_execpolicy::ExecPolicyContext {
+            command: "cargo test",
+            cwd: tmp.path().to_string_lossy().as_ref(),
+            tool: Some("exec_shell"),
+            path: None,
+            ask_for_approval: codewhale_execpolicy::AskForApproval::OnRequest,
+            sandbox_mode: None,
+        })
+        .expect("check persisted allow");
+    assert_eq!(
+        exact.matched_action,
+        Some(codewhale_execpolicy::PermissionAction::Allow)
+    );
+    assert!(!exact.requires_approval);
+
+    let expanded = config
+        .exec_policy_engine
+        .check(codewhale_execpolicy::ExecPolicyContext {
+            command: "cargo test --workspace",
+            cwd: tmp.path().to_string_lossy().as_ref(),
+            tool: Some("exec_shell"),
+            path: None,
+            ask_for_approval: codewhale_execpolicy::AskForApproval::OnRequest,
+            sandbox_mode: None,
+        })
+        .expect("check expanded command");
+    assert!(expanded.requires_approval);
 }
 
 #[test]

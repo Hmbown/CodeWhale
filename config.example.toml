@@ -184,12 +184,16 @@ sandbox_mode = "workspace-write" # read-only | workspace-write | danger-full-acc
 
 # Typed permission rules live in a sibling `permissions.toml` file, not in
 # config.toml. Each `[[rules]]` entry accepts `tool`, optional `command`
-# or `path`, and an `action` field: `"deny"`, `"ask"` (default), or `"allow"`.
+# or `path`, optional absolute `workspace`, optional `command_exact = true`,
+# and an `action` field: `"deny"`, `"ask"` (default), or `"allow"`.
 # Deny always wins over ask, which wins over allow.  Globs, broad directory
 # rules, and a rule editor/deleter UI are future work.
 #
-# In supported approval cards, press `S` to approve once and save exact rules
-# (currently saved as ask-only; deny/allow UI save is future work):
+# In supported approval cards, press `S` to allow once and save an exact ask
+# rule. Eligible safe calls also offer `P` / "Always allow this exact rule in
+# this repo", which saves an exact `allow` rule scoped to the current absolute
+# workspace. Dangerous/critical calls and repo-law prompts cannot save allow
+# grants. The UI still does not save deny rules or provide editing/deletion:
 #   exec_shell  -> exact approved command string
 #   write_file  -> exact workspace-relative target path
 #   edit_file   -> exact workspace-relative target path
@@ -219,6 +223,8 @@ sandbox_mode = "workspace-write" # read-only | workspace-write | danger-full-acc
 # [[rules]]
 # tool = "exec_shell"
 # command = "git status"
+# command_exact = true
+# workspace = "/absolute/path/to/project"
 # action = "allow"
 #
 # # Path-based deny

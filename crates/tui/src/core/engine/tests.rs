@@ -4083,6 +4083,49 @@ fn exec_shell_ask_rule_decision_ignores_unmatched_command() {
 }
 
 #[test]
+fn exec_shell_allow_rule_decision_allows_only_exact_command_in_scoped_repo() {
+    let rule = codewhale_execpolicy::ToolAskRule::exec_shell("cargo test")
+        .into_exact_workspace_allow("/repo");
+    let config = EngineConfig {
+        exec_policy_engine: codewhale_execpolicy::ExecPolicyEngine::with_rulesets(vec![
+            codewhale_execpolicy::Ruleset::user(vec![], vec![]).with_ask_rules(vec![rule]),
+        ]),
+        ..EngineConfig::default()
+    };
+
+    assert_eq!(
+        exec_shell_ask_rule_decision(
+            &config,
+            "exec_shell",
+            &json!({"command": "cargo test"}),
+            Path::new("/repo"),
+            crate::tui::approval::ApprovalMode::Suggest,
+        ),
+        Some(ToolAskRuleDecision::Allow)
+    );
+    assert_eq!(
+        exec_shell_ask_rule_decision(
+            &config,
+            "exec_shell",
+            &json!({"command": "cargo test --workspace"}),
+            Path::new("/repo"),
+            crate::tui::approval::ApprovalMode::Suggest,
+        ),
+        None
+    );
+    assert_eq!(
+        exec_shell_ask_rule_decision(
+            &config,
+            "exec_shell",
+            &json!({"command": "cargo test"}),
+            Path::new("/other"),
+            crate::tui::approval::ApprovalMode::Suggest,
+        ),
+        None
+    );
+}
+
+#[test]
 fn file_ask_rule_decision_prompts_for_matching_read_path() {
     let config = EngineConfig {
         exec_policy_engine: file_ask_rule_engine("read_file", "secrets/api_key.txt"),
@@ -4192,6 +4235,51 @@ fn file_ask_rule_decision_ignores_unmatched_path() {
     );
 
     assert_eq!(decision, None);
+}
+
+#[test]
+fn apply_patch_allow_requires_every_touched_path_to_match() {
+    let rules = ["src/a.rs", "src/b.rs"]
+        .into_iter()
+        .map(|path| {
+            codewhale_execpolicy::ToolAskRule::file_path("apply_patch", path)
+                .into_exact_workspace_allow("/repo")
+        })
+        .collect();
+    let config = EngineConfig {
+        exec_policy_engine: codewhale_execpolicy::ExecPolicyEngine::with_rulesets(vec![
+            codewhale_execpolicy::Ruleset::user(vec![], vec![]).with_ask_rules(rules),
+        ]),
+        ..EngineConfig::default()
+    };
+
+    let fully_allowed = file_tool_ask_rule_decision(
+        &config,
+        "apply_patch",
+        &json!({
+            "replace": [
+                {"path": "src/a.rs", "content": "a"},
+                {"path": "src/b.rs", "content": "b"}
+            ]
+        }),
+        Path::new("/repo"),
+        crate::tui::approval::ApprovalMode::Suggest,
+    );
+    assert_eq!(fully_allowed, Some(ToolAskRuleDecision::Allow));
+
+    let partially_allowed = file_tool_ask_rule_decision(
+        &config,
+        "apply_patch",
+        &json!({
+            "replace": [
+                {"path": "src/a.rs", "content": "a"},
+                {"path": "src/c.rs", "content": "c"}
+            ]
+        }),
+        Path::new("/repo"),
+        crate::tui::approval::ApprovalMode::Suggest,
+    );
+    assert_eq!(partially_allowed, None);
 }
 
 fn api_tool(name: &str) -> Tool {

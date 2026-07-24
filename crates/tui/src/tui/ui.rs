@@ -13049,7 +13049,7 @@ async fn handle_view_events(
                 timed_out,
                 approval_key,
                 approval_grouping_key,
-                persistent_ask_rules,
+                persistent_rules,
             } => {
                 apply_approval_decision(
                     app,
@@ -13062,7 +13062,7 @@ async fn handle_view_events(
                         timed_out,
                         approval_key,
                         approval_grouping_key,
-                        persistent_ask_rules,
+                        persistent_rules,
                     },
                 )
                 .await;
@@ -14012,7 +14012,7 @@ struct ApprovalDecisionEvent {
     timed_out: bool,
     approval_key: String,
     approval_grouping_key: String,
-    persistent_ask_rules: Vec<codewhale_config::ToolAskRule>,
+    persistent_rules: Vec<codewhale_config::ToolAskRule>,
 }
 
 async fn apply_approval_decision(
@@ -14034,10 +14034,10 @@ async fn apply_approval_decision(
     if matches!(
         event.decision,
         ReviewDecision::Approved | ReviewDecision::ApprovedForSession
-    ) && !event.persistent_ask_rules.is_empty()
+    ) && !event.persistent_rules.is_empty()
         && !event.timed_out
     {
-        persist_ask_rules_from_approval(app, config, &event.persistent_ask_rules);
+        persist_rules_from_approval(app, config, &event.persistent_rules);
     }
 
     match event.decision {
@@ -14235,31 +14235,49 @@ fn apply_setup_runtime_preset(
     Ok(format!("Applied {}.", preset.result_summary()))
 }
 
-fn persist_ask_rules_from_approval(
+fn persist_rules_from_approval(
     app: &mut App,
     config: &mut Config,
     rules: &[codewhale_config::ToolAskRule],
 ) {
+    let action = rules.first().map(|rule| rule.action);
     match codewhale_config::ConfigStore::load(app.config_path.clone()).and_then(|mut store| {
-        let added = store.append_ask_rules(rules)?;
+        let added = match action {
+            Some(codewhale_execpolicy::PermissionAction::Ask) => store.append_ask_rules(rules)?,
+            Some(codewhale_execpolicy::PermissionAction::Allow) => {
+                store.append_allow_rules(rules)?
+            }
+            Some(codewhale_execpolicy::PermissionAction::Deny) => {
+                anyhow::bail!("the approval UI cannot persist deny rules")
+            }
+            None => 0,
+        };
         let permissions_path = store.permissions_path();
         config.exec_policy_engine = store.exec_policy_engine();
         Ok((added, permissions_path))
     }) {
         Ok((added, path)) if added > 0 => {
+            let action = match action {
+                Some(codewhale_execpolicy::PermissionAction::Allow) => "allow",
+                _ => "ask",
+            };
             app.status_message = Some(format!(
-                "Saved {added} ask permission rule(s) to {}",
+                "Saved {added} {action} permission rule(s) to {}",
                 path.display()
             ));
         }
         Ok((_added, path)) => {
+            let action = match action {
+                Some(codewhale_execpolicy::PermissionAction::Allow) => "Allow",
+                _ => "Ask",
+            };
             app.status_message = Some(format!(
-                "Ask permission rule already saved in {}",
+                "{action} permission rule already saved in {}",
                 path.display()
             ));
         }
         Err(err) => {
-            app.status_message = Some(format!("Failed to save ask permission rule: {err:#}"));
+            app.status_message = Some(format!("Failed to save permission rule: {err:#}"));
         }
     }
 }
