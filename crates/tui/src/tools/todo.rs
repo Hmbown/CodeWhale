@@ -586,7 +586,7 @@ impl ToolSpec for TodoWriteTool {
                 "Compatibility alias for work_update. Replace the active thread/task To-do list; durable tasks are the real executable work object."
             }
             _ => {
-                "Replace the active thread/task To-do list (concrete current work items). This is the canonical progress surface. Durable tasks remain the real executable work object."
+                "Replace the active thread/task To-do list (concrete current work items). This is the canonical progress surface the user watches, so keep it live while you work: mark an item in_progress before starting it (exactly one at a time), and call work_update again the moment an item finishes so it shows completed — never batch completions at the end. Durable tasks remain the real executable work object."
             }
         }
     }
@@ -748,6 +748,26 @@ fn work_progress_metadata(snapshot: &TodoListSnapshot, tool_name: &str) -> serde
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn work_update_description_teaches_live_upkeep() {
+        // 2026-07-23 user report: models wrote the list once and never
+        // updated it while working. The canonical tool description must
+        // carry the upkeep contract every provider sees.
+        let tool = super::TodoWriteTool::work_update(super::new_shared_todo_list());
+        let description = crate::tools::spec::ToolSpec::description(&tool);
+        for phrase in [
+            "keep it live while you work",
+            "in_progress before starting it (exactly one at a time)",
+            "the moment an item finishes",
+            "never batch completions",
+        ] {
+            assert!(
+                description.contains(phrase),
+                "work_update description missing {phrase:?}: {description}"
+            );
+        }
+    }
+
     use super::*;
 
     #[test]

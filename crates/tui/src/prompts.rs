@@ -1632,6 +1632,11 @@ mod tests {
             "Keep `work_update` current",
             "verify load-bearing child",
             "never manufacture completion sentinels",
+            // Live progress upkeep (2026-07-23 user report: models wrote the
+            // list once and never updated it while working).
+            "exactly one item in_progress before you
+start it",
+            "never batch completions",
         ] {
             assert!(
                 AGENT_MODE.contains(phrase),
