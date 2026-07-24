@@ -60,13 +60,49 @@ pub fn parse_named_fleet(toml_text: &str) -> Result<NamedFleet, NamedFleetError>
     parse_fleet_toml_minimal(trimmed)
 }
 
+/// Strip comments from the single-line basic and literal strings supported by
+/// the minimal fleet parser.
+fn strip_toml_comment(line: &str) -> &str {
+    let mut quote = None;
+    let mut escaped = false;
+
+    for (index, character) in line.char_indices() {
+        match quote {
+            Some('"') => {
+                if escaped {
+                    escaped = false;
+                } else {
+                    match character {
+                        '\\' => escaped = true,
+                        '"' => quote = None,
+                        _ => {}
+                    }
+                }
+            }
+            Some('\'') => {
+                if character == '\'' {
+                    quote = None;
+                }
+            }
+            Some(_) => unreachable!("only TOML string delimiters are tracked"),
+            None => match character {
+                '"' | '\'' => quote = Some(character),
+                '#' => return &line[..index],
+                _ => {}
+            },
+        }
+    }
+
+    line
+}
+
 fn parse_fleet_toml_minimal(text: &str) -> Result<NamedFleet, NamedFleetError> {
     let mut name = None;
     let mut description = None;
     let mut roles = BTreeMap::new();
     let mut section = "";
     for raw in text.lines() {
-        let line = raw.split('#').next().unwrap_or("").trim();
+        let line = strip_toml_comment(raw).trim();
         if line.is_empty() {
             continue;
         }
@@ -204,6 +240,39 @@ release_lead = "manager"
         let fleet = parse_named_fleet(STOPSHIP_TOML).unwrap();
         let err = fleet.resolve("wizard").unwrap_err();
         assert!(matches!(err, NamedFleetError::MissingRole { .. }));
+    }
+
+    #[test]
+    fn quoted_hashes_are_not_treated_as_comments() {
+        let fleet = parse_named_fleet(
+            r#"
+name = "issue-references"
+description = "Tracks #4178 dogfood" # real comment
+
+[roles]
+scout = "scout#stable"
+"#,
+        )
+        .expect("parse");
+
+        assert_eq!(fleet.description.as_deref(), Some("Tracks #4178 dogfood"));
+        assert_eq!(fleet.resolve("scout").unwrap(), "scout#stable");
+    }
+
+    #[test]
+    fn comment_stripping_tracks_toml_quotes_and_escapes() {
+        assert_eq!(
+            strip_toml_comment(r##"description = "say \"#still-value\"" # comment"##).trim_end(),
+            r##"description = "say \"#still-value\"""##
+        );
+        assert_eq!(
+            strip_toml_comment("description = 'tracks #4178' # comment").trim_end(),
+            "description = 'tracks #4178'"
+        );
+        assert_eq!(
+            strip_toml_comment(r#"name = "stopship" # comment"#).trim_end(),
+            r#"name = "stopship""#
+        );
     }
 
     #[test]
