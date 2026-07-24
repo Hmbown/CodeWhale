@@ -1,6 +1,52 @@
 # Repository Agent Guidance
 
-## Where to work right now (read this first)
+## Intent is the artifact (read this first)
+
+We have crossed the threshold where **writing the code again is cheaper than
+recovering the code we wrote.** Assume that is true by default and act on it.
+
+- **The durable asset is intent** — what a change was *for*, the behavior it
+  promised, the constraint it honored. The diff that expressed it is disposable.
+  When you find work that is stranded, stale, or hard to reconcile, recover the
+  intent and re-implement it against today's code. Do not archaeology your way
+  through a merge you can retype in less time.
+- **Rewriting any part of this project is always in scope**, up to and including
+  the whole thing. A module, a crate, a subsystem, the TUI's 16k-line `ui.rs` —
+  none of it is load-bearing by virtue of existing. If the current shape is
+  fighting you, the rewrite is a legitimate first option, not a last resort.
+  Argue it on merit, not on sunk cost.
+- **Use git; do not be governed by it.** Branches, merge bases, and patch-ids
+  are bookkeeping, not authority. A branch that is 600 commits behind is not a
+  debt to be paid — it is a note describing something we once wanted. Read the
+  note, decide if we still want it, then either build it fresh or close it.
+  Conflict count is a signal to rewrite, not a task list.
+- **A stranded lane becomes an issue, not a merge.** Default disposition for
+  drifted work: open an issue that states the intent, the behavior we wanted,
+  and any evidence worth keeping (repro, test, linked report); reference the
+  dead branch for provenance; delete or abandon the branch. Then implement it
+  from current `main` when it comes up the queue.
+- **Verify before you rebuild.** The one thing that must not be lazy is the
+  check for whether main *already* does it. Grep for the symbols and behavior,
+  not the commit. Re-landing work that already landed is the failure mode this
+  ethos creates, and it is the one you own.
+
+### What this does not license
+
+- **`main` stays protected and releases stay reproducible.** Rewrite freely in a
+  branch or worktree; do not rewrite published history, retag a shipped release,
+  or force-push a shared ref.
+- **Stewardship obligations survive a rewrite.** Contributor credit, the
+  `Co-authored-by` / `Harvested from PR #N` machinery, and the licensing that
+  comes with community work are not artifacts of the old diff — carry them onto
+  the new implementation. Re-implementing someone's contribution does not
+  launder away their authorship.
+- **The do-not-delete guardrail below still applies.** "Rewriting is in scope"
+  is not "this looks dead to me." Verify consumers with `rg` first.
+- **Don't rewrite to avoid understanding.** Rewrite because you know what the
+  code should do and the current shape is in the way — not because reading it
+  is tedious.
+
+## Where to work right now
 
 - **Repo:** `Hmbown/CodeWhale`. This repo lives on multiple devices, so work in
   whichever local checkout you have — keep paths here device-agnostic and always
@@ -84,6 +130,13 @@
   agents intact.
 
 ## Release PR Integration
+
+The guidance below is for **live** work — open PRs and branches close enough to
+`main` to reconcile honestly. For work that has drifted far enough that the merge
+is an excavation, see "Intent is the artifact" above: capture the intent as an
+issue, drop the branch, rebuild from current `main`. A useful rule of thumb — if
+the conflicts are in the files the branch most wanted to change, you are
+reconstructing intent anyway; do it in the editor, not the merge tool.
 
 - Use scratch integration branches when triaging a crowded release queue. A
   branch such as `scratch/vX.Y.Z-pr-train-YYYYMMDD` may merge or cherry-pick
