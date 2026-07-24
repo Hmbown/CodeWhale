@@ -734,7 +734,10 @@ fn config_store_appends_exact_workspace_allow_rules() {
     assert!(body.contains("# remembered grants stay user-owned"));
     assert!(body.contains("action = \"allow\""));
     assert!(body.contains("command_exact = true"));
-    assert!(body.contains(&format!("workspace = {:?}", dir.path().to_string_lossy())));
+    // Windows paths may make toml_edit choose a different valid quoting style
+    // than Rust's Debug output. Check the rendered field shape here and its
+    // exact value through the typed parse below.
+    assert!(body.lines().any(|line| line.starts_with("workspace = ")));
     let parsed: PermissionsToml = toml::from_str(&body).expect("parse permissions");
     assert_eq!(parsed.rules, vec![rule.clone()]);
 
