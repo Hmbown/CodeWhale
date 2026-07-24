@@ -2294,11 +2294,11 @@ fn trust_remove(workspace: &Path, raw: &str) -> CommandResult {
 
 fn expand_tilde(raw: &str) -> String {
     if let Some(rest) = raw.strip_prefix("~/")
-        && let Some(home) = dirs::home_dir()
+        && let Some(home) = crate::config::effective_home_dir()
     {
         return home.join(rest).to_string_lossy().into_owned();
     } else if raw == "~"
-        && let Some(home) = dirs::home_dir()
+        && let Some(home) = crate::config::effective_home_dir()
     {
         return home.to_string_lossy().into_owned();
     }

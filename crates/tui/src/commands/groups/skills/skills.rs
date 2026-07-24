@@ -509,7 +509,7 @@ fn install_skill(app: &mut App, args: &str) -> CommandResult {
     // Legacy no-scope install maps to the CodeWhale global owned root.
     let target = scope.unwrap_or(SkillTargetScope::Global);
     let workspace = app.workspace.clone();
-    let home = dirs::home_dir();
+    let home = crate::config::effective_home_dir();
     let (network, max_size, registry_url) = installer_settings(app);
 
     let outcome = run_async(async move {
@@ -564,7 +564,7 @@ fn update_skill(app: &mut App, args: &str) -> CommandResult {
         return CommandResult::error("Usage: /skill update [--project|--global] <name>");
     }
     let workspace = app.workspace.clone();
-    let home = dirs::home_dir();
+    let home = crate::config::effective_home_dir();
     let (network, max_size, registry_url) = installer_settings(app);
     let owned_name = name.to_string();
 
@@ -623,7 +623,7 @@ fn uninstall_skill(app: &mut App, args: &str) -> CommandResult {
     if name.is_empty() {
         return CommandResult::error("Usage: /skill uninstall [--project|--global] <name>");
     }
-    let home = dirs::home_dir();
+    let home = crate::config::effective_home_dir();
     let (network, max_size, registry_url) = installer_settings(app);
     let ctx = MutationContext {
         workspace: &app.workspace,
@@ -662,7 +662,7 @@ fn trust_skill(app: &mut App, args: &str) -> CommandResult {
     if name.is_empty() {
         return CommandResult::error("Usage: /skill trust [--project|--global] <name>");
     }
-    let home = dirs::home_dir();
+    let home = crate::config::effective_home_dir();
     let (network, max_size, registry_url) = installer_settings(app);
     let ctx = MutationContext {
         workspace: &app.workspace,

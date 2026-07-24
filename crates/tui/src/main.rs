@@ -1333,7 +1333,7 @@ fn main() -> Result<()> {
             .unwrap_or_else(|| "unknown".to_string());
         tracing::error!(target: "panic", "Process panicked at {location}: {msg}");
         // Write crash dump best-effort
-        if let Some(home) = dirs::home_dir() {
+        if let Some(home) = crate::config::effective_home_dir() {
             let crash_dir = home.join(".deepseek").join("crashes");
             let _ = std::fs::create_dir_all(&crash_dir);
             use chrono::Utc;
@@ -2984,7 +2984,8 @@ fn resolve_cors_origins(config: &Config, flag_origins: &[String]) -> Vec<String>
 
 fn deepseek_home_dir() -> PathBuf {
     codewhale_config::codewhale_home().unwrap_or_else(|_| {
-        dirs::home_dir().map_or_else(|| PathBuf::from(".codewhale"), |h| h.join(".codewhale"))
+        crate::config::effective_home_dir()
+            .map_or_else(|| PathBuf::from(".codewhale"), |h| h.join(".codewhale"))
     })
 }
 

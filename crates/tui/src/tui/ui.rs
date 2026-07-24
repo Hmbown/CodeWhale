@@ -11485,7 +11485,7 @@ fn mcp_import_consent_path() -> PathBuf {
 
 fn mcp_external_import_status_text(workspace: &std::path::Path) -> String {
     use crate::mcp::external_import::{discover_external_sources, format_candidates_for_display};
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let home = crate::config::effective_home_dir().unwrap_or_else(|| PathBuf::from("."));
     let market_path = codewhale_config::codewhale_home()
         .ok()
         .map(|h| h.join("mcp-marketplace.json"));
@@ -11509,7 +11509,7 @@ fn mcp_import_apply(
     use std::collections::HashMap;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let home = crate::config::effective_home_dir().unwrap_or_else(|| PathBuf::from("."));
     let market_path = codewhale_config::codewhale_home()
         .ok()
         .map(|h| h.join("mcp-marketplace.json"));
@@ -12863,7 +12863,7 @@ async fn handle_skill_mutation_requested(
     };
 
     let workspace = app.workspace.clone();
-    let home = dirs::home_dir();
+    let home = crate::config::effective_home_dir();
     let cfg = crate::config::Config::load(None, None).unwrap_or_default();
     let network = cfg
         .network
