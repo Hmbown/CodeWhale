@@ -2054,10 +2054,7 @@ fn picker_efforts_for_route(
 /// values collapse cleanly onto our tier vocabulary; unknown values are
 /// skipped. Returns `None` when the catalog has no usable effort list so the
 /// caller can keep the provider default rather than inventing tiers.
-fn catalog_picker_efforts(
-    provider: ApiProvider,
-    wire_model: &str,
-) -> Option<Vec<ReasoningEffort>> {
+fn catalog_picker_efforts(provider: ApiProvider, wire_model: &str) -> Option<Vec<ReasoningEffort>> {
     let offering = catalog_offering_for_model(provider, wire_model)?;
     let mut efforts = Vec::new();
     let mut saw_effort_list = false;
@@ -4628,9 +4625,15 @@ mod tests {
     fn catalog_effort_values_map_provider_vocabularies() {
         assert_eq!(catalog_effort_value("none"), Some(ReasoningEffort::Off));
         assert_eq!(catalog_effort_value("minimal"), Some(ReasoningEffort::Low));
-        assert_eq!(catalog_effort_value("adaptive"), Some(ReasoningEffort::Auto));
+        assert_eq!(
+            catalog_effort_value("adaptive"),
+            Some(ReasoningEffort::Auto)
+        );
         assert_eq!(catalog_effort_value("xhigh"), Some(ReasoningEffort::Max));
-        assert_eq!(catalog_effort_value("always_on"), Some(ReasoningEffort::Max));
+        assert_eq!(
+            catalog_effort_value("always_on"),
+            Some(ReasoningEffort::Max)
+        );
         assert_eq!(catalog_effort_value("mystery"), None);
     }
 

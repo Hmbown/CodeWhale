@@ -10775,7 +10775,10 @@ async fn empty_composer_second_enter_leaves_queued_message() {
 
     // Second bare Enter with empty composer is a no-op for queue contents.
     assert!(app.input.trim().is_empty());
-    assert_eq!(app.decide_submit_disposition(), crate::tui::app::SubmitDisposition::Queue);
+    assert_eq!(
+        app.decide_submit_disposition(),
+        crate::tui::app::SubmitDisposition::Queue
+    );
     assert_eq!(app.queued_message_count(), 1);
     assert_eq!(
         app.queued_messages.front().map(|m| m.display.as_str()),
