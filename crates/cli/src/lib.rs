@@ -5405,12 +5405,9 @@ model = "qwen-2.5-7b"
 
         // An explicit repo-relative path still resolves — checked against a
         // workflow that actually ships.
-        let explicit = resolve_workflow_source_path(
-            "workflows/stopship.workflow.js",
-            None,
-            &workspace,
-        )
-        .expect("explicit workflow path");
+        let explicit =
+            resolve_workflow_source_path("workflows/stopship.workflow.js", None, &workspace)
+                .expect("explicit workflow path");
         assert!(explicit.ends_with("workflows/stopship.workflow.js"));
     }
 
