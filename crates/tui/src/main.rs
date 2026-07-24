@@ -5403,8 +5403,22 @@ fn doctor_runtime_default_mode() -> (String, &'static str) {
     }
 }
 
+/// TUI settings posture used when `config.approval_policy` is unset.
+/// Doctor must surface this separately so a saved Full Access baseline is not
+/// misreported as the config default `approval_policy=on-request`.
+fn doctor_runtime_permission_posture() -> (String, &'static str) {
+    match crate::settings::Settings::load_read_only() {
+        Ok(settings) => match settings.permission_posture {
+            Some(posture) => (posture, "settings"),
+            None => ("unset".to_string(), "default"),
+        },
+        Err(_) => ("unset".to_string(), "default"),
+    }
+}
+
 fn doctor_runtime_posture_line(config: &Config, workspace: &Path) -> String {
     let (default_mode, default_mode_source) = doctor_runtime_default_mode();
+    let (permission_posture, permission_posture_source) = doctor_runtime_permission_posture();
     let approval = config.approval_policy.as_deref().unwrap_or("on-request");
     let approval_source = if config.approval_policy.is_some() {
         "config"
@@ -5439,7 +5453,7 @@ fn doctor_runtime_posture_line(config: &Config, workspace: &Path) -> String {
     };
 
     format!(
-        "default_mode={default_mode} ({default_mode_source}), approval_policy={approval} ({approval_source}), allow_shell={allow_shell} ({allow_shell_source}), sandbox={sandbox} ({sandbox_source}), network.default={network} ({network_source}), trust={trust}"
+        "default_mode={default_mode} ({default_mode_source}), permission_posture={permission_posture} ({permission_posture_source}), approval_policy={approval} ({approval_source}), allow_shell={allow_shell} ({allow_shell_source}), sandbox={sandbox} ({sandbox_source}), network.default={network} ({network_source}), trust={trust}"
     )
 }
 
@@ -5645,6 +5659,7 @@ fn doctor_setup_report_json(config: &Config, workspace: &Path) -> serde_json::Va
 
     let (state, source) = doctor_setup_state(config, workspace);
     let (default_mode, default_mode_source) = doctor_runtime_default_mode();
+    let (permission_posture, permission_posture_source) = doctor_runtime_permission_posture();
     let approval_policy = config.approval_policy.as_deref().unwrap_or("on-request");
     let approval_policy_source = if config.approval_policy.is_some() {
         "config"
@@ -5711,6 +5726,10 @@ fn doctor_setup_report_json(config: &Config, workspace: &Path) -> serde_json::Va
             "default_mode": {
                 "value": default_mode,
                 "source": default_mode_source,
+            },
+            "permission_posture": {
+                "value": permission_posture,
+                "source": permission_posture_source,
             },
             "approval_policy": {
                 "value": approval_policy,
@@ -12010,6 +12029,51 @@ mod doctor_setup_state_tests {
             "config"
         );
         assert_eq!(provider_step(&report)["result"], "deepseek/deepseek-chat");
+    }
+
+    #[test]
+    fn doctor_reports_settings_permission_posture_when_approval_policy_unset() {
+        let _guard = crate::test_support::lock_test_env();
+        let tmp = TempDir::new().expect("tempdir");
+        let (_home_guard, codewhale_home) = prepare_env(&tmp);
+        let workspace = tmp.path().join("workspace");
+        fs::create_dir_all(&workspace).expect("workspace");
+        fs::write(
+            codewhale_home.join("settings.toml"),
+            "permission_posture = \"full-access\"\n",
+        )
+        .expect("write settings.toml");
+
+        let config = Config::default();
+        assert!(config.approval_policy.is_none());
+
+        let line = doctor_runtime_posture_line(&config, &workspace);
+        assert!(
+            line.contains("permission_posture=full-access (settings)"),
+            "text doctor should report saved settings posture: {line}"
+        );
+        assert!(
+            line.contains("approval_policy=on-request (default)"),
+            "text doctor should keep unset config approval_policy default: {line}"
+        );
+
+        let report = doctor_setup_report_json(&config, &workspace);
+        assert_eq!(
+            report["runtime_posture"]["permission_posture"]["value"],
+            "full-access"
+        );
+        assert_eq!(
+            report["runtime_posture"]["permission_posture"]["source"],
+            "settings"
+        );
+        assert_eq!(
+            report["runtime_posture"]["approval_policy"]["value"],
+            "on-request"
+        );
+        assert_eq!(
+            report["runtime_posture"]["approval_policy"]["source"],
+            "default"
+        );
     }
 
     #[test]
