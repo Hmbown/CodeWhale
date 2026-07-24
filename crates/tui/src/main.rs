@@ -2984,7 +2984,8 @@ fn resolve_cors_origins(config: &Config, flag_origins: &[String]) -> Vec<String>
 
 fn deepseek_home_dir() -> PathBuf {
     codewhale_config::codewhale_home().unwrap_or_else(|_| {
-        crate::config::effective_home_dir().map_or_else(|| PathBuf::from(".codewhale"), |h| h.join(".codewhale"))
+        crate::config::effective_home_dir()
+            .map_or_else(|| PathBuf::from(".codewhale"), |h| h.join(".codewhale"))
     })
 }
 

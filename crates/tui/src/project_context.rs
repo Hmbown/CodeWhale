@@ -930,7 +930,10 @@ pub fn load_project_context(workspace: &Path) -> ProjectContext {
 ///
 /// This allows for monorepo setups where a root AGENTS.md applies to all subdirectories.
 pub fn load_project_context_with_parents(workspace: &Path) -> ProjectContext {
-    load_project_context_with_parents_cached_and_home(workspace, crate::config::effective_home_dir().as_deref())
+    load_project_context_with_parents_cached_and_home(
+        workspace,
+        crate::config::effective_home_dir().as_deref(),
+    )
 }
 
 fn load_project_context_with_parents_cached_and_home(

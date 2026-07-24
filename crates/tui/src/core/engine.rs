@@ -4443,7 +4443,8 @@ fn strip_active_operation_reanchor(prompt: Option<&SystemPrompt>) -> Option<Syst
 fn default_plugin_tools_dir() -> PathBuf {
     codewhale_config::codewhale_home()
         .unwrap_or_else(|_| {
-            crate::config::effective_home_dir().map_or_else(|| PathBuf::from(".codewhale"), |h| h.join(".codewhale"))
+            crate::config::effective_home_dir()
+                .map_or_else(|| PathBuf::from(".codewhale"), |h| h.join(".codewhale"))
         })
         .join("tools")
 }
