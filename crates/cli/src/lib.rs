@@ -5388,10 +5388,13 @@ model = "qwen-2.5-7b"
     }
 
     #[test]
-    fn short_workflow_names_do_not_resolve_historical_v0868_files() {
+    fn short_workflow_names_do_not_resolve_version_pinned_files() {
         let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("..");
+        // A bare short name must never expand to a version-pinned script.
+        // The v0868_* lane scripts are gone, but the guard stays so a future
+        // vXXXX_ naming habit cannot silently become resolvable.
         let candidates = workflow_source_candidates("issue-sweep", None, &workspace);
         assert!(candidates.iter().all(|path| {
             !path
@@ -5400,13 +5403,15 @@ model = "qwen-2.5-7b"
         }));
         assert!(resolve_workflow_source_path("issue-sweep", None, &workspace).is_err());
 
-        let historical = resolve_workflow_source_path(
-            "workflows/v0868_issue_sweep.workflow.js",
+        // An explicit repo-relative path still resolves — checked against a
+        // workflow that actually ships.
+        let explicit = resolve_workflow_source_path(
+            "workflows/stopship.workflow.js",
             None,
             &workspace,
         )
-        .expect("explicit historical workflow path");
-        assert!(historical.ends_with("workflows/v0868_issue_sweep.workflow.js"));
+        .expect("explicit workflow path");
+        assert!(explicit.ends_with("workflows/stopship.workflow.js"));
     }
 
     #[test]
