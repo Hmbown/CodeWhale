@@ -1,0 +1,214 @@
+name: Release Republish Channels
+
+# Recovery for derived distribution channels — the container image and the
+# Homebrew tap — when a released tag has them missing or stale.
+#
+# This is a separate workflow, dispatched from the DEFAULT BRANCH, on purpose.
+# `workflow_dispatch` reads its input schema from the workflow file at the ref
+# being dispatched, and `release.yml` requires being dispatched from the tag
+# itself. Any recovery option added to `release.yml` is therefore unusable on
+# tags that predate it — which is every tag that could ever need recovery.
+# Taking the tag as an input sidesteps that entirely.
+#
+# It never writes GitHub Release bytes. `release.yml` owns those, and they stay
+# immutable; this only (re)publishes channels derived from an existing release.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Released version to republish, without v (e.g. 0.9.1). The tag must already exist and have a published GitHub Release.'
+        required: true
+        type: string
+      channels:
+        description: 'Which derived channels to republish.'
+        required: true
+        default: 'docker+homebrew'
+        type: choice
+        options:
+          - docker+homebrew
+          - docker
+          - homebrew
+
+concurrency:
+  group: release-republish-${{ inputs.version }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      sha: ${{ steps.release.outputs.sha }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+      - name: Resolve released tag
+        id: release
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          if ! [[ "${INPUT_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Version '${INPUT_VERSION}' must use X.Y.Z." >&2
+            exit 1
+          fi
+          tag="v${INPUT_VERSION}"
+
+          if ! git rev-parse --verify "refs/tags/${tag}^{commit}" >/dev/null 2>&1; then
+            echo "::error::Tag ${tag} does not exist." >&2
+            exit 1
+          fi
+          sha="$(git rev-parse "refs/tags/${tag}^{commit}")"
+
+          {
+            echo "tag=${tag}"
+            echo "sha=${sha}"
+            echo "version=${INPUT_VERSION}"
+          } >> "${GITHUB_OUTPUT}"
+          echo "Resolved ${tag} -> ${sha}"
+      - name: Require an existing published release
+        # The inverse of release.yml's immutability guard. That one refuses to
+        # run when assets exist; this one refuses to run when they do not,
+        # because there is nothing to derive a channel from.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          count="$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets | length')"
+          if [[ "${count}" -eq 0 ]]; then
+            echo "::error::${TAG} has no published assets. Run release.yml, not this recovery workflow." >&2
+            exit 1
+          fi
+          echo "${TAG} has ${count} published assets."
+      - name: Verify the remote tag still points at this commit
+        env:
+          EXPECTED_SHA: ${{ steps.release.outputs.sha }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          ./scripts/release/verify-remote-tag.sh \
+            "https://github.com/${GITHUB_REPOSITORY}.git" \
+            "${TAG}" \
+            "${EXPECTED_SHA}"
+
+  docker:
+    needs: resolve
+    if: ${{ contains(inputs.channels, 'docker') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          path: source
+      - name: Checkout release infrastructure
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          path: infra
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Normalize image name
+        id: image
+        shell: bash
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - name: Revalidate release tag before container publish
+        env:
+          EXPECTED_SHA: ${{ needs.resolve.outputs.sha }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          ./infra/scripts/release/verify-remote-tag.sh \
+            "https://github.com/${GITHUB_REPOSITORY}.git" \
+            "${TAG}" \
+            "${EXPECTED_SHA}"
+      - name: Build and push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: false
+          DOCKER_BUILD_SUMMARY: false
+        with:
+          context: source
+          file: infra/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            DEEPSEEK_BUILD_SHA=${{ needs.resolve.outputs.sha }}
+          tags: |
+            ${{ steps.image.outputs.name }}:${{ needs.resolve.outputs.tag }}
+            ${{ steps.image.outputs.name }}:${{ needs.resolve.outputs.version }}
+            ${{ steps.image.outputs.name }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke published container entrypoints
+        shell: bash
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}:${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          docker pull "${IMAGE}"
+          docker run --rm --entrypoint codewhale "${IMAGE}" --version
+          docker run --rm --entrypoint codew "${IMAGE}" --version
+          docker run --rm --entrypoint codewhale-tui "${IMAGE}" --version
+
+  homebrew:
+    needs: resolve
+    if: ${{ contains(inputs.channels, 'homebrew') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check Homebrew tap token
+        id: homebrew-token
+        env:
+          TOKEN: ${{ secrets.HOMEBREW_TAP_PAT || secrets.RELEASE_TAG_PAT }}
+        run: |
+          if [[ -z "${TOKEN:-}" ]]; then
+            echo "::error::No Homebrew tap token configured; cannot republish the tap." >&2
+            exit 1
+          fi
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+      - name: Download checksum manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "${{ needs.resolve.outputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --pattern 'codewhale-artifacts-sha256.txt' \
+            --dir /tmp
+      - name: Revalidate release tag before Homebrew tap write
+        env:
+          EXPECTED_SHA: ${{ needs.resolve.outputs.sha }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          ./scripts/release/verify-remote-tag.sh \
+            "https://github.com/${GITHUB_REPOSITORY}.git" \
+            "${TAG}" \
+            "${EXPECTED_SHA}"
+      - name: Update Homebrew tap
+        env:
+          TAG: ${{ needs.resolve.outputs.tag }}
+          MANIFEST: /tmp/codewhale-artifacts-sha256.txt
+          TAP_REPO: Hmbown/homebrew-deepseek-tui
+          TOKEN: ${{ secrets.HOMEBREW_TAP_PAT || secrets.RELEASE_TAG_PAT }}
+        run: bash .github/scripts/update-homebrew-tap.sh
