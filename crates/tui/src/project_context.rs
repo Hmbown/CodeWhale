@@ -930,7 +930,7 @@ pub fn load_project_context(workspace: &Path) -> ProjectContext {
 ///
 /// This allows for monorepo setups where a root AGENTS.md applies to all subdirectories.
 pub fn load_project_context_with_parents(workspace: &Path) -> ProjectContext {
-    load_project_context_with_parents_cached_and_home(workspace, dirs::home_dir().as_deref())
+    load_project_context_with_parents_cached_and_home(workspace, crate::config::effective_home_dir().as_deref())
 }
 
 fn load_project_context_with_parents_cached_and_home(
@@ -1187,7 +1187,7 @@ fn find_git_root(cwd: &Path) -> Option<PathBuf> {
 }
 
 fn project_context_parent_search_stop_dir() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| canonicalize_workspace_or_keep(&home))
+    crate::config::effective_home_dir().map(|home| canonicalize_workspace_or_keep(&home))
 }
 
 /// Combine global user-wide preferences with a project-local

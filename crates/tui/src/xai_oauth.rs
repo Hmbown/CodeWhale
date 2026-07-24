@@ -192,7 +192,7 @@ pub fn auth_file_path() -> PathBuf {
             return codewhale_config::resolve_external_credential_path(&path).unwrap_or(path);
         }
     }
-    let path = dirs::home_dir()
+    let path = crate::config::effective_home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".grok")
         .join("auth.json");

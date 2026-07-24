@@ -964,7 +964,7 @@ fn redact_exported_text(text: &mut String) {
     }
 
     // Normalise secrets directory paths.
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = crate::config::effective_home_dir() {
         for leaf in [".codewhale/secrets", ".deepseek/secrets"] {
             let dir = home.join(leaf);
             let prefix = dir.to_string_lossy().to_string();

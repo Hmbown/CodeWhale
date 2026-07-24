@@ -41,12 +41,12 @@ use super::CommandResult;
 
 /// Path to the global user commands directory: `~/.codewhale/commands/`.
 fn global_commands_dir() -> PathBuf {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("~"));
+    let home = crate::config::effective_home_dir().unwrap_or_else(|| PathBuf::from("~"));
     home.join(".codewhale").join("commands")
 }
 
 fn legacy_global_commands_dir() -> PathBuf {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("~"));
+    let home = crate::config::effective_home_dir().unwrap_or_else(|| PathBuf::from("~"));
     home.join(".deepseek").join("commands")
 }
 
@@ -73,7 +73,7 @@ pub(crate) fn workflow_dirs(workspace: Option<&Path>) -> Vec<PathBuf> {
     if let Some(ws) = workspace {
         dirs.push(ws.join(".codewhale").join("workflows"));
     }
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("~"));
+    let home = crate::config::effective_home_dir().unwrap_or_else(|| PathBuf::from("~"));
     dirs.push(home.join(".codewhale").join("workflows"));
     dirs
 }

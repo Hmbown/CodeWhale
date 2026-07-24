@@ -321,7 +321,7 @@ impl NetworkAuditor {
     /// home directory can't be resolved.
     #[must_use]
     pub fn default_path(enabled: bool) -> Option<Self> {
-        let home = dirs::home_dir()?;
+        let home = crate::config::effective_home_dir()?;
         Some(Self::new(
             home.join(".codewhale").join("audit.log"),
             enabled,

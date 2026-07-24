@@ -37,7 +37,7 @@ pub const MAX_HISTORY_ENTRIES: usize = 1000;
 const HISTORY_FILE_NAME: &str = "composer_history.txt";
 
 fn default_history_path() -> Option<PathBuf> {
-    history_path_with_home(dirs::home_dir())
+    history_path_with_home(crate::config::effective_home_dir())
 }
 
 /// Resolve the composer-history file under `home`, preferring the CodeWhale

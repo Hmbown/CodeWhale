@@ -61,7 +61,7 @@ fn reqwest_client() -> reqwest::Client {
 /// Lives at `~/.codewhale/cache/skills/` so it's separate from user-installed
 /// skills and can be blown away without losing anything irreplaceable.
 pub fn default_cache_skills_dir() -> PathBuf {
-    dirs::home_dir().map_or_else(
+    crate::config::effective_home_dir().map_or_else(
         || PathBuf::from("/tmp/codewhale/cache/skills"),
         |p| p.join(".codewhale").join("cache").join("skills"),
     )

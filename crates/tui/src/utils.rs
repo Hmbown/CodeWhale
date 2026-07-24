@@ -536,7 +536,7 @@ fn write_panic_dump(
     location: &std::panic::Location<'_>,
     message: &str,
 ) -> std::io::Result<()> {
-    let home = dirs::home_dir().ok_or_else(|| {
+    let home = crate::config::effective_home_dir().ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::NotFound, "home directory not found")
     })?;
     // Prefer .codewhale, fall back to .deepseek
@@ -662,7 +662,7 @@ pub fn url_encode(input: &str) -> String {
 /// resolve correctly across processes.
 #[must_use]
 pub fn display_path(path: &Path) -> String {
-    display_path_with_home(path, dirs::home_dir().as_deref())
+    display_path_with_home(path, crate::config::effective_home_dir().as_deref())
 }
 
 /// Like [`display_path`] but takes an explicit home directory instead of

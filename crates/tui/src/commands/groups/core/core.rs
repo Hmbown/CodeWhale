@@ -394,11 +394,11 @@ pub fn workspace_switch(app: &mut App, arg: Option<&str>) -> CommandResult {
 
 fn expand_workspace_path(path: &str) -> Result<PathBuf, String> {
     if path == "~" {
-        return dirs::home_dir().ok_or_else(|| "Could not resolve home directory".to_string());
+        return crate::config::effective_home_dir().ok_or_else(|| "Could not resolve home directory".to_string());
     }
     if let Some(rest) = path.strip_prefix("~/") {
         let home =
-            dirs::home_dir().ok_or_else(|| "Could not resolve home directory".to_string())?;
+            crate::config::effective_home_dir().ok_or_else(|| "Could not resolve home directory".to_string())?;
         return Ok(home.join(rest));
     }
     Ok(PathBuf::from(path))
