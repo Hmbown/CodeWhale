@@ -6227,18 +6227,6 @@ async fn run_event_loop(
                             continue;
                         }
                     }
-                    // First Enter while streaming queues and clears the composer.
-                    // A second bare Enter within the double-tap window must still
-                    // steer that just-queued message (chrome promises double-↵).
-                    if app.input.trim().is_empty()
-                        && !slash_menu_open
-                        && !mention_menu_open
-                        && let Some(queued) = app.take_queued_for_double_tap_steer()
-                    {
-                        persist_offline_queue_state(app);
-                        attempt_steer_with_queue_fallback(app, &engine_handle, queued).await;
-                        continue;
-                    }
                     if let Some(input) = app.handle_composer_enter() {
                         // `# foo` quick-add (#492) — when memory is enabled,
                         // a single line starting with `#` (but not `##` /

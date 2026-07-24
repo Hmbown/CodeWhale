@@ -3787,41 +3787,30 @@ fn submit_disposition_offline_busy_queues() {
 }
 
 #[test]
-fn double_enter_detects_steering() {
+fn bare_enter_while_streaming_stays_queue_not_steer() {
     let mut app = App::new(test_options(false), &Config::default());
-    // Simulate a busy engine that is already streaming so the first Enter
-    // queues; the second tap escalates to steer.
+    // Busy + streaming: every bare Enter queues. Steer is Shift/Ctrl+Enter only.
     app.is_loading = true;
     app.streaming_message_index = Some(0);
 
-    // First Enter → Queue (normal queueing)
     let first = app.enter_with_double_tap();
     assert_eq!(first, Some(SubmitDisposition::Queue));
-
-    // Second Enter within 500ms → Steer (double-tap detected)
     let second = app.enter_with_double_tap();
-    assert_eq!(second, Some(SubmitDisposition::Steer));
+    assert_eq!(second, Some(SubmitDisposition::Queue));
 }
 
 #[test]
-fn empty_composer_double_enter_takes_last_queued_for_steer() {
+fn empty_composer_second_enter_does_not_steal_queued_for_steer() {
     let mut app = App::new(test_options(false), &Config::default());
     app.is_loading = true;
     app.streaming_message_index = Some(0);
-    // Mirror the live path: first Enter queues + clears the composer.
     assert_eq!(app.enter_with_double_tap(), Some(SubmitDisposition::Queue));
     app.queue_message(QueuedMessage::new("older queued".to_string(), None));
     app.queue_message(QueuedMessage::new("just typed follow-up".to_string(), None));
     assert!(app.input.is_empty());
-
-    let taken = app
-        .take_queued_for_double_tap_steer()
-        .expect("second bare Enter must escalate the just-queued message");
-    assert_eq!(taken.display, "just typed follow-up");
-    assert_eq!(app.queued_message_count(), 1);
-    assert!(app.last_enter_instant.is_none());
-    // Window consumed: a third Enter does not keep popping.
-    assert!(app.take_queued_for_double_tap_steer().is_none());
+    // Bare Enter no longer pops the queue for steer; messages stay queued.
+    assert_eq!(app.enter_with_double_tap(), Some(SubmitDisposition::Queue));
+    assert_eq!(app.queued_message_count(), 2);
 }
 
 #[test]
@@ -3835,27 +3824,9 @@ fn sticky_error_ttl_is_capped_and_clears_on_composer_activity() {
 }
 
 #[test]
-fn double_enter_resets_after_timeout() {
+fn bare_enter_passes_through_when_idle() {
     let mut app = App::new(test_options(false), &Config::default());
-    app.is_loading = true;
-    app.streaming_message_index = Some(0);
-
-    // First Enter → Queue
-    let first = app.enter_with_double_tap();
-    assert_eq!(first, Some(SubmitDisposition::Queue));
-
-    // Simulate timeout by clearing last_enter_instant
-    app.last_enter_instant = None;
-
-    // Next Enter → Queue again (not Steer, because window expired)
-    let second = app.enter_with_double_tap();
-    assert_eq!(second, Some(SubmitDisposition::Queue));
-}
-
-#[test]
-fn double_enter_passes_through_when_idle() {
-    let mut app = App::new(test_options(false), &Config::default());
-    // Engine idle → Immediate (not affected by double-tap)
+    // Engine idle → Immediate every time.
     let first = app.enter_with_double_tap();
     assert_eq!(first, Some(SubmitDisposition::Immediate));
     let second = app.enter_with_double_tap();

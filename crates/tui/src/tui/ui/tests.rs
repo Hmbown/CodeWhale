@@ -10757,14 +10757,14 @@ async fn streaming_enter_queue_pushes_visible_toast() {
 }
 
 #[tokio::test]
-async fn empty_composer_double_enter_steers_just_queued_message() {
-    // Live path regression: first Enter queues+clears; second bare Enter must
-    // still steer the just-queued body (not require retyping).
+async fn empty_composer_second_enter_leaves_queued_message() {
+    // Bare Enter while streaming only queues. A second bare Enter must not
+    // steal the just-queued body for steer — use Shift+Enter / Ctrl+Enter.
     let mut app = create_test_app();
     app.is_loading = true;
     app.streaming_message_index = Some(0);
     let config = Config::default();
-    let mut engine = crate::core::engine::mock_engine_handle();
+    let engine = crate::core::engine::mock_engine_handle();
     let queued = build_queued_message(&mut app, "coordinate parallel tasks".to_string());
 
     submit_or_steer_message(&mut app, &config, &engine.handle, queued)
@@ -10772,16 +10772,13 @@ async fn empty_composer_double_enter_steers_just_queued_message() {
         .expect("first enter queues while streaming");
     assert_eq!(app.queued_message_count(), 1);
     assert!(app.input.is_empty());
-    assert!(app.last_enter_instant.is_some());
 
-    let escalated = app
-        .take_queued_for_double_tap_steer()
-        .expect("second enter takes queued body");
-    attempt_steer_with_queue_fallback(&mut app, &engine.handle, escalated).await;
-
-    assert_eq!(app.queued_message_count(), 0);
+    // Second bare Enter with empty composer is a no-op for queue contents.
+    assert!(app.input.trim().is_empty());
+    assert_eq!(app.decide_submit_disposition(), crate::tui::app::SubmitDisposition::Queue);
+    assert_eq!(app.queued_message_count(), 1);
     assert_eq!(
-        engine.rx_steer.recv().await.as_deref(),
+        app.queued_messages.front().map(|m| m.display.as_str()),
         Some("coordinate parallel tasks")
     );
 }

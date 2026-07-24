@@ -2024,7 +2024,9 @@ pub struct App {
     /// instead of spawning a second dispatch that could reorder ops.
     pub dispatch_in_flight: bool,
     /// Timestamp of the most recent Enter while the engine was busy.
-    /// Used by `enter_with_double_tap()` to detect a double-tap within 500 ms.
+    /// Retained for session layout compatibility; bare-Enter double-tap
+    /// steering was removed (use Shift+Enter / Ctrl+Enter instead).
+    #[allow(dead_code)]
     pub last_enter_instant: Option<Instant>,
     /// Whether the once-per-turn provider-wait incident (#3095) has already
     /// been logged for the current turn.
@@ -7000,14 +7002,14 @@ impl App {
     /// Decide how to route a fresh composer submit.
     ///
     /// v0.8.68: streaming output queues. Busy-but-waiting turns steer so
-    /// Enter can amend the active turn before output starts. A double-tap
+    /// Enter can amend the active turn before output starts. Explicit Shift/Ctrl+Enter
     /// Enter within 500 ms triggers Steer while streaming; Ctrl+Enter forces
     /// Steer in all busy states.
     ///
     /// Truth table:
     ///   offline=F, busy=F → Immediate
     ///   offline=F, busy=T, streaming=F → Steer
-    ///   offline=F, busy=T, streaming=T → Queue (double-tap → Steer)
+    ///   offline=F, busy=T, streaming=T → Queue (Shift/Ctrl+Enter steers)
     ///   offline=T, busy=* → Queue
     #[must_use]
     pub fn decide_submit_disposition(&self) -> SubmitDisposition {
@@ -7025,65 +7027,20 @@ impl App {
         if self.streaming_message_index.is_none() {
             return SubmitDisposition::Steer;
         }
-        // Streaming: queue the message. Double-tap Enter within 500 ms
-        // triggers Steer via enter_with_double_tap(); see the ui.rs submit
-        // handler.
+        // Streaming: queue the message. Steer is an explicit gesture
+        // (Shift+Enter / Ctrl+Enter), not a bare double-Enter race.
         SubmitDisposition::Queue
     }
 
-    /// Process an Enter keypress with double-tap steering detection.
+    /// Resolve what bare Enter should do right now.
     ///
-    /// When the engine is busy, the first Enter queues the message. A second
-    /// Enter within 500 ms triggers Steer (interrupt the current turn to
-    /// inject the new instruction immediately). When idle, Enter submits
-    /// immediately.
-    ///
-    /// The first Enter clears the composer, so the UI path must also call
-    /// [`Self::take_queued_for_double_tap_steer`] on an empty second Enter to
-    /// escalate the just-queued message — otherwise double-tap never fires.
+    /// When the engine is busy, Enter queues. When idle, Enter submits
+    /// immediately. Steering is only available via explicit Shift+Enter or
+    /// Ctrl+Enter — a second bare Enter after queueing must not interrupt.
     #[must_use]
     pub fn enter_with_double_tap(&mut self) -> Option<SubmitDisposition> {
-        let disposition = self.decide_submit_disposition();
-        match disposition {
-            SubmitDisposition::Queue => {
-                if let Some(instant) = self.last_enter_instant
-                    && instant.elapsed() < Duration::from_millis(500)
-                {
-                    self.last_enter_instant = None;
-                    return Some(SubmitDisposition::Steer);
-                }
-                self.last_enter_instant = Some(Instant::now());
-                Some(SubmitDisposition::Queue)
-            }
-            other => {
-                self.last_enter_instant = None;
-                Some(other)
-            }
-        }
-    }
-
-    /// True when a second bare Enter should escalate the most recent queued
-    /// follow-up into a live steer (composer already emptied by the first tap).
-    #[must_use]
-    pub fn can_double_tap_steer_queued(&self) -> bool {
-        if self.offline_mode || !self.is_loading || self.dispatch_in_flight {
-            return false;
-        }
-        if self.queued_messages.is_empty() {
-            return false;
-        }
-        self.last_enter_instant
-            .is_some_and(|instant| instant.elapsed() < Duration::from_millis(500))
-    }
-
-    /// Pop the most recently queued message when a double-tap steer window is
-    /// still open. Clears the window so a third Enter does not re-steer.
-    pub fn take_queued_for_double_tap_steer(&mut self) -> Option<QueuedMessage> {
-        if !self.can_double_tap_steer_queued() {
-            return None;
-        }
-        self.last_enter_instant = None;
-        self.queued_messages.pop_back()
+        // Name kept for call-site stability; the double-tap window is gone.
+        Some(self.decide_submit_disposition())
     }
 
     /// Mark the in-flight streaming Assistant cell as interrupted: prepend
