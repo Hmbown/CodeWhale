@@ -323,9 +323,8 @@ impl McpManager {
 
         if let Ok((server_name, tool_name)) = &parsed
             && self.clients.contains_key(server_name)
-            && let Ok(result) = self.call_tool(server_name, tool_name, arguments.clone())
         {
-            return Ok(result);
+            return self.call_tool(server_name, tool_name, arguments);
         }
 
         for (server_name, (_, filter)) in &self.configs {
@@ -1009,6 +1008,10 @@ impl JsonRpcError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     struct EchoMcpClient;
 
@@ -1022,6 +1025,29 @@ mod tests {
                 bail!("intentional error for testing");
             }
             Ok(arguments)
+        }
+
+        fn list_resources(&self) -> Result<Vec<McpResourceDescriptor>> {
+            Ok(vec![])
+        }
+
+        fn read_resource(&self, _uri: &str) -> Result<Value> {
+            bail!("not supported")
+        }
+    }
+
+    struct CountingErrorMcpClient {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl McpManagedClient for CountingErrorMcpClient {
+        fn list_tools(&self) -> Result<Vec<McpToolDescriptor>> {
+            Ok(vec![])
+        }
+
+        fn call_tool(&self, _tool_name: &str, _arguments: Value) -> Result<Value> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            bail!("intentional error for testing")
         }
 
         fn list_resources(&self) -> Result<Vec<McpResourceDescriptor>> {
@@ -1243,6 +1269,26 @@ mod tests {
             .call_qualified_tool("mcp__my_server__my_tool", json!({}))
             .unwrap();
         assert_eq!(result["ok"], true);
+    }
+
+    #[test]
+    fn manager_call_qualified_tool_does_not_retry_after_client_error() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut manager = McpManager::default();
+        manager.register_server(
+            make_server_config("s1"),
+            ToolFilter::default(),
+            Box::new(CountingErrorMcpClient {
+                calls: Arc::clone(&calls),
+            }),
+        );
+
+        let err = manager
+            .call_qualified_tool("mcp__s1__write", json!({}))
+            .unwrap_err();
+
+        assert!(err.to_string().contains("intentional error for testing"));
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
 
     #[test]
