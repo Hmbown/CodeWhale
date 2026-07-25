@@ -126,7 +126,7 @@ export const DOC_TOPICS: DocTopic[] = [
       zh: "并行执行、角色类型、transcript 句柄和嵌套。",
     },
     repoSource: "docs/SUBAGENTS.md",
-    hasPage: false,
+    hasPage: true,
     category: "core-concepts",
   },
   {
@@ -138,7 +138,7 @@ export const DOC_TOPICS: DocTopic[] = [
       zh: "Model Context Protocol — 通过 stdio 和 HTTP/SSE 消费和暴露工具。",
     },
     repoSource: "docs/MCP.md",
-    hasPage: false,
+    hasPage: true,
     category: "extending",
   },
   {
@@ -149,8 +149,8 @@ export const DOC_TOPICS: DocTopic[] = [
       en: "Lifecycle hooks for pre/post tool execution, mode changes, and session events.",
       zh: "工具执行前后、模式切换和会话事件的生命周期钩子。",
     },
-    repoSource: "docs/rfcs/1364-hooks-lifecycle.md",
-    hasPage: false,
+    repoSource: ["docs/rfcs/1364-hooks-lifecycle.md", "docs/CONFIGURATION.md"],
+    hasPage: true,
     category: "extending",
   },
   {
