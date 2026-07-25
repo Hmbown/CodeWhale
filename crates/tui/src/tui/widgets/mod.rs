@@ -1111,7 +1111,6 @@ impl Renderable for ComposerWidget<'_> {
                 input_content_width,
                 input_rows_budget,
             );
-        let is_draft_mode = input_text.contains('\n') || visible_lines.len() > 1;
         if has_panel {
             let hint_line = if self.app.is_history_search_active() {
                 Some(Line::from(vec![
@@ -1224,19 +1223,12 @@ impl Renderable for ComposerWidget<'_> {
                 .borders(Borders::TOP)
                 .border_style(Style::default().fg(permission_color))
                 .style(background);
-            if self.app.is_history_search_active() || is_draft_mode {
-                top_border = if self.app.is_history_search_active() {
-                    top_border.title(Line::from(Span::styled(
-                        self.app
-                            .tr(crate::localization::MessageId::HistorySearchTitle),
-                        Style::default().fg(palette::TEXT_MUTED),
-                    )))
-                } else {
-                    top_border.title(Line::from(Span::styled(
-                        "Draft",
-                        Style::default().fg(palette::TEXT_MUTED),
-                    )))
-                };
+            if self.app.is_history_search_active() {
+                top_border = top_border.title(Line::from(Span::styled(
+                    self.app
+                        .tr(crate::localization::MessageId::HistorySearchTitle),
+                    Style::default().fg(palette::TEXT_MUTED),
+                )));
             }
             // Top-right corner: editor state plus transient turn receipts.
             // Receipts are lifecycle chrome, not transcript content; they
@@ -5859,7 +5851,9 @@ mod tests {
             ComposerWidget::new(&draft_app, 5, &slash_menu_entries, &mention_menu_entries);
         let mut draft_buf = Buffer::empty(area);
         draft_widget.render(area, &mut draft_buf);
-        assert!(buffer_text(&draft_buf, area).contains("Draft"));
+        // Multi-line drafts no longer announce themselves with a block title;
+        // the user can see the draft. Only history search keeps its title.
+        assert!(!buffer_text(&draft_buf, area).contains("Draft"));
 
         let mut search_app = create_test_app();
         search_app.composer_density = ComposerDensity::Comfortable;
