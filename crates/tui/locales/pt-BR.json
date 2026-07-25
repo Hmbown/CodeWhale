@@ -252,6 +252,7 @@
     "CmdQueueIndexPositive": "O índice deve ser um número positivo",
     "CmdQueueIndexMin": "O índice deve ser >= 1",
     "CmdRelayDescription": "Criar um relay da sessão para um novo thread",
+    "CmdRemoteControlDescription": "Retomar esta sessão exata pela sua conta web do Codewhale",
     "CmdRenameDescription": "Renomear a sessão atual",
     "CmdRestoreDescription": "Reverter o workspace a um snapshot pré/pós-turno anterior. Sem argumento, lista os snapshots recentes.",
     "CmdRetryDescription": "Repetir a última requisição",

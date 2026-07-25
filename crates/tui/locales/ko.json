@@ -252,6 +252,7 @@
     "CmdQueueIndexPositive": "인덱스는 양수여야 합니다",
     "CmdQueueIndexMin": "인덱스는 1 이상이어야 합니다",
     "CmdRelayDescription": "새 스레드를 위한 세션 릴레이(接力)를 생성합니다",
+    "CmdRemoteControlDescription": "Codewhale 웹 계정에서 이 세션을 그대로 재개합니다",
     "CmdRenameDescription": "현재 세션 이름을 바꿉니다",
     "CmdRestoreDescription": "작업 공간을 이전 턴 전/후 스냅샷으로 되돌립니다. 인자가 없으면 최근 스냅샷 목록을 표시합니다.",
     "CmdRetryDescription": "마지막 요청을 재시도합니다",

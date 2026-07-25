@@ -24,11 +24,17 @@ pub fn declare_rerun_conditions(manifest_dir: &Path) {
 /// `manifest_dir` and `package_version` are the calling build script's
 /// `CARGO_MANIFEST_DIR` and `CARGO_PKG_VERSION`.
 pub fn emit_build_version(manifest_dir: &Path, package_version: &str) {
-    let build_version = build_sha(manifest_dir)
+    let commit = build_commit(manifest_dir);
+    let build_version = commit
+        .as_ref()
+        .and_then(|sha| short_sha(sha.clone()))
         .map(|sha| format!("{package_version} ({sha})"))
         .unwrap_or_else(|| package_version.to_string());
 
     println!("cargo:rustc-env=DEEPSEEK_BUILD_VERSION={build_version}");
+    if let Some(commit) = commit {
+        println!("cargo:rustc-env=CODEWHALE_BUILD_COMMIT={commit}");
+    }
 }
 
 /// Tell Cargo to invalidate the cached build script output when `HEAD`
@@ -117,17 +123,17 @@ fn parse_symbolic_ref(head_contents: &str) -> Option<&str> {
         .filter(|s| !s.is_empty())
 }
 
-fn build_sha(manifest_dir: &Path) -> Option<String> {
-    env_sha("DEEPSEEK_BUILD_SHA")
-        .or_else(|| env_sha("GITHUB_SHA"))
-        .or_else(|| git_sha(manifest_dir))
+fn build_commit(manifest_dir: &Path) -> Option<String> {
+    env_commit("DEEPSEEK_BUILD_SHA")
+        .or_else(|| env_commit("GITHUB_SHA"))
+        .or_else(|| git_commit(manifest_dir))
 }
 
-fn env_sha(name: &str) -> Option<String> {
-    std::env::var(name).ok().and_then(short_sha)
+fn env_commit(name: &str) -> Option<String> {
+    std::env::var(name).ok().and_then(full_sha)
 }
 
-fn git_sha(manifest_dir: &Path) -> Option<String> {
+fn git_commit(manifest_dir: &Path) -> Option<String> {
     let top_level_output = Command::new("git")
         .args(["-C"])
         .arg(manifest_dir)
@@ -145,14 +151,22 @@ fn git_sha(manifest_dir: &Path) -> Option<String> {
     let output = Command::new("git")
         .args(["-C"])
         .arg(top_level)
-        .args(["rev-parse", "--short=12", "HEAD"])
+        .args(["rev-parse", "HEAD"])
         .output()
         .ok()?;
     if !output.status.success() {
         return None;
     }
 
-    short_sha(String::from_utf8_lossy(&output.stdout).to_string())
+    full_sha(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn full_sha(value: String) -> Option<String> {
+    let trimmed = value.trim().to_ascii_lowercase();
+    if trimmed.len() != 40 || !trimmed.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(trimmed)
 }
 
 fn short_sha(value: String) -> Option<String> {
@@ -165,7 +179,7 @@ fn short_sha(value: String) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{git_common_dir, parse_symbolic_ref};
+    use super::{full_sha, git_common_dir, parse_symbolic_ref, short_sha};
     use std::{
         fs,
         time::{SystemTime, UNIX_EPOCH},
@@ -184,6 +198,23 @@ mod tests {
         assert_eq!(
             parse_symbolic_ref("ref: refs/heads/work/v0.8.26-security"),
             Some("refs/heads/work/v0.8.26-security")
+        );
+    }
+
+    #[test]
+    fn full_commit_requires_exact_forty_hex_characters() {
+        assert_eq!(
+            full_sha("ABCDEF0123456789ABCDEF0123456789ABCDEF01".to_string()),
+            Some("abcdef0123456789abcdef0123456789abcdef01".to_string())
+        );
+        assert_eq!(full_sha("abc123".to_string()), None);
+        assert_eq!(
+            full_sha("gggggggggggggggggggggggggggggggggggggggg".to_string()),
+            None
+        );
+        assert_eq!(
+            short_sha("abcdef0123456789abcdef0123456789abcdef01".to_string()),
+            Some("abcdef012345".to_string())
         );
     }
 

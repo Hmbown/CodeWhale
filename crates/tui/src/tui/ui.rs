@@ -138,9 +138,9 @@ use super::key_actions;
 use super::app::{
     ActiveTurnMetadata, AgentCurrentActivity, AgentCurrentActivityStatus, App, AppAction, AppMode,
     HuntVerdict, OnboardingState, PendingProviderSwitch, QueuedMessage, ReasoningEffort,
-    SidebarFocus, StatusToastLevel, SubmitDisposition, TaskPanelEntry, TaskPanelEntryKind,
-    ToolEvidence, TuiOptions, bound_agent_activity_text, looks_like_slash_command_input,
-    shell_command_from_bang_input,
+    SidebarFocus, StatusToast, StatusToastLevel, SubmitDisposition, TaskPanelEntry,
+    TaskPanelEntryKind, ToolEvidence, TuiOptions, bound_agent_activity_text,
+    looks_like_slash_command_input, shell_command_from_bang_input,
 };
 use super::approval::{
     ApprovalMode, ApprovalRequest, ApprovalView, ElevationRequest, ElevationView, ReviewDecision,
@@ -870,6 +870,238 @@ fn surface_prompt_override_notices(app: &mut App) {
     }
 }
 
+async fn drain_remote_control_events(
+    app: &mut App,
+    config: &Config,
+    engine_handle: &EngineHandle,
+) -> Result<bool> {
+    let mut changed = false;
+    while let Some(event) = app.remote_control.try_next_event() {
+        changed = true;
+        match event {
+            crate::remote_control::RemoteEvent::Notice(message) => {
+                app.add_message(HistoryCell::System {
+                    content: message.clone(),
+                });
+                app.status_message = Some(message.clone());
+                app.sticky_status =
+                    Some(StatusToast::new(message, StatusToastLevel::Warning, None));
+            }
+            crate::remote_control::RemoteEvent::Connected {
+                account_ref,
+                runner_id,
+                ..
+            } => {
+                let status = format!(
+                    "REMOTE CONTROL · account {account_ref} · runner {runner_id} · /rc stop returns input here"
+                );
+                app.add_message(HistoryCell::System {
+                    content: format!(
+                        "{status}\n\nThe web now owns new prompts and approvals. This terminal remains readable."
+                    ),
+                });
+                app.status_message = Some(status.clone());
+                app.sticky_status = Some(StatusToast::new(status, StatusToastLevel::Warning, None));
+            }
+            crate::remote_control::RemoteEvent::Failed(error) => {
+                let status = format!(
+                    "REMOTE CONTROL LOST · {error} · input stays locked until the server lease expires"
+                );
+                app.status_message = Some(status.clone());
+                app.sticky_status = Some(StatusToast::new(status, StatusToastLevel::Error, None));
+            }
+            crate::remote_control::RemoteEvent::Stopped => {
+                app.sticky_status = None;
+                app.status_message =
+                    Some("Remote control stopped; this terminal owns input again.".to_string());
+            }
+            crate::remote_control::RemoteEvent::OwnershipRestored { approvals } => {
+                app.sticky_status = None;
+                app.status_message = Some(
+                    "The remote lease expired safely; this terminal owns input again.".to_string(),
+                );
+                for approval in approvals {
+                    push_approval_request_view(
+                        app,
+                        &approval.tool_id,
+                        &approval.tool_name,
+                        &approval.description,
+                        &approval.input,
+                        &approval.approval_key,
+                        approval.intent_summary.as_deref(),
+                    );
+                }
+            }
+            crate::remote_control::RemoteEvent::Command {
+                run_id,
+                seq,
+                command,
+            } => {
+                match app.remote_control.claim_command(&run_id, seq, &command) {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(error) => {
+                        app.remote_control.acknowledge(
+                            &run_id,
+                            seq,
+                            &command,
+                            "failed",
+                            Some(error.clone()),
+                        );
+                        app.remote_control.stop();
+                        app.sticky_status = None;
+                        app.status_message = Some(error);
+                        continue;
+                    }
+                }
+                match command.clone() {
+                    crate::remote_control::RemoteCommand::Prompt { turn_id, prompt } => {
+                        if app.is_loading || app.dispatch_in_flight {
+                            app.remote_control.acknowledge(
+                                &run_id,
+                                seq,
+                                &command,
+                                "failed",
+                                Some(
+                                    "The exact session is already running a turn; no second owner was started."
+                                        .to_string(),
+                                ),
+                            );
+                            continue;
+                        }
+                        app.remote_control
+                            .upload_snapshot(&run_id, &app.api_messages);
+                        app.remote_control.activate_prompt(&run_id, &turn_id);
+                        let message = QueuedMessage::new(prompt, None);
+                        app.remote_control.set_applying_remote_command(true);
+                        let result =
+                            dispatch_user_message(app, config, engine_handle, message).await;
+                        app.remote_control.set_applying_remote_command(false);
+                        match result {
+                            Ok(()) if app.is_loading || app.dispatch_in_flight => {
+                                app.remote_control
+                                    .acknowledge(&run_id, seq, &command, "applied", None);
+                            }
+                            Ok(()) => {
+                                app.remote_control.acknowledge(
+                                    &run_id,
+                                    seq,
+                                    &command,
+                                    "failed",
+                                    Some(
+                                        "The remote prompt was blocked before dispatch."
+                                            .to_string(),
+                                    ),
+                                );
+                            }
+                            Err(error) => {
+                                app.remote_control.acknowledge(
+                                    &run_id,
+                                    seq,
+                                    &command,
+                                    "failed",
+                                    Some(error.to_string()),
+                                );
+                            }
+                        }
+                    }
+                    crate::remote_control::RemoteCommand::Approval { gate, approved } => {
+                        let Some(tool_id) = app.remote_control.take_pending_approval(&gate) else {
+                            app.remote_control.acknowledge(
+                                &run_id,
+                                seq,
+                                &command,
+                                "failed",
+                                Some("This approval is no longer pending.".to_string()),
+                            );
+                            continue;
+                        };
+                        let result = if approved {
+                            engine_handle.approve_tool_call(tool_id).await
+                        } else {
+                            engine_handle.deny_tool_call(tool_id).await
+                        };
+                        match result {
+                            Ok(()) => app
+                                .remote_control
+                                .acknowledge(&run_id, seq, &command, "applied", None),
+                            Err(error) => app.remote_control.acknowledge(
+                                &run_id,
+                                seq,
+                                &command,
+                                "failed",
+                                Some(error.to_string()),
+                            ),
+                        }
+                    }
+                    crate::remote_control::RemoteCommand::Control { .. } => {
+                        if !app.remote_control.active_run_matches(&run_id) {
+                            app.remote_control.acknowledge(
+                                &run_id,
+                                seq,
+                                &command,
+                                "failed",
+                                Some("This run no longer owns an active turn.".to_string()),
+                            );
+                            continue;
+                        }
+                        engine_handle.cancel();
+                        mark_active_turn_cancelled_locally(app);
+                        app.remote_control
+                            .acknowledge(&run_id, seq, &command, "applied", None);
+                    }
+                }
+            }
+        }
+    }
+    Ok(changed)
+}
+
+fn start_remote_control_session(app: &mut App) {
+    if app.is_loading {
+        app.status_message = Some(
+            "Finish or interrupt the current turn before handing this session to the web."
+                .to_string(),
+        );
+        return;
+    }
+    let session_id = app
+        .current_session_id
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    app.current_session_id = Some(session_id.clone());
+    let target_ref = crate::remote_control::target_ref(&app.workspace, &session_id);
+    let workspace_label = app
+        .workspace
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Codewhale session")
+        .to_string();
+    let runtime_commit = option_env!("CODEWHALE_BUILD_COMMIT")
+        .unwrap_or("")
+        .to_string();
+    match app
+        .remote_control
+        .start(crate::remote_control::RemoteStart {
+            workspace_label,
+            target_ref,
+            session_id,
+            runtime_version: env!("CARGO_PKG_VERSION").to_string(),
+            runtime_commit,
+        }) {
+        Ok(()) => {
+            let status = app.remote_control.status_line();
+            app.status_message = Some(status.clone());
+            app.sticky_status = Some(StatusToast::new(status, StatusToastLevel::Warning, None));
+        }
+        Err(error) => {
+            app.status_message = Some(error.clone());
+            app.push_status_toast(error, StatusToastLevel::Error, Some(12_000));
+        }
+    }
+}
+
 /// Run the interactive TUI event loop.
 ///
 /// # Examples
@@ -1267,6 +1499,9 @@ pub async fn run_tui(
         tokio::sync::mpsc::unbounded_channel::<crate::tui::app::DispatchApplyFn>();
     app.dispatch_completion_tx = Some(dispatch_completion_tx);
 
+    if std::mem::take(&mut app.start_remote_control_on_launch) {
+        start_remote_control_session(&mut app);
+    }
     submit_initial_input_if_ready(&mut app, config, &engine_handle).await?;
 
     crate::startup_trace::log_summary();
@@ -2555,6 +2790,10 @@ async fn run_event_loop(
         // potentially long engine batch so composer/modal input stays live.
         collect_pending_terminal_events(&terminal_input, &mut pending_terminal_events)?;
 
+        if drain_remote_control_events(app, config, &engine_handle).await? {
+            app.needs_redraw = true;
+        }
+
         // First, poll for engine events (non-blocking)
         let mut received_engine_event = false;
         let mut transcript_batch_updated = false;
@@ -2610,6 +2849,9 @@ async fn run_event_loop(
                     }
                 } else if !app.is_loading && ignore_stale_stream_event_while_idle(&event) {
                     continue;
+                }
+                if !matches!(event, EngineEvent::ApprovalRequired { .. }) {
+                    app.remote_control.observe_engine_event(&event);
                 }
                 record_turn_activity(app, &event, Instant::now());
                 match event {
@@ -3887,6 +4129,27 @@ async fn run_event_loop(
                         intent_summary,
                         approval_force_prompt,
                     } => {
+                        if app.remote_control.blocks_local_input() {
+                            let gate = app.remote_control.record_remote_approval(
+                                &id,
+                                &tool_name,
+                                &description,
+                                &input,
+                                &approval_key,
+                                intent_summary.as_deref(),
+                            );
+                            app.status_message = Some(format!(
+                                "Remote approval required for '{tool_name}' ({gate}); decide in the web session."
+                            ));
+                            app.sticky_status = Some(StatusToast::new(
+                                format!(
+                                    "REMOTE CONTROL · approval waiting in web · {tool_name} · /rc stop"
+                                ),
+                                StatusToastLevel::Warning,
+                                None,
+                            ));
+                            continue;
+                        }
                         use crate::core::authority::ApprovalRequestDisposition;
                         // One disposition path for every ApprovalRequired (#4412):
                         // session denial, Full Access policy hold, session/FA
@@ -3998,7 +4261,27 @@ async fn run_event_loop(
                         }
                     }
                     EngineEvent::UserInputRequired { id, request } => {
-                        if should_suppress_user_input_prompt(app) {
+                        if app.remote_control.blocks_local_input() {
+                            // Remote-control v1 deliberately admits only prompts, approval
+                            // decisions, and run control. Do not leak a second controller
+                            // through a local structured-question modal.
+                            log_sensitive_event(
+                                "tool.user_input.cancelled_remote_control",
+                                serde_json::json!({
+                                    "tool_id": id.clone(),
+                                    "session_id": app.current_session_id,
+                                }),
+                            );
+                            let _ = engine_handle.cancel_user_input(id).await;
+                            app.pending_user_input_prompt = None;
+                            let notice = "A structured question was cancelled because the web owns input; ask it as a normal web prompt instead.".to_string();
+                            app.push_status_toast(
+                                notice.clone(),
+                                StatusToastLevel::Warning,
+                                Some(8_000),
+                            );
+                            app.status_message = Some(notice);
+                        } else if should_suppress_user_input_prompt(app) {
                             // A question may have been planned just before the
                             // user switched to Auto-Review. Cancel the stale
                             // request instead of opening a modal under an Auto
@@ -6137,6 +6420,9 @@ async fn run_event_loop(
                         && !key.modifiers.contains(KeyModifiers::ALT) =>
                 {
                     if let Some(input) = app.submit_input() {
+                        if reject_local_input_while_remote(app, &input) {
+                            continue;
+                        }
                         if handle_bang_shell_input(app, &engine_handle, &input).await? {
                             continue;
                         }
@@ -6188,6 +6474,9 @@ async fn run_event_loop(
                     && (matches!(key.code, KeyCode::Enter) || app.is_loading) =>
                 {
                     if let Some(input) = app.submit_input() {
+                        if reject_local_input_while_remote(app, &input) {
+                            continue;
+                        }
                         if handle_bang_shell_input(app, &engine_handle, &input).await? {
                             continue;
                         }
@@ -6250,6 +6539,9 @@ async fn run_event_loop(
                         }
                     }
                     if let Some(input) = app.handle_composer_enter() {
+                        if reject_local_input_while_remote(app, &input) {
+                            continue;
+                        }
                         // `# foo` quick-add (#492) — when memory is enabled,
                         // a single line starting with `#` (but not `##` /
                         // `#!` shebangs / Markdown headings the user might
@@ -11014,6 +11306,25 @@ async fn apply_command_result(
                     content: format_task_list(&tasks),
                 });
             }
+            AppAction::RemoteControl(action) => match action {
+                crate::remote_control::RemoteControlAction::Start => {
+                    start_remote_control_session(app);
+                }
+                crate::remote_control::RemoteControlAction::Stop => {
+                    app.remote_control.stop();
+                    let status = app.remote_control.status_line();
+                    if app.remote_control.blocks_local_input() {
+                        app.sticky_status = Some(StatusToast::new(
+                            status.clone(),
+                            StatusToastLevel::Warning,
+                            None,
+                        ));
+                    } else {
+                        app.sticky_status = None;
+                    }
+                    app.status_message = Some(status);
+                }
+            },
             AppAction::TaskShow { id } => match task_manager.get_task(&id).await {
                 Ok(task) => open_task_pager(app, &task),
                 Err(err) => {
@@ -11901,6 +12212,16 @@ async fn submit_or_steer_message(
     engine_handle: &EngineHandle,
     message: QueuedMessage,
 ) -> Result<()> {
+    if app.remote_control.blocks_local_input() {
+        app.input = message.display;
+        app.cursor_position = app.input.chars().count();
+        let status =
+            "Web remote control owns prompts. Use /rc stop to return input to this terminal."
+                .to_string();
+        app.status_message = Some(status.clone());
+        app.push_status_toast(status, StatusToastLevel::Warning, Some(6_000));
+        return Ok(());
+    }
     match app
         .enter_with_double_tap()
         .unwrap_or(SubmitDisposition::Immediate)
@@ -11944,6 +12265,24 @@ async fn submit_or_steer_message(
         }
         SubmitDisposition::QueueFollowUp => queue_follow_up(app, message).await,
     }
+}
+
+fn reject_local_input_while_remote(app: &mut App, input: &str) -> bool {
+    if !app.remote_control.blocks_local_input()
+        || input
+            .split_whitespace()
+            .next()
+            .is_some_and(|value| matches!(value, "/rc" | "/remote-control"))
+    {
+        return false;
+    }
+    app.input = input.to_string();
+    app.cursor_position = app.input.chars().count();
+    let status = "Web remote control owns prompts. Use /rc stop to return input to this terminal."
+        .to_string();
+    app.status_message = Some(status.clone());
+    app.push_status_toast(status, StatusToastLevel::Warning, Some(6_000));
+    true
 }
 
 fn restore_failed_immediate_submit(app: &mut App, message: QueuedMessage, error: &anyhow::Error) {

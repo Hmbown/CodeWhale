@@ -296,6 +296,7 @@ Common commands for first-time users:
 | `/memory` | Inspect or manage memory when enabled |
 | `/mcp` | Configure or inspect MCP server integration |
 | `/plugin` | Review and manage disabled-by-default local plugin bundles |
+| `/rc` | Hand this exact session to the signed-in Codewhale web app |
 
 Toolbox commands stay searchable when you type them directly: `/models`
 fetches live endpoint IDs, `/modeldb` opens the bundled model reference, and
@@ -565,6 +566,14 @@ The `/sessions` picker starts scoped to the current workspace so resumes stay
 attached to the project you opened. Press `a` in the picker to show sessions
 from every workspace, or run `codewhale sessions` to list all saved sessions
 with last-updated timestamps before resuming a specific id.
+
+To continue the exact running session from the web app, type `/rc` or launch
+with `codewhale rc`. Approve the one-time code in the system browser. While the
+lease is active, the browser owns new prompts and approvals and the terminal is
+a readable safety surface; `/rc status` shows ownership, `/rc stop` returns it
+to the terminal, and interrupt remains available. A dropped connection keeps
+local input locked until the last web lease expires so two controllers never
+race.
 
 ### What should I do when the model gets confused?
 

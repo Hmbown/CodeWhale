@@ -252,6 +252,7 @@
     "CmdQueueIndexPositive": "インデックスは正の数値である必要があります",
     "CmdQueueIndexMin": "インデックスは 1 以上である必要があります",
     "CmdRelayDescription": "新しいスレッド用のセッションリレー（接力）を作成",
+    "CmdRemoteControlDescription": "Codewhaleウェブアカウントからこのセッションを再開",
     "CmdRenameDescription": "現在のセッションの名前を変更",
     "CmdRestoreDescription": "ワークスペースを以前のターン前/後スナップショットへロールバック。引数なしで最近のスナップショットを一覧表示。",
     "CmdRetryDescription": "直前のリクエストを再試行",
