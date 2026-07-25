@@ -28,8 +28,8 @@ export default async function DocsLayout({
           <h1>{isZh ? "查找准确的使用说明。" : "Find the guidance you need."}</h1>
           <p>
             {isZh
-              ? "从安装和首次运行开始，或者直接查找模式、权限、工具、提供商、Fleet、MCP 与运行时 API。网站页面提供简明入口，仓库中的源文档保留完整细节。"
-              : "Start with installation and first run, or go straight to modes, permissions, tools, providers, Fleet, MCP, and the Runtime API. These pages provide a clear index while the source documents in the repository carry the full detail."}
+              ? "从安装和首次运行开始，或者直接查找模式、权限、工具、提供商、Fleet、MCP 与运行时 API。这些页面就是正式的产品文档；每页都链接仓库中的源文档，方便查阅完整细节。"
+              : "Start with installation and first run, or go straight to modes, permissions, tools, providers, Fleet, MCP, and the Runtime API. These pages are the product documentation; each one cites the source documents in the repository for full detail."}
           </p>
           <div className="portal-actions">
             <Link href={`/${locale}/install`} className="portal-button portal-button-primary">

@@ -174,7 +174,7 @@ export const DOC_TOPICS: DocTopic[] = [
       zh: "用于集成、桥接和自动化的公开 HTTP API。",
     },
     repoSource: "docs/RUNTIME_API.md",
-    hasPage: false,
+    hasPage: true,
     category: "extending",
   },
   {
@@ -186,7 +186,7 @@ export const DOC_TOPICS: DocTopic[] = [
       zh: "仅在本机回环地址运行内置浏览器客户端，了解一次性引导与会话边界。",
     },
     repoSource: "docs/WEB.md",
-    hasPage: false,
+    hasPage: true,
     category: "extending",
   },
   {
@@ -210,7 +210,7 @@ export const DOC_TOPICS: DocTopic[] = [
       zh: "常见问题、诊断、运维手册和 Docker 说明。",
     },
     repoSource: ["docs/OPERATIONS_RUNBOOK.md", "docs/DOCKER.md"],
-    hasPage: false,
+    hasPage: true,
     category: "operations",
   },
   {
