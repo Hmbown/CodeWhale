@@ -65,7 +65,7 @@ export const DOC_TOPICS: DocTopic[] = [
       zh: "config.toml 参考、环境变量、项目覆盖和旧版路径。",
     },
     repoSource: ["docs/CONFIGURATION.md", "docs/LEGACY_PATHS.md"],
-    hasPage: false,
+    hasPage: true,
     category: "getting-started",
   },
   {
@@ -162,7 +162,7 @@ export const DOC_TOPICS: DocTopic[] = [
       zh: "可用的 Seatbelt（macOS）、显式启用的 bubblewrap（Linux）、平台缺口和审批策略。",
     },
     repoSource: "docs/SANDBOX.md",
-    hasPage: false,
+    hasPage: true,
     category: "core-concepts",
   },
   {
@@ -198,7 +198,7 @@ export const DOC_TOPICS: DocTopic[] = [
       zh: "持久任务执行、Fleet 管理和 Workflow 编写。",
     },
     repoSource: ["docs/FLEET.md", "docs/WORKFLOW_AUTHORING.md"],
-    hasPage: false,
+    hasPage: true,
     category: "operations",
   },
   {
