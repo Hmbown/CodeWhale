@@ -42,6 +42,8 @@ use crate::tui::views::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HelpSection {
     Command,
+    UserCommand,
+    Skill,
     Keybinding,
 }
 
@@ -49,6 +51,8 @@ impl HelpSection {
     fn label(self, locale: Locale) -> Cow<'static, str> {
         match self {
             Self::Command => tr(locale, MessageId::HelpSlashCommands),
+            Self::UserCommand => tr(locale, MessageId::HelpUserCommands),
+            Self::Skill => tr(locale, MessageId::HelpSkills),
             Self::Keybinding => tr(locale, MessageId::HelpKeybindings),
         }
     }
@@ -65,11 +69,18 @@ pub enum HelpOrdering {
 
 impl HelpOrdering {
     fn section_rank(self, section: HelpSection) -> u8 {
+        // User commands and skills sit with the built-in commands: they are
+        // the same kind of thing to the user (#3912), so a keyboard-reference
+        // open still sorts every command surface below the chords.
         match (self, section) {
-            (Self::CommandsFirst, HelpSection::Command)
-            | (Self::KeybindingsFirst, HelpSection::Keybinding) => 0,
-            (Self::CommandsFirst, HelpSection::Keybinding)
-            | (Self::KeybindingsFirst, HelpSection::Command) => 1,
+            (Self::CommandsFirst, HelpSection::Command) => 0,
+            (Self::CommandsFirst, HelpSection::UserCommand) => 1,
+            (Self::CommandsFirst, HelpSection::Skill) => 2,
+            (Self::CommandsFirst, HelpSection::Keybinding) => 3,
+            (Self::KeybindingsFirst, HelpSection::Keybinding) => 0,
+            (Self::KeybindingsFirst, HelpSection::Command) => 1,
+            (Self::KeybindingsFirst, HelpSection::UserCommand) => 2,
+            (Self::KeybindingsFirst, HelpSection::Skill) => 3,
         }
     }
 }
@@ -120,30 +131,42 @@ impl HelpView {
         Self::new_with_ordering(locale, HelpOrdering::CommandsFirst)
     }
 
-    pub fn new_for_workspace(locale: Locale, workspace: &Path) -> Self {
+    /// Discoverability index over every user-invocable surface (#3912):
+    /// built-ins, workspace commands, and discovered skills. `skills` comes
+    /// from `App::cached_skills`; pass `&[]` only where none are discovered.
+    pub fn new_for_workspace(
+        locale: Locale,
+        workspace: &Path,
+        skills: &[(String, String)],
+    ) -> Self {
         commands::user_registry::with_registry_for_workspace(Some(workspace), |registry| {
-            Self::new_with_registry(locale, HelpOrdering::CommandsFirst, registry)
+            Self::new_with_registry(locale, HelpOrdering::CommandsFirst, registry, skills)
         })
     }
 
     /// Open Help as the keyboard reference promised by shell shortcut hints.
-    pub fn new_for_shortcuts(locale: Locale, workspace: &Path) -> Self {
+    pub fn new_for_shortcuts(
+        locale: Locale,
+        workspace: &Path,
+        skills: &[(String, String)],
+    ) -> Self {
         commands::user_registry::with_registry_for_workspace(Some(workspace), |registry| {
-            Self::new_with_registry(locale, HelpOrdering::KeybindingsFirst, registry)
+            Self::new_with_registry(locale, HelpOrdering::KeybindingsFirst, registry, skills)
         })
     }
 
     fn new_with_ordering(locale: Locale, ordering: HelpOrdering) -> Self {
         let registry = commands::user_registry::UserCommandRegistry::new();
-        Self::new_with_registry(locale, ordering, &registry)
+        Self::new_with_registry(locale, ordering, &registry, &[])
     }
 
     fn new_with_registry(
         locale: Locale,
         ordering: HelpOrdering,
         registry: &commands::user_registry::UserCommandRegistry,
+        skills: &[(String, String)],
     ) -> Self {
-        let entries = build_entries(locale, registry);
+        let entries = build_entries(locale, registry, skills);
         let mut view = Self {
             locale,
             ordering,
@@ -195,23 +218,12 @@ impl HelpView {
     }
 
     fn move_selection(&mut self, delta: isize) {
-        if self.filtered.is_empty() {
-            self.selected = 0;
-            return;
-        }
-        let len = self.filtered.len() as isize;
-        let next = (self.selected as isize + delta).clamp(0, len - 1) as usize;
-        self.selected = next;
+        // #4755: help list wraps at both ends (same as other modal lists).
+        self.selected = crate::tui::list_nav::wrap_index(self.selected, self.filtered.len(), delta);
     }
 
     fn move_selection_wrapping(&mut self, delta: isize) {
-        if self.filtered.is_empty() {
-            self.selected = 0;
-            return;
-        }
-        let len = self.filtered.len() as isize;
-        let next = (self.selected as isize + delta).rem_euclid(len) as usize;
-        self.selected = next;
+        self.move_selection(delta);
     }
 
     fn render_rows(&self) -> Vec<HelpRenderRow> {
@@ -256,6 +268,7 @@ impl HelpView {
 fn build_entries(
     locale: Locale,
     registry: &commands::user_registry::UserCommandRegistry,
+    skills: &[(String, String)],
 ) -> Vec<HelpEntry> {
     let mut entries = Vec::new();
 
@@ -294,6 +307,58 @@ fn build_entries(
             section: HelpSection::Command,
             // Commands have no inherent ordering — fall back to alphabetical
             // by leaning on `label.clone()` in the final sort_by_key tuple.
+            sub_rank: 0,
+            label,
+            description,
+            haystack,
+        });
+    }
+
+    // Workspace commands (#3912). The registry was already consulted above to
+    // suppress shadowed built-ins; until now it never contributed a row of its
+    // own, so `.codewhale/commands/*.md` authors could not find their own work
+    // in the surface that teaches the product. `hidden` entries stay out.
+    for command in registry.iter().filter(|command| !command.hidden) {
+        let label = format!("/{}", command.name);
+        let description = command
+            .description
+            .as_deref()
+            .map(str::trim)
+            .filter(|description| !description.is_empty())
+            .unwrap_or_default()
+            .to_string();
+        let usage = command
+            .display_usage()
+            .map(str::to_owned)
+            .unwrap_or_else(|| label.clone());
+        let haystack = format!(
+            "{} {} {}",
+            label.to_ascii_lowercase(),
+            description.to_ascii_lowercase(),
+            usage.to_ascii_lowercase()
+        );
+        entries.push(HelpEntry {
+            section: HelpSection::UserCommand,
+            sub_rank: 0,
+            label,
+            description,
+            haystack,
+        });
+    }
+
+    // Skills dispatch as `$name` or `/skill name`; advertise the shape the
+    // user actually types.
+    for (name, description) in skills {
+        let label = format!("${name}");
+        let description = description.trim().to_string();
+        let haystack = format!(
+            "{} {} /skill {}",
+            label.to_ascii_lowercase(),
+            description.to_ascii_lowercase(),
+            name.to_ascii_lowercase()
+        );
+        entries.push(HelpEntry {
+            section: HelpSection::Skill,
             sub_rank: 0,
             label,
             description,
@@ -636,10 +701,13 @@ mod tests {
         .unwrap();
 
         for (term, mut view) in [
-            ("slop", HelpView::new_for_workspace(Locale::En, tmp.path())),
+            (
+                "slop",
+                HelpView::new_for_workspace(Locale::En, tmp.path(), &[]),
+            ),
             (
                 "canzha",
-                HelpView::new_for_shortcuts(Locale::En, tmp.path()),
+                HelpView::new_for_shortcuts(Locale::En, tmp.path(), &[]),
             ),
         ] {
             let debt = view
@@ -661,14 +729,104 @@ mod tests {
     }
 
     #[test]
+    fn workspace_commands_and_skills_are_findable_with_provenance() {
+        // #3912: both surfaces executed and autocompleted but were absent
+        // from the surface that teaches the product.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let commands_dir = tmp.path().join(".codewhale").join("commands");
+        std::fs::create_dir_all(&commands_dir).unwrap();
+        std::fs::write(
+            commands_dir.join("shipit.md"),
+            "---\ndescription: Cut a release candidate\n---\nbody",
+        )
+        .unwrap();
+        std::fs::write(
+            commands_dir.join("secret.md"),
+            "---\ndescription: Internal only\nhidden: true\n---\nbody",
+        )
+        .unwrap();
+
+        let skills = vec![(
+            "codereview".to_string(),
+            "Review a diff for defects".to_string(),
+        )];
+        let mut view = HelpView::new_for_workspace(Locale::En, tmp.path(), &skills);
+
+        let user = view
+            .entries
+            .iter()
+            .find(|entry| entry.label == "/shipit")
+            .expect("workspace command should be listed");
+        assert_eq!(user.section, HelpSection::UserCommand);
+        assert!(user.description.contains("Cut a release candidate"));
+
+        let skill = view
+            .entries
+            .iter()
+            .find(|entry| entry.label == "$codereview")
+            .expect("discovered skill should be listed");
+        assert_eq!(skill.section, HelpSection::Skill);
+
+        assert!(
+            !view.entries.iter().any(|entry| entry.label == "/secret"),
+            "hidden workspace commands stay out of the overlay"
+        );
+
+        // Both are reachable through the existing substring filter.
+        type_filter(&mut view, "shipit");
+        assert!(
+            view.filtered
+                .iter()
+                .any(|idx| view.entries[*idx].label == "/shipit")
+        );
+
+        let mut view = HelpView::new_for_workspace(Locale::En, tmp.path(), &skills);
+        type_filter(&mut view, "review a diff");
+        assert!(
+            view.filtered
+                .iter()
+                .any(|idx| view.entries[*idx].label == "$codereview"),
+            "skills are findable by their description"
+        );
+    }
+
+    #[test]
+    fn skill_rows_advertise_the_slash_skill_shape_too() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let skills = vec![("audit".to_string(), "Audit the tree".to_string())];
+        let mut view = HelpView::new_for_workspace(Locale::En, tmp.path(), &skills);
+        type_filter(&mut view, "/skill audit");
+        assert!(
+            view.filtered
+                .iter()
+                .any(|idx| view.entries[*idx].label == "$audit"),
+            "searching the /skill form finds the skill"
+        );
+    }
+
+    #[test]
     fn help_hides_builtins_with_shadowed_canonical_names() {
         let registry = commands::user_registry::UserCommandRegistry::from_loaded(vec![(
             "debt".to_string(),
             "---\ndescription: Custom debt\n---\ncustom debt".to_string(),
         )]);
-        let entries = build_entries(Locale::En, &registry);
+        let entries = build_entries(Locale::En, &registry, &[]);
 
-        assert!(entries.iter().all(|entry| entry.label != "/debt"));
+        // The built-in row is suppressed so the name is not advertised twice.
+        assert!(
+            !entries
+                .iter()
+                .any(|entry| entry.label == "/debt" && entry.section == HelpSection::Command),
+            "the shadowed built-in must not keep its own row"
+        );
+        // Since #3912 the shadowing workspace command supplies the row instead
+        // of the name vanishing from help entirely.
+        let user = entries
+            .iter()
+            .find(|entry| entry.label == "/debt")
+            .expect("the user command that shadows /debt should be listed");
+        assert_eq!(user.section, HelpSection::UserCommand);
+        assert!(user.description.contains("Custom debt"));
     }
 
     #[test]
@@ -981,7 +1139,7 @@ mod tests {
     #[test]
     fn localized_help_keybinding_descriptions_use_zh_hans() {
         let registry = commands::user_registry::UserCommandRegistry::new();
-        let entries = build_entries(Locale::ZhHans, &registry);
+        let entries = build_entries(Locale::ZhHans, &registry, &[]);
         let kb_entries: Vec<_> = entries
             .iter()
             .filter(|e| e.section == HelpSection::Keybinding)

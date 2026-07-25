@@ -61,7 +61,7 @@ pub fn auth_file_path() -> PathBuf {
     let codex_home = std::env::var("CODEX_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
-            dirs::home_dir()
+            crate::config::effective_home_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join(".codex")
         });

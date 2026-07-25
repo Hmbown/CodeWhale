@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -26,7 +26,7 @@ use codewhale_tools::{ToolCall, ToolRegistry};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::{Mutex, RwLock};
 use tower_http::cors::CorsLayer;
 use uuid::Uuid;
@@ -126,7 +126,26 @@ struct AppState {
     /// `request_id`. A driver polls this to resolve clarification questions
     /// raised by the model during a headless run.
     pending_user_input: Arc<Mutex<std::collections::HashMap<String, PendingUserInputAnswers>>>,
+    /// Turns currently streaming over stdio, keyed by stdio thread id.
+    ///
+    /// Deliberately kept *outside* the bridge mutex: a streaming turn holds
+    /// that mutex for its entire duration, so anything reachable only through
+    /// it cannot be used to stop the turn. This holds its own copy of what an
+    /// interrupt needs, so a cancel never waits on the turn it is cancelling.
+    in_flight_turns: Arc<Mutex<HashMap<String, InFlightTurn>>>,
 }
+
+/// Everything needed to interrupt a running turn without the bridge lock.
+#[derive(Debug, Clone)]
+struct InFlightTurn {
+    base_url: String,
+    auth_token: Option<String>,
+    /// Thread id as the *runtime* knows it, not the stdio-facing id.
+    runtime_thread_id: String,
+    turn_id: String,
+}
+
+type TurnRegistry = Arc<Mutex<HashMap<String, InFlightTurn>>>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ToolCallRequest {
@@ -211,6 +230,11 @@ struct ThreadMessageParams {
     input: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct ThreadInterruptParams {
+    thread_id: String,
+}
+
 pub async fn run(options: AppServerOptions) -> Result<()> {
     let auth_token = resolve_auth_token(&options)?;
     let state = build_state(options.config_path.clone(), auth_token)?;
@@ -274,70 +298,193 @@ fn app_router(state: AppState, cors_origins: &[String]) -> Router {
 
 pub async fn run_stdio(config_path: Option<PathBuf>) -> Result<()> {
     let state = build_state(config_path, None)?;
-    let stdin = tokio::io::stdin();
-    let stdout = tokio::io::stdout();
-    let mut reader = BufReader::new(stdin).lines();
-    let mut writer = tokio::io::BufWriter::new(stdout);
-    while let Some(line) = reader.next_line().await? {
-        if line.trim().is_empty() {
-            continue;
-        }
+    let reader = BufReader::new(tokio::io::stdin()).lines();
+    let writer = tokio::io::BufWriter::new(tokio::io::stdout());
+    run_stdio_loop(&state, reader, writer).await
+}
 
-        let request: JsonRpcRequest = match serde_json::from_str(&line) {
-            Ok(value) => value,
-            Err(err) => {
-                let response = jsonrpc_error(
-                    None,
-                    JsonRpcError::parse_error(format!("invalid json: {err}")),
-                );
-                writer.write_all(&serde_json::to_vec(&response)?).await?;
-                writer.write_all(b"\n").await?;
-                writer.flush().await?;
+/// The stdio JSON-RPC loop, generic over its transport so it can be driven by
+/// a duplex pipe in tests rather than the process's real stdin/stdout.
+async fn run_stdio_loop<R, W>(
+    state: &AppState,
+    mut reader: tokio::io::Lines<R>,
+    mut writer: W,
+) -> Result<()>
+where
+    R: AsyncBufRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    // Work that arrived while a turn was streaming. The turn owns the writer
+    // for its whole duration, so these wait for it rather than interleaving
+    // into the middle of a response.
+    let mut pending: VecDeque<PendingStdioWork> = VecDeque::new();
+    let mut stdin_open = true;
+
+    loop {
+        let request = match pending.pop_front() {
+            Some(PendingStdioWork::Response(response)) => {
+                write_stdio_line(&mut writer, &response).await?;
                 continue;
+            }
+            Some(PendingStdioWork::Request(request)) => request,
+            None => {
+                if !stdin_open {
+                    break;
+                }
+                let Some(line) = reader.next_line().await? else {
+                    break;
+                };
+                match parse_stdio_line(&line) {
+                    ParsedStdioLine::Blank => continue,
+                    ParsedStdioLine::Rejected(response) => {
+                        write_stdio_line(&mut writer, &response).await?;
+                        continue;
+                    }
+                    ParsedStdioLine::Request(request) => request,
+                }
             }
         };
 
-        if request
-            .jsonrpc
-            .as_deref()
-            .is_some_and(|version| version != "2.0")
-        {
-            let response = jsonrpc_error(
-                request.id,
-                JsonRpcError::invalid_request("jsonrpc version must be 2.0"),
+        let id = request.id.clone();
+        let dispatched = if request.method == "thread/message" {
+            // A turn can run for minutes. Keep reading stdin while it streams
+            // so an interrupt (or a shutdown) can actually reach it — with a
+            // plain `await` here, nothing could be read until it finished.
+            let dispatch = dispatch_stdio_request_with_writer(
+                state,
+                &mut writer,
+                &request.method,
+                request.params,
             );
-            writer.write_all(&serde_json::to_vec(&response)?).await?;
-            writer.write_all(b"\n").await?;
-            writer.flush().await?;
-            continue;
-        }
+            tokio::pin!(dispatch);
+            loop {
+                tokio::select! {
+                    outcome = &mut dispatch => break outcome,
+                    line = reader.next_line(), if stdin_open => {
+                        match line? {
+                            None => stdin_open = false,
+                            Some(line) => {
+                                handle_line_during_turn(state, &line, &mut pending).await;
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            dispatch_stdio_request_with_writer(state, &mut writer, &request.method, request.params)
+                .await
+        };
 
-        let response = match dispatch_stdio_request_with_writer(
-            &state,
-            &mut writer,
-            &request.method,
-            request.params,
-        )
-        .await
-        {
+        match dispatched {
             Ok(dispatch) => {
-                let encoded = jsonrpc_result(request.id, dispatch.result);
-                writer.write_all(&serde_json::to_vec(&encoded)?).await?;
-                writer.write_all(b"\n").await?;
-                writer.flush().await?;
+                write_stdio_line(&mut writer, &jsonrpc_result(id, dispatch.result)).await?;
                 if dispatch.should_exit {
                     break;
                 }
-                continue;
             }
-            Err(err) => jsonrpc_error(request.id, err),
-        };
-
-        writer.write_all(&serde_json::to_vec(&response)?).await?;
-        writer.write_all(b"\n").await?;
-        writer.flush().await?;
+            Err(err) => {
+                write_stdio_line(&mut writer, &jsonrpc_error(id, err)).await?;
+            }
+        }
     }
 
+    Ok(())
+}
+
+/// Work deferred until a streaming turn releases the writer.
+enum PendingStdioWork {
+    /// Already answered (an interrupt acted immediately); just needs writing.
+    Response(Value),
+    /// Not started yet; runs normally once the turn is done.
+    Request(JsonRpcRequest),
+}
+
+enum ParsedStdioLine {
+    Blank,
+    Request(JsonRpcRequest),
+    Rejected(Value),
+}
+
+fn parse_stdio_line(line: &str) -> ParsedStdioLine {
+    if line.trim().is_empty() {
+        return ParsedStdioLine::Blank;
+    }
+    let request: JsonRpcRequest = match serde_json::from_str(line) {
+        Ok(value) => value,
+        Err(err) => {
+            return ParsedStdioLine::Rejected(jsonrpc_error(
+                None,
+                JsonRpcError::parse_error(format!("invalid json: {err}")),
+            ));
+        }
+    };
+    if request
+        .jsonrpc
+        .as_deref()
+        .is_some_and(|version| version != "2.0")
+    {
+        return ParsedStdioLine::Rejected(jsonrpc_error(
+            request.id,
+            JsonRpcError::invalid_request("jsonrpc version must be 2.0"),
+        ));
+    }
+    ParsedStdioLine::Request(request)
+}
+
+/// Triage a request that arrived mid-turn.
+///
+/// Cancellation is the whole point of reading here, so `thread/interrupt`
+/// runs immediately and only its reply waits for the writer. `shutdown` also
+/// interrupts immediately — otherwise it would block on the bridge mutex the
+/// turn is holding — and then queues so the turn can unwind first. Everything
+/// else simply queues: it was never urgent, and running it now would race the
+/// turn for the writer.
+async fn handle_line_during_turn(
+    state: &AppState,
+    line: &str,
+    pending: &mut VecDeque<PendingStdioWork>,
+) {
+    let request = match parse_stdio_line(line) {
+        ParsedStdioLine::Blank => return,
+        ParsedStdioLine::Rejected(response) => {
+            pending.push_back(PendingStdioWork::Response(response));
+            return;
+        }
+        ParsedStdioLine::Request(request) => request,
+    };
+
+    match request.method.as_str() {
+        "thread/interrupt" => {
+            let id = request.id.clone();
+            let response = match parse_params::<ThreadInterruptParams>(params_or_object(
+                request.params.clone(),
+            )) {
+                Ok(parsed) => match interrupt_stdio_turn(state, &parsed.thread_id).await {
+                    Ok(interrupted) => jsonrpc_result(
+                        id,
+                        json!({ "thread_id": parsed.thread_id, "interrupted": interrupted }),
+                    ),
+                    Err(err) => jsonrpc_error(id, err),
+                },
+                Err(err) => jsonrpc_error(id, err),
+            };
+            pending.push_back(PendingStdioWork::Response(response));
+        }
+        "shutdown" => {
+            let live: Vec<String> = state.in_flight_turns.lock().await.keys().cloned().collect();
+            for thread_id in live {
+                let _ = interrupt_stdio_turn(state, &thread_id).await;
+            }
+            pending.push_back(PendingStdioWork::Request(request));
+        }
+        _ => pending.push_back(PendingStdioWork::Request(request)),
+    }
+}
+
+async fn write_stdio_line<W: AsyncWrite + Unpin>(writer: &mut W, response: &Value) -> Result<()> {
+    writer.write_all(&serde_json::to_vec(response)?).await?;
+    writer.write_all(b"\n").await?;
+    writer.flush().await?;
     Ok(())
 }
 
@@ -516,6 +663,7 @@ fn build_state(config_path: Option<PathBuf>, auth_token: Option<String>) -> Resu
         stdio_bridge: Arc::new(Mutex::new(None)),
         stdio_thread_hints: Arc::new(Mutex::new(HashMap::new())),
         pending_user_input: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        in_flight_turns: Arc::new(Mutex::new(HashMap::new())),
     })
 }
 
@@ -741,7 +889,12 @@ async fn handle_stdio_thread_message<W: AsyncWrite + Unpin>(
         .await
         .map_err(|err| JsonRpcError::internal(err.to_string()))?;
     let mut result = bridge
-        .message_thread(&runtime_thread_id, &parsed.input, writer)
+        .message_thread(
+            &runtime_thread_id,
+            &parsed.input,
+            writer,
+            Some((state.in_flight_turns.clone(), parsed.thread_id.clone())),
+        )
         .await
         .map_err(|err| JsonRpcError::internal(err.to_string()))?;
     if let Some(object) = result.as_object_mut() {
@@ -781,6 +934,37 @@ async fn acquire_stdio_bridge(
     // Prefer a bridge cached by a concurrent caller while we were spawning;
     // dropping our unused one kills the extra child via `Drop`.
     Ok(slot.get_or_insert_with(|| bridge.clone()).clone())
+}
+
+/// Ask the runtime to interrupt a turn that is streaming right now.
+///
+/// Everything this needs was copied out of the bridge when the turn started,
+/// so it never touches the bridge mutex the turn is holding. Returns whether
+/// a live turn was found for `thread_id`.
+async fn interrupt_stdio_turn(
+    state: &AppState,
+    thread_id: &str,
+) -> std::result::Result<bool, JsonRpcError> {
+    let Some(turn) = state.in_flight_turns.lock().await.get(thread_id).cloned() else {
+        return Ok(false);
+    };
+    let mut request = codewhale_release::platform_http_client_builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|err| JsonRpcError::internal(err.to_string()))?
+        .post(format!(
+            "{}/v1/threads/{}/turns/{}/interrupt",
+            turn.base_url, turn.runtime_thread_id, turn.turn_id
+        ));
+    if let Some(token) = turn.auth_token.as_deref() {
+        request = request.bearer_auth(token);
+    }
+    request
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(|err| JsonRpcError::internal(format!("interrupt failed: {err}")))?;
+    Ok(true)
 }
 
 /// Drop the cached runtime bridge so the next stdio thread message spawns a
@@ -933,11 +1117,17 @@ impl RuntimeBridge {
         Ok(thread_id)
     }
 
+    /// Run one turn to completion, streaming its events to `writer`.
+    ///
+    /// `registration` is `Some` on the stdio path: it publishes the live turn
+    /// so an `thread/interrupt` arriving mid-stream can reach the runtime
+    /// without waiting on the bridge mutex this call holds.
     async fn message_thread<W: AsyncWrite + Unpin>(
         &mut self,
         thread_id: &str,
         input: &str,
         writer: &mut W,
+        registration: Option<(TurnRegistry, String)>,
     ) -> Result<Value> {
         let turn = self
             .request_json(
@@ -964,10 +1154,29 @@ impl RuntimeBridge {
         )
         .await?;
 
+        // Publish the turn only for the streaming window, and take it back
+        // before any `?` below: a turn that has already finished must never
+        // look cancellable.
+        if let Some((registry, key)) = registration.as_ref() {
+            registry.lock().await.insert(
+                key.clone(),
+                InFlightTurn {
+                    base_url: self.base_url.clone(),
+                    auth_token: self.auth_token.clone(),
+                    runtime_thread_id: thread_id.to_string(),
+                    turn_id: turn_id.clone(),
+                },
+            );
+        }
+
         let since_seq = self.last_seq_by_thread.get(thread_id).copied().unwrap_or(0);
         let stream_result = self
             .stream_turn_events(thread_id, &turn_id, &response_id, writer, since_seq)
             .await;
+
+        if let Some((registry, key)) = registration.as_ref() {
+            registry.lock().await.remove(key);
+        }
 
         let _ = emit_stdio_event(
             writer,
@@ -1248,6 +1457,7 @@ async fn dispatch_stdio_request_with_writer<W: AsyncWrite + Unpin>(
                     "thread/archive",
                     "thread/unarchive",
                     "thread/message",
+                    "thread/interrupt",
                     "app/capabilities",
                     "app/request",
                     "app/config/get",
@@ -1281,7 +1491,8 @@ async fn dispatch_stdio_request_with_writer<W: AsyncWrite + Unpin>(
                     "thread/goal/clear",
                     "thread/archive",
                     "thread/unarchive",
-                    "thread/message"
+                    "thread/message",
+                    "thread/interrupt"
                 ]
             }),
             should_exit: false,
@@ -1511,7 +1722,26 @@ async fn dispatch_stdio_request_with_writer<W: AsyncWrite + Unpin>(
                 should_exit: false,
             }
         }
+        "thread/interrupt" => {
+            let parsed: ThreadInterruptParams = parse_params(params_or_object(params))?;
+            let interrupted = interrupt_stdio_turn(state, &parsed.thread_id).await?;
+            StdioDispatchResult {
+                result: json!({
+                    "thread_id": parsed.thread_id,
+                    "interrupted": interrupted,
+                }),
+                should_exit: false,
+            }
+        }
         "shutdown" => {
+            // A turn streaming right now holds the bridge mutex, so taking it
+            // to kill the child would block until that turn ends — the exact
+            // deadlock that made shutdown useless against a runaway turn.
+            // Interrupt live turns first; they release the mutex promptly.
+            let live: Vec<String> = state.in_flight_turns.lock().await.keys().cloned().collect();
+            for thread_id in live {
+                let _ = interrupt_stdio_turn(state, &thread_id).await;
+            }
             if let Some(bridge) = state.stdio_bridge.lock().await.take() {
                 bridge.lock().await.shutdown_child();
             }
@@ -1559,7 +1789,16 @@ async fn process_app_request(
             };
             let ok = result.is_ok();
             let message = result.err().map(|e| e.to_string());
-            apply_config_update(state, snapshot, None, true).await;
+            // Only propagate a mutation that actually happened. `set_value`
+            // leaves the config untouched on an unknown key or invalid value,
+            // so this is a no-op from the caller's point of view — but
+            // `apply_config_update` invalidates the cached stdio bridge
+            // regardless, and dropping the last reference kills the running
+            // child runtime along with its thread map. A single typo'd key
+            // would orphan every in-flight thread on that bridge.
+            if ok {
+                apply_config_update(state, snapshot, None, true).await;
+            }
             AppResponse {
                 ok,
                 data: json!({ "key": key, "value": value, "error": message }),
@@ -1574,7 +1813,11 @@ async fn process_app_request(
             };
             let ok = result.is_ok();
             let message = result.err().map(|e| e.to_string());
-            apply_config_update(state, snapshot, None, true).await;
+            // See ConfigSet: a failed unset changed nothing and must not tear
+            // down the runtime bridge.
+            if ok {
+                apply_config_update(state, snapshot, None, true).await;
+            }
             AppResponse {
                 ok,
                 data: json!({ "key": key, "error": message }),
@@ -2019,6 +2262,88 @@ mod tests {
         assert!(persisted.contains("deepseek-reasoner"));
     }
 
+    /// A bridge stand-in with no child process: this test only cares about
+    /// whether the cache slot survives, not about talking to a runtime.
+    fn sentinel_bridge() -> SharedRuntimeBridge {
+        Arc::new(Mutex::new(RuntimeBridge {
+            base_url: "http://127.0.0.1:0".to_string(),
+            client: reqwest::Client::new(),
+            auth_token: None,
+            child: None,
+            thread_map: HashMap::from([("stdio-1".to_string(), "runtime-1".to_string())]),
+            last_seq_by_thread: HashMap::new(),
+        }))
+    }
+
+    #[tokio::test]
+    async fn failed_config_set_keeps_the_stdio_bridge() {
+        // #4737: `set_value` rejects an invalid value before assigning, so the
+        // request is a no-op — but `apply_config_update` ran anyway and
+        // invalidated the cached bridge, dropping the child runtime along with
+        // its thread map. A single bad value orphaned every in-flight stdio
+        // thread, behind a response that correctly reported `ok: false`.
+        //
+        // Only `set_value` is exercised: an unknown key lands in `extras` and
+        // succeeds, and `unset_value` has no failing input today, so its
+        // identical guard has nothing to assert against.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config_path = tmp.path().join("config.toml");
+        fs::write(&config_path, "model = \"deepseek-chat\"\n").expect("write config");
+        let state = build_state(Some(config_path.clone()), None).expect("state");
+        *state.stdio_bridge.lock().await = Some(sentinel_bridge());
+
+        let response = process_app_request(
+            &state,
+            AppRequest::ConfigSet {
+                key: "telemetry".to_string(),
+                value: "not-a-bool".to_string(),
+            },
+            AppTransport::Stdio,
+        )
+        .await;
+        assert!(!response.ok, "invalid value must fail: {response:?}");
+
+        let slot = state.stdio_bridge.lock().await;
+        let kept = slot
+            .as_ref()
+            .expect("bridge must survive a failed config/set");
+        assert_eq!(
+            kept.lock()
+                .await
+                .thread_map
+                .get("stdio-1")
+                .map(String::as_str),
+            Some("runtime-1"),
+            "the live thread map must be intact",
+        );
+    }
+
+    #[tokio::test]
+    async fn successful_config_set_still_invalidates_the_stdio_bridge() {
+        // The other half of #4737: a mutation that *did* happen must still
+        // rebuild the bridge, or the runtime keeps serving the old config.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config_path = tmp.path().join("config.toml");
+        fs::write(&config_path, "model = \"deepseek-chat\"\n").expect("write config");
+        let state = build_state(Some(config_path.clone()), None).expect("state");
+        *state.stdio_bridge.lock().await = Some(sentinel_bridge());
+
+        let response = process_app_request(
+            &state,
+            AppRequest::ConfigSet {
+                key: "model".to_string(),
+                value: "deepseek-reasoner".to_string(),
+            },
+            AppTransport::Stdio,
+        )
+        .await;
+        assert!(response.ok, "valid set should succeed: {response:?}");
+        assert!(
+            state.stdio_bridge.lock().await.is_none(),
+            "a successful config change must invalidate the cached bridge",
+        );
+    }
+
     #[tokio::test]
     async fn config_unset_propagates_to_runtime_config() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -2313,6 +2638,186 @@ mod tests {
         format!("event: {event}\ndata: {payload}\n\n")
     }
 
+    /// A runtime whose turn never ends on its own — only an interrupt stops
+    /// it. That is the shape of the runaway turn this protects against.
+    async fn spawn_uninterruptible_until_asked_runtime() -> (
+        String,
+        Arc<tokio::sync::Notify>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use axum::body::Body;
+        use axum::extract::Path as AxumPath;
+
+        let interrupted = Arc::new(tokio::sync::Notify::new());
+
+        async fn create_turn(AxumPath(_thread_id): AxumPath<String>) -> Json<Value> {
+            Json(json!({ "turn": { "id": "turn_runaway" } }))
+        }
+        async fn create_thread() -> Json<Value> {
+            Json(json!({ "id": "thr_runaway" }))
+        }
+        async fn interrupt(
+            State(notify): State<Arc<tokio::sync::Notify>>,
+            AxumPath((_thread_id, _turn_id)): AxumPath<(String, String)>,
+        ) -> Json<Value> {
+            notify.notify_waiters();
+            Json(json!({ "ok": true }))
+        }
+        async fn thread_events(
+            State(notify): State<Arc<tokio::sync::Notify>>,
+            AxumPath(_thread_id): AxumPath<String>,
+        ) -> ([(header::HeaderName, &'static str); 1], Body) {
+            // Hold the event response open until something interrupts the
+            // turn. Nothing else can end it, which is the point.
+            notify.notified().await;
+            let body = [
+                sse_frame(
+                    "item.delta",
+                    json!({
+                        "seq": 1,
+                        "turn_id": "turn_runaway",
+                        "payload": { "kind": "agent_message", "delta": "thinking" }
+                    }),
+                ),
+                sse_frame(
+                    "turn.completed",
+                    json!({
+                        "seq": 2,
+                        "turn_id": "turn_runaway",
+                        "payload": { "turn": { "status": "interrupted" } }
+                    }),
+                ),
+            ]
+            .concat();
+            (
+                [(header::CONTENT_TYPE, "text/event-stream")],
+                Body::from(body),
+            )
+        }
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let app = Router::new()
+            .route("/v1/threads", post(create_thread))
+            .route("/v1/threads/{thread_id}/turns", post(create_turn))
+            .route(
+                "/v1/threads/{thread_id}/turns/{turn_id}/interrupt",
+                post(interrupt),
+            )
+            .route("/v1/threads/{thread_id}/events", get(thread_events))
+            .with_state(interrupted.clone());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve test runtime");
+        });
+        (format!("http://{addr}"), interrupted, server)
+    }
+
+    #[tokio::test]
+    async fn interrupt_stops_a_turn_that_would_otherwise_stream_forever() {
+        let (base_url, _notify, server) = spawn_uninterruptible_until_asked_runtime().await;
+        let (state, _tmp) = capability_test_state();
+        *state.stdio_bridge.lock().await = Some(Arc::new(Mutex::new(
+            RuntimeBridge::from_base_url_for_test(base_url),
+        )));
+
+        let (client, server_side) = tokio::io::duplex(16 * 1024);
+        let (client_reader, mut client_writer) = tokio::io::split(client);
+
+        let loop_state = state.clone();
+        let loop_handle = tokio::spawn(async move {
+            let (rx, tx) = tokio::io::split(server_side);
+            run_stdio_loop(&loop_state, BufReader::new(rx).lines(), tx).await
+        });
+
+        // Start the runaway turn.
+        client_writer
+            .write_all(
+                b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"thread/message\",\
+                  \"params\":{\"thread_id\":\"thr_a\",\"input\":\"go\"}}\n",
+            )
+            .await
+            .expect("send thread/message");
+
+        // Wait until the turn is genuinely in flight before cancelling, so the
+        // test exercises mid-stream cancellation rather than a race.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if state.in_flight_turns.lock().await.contains_key("thr_a") {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("turn should register itself as in flight");
+
+        // The read loop must accept this while the turn holds the bridge.
+        client_writer
+            .write_all(
+                b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"thread/interrupt\",\
+                  \"params\":{\"thread_id\":\"thr_a\"}}\n",
+            )
+            .await
+            .expect("send thread/interrupt");
+        client_writer
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\"}\n")
+            .await
+            .expect("send shutdown");
+
+        let finished = tokio::time::timeout(Duration::from_secs(20), loop_handle)
+            .await
+            .expect("the loop must exit rather than hang on the runaway turn");
+        finished.expect("join loop").expect("loop result");
+
+        let mut output = String::new();
+        let mut lines = BufReader::new(client_reader);
+        lines
+            .read_to_string(&mut output)
+            .await
+            .expect("read stdio output");
+
+        let responses: Vec<Value> = output
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .collect();
+        let by_id = |id: u64| {
+            responses
+                .iter()
+                .find(|value| value["id"] == json!(id))
+                .unwrap_or_else(|| panic!("no response for id {id} in {output}"))
+                .clone()
+        };
+
+        // The turn ended as interrupted rather than running to completion.
+        assert!(
+            by_id(1)["error"].is_object(),
+            "the interrupted turn should report an error, got: {}",
+            by_id(1)
+        );
+        assert_eq!(by_id(2)["result"]["interrupted"], json!(true));
+        assert_eq!(by_id(3)["result"]["status"], json!("stopped"));
+
+        server.abort();
+        let _ = server.await;
+    }
+
+    #[tokio::test]
+    async fn interrupting_an_idle_thread_is_not_an_error() {
+        let (state, _tmp) = capability_test_state();
+        let response = dispatch_stdio_request(
+            &state,
+            "thread/interrupt",
+            json!({ "thread_id": "thr_nothing_running" }),
+        )
+        .await
+        .expect("interrupt dispatch");
+        assert_eq!(response.result["interrupted"], json!(false));
+    }
+
     #[tokio::test]
     async fn stdio_runtime_bridge_streams_response_delta_events() {
         async fn create_turn(AxumPath(thread_id): AxumPath<String>) -> Json<Value> {
@@ -2377,7 +2882,7 @@ mod tests {
         let (mut reader, mut writer) = tokio::io::duplex(4096);
 
         let result = bridge
-            .message_thread("thr_test", "hello", &mut writer)
+            .message_thread("thr_test", "hello", &mut writer, None)
             .await
             .expect("message_thread should succeed");
         drop(writer);
@@ -2491,6 +2996,7 @@ mod tests {
         "thread/archive",
         "thread/unarchive",
         "thread/message",
+        "thread/interrupt",
         "app/capabilities",
         "app/request",
         "app/config/get",

@@ -486,7 +486,7 @@ pub async fn run_http_server(
     );
 
     let sessions_dir = default_sessions_dir().unwrap_or_else(|_| {
-        dirs::home_dir()
+        crate::config::effective_home_dir()
             .map(|h| h.join(".deepseek").join("sessions"))
             .unwrap_or_else(|| PathBuf::from(".deepseek").join("sessions"))
     });

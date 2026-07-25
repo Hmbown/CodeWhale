@@ -48,8 +48,10 @@ venv/
 /.claude/
 /.ace-tool/
 
-# Documentation (not needed at runtime)
+# Documentation (not needed at runtime), except schemas embedded via include_str!
 /docs/
+!/docs/schemas/
+!/docs/schemas/**
 /website/
 /*.md
 !/README.md

@@ -106,7 +106,7 @@ pub fn build_entries_with_plugins(
                 description.push_str("  ");
                 description.push_str(command.usage);
             }
-            let action = if command_runs_directly(command.name) {
+            let action = if command.palette_runs_directly() {
                 CommandPaletteAction::ExecuteCommand {
                     command: format!("/{}", command.name),
                 }
@@ -521,51 +521,6 @@ fn section_rank(section: PaletteSection) -> usize {
     }
 }
 
-fn command_runs_directly(name: &str) -> bool {
-    matches!(
-        name,
-        "help"
-            | "clear"
-            | "exit"
-            | "provider"
-            | "model"
-            | "models"
-            | "modeldb"
-            | "queue"
-            | "stash"
-            | "hooks"
-            | "subagents"
-            | "links"
-            | "home"
-            | "save"
-            | "sessions"
-            | "compact"
-            | "export"
-            | "config"
-            | "fleet"
-            | "mode"
-            | "statusline"
-            | "yolo"
-            | "agent"
-            | "plan"
-            | "trust"
-            | "logout"
-            | "tokens"
-            | "change"
-            | "system"
-            | "context"
-            | "undo"
-            | "retry"
-            | "init"
-            | "settings"
-            | "skills"
-            | "cost"
-            | "jobs"
-            | "mcp"
-            | "task"
-    )
-}
-
 fn format_tool_details(name: &str, description: &str, tags: &[&str]) -> String {
     let mut lines = vec![
         format!("Tool: {name}"),
@@ -817,13 +772,7 @@ impl CommandPaletteView {
     }
 
     fn move_selection(&mut self, delta: isize) {
-        if self.filtered.is_empty() {
-            self.selected = 0;
-            return;
-        }
-        let len = self.filtered.len() as isize;
-        let next = (self.selected as isize + delta).clamp(0, len - 1) as usize;
-        self.selected = next;
+        self.selected = crate::tui::list_nav::wrap_index(self.selected, self.filtered.len(), delta);
     }
 
     fn selected_entry(&self) -> Option<&CommandPaletteEntry> {
@@ -1756,6 +1705,103 @@ mod tests {
             &change.action,
             CommandPaletteAction::ExecuteCommand { command } if command == "/change"
         ));
+    }
+
+    #[test]
+    fn palette_paste_only_names_are_registered_canonical_commands() {
+        let registered: std::collections::HashSet<&str> = commands::command_infos()
+            .iter()
+            .map(|info| info.name)
+            .collect();
+        for name in commands::traits::PALETTE_PASTE_ONLY {
+            assert!(
+                registered.contains(name),
+                "PALETTE_PASTE_ONLY entry `{name}` is not a registered command"
+            );
+        }
+    }
+
+    #[test]
+    fn command_palette_direct_execute_follows_command_metadata() {
+        let tmp = TempDir::new().expect("tempdir");
+        let skills_dir = tmp.path().join("skills");
+        let mcp_config_path = tmp.path().join("mcp.json");
+        let entries = build_entries(
+            Locale::En,
+            skills_dir.as_path(),
+            false,
+            tmp.path(),
+            mcp_config_path.as_path(),
+            None,
+        );
+        let user_registry = commands::user_registry::registry_for_workspace(Some(tmp.path()));
+
+        for command in commands::command_infos() {
+            if user_registry.get(command.name).is_some() {
+                continue;
+            }
+            let label = format!("/{}", command.name);
+            let entry = entries
+                .iter()
+                .find(|entry| entry.section == PaletteSection::Command && entry.label == label)
+                .unwrap_or_else(|| panic!("missing palette entry for {label}"));
+
+            if command.palette_runs_directly() {
+                assert!(
+                    matches!(
+                        &entry.action,
+                        CommandPaletteAction::ExecuteCommand { command: c }
+                            if c == &format!("/{}", command.name)
+                    ),
+                    "/{} should execute directly from the palette (no required arg)",
+                    command.name
+                );
+            } else {
+                assert!(
+                    matches!(
+                        &entry.action,
+                        CommandPaletteAction::InsertText { text }
+                            if text == &command.palette_command()
+                    ),
+                    "/{} should paste for required arguments (usage: {})",
+                    command.name,
+                    command.usage
+                );
+            }
+        }
+
+        // Drift traps from #3911: no-arg rows must not silently paste, and
+        // dead mode-arg names must never reappear as palette allowlist entries.
+        for no_arg in [
+            "cost",
+            "diff",
+            "edit",
+            "purge",
+            "setup",
+            "hotbar",
+            "translate",
+        ] {
+            let label = format!("/{no_arg}");
+            let entry = entries
+                .iter()
+                .find(|entry| entry.section == PaletteSection::Command && entry.label == label)
+                .unwrap_or_else(|| panic!("missing palette entry for {label}"));
+            assert!(
+                matches!(&entry.action, CommandPaletteAction::ExecuteCommand { .. }),
+                "/{no_arg} is no-arg and must run directly"
+            );
+        }
+        for required in ["rename", "attach", "profile", "review"] {
+            let label = format!("/{required}");
+            let entry = entries
+                .iter()
+                .find(|entry| entry.section == PaletteSection::Command && entry.label == label)
+                .unwrap_or_else(|| panic!("missing palette entry for {label}"));
+            assert!(
+                matches!(&entry.action, CommandPaletteAction::InsertText { .. }),
+                "/{required} requires an argument and must paste"
+            );
+        }
     }
 
     #[test]

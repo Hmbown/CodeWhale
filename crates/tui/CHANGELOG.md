@@ -7,6 +7,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Landed since v0.9.1, not yet released. A cluster of defects found by a
+read-through audit of the policy engine, the MCP proxy, the session index,
+and the app-server bridge — several of them cases where the wrong outcome
+was reached silently, behind a response or a log line that looked fine.
+Nothing here changes a public interface; every entry below makes an
+existing one behave the way it already claimed to.
+
+### Fixed
+
+- Deny rules in `permissions.toml` no longer miss a command because of an
+  intervening flag: deny matching is token-based with flag-skipping and
+  backtracking, so a `git push` rule still catches
+  `git -c foo=bar push`. Path matching folds case only on platforms whose
+  filesystems are case-insensitive, and the default approval branch no
+  longer proposes the working directory as a network host.
+
+- MCP tool calls run once. A failed call is no longer retried as if it
+  were a failed lookup, qualified-name resolution collects every match and
+  reports an ambiguity instead of taking whichever the hash map yielded
+  first, and registering a server whose name collides with an existing one
+  after sanitization is now an error rather than a silent overwrite.
+
+- The session index survives a torn line: an unparseable entry is skipped
+  rather than aborting the whole read, appends carry their data through to
+  disk, and appends and compaction share a lock so a compaction can no
+  longer race an append into a lost record.
+
+- `Edit` counts as a write tool for workflow elevation, and the TUI's
+  write/shell classification now delegates to one shared allowlist rather
+  than keeping a second copy that could drift.
+
+- A rejected `app/config/set` stays a no-op. Previously an invalid value
+  still tore down the cached runtime bridge, killing the child runtime and
+  orphaning every other in-flight stdio thread behind a response that
+  correctly reported failure.
+
+- A malformed project `config.toml` is no longer indistinguishable from
+  having no project config. Because a project config may only *tighten*
+  approval and sandbox policy, silently discarding a broken one dropped a
+  repository's restrictions back to the looser user defaults; the setup
+  wizard now says so, naming the file but never quoting its contents.
+
+- An expired lane worktree no longer leaves its branch behind, which made
+  reusing the same lane name fail with "branch already exists". A branch
+  still carrying unmerged commits is kept — a TTL lapsing is not consent
+  to delete someone's work.
+
+- An in-flight `thread/message` turn can be stopped. The stdio loop keeps
+  reading while a turn streams, so the new `thread/interrupt` request (and
+  `shutdown`) can reach a runaway turn instead of waiting on the very turn
+  they were meant to stop.
+
+- Precedence is stated only in the constitution's "Whose word wins" section.
+  Memory hygiene no longer ships an inverted Tier list that put the
+  constitution above the user's current request; approval, compaction, and
+  personality overlays describe behavior without rank vocabulary; and the
+  authority recap points at the single source rather than restating a second
+  ladder.
+
+- `<turn_meta>` carries facts (mode, posture, model, workspace), not mode
+  doctrine or permission-question essays re-asserted every user message.
+
+- The project context pack (pretty-printed workspace tree) is off by default
+  and opt-in via `[context] project_pack = true`. Language law is compressed
+  while keeping the English-constitution / user-language-reply contract.
+
+- Modal lists and config pickers wrap selection at both ends (Down past the
+  last row returns to the top). Home-directory resolution prefers
+  `HOME`/`USERPROFILE` via `effective_home_dir` across remaining call sites so
+  Windows tests that fake the home env vars match production paths.
+
+### Changed
+
+- Prefix-cache tool catalog entries store only the SHA-256 digest, not the
+  joined catalog string. Unused plan-transition validation helpers are removed.
 
 ## [0.9.1] - 2026-07-24
 

@@ -41,12 +41,12 @@ use super::CommandResult;
 
 /// Path to the global user commands directory: `~/.codewhale/commands/`.
 fn global_commands_dir() -> PathBuf {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("~"));
+    let home = crate::config::effective_home_dir().unwrap_or_else(|| PathBuf::from("~"));
     home.join(".codewhale").join("commands")
 }
 
 fn legacy_global_commands_dir() -> PathBuf {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("~"));
+    let home = crate::config::effective_home_dir().unwrap_or_else(|| PathBuf::from("~"));
     home.join(".deepseek").join("commands")
 }
 
@@ -73,7 +73,7 @@ pub(crate) fn workflow_dirs(workspace: Option<&Path>) -> Vec<PathBuf> {
     if let Some(ws) = workspace {
         dirs.push(ws.join(".codewhale").join("workflows"));
     }
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("~"));
+    let home = crate::config::effective_home_dir().unwrap_or_else(|| PathBuf::from("~"));
     dirs.push(home.join(".codewhale").join("workflows"));
     dirs
 }
@@ -367,25 +367,7 @@ mod tests {
         use crate::tui::app::TuiOptions;
 
         let options = TuiOptions {
-            model: "deepseek-v4-pro".to_string(),
-            workspace: PathBuf::from("."),
-            config_path: None,
-            config_profile: None,
-            allow_shell: false,
-            use_alt_screen: true,
-            use_mouse_capture: false,
-            use_bracketed_paste: true,
-            max_subagents: 1,
-            skills_dir: PathBuf::from("."),
-            memory_path: PathBuf::from("memory.md"),
-            notes_path: PathBuf::from("notes.txt"),
-            mcp_config_path: PathBuf::from("mcp.json"),
-            use_memory: false,
-            start_in_agent_mode: false,
-            skip_onboarding: true,
-            yolo: false,
-            resume_session_id: None,
-            initial_input: None,
+            ..crate::test_support::test_tui_options(PathBuf::from("."))
         };
         let mut app = App::new(options, &Config::default());
         let result = try_dispatch_user_command(&mut app, "/nonexistent-thing-12345");
@@ -401,25 +383,7 @@ mod tests {
 
     fn test_options(workspace: PathBuf) -> crate::tui::app::TuiOptions {
         crate::tui::app::TuiOptions {
-            model: "deepseek-v4-pro".to_string(),
-            workspace,
-            config_path: None,
-            config_profile: None,
-            allow_shell: false,
-            use_alt_screen: true,
-            use_mouse_capture: false,
-            use_bracketed_paste: true,
-            max_subagents: 1,
-            skills_dir: PathBuf::from("."),
-            memory_path: PathBuf::from("memory.md"),
-            notes_path: PathBuf::from("notes.txt"),
-            mcp_config_path: PathBuf::from("mcp.json"),
-            use_memory: false,
-            start_in_agent_mode: false,
-            skip_onboarding: true,
-            yolo: false,
-            resume_session_id: None,
-            initial_input: None,
+            ..crate::test_support::test_tui_options(workspace)
         }
     }
 
@@ -477,7 +441,7 @@ mod tests {
             "workspace version",
         );
         // Global version — simulate by putting it in a "global" temp dir.
-        // Since we can't easily override `dirs::home_dir()`, we test the
+        // Paths resolve via effective_home_dir (HOME/USERPROFILE-aware). We test the
         // first-match-wins semantics by putting the same name in both
         // workspace-scanned dirs. The first dir in precedence order wins.
         write_command(
@@ -521,25 +485,7 @@ mod tests {
         );
 
         let options = TuiOptions {
-            model: "deepseek-v4-pro".to_string(),
-            workspace: ws.clone(),
-            config_path: None,
-            config_profile: None,
-            allow_shell: false,
-            use_alt_screen: true,
-            use_mouse_capture: false,
-            use_bracketed_paste: true,
-            max_subagents: 1,
-            skills_dir: PathBuf::from("."),
-            memory_path: PathBuf::from("memory.md"),
-            notes_path: PathBuf::from("notes.txt"),
-            mcp_config_path: PathBuf::from("mcp.json"),
-            use_memory: false,
-            start_in_agent_mode: false,
-            skip_onboarding: true,
-            yolo: false,
-            resume_session_id: None,
-            initial_input: None,
+            ..crate::test_support::test_tui_options(ws.clone())
         };
         let mut app = App::new(options, &Config::default());
         let result = try_dispatch_user_command(&mut app, "/hello world");

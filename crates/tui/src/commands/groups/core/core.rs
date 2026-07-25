@@ -49,6 +49,14 @@ pub fn help(app: &mut App, topic: Option<&str>) -> CommandResult {
             }
             return CommandResult::message(help);
         }
+
+        // Skills are user-invocable but were never a `/help` topic (#3912):
+        // they execute and autocomplete, yet the surface that teaches the
+        // product claimed they did not exist.
+        if let Some(help) = skill_help(app, topic) {
+            return CommandResult::message(help);
+        }
+
         return CommandResult::error(
             tr(app.ui_locale, MessageId::HelpUnknownCommand).replace("{topic}", topic),
         );
@@ -56,10 +64,45 @@ pub fn help(app: &mut App, topic: Option<&str>) -> CommandResult {
 
     // Show help overlay
     if app.view_stack.top_kind() != Some(ModalKind::Help) {
-        let help = HelpView::new_for_workspace(app.ui_locale, &app.workspace);
+        let help = HelpView::new_for_workspace(app.ui_locale, &app.workspace, &app.cached_skills);
         app.view_stack.push(help);
     }
     CommandResult::ok()
+}
+
+/// `/help <skill>` for a discovered skill (#3912).
+///
+/// Matches the cached skill list case-insensitively, accepting the bare name
+/// as well as either invocation shape the dispatcher supports, so `/help
+/// $review` and `/help /skill review` resolve the same as `/help review`.
+fn skill_help(app: &App, topic: &str) -> Option<String> {
+    let needle = topic
+        .trim()
+        .trim_start_matches('$')
+        .trim_start_matches('/')
+        .trim_start_matches("skill ")
+        .trim();
+    if needle.is_empty() {
+        return None;
+    }
+
+    let (name, description) = app
+        .cached_skills
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(needle))?;
+
+    let mut help = format!("${name}");
+    if !description.trim().is_empty() {
+        let _ = write!(help, "\n\n  {}", description.trim());
+    }
+    // Both shapes are advertised because both dispatch (`commands::execute`).
+    let _ = write!(
+        help,
+        "\n\n  {} ${name}\n  {} /skill {name}",
+        tr(app.ui_locale, MessageId::HelpUsageLabel),
+        tr(app.ui_locale, MessageId::HelpUsageLabel),
+    );
+    Some(help)
 }
 
 fn user_command_help(
@@ -394,11 +437,12 @@ pub fn workspace_switch(app: &mut App, arg: Option<&str>) -> CommandResult {
 
 fn expand_workspace_path(path: &str) -> Result<PathBuf, String> {
     if path == "~" {
-        return dirs::home_dir().ok_or_else(|| "Could not resolve home directory".to_string());
+        return crate::config::effective_home_dir()
+            .ok_or_else(|| "Could not resolve home directory".to_string());
     }
     if let Some(rest) = path.strip_prefix("~/") {
-        let home =
-            dirs::home_dir().ok_or_else(|| "Could not resolve home directory".to_string())?;
+        let home = crate::config::effective_home_dir()
+            .ok_or_else(|| "Could not resolve home directory".to_string())?;
         return Ok(home.join(rest));
     }
     Ok(PathBuf::from(path))
@@ -649,6 +693,49 @@ mod tests {
     use std::time::Instant;
     use tempfile::{TempDir, tempdir};
 
+    #[test]
+    fn help_topic_resolves_a_discovered_skill_and_both_shapes() {
+        // #3912: `/help <skill>` said "Unknown command" for a skill that
+        // executes and autocompletes.
+        let mut app = create_test_app();
+        app.cached_skills = vec![(
+            "codereview".to_string(),
+            "Review a diff for defects".to_string(),
+        )];
+
+        for topic in [
+            "codereview",
+            "CodeReview",
+            "$codereview",
+            "/skill codereview",
+        ] {
+            let result = help(&mut app, Some(topic));
+            let message = result
+                .message
+                .as_deref()
+                .unwrap_or_else(|| panic!("{topic} should resolve to skill help"));
+            assert!(message.contains("Review a diff for defects"), "{message}");
+            assert!(message.contains("$codereview"), "{message}");
+            assert!(message.contains("/skill codereview"), "{message}");
+        }
+    }
+
+    #[test]
+    fn help_topic_still_errors_for_an_unknown_name() {
+        let mut app = create_test_app();
+        app.cached_skills = vec![("codereview".to_string(), "Review a diff".to_string())];
+        let result = help(&mut app, Some("definitely-not-a-thing"));
+        assert!(result.is_error, "unknown topics must still be an error");
+        assert!(
+            !result
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Review a diff"),
+            "the skill fallback must not match an unrelated topic"
+        );
+    }
+
     struct SettingsPathGuard {
         _tmp: TempDir,
         previous: Option<OsString>,
@@ -690,25 +777,8 @@ mod tests {
 
     fn create_test_app() -> App {
         let options = TuiOptions {
-            model: "deepseek-v4-pro".to_string(),
-            workspace: PathBuf::from("/tmp/test-workspace"),
-            config_path: None,
-            config_profile: None,
-            allow_shell: false,
-            use_alt_screen: true,
-            use_mouse_capture: false,
-            use_bracketed_paste: true,
-            max_subagents: 1,
             skills_dir: PathBuf::from("/tmp/test-skills"),
-            memory_path: PathBuf::from("memory.md"),
-            notes_path: PathBuf::from("notes.txt"),
-            mcp_config_path: PathBuf::from("mcp.json"),
-            use_memory: false,
-            start_in_agent_mode: false,
-            skip_onboarding: true,
-            yolo: false,
-            resume_session_id: None,
-            initial_input: None,
+            ..crate::test_support::test_tui_options(PathBuf::from("/tmp/test-workspace"))
         };
         let mut app = App::new(options, &Config::default());
         app.ui_locale = crate::localization::Locale::En;

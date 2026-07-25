@@ -29,6 +29,12 @@ describe("docsTopicIsCurrent", () => {
   });
 
   it("never marks source-document links as local pages", () => {
-    expect(docsTopicIsCurrent(topic("runtime-api"), "en", "/en/docs/runtime-api")).toBe(false);
+    expect(docsTopicIsCurrent(topic("guide"), "en", "/en/docs/guide")).toBe(false);
+  });
+
+  it("routes former link-out topics to their dedicated docs pages", () => {
+    expect(docTopicHref(topic("runtime-api"), "en")).toBe("/en/docs/runtime-api");
+    expect(docsTopicIsCurrent(topic("runtime-api"), "en", "/en/docs/runtime-api")).toBe(true);
+    expect(docTopicIsExternal(topic("runtime-api"))).toBe(false);
   });
 });

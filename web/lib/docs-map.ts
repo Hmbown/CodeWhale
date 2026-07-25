@@ -65,7 +65,7 @@ export const DOC_TOPICS: DocTopic[] = [
       zh: "config.toml 参考、环境变量、项目覆盖和旧版路径。",
     },
     repoSource: ["docs/CONFIGURATION.md", "docs/LEGACY_PATHS.md"],
-    hasPage: false,
+    hasPage: true,
     category: "getting-started",
   },
   {
@@ -118,6 +118,18 @@ export const DOC_TOPICS: DocTopic[] = [
     category: "core-concepts",
   },
   {
+    id: "work",
+    slug: "work",
+    label: { en: "Work Surface", zh: "工作面板" },
+    description: {
+      en: "The counted To-do ledger, update_plan strategy context, and how work state flows to the sidebar, relay, and sub-agents.",
+      zh: "带计数的 To-do 台账、update_plan 策略上下文，以及工作状态如何流向侧栏、relay 和子 Agent。",
+    },
+    repoSource: ["docs/TOOL_SURFACE.md", "docs/TOOL_LIFECYCLE.md"],
+    hasPage: true,
+    category: "core-concepts",
+  },
+  {
     id: "subagents",
     slug: "subagents",
     label: { en: "Sub-Agents", zh: "子 Agent" },
@@ -126,7 +138,7 @@ export const DOC_TOPICS: DocTopic[] = [
       zh: "并行执行、角色类型、transcript 句柄和嵌套。",
     },
     repoSource: "docs/SUBAGENTS.md",
-    hasPage: false,
+    hasPage: true,
     category: "core-concepts",
   },
   {
@@ -138,7 +150,7 @@ export const DOC_TOPICS: DocTopic[] = [
       zh: "Model Context Protocol — 通过 stdio 和 HTTP/SSE 消费和暴露工具。",
     },
     repoSource: "docs/MCP.md",
-    hasPage: false,
+    hasPage: true,
     category: "extending",
   },
   {
@@ -149,8 +161,8 @@ export const DOC_TOPICS: DocTopic[] = [
       en: "Lifecycle hooks for pre/post tool execution, mode changes, and session events.",
       zh: "工具执行前后、模式切换和会话事件的生命周期钩子。",
     },
-    repoSource: "docs/rfcs/1364-hooks-lifecycle.md",
-    hasPage: false,
+    repoSource: ["docs/rfcs/1364-hooks-lifecycle.md", "docs/CONFIGURATION.md"],
+    hasPage: true,
     category: "extending",
   },
   {
@@ -162,7 +174,7 @@ export const DOC_TOPICS: DocTopic[] = [
       zh: "可用的 Seatbelt（macOS）、显式启用的 bubblewrap（Linux）、平台缺口和审批策略。",
     },
     repoSource: "docs/SANDBOX.md",
-    hasPage: false,
+    hasPage: true,
     category: "core-concepts",
   },
   {
@@ -174,7 +186,7 @@ export const DOC_TOPICS: DocTopic[] = [
       zh: "用于集成、桥接和自动化的公开 HTTP API。",
     },
     repoSource: "docs/RUNTIME_API.md",
-    hasPage: false,
+    hasPage: true,
     category: "extending",
   },
   {
@@ -186,7 +198,7 @@ export const DOC_TOPICS: DocTopic[] = [
       zh: "仅在本机回环地址运行内置浏览器客户端，了解一次性引导与会话边界。",
     },
     repoSource: "docs/WEB.md",
-    hasPage: false,
+    hasPage: true,
     category: "extending",
   },
   {
@@ -198,7 +210,7 @@ export const DOC_TOPICS: DocTopic[] = [
       zh: "持久任务执行、Fleet 管理和 Workflow 编写。",
     },
     repoSource: ["docs/FLEET.md", "docs/WORKFLOW_AUTHORING.md"],
-    hasPage: false,
+    hasPage: true,
     category: "operations",
   },
   {
@@ -210,7 +222,7 @@ export const DOC_TOPICS: DocTopic[] = [
       zh: "常见问题、诊断、运维手册和 Docker 说明。",
     },
     repoSource: ["docs/OPERATIONS_RUNBOOK.md", "docs/DOCKER.md"],
-    hasPage: false,
+    hasPage: true,
     category: "operations",
   },
   {

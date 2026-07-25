@@ -70,7 +70,7 @@ impl ExecPolicyConfig {
 }
 
 pub fn default_execpolicy_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| home.join(".deepseek").join("execpolicy.toml"))
+    crate::config::effective_home_dir().map(|home| home.join(".deepseek").join("execpolicy.toml"))
 }
 
 pub fn load_default_policy() -> Result<Option<ExecPolicyConfig>> {

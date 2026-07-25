@@ -1,0 +1,845 @@
+//! Application initialization: `App` construction lives here so the central
+//! `app.rs` module holds state and behavior rather than a ~830-line
+//! constructor. `App::new` remains a thin test-only shim over
+//! [`App::new_with_plugin_registry`]; all callers construct `App` exactly as
+//! before.
+
+use super::*;
+
+impl App {
+    #[cfg(test)]
+    pub fn new(options: TuiOptions, config: &Config) -> Self {
+        let workspace = options.workspace.clone();
+        Self::new_with_plugin_registry(
+            options,
+            config,
+            std::sync::Arc::new(crate::plugins::PluginRegistry::empty(&workspace)),
+        )
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub fn new_with_plugin_registry(
+        options: TuiOptions,
+        config: &Config,
+        plugin_registry: std::sync::Arc<crate::plugins::PluginRegistry>,
+    ) -> Self {
+        let TuiOptions {
+            model,
+            workspace,
+            config_path,
+            config_profile,
+            allow_shell,
+            use_alt_screen,
+            use_mouse_capture,
+            use_bracketed_paste,
+            max_subagents,
+            skills_dir: global_skills_dir,
+            memory_path,
+            notes_path: _,
+            mcp_config_path,
+            use_memory,
+            start_in_agent_mode,
+            skip_onboarding,
+            yolo,
+            resume_session_id,
+            initial_input,
+        } = options;
+
+        // Start from disk-only preferences so one-time migrations can never
+        // persist terminal/environment overlays such as NO_ANIMATIONS. Apply
+        // those overlays only after any normalized settings write succeeds.
+        let mut settings = Settings::load_persisted().unwrap_or_else(|_| Settings::default());
+        let legacy_yolo_default = settings.legacy_yolo_default_detected();
+        let legacy_yolo_full_access = if legacy_yolo_default {
+            let control = config.approval_policy_control(
+                config_path.as_deref(),
+                config_profile.as_deref(),
+                &workspace,
+            );
+            match control {
+                crate::config::ApprovalPolicyControl::Unset => {
+                    if let Err(error) = settings.save() {
+                        tracing::warn!(
+                            "failed to normalize legacy YOLO settings; retrying next launch: {error:#}"
+                        );
+                    }
+                    true
+                }
+                crate::config::ApprovalPolicyControl::RootConfig => {
+                    let active_config_path =
+                        crate::config::resolve_load_config_path(config_path.clone());
+                    match crate::config_persistence::persist_unset_root_key(
+                        active_config_path.as_deref(),
+                        "approval_policy",
+                    ) {
+                        Ok(_) => {
+                            if let Err(error) = settings.save() {
+                                tracing::warn!(
+                                    "removed legacy approval_policy but could not normalize settings; retrying next launch: {error:#}"
+                                );
+                            }
+                            true
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                "could not migrate legacy YOLO approval policy; keeping the controlling policy: {error:#}"
+                            );
+                            false
+                        }
+                    }
+                }
+                source => {
+                    tracing::warn!(
+                        "legacy YOLO setting was not allowed to override {}",
+                        source.label()
+                    );
+                    false
+                }
+            }
+        } else {
+            false
+        };
+        settings.apply_env_overrides();
+        let launch_visible =
+            settings.launch_screen && resume_session_id.is_none() && initial_input.is_none();
+        let launch = LaunchState::new(launch_visible, &workspace);
+
+        // If settings.toml exists on disk but couldn't be parsed (we fell back
+        // to defaults), surface a warning in the TUI so the user knows their
+        // file is broken instead of silently losing all settings.
+        let settings_parse_warning = crate::settings::Settings::path().ok().and_then(|p| {
+            if p.exists() {
+                std::fs::read_to_string(&p).ok().and_then(|raw| {
+                    ::toml::from_str::<::toml::Value>(&raw)
+                        .err()
+                        .map(|e| format!("⚠ settings.toml is malformed — using defaults ({e})"))
+                })
+            } else {
+                None
+            }
+        });
+        let tui_prefs_warning = crate::settings::TuiPrefs::path().ok().and_then(|p| {
+            if p.exists() {
+                std::fs::read_to_string(&p).ok().and_then(|raw| {
+                    ::toml::from_str::<::toml::Value>(&raw)
+                        .err()
+                        .map(|e| format!("⚠ tui.toml is malformed — using defaults ({e})"))
+                })
+            } else {
+                None
+            }
+        });
+
+        let mut provider = config.api_provider();
+
+        // Let settings preserve runtime switches only when config/CLI did not
+        // explicitly select a provider. A configured provider must not be
+        // pushed back to a stale saved setting on restart.
+        let config_explicitly_selects_provider = config
+            .provider
+            .as_deref()
+            .is_some_and(|provider| !provider.trim().is_empty());
+        let mut provider_identity_record = config
+            .active_provider_identity(provider)
+            .unwrap_or_else(|_| {
+                let key = config.provider_identity_for(provider);
+                let exact_id = (!(provider == ApiProvider::Custom
+                    && config.uses_legacy_literal_custom_route()))
+                .then(|| key.clone());
+                crate::config::ProviderIdentity {
+                    provider,
+                    key,
+                    exact_id,
+                }
+            });
+        if !config_explicitly_selects_provider
+            && let Some(ref provider_str) = settings.default_provider
+            && let Ok(resolved) = config.resolve_provider_identity(provider_str)
+        {
+            provider = resolved.provider;
+            provider_identity_record = resolved;
+        }
+        let provider_identity = provider_identity_record.key;
+        let provider_exact_id = provider_identity_record.exact_id;
+        let mut effective_auth_config = config.clone();
+        effective_auth_config.provider = Some(provider_identity.clone());
+        let model_ids_passthrough = effective_auth_config.model_ids_pass_through();
+        let provider_chain = provider
+            .kind()
+            .map(|kind| ProviderChain::new(kind, &config.fallback_providers))
+            .filter(|chain| chain.providers().len() > 1);
+
+        // Snapshot per-provider readiness for the fallback chain (#2574). Uses
+        // the same `has_api_key_for` helper the provider picker uses, so hosted
+        // providers require a key and self-hosted ones (Ollama/vLLM/SGLang) are
+        // reported ready without one. Empty when there is no fallback chain.
+        let provider_readiness = provider_chain
+            .as_ref()
+            .map(|chain| {
+                chain
+                    .providers()
+                    .iter()
+                    .map(|kind| {
+                        let provider = ApiProvider::from_kind(*kind);
+                        (provider, has_api_key_for(config, provider))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Check if the effective provider has an API key. This must happen
+        // after settings.default_provider is applied; otherwise a saved
+        // third-party provider can be pushed back into DeepSeek onboarding.
+        let needs_api_key = !has_api_key(&effective_auth_config);
+        let api_key_env_only =
+            crate::config::active_provider_uses_env_only_api_key(&effective_auth_config);
+        let was_onboarded = crate::tui::onboarding::is_onboarded();
+        let settings_auto_compact = settings.auto_compact;
+        let auto_compact_user_configured = Settings::auto_compact_explicitly_configured();
+        let auto_compact_threshold_percent = settings.auto_compact_threshold_percent;
+        let calm_mode = settings.calm_mode;
+        let low_motion = settings.low_motion;
+        let constrained_frame_rate = settings.constrained_frame_rate;
+        let fancy_animations = settings.fancy_animations;
+        let ocean_treatment = crate::tui::ocean::OceanTreatment::parse(&settings.ocean_treatment);
+        let work_surface_placement =
+            crate::tui::work_surface::WorkSurfacePlacement::parse(&settings.work_surface_placement);
+        let work_surface_top_height = settings.work_surface_top_height;
+        let work_surface_side_width = settings.work_surface_side_width;
+        let synchronized_output_enabled = settings.synchronized_output_enabled();
+        let status_indicator = settings.status_indicator.clone();
+        let show_thinking = settings.show_thinking;
+        let show_tool_details = settings.show_tool_details;
+        let inline_diff_mode = InlineDiffMode::parse(&settings.inline_diffs);
+        let ui_locale = resolve_locale(&settings.locale);
+        let cost_currency = match (settings.cost_currency.as_str(), ui_locale.tag()) {
+            ("usd", "zh-Hans") => CostCurrency::Cny,
+            _ => CostCurrency::from_setting(&settings.cost_currency).unwrap_or(CostCurrency::Usd),
+        };
+        let composer_density = ComposerDensity::from_setting(&settings.composer_density);
+        let composer_border = settings.composer_border;
+        let composer_vim_enabled = settings
+            .composer_vim_mode
+            .trim()
+            .eq_ignore_ascii_case("vim");
+        let transcript_spacing = TranscriptSpacing::from_setting(&settings.transcript_spacing);
+        let sidebar_width_percent = settings.sidebar_width_percent;
+        let sidebar_focus = SidebarFocus::from_setting(&settings.sidebar_focus);
+        let max_input_history = settings.max_input_history;
+        let use_paste_burst_detection = settings.paste_burst_detection;
+        // Resolve the named theme from settings; unknown values were already
+        // normalised to "system" in Settings::load. The background_color
+        // setting still overlays on top.
+        let background_color_override = settings
+            .background_color
+            .as_deref()
+            .and_then(palette::parse_hex_rgb_color);
+        let background_setting = background_color_override.and_then(palette::hex_rgb_string);
+        let resolved_theme =
+            palette::resolve_theme_setting(&settings.theme, background_setting.as_deref());
+        let theme_warning = resolved_theme.as_ref().err().map(|error| {
+            format!(
+                "⚠ configured theme '{}' could not be loaded — using System ({error})",
+                settings.theme
+            )
+        });
+        let (_, theme_id, ui_theme) = resolved_theme.unwrap_or_else(|_| {
+            let id = palette::ThemeId::System;
+            let mut theme = id.ui_theme();
+            if let Some(background) = background_color_override {
+                theme = theme.with_background_color(background);
+            }
+            (id.name().to_string(), id, theme)
+        });
+        let provider_models = settings.provider_models.clone().unwrap_or_default();
+        let model = provider_models
+            .get(&provider_identity)
+            .cloned()
+            .or_else(|| {
+                // default_model is a DeepSeek-centric setting; other providers
+                // get their model from config.toml / env (e.g. OPENAI_MODEL).
+                if matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN) {
+                    settings.default_model.clone()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(model);
+        let auto_model = model.trim().eq_ignore_ascii_case("auto");
+        let mut enabled_provider_models = settings.enabled_models.clone().unwrap_or_default();
+        for (saved_provider, saved_model) in &provider_models {
+            push_enabled_provider_model(&mut enabled_provider_models, saved_provider, saved_model);
+        }
+        push_enabled_provider_model(&mut enabled_provider_models, &provider_identity, &model);
+        let active_context_window_override = config.context_window_for_provider_config(provider);
+        let configured_route_base_url = effective_auth_config.deepseek_base_url();
+        let (active_route_limits, active_route_base_url, active_context_window_source) =
+            if auto_model {
+                (
+                    active_context_window_override.map(|window| RouteLimits {
+                        context_tokens: Some(u64::from(window)),
+                        ..RouteLimits::default()
+                    }),
+                    configured_route_base_url,
+                    if active_context_window_override.is_some() {
+                        crate::route_runtime::ContextWindowSource::Configured
+                    } else {
+                        crate::route_runtime::ContextWindowSource::Fallback
+                    },
+                )
+            } else {
+                let saved_provider_model = config
+                    .provider_config_for(provider)
+                    .and_then(|provider| provider.model.as_deref());
+                crate::route_runtime::resolve_route_candidate_with_context_metadata(
+                    provider,
+                    Some(&model),
+                    saved_provider_model,
+                    Some(configured_route_base_url.clone()),
+                    active_context_window_override,
+                    None,
+                )
+                .map(|resolution| {
+                    (
+                        crate::route_budget::known_route_limits(resolution.candidate.limits()),
+                        resolution.candidate.endpoint().base_url.clone(),
+                        resolution.context_window.source,
+                    )
+                })
+                .unwrap_or((
+                    None,
+                    configured_route_base_url,
+                    crate::route_runtime::ContextWindowSource::Fallback,
+                ))
+            };
+        let reasoning_effort_explicit =
+            settings.reasoning_effort.is_some() || config.reasoning_effort_is_explicit();
+        let configured_reasoning_effort = settings
+            .reasoning_effort
+            .as_deref()
+            .or_else(|| config.reasoning_effort());
+        let threshold_model = if auto_model {
+            DEFAULT_TEXT_MODEL
+        } else {
+            model.as_str()
+        };
+        let compact_threshold = crate::route_budget::compaction_threshold_for_route_at_percent(
+            provider,
+            threshold_model,
+            active_route_limits,
+            auto_compact_threshold_percent,
+        );
+        let auto_compact = if auto_compact_user_configured {
+            settings_auto_compact
+        } else {
+            crate::route_budget::auto_compact_default_for_route(
+                provider,
+                threshold_model,
+                active_route_limits,
+            )
+        };
+        let mut reasoning_effort = if auto_model {
+            ReasoningEffort::Auto
+        } else {
+            configured_reasoning_effort.map_or_else(ReasoningEffort::default, |s| {
+                ReasoningEffort::from_setting_for_provider(s, provider)
+            })
+        };
+        if !auto_model
+            && !reasoning_effort_explicit
+            && let Some(effort) = crate::config::legacy_deepseek_alias_effort_for_route(
+                provider,
+                &effective_auth_config.deepseek_base_url(),
+                &model,
+            )
+        {
+            reasoning_effort = ReasoningEffort::from_setting_for_provider(effort, provider);
+        }
+        if !auto_model
+            && crate::config::is_exact_direct_moonshot_k3_route(
+                provider,
+                &active_route_base_url,
+                &model,
+            )
+        {
+            // Keep the visible/effective tier truthful on first launch too;
+            // direct K3 cannot honor a persisted `off` setting.
+            reasoning_effort =
+                reasoning_effort.normalize_for_route(provider, &active_route_base_url, &model);
+        }
+
+        // Resolve the saved mode separately from the permission posture.
+        let preferred_mode = AppMode::from_setting(&settings.default_mode);
+        let yolo_compat = yolo || (preferred_mode == AppMode::Yolo && !start_in_agent_mode);
+        let initial_mode = if yolo_compat || start_in_agent_mode {
+            AppMode::Agent
+        } else {
+            preferred_mode
+        };
+        let needs_workspace_trust = !yolo_compat && crate::tui::onboarding::needs_trust(&workspace);
+        let onboarding = initial_onboarding_state(
+            skip_onboarding,
+            was_onboarded,
+            needs_api_key,
+            needs_workspace_trust,
+        );
+        let onboarding_missing_key_recovery = !skip_onboarding && was_onboarded && needs_api_key;
+        let onboarding_workspace_trust_gate = onboarding_is_workspace_trust_gate(
+            skip_onboarding,
+            was_onboarded,
+            needs_api_key,
+            needs_workspace_trust,
+        );
+
+        // Durable Agent-era permission baseline (#3386). Plan/YOLO derive from
+        // and restore to this. Legacy Auto inputs parse to Agent; if an older
+        // caller still constructs `AppMode::Auto` directly, it projects through
+        // the Agent baseline instead of enabling a fourth runtime posture. When
+        // the user starts in YOLO the live shell flag is force-enabled below, so
+        // the baseline shell value is taken from the interactive default (the
+        // pre-mode Agent surface) rather than the YOLO-forced live mirror;
+        // otherwise it mirrors the resolved `allow_shell` option, which already
+        // carries that same interactive default. Using `interactive_allow_shell()`
+        // here keeps the Agent baseline identical regardless of launch mode, so
+        // a YOLO -> Agent downshift exposes shell (approval-gated) exactly as
+        // documented, while an explicit `allow_shell = false` still hides it.
+        // Trust is never part of the Agent baseline (it is YOLO-only authority).
+        // Approval mirrors the configured policy.
+        let explicit_approval_mode = (!legacy_yolo_full_access)
+            .then_some(config.approval_policy.as_deref())
+            .flatten()
+            .and_then(ApprovalMode::from_config_value);
+        let approval_policy_control = if legacy_yolo_full_access {
+            ApprovalPolicyControl::Unset
+        } else {
+            config.approval_policy_control(
+                config_path.as_deref(),
+                config_profile.as_deref(),
+                &workspace,
+            )
+        };
+        let approval_policy_locked = approval_policy_control != ApprovalPolicyControl::Unset;
+        let approval_policy_root_editable =
+            approval_policy_control == ApprovalPolicyControl::RootConfig;
+        let approval_policy_requirements_managed =
+            approval_policy_control == ApprovalPolicyControl::Requirements;
+        let saved_permission_posture = if approval_policy_locked {
+            None
+        } else {
+            settings
+                .permission_posture
+                .as_deref()
+                .and_then(ApprovalMode::from_config_value)
+        };
+        let configured_approval_mode = explicit_approval_mode
+            .or(saved_permission_posture)
+            .unwrap_or_default();
+        let configured_trust_mode = configured_approval_mode == ApprovalMode::Bypass;
+        let mode_prefs = ModeSessionPrefs {
+            agent_allow_shell: if yolo_compat || matches!(initial_mode, AppMode::Yolo) {
+                config.interactive_allow_shell()
+            } else {
+                allow_shell
+            },
+            agent_trust_mode: configured_trust_mode,
+            // The YOLO-compat launch elevates the *live* approval mirror to
+            // Bypass below; the durable Agent baseline keeps the configured
+            // policy so a YOLO -> Agent downshift restores it.
+            agent_approval_mode: configured_approval_mode,
+        };
+        let allow_shell = allow_shell || yolo_compat || matches!(initial_mode, AppMode::Yolo);
+        let shell_manager = new_shared_shell_manager(workspace.clone());
+
+        // Initialize hooks executor from config, merged with project-local
+        // `.codewhale/hooks.toml` (#3026).
+        let hooks_config =
+            crate::hooks::HooksConfig::load_with_project(config.hooks_config(), &workspace);
+        let hooks = HookExecutor::new(hooks_config, workspace.clone());
+
+        // Initialize plan state
+        let plan_state = new_shared_plan_state();
+        let todos = new_shared_todo_list();
+        let work_runtime =
+            crate::work_graph::new_shared_work_runtime(todos.clone(), plan_state.clone());
+
+        let skills_scan_codewhale_only = config.skills_config().scan_codewhale_only();
+        let skills_dir = resolve_skills_dir(&workspace, &global_skills_dir, config);
+        let cached_skills = Self::discover_cached_skills(
+            &workspace,
+            &skills_dir,
+            skills_scan_codewhale_only,
+            plugin_registry.as_ref(),
+        );
+
+        let input_history = crate::composer_history::load_history();
+        let mention_cwd = std::env::current_dir().ok();
+        let (initial_input_text, initial_input_cursor, auto_submit_initial_input) =
+            match initial_input {
+                // #451: pre-populate the composer when invoked via
+                // `deepseek pr <N>` (or any future caller that wants to
+                // drop the model into a session with context already
+                // typed). Cursor lands at the end so Enter sends as-is.
+                Some(InitialInput::Prefill(text)) if !text.is_empty() => {
+                    let cursor = text.chars().count();
+                    (text, cursor, false)
+                }
+                Some(InitialInput::Submit(text)) if !text.is_empty() => {
+                    let cursor = text.chars().count();
+                    (text, cursor, true)
+                }
+                _ => (String::new(), 0, false),
+            };
+        let mcp_configured_count = crate::mcp::load_config_with_workspace_and_plugins(
+            &mcp_config_path,
+            &workspace,
+            plugin_registry.as_ref(),
+        )
+        .map(|cfg| cfg.servers.len())
+        .unwrap_or(0);
+        let mut hotbar_actions = HotbarActionRegistry::with_configured_routes(
+            config,
+            provider,
+            &model,
+            &provider_models,
+        );
+        // #2069: expose the already-discovered skills as bindable hotbar
+        // actions. Reuses the startup skill cache, so no extra filesystem I/O.
+        hotbar_actions.register_skills(&cached_skills);
+        let mut app = Self {
+            mode: initial_mode,
+            hotbar_actions,
+            composer: ComposerState {
+                input: initial_input_text,
+                cursor_position: initial_input_cursor,
+                kill_buffer: String::new(),
+                paste_burst: PasteBurst::default(),
+                pending_paste_reference: None,
+                oversized_paste_full_text: None,
+                input_history,
+                draft_history: VecDeque::new(),
+                clear_undo_buffer: None,
+                history_index: None,
+                history_navigation_draft: None,
+                composer_history_search: None,
+                selected_attachment_index: None,
+                slash_menu_selected: 0,
+                slash_menu_hidden: false,
+                mention_menu_selected: 0,
+                mention_menu_hidden: false,
+                mention_completion_cache: None,
+                mention_discovery: crate::tui::mention_completion::MentionDiscovery::default(),
+                mention_cwd,
+                vim_enabled: composer_vim_enabled,
+                vim_mode: VimMode::Normal,
+                vim_pending_d: false,
+                selection_anchor: None,
+            },
+            viewport: ViewportState::default(),
+            work_surface: crate::tui::work_surface::WorkSurfaceState::with_layout(
+                work_surface_placement,
+                work_surface_top_height,
+                work_surface_side_width,
+            ),
+            hunt: HuntState::default(),
+            session: SessionState::default(),
+            active_allowed_tools: None,
+            pausable: false,
+            paused: false,
+            paused_quarry: None,
+            history: Vec::new(),
+            history_version: 0,
+            history_revisions: Vec::new(),
+            next_history_revision: 1,
+            api_messages: Vec::new(),
+            is_loading: false,
+            dispatch_completion_tx: None,
+            dispatch_in_flight: false,
+            last_enter_instant: None,
+            provider_wait_incident_logged: false,
+            prompt_suggestion: None,
+            prompt_suggestion_gen: std::sync::atomic::AtomicU64::new(0),
+            offline_mode: false,
+            turn_error_posted: false,
+            // Surface parse warnings so the user knows their config file is
+            // broken instead of silently losing all settings.
+            status_message: settings_parse_warning
+                .or(tui_prefs_warning)
+                .or(theme_warning),
+            status_toasts: VecDeque::new(),
+            sticky_status: None,
+            last_status_message_seen: None,
+            model,
+            provider_models,
+            enabled_provider_models,
+            auto_model,
+            last_effective_model: None,
+            last_effective_provider: None,
+            last_effective_provider_identity: None,
+            last_auto_route_receipt: None,
+            pending_turn_route: None,
+            pending_auto_route_receipt: None,
+            active_turn: None,
+            api_provider: provider,
+            provider_identity,
+            provider_exact_id,
+            provider_chain,
+            provider_readiness,
+            provider_health: crate::provider_readiness::ProviderReadinessSnapshot::default(),
+            last_fallback_reason: None,
+            model_ids_passthrough,
+            active_route_limits,
+            active_route_base_url,
+            active_context_window_source,
+            active_context_window_override,
+            pending_provider_switch: None,
+            reasoning_effort,
+            reasoning_effort_explicit,
+            last_effective_reasoning_effort: None,
+            workspace,
+            plugin_registry,
+            config_path,
+            config_profile,
+            legacy_plugin_tools_dir: config
+                .tools
+                .as_ref()
+                .and_then(|tools| tools.plugin_dir.as_deref())
+                .map(PathBuf::from),
+            mcp_config_path: mcp_config_path.clone(),
+            skills_dir,
+            skills_scan_codewhale_only,
+            memory_path,
+            use_memory,
+            moraine_fallback: config.moraine_fallback(),
+            use_alt_screen,
+            use_mouse_capture,
+            use_bracketed_paste,
+            use_paste_burst_detection,
+            bracketed_paste_seen: false,
+            system_prompt: None,
+            auto_compact,
+            auto_compact_user_configured,
+            auto_compact_threshold_percent,
+            calm_mode,
+            low_motion,
+            constrained_frame_rate,
+            ocean_started_at: Instant::now(),
+            ocean_completion_started_at: None,
+            ocean_turn_history_start: 0,
+            ocean_receipt_settle_start: None,
+            fancy_animations,
+            ocean_treatment,
+            launch,
+            pending_launch_action: None,
+            pending_hotbar_slot: None,
+            synchronized_output_enabled,
+            status_indicator,
+            show_thinking,
+            verbose_transcript: false,
+            show_tool_details,
+            inline_diff_mode,
+            ui_locale,
+            cost_currency,
+            billing_presentation: crate::route_billing::for_route(config, provider),
+            composer_density,
+            composer_border,
+            voice_enabled: false,
+            voice_send_enabled: false,
+            voice_control_enabled: false,
+            transcript_spacing,
+            sidebar_width_percent,
+            sidebar_focus,
+            sidebar_hover: SidebarHoverState::default(),
+            sidebar_hover_tooltip: None,
+            cached_work_summary: None,
+            model_picker_memory: None,
+            provider_picker_memory: None,
+            last_mouse_pos: None,
+            sidebar_resizing: false,
+            sidebar_resize_hovered: false,
+            sidebar_resize_anchor_x: 0,
+            sidebar_resize_anchor_width: 0,
+            last_sidebar_area: None,
+            last_sidebar_host_width: None,
+            last_sidebar_handle_area: None,
+            sidebar_resize_total_width: 0,
+            sidebar_width_dirty: false,
+            sidebar_focus_dirty: false,
+            context_panel: settings.context_panel,
+            tool_collapse_threshold: 3,
+            expanded_tool_runs: HashSet::new(),
+            tool_collapse_mode: ToolCollapseMode::from_setting(&settings.tool_collapse_mode),
+            file_tree: None,
+            file_tree_visible: false,
+            compact_threshold,
+            max_input_history,
+            allow_shell,
+            verbosity: config.verbosity.clone(),
+            max_subagents,
+            stream_chunk_timeout_secs: config.stream_chunk_timeout_secs(),
+            subagent_cache: Vec::new(),
+            subagent_terminal_seen_at: HashMap::new(),
+            agent_progress: HashMap::new(),
+            expanded_sidebar_agents: HashSet::new(),
+            agent_progress_meta: HashMap::new(),
+            subagent_card_index: HashMap::new(),
+            last_fanout_card_index: None,
+            pending_subagent_dispatch: None,
+            agent_activity_started_at: None,
+            agent_counter: 0,
+            agent_label_map: HashMap::new(),
+            last_agent_progress_redraw: None,
+            last_workflow_budget_redraw: None,
+            ui_theme,
+            background_color_override,
+            theme_id,
+            onboarding,
+            onboarding_needs_api_key: needs_api_key,
+            onboarding_provider: provider,
+            onboarding_workspace_trust_gate,
+            onboarding_missing_key_recovery,
+            onboarding_had_api_key_step: !was_onboarded && needs_api_key,
+            onboarding_had_trust_step: !was_onboarded && needs_workspace_trust,
+            api_key_env_only,
+            api_key_input: String::new(),
+            api_key_cursor: 0,
+            hooks,
+            yolo: yolo_compat,
+            yolo_compat_notified: false,
+            keybinding_migration_notified: false,
+            mode_prefs,
+            approval_policy_locked,
+            approval_policy_root_editable,
+            approval_policy_requirements_managed,
+            clipboard: ClipboardHandler::new(),
+            approval_session_approved: HashSet::new(),
+            approval_session_denied: HashSet::new(),
+            approval_mode: if yolo_compat || matches!(initial_mode, AppMode::Yolo) {
+                ApprovalMode::Bypass
+            } else {
+                configured_approval_mode
+            },
+            view_stack: ViewStack::new(),
+            pending_user_input_prompt: None,
+            backtrack: crate::tui::backtrack::BacktrackState::new(),
+            current_session_id: None,
+            last_known_work_state: None,
+            current_session_metadata: None,
+            session_artifacts: Vec::new(),
+            trust_mode: yolo_compat || initial_mode == AppMode::Yolo || configured_trust_mode,
+            translation_enabled: false,
+            status_items: config
+                .tui
+                .as_ref()
+                .and_then(|tui| tui.status_items.clone())
+                .unwrap_or_else(crate::config::StatusItem::default_footer),
+            project_doc: None,
+            plan_state,
+            todos,
+            runtime_services: RuntimeToolServices {
+                shell_manager: Some(shell_manager),
+                work: Some(work_runtime),
+                ..RuntimeToolServices::default()
+            },
+            coordination_detail: None,
+            mcp_snapshot: None,
+            // Read the MCP config once at boot to know how many servers
+            // the user has declared. The footer chip uses this even when
+            // no live snapshot is available (#502). Cheap (just reads
+            // the JSON files); errors fall through to zero so a missing
+            // or malformed config simply hides the chip.
+            mcp_configured_count,
+            mcp_reload_required: false,
+            tool_log: Vec::new(),
+            active_skill: None,
+            active_skill_provenance: None,
+            cached_skills,
+            tool_cells: HashMap::new(),
+            tool_details_by_cell: HashMap::new(),
+            context_references_by_cell: HashMap::new(),
+            session_context_references: Vec::new(),
+            active_cell: None,
+            active_cell_revision: 0,
+            active_tool_details: HashMap::new(),
+            active_tool_entry_completed_at: HashMap::new(),
+            exploring_cell: None,
+            exploring_entries: HashMap::new(),
+            ignored_tool_calls: HashSet::new(),
+            last_exec_wait_command: None,
+            streaming_message_index: None,
+            suppress_stream_events_until_turn_complete: false,
+            streaming_thinking_active_entry: None,
+            thinking_revision_last_bump_at: None,
+            streaming_state: StreamingState::new(),
+            streaming_output_token_estimate: 0,
+            reasoning_buffer: String::new(),
+            reasoning_header: None,
+            last_reasoning: None,
+            pending_tool_uses: Vec::new(),
+            queued_messages: VecDeque::new(),
+            queued_draft: None,
+            pending_steers: VecDeque::new(),
+            rejected_steers: VecDeque::new(),
+            submit_pending_steers_after_interrupt: false,
+            turn_started_at: None,
+            turn_last_activity_at: None,
+            cumulative_turn_duration: std::time::Duration::ZERO,
+            balance_cell: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            draft_gen: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            fleet_draft_cell: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            constitution_draft_cell: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            prompt_suggestion_cell: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            balance_initiated: false,
+            last_balance_fetch: None,
+            runtime_turn_id: None,
+            runtime_turn_status: None,
+            turn_counter: 0,
+            dispatch_started_at: None,
+            workspace_context: None,
+            workspace_context_cell: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            workspace_context_refreshed_at: None,
+            task_panel: Vec::new(),
+            behavioral_tips: crate::tui::behavioral_tips::BehavioralTipState::default(),
+            decision_card: None,
+            workflow_panel: None,
+            session_started_at: chrono::Utc::now(),
+            needs_redraw: true,
+            force_next_full_repaint: false,
+            thinking_started_at: None,
+            is_compacting: false,
+            is_purging: false,
+            user_scrolled_during_stream: false,
+            last_send_at: None,
+            last_submitted_prompt: None,
+            auto_submit_initial_input,
+            quit_armed_until: None,
+            prefix_change_count: 0,
+            prefix_checks_total: 0,
+            prefix_stability_pct: None,
+            last_prefix_change_desc: None,
+            last_pinned_prefix_hash: None,
+            collapsed_cells: HashSet::new(),
+            folded_thinking: HashSet::new(),
+            collapsed_cell_map: Vec::new(),
+            edit_in_progress: false,
+            lsp_enabled: config.lsp.as_ref().and_then(|l| l.enabled).unwrap_or(true),
+            lsp_repair: LspRepairState::default(),
+            composer_arrows_scroll: config
+                .tui
+                .as_ref()
+                .and_then(|tui| tui.composer_arrows_scroll)
+                .unwrap_or_else(|| default_composer_arrows_scroll(use_mouse_capture)),
+            mention_menu_limit: settings.mention_menu_limit,
+            mention_walk_depth: settings.mention_walk_depth,
+            mention_menu_behavior: settings.mention_menu_behavior.clone(),
+            workspace_follow_symlinks: settings.workspace_follow_symlinks,
+            session_title: None,
+            receipt_text: None,
+            receipt_started_at: None,
+            tool_evidence: Vec::new(),
+        };
+        if yolo_compat {
+            app.notify_yolo_compat_once();
+        }
+        app
+    }
+}

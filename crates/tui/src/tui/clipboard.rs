@@ -566,7 +566,7 @@ fn osc52_sequence(text: &str) -> Result<String> {
 /// matches the location described in user-facing docs; falls back to
 /// `<workspace>/clipboard-images/` if the home dir is unavailable.
 pub(crate) fn clipboard_images_dir(workspace: &Path) -> PathBuf {
-    let home = dirs::home_dir();
+    let home = crate::config::effective_home_dir();
     clipboard_images_dir_for_home(workspace, home.as_deref())
 }
 

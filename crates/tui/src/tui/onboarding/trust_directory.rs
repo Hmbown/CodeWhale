@@ -61,6 +61,17 @@ pub fn lines(app: &App) -> Vec<Line<'static>> {
             Style::default().fg(palette::TEXT_MUTED),
         ),
         Span::styled(
+            "3/U",
+            Style::default()
+                .fg(palette::TEXT_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            app.tr(MessageId::OnboardTrustFooterUntrustedMiddle)
+                .to_string(),
+            Style::default().fg(palette::TEXT_MUTED),
+        ),
+        Span::styled(
             "2/N/Esc",
             Style::default()
                 .fg(palette::TEXT_PRIMARY)
@@ -85,24 +96,7 @@ mod tests {
     fn prompt_names_the_workspace_boundary_and_effects() {
         let options = TuiOptions {
             model: "test-model".to_string(),
-            workspace: PathBuf::from("workspace-fixture"),
-            config_path: None,
-            config_profile: None,
-            allow_shell: false,
-            use_alt_screen: true,
-            use_mouse_capture: false,
-            use_bracketed_paste: true,
-            max_subagents: 1,
-            skills_dir: PathBuf::from("."),
-            memory_path: PathBuf::from("memory.md"),
-            notes_path: PathBuf::from("notes.txt"),
-            mcp_config_path: PathBuf::from("mcp.json"),
-            use_memory: false,
-            start_in_agent_mode: false,
-            skip_onboarding: true,
-            yolo: false,
-            resume_session_id: None,
-            initial_input: None,
+            ..crate::test_support::test_tui_options(PathBuf::from("workspace-fixture"))
         };
         let mut app = App::new(options, &Config::default());
         app.ui_locale = crate::localization::Locale::En;
@@ -117,6 +111,9 @@ mod tests {
         assert!(body.contains("prompt injection"));
         assert!(body.contains("tools and hooks"));
         assert!(body.contains("1/Y"));
+        assert!(body.contains("3/U"));
+        assert!(body.contains("continue without trusting"));
         assert!(body.contains("2/N/Esc"));
+        assert!(body.contains("quit Codewhale"));
     }
 }

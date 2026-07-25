@@ -126,12 +126,12 @@ impl FleetRosterView {
     }
 
     fn move_up(&mut self) {
-        self.selected = self.selected.saturating_sub(1);
+        self.selected = crate::tui::list_nav::wrap_index(self.selected, self.row_count(), -1);
         self.detail_scroll = 0;
     }
 
     fn move_down(&mut self) {
-        self.selected = (self.selected + 1).min(self.row_count().saturating_sub(1));
+        self.selected = crate::tui::list_nav::wrap_index(self.selected, self.row_count(), 1);
         self.detail_scroll = 0;
     }
 
@@ -659,22 +659,31 @@ mod tests {
     }
 
     #[test]
-    fn arrows_move_selection_and_clamp() {
+    fn arrows_move_selection_and_wrap() {
         let mut view = built_in_view();
+        let last = view.members.len();
         assert_eq!(view.selected, 0);
+
         view.handle_key(key(KeyCode::Up));
-        assert_eq!(view.selected, 0, "clamps at the operator row");
+        assert_eq!(
+            view.selected, last,
+            "up from the operator wraps to the last member (#4755)"
+        );
+
+        view.handle_key(key(KeyCode::Down));
+        assert_eq!(
+            view.selected, 0,
+            "down from the last member wraps to the operator"
+        );
 
         view.handle_key(key(KeyCode::Down));
         assert_eq!(view.selected, 1, "first member follows the operator");
-        for _ in 0..50 {
+
+        // A full cycle of the roster returns to where it started.
+        for _ in 0..=last {
             view.handle_key(key(KeyCode::Down));
         }
-        assert_eq!(
-            view.selected,
-            view.members.len(),
-            "clamps at the last member"
-        );
+        assert_eq!(view.selected, 1, "one full cycle is the identity");
     }
 
     #[test]

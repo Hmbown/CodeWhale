@@ -282,4 +282,41 @@ mod tests {
             format!("{label} opens full output")
         );
     }
+
+    /// #3256: every surface that advertises tool details must name the chord
+    /// that `is_tool_details_shortcut` actually handles — the help catalog,
+    /// shell binding catalog, and in-transcript hint share one source of
+    /// truth so "v opens details" cannot regress while bare `v` types `v`.
+    #[test]
+    fn tool_details_hint_tracks_keybinding_catalog_and_handler() {
+        use crate::localization::MessageId;
+        use crate::tui::keybindings::KEYBINDINGS;
+        use crate::tui::shell_key_routing::{
+            ShellBindingId, binding, is_tool_details_shortcut, tool_details_chord,
+        };
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let catalog_chords: Vec<&str> = KEYBINDINGS
+            .iter()
+            .filter(|entry| entry.description_id == MessageId::KbSelectedDetails)
+            .map(|entry| entry.chord)
+            .collect();
+        assert_eq!(catalog_chords, vec!["Alt+V"]);
+        assert_eq!(binding(ShellBindingId::ToolDetails).catalog_chord, "Alt+V");
+        assert_eq!(binding(ShellBindingId::ToolDetails).footer_chord, "Alt+V");
+
+        let label = tool_details_shortcut_label();
+        assert_eq!(label, tool_details_chord());
+        assert!(
+            label == "Alt+V" || label == "⌥V",
+            "details hint must advertise Alt+V / ⌥V, got {label}"
+        );
+        assert!(!label.eq_ignore_ascii_case("v"));
+        assert!(!tool_details_shortcut_action_hint("details").starts_with("v "));
+
+        let plain_v = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE);
+        let alt_v = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::ALT);
+        assert!(!is_tool_details_shortcut(&plain_v));
+        assert!(is_tool_details_shortcut(&alt_v));
+    }
 }

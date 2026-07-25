@@ -51,6 +51,7 @@ pub mod hover_layer;
 pub mod key_actions;
 pub mod key_shortcuts;
 pub mod keybindings;
+pub mod list_nav;
 pub mod live_transcript;
 pub mod markdown_render;
 mod mcp_routing;

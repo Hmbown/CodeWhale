@@ -1541,19 +1541,75 @@ impl StateStore {
         };
         let encoded =
             serde_json::to_string(&entry).context("failed to serialize session index entry")?;
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.session_index_path)
-            .with_context(|| {
+        // Append and compaction share one lock. Compaction rewrites the file
+        // from a snapshot and renames over it, so an append landing between
+        // that snapshot and the rename would be discarded — silently, since
+        // the append already returned success to its caller.
+        self.with_session_index_lock(|| {
+            let mut file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.session_index_path)
+                .with_context(|| {
+                    format!(
+                        "failed to open session index {}",
+                        self.session_index_path.display()
+                    )
+                })?;
+            writeln!(file, "{encoded}").context("failed to append session index entry")?;
+            // Durability: without this a crash mid-write can leave a torn
+            // final line. Reads tolerate one (see `session_index_map`), but
+            // not losing the entry beats recovering from having lost it.
+            file.sync_data()
+                .context("failed to flush session index entry")?;
+            drop(file);
+            self.compact_session_index_locked()
+        })
+    }
+
+    /// Run `operation` holding the exclusive session-index lock.
+    ///
+    /// The lock is an adjacent `.lock` file rather than the index itself, so
+    /// compaction's rename cannot pull the lock out from under a waiter. This
+    /// mirrors the discipline `codewhale-config` uses for `config.toml`.
+    fn with_session_index_lock<T>(&self, operation: impl FnOnce() -> Result<T>) -> Result<T> {
+        if let Some(parent) = self.session_index_path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
                 format!(
-                    "failed to open session index {}",
-                    self.session_index_path.display()
+                    "failed to create session index directory {}",
+                    parent.display()
                 )
             })?;
-        writeln!(file, "{encoded}").context("failed to append session index entry")?;
-        self.maybe_compact_session_index()?;
-        Ok(())
+        }
+        let lock_path = self.session_index_path.with_extension("jsonl.lock");
+        let lock_file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            // The file is only a lock handle; its contents are never read and
+            // truncating it would race other holders for no benefit.
+            .truncate(false)
+            .open(&lock_path)
+            .with_context(|| {
+                format!("failed to open session index lock {}", lock_path.display())
+            })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            lock_file
+                .set_permissions(fs::Permissions::from_mode(0o600))
+                .with_context(|| {
+                    format!(
+                        "failed to secure session index lock {}",
+                        lock_path.display()
+                    )
+                })?;
+        }
+        let mut lock = fd_lock::RwLock::new(lock_file);
+        let _guard = lock
+            .write()
+            .with_context(|| format!("failed to lock session index {}", lock_path.display()))?;
+        operation()
     }
 
     /// Find the display name for a thread by its ID, using the session index.
@@ -1600,7 +1656,11 @@ impl StateStore {
         Ok(matched.and_then(|entry| entry.rollout_path.clone()))
     }
 
-    fn maybe_compact_session_index(&self) -> Result<()> {
+    /// Compact the session index. The caller must already hold the lock from
+    /// [`Self::with_session_index_lock`]: this reads a snapshot and renames a
+    /// rewritten file over the live one, and an append interleaved between
+    /// those two steps is lost.
+    fn compact_session_index_locked(&self) -> Result<()> {
         if !self.session_index_path.exists() {
             return Ok(());
         }
@@ -1647,6 +1707,11 @@ impl StateStore {
                     .context("failed to write compact session index entry")?;
             }
         }
+        // The snapshot is written but the live file is still the old one:
+        // this is the window an unsynchronized appender would write into and
+        // lose. Tests widen it deliberately to prove the lock closes it.
+        #[cfg(test)]
+        tests::compaction_midpoint(&self.session_index_path);
         fs::rename(&compact_path, &self.session_index_path).with_context(|| {
             format!(
                 "failed to replace session index {}",
@@ -1701,9 +1766,23 @@ impl StateStore {
             if line.trim().is_empty() {
                 continue;
             }
-            let parsed: SessionIndexEntry =
-                serde_json::from_str(&line).context("failed to parse session index entry")?;
-            latest.insert(parsed.thread_id.clone(), parsed);
+            // Skip a line we can't parse instead of failing the whole read.
+            // An append that was interrupted mid-write leaves a torn final
+            // line; aborting here broke every thread-name lookup, and because
+            // compaction reads through this same function, the index could
+            // never repair itself either — the file stayed broken until
+            // someone deleted it by hand.
+            match serde_json::from_str::<SessionIndexEntry>(&line) {
+                Ok(parsed) => {
+                    latest.insert(parsed.thread_id.clone(), parsed);
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        "skipping unparseable session index entry in {}: {err}",
+                        self.session_index_path.display()
+                    );
+                }
+            }
         }
         Ok(latest)
     }
@@ -1904,7 +1983,9 @@ fn row_to_thread_goal(row: &rusqlite::Row<'_>) -> rusqlite::Result<ThreadGoalRec
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::{Arc, Barrier, Mutex};
+    use std::thread;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     fn temp_state_store(name: &str) -> StateStore {
         let suffix = SystemTime::now()
@@ -2436,5 +2517,142 @@ mod tests {
             .find_thread_name_by_id("thread-1")
             .expect("lookup thread name");
         assert_eq!(name.as_deref(), Some("name-5"));
+    }
+
+    #[test]
+    fn session_index_read_skips_a_torn_line() {
+        // #4735: a crash mid-append leaves a truncated final line. Failing the
+        // whole read broke every thread-name lookup at once, and compaction
+        // reads through the same path, so the index could not repair itself.
+        let store = temp_state_store("session-index-torn");
+        store
+            .append_thread_name("thread-1", Some("first".to_string()), 1, None)
+            .expect("append first entry");
+
+        {
+            let mut file = OpenOptions::new()
+                .append(true)
+                .open(&store.session_index_path)
+                .expect("open session index");
+            // A write cut off mid-JSON, exactly as a crash would leave it.
+            writeln!(file, "{{\"thread_id\":\"thread-2\",\"thread_na").expect("write torn line");
+        }
+
+        store
+            .append_thread_name("thread-3", Some("third".to_string()), 3, None)
+            .expect("append third entry");
+
+        assert_eq!(
+            store
+                .find_thread_name_by_id("thread-1")
+                .expect("lookup thread-1")
+                .as_deref(),
+            Some("first"),
+        );
+        assert_eq!(
+            store
+                .find_thread_name_by_id("thread-3")
+                .expect("lookup thread-3")
+                .as_deref(),
+            Some("third"),
+        );
+    }
+
+    /// Hook fired by compaction between writing the snapshot and renaming it
+    /// over the live index — the window a concurrent append can be lost in.
+    /// Only the store whose path a test registered is affected, so tests
+    /// running in parallel don't disturb each other.
+    type MidpointHook = Box<dyn Fn() + Send + Sync>;
+    static COMPACTION_MIDPOINT: Mutex<Option<(PathBuf, MidpointHook)>> = Mutex::new(None);
+
+    /// Fires at most once: the racing append compacts too, and a hook that
+    /// fired twice would re-enter the test's one-shot handshake.
+    pub(super) fn compaction_midpoint(index_path: &Path) {
+        let mut hook = COMPACTION_MIDPOINT.lock().expect("midpoint hook lock");
+        let registered_for_this_store = match hook.as_ref() {
+            Some((registered, _)) => registered == index_path,
+            None => return,
+        };
+        if !registered_for_this_store {
+            return;
+        }
+        let (_, callback) = hook.take().expect("presence checked above");
+        drop(hook);
+        callback();
+    }
+
+    #[test]
+    fn session_index_compaction_does_not_drop_a_concurrent_append() {
+        // #4736: compaction snapshots the file, rewrites it, and renames over
+        // the live one. An append landing between those two steps used to
+        // vanish — silently, since it had already returned success to its
+        // caller. The shared lock serializes the two.
+        //
+        // The race is real but narrow, so the test drives it deterministically:
+        // a hook at the compaction midpoint releases the appender and then
+        // waits. Without the lock the appender writes into the doomed file and
+        // the rename discards it; with the lock it blocks until compaction
+        // finishes, and its entry survives.
+        let store = Arc::new(temp_state_store("session-index-race"));
+        let threshold = session_index_compact_line_threshold();
+
+        // One line short of the threshold, so the next append compacts.
+        for idx in 0..threshold {
+            store
+                .append_thread_name(
+                    &format!("thread-{idx}"),
+                    Some(format!("name-{idx}")),
+                    1,
+                    None,
+                )
+                .expect("append filler entry");
+        }
+
+        let appender_released = Arc::new(Barrier::new(2));
+        {
+            let released = Arc::clone(&appender_released);
+            *COMPACTION_MIDPOINT.lock().expect("midpoint hook lock") = Some((
+                store.session_index_path.clone(),
+                Box::new(move || {
+                    released.wait();
+                    // Give the appender time to complete its write into the
+                    // window. Under the fix it is blocked on the lock instead.
+                    thread::sleep(Duration::from_millis(300));
+                }),
+            ));
+        }
+
+        let appender = {
+            let store = Arc::clone(&store);
+            let released = Arc::clone(&appender_released);
+            thread::spawn(move || {
+                released.wait();
+                store
+                    .append_thread_name("racer", Some("racer-name".to_string()), 2, None)
+                    .expect("append racing entry");
+            })
+        };
+
+        store
+            .append_thread_name("trigger", Some("trigger-name".to_string()), 1, None)
+            .expect("append entry that triggers compaction");
+        appender.join().expect("appender thread");
+        *COMPACTION_MIDPOINT.lock().expect("midpoint hook lock") = None;
+
+        assert_eq!(
+            store
+                .find_thread_name_by_id("racer")
+                .expect("lookup racer")
+                .as_deref(),
+            Some("racer-name"),
+            "append was dropped by a concurrent compaction",
+        );
+        assert_eq!(
+            store
+                .find_thread_name_by_id("trigger")
+                .expect("lookup trigger")
+                .as_deref(),
+            Some("trigger-name"),
+        );
     }
 }

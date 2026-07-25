@@ -2970,6 +2970,76 @@ base_url = "https://opencode.example/v1"
         load_project_config(workspace.path()).is_none(),
         "project overlays must not gain named-provider authority"
     );
+    // ...and the reason is available, not just the absence.
+    let (path, reason) = load_project_config_outcome(workspace.path())
+        .invalid()
+        .map(|(path, reason)| (path.to_path_buf(), reason.to_string()))
+        .expect("unknown provider must report why the config was rejected");
+    assert!(path.ends_with(CONFIG_FILE_NAME), "{path:?}");
+    assert!(reason.contains("opencode_zen"), "{reason}");
+}
+
+#[test]
+fn malformed_project_config_is_distinguishable_from_a_missing_one() {
+    // #4733: the loader returned `None` for both cases. A project config can
+    // only *tighten* approval/sandbox posture, so reporting a broken file as
+    // "no project config" silently drops those restrictions and falls back to
+    // the user's more permissive baseline.
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    assert!(
+        matches!(
+            load_project_config_outcome(workspace.path()),
+            ProjectConfigOutcome::Missing
+        ),
+        "a workspace with no project config must report Missing"
+    );
+
+    let config_dir = workspace.path().join(CODEWHALE_APP_DIR);
+    fs::create_dir_all(&config_dir).expect("mkdir project config");
+    fs::write(
+        config_dir.join(CONFIG_FILE_NAME),
+        "approval_policy = \"unless-trusted\"\nthis is not valid toml\n",
+    )
+    .expect("write malformed project config");
+
+    let outcome = load_project_config_outcome(workspace.path());
+    let (path, reason) = outcome
+        .invalid()
+        .expect("a malformed project config must not read as Missing");
+    assert!(path.ends_with(CONFIG_FILE_NAME), "{path:?}");
+    assert!(!reason.is_empty(), "the rejection must carry a reason");
+    // The reason must not leak the file's contents — config files hold
+    // credentials.
+    assert!(
+        !reason.contains("approval_policy"),
+        "reason must not echo file contents: {reason}"
+    );
+
+    // The lossy convenience wrapper still behaves as before for callers that
+    // only want the config.
+    assert!(load_project_config(workspace.path()).is_none());
+}
+
+#[test]
+fn well_formed_project_config_still_loads() {
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let config_dir = workspace.path().join(CODEWHALE_APP_DIR);
+    fs::create_dir_all(&config_dir).expect("mkdir project config");
+    fs::write(
+        config_dir.join(CONFIG_FILE_NAME),
+        "approval_policy = \"unless-trusted\"\n",
+    )
+    .expect("write project config");
+
+    let outcome = load_project_config_outcome(workspace.path());
+    assert!(outcome.invalid().is_none(), "{outcome:?}");
+    assert_eq!(
+        outcome
+            .into_config()
+            .and_then(|config| config.approval_policy)
+            .as_deref(),
+        Some("unless-trusted"),
+    );
 }
 
 #[cfg(unix)]

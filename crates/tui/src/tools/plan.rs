@@ -325,6 +325,7 @@ impl PlanState {
         state
     }
 
+    #[allow(dead_code)] // retained for PlanState consumers / older tests
     pub fn steps(&self) -> &[PlanStep] {
         &self.steps
     }
@@ -371,48 +372,6 @@ fn clean_list(values: Vec<String>) -> Vec<String> {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .collect()
-}
-
-/// Validation result for plan transitions
-#[derive(Debug)]
-#[allow(dead_code)]
-pub enum PlanValidation {
-    Ok,
-    Warning(String),
-    Error(String),
-}
-
-/// Validate a plan update
-#[allow(dead_code)]
-pub fn validate_plan_update(current: &PlanState, update: &UpdatePlanArgs) -> PlanValidation {
-    let current_steps: std::collections::HashMap<_, _> = current
-        .steps()
-        .iter()
-        .map(|s| (s.text.clone(), &s.status))
-        .collect();
-
-    for item in &update.plan {
-        if let Some(old_status) = current_steps.get(&item.step) {
-            // Check for invalid transitions
-            match (old_status, &item.status) {
-                (StepStatus::Completed, StepStatus::Pending) => {
-                    return PlanValidation::Warning(format!(
-                        "Step '{}' was completed but is now pending",
-                        item.step
-                    ));
-                }
-                (StepStatus::Completed, StepStatus::InProgress) => {
-                    return PlanValidation::Warning(format!(
-                        "Step '{}' was completed but is now in progress",
-                        item.step
-                    ));
-                }
-                _ => {}
-            }
-        }
-    }
-
-    PlanValidation::Ok
 }
 
 // === UpdatePlanTool - ToolSpec implementation ===

@@ -10,7 +10,7 @@ use serde::Deserialize;
 use super::{ThemeId, UiTheme, parse_hex_rgb_color};
 
 pub const USER_THEME_PREFIX: &str = "custom:";
-pub const USER_THEME_SCHEMA: &str = include_str!("../../../../docs/schemas/user-theme.schema.json");
+pub const USER_THEME_SCHEMA: &str = include_str!("../assets/user-theme.schema.json");
 const MAX_USER_THEME_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug, Deserialize)]

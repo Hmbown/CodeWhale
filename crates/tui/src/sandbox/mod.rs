@@ -961,7 +961,7 @@ mod tests {
                 assert_eq!(env.program(), bwrap::BWRAP_PATH);
             } else {
                 assert_eq!(env.sandbox_type, SandboxType::None);
-                assert!(env.env.get("DEEPSEEK_SANDBOX").is_none());
+                assert!(!env.env.contains_key("DEEPSEEK_SANDBOX"));
             }
         }
         let _ = env;

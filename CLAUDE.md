@@ -3,6 +3,27 @@
 Read `AGENTS.md` first. This file exists as a compatibility instruction source
 for Claude-based agents working in this repository.
 
+## Intent is the artifact
+
+See `AGENTS.md` → "Intent is the artifact" for the full statement. The short
+version, because it governs almost every judgment call you will make here:
+
+- Generating code against current `main` is now **cheaper and faster** than
+  recovering, rebasing, or reconciling old code. Default to that.
+- **Rewriting any part of this project is always in scope**, including the whole
+  project. Nothing is load-bearing merely because it exists.
+- **Use git; do not be governed by it.** A far-behind branch is a note about
+  something we once wanted — not a debt. High conflict count is a signal to
+  rewrite, not a task list.
+- Stranded work becomes an **issue describing the intent**, plus a deleted
+  branch — not a heroic merge.
+- The non-negotiable check: **confirm main doesn't already do it.** Grep the
+  symbols and behavior, not the commit history. Re-landing landed work is the
+  failure mode this ethos creates.
+- Limits: `main` stays protected, published history and shipped tags stay
+  immutable, contributor credit carries onto the rewrite, and the
+  do-not-delete guardrail in `AGENTS.md` still binds.
+
 ## Stewardship Defaults
 
 - Treat community PRs and issues as maintainer evidence. Inspect code, tests,
@@ -20,6 +41,9 @@ for Claude-based agents working in this repository.
   (Claude, codex, cursor), so use a plain commit body to note agent assistance.
 
 ## Scratch Integration Branches
+
+Applies to **live** queue work. Once a branch has drifted far enough that the
+merge is an excavation, stop and apply "Intent is the artifact" instead.
 
 - For release queues, create disposable local branches from the real landing
   branch, for example `scratch/vX.Y.Z-pr-train-YYYYMMDD`.

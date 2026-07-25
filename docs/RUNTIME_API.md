@@ -80,6 +80,28 @@ printf '%s\n' \
 set is pinned by a drift test in `crates/app-server/src/lib.rs`, so SDK and
 local integration clients can rely on it not changing silently.
 
+### Interrupting a turn
+
+`thread/message` streams until the turn reaches a terminal state, which can
+take minutes. The read loop keeps polling stdin while a turn streams, so a
+client can send:
+
+```json
+{"jsonrpc":"2.0","id":9,"method":"thread/interrupt","params":{"thread_id":"thr_..."}}
+```
+
+and the runtime is asked to interrupt that turn
+(`POST /v1/threads/{id}/turns/{turn_id}/interrupt`). The reply carries
+`interrupted: false` when no turn is streaming for that thread — this is not
+an error, just nothing to stop. The interrupted `thread/message` then fails
+with a `turn interrupted` error, and its reply is written before the
+interrupt's own reply, since the turn owns the writer until it unwinds.
+
+`shutdown` sent during a live turn also interrupts first: it needs the same
+bridge that the turn holds, so without that it would wait for the very turn
+it was meant to stop. Other requests that arrive mid-turn are queued and run
+in order once the turn finishes.
+
 ## SDK contract
 
 The app-server exists so an external SDK can answer — without scraping TUI

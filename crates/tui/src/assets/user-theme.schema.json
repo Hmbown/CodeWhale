@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codewhale.ai/schemas/user-theme.schema.json",
+  "title": "Codewhale user theme overlay",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "base", "colors"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "base": {
+      "enum": ["system", "terminal", "dark", "light", "grayscale", "catppuccin-mocha", "tokyo-night", "dracula", "gruvbox-dark", "claude", "matrix", "solarized-light", "uwu"]
+    },
+    "colors": {
+      "type": "object",
+      "propertyNames": {
+        "enum": ["surface_bg", "panel_bg", "elevated_bg", "composer_bg", "selection_bg", "header_bg", "footer_bg", "text_dim", "text_hint", "text_muted", "text_body", "text_soft", "border", "accent_primary", "accent_secondary", "accent_action", "error_fg", "error_hover", "error_surface", "error_border", "error_text", "warning", "success", "info", "mode_agent", "mode_yolo", "mode_plan", "mode_operate", "permission_ask", "permission_auto_review", "permission_full_access", "status_ready", "status_working", "status_warning", "diff_added_fg", "diff_deleted_fg", "diff_added_bg", "diff_deleted_bg", "tool_running", "tool_success", "tool_failed"]
+      },
+      "additionalProperties": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" }
+    }
+  }
+}

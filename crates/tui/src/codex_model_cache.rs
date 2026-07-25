@@ -116,7 +116,7 @@ pub(crate) fn codex_home_path() -> PathBuf {
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            dirs::home_dir()
+            crate::config::effective_home_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join(".codex")
         })

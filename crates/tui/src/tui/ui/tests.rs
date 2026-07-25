@@ -2703,53 +2703,13 @@ fn tool_path_relevance_extracts_paths_from_command_text() {
 }
 
 fn create_test_app() -> App {
-    let options = TuiOptions {
-        model: "deepseek-v4-pro".to_string(),
-        workspace: PathBuf::from("."),
-        config_path: None,
-        config_profile: None,
-        allow_shell: false,
-        use_alt_screen: true,
-        use_mouse_capture: false,
-        use_bracketed_paste: true,
-        max_subagents: 1,
-        skills_dir: PathBuf::from("."),
-        memory_path: PathBuf::from("memory.md"),
-        notes_path: PathBuf::from("notes.txt"),
-        mcp_config_path: PathBuf::from("mcp.json"),
-        use_memory: false,
+    crate::test_support::test_app_with_options(TuiOptions {
         // Keep UI tests independent from the developer's saved
         // `default_mode` setting.
         start_in_agent_mode: true,
         skip_onboarding: false,
-        yolo: false,
-        resume_session_id: None,
-        initial_input: None,
-    };
-    let mut app = App::new(options, &Config::default());
-    // Pin locale and currency for deterministic tests regardless of host locale.
-    app.cost_currency = crate::pricing::CostCurrency::Usd;
-    app.ui_locale = crate::localization::Locale::En;
-    // Keep transcript tests independent of a concurrently swapped persisted
-    // settings home. Tests for hidden reasoning opt out explicitly.
-    app.show_thinking = true;
-    // Pin the route identity too: App::new consults the developer's real
-    // saved settings (provider/model maps, auto-model, route limits), so on
-    // a machine with customized settings the context-window tests computed
-    // against a different model than the requested deepseek-v4-pro.
-    app.set_provider_identity(crate::config::ApiProvider::Deepseek, "deepseek");
-    app.billing_presentation = crate::route_billing::BillingPresentation::Metered;
-    app.model = "deepseek-v4-pro".to_string();
-    app.auto_model = false;
-    app.last_effective_model = None;
-    app.active_route_limits = None;
-    app.active_context_window_override = None;
-    // UI fixtures replace `app.workspace` freely. Do not retain App::new's
-    // real process cwd as a second discovery root: parallel tests and a large
-    // developer checkout can otherwise consume the bounded mention index
-    // before the fixture workspace is scanned.
-    app.composer.mention_cwd = None;
-    app
+        ..crate::test_support::test_tui_options(PathBuf::from("."))
+    })
 }
 
 #[test]
@@ -3505,27 +3465,11 @@ fn auto_review_suppresses_stale_question_prompts_while_other_postures_allow_them
 
 fn create_test_options() -> TuiOptions {
     TuiOptions {
-        model: "deepseek-v4-pro".to_string(),
-        workspace: PathBuf::from("."),
-        config_path: None,
-        config_profile: None,
-        allow_shell: false,
-        use_alt_screen: true,
-        use_mouse_capture: false,
-        use_bracketed_paste: true,
-        max_subagents: 1,
-        skills_dir: PathBuf::from("."),
-        memory_path: PathBuf::from("memory.md"),
-        notes_path: PathBuf::from("notes.txt"),
-        mcp_config_path: PathBuf::from("mcp.json"),
-        use_memory: false,
         // Keep UI tests independent from the developer's saved
         // `default_mode` setting.
         start_in_agent_mode: true,
         skip_onboarding: false,
-        yolo: false,
-        resume_session_id: None,
-        initial_input: None,
+        ..crate::test_support::test_tui_options(PathBuf::from("."))
     }
 }
 
@@ -10757,14 +10701,14 @@ async fn streaming_enter_queue_pushes_visible_toast() {
 }
 
 #[tokio::test]
-async fn empty_composer_double_enter_steers_just_queued_message() {
-    // Live path regression: first Enter queues+clears; second bare Enter must
-    // still steer the just-queued body (not require retyping).
+async fn empty_composer_second_enter_leaves_queued_message() {
+    // Bare Enter while streaming only queues. A second bare Enter must not
+    // steal the just-queued body for steer — use Shift+Enter / Ctrl+Enter.
     let mut app = create_test_app();
     app.is_loading = true;
     app.streaming_message_index = Some(0);
     let config = Config::default();
-    let mut engine = crate::core::engine::mock_engine_handle();
+    let engine = crate::core::engine::mock_engine_handle();
     let queued = build_queued_message(&mut app, "coordinate parallel tasks".to_string());
 
     submit_or_steer_message(&mut app, &config, &engine.handle, queued)
@@ -10772,16 +10716,16 @@ async fn empty_composer_double_enter_steers_just_queued_message() {
         .expect("first enter queues while streaming");
     assert_eq!(app.queued_message_count(), 1);
     assert!(app.input.is_empty());
-    assert!(app.last_enter_instant.is_some());
 
-    let escalated = app
-        .take_queued_for_double_tap_steer()
-        .expect("second enter takes queued body");
-    attempt_steer_with_queue_fallback(&mut app, &engine.handle, escalated).await;
-
-    assert_eq!(app.queued_message_count(), 0);
+    // Second bare Enter with empty composer is a no-op for queue contents.
+    assert!(app.input.trim().is_empty());
     assert_eq!(
-        engine.rx_steer.recv().await.as_deref(),
+        app.decide_submit_disposition(),
+        crate::tui::app::SubmitDisposition::Queue
+    );
+    assert_eq!(app.queued_message_count(), 1);
+    assert_eq!(
+        app.queued_messages.front().map(|m| m.display.as_str()),
         Some("coordinate parallel tasks")
     );
 }
@@ -11012,6 +10956,33 @@ fn trust_directory_completion_advances_to_mental_models() {
     assert!(app.trust_mode);
     assert_eq!(app.onboarding, OnboardingState::MentalModels);
     assert!(app.runtime_services.hook_executor.is_some());
+}
+
+#[test]
+fn trust_directory_continue_untrusted_advances_without_recording_trust() {
+    let _guard = ConfigPathEnvGuard::new();
+    let tmpdir = TempDir::new().expect("workspace tempdir");
+    let mut app = create_test_app();
+    app.workspace = tmpdir.path().to_path_buf();
+    app.onboarding = OnboardingState::TrustDirectory;
+    app.onboarding_workspace_trust_gate = false;
+    app.onboarding_missing_key_recovery = false;
+    app.onboarding_had_trust_step = true;
+    app.trust_mode = false;
+
+    continue_without_trusting_directory(&mut app);
+
+    assert!(!app.trust_mode);
+    assert_eq!(app.onboarding, OnboardingState::MentalModels);
+    assert!(
+        crate::tui::onboarding::needs_trust(&app.workspace),
+        "declining trust must not write a trusted marker"
+    );
+    let notice = app.status_message.expect("restricted-mode notice");
+    assert!(
+        notice.contains("without workspace trust") || notice.contains("restricted"),
+        "unexpected notice: {notice}"
+    );
 }
 
 #[test]
@@ -13510,24 +13481,9 @@ fn app_new_restores_saved_model_and_reasoning_effort() {
 
     let options = TuiOptions {
         model: "auto".to_string(),
-        workspace: PathBuf::from("."),
-        config_path: None,
-        config_profile: None,
-        allow_shell: false,
-        use_alt_screen: true,
-        use_mouse_capture: false,
-        use_bracketed_paste: true,
-        max_subagents: 1,
-        skills_dir: PathBuf::from("."),
-        memory_path: PathBuf::from("memory.md"),
-        notes_path: PathBuf::from("notes.txt"),
-        mcp_config_path: PathBuf::from("mcp.json"),
-        use_memory: false,
         start_in_agent_mode: true,
         skip_onboarding: false,
-        yolo: false,
-        resume_session_id: None,
-        initial_input: None,
+        ..crate::test_support::test_tui_options(PathBuf::from("."))
     };
     let config = Config {
         reasoning_effort: Some("max".to_string()),

@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use anyhow::Result;
 use bash_arity::BashArityDict;
-use codewhale_protocol::{NetworkPolicyAmendment, NetworkPolicyRuleAction};
+use codewhale_protocol::NetworkPolicyAmendment;
 use serde::{Deserialize, Serialize};
 
 /// Priority layer for a permission ruleset. Higher ordinal = higher priority.
@@ -388,22 +388,18 @@ impl ExecPolicyEngine {
     /// The evaluation order is: deny rules first (always win), then trusted prefix
     /// matching (arity-aware), then typed ask rules, and finally the approval mode.
     pub fn check(&self, ctx: ExecPolicyContext<'_>) -> Result<ExecPolicyDecision> {
-        let normalized = normalize_command(ctx.command);
         let (trusted_prefixes, denied_prefixes) = self.resolve_prefixes();
-        // Deny rules use word-boundary prefix matching: the command must either
-        // equal the rule or start with the rule followed by a space, so "rm"
-        // blocks "rm -rf /" but NOT "rmdir" or "rmview".
+        // Deny rules match positional tokens at a word boundary: the command
+        // must equal the rule or continue past it, so "rm" blocks "rm -rf /"
+        // but NOT "rmdir" or "rmview". See `denied_prefix_matches`.
         let segments = command_segments(ctx.command);
         if let Some(rule) = denied_prefixes.iter().find(|rule| {
-            let norm_rule = normalize_command(rule);
-            // Match the whole command OR any chained segment (word-boundary).
-            std::iter::once(normalized.clone())
-                .chain(segments.iter().map(|seg| normalize_command(seg)))
-                .any(|hay| {
-                    hay == norm_rule
-                        || (hay.starts_with(&norm_rule)
-                            && hay.as_bytes().get(norm_rule.len()) == Some(&b' '))
-                })
+            // Match the whole command OR any chained segment. Matching is
+            // flag-aware: a global flag inserted before the subcommand
+            // (`git -c foo=bar push`) must not defeat a `git push` rule.
+            std::iter::once(ctx.command.to_string())
+                .chain(segments.iter().cloned())
+                .any(|hay| denied_prefix_matches(rule, &hay))
         }) {
             return Ok(ExecPolicyDecision {
                 allow: false,
@@ -567,10 +563,14 @@ impl ExecPolicyEngine {
                             prefixes: vec![first_token(ctx.command)],
                         })
                     },
-                    proposed_network_policy_amendments: vec![NetworkPolicyAmendment {
-                        host: ctx.cwd.to_string(),
-                        action: NetworkPolicyRuleAction::Allow,
-                    }],
+                    // Approving a command must never create a network
+                    // allow-entry. The original PR proposed `ctx.cwd` as a
+                    // host here — a filesystem path, not a hostname — which
+                    // both offers the user a nonsensical choice and pollutes
+                    // the network allowlist if accepted. The typed ask-rule
+                    // branch above was already fixed; this is the same fix for
+                    // the default (unmatched-command) branch.
+                    proposed_network_policy_amendments: Vec::new(),
                 },
             }
         };
@@ -615,6 +615,88 @@ fn command_is_chained(command: &str) -> bool {
     command_segments(command).len() > 1
 }
 
+/// True when the denied prefix `rule` matches the command segment `command`.
+///
+/// Deny rules are the one gate that holds under `AskForApproval::Never`, so a
+/// plain string-prefix test is too weak: a global flag inserted between the
+/// base command and its subcommand hides the rule text entirely, and
+/// `git -c foo=bar push` slips past a `git push` rule. Matching therefore runs
+/// over *positional* tokens, skipping flags and leading `NAME=value`
+/// environment assignments.
+///
+/// A flag token without an inline `=` may or may not consume the token after
+/// it as its value (`git -c foo=bar push` vs. `git --no-verify push`), and
+/// nothing here knows each command's flag grammar. Both readings are tried and
+/// a match under either one denies: for a deny rule, over-matching is the safe
+/// direction. Matching stays anchored at the first positional token, so a
+/// non-flag token that isn't in the rule ends it — `git push` does not block
+/// `git checkout push`, and `rm` does not block `rmdir`.
+fn denied_prefix_matches(rule: &str, command: &str) -> bool {
+    let rule_tokens: Vec<String> = normalize_command(rule)
+        .split_whitespace()
+        .map(ToOwned::to_owned)
+        .collect();
+    if rule_tokens.is_empty() {
+        return false;
+    }
+    let command_tokens: Vec<String> = normalize_command(command)
+        .split_whitespace()
+        .map(ToOwned::to_owned)
+        .collect();
+
+    // `FOO=bar git push` is still a `git push`. Skip leading environment
+    // assignments before anchoring on the base command.
+    let start = command_tokens
+        .iter()
+        .position(|token| !is_env_assignment(token))
+        .unwrap_or(command_tokens.len());
+
+    // Explore (command index, rule index) pairs; `seen` keeps the flag-value
+    // ambiguity from branching exponentially over a long flag run.
+    let mut seen = HashSet::new();
+    let mut stack = vec![(start, 0usize)];
+    while let Some((i, j)) = stack.pop() {
+        if j == rule_tokens.len() {
+            return true;
+        }
+        if i >= command_tokens.len() || !seen.insert((i, j)) {
+            continue;
+        }
+        let token = &command_tokens[i];
+        if *token == rule_tokens[j] {
+            stack.push((i + 1, j + 1));
+        }
+        if token.starts_with('-') {
+            // An unrelated flag is skippable — alone, and (when it could take
+            // a separate value) together with the token after it. Consuming it
+            // as a rule token above takes priority, so a rule that names a flag
+            // (`cargo test --danger`) still matches it.
+            stack.push((i + 1, j));
+            if !token.contains('=') {
+                stack.push((i + 2, j));
+            }
+        }
+        // A positional token that matches neither the rule nor a flag ends
+        // this path, which is what keeps the match anchored.
+    }
+    false
+}
+
+/// True for a leading shell environment assignment such as `FOO=bar`, which
+/// precedes the command it applies to rather than being the command itself.
+fn is_env_assignment(token: &str) -> bool {
+    match token.split_once('=') {
+        Some((name, _)) => {
+            !name.is_empty()
+                && !name.starts_with('-')
+                && name
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        }
+        None => false,
+    }
+}
+
 fn normalize_command(value: &str) -> String {
     // Normalize: lowercase, collapse internal whitespace to single spaces.
     // This prevents bypass via "git  status" (double space) vs "git status".
@@ -648,9 +730,25 @@ fn first_token(command: &str) -> String {
 /// returns so the saved path matches the same invocation later. `None` means
 /// the path is empty, traversing, drive-relative, or outside the workspace and
 /// must not be turned into a rule.
+///
+/// Case is preserved on case-sensitive filesystems and folded on
+/// case-insensitive ones, matching what the host actually considers the same
+/// file. See [`platform_paths_are_case_insensitive`].
 pub fn normalize_workspace_relative_path(value: &str, workspace_root: &str) -> Option<String> {
-    let path = parse_path_for_matching(value)?;
-    let workspace = parse_path_for_matching(workspace_root)?;
+    normalize_workspace_relative_path_with_case(
+        value,
+        workspace_root,
+        platform_paths_are_case_insensitive(),
+    )
+}
+
+fn normalize_workspace_relative_path_with_case(
+    value: &str,
+    workspace_root: &str,
+    case_insensitive: bool,
+) -> Option<String> {
+    let path = parse_path_for_matching_with_case(value, case_insensitive)?;
+    let workspace = parse_path_for_matching_with_case(workspace_root, case_insensitive)?;
     let workspace_root = workspace.root.as_ref()?;
 
     let relative_components = match path.root.as_ref() {
@@ -672,8 +770,33 @@ struct PathForMatching {
     components: Vec<String>,
 }
 
-fn parse_path_for_matching(value: &str) -> Option<PathForMatching> {
-    let value = value.trim().replace('\\', "/").to_ascii_lowercase();
+/// True when this platform's filesystem treats paths case-insensitively.
+///
+/// Windows and the default macOS volume fold case; Linux (and a
+/// case-sensitive APFS volume) do not. Folding case on a case-sensitive
+/// filesystem makes `src/Secrets.rs` and `src/secrets.rs` — two different
+/// files — compare equal, so a narrow `Allow` ask-rule written for a reviewed
+/// file would also authorize a same-name-different-case file that was never
+/// reviewed.
+const fn platform_paths_are_case_insensitive() -> bool {
+    cfg!(any(target_os = "windows", target_os = "macos"))
+}
+
+fn parse_path_for_matching_with_case(
+    value: &str,
+    case_insensitive: bool,
+) -> Option<PathForMatching> {
+    let value = value.trim().replace('\\', "/");
+    // The drive letter is folded regardless: `C:` and `c:` name the same
+    // volume on every platform that has drive letters.
+    let value = if case_insensitive {
+        value.to_ascii_lowercase()
+    } else if has_windows_drive_prefix(&value) {
+        let (drive, rest) = value.split_at(1);
+        format!("{}{rest}", drive.to_ascii_lowercase())
+    } else {
+        value
+    };
     if value.is_empty() {
         return None;
     }
@@ -785,6 +908,103 @@ mod tests {
     }
 
     #[test]
+    fn denied_prefix_is_not_bypassed_by_a_flag_before_the_subcommand() {
+        // #4740: a global flag inserted between the base command and its
+        // subcommand used to hide the rule text from a raw substring test.
+        // Under `Never` an unmatched command runs with no prompt at all, so a
+        // bypassed deny rule silently executes what the operator forbade.
+        let engine = ExecPolicyEngine::new(vec![], vec!["git push".to_string()]);
+        for command in [
+            "git push origin main",
+            "git -c foo=bar push origin main",
+            "git --no-verify push",
+            "git -c protocol.version=2 --no-verify push origin main",
+            "GIT PUSH",
+            "GIT_TRACE=1 git push",
+            "ls && git -c foo=bar push",
+        ] {
+            let decision = engine.check(ctx(command, AskForApproval::Never)).unwrap();
+            assert!(
+                !decision.allow,
+                "denied prefix bypassed by {command:?}: {decision:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn denied_prefix_flag_awareness_does_not_over_match_positionals() {
+        // Skipping flags must not turn the deny check into a subsequence
+        // search: an unrelated positional token between the two rule words
+        // ends the match. `git checkout push` is a branch named "push".
+        let engine = ExecPolicyEngine::new(vec![], vec!["git push".to_string()]);
+        for command in ["git checkout push", "git log push", "git pushd"] {
+            let decision = engine
+                .check(ctx(command, AskForApproval::UnlessTrusted))
+                .unwrap();
+            assert!(
+                decision.allow,
+                "unexpected deny for {command:?}: {decision:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn denied_prefix_word_boundary_survives_flag_awareness() {
+        // The existing word-boundary guarantee must not regress: "rm" blocks
+        // "rm -rf /" but not "rmdir".
+        let engine = ExecPolicyEngine::new(vec![], vec!["rm".to_string()]);
+        let blocked = engine
+            .check(ctx("rm -rf /", AskForApproval::UnlessTrusted))
+            .unwrap();
+        assert!(!blocked.allow, "rm -rf / must be denied: {blocked:?}");
+        let allowed = engine
+            .check(ctx("rmdir empty-dir", AskForApproval::UnlessTrusted))
+            .unwrap();
+        assert!(allowed.allow, "rmdir must not be denied: {allowed:?}");
+    }
+
+    #[test]
+    fn path_rules_respect_filesystem_case_sensitivity() {
+        // #4725: on a case-sensitive filesystem `config/allowed.toml` and
+        // `config/Allowed.toml` are different files, so a narrow Allow rule
+        // written for the reviewed one must not authorize the other.
+        let sensitive =
+            normalize_workspace_relative_path_with_case("/ws/config/Allowed.toml", "/ws", false);
+        assert_eq!(sensitive.as_deref(), Some("config/Allowed.toml"));
+        assert_ne!(
+            sensitive,
+            normalize_workspace_relative_path_with_case("/ws/config/allowed.toml", "/ws", false)
+        );
+
+        // On a case-insensitive filesystem they are the same file and must
+        // still normalize to one rule value.
+        assert_eq!(
+            normalize_workspace_relative_path_with_case("/ws/config/Allowed.toml", "/ws", true),
+            normalize_workspace_relative_path_with_case("/ws/config/allowed.toml", "/ws", true)
+        );
+    }
+
+    #[test]
+    fn case_sensitive_paths_still_normalize_workspace_and_drive_prefixes() {
+        // Case sensitivity must not break the surrounding normalization: the
+        // workspace prefix still strips, traversal is still rejected, and a
+        // drive letter still folds (it names the same volume either way).
+        assert_eq!(
+            normalize_workspace_relative_path_with_case("/ws/src/Main.rs", "/ws", false).as_deref(),
+            Some("src/Main.rs")
+        );
+        assert_eq!(
+            normalize_workspace_relative_path_with_case("/ws/../etc/passwd", "/ws", false),
+            None
+        );
+        assert_eq!(
+            normalize_workspace_relative_path_with_case(r"C:\WS\Src\Main.rs", r"c:\WS", false)
+                .as_deref(),
+            Some("Src/Main.rs")
+        );
+    }
+
+    #[test]
     fn trusted_prefix_does_not_auto_approve_a_chained_command() {
         // #security: `git log ; rm -rf /` must not be "trusted" because git log is.
         let engine = ExecPolicyEngine::new(vec!["git log".to_string()], vec![]);
@@ -865,12 +1085,12 @@ mod tests {
                 ..
             } => {
                 assert_eq!(amendment.prefixes, vec!["cargo"]);
-                assert_eq!(
-                    proposed_network_policy_amendments,
-                    vec![NetworkPolicyAmendment {
-                        host: "/workspace".to_string(),
-                        action: NetworkPolicyRuleAction::Allow,
-                    }]
+                // Approving an unmatched command must not propose a network
+                // amendment. This previously asserted `host: "/workspace"` —
+                // the cwd, a filesystem path offered as if it were a hostname.
+                assert!(
+                    proposed_network_policy_amendments.is_empty(),
+                    "command approval must not propose network amendments, got {proposed_network_policy_amendments:?}"
                 );
             }
             other => panic!("expected approval with proposed amendment, got {other:?}"),

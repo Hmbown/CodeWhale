@@ -20,7 +20,7 @@ use thiserror::Error;
 
 pub use elevation::{
     DEFAULT_HIGH_BUDGET_THRESHOLD, ElevationOptions, PlanRiskHint, WorkflowPlanElevation,
-    assess_plan_risk_string, assess_workflow_elevation,
+    assess_plan_risk_string, assess_workflow_elevation, is_shell_tool, is_write_tool,
 };
 pub use gates::{
     GateError, GateKind, GateOn, GateOnFail, GateOutcome, GateSpec, GateState, GateStatusLine,

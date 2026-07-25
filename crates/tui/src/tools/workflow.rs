@@ -2175,17 +2175,9 @@ fn read_only_allowed_tools(agent_type: AgentType) -> &'static [&'static str] {
 }
 
 fn is_write_or_shell_tool(tool: &str) -> bool {
-    matches!(
-        tool.trim(),
-        "write_file"
-            | "edit_file"
-            | "apply_patch"
-            | "exec_shell"
-            | "exec_shell_wait"
-            | "exec_shell_interact"
-            | "exec_wait"
-            | "exec_interact"
-    )
+    // One list, owned by the workflow crate. This used to be a second copy
+    // that drifted from `elevation.rs`'s — see `codewhale_workflow::is_write_tool`.
+    codewhale_workflow::is_write_tool(tool) || codewhale_workflow::is_shell_tool(tool)
 }
 
 // Pre-existing builder that grew `allowed_tools`; each arg maps 1:1 onto one

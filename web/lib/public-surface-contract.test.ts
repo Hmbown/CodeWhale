@@ -105,6 +105,11 @@ function pngDimensions(image: Buffer): [number, number] {
   return [image.readUInt32BE(16), image.readUInt32BE(20)];
 }
 
+function comparableVersion(value: string): number {
+  const [major = 0, minor = 0, patch = 0] = value.split(".").map((n) => Number.parseInt(n, 10) || 0);
+  return major * 1_000_000 + minor * 1_000 + patch;
+}
+
 describe("public surface contracts", () => {
   it("keeps source-candidate and published-release facts distinct and aligned", () => {
     expect(matrix.schemaVersion).toBe(2);
@@ -118,7 +123,14 @@ describe("public surface contracts", () => {
       publishedAt: matrix.latestPublishedRelease.publishedAt,
       url: matrix.latestPublishedRelease.url,
     }).toEqual(FACTS.latestPublishedRelease);
-    expect(matrix.latestPublishedRelease.version).not.toBe(matrix.sourceCandidate.version);
+    // The published release may equal the source candidate: that is the normal
+    // state in the window between shipping vX.Y.Z and opening the next lane.
+    // What must never happen is the site advertising a version that is not
+    // published yet, so assert published <= source candidate rather than
+    // asserting they differ.
+    expect(comparableVersion(matrix.latestPublishedRelease.version)).toBeLessThanOrEqual(
+      comparableVersion(matrix.sourceCandidate.version),
+    );
     expect(matrix.latestPublishedRelease).not.toHaveProperty("providerCount");
     expect(matrix.latestPublishedRelease).not.toHaveProperty("toolCount");
     expect(matrix.surfaces).not.toHaveProperty("stable");
@@ -161,10 +173,13 @@ describe("public surface contracts", () => {
       requiresMatchingPublishedAssets: true,
       sourceBuild: true,
     });
-    expect(install).toContain("v0.9.1 source candidate");
+    // Pinned to FACTS.version, not a literal: these assertions used to carry
+    // the version number by hand, so every release bump broke them and the
+    // failure looked like a copy defect rather than a stale test.
+    expect(install).toContain(`v${FACTS.version} source candidate`);
     expect(install).toContain("unpublished source candidate");
     expect(install).toMatch(/Android \/ Termux \| arm64 \(aarch64\) \| ⚠️⁴ preview/);
-    expect(install).not.toContain("wrapper is published at\nv0.9.1");
+    expect(install).not.toContain(`wrapper is published at\nv${FACTS.version}`);
     expect(npmReadme).toMatch(/^- Android arm64 \/ Termux \(preview;/m);
     expect(npmReadme).toContain("requires matching Android assets");
     expect(npmArtifacts).toContain("android: {");
@@ -175,11 +190,19 @@ describe("public surface contracts", () => {
     ]) {
       expect(npmArtifacts).toContain(binary);
     }
-    expect(changelog).toMatch(
-      /^## \[0\.9\.1\] - (?:Unreleased candidate|\d{4}-\d{2}-\d{2})$/m,
+    // Matched by string prefix rather than by building a RegExp from
+    // FACTS.version: escaping only `.` left backslashes unescaped, which
+    // CodeQL flagged as incomplete escaping. The version needs no regex.
+    const heading = `## [${FACTS.version}] - `;
+    const headingLine = changelog
+      .split("\n")
+      .find((line) => line.startsWith(heading));
+    expect(headingLine, `missing "${heading}" changelog heading`).toBeTruthy();
+    expect(headingLine?.slice(heading.length)).toMatch(
+      /^(?:Unreleased candidate|\d{4}-\d{2}-\d{2})$/,
     );
-    expect(changelog).toContain("v0.9.1 source candidate");
-    expect(changelog).not.toContain("compare/v0.9.1...HEAD");
+    expect(changelog).toContain(`v${FACTS.version} source candidate`);
+    expect(changelog).not.toContain(`compare/v${FACTS.version}...HEAD`);
   });
 
   it("distinguishes two Cargo packages from the three installed commands", () => {

@@ -351,25 +351,7 @@ mod tests {
 
     fn create_test_app() -> App {
         let options = TuiOptions {
-            model: "deepseek-v4-pro".to_string(),
-            workspace: PathBuf::from("."),
-            config_path: None,
-            config_profile: None,
-            allow_shell: false,
-            use_alt_screen: true,
-            use_mouse_capture: false,
-            use_bracketed_paste: true,
-            max_subagents: 1,
-            skills_dir: PathBuf::from("."),
-            memory_path: PathBuf::from("memory.md"),
-            notes_path: PathBuf::from("notes.txt"),
-            mcp_config_path: PathBuf::from("mcp.json"),
-            use_memory: false,
-            start_in_agent_mode: false,
-            skip_onboarding: true,
-            yolo: false,
-            resume_session_id: None,
-            initial_input: None,
+            ..crate::test_support::test_tui_options(PathBuf::from("."))
         };
         App::new(options, &Config::default())
     }
@@ -932,6 +914,26 @@ mod tests {
                 "/{} must have non-empty English help text",
                 command.name
             );
+            // #3913: descriptions must not restate the usage field — the
+            // palette and /help already append `usage` when arguments exist.
+            assert!(
+                !description.contains(command.usage),
+                "/{} description embeds its usage string {:?}: {description:?}",
+                command.name,
+                command.usage
+            );
+            assert!(
+                !description.contains(&format!("/{}", command.name)),
+                "/{} description embeds slash-command syntax that usage already covers: {description:?}",
+                command.name
+            );
+            for banned_prefix in ["Toolbox:", "Reference:"] {
+                assert!(
+                    !description.starts_with(banned_prefix),
+                    "/{} description should not start with {banned_prefix:?}: {description:?}",
+                    command.name
+                );
+            }
 
             let palette_command = command.palette_command();
             assert!(
@@ -1318,25 +1320,12 @@ mod tests {
         std::fs::create_dir_all(config_path.parent().expect("config parent")).expect("config dir");
         let guard = ConfigPathGuard::new(&config_path);
         let options = TuiOptions {
-            model: "deepseek-v4-pro".to_string(),
-            workspace: workspace.clone(),
             config_path: Some(config_path),
-            config_profile: None,
-            allow_shell: false,
-            use_alt_screen: true,
-            use_mouse_capture: false,
-            use_bracketed_paste: true,
-            max_subagents: 1,
             skills_dir: workspace.join("skills"),
             memory_path: workspace.join("memory.md"),
             notes_path: workspace.join("notes.txt"),
             mcp_config_path: workspace.join("mcp.json"),
-            use_memory: false,
-            start_in_agent_mode: false,
-            skip_onboarding: true,
-            yolo: false,
-            resume_session_id: None,
-            initial_input: None,
+            ..crate::test_support::test_tui_options(workspace.clone())
         };
         let app = App::new(options, &Config::default());
         (app, tmpdir, guard)

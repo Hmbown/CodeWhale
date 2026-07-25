@@ -37,7 +37,7 @@ pub const MAX_HISTORY_ENTRIES: usize = 1000;
 const HISTORY_FILE_NAME: &str = "composer_history.txt";
 
 fn default_history_path() -> Option<PathBuf> {
-    history_path_with_home(dirs::home_dir())
+    history_path_with_home(crate::config::effective_home_dir())
 }
 
 /// Resolve the composer-history file under `home`, preferring the CodeWhale
@@ -290,7 +290,7 @@ mod tests {
 
     /// Tests use the path-injecting `*_from` / `*_to` helpers so they
     /// don't have to mutate `HOME` (which is not honored by
-    /// `dirs::home_dir()` on Windows — it reads `USERPROFILE` /
+    /// `crate::config::effective_home_dir()` on Windows — it reads `USERPROFILE` /
     /// `SHGetKnownFolderPath` instead). This makes the suite portable
     /// across all three CI runners without per-platform env juggling.
     fn temp_history_path() -> (tempfile::TempDir, PathBuf) {

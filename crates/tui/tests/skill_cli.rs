@@ -25,6 +25,15 @@ use tiny_http::{Method, Response, Server};
 #[path = "../src/network_policy.rs"]
 mod network_policy;
 
+// Both `network_policy` and `install` resolve the home directory through
+// `crate::config::effective_home_dir()` (#4757). `config/home.rs` is a leaf
+// over `std`/`dirs` with no `crate::` references, so including it here gives
+// this binary the real implementation; naming it `config` matches how those
+// two files address it in the lib.
+#[path = "../src/config/home.rs"]
+#[allow(dead_code)]
+mod config;
+
 #[path = "../src/skills/package_digest.rs"]
 #[allow(dead_code)]
 mod package_digest;

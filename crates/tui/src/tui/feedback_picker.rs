@@ -55,16 +55,11 @@ impl FeedbackPickerView {
     }
 
     fn move_up(&mut self) {
-        if self.selected > 0 {
-            self.selected -= 1;
-        }
+        self.selected = crate::tui::list_nav::wrap_index(self.selected, OPTIONS.len(), -1);
     }
 
     fn move_down(&mut self) {
-        let max = OPTIONS.len().saturating_sub(1);
-        if self.selected < max {
-            self.selected += 1;
-        }
+        self.selected = crate::tui::list_nav::wrap_index(self.selected, OPTIONS.len(), 1);
     }
 
     fn select_number(&mut self, number: char) -> Option<ViewAction> {

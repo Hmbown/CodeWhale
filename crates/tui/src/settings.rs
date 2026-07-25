@@ -2392,6 +2392,24 @@ mod tests {
     }
 
     #[test]
+    fn tool_collapse_threshold_is_not_a_settings_key() {
+        // #3256: rollup min-run size stays a fixed runtime constant (3), not a
+        // user setting — reject any accidental /set surface for it.
+        let mut settings = Settings::default();
+        let err = settings
+            .set("tool_collapse_threshold", "5")
+            .expect_err("threshold must not be configurable");
+        assert!(
+            err.to_string().contains("Unknown setting")
+                || err.to_string().contains("unknown setting")
+                || err.to_string().contains("Failed to update"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(settings.tool_collapse_mode, "compact");
+        assert!(!settings.show_tool_details);
+    }
+
+    #[test]
     fn display_localizes_header_and_config_file_label() {
         let settings = Settings::default();
         let en = settings.display(crate::localization::Locale::En);

@@ -415,7 +415,7 @@ impl Default for EngineConfig {
             skills_scan_codewhale_only: false,
             plugin_registry: None,
             instructions: Vec::new(),
-            project_context_pack_enabled: true,
+            project_context_pack_enabled: false,
             translation_enabled: false,
             show_thinking: true,
             // High backstop rather than a working ceiling: the in-turn
@@ -735,15 +735,9 @@ fn subagent_mailbox_best_effort_send_permitted(
 }
 
 impl Engine {
-    fn mode_runtime_instructions(mode: AppMode) -> &'static str {
-        match mode {
-            AppMode::Agent | AppMode::Auto | AppMode::Yolo => prompts::AGENT_MODE,
-            AppMode::Plan => prompts::PLAN_MODE,
-            AppMode::Operate => prompts::OPERATE_MODE,
-        }
-        .trim()
-    }
-
+    /// Per-posture question discipline. Lives with the approval overlays in the
+    /// stable prefix / gate errors — not re-asserted every turn (#4780).
+    #[allow(dead_code)] // surface via approval-gate errors when those are tightened
     fn permission_question_discipline(
         approval_mode: crate::tui::approval::ApprovalMode,
     ) -> &'static str {
@@ -1061,6 +1055,9 @@ impl Engine {
                     verbosity: config.verbosity.as_deref(),
                     skills_scan_codewhale_only: config.skills_scan_codewhale_only,
                     plugin_registry: Some(plugin_registry.as_ref()),
+                    // Matches `current_mode`'s initial value below; a later
+                    // `/mode` switch re-runs `refresh_system_prompt`.
+                    mode: AppMode::Agent,
                 },
             );
         let stable_prompt = Some(system_prompt);
@@ -1483,7 +1480,15 @@ impl Engine {
     }
 
     fn apply_runtime_mode_policy(&mut self, authority: &TurnAuthority) {
+        // Mode doctrine lives in the stable prefix (#4780), so a mode change
+        // has to rebuild it. `refresh_system_prompt` is hash-guarded and only
+        // swaps the prompt when the composed text actually differs, so modes
+        // that share an overlay (Agent/Auto/Yolo) keep the prefix cache warm.
+        let mode_changed = self.current_mode != authority.mode;
         self.current_mode = authority.mode;
+        if mode_changed {
+            self.refresh_system_prompt();
+        }
         self.session.allow_shell = authority.allow_shell;
         self.config.allow_shell = authority.allow_shell;
         self.session.trust_mode = authority.trust_mode;
@@ -2506,6 +2511,10 @@ impl Engine {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
 
+        // Facts only (#4780). Mode doctrine and permission-question discipline
+        // ship once in the stable system prefix (mode/approval overlays); re-
+        // asserting hundreds of tokens of doctrine here out-shouts the
+        // constitution by salience every user message.
         let mut lines = vec![
             format!("Current local date: {today}"),
             // Workspace path moved here from the static `## Environment` block so
@@ -2514,19 +2523,9 @@ impl Engine {
             format!("Current workspace: {}", self.config.workspace.display()),
             format!("Current model: {routed_model}"),
             format!("Current mode: {}", self.current_mode.as_setting()),
-            "Current mode policy source: runtime".to_string(),
-            format!(
-                "Current mode policy:\n{}",
-                Self::mode_runtime_instructions(self.current_mode)
-            ),
             format!(
                 "Current permission posture: {}",
                 self.session.approval_mode.permission_chip_label()
-            ),
-            "Current permission policy source: effective runtime authority".to_string(),
-            format!(
-                "Current question discipline: {}",
-                Self::permission_question_discipline(self.session.approval_mode)
             ),
             format!("Input provenance: {}", provenance.as_str()),
             format!(
@@ -4339,6 +4338,7 @@ impl Engine {
                 verbosity: self.config.verbosity.as_deref(),
                 skills_scan_codewhale_only: self.config.skills_scan_codewhale_only,
                 plugin_registry: Some(self.plugin_registry.as_ref()),
+                mode: self.current_mode,
             },
         );
         let stable_prompt =
@@ -4443,7 +4443,8 @@ fn strip_active_operation_reanchor(prompt: Option<&SystemPrompt>) -> Option<Syst
 fn default_plugin_tools_dir() -> PathBuf {
     codewhale_config::codewhale_home()
         .unwrap_or_else(|_| {
-            dirs::home_dir().map_or_else(|| PathBuf::from(".codewhale"), |h| h.join(".codewhale"))
+            crate::config::effective_home_dir()
+                .map_or_else(|| PathBuf::from(".codewhale"), |h| h.join(".codewhale"))
         })
         .join("tools")
 }

@@ -1111,7 +1111,6 @@ impl Renderable for ComposerWidget<'_> {
                 input_content_width,
                 input_rows_budget,
             );
-        let is_draft_mode = input_text.contains('\n') || visible_lines.len() > 1;
         if has_panel {
             let hint_line = if self.app.is_history_search_active() {
                 Some(Line::from(vec![
@@ -1166,38 +1165,38 @@ impl Renderable for ComposerWidget<'_> {
                             (Some("↵ offline queue".to_string()), palette::STATUS_WARNING)
                         } else if self.app.mode == crate::tui::app::AppMode::Operate {
                             // Ctrl+G sends an already-queued item now; with only
-                            // composer text it stashes the draft (#440). Double-↵
-                            // after queueing steers the just-queued task.
+                            // composer text it stashes the draft (#440). Steer is
+                            // an explicit Shift+Enter / Ctrl+Enter gesture.
                             let label = if queue_count > 0 {
                                 format!(
-                                    "↵ queue task ({} waiting) · double-↵/⇧↵ steer · Ctrl+G send queued",
+                                    "↵ queue task ({} waiting) · ⇧↵ steer · Ctrl+G send queued",
                                     queue_count.saturating_add(1)
                                 )
                             } else {
-                                "↵ queue task · double-↵/⇧↵ steer".to_string()
+                                "↵ queue task · ⇧↵ steer".to_string()
                             };
                             (Some(label), palette::WHALE_INFO)
                         } else {
                             let label = if queue_count > 0 {
                                 format!(
-                                    "↵ queue ({} waiting) · double-↵/⇧↵ steer · Ctrl+G send queued",
+                                    "↵ queue ({} waiting) · ⇧↵ steer · Ctrl+G send queued",
                                     queue_count.saturating_add(1)
                                 )
                             } else {
-                                "↵ queue · double-↵/⇧↵ steer".to_string()
+                                "↵ queue · ⇧↵ steer".to_string()
                             };
                             (Some(label), palette::TEXT_MUTED)
                         }
                     }
-                    // Steer reached via double-tap Enter, Shift+Enter, or Ctrl+Enter.
+                    // Steer is reached via Shift+Enter or Ctrl+Enter only.
                     SubmitDisposition::Steer => {
                         (Some("↵ steering".to_string()), palette::WHALE_INFO)
                     }
                     SubmitDisposition::QueueFollowUp => (
                         Some(if self.app.mode == crate::tui::app::AppMode::Operate {
-                            "↵ queued task · double-↵/⇧↵ steer · Ctrl+G send queued".to_string()
+                            "↵ queued task · ⇧↵ steer · Ctrl+G send queued".to_string()
                         } else {
-                            "↵ queued · double-↵/⇧↵ steer · Ctrl+G send queued".to_string()
+                            "↵ queued · ⇧↵ steer · Ctrl+G send queued".to_string()
                         }),
                         palette::TEXT_MUTED,
                     ),
@@ -1224,19 +1223,12 @@ impl Renderable for ComposerWidget<'_> {
                 .borders(Borders::TOP)
                 .border_style(Style::default().fg(permission_color))
                 .style(background);
-            if self.app.is_history_search_active() || is_draft_mode {
-                top_border = if self.app.is_history_search_active() {
-                    top_border.title(Line::from(Span::styled(
-                        self.app
-                            .tr(crate::localization::MessageId::HistorySearchTitle),
-                        Style::default().fg(palette::TEXT_MUTED),
-                    )))
-                } else {
-                    top_border.title(Line::from(Span::styled(
-                        "Draft",
-                        Style::default().fg(palette::TEXT_MUTED),
-                    )))
-                };
+            if self.app.is_history_search_active() {
+                top_border = top_border.title(Line::from(Span::styled(
+                    self.app
+                        .tr(crate::localization::MessageId::HistorySearchTitle),
+                    Style::default().fg(palette::TEXT_MUTED),
+                )));
             }
             // Top-right corner: editor state plus transient turn receipts.
             // Receipts are lifecycle chrome, not transcript content; they
@@ -4190,24 +4182,8 @@ mod tests {
     fn create_test_app() -> App {
         let options = TuiOptions {
             model: "deepseek-v4-flash".to_string(),
-            workspace: PathBuf::from("."),
-            config_path: None,
-            config_profile: None,
-            allow_shell: false,
-            use_alt_screen: true,
-            use_mouse_capture: false,
-            use_bracketed_paste: true,
-            max_subagents: 1,
-            skills_dir: PathBuf::from("."),
-            memory_path: PathBuf::from("memory.md"),
-            notes_path: PathBuf::from("notes.txt"),
-            mcp_config_path: PathBuf::from("mcp.json"),
-            use_memory: false,
             start_in_agent_mode: true,
-            skip_onboarding: true,
-            yolo: false,
-            resume_session_id: None,
-            initial_input: None,
+            ..crate::test_support::test_tui_options(PathBuf::from("."))
         };
         let mut app = App::new(options, &Config::default());
         app.ui_locale = Locale::En;
@@ -5875,7 +5851,9 @@ mod tests {
             ComposerWidget::new(&draft_app, 5, &slash_menu_entries, &mention_menu_entries);
         let mut draft_buf = Buffer::empty(area);
         draft_widget.render(area, &mut draft_buf);
-        assert!(buffer_text(&draft_buf, area).contains("Draft"));
+        // Multi-line drafts no longer announce themselves with a block title;
+        // the user can see the draft. Only history search keeps its title.
+        assert!(!buffer_text(&draft_buf, area).contains("Draft"));
 
         let mut search_app = create_test_app();
         search_app.composer_density = ComposerDensity::Comfortable;

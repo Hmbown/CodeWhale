@@ -480,16 +480,25 @@ fn merge_permissions(
     }
 }
 
-fn is_write_tool(tool: &str) -> bool {
+/// True for a tool that can modify files.
+///
+/// This is the one list. It previously existed twice — here and as half of
+/// the TUI's `is_write_or_shell_tool` — and the two drifted: `Edit`, the
+/// model-visible canonical name for the write tool, was in the TUI copy and
+/// missing here, so a branch or sequence whose `allowed_tools` was `["Edit"]`
+/// produced an approval card reporting `writes: false` for a spec that could
+/// in fact write.
+pub fn is_write_tool(tool: &str) -> bool {
     matches!(
-        tool,
-        "write_file" | "edit_file" | "apply_patch" | "checklist_write" | "todo_write"
+        tool.trim(),
+        "Edit" | "write_file" | "edit_file" | "apply_patch" | "checklist_write" | "todo_write"
     )
 }
 
-fn is_shell_tool(tool: &str) -> bool {
+/// True for a tool that can run a shell command.
+pub fn is_shell_tool(tool: &str) -> bool {
     matches!(
-        tool,
+        tool.trim(),
         "exec_shell"
             | "exec_shell_wait"
             | "exec_shell_interact"
@@ -543,6 +552,54 @@ mod tests {
             permissions: PermissionSpec::default(),
             model_policy: ModelPolicy::default(),
         }
+    }
+
+    #[test]
+    fn edit_is_recognized_as_a_write_tool() {
+        // #4730: `Edit` is the model-visible canonical write-tool name. It
+        // lived only in the TUI's copy of this list, so the risk assessor
+        // didn't know it was a write.
+        assert!(is_write_tool("Edit"));
+        assert!(is_write_tool(" Edit "));
+        for tool in [
+            "write_file",
+            "edit_file",
+            "apply_patch",
+            "checklist_write",
+            "todo_write",
+        ] {
+            assert!(is_write_tool(tool), "{tool} must count as a write");
+        }
+        assert!(!is_write_tool("read_file"));
+        assert!(!is_write_tool("Editor"));
+    }
+
+    #[test]
+    fn branch_allowing_edit_reports_writes_in_its_risk_summary() {
+        // The tool-allowlist path is what produces branch/sequence-level
+        // permission summaries; a spec that can write must not present an
+        // approval card saying it cannot.
+        let spec = spec_with(
+            vec![WorkflowNode::BranchSet(BranchSpec {
+                id: "edits".to_string(),
+                description: None,
+                parallel: false,
+                budget: BudgetSpec::default(),
+                permissions: PermissionSpec {
+                    allowed_tools: vec!["Edit".to_string()],
+                    ..PermissionSpec::default()
+                },
+                model_policy: ModelPolicy::default(),
+                children: vec![WorkflowNode::Leaf(leaf("child", TaskMode::ReadOnly))],
+            })],
+            None,
+        );
+
+        let elevation = assess_workflow_elevation(&spec, ElevationOptions::default());
+        assert!(
+            elevation.writes,
+            "branch allowing Edit must report writes: {elevation:?}"
+        );
     }
 
     fn spec_with(nodes: Vec<WorkflowNode>, risk: Option<&str>) -> WorkflowSpec {

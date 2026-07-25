@@ -60,6 +60,14 @@ pub(crate) const ADVANCED_DISCOVERY_COMMANDS: &[&str] = &[
 
 pub(crate) const COMPATIBILITY_DISCOVERY_COMMANDS: &[&str] = &["subagents"];
 
+/// Built-in commands that the palette pastes into the composer instead of
+/// executing, even though they have no *required* argument.
+///
+/// Prefer keeping this empty. Every name here must be a registered canonical
+/// command name — see `palette_paste_only_names_are_registered` in the
+/// command palette tests.
+pub(crate) const PALETTE_PASTE_ONLY: &[&str] = &[];
+
 impl CommandDiscovery {
     pub fn show_at_root(self) -> bool {
         matches!(self, CommandDiscovery::Primary)
@@ -82,6 +90,28 @@ impl CommandInfo {
             }
         }
         false
+    }
+
+    /// Whether the slash menu / composer should leave a trailing space so the
+    /// user can type arguments immediately. `/change` is bare-useful (opens
+    /// the latest changelog) even though its usage documents an optional
+    /// version, so it is the only historical carve-out.
+    pub fn composer_wants_trailing_space(&self) -> bool {
+        self.name != "change" && self.requires_argument()
+    }
+
+    /// Whether the command palette should run this command immediately when
+    /// selected, instead of pasting it into the composer.
+    ///
+    /// Default: run anything that does not require a mandatory positional
+    /// argument (including optional-arg commands that open a picker when bare).
+    /// [`PALETTE_PASTE_ONLY`] is the explicit opt-out for side-effectful or
+    /// multi-step no-arg commands that should still paste for confirmation.
+    pub fn palette_runs_directly(&self) -> bool {
+        if self.requires_required_argument() {
+            return false;
+        }
+        !PALETTE_PASTE_ONLY.contains(&self.name)
     }
 
     pub fn palette_command(&self) -> String {

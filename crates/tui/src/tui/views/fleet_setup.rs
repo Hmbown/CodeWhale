@@ -634,11 +634,13 @@ impl FleetSetupView {
     fn move_up(&mut self) {
         match self.step {
             Step::Role => {
-                self.role_idx = self.role_idx.saturating_sub(1);
+                self.role_idx =
+                    crate::tui::list_nav::wrap_index(self.role_idx, self.step_len(), -1);
                 self.discard_model_draft();
             }
             Step::Model => {
-                self.model_idx = self.model_idx.saturating_sub(1);
+                self.model_idx =
+                    crate::tui::list_nav::wrap_index(self.model_idx, self.step_len(), -1);
                 self.discard_model_draft();
             }
             Step::Review => self.review_scroll = self.review_scroll.saturating_sub(1),
@@ -655,11 +657,12 @@ impl FleetSetupView {
     fn move_down(&mut self) {
         match self.step {
             Step::Role => {
-                self.role_idx = (self.role_idx + 1).min(self.step_len().saturating_sub(1));
+                self.role_idx = crate::tui::list_nav::wrap_index(self.role_idx, self.step_len(), 1);
                 self.discard_model_draft();
             }
             Step::Model => {
-                self.model_idx = (self.model_idx + 1).min(self.step_len().saturating_sub(1));
+                self.model_idx =
+                    crate::tui::list_nav::wrap_index(self.model_idx, self.step_len(), 1);
                 self.discard_model_draft();
             }
             Step::Review => self.review_scroll = self.review_scroll.saturating_add(1),

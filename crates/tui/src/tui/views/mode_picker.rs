@@ -52,16 +52,11 @@ impl ModePickerView {
     }
 
     fn move_up(&mut self) {
-        if self.cursor > 0 {
-            self.cursor -= 1;
-        }
+        self.cursor = crate::tui::list_nav::wrap_index(self.cursor, VISIBLE_MODES.len(), -1);
     }
 
     fn move_down(&mut self) {
-        let max = VISIBLE_MODES.len().saturating_sub(1);
-        if self.cursor < max {
-            self.cursor += 1;
-        }
+        self.cursor = crate::tui::list_nav::wrap_index(self.cursor, VISIBLE_MODES.len(), 1);
     }
 
     fn select_by_number(&mut self, number: char) -> Option<ViewAction> {

@@ -179,13 +179,7 @@ impl SessionPickerView {
     }
 
     fn move_selection(&mut self, delta: isize) {
-        if self.filtered.is_empty() {
-            self.selected = 0;
-            return;
-        }
-        let len = self.filtered.len() as isize;
-        let next = (self.selected as isize + delta).clamp(0, len - 1) as usize;
-        self.selected = next;
+        self.selected = crate::tui::list_nav::wrap_index(self.selected, self.filtered.len(), delta);
         self.ensure_selected_visible();
         self.refresh_preview();
     }

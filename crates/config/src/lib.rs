@@ -2681,12 +2681,56 @@ fn sandbox_mode_rank(value: &str) -> Option<u8> {
     }
 }
 
-/// Load a project-level config from the workspace.
+/// What [`load_project_config_outcome`] found in the workspace.
+///
+/// The distinction between "no project config" and "a project config that is
+/// broken" is security-relevant, so it is in the type rather than in a log
+/// line. A project config can only *tighten* `approval_policy` /
+/// `sandbox_mode` beyond the user's baseline; if a typo makes it unparseable
+/// and that is reported as absence, the project silently loses its
+/// restrictions and falls back to the user's more permissive baseline.
+#[derive(Debug, Clone)]
+pub enum ProjectConfigOutcome {
+    /// No project config file exists in this workspace.
+    Missing,
+    /// A project config was found and parsed.
+    Loaded(Box<ConfigToml>),
+    /// A project config file exists but could not be used. Its contents are
+    /// deliberately not included — a config file holds credentials.
+    Invalid {
+        /// The offending file.
+        path: PathBuf,
+        /// Why it could not be used, safe to display.
+        reason: String,
+    },
+}
+
+impl ProjectConfigOutcome {
+    /// The parsed config, discarding the reason a broken one was rejected.
+    #[must_use]
+    pub fn into_config(self) -> Option<ConfigToml> {
+        match self {
+            Self::Loaded(config) => Some(*config),
+            Self::Missing | Self::Invalid { .. } => None,
+        }
+    }
+
+    /// The path and reason when a project config exists but is unusable.
+    #[must_use]
+    pub fn invalid(&self) -> Option<(&Path, &str)> {
+        match self {
+            Self::Invalid { path, reason } => Some((path.as_path(), reason.as_str())),
+            Self::Missing | Self::Loaded(_) => None,
+        }
+    }
+}
+
+/// Load a project-level config from the workspace, reporting why a file that
+/// exists could not be used.
 ///
 /// Checks `$WORKSPACE/.codewhale/config.toml` first, falling back to
 /// `$WORKSPACE/.deepseek/config.toml` for backward compatibility.
-/// Returns `None` if neither file exists or can't be parsed.
-pub fn load_project_config(workspace: &Path) -> Option<ConfigToml> {
+pub fn load_project_config_outcome(workspace: &Path) -> ProjectConfigOutcome {
     for dir in [CODEWHALE_APP_DIR, LEGACY_APP_DIR] {
         let path = workspace.join(dir).join(CONFIG_FILE_NAME);
         if !project_config_candidate_exists(&path) {
@@ -2696,7 +2740,10 @@ pub fn load_project_config(workspace: &Path) -> Option<ConfigToml> {
             Ok(raw) => raw,
             Err(e) => {
                 tracing::warn!("Failed to read project config {}: {e:#}", path.display());
-                return None;
+                return ProjectConfigOutcome::Invalid {
+                    path,
+                    reason: format!("could not be read: {e}"),
+                };
             }
         };
         match toml::from_str::<ConfigToml>(&raw) {
@@ -2708,24 +2755,49 @@ pub fn load_project_config(workspace: &Path) -> Option<ConfigToml> {
                 if config.provider == ProviderKind::Custom
                     && raw_provider.as_deref() != Some(ProviderKind::Custom.as_str())
                 {
+                    // An unrecognized provider name deserializes to `Custom`
+                    // rather than failing, so a typo would otherwise be
+                    // accepted as a deliberate custom-provider selection.
                     tracing::warn!(
                         "Failed to parse project config {}; file contents were omitted",
                         quote_os_path(&path)
                     );
-                    return None;
+                    return ProjectConfigOutcome::Invalid {
+                        path,
+                        reason: match raw_provider {
+                            Some(name) => format!("unknown provider '{name}'"),
+                            None => "unknown provider".to_string(),
+                        },
+                    };
                 }
-                return Some(config);
+                return ProjectConfigOutcome::Loaded(Box::new(config));
             }
-            Err(_) => {
+            Err(err) => {
                 tracing::warn!(
                     "Failed to parse project config {}; file contents were omitted",
                     quote_os_path(&path)
                 );
-                return None;
+                return ProjectConfigOutcome::Invalid {
+                    path,
+                    // `toml`'s message names the offending key and span
+                    // without echoing the file, so it is safe to surface.
+                    reason: err.message().to_string(),
+                };
             }
         }
     }
-    None
+    ProjectConfigOutcome::Missing
+}
+
+/// Load a project-level config from the workspace.
+///
+/// Returns `None` both when no project config exists and when one exists but
+/// is unusable. Callers that act on the *absence* of project restrictions —
+/// anything deciding whether a project tightens `approval_policy` or
+/// `sandbox_mode` — should use [`load_project_config_outcome`] instead, so a
+/// broken file is not read as "this project asked for nothing."
+pub fn load_project_config(workspace: &Path) -> Option<ConfigToml> {
+    load_project_config_outcome(workspace).into_config()
 }
 
 fn project_config_candidate_exists(path: &Path) -> bool {

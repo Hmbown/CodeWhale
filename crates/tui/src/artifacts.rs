@@ -101,7 +101,7 @@ fn artifact_sessions_root() -> Option<PathBuf> {
     }
 
     // Honor explicit HOME/USERPROFILE isolation before consulting the host
-    // known-folder API. On Windows, `dirs::home_dir()` can ignore subprocess
+    // known-folder API. On Windows, `crate::config::effective_home_dir()` can ignore subprocess
     // environment redirection and leak artifacts into the runner profile.
     let home = crate::config::effective_home_dir()?;
     let primary = home.join(".codewhale").join("sessions");

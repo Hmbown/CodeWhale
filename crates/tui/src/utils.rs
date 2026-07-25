@@ -536,7 +536,7 @@ fn write_panic_dump(
     location: &std::panic::Location<'_>,
     message: &str,
 ) -> std::io::Result<()> {
-    let home = dirs::home_dir().ok_or_else(|| {
+    let home = crate::config::effective_home_dir().ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::NotFound, "home directory not found")
     })?;
     // Prefer .codewhale, fall back to .deepseek
@@ -662,11 +662,11 @@ pub fn url_encode(input: &str) -> String {
 /// resolve correctly across processes.
 #[must_use]
 pub fn display_path(path: &Path) -> String {
-    display_path_with_home(path, dirs::home_dir().as_deref())
+    display_path_with_home(path, crate::config::effective_home_dir().as_deref())
 }
 
 /// Like [`display_path`] but takes an explicit home directory instead of
-/// reading `$HOME` / `dirs::home_dir()`.  Used in tests and anywhere the
+/// reading `$HOME` / `crate::config::effective_home_dir()`.  Used in tests and anywhere the
 /// caller already has the home path available.
 ///
 /// The home-relative suffix is rejoined with the platform separator
@@ -1092,7 +1092,7 @@ mod spawn_supervised_tests {
     /// A spawned task that panics does not propagate the panic to the
     /// parent task — `spawn_supervised` catches it. Verified in isolation
     /// from the on-disk crash-dump path so the test is portable across
-    /// macOS / Linux / Windows (where `dirs::home_dir()` reads
+    /// macOS / Linux / Windows (where `crate::config::effective_home_dir()` reads
     /// `USERPROFILE`, not `HOME`, so env-mutation tricks don't redirect
     /// the dump on Windows).
     #[tokio::test]
@@ -1143,7 +1143,7 @@ mod spawn_supervised_tests {
 
     /// `write_panic_dump_to` writes a properly-formatted crash log into
     /// the supplied directory. Tested separately from `spawn_supervised`
-    /// because env-mutation redirection of `dirs::home_dir()` doesn't
+    /// because env-mutation redirection of `crate::config::effective_home_dir()` doesn't
     /// work on Windows.
     #[test]
     fn write_panic_dump_writes_named_log() {

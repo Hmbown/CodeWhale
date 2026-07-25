@@ -13,6 +13,11 @@
 
 use std::path::{Path, PathBuf};
 
+/// Re-exported so `config::effective_home_dir` and every `use paths::{...}`
+/// caller resolve unchanged. It lives in `home.rs` because this module is not
+/// includable from an integration test binary — see that file's header.
+pub(crate) use super::home::effective_home_dir;
+
 pub(crate) fn default_config_path() -> Option<PathBuf> {
     env_config_path().or_else(home_config_path)
 }
@@ -22,37 +27,6 @@ pub(crate) fn codewhale_home_dir() -> Option<PathBuf> {
         let path = PathBuf::from(path);
         (!path.as_os_str().is_empty()).then_some(path)
     })
-}
-
-pub(crate) fn effective_home_dir() -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("HOME") {
-        let path = PathBuf::from(path);
-        if !path.as_os_str().is_empty() {
-            return Some(path);
-        }
-    }
-
-    if let Some(path) = std::env::var_os("USERPROFILE") {
-        let path = PathBuf::from(path);
-        if !path.as_os_str().is_empty() {
-            return Some(path);
-        }
-    }
-
-    #[cfg(windows)]
-    {
-        if let (Some(drive), Some(homepath)) =
-            (std::env::var_os("HOMEDRIVE"), std::env::var_os("HOMEPATH"))
-        {
-            let mut path = PathBuf::from(drive);
-            path.push(homepath);
-            if !path.as_os_str().is_empty() {
-                return Some(path);
-            }
-        }
-    }
-
-    dirs::home_dir()
 }
 
 pub(crate) fn home_config_path() -> Option<PathBuf> {

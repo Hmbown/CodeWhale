@@ -233,13 +233,7 @@ impl FilePickerView {
         if self.filtered.is_empty() {
             return;
         }
-        let max = self.filtered.len() - 1;
-        let next = if delta.is_negative() {
-            self.selected.saturating_sub(delta.unsigned_abs())
-        } else {
-            (self.selected + delta as usize).min(max)
-        };
-        self.selected = next;
+        self.selected = crate::tui::list_nav::wrap_index(self.selected, self.filtered.len(), delta);
         self.adjust_scroll();
     }
 

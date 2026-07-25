@@ -750,25 +750,12 @@ mod tests {
         )
         .unwrap();
         let options = TuiOptions {
-            model: "deepseek-v4-pro".to_string(),
-            workspace: root.to_path_buf(),
             config_path: Some(config_path),
-            config_profile: None,
-            allow_shell: false,
-            use_alt_screen: true,
-            use_mouse_capture: false,
-            use_bracketed_paste: true,
-            max_subagents: 1,
             skills_dir: temp.path().join("skills"),
             memory_path: temp.path().join("memory.md"),
             notes_path: temp.path().join("notes.txt"),
             mcp_config_path: temp.path().join("mcp.json"),
-            use_memory: false,
-            start_in_agent_mode: false,
-            skip_onboarding: true,
-            yolo: false,
-            resume_session_id: None,
-            initial_input: None,
+            ..crate::test_support::test_tui_options(root.to_path_buf())
         };
         let config = Config {
             tools: Some(crate::config::ToolsConfig {

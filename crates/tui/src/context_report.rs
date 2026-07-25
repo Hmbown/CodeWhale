@@ -895,7 +895,6 @@ mod tests {
     use crate::config::Config;
     use crate::models::Tool;
     use std::fs;
-    use std::path::PathBuf;
     use tempfile::tempdir;
 
     #[test]
@@ -1082,25 +1081,14 @@ mod tests {
         .expect("parse config");
         let app = App::new(
             crate::tui::app::TuiOptions {
-                model: "deepseek-v4-pro".to_string(),
-                workspace: tmp.path().to_path_buf(),
-                config_path: None,
-                config_profile: None,
-                allow_shell: false,
                 use_alt_screen: false,
-                use_mouse_capture: false,
                 use_bracketed_paste: false,
-                max_subagents: 1,
-                skills_dir: PathBuf::from("."),
                 memory_path: memory_path.clone(),
                 notes_path: tmp.path().join("notes.txt"),
                 mcp_config_path: tmp.path().join("mcp.json"),
                 use_memory: true,
                 start_in_agent_mode: true,
-                skip_onboarding: true,
-                yolo: false,
-                resume_session_id: None,
-                initial_input: None,
+                ..crate::test_support::test_tui_options(tmp.path().to_path_buf())
             },
             &config,
         );

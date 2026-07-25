@@ -34,7 +34,7 @@
     "autoprefixer": "^10.4.20",
     "eslint": "^9.39.4",
     "eslint-config-next": "^15.5.18",
-    "postcss": "^8.5.14",
+    "postcss": "^8.5.18",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.3",
     "vitest": "^4.1.9",
@@ -42,7 +42,7 @@
   },
   "overrides": {
     "esbuild": "0.28.1",
-    "postcss": "^8.5.14",
+    "postcss": "^8.5.18",
     "sharp": "0.35.3",
     "ws": "8.21.0"
   }

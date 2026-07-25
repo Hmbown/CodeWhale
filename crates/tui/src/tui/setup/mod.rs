@@ -522,7 +522,7 @@ impl SetupRuntimeFacts {
 
 fn setup_codewhale_home_dir() -> std::path::PathBuf {
     codewhale_config::codewhale_home().unwrap_or_else(|_| {
-        dirs::home_dir().map_or_else(
+        crate::config::effective_home_dir().map_or_else(
             || std::path::PathBuf::from(".codewhale"),
             |home| home.join(".codewhale"),
         )
@@ -3213,7 +3213,23 @@ fn runtime_preset_diff_rows(preset: SetupRuntimePreset, facts: &SetupRuntimeFact
 }
 
 fn project_runtime_override_warning(workspace: &Path, locale: Locale) -> Option<String> {
-    let project = codewhale_config::load_project_config(workspace)?;
+    let outcome = codewhale_config::load_project_config_outcome(workspace);
+    // A project config that exists but can't be parsed is not the same as no
+    // project config: its restrictions are silently not in effect, and the
+    // workspace falls back to the user's baseline. Say so here rather than
+    // only in a log line the TUI never shows.
+    if let Some((path, reason)) = outcome.invalid() {
+        let path = path.display();
+        return Some(match locale {
+            Locale::ZhHans => format!(
+                "无法解析项目配置 {path}（{reason}）。此工作区的项目级运行姿态限制未生效，将回退到用户默认值。",
+            ),
+            _ => format!(
+                "Project config {path} could not be parsed ({reason}). Its runtime posture restrictions are NOT in effect; this workspace falls back to your user defaults.",
+            ),
+        });
+    }
+    let project = outcome.into_config()?;
     let mut fields = Vec::new();
     if let Some(policy) = project.approval_policy.as_deref() {
         fields.push(format!("approval_policy={policy}"));
@@ -3998,25 +4014,10 @@ mod tests {
 
     fn setup_test_options(workspace: std::path::PathBuf) -> crate::tui::app::TuiOptions {
         crate::tui::app::TuiOptions {
-            model: "deepseek-v4-pro".to_string(),
-            workspace,
-            config_path: None,
-            config_profile: None,
             allow_shell: true,
-            use_alt_screen: true,
-            use_mouse_capture: false,
-            use_bracketed_paste: true,
-            max_subagents: 1,
-            skills_dir: std::path::PathBuf::from("."),
-            memory_path: std::path::PathBuf::from("memory.md"),
-            notes_path: std::path::PathBuf::from("notes.txt"),
-            mcp_config_path: std::path::PathBuf::from("mcp.json"),
-            use_memory: false,
             start_in_agent_mode: true,
             skip_onboarding: false,
-            yolo: false,
-            resume_session_id: None,
-            initial_input: None,
+            ..crate::test_support::test_tui_options(workspace)
         }
     }
 

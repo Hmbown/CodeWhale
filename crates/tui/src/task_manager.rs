@@ -1854,7 +1854,7 @@ pub fn default_tasks_dir() -> PathBuf {
             return PathBuf::from(path);
         }
     }
-    dirs::home_dir()
+    crate::config::effective_home_dir()
         .map(|home| default_tasks_dir_for_home(&home))
         .unwrap_or_else(|| PathBuf::from(".codewhale").join("tasks"))
 }

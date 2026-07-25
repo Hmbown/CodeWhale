@@ -620,25 +620,12 @@ mod tests {
         skills_dir: PathBuf,
     ) -> App {
         let options = TuiOptions {
-            model: "deepseek-v4-pro".to_string(),
-            workspace: workspace.to_path_buf(),
-            config_path,
-            config_profile: None,
-            allow_shell: false,
-            use_alt_screen: true,
-            use_mouse_capture: false,
-            use_bracketed_paste: true,
-            max_subagents: 1,
+            config_path: config_path,
             skills_dir: skills_dir.clone(),
             memory_path: workspace.join("memory.md"),
             notes_path: workspace.join("notes.txt"),
-            mcp_config_path,
-            use_memory: false,
-            start_in_agent_mode: false,
-            skip_onboarding: true,
-            yolo: false,
-            resume_session_id: None,
-            initial_input: None,
+            mcp_config_path: mcp_config_path,
+            ..crate::test_support::test_tui_options(workspace.to_path_buf())
         };
         let mut app = App::new(options, &Config::default());
         app.ui_locale = Locale::En;

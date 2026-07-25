@@ -1320,14 +1320,13 @@ impl ApprovalView {
     }
 
     fn select_prev(&mut self) {
-        self.selected = self.selected.saturating_sub(1);
+        let len = ApprovalOption::order_for(&self.request.tool_name).len();
+        self.selected = crate::tui::list_nav::wrap_index(self.selected, len, -1);
     }
 
     fn select_next(&mut self) {
-        let max = ApprovalOption::order_for(&self.request.tool_name)
-            .len()
-            .saturating_sub(1);
-        self.selected = (self.selected + 1).min(max);
+        let len = ApprovalOption::order_for(&self.request.tool_name).len();
+        self.selected = crate::tui::list_nav::wrap_index(self.selected, len, 1);
     }
 
     fn current_option(&self) -> ApprovalOption {
@@ -1728,12 +1727,13 @@ impl ElevationView {
     }
 
     fn select_prev(&mut self) {
-        self.selected = self.selected.saturating_sub(1);
+        self.selected =
+            crate::tui::list_nav::wrap_index(self.selected, self.request.options.len(), -1);
     }
 
     fn select_next(&mut self) {
-        let max = self.request.options.len().saturating_sub(1);
-        self.selected = (self.selected + 1).min(max);
+        self.selected =
+            crate::tui::list_nav::wrap_index(self.selected, self.request.options.len(), 1);
     }
 
     fn current_option(&self) -> &ElevationOption {
@@ -2800,8 +2800,12 @@ diff --git a/src/b.rs b/src/b.rs
         view.select_next();
         assert_eq!(view.selected, 3);
 
-        // Should clamp at 3
+        // Wraps to the first option rather than dead-ending (#4755).
         view.select_next();
+        assert_eq!(view.selected, 0);
+
+        // And back around the other way.
+        view.select_prev();
         assert_eq!(view.selected, 3);
 
         view.select_prev();
@@ -3062,7 +3066,10 @@ diff --git a/src/b.rs b/src/b.rs
         let mut view = ApprovalView::new(benign_request());
 
         view.handle_key(create_key_event(KeyCode::Up));
-        assert_eq!(view.selected, 0); // clamped at 0
+        assert_eq!(view.selected, 3); // wraps to the last option (#4755)
+
+        view.handle_key(create_key_event(KeyCode::Down));
+        assert_eq!(view.selected, 0); // and back around to the first
 
         view.handle_key(create_key_event(KeyCode::Down));
         assert_eq!(view.selected, 1);

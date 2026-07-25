@@ -89,9 +89,8 @@ pub fn apply_slash_menu_selection(
                 .map(|metadata| metadata.takes_arguments())
         });
     let takes_arguments = user_takes_arguments.unwrap_or_else(|| {
-        commands::get_command_info(command_key).is_some_and(|info| {
-            info.name != "change" && (info.usage.contains('<') || info.usage.contains('['))
-        })
+        commands::get_command_info(command_key)
+            .is_some_and(|info| info.composer_wants_trailing_space())
     });
 
     if append_space

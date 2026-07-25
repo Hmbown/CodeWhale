@@ -1170,7 +1170,7 @@ pub fn default_automations_dir() -> PathBuf {
     if let Some(home) = std::env::var_os("CODEWHALE_HOME").filter(|value| !value.is_empty()) {
         return PathBuf::from(home).join("automations");
     }
-    dirs::home_dir()
+    crate::config::effective_home_dir()
         .map(|home| {
             let primary = home.join(".codewhale").join("automations");
             let legacy = home.join(".deepseek").join("automations");

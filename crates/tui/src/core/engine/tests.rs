@@ -1,6 +1,7 @@
 use super::*;
 
 use super::context::{COMPACTION_SUMMARY_MARKER, TURN_MAX_OUTPUT_TOKENS};
+use super::streaming::{TOOL_CALL_END_MARKERS, TOOL_CALL_MARKER_PAIRS};
 use super::turn_loop::{
     registered_tool_approval_required, registered_tool_blocked_in_full_access,
     registered_tool_forces_prompt, tool_error_degradation_runtime_hint,
@@ -7964,9 +7965,29 @@ fn mode_invariant_matrix_covers_context_catalog_subagents_and_prompt_metadata() 
             "{}: {text}",
             case.name
         );
+        // turn_meta carries the mode as a *fact*; the doctrine ships once in
+        // the stable prefix (#4780). Assert both halves so neither can be
+        // dropped silently the way the overlay was.
         assert!(
-            text.contains(case.prompt_marker),
-            "{}: missing {} in metadata",
+            !text.contains(case.prompt_marker),
+            "{}: turn metadata must not re-embed mode doctrine: {text}",
+            case.name
+        );
+        let prefix = crate::prompts::system_prompt_flat_text(
+            &crate::prompts::system_prompt_for_mode_with_context_skills_session_and_approval(
+                &engine.config.workspace,
+                None,
+                None,
+                None,
+                crate::prompts::PromptSessionContext {
+                    mode: case.mode,
+                    ..Default::default()
+                },
+            ),
+        );
+        assert!(
+            prefix.contains(case.prompt_marker),
+            "{}: missing {} in the stable prefix",
             case.name,
             case.prompt_marker
         );
@@ -9883,7 +9904,8 @@ fn external_user_wording_does_not_downgrade_standing_authority() {
 }
 
 #[test]
-fn turn_metadata_includes_plan_mode_policy() {
+fn turn_metadata_includes_plan_mode_as_fact_only() {
+    // #4780: turn_meta carries mode as a label, not the full mode doctrine.
     let tmp = tempdir().expect("tempdir");
     let config = EngineConfig {
         workspace: tmp.path().to_path_buf(),
@@ -9906,41 +9928,32 @@ fn turn_metadata_includes_plan_mode_policy() {
 
     assert!(text.contains("Current mode: plan"), "got: {text}");
     assert!(
-        text.contains("Current mode policy source: runtime"),
-        "got: {text}"
+        !text.contains("Current mode policy"),
+        "mode doctrine must not re-enter turn_meta: {text}"
     );
-    assert!(text.contains("##### Mode: Plan"), "got: {text}");
     assert!(
-        text.contains("All writes, patches, shell commands,")
-            && text.contains("and code execution are blocked"),
-        "got: {text}"
+        !text.contains("##### Mode: Plan"),
+        "mode overlay text must not re-enter turn_meta: {text}"
+    );
+    assert!(
+        !text.contains("All writes, patches, shell commands,"),
+        "mode doctrine must not re-enter turn_meta: {text}"
     );
 }
 
 #[test]
-fn turn_metadata_projects_effective_permission_question_discipline() {
+fn turn_metadata_projects_permission_posture_as_fact_only() {
+    // #4780: posture is a fact; question-discipline prose stays out of turn_meta.
     use crate::tui::approval::ApprovalMode;
 
     let cases = [
-        (
-            ApprovalMode::Suggest,
-            "Ask",
-            "Tool approvals and user decisions are separate",
-        ),
-        (
-            ApprovalMode::Auto,
-            "Auto-Review",
-            "Do not ask the user questions or pause for a user decision",
-        ),
-        (
-            ApprovalMode::Bypass,
-            "Full Access",
-            "Full Access does not authorize invented intent",
-        ),
-        (ApprovalMode::Never, "Never", "Remain read-only"),
+        (ApprovalMode::Suggest, "Ask"),
+        (ApprovalMode::Auto, "Auto-Review"),
+        (ApprovalMode::Bypass, "Full Access"),
+        (ApprovalMode::Never, "Never"),
     ];
 
-    for (approval_mode, posture, question_marker) in cases {
+    for (approval_mode, posture) in cases {
         let tmp = tempdir().expect("tempdir");
         let config = EngineConfig {
             workspace: tmp.path().to_path_buf(),
@@ -9963,10 +9976,13 @@ fn turn_metadata_projects_effective_permission_question_discipline() {
             "{posture}: {text}"
         );
         assert!(
-            text.contains("Current permission policy source: effective runtime authority"),
-            "{posture}: {text}"
+            !text.contains("Current permission policy source"),
+            "{posture}: doctrine must not re-enter turn_meta: {text}"
         );
-        assert!(text.contains(question_marker), "{posture}: {text}");
+        assert!(
+            !text.contains("Current question discipline"),
+            "{posture}: question discipline must not re-enter turn_meta: {text}"
+        );
     }
 }
 
@@ -11104,6 +11120,80 @@ fn filter_tool_call_delta_strips_deepseek_xml_marker() {
     }
     assert!(visible.contains("before"));
     assert!(visible.contains("after"));
+}
+
+#[test]
+fn filter_tool_call_delta_strips_deepseek_native_tool_tokens() {
+    // #3880: DeepSeek's chat template separates words with `▁` (U+2581), so
+    // `<｜tool▁calls▁begin｜>` matched no DSML entry and reached the user as
+    // visible text that interrupted the task.
+    for (start, end) in [
+        ("<｜tool▁calls▁begin｜>", "<｜tool▁calls▁end｜>"),
+        ("<｜tool▁call▁begin｜>", "<｜tool▁call▁end｜>"),
+        ("<|tool▁calls▁begin|>", "<|tool▁calls▁end|>"),
+        ("<｜tool_calls_begin｜>", "<｜tool_calls_end｜>"),
+        ("<|tool_call_begin|>", "<|tool_call_end|>"),
+        ("<｜tool▁outputs▁begin｜>", "<｜tool▁outputs▁end｜>"),
+    ] {
+        let mut in_block = false;
+        let visible = filter_tool_call_delta(
+            &format!("before {start}function<｜tool▁sep｜>read_file\n{{}}{end} after"),
+            &mut in_block,
+        );
+        assert!(!in_block, "state stuck inside block for {start}");
+        assert!(
+            !visible.contains("tool▁") && !visible.contains("tool_calls"),
+            "leaked {start} into visible text: {visible:?}"
+        );
+        assert!(visible.contains("before"), "{visible:?}");
+        assert!(visible.contains("after"), "{visible:?}");
+    }
+}
+
+#[test]
+fn filter_tool_call_delta_strips_deepseek_native_token_split_across_chunks() {
+    // The streaming filter carries a partial marker across chunk boundaries.
+    // These markers are multi-byte, so a split partway through one is the case
+    // most likely to slip past the carry buffer.
+    let mut state = ToolCallDeltaFilterState::default();
+    let full = "before <｜tool▁calls▁begin｜>payload<｜tool▁calls▁end｜> after";
+    let cut = full.find("calls").expect("marker present") + 2;
+    let mut visible = filter_tool_call_delta_with_state(&full[..cut], &mut state);
+    visible.push_str(&filter_tool_call_delta_with_state(&full[cut..], &mut state));
+
+    assert!(
+        !visible.contains("tool▁") && !visible.contains("payload"),
+        "chunk-split marker leaked: {visible:?}"
+    );
+    assert!(visible.contains("before"), "{visible:?}");
+    assert!(visible.contains("after"), "{visible:?}");
+}
+
+#[test]
+fn marker_tables_are_consistent() {
+    // Three parallel tables describe the same wrapper shapes. They drifting
+    // apart is exactly how #3880's family went unhandled, so assert they
+    // agree rather than trusting review.
+    assert_eq!(
+        TOOL_CALL_MARKER_PAIRS.len(),
+        TOOL_CALL_START_MARKERS.len(),
+        "start-marker table is out of sync with the pair table"
+    );
+    assert_eq!(
+        TOOL_CALL_MARKER_PAIRS.len(),
+        TOOL_CALL_END_MARKERS.len(),
+        "end-marker table is out of sync with the pair table"
+    );
+    for (index, (start, end)) in TOOL_CALL_MARKER_PAIRS.iter().enumerate() {
+        assert_eq!(
+            *start, TOOL_CALL_START_MARKERS[index],
+            "start marker {index} disagrees with the pair table"
+        );
+        assert_eq!(
+            *end, TOOL_CALL_END_MARKERS[index],
+            "end marker {index} disagrees with the pair table"
+        );
+    }
 }
 
 #[test]

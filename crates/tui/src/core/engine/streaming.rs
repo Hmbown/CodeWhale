@@ -128,37 +128,25 @@ pub(super) fn stream_read_error_user_message(message: &str, any_content_received
     )
 }
 
-pub(crate) const TOOL_CALL_START_MARKERS: [&str; 12] = [
-    "[TOOL_CALL]",
-    "<codewhale:tool_call",
-    "<tool_call",
-    "<invoke ",
-    "<function_calls>",
-    "<｜DSML｜tool_calls>",
-    "<｜DSML｜invoke ",
-    "<|DSML|tool_calls>",
-    "<|DSML|invoke ",
-    "<|dsml|tool_calls>",
-    "<|dsml|invoke ",
-    "<|tool_calls>",
-];
-
-pub(crate) const TOOL_CALL_END_MARKERS: [&str; 12] = [
-    "[/TOOL_CALL]",
-    "</codewhale:tool_call>",
-    "</tool_call>",
-    "</invoke>",
-    "</function_calls>",
-    "</｜DSML｜tool_calls>",
-    "</｜DSML｜invoke>",
-    "</|DSML|tool_calls>",
-    "</|DSML|invoke>",
-    "</|dsml|tool_calls>",
-    "</|dsml|invoke>",
-    "</|tool_calls>",
-];
-
-const TOOL_CALL_MARKER_PAIRS: [(&str, &str); 12] = [
+/// Wrapper shapes a model may emit as plain text instead of using the API tool
+/// channel. Each pair is `(start, end)`; the tables below are projections of
+/// this one and must stay in sync with it.
+///
+/// Three families are covered:
+///
+/// 1. Generic/Anthropic-style (`[TOOL_CALL]`, `<invoke …>`, `<function_calls>`).
+/// 2. DSML wrappers, in fullwidth `｜` (U+FF5C) and ASCII `|` delimiters, upper
+///    and lower case.
+/// 3. **DeepSeek's native tool-call tokens** (#3880). DeepSeek's chat template
+///    separates words with `▁` (U+2581 LOWER ONE EIGHTH BLOCK), not a space or
+///    underscore, so `<｜tool▁calls▁begin｜>` does not match any DSML entry and
+///    leaked into visible output. Both the `▁` and `_` separators are listed
+///    because a partially-normalizing tokenizer can emit either, and both
+///    delimiter forms because the ASCII fallback shows up in some renderings.
+///
+/// When adding a shape, add it here and to the two marker tables below.
+/// `marker_tables_are_consistent` enforces that they agree.
+pub(crate) const TOOL_CALL_MARKER_PAIRS: [(&str, &str); 28] = [
     ("[TOOL_CALL]", "[/TOOL_CALL]"),
     ("<codewhale:tool_call", "</codewhale:tool_call>"),
     ("<tool_call", "</tool_call>"),
@@ -171,6 +159,87 @@ const TOOL_CALL_MARKER_PAIRS: [(&str, &str); 12] = [
     ("<|dsml|tool_calls>", "</|dsml|tool_calls>"),
     ("<|dsml|invoke ", "</|dsml|invoke>"),
     ("<|tool_calls>", "</|tool_calls>"),
+    // DeepSeek native, fullwidth delimiters, U+2581 separator.
+    ("<｜tool▁calls▁begin｜>", "<｜tool▁calls▁end｜>"),
+    ("<｜tool▁call▁begin｜>", "<｜tool▁call▁end｜>"),
+    ("<｜tool▁outputs▁begin｜>", "<｜tool▁outputs▁end｜>"),
+    ("<｜tool▁output▁begin｜>", "<｜tool▁output▁end｜>"),
+    // DeepSeek native, ASCII delimiters, U+2581 separator.
+    ("<|tool▁calls▁begin|>", "<|tool▁calls▁end|>"),
+    ("<|tool▁call▁begin|>", "<|tool▁call▁end|>"),
+    ("<|tool▁outputs▁begin|>", "<|tool▁outputs▁end|>"),
+    ("<|tool▁output▁begin|>", "<|tool▁output▁end|>"),
+    // DeepSeek native, underscore separator.
+    ("<｜tool_calls_begin｜>", "<｜tool_calls_end｜>"),
+    ("<｜tool_call_begin｜>", "<｜tool_call_end｜>"),
+    ("<｜tool_outputs_begin｜>", "<｜tool_outputs_end｜>"),
+    ("<｜tool_output_begin｜>", "<｜tool_output_end｜>"),
+    ("<|tool_calls_begin|>", "<|tool_calls_end|>"),
+    ("<|tool_call_begin|>", "<|tool_call_end|>"),
+    ("<|tool_outputs_begin|>", "<|tool_outputs_end|>"),
+    ("<|tool_output_begin|>", "<|tool_output_end|>"),
+];
+
+pub(crate) const TOOL_CALL_START_MARKERS: [&str; 28] = [
+    "[TOOL_CALL]",
+    "<codewhale:tool_call",
+    "<tool_call",
+    "<invoke ",
+    "<function_calls>",
+    "<｜DSML｜tool_calls>",
+    "<｜DSML｜invoke ",
+    "<|DSML|tool_calls>",
+    "<|DSML|invoke ",
+    "<|dsml|tool_calls>",
+    "<|dsml|invoke ",
+    "<|tool_calls>",
+    "<｜tool▁calls▁begin｜>",
+    "<｜tool▁call▁begin｜>",
+    "<｜tool▁outputs▁begin｜>",
+    "<｜tool▁output▁begin｜>",
+    "<|tool▁calls▁begin|>",
+    "<|tool▁call▁begin|>",
+    "<|tool▁outputs▁begin|>",
+    "<|tool▁output▁begin|>",
+    "<｜tool_calls_begin｜>",
+    "<｜tool_call_begin｜>",
+    "<｜tool_outputs_begin｜>",
+    "<｜tool_output_begin｜>",
+    "<|tool_calls_begin|>",
+    "<|tool_call_begin|>",
+    "<|tool_outputs_begin|>",
+    "<|tool_output_begin|>",
+];
+
+pub(crate) const TOOL_CALL_END_MARKERS: [&str; 28] = [
+    "[/TOOL_CALL]",
+    "</codewhale:tool_call>",
+    "</tool_call>",
+    "</invoke>",
+    "</function_calls>",
+    "</｜DSML｜tool_calls>",
+    "</｜DSML｜invoke>",
+    "</|DSML|tool_calls>",
+    "</|DSML|invoke>",
+    "</|dsml|tool_calls>",
+    "</|dsml|invoke>",
+    "</|tool_calls>",
+    "<｜tool▁calls▁end｜>",
+    "<｜tool▁call▁end｜>",
+    "<｜tool▁outputs▁end｜>",
+    "<｜tool▁output▁end｜>",
+    "<|tool▁calls▁end|>",
+    "<|tool▁call▁end|>",
+    "<|tool▁outputs▁end|>",
+    "<|tool▁output▁end|>",
+    "<｜tool_calls_end｜>",
+    "<｜tool_call_end｜>",
+    "<｜tool_outputs_end｜>",
+    "<｜tool_output_end｜>",
+    "<|tool_calls_end|>",
+    "<|tool_call_end|>",
+    "<|tool_outputs_end|>",
+    "<|tool_output_end|>",
 ];
 
 #[derive(Debug, Default)]
