@@ -170,7 +170,7 @@ impl TuiPrefs {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let content = std::fs::read_to_string(&path)
+        let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read tui.toml from {}", path.display()))?;
         let prefs: TuiPrefs = match toml::from_str(&content) {
             Ok(p) => p,
@@ -202,7 +202,7 @@ impl TuiPrefs {
         }
         let serialized = toml::to_string_pretty(self).context("Failed to serialize TuiPrefs")?;
         let body = if path.exists() {
-            let raw = std::fs::read_to_string(&path)
+            let raw = std::fs::read_to_string(path)
                 .with_context(|| format!("Failed to read tui.toml at {}", path.display()))?;
             codewhale_config::merge_and_preserve_comments(&serialized, &raw).unwrap_or_else(|e| {
                 tracing::warn!("failed to merge tui.toml comments, saving without them: {e:#}");
@@ -211,7 +211,7 @@ impl TuiPrefs {
         } else {
             serialized
         };
-        std::fs::write(&path, body)
+        std::fs::write(path, body)
             .with_context(|| format!("Failed to write tui.toml to {}", path.display()))?;
         Ok(())
     }
@@ -919,7 +919,7 @@ impl Settings {
 
         let serialized = toml::to_string_pretty(self).context("Failed to serialize settings")?;
         let body = if path.exists() {
-            let raw = std::fs::read_to_string(&path)
+            let raw = std::fs::read_to_string(path)
                 .with_context(|| format!("Failed to read settings at {}", path.display()))?;
             codewhale_config::merge_and_preserve_comments(&serialized, &raw).unwrap_or_else(|e| {
                 tracing::warn!("failed to merge settings comments, saving without them: {e:#}");
@@ -928,7 +928,7 @@ impl Settings {
         } else {
             serialized
         };
-        std::fs::write(&path, body)
+        std::fs::write(path, body)
             .with_context(|| format!("Failed to write settings to {}", path.display()))?;
         Ok(())
     }
