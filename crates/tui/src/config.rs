@@ -2999,6 +2999,36 @@ impl ShellAccessControl {
     }
 }
 
+fn approval_policy_env_is_set() -> bool {
+    let read = || {
+        std::env::var_os("CODEWHALE_APPROVAL_POLICY").is_some()
+            || std::env::var_os("DEEPSEEK_APPROVAL_POLICY").is_some()
+    };
+    #[cfg(test)]
+    {
+        crate::test_support::with_test_env_lock(read)
+    }
+    #[cfg(not(test))]
+    {
+        read()
+    }
+}
+
+fn allow_shell_env_is_set() -> bool {
+    let read = || {
+        std::env::var_os("CODEWHALE_ALLOW_SHELL").is_some()
+            || std::env::var_os("DEEPSEEK_ALLOW_SHELL").is_some()
+    };
+    #[cfg(test)]
+    {
+        crate::test_support::with_test_env_lock(read)
+    }
+    #[cfg(not(test))]
+    {
+        read()
+    }
+}
+
 fn project_config_root_bool(workspace: &Path, key: &str) -> Option<bool> {
     [
         workspace
@@ -3253,9 +3283,7 @@ impl Config {
             }
         }
 
-        if std::env::var_os("CODEWHALE_APPROVAL_POLICY").is_some()
-            || std::env::var_os("DEEPSEEK_APPROVAL_POLICY").is_some()
-        {
+        if approval_policy_env_is_set() {
             return ApprovalPolicyControl::Environment;
         }
 
@@ -3332,9 +3360,7 @@ impl Config {
             }
         }
 
-        if std::env::var_os("CODEWHALE_ALLOW_SHELL").is_some()
-            || std::env::var_os("DEEPSEEK_ALLOW_SHELL").is_some()
-        {
+        if allow_shell_env_is_set() {
             return ShellAccessControl::Environment;
         }
 
@@ -5901,6 +5927,26 @@ pub(crate) fn resolve_load_config_path(path: Option<PathBuf>) -> Option<PathBuf>
         return Some(expand_pathbuf(path));
     }
 
+    #[cfg(test)]
+    {
+        let honor_guarded_environment = crate::test_support::current_thread_holds_test_env_lock();
+        return crate::test_support::with_test_env_lock(|| {
+            if honor_guarded_environment {
+                resolve_default_load_config_path()
+            } else {
+                Some(
+                    crate::test_support::isolated_test_state_root()
+                        .join(codewhale_config::CONFIG_FILE_NAME),
+                )
+            }
+        });
+    }
+
+    #[cfg(not(test))]
+    resolve_default_load_config_path()
+}
+
+fn resolve_default_load_config_path() -> Option<PathBuf> {
     if let Some(path) = env_config_path() {
         if path.exists() {
             return Some(path);
@@ -5972,11 +6018,21 @@ fn env_base_url_override() -> Option<String> {
 }
 
 fn first_nonempty_env(names: &[&str]) -> Option<String> {
-    names.iter().find_map(|name| {
-        std::env::var(name)
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-    })
+    let read = || {
+        names.iter().find_map(|name| {
+            std::env::var(name)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
+    };
+    #[cfg(test)]
+    {
+        crate::test_support::with_test_env_lock(read)
+    }
+    #[cfg(not(test))]
+    {
+        read()
+    }
 }
 
 /// Return the provider-scoped endpoint override that `apply_env_overrides`
@@ -6041,18 +6097,41 @@ fn codewhale_env_var(
     codewhale_name: &str,
     legacy_name: &str,
 ) -> Result<String, std::env::VarError> {
-    std::env::var(codewhale_name)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            std::env::var(legacy_name)
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-        })
-        .ok_or(std::env::VarError::NotPresent)
+    let read = || {
+        std::env::var(codewhale_name)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| {
+                std::env::var(legacy_name)
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+            })
+            .ok_or(std::env::VarError::NotPresent)
+    };
+    #[cfg(test)]
+    {
+        crate::test_support::with_test_env_lock(read)
+    }
+    #[cfg(not(test))]
+    {
+        read()
+    }
 }
 
 fn apply_env_overrides(config: &mut Config) {
+    #[cfg(test)]
+    {
+        return crate::test_support::with_test_env_lock(|| {
+            apply_env_overrides_unlocked(config);
+        });
+    }
+    #[cfg(not(test))]
+    {
+        apply_env_overrides_unlocked(config);
+    }
+}
+
+fn apply_env_overrides_unlocked(config: &mut Config) {
     if let Ok(value) = codewhale_env_var("CODEWHALE_PROVIDER", "DEEPSEEK_PROVIDER") {
         config.provider = Some(value);
     }

@@ -2380,6 +2380,7 @@ mod tests {
         userprofile: Option<OsString>,
         codewhale_config_path: Option<OsString>,
         deepseek_config_path: Option<OsString>,
+        codewhale_allow_shell: Option<OsString>,
         deepseek_allow_shell: Option<OsString>,
         deepseek_approval_policy: Option<OsString>,
         no_animations: Option<OsString>,
@@ -2398,6 +2399,7 @@ mod tests {
             let userprofile_prev = env::var_os("USERPROFILE");
             let codewhale_config_prev = env::var_os("CODEWHALE_CONFIG_PATH");
             let deepseek_config_prev = env::var_os("DEEPSEEK_CONFIG_PATH");
+            let codewhale_allow_shell_prev = env::var_os("CODEWHALE_ALLOW_SHELL");
             let deepseek_allow_shell_prev = env::var_os("DEEPSEEK_ALLOW_SHELL");
             let deepseek_approval_policy_prev = env::var_os("DEEPSEEK_APPROVAL_POLICY");
             let no_animations_prev = env::var_os("NO_ANIMATIONS");
@@ -2410,6 +2412,7 @@ mod tests {
                 env::set_var("USERPROFILE", &home_str);
                 env::remove_var("CODEWHALE_CONFIG_PATH");
                 env::set_var("DEEPSEEK_CONFIG_PATH", &config_str);
+                env::remove_var("CODEWHALE_ALLOW_SHELL");
                 env::remove_var("DEEPSEEK_ALLOW_SHELL");
                 env::remove_var("DEEPSEEK_APPROVAL_POLICY");
                 env::remove_var("NO_ANIMATIONS");
@@ -2422,6 +2425,7 @@ mod tests {
                 userprofile: userprofile_prev,
                 codewhale_config_path: codewhale_config_prev,
                 deepseek_config_path: deepseek_config_prev,
+                codewhale_allow_shell: codewhale_allow_shell_prev,
                 deepseek_allow_shell: deepseek_allow_shell_prev,
                 deepseek_approval_policy: deepseek_approval_policy_prev,
                 no_animations: no_animations_prev,
@@ -2483,6 +2487,7 @@ mod tests {
             }
 
             for (key, value) in [
+                ("CODEWHALE_ALLOW_SHELL", self.codewhale_allow_shell.take()),
                 ("DEEPSEEK_ALLOW_SHELL", self.deepseek_allow_shell.take()),
                 (
                     "DEEPSEEK_APPROVAL_POLICY",
@@ -3142,10 +3147,10 @@ Parse error: permissions.toml at permissions.toml could not be parsed: expected 
 
     #[test]
     fn config_model_with_save_flag() {
+        let temp_root = tempfile::tempdir().expect("isolated settings dir");
+        let _guard = EnvGuard::new(temp_root.path());
         let mut app = create_test_app();
         let _result = config_command(&mut app, Some("model deepseek-v4-flash --save"));
-        // Note: This test may fail in environments where settings can't be saved
-        // The important thing is that the model is updated
         assert_eq!(app.model, "deepseek-v4-flash");
     }
 
@@ -3282,13 +3287,10 @@ Parse error: permissions.toml at permissions.toml could not be parsed: expected 
 
     #[test]
     fn config_command_allow_shell_save_persists_root_boolean() {
-        let temp_root = env::temp_dir().join(format!(
-            "codewhale-allow-shell-save-app-path-test-{}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&temp_root).unwrap();
+        let temp_root = tempfile::tempdir().expect("isolated config dir");
+        let _guard = EnvGuard::new(temp_root.path());
 
-        let config_path = temp_root.join("custom-config.toml");
+        let config_path = temp_root.path().join("custom-config.toml");
 
         let mut app = create_test_app();
         app.config_path = Some(config_path.clone());

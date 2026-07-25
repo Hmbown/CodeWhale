@@ -734,14 +734,24 @@ fn apply_exec_provider_override(config: &mut Config, provider_arg: &str) -> Resu
 }
 
 fn exec_model_env_override() -> Option<String> {
-    ["CODEWHALE_MODEL", "DEEPSEEK_MODEL"]
-        .into_iter()
-        .find_map(|key| {
-            std::env::var(key)
-                .ok()
-                .map(|model| model.trim().to_string())
-                .filter(|model| !model.is_empty())
-        })
+    let read = || {
+        ["CODEWHALE_MODEL", "DEEPSEEK_MODEL"]
+            .into_iter()
+            .find_map(|key| {
+                std::env::var(key)
+                    .ok()
+                    .map(|model| model.trim().to_string())
+                    .filter(|model| !model.is_empty())
+            })
+    };
+    #[cfg(test)]
+    {
+        crate::test_support::with_test_env_lock(read)
+    }
+    #[cfg(not(test))]
+    {
+        read()
+    }
 }
 
 fn top_level_prompt_initial_input(parts: &[String]) -> Option<tui::InitialInput> {
@@ -13289,6 +13299,42 @@ mod terminal_mode_tests {
             .expect_err("removed saved provider must fail closed");
         assert!(err.to_string().contains("will not fall back"), "{err}");
         assert_eq!(missing.provider, before);
+    }
+
+    #[test]
+    fn exec_model_reads_wait_for_foreign_test_env_overrides_to_restore() {
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        let (reader, expected_after_restore) = {
+            let lock = crate::test_support::lock_test_env();
+            let expected_after_restore = exec_model_env_override();
+            let temporary =
+                crate::test_support::EnvVarGuard::set("CODEWHALE_MODEL", "temporary-model");
+            let reader = std::thread::spawn(move || {
+                started_tx.send(()).expect("signal model read start");
+                tx.send(exec_model_env_override())
+                    .expect("send resolved model override");
+            });
+
+            started_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .expect("reader reached model read");
+            assert!(
+                rx.recv_timeout(std::time::Duration::from_millis(50))
+                    .is_err(),
+                "a foreign reader observed another test's temporary model override"
+            );
+            drop(temporary);
+            drop(lock);
+            (reader, expected_after_restore)
+        };
+
+        let observed = rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("reader resumed after model override was restored");
+        reader.join().expect("reader thread");
+        assert_eq!(observed, expected_after_restore);
     }
 
     #[tokio::test]

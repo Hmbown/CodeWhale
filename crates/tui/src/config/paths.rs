@@ -19,7 +19,27 @@ use std::path::{Path, PathBuf};
 pub(crate) use super::home::effective_home_dir;
 
 pub(crate) fn default_config_path() -> Option<PathBuf> {
-    env_config_path().or_else(home_config_path)
+    #[cfg(test)]
+    {
+        let honor_guarded_environment = crate::test_support::current_thread_holds_test_env_lock();
+        return crate::test_support::with_test_env_lock(|| {
+            if honor_guarded_environment {
+                default_config_path_from_environment()
+            } else {
+                Some(
+                    crate::test_support::isolated_test_state_root()
+                        .join(codewhale_config::CONFIG_FILE_NAME),
+                )
+            }
+        });
+    }
+
+    #[cfg(not(test))]
+    default_config_path_from_environment()
+}
+
+fn default_config_path_from_environment() -> Option<PathBuf> {
+    env_config_path_unlocked().or_else(home_config_path)
 }
 
 pub(crate) fn codewhale_home_dir() -> Option<PathBuf> {

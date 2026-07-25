@@ -3,6 +3,36 @@
 use std::ffi::{OsStr, OsString};
 use std::sync::{Mutex, MutexGuard, OnceLock, TryLockError};
 use std::thread::ThreadId;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Process-wide state root for unit tests that do not intentionally provide an
+/// explicit config/settings path.
+///
+/// The production fallback is the user's real home. That is useful at runtime
+/// and unsafe in a parallel test binary: an unguarded save can otherwise read
+/// or overwrite the developer's config. Tests that exercise path precedence
+/// still hold [`lock_test_env`] and provide explicit temporary environment
+/// values; every other test is confined here.
+pub(crate) fn isolated_test_state_root() -> &'static Path {
+    static ROOT: OnceLock<PathBuf> = OnceLock::new();
+    ROOT.get_or_init(|| {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "codewhale-tui-test-state-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap_or_else(|error| {
+            panic!(
+                "failed to create isolated unit-test state root {}: {error}",
+                root.display()
+            )
+        });
+        root
+    })
+}
 
 /// Build a syntactically valid, non-secret JWT fixture without embedding a
 /// high-entropy token-shaped literal in Git history.
@@ -14,6 +44,11 @@ pub(crate) fn future_test_jwt(label: &str) -> String {
 }
 
 fn env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn state_io_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
 }
@@ -82,24 +117,18 @@ pub(crate) fn lock_test_env() -> TestEnvLock {
 /// into it. The owner check makes the barrier re-entrant for a test that reads
 /// its own guarded override.
 pub(crate) fn with_test_env_lock<T>(read: impl FnOnce() -> T) -> T {
-    match env_lock().try_lock() {
-        Ok(_guard) => read(),
-        Err(TryLockError::Poisoned(poisoned)) => {
-            let _guard = poisoned.into_inner();
-            read()
-        }
-        Err(TryLockError::WouldBlock) if current_thread_owns_contended_env_lock() => read(),
-        Err(TryLockError::WouldBlock) => {
-            let _guard = match env_lock().lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            read()
-        }
+    if current_thread_owns_contended_env_lock() {
+        return read();
     }
+
+    // Acquire through the owner-tracking guard so nested environment readers
+    // remain re-entrant. This matters for config loading: the outer override
+    // pass holds the barrier while helper functions read individual variables.
+    let _guard = lock_test_env();
+    read()
 }
 
-fn current_thread_holds_test_env_lock() -> bool {
+pub(crate) fn current_thread_holds_test_env_lock() -> bool {
     match env_lock().try_lock() {
         Ok(guard) => {
             drop(guard);
@@ -111,6 +140,21 @@ fn current_thread_holds_test_env_lock() -> bool {
         }
         Err(TryLockError::WouldBlock) => current_thread_owns_contended_env_lock(),
     }
+}
+
+/// Serialize read/merge/write operations against the process-wide isolated
+/// test state root.
+///
+/// Path isolation protects the developer's files, but parallel tests still
+/// share the same temporary files. Settings persistence is a multi-step
+/// operation, so it needs this second barrier around the complete I/O
+/// transaction rather than only around path resolution.
+pub(crate) fn with_test_state_io_lock<T>(operation: impl FnOnce() -> T) -> T {
+    let _guard = match state_io_lock().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    operation()
 }
 
 /// Restore one environment variable when dropped.
@@ -213,7 +257,106 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    fn unguarded_state_writes_use_isolated_test_root() {
+        const PROBE_ENV: &str = "CODEWHALE_TEST_STATE_ISOLATION_PROBE";
+        const RECEIPT_ENV: &str = "CODEWHALE_TEST_STATE_ISOLATION_RECEIPT";
+
+        if std::env::var_os(PROBE_ENV).is_some() {
+            let config_path =
+                crate::config_persistence::persist_root_bool_key(None, "allow_shell", true)
+                    .expect("write isolated config");
+            let direct_config_path =
+                crate::config::save_workspace_trust(Path::new("/tmp/codewhale-test-workspace"))
+                    .expect("write through direct default config path");
+            crate::settings::Settings::default()
+                .save()
+                .expect("write isolated settings");
+            let settings_path =
+                crate::settings::Settings::path().expect("resolve isolated settings");
+            let root = isolated_test_state_root();
+            assert!(config_path.starts_with(root), "{}", config_path.display());
+            assert!(
+                settings_path.starts_with(root),
+                "{}",
+                settings_path.display()
+            );
+            assert!(
+                direct_config_path.starts_with(root),
+                "{}",
+                direct_config_path.display()
+            );
+            let receipt = std::env::var_os(RECEIPT_ENV).expect("receipt path");
+            std::fs::write(
+                receipt,
+                format!(
+                    "{}\n{}\n{}\n{}\n",
+                    root.display(),
+                    config_path.display(),
+                    settings_path.display(),
+                    direct_config_path.display()
+                ),
+            )
+            .expect("write isolation receipt");
+            return;
+        }
+
+        let sentinel = tempfile::tempdir().expect("sentinel home");
+        let user_state = sentinel.path().join(".codewhale");
+        std::fs::create_dir_all(&user_state).expect("create sentinel state");
+        let config_path = user_state.join("config.toml");
+        let settings_path = user_state.join("settings.toml");
+        let config_sentinel = b"# developer config sentinel\n";
+        let settings_sentinel = b"# developer settings sentinel\n";
+        std::fs::write(&config_path, config_sentinel).expect("seed config");
+        std::fs::write(&settings_path, settings_sentinel).expect("seed settings");
+        let receipt_path = sentinel.path().join("receipt.txt");
+
+        let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .arg("--exact")
+            .arg("test_support::tests::unguarded_state_writes_use_isolated_test_root")
+            .arg("--test-threads=1")
+            .env(PROBE_ENV, "1")
+            .env(RECEIPT_ENV, &receipt_path)
+            .env("HOME", sentinel.path())
+            .env("USERPROFILE", sentinel.path())
+            .env_remove("CODEWHALE_HOME")
+            .env_remove("CODEWHALE_CONFIG_PATH")
+            .env_remove("DEEPSEEK_CONFIG_PATH")
+            .output()
+            .expect("run isolated-state probe");
+        assert!(
+            output.status.success(),
+            "probe failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        assert_eq!(
+            std::fs::read(&config_path).expect("read config sentinel"),
+            config_sentinel
+        );
+        assert_eq!(
+            std::fs::read(&settings_path).expect("read settings sentinel"),
+            settings_sentinel
+        );
+
+        let receipt = std::fs::read_to_string(&receipt_path).expect("read isolation receipt");
+        let mut paths = receipt.lines().map(PathBuf::from);
+        let isolated_root = paths.next().expect("root receipt");
+        let written_config = paths.next().expect("config receipt");
+        let written_settings = paths.next().expect("settings receipt");
+        let direct_config = paths.next().expect("direct config receipt");
+        assert!(!isolated_root.starts_with(sentinel.path()));
+        assert!(written_config.starts_with(&isolated_root));
+        assert!(written_settings.starts_with(&isolated_root));
+        assert!(direct_config.starts_with(&isolated_root));
+        assert!(written_config.exists());
+        assert!(written_settings.exists());
+    }
+
+    #[test]
     fn config_path_read_waits_for_foreign_env_redirect_to_restore() {
+        let (started_tx, started_rx) = mpsc::channel();
         let (tx, rx) = mpsc::channel();
         let redirected = std::env::temp_dir().join(format!(
             "codewhale-config-path-read-barrier-{}",
@@ -224,10 +367,14 @@ mod tests {
             let lock = lock_test_env();
             let redirect = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &redirected);
             let reader = std::thread::spawn(move || {
+                started_tx.send(()).expect("signal config path read start");
                 tx.send(crate::config_persistence::config_toml_path(None))
                     .expect("send resolved config path");
             });
 
+            started_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("reader reached config path resolution");
             assert!(
                 rx.recv_timeout(Duration::from_millis(50)).is_err(),
                 "a foreign reader observed the temporary config redirect"
@@ -243,6 +390,45 @@ mod tests {
             .expect("resolve config path");
         reader.join().expect("reader thread");
         assert_ne!(resolved, redirected);
+    }
+
+    #[test]
+    fn settings_save_waits_for_foreign_state_io_transaction() {
+        let (holder_ready_tx, holder_ready_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            with_test_state_io_lock(|| {
+                holder_ready_tx.send(()).expect("signal state lock held");
+                release_rx.recv().expect("release state lock");
+            });
+        });
+        holder_ready_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("holder acquired state I/O lock");
+
+        let (started_tx, started_rx) = mpsc::channel();
+        let (saved_tx, saved_rx) = mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            started_tx.send(()).expect("signal settings save start");
+            saved_tx
+                .send(crate::settings::Settings::default().save())
+                .expect("send settings save result");
+        });
+        started_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("writer reached settings save");
+        assert!(
+            saved_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "settings save did not wait for an in-flight state transaction"
+        );
+
+        release_tx.send(()).expect("release holder");
+        holder.join().expect("holder thread");
+        saved_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("settings save resumed")
+            .expect("settings save succeeded");
+        writer.join().expect("writer thread");
     }
 }
 

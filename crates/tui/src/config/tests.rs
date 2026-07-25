@@ -5,6 +5,8 @@ use std::env;
 use std::ffi::OsString;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::sync::mpsc;
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
@@ -2332,6 +2334,90 @@ fn save_api_key_writes_config_file_under_cfg_test() -> Result<()> {
         assert_eq!(fs::metadata(&expected)?.permissions().mode() & 0o777, 0o600);
     }
     Ok(())
+}
+
+#[test]
+fn policy_control_waits_for_foreign_test_env_overrides_to_restore() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config_path = temp.path().join("config.toml");
+    let workspace = temp.path().join("workspace");
+    let managed_config_path = temp.path().join("missing-managed.toml");
+    let requirements_path = temp.path().join("missing-requirements.toml");
+    let (started_tx, started_rx) = mpsc::channel();
+    let (tx, rx) = mpsc::channel();
+
+    let reader = {
+        let lock = lock_test_env();
+        let shell_override = EnvVarGuard::set("CODEWHALE_ALLOW_SHELL", "false");
+        let approval_override = EnvVarGuard::set("DEEPSEEK_APPROVAL_POLICY", "never");
+        let reader = std::thread::spawn(move || {
+            started_tx.send(()).expect("signal policy read start");
+            let config = Config {
+                managed_config_path: Some(managed_config_path.display().to_string()),
+                requirements_path: Some(requirements_path.display().to_string()),
+                ..Config::default()
+            };
+            tx.send((
+                config.allow_shell_control(Some(&config_path), None, &workspace),
+                config.approval_policy_control(Some(&config_path), None, &workspace),
+            ))
+            .expect("send policy controls");
+        });
+
+        started_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("reader reached policy read");
+        assert!(
+            rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "a foreign reader observed another test's temporary policy overrides"
+        );
+        drop(approval_override);
+        drop(shell_override);
+        drop(lock);
+        reader
+    };
+
+    let (shell, approval) = rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("reader resumed after policy overrides were restored");
+    reader.join().expect("reader thread");
+    assert_eq!(shell, ShellAccessControl::Unset);
+    assert_eq!(approval, ApprovalPolicyControl::Unset);
+}
+
+#[test]
+fn base_url_reads_wait_for_foreign_test_env_overrides_to_restore() {
+    let (started_tx, started_rx) = mpsc::channel();
+    let (tx, rx) = mpsc::channel();
+
+    let reader = {
+        let lock = lock_test_env();
+        let expected_after_restore = env_base_url_override();
+        let override_guard =
+            EnvVarGuard::set("CODEWHALE_BASE_URL", "https://temporary.test.invalid/v1");
+        let reader = std::thread::spawn(move || {
+            started_tx.send(()).expect("signal base URL read start");
+            tx.send(env_base_url_override())
+                .expect("send resolved base URL override");
+        });
+
+        started_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("reader reached base URL read");
+        assert!(
+            rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "a foreign reader observed another test's temporary base URL override"
+        );
+        drop(override_guard);
+        drop(lock);
+        (reader, expected_after_restore)
+    };
+
+    let observed = rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("reader resumed after base URL override was restored");
+    reader.0.join().expect("reader thread");
+    assert_eq!(observed, reader.1);
 }
 
 #[test]

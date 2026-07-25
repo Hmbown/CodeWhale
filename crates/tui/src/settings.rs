@@ -134,25 +134,21 @@ impl TuiPrefs {
     /// `DEEPSEEK_CONFIG_PATH` environment variable (the parent directory of
     /// the pointed-to config is used instead of `~/.deepseek`).
     pub fn path() -> Result<PathBuf> {
-        // Honour the same env-var escape hatch used by Settings::path so that
-        // integration tests can redirect all config I/O to a temp directory.
-        if let Some(parent) = legacy_config_override_parent() {
-            return Ok(parent.join("tui.toml"));
-        }
-
-        let primary = codewhale_config::codewhale_home()
-            .ok()
-            .map(|home| home.join(TUI_PREFS_FILE_NAME));
-        if codewhale_config::codewhale_home_is_explicit() {
-            return primary.ok_or_else(|| {
-                anyhow::anyhow!("Failed to resolve tui.toml path: no Codewhale home found.")
+        #[cfg(test)]
+        {
+            let honor_guarded_environment =
+                crate::test_support::current_thread_holds_test_env_lock();
+            return crate::test_support::with_test_env_lock(|| {
+                if honor_guarded_environment {
+                    tui_prefs_path_from_environment()
+                } else {
+                    Ok(crate::test_support::isolated_test_state_root().join(TUI_PREFS_FILE_NAME))
+                }
             });
         }
-        let legacy_home = codewhale_config::legacy_deepseek_home()
-            .ok()
-            .map(|home| home.join(TUI_PREFS_FILE_NAME));
 
-        resolve_tui_prefs_path_from_candidates(primary, legacy_home)
+        #[cfg(not(test))]
+        tui_prefs_path_from_environment()
     }
 
     /// Load TUI preferences from `~/.codewhale/tui.toml` or a legacy fallback.
@@ -162,6 +158,15 @@ impl TuiPrefs {
     /// user without crashing the session.
     pub fn load() -> Result<Self> {
         let path = Self::path()?;
+        #[cfg(test)]
+        {
+            return crate::test_support::with_test_state_io_lock(|| Self::load_from_path(&path));
+        }
+        #[cfg(not(test))]
+        Self::load_from_path(&path)
+    }
+
+    fn load_from_path(path: &Path) -> Result<Self> {
         if !path.exists() {
             return Ok(Self::default());
         }
@@ -181,6 +186,15 @@ impl TuiPrefs {
     /// it already exists), creating the target directory if needed.
     pub fn save(&self) -> Result<()> {
         let path = Self::path()?;
+        #[cfg(test)]
+        {
+            return crate::test_support::with_test_state_io_lock(|| self.save_to_path(&path));
+        }
+        #[cfg(not(test))]
+        self.save_to_path(&path)
+    }
+
+    fn save_to_path(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).with_context(|| {
                 format!("Failed to create config directory {}", parent.display())
@@ -210,6 +224,28 @@ impl TuiPrefs {
         self.theme = normalize_theme_setting(&self.theme).map_err(anyhow::Error::msg)?;
         Ok(())
     }
+}
+
+fn tui_prefs_path_from_environment() -> Result<PathBuf> {
+    // Honour the same env-var escape hatch used by Settings::path so that
+    // integration tests can redirect all config I/O to a temp directory.
+    if let Some(parent) = legacy_config_override_parent() {
+        return Ok(parent.join("tui.toml"));
+    }
+
+    let primary = codewhale_config::codewhale_home()
+        .ok()
+        .map(|home| home.join(TUI_PREFS_FILE_NAME));
+    if codewhale_config::codewhale_home_is_explicit() {
+        return primary.ok_or_else(|| {
+            anyhow::anyhow!("Failed to resolve tui.toml path: no Codewhale home found.")
+        });
+    }
+    let legacy_home = codewhale_config::legacy_deepseek_home()
+        .ok()
+        .map(|home| home.join(TUI_PREFS_FILE_NAME));
+
+    resolve_tui_prefs_path_from_candidates(primary, legacy_home)
 }
 
 fn resolve_tui_prefs_path_from_candidates(
@@ -617,6 +653,32 @@ impl Settings {
         legacy_config_dir: Option<PathBuf>,
         migrate_legacy_file: bool,
     ) -> Result<Self> {
+        #[cfg(test)]
+        {
+            return crate::test_support::with_test_state_io_lock(|| {
+                Self::load_persisted_from_candidates_with_migration_unlocked(
+                    primary,
+                    legacy_home,
+                    legacy_config_dir,
+                    migrate_legacy_file,
+                )
+            });
+        }
+        #[cfg(not(test))]
+        Self::load_persisted_from_candidates_with_migration_unlocked(
+            primary,
+            legacy_home,
+            legacy_config_dir,
+            migrate_legacy_file,
+        )
+    }
+
+    fn load_persisted_from_candidates_with_migration_unlocked(
+        primary: Option<PathBuf>,
+        legacy_home: Option<PathBuf>,
+        legacy_config_dir: Option<PathBuf>,
+        migrate_legacy_file: bool,
+    ) -> Result<Self> {
         let write_path = primary
             .as_ref()
             .cloned()
@@ -712,23 +774,37 @@ impl Settings {
     /// Whether the user explicitly persisted an `auto_compact` preference.
     /// When absent, callers may choose a model-aware default.
     pub fn auto_compact_explicitly_configured() -> bool {
-        let (primary, legacy_home, legacy_config_dir) = settings_path_candidates();
-        let Ok(path) =
-            resolve_settings_path_from_candidates(primary, legacy_home, legacy_config_dir)
-        else {
-            return false;
-        };
-        let Ok(content) = std::fs::read_to_string(path) else {
-            return false;
-        };
-        let Ok(value) = toml::from_str::<toml::Value>(&content) else {
-            return false;
-        };
-        value
-            .as_table()
-            .is_some_and(|table| table.contains_key("auto_compact"))
+        let candidates = settings_path_candidates();
+        #[cfg(test)]
+        {
+            return crate::test_support::with_test_state_io_lock(|| {
+                auto_compact_explicitly_configured_from_candidates(candidates)
+            });
+        }
+        #[cfg(not(test))]
+        auto_compact_explicitly_configured_from_candidates(candidates)
     }
+}
 
+fn auto_compact_explicitly_configured_from_candidates(
+    (primary, legacy_home, legacy_config_dir): (Option<PathBuf>, Option<PathBuf>, Option<PathBuf>),
+) -> bool {
+    let Ok(path) = resolve_settings_path_from_candidates(primary, legacy_home, legacy_config_dir)
+    else {
+        return false;
+    };
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(value) = toml::from_str::<toml::Value>(&content) else {
+        return false;
+    };
+    value
+        .as_table()
+        .is_some_and(|table| table.contains_key("auto_compact"))
+}
+
+impl Settings {
     /// Apply environment-driven overlays after disk load. Used for
     /// platform a11y signals that should ignore the user's saved
     /// preference (#450). The env values are consulted at startup;
@@ -825,7 +901,15 @@ impl Settings {
     /// Save settings to disk
     pub fn save(&self) -> Result<()> {
         let path = Self::path()?;
+        #[cfg(test)]
+        {
+            return crate::test_support::with_test_state_io_lock(|| self.save_to_path(&path));
+        }
+        #[cfg(not(test))]
+        self.save_to_path(&path)
+    }
 
+    fn save_to_path(&self, path: &Path) -> Result<()> {
         // Create config directory if it doesn't exist
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).with_context(|| {
@@ -1550,6 +1634,28 @@ fn resolve_settings_path_from_candidates(
 }
 
 fn settings_path_candidates() -> (Option<PathBuf>, Option<PathBuf>, Option<PathBuf>) {
+    #[cfg(test)]
+    {
+        let honor_guarded_environment = crate::test_support::current_thread_holds_test_env_lock();
+        return crate::test_support::with_test_env_lock(|| {
+            if honor_guarded_environment {
+                settings_path_candidates_from_environment()
+            } else {
+                (
+                    Some(crate::test_support::isolated_test_state_root().join(SETTINGS_FILE_NAME)),
+                    None,
+                    None,
+                )
+            }
+        });
+    }
+
+    #[cfg(not(test))]
+    settings_path_candidates_from_environment()
+}
+
+fn settings_path_candidates_from_environment() -> (Option<PathBuf>, Option<PathBuf>, Option<PathBuf>)
+{
     // Allow tests to override the settings directory via the same env var
     // used for config (DEEPSEEK_CONFIG_PATH points at config.toml; the
     // settings file lives as a sibling in the same directory).
