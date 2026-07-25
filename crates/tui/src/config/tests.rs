@@ -9990,3 +9990,61 @@ fn picker_consent_persists_only_confirmed_exact_scope_and_revoke_is_one_step() {
         (0, 0, 0, 0, 0)
     );
 }
+
+/// Every provider must accept the model ids it advertises for itself.
+///
+/// Regression for #4829: `validate()` checked `default_text_model` against the
+/// DeepSeek-only normalizer, so a config our own setup wizard writes
+/// (`provider = "zai"`, `default_text_model = "GLM-5.2"`) was rejected on every
+/// startup — the CLI could not launch at all. This asserts the equal-treatment
+/// contract from CLAUDE.md: no provider's own models are second-class.
+#[test]
+fn validate_accepts_every_providers_own_advertised_models() {
+    for &provider in ApiProvider::all() {
+        for model in model_completion_names_for_provider(provider) {
+            let config = Config {
+                provider: Some(provider.as_str().to_string()),
+                default_text_model: Some(model.to_string()),
+                ..Default::default()
+            };
+            assert!(
+                config.validate().is_ok(),
+                "provider {} rejected its own advertised model {model}: {:?}",
+                provider.as_str(),
+                config.validate().unwrap_err().to_string(),
+            );
+        }
+    }
+}
+
+/// The exact config that bricked the CLI in the field.
+#[test]
+fn validate_accepts_zai_glm_model_from_setup_wizard() {
+    let config = Config {
+        provider: Some("zai".to_string()),
+        default_text_model: Some(DEFAULT_ZAI_MODEL.to_string()),
+        ..Default::default()
+    };
+    config
+        .validate()
+        .expect("setup-wizard zai/GLM config must validate");
+}
+
+/// The official DeepSeek gate is the one legitimate per-family rejection and
+/// must survive the fix — this is what keeps the validation meaningful.
+#[test]
+fn validate_still_rejects_unknown_model_on_official_deepseek() {
+    let config = Config {
+        provider: Some("deepseek".to_string()),
+        default_text_model: Some("definitely-not-a-deepseek-model".to_string()),
+        ..Default::default()
+    };
+    let err = config
+        .validate()
+        .expect_err("official DeepSeek must reject foreign ids")
+        .to_string();
+    assert!(
+        err.contains("definitely-not-a-deepseek-model") && err.contains("deepseek"),
+        "error should name the model and the active provider, got: {err}"
+    );
+}

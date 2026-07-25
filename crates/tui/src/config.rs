@@ -3595,14 +3595,30 @@ impl Config {
                 }
             }
         }
+        // Validate the model against the *active provider's* name space, not
+        // against DeepSeek's. `canonical_model_id_for_provider` is the
+        // equal-treatment resolver: it applies each family's own canonical map
+        // (GLM via Z.ai, Kimi, MiniMax, …) and passes unknown ids through, so
+        // it rejects only what the provider genuinely cannot serve. Validating
+        // with the DeepSeek-only `normalize_model_name` bricked every config
+        // whose provider owns a non-DeepSeek family — including ones our own
+        // setup wizard writes (`provider = "zai"`, `GLM-5.2`). (#4829)
         if let Some(model) = self.default_text_model.as_deref()
             && !model.trim().eq_ignore_ascii_case("auto")
             && !provider_passes_model_through(self.api_provider())
             && !self.active_provider_preserves_custom_base_url_model()
-            && normalize_model_name(model).is_none()
+            && canonical_model_id_for_provider(self.api_provider(), model).is_none()
         {
+            let provider = self.api_provider();
+            let known = model_completion_names_for_provider(provider);
+            let hint = if known.is_empty() {
+                String::new()
+            } else {
+                format!(" (for example: {})", known.join(", "))
+            };
             anyhow::bail!(
-                "Invalid default_text_model '{model}': expected auto or a DeepSeek model ID (for example: deepseek-v4-pro, deepseek-v4-flash, deepseek-ai/deepseek-v4-pro)."
+                "Invalid default_text_model '{model}' for provider '{}': expected auto or a model ID this provider serves{hint}.",
+                provider.as_str()
             );
         }
         if let Some(policy) = self.approval_policy.as_deref() {
