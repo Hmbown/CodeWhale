@@ -54,6 +54,26 @@ use crate::work_graph::{
 /// already approved.
 const WORKFLOW_HANDOFF_MAX_CHARS: usize = 4_000;
 
+/// Model-facing run-record payloads carry only the newest events; the full
+/// stream persists per-event in `.codewhale/workflow-runs.jsonl` (#2974).
+const WORKFLOW_RESULT_EVENTS_TAIL: usize = 50;
+/// Bounded tail for free-form progress lines in model-facing payloads.
+const WORKFLOW_RESULT_PROGRESS_TAIL: usize = 20;
+/// Char cap for the VM `result` / `verification` values in model-facing
+/// payloads (matches the handoff compaction budget); oversized values
+/// collapse to a preview plus a journal pointer.
+const WORKFLOW_RESULT_VALUE_MAX_CHARS: usize = 4_000;
+/// Char cap per leaf output preview inside the model-facing execution
+/// receipt; full child output stays retrievable via the worker ledger and
+/// the journal.
+const WORKFLOW_RESULT_LEAF_OUTPUT_MAX_CHARS: usize = 500;
+/// Stated upper bound for a bounded model-facing run-record payload; the
+/// payload tests assert every `start`/`run`/`status` result stays below it.
+const WORKFLOW_RESULT_MAX_CHARS: usize = 24_000;
+/// In-memory (and snapshot) event retention per run: only the newest events
+/// are kept; older ones remain in the per-event journal lines (#2974).
+const WORKFLOW_RUN_EVENTS_MAX_RETAINED: usize = 1_000;
+
 #[derive(Clone)]
 pub struct WorkflowTool {
     manager: SharedSubAgentManager,
@@ -259,6 +279,8 @@ struct WorkflowRunSummary {
     error: Option<String>,
     /// Run-wide usage totals reconciled from per-task telemetry (#2974).
     usage: Option<WorkflowRunUsage>,
+    /// Events evicted from the retained tail; full stream in the journal.
+    events_dropped: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -501,6 +523,13 @@ struct WorkflowRunRecord {
     /// Run-wide usage totals reconciled at completion (#2974).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     usage: Option<WorkflowRunUsage>,
+    /// Total events recorded for this run (monotonic; survives the bounded
+    /// `events` tail retention) (#2974).
+    #[serde(default)]
+    events_total: u64,
+    /// Events evicted from the in-memory tail; available in the journal.
+    #[serde(default)]
+    events_dropped: u64,
 }
 
 impl WorkflowRunRecord {
@@ -535,6 +564,24 @@ impl WorkflowRunRecord {
             plan_approval: None,
             gate_status,
             usage: None,
+            events_total: 0,
+            events_dropped: 0,
+        }
+    }
+
+    /// Record one event, bounding retention to the newest
+    /// `WORKFLOW_RUN_EVENTS_MAX_RETAINED` entries (#2974). Every event is
+    /// journaled per-line at record time, so evicted entries remain
+    /// available in `.codewhale/workflow-runs.jsonl`.
+    fn push_event(&mut self, event: WorkflowUiEvent) {
+        self.events_total = self.events_total.saturating_add(1);
+        self.events.push(event);
+        if self.events.len() > WORKFLOW_RUN_EVENTS_MAX_RETAINED {
+            let overflow = self.events.len() - WORKFLOW_RUN_EVENTS_MAX_RETAINED;
+            self.events.drain(..overflow);
+            self.events_dropped = self
+                .events_dropped
+                .saturating_add(u64::try_from(overflow).unwrap_or(u64::MAX));
         }
     }
 
@@ -553,7 +600,8 @@ impl WorkflowRunRecord {
             schema_error_count: self.schema_errors.len(),
             progress_count: self.progress.len(),
             last_progress: self.progress.last().cloned(),
-            event_count: self.events.len(),
+            event_count: usize::try_from(self.events_total.max(self.events.len() as u64))
+                .unwrap_or(usize::MAX),
             last_event_type: self
                 .events
                 .last()
@@ -583,6 +631,7 @@ impl WorkflowRunRecord {
             gate_status: self.gate_status.clone(),
             error: self.error.clone(),
             usage: self.usage.clone(),
+            events_dropped: self.events_dropped,
         }
     }
 }
@@ -902,7 +951,7 @@ async fn start_workflow(
                 token_budget: record.token_budget,
             },
         );
-        record.events.push(started.clone());
+        record.push_event(started.clone());
         runs_guard.insert(run_id.clone(), record.clone());
         if let Err(err) = state.try_record_snapshot(&record) {
             runs_guard.remove(&run_id);
@@ -1089,7 +1138,7 @@ async fn cancel_workflow(
         record.completed_at_ms = Some(now_ms());
         let reason = "cancelled by workflow tool".to_string();
         record.error = Some(reason);
-        record.events.push(cancelled_event.clone());
+        record.push_event(cancelled_event.clone());
         record.clone()
     };
     if let Err(err) = state.try_record_snapshot(&snapshot) {
@@ -1275,8 +1324,8 @@ async fn run_workflow_vm(
                     error: record.error.clone(),
                     usage: run_usage.clone(),
                 });
-                record.events.push(budget_event.clone());
-                record.events.push(completed.clone());
+                record.push_event(budget_event.clone());
+                record.push_event(completed.clone());
                 // Live stream terminal events even when recorded outside the
                 // driver helper (completion path).
                 driver.emit_ui_event(&budget_event);
@@ -1397,8 +1446,10 @@ fn workflow_result_for(
             ToolError::invalid_input(format!("Unknown workflow run_id '{run_id}'"))
         })?
     };
+    let journal_path = state.journal_path().to_path_buf();
+    let (payload, bounds) = bounded_run_record_value(&record, &journal_path);
     let mut result =
-        ToolResult::json(&record).map_err(|err| ToolError::execution_failed(err.to_string()))?;
+        ToolResult::json(&payload).map_err(|err| ToolError::execution_failed(err.to_string()))?;
     let summary = record.summary();
     result.metadata = Some(json!({
         "run_id": summary.run_id,
@@ -1407,6 +1458,9 @@ fn workflow_result_for(
         "child_count": summary.child_count,
         "schema_error_count": summary.schema_error_count,
         "event_count": summary.event_count,
+        "events_returned": bounds.events_returned,
+        "events_omitted": bounds.events_omitted,
+        "events_dropped": summary.events_dropped,
         "last_event_type": summary.last_event_type,
         "leaf_count": summary.leaf_count,
         "branch_count": summary.branch_count,
@@ -1415,10 +1469,157 @@ fn workflow_result_for(
         "gate_count": summary.gate_count,
         "blocked_gate_count": summary.blocked_gate_count,
         "gate_status": summary.gate_status,
+        // #2974: bounded payload; full detail stays in the durable journal.
+        "truncated": bounds.truncated(),
+        "payload_budget_chars": WORKFLOW_RESULT_MAX_CHARS,
+        "journal_path": journal_path.display().to_string(),
         // #4126: durable plan-approval receipt for audit/receipt consumers.
         "plan_approval": record.plan_approval,
     }));
     Ok(result)
+}
+
+/// What `bounded_run_record_value` clipped out of the model-facing payload.
+#[derive(Debug, Default)]
+struct RunPayloadBounds {
+    events_returned: usize,
+    events_omitted: usize,
+    progress_omitted: usize,
+    result_truncated: bool,
+    leaf_outputs_truncated: usize,
+}
+
+impl RunPayloadBounds {
+    fn truncated(&self) -> bool {
+        self.events_omitted > 0
+            || self.progress_omitted > 0
+            || self.result_truncated
+            || self.leaf_outputs_truncated > 0
+    }
+}
+
+/// Build the model-facing view of a run record (#2974). The JSON shape is
+/// identical to the full record (panel hydration and history cards keep
+/// working unchanged), but the unbounded parts are clipped:
+///
+/// - `events`: newest `WORKFLOW_RESULT_EVENTS_TAIL` entries.
+/// - `progress`: newest `WORKFLOW_RESULT_PROGRESS_TAIL` lines.
+/// - `result` / `verification`: collapsed to a preview + journal pointer
+///   when the serialized value exceeds `WORKFLOW_RESULT_VALUE_MAX_CHARS`.
+/// - `execution.leaf_results[*].output`: per-leaf preview capped at
+///   `WORKFLOW_RESULT_LEAF_OUTPUT_MAX_CHARS`.
+///
+/// Full detail remains available in `.codewhale/workflow-runs.jsonl`; every
+/// clip adds an explicit note/pointer so the model can fetch more on demand.
+fn bounded_run_record_value(
+    record: &WorkflowRunRecord,
+    journal_path: &Path,
+) -> (Value, RunPayloadBounds) {
+    let mut bounds = RunPayloadBounds::default();
+    let journal = journal_path.display().to_string();
+    let mut value = serde_json::to_value(record).unwrap_or_else(|_| json!({}));
+    let Some(obj) = value.as_object_mut() else {
+        return (value, bounds);
+    };
+
+    if let Some(events) = obj.get_mut("events").and_then(Value::as_array_mut) {
+        if events.len() > WORKFLOW_RESULT_EVENTS_TAIL {
+            let omitted = events.len() - WORKFLOW_RESULT_EVENTS_TAIL;
+            events.drain(..omitted);
+            bounds.events_omitted = omitted;
+        }
+        bounds.events_returned = events.len();
+    }
+    if bounds.events_omitted > 0 {
+        obj.insert(
+            "events_note".to_string(),
+            json!(format!(
+                "showing the newest {} of {} events; full stream: {journal}",
+                bounds.events_returned,
+                bounds.events_returned + bounds.events_omitted,
+            )),
+        );
+    }
+
+    if let Some(progress) = obj.get_mut("progress").and_then(Value::as_array_mut)
+        && progress.len() > WORKFLOW_RESULT_PROGRESS_TAIL
+    {
+        let omitted = progress.len() - WORKFLOW_RESULT_PROGRESS_TAIL;
+        progress.drain(..omitted);
+        bounds.progress_omitted = omitted;
+        obj.insert(
+            "progress_note".to_string(),
+            json!(format!(
+                "showing the newest {WORKFLOW_RESULT_PROGRESS_TAIL} of {} progress lines; full log: {journal}",
+                omitted + WORKFLOW_RESULT_PROGRESS_TAIL,
+            )),
+        );
+    }
+
+    for key in ["result", "verification"] {
+        let Some(raw) = obj.get(key).filter(|value| !value.is_null()) else {
+            continue;
+        };
+        let text = raw.to_string();
+        if text.chars().count() > WORKFLOW_RESULT_VALUE_MAX_CHARS {
+            obj.insert(
+                key.to_string(),
+                json!({
+                    "truncated": true,
+                    "omitted_chars": text.chars().count() - WORKFLOW_RESULT_VALUE_MAX_CHARS,
+                    "preview": truncate_chars(&text, WORKFLOW_RESULT_VALUE_MAX_CHARS),
+                    "full_detail": journal,
+                }),
+            );
+            bounds.result_truncated = true;
+        }
+    }
+
+    if let Some(leaves) = obj
+        .get_mut("execution")
+        .and_then(|execution| execution.get_mut("leaf_results"))
+        .and_then(Value::as_array_mut)
+    {
+        for leaf in leaves {
+            let too_long = leaf
+                .get("output")
+                .and_then(Value::as_str)
+                .is_some_and(|output| {
+                    output.chars().count() > WORKFLOW_RESULT_LEAF_OUTPUT_MAX_CHARS
+                });
+            if too_long
+                && let Some(slot) = leaf.get_mut("output")
+                && let Some(output) = slot.as_str()
+            {
+                let clipped = format!(
+                    "{} [leaf output truncated to {WORKFLOW_RESULT_LEAF_OUTPUT_MAX_CHARS} chars; full text: {journal}]",
+                    truncate_chars(output, WORKFLOW_RESULT_LEAF_OUTPUT_MAX_CHARS),
+                );
+                *slot = Value::String(clipped);
+                bounds.leaf_outputs_truncated += 1;
+            }
+        }
+    }
+
+    (value, bounds)
+}
+
+/// Char-boundary-safe truncation with an ellipsis (precedent:
+/// `cargo_failure_summary::truncate_chars`).
+fn truncate_chars(text: &str, max_chars: usize) -> String {
+    if let Some((idx, _)) = text.char_indices().nth(max_chars) {
+        if max_chars < 3 {
+            return text[..idx].to_string();
+        }
+        let truncate_at = text
+            .char_indices()
+            .nth(max_chars - 3)
+            .map(|(idx, _)| idx)
+            .unwrap_or(0);
+        format!("{}...", &text[..truncate_at])
+    } else {
+        text.to_string()
+    }
 }
 
 #[derive(Debug)]
@@ -2594,7 +2795,7 @@ impl SubAgentWorkflowDriver {
         let recorded = if let Ok(mut runs) = self.state.runs.lock()
             && let Some(record) = runs.get_mut(&self.run_id)
         {
-            record.events.push(event.clone());
+            record.push_event(event.clone());
             true
         } else {
             false
@@ -3100,7 +3301,7 @@ impl WorkflowDriver for SubAgentWorkflowDriver {
             && let Some(record) = runs.get_mut(&self.run_id)
         {
             record.progress.push(message.clone());
-            record.events.push(ui_event.clone());
+            record.push_event(ui_event.clone());
             if let Some(schema_error) = schema_error {
                 record.schema_errors.push(schema_error);
             }
@@ -3707,6 +3908,11 @@ mod journal {
                 warn!("workflow journal event failed: {err}");
             }
         }
+
+        /// Durable journal location for full-fidelity run detail (#2974).
+        pub fn journal_path(&self) -> &Path {
+            &self.journal.ledger_path
+        }
     }
 
     fn workspace_store() -> &'static Mutex<HashMap<PathBuf, Arc<WorkflowWorkspaceState>>> {
@@ -3802,10 +4008,15 @@ mod journal {
                     }
                     WorkflowJournalRecord::Event { run_id, event } => {
                         if let Some(run) = runs.get_mut(&run_id) {
-                            run.events.push(*event);
+                            run.push_event(*event);
                         }
                     }
                 }
+            }
+            // Journals written before #2974 have no counters; rebuild them
+            // from the retained tail so summaries stay truthful.
+            for run in runs.values_mut() {
+                run.events_total = run.events_total.max(run.events.len() as u64);
             }
             // A run journaled as Running belongs to a process that is gone;
             // without this it would show as live forever after a restart.
@@ -3898,6 +4109,8 @@ mod journal {
                 plan_approval: None,
                 gate_status: Vec::new(),
                 usage: None,
+                events_total: 0,
+                events_dropped: 0,
             }
         }
 
@@ -7217,6 +7430,171 @@ FINAL RECEIPT
         ))
         .expect("serialize plain run_completed");
         assert!(plain.get("usage").is_none(), "{plain}");
+    }
+
+    #[test]
+    fn run_record_event_retention_is_bounded() {
+        let mut record = WorkflowRunRecord::new("workflow_tail".to_string(), None, None, None);
+        for index in 0..(WORKFLOW_RUN_EVENTS_MAX_RETAINED + 5) {
+            record.push_event(WorkflowUiEvent::at(
+                index as u64,
+                WorkflowUiEventKind::Log {
+                    message: format!("log {index}"),
+                },
+            ));
+        }
+        assert_eq!(record.events.len(), WORKFLOW_RUN_EVENTS_MAX_RETAINED);
+        assert_eq!(record.events_dropped, 5);
+        assert_eq!(
+            record.events_total,
+            (WORKFLOW_RUN_EVENTS_MAX_RETAINED + 5) as u64
+        );
+        // The retained window is the newest tail.
+        let first = &record.events[0];
+        assert_eq!(first.at_ms, 5);
+        // Summaries report the truthful total, not the retained tail length.
+        let summary = record.summary();
+        assert_eq!(summary.event_count, WORKFLOW_RUN_EVENTS_MAX_RETAINED + 5);
+        assert_eq!(summary.events_dropped, 5);
+        assert_eq!(summary.last_event_type.as_deref(), Some("log"));
+    }
+
+    #[test]
+    fn workflow_status_payload_bounds_oversized_run_records() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = WorkflowWorkspaceState::open(tmp.path());
+        let run_id = "workflow_big_run".to_string();
+        let mut record = WorkflowRunRecord::new(run_id.clone(), None, None, None);
+        record.status = WorkflowRunStatus::Completed;
+        // A high-fan-out run: far more events/progress than the model needs.
+        for index in 0..200u64 {
+            record.push_event(WorkflowUiEvent::at(
+                index,
+                WorkflowUiEventKind::Log {
+                    message: format!("fan-out event {index}"),
+                },
+            ));
+        }
+        for index in 0..60 {
+            record.progress.push(format!("progress line {index}"));
+        }
+        record.result = Some(json!({ "blob": "r".repeat(10_000) }));
+        record.execution = Some(IrWorkflowExecution {
+            status: IrWorkflowRunStatus::Succeeded,
+            usage: WorkflowUsage::default(),
+            memo_usage: WorkflowMemoUsage::default(),
+            leaf_results: vec![LeafResult {
+                leaf_id: "inspect".to_string(),
+                task_id: "agent_1".to_string(),
+                role: None,
+                profile: None,
+                status: IrWorkflowRunStatus::Succeeded,
+                usage: WorkflowUsage::default(),
+                memo_usage: WorkflowMemoUsage::default(),
+                output: Some("o".repeat(5_000)),
+                artifacts: Vec::new(),
+                schema_error: None,
+            }],
+            branch_results: Vec::new(),
+            control_node_results: Vec::new(),
+        });
+        state
+            .runs
+            .lock()
+            .expect("runs")
+            .insert(run_id.clone(), record);
+
+        let result = workflow_result_for(&run_id, state).expect("status result");
+        assert!(
+            result.content.len() < WORKFLOW_RESULT_MAX_CHARS,
+            "bounded payload must stay under {WORKFLOW_RESULT_MAX_CHARS} chars, got {}",
+            result.content.len()
+        );
+        let payload: Value = serde_json::from_str(&result.content).expect("payload json");
+
+        let events = payload["events"].as_array().expect("events");
+        assert_eq!(events.len(), WORKFLOW_RESULT_EVENTS_TAIL, "{payload}");
+        assert!(
+            payload["events_note"]
+                .as_str()
+                .is_some_and(|note| note.contains("workflow-runs.jsonl")),
+            "{payload}"
+        );
+        // The retained window is the newest events.
+        assert_eq!(events[0]["at_ms"], 150);
+
+        let progress = payload["progress"].as_array().expect("progress");
+        assert_eq!(progress.len(), WORKFLOW_RESULT_PROGRESS_TAIL, "{payload}");
+        assert!(payload.get("progress_note").is_some(), "{payload}");
+
+        // Oversized VM result collapses to a preview with a journal pointer.
+        assert_eq!(payload["result"]["truncated"], true, "{payload}");
+        assert!(
+            payload["result"]["preview"]
+                .as_str()
+                .is_some_and(|preview| preview.chars().count() <= WORKFLOW_RESULT_VALUE_MAX_CHARS),
+            "{payload}"
+        );
+        assert!(
+            payload["result"]["full_detail"]
+                .as_str()
+                .is_some_and(|path| path.contains("workflow-runs.jsonl")),
+            "{payload}"
+        );
+
+        // Leaf outputs carry a bounded preview instead of full child text.
+        let leaf_output = payload["execution"]["leaf_results"][0]["output"]
+            .as_str()
+            .expect("leaf output");
+        assert!(
+            leaf_output.contains("leaf output truncated"),
+            "{leaf_output}"
+        );
+        assert!(leaf_output.len() < 1_000, "{leaf_output}");
+
+        let metadata = result.metadata.expect("metadata");
+        assert_eq!(metadata["events_returned"], WORKFLOW_RESULT_EVENTS_TAIL);
+        assert_eq!(metadata["events_omitted"], 150);
+        assert_eq!(metadata["event_count"], 200);
+        assert_eq!(metadata["truncated"], true);
+        assert!(
+            metadata["journal_path"]
+                .as_str()
+                .is_some_and(|path| path.contains("workflow-runs.jsonl")),
+            "{metadata}"
+        );
+    }
+
+    #[test]
+    fn workflow_status_payload_keeps_small_records_intact() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = WorkflowWorkspaceState::open(tmp.path());
+        let run_id = "workflow_small_run".to_string();
+        let mut record = WorkflowRunRecord::new(run_id.clone(), None, None, None);
+        record.status = WorkflowRunStatus::Completed;
+        record.push_event(WorkflowUiEvent::at(
+            1,
+            WorkflowUiEventKind::PhaseStarted {
+                title: "scan".to_string(),
+            },
+        ));
+        record.result = Some(json!({ "ok": true }));
+        state
+            .runs
+            .lock()
+            .expect("runs")
+            .insert(run_id.clone(), record);
+
+        let result = workflow_result_for(&run_id, state).expect("status result");
+        let payload: Value = serde_json::from_str(&result.content).expect("payload json");
+        assert_eq!(payload["events"].as_array().map(Vec::len), Some(1));
+        assert_eq!(payload["result"], json!({ "ok": true }));
+        assert!(payload.get("events_note").is_none(), "{payload}");
+        assert!(payload.get("progress_note").is_none(), "{payload}");
+        let metadata = result.metadata.expect("metadata");
+        assert_eq!(metadata["truncated"], false);
+        assert_eq!(metadata["events_omitted"], 0);
+        assert_eq!(metadata["events_returned"], 1);
     }
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
