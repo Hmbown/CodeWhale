@@ -34,8 +34,8 @@ use crate::tools::spec::{
     optional_bool, optional_str, optional_u64,
 };
 use crate::tools::subagent::{
-    SharedSubAgentManager, SubAgentCompletion, SubAgentRuntime, SubAgentStatus,
-    WorkflowTaskSpawnIdentity, WorkflowTaskSpawnMetadata, spawn_workflow_task,
+    SharedSubAgentManager, SubAgentCompletion, SubAgentManager, SubAgentResult, SubAgentRuntime,
+    SubAgentStatus, WorkflowTaskSpawnIdentity, WorkflowTaskSpawnMetadata, spawn_workflow_task,
 };
 use crate::tools::verifier::run_workflow_completion_gates;
 use crate::tools::workflow_plan_approval::{
@@ -257,6 +257,8 @@ struct WorkflowRunSummary {
     blocked_gate_count: usize,
     gate_status: Vec<GateStatusLine>,
     error: Option<String>,
+    /// Run-wide usage totals reconciled from per-task telemetry (#2974).
+    usage: Option<WorkflowRunUsage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -301,6 +303,9 @@ enum WorkflowUiEventKind {
     RunCompleted {
         status: WorkflowRunStatus,
         error: Option<String>,
+        /// Run-wide usage totals reconciled from per-task telemetry (#2974).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<WorkflowRunUsage>,
     },
     RunCancelled {
         reason: String,
@@ -312,6 +317,9 @@ enum WorkflowUiEventKind {
     TaskCompleted {
         task_id: String,
         status: IrWorkflowRunStatus,
+        /// Per-worker telemetry captured at terminal delivery (#2974).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<WorkflowTaskUsage>,
     },
     GateUpdated {
         gate_id: String,
@@ -348,6 +356,65 @@ enum WorkflowUiEventKind {
     Log {
         message: String,
     },
+}
+
+/// Per-worker usage telemetry carried on `task_completed` events (#2974).
+///
+/// Tokens come from the worker ledger (`AgentRunUsage`); `tool_calls` is the
+/// worker's model/tool step count (`SubAgentResult::steps_taken`) and
+/// `result_ref` points at the durable child artifact (transcript handle) so
+/// consumers can fetch full output by reference instead of inline text.
+/// Field names mirror `AgentRunUsage` so #4039 can render Tokens/Tools
+/// columns without a remapping layer.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+struct WorkflowTaskUsage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    total_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    result_ref: Option<String>,
+}
+
+/// Run-wide usage totals reconciled from per-task telemetry, carried on
+/// `run_completed` events and the persisted run record (#2974).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+struct WorkflowRunUsage {
+    #[serde(default)]
+    input_tokens: u64,
+    #[serde(default)]
+    output_tokens: u64,
+    #[serde(default)]
+    total_tokens: u64,
+    #[serde(default)]
+    tool_calls: u64,
+    /// Number of completed tasks that contributed telemetry.
+    #[serde(default)]
+    tasks_reported: u64,
+}
+
+impl WorkflowRunUsage {
+    fn add_task(&mut self, usage: &WorkflowTaskUsage) {
+        self.input_tokens = self
+            .input_tokens
+            .saturating_add(usage.input_tokens.unwrap_or(0));
+        self.output_tokens = self
+            .output_tokens
+            .saturating_add(usage.output_tokens.unwrap_or(0));
+        self.total_tokens = self
+            .total_tokens
+            .saturating_add(usage.total_tokens.unwrap_or(0));
+        self.tool_calls = self
+            .tool_calls
+            .saturating_add(u64::from(usage.tool_calls.unwrap_or(0)));
+        self.tasks_reported = self.tasks_reported.saturating_add(1);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -431,6 +498,9 @@ struct WorkflowRunRecord {
     /// Compact lane gate state for status / panel surfaces (#4179).
     #[serde(default)]
     gate_status: Vec<GateStatusLine>,
+    /// Run-wide usage totals reconciled at completion (#2974).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    usage: Option<WorkflowRunUsage>,
 }
 
 impl WorkflowRunRecord {
@@ -464,6 +534,7 @@ impl WorkflowRunRecord {
             verification: None,
             plan_approval: None,
             gate_status,
+            usage: None,
         }
     }
 
@@ -511,6 +582,7 @@ impl WorkflowRunRecord {
                 .count(),
             gate_status: self.gate_status.clone(),
             error: self.error.clone(),
+            usage: self.usage.clone(),
         }
     }
 }
@@ -1184,6 +1256,8 @@ async fn run_workflow_vm(
         }
     }
     let final_budget = driver.current_budget_snapshot();
+    // Reconcile run-wide usage totals from per-task telemetry (#2974).
+    let run_usage = run_usage_totals(&driver.task_records_snapshot());
     let snapshot = state
         .runs
         .lock()
@@ -1192,10 +1266,14 @@ async fn run_workflow_vm(
             let record = guard.get_mut(&run_id)?;
             if record.status != WorkflowRunStatus::Cancelled {
                 record.lifecycle_seq = record.lifecycle_seq.saturating_add(1);
+                if run_usage.is_some() {
+                    record.usage = run_usage.clone();
+                }
                 let budget_event = WorkflowUiEvent::new(budget_event_kind(final_budget));
                 let completed = WorkflowUiEvent::new(WorkflowUiEventKind::RunCompleted {
                     status: record.status,
                     error: record.error.clone(),
+                    usage: run_usage.clone(),
                 });
                 record.events.push(budget_event.clone());
                 record.events.push(completed.clone());
@@ -2360,6 +2438,7 @@ struct RuntimeTaskRecord {
     status: IrWorkflowRunStatus,
     output: Option<String>,
     schema_error: Option<String>,
+    usage: Option<WorkflowTaskUsage>,
 }
 
 struct SubAgentWorkflowDriver {
@@ -2454,7 +2533,7 @@ impl SubAgentWorkflowDriver {
             .map(|ids| ids.clone())
             .unwrap_or_default();
         for id in &ids {
-            self.record_task_completion(id, &TaskCompletion::Cancelled);
+            self.record_task_completion(id, &TaskCompletion::Cancelled, None);
         }
     }
 
@@ -2774,6 +2853,7 @@ impl SubAgentWorkflowDriver {
                     status: IrWorkflowRunStatus::Running,
                     output: None,
                     schema_error: None,
+                    usage: None,
                 },
             );
         }
@@ -2783,11 +2863,16 @@ impl SubAgentWorkflowDriver {
             .ok()
             .and_then(|state| state.pending.get(agent_id).cloned());
         if let Some(completion) = pending_completion {
-            self.record_task_completion(agent_id, &completion);
+            self.record_task_completion(agent_id, &completion.completion, completion.usage);
         }
     }
 
-    fn record_task_completion(&self, agent_id: &str, completion: &TaskCompletion) {
+    fn record_task_completion(
+        &self,
+        agent_id: &str,
+        completion: &TaskCompletion,
+        usage: Option<WorkflowTaskUsage>,
+    ) {
         let mut terminal_event = None;
         let mut completed_record = None;
         if let Ok(mut records) = self.task_records.lock()
@@ -2797,10 +2882,14 @@ impl SubAgentWorkflowDriver {
             let (status, output) = task_completion_status(completion);
             record.status = status;
             record.output = output;
+            if usage.is_some() {
+                record.usage = usage;
+            }
             if was_running {
                 terminal_event = Some(WorkflowUiEvent::new(WorkflowUiEventKind::TaskCompleted {
                     task_id: agent_id.to_string(),
                     status,
+                    usage: record.usage.clone(),
                 }));
                 completed_record = Some(record.clone());
             }
@@ -2838,14 +2927,19 @@ impl SubAgentWorkflowDriver {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         if let Some(completion) = state.pending.remove(&agent_id) {
-            let _ = waiter.send(completion);
+            let _ = waiter.send(completion.completion);
         } else {
             state.waiters.insert(agent_id, waiter);
         }
     }
 
-    fn deliver_completion(&self, agent_id: String, completion: TaskCompletion) {
-        self.record_task_completion(&agent_id, &completion);
+    fn deliver_completion(
+        &self,
+        agent_id: String,
+        completion: TaskCompletion,
+        usage: Option<WorkflowTaskUsage>,
+    ) {
+        self.record_task_completion(&agent_id, &completion, usage.clone());
         if let Ok(mut permits) = self.spawn_permits.lock() {
             permits.remove(&agent_id);
         }
@@ -2856,15 +2950,23 @@ impl SubAgentWorkflowDriver {
         if let Some(waiter) = state.waiters.remove(&agent_id) {
             let _ = waiter.send(completion);
         } else {
-            state.pending.insert(agent_id, completion);
+            state
+                .pending
+                .insert(agent_id, PendingCompletion { completion, usage });
         }
     }
+}
+
+#[derive(Clone)]
+struct PendingCompletion {
+    completion: TaskCompletion,
+    usage: Option<WorkflowTaskUsage>,
 }
 
 #[derive(Default)]
 struct CompletionState {
     waiters: HashMap<String, oneshot::Sender<TaskCompletion>>,
-    pending: HashMap<String, TaskCompletion>,
+    pending: HashMap<String, PendingCompletion>,
 }
 
 #[async_trait]
@@ -3070,6 +3172,31 @@ fn task_completion_status(completion: &TaskCompletion) -> (IrWorkflowRunStatus, 
     }
 }
 
+/// Sum per-task telemetry into run-wide totals for `run_completed` (#2974).
+/// Returns `None` when no task contributed telemetry (e.g. a plan that ran
+/// zero children) so the event stays byte-identical to its pre-#2974 shape.
+fn run_usage_totals(records: &[RuntimeTaskRecord]) -> Option<WorkflowRunUsage> {
+    let mut totals = WorkflowRunUsage::default();
+    let mut any = false;
+    for record in records {
+        if let Some(usage) = record.usage.as_ref() {
+            totals.add_task(usage);
+            any = true;
+        }
+    }
+    any.then_some(totals)
+}
+
+/// Convert captured task telemetry into the shared `WorkflowUsage` aggregate
+/// used by the workflow execution record (#2974).
+fn workflow_usage_from_task(usage: &WorkflowTaskUsage) -> WorkflowUsage {
+    WorkflowUsage {
+        input_tokens: usage.input_tokens.unwrap_or(0),
+        output_tokens: usage.output_tokens.unwrap_or(0),
+        cost_microusd: 0,
+    }
+}
+
 fn execution_from_declarative_spec(
     spec: &WorkflowSpec,
     records: Vec<RuntimeTaskRecord>,
@@ -3083,6 +3210,17 @@ fn execution_from_declarative_spec(
     for node in &spec.nodes {
         push_execution_node(node, &by_label, &mut execution);
     }
+    execution.usage =
+        execution
+            .leaf_results
+            .iter()
+            .fold(WorkflowUsage::default(), |mut totals, leaf| {
+                totals.input_tokens = totals.input_tokens.saturating_add(leaf.usage.input_tokens);
+                totals.output_tokens = totals
+                    .output_tokens
+                    .saturating_add(leaf.usage.output_tokens);
+                totals
+            });
     match terminal_status {
         WorkflowRunStatus::Completed => {}
         WorkflowRunStatus::Failed => mark_ir_status(&mut execution, IrWorkflowRunStatus::Failed),
@@ -3170,7 +3308,10 @@ fn push_leaf_execution(
         role: spec.role.clone(),
         profile: spec.profile.clone(),
         status,
-        usage: WorkflowUsage::default(),
+        usage: record
+            .and_then(|record| record.usage.as_ref())
+            .map(workflow_usage_from_task)
+            .unwrap_or_default(),
         memo_usage: WorkflowMemoUsage::default(),
         output: record.and_then(|record| record.output.clone()),
         artifacts: Vec::new(),
@@ -3334,10 +3475,10 @@ fn spawn_completion_pump(
         async move {
             while let Some(completion) = rx.recv().await {
                 let agent_id = completion.agent_id.clone();
-                let task_completion =
+                let (task_completion, usage) =
                     completion_from_manager(driver.manager.clone(), &agent_id, completion.payload)
                         .await;
-                driver.deliver_completion(agent_id, task_completion);
+                driver.deliver_completion(agent_id, task_completion, usage);
             }
         },
     );
@@ -3347,32 +3488,73 @@ async fn completion_from_manager(
     manager: SharedSubAgentManager,
     agent_id: &str,
     fallback_payload: String,
-) -> TaskCompletion {
+) -> (TaskCompletion, Option<WorkflowTaskUsage>) {
     for _ in 0..50 {
-        let snapshot = {
+        let snapshot_and_usage = {
             let manager = manager.read().await;
-            manager.get_result(agent_id).ok()
+            let snapshot = manager.get_result(agent_id).ok();
+            let usage = snapshot
+                .as_ref()
+                .filter(|snapshot| snapshot.status != SubAgentStatus::Running)
+                .map(|snapshot| task_usage_from_manager(&manager, agent_id, snapshot));
+            (snapshot, usage)
         };
-        if let Some(snapshot) = snapshot
+        if let (Some(snapshot), usage) = snapshot_and_usage
             && snapshot.status != SubAgentStatus::Running
         {
-            return match snapshot.status {
+            let completion = match snapshot.status {
                 SubAgentStatus::Completed => TaskCompletion::Completed {
-                    text: snapshot.result.unwrap_or(fallback_payload),
+                    text: snapshot.result.clone().unwrap_or(fallback_payload),
                 },
-                SubAgentStatus::Failed(message) => TaskCompletion::Failed { message },
-                SubAgentStatus::Interrupted(message) => TaskCompletion::Failed { message },
+                SubAgentStatus::Failed(ref message) => TaskCompletion::Failed {
+                    message: message.clone(),
+                },
+                SubAgentStatus::Interrupted(ref message) => TaskCompletion::Failed {
+                    message: message.clone(),
+                },
                 SubAgentStatus::Cancelled => TaskCompletion::Cancelled,
                 SubAgentStatus::BudgetExhausted => TaskCompletion::BudgetExhausted {
                     message: "sub-agent budget exhausted".to_string(),
                 },
                 SubAgentStatus::Running => unreachable!("guarded above"),
             };
+            return (completion, usage);
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
-    TaskCompletion::Failed {
-        message: format!("sub-agent '{agent_id}' did not report a terminal status within 1s"),
+    (
+        TaskCompletion::Failed {
+            message: format!("sub-agent '{agent_id}' did not report a terminal status within 1s"),
+        },
+        None,
+    )
+}
+
+/// Capture per-worker telemetry at terminal delivery (#2974): provider-reported
+/// tokens from the worker ledger, the model/tool step count and duration from
+/// the agent snapshot, and a durable artifact reference for the full output.
+fn task_usage_from_manager(
+    manager: &SubAgentManager,
+    agent_id: &str,
+    snapshot: &SubAgentResult,
+) -> WorkflowTaskUsage {
+    let record = manager.get_worker_record(agent_id);
+    let usage = record.as_ref().map(|record| &record.usage);
+    let result_ref = record.as_ref().and_then(|record| {
+        record
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.kind == "transcript")
+            .or_else(|| record.artifacts.last())
+            .map(|artifact| artifact.target.clone())
+    });
+    WorkflowTaskUsage {
+        input_tokens: usage.and_then(|usage| usage.input_tokens),
+        output_tokens: usage.and_then(|usage| usage.output_tokens),
+        total_tokens: usage.and_then(|usage| usage.total_tokens),
+        tool_calls: Some(snapshot.steps_taken),
+        duration_ms: Some(snapshot.duration_ms),
+        result_ref,
     }
 }
 
@@ -3715,6 +3897,7 @@ mod journal {
                 verification: None,
                 plan_approval: None,
                 gate_status: Vec::new(),
+                usage: None,
             }
         }
 
@@ -5546,6 +5729,7 @@ reviewer = "reviewer"
             status: IrWorkflowRunStatus::Succeeded,
             output: Some("findings: inspect tui exit path".to_string()),
             schema_error: None,
+            usage: None,
         });
 
         let mut implementer = TaskRequest {
@@ -5599,6 +5783,7 @@ reviewer = "reviewer"
             status: IrWorkflowRunStatus::Failed,
             output: Some("scout incomplete".to_string()),
             schema_error: None,
+            usage: None,
         });
         let mut blocked = TaskRequest {
             description: "Try after block.".to_string(),
@@ -5710,6 +5895,7 @@ reviewer = "reviewer"
             status: IrWorkflowRunStatus::Succeeded,
             output: Some("findings".to_string()),
             schema_error: None,
+            usage: None,
         });
 
         let mut request = TaskRequest {
@@ -5834,6 +6020,7 @@ reviewer = "reviewer"
             status: IrWorkflowRunStatus::Succeeded,
             output: Some("findings".to_string()),
             schema_error: None,
+            usage: None,
         });
 
         let mut request = TaskRequest {
@@ -5939,6 +6126,7 @@ reviewer = "reviewer"
             status: IrWorkflowRunStatus::Succeeded,
             output: Some("Review result: BLOCK".to_string()),
             schema_error: None,
+            usage: None,
         };
 
         match gate_outcome_for_completed_role(&record, true, None) {
@@ -5972,6 +6160,7 @@ reviewer = "reviewer"
             status: IrWorkflowRunStatus::Succeeded,
             output: Some("APPROVE".to_string()),
             schema_error: None,
+            usage: None,
         };
 
         match gate_outcome_for_completed_role(&record, true, Some("verification_plan")) {
@@ -6136,6 +6325,7 @@ reviewer = "reviewer"
             status: IrWorkflowRunStatus::Succeeded,
             output: Some("\nBLOCK\nmissing terminal receipt".to_string()),
             schema_error: None,
+            usage: None,
         });
 
         let verifier_request = || TaskRequest {
@@ -6187,6 +6377,7 @@ reviewer = "reviewer"
             status: IrWorkflowRunStatus::Succeeded,
             output: Some("APPROVE\nEVIDENCE REVIEW\n- all receipt owners confirmed".to_string()),
             schema_error: None,
+            usage: None,
         });
 
         let mut admitted_verifier = verifier_request();
@@ -6820,8 +7011,9 @@ FINAL RECEIPT
         let tmp = tempfile::tempdir().expect("tempdir");
         let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 2);
 
-        let completion =
+        let (completion, usage) =
             completion_from_manager(manager, "missing_agent", "fallback".to_string()).await;
+        assert!(usage.is_none(), "fail-closed path carries no telemetry");
         match completion {
             TaskCompletion::Failed { message } => {
                 assert!(
@@ -6833,6 +7025,199 @@ FINAL RECEIPT
         }
     }
 
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn task_completed_and_run_completed_carry_usage_telemetry() {
+        let _retry_guard = workflow_test_retry_guard();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+        let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 2);
+        let (client, calls) = fake_chat_client("telemetry-output").await;
+        let runtime = SubAgentRuntime::new(
+            client,
+            "deepseek-v4-flash".to_string(),
+            ctx.clone(),
+            true,
+            None,
+            manager,
+        );
+        let tool = WorkflowTool::new(runtime.manager.clone(), runtime);
+
+        let run = tool
+            .execute(
+                json!({
+                    "action": "run",
+                    "script": r#"export default workflow({
+                        "id": "telemetry-fixture",
+                        "goal": "usage telemetry",
+                        "nodes": [
+                            {
+                                "agent": {
+                                    "id": "inspect",
+                                    "prompt": "Inspect the code.",
+                                    "agent_type": "review"
+                                }
+                            }
+                        ]
+                    });"#
+                }),
+                &ctx,
+            )
+            .await
+            .expect("workflow run");
+        let payload: Value = serde_json::from_str(&run.content).expect("run json");
+        assert_eq!(payload["status"], "completed", "{payload}");
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "{payload}");
+
+        let events = payload["events"].as_array().expect("typed events");
+        let task_completed = events
+            .iter()
+            .find(|event| event["type"] == "task_completed")
+            .expect("task_completed event");
+        let usage = &task_completed["usage"];
+        let input = usage["input_tokens"].as_u64().expect("worker input tokens");
+        let output = usage["output_tokens"]
+            .as_u64()
+            .expect("worker output tokens");
+        let total = usage["total_tokens"].as_u64().expect("worker total tokens");
+        assert!(total >= input + output, "{task_completed}");
+        assert!(
+            usage["tool_calls"].as_u64().unwrap_or_default() >= 1,
+            "{task_completed}"
+        );
+        assert!(usage["duration_ms"].is_u64(), "{task_completed}");
+        assert!(
+            usage["result_ref"]
+                .as_str()
+                .is_some_and(|target| target.starts_with("agent:")),
+            "{task_completed}"
+        );
+
+        // Run totals reconcile exactly with the per-task telemetry.
+        let run_completed = events
+            .iter()
+            .find(|event| event["type"] == "run_completed")
+            .expect("run_completed event");
+        let run_usage = &run_completed["usage"];
+        assert_eq!(run_usage["total_tokens"], total, "{run_completed}");
+        assert_eq!(run_usage["input_tokens"], input, "{run_completed}");
+        assert_eq!(run_usage["output_tokens"], output, "{run_completed}");
+        assert_eq!(
+            run_usage["tool_calls"], usage["tool_calls"],
+            "{run_completed}"
+        );
+        assert_eq!(run_usage["tasks_reported"], 1, "{run_completed}");
+
+        // Totals also land on the persisted record and execution receipt.
+        assert_eq!(payload["usage"]["total_tokens"], total, "{payload}");
+        assert_eq!(
+            payload["execution"]["usage"]["input_tokens"], input,
+            "{payload}"
+        );
+        assert_eq!(
+            payload["execution"]["leaf_results"][0]["usage"]["input_tokens"], input,
+            "{payload}"
+        );
+    }
+
+    #[test]
+    fn run_usage_totals_reconcile_task_telemetry() {
+        let task_usage = |total: u64, calls: u32| WorkflowTaskUsage {
+            input_tokens: Some(total / 2),
+            output_tokens: Some(total - total / 2),
+            total_tokens: Some(total),
+            tool_calls: Some(calls),
+            duration_ms: Some(7),
+            result_ref: None,
+        };
+        let record = |agent_id: &str, usage: Option<WorkflowTaskUsage>| RuntimeTaskRecord {
+            agent_id: agent_id.to_string(),
+            label: None,
+            role: None,
+            status: IrWorkflowRunStatus::Succeeded,
+            output: None,
+            schema_error: None,
+            usage,
+        };
+        let records = vec![
+            record("a", Some(task_usage(100, 2))),
+            record("b", Some(task_usage(60, 1))),
+            record("c", None),
+        ];
+        let totals = run_usage_totals(&records).expect("totals");
+        assert_eq!(totals.total_tokens, 160);
+        assert_eq!(totals.input_tokens, 80);
+        assert_eq!(totals.output_tokens, 80);
+        assert_eq!(totals.tool_calls, 3);
+        assert_eq!(totals.tasks_reported, 2);
+
+        assert!(run_usage_totals(&[]).is_none());
+        assert!(run_usage_totals(&[record("d", None)]).is_none());
+    }
+
+    #[test]
+    fn workflow_ui_event_usage_telemetry_serde_round_trip() {
+        let event = WorkflowUiEvent::at(
+            7,
+            WorkflowUiEventKind::TaskCompleted {
+                task_id: "child-1".to_string(),
+                status: IrWorkflowRunStatus::Succeeded,
+                usage: Some(WorkflowTaskUsage {
+                    input_tokens: Some(128),
+                    output_tokens: Some(32),
+                    total_tokens: Some(160),
+                    tool_calls: Some(2),
+                    duration_ms: Some(42),
+                    result_ref: Some("agent:child-1".to_string()),
+                }),
+            },
+        );
+        let json = serde_json::to_value(&event).expect("serialize");
+        assert_eq!(json["usage"]["total_tokens"], 160);
+        let parsed: WorkflowUiEvent = serde_json::from_value(json).expect("deserialize round trip");
+        match parsed.kind {
+            WorkflowUiEventKind::TaskCompleted {
+                usage: Some(usage), ..
+            } => {
+                assert_eq!(usage.total_tokens, Some(160));
+                assert_eq!(usage.tool_calls, Some(2));
+                assert_eq!(usage.duration_ms, Some(42));
+            }
+            other => panic!("expected task_completed with usage, got {other:?}"),
+        }
+
+        // Journals written before #2974 carry no usage fields; they must
+        // still parse with `usage == None`.
+        let legacy_task: WorkflowUiEvent = serde_json::from_str(
+            r#"{"at_ms":5,"type":"task_completed","task_id":"child-1","status":"succeeded"}"#,
+        )
+        .expect("legacy task_completed parses");
+        match legacy_task.kind {
+            WorkflowUiEventKind::TaskCompleted { usage: None, .. } => {}
+            other => panic!("expected legacy task_completed without usage, got {other:?}"),
+        }
+        let legacy_run: WorkflowUiEvent = serde_json::from_str(
+            r#"{"at_ms":6,"type":"run_completed","status":"completed","error":null}"#,
+        )
+        .expect("legacy run_completed parses");
+        match legacy_run.kind {
+            WorkflowUiEventKind::RunCompleted { usage: None, .. } => {}
+            other => panic!("expected legacy run_completed without usage, got {other:?}"),
+        }
+
+        // A telemetry-less event serializes without a `usage` key, so old
+        // consumers see a byte-compatible shape.
+        let plain = serde_json::to_value(WorkflowUiEvent::at(
+            8,
+            WorkflowUiEventKind::RunCompleted {
+                status: WorkflowRunStatus::Completed,
+                error: None,
+                usage: None,
+            },
+        ))
+        .expect("serialize plain run_completed");
+        assert!(plain.get("usage").is_none(), "{plain}");
+    }
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn workflow_cancel_interrupts_vm_and_blocks_further_spawns() {
