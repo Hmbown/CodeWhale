@@ -2703,53 +2703,13 @@ fn tool_path_relevance_extracts_paths_from_command_text() {
 }
 
 fn create_test_app() -> App {
-    let options = TuiOptions {
-        model: "deepseek-v4-pro".to_string(),
-        workspace: PathBuf::from("."),
-        config_path: None,
-        config_profile: None,
-        allow_shell: false,
-        use_alt_screen: true,
-        use_mouse_capture: false,
-        use_bracketed_paste: true,
-        max_subagents: 1,
-        skills_dir: PathBuf::from("."),
-        memory_path: PathBuf::from("memory.md"),
-        notes_path: PathBuf::from("notes.txt"),
-        mcp_config_path: PathBuf::from("mcp.json"),
-        use_memory: false,
+    crate::test_support::test_app_with_options(TuiOptions {
         // Keep UI tests independent from the developer's saved
         // `default_mode` setting.
         start_in_agent_mode: true,
         skip_onboarding: false,
-        yolo: false,
-        resume_session_id: None,
-        initial_input: None,
-    };
-    let mut app = App::new(options, &Config::default());
-    // Pin locale and currency for deterministic tests regardless of host locale.
-    app.cost_currency = crate::pricing::CostCurrency::Usd;
-    app.ui_locale = crate::localization::Locale::En;
-    // Keep transcript tests independent of a concurrently swapped persisted
-    // settings home. Tests for hidden reasoning opt out explicitly.
-    app.show_thinking = true;
-    // Pin the route identity too: App::new consults the developer's real
-    // saved settings (provider/model maps, auto-model, route limits), so on
-    // a machine with customized settings the context-window tests computed
-    // against a different model than the requested deepseek-v4-pro.
-    app.set_provider_identity(crate::config::ApiProvider::Deepseek, "deepseek");
-    app.billing_presentation = crate::route_billing::BillingPresentation::Metered;
-    app.model = "deepseek-v4-pro".to_string();
-    app.auto_model = false;
-    app.last_effective_model = None;
-    app.active_route_limits = None;
-    app.active_context_window_override = None;
-    // UI fixtures replace `app.workspace` freely. Do not retain App::new's
-    // real process cwd as a second discovery root: parallel tests and a large
-    // developer checkout can otherwise consume the bounded mention index
-    // before the fixture workspace is scanned.
-    app.composer.mention_cwd = None;
-    app
+        ..crate::test_support::test_tui_options(PathBuf::from("."))
+    })
 }
 
 #[test]
@@ -3505,27 +3465,11 @@ fn auto_review_suppresses_stale_question_prompts_while_other_postures_allow_them
 
 fn create_test_options() -> TuiOptions {
     TuiOptions {
-        model: "deepseek-v4-pro".to_string(),
-        workspace: PathBuf::from("."),
-        config_path: None,
-        config_profile: None,
-        allow_shell: false,
-        use_alt_screen: true,
-        use_mouse_capture: false,
-        use_bracketed_paste: true,
-        max_subagents: 1,
-        skills_dir: PathBuf::from("."),
-        memory_path: PathBuf::from("memory.md"),
-        notes_path: PathBuf::from("notes.txt"),
-        mcp_config_path: PathBuf::from("mcp.json"),
-        use_memory: false,
         // Keep UI tests independent from the developer's saved
         // `default_mode` setting.
         start_in_agent_mode: true,
         skip_onboarding: false,
-        yolo: false,
-        resume_session_id: None,
-        initial_input: None,
+        ..crate::test_support::test_tui_options(PathBuf::from("."))
     }
 }
 
@@ -13537,24 +13481,9 @@ fn app_new_restores_saved_model_and_reasoning_effort() {
 
     let options = TuiOptions {
         model: "auto".to_string(),
-        workspace: PathBuf::from("."),
-        config_path: None,
-        config_profile: None,
-        allow_shell: false,
-        use_alt_screen: true,
-        use_mouse_capture: false,
-        use_bracketed_paste: true,
-        max_subagents: 1,
-        skills_dir: PathBuf::from("."),
-        memory_path: PathBuf::from("memory.md"),
-        notes_path: PathBuf::from("notes.txt"),
-        mcp_config_path: PathBuf::from("mcp.json"),
-        use_memory: false,
         start_in_agent_mode: true,
         skip_onboarding: false,
-        yolo: false,
-        resume_session_id: None,
-        initial_input: None,
+        ..crate::test_support::test_tui_options(PathBuf::from("."))
     };
     let config = Config {
         reasoning_effort: Some("max".to_string()),

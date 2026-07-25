@@ -177,25 +177,10 @@ mod tests {
     fn app_with_mcp_path(mcp_config_path: PathBuf) -> App {
         App::new(
             TuiOptions {
-                model: "deepseek-v4-pro".to_string(),
-                workspace: PathBuf::from("."),
-                config_path: None,
-                config_profile: None,
-                allow_shell: false,
                 use_alt_screen: false,
-                use_mouse_capture: false,
-                use_bracketed_paste: true,
                 max_subagents: 2,
-                skills_dir: PathBuf::from("."),
-                memory_path: PathBuf::from("memory.md"),
-                notes_path: PathBuf::from("notes.txt"),
-                mcp_config_path,
-                use_memory: false,
-                start_in_agent_mode: false,
-                skip_onboarding: true,
-                yolo: false,
-                resume_session_id: None,
-                initial_input: None,
+                mcp_config_path: mcp_config_path,
+                ..crate::test_support::test_tui_options(PathBuf::from("."))
             },
             &Config::default(),
         )

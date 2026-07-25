@@ -11,26 +11,13 @@ use crate::tui::motion::MotionMode;
 fn test_options(yolo: bool) -> TuiOptions {
     TuiOptions {
         model: "test-model".to_string(),
-        workspace: PathBuf::from("."),
-        config_path: None,
-        config_profile: None,
         allow_shell: yolo,
-        use_alt_screen: true,
-        use_mouse_capture: false,
-        use_bracketed_paste: true,
-        max_subagents: 1,
-        skills_dir: PathBuf::from("."),
-        memory_path: PathBuf::from("memory.md"),
-        notes_path: PathBuf::from("notes.txt"),
-        mcp_config_path: PathBuf::from("mcp.json"),
-        use_memory: false,
         // Keep unit tests independent from the developer's saved
         // `default_mode` setting.
         start_in_agent_mode: true,
         skip_onboarding: false,
         yolo,
-        resume_session_id: None,
-        initial_input: None,
+        ..crate::test_support::test_tui_options(PathBuf::from("."))
     }
 }
 

@@ -170,25 +170,11 @@ mod tests {
         let tmpdir = TempDir::new().expect("tempdir");
         let workspace = tmpdir.path().to_path_buf();
         let options = TuiOptions {
-            model: "deepseek-v4-pro".to_string(),
-            workspace: workspace.clone(),
-            config_path: None,
-            config_profile: None,
-            allow_shell: false,
-            use_alt_screen: true,
-            use_mouse_capture: false,
-            use_bracketed_paste: true,
-            max_subagents: 1,
             skills_dir: workspace.join("skills"),
             memory_path: workspace.join("memory.md"),
             notes_path: workspace.join("notes.txt"),
             mcp_config_path: workspace.join("mcp.json"),
-            use_memory: false,
-            start_in_agent_mode: false,
-            skip_onboarding: true,
-            yolo: false,
-            resume_session_id: None,
-            initial_input: None,
+            ..crate::test_support::test_tui_options(workspace.clone())
         };
         let mut app = App::new(options, &Config::default());
         app.current_session_id = Some("session-123".to_string());
