@@ -323,8 +323,3 @@ pub(crate) fn test_app_with_options(options: crate::tui::app::TuiOptions) -> cra
     app.composer.mention_cwd = None;
     app
 }
-
-/// `test_app_with_options(test_tui_options(workspace))`.
-pub(crate) fn test_app(workspace: impl AsRef<Path>) -> crate::tui::app::App {
-    test_app_with_options(test_tui_options(workspace))
-}

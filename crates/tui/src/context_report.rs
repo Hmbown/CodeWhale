@@ -895,7 +895,6 @@ mod tests {
     use crate::config::Config;
     use crate::models::Tool;
     use std::fs;
-    use std::path::PathBuf;
     use tempfile::tempdir;
 
     #[test]
