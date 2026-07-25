@@ -2526,12 +2526,22 @@ impl ConfigToml {
         };
 
         let env_provider_model = env.model_for(provider, &base_url);
-        let explicit_model = cli.model.is_some()
-            || env.model.is_some()
-            || env_provider_model.is_some()
-            || provider_cfg.model.is_some()
-            || root_deepseek_model.is_some()
-            || self.model.is_some();
+        // Derived from the same chain as `model` below so the reported
+        // provenance cannot drift from the id that is actually used.
+        let model_source = if cli.model.is_some() {
+            ModelSource::Cli
+        } else if env.model.is_some() || env_provider_model.is_some() {
+            ModelSource::Env
+        } else if provider_cfg.model.is_some() {
+            ModelSource::ProviderConfig
+        } else if root_deepseek_model.is_some() {
+            ModelSource::RootDefaultTextModel
+        } else if self.model.is_some() {
+            ModelSource::RootModel
+        } else {
+            ModelSource::ProviderDefault
+        };
+        let explicit_model = model_source.is_explicit();
         let model = cli
             .model
             .clone()
@@ -2610,6 +2620,7 @@ impl ConfigToml {
             provider,
             provider_source,
             model,
+            model_source,
             api_key,
             api_key_source,
             base_url,
@@ -3613,11 +3624,55 @@ pub enum ProviderSource {
     Config,
 }
 
+/// Where the resolved runtime model id came from.
+///
+/// This mirrors the precedence chain in
+/// [`ConfigToml::resolve_runtime_options_with_secrets`] so diagnostics can say
+/// *why* a model was chosen instead of presenting a built-in default as if the
+/// user had asked for it. [`Self::ProviderDefault`] is the only variant that
+/// means "nothing was configured".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelSource {
+    /// `--model` on the command line.
+    Cli,
+    /// A `CODEWHALE_*` environment variable.
+    Env,
+    /// `[providers.<name>].model`.
+    ProviderConfig,
+    /// The root `default_text_model` key, which is DeepSeek-scoped.
+    RootDefaultTextModel,
+    /// The provider-neutral root `model` key.
+    RootModel,
+    /// Nothing was configured; this is the built-in default for the provider.
+    ProviderDefault,
+}
+
+impl ModelSource {
+    /// Whether the id was chosen by the user rather than substituted by us.
+    #[must_use]
+    pub fn is_explicit(self) -> bool {
+        !matches!(self, Self::ProviderDefault)
+    }
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cli => "--model",
+            Self::Env => "environment",
+            Self::ProviderConfig => "config [providers.*].model",
+            Self::RootDefaultTextModel => "config default_text_model",
+            Self::RootModel => "config model",
+            Self::ProviderDefault => "provider default",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ResolvedRuntimeOptions {
     pub provider: ProviderKind,
     pub provider_source: ProviderSource,
     pub model: String,
+    pub model_source: ModelSource,
     pub api_key: Option<String>,
     pub api_key_source: Option<RuntimeApiKeySource>,
     pub base_url: String,

@@ -1753,7 +1753,17 @@ fn run() -> Result<()> {
         Some(Commands::McpServer) => run_mcp_server_command(&mut store),
         Some(Commands::Config(args)) => run_config_command(&mut store, args.command),
         Some(Commands::Model(args)) => {
-            run_model_command(&mut store, args.command, runtime_overrides.provider)
+            // `model resolve` is a diagnostic: it must report the same route
+            // the runtime would take, so it resolves through the same
+            // read-only path `doctor` uses rather than looking only at flags.
+            let resolved_runtime =
+                resolve_runtime_for_diagnostic_dispatch(&store, &runtime_overrides);
+            run_model_command(
+                &mut store,
+                args.command,
+                runtime_overrides.provider,
+                &resolved_runtime,
+            )
         }
         Some(Commands::Thread(args)) => run_thread_command(args.command),
         Some(Commands::Sandbox(args)) => run_sandbox_command(args.command),
@@ -3571,10 +3581,19 @@ fn model_command_provider_hint(
         .or(top_level_provider)
 }
 
+fn provider_source_label(source: ProviderSource) -> String {
+    match source {
+        ProviderSource::Cli => "--provider".to_string(),
+        ProviderSource::Env(name) => format!("environment ({name})"),
+        ProviderSource::Config => "config".to_string(),
+    }
+}
+
 fn run_model_command(
     store: &mut ConfigStore,
     command: ModelCommand,
     top_level_provider: Option<ProviderKind>,
+    resolved_runtime: &ResolvedRuntimeOptions,
 ) -> Result<()> {
     let registry = ModelRegistry::default();
     match command {
@@ -3589,12 +3608,60 @@ fn run_model_command(
             Ok(())
         }
         ModelCommand::Resolve { model, provider } => {
-            let provider = model_command_provider_hint(provider, top_level_provider);
-            let resolved = registry.resolve(model.as_deref(), provider);
+            let subcommand_provider = model_command_provider_hint(provider, top_level_provider);
+            let queried = model.as_deref().map(str::trim).filter(|m| !m.is_empty());
+
+            // With no explicit query, this reports the route the runtime would
+            // actually take — the same answer `doctor` gives — rather than
+            // re-deriving one from an empty flag set. Re-deriving is what made
+            // a Z.ai config report `provider: deepseek` (#4832).
+            if queried.is_none() && subcommand_provider.is_none() {
+                let source = resolved_runtime.model_source;
+                println!(
+                    "requested: {}",
+                    if source.is_explicit() {
+                        resolved_runtime.model.as_str()
+                    } else {
+                        ""
+                    }
+                );
+                println!("resolved: {}", resolved_runtime.model);
+                println!("provider: {}", resolved_runtime.provider.as_str());
+                println!("used_fallback: {}", !source.is_explicit());
+                println!(
+                    "provider_source: {}",
+                    provider_source_label(resolved_runtime.provider_source)
+                );
+                println!("model_source: {}", source.as_str());
+                return Ok(());
+            }
+
+            // An explicit model or provider makes this a hypothetical query
+            // ("what would this name resolve to"), so answer it against the
+            // registry — but default the provider to the configured one rather
+            // than to any single vendor.
+            let provider_hint = subcommand_provider.or(Some(resolved_runtime.provider));
+            let resolved = registry.resolve(queried, provider_hint);
             println!("requested: {}", resolved.requested.unwrap_or_default());
             println!("resolved: {}", resolved.resolved.id);
             println!("provider: {}", resolved.resolved.provider.as_str());
             println!("used_fallback: {}", resolved.used_fallback);
+            println!(
+                "provider_source: {}",
+                if subcommand_provider.is_some() {
+                    "--provider".to_string()
+                } else {
+                    provider_source_label(resolved_runtime.provider_source)
+                }
+            );
+            println!(
+                "model_source: {}",
+                if queried.is_some() {
+                    "argument"
+                } else {
+                    resolved_runtime.model_source.as_str()
+                }
+            );
             Ok(())
         }
         ModelCommand::Set { model } => {
@@ -4506,7 +4573,7 @@ fn read_api_key_from_stdin() -> Result<String> {
 mod tests {
     use super::*;
     use clap::error::ErrorKind;
-    use codewhale_config::ProviderSource;
+    use codewhale_config::{ModelSource, ProviderSource};
     use std::ffi::OsString;
     use std::sync::{Mutex, OnceLock};
 
@@ -4651,6 +4718,7 @@ mod tests {
             provider,
             provider_source,
             model: "test-model".to_string(),
+            model_source: ModelSource::ProviderDefault,
             api_key: None,
             api_key_source: None,
             base_url: "http://localhost:8000/v1".to_string(),
@@ -7550,6 +7618,7 @@ model = "qwen-2.5-7b"
         let resolved = ResolvedRuntimeOptions {
             provider: ProviderKind::Openai,
             provider_source: ProviderSource::Cli,
+            model_source: ModelSource::ProviderDefault,
             model: "glm-5".to_string(),
             api_key: Some("resolved-openai-key".to_string()),
             api_key_source: Some(RuntimeApiKeySource::Keyring),
@@ -7641,6 +7710,7 @@ model = "qwen-2.5-7b"
         let resolved = ResolvedRuntimeOptions {
             provider: ProviderKind::Openai,
             provider_source: ProviderSource::Cli,
+            model_source: ModelSource::ProviderDefault,
             model: "glm-5".to_string(),
             api_key: Some("resolved-openai-key".to_string()),
             api_key_source: Some(RuntimeApiKeySource::Keyring),
@@ -7692,6 +7762,7 @@ model = "qwen-2.5-7b"
         let resolved = ResolvedRuntimeOptions {
             provider: ProviderKind::OpenaiCodex,
             provider_source: ProviderSource::Config,
+            model_source: ModelSource::ProviderDefault,
             model: "gpt-5.5".to_string(),
             api_key: None,
             api_key_source: None,
@@ -7733,6 +7804,7 @@ model = "qwen-2.5-7b"
         let resolved = ResolvedRuntimeOptions {
             provider: ProviderKind::OpenaiCodex,
             provider_source: ProviderSource::Cli,
+            model_source: ModelSource::ProviderDefault,
             model: "gpt-5.5".to_string(),
             api_key: None,
             api_key_source: None,
@@ -7834,6 +7906,7 @@ model = "qwen-2.5-7b"
         let resolved = ResolvedRuntimeOptions {
             provider: ProviderKind::Deepseek,
             provider_source: ProviderSource::Config,
+            model_source: ModelSource::ProviderDefault,
             model: "deepseek-v4-pro".to_string(),
             api_key: Some("config-file-key".to_string()),
             api_key_source: Some(RuntimeApiKeySource::ConfigFile),
@@ -7941,6 +8014,7 @@ model = "qwen-2.5-7b"
         let resolved = ResolvedRuntimeOptions {
             provider: ProviderKind::Moonshot,
             provider_source: ProviderSource::Cli,
+            model_source: ModelSource::ProviderDefault,
             model: "kimi-k2.7-code".to_string(),
             api_key: Some("resolved-kimi-key".to_string()),
             api_key_source: Some(RuntimeApiKeySource::Keyring),
@@ -8008,6 +8082,7 @@ model = "qwen-2.5-7b"
         let resolved = ResolvedRuntimeOptions {
             provider: ProviderKind::Volcengine,
             provider_source: ProviderSource::Cli,
+            model_source: ModelSource::ProviderDefault,
             model: "DeepSeek-V4-Pro".to_string(),
             api_key: Some("resolved-ark-key".to_string()),
             api_key_source: Some(RuntimeApiKeySource::Keyring),
@@ -8076,6 +8151,7 @@ model = "qwen-2.5-7b"
         let resolved = ResolvedRuntimeOptions {
             provider: ProviderKind::Openai,
             provider_source: ProviderSource::Cli,
+            model_source: ModelSource::ProviderDefault,
             model: "glm-5".to_string(),
             api_key: None,
             api_key_source: None,
@@ -8124,6 +8200,7 @@ model = "qwen-2.5-7b"
             let resolved = ResolvedRuntimeOptions {
                 provider,
                 provider_source: ProviderSource::Config,
+                model_source: ModelSource::ProviderDefault,
                 model: "test-model".to_string(),
                 api_key: Some("test-key".to_string()),
                 api_key_source: Some(RuntimeApiKeySource::Keyring),
