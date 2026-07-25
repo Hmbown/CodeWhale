@@ -118,6 +118,18 @@ export const DOC_TOPICS: DocTopic[] = [
     category: "core-concepts",
   },
   {
+    id: "work",
+    slug: "work",
+    label: { en: "Work Surface", zh: "工作面板" },
+    description: {
+      en: "The counted To-do ledger, update_plan strategy context, and how work state flows to the sidebar, relay, and sub-agents.",
+      zh: "带计数的 To-do 台账、update_plan 策略上下文，以及工作状态如何流向侧栏、relay 和子 Agent。",
+    },
+    repoSource: ["docs/TOOL_SURFACE.md", "docs/TOOL_LIFECYCLE.md"],
+    hasPage: true,
+    category: "core-concepts",
+  },
+  {
     id: "subagents",
     slug: "subagents",
     label: { en: "Sub-Agents", zh: "子 Agent" },
