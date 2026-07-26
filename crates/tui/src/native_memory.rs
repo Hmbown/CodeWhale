@@ -171,19 +171,21 @@ impl NativeMemoryStore {
     /// Import the pre-v0.9.2 single memory file without removing or mutating
     /// it. An existing native source wins so repeated startup is idempotent.
     pub fn import_legacy(&self, legacy_path: &Path) -> Result<bool> {
-        if !legacy_path.is_file() || self.global_path().exists() {
-            return Ok(false);
-        }
-        let content = fs::read_to_string(legacy_path)
-            .with_context(|| format!("read legacy memory source {}", legacy_path.display()))?;
-        if content.trim().is_empty() {
-            return Ok(false);
-        }
-        let target = self.global_path();
-        ensure_memory_file(&target)?;
-        fs::write(&target, content)?;
-        self.reindex_file(&target)?;
-        Ok(true)
+        self.with_write_lock(|| {
+            if !legacy_path.is_file() || self.global_path().exists() {
+                return Ok(false);
+            }
+            let content = fs::read_to_string(legacy_path)
+                .with_context(|| format!("read legacy memory source {}", legacy_path.display()))?;
+            if content.trim().is_empty() {
+                return Ok(false);
+            }
+            let target = self.global_path();
+            ensure_memory_file(&target)?;
+            fs::write(&target, content)?;
+            self.reindex_file(&target)?;
+            Ok(true)
+        })
     }
 
     /// Append a reviewed note to the selected Markdown source and refresh its
@@ -201,31 +203,33 @@ impl NativeMemoryStore {
                 workspace_id.ok_or_else(|| anyhow!("workspace scope requires a workspace id"))?,
             )?,
         };
-        ensure_memory_file(&path)?;
-        let before = fs::read_to_string(&path).unwrap_or_default();
-        let line_start = before.lines().count().saturating_add(2);
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .with_context(|| format!("open memory source {}", path.display()))?;
-        if !before.is_empty() && !before.ends_with('\n') {
-            writeln!(file)?;
-        }
-        writeln!(file, "\n- {note}")?;
-        file.sync_data()?;
-        self.reindex_file(&path)?;
-        let line_end = line_start;
-        let id = self
-            .lookup_id(&path, line_start, line_end)?
-            .unwrap_or_default();
-        Ok(MemoryHit {
-            id,
-            text: note,
-            source: path,
-            line_start,
-            line_end,
-            stale: false,
+        self.with_write_lock(|| {
+            ensure_memory_file(&path)?;
+            let before = fs::read_to_string(&path).unwrap_or_default();
+            let line_start = before.lines().count().saturating_add(2);
+            let mut file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .with_context(|| format!("open memory source {}", path.display()))?;
+            if !before.is_empty() && !before.ends_with('\n') {
+                writeln!(file)?;
+            }
+            writeln!(file, "\n- {note}")?;
+            file.sync_data()?;
+            self.reindex_file(&path)?;
+            let line_end = line_start;
+            let id = self
+                .lookup_id(&path, line_start, line_end)?
+                .unwrap_or_default();
+            Ok(MemoryHit {
+                id,
+                text: note,
+                source: path,
+                line_start,
+                line_end,
+                stale: false,
+            })
         })
     }
 
@@ -324,6 +328,10 @@ impl NativeMemoryStore {
     }
 
     pub fn reindex(&self) -> Result<usize> {
+        self.with_write_lock(|| self.reindex_unlocked())
+    }
+
+    fn reindex_unlocked(&self) -> Result<usize> {
         fs::create_dir_all(&self.root)?;
         let conn = self.connection()?;
         conn.execute("DELETE FROM memory_fts", [])?;
@@ -346,12 +354,30 @@ impl NativeMemoryStore {
                 workspace_id.ok_or_else(|| anyhow!("workspace scope requires a workspace id"))?,
             )?,
         };
-        if target.is_file() {
-            fs::remove_file(&target)?;
-        } else if target.is_dir() {
-            remove_tree_contents(&target)?;
-        }
-        self.reindex().map(|_| ())
+        self.with_write_lock(|| {
+            if target.is_file() {
+                fs::remove_file(&target)?;
+            } else if target.is_dir() {
+                remove_tree_contents(&target)?;
+            }
+            self.reindex_unlocked().map(|_| ())
+        })
+    }
+
+    fn with_write_lock<T>(&self, operation: impl FnOnce() -> Result<T>) -> Result<T> {
+        fs::create_dir_all(&self.root)?;
+        let lock_path = self.root.join(".memory.lock");
+        let lock_file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&lock_path)?;
+        let mut lock = fd_lock::RwLock::new(lock_file);
+        let _guard = lock
+            .write()
+            .with_context(|| format!("write-lock native memory at {}", self.root.display()))?;
+        operation()
     }
 
     fn connection(&self) -> Result<Connection> {
@@ -666,5 +692,32 @@ mod tests {
             .unwrap();
         assert!(store.search("remove", 10).unwrap().is_empty());
         assert_eq!(store.search("keep", 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn concurrent_reviewed_writes_are_serialized() {
+        let tmp = TempDir::new().unwrap();
+        let store = NativeMemoryStore::new(tmp.path().join("memory"));
+        let handles = (0..8)
+            .map(|index| {
+                let store = store.clone();
+                std::thread::spawn(move || {
+                    store
+                        .remember(
+                            MemoryScope::Global,
+                            None,
+                            &format!("concurrent note {index}"),
+                        )
+                        .unwrap();
+                })
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        let content = fs::read_to_string(store.global_path()).unwrap();
+        for index in 0..8 {
+            assert!(content.contains(&format!("concurrent note {index}")));
+        }
     }
 }
