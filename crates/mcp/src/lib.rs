@@ -8,7 +8,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 mod stdio_client;
-#[cfg(test)]
+// Unix-gated as well as test-gated: every helper in here builds and spawns a
+// POSIX-sh script, so the tests that use it are `#[cfg(unix)]` and on Windows
+// the whole module compiles to dead code, which `-D warnings` rejects.
+#[cfg(all(test, unix))]
 mod test_support;
 
 pub use stdio_client::ChildProcessMcpClient;

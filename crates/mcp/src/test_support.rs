@@ -1,5 +1,7 @@
-//! Test-only helpers. Compiled under `#[cfg(test)]` only, so nothing here can
-//! be reached by a real `codewhale mcp-server` run.
+//! Test-only helpers. Compiled under `#[cfg(all(test, unix))]` only, so
+//! nothing here can be reached by a real `codewhale mcp-server` run, and
+//! Windows — where the POSIX-sh fixture cannot run and its consumers are
+//! `#[cfg(unix)]` — does not compile it as dead code.
 
 use std::path::{Path, PathBuf};
 
