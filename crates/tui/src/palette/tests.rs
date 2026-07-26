@@ -3,7 +3,10 @@ use super::adapt::{
     adapt_fg_for_depth, adapt_fg_for_palette_mode, adapt_fg_for_theme, blend, luma, nearest_ansi16,
     pulse_brightness, reasoning_surface_tint, rgb_to_ansi256,
 };
-use super::detect::{PaletteMode, palette_mode_from_apple_interface_style};
+use super::detect::{
+    BackgroundSource, PaletteMode, palette_mode_for_background,
+    palette_mode_from_apple_interface_style, resolve_terminal_background,
+};
 use super::themes::{
     CATPPUCCIN_MOCHA_UI_THEME, GRAYSCALE_UI_THEME, LIGHT_UI_THEME, MATRIX_UI_THEME,
     SELECTABLE_THEMES, SOLARIZED_LIGHT_UI_THEME, TERMINAL_UI_THEME, TOKYO_NIGHT_UI_THEME, ThemeId,
@@ -42,11 +45,11 @@ fn palette_mode_parses_colorfgbg_background_slot() {
 #[test]
 fn palette_mode_detect_prefers_colorfgbg_over_macos_fallback() {
     assert_eq!(
-        PaletteMode::detect_from_sources(Some("0;15"), Some(PaletteMode::Dark)),
+        resolve_terminal_background(None, Some("0;15"), Some(PaletteMode::Dark)).mode(),
         PaletteMode::Light
     );
     assert_eq!(
-        PaletteMode::detect_from_sources(Some("15;0"), Some(PaletteMode::Light)),
+        resolve_terminal_background(None, Some("15;0"), Some(PaletteMode::Light)).mode(),
         PaletteMode::Dark
     );
 }
@@ -54,15 +57,15 @@ fn palette_mode_detect_prefers_colorfgbg_over_macos_fallback() {
 #[test]
 fn palette_mode_detect_uses_macos_fallback_when_colorfgbg_missing_or_invalid() {
     assert_eq!(
-        PaletteMode::detect_from_sources(None, Some(PaletteMode::Light)),
+        resolve_terminal_background(None, None, Some(PaletteMode::Light)).mode(),
         PaletteMode::Light
     );
     assert_eq!(
-        PaletteMode::detect_from_sources(Some("not-a-color"), Some(PaletteMode::Light)),
+        resolve_terminal_background(None, Some("not-a-color"), Some(PaletteMode::Light)).mode(),
         PaletteMode::Light
     );
     assert_eq!(
-        PaletteMode::detect_from_sources(None, None),
+        resolve_terminal_background(None, None, None).mode(),
         PaletteMode::Dark
     );
 }
@@ -608,4 +611,350 @@ fn color_depth_detect_is_safe_without_env() {
     // exercise the path so a panic would surface.
     let _ = ColorDepth::detect();
     let _ = adapt_color(WHALE_BG, ColorDepth::detect());
+}
+
+// === #4833: contrast floor ===
+
+use super::contrast::{
+    AA_BODY_CONTRAST, contrast_ratio, effective_surface, enforce_contrast, meets_contrast,
+    relative_luminance, symbol_needs_text_contrast,
+};
+use super::detect::TerminalBackground;
+use super::osc11::parse_osc11_reply;
+use super::tokens::{
+    MODE_OPERATE, STATUS_SUCCESS, TEXT_MUTED, TEXT_SECONDARY, TEXT_SOFT, USER_BODY,
+};
+
+const WHITE: Color = Color::Rgb(0xFF, 0xFF, 0xFF);
+const BLACK: Color = Color::Rgb(0x00, 0x00, 0x00);
+
+/// Every dark-palette token that renders *text*. Frame chrome (`BORDER_COLOR`)
+/// is deliberately absent — see `symbol_needs_text_contrast`.
+const DARK_TEXT_TOKENS: &[Color] = &[
+    TEXT_BODY,
+    TEXT_SOFT,
+    TEXT_SECONDARY,
+    TEXT_MUTED,
+    TEXT_HINT,
+    TEXT_REASONING,
+    TEXT_TOOL_OUTPUT,
+    USER_BODY,
+    WHALE_ACTION,
+    WHALE_INFO,
+    WHALE_LIVE,
+    WHALE_HUMAN,
+    WHALE_ERROR,
+    WHALE_ACCENT_PRIMARY,
+    MODE_AGENT,
+    MODE_PLAN,
+    MODE_OPERATE,
+    MODE_YOLO,
+    STATUS_ERROR,
+    STATUS_WARNING,
+    STATUS_SUCCESS,
+    DIFF_ADDED,
+];
+
+fn approx(actual: f32, expected: f32, tolerance: f32) {
+    assert!(
+        (actual - expected).abs() <= tolerance,
+        "expected {expected} ± {tolerance}, got {actual}"
+    );
+}
+
+#[test]
+fn relative_luminance_matches_wcag_reference_values() {
+    approx(relative_luminance(WHITE).unwrap(), 1.0, 1e-4);
+    approx(relative_luminance(BLACK).unwrap(), 0.0, 1e-4);
+    // WCAG worked example: #808080 has relative luminance 0.2159.
+    approx(
+        relative_luminance(Color::Rgb(0x80, 0x80, 0x80)).unwrap(),
+        0.2159,
+        1e-3,
+    );
+    // Terminal-defined colors have no knowable RGB, so no luminance.
+    assert_eq!(relative_luminance(Color::Reset), None);
+    assert_eq!(relative_luminance(Color::White), None);
+    assert_eq!(relative_luminance(Color::Indexed(7)), None);
+    // The xterm cube and gray ramp are fixed by spec, so they are knowable.
+    assert!(relative_luminance(Color::Indexed(231)).is_some());
+}
+
+#[test]
+fn contrast_ratio_matches_known_pairs() {
+    approx(contrast_ratio(BLACK, WHITE).unwrap(), 21.0, 1e-3);
+    approx(contrast_ratio(WHITE, WHITE).unwrap(), 1.0, 1e-4);
+    // #767676 on white is the canonical "smallest AA-passing gray".
+    approx(
+        contrast_ratio(Color::Rgb(0x76, 0x76, 0x76), WHITE).unwrap(),
+        4.54,
+        0.01,
+    );
+    // Symmetric in its arguments.
+    assert_eq!(
+        contrast_ratio(TEXT_BODY, WHALE_BG),
+        contrast_ratio(WHALE_BG, TEXT_BODY)
+    );
+    // An unknowable side yields no ratio, and `meets_contrast` refuses to call
+    // that a pass.
+    assert_eq!(contrast_ratio(TEXT_BODY, Color::Reset), None);
+    assert!(!meets_contrast(TEXT_BODY, Color::Reset, AA_BODY_CONTRAST));
+}
+
+#[test]
+fn light_surface_lifts_body_text_that_no_whitelist_adapted() {
+    // The #4833 shape: dark-tuned ivory body text reaching a near-white
+    // terminal with no light adaptation applied, because detection said Dark.
+    let before = contrast_ratio(TEXT_BODY, WHITE).unwrap();
+    assert!(
+        before < AA_BODY_CONTRAST,
+        "precondition: unadapted body text is illegible on white ({before})"
+    );
+
+    let lifted = enforce_contrast(TEXT_BODY, WHITE, AA_BODY_CONTRAST);
+    let after = contrast_ratio(lifted, WHITE).unwrap();
+    assert!(
+        after >= AA_BODY_CONTRAST,
+        "body text must clear AA on a light surface, got {after}"
+    );
+
+    // The same holds for the reporter's paler surface and for the secondary
+    // tiers that collapsed alongside body text.
+    let reported_surface = Color::Rgb(0xF7, 0xF7, 0xF5);
+    for token in [TEXT_BODY, TEXT_SOFT, TEXT_SECONDARY, TEXT_HINT] {
+        let lifted = enforce_contrast(token, reported_surface, AA_BODY_CONTRAST);
+        let ratio = contrast_ratio(lifted, reported_surface).unwrap();
+        assert!(
+            ratio >= AA_BODY_CONTRAST,
+            "{token:?} still below floor on light surface: {ratio}"
+        );
+    }
+}
+
+#[test]
+fn enforce_contrast_lifts_by_the_smallest_amount_that_clears_the_floor() {
+    let lifted = enforce_contrast(TEXT_BODY, WHITE, AA_BODY_CONTRAST);
+    let ratio = contrast_ratio(lifted, WHITE).unwrap();
+    assert!(
+        (AA_BODY_CONTRAST..AA_BODY_CONTRAST + 0.1).contains(&ratio),
+        "expected a minimal lift to ~{AA_BODY_CONTRAST}, got {ratio}"
+    );
+    // Already-compliant colors are returned byte-identical.
+    assert_eq!(
+        enforce_contrast(LIGHT_TEXT_BODY, WHITE, AA_BODY_CONTRAST),
+        LIGHT_TEXT_BODY
+    );
+}
+
+#[test]
+fn dark_surface_leaves_every_text_token_untouched() {
+    // The no-regression guarantee for today's users: on the surfaces a dark
+    // terminal actually presents, no shipped text token is rewritten.
+    for surface in [
+        WHALE_BG,
+        WHALE_PANEL,
+        BLACK,
+        Color::Rgb(0x1E, 0x1E, 0x1E), // VS Code dark
+        Color::Rgb(0x0C, 0x0C, 0x0C), // Windows Terminal default
+    ] {
+        for token in DARK_TEXT_TOKENS {
+            assert_eq!(
+                enforce_contrast(*token, surface, AA_BODY_CONTRAST),
+                *token,
+                "{token:?} was rewritten on dark surface {surface:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn light_theme_tokens_already_clear_the_floor_on_their_own_surfaces() {
+    for surface in [LIGHT_SURFACE, LIGHT_PANEL, LIGHT_ELEVATED] {
+        for token in [
+            LIGHT_TEXT_BODY,
+            LIGHT_TEXT_HINT,
+            LIGHT_ACTION,
+            LIGHT_LIVE,
+            LIGHT_HUMAN,
+            LIGHT_WARNING,
+            LIGHT_DANGER,
+            LIGHT_SUCCESS_FG,
+        ] {
+            let ratio = contrast_ratio(token, surface).unwrap();
+            assert!(
+                ratio >= AA_BODY_CONTRAST,
+                "{token:?} on {surface:?} is {ratio}, below the floor"
+            );
+            assert_eq!(enforce_contrast(token, surface, AA_BODY_CONTRAST), token);
+        }
+    }
+}
+
+#[test]
+fn enforce_contrast_declines_when_it_cannot_know_the_colors() {
+    // Named/indexed colors are remapped by the user's terminal profile, and
+    // `Reset` is the terminal's own choice. Rewriting either would be a guess.
+    assert_eq!(
+        enforce_contrast(Color::White, WHITE, AA_BODY_CONTRAST),
+        Color::White
+    );
+    assert_eq!(
+        enforce_contrast(Color::Indexed(250), WHITE, AA_BODY_CONTRAST),
+        Color::Indexed(250)
+    );
+    assert_eq!(
+        enforce_contrast(TEXT_BODY, Color::Reset, AA_BODY_CONTRAST),
+        TEXT_BODY
+    );
+    // 4.5:1 is reachable from *every* surface — the worst case is the
+    // luminance where black and white tie, and even there the better pole
+    // clears 4.58:1. So the floor never silently gives up.
+    for gray in (0u8..=255).step_by(5) {
+        let surface = Color::Rgb(gray, gray, gray);
+        let lifted = enforce_contrast(TEXT_BODY, surface, AA_BODY_CONTRAST);
+        let ratio = contrast_ratio(lifted, surface).unwrap();
+        assert!(
+            ratio >= AA_BODY_CONTRAST,
+            "gray {gray:#04x} left body text at {ratio}:1"
+        );
+    }
+
+    // An unreachable floor (AAA on a mid-gray) returns the better pole rather
+    // than pretending it succeeded.
+    let mid = Color::Rgb(0x80, 0x80, 0x80);
+    assert_eq!(enforce_contrast(TEXT_BODY, mid, 7.0), BLACK);
+}
+
+#[test]
+fn effective_surface_prefers_painted_background_then_measurement() {
+    // A painted cell knows its own surface.
+    assert_eq!(
+        effective_surface(WHALE_PANEL, Some(WHITE)),
+        Some(WHALE_PANEL)
+    );
+    // An unpainted cell falls through to what detection measured.
+    assert_eq!(effective_surface(Color::Reset, Some(WHITE)), Some(WHITE));
+    // With no measurement there is no surface — the floor stands down.
+    assert_eq!(effective_surface(Color::Reset, None), None);
+    // A measurement we cannot resolve is not a measurement.
+    assert_eq!(effective_surface(Color::Reset, Some(Color::Reset)), None);
+}
+
+#[test]
+fn text_contrast_floor_applies_to_glyphs_not_frame_chrome() {
+    assert!(symbol_needs_text_contrast("a"));
+    assert!(symbol_needs_text_contrast("字"));
+    assert!(symbol_needs_text_contrast("→"));
+    assert!(!symbol_needs_text_contrast(" "));
+    assert!(!symbol_needs_text_contrast(""));
+    assert!(!symbol_needs_text_contrast("─"));
+    assert!(!symbol_needs_text_contrast("│"));
+    assert!(!symbol_needs_text_contrast("█"));
+    assert!(!symbol_needs_text_contrast("▏"));
+    assert!(!symbol_needs_text_contrast("●"));
+}
+
+#[test]
+fn background_luminance_decides_polarity_without_a_color_list() {
+    assert_eq!(palette_mode_for_background(WHITE), Some(PaletteMode::Light));
+    assert_eq!(palette_mode_for_background(BLACK), Some(PaletteMode::Dark));
+    assert_eq!(
+        palette_mode_for_background(LIGHT_SURFACE),
+        Some(PaletteMode::Light)
+    );
+    assert_eq!(
+        palette_mode_for_background(SOLARIZED_SURFACE),
+        Some(PaletteMode::Light)
+    );
+    assert_eq!(
+        palette_mode_for_background(WHALE_BG),
+        Some(PaletteMode::Dark)
+    );
+    assert_eq!(
+        palette_mode_for_background(Color::Rgb(0x28, 0x2C, 0x34)),
+        Some(PaletteMode::Dark)
+    );
+    assert_eq!(palette_mode_for_background(Color::Reset), None);
+}
+
+#[test]
+fn unknown_background_keeps_the_dark_default_and_offers_no_surface() {
+    let unknown = TerminalBackground::unknown();
+    assert_eq!(unknown.mode(), PaletteMode::Dark);
+    assert_eq!(unknown.color(), None);
+    assert_eq!(unknown.source(), BackgroundSource::Unknown);
+    // This is the #4833 trigger environment: a terminal that sets no
+    // COLORFGBG and is not macOS. Detection still answers Dark — but it says
+    // so with `Unknown` provenance and no color, so nothing downstream
+    // mistakes the guess for a measurement.
+    let resolved = resolve_terminal_background(None, None, None);
+    assert_eq!(resolved, unknown);
+    assert_eq!(effective_surface(Color::Reset, resolved.color()), None);
+}
+
+#[test]
+fn measured_background_outranks_env_hints_and_records_provenance() {
+    // A white terminal that also exports a dark-looking COLORFGBG: the
+    // measurement wins, and it carries the color the floor needs.
+    let measured = resolve_terminal_background(Some((0xFF, 0xFF, 0xFF)), Some("15;0"), None);
+    assert_eq!(measured.mode(), PaletteMode::Light);
+    assert_eq!(measured.color(), Some(WHITE));
+    assert_eq!(measured.source(), BackgroundSource::Osc11);
+
+    // COLORFGBG with a resolvable xterm index yields a real color too.
+    let indexed = resolve_terminal_background(None, Some("0;231"), None);
+    assert_eq!(indexed.mode(), PaletteMode::Light);
+    assert_eq!(indexed.color(), Some(Color::Indexed(231)));
+    assert_eq!(indexed.source(), BackgroundSource::ColorFgBg);
+
+    // Indices 0..=15 are terminal-profile defined: mode only, no color.
+    let ansi = resolve_terminal_background(None, Some("0;15"), None);
+    assert_eq!(ansi.mode(), PaletteMode::Light);
+    assert_eq!(ansi.color(), None);
+    assert_eq!(ansi.source(), BackgroundSource::ColorFgBg);
+
+    // macOS appearance describes the OS, not the terminal — no color.
+    let macos = resolve_terminal_background(None, None, Some(PaletteMode::Light));
+    assert_eq!(macos.mode(), PaletteMode::Light);
+    assert_eq!(macos.color(), None);
+    assert_eq!(macos.source(), BackgroundSource::MacOsAppearance);
+}
+
+#[test]
+fn osc11_replies_parse_across_the_shapes_terminals_emit() {
+    assert_eq!(
+        parse_osc11_reply("\u{1b}]11;rgb:ffff/ffff/ffff"),
+        Some((255, 255, 255))
+    );
+    assert_eq!(
+        parse_osc11_reply("]11;rgb:0000/0000/0000\u{7}"),
+        Some((0, 0, 0))
+    );
+    // 8-bit channels, and a mid value that must scale rather than truncate.
+    assert_eq!(parse_osc11_reply("rgb:1e/1e/1e"), Some((30, 30, 30)));
+    assert_eq!(
+        parse_osc11_reply("rgb:8000/8000/8000"),
+        Some((128, 128, 128))
+    );
+    assert_eq!(parse_osc11_reply("rgb:f/f/f"), Some((255, 255, 255)));
+    // Hash forms.
+    assert_eq!(parse_osc11_reply("]11;#282c34"), Some((0x28, 0x2C, 0x34)));
+    assert_eq!(parse_osc11_reply("#fff"), Some((255, 255, 255)));
+    // Anything we cannot read is `None`, never a fabricated color.
+    assert_eq!(parse_osc11_reply(""), None);
+    assert_eq!(parse_osc11_reply("\u{1b}]11;"), None);
+    assert_eq!(parse_osc11_reply("rgb:ff/ff"), None);
+    assert_eq!(parse_osc11_reply("rgb:ff/ff/ff/ff"), None);
+    assert_eq!(parse_osc11_reply("rgb:zz/zz/zz"), None);
+    assert_eq!(parse_osc11_reply("#ff00"), None);
+}
+
+#[test]
+fn measured_light_background_selects_the_light_theme_end_to_end() {
+    // Detection → mode → theme: an OSC 11 answer of white must reach the
+    // light UiTheme, which is what actually repaints the frame.
+    let measured = resolve_terminal_background(Some((0xFA, 0xFA, 0xFA)), None, None);
+    assert_eq!(UiTheme::for_mode(measured.mode()), LIGHT_UI_THEME);
+    let dark = resolve_terminal_background(Some((0x1E, 0x1E, 0x1E)), None, None);
+    assert_eq!(UiTheme::for_mode(dark.mode()), UI_THEME);
 }

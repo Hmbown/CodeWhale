@@ -1023,13 +1023,21 @@ pub async fn run_tui(
         defused: false,
     };
     let color_depth = palette::ColorDepth::detect();
-    let palette_mode = palette::PaletteMode::detect();
+    // Raw mode is on and the event loop has not started, which is the only
+    // window where the OSC 11 background query is safe to issue — see
+    // `palette::probe_terminal_background`. The result is cached process-wide,
+    // so every later `PaletteMode::detect()` sees the same answer.
+    let background = palette::probe_terminal_background();
+    let palette_mode = background.mode();
     tracing::debug!(
         ?color_depth,
         ?palette_mode,
+        background_source = ?background.source(),
+        background_color = ?background.color(),
         "terminal color profile detected"
     );
-    let backend = ColorCompatBackend::new(stdout, color_depth, palette_mode);
+    let mut backend = ColorCompatBackend::new(stdout, color_depth, palette_mode);
+    backend.set_detected_background(background.color());
     let mut terminal = Terminal::new(backend)?;
     // At this point Settings hasn't loaded yet, so we can't read the
     // user's `synchronized_output` knob. Use the same env-based terminal

@@ -1,0 +1,188 @@
+//! OSC 11 terminal-background query.
+//!
+//! `COLORFGBG` is the only background signal the palette had before this
+//! module, and most modern terminals never set it — Windows Terminal, conhost,
+//! VS Code, GNOME Terminal, Alacritty and Ghostty all omit it. Without it a
+//! white terminal was indistinguishable from a black one, so detection fell
+//! back to `Dark` and painted dark-tuned text onto a light surface (#4833).
+//!
+//! OSC 11 (`ESC ] 11 ; ? BEL`) asks the terminal for its actual background
+//! color and is answered by every terminal listed above. The reply is an
+//! `xterm`-style color spec, e.g.
+//!
+//! ```text
+//! ESC ] 11 ; rgb:ffff/ffff/ffff ESC \
+//! ```
+//!
+//! The parse is a pure function so it can be tested without a terminal; the
+//! query itself is Unix-only, bounded by a short deadline, and never runs when
+//! stdin/stdout are not both TTYs.
+
+/// Upper bound on how long startup will wait for a terminal that never
+/// answers. A terminal that supports OSC 11 replies in well under a
+/// millisecond; anything past this is a terminal that will never reply, and
+/// startup latency matters more than the answer.
+pub const OSC11_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(120);
+
+/// The query sequence. `ESC \` (ST) is the terminator we prefer in the reply,
+/// but terminals may answer with BEL instead, so the reader accepts both.
+const OSC11_QUERY: &[u8] = b"\x1b]11;?\x1b\\";
+
+/// Extract an RGB triple from an OSC 11 reply body.
+///
+/// Accepts the shapes terminals actually emit:
+/// - `rgb:RRRR/GGGG/BBBB` (xterm, 1–4 hex digits per channel, any width)
+/// - `#RRGGBB` / `#RGB` / `#RRRRGGGGBBBB`
+///
+/// Leading `ESC ] 11 ;` and the trailing BEL/ST are optional — anything
+/// outside the color spec is ignored, so a reply that arrived interleaved with
+/// other terminal chatter still parses.
+///
+/// Returns `None` when no color spec is present or a channel is malformed.
+/// Channels wider than 8 bits are scaled down, not truncated, so `ffff` is
+/// `255` rather than `0`.
+#[must_use]
+pub fn parse_osc11_reply(reply: &str) -> Option<(u8, u8, u8)> {
+    if let Some(idx) = reply.find("rgb:") {
+        return parse_slash_separated(&reply[idx + 4..]);
+    }
+    if let Some(idx) = reply.find('#') {
+        return parse_hash_hex(&reply[idx + 1..]);
+    }
+    None
+}
+
+fn parse_slash_separated(spec: &str) -> Option<(u8, u8, u8)> {
+    let spec: String = spec
+        .chars()
+        .take_while(|c| c.is_ascii_hexdigit() || *c == '/')
+        .collect();
+    let mut parts = spec.split('/');
+    let r = scale_hex_channel(parts.next()?)?;
+    let g = scale_hex_channel(parts.next()?)?;
+    let b = scale_hex_channel(parts.next()?)?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((r, g, b))
+}
+
+fn parse_hash_hex(spec: &str) -> Option<(u8, u8, u8)> {
+    let digits: String = spec.chars().take_while(char::is_ascii_hexdigit).collect();
+    if !digits.len().is_multiple_of(3) || digits.is_empty() || digits.len() > 12 {
+        return None;
+    }
+    let width = digits.len() / 3;
+    let r = scale_hex_channel(&digits[..width])?;
+    let g = scale_hex_channel(&digits[width..width * 2])?;
+    let b = scale_hex_channel(&digits[width * 2..])?;
+    Some((r, g, b))
+}
+
+/// Normalize a hex channel of arbitrary width (1–4 digits) to 8 bits by
+/// rescaling across the channel's full range: `f` → `255`, `ffff` → `255`,
+/// `8000` → `128`.
+fn scale_hex_channel(digits: &str) -> Option<u8> {
+    if digits.is_empty() || digits.len() > 4 || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let value = u32::from_str_radix(digits, 16).ok()?;
+    let max = (1u32 << (4 * digits.len() as u32)) - 1;
+    Some(((value * 255 + max / 2) / max) as u8)
+}
+
+/// Ask the terminal for its background color, giving up after `timeout`.
+///
+/// Returns `None` — never blocks past `timeout`, never panics — when:
+/// - stdin and stdout are not both TTYs (piped output, CI, `codewhale < file`),
+/// - the platform has no supported query path (non-Unix; see the module docs),
+/// - the terminal does not answer, or answers with something unparsable.
+///
+/// # Caveat
+///
+/// This reads from stdin, so it must only be called while the terminal is in
+/// raw mode and before the event loop starts. Bytes that arrive during the
+/// window and are not part of the reply are discarded — at startup that window
+/// is sub-millisecond on any terminal that answers at all.
+#[must_use]
+pub fn query_terminal_background(timeout: std::time::Duration) -> Option<(u8, u8, u8)> {
+    query_impl(timeout)
+}
+
+#[cfg(unix)]
+fn query_impl(timeout: std::time::Duration) -> Option<(u8, u8, u8)> {
+    use std::io::{Read, Write};
+    use std::os::fd::AsRawFd;
+    use std::time::Instant;
+
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    let in_fd = stdin.as_raw_fd();
+    let out_fd = stdout.as_raw_fd();
+
+    // SAFETY: `isatty` only inspects the descriptor; both fds are owned by the
+    // std handles held above for the duration of the call.
+    let both_tty = unsafe { libc::isatty(in_fd) == 1 && libc::isatty(out_fd) == 1 };
+    if !both_tty {
+        return None;
+    }
+
+    {
+        let mut out = stdout.lock();
+        out.write_all(OSC11_QUERY).ok()?;
+        out.flush().ok()?;
+    }
+
+    let deadline = Instant::now() + timeout;
+    let mut reply = Vec::with_capacity(32);
+    let mut stdin = stdin.lock();
+    let mut byte = [0u8; 1];
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return None;
+        }
+        if !wait_readable(in_fd, remaining) {
+            return None;
+        }
+        match stdin.read(&mut byte) {
+            Ok(1) => {}
+            _ => return None,
+        }
+        // BEL, or the ESC of a `ESC \` string terminator, ends the reply.
+        if byte[0] == 0x07 || (byte[0] == 0x1b && !reply.is_empty()) {
+            break;
+        }
+        reply.push(byte[0]);
+        if reply.len() >= 128 {
+            return None;
+        }
+    }
+
+    parse_osc11_reply(&String::from_utf8_lossy(&reply))
+}
+
+/// Block until `fd` has data or `timeout` elapses. `true` means readable.
+#[cfg(unix)]
+fn wait_readable(fd: std::os::fd::RawFd, timeout: std::time::Duration) -> bool {
+    let mut pollfd = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let millis = i32::try_from(timeout.as_millis())
+        .unwrap_or(i32::MAX)
+        .max(1);
+    // SAFETY: `pollfd` is a live, correctly-initialized single-element array
+    // and the count matches.
+    let rc = unsafe { libc::poll(std::ptr::addr_of_mut!(pollfd), 1, millis) };
+    rc > 0 && (pollfd.revents & libc::POLLIN) != 0
+}
+
+/// Non-Unix platforms have no portable way to read a raw OSC reply back off
+/// the console handle, so detection falls through to the environment-based
+/// sources. Callers treat `None` as "no evidence", never as "dark".
+#[cfg(not(unix))]
+fn query_impl(_timeout: std::time::Duration) -> Option<(u8, u8, u8)> {
+    None
+}

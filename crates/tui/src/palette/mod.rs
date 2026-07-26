@@ -10,7 +10,9 @@
 //!    delegate to the current Whale palette constants.
 
 mod adapt;
+mod contrast;
 mod detect;
+mod osc11;
 mod themes;
 mod tokens;
 mod user_theme;
@@ -21,7 +23,11 @@ mod tests;
 #[allow(unused_imports)]
 pub use adapt::*;
 #[allow(unused_imports)]
+pub use contrast::*;
+#[allow(unused_imports)]
 pub use detect::*;
+#[allow(unused_imports)]
+pub use osc11::*;
 #[allow(unused_imports)]
 pub use themes::*;
 pub use tokens::*;

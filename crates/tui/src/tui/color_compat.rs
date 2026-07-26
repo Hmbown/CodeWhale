@@ -51,6 +51,12 @@ pub(crate) struct ColorCompatBackend<W: Write> {
     terminal_size: Option<Size>,
     render_debug: Option<RenderDebugLog>,
     ascii_safe: bool,
+    /// The terminal's own background, when detection measured one
+    /// (`BackgroundSource::Osc11` or a resolvable `COLORFGBG` index). This is
+    /// the surface a `Color::Reset` cell is really drawn on, so it is what the
+    /// contrast floor reasons against. `None` means "no evidence" and disables
+    /// the floor for unpainted cells rather than guessing.
+    detected_background: Option<ratatui::style::Color>,
 }
 
 impl<W: Write> ColorCompatBackend<W> {
@@ -69,7 +75,13 @@ impl<W: Write> ColorCompatBackend<W> {
             terminal_size: None,
             render_debug: RenderDebugLog::from_env(),
             ascii_safe: ascii_safe_enabled(),
+            detected_background: None,
         }
+    }
+
+    /// Record the measured terminal background. See the field docs.
+    pub(crate) fn set_detected_background(&mut self, color: Option<ratatui::style::Color>) {
+        self.detected_background = color;
     }
 
     pub(crate) fn force_size(&mut self, size: Size) {
@@ -120,6 +132,7 @@ impl<W: Write> Backend for ColorCompatBackend<W> {
                     self.palette_mode,
                     self.theme_id,
                     &self.active_ui_theme,
+                    self.detected_background,
                 );
                 if self.ascii_safe {
                     adapt_cell_symbol_for_ascii(&mut cell);
@@ -346,12 +359,42 @@ fn render_debug_line(
     line
 }
 
+/// Apply the WCAG contrast floor to a cell that is about to be drawn.
+///
+/// This runs *after* the palette-mode remap and *before* depth downsampling,
+/// because the floor has to reason about the color the user will actually see
+/// while it is still full-precision RGB.
+///
+/// Two guards keep the blast radius at exactly the #4833 failure:
+///
+/// - Presets that own their own palette (`theme_remap_active`: Terminal,
+///   Catppuccin, Matrix, …) are exempt. Their authors tuned those pairs, some
+///   deliberately below 4.5:1, and a user who typed `/theme matrix` asked for
+///   that. The floor guards the auto-detected default path.
+/// - Only text cells are clamped; frame chrome keeps its intended weight.
+///   See [`palette::symbol_needs_text_contrast`].
+fn enforce_cell_contrast(
+    cell: &mut Cell,
+    theme_id: ThemeId,
+    detected_background: Option<ratatui::style::Color>,
+) {
+    if palette::theme_remap_active(theme_id) || !palette::symbol_needs_text_contrast(cell.symbol())
+    {
+        return;
+    }
+    let Some(surface) = palette::effective_surface(cell.bg, detected_background) else {
+        return;
+    };
+    cell.fg = palette::enforce_contrast(cell.fg, surface, palette::AA_BODY_CONTRAST);
+}
+
 fn adapt_cell_colors(
     cell: &mut Cell,
     depth: ColorDepth,
     palette_mode: PaletteMode,
     theme_id: ThemeId,
     ui_theme: &UiTheme,
+    detected_background: Option<ratatui::style::Color>,
 ) {
     let source_fg = cell.fg;
     // Stage 1: community-theme remap (dark palette → preset slots). No-op
@@ -365,6 +408,12 @@ fn adapt_cell_colors(
     let original_bg = cell.bg;
     cell.fg = palette::adapt_fg_for_palette_mode(cell.fg, original_bg, palette_mode);
     cell.bg = palette::adapt_bg_for_palette_mode(cell.bg, palette_mode);
+    // Stage 2.5: contrast floor. Stages 1 and 2 are equality whitelists — a
+    // token nobody listed reaches here unadapted, which is exactly how
+    // near-white body text ends up on a near-white terminal (#4833). This
+    // stage is membership-independent: it looks at the pair that will be
+    // rendered and lifts it if the numbers fail.
+    enforce_cell_contrast(cell, theme_id, detected_background);
     // Stage 3: depth (truecolor / 256 / 16) downsampling.
     cell.fg = palette::adapt_fg_for_depth(source_fg, cell.fg, depth, ui_theme);
     cell.bg = palette::adapt_bg(cell.bg, depth);
@@ -432,6 +481,7 @@ mod tests {
             PaletteMode::Dark,
             ThemeId::System,
             &palette::UI_THEME,
+            None,
         );
 
         assert!(matches!(cell.fg, Color::Indexed(_)));
@@ -450,6 +500,7 @@ mod tests {
             PaletteMode::Dark,
             ThemeId::System,
             &palette::UI_THEME,
+            None,
         );
 
         assert_eq!(cell.fg, Color::Rgb(53, 120, 229));
@@ -505,6 +556,7 @@ mod tests {
             PaletteMode::Light,
             ThemeId::WhaleLight,
             &palette::LIGHT_UI_THEME,
+            None,
         );
 
         assert_eq!(cell.fg, palette::LIGHT_TEXT_BODY);
@@ -523,6 +575,7 @@ mod tests {
             PaletteMode::Grayscale,
             ThemeId::Grayscale,
             &palette::GRAYSCALE_UI_THEME,
+            None,
         );
 
         assert_eq!(cell.fg, palette::GRAYSCALE_TEXT_SOFT);
@@ -544,6 +597,7 @@ mod tests {
             PaletteMode::Dark,
             ThemeId::TokyoNight,
             &active,
+            None,
         );
 
         assert_eq!(cell.bg, Color::Rgb(0, 0, 0));
@@ -569,6 +623,7 @@ mod tests {
                     theme.mode,
                     theme_id,
                     &theme,
+                    None,
                 );
                 assert_eq!(
                     cell.fg,
@@ -588,7 +643,7 @@ mod tests {
     ) -> Color {
         let mut cell = Cell::default();
         cell.set_fg(source);
-        adapt_cell_colors(&mut cell, depth, theme.mode, theme_id, theme);
+        adapt_cell_colors(&mut cell, depth, theme.mode, theme_id, theme, None);
         cell.fg
     }
 
@@ -1042,6 +1097,149 @@ mod tests {
         assert_eq!(
             linked_visible, baseline_visible,
             "OSC 8 insertion must not move or alter any rendered cell"
+        );
+    }
+
+    /// Render one cell the way `draw()` does and hand back the foreground.
+    fn cell_fg_after_adaptation(
+        symbol: &str,
+        fg: Color,
+        bg: Color,
+        palette_mode: PaletteMode,
+        theme_id: ThemeId,
+        detected_background: Option<Color>,
+    ) -> Color {
+        let mut cell = Cell::default();
+        cell.set_symbol(symbol).set_fg(fg).set_bg(bg);
+        adapt_cell_colors(
+            &mut cell,
+            ColorDepth::TrueColor,
+            palette_mode,
+            theme_id,
+            &theme_id.ui_theme(),
+            detected_background,
+        );
+        cell.fg
+    }
+
+    /// #4833. A white terminal that reports no `COLORFGBG` was detected as
+    /// Dark, so the light whitelist never ran and ivory body text landed on a
+    /// near-white surface. With the background measured, the contrast floor
+    /// catches it even when the palette mode is still Dark.
+    #[test]
+    fn measured_light_background_lifts_body_text_off_the_surface() {
+        let white = Color::Rgb(0xFF, 0xFF, 0xFF);
+        let rendered = cell_fg_after_adaptation(
+            "x",
+            palette::TEXT_BODY,
+            Color::Reset,
+            PaletteMode::Dark,
+            ThemeId::System,
+            Some(white),
+        );
+
+        assert_ne!(
+            rendered,
+            palette::TEXT_BODY,
+            "body text must not pass through unadapted onto a white surface"
+        );
+        let ratio = palette::contrast_ratio(rendered, white).unwrap();
+        assert!(
+            ratio >= palette::AA_BODY_CONTRAST,
+            "rendered body text is {ratio}:1 against the measured surface"
+        );
+    }
+
+    /// The no-regression half of #4833: on a measured dark terminal every
+    /// rendered cell comes out byte-identical to what v0.9.1 emitted.
+    #[test]
+    fn measured_dark_background_changes_nothing() {
+        for surface in [
+            Color::Rgb(0x00, 0x00, 0x00),
+            Color::Rgb(0x1E, 0x1E, 0x1E),
+            palette::WHALE_BG,
+        ] {
+            for token in [
+                palette::TEXT_BODY,
+                palette::TEXT_HINT,
+                palette::TEXT_TOOL_OUTPUT,
+                palette::WHALE_ACTION,
+                palette::WHALE_HUMAN,
+                palette::STATUS_ERROR,
+                palette::DIFF_ADDED,
+                // Frame chrome sits below 4.5:1 by design and must survive.
+                palette::BORDER_COLOR,
+            ] {
+                let symbol = if token == palette::BORDER_COLOR {
+                    "\u{2500}"
+                } else {
+                    "x"
+                };
+                assert_eq!(
+                    cell_fg_after_adaptation(
+                        symbol,
+                        token,
+                        Color::Reset,
+                        PaletteMode::Dark,
+                        ThemeId::System,
+                        Some(surface),
+                    ),
+                    token,
+                    "{token:?} was rewritten on measured dark surface {surface:?}"
+                );
+            }
+        }
+    }
+
+    /// No measurement means no intervention: an unpainted cell on a terminal
+    /// we could not query renders exactly as before.
+    #[test]
+    fn unknown_background_leaves_unpainted_cells_alone() {
+        assert_eq!(
+            cell_fg_after_adaptation(
+                "x",
+                palette::TEXT_BODY,
+                Color::Reset,
+                PaletteMode::Dark,
+                ThemeId::System,
+                None,
+            ),
+            palette::TEXT_BODY
+        );
+    }
+
+    /// Frame chrome keeps its intended weight even where the floor is active.
+    #[test]
+    fn contrast_floor_skips_frame_chrome_on_a_light_surface() {
+        let white = Color::Rgb(0xFF, 0xFF, 0xFF);
+        assert_eq!(
+            cell_fg_after_adaptation(
+                "\u{2502}",
+                palette::LIGHT_BORDER,
+                Color::Reset,
+                PaletteMode::Light,
+                ThemeId::WhaleLight,
+                Some(white),
+            ),
+            palette::LIGHT_BORDER
+        );
+    }
+
+    /// Presets own their palette. A user who chose Matrix asked for its
+    /// deliberately dim greens; the floor must not repaint them.
+    #[test]
+    fn explicit_presets_are_exempt_from_the_floor() {
+        let matrix = ThemeId::Matrix.ui_theme();
+        assert_eq!(
+            cell_fg_after_adaptation(
+                "x",
+                matrix.text_muted,
+                Color::Reset,
+                PaletteMode::Dark,
+                ThemeId::Matrix,
+                Some(Color::Rgb(0x00, 0x00, 0x00)),
+            ),
+            matrix.text_muted
         );
     }
 }
