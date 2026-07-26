@@ -818,6 +818,41 @@ fn back_from_api_key_onboarding(app: &mut App) {
     app.status_message = None;
 }
 
+/// Where a key goes while onboarding owns the screen (#4763).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OnboardingKeyRoute {
+    /// Terminate the session. Ctrl+C is unconditional during onboarding.
+    Quit,
+    /// Hand the key to the provider picker on the view stack.
+    ProviderPicker,
+    /// Fall through to the legacy onboarding key switch.
+    Legacy,
+}
+
+/// Decide the onboarding route for one key press.
+///
+/// Two invariants this encodes, both regressions reported in #4763:
+/// Ctrl+C quits from *any* onboarding state — a modal on the stack must not
+/// swallow it — and Escape is never intercepted on the picker's behalf, so
+/// the picker can back out one stage at a time instead of the shell popping
+/// the whole modal from a key/OAuth sub-stage.
+fn onboarding_key_route(
+    onboarding: OnboardingState,
+    top_kind: Option<ModalKind>,
+    key: &KeyEvent,
+) -> OnboardingKeyRoute {
+    if onboarding == OnboardingState::None {
+        return OnboardingKeyRoute::Legacy;
+    }
+    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        return OnboardingKeyRoute::Quit;
+    }
+    if onboarding == OnboardingState::Provider && top_kind == Some(ModalKind::ProviderPicker) {
+        return OnboardingKeyRoute::ProviderPicker;
+    }
+    OnboardingKeyRoute::Legacy
+}
+
 fn back_from_provider_onboarding(app: &mut App) {
     if app.onboarding_missing_key_recovery {
         // A returning user declined missing-key recovery: leave onboarding
@@ -2378,6 +2413,18 @@ async fn run_event_loop(
     let mut pending_subagent_list_refresh = false;
 
     loop {
+        while let Some(completion) = app.clipboard.poll_write_completion() {
+            if let Err(err) = completion {
+                tracing::warn!(error = %err, "background terminal clipboard write failed");
+                app.push_status_toast(
+                    format!("Clipboard copy failed: {err}"),
+                    StatusToastLevel::Error,
+                    None,
+                );
+                app.needs_redraw = true;
+            }
+        }
+
         // Drain dispatch completions from spawned send tasks (#4605). The
         // closure receives `&mut App` and applies success state or rollback.
         while let Ok(apply) = dispatch_completion_rx.try_recv() {
@@ -5013,35 +5060,39 @@ async fn run_event_loop(
             // parallel ten-provider key handler. Route its keys before the
             // legacy onboarding switch so List/Key/Model/Confirm retain the
             // same behavior as `/provider` and `/setup`.
-            if app.onboarding == OnboardingState::Provider
-                && app.view_stack.top_kind() == Some(ModalKind::ProviderPicker)
-            {
-                if key.code == KeyCode::Esc {
-                    // Onboarding has no committed provider choice yet. A
-                    // single Escape always abandons the whole setup modal and
-                    // returns to Language; do not let an inner key/model
-                    // stage mutate config or mark onboarding complete.
-                    app.view_stack.pop();
-                    back_from_provider_onboarding(app);
-                    app.needs_redraw = true;
-                    continue;
-                }
-                let events = app.view_stack.handle_key(key);
-                app.needs_redraw = true;
-                if handle_view_events_boxed(
-                    terminal,
-                    app,
-                    config,
-                    &task_manager,
-                    &mut engine_handle,
-                    &mut web_config_session,
-                    events,
-                )
-                .await?
-                {
+            match onboarding_key_route(app.onboarding, app.view_stack.top_kind(), &key) {
+                // #4763: onboarding must never be a trap. Ctrl+C terminates
+                // from every onboarding state, including while the picker
+                // owns the keys — the legacy handler below is unreachable
+                // once a modal is on the stack.
+                OnboardingKeyRoute::Quit => {
+                    let _ = engine_handle.send(Op::Shutdown).await;
                     return Ok(());
                 }
-                continue;
+                // Every other key, Escape included, belongs to the picker.
+                // The picker's own per-stage Escape walks key/OAuth entry
+                // back to the list and only dismisses from the list, where
+                // `ProviderPickerDismissed` runs the same non-mutating
+                // onboarding back-transition the shell used to force.
+                OnboardingKeyRoute::ProviderPicker => {
+                    let events = app.view_stack.handle_key(key);
+                    app.needs_redraw = true;
+                    if handle_view_events_boxed(
+                        terminal,
+                        app,
+                        config,
+                        &task_manager,
+                        &mut engine_handle,
+                        &mut web_config_session,
+                        events,
+                    )
+                    .await?
+                    {
+                        return Ok(());
+                    }
+                    continue;
+                }
+                OnboardingKeyRoute::Legacy => {}
             }
 
             // Handle onboarding flow
@@ -10268,7 +10319,9 @@ async fn query_provider_runtime_status(
 /// Open the one canonical provider setup surface for onboarding.  Fresh
 /// onboarding starts at the full catalog; missing-key recovery focuses the
 /// current route so an exact Kimi Code K3 configuration can expose its plan
-/// route before a secret is entered.
+/// route before a secret is entered.  Either way the picker opens on the
+/// navigable list (#4763): onboarding never drops a user straight into a
+/// key/OAuth prompt for a route they were not shown.
 async fn open_onboarding_provider_picker(
     app: &mut App,
     config: &Config,
@@ -10282,7 +10335,7 @@ async fn open_onboarding_provider_picker(
     }
     let runtime_status = query_provider_runtime_status(engine_handle).await;
     app.view_stack.push(
-        crate::tui::provider_picker::ProviderPickerView::new_for_setup(
+        crate::tui::provider_picker::ProviderPickerView::new_for_onboarding(
             app.api_provider,
             focus_current_route.then_some(app.onboarding_provider),
             config,
@@ -13176,7 +13229,7 @@ async fn handle_view_events(
                 timed_out,
                 approval_key,
                 approval_grouping_key,
-                persistent_ask_rules,
+                persistent_rules,
             } => {
                 apply_approval_decision(
                     app,
@@ -13189,7 +13242,7 @@ async fn handle_view_events(
                         timed_out,
                         approval_key,
                         approval_grouping_key,
-                        persistent_ask_rules,
+                        persistent_rules,
                     },
                 )
                 .await;
@@ -13798,12 +13851,12 @@ async fn handle_view_events(
                 }
                 app.needs_redraw = true;
             }
-            ViewEvent::ModelPickerTogglePin { provider, model } => {
-                let provider_key = if provider == crate::config::ApiProvider::Custom {
-                    app.provider_identity_for_persistence().to_string()
-                } else {
-                    provider.as_str().to_string()
-                };
+            ViewEvent::ModelPickerTogglePin {
+                provider,
+                provider_id,
+                model,
+            } => {
+                let provider_key = provider_id.unwrap_or_else(|| provider.as_str().to_string());
                 match crate::settings::Settings::load_persisted().and_then(|mut settings| {
                     let pinned = settings.toggle_pinned_model(&provider_key, &model);
                     settings.save()?;
@@ -13833,14 +13886,11 @@ async fn handle_view_events(
             }
             ViewEvent::ModelPickerMovePin {
                 provider,
+                provider_id,
                 model,
                 delta,
             } => {
-                let provider_key = if provider == crate::config::ApiProvider::Custom {
-                    app.provider_identity_for_persistence().to_string()
-                } else {
-                    provider.as_str().to_string()
-                };
+                let provider_key = provider_id.unwrap_or_else(|| provider.as_str().to_string());
                 if let Ok(mut settings) = crate::settings::Settings::load_persisted()
                     && settings.move_pinned_model(&provider_key, &model, delta)
                 {
@@ -13849,6 +13899,15 @@ async fn handle_view_events(
                     } else {
                         app.pinned_models = settings.pinned_models;
                         app.status_message = Some("Pinned model order updated".into());
+                        if let Some(mut boxed) = app.view_stack.pop() {
+                            if let Some(picker) = boxed
+                                .as_any_mut()
+                                .downcast_mut::<crate::tui::model_picker::ModelPickerView>(
+                            ) {
+                                picker.re_resolve_from_app(app, config);
+                            }
+                            app.view_stack.push_boxed(boxed);
+                        }
                     }
                 }
                 app.needs_redraw = true;
@@ -13933,6 +13992,7 @@ async fn handle_view_events(
                 provider_id,
                 api_key,
                 model,
+                context_window,
             } => {
                 let identity = picker_provider_identity(config, provider, provider_id.as_deref())
                     .map_err(anyhow::Error::msg)?;
@@ -13943,6 +14003,7 @@ async fn handle_view_events(
                     identity,
                     api_key,
                     model,
+                    context_window,
                 )
                 .await;
                 if completed && app.onboarding == OnboardingState::Provider {
@@ -13991,7 +14052,16 @@ async fn handle_view_events(
                         .replace("{provider}", provider.as_str());
                     app.push_status_toast(toast, StatusToastLevel::Success, Some(8_000));
                     let model_override = provider_picker_model_override(app, config, provider);
-                    switch_provider(app, engine_handle, config, provider, model_override).await;
+                    let switched =
+                        switch_provider(app, engine_handle, config, provider, model_override).await;
+                    // #4763: reusing an external CLI grant completes provider
+                    // onboarding exactly like a submitted key or an applied
+                    // route. Without this the picker closes on success and
+                    // the user is returned to the provider step they just
+                    // satisfied — the second half of the reported loop.
+                    if switched && app.onboarding == OnboardingState::Provider {
+                        complete_provider_picker_onboarding(app, provider);
+                    }
                     refresh_config_view_if_open(app, "provider");
                 }
                 Err(error) => app.push_status_toast(
@@ -14194,7 +14264,7 @@ struct ApprovalDecisionEvent {
     timed_out: bool,
     approval_key: String,
     approval_grouping_key: String,
-    persistent_ask_rules: Vec<codewhale_config::ToolAskRule>,
+    persistent_rules: Vec<codewhale_config::ToolAskRule>,
 }
 
 async fn apply_approval_decision(
@@ -14216,10 +14286,10 @@ async fn apply_approval_decision(
     if matches!(
         event.decision,
         ReviewDecision::Approved | ReviewDecision::ApprovedForSession
-    ) && !event.persistent_ask_rules.is_empty()
+    ) && !event.persistent_rules.is_empty()
         && !event.timed_out
     {
-        persist_ask_rules_from_approval(app, config, &event.persistent_ask_rules);
+        persist_rules_from_approval(app, config, &event.persistent_rules);
     }
 
     match event.decision {
@@ -14417,31 +14487,49 @@ fn apply_setup_runtime_preset(
     Ok(format!("Applied {}.", preset.result_summary()))
 }
 
-fn persist_ask_rules_from_approval(
+fn persist_rules_from_approval(
     app: &mut App,
     config: &mut Config,
     rules: &[codewhale_config::ToolAskRule],
 ) {
+    let action = rules.first().map(|rule| rule.action);
     match codewhale_config::ConfigStore::load(app.config_path.clone()).and_then(|mut store| {
-        let added = store.append_ask_rules(rules)?;
+        let added = match action {
+            Some(codewhale_execpolicy::PermissionAction::Ask) => store.append_ask_rules(rules)?,
+            Some(codewhale_execpolicy::PermissionAction::Allow) => {
+                store.append_allow_rules(rules)?
+            }
+            Some(codewhale_execpolicy::PermissionAction::Deny) => {
+                anyhow::bail!("the approval UI cannot persist deny rules")
+            }
+            None => 0,
+        };
         let permissions_path = store.permissions_path();
         config.exec_policy_engine = store.exec_policy_engine();
         Ok((added, permissions_path))
     }) {
         Ok((added, path)) if added > 0 => {
+            let action = match action {
+                Some(codewhale_execpolicy::PermissionAction::Allow) => "allow",
+                _ => "ask",
+            };
             app.status_message = Some(format!(
-                "Saved {added} ask permission rule(s) to {}",
+                "Saved {added} {action} permission rule(s) to {}",
                 path.display()
             ));
         }
         Ok((_added, path)) => {
+            let action = match action {
+                Some(codewhale_execpolicy::PermissionAction::Allow) => "Allow",
+                _ => "Ask",
+            };
             app.status_message = Some(format!(
-                "Ask permission rule already saved in {}",
+                "{action} permission rule already saved in {}",
                 path.display()
             ));
         }
         Err(err) => {
-            app.status_message = Some(format!("Failed to save ask permission rule: {err:#}"));
+            app.status_message = Some(format!("Failed to save permission rule: {err:#}"));
         }
     }
 }
@@ -14865,8 +14953,12 @@ async fn apply_provider_picker_setup_confirmed(
     identity: crate::config::ProviderIdentity,
     api_key: String,
     model: String,
+    context_window: Option<u32>,
 ) -> bool {
-    use crate::config::{save_api_key_for_identity, save_provider_model_for_identity};
+    use crate::config::{
+        save_api_key_for_identity, save_provider_context_window_for_identity,
+        save_provider_model_for_identity,
+    };
 
     let provider = identity.provider;
 
@@ -14894,6 +14986,24 @@ async fn apply_provider_picker_setup_confirmed(
                         path.display()
                     ),
                 });
+            } else if let Some(context_window) = context_window {
+                if let Err(err) =
+                    save_provider_context_window_for_identity(&identity, config, context_window)
+                {
+                    app.add_message(HistoryCell::System {
+                        content: format!(
+                            "Saved {} API key and model to {}, but failed to save context window: {err}",
+                            provider.as_str(),
+                            path.display()
+                        ),
+                    });
+                } else {
+                    app.status_message = Some(format!(
+                        "Saved {} API key, model, and context window to {}",
+                        provider.as_str(),
+                        path.display()
+                    ));
+                }
             } else {
                 app.status_message = Some(format!(
                     "Saved {} API key and model to {}",
@@ -14917,6 +15027,9 @@ async fn apply_provider_picker_setup_confirmed(
     config.provider = Some(identity.key);
     mirror_saved_api_key_in_config(config, provider, api_key);
     mirror_saved_model_in_config(config, provider, model.clone());
+    if let Some(context_window) = context_window {
+        mirror_saved_context_window_in_config(config, provider, context_window);
+    }
     switch_provider(app, engine_handle, config, provider, Some(model)).await
 }
 
@@ -14926,6 +15039,21 @@ fn mirror_saved_model_in_config(config: &mut Config, provider: ApiProvider, mode
         return;
     }
     config.set_provider_model_override(provider, Some(model));
+}
+
+fn mirror_saved_context_window_in_config(
+    config: &mut Config,
+    provider: ApiProvider,
+    context_window: u32,
+) {
+    let providers = config
+        .providers
+        .get_or_insert_with(ProvidersConfig::default);
+    let entry = match provider {
+        ApiProvider::Moonshot => &mut providers.moonshot,
+        _ => return,
+    };
+    entry.context_window = Some(context_window);
 }
 
 fn mirror_saved_api_key_in_config(config: &mut Config, provider: ApiProvider, api_key: String) {
@@ -16859,6 +16987,7 @@ auth_mode = "kimi_oauth"
             identity,
             "sk-kimi-supported".to_string(),
             crate::config::DEFAULT_KIMI_CODE_MODEL.to_string(),
+            None,
         )
         .await;
 
@@ -16911,6 +17040,7 @@ base_url = "https://mock.openrouter.test/v1"
             identity,
             "sk-confirmed".to_string(),
             model.clone(),
+            None,
         )
         .await;
 
@@ -17064,6 +17194,7 @@ model = "model-b"
             identity,
             "saved-b-key".to_string(),
             "model-b-confirmed".to_string(),
+            None,
         )
         .await;
 

@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   link:
@@ -21,11 +22,20 @@ jobs:
     steps:
       - name: Require a closing keyword or an explicit opt-out
         env:
-          # Read through env, never interpolated into the script body:
-          # a PR body is attacker-controlled text.
-          PR_BODY: ${{ github.event.pull_request.body }}
+          # Fetched live rather than read from the event payload. A rerun
+          # replays the payload the run started with, so a body-only fix could
+          # never turn this check green: the obvious operator move — add the
+          # missing line, rerun the failed check — re-read the old body and
+          # failed again with no hint why. Reading the current body makes a
+          # rerun mean what everyone already assumes it means.
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          # Through a variable, never interpolated into the script body:
+          # a PR body is attacker-controlled text.
+          PR_BODY=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json body --jq '.body // ""')
           # Body only, deliberately. GitHub resolves closing keywords from the
           # PR description; a "Closes #123" in the title auto-closes nothing.
           # Accepting the title here would pass PRs that never close an issue,

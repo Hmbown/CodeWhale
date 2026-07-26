@@ -642,8 +642,8 @@ pub enum ViewEvent {
         approval_key: String,
         /// Lossy / arity-aware fingerprint, used to scope *approvals*.
         approval_grouping_key: String,
-        /// Ask-only permission rules to append when the decision approves.
-        persistent_ask_rules: Vec<codewhale_config::ToolAskRule>,
+        /// Permission rules to append when the decision approves.
+        persistent_rules: Vec<codewhale_config::ToolAskRule>,
     },
     ElevationDecision {
         tool_id: String,
@@ -723,10 +723,14 @@ pub enum ViewEvent {
     ModelPickerRefresh,
     ModelPickerTogglePin {
         provider: crate::config::ApiProvider,
+        /// Exact named route for `Custom`; built-in providers leave this unset.
+        provider_id: Option<String>,
         model: String,
     },
     ModelPickerMovePin {
         provider: crate::config::ApiProvider,
+        /// Exact named route for `Custom`; built-in providers leave this unset.
+        provider_id: Option<String>,
         model: String,
         delta: isize,
     },
@@ -769,6 +773,7 @@ pub enum ViewEvent {
         provider_id: Option<String>,
         api_key: String,
         model: String,
+        context_window: Option<u32>,
     },
     /// Emitted by the `/provider` picker after the custom provider form is
     /// completed. The handler persists a named OpenAI-compatible provider
@@ -1610,6 +1615,13 @@ impl ConfigView {
                 section: ConfigSection::Display,
                 key: "show_thinking".to_string(),
                 value: settings.show_thinking.to_string(),
+                editable: true,
+                scope: ConfigScope::Saved,
+            },
+            ConfigRow {
+                section: ConfigSection::Display,
+                key: "thinking_highlight".to_string(),
+                value: settings.thinking_highlight.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
             },
@@ -2682,6 +2694,7 @@ fn config_label_message(key: &str) -> Option<MessageId> {
         "fancy_animations" => MessageId::ConfigLabelFancyAnimations,
         "launch_screen" => MessageId::ConfigLabelLaunchScreen,
         "show_thinking" => MessageId::ConfigLabelShowThinking,
+        "thinking_highlight" => MessageId::ConfigLabelThinkingHighlight,
         "show_tool_details" => MessageId::ConfigLabelShowToolDetails,
         "inline_diffs" => MessageId::ConfigLabelInlineDiffs,
         "status_indicator" => MessageId::ConfigLabelStatusIndicator,
@@ -2806,6 +2819,9 @@ fn config_hint_for_key(key: &str) -> &'static str {
         "fancy_animations" => "on animates truthful tool, status, and ocean live state",
         "ocean_treatment" => "ombre | flat (appearance; independent of motion)",
         "show_thinking" => "show or hide model reasoning in chat; task lists stay concise",
+        "thinking_highlight" => {
+            "fill the model reasoning background; the dashed rail remains visible when off"
+        }
         "synchronized_output" => "auto | on | off; terminal redraw pacing, not model speed",
         "default_mode" => "agent | plan",
         "sidebar_width" => "10..=50",
@@ -2853,6 +2869,7 @@ fn config_boolean_key(key: &str) -> bool {
             | "fancy_animations"
             | "launch_screen"
             | "show_thinking"
+            | "thinking_highlight"
             | "show_tool_details"
             | "composer_border"
             | "bracketed_paste"
@@ -3044,6 +3061,10 @@ fn config_choice_detail(locale: Locale, key: &str, value: &str) -> Cow<'static, 
         ("show_thinking", "true") => "Show model reasoning blocks in the transcript.",
         ("show_thinking", "false") => {
             "Keep model reasoning hidden; answers and tools remain visible."
+        }
+        ("thinking_highlight", "true") => "Fill the model reasoning background.",
+        ("thinking_highlight", "false") => {
+            "Keep the dashed reasoning rail and italic text without a filled background."
         }
         ("ocean_treatment", "ombre") => "Use one continuous ocean color field.",
         ("ocean_treatment", "flat") => "Use a single flat background color.",
@@ -3866,6 +3887,7 @@ fn live_subagent_result(
         nickname,
         status,
         worker_status: None,
+        runtime_permissions: None,
         parent_run_id: None,
         spawn_depth: 0,
         result: None,
@@ -4177,6 +4199,21 @@ fn append_subagent_group(
             lines.push(Line::from(vec![
                 Span::styled("    role: ", Style::default().fg(palette::TEXT_MUTED)),
                 Span::styled(role, Style::default().fg(palette::WHALE_INFO)),
+            ]));
+        }
+
+        if let Some(permissions) = agent.runtime_permissions.as_ref() {
+            let posture = format!(
+                "network={} · shell={} · write={}",
+                if permissions.network { "on" } else { "off" },
+                permissions.shell,
+                if permissions.write { "on" } else { "off" },
+            );
+            let max_len = content_width.saturating_sub(18);
+            let posture = truncate_view_text(&posture, max_len);
+            lines.push(Line::from(vec![
+                Span::styled("    posture: ", Style::default().fg(palette::TEXT_MUTED)),
+                Span::styled(posture, Style::default().fg(palette::WHALE_INFO)),
             ]));
         }
 
@@ -4623,6 +4660,7 @@ mod tests {
             nickname: None,
             status,
             worker_status: None,
+            runtime_permissions: None,
             parent_run_id: None,
             spawn_depth: 0,
             result: None,
@@ -5474,7 +5512,10 @@ base_url = "https://api.xiaomimimo.com/v1"
         let mut view = ConfigView::new_for_app(&app);
 
         type_filter(&mut view, "thinking");
-        assert_eq!(visible_row_keys(&view), vec!["show_thinking"]);
+        assert_eq!(
+            visible_row_keys(&view),
+            vec!["show_thinking", "thinking_highlight"]
+        );
 
         view.clear_filter();
         view.rows[0].value = "CAFÉ".to_string();
@@ -5501,6 +5542,11 @@ base_url = "https://api.xiaomimimo.com/v1"
     #[test]
     fn config_view_renders_friendly_setting_labels() {
         let mut view = create_config_view(Locale::En);
+        assert_ne!(
+            config_label_for_key("show_thinking"),
+            config_label_for_key("thinking_highlight"),
+            "reasoning visibility and background controls need distinct labels"
+        );
         let area = Rect::new(0, 0, 100, 40);
         let mut buf = Buffer::empty(area);
 

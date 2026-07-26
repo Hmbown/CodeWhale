@@ -1222,6 +1222,7 @@ pub struct App {
     /// `/config status_indicator <cw|whale|dots|off>`.
     pub status_indicator: String,
     pub show_thinking: bool,
+    pub thinking_highlight: bool,
     pub verbose_transcript: bool,
     pub show_tool_details: bool,
     /// Inline presentation mode for successful structured File mutations.
@@ -3428,6 +3429,7 @@ impl App {
     pub fn transcript_render_options(&self) -> TranscriptRenderOptions {
         TranscriptRenderOptions {
             show_thinking: self.show_thinking,
+            thinking_highlight: self.thinking_highlight,
             verbose: self.verbose_transcript,
             show_tool_details: self.show_tool_details,
             inline_diff_mode: self.inline_diff_mode,

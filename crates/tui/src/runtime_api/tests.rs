@@ -13,6 +13,24 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::time::sleep;
 use uuid::Uuid;
 
+/// Scale a wait budget for shared CI runners.
+///
+/// These deadlines are tuned for a developer laptop running one test at a
+/// time. CI runs the whole workspace suite on a shared runner, where the same
+/// async progress can legitimately take several times longer. Every budget
+/// guarded by this helper is a deadline on a poll or a oneshot that resolves
+/// as soon as the runtime makes progress, so a larger budget does not slow a
+/// passing run down — it only changes how long a genuinely stuck test waits
+/// before it fails. Keeping the local value tight preserves fast feedback
+/// while the tests stop failing for being unlucky about scheduling.
+fn ci_scaled(base: Duration) -> Duration {
+    if std::env::var_os("CI").is_some() {
+        base * 4
+    } else {
+        base
+    }
+}
+
 struct MockExecutor;
 
 #[test]
@@ -834,7 +852,7 @@ async fn read_first_sse_frame(resp: reqwest::Response) -> Result<String> {
     let mut stream = resp.bytes_stream();
     let mut buf = Vec::new();
     loop {
-        let next = tokio::time::timeout(Duration::from_secs(2), stream.next())
+        let next = tokio::time::timeout(ci_scaled(Duration::from_secs(2)), stream.next())
             .await
             .context("timed out waiting for SSE frame")?
             .context("SSE stream ended unexpectedly")??;
@@ -975,7 +993,7 @@ async fn wait_for_terminal_turn_status(
     turn_id: &str,
     timeout: Duration,
 ) -> Result<String> {
-    let deadline = tokio::time::Instant::now() + timeout;
+    let deadline = tokio::time::Instant::now() + ci_scaled(timeout);
     loop {
         let detail: serde_json::Value = client
             .get(format!("http://{addr}/v1/threads/{thread_id}"))
@@ -1010,7 +1028,7 @@ async fn wait_for_in_progress_item(
     thread_id: &str,
     timeout: Duration,
 ) -> Result<()> {
-    let deadline = tokio::time::Instant::now() + timeout;
+    let deadline = tokio::time::Instant::now() + ci_scaled(timeout);
     loop {
         let detail: serde_json::Value = client
             .get(format!("http://{addr}/v1/threads/{thread_id}"))
@@ -1734,7 +1752,7 @@ async fn fleet_status_runtime_api_exposes_state_and_actions() -> Result<()> {
     assert_eq!(restarted["execution"], "scheduled");
     assert_eq!(restarted["worker"]["status"], "busy");
 
-    let terminal_status = tokio::time::timeout(Duration::from_secs(15), async {
+    let terminal_status = tokio::time::timeout(ci_scaled(Duration::from_secs(15)), async {
         loop {
             let status = manager.run_status(&report.run_id).unwrap();
             if status.queued == 0 && status.running == 0 {
@@ -2050,7 +2068,7 @@ async fn compatibility_stream_closes_losslessly_across_replay_live_handoff() -> 
         Ok::<_, anyhow::Error>((content_type, body))
     });
 
-    let created = tokio::time::timeout(Duration::from_secs(2), hook_rx.recv())
+    let created = tokio::time::timeout(ci_scaled(Duration::from_secs(2)), hook_rx.recv())
         .await
         .context("compatibility stream did not create its thread")?
         .context("compatibility stream test hook closed")?;
@@ -2113,7 +2131,7 @@ async fn compatibility_stream_closes_losslessly_across_replay_live_handoff() -> 
         .send(())
         .map_err(|_| anyhow::anyhow!("compatibility stream dropped thread-create handoff"))?;
 
-    let subscribed = tokio::time::timeout(Duration::from_secs(2), hook_rx.recv())
+    let subscribed = tokio::time::timeout(ci_scaled(Duration::from_secs(2)), hook_rx.recv())
         .await
         .context("compatibility stream did not subscribe before replay")?
         .context("compatibility stream test hook closed")?;
@@ -2133,7 +2151,7 @@ async fn compatibility_stream_closes_losslessly_across_replay_live_handoff() -> 
     release_overlap
         .send(())
         .map_err(|_| anyhow::anyhow!("mock engine dropped overlap release"))?;
-    tokio::time::timeout(Duration::from_secs(2), async {
+    tokio::time::timeout(ci_scaled(Duration::from_secs(2)), async {
         loop {
             if runtime_threads
                 .events_since(&thread_id, None)
@@ -2155,7 +2173,7 @@ async fn compatibility_stream_closes_losslessly_across_replay_live_handoff() -> 
         .send(())
         .map_err(|_| anyhow::anyhow!("compatibility stream dropped subscribe handoff"))?;
 
-    let replay_loaded = tokio::time::timeout(Duration::from_secs(2), hook_rx.recv())
+    let replay_loaded = tokio::time::timeout(ci_scaled(Duration::from_secs(2)), hook_rx.recv())
         .await
         .context("compatibility stream did not reach its replay/live handoff")?
         .context("compatibility stream test hook closed")?;
@@ -2176,7 +2194,7 @@ async fn compatibility_stream_closes_losslessly_across_replay_live_handoff() -> 
     release_terminal
         .send(())
         .map_err(|_| anyhow::anyhow!("mock engine dropped terminal release"))?;
-    tokio::time::timeout(Duration::from_secs(2), async {
+    tokio::time::timeout(ci_scaled(Duration::from_secs(2)), async {
         loop {
             if runtime_threads
                 .events_since(&thread_id, None)
@@ -2198,7 +2216,7 @@ async fn compatibility_stream_closes_losslessly_across_replay_live_handoff() -> 
         .send(())
         .map_err(|_| anyhow::anyhow!("compatibility stream dropped replay handoff"))?;
 
-    let (content_type, body) = tokio::time::timeout(Duration::from_secs(3), stream_task)
+    let (content_type, body) = tokio::time::timeout(ci_scaled(Duration::from_secs(3)), stream_task)
         .await
         .context("compatibility stream hung after its terminal event")?
         .context("compatibility stream request task panicked")??;
@@ -2249,7 +2267,7 @@ async fn compatibility_stream_exposes_and_resolves_user_input_without_answer_ech
         Ok::<_, anyhow::Error>(response)
     });
 
-    let created = tokio::time::timeout(Duration::from_secs(2), hook_rx.recv())
+    let created = tokio::time::timeout(ci_scaled(Duration::from_secs(2)), hook_rx.recv())
         .await
         .context("compatibility stream did not create its interaction thread")?
         .context("compatibility stream interaction hook closed")?;
@@ -2362,7 +2380,7 @@ async fn compatibility_stream_exposes_and_resolves_user_input_without_answer_ech
         .send(())
         .map_err(|_| anyhow::anyhow!("compatibility interaction stream dropped create hook"))?;
 
-    let subscribed = tokio::time::timeout(Duration::from_secs(2), hook_rx.recv())
+    let subscribed = tokio::time::timeout(ci_scaled(Duration::from_secs(2)), hook_rx.recv())
         .await
         .context("compatibility interaction stream did not subscribe")?
         .context("compatibility stream interaction hook closed")?;
@@ -2382,7 +2400,7 @@ async fn compatibility_stream_exposes_and_resolves_user_input_without_answer_ech
         .send(())
         .map_err(|_| anyhow::anyhow!("compatibility interaction stream dropped subscribe hook"))?;
 
-    let replay_loaded = tokio::time::timeout(Duration::from_secs(2), hook_rx.recv())
+    let replay_loaded = tokio::time::timeout(ci_scaled(Duration::from_secs(2)), hook_rx.recv())
         .await
         .context("compatibility interaction stream did not load replay")?
         .context("compatibility stream interaction hook closed")?;
@@ -2403,14 +2421,14 @@ async fn compatibility_stream_exposes_and_resolves_user_input_without_answer_ech
         .send(())
         .map_err(|_| anyhow::anyhow!("compatibility interaction stream dropped replay hook"))?;
 
-    let response = tokio::time::timeout(Duration::from_secs(2), request_task)
+    let response = tokio::time::timeout(ci_scaled(Duration::from_secs(2)), request_task)
         .await
         .context("compatibility interaction request did not return SSE headers")?
         .context("compatibility interaction request task panicked")??;
     let (frame_tx, mut frame_rx) = mpsc::unbounded_channel();
     let body_task = tokio::spawn(collect_sse_frames(response, frame_tx));
 
-    let required_payload = tokio::time::timeout(Duration::from_secs(2), async {
+    let required_payload = tokio::time::timeout(ci_scaled(Duration::from_secs(2)), async {
         loop {
             let (event, payload) = frame_rx
                 .recv()
@@ -2450,7 +2468,7 @@ async fn compatibility_stream_exposes_and_resolves_user_input_without_answer_ech
         .await?;
     assert_eq!(submitted["delivered"], true);
     let (submitted_id, submitted_response) =
-        tokio::time::timeout(Duration::from_secs(2), submission_rx)
+        tokio::time::timeout(ci_scaled(Duration::from_secs(2)), submission_rx)
             .await
             .context("mock engine did not receive compatibility user input")?
             .context("mock engine dropped compatibility user input")?
@@ -2461,7 +2479,7 @@ async fn compatibility_stream_exposes_and_resolves_user_input_without_answer_ech
         .send(())
         .map_err(|_| anyhow::anyhow!("mock interaction engine dropped completion release"))?;
 
-    let frames = tokio::time::timeout(Duration::from_secs(3), body_task)
+    let frames = tokio::time::timeout(ci_scaled(Duration::from_secs(3)), body_task)
         .await
         .context("compatibility interaction stream did not terminate")?
         .context("compatibility interaction body task panicked")??;
@@ -4136,7 +4154,7 @@ async fn session_create_from_thread_rejects_active_turn() -> Result<()> {
         .as_str()
         .context("missing turn id")?
         .to_string();
-    tokio::time::timeout(Duration::from_secs(2), active_rx)
+    tokio::time::timeout(ci_scaled(Duration::from_secs(2)), active_rx)
         .await
         .context("timed out waiting for mock active turn")?
         .context("mock active turn sender dropped")?;
@@ -4881,7 +4899,7 @@ async fn decide_approval_delivers_to_runtime() -> Result<()> {
     assert_eq!(body["decision"], "allow");
     assert_eq!(body["delivered"], true);
 
-    let received = tokio::time::timeout(Duration::from_secs(1), rx).await??;
+    let received = tokio::time::timeout(ci_scaled(Duration::from_secs(1)), rx).await??;
     assert_eq!(
         received,
         ExternalApprovalDecision::Allow { remember: false }
@@ -4930,7 +4948,7 @@ async fn dynamic_tool_result_endpoint_delivers_to_runtime() -> Result<()> {
         .await?;
     assert_eq!(resp.status(), StatusCode::ACCEPTED);
 
-    let received = tokio::time::timeout(Duration::from_secs(1), rx).await??;
+    let received = tokio::time::timeout(ci_scaled(Duration::from_secs(1)), rx).await??;
     assert!(received.success);
     assert_eq!(received.content.len(), 1);
     let resolved = runtime_threads

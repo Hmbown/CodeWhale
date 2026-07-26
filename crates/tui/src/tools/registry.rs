@@ -1109,6 +1109,14 @@ impl ToolRegistryBuilder {
         self.with_tool(Arc::new(RememberTool))
     }
 
+    /// Include the native-memory retrieval tools alongside reviewed capture.
+    #[must_use]
+    pub fn with_native_memory_tools(self) -> Self {
+        use super::native_memory::{MemoryGetTool, MemorySearchTool};
+        self.with_tool(Arc::new(MemorySearchTool))
+            .with_tool(Arc::new(MemoryGetTool))
+    }
+
     /// Include the model-facing `lsp` intelligence tool. Reuses the session
     /// [`crate::lsp::LspManager`] attached to `ToolContext` — never spawns a
     /// second server lifecycle.
@@ -1280,7 +1288,7 @@ impl ToolRegistryBuilder {
             builder = builder.with_web_tools();
         }
         if options.memory_tool_enabled {
-            builder = builder.with_remember_tool();
+            builder = builder.with_remember_tool().with_native_memory_tools();
         }
         if let Some(vision_config) = options.vision_config {
             builder = builder.with_vision_tools(vision_config);

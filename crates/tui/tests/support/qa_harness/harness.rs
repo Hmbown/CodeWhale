@@ -13,6 +13,24 @@ use anyhow::{Context, Result, anyhow};
 
 use super::{Frame, PtySession};
 
+/// Scale a wait budget for shared CI runners.
+///
+/// PTY scenarios boot a real binary and wait on real terminal output, and the
+/// budgets in the scenarios are tuned for a developer laptop running one test
+/// at a time. CI runs the whole workspace suite on a shared runner, where the
+/// same output can legitimately arrive several times later. Every budget this
+/// scales is a deadline on a poll that returns as soon as the condition holds,
+/// so a larger budget never slows a passing run — it only changes how long a
+/// genuinely stuck scenario waits before failing. Local runs keep the tight
+/// value so a real hang still surfaces quickly while developing.
+pub fn ci_scaled(base: Duration) -> Duration {
+    if std::env::var_os("CI").is_some() {
+        base * 4
+    } else {
+        base
+    }
+}
+
 pub struct Harness {
     pty: PtySession,
     frame: Frame,
@@ -169,7 +187,8 @@ impl Harness {
     where
         F: FnMut(&Frame) -> bool,
     {
-        let deadline = Instant::now() + timeout;
+        let budget = ci_scaled(timeout);
+        let deadline = Instant::now() + budget;
         loop {
             self.pump();
             if predicate(&self.frame) {
@@ -178,7 +197,7 @@ impl Harness {
             if Instant::now() >= deadline {
                 return Err(anyhow!(
                     "wait_for timed out after {:?}.\n{}",
-                    timeout,
+                    budget,
                     self.frame.debug_dump()
                 ));
             }
@@ -195,7 +214,10 @@ impl Harness {
     /// Wait for stable output: no new bytes for `quiet_for` consecutive
     /// pump ticks, bounded by `max`. Useful for "let the UI settle".
     pub fn wait_for_idle(&mut self, quiet_for: Duration, max: Duration) -> Result<()> {
-        let max_deadline = Instant::now() + max;
+        // Only the ceiling scales: `quiet_for` is the definition of "settled",
+        // not a budget, and stretching it would change what the test asserts.
+        let budget = ci_scaled(max);
+        let max_deadline = Instant::now() + budget;
         let mut quiet_since = Instant::now();
         loop {
             if self.pump() {
@@ -207,7 +229,7 @@ impl Harness {
             if Instant::now() >= max_deadline {
                 return Err(anyhow!(
                     "wait_for_idle: never settled within {:?}\n{}",
-                    max,
+                    budget,
                     self.frame.debug_dump()
                 ));
             }
@@ -239,7 +261,7 @@ impl Harness {
 
     /// Wait for the child process to exit without sending it a signal.
     pub fn wait_for_exit(&mut self, timeout: Duration) -> Option<i32> {
-        self.pty.wait_until(Instant::now() + timeout)
+        self.pty.wait_until(Instant::now() + ci_scaled(timeout))
     }
 
     pub fn debug_dump(&mut self) -> String {

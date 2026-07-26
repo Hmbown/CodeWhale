@@ -7080,6 +7080,7 @@ mod tests {
             nickname: nickname.map(str::to_string),
             status: crate::tools::subagent::SubAgentStatus::Running,
             worker_status: None,
+            runtime_permissions: None,
             parent_run_id: None,
             spawn_depth: 0,
             result: None,

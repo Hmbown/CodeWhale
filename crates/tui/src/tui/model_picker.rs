@@ -209,6 +209,9 @@ pub struct ModelPickerView {
 struct ModelPickerRow {
     id: String,
     provider: Option<ApiProvider>,
+    /// Concrete persistence identity. `Custom` alone cannot identify a named
+    /// custom route, so pins must carry this exact key when present.
+    provider_identity: Option<String>,
     hint: String,
     metadata: EffectivePickerMetadata,
     selectable: bool,
@@ -387,7 +390,9 @@ impl ModelPickerView {
             rows.sort_by(|a, b| {
                 let rank = |row: &ModelPickerRow| {
                     let provider_matches = row.provider.is_some_and(|provider| {
-                        provider
+                        row.provider_identity.as_deref().is_some_and(|identity| {
+                            identity.to_ascii_lowercase().contains(&query_lower)
+                        }) || provider
                             .as_str()
                             .to_ascii_lowercase()
                             .contains(&query_lower)
@@ -976,13 +981,22 @@ fn picker_model_rows_for_app(app: &App, config: &Config) -> Vec<ModelPickerRow> 
         );
     }
 
+    // `ApiProvider::Custom` is shared by every named custom route. Preserve
+    // the concrete active route key on rows so exact pins cannot collide.
+    let active_custom_identity = (app.api_provider == ApiProvider::Custom)
+        .then(|| app.provider_identity_for_persistence().to_string());
+    for row in &mut rows {
+        if row.provider == Some(ApiProvider::Custom) {
+            row.provider_identity = active_custom_identity.clone();
+        }
+    }
+
     for row in &mut rows {
         row.enabled = model_row_enabled_for_app(app, config, row);
         if let Some(pin) = app.pinned_models.iter().find(|pin| {
-            row.provider.is_some_and(|provider| {
-                provider.as_str().eq_ignore_ascii_case(&pin.provider)
-                    && row.id.eq_ignore_ascii_case(&pin.model)
-            })
+            row_provider_identity(row)
+                .is_some_and(|provider| provider.eq_ignore_ascii_case(&pin.provider))
+                && row.id.eq_ignore_ascii_case(&pin.model)
         }) {
             let label = pin.label.as_deref().unwrap_or("pinned");
             row.hint = format!(
@@ -994,27 +1008,28 @@ fn picker_model_rows_for_app(app: &App, config: &Config) -> Vec<ModelPickerRow> 
 
     for pin in &app.pinned_models {
         let provider = ApiProvider::parse(&pin.provider).unwrap_or(ApiProvider::Custom);
-        if rows
-            .iter()
-            .any(|row| row.provider == Some(provider) && row.id.eq_ignore_ascii_case(&pin.model))
-        {
+        if rows.iter().any(|row| {
+            row_provider_identity(row)
+                .is_some_and(|identity| identity.eq_ignore_ascii_case(&pin.provider))
+                && row.id.eq_ignore_ascii_case(&pin.model)
+        }) {
             continue;
         }
         let metadata = effective_picker_metadata(config, Some(provider), &pin.model);
-        push_model_row(
-            &mut rows,
-            pin.model.clone(),
-            Some(provider),
-            format!(
+        // Bypass the ordinary `(enum provider, model)` de-duplication here:
+        // two named Custom routes may intentionally expose the same model id.
+        rows.push(ModelPickerRow {
+            id: pin.model.clone(),
+            provider: Some(provider),
+            provider_identity: Some(pin.provider.clone()),
+            hint: format!(
                 "stale pinned · exact {} / {} · unavailable; repair or remove",
                 pin.provider, pin.model
             ),
             metadata,
-            false,
-        );
-        if let Some(row) = rows.last_mut() {
-            row.enabled = true;
-        }
+            selectable: false,
+            enabled: true,
+        });
     }
 
     rows
@@ -1268,6 +1283,7 @@ fn push_model_row(
     rows.push(ModelPickerRow {
         id,
         provider,
+        provider_identity: None,
         hint,
         metadata,
         selectable,
@@ -1309,9 +1325,11 @@ fn model_row_matches_query(
         candidate.contains(&query)
             || normalize_picker_search_text(&candidate).contains(&normalized_query)
     };
-    let provider_matches = row
-        .provider
-        .is_some_and(|provider| matches(provider.as_str()) || matches(provider.display_name()));
+    let provider_matches = row.provider.is_some_and(|provider| {
+        row.provider_identity.as_deref().is_some_and(matches)
+            || matches(provider.as_str())
+            || matches(provider.display_name())
+    });
     provider_matches
         || matches(&row.id)
         || ((row.provider.is_none() || row.provider == Some(initial_provider))
@@ -1372,10 +1390,10 @@ fn sort_model_rows_for_view(
     pins: &[PinnedModel],
 ) {
     let pin_rank = |row: &ModelPickerRow| {
-        row.provider
+        row_provider_identity(row)
             .and_then(|provider| {
                 pins.iter().position(|pin| {
-                    provider.as_str().eq_ignore_ascii_case(&pin.provider)
+                    provider.eq_ignore_ascii_case(&pin.provider)
                         && row.id.eq_ignore_ascii_case(&pin.model)
                 })
             })
@@ -1413,6 +1431,14 @@ fn sort_model_rows_for_view(
                 .then_with(|| left.id.cmp(&right.id))
         }),
     }
+}
+
+fn row_provider_identity(row: &ModelPickerRow) -> Option<&str> {
+    row.provider_identity.as_deref().or_else(|| {
+        row.provider
+            .filter(|provider| *provider != ApiProvider::Custom)
+            .map(ApiProvider::as_str)
+    })
 }
 
 fn offering_for_row(row: &ModelPickerRow) -> Option<codewhale_config::catalog::CatalogOffering> {
@@ -1729,6 +1755,15 @@ fn format_picker_context_window(tokens: u32) -> String {
 impl ModelPickerView {
     /// Rebuild model rows from a fresh app/config snapshot (readiness + catalog).
     pub fn re_resolve_from_app(&mut self, app: &App, config: &Config) {
+        let selected = self
+            .visible_model_rows()
+            .get(self.selected_model_idx)
+            .map(|row| {
+                (
+                    row_provider_identity(row).map(str::to_string),
+                    row.id.clone(),
+                )
+            });
         self.provider_health = app.provider_health.clone();
         self.route_config = config.clone();
         self.pinned_models = app.pinned_models.clone();
@@ -1737,6 +1772,17 @@ impl ModelPickerView {
             .into_iter()
             .filter(|provider| *provider != app.api_provider)
             .collect();
+        // Re-anchor to the same exact provider/model after pin sorting changes;
+        // preserving only the numeric index can select a different model.
+        if let Some((provider, model)) = selected
+            && let Some(position) = self.visible_model_rows().iter().position(|row| {
+                row.id.eq_ignore_ascii_case(&model)
+                    && row_provider_identity(row).map(str::to_owned) == provider
+            })
+        {
+            self.selected_model_idx = position;
+            return;
+        }
         // Keep selection stable when the row still exists.
         let rows = self.visible_model_rows();
         if self.selected_model_idx >= rows.len() + usize::from(self.show_custom_model_row) {
@@ -1756,6 +1802,7 @@ impl ModelPickerView {
         };
         ViewAction::Emit(ViewEvent::ModelPickerMovePin {
             provider,
+            provider_id: row.provider_identity.clone(),
             model: row.id.clone(),
             delta,
         })
@@ -1800,6 +1847,7 @@ impl ModalView for ModelPickerView {
                 };
                 ViewAction::Emit(ViewEvent::ModelPickerTogglePin {
                     provider,
+                    provider_id: row.provider_identity.clone(),
                     model: row.id.clone(),
                 })
             }
@@ -3627,6 +3675,7 @@ mod tests {
         ModelPickerRow {
             id: "z-ai/glm-5.2".to_string(),
             provider: Some(ApiProvider::Zai),
+            provider_identity: None,
             hint: "switch route · reasoning".to_string(),
             metadata: EffectivePickerMetadata::default(),
             selectable: true,
@@ -3687,6 +3736,7 @@ mod tests {
         let row = ModelPickerRow {
             id: "deepseek-v4-flash".to_string(),
             provider: Some(ApiProvider::Deepseek),
+            provider_identity: None,
             hint: String::new(),
             metadata: EffectivePickerMetadata::default(),
             selectable: true,
@@ -3985,6 +4035,25 @@ mod tests {
             .iter()
             .position(|row| row.provider == Some(ApiProvider::Custom) && row.id == "model-b")
             .expect("custom B row");
+
+        app.pinned_models = vec![PinnedModel {
+            provider: "custom-a".to_string(),
+            model: "model-b".to_string(),
+            label: Some("A's pin".to_string()),
+        }];
+        app.set_provider_identity(crate::config::ApiProvider::Custom, "custom-b");
+        let rows = picker_model_rows_for_app(&app, &config);
+        assert!(rows.iter().any(|row| {
+            row.provider == Some(ApiProvider::Custom)
+                && row.provider_identity.as_deref() == Some("custom-b")
+                && row.id == "model-b"
+        }));
+        assert!(rows.iter().any(|row| {
+            row.provider == Some(ApiProvider::Custom)
+                && row.provider_identity.as_deref() == Some("custom-a")
+                && row.id == "model-b"
+                && row.hint.contains("stale pinned")
+        }));
 
         match view.build_event() {
             ViewEvent::ModelPickerApplied {

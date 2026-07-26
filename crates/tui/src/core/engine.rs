@@ -74,7 +74,9 @@ use crate::working_set::WorkingSet;
 
 #[cfg(test)]
 use super::authority::agent_approval_mode_for_turn;
-use super::authority::{TurnAuthority, effective_input_policy, shell_policy_for_mode};
+use super::authority::{
+    PolicyNarrowingEvent, TurnAuthority, effective_input_policy, shell_policy_for_mode,
+};
 use super::events::{Event, TurnOutcomeStatus, TurnRoute};
 use super::ops::{
     Op, ProviderRuntimeStatus, SessionSnapshot, USER_SHELL_TOOL_ID_PREFIX, UserInputProvenance,
@@ -641,6 +643,10 @@ pub struct Engine {
     slop_ledger_gate_cache: Option<(Option<SystemTime>, Option<String>)>,
     /// Current operating mode. Updated on `ChangeMode` and `SendMessage`.
     current_mode: AppMode,
+    /// The most recent authority narrowing, if any (#3947). Kept on the engine
+    /// so doctor and debug surfaces can answer "why is this tool unavailable"
+    /// with the same record the user and the model already saw.
+    last_policy_narrowing: Option<PolicyNarrowingEvent>,
     /// Process-local cache for `estimated_input_tokens`. Memoizes the most
     /// recent token estimate keyed on `(session.messages_revision,
     /// system_prompt_fingerprint)`. Five call sites per turn consult this
@@ -1172,6 +1178,7 @@ impl Engine {
             workshop_vars,
             sandbox_backend,
             current_mode: AppMode::Agent,
+            last_policy_narrowing: None,
             token_estimate_cache: TokenEstimateCache::new(),
             shared_paused: shared_paused.clone(),
         };
@@ -1297,15 +1304,22 @@ impl Engine {
                 &self.session.workspace,
                 self.session.approval_mode,
             );
-            if let Some(ToolAskRuleDecision::Prompt(reason)) = ask_rule_decision.as_ref() {
-                // YOLO mode (auto_approve) is the explicit "no approvals"
-                // contract: a typed ask-rule must not pop a modal in YOLO.
-                // A typed deny rule still blocks hard below.
-                if !self.session.auto_approve {
-                    approval_required = true;
-                    approval_description = reason.clone();
-                    approval_force_prompt = true;
+            match ask_rule_decision.as_ref() {
+                Some(ToolAskRuleDecision::Allow) => {
+                    approval_required = false;
+                    approval_force_prompt = false;
                 }
+                Some(ToolAskRuleDecision::Prompt(reason)) => {
+                    // YOLO mode (auto_approve) is the explicit "no approvals"
+                    // contract: a typed ask-rule must not pop a modal in YOLO.
+                    // A typed deny rule still blocks hard below.
+                    if !self.session.auto_approve {
+                        approval_required = true;
+                        approval_description = reason.clone();
+                        approval_force_prompt = true;
+                    }
+                }
+                Some(ToolAskRuleDecision::Block(_)) | None => {}
             }
             if let Some(ToolAskRuleDecision::Block(reason)) = ask_rule_decision {
                 Err(ToolError::permission_denied(reason))
@@ -1976,6 +1990,7 @@ impl Engine {
                         // during a sub-agent fanout no longer contends for the
                         // write lock (against completions/persistence) on every
                         // request. Cleanup still auto-cancels stale agents.
+                        self.touch_workers_with_running_shells().await;
                         let due = {
                             let manager = self.subagent_manager.read().await;
                             manager.cleanup_due(
@@ -2503,6 +2518,7 @@ impl Engine {
         self.emit_session_updated().await;
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn turn_metadata_block(
         &self,
         routed_model: &str,
@@ -2511,6 +2527,7 @@ impl Engine {
         reasoning_effort_auto: bool,
         provenance: UserInputProvenance,
         current_text: &str,
+        policy_narrowing: Option<&PolicyNarrowingEvent>,
     ) -> ContentBlock {
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let working_set_summary = self
@@ -2551,6 +2568,15 @@ impl Engine {
         }
         if reasoning_effort_auto && let Some(reasoning_effort) = reasoning_effort {
             lines.push(format!("Auto reasoning effort: {reasoning_effort}"));
+        }
+        // #3947: when runtime policy narrowed this turn's authority, the model
+        // learns that it happened, why, and the exact sentence the user saw —
+        // not merely the already-narrowed posture above. Emitted only on a
+        // narrowed turn, so the ordinary turn's metadata stays byte-stable.
+        if let Some(event) = policy_narrowing {
+            lines.push(format!("Authority narrowing: {}", event.reason().as_str()));
+            lines.push(format!("Authority transition: {}", event.transition()));
+            lines.push(format!("Authority narrowing status: {}", event.message()));
         }
         self.append_resource_metadata_lines(&mut lines, routed_model, current_text);
         if let Some(working_set_summary) = working_set_summary {
@@ -2668,6 +2694,7 @@ impl Engine {
             reasoning_effort_auto,
             provenance,
             &text,
+            self.last_policy_narrowing.as_ref(),
         );
         Message {
             role: "user".to_string(),
@@ -3116,6 +3143,22 @@ impl Engine {
             return outcome;
         }
 
+        // Deliver completions that arrived after the previous turn before the
+        // next user request is sent. This keeps background shell work
+        // model-visible without requiring an explicit wait/poll tool call.
+        let shell_completions = self.drain_shell_completion_events();
+        if !shell_completions.is_empty() {
+            self.add_session_message(crate::runtime_handoff::shell_completion_runtime_message(
+                &shell_completions,
+            ))
+            .await;
+            if let Some(status) =
+                crate::core::engine::turn_loop::shell_completion_status_text(&shell_completions, "")
+            {
+                let _ = self.tx_event.send(Event::status(status)).await;
+            }
+        }
+
         let input_policy = effective_input_policy(
             provenance,
             mode,
@@ -3125,7 +3168,11 @@ impl Engine {
             mode == AppMode::Yolo || auto_approve,
             approval_mode,
         );
-        if let Some(status) = input_policy.status.clone() {
+        // #3947: an effective-mode change is never silent. The structured
+        // event is recorded first (so doctor and this turn's metadata can read
+        // it), then rendered to the UI from that same value.
+        self.last_policy_narrowing = input_policy.narrowing.clone();
+        if let Some(status) = input_policy.status() {
             let _ = self.tx_event.send(Event::status(status)).await;
         }
         // Reset cancel token for fresh turn (in case previous was cancelled)
@@ -3594,6 +3641,7 @@ impl Engine {
     /// Capture typed live state for post-compact rehydrate (todos, workers,
     /// shells, mode, permission). Pure formatting lives in compaction.rs.
     async fn capture_compaction_live_state(&self) -> CompactionLiveState {
+        self.touch_workers_with_running_shells().await;
         let todos = {
             let guard = self.config.todos.lock().await;
             let snap = guard.snapshot();
@@ -4574,6 +4622,7 @@ fn goal_objective_for_prompt(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ToolAskRuleDecision {
+    Allow,
     Prompt(String),
     Block(String),
 }
@@ -4699,6 +4748,7 @@ pub(super) fn file_tool_ask_rule_decision(
     }
 
     let mut prompt: Option<String> = None;
+    let mut all_allowed = true;
     for path in paths {
         match tool_ask_rule_decision_for_context(
             config,
@@ -4713,11 +4763,19 @@ pub(super) fn file_tool_ask_rule_decision(
             }
             Some(ToolAskRuleDecision::Prompt(reason)) => {
                 prompt.get_or_insert(reason);
+                all_allowed = false;
             }
-            None => {}
+            Some(ToolAskRuleDecision::Allow) => {}
+            None => all_allowed = false,
         }
     }
-    prompt.map(ToolAskRuleDecision::Prompt)
+    if let Some(prompt) = prompt {
+        Some(ToolAskRuleDecision::Prompt(prompt))
+    } else if all_allowed {
+        Some(ToolAskRuleDecision::Allow)
+    } else {
+        None
+    }
 }
 
 fn tool_ask_rule_decision_for_context(
@@ -4750,6 +4808,8 @@ fn tool_ask_rule_decision_for_context(
         Some(ToolAskRuleDecision::Block(decision.reason().to_string()))
     } else if decision.requires_approval {
         Some(ToolAskRuleDecision::Prompt(decision.reason().to_string()))
+    } else if decision.matched_action == Some(codewhale_execpolicy::PermissionAction::Allow) {
+        Some(ToolAskRuleDecision::Allow)
     } else {
         None
     }

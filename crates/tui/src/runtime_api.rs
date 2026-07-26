@@ -3414,6 +3414,7 @@ struct GuiConfigResponse {
     subagents_enabled: bool,
     subagents_max_depth: u32,
     show_thinking: bool,
+    thinking_highlight: bool,
     show_tool_details: bool,
     inline_diffs: String,
     locale: String,
@@ -3507,6 +3508,7 @@ async fn get_config(
         subagents_enabled: config.subagents_enabled(),
         subagents_max_depth: config.subagent_max_spawn_depth(),
         show_thinking: settings.show_thinking,
+        thinking_highlight: settings.thinking_highlight,
         show_tool_details: settings.show_tool_details,
         inline_diffs: settings.inline_diffs.clone(),
         locale: settings.locale.clone(),
@@ -3615,6 +3617,7 @@ async fn set_config(
             | "default_mode"
             | "auto_compact"
             | "show_thinking"
+            | "thinking_highlight"
             | "show_tool_details"
             | "inline_diffs"
             | "calm_mode"
@@ -3723,7 +3726,7 @@ async fn set_config(
             }
             _ => {
                 return Err(ApiError::bad_request(format!(
-                    "Unknown config key '{key}'. Supported keys: model, default_model, reasoning_effort, approval_mode, base_url, provider, provider_url, cost_currency, default_mode, auto_compact, allow_shell, mcp_config_path, show_thinking, show_tool_details, inline_diffs, locale, max_history, calm_mode, prefer_external_pdftotext, workspace_follow_symlinks, subagents_enabled, subagents_max_depth, sandbox_mode, strict_tool_mode, memory_enabled, search_provider, prompt_suggestion"
+                    "Unknown config key '{key}'. Supported keys: model, default_model, reasoning_effort, approval_mode, base_url, provider, provider_url, cost_currency, default_mode, auto_compact, allow_shell, mcp_config_path, show_thinking, thinking_highlight, show_tool_details, inline_diffs, locale, max_history, calm_mode, prefer_external_pdftotext, workspace_follow_symlinks, subagents_enabled, subagents_max_depth, sandbox_mode, strict_tool_mode, memory_enabled, search_provider, prompt_suggestion"
                 )));
             }
         };

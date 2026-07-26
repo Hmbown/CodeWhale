@@ -153,17 +153,20 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &mut App) {
         Span::styled(phase_label.clone(), phase_style),
     ];
 
-    if tier != ShellTier::Compact
-        && matches!(phase, ShellPhase::Working | ShellPhase::Verifying)
-        && let Some(detail) = working_detail(app, activity)
-    {
+    if tier != ShellTier::Compact && matches!(phase, ShellPhase::Working | ShellPhase::Verifying) {
+        if let Some(detail) = working_detail(app, activity) {
+            left.push(Span::styled(
+                " · ",
+                Style::default().fg(app.ui_theme.text_dim),
+            ));
+            left.push(Span::styled(
+                detail,
+                Style::default().fg(app.ui_theme.status_working),
+            ));
+        }
         left.push(Span::styled(
-            " · ",
+            " · Esc to interrupt",
             Style::default().fg(app.ui_theme.text_dim),
-        ));
-        left.push(Span::styled(
-            detail,
-            Style::default().fg(app.ui_theme.status_working),
         ));
     }
 
@@ -386,6 +389,7 @@ mod tests {
             !text.contains("Alt+?") && !text.contains("F1:"),
             "live phase strip stays quiet: {text}"
         );
+        assert!(text.contains("Esc to interrupt"), "{text}");
     }
 
     #[test]
@@ -440,12 +444,27 @@ mod tests {
     #[test]
     fn working_band_keeps_elapsed_time_when_model_is_thinking() {
         let mut app = test_app();
+        app.is_loading = true;
         app.turn_started_at = Some(Instant::now() - Duration::from_secs(12));
 
         assert_eq!(
             working_detail(&app, LiveActivity::from_app(&app)).as_deref(),
             Some("12s")
         );
+
+        let backend = TestBackend::new(80, 1);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal
+            .draw(|frame| render(frame.area(), frame.buffer_mut(), &mut app))
+            .expect("draw");
+        let text = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(text.contains("Esc to interrupt"), "{text}");
     }
 
     #[test]

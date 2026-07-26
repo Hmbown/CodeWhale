@@ -188,9 +188,78 @@ pub enum ClipboardContent {
     Image(PastedImage),
 }
 
+struct TerminalClipboardWriteRequest {
+    text: String,
+    in_tmux: bool,
+}
+
+type TerminalClipboardWriteCompletion = std::result::Result<(), String>;
+
+/// Serializes terminal-client clipboard writes on a bounded background lane.
+///
+/// OSC 52 ultimately writes to the terminal output stream, which can block
+/// indefinitely under backpressure. tmux transport can likewise wait on a
+/// stalled server. Keeping both operations on this worker means copy actions
+/// never park the TUI input/render loop, while the single request slot bounds
+/// memory and preserves copy order.
+struct TerminalClipboardWriter {
+    request_tx: std::sync::mpsc::SyncSender<TerminalClipboardWriteRequest>,
+    completion_rx: std::sync::mpsc::Receiver<TerminalClipboardWriteCompletion>,
+}
+
+impl TerminalClipboardWriter {
+    #[cfg(not(test))]
+    fn spawn() -> Result<Self> {
+        Self::spawn_with(|request| write_text_to_terminal_client(&request.text, request.in_tmux))
+    }
+
+    fn spawn_with<F>(write: F) -> Result<Self>
+    where
+        F: Fn(TerminalClipboardWriteRequest) -> Result<()> + Send + 'static,
+    {
+        let (request_tx, request_rx) = std::sync::mpsc::sync_channel(1);
+        let (completion_tx, completion_rx) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name("terminal-clipboard-writer".to_string())
+            .spawn(move || {
+                while let Ok(request) = request_rx.recv() {
+                    let completion = write(request).map_err(|err| format!("{err:#}"));
+                    if completion_tx.send(completion).is_err() {
+                        break;
+                    }
+                }
+            })
+            .context("spawn terminal clipboard writer")?;
+        Ok(Self {
+            request_tx,
+            completion_rx,
+        })
+    }
+
+    fn enqueue(&self, text: &str, in_tmux: bool) -> Result<()> {
+        let request = TerminalClipboardWriteRequest {
+            text: text.to_string(),
+            in_tmux,
+        };
+        self.request_tx.try_send(request).map_err(|err| match err {
+            std::sync::mpsc::TrySendError::Full(_) => {
+                anyhow::anyhow!("another terminal clipboard write is still queued")
+            }
+            std::sync::mpsc::TrySendError::Disconnected(_) => {
+                anyhow::anyhow!("terminal clipboard writer stopped")
+            }
+        })
+    }
+
+    fn poll_completion(&self) -> Option<TerminalClipboardWriteCompletion> {
+        self.completion_rx.try_recv().ok()
+    }
+}
+
 /// Clipboard reader/writer helper.
 pub struct ClipboardHandler {
     terminal_context: TerminalClipboardContext,
+    terminal_writer: Option<TerminalClipboardWriter>,
     #[cfg(any(
         target_os = "macos",
         target_os = "windows",
@@ -222,6 +291,7 @@ impl ClipboardHandler {
     fn with_terminal_context(terminal_context: TerminalClipboardContext) -> Self {
         Self {
             terminal_context,
+            terminal_writer: None,
             #[cfg(any(
                 target_os = "macos",
                 target_os = "windows",
@@ -338,10 +408,18 @@ impl ClipboardHandler {
         None
     }
 
-    /// Write text to the clipboard (no-op if unavailable).
+    /// Write text to the clipboard.
+    ///
+    /// Native clipboard transports complete before this method returns. OSC 52
+    /// and tmux terminal-client writes are validated and admitted to a bounded
+    /// background worker; asynchronous transport failures are exposed through
+    /// [`Self::poll_write_completion`].
     pub fn write_text(&mut self, text: &str) -> Result<()> {
         #[cfg(test)]
         {
+            if let Some(writer) = self.terminal_writer.as_ref() {
+                return writer.enqueue(text, self.terminal_context.in_tmux);
+            }
             if self.fail_text_writes {
                 bail!("test clipboard unavailable");
             }
@@ -352,7 +430,8 @@ impl ClipboardHandler {
         #[cfg(not(test))]
         {
             if self.terminal_context.write_order() == ClipboardWriteOrder::TerminalClientOnly {
-                return write_text_to_terminal_client(text, self.terminal_context.in_tmux)
+                return self
+                    .enqueue_terminal_write(text)
                     .map_err(|err| anyhow::anyhow!("Clipboard unavailable: {err}"));
             }
 
@@ -385,9 +464,40 @@ impl ClipboardHandler {
                 return Ok(());
             }
 
-            write_text_to_terminal_client(text, self.terminal_context.in_tmux)
+            self.enqueue_terminal_write(text)
                 .map_err(|err| anyhow::anyhow!("Clipboard unavailable: {err}"))
         }
+    }
+
+    #[cfg(not(test))]
+    fn enqueue_terminal_write(&mut self, text: &str) -> Result<()> {
+        if !self.terminal_context.in_tmux {
+            if text.len() > OSC52_MAX_BYTES {
+                bail!("selection is too large for OSC 52 clipboard fallback");
+            }
+            if !io::stdout().is_terminal() {
+                bail!("OSC 52 clipboard fallback requires a terminal");
+            }
+        }
+
+        if self.terminal_writer.is_none() {
+            self.terminal_writer = Some(TerminalClipboardWriter::spawn()?);
+        }
+        self.terminal_writer
+            .as_ref()
+            .expect("terminal clipboard writer initialized")
+            .enqueue(text, self.terminal_context.in_tmux)
+    }
+
+    /// Return one completed background terminal clipboard write, if available.
+    ///
+    /// Successes are intentionally quiet because callers already show their
+    /// normal copy receipt. Failures are drained by the event loop and replace
+    /// that optimistic receipt with an actionable error.
+    pub(crate) fn poll_write_completion(&self) -> Option<TerminalClipboardWriteCompletion> {
+        self.terminal_writer
+            .as_ref()
+            .and_then(TerminalClipboardWriter::poll_completion)
     }
 
     #[cfg(test)]
@@ -652,6 +762,89 @@ mod tests {
     use std::borrow::Cow;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn terminal_clipboard_write_does_not_wait_for_slow_transport() {
+        let (transport_started_tx, transport_started_rx) = std::sync::mpsc::channel();
+        let (release_transport_tx, release_transport_rx) = std::sync::mpsc::channel();
+        let writer = TerminalClipboardWriter::spawn_with(move |request| {
+            assert_eq!(request.text, "copied");
+            assert!(!request.in_tmux);
+            transport_started_tx
+                .send(())
+                .expect("announce transport start");
+            release_transport_rx.recv().expect("release slow transport");
+            Ok(())
+        })
+        .expect("spawn clipboard writer");
+        let mut clipboard = ClipboardHandler::for_test(true, false);
+        clipboard.terminal_writer = Some(writer);
+
+        let (caller_returned_tx, caller_returned_rx) = std::sync::mpsc::channel();
+        let caller = std::thread::spawn(move || {
+            let result = clipboard.write_text("copied");
+            caller_returned_tx
+                .send((clipboard, result))
+                .expect("report caller completion");
+        });
+
+        let (clipboard, result) =
+            match caller_returned_rx.recv_timeout(std::time::Duration::from_millis(250)) {
+                Ok(value) => value,
+                Err(err) => {
+                    let _ = release_transport_tx.send(());
+                    caller.join().expect("join clipboard caller");
+                    panic!("clipboard caller waited for slow transport: {err}");
+                }
+            };
+        result.expect("queue clipboard write");
+        transport_started_rx
+            .recv_timeout(std::time::Duration::from_millis(250))
+            .expect("worker started transport");
+        assert!(
+            clipboard.poll_write_completion().is_none(),
+            "transport must remain pending until explicitly released"
+        );
+
+        release_transport_tx.send(()).expect("release transport");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            if let Some(completion) = clipboard.poll_write_completion() {
+                completion.expect("background clipboard completion");
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "background clipboard completion timed out"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        caller.join().expect("join clipboard caller");
+    }
+
+    #[test]
+    fn terminal_clipboard_write_reports_background_failure() {
+        let writer =
+            TerminalClipboardWriter::spawn_with(|_| bail!("terminal clipboard transport denied"))
+                .expect("spawn clipboard writer");
+        writer
+            .enqueue("copied", false)
+            .expect("queue clipboard write");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            if let Some(completion) = writer.poll_completion() {
+                let err = completion.expect_err("transport should fail");
+                assert!(err.contains("transport denied"), "{err}");
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "background clipboard failure timed out"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
 
     #[cfg(any(
         target_os = "macos",

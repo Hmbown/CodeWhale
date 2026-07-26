@@ -155,6 +155,7 @@ fn make_snapshot(status: SubAgentStatus) -> SubAgentResult {
         nickname: None,
         status,
         worker_status: None,
+        runtime_permissions: None,
         parent_run_id: None,
         spawn_depth: 0,
         result: None,
@@ -11649,4 +11650,123 @@ fn test_parse_spawn_request_inherit_disallowed_tools_explicit_false() {
         !req.inherit_disallowed_tools,
         "inherit_disallowed_tools should parse an explicit false"
     );
+}
+
+/// #3874 acceptance: the no-progress heartbeat must not kill a worker whose
+/// only pending work is a tracked *running* background shell task.
+///
+/// This is the behavioral claim the issue asks to prove, exercised through the
+/// real path: `running_owner_agent_ids` -> `touch`. It also proves the
+/// converse, which is the part that makes the carve-out safe — once the job is
+/// no longer running, nothing extends the heartbeat any more.
+#[tokio::test]
+async fn tracked_running_background_shell_keeps_its_owner_off_the_heartbeat_reaper() {
+    use crate::tools::shell::{SharedShellManager, ShellJobOwner, ShellManager};
+    use std::sync::Mutex as StdMutex;
+
+    // Keep the platform sleep spelling local to this test rather than
+    // exporting a helper out of the shell test module.
+    let sleep_command = {
+        let dispatcher = crate::shell_dispatcher::global_dispatcher();
+        if dispatcher.kind().is_powershell() {
+            "Start-Sleep -Seconds 60".to_string()
+        } else if cfg!(windows) {
+            "ping 127.0.0.1 -n 61 > NUL".to_string()
+        } else {
+            "sleep 60".to_string()
+        }
+    };
+
+    let tmp = tempdir().expect("tempdir");
+    let mut manager = SubAgentManager::new(PathBuf::from("."), 1)
+        .with_running_heartbeat_timeout(Duration::from_millis(50));
+    let (input_tx, _input_rx) = mpsc::unbounded_channel();
+    let mut agent = SubAgent::new(
+        "test_agent_shell_owner".to_string(),
+        FleetRole::Worker,
+        "prompt".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        Some("Blue".to_string()),
+        Some(vec!["exec_shell".to_string()]),
+        input_tx,
+        PathBuf::from("."),
+        "boot_test".to_string(),
+    );
+    agent.task_handle = Some(tokio::spawn(async {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+    }));
+    let agent_id = agent.id.clone();
+    manager.agents.insert(agent_id.clone(), agent);
+
+    // A long-running background shell owned by that worker.
+    let shell_manager: SharedShellManager =
+        std::sync::Arc::new(StdMutex::new(ShellManager::new(tmp.path().to_path_buf())));
+    let task_id = {
+        let mut shell = shell_manager.lock().expect("shell manager");
+        let started = shell
+            .execute_with_options_env_for_owner(
+                &sleep_command,
+                None,
+                60_000,
+                true,
+                None,
+                false,
+                None,
+                std::collections::HashMap::new(),
+                Some(ShellJobOwner {
+                    agent_id: "test_agent_shell_owner".to_string(),
+                    agent_name: "worker".to_string(),
+                }),
+            )
+            .expect("start owned background shell");
+        started.task_id.expect("background task id")
+    };
+
+    // Go stale: past the heartbeat timeout, the worker reads as not running.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(
+        manager.running_count(),
+        0,
+        "precondition: the worker is stale before the carve-out runs"
+    );
+
+    // The carve-out: a tracked running shell refreshes its owner's heartbeat.
+    let owners = {
+        let mut shell = shell_manager.lock().expect("shell manager");
+        shell.running_owner_agent_ids()
+    };
+    assert_eq!(owners, vec!["test_agent_shell_owner".to_string()]);
+    for owner in &owners {
+        assert!(manager.touch(owner), "owner must be touchable");
+    }
+    assert_eq!(
+        manager.running_count(),
+        1,
+        "a worker waiting on a tracked background shell must survive the heartbeat"
+    );
+    assert_eq!(manager.cleanup(Duration::from_secs(60 * 60)), 0);
+
+    // The converse: once the job stops running, nothing extends the heartbeat.
+    {
+        let mut shell = shell_manager.lock().expect("shell manager");
+        let _ = shell.kill(&task_id);
+        assert!(
+            shell.running_owner_agent_ids().is_empty(),
+            "a finished job must not keep extending its owner's heartbeat"
+        );
+    }
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(
+        manager.running_count(),
+        0,
+        "without a running job the worker goes stale again"
+    );
+
+    manager
+        .agents
+        .get_mut(&agent_id)
+        .and_then(|agent| agent.task_handle.take())
+        .expect("live task handle")
+        .abort();
 }

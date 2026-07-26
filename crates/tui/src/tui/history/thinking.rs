@@ -129,6 +129,26 @@ pub(super) fn render_thinking(
     collapsed: bool,
     low_motion: bool,
 ) -> Vec<Line<'static>> {
+    render_thinking_with_highlight(
+        content,
+        width,
+        streaming,
+        duration_secs,
+        collapsed,
+        low_motion,
+        true,
+    )
+}
+
+pub(crate) fn render_thinking_with_highlight(
+    content: &str,
+    width: u16,
+    streaming: bool,
+    duration_secs: Option<f32>,
+    collapsed: bool,
+    low_motion: bool,
+    highlight: bool,
+) -> Vec<Line<'static>> {
     let state = thinking_visual_state(streaming, duration_secs);
     let style = thinking_style();
     // 12% reasoning surface tint over the app ink — the only deliberately
@@ -136,9 +156,9 @@ pub(super) fn render_thinking(
     // tint would distort the named palette.
     let depth = cached_color_depth();
     let body_bg = palette::reasoning_surface_tint(depth);
-    let body_style = match body_bg {
-        Some(bg) => style.italic().bg(bg),
-        None => style.italic(),
+    let body_style = match (highlight, body_bg) {
+        (true, Some(bg)) => style.italic().bg(bg),
+        (_, None) | (false, Some(_)) => style.italic(),
     };
     let mut lines = Vec::new();
 

@@ -48,6 +48,8 @@ use message::{
     render_message, render_message_with_copy_metadata_for_palette, render_plain_message,
     render_user_message, system_body_style, system_label_style, user_body_style, user_label_style,
 };
+#[cfg(test)]
+pub(super) use thinking::render_thinking_with_highlight;
 use thinking::{render_hidden_thinking_activity, render_thinking};
 use tool_output::{render_exec_output_mode, render_tool_output_mode, wrap_plain_line, wrap_text};
 
@@ -159,6 +161,7 @@ impl SubAgentCell {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TranscriptRenderOptions {
     pub show_thinking: bool,
+    pub thinking_highlight: bool,
     pub verbose: bool,
     pub show_tool_details: bool,
     pub inline_diff_mode: crate::settings::InlineDiffMode,
@@ -175,6 +178,7 @@ impl Default for TranscriptRenderOptions {
     fn default() -> Self {
         Self {
             show_thinking: true,
+            thinking_highlight: true,
             verbose: false,
             show_tool_details: true,
             inline_diff_mode: crate::settings::InlineDiffMode::Full,
@@ -310,13 +314,14 @@ impl HistoryCell {
                 content,
                 streaming,
                 duration_secs,
-            } => render_thinking(
+            } => thinking::render_thinking_with_highlight(
                 content,
                 width,
                 *streaming,
                 *duration_secs,
                 folded ^ !options.verbose,
                 options.low_motion,
+                options.thinking_highlight,
             ),
             HistoryCell::Tool(ToolCell::PatchSummary(cell)) => cell.render(
                 width,

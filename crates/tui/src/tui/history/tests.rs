@@ -3,7 +3,8 @@ use super::{
     PlanUpdateCell, REASONING_CURSOR, REASONING_OPENER, REASONING_RAIL, TOOL_RUNNING_SYMBOLS,
     TOOL_STATUS_SYMBOL_MS, ToolCell, ToolStatus, TranscriptRenderOptions, USER_GLYPH,
     WebSearchCell, assistant_label_style_for, extract_reasoning_summary,
-    render_spillover_annotation, render_thinking, running_status_label_with_elapsed,
+    render_spillover_annotation, render_thinking, render_thinking_with_highlight,
+    running_status_label_with_elapsed,
 };
 use crate::deepseek_theme::Theme;
 use crate::models::{ContentBlock, Message};
@@ -1997,6 +1998,27 @@ fn render_thinking_body_lines_use_dashed_rail_and_italic() {
         .skip(1)
         .any(|span| span.style.add_modifier.contains(Modifier::ITALIC));
     assert!(italic_seen, "body content should carry italic modifier");
+}
+
+#[test]
+fn render_thinking_can_omit_background_highlight() {
+    let lines = render_thinking_with_highlight(
+        "reasoning without a filled surface",
+        80,
+        false,
+        Some(1.0),
+        false,
+        true,
+        false,
+    );
+
+    assert!(
+        lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .all(|span| span.style.bg.is_none()),
+        "disabled thinking highlight must not apply a background to any span"
+    );
 }
 
 #[test]

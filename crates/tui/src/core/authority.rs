@@ -69,6 +69,76 @@ pub(crate) fn base_policy_for_mode(mode: AppMode, prefs: &ModeSessionPrefs) -> E
     }
 }
 
+/// Why runtime policy narrowed the authority a turn was asked to run with.
+///
+/// One variant per narrowing site. Adding a site means adding a variant, which
+/// is the mechanism that makes "no silent effective mode change" enforceable
+/// rather than aspirational (#3947).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PolicyNarrowingReason {
+    /// Input arrived from a provenance that cannot inherit standing
+    /// auto-approval authority (sub-agent handoffs, restored checkpoints).
+    NonAuthoritativeProvenance,
+}
+
+impl PolicyNarrowingReason {
+    /// Stable machine-readable identifier. Shared by the model-visible
+    /// metadata line and doctor output so the two cannot drift.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::NonAuthoritativeProvenance => "non_authoritative_provenance",
+        }
+    }
+}
+
+/// A structured record of one authority narrowing.
+///
+/// Before this existed, narrowing produced only a free-text UI status line:
+/// the model saw the narrowed posture but never learned it had been narrowed
+/// or why, and doctor could not report it at all. Every consumer now renders
+/// from this one value, so the UI status, the `<turn_meta>` line, and doctor
+/// necessarily agree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PolicyNarrowingEvent {
+    reason: PolicyNarrowingReason,
+    /// Mode before narrowing, and after, as setting strings.
+    from_mode: &'static str,
+    to_mode: &'static str,
+    /// Permission posture before narrowing, and after.
+    from_approval: ApprovalMode,
+    to_approval: ApprovalMode,
+    /// Human-readable cause, e.g. the provenance that could not inherit.
+    detail: String,
+}
+
+impl PolicyNarrowingEvent {
+    pub(crate) fn reason(&self) -> PolicyNarrowingReason {
+        self.reason
+    }
+
+    /// The single user-facing sentence. The TUI status line renders exactly
+    /// this, and the model-visible metadata carries the same string.
+    pub(crate) fn message(&self) -> String {
+        match self.reason {
+            PolicyNarrowingReason::NonAuthoritativeProvenance => format!(
+                "Input provenance '{}' cannot inherit standing auto-approval authority; continuing with approvals required.",
+                self.detail
+            ),
+        }
+    }
+
+    /// Compact `from -> to` summary for doctor and debug surfaces.
+    pub(crate) fn transition(&self) -> String {
+        format!(
+            "{} ({}) -> {} ({})",
+            self.from_mode,
+            self.from_approval.permission_chip_label(),
+            self.to_mode,
+            self.to_approval.permission_chip_label(),
+        )
+    }
+}
+
 /// Effective authority for one engine turn after provenance narrowing.
 #[derive(Debug, Clone)]
 pub(crate) struct TurnAuthority {
@@ -78,10 +148,18 @@ pub(crate) struct TurnAuthority {
     pub(crate) auto_approve: bool,
     pub(crate) approval_mode: ApprovalMode,
     pub(crate) dynamic_active_tools: Vec<&'static str>,
-    pub(crate) status: Option<String>,
+    /// Structured record of any narrowing applied to this turn (#3947). The
+    /// UI status line, `<turn_meta>`, and doctor all render from here, so a
+    /// narrowing that reaches one surface reaches all of them.
+    pub(crate) narrowing: Option<PolicyNarrowingEvent>,
 }
 
 impl TurnAuthority {
+    /// The user-facing status sentence for this turn's narrowing, if any.
+    pub(crate) fn status(&self) -> Option<String> {
+        self.narrowing.as_ref().map(PolicyNarrowingEvent::message)
+    }
+
     #[must_use]
     pub(crate) fn from_effective_fields(
         mode: AppMode,
@@ -97,7 +175,7 @@ impl TurnAuthority {
             auto_approve,
             approval_mode,
             dynamic_active_tools: Vec::new(),
-            status: None,
+            narrowing: None,
         }
     }
 
@@ -156,9 +234,11 @@ pub(crate) fn effective_input_policy(
     let mut trust_mode = trust_mode;
     let mut auto_approve = auto_approve;
     let mut approval_mode = approval_mode;
-    let mut status = None;
+    let mut narrowing = None;
 
     if !provenance_can_inherit_standing_auto_authority(provenance) {
+        let from_mode = mode;
+        let from_approval = approval_mode;
         let had_auto_authority = matches!(mode, AppMode::Yolo)
             || trust_mode
             || auto_approve
@@ -172,10 +252,16 @@ pub(crate) fn effective_input_policy(
             approval_mode = ApprovalMode::Suggest;
         }
         if had_auto_authority {
-            status = Some(format!(
-                "Input provenance '{}' cannot inherit standing auto-approval authority; continuing with approvals required.",
-                provenance.as_str()
-            ));
+            // Record the transition, not just a sentence about it: the same
+            // value drives the UI status, `<turn_meta>`, and doctor (#3947).
+            narrowing = Some(PolicyNarrowingEvent {
+                reason: PolicyNarrowingReason::NonAuthoritativeProvenance,
+                from_mode: from_mode.as_setting(),
+                to_mode: mode.as_setting(),
+                from_approval,
+                to_approval: approval_mode,
+                detail: provenance.as_str().to_string(),
+            });
         }
     }
 
@@ -193,7 +279,7 @@ pub(crate) fn effective_input_policy(
         auto_approve,
         approval_mode,
         dynamic_active_tools: Vec::new(),
-        status,
+        narrowing,
     }
 }
 

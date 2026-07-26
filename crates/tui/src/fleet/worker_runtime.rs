@@ -64,12 +64,16 @@ pub fn validate_fleet_task_routes(
             .flatten();
         let (model, source) =
             effective_fleet_model_with_source(run_model, task.worker.as_ref(), agent_profile);
+        let route = resolve_fleet_route_with_config(task, agent_profiles, session_model, config);
+        if route.is_some() {
+            validate_fleet_reasoning_effort(task, agent_profiles, session_model, config)?;
+        }
         if !matches!(source, "task.model" | "agent_profile.model") {
             continue;
         }
         // A concrete model is pinned at the task/profile level; it must resolve
         // to a real provider route or the worker cannot launch.
-        if resolve_fleet_route_with_config(task, agent_profiles, session_model, config).is_some() {
+        if route.is_some() {
             continue;
         }
         let provider = explicit_fleet_provider_id(agent_profile)
@@ -88,6 +92,46 @@ pub fn validate_fleet_task_routes(
         );
     }
     Ok(())
+}
+
+/// Reject an explicit Fleet thinking tier when the exact resolved route does
+/// not advertise reasoning support. `inherit`, `auto`, and `off` are valid on
+/// every route because they do not force a reasoning payload. This check is
+/// deliberately performed at run creation, after the same route resolver used
+/// for launch, so the UI cannot save a profile that will silently downgrade or
+/// fail at spawn time (#4866).
+fn validate_fleet_reasoning_effort(
+    task: &FleetTaskSpec,
+    agent_profiles: &[AgentProfile],
+    session_model: Option<&str>,
+    config: Option<&Config>,
+) -> Result<()> {
+    let agent_profile = resolve_task_agent_profile(task, agent_profiles)
+        .ok()
+        .flatten();
+    let Some(effort) = effective_fleet_reasoning_effort(agent_profile) else {
+        return Ok(());
+    };
+    if matches!(effort.as_str(), "inherit" | "auto" | "off") {
+        return Ok(());
+    }
+    let Some(route) = resolve_fleet_route_with_config(task, agent_profiles, session_model, config)
+    else {
+        // The model-route validator owns unresolved-route errors and produces
+        // the more useful provider/model diagnosis.
+        return Ok(());
+    };
+    let provider = ApiProvider::parse(&route.provider_kind).unwrap_or(ApiProvider::Custom);
+    let capability = crate::config::provider_capability(provider, &route.wire_model_id);
+    if capability.thinking_supported {
+        return Ok(());
+    }
+    bail!(
+        "Fleet task `{}` requests thinking tier `{effort}` for `{}` / `{}`, but that exact model route does not support thinking; choose inherit, auto, or off, or select a reasoning-capable model",
+        task.id,
+        route.provider_id,
+        route.wire_model_id,
+    );
 }
 
 /// Build a sub-agent worker spec after resolving workspace Fleet profile input.
@@ -1047,7 +1091,7 @@ pub(crate) fn fleet_effective_permissions_for_task(
     fleet_effective_permissions_from_runtime_profile(&spec.runtime_profile, agent_profile)
 }
 
-fn fleet_effective_permissions_from_runtime_profile(
+pub(crate) fn fleet_effective_permissions_from_runtime_profile(
     profile: &WorkerRuntimeProfile,
     agent_profile: Option<&AgentProfile>,
 ) -> FleetEffectivePermissions {
@@ -1067,6 +1111,74 @@ fn fleet_effective_permissions_from_runtime_profile(
             .map(|profile| profile_origin_label(profile.origin).to_string()),
         source: "worker_runtime_profile".to_string(),
     }
+}
+
+/// Return a truthful dispatch warning when a brief asks for network-backed
+/// verification but the selected Fleet role cannot use the network.
+pub(crate) fn network_posture_warning_for_task(
+    task: &FleetTaskSpec,
+    agent_profiles: &[AgentProfile],
+    session_model: Option<&str>,
+) -> Option<String> {
+    let brief = format!(
+        "{}\n{}\n{}",
+        task.name,
+        task.objective.as_deref().unwrap_or_default(),
+        task.instructions
+    );
+    let lower = brief.to_ascii_lowercase();
+    let asks_for_network = [
+        "gh ",
+        "gh\n",
+        "github",
+        "curl ",
+        "wget ",
+        "http://",
+        "https://",
+        "network",
+        "web search",
+        "check ci",
+        "check the pr",
+        "check the issue",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
+    if !asks_for_network {
+        return None;
+    }
+
+    let agent_profile = resolve_task_agent_profile(task, agent_profiles)
+        .ok()
+        .flatten();
+    let worker_profile = task.worker.as_ref();
+    let role = effective_fleet_role(worker_profile, agent_profile);
+    let agent_type = fleet_role_to_agent_type(role.as_deref());
+    let tool_profile = fleet_tool_profile(worker_profile);
+    let (model, model_source) = effective_fleet_model_with_source(
+        session_model.unwrap_or("auto"),
+        worker_profile,
+        agent_profile,
+    );
+    let loadout = effective_fleet_loadout(worker_profile, agent_profile);
+    let runtime = fleet_worker_runtime_profile_for_loadout(
+        &agent_type,
+        &tool_profile,
+        &model,
+        0,
+        codewhale_config::FleetExecConfig::default().max_spawn_depth,
+        &loadout,
+        model_source,
+    );
+    if runtime.permissions.network {
+        return None;
+    }
+
+    Some(format!(
+        "Fleet task `{}` mentions network-backed verification, but role `{}` has network=off and shell={}. Dispatch a `worker` role with shell `read_only` for gh/curl evidence, or revise the brief.",
+        task.id,
+        role.as_deref().unwrap_or("worker"),
+        shell_policy_label(runtime.shell),
+    ))
 }
 
 fn profile_origin_label(origin: crate::fleet::roster::ProfileOrigin) -> &'static str {
@@ -1612,6 +1724,47 @@ mod tests {
     }
 
     #[test]
+    fn network_brief_warns_for_networkless_reviewer_but_not_worker() {
+        let reviewer = fleet_task(
+            "triage",
+            Some(worker_profile(
+                None,
+                Some("reviewer"),
+                None,
+                None,
+                None,
+                vec!["read_file"],
+            )),
+        );
+        let mut reviewer = reviewer;
+        reviewer.instructions = "Use gh to check the PR and report CI evidence.".to_string();
+        let warning = network_posture_warning_for_task(&reviewer, &[], None)
+            .expect("network-dependent reviewer brief should warn");
+        assert!(warning.contains("network=off"));
+        assert!(warning.contains("worker"));
+
+        let mut worker = reviewer.clone();
+        worker.worker.as_mut().unwrap().role = Some("worker".to_string());
+        assert!(network_posture_warning_for_task(&worker, &[], None).is_none());
+    }
+
+    #[test]
+    fn non_network_brief_does_not_warn_for_networkless_role() {
+        let task = fleet_task(
+            "local-review",
+            Some(worker_profile(
+                None,
+                Some("reviewer"),
+                None,
+                None,
+                None,
+                vec!["read_file"],
+            )),
+        );
+        assert!(network_posture_warning_for_task(&task, &[], None).is_none());
+    }
+
+    #[test]
     fn fleet_task_prompt_includes_instructions_context_and_input_files() {
         let task = FleetTaskSpec {
             id: "review".to_string(),
@@ -1866,6 +2019,91 @@ mod tests {
         );
         validate_fleet_task_routes(&[inherit_task], &[inherit], None, None)
             .expect("inherit (no model pin) must pass");
+    }
+
+    #[test]
+    fn validate_fleet_task_routes_rejects_unsupported_thinking_tier() {
+        let mut profile = agent_profile(
+            "preview-builder",
+            "builder",
+            None,
+            codewhale_config::FleetLoadout::Inherit,
+        );
+        profile.profile.model = Some("trinity-large-preview".to_string());
+        profile.profile.provider = Some("arcee".to_string());
+        profile.profile.reasoning_effort = Some("high".to_string());
+        let task = fleet_task(
+            "preview-build",
+            Some(worker_profile(
+                Some("preview-builder"),
+                None,
+                None,
+                None,
+                None,
+                vec![],
+            )),
+        );
+
+        let err = validate_fleet_task_routes(&[task], &[profile], Some("deepseek-v4-flash"), None)
+            .expect_err("unsupported thinking tier must fail before leasing");
+        let message = err.to_string();
+        assert!(message.contains("does not support thinking"), "{message}");
+        assert!(message.contains("trinity-large-preview"), "{message}");
+    }
+
+    #[test]
+    fn validate_fleet_task_routes_accepts_thinking_capable_route() {
+        let mut profile = agent_profile(
+            "deep-builder",
+            "builder",
+            None,
+            codewhale_config::FleetLoadout::Inherit,
+        );
+        profile.profile.model = Some("deepseek-v4-flash".to_string());
+        profile.profile.reasoning_effort = Some("high".to_string());
+        let task = fleet_task(
+            "deep-build",
+            Some(worker_profile(
+                Some("deep-builder"),
+                None,
+                None,
+                None,
+                None,
+                vec![],
+            )),
+        );
+
+        validate_fleet_task_routes(&[task], &[profile], Some("deepseek-v4-flash"), None)
+            .expect("thinking-capable route must pass");
+    }
+
+    #[test]
+    fn validate_fleet_task_routes_keeps_non_explicit_thinking_modes_route_agnostic() {
+        for effort in ["inherit", "auto", "off"] {
+            let mut profile = agent_profile(
+                "preview-builder",
+                "builder",
+                None,
+                codewhale_config::FleetLoadout::Inherit,
+            );
+            profile.profile.model = Some("trinity-large-preview".to_string());
+            profile.profile.provider = Some("arcee".to_string());
+            profile.profile.reasoning_effort = Some(effort.to_string());
+            let task = fleet_task(
+                "preview-build",
+                Some(worker_profile(
+                    Some("preview-builder"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    vec![],
+                )),
+            );
+
+            validate_fleet_task_routes(&[task], &[profile], Some("deepseek-v4-flash"), None)
+                .unwrap_or_else(|error| panic!("{effort} must remain valid: {error}"));
+        }
     }
 
     #[test]

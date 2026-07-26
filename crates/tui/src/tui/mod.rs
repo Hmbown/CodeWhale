@@ -41,6 +41,7 @@ pub mod file_tree;
 pub mod footer_ui;
 pub mod format_helpers;
 pub mod frame_rate_limiter;
+pub mod git_mention;
 pub mod git_status;
 pub mod glyphs;
 pub mod history;

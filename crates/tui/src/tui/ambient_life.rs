@@ -151,6 +151,7 @@ pub struct WhaleCameo {
 const WHALE_CAMEO_MS: u128 = 2_400;
 
 /// Render ambient life into empty water cells of `area`.
+#[allow(clippy::too_many_arguments)]
 pub fn render_ambient_life(
     area: Rect,
     buf: &mut Buffer,

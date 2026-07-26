@@ -101,6 +101,32 @@ pub struct LiveTranscriptOverlay {
     /// Set when a backtrack selection changes. The next render pins the
     /// selected cell into view once we know the wrapped line range.
     preview_pin_pending: Cell<bool>,
+    /// Bumped by `refresh_from_app` whenever any snapshot actually changed.
+    /// Lets the flatten cache below be keyed in O(1) (#3904).
+    snapshots_generation: Cell<u64>,
+    /// Cached flattened line vector. `flatten` used to re-clone every cell's
+    /// cached wrapped lines into a fresh `Vec` on every frame; now it is
+    /// rebuilt only when the snapshots, width, mode, or render options change.
+    flat_cache: RefCell<Option<FlatCache>>,
+    /// How many `HistoryCell` deep clones `refresh_from_app` has performed.
+    /// Diagnostics + the #3904 regression tests.
+    cell_clones: Cell<u64>,
+    /// How many times `flatten` actually rebuilt the flat line vector.
+    flattens: Cell<u64>,
+}
+
+/// Key that fully determines the output of `flatten`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FlatKey {
+    generation: u64,
+    width: u16,
+    mode: Mode,
+    options: TranscriptRenderOptions,
+}
+
+struct FlatCache {
+    key: FlatKey,
+    flat: FlattenedTranscript,
 }
 
 impl LiveTranscriptOverlay {
@@ -117,6 +143,10 @@ impl LiveTranscriptOverlay {
             pending_g: false,
             mode: Mode::Tail,
             preview_pin_pending: Cell::new(false),
+            snapshots_generation: Cell::new(0),
+            flat_cache: RefCell::new(None),
+            cell_clones: Cell::new(0),
+            flattens: Cell::new(0),
         }
     }
 
@@ -153,37 +183,71 @@ impl LiveTranscriptOverlay {
     /// state they were in when the overlay was first opened.
     pub fn refresh_from_app(&mut self, app: &mut App) {
         app.resync_history_revisions();
-        let mut new_snapshots = Vec::with_capacity(
-            app.history.len() + app.active_cell.as_ref().map_or(0, |a| a.entries().len()),
-        );
+        let mut slot = 0usize;
+        let mut changed = false;
         for (idx, cell) in app.history.iter().enumerate() {
             let rev = app.history_revisions.get(idx).copied().unwrap_or(0);
-            new_snapshots.push(CellSnapshot {
-                id: CellId::History(idx),
-                revision: rev,
-                cell: cell.clone(),
-            });
+            changed |= self.store_snapshot(slot, CellId::History(idx), rev, cell);
+            slot += 1;
         }
         if let Some(active) = app.active_cell.as_ref() {
             let active_rev = app.active_cell_revision;
             for (idx, cell) in active.entries().iter().enumerate() {
                 let salt = (idx as u64).wrapping_add(1);
-                // This overlay has its own cache and `CellId::Active` already
-                // separates active entries from history. It only needs the
-                // positional salt; the main transcript additionally reserves
-                // bit 63 because active and history rows can reuse one slot.
-                let revision = active_rev
-                    .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-                    .wrapping_add(salt);
-                new_snapshots.push(CellSnapshot {
-                    id: CellId::Active(idx),
+                // Share the main transcript's revision derivation instead of
+                // keeping an inline copy of the same mixing constant (#3904).
+                let revision = crate::tui::widgets::active_entry_revision(active_rev, salt);
+                changed |= self.store_snapshot(slot, CellId::Active(idx), revision, cell);
+                slot += 1;
+            }
+        }
+        if self.snapshots.len() != slot {
+            self.snapshots.truncate(slot);
+            changed = true;
+        }
+        let options = app.transcript_render_options();
+        if self.options != options {
+            self.options = options;
+            changed = true;
+        }
+        if changed {
+            self.snapshots_generation
+                .set(self.snapshots_generation.get().wrapping_add(1));
+        }
+    }
+
+    /// Write the snapshot for `slot`, cloning the cell **only** when its
+    /// `(CellId, revision)` differs from what is already stored (#3904).
+    ///
+    /// Returns whether anything changed. The overlay tails a live stream, so
+    /// this runs at streaming cadence; the old code deep-cloned every history
+    /// cell every frame even though revisions were already available.
+    fn store_snapshot(
+        &mut self,
+        slot: usize,
+        id: CellId,
+        revision: u64,
+        cell: &HistoryCell,
+    ) -> bool {
+        match self.snapshots.get_mut(slot) {
+            Some(existing) if existing.id == id && existing.revision == revision => false,
+            Some(existing) => {
+                existing.id = id;
+                existing.revision = revision;
+                existing.cell = cell.clone();
+                self.cell_clones.set(self.cell_clones.get() + 1);
+                true
+            }
+            None => {
+                self.snapshots.push(CellSnapshot {
+                    id,
                     revision,
                     cell: cell.clone(),
                 });
+                self.cell_clones.set(self.cell_clones.get() + 1);
+                true
             }
         }
-        self.snapshots = new_snapshots;
-        self.options = app.transcript_render_options();
     }
 
     /// Wrap each cell (using the cache) and return the flat line vector.
@@ -192,6 +256,34 @@ impl LiveTranscriptOverlay {
     /// first line and reverse-video styling on every line so the eye
     /// snaps to them at a glance. The decoration is applied *after* the
     /// cache lookup so toggling preview mode never invalidates wraps.
+    /// Cached wrapper around [`Self::flatten`] (#3904).
+    ///
+    /// The overlay renders at streaming cadence while the main transcript
+    /// renders underneath in the same frame, so re-flattening the whole
+    /// transcript per frame roughly doubled per-frame allocations. The flat
+    /// vector only depends on the snapshots, the width, the mode, and the
+    /// render options — all of which are in `FlatKey`.
+    fn flattened(&self, width: u16) -> std::cell::Ref<'_, FlattenedTranscript> {
+        let key = FlatKey {
+            generation: self.snapshots_generation.get(),
+            width: width.max(1),
+            mode: self.mode,
+            options: self.options,
+        };
+        {
+            let mut cache = self.flat_cache.borrow_mut();
+            let stale = cache.as_ref().is_none_or(|cached| cached.key != key);
+            if stale {
+                let flat = self.flatten(key.width);
+                self.flattens.set(self.flattens.get() + 1);
+                *cache = Some(FlatCache { key, flat });
+            }
+        }
+        std::cell::Ref::map(self.flat_cache.borrow(), |cache| {
+            &cache.as_ref().expect("flat cache populated above").flat
+        })
+    }
+
     fn flatten(&self, width: u16) -> FlattenedTranscript {
         let width = width.max(1);
         let mut out: Vec<Line<'static>> = Vec::new();
@@ -578,11 +670,13 @@ impl ModalView for LiveTranscriptOverlay {
 
         // Wrap content using the per-cell cache at the body width.
         let content_width = content.width;
+        let flat = self.flattened(content_width);
         let FlattenedTranscript {
             lines,
             line_links,
             highlighted_range,
-        } = self.flatten(content_width);
+        } = &*flat;
+        let highlighted_range = *highlighted_range;
         self.last_total_lines.set(lines.len());
 
         let max_scroll = lines.len().saturating_sub(visible_height);
@@ -669,6 +763,13 @@ mod tests {
                 cell,
             })
             .collect();
+        view.snapshots_generation
+            .set(view.snapshots_generation.get().wrapping_add(1));
+    }
+
+    fn mark_snapshots_changed(view: &LiveTranscriptOverlay) {
+        view.snapshots_generation
+            .set(view.snapshots_generation.get().wrapping_add(1));
     }
 
     fn buffer_text(buf: &Buffer) -> String {
@@ -842,6 +943,7 @@ mod tests {
         };
         content.push_str(" + one delta");
         tail.revision = tail.revision.saturating_add(1);
+        mark_snapshots_changed(&view);
 
         let mut after = Buffer::empty(area);
         view.render(area, &mut after);
@@ -875,6 +977,7 @@ mod tests {
         // re-render. We expect the cache to grow by one new entry — the new
         // (cell, width, new_rev) — while the user cell entry is reused.
         v.snapshots[1].revision = 2;
+        mark_snapshots_changed(&v);
         v.render(area, &mut buf);
         let after = v.cache.borrow().len();
         assert!(

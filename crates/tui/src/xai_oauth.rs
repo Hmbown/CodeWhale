@@ -1440,6 +1440,85 @@ mod tests {
         );
     }
 
+    /// #4763 root trigger. A returning xAI-OAuth user whose only material is
+    /// an external Grok CLI grant loses readiness the moment that CLI's
+    /// short-lived access token expires, even though a refresh token sits
+    /// right beside it — read-only consent deliberately never refreshes or
+    /// rewrites another CLI's file, so there is nothing to renew it with.
+    /// `needs_api_key` therefore flips to true and onboarding reopens. That
+    /// is the intended invariant, not a leak; this test pins it so the
+    /// onboarding entry point stays explainable.
+    #[test]
+    fn expired_external_grok_grant_reads_as_missing_key_despite_refresh_token() {
+        let _guard = crate::test_support::lock_test_env();
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().canonicalize().expect("canonical temp root");
+        let path = root.join("external-grok-auth.json");
+        let scope = format!("https://auth.x.ai::{GROK_OIDC_CLIENT_ID}");
+        fs::write(
+            &path,
+            serde_json::json!({
+                scope.clone(): {
+                    "key": "expired-external-access",
+                    "refresh_token": "present-but-unusable-under-read-only-consent",
+                    "expires_at": rfc3339_from_unix(now_unix_secs().unwrap_or(0) - 3600),
+                    "oidc_client_id": GROK_OIDC_CLIENT_ID,
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let _home_guard =
+            crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", root.join("codewhale-owned"));
+        let _path_guard = crate::test_support::EnvVarGuard::set("GROK_AUTH_PATH", &path);
+        let _key_guard = crate::test_support::EnvVarGuard::remove("XAI_API_KEY");
+        let config = Config {
+            provider: Some(ApiProvider::Xai.as_str().to_string()),
+            providers: Some(crate::config::ProvidersConfig {
+                xai: crate::config::ProviderConfig {
+                    auth_mode: Some("oauth".to_string()),
+                    external_credentials: Some(
+                        codewhale_config::ExternalCredentialConsentToml::read_only(
+                            codewhale_config::ProviderKind::Xai,
+                            codewhale_config::ExternalCredentialSource::GrokCli,
+                            path.clone(),
+                        ),
+                    ),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        assert!(
+            !credentials_present(&config),
+            "an expired external access token is not usable material"
+        );
+        assert!(
+            !crate::config::has_api_key_for(&config, ApiProvider::Xai),
+            "expired external xAI OAuth must fall through to the missing-key path"
+        );
+
+        // The same file with a live access token is ready, so the check is
+        // expiry-driven rather than a blanket rejection of external grants.
+        fs::write(
+            &path,
+            serde_json::json!({
+                scope: {
+                    "key": "fresh-external-access",
+                    "refresh_token": "unused",
+                    "expires_at": rfc3339_from_now(3600),
+                    "oidc_client_id": GROK_OIDC_CLIENT_ID,
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert!(credentials_present(&config));
+        assert!(crate::config::has_api_key_for(&config, ApiProvider::Xai));
+    }
+
     #[test]
     fn native_login_storage_is_codewhale_owned() {
         let _guard = crate::test_support::lock_test_env();

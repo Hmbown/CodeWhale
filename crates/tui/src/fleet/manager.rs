@@ -84,6 +84,8 @@ pub struct FleetRunReport {
     pub leased: usize,
     pub queued: usize,
     pub worker_ids: Vec<String>,
+    /// Non-blocking dispatch warnings about a brief/profile mismatch.
+    pub warnings: Vec<String>,
 }
 
 /// Durable restart transition plus the execution context a caller must drive.
@@ -305,6 +307,17 @@ impl FleetManager {
             self.session_model(),
             self.route_config.as_ref(),
         )?;
+        let warnings = doc
+            .tasks
+            .iter()
+            .filter_map(|task| {
+                worker_runtime::network_posture_warning_for_task(
+                    task,
+                    roster.members(),
+                    self.session_model(),
+                )
+            })
+            .collect::<Vec<_>>();
         let max_workers = max_workers.clamp(1, 128);
         let run_id = FleetRunId::from(format!(
             "fleet-{}",
@@ -355,6 +368,7 @@ impl FleetManager {
             leased: tick.leased,
             queued: snapshot.queued,
             worker_ids: run.worker_specs.iter().map(|w| w.id.clone()).collect(),
+            warnings,
         })
     }
 

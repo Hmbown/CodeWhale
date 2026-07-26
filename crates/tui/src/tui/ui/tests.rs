@@ -8073,6 +8073,7 @@ fn make_subagent(
         nickname: None,
         status,
         worker_status: None,
+        runtime_permissions: None,
         parent_run_id: None,
         spawn_depth: 0,
         result: None,
@@ -10997,6 +10998,102 @@ fn mental_models_backtracks_to_the_last_first_run_decision() {
     app.onboarding_had_api_key_step = false;
     crate::tui::onboarding::back_from_mental_models(&mut app);
     assert_eq!(app.onboarding, OnboardingState::Language);
+}
+
+// ---- Issue #4763: provider onboarding must never be a trap ----
+
+/// Ctrl+C quits from every onboarding state, including while the provider
+/// picker owns the keys. Before #4763 the picker swallowed it and the only
+/// exit was Escape-then-Ctrl+C.
+#[test]
+fn onboarding_ctrl_c_quits_even_with_the_provider_picker_on_the_view_stack() {
+    let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+
+    assert_eq!(
+        onboarding_key_route(
+            OnboardingState::Provider,
+            Some(ModalKind::ProviderPicker),
+            &ctrl_c,
+        ),
+        OnboardingKeyRoute::Quit,
+    );
+    assert_eq!(
+        onboarding_key_route(OnboardingState::Provider, None, &ctrl_c),
+        OnboardingKeyRoute::Quit,
+    );
+    assert_eq!(
+        onboarding_key_route(OnboardingState::Language, None, &ctrl_c),
+        OnboardingKeyRoute::Quit,
+    );
+    assert_eq!(
+        onboarding_key_route(
+            OnboardingState::MentalModels,
+            Some(ModalKind::Help),
+            &ctrl_c,
+        ),
+        OnboardingKeyRoute::Quit,
+    );
+}
+
+/// Escape is no longer intercepted on the picker's behalf, so the picker can
+/// back out one stage (key/OAuth entry → list) and only dismiss from the
+/// list. Non-onboarding keys still reach the legacy switch.
+#[test]
+fn onboarding_escape_is_routed_to_the_provider_picker_not_intercepted() {
+    let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+
+    assert_eq!(
+        onboarding_key_route(
+            OnboardingState::Provider,
+            Some(ModalKind::ProviderPicker),
+            &esc
+        ),
+        OnboardingKeyRoute::ProviderPicker,
+        "the picker owns Escape so it can back out one stage at a time"
+    );
+    assert_eq!(
+        onboarding_key_route(OnboardingState::Provider, None, &esc),
+        OnboardingKeyRoute::Legacy,
+        "without the picker the legacy onboarding switch still handles Escape"
+    );
+    assert_eq!(
+        onboarding_key_route(
+            OnboardingState::ApiKey,
+            Some(ModalKind::ProviderPicker),
+            &esc
+        ),
+        OnboardingKeyRoute::Legacy,
+    );
+    assert_eq!(
+        onboarding_key_route(OnboardingState::None, Some(ModalKind::ProviderPicker), &esc),
+        OnboardingKeyRoute::Legacy,
+        "a picker outside onboarding is not an onboarding route"
+    );
+}
+
+/// #4763: reusing an external Grok CLI grant must finish provider onboarding
+/// the same way a submitted key does. The consent handler used to switch the
+/// route and stop there, returning the user to the provider step they had
+/// just satisfied.
+#[test]
+fn external_grant_reuse_completes_provider_onboarding() {
+    let mut app = create_test_app();
+    app.onboarding = OnboardingState::Provider;
+    app.onboarding_needs_api_key = true;
+    app.onboarding_missing_key_recovery = true;
+    app.offline_mode = true;
+    app.trust_mode = true;
+
+    complete_provider_picker_onboarding(&mut app, crate::config::ApiProvider::Xai);
+
+    assert_ne!(
+        app.onboarding,
+        OnboardingState::Provider,
+        "a satisfied provider must not return to the provider step"
+    );
+    assert_eq!(app.onboarding_provider, crate::config::ApiProvider::Xai);
+    assert!(!app.onboarding_needs_api_key);
+    assert!(!app.offline_mode);
 }
 
 #[test]
@@ -15315,7 +15412,7 @@ async fn approval_decision_persists_ask_rules_to_permissions_file() {
             timed_out: false,
             approval_key: "approval-key".to_string(),
             approval_grouping_key: "approval-group".to_string(),
-            persistent_ask_rules: vec![rule.clone()],
+            persistent_rules: vec![rule.clone()],
         },
     )
     .await;
@@ -15346,6 +15443,79 @@ async fn approval_decision_persists_ask_rules_to_permissions_file() {
         })
         .expect("check persisted runtime policy");
     assert!(decision.requires_approval);
+}
+
+#[tokio::test]
+async fn approval_decision_persists_exact_workspace_allow_rule() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = tmp.path().join("config.toml");
+    let mut app = create_test_app();
+    app.workspace = tmp.path().to_path_buf();
+    app.config_path = Some(config_path.clone());
+    let mut config = Config::default();
+    let mut engine = mock_engine_handle();
+    let rule = codewhale_config::ToolAskRule::exec_shell("cargo test")
+        .into_exact_workspace_allow(tmp.path().to_string_lossy());
+
+    apply_approval_decision(
+        &mut app,
+        &mut engine.handle,
+        &mut config,
+        ApprovalDecisionEvent {
+            tool_id: "tool-allow".to_string(),
+            tool_name: "exec_shell".to_string(),
+            decision: ReviewDecision::Approved,
+            timed_out: false,
+            approval_key: "approval-key".to_string(),
+            approval_grouping_key: "approval-group".to_string(),
+            persistent_rules: vec![rule.clone()],
+        },
+    )
+    .await;
+
+    assert_eq!(
+        engine.recv_approval_event().await,
+        Some(crate::core::engine::MockApprovalEvent::Approved {
+            id: "tool-allow".to_string()
+        })
+    );
+    let store = codewhale_config::ConfigStore::load(Some(config_path)).expect("load config store");
+    assert_eq!(store.permissions().rules, vec![rule]);
+    assert!(
+        app.status_message
+            .as_deref()
+            .is_some_and(|message| message.contains("Saved 1 allow permission rule"))
+    );
+
+    let exact = config
+        .exec_policy_engine
+        .check(codewhale_execpolicy::ExecPolicyContext {
+            command: "cargo test",
+            cwd: tmp.path().to_string_lossy().as_ref(),
+            tool: Some("exec_shell"),
+            path: None,
+            ask_for_approval: codewhale_execpolicy::AskForApproval::OnRequest,
+            sandbox_mode: None,
+        })
+        .expect("check persisted allow");
+    assert_eq!(
+        exact.matched_action,
+        Some(codewhale_execpolicy::PermissionAction::Allow)
+    );
+    assert!(!exact.requires_approval);
+
+    let expanded = config
+        .exec_policy_engine
+        .check(codewhale_execpolicy::ExecPolicyContext {
+            command: "cargo test --workspace",
+            cwd: tmp.path().to_string_lossy().as_ref(),
+            tool: Some("exec_shell"),
+            path: None,
+            ask_for_approval: codewhale_execpolicy::AskForApproval::OnRequest,
+            sandbox_mode: None,
+        })
+        .expect("check expanded command");
+    assert!(expanded.requires_approval);
 }
 
 #[test]

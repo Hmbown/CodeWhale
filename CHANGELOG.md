@@ -17,6 +17,12 @@ already claimed to.
 
 ### Added
 
+- Approval cards can now remember eligible safe shell and file-write approvals
+  as exact `allow` rules scoped to the current repository. Remembered shell
+  commands use complete-command matching, validated file and patch paths remain
+  workspace-relative, and dangerous, critical, or repo-law-held requests stay
+  ineligible and continue to require review.
+
 - `tui.header_items` (array of strings, optional, default `[]`): an opt-in
   header chip showing cumulative session token usage as input / cache-hit /
   output. Set `header_items = ["tokens"]` under `[tui]` to enable it. The
@@ -94,7 +100,6 @@ already claimed to.
 
 - Prefix-cache tool catalog entries store only the SHA-256 digest, not the
   joined catalog string. Unused plan-transition validation helpers are removed.
-
 ## [0.9.1] - 2026-07-24
 
 ### Dogfood follow-ups (2026-07-24)

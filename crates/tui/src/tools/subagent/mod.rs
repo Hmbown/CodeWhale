@@ -41,6 +41,7 @@ use crate::tools::canonical_action::{CANONICAL_ACTION_ALIASES, canonical_action_
 use crate::tools::handle::VarHandle;
 use crate::tools::plan::{PlanState, SharedPlanState};
 use crate::tools::registry::{AgentToolSurfaceOptions, ToolRegistry, ToolRegistryBuilder};
+use crate::tools::shell::SharedShellManager;
 use crate::tools::spec::{
     ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec,
 };
@@ -912,6 +913,9 @@ pub struct SubAgentResult {
     pub status: SubAgentStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker_status: Option<AgentWorkerStatus>,
+    /// Effective non-secret runtime posture for Fleet-backed workers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_permissions: Option<codewhale_protocol::fleet::FleetEffectivePermissions>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_run_id: Option<String>,
     #[serde(default)]
@@ -2746,6 +2750,7 @@ impl SubAgent {
             nickname: self.nickname.clone(),
             status: self.status.clone(),
             worker_status: None,
+            runtime_permissions: None,
             parent_run_id: None,
             spawn_depth: 0,
             result: self.result.clone(),
@@ -5294,6 +5299,12 @@ impl SubAgentManager {
         snap.from_prior_session = self.is_from_prior_session(agent);
         if let Some(record) = self.worker_records.get(&agent.id) {
             snap.worker_status = Some(record.status);
+            snap.runtime_permissions = Some(
+                crate::fleet::worker_runtime::fleet_effective_permissions_from_runtime_profile(
+                    &record.spec.runtime_profile,
+                    None,
+                ),
+            );
             snap.parent_run_id = record
                 .parent_run_id
                 .clone()
@@ -6559,6 +6570,7 @@ impl ToolSpec for AgentTool {
                 return cancel_agent_from_input(&input, self.manager.clone(), context).await;
             }
         }
+        touch_running_shell_owners(&self.manager, &context.execution.shell_manager).await;
         let (snapshot, _) =
             spawn_subagent_from_input(input, self.manager.clone(), self.runtime.clone()).await?;
         let worker_record = {
@@ -6611,6 +6623,7 @@ async fn inspect_agent_from_input(
 
     if let Some(agent_ref) = parse_agent_ref(input) {
         let (snapshot, worker_record) = {
+            touch_running_shell_owners(&manager, &context.execution.shell_manager).await;
             let mut manager = manager.write().await;
             manager.cleanup(COMPLETED_AGENT_RETENTION);
             let snapshot = manager
@@ -6680,6 +6693,7 @@ async fn inspect_agent_from_input(
     }
 
     let snapshots = {
+        touch_running_shell_owners(&manager, &context.execution.shell_manager).await;
         let mut manager = manager.write().await;
         manager.cleanup(COMPLETED_AGENT_RETENTION);
         manager
@@ -6710,6 +6724,28 @@ async fn inspect_agent_from_input(
         "count": payload["count"],
     }));
     Ok(tool_result)
+}
+
+/// Keep a running child alive while one of its tracked background shell jobs
+/// is still active. Shell output is progress owned by the child even before
+/// the next model-visible completion event is emitted.
+async fn touch_running_shell_owners(
+    manager: &SharedSubAgentManager,
+    shell_manager: &SharedShellManager,
+) {
+    let owner_ids = {
+        let Ok(mut shell_manager) = shell_manager.lock() else {
+            return;
+        };
+        shell_manager.running_owner_agent_ids()
+    };
+    if owner_ids.is_empty() {
+        return;
+    }
+    let mut manager = manager.write().await;
+    for owner_id in owner_ids {
+        manager.touch(&owner_id);
+    }
 }
 
 async fn cancel_agent_from_input(
@@ -8627,6 +8663,7 @@ async fn run_subagent(
                 nickname: None,
                 status,
                 worker_status: None,
+                runtime_permissions: None,
                 parent_run_id: runtime.parent_agent_id.clone(),
                 spawn_depth: runtime.spawn_depth,
                 result: None,
@@ -8766,6 +8803,7 @@ async fn run_subagent(
                     nickname: None,
                     status,
                     worker_status: None,
+                    runtime_permissions: None,
                     parent_run_id: runtime.parent_agent_id.clone(),
                     spawn_depth: runtime.spawn_depth,
                     result: None,
@@ -8852,6 +8890,7 @@ async fn run_subagent(
                             nickname: None,
                             status,
                             worker_status: None,
+                            runtime_permissions: None,
                             parent_run_id: runtime.parent_agent_id.clone(),
                             spawn_depth: runtime.spawn_depth,
                             result: Some(reason),
@@ -8948,6 +8987,7 @@ async fn run_subagent(
                 nickname: None,
                 status,
                 worker_status: None,
+                runtime_permissions: None,
                 parent_run_id: runtime.parent_agent_id.clone(),
                 spawn_depth: runtime.spawn_depth,
                 result: final_result.clone(),
@@ -9304,6 +9344,7 @@ async fn run_subagent(
         nickname: None,
         status,
         worker_status: None,
+        runtime_permissions: None,
         parent_run_id: runtime.parent_agent_id.clone(),
         spawn_depth: runtime.spawn_depth,
         result: final_result,

@@ -289,6 +289,14 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
         "show_thinking" | "thinking" => {
             Some(if app.show_thinking { "true" } else { "false" }.to_string())
         }
+        "thinking_highlight" | "reasoning_highlight" => Some(
+            if app.thinking_highlight {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string(),
+        ),
         "show_tool_details" | "tool_details" => Some(
             if app.show_tool_details {
                 "true"
@@ -1864,6 +1872,10 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
         }
         "show_thinking" | "thinking" => {
             app.show_thinking = settings.show_thinking;
+            app.mark_history_updated();
+        }
+        "thinking_highlight" | "reasoning_highlight" => {
+            app.thinking_highlight = settings.thinking_highlight;
             app.mark_history_updated();
         }
         "show_tool_details" | "tool_details" => {

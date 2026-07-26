@@ -166,7 +166,7 @@ fn native_command(app: &App, input: &str) -> CommandResult {
             let Some(id) = arg.and_then(|value| value.parse::<i64>().ok()) else {
                 return CommandResult::error("Usage: /memory native get <id>");
             };
-            match store.get(id) {
+            match store.get_for_workspace(&app.workspace, id) {
                 Ok(Some(hit)) => CommandResult::message(format!(
                     "{}:{}-{}\n{}",
                     hit.source.display(),

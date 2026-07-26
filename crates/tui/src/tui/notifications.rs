@@ -286,12 +286,41 @@ pub fn notify_done(
 ///
 /// Other terminals (iTerm2, WezTerm) ignore the sequence silently.
 /// Best-effort — write failures are ignored.
+/// Build the OSC 9;4 taskbar-progress sequence. Split from the write so the
+/// bytes can be asserted without depending on whether the test runner owns a
+/// terminal.
+#[must_use]
+fn taskbar_progress_sequence(state: u8, progress: Option<u8>) -> String {
+    match progress {
+        Some(pct) => format!("\x1b]9;4;{state};{pct}\x07"),
+        None => format!("\x1b]9;4;{state}\x07"),
+    }
+}
+
+/// Build the OSC 0 window-title sequence. Split from the write for the same
+/// reason as [`taskbar_progress_sequence`].
+#[must_use]
+fn terminal_title_sequence(title: &str) -> String {
+    format!("\x1b]0;{title}\x07")
+}
+
+/// Whether raw terminal control sequences may be written to stdout.
+///
+/// OSC 9;4 (taskbar progress) and OSC 0 (window title) are *control* bytes,
+/// not content. A terminal that understands them renders nothing visible; a
+/// pipe, a file, or a CI log renders them literally, so `cargo test` output
+/// and redirected sessions pick up stray `]9;4;1]0;` noise. Gate on stdout
+/// actually being a TTY — there is no one to control otherwise.
+fn stdout_accepts_control_sequences() -> bool {
+    use std::io::IsTerminal;
+    io::stdout().is_terminal()
+}
+
 pub fn set_taskbar_progress(state: u8, progress: Option<u8>) {
-    let seq = if let Some(pct) = progress {
-        format!("\x1b]9;4;{state};{pct}\x07")
-    } else {
-        format!("\x1b]9;4;{state}\x07")
-    };
+    if !stdout_accepts_control_sequences() {
+        return;
+    }
+    let seq = taskbar_progress_sequence(state, progress);
     let mut stdout = io::stdout();
     let _ = stdout.write_all(seq.as_bytes());
     let _ = stdout.flush();
@@ -391,7 +420,10 @@ fn title_activity_label(base: &str, elapsed: Duration, focused: bool, motion: bo
 
 /// Write OSC 0 (set window title) sequence.
 fn set_terminal_title(title: &str) {
-    let seq = format!("\x1b]0;{title}\x07");
+    if !stdout_accepts_control_sequences() {
+        return;
+    }
+    let seq = terminal_title_sequence(title);
     let mut stdout = io::stdout();
     let _ = stdout.write_all(seq.as_bytes());
     let _ = stdout.flush();
@@ -410,10 +442,10 @@ pub fn start_title_animation(original: &str) {
     if let Ok(mut base) = title_animation_base().lock() {
         original.clone_into(&mut base);
     }
-    if let Ok(mut verb) = title_activity_verb().lock() {
-        if verb.is_empty() {
-            "working…".clone_into(&mut *verb);
-        }
+    if let Ok(mut verb) = title_activity_verb().lock()
+        && verb.is_empty()
+    {
+        "working…".clone_into(&mut *verb);
     }
     COMPLETION_MARKER_SHOWN.store(false, Ordering::SeqCst);
     TITLE_ANIMATION_RUNNING.store(true, Ordering::SeqCst);
@@ -979,6 +1011,23 @@ mod tests {
     fn off_mode_emits_nothing() {
         let out = capture(Method::Off, false, "ignored", 0, 9999);
         assert!(out.is_empty());
+    }
+
+    /// #4847 follow-up: OSC 9;4 and OSC 0 are *control* bytes, not content.
+    /// A terminal renders nothing visible; a pipe, a file, or a CI log renders
+    /// them literally — which is why `cargo test` output carried stray
+    /// `]9;4;1]0;` noise. The write is now gated on stdout being a TTY; these
+    /// assertions pin the bytes themselves so the gate cannot be "fixed" by
+    /// quietly changing what gets emitted.
+    #[test]
+    fn control_sequences_have_the_exact_documented_bytes() {
+        assert_eq!(taskbar_progress_sequence(1, None), "\x1b]9;4;1\x07");
+        assert_eq!(taskbar_progress_sequence(1, Some(42)), "\x1b]9;4;1;42\x07");
+        assert_eq!(taskbar_progress_sequence(0, None), "\x1b]9;4;0\x07");
+        assert_eq!(
+            terminal_title_sequence("🐳 working…"),
+            "\x1b]0;🐳 working…\x07"
+        );
     }
 
     #[test]

@@ -9219,6 +9219,35 @@ pub(crate) fn save_provider_model_for_identity(
     Ok(config_path)
 }
 
+/// Persist a guided-setup context-window choice without replacing the user's
+/// surrounding TOML comments or formatting.
+pub(crate) fn save_provider_context_window_for_identity(
+    identity: &ProviderIdentity,
+    _route_config: &Config,
+    context_window: u32,
+) -> Result<PathBuf> {
+    anyhow::ensure!(context_window > 0, "context window must be greater than 0");
+    let config_path = default_config_path()
+        .context("Failed to resolve config path: home directory not found.")?;
+    ensure_parent_dir(&config_path)?;
+    let key_inside = if identity.provider == ApiProvider::Custom {
+        let key = identity.key.trim();
+        anyhow::ensure!(!key.is_empty(), "custom provider id cannot be empty");
+        key
+    } else {
+        provider_config_key(identity.provider).context("provider context window table")?
+    };
+    crate::config_persistence::mutate_config_document(&config_path, |doc| {
+        crate::config_persistence::set_document_value(
+            doc,
+            &["providers", key_inside, "context_window"],
+            i64::from(context_window),
+        )
+    })
+    .with_context(|| format!("Failed to write config to {}", config_path.display()))?;
+    Ok(config_path)
+}
+
 /// Persist an explicitly confirmed read-only external credential grant and
 /// update the live mirror only after the comment-preserving disk mutation
 /// succeeds. This function never inspects the external path.

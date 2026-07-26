@@ -849,7 +849,7 @@ impl ToolSpec for TaskShellStartTool {
     }
 
     fn description(&self) -> &'static str {
-        "Start a long-running shell command in the background and return a shell task_id immediately. Completion is tracked in the task/status surface; use task_shell_wait for early output, explicit barriers, or gate evidence on the active durable task."
+        "Start a long-running shell command in the background and return a shell task_id immediately. Completion is delivered automatically as an internal runtime event and remains visible in the task/status surface; use task_shell_wait only for early output, explicit barriers, or gate evidence on the active durable task."
     }
 
     fn input_schema(&self) -> Value {
@@ -915,7 +915,7 @@ impl ToolSpec for TaskShellWaitTool {
     }
 
     fn description(&self) -> &'static str {
-        "Poll a background shell task without blocking the agent indefinitely. If `gate` is supplied and the shell task has completed, records structured gate evidence on the active durable task."
+        "Poll a background shell task without blocking the agent indefinitely. Completion is delivered automatically; use this only for early output, explicit barriers, or gate evidence. If `gate` is supplied and the shell task has completed, records structured gate evidence on the active durable task."
     }
 
     fn input_schema(&self) -> Value {

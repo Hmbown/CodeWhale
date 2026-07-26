@@ -26,6 +26,7 @@
 
 #[cfg(test)]
 use std::cell::Cell;
+use std::cell::RefCell;
 use std::sync::OnceLock;
 
 use ratatui::style::{Color, Modifier, Style};
@@ -152,82 +153,214 @@ pub fn parse(content: &str) -> ParsedMarkdown {
     #[cfg(test)]
     PARSE_INVOCATIONS.with(|c| c.set(c.get() + 1));
 
-    let mut blocks = Vec::new();
-    let mut in_code_block = false;
-    let mut code_language: Option<String> = None;
-    let mut code_block_id = 0usize;
-
-    for raw_line in content.lines() {
-        let trimmed = raw_line.trim_start();
-        if trimmed.starts_with("```") {
-            if in_code_block {
-                in_code_block = false;
-                code_language = None;
-            } else {
-                in_code_block = true;
-                code_block_id = code_block_id.saturating_add(1);
-                code_language = normalized_fence_language(trimmed.trim_start_matches('`'));
-            }
-            continue;
+    STREAM_PARSE_MEMO.with(|memo| {
+        let mut memo = memo.borrow_mut();
+        // Reuse the committed prefix when this call continues the same source
+        // (the streaming case). Anything else — a different cell, a shrunk
+        // buffer, an edit to earlier bytes — fails the check and starts clean.
+        let state = memo.get_or_insert_with(ParseState::default);
+        if !state.can_resume_from(content) {
+            *state = ParseState::default();
         }
-
-        if in_code_block {
-            blocks.push(Block::Code {
-                line: raw_line.to_string(),
-                language: code_language.clone(),
-                block_id: code_block_id,
-            });
-            continue;
+        state.commit_complete_lines(content);
+        let parsed = state.snapshot(content);
+        // Don't hold a whole large message alive between unrelated renders.
+        if state.consumed > MAX_MEMOIZED_PREFIX_BYTES {
+            *state = ParseState::default();
         }
+        parsed
+    })
+}
 
-        if let Some((level, text)) = parse_heading(trimmed) {
-            blocks.push(Block::Heading {
-                level,
-                text: text.to_string(),
-            });
-            if level == 1 {
-                blocks.push(Block::HeadingRule);
-            }
-            continue;
+/// Upper bound on the source we keep memoized between `parse` calls. Streaming
+/// messages are the reason this exists; past this size the memory cost of
+/// holding the prefix outweighs the re-parse it saves.
+const MAX_MEMOIZED_PREFIX_BYTES: usize = 1024 * 1024;
+
+thread_local! {
+    /// Single-entry resume memo for the streaming re-parse (#3897).
+    ///
+    /// Deliberately one entry and thread-local: the hot path is one cell
+    /// growing chunk by chunk on the render thread. A miss costs exactly what
+    /// the old code always paid, so this can only make things faster or
+    /// identical — never wrong, because [`ParseState::can_resume_from`]
+    /// verifies the prefix byte-for-byte before reusing anything.
+    static STREAM_PARSE_MEMO: RefCell<Option<ParseState>> = const { RefCell::new(None) };
+}
+
+/// Resumable parser state.
+///
+/// The parser is strictly line-oriented: each source line maps to blocks using
+/// only a three-field carry (`in_code_block`, `code_language`,
+/// `code_block_id`). That is what makes resuming *exact* rather than
+/// approximate — appending text can never change how an earlier complete line
+/// parsed, so committed blocks never need revisiting.
+///
+/// Streaming is the case that matters (#3897): the renderer re-parses the whole
+/// growing message on every chunk, which is quadratic over message length.
+#[derive(Debug, Clone, Default)]
+pub struct ParseState {
+    blocks: Vec<Block>,
+    /// The exact source bytes already folded into `blocks`. Kept verbatim so
+    /// resumption is *verified* against the new content rather than assumed —
+    /// a caller that hands over unrelated text gets a full re-parse, not
+    /// silently wrong output.
+    prefix: String,
+    /// Length of `prefix`. Always ends just past a newline, so only whole
+    /// lines are ever committed.
+    consumed: usize,
+    in_code_block: bool,
+    code_language: Option<String>,
+    code_block_id: usize,
+}
+
+impl ParseState {
+    /// Fold every *complete* line after `consumed` into `blocks`.
+    ///
+    /// The trailing partial line is deliberately left uncommitted: streaming
+    /// can still extend it, and committing it early would be the one way this
+    /// could diverge from a full re-parse.
+    fn commit_complete_lines(&mut self, content: &str) {
+        let Some(rest) = content.get(self.consumed..) else {
+            return;
+        };
+        let Some(last_newline) = rest.rfind('\n') else {
+            return;
+        };
+        let complete = &rest[..=last_newline];
+        for raw_line in complete.lines() {
+            push_parsed_line(
+                raw_line,
+                &mut self.blocks,
+                &mut self.in_code_block,
+                &mut self.code_language,
+                &mut self.code_block_id,
+            );
         }
-
-        if let Some((bullet, text)) = parse_list_item(trimmed) {
-            blocks.push(Block::ListItem {
-                bullet,
-                text: text.to_string(),
-            });
-            continue;
-        }
-
-        if is_horizontal_rule(trimmed) {
-            blocks.push(Block::HorizontalRule);
-            continue;
-        }
-
-        match parse_table_row(trimmed) {
-            Some(cells) => {
-                blocks.push(Block::TableRow(cells));
-                continue;
-            }
-            None if trimmed.starts_with('|') => {
-                blocks.push(Block::TableSeparator);
-                continue;
-            }
-            None => {}
-        }
-
-        if trimmed.is_empty() {
-            // Whitespace-only lines are blank paragraphs.
-            blocks.push(Block::Blank);
-            continue;
-        }
-
-        blocks.push(Block::Paragraph {
-            text: raw_line.to_string(),
-        });
+        self.prefix.push_str(complete);
+        self.consumed += complete.len();
     }
 
-    ParsedMarkdown { blocks }
+    /// The full AST: committed blocks plus the trailing partial line, parsed
+    /// against a throwaway copy of the carry so `self` stays resumable.
+    fn snapshot(&self, content: &str) -> ParsedMarkdown {
+        let tail = content.get(self.consumed..).unwrap_or_default();
+        if tail.is_empty() {
+            return ParsedMarkdown {
+                blocks: self.blocks.clone(),
+            };
+        }
+        let mut blocks = self.blocks.clone();
+        let mut in_code_block = self.in_code_block;
+        let mut code_language = self.code_language.clone();
+        let mut code_block_id = self.code_block_id;
+        for raw_line in tail.lines() {
+            push_parsed_line(
+                raw_line,
+                &mut blocks,
+                &mut in_code_block,
+                &mut code_language,
+                &mut code_block_id,
+            );
+        }
+        ParsedMarkdown { blocks }
+    }
+
+    /// True when `content` still starts with everything already committed.
+    ///
+    /// Streaming only ever appends, so this is the common case. An edit that
+    /// rewrites earlier bytes (a re-render of a different cell, a retry) fails
+    /// here and the caller falls back to a full parse — correctness never
+    /// depends on the caller guessing right.
+    fn can_resume_from(&self, content: &str) -> bool {
+        content.len() >= self.consumed
+            && content.is_char_boundary(self.consumed)
+            && self.committed_prefix_matches(content)
+    }
+
+    fn committed_prefix_matches(&self, content: &str) -> bool {
+        self.prefix == content[..self.consumed]
+    }
+}
+
+/// Classify one source line into blocks, advancing the fenced-code carry.
+///
+/// Extracted from the original loop body unchanged so the batch and streaming
+/// paths cannot drift: both call exactly this.
+fn push_parsed_line(
+    raw_line: &str,
+    blocks: &mut Vec<Block>,
+    in_code_block: &mut bool,
+    code_language: &mut Option<String>,
+    code_block_id: &mut usize,
+) {
+    let trimmed = raw_line.trim_start();
+    if trimmed.starts_with("```") {
+        if *in_code_block {
+            *in_code_block = false;
+            *code_language = None;
+        } else {
+            *in_code_block = true;
+            *code_block_id = code_block_id.saturating_add(1);
+            *code_language = normalized_fence_language(trimmed.trim_start_matches('`'));
+        }
+        return;
+    }
+
+    if *in_code_block {
+        blocks.push(Block::Code {
+            line: raw_line.to_string(),
+            language: code_language.clone(),
+            block_id: *code_block_id,
+        });
+        return;
+    }
+
+    if let Some((level, text)) = parse_heading(trimmed) {
+        blocks.push(Block::Heading {
+            level,
+            text: text.to_string(),
+        });
+        if level == 1 {
+            blocks.push(Block::HeadingRule);
+        }
+        return;
+    }
+
+    if let Some((bullet, text)) = parse_list_item(trimmed) {
+        blocks.push(Block::ListItem {
+            bullet,
+            text: text.to_string(),
+        });
+        return;
+    }
+
+    if is_horizontal_rule(trimmed) {
+        blocks.push(Block::HorizontalRule);
+        return;
+    }
+
+    match parse_table_row(trimmed) {
+        Some(cells) => {
+            blocks.push(Block::TableRow(cells));
+            return;
+        }
+        None if trimmed.starts_with('|') => {
+            blocks.push(Block::TableSeparator);
+            return;
+        }
+        None => {}
+    }
+
+    if trimmed.is_empty() {
+        // Whitespace-only lines are blank paragraphs.
+        blocks.push(Block::Blank);
+        return;
+    }
+
+    blocks.push(Block::Paragraph {
+        text: raw_line.to_string(),
+    });
 }
 
 /// Render a parsed-markdown AST at the given terminal width.
@@ -1847,6 +1980,123 @@ mod tests {
             0,
             "render_parsed must not call parse"
         );
+    }
+
+    // -----------------------------------------------------------------
+    //  #3897 — streaming re-parse is incremental, not quadratic
+    // -----------------------------------------------------------------
+
+    /// Markdown corpus chosen to hit every carry-state transition the parser
+    /// has: fences opened and closed across chunk boundaries, an unterminated
+    /// fence, headings, nested lists, tables, rules, blanks, CRLF, and CJK.
+    fn streaming_corpus() -> Vec<&'static str> {
+        vec![
+            "# Title\n\nSome prose that wraps.\n\n- alpha\n- beta\n",
+            "text\n```rust\nlet x = 1;\nlet y = 2;\n```\nafter\n",
+            "```\nunterminated fence never closes\nstill inside\n",
+            "| a | b |\n|---|---|\n| 1 | 2 |\n\n---\n\ndone\n",
+            "1. one\n2. two\n   * nested\n\n## Sub\n\n***\n",
+            "混合 CJK 内容\n\n```python\nprint(\"中文\")\n```\n尾部\n",
+            "crlf lines\r\nsecond\r\n\r\n```go\nfmt.Println()\r\n```\r\n",
+            "no trailing newline at all",
+            "",
+        ]
+    }
+
+    /// The acceptance guarantee: streaming a message chunk by chunk produces,
+    /// at every intermediate prefix, exactly what a full re-parse of that
+    /// prefix produces. Byte-for-byte on the AST, so a divergence in any field
+    /// of any block fails here rather than showing up as a render artifact.
+    #[test]
+    fn incremental_parse_matches_a_full_reparse_at_every_prefix() {
+        for source in streaming_corpus() {
+            // Grow one byte at a time (respecting char boundaries) — the
+            // worst case for a parser that commits too eagerly.
+            for end in 0..=source.len() {
+                if !source.is_char_boundary(end) {
+                    continue;
+                }
+                let prefix = &source[..end];
+                let streamed = parse(prefix);
+
+                // A cold parser is the reference: no memo, no resumption.
+                let mut cold = ParseState::default();
+                cold.commit_complete_lines(prefix);
+                let reference = cold.snapshot(prefix);
+
+                assert_eq!(
+                    streamed, reference,
+                    "prefix {end} of {source:?} diverged from a full re-parse"
+                );
+            }
+        }
+    }
+
+    /// The performance guarantee: work per chunk must not grow with the
+    /// message. Counted in lines actually classified, which is the quantity
+    /// that was quadratic — the old code re-classified every line on every
+    /// chunk.
+    #[test]
+    fn streaming_does_not_reclassify_committed_lines() {
+        let chunk = "a line of prose\n";
+        let chunks = 400;
+
+        let mut content = String::new();
+        let mut state = ParseState::default();
+        let mut total_committed = 0usize;
+
+        for _ in 0..chunks {
+            content.push_str(chunk);
+            assert!(
+                state.can_resume_from(&content),
+                "an append-only stream must always be resumable"
+            );
+            let before = state.blocks.len();
+            state.commit_complete_lines(&content);
+            total_committed += state.blocks.len() - before;
+        }
+
+        // Quadratic would be chunks * (chunks + 1) / 2 = 80,200 classifications.
+        assert_eq!(
+            total_committed, chunks,
+            "each line must be classified exactly once across the whole stream"
+        );
+        assert_eq!(state.blocks.len(), chunks);
+    }
+
+    /// Resumption is verified, never assumed. Content that does not extend the
+    /// committed prefix must fall back to a full parse rather than splice
+    /// unrelated blocks together.
+    #[test]
+    fn a_changed_prefix_is_not_resumable() {
+        let mut state = ParseState::default();
+        state.commit_complete_lines("first line\nsecond line\n");
+
+        assert!(state.can_resume_from("first line\nsecond line\nthird\n"));
+        // Earlier bytes rewritten.
+        assert!(!state.can_resume_from("FIRST line\nsecond line\nthird\n"));
+        // Buffer shrank (a different, shorter cell).
+        assert!(!state.can_resume_from("first line\n"));
+        // Entirely unrelated content.
+        assert!(!state.can_resume_from("something else\n"));
+    }
+
+    /// Interleaving two different sources through the shared memo must not
+    /// contaminate either — this is the multi-cell render-loop case.
+    #[test]
+    fn interleaved_sources_do_not_contaminate_each_other() {
+        let a = "# Alpha\n\nalpha body\n";
+        let b = "```rust\nlet b = 1;\n```\n";
+        for _ in 0..5 {
+            assert_eq!(parse(a), reference_parse(a));
+            assert_eq!(parse(b), reference_parse(b));
+        }
+    }
+
+    fn reference_parse(content: &str) -> ParsedMarkdown {
+        let mut cold = ParseState::default();
+        cold.commit_complete_lines(content);
+        cold.snapshot(content)
     }
 
     #[test]

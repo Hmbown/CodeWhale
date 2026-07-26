@@ -28,6 +28,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::tui::app::{App, MentionCompletionCache};
+use crate::tui::git_mention::{self, GitMentionKind};
 use crate::tui::mention_completion::{MentionDiscoveryBehavior, MentionDiscoveryKey};
 use crate::working_set::Workspace;
 
@@ -86,6 +87,8 @@ pub enum ContextReferenceKind {
     Unsupported,
     MediaMention,
     MediaAttachment,
+    /// `@git` / `@diff` — curated git context rather than a path (#4067).
+    GitContext,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -264,6 +267,8 @@ fn mention_menu_entries(app: &mut App, partial: &str, limit: usize) -> (Vec<Stri
         }
     };
 
+    let entries = with_git_mention_entries(entries, partial, limit);
+
     app.composer.mention_completion_cache = Some(MentionCompletionCache {
         workspace,
         cwd,
@@ -276,6 +281,39 @@ fn mention_menu_entries(app: &mut App, partial: &str, limit: usize) -> (Vec<Stri
     });
 
     (entries, true)
+}
+
+/// Prepend the `@git` / `@diff` tokens that prefix-match `partial` to the path
+/// completions, so curated git context is discoverable from the same menu as
+/// files (#4067). They lead because a two-entry prefix match is what the user
+/// meant when they typed `gi` or `di`, and paths still fill the rest.
+///
+/// A bare `@` is deliberately left alone: that menu is the file picker, and
+/// pushing two fixed tokens above every path would cost a slot on every
+/// mention the user makes. The tokens appear as soon as a matching character
+/// is typed.
+fn with_git_mention_entries(entries: Vec<String>, partial: &str, limit: usize) -> Vec<String> {
+    let needle = partial.trim().to_lowercase();
+    if needle.is_empty() {
+        return entries;
+    }
+    let matching: Vec<String> = GitMentionKind::iter_all()
+        .filter(|kind| kind.token().starts_with(&needle))
+        .map(|kind| kind.token().to_string())
+        .collect();
+    if matching.is_empty() {
+        return entries;
+    }
+    let mut combined = matching;
+    for entry in entries {
+        if combined.len() >= limit {
+            break;
+        }
+        if !combined.contains(&entry) {
+            combined.push(entry);
+        }
+    }
+    combined
 }
 
 /// Apply the currently selected `@`-mention popup entry to the composer
@@ -456,6 +494,19 @@ pub fn pending_context_previews(input: &str) -> Vec<FileMentionPreview> {
         if !seen.insert(mention.clone()) {
             continue;
         }
+        // Composer previews stay lexical (no git subprocess from the render
+        // loop, same rule as #4365 for path stats); the payload is resolved
+        // once at submit time.
+        if let Some(kind) = git_mention::git_mention_kind(&mention) {
+            previews.push(FileMentionPreview {
+                kind: "git".to_string(),
+                label: kind.label().to_string(),
+                detail: Some("resolved on send".to_string()),
+                included: false,
+                removable: false,
+            });
+            continue;
+        }
         let media = is_media_path(Path::new(&mention));
         previews.push(FileMentionPreview {
             kind: if media { "media" } else { "mention" }.to_string(),
@@ -499,6 +550,36 @@ pub fn context_references_from_input(
         .into_iter()
         .take(MAX_FILE_MENTIONS_PER_MESSAGE)
     {
+        // Git mentions resolve against the working tree, not the path index,
+        // so the inspector reports their real size and budget (#4067).
+        if let Some(kind) = git_mention::git_mention_kind(&mention) {
+            let payload = git_mention::resolve_git_mention(kind, workspace);
+            let detail = match payload.unavailable_reason.as_deref() {
+                Some(reason) => format!("{}, {reason}", kind.label()),
+                None if payload.truncated => format!(
+                    "{}, {} bytes truncated at {} budget",
+                    kind.label(),
+                    payload.bytes,
+                    kind.byte_budget()
+                ),
+                None => format!("{}, {} bytes", kind.label(), payload.bytes),
+            };
+            let reference = ContextReference {
+                kind: ContextReferenceKind::GitContext,
+                source: ContextReferenceSource::AtMention,
+                badge: "git".to_string(),
+                label: kind.token().to_string(),
+                target: workspace.display().to_string(),
+                included: payload.unavailable_reason.is_none(),
+                expanded: false,
+                detail: Some(detail),
+            };
+            if seen.insert(format!("git-mention:{}", kind.token())) {
+                references.push(reference);
+            }
+            continue;
+        }
+
         let (path, display_path, exists) = match ws.resolve_exact(&mention) {
             Ok(path) => {
                 let display = path.display().to_string();
@@ -680,6 +761,16 @@ fn local_context_from_file_mentions(
     let ws = Workspace::with_cwd(workspace.to_path_buf(), cwd);
 
     for mention in mentions.into_iter().take(MAX_FILE_MENTIONS_PER_MESSAGE) {
+        // `@git` / `@diff` resolve to curated git context, not to a path, so
+        // they short-circuit before any workspace path resolution (#4067).
+        if let Some(kind) = git_mention::git_mention_kind(&mention) {
+            if !seen.insert(format!("git-mention:{}", kind.token())) {
+                continue;
+            }
+            blocks.push(git_mention::resolve_git_mention(kind, workspace).block);
+            continue;
+        }
+
         // `Workspace::resolve_exact` already returns absolute paths when the root
         // is absolute (TUI always runs from an absolute workspace), so we
         // skip `canonicalize()` here — it's per-mention I/O on the
@@ -1162,5 +1253,177 @@ mod tests {
             !text.contains('\u{FFFD}'),
             "truncated text must not contain replacement characters; got: {text:?}",
         );
+    }
+    // ---------------------------------------------------------------------
+    //  #4067 — @git / @diff composer mentions
+    // ---------------------------------------------------------------------
+
+    fn init_test_repo(dir: &Path) {
+        for args in [
+            vec!["init", "--initial-branch=main"],
+            vec!["config", "user.email", "test@example.com"],
+            vec!["config", "user.name", "Test"],
+        ] {
+            let out = std::process::Command::new("git")
+                .args(&args)
+                .current_dir(dir)
+                .output()
+                .expect("git available in tests");
+            assert!(out.status.success(), "git {args:?} failed");
+        }
+    }
+
+    fn commit_test_repo(dir: &Path) {
+        for args in [vec!["add", "-A"], vec!["commit", "-m", "initial"]] {
+            std::process::Command::new("git")
+                .args(&args)
+                .current_dir(dir)
+                .output()
+                .expect("git available in tests");
+        }
+    }
+
+    #[test]
+    fn git_and_diff_mentions_inline_curated_context_not_paths() {
+        let tmp = TempDir::new().expect("tempdir");
+        init_test_repo(tmp.path());
+        std::fs::write(tmp.path().join("a.txt"), "one\n").expect("write");
+        commit_test_repo(tmp.path());
+        std::fs::write(tmp.path().join("a.txt"), "two\n").expect("write");
+
+        let expanded = user_request_with_file_mentions(
+            "look at @git and @diff",
+            tmp.path(),
+            Some(tmp.path().to_path_buf()),
+        );
+
+        assert!(expanded.contains("<git-status"), "{expanded}");
+        assert!(expanded.contains("<git-diff"), "{expanded}");
+        assert!(expanded.contains("a.txt"), "{expanded}");
+        // The tokens are not treated as paths, so no missing-file block.
+        assert!(!expanded.contains("<missing-file"), "{expanded}");
+    }
+
+    #[test]
+    fn git_mentions_outside_a_repository_say_so_explicitly() {
+        let tmp = TempDir::new().expect("tempdir");
+        let expanded = user_request_with_file_mentions(
+            "status? @git",
+            tmp.path(),
+            Some(tmp.path().to_path_buf()),
+        );
+        assert!(expanded.contains("<git-unavailable"), "{expanded}");
+        assert!(expanded.contains("not a git repository"), "{expanded}");
+    }
+
+    #[test]
+    fn git_mention_is_deduplicated_within_one_message() {
+        let tmp = TempDir::new().expect("tempdir");
+        init_test_repo(tmp.path());
+        std::fs::write(tmp.path().join("a.txt"), "one\n").expect("write");
+        commit_test_repo(tmp.path());
+        std::fs::write(tmp.path().join("a.txt"), "two\n").expect("write");
+
+        let expanded = user_request_with_file_mentions(
+            "@diff and again @diff",
+            tmp.path(),
+            Some(tmp.path().to_path_buf()),
+        );
+        assert_eq!(expanded.matches("<git-diff").count(), 1, "{expanded}");
+    }
+
+    #[test]
+    fn paths_that_merely_start_with_git_stay_file_mentions() {
+        let tmp = TempDir::new().expect("tempdir");
+        std::fs::write(tmp.path().join("diff.txt"), "plain file").expect("write");
+
+        let expanded = user_request_with_file_mentions(
+            "see @diff.txt",
+            tmp.path(),
+            Some(tmp.path().to_path_buf()),
+        );
+        assert!(expanded.contains("plain file"), "{expanded}");
+        assert!(!expanded.contains("<git-diff"), "{expanded}");
+    }
+
+    #[test]
+    fn large_diff_is_truncated_and_the_inspector_reports_the_budget() {
+        let tmp = TempDir::new().expect("tempdir");
+        init_test_repo(tmp.path());
+        std::fs::write(tmp.path().join("big.txt"), "seed\n").expect("write");
+        commit_test_repo(tmp.path());
+        let bulk: String = (0..40_000).map(|i| format!("line {i}\n")).collect();
+        std::fs::write(tmp.path().join("big.txt"), bulk).expect("write");
+
+        let expanded =
+            user_request_with_file_mentions("@diff", tmp.path(), Some(tmp.path().to_path_buf()));
+        assert!(
+            expanded.contains("truncated=\"true\""),
+            "expected truncation marker"
+        );
+
+        let references =
+            context_references_from_input("@diff", tmp.path(), Some(tmp.path().to_path_buf()));
+        let git_ref = references
+            .iter()
+            .find(|r| r.kind == ContextReferenceKind::GitContext)
+            .expect("git reference present in the inspector");
+        assert_eq!(git_ref.label, "diff");
+        assert!(git_ref.included);
+        let detail = git_ref.detail.clone().unwrap_or_default();
+        assert!(detail.contains("truncated at"), "{detail}");
+        assert!(
+            detail.contains(&crate::tui::git_mention::MAX_GIT_DIFF_MENTION_BYTES.to_string()),
+            "{detail}"
+        );
+    }
+
+    #[test]
+    fn empty_repository_reference_is_visible_but_not_included() {
+        let tmp = TempDir::new().expect("tempdir");
+        init_test_repo(tmp.path());
+        std::fs::write(tmp.path().join("a.txt"), "one\n").expect("write");
+        commit_test_repo(tmp.path());
+
+        let references =
+            context_references_from_input("@diff", tmp.path(), Some(tmp.path().to_path_buf()));
+        let git_ref = references
+            .iter()
+            .find(|r| r.kind == ContextReferenceKind::GitContext)
+            .expect("git reference present even when there is nothing to show");
+        assert!(!git_ref.included);
+        assert!(
+            git_ref
+                .detail
+                .as_deref()
+                .is_some_and(|d| d.contains("no working-tree changes")),
+            "{:?}",
+            git_ref.detail
+        );
+    }
+
+    #[test]
+    fn composer_preview_lists_git_mentions_without_running_git() {
+        let previews = pending_context_previews("@git @diff");
+        let kinds: Vec<&str> = previews.iter().map(|p| p.kind.as_str()).collect();
+        assert_eq!(kinds, vec!["git", "git"]);
+        assert!(previews.iter().all(|p| !p.included));
+    }
+
+    #[test]
+    fn completion_offers_git_and_diff_alongside_paths() {
+        let paths = vec!["src/main.rs".to_string(), "docs/guide.md".to_string()];
+        // A bare `@` stays the file picker.
+        assert_eq!(with_git_mention_entries(paths.clone(), "", 8), paths);
+
+        let narrowed = with_git_mention_entries(paths.clone(), "di", 8);
+        assert_eq!(narrowed.first().map(String::as_str), Some("diff"));
+        assert!(narrowed.contains(&"src/main.rs".to_string()));
+
+        let git_only = with_git_mention_entries(paths.clone(), "g", 8);
+        assert_eq!(git_only.first().map(String::as_str), Some("git"));
+
+        // A partial that matches no token leaves path completion untouched.
+        assert_eq!(with_git_mention_entries(paths.clone(), "src", 8), paths);
     }
 }

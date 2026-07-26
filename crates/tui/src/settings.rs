@@ -332,6 +332,8 @@ pub struct Settings {
     pub mention_menu_behavior: String,
     /// Show thinking blocks from the model
     pub show_thinking: bool,
+    /// Keep thinking visible while disabling its filled background treatment.
+    pub thinking_highlight: bool,
     /// Show detailed tool output
     pub show_tool_details: bool,
     /// Successful structured File mutation evidence: full, summary, or off.
@@ -513,6 +515,7 @@ impl Default for Settings {
             // Reasoning is useful when explicitly requested, but it should
             // never displace the actual conversation in the default TUI.
             show_thinking: false,
+            thinking_highlight: true,
             show_tool_details: false,
             inline_diffs: "full".to_string(),
             locale: "auto".to_string(),
@@ -1028,6 +1031,9 @@ impl Settings {
             "show_thinking" | "thinking" => {
                 self.show_thinking = parse_bool(value)?;
             }
+            "thinking_highlight" | "reasoning_highlight" => {
+                self.thinking_highlight = parse_bool(value)?;
+            }
             "show_tool_details" | "tool_details" => {
                 self.show_tool_details = parse_bool(value)?;
             }
@@ -1292,6 +1298,7 @@ impl Settings {
             self.mention_menu_behavior
         ));
         lines.push(format!("  show_thinking:      {}", self.show_thinking));
+        lines.push(format!("  thinking_highlight: {}", self.thinking_highlight));
         lines.push(format!("  show_tool_details:  {}", self.show_tool_details));
         lines.push(format!("  inline_diffs:      {}", self.inline_diffs));
         lines.push(format!("  locale:            {}", self.locale));
@@ -1435,6 +1442,10 @@ impl Settings {
                 "@-mention completion behavior: fuzzy/browser (default fuzzy)",
             ),
             ("show_thinking", "Show model thinking: on/off"),
+            (
+                "thinking_highlight",
+                "Fill the thinking/reasoning background: on/off",
+            ),
             ("show_tool_details", "Show detailed tool output: on/off"),
             (
                 "inline_diffs",
@@ -2163,6 +2174,22 @@ mod tests {
             .expect_err("unknown mode must not be guessed");
         assert!(error.to_string().contains("full, summary, or off"));
         assert_eq!(settings.inline_diffs, "full");
+    }
+
+    #[test]
+    fn thinking_highlight_is_independently_configurable_and_persisted() {
+        let mut settings = Settings::default();
+        assert!(settings.thinking_highlight);
+
+        settings
+            .set("thinking_highlight", "false")
+            .expect("valid thinking highlight setting");
+        assert!(!settings.thinking_highlight);
+
+        let restored: Settings =
+            toml::from_str(&toml::to_string(&settings).expect("serialize settings"))
+                .expect("restore settings");
+        assert!(!restored.thinking_highlight);
     }
 
     /// Explicit animated baseline for env-force tests (#4095 flipped defaults to calm).

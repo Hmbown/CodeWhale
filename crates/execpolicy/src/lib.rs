@@ -104,9 +104,20 @@ pub struct ToolAskRule {
     /// Optional command prefix to match against (uses arity-aware matching).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    /// Match `command` as the complete invocation instead of as a prefix.
+    ///
+    /// Approval-card remembered grants set this so approving one safe command
+    /// cannot silently authorize a later invocation with extra arguments.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub command_exact: bool,
     /// Optional file path pattern to match against.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// Optional absolute workspace root that limits this rule to one repo.
+    ///
+    /// Rules authored without a workspace retain the historical global scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
     /// Action when this rule matches. Default: `"ask"` (backward compatible).
     #[serde(default = "default_rule_action")]
     pub action: PermissionAction,
@@ -118,7 +129,9 @@ impl ToolAskRule {
         Self {
             tool: tool.into(),
             command: None,
+            command_exact: false,
             path: None,
+            workspace: None,
             action: PermissionAction::Ask,
         }
     }
@@ -128,7 +141,9 @@ impl ToolAskRule {
         Self {
             tool: "exec_shell".to_string(),
             command: Some(command.into()),
+            command_exact: false,
             path: None,
+            workspace: None,
             action: PermissionAction::Ask,
         }
     }
@@ -138,9 +153,20 @@ impl ToolAskRule {
         Self {
             tool: tool.into(),
             command: None,
+            command_exact: false,
             path: Some(path.into()),
+            workspace: None,
             action: PermissionAction::Ask,
         }
+    }
+
+    /// Convert an exact rule candidate into a repo-scoped persistent allow.
+    #[must_use]
+    pub fn into_exact_workspace_allow(mut self, workspace: impl Into<String>) -> Self {
+        self.command_exact = self.command.is_some();
+        self.workspace = Some(workspace.into());
+        self.action = PermissionAction::Allow;
+        self
     }
 
     fn label(&self) -> String {
@@ -148,8 +174,14 @@ impl ToolAskRule {
         if let Some(command) = &self.command {
             parts.push(format!("command={command}"));
         }
+        if self.command_exact {
+            parts.push("command_exact=true".to_string());
+        }
         if let Some(path) = &self.path {
             parts.push(format!("path={path}"));
+        }
+        if let Some(workspace) = &self.workspace {
+            parts.push(format!("workspace={workspace}"));
         }
         parts.join(" ")
     }
@@ -354,7 +386,13 @@ impl ExecPolicyEngine {
                     .map(move |rule| (ruleset.layer, rule))
             })
             .filter(|(_, rule)| rule.tool == tool)
+            .filter(|(_, rule)| {
+                rule.workspace
+                    .as_deref()
+                    .is_none_or(|workspace| workspace_scope_matches(workspace, ctx.cwd))
+            })
             .filter(|(_, rule)| match rule.command.as_deref() {
+                Some(command) if rule.command_exact => command.trim() == ctx.command.trim(),
                 Some(command) => self.arity_dict.allow_rule_matches(command, ctx.command),
                 None => true,
             })
@@ -764,6 +802,57 @@ fn normalize_workspace_relative_path_with_case(
     Some(relative_components.join("/"))
 }
 
+/// Return a stable absolute workspace scope suitable for a persisted rule.
+///
+/// Relative paths and filesystem roots are rejected: remembered grants must
+/// name one concrete repository rather than accidentally applying everywhere.
+pub fn normalize_workspace_scope(value: &str) -> Option<String> {
+    let value = value.trim().replace('\\', "/");
+    if value.is_empty() {
+        return None;
+    }
+
+    let (root, components) = if let Some(path) = value.strip_prefix('/') {
+        ("/".to_string(), path.to_string())
+    } else if is_windows_absolute_path(&value) {
+        // Windows paths are case-insensitive in the environments CodeWhale
+        // supports. Keep the POSIX branch case-sensitive so two distinct
+        // repositories on a case-sensitive filesystem cannot share a grant.
+        let value = value.to_ascii_lowercase();
+        (value[..2].to_string(), value[3..].to_string())
+    } else {
+        return None;
+    };
+
+    let mut normalized_components = Vec::new();
+    for component in components.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => return None,
+            component => normalized_components.push(component),
+        }
+    }
+    if normalized_components.is_empty() {
+        return None;
+    }
+
+    let separator = if root == "/" { "" } else { "/" };
+    Some(format!(
+        "{root}{separator}{}",
+        normalized_components.join("/")
+    ))
+}
+
+fn workspace_scope_matches(rule_workspace: &str, cwd: &str) -> bool {
+    match (
+        normalize_workspace_scope(rule_workspace),
+        normalize_workspace_scope(cwd),
+    ) {
+        (Some(rule_workspace), Some(cwd)) => rule_workspace == cwd,
+        _ => false,
+    }
+}
+
 #[derive(Debug)]
 struct PathForMatching {
     root: Option<String>,
@@ -845,6 +934,11 @@ fn ask_rule_specificity(rule: &ToolAskRule) -> usize {
             .as_ref()
             .map_or(0, |command| command.len() + 1000)
         + rule.path.as_ref().map_or(0, |path| path.len() + 1000)
+        + rule
+            .workspace
+            .as_ref()
+            .map_or(0, |workspace| workspace.len() + 1000)
+        + usize::from(rule.command_exact)
 }
 
 #[cfg(test)]
@@ -1449,6 +1543,7 @@ mod tests {
                     command: Some("sed".into()),
                     path: None,
                     action: PermissionAction::Deny,
+                    ..ToolAskRule::new("")
                 }],
             )]);
 
@@ -1484,6 +1579,7 @@ mod tests {
                     command: Some("git status".into()),
                     path: None,
                     action: PermissionAction::Allow,
+                    ..ToolAskRule::new("")
                 }],
             )]);
 
@@ -1536,12 +1632,14 @@ mod tests {
                 command: Some("git status".into()),
                 path: None,
                 action: PermissionAction::Ask,
+                ..ToolAskRule::new("")
             }]),
             Ruleset::user(vec![], vec![]).with_ask_rules(vec![ToolAskRule {
                 tool: "exec_shell".into(),
                 command: Some("git status".into()),
                 path: None,
                 action: PermissionAction::Allow,
+                ..ToolAskRule::new("")
             }]),
         ]);
 
@@ -1611,6 +1709,7 @@ mod tests {
             command: Some("sed".into()),
             path: None,
             action: PermissionAction::Deny,
+            ..ToolAskRule::new("")
         });
 
         // exact match
@@ -1631,6 +1730,7 @@ mod tests {
             command: Some("sed".into()),
             path: None,
             action: PermissionAction::Deny,
+            ..ToolAskRule::new("")
         });
 
         // unrelated command passes through
@@ -1648,6 +1748,7 @@ mod tests {
             command: Some("rm".into()),
             path: None,
             action: PermissionAction::Deny,
+            ..ToolAskRule::new("")
         });
 
         assert!(!engine.check(ctx("rm -rf /", UnlessTrusted)).unwrap().allow);
@@ -1668,6 +1769,7 @@ mod tests {
             command: Some("git push".into()),
             path: None,
             action: PermissionAction::Deny,
+            ..ToolAskRule::new("")
         });
 
         assert!(!engine.check(ctx("git push", UnlessTrusted)).unwrap().allow);
@@ -1693,6 +1795,7 @@ mod tests {
             command: Some("git push".into()),
             path: None,
             action: PermissionAction::Deny,
+            ..ToolAskRule::new("")
         });
 
         assert!(engine.check(ctx("git pull", UnlessTrusted)).unwrap().allow);
@@ -1737,12 +1840,14 @@ mod tests {
                         command: Some("sed".into()),
                         path: None,
                         action: PermissionAction::Allow,
+                        ..ToolAskRule::new("")
                     },
                     ToolAskRule {
                         tool: "exec_shell".into(),
                         command: Some("sed".into()),
                         path: None,
                         action: PermissionAction::Deny,
+                        ..ToolAskRule::new("")
                     },
                 ],
             )]);
@@ -1765,12 +1870,14 @@ mod tests {
                         command: Some("sed".into()),
                         path: None,
                         action: PermissionAction::Deny,
+                        ..ToolAskRule::new("")
                     },
                     ToolAskRule {
                         tool: "exec_shell".into(),
                         command: Some("sed".into()),
                         path: None,
                         action: PermissionAction::Allow,
+                        ..ToolAskRule::new("")
                     },
                 ],
             )]);
@@ -1792,12 +1899,14 @@ mod tests {
                         command: None,
                         path: Some("src/secrets.rs".into()),
                         action: PermissionAction::Deny,
+                        ..ToolAskRule::new("")
                     },
                     ToolAskRule {
                         tool: "write_file".into(),
                         command: None,
                         path: Some("src/secrets.rs".into()),
                         action: PermissionAction::Allow,
+                        ..ToolAskRule::new("")
                     },
                 ],
             )]);
@@ -2005,6 +2114,7 @@ mod tests {
             command: None,
             path: None,
             action: PermissionAction::Deny,
+            ..ToolAskRule::new("")
         });
 
         // any exec_shell command should be blocked
@@ -2037,6 +2147,7 @@ mod tests {
             command: Some("cargo".into()),
             path: None,
             action: PermissionAction::Allow,
+            ..ToolAskRule::new("")
         });
 
         let d = engine
@@ -2054,6 +2165,7 @@ mod tests {
             command: Some("git status".into()),
             path: None,
             action: PermissionAction::Allow,
+            ..ToolAskRule::new("")
         });
 
         let d = engine.check(ctx("git status --short", OnRequest)).unwrap();
@@ -2068,6 +2180,7 @@ mod tests {
             command: Some("git status".into()),
             path: None,
             action: PermissionAction::Allow,
+            ..ToolAskRule::new("")
         });
 
         // Unrelated command: normal approval flow applies.
@@ -2086,6 +2199,7 @@ mod tests {
             command: Some("cargo".into()),
             path: None,
             action: PermissionAction::Allow,
+            ..ToolAskRule::new("")
         });
 
         let d = engine.check(ctx("cargo check", Never)).unwrap();
@@ -2102,6 +2216,7 @@ mod tests {
             command: Some("cargo test".into()),
             path: None,
             action: PermissionAction::Ask,
+            ..ToolAskRule::new("")
         });
 
         // Under UnlessTrusted: ask rule forces approval
@@ -2133,6 +2248,7 @@ mod tests {
             command: Some("sed".into()),
             path: None,
             action: PermissionAction::Deny,
+            ..ToolAskRule::new("")
         });
 
         let d = engine
@@ -2180,6 +2296,129 @@ mod tests {
         assert!(d.requires_approval, "untrusted cmd needs approval");
     }
 
+    #[test]
+    fn exact_workspace_allow_matches_only_the_same_command_and_repo() {
+        let rule = ToolAskRule::exec_shell("cargo test").into_exact_workspace_allow("/workspace");
+        let engine = engine_with_ask_rule(rule);
+
+        let exact = engine.check(ctx("cargo test", OnRequest)).unwrap();
+        assert!(!exact.requires_approval);
+        assert_eq!(exact.matched_action, Some(PermissionAction::Allow));
+
+        let extra_args = engine
+            .check(ctx("cargo test --workspace", OnRequest))
+            .unwrap();
+        assert!(
+            extra_args.requires_approval,
+            "an exact remembered grant must not authorize extra arguments"
+        );
+
+        let other_repo = engine
+            .check(ExecPolicyContext {
+                command: "cargo test",
+                cwd: "/other",
+                tool: Some("exec_shell"),
+                path: None,
+                ask_for_approval: OnRequest,
+                sandbox_mode: Some("workspace-write"),
+            })
+            .unwrap();
+        assert!(
+            other_repo.requires_approval,
+            "a remembered grant must not escape its repository"
+        );
+    }
+
+    #[test]
+    fn exact_workspace_file_allow_matches_relative_and_absolute_paths_in_repo() {
+        let rule = ToolAskRule::file_path("write_file", "src/lib.rs")
+            .into_exact_workspace_allow("/workspace");
+        let engine = engine_with_ask_rule(rule);
+
+        for path in ["src/lib.rs", "/workspace/src/lib.rs"] {
+            let decision = engine
+                .check(file_ctx("write_file", path, "/workspace", OnRequest))
+                .unwrap();
+            assert_eq!(
+                decision.matched_action,
+                Some(PermissionAction::Allow),
+                "{path}"
+            );
+            assert!(!decision.requires_approval, "{path}");
+        }
+
+        let other_repo = engine
+            .check(file_ctx("write_file", "src/lib.rs", "/other", OnRequest))
+            .unwrap();
+        assert!(other_repo.requires_approval);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn exact_workspace_file_allow_preserves_posix_case_boundaries() {
+        let rule = ToolAskRule::file_path("write_file", "src/Foo.rs")
+            .into_exact_workspace_allow("/Workspace");
+        let engine = engine_with_ask_rule(rule);
+
+        let exact = engine
+            .check(file_ctx(
+                "write_file",
+                "/Workspace/src/Foo.rs",
+                "/Workspace",
+                OnRequest,
+            ))
+            .unwrap();
+        assert_eq!(exact.matched_action, Some(PermissionAction::Allow));
+
+        for path in ["src/foo.rs", "/workspace/src/Foo.rs"] {
+            let decision = engine
+                .check(file_ctx("write_file", path, "/Workspace", OnRequest))
+                .unwrap();
+            assert!(
+                decision.requires_approval,
+                "{path:?} must not inherit a case-distinct grant"
+            );
+        }
+    }
+
+    #[test]
+    fn workspace_scope_normalizes_windows_separators_and_case() {
+        let rule =
+            ToolAskRule::exec_shell("cargo test").into_exact_workspace_allow(r"C:\Repo\CodeWhale");
+        let engine = engine_with_ask_rule(rule);
+        let decision = engine
+            .check(ExecPolicyContext {
+                command: "cargo test",
+                cwd: "c:/repo/codewhale",
+                tool: Some("exec_shell"),
+                path: None,
+                ask_for_approval: OnRequest,
+                sandbox_mode: Some("workspace-write"),
+            })
+            .unwrap();
+
+        assert_eq!(decision.matched_action, Some(PermissionAction::Allow));
+        assert_eq!(
+            normalize_workspace_scope(r"C:\Repo\CodeWhale"),
+            Some("c:/repo/codewhale".to_string())
+        );
+        assert_eq!(normalize_workspace_scope("relative/repo"), None);
+        assert_eq!(normalize_workspace_scope("/"), None);
+    }
+
+    #[test]
+    fn workspace_scope_preserves_posix_case_and_rejects_traversal() {
+        assert_eq!(
+            normalize_workspace_scope("/Workspace/CodeWhale"),
+            Some("/Workspace/CodeWhale".to_string())
+        );
+        assert_ne!(
+            normalize_workspace_scope("/Workspace/CodeWhale"),
+            normalize_workspace_scope("/workspace/codewhale")
+        );
+        assert_eq!(normalize_workspace_scope("/workspace/../other"), None);
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────
 
     fn engine_with_ask_rule(rule: ToolAskRule) -> ExecPolicyEngine {
@@ -2196,6 +2435,7 @@ mod tests {
             command: None,
             path: None,
             action,
+            ..ToolAskRule::new("")
         }
     }
 
@@ -2205,6 +2445,7 @@ mod tests {
             command: None,
             path: Some(path.to_string()),
             action,
+            ..ToolAskRule::new("")
         }
     }
 

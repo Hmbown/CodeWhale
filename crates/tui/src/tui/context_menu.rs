@@ -184,7 +184,12 @@ impl ContextMenuView {
         if mouse_row <= rect.y || mouse_row >= rect.bottom().saturating_sub(1) {
             return None;
         }
-        let mut visual = rect.y.saturating_add(1); // skip top padding / title row
+        // The paragraph starts below the accent rail, and a non-empty title
+        // consumes its first row before any entries are rendered.
+        let mut visual = rect
+            .y
+            .saturating_add(1)
+            .saturating_add(u16::from(!self.title.is_empty()));
         for (idx, entry) in self.entries.iter().enumerate() {
             if entry.section_start && idx > 0 {
                 visual = visual.saturating_add(1);
@@ -549,5 +554,54 @@ mod tests {
             true,
         );
         assert!((view.appear_progress() - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn hover_rows_match_titled_menu_entries_and_dividers() {
+        let entries = vec![
+            ContextMenuEntry::new("Copy", "", ContextMenuAction::CopySelection),
+            ContextMenuEntry::new("Paste", "", ContextMenuAction::Paste).section_start(),
+            ContextMenuEntry::new("Help", "", ContextMenuAction::OpenHelp).primary(),
+        ];
+        let mut view = ContextMenuView::new_with_motion(entries, 0, 0, "Actions".into(), false);
+        let rect = Rect::new(10, 5, 30, 10);
+        view.last_rect.set(Some(rect));
+        let moved = |row| MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: rect.x.saturating_add(1),
+            row,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        };
+
+        // The title and section divider are not selectable.
+        view.handle_mouse(moved(rect.y.saturating_add(1)));
+        assert_eq!(view.selected, 2);
+        view.handle_mouse(moved(rect.y.saturating_add(2)));
+        assert_eq!(view.selected, 0);
+        view.handle_mouse(moved(rect.y.saturating_add(3)));
+        assert_eq!(view.selected, 0);
+
+        view.handle_mouse(moved(rect.y.saturating_add(4)));
+        assert_eq!(view.selected, 1);
+        view.handle_mouse(moved(rect.y.saturating_add(5)));
+        assert_eq!(view.selected, 2);
+    }
+
+    #[test]
+    fn untitled_menu_entries_start_on_first_body_row() {
+        let view = ContextMenuView::new_with_motion(
+            vec![ContextMenuEntry::new(
+                "Copy",
+                "",
+                ContextMenuAction::CopySelection,
+            )],
+            0,
+            0,
+            String::new(),
+            false,
+        );
+        let rect = Rect::new(10, 5, 30, 5);
+
+        assert_eq!(view.entry_at_row(rect.y.saturating_add(1), rect), Some(0));
     }
 }

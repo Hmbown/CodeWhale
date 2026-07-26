@@ -870,6 +870,13 @@ struct DoctorArgs {
         conflicts_with_all = ["json", "context_json"]
     )]
     probe_local: bool,
+    /// Opt in to starting enabled MCP servers and checking process/protocol reachability
+    #[arg(
+        long,
+        default_value_t = false,
+        conflicts_with_all = ["json", "context_json"]
+    )]
+    probe_mcp: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -1464,6 +1471,7 @@ async fn run_async_main(
                         &workspace,
                         cli.config.as_deref(),
                         args.probe_local,
+                        args.probe_mcp,
                         plugin_registry.as_ref(),
                     )
                     .await;
@@ -2569,6 +2577,9 @@ async fn run_fleet_command(workspace: &Path, config: &Config, args: FleetArgs) -
                 "fleet run: {} tasks={} leased={} queued={}",
                 report.run_id.0, report.task_count, report.leased, report.queued
             );
+            for warning in &report.warnings {
+                println!("warning: {warning}");
+            }
             println!("workers:");
             for worker_id in &report.worker_ids {
                 println!("  {worker_id}");
@@ -3607,6 +3618,7 @@ async fn run_doctor(
     workspace: &Path,
     config_path_override: Option<&Path>,
     probe_local: bool,
+    probe_mcp: bool,
     plugins: &crate::plugins::PluginRegistry,
 ) {
     use crate::palette;
@@ -4055,6 +4067,55 @@ async fn run_doctor(
                         "      process/protocol/backend: not checked; `codewhale mcp validate` explicitly starts and initializes configured servers"
                     );
                 }
+            }
+            if probe_mcp {
+                println!();
+                println!(
+                    "  {} Live MCP probe enabled: starting enabled servers; backend tool health remains untested.",
+                    "!".truecolor(sky_r, sky_g, sky_b)
+                );
+                match crate::mcp::McpPool::from_config_path_with_workspace_and_plugins(
+                    &mcp_config_path,
+                    workspace,
+                    std::sync::Arc::new(plugins.clone()),
+                ) {
+                    Ok(mut pool) => {
+                        let errors = pool.connect_all().await;
+                        let failed = errors
+                            .iter()
+                            .map(|(name, _)| name.as_str())
+                            .collect::<std::collections::BTreeSet<_>>();
+                        for (name, server) in &cfg.servers {
+                            if !server.is_enabled() {
+                                continue;
+                            }
+                            if failed.contains(name.as_str()) {
+                                let detail = errors
+                                    .iter()
+                                    .find(|(failed_name, _)| failed_name == name)
+                                    .map(|(_, error)| format!("{error:#}"))
+                                    .unwrap_or_else(|| "connection failed".to_string());
+                                println!(
+                                    "      {} {name}: process/protocol unreachable; {detail}",
+                                    "✗".truecolor(red_r, red_g, red_b)
+                                );
+                            } else {
+                                println!(
+                                    "      {} {name}: process reachable and protocol initialized; backend tool health not checked",
+                                    "✓".truecolor(aqua_r, aqua_g, aqua_b)
+                                );
+                            }
+                        }
+                    }
+                    Err(error) => println!(
+                        "      {} live MCP probe could not load merged configuration: {error:#}",
+                        "✗".truecolor(red_r, red_g, red_b)
+                    ),
+                }
+            } else {
+                println!(
+                    "    Use codewhale doctor --probe-mcp to opt in to live process/protocol checks; it may start configured servers."
+                );
             }
         }
         Err(err) => {

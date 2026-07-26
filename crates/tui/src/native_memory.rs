@@ -17,7 +17,6 @@ use sha2::{Digest, Sha256};
 
 const SCHEMA_VERSION: i64 = 1;
 const MAX_NOTE_BYTES: usize = 64 * 1024;
-#[cfg(test)]
 const MAX_QUERY_CHARS: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -239,12 +238,8 @@ impl NativeMemoryStore {
         })
     }
 
-    #[cfg(test)]
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<MemoryHit>> {
-        let query = query.trim();
-        if query.is_empty() || query.chars().count() > MAX_QUERY_CHARS {
-            bail!("memory search query is empty or too long");
-        }
+        let query = validate_query(query)?;
         // Markdown is authoritative. Refresh before retrieval so direct edits
         // become visible even when no file-watcher thread is running.
         self.with_write_lock(|| {
@@ -262,7 +257,11 @@ impl NativeMemoryStore {
         query: &str,
         limit: usize,
     ) -> Result<Vec<MemoryHit>> {
+        let query = validate_query(query)?;
         let workspace_path = self.workspace_path_for(workspace)?;
+        if workspace_path.is_none() {
+            return self.search(query, limit);
+        }
         let global = self.global_path();
         self.with_write_lock(|| {
             self.reindex_unlocked()?;
@@ -278,22 +277,53 @@ impl NativeMemoryStore {
 
     pub fn get(&self, id: i64) -> Result<Option<MemoryHit>> {
         self.with_write_lock(|| {
+            self.reindex_unlocked()?;
             let conn = self.connection_unlocked()?;
             Ok(conn
                 .query_row(
-                    "SELECT id,text,source,line_start,line_end FROM memory_entries WHERE id=?1",
+                    "SELECT e.id,e.text,e.source,e.line_start,e.line_end,
+                            CASE WHEN e.source_mtime != s.mtime THEN 1 ELSE 0 END
+                     FROM memory_entries e
+                     LEFT JOIN memory_sources s ON s.path=e.source
+                     WHERE e.id=?1",
                     params![id],
-                    |row| {
-                        Ok(MemoryHit {
-                            id: row.get(0)?,
-                            text: row.get(1)?,
-                            source: PathBuf::from(row.get::<_, String>(2)?),
-                            line_start: row.get::<_, i64>(3)? as usize,
-                            line_end: row.get::<_, i64>(4)? as usize,
-                            stale: false,
-                        })
-                    },
+                    memory_hit_from_row,
                 )
+                .optional()?)
+        })
+    }
+
+    /// Read one entry only when it belongs to global memory or the current
+    /// repository's origin-scoped workspace memory. User-facing retrieval
+    /// surfaces must use this boundary; numeric SQLite IDs are not authority.
+    pub fn get_for_workspace(&self, workspace: &Path, id: i64) -> Result<Option<MemoryHit>> {
+        let global = self.global_path();
+        let workspace = self.workspace_path_for(workspace)?;
+        let Some(workspace) = workspace else {
+            return self.get_from_sources(id, &[global]);
+        };
+        self.get_from_sources(id, &[global, workspace])
+    }
+
+    fn get_from_sources(&self, id: i64, sources: &[PathBuf]) -> Result<Option<MemoryHit>> {
+        self.with_write_lock(|| {
+            self.reindex_unlocked()?;
+            let conn = self.connection_unlocked()?;
+            let mut stmt = conn.prepare(
+                "SELECT e.id,e.text,e.source,e.line_start,e.line_end,
+                        CASE WHEN e.source_mtime != s.mtime THEN 1 ELSE 0 END
+                 FROM memory_entries e
+                 LEFT JOIN memory_sources s ON s.path=e.source
+                 WHERE e.id=?1 AND e.source IN (?2, ?3)",
+            )?;
+            let first = sources
+                .first()
+                .map_or_else(String::new, |path| path.to_string_lossy().into_owned());
+            let second = sources
+                .get(1)
+                .map_or_else(String::new, |path| path.to_string_lossy().into_owned());
+            Ok(stmt
+                .query_row(params![id, first, second], memory_hit_from_row)
                 .optional()?)
         })
     }
@@ -572,6 +602,14 @@ fn normalize_note(note: &str) -> Result<String> {
     Ok(note.trim_start_matches('-').trim().to_string())
 }
 
+fn validate_query(query: &str) -> Result<&str> {
+    let query = query.trim();
+    if query.is_empty() || query.chars().count() > MAX_QUERY_CHARS {
+        bail!("memory search query is empty or too long");
+    }
+    Ok(query)
+}
+
 fn safe_component(value: &str) -> Result<String> {
     if value.is_empty()
         || value == "."
@@ -749,6 +787,83 @@ mod tests {
         fs::write(&path, "- second value\n").unwrap();
         assert!(store.search("first", 10).unwrap().is_empty());
         assert_eq!(store.search("second", 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn empty_and_crlf_scaffold_files_are_safe_and_searchable() {
+        let tmp = TempDir::new().unwrap();
+        let store = NativeMemoryStore::new(tmp.path().join("memory"));
+        let path = store.global_path();
+        ensure_memory_file(&path).unwrap();
+        fs::write(&path, "---\r\n\r\n- Unicode ✓\r\n").unwrap();
+
+        assert_eq!(store.reindex().unwrap(), 1);
+        let hit = store.search("Unicode", 10).unwrap().pop().unwrap();
+        assert_eq!(hit.text, "Unicode ✓");
+        assert!(store.search("---", 10).unwrap().is_empty());
+
+        fs::write(&path, "\r\n---\r\n").unwrap();
+        assert_eq!(store.reindex().unwrap(), 0);
+        assert!(store.search("Unicode", 10).unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_markdown_is_not_indexed() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = TempDir::new().unwrap();
+        let store = NativeMemoryStore::new(tmp.path().join("memory"));
+        let outside = tmp.path().join("outside.md");
+        fs::write(&outside, "- outside secret\n").unwrap();
+        let linked = store.root().join("global").join("linked.md");
+        fs::create_dir_all(linked.parent().unwrap()).unwrap();
+        symlink(&outside, &linked).unwrap();
+
+        assert_eq!(store.reindex().unwrap(), 0);
+        assert!(store.search("outside", 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn workspace_search_excludes_another_origin_scope() {
+        let first = TempDir::new().unwrap();
+        let second = TempDir::new().unwrap();
+        let git = |path: &Path, origin: &str| {
+            for args in [
+                &["init", "-q"][..],
+                &["remote", "add", "origin", origin][..],
+            ] {
+                let status = Command::new("git")
+                    .arg("-C")
+                    .arg(path)
+                    .args(args)
+                    .status()
+                    .unwrap();
+                assert!(status.success());
+            }
+        };
+        git(first.path(), "https://example.test/first.git");
+        git(second.path(), "https://example.test/second.git");
+
+        let store = NativeMemoryStore::new(first.path().join("memory"));
+        let first_id = NativeMemoryStore::workspace_id(first.path())
+            .unwrap()
+            .unwrap();
+        let second_id = NativeMemoryStore::workspace_id(second.path())
+            .unwrap()
+            .unwrap();
+        store
+            .remember(MemoryScope::Workspace, Some(&first_id), "first-only")
+            .unwrap();
+        store
+            .remember(MemoryScope::Workspace, Some(&second_id), "second-only")
+            .unwrap();
+
+        let hits = store
+            .search_for_workspace(first.path(), "only", 10)
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].text, "first-only");
     }
 
     #[test]

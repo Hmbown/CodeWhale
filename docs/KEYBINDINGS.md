@@ -115,6 +115,15 @@ Fresh configs resolve to this default bar unless `[[hotbar]]` overrides it or `h
 
 Type `@<partial>` to open the file mention popup. `↑`/`↓` cycle the entries, `Tab` or `Enter` accepts. `Esc` hides the popup. As of v0.8.10 (#441), completions are re-ranked by mention frecency — files you mention often + recently float to the top.
 
+Two mentions resolve to curated git context instead of a path (v0.9.2, #4067):
+
+| Mention | Inlines | Byte budget |
+|---------|---------|-------------|
+| `@git`  | `git status --short --branch` for the workspace | 8 KB |
+| `@diff` | The working-tree diff, staged and unstaged (`git diff HEAD`) | 32 KB |
+
+Both appear in the completion popup alongside paths, and both show up in the context inspector with their resolved size and, when the diff exceeds its budget, the truncation marker. When git is missing, the workspace is not a repository, or there is nothing to show, the turn carries an explicit `<git-unavailable>` note rather than silently contributing nothing. A path that merely starts with the token (`@diff.txt`, `@git/config`) stays a file mention.
+
 ### `#` quick-add (memory)
 
 When `[memory] enabled = true`, typing `# foo` and pressing `Enter` appends `foo` as a timestamped bullet to your memory file *without* sending a turn. See `docs/MEMORY.md`.

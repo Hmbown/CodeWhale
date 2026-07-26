@@ -558,17 +558,17 @@ async fn background_start_advertises_task_status_completion() {
         .await
         .expect("start background");
 
-    assert!(result.content.contains("completion is tracked"));
+    assert!(result.content.contains("completion is delivered"));
     let metadata = result.metadata.as_ref().expect("metadata");
     assert_eq!(
         metadata
             .get("auto_resume_on_completion")
             .and_then(Value::as_bool),
-        Some(false)
+        Some(true)
     );
     assert_eq!(
         metadata.get("completion_surface").and_then(Value::as_str),
-        Some("task_status")
+        Some("runtime_event_and_task_status")
     );
     assert_eq!(
         metadata.get("background_policy").and_then(Value::as_str),
@@ -612,6 +612,8 @@ async fn background_shell_job_carries_subagent_owner() {
             .expect("owned shell job snapshot");
         assert_eq!(snapshot.owner_agent_id.as_deref(), Some("agent_owner"));
         assert_eq!(snapshot.owner_agent_name.as_deref(), Some("verifier"));
+        let owners = manager.running_owner_agent_ids();
+        assert_eq!(owners, vec!["agent_owner".to_string()]);
     }
 
     BashTool::alias("exec_shell_cancel", "cancel")
