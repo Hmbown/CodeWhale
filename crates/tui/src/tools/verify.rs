@@ -135,8 +135,10 @@ pub struct CritiqueReport {
     /// Concrete findings the agent must address before claiming done.
     #[serde(default)]
     pub findings: Vec<CritiqueFinding>,
-    /// True whenever an unaddressed correctness risk remains. Biased toward
-    /// `true` on ambiguity so "green-but-wrong" changes are not waved through.
+    /// True whenever an unaddressed correctness risk remains. Forced `true` by
+    /// any finding at `medium` severity or above (only `low` nits are exempt),
+    /// regardless of what the critic self-reported, so "green-but-wrong"
+    /// changes are not waved through.
     #[serde(default)]
     pub unresolved_risk: bool,
 }
@@ -187,19 +189,35 @@ impl CritiqueReport {
             finding.suggested_fix = normalize_optional(finding.suggested_fix.take());
         }
 
+        // `has_serious` (critical/high) refutes the claim outright.
         let has_serious = self
             .findings
             .iter()
             .any(|f| matches!(f.severity.as_str(), "critical" | "high"));
+        // `has_blocking` (medium-or-above, i.e. anything that is not a `low`
+        // nit) is a real unresolved correctness concern: it must force
+        // `unresolved_risk` and forbid an `upheld` verdict, even if the critic
+        // self-reported `unresolved_risk = false`. This closes the green-but-
+        // wrong gap where verdict=upheld + a MEDIUM finding + critic-set
+        // `unresolved_risk=false` reported "no unresolved risk". `low`-only
+        // findings are intentionally exempt so nits don't block a claim.
+        let has_blocking = self
+            .findings
+            .iter()
+            .any(|f| matches!(f.severity.as_str(), "critical" | "high" | "medium"));
 
         // Verdict: honour an explicit, recognized value; otherwise infer.
+        // Precedence: any serious finding => refuted; else any blocking
+        // (medium) finding => uncertain (never upheld); else honour the critic.
         self.verdict = match self.verdict.trim().to_ascii_lowercase().as_str() {
             "refuted" | "rejected" | "fail" | "failed" => "refuted".to_string(),
             "upheld" | "confirmed" | "pass" | "passed" | "ok" => {
-                // Don't let the critic mark a change clean while it also reported
-                // serious findings — that is exactly the green-but-wrong trap.
                 if has_serious {
                     "refuted".to_string()
+                } else if has_blocking {
+                    // A medium finding is a genuine open concern — the claim
+                    // cannot be "upheld" while it stands.
+                    "uncertain".to_string()
                 } else {
                     "upheld".to_string()
                 }
@@ -214,9 +232,9 @@ impl CritiqueReport {
             _ => "uncertain".to_string(),
         };
 
-        // Fail safe: any serious finding => unresolved risk, regardless of what
-        // the model set.
-        self.unresolved_risk = self.unresolved_risk || has_serious;
+        // Fail safe: any medium-or-above finding => unresolved risk, regardless
+        // of what the model set.
+        self.unresolved_risk = self.unresolved_risk || has_blocking;
         self
     }
 
@@ -415,17 +433,9 @@ self-check of whether what you just did is actually correct and complete."
         // --- Deterministic evidence gathering ---
         let mut evidence: Vec<EvidenceBlock> = Vec::new();
         if gather_diff_scope {
-            match gather_git_diff(context.workspace.as_path(), staged, base.as_deref()).await? {
-                Some(diff) => evidence.push(EvidenceBlock {
-                    label: if staged {
-                        "git diff --cached".to_string()
-                    } else {
-                        "git diff (working tree)".to_string()
-                    },
-                    body: diff,
-                }),
-                None => { /* no diff — recorded via no_code_evidence below */ }
-            }
+            evidence.extend(
+                gather_diff_evidence(context.workspace.as_path(), staged, base.as_deref()).await?,
+            );
         }
         evidence.extend(gather_files(&files, context));
 
@@ -566,24 +576,75 @@ and explicitly note in your summary that you could not inspect the actual change
     out
 }
 
-/// Gather a git diff, or `None` when there is nothing to diff / git is absent.
-/// Unlike `review`, an empty diff is not an error — a claim can be about
-/// reasoning, and `files` may carry the evidence instead.
-async fn gather_git_diff(
+/// Gather git-diff evidence for the requested scope. Returns zero or more
+/// labelled blocks; an empty result is not an error (unlike `review`) — a claim
+/// can be about reasoning, and `files` may carry the evidence instead.
+///
+/// The key correctness point (fix for the base-omits-worktree gap): when a
+/// `base` ref is supplied for the working-tree scope, we emit BOTH the committed
+/// changes since the merge-base (`git diff base...HEAD`) AND the uncommitted
+/// working-tree changes (`git diff HEAD`). `git diff base...HEAD` alone captures
+/// branch commits but drops the uncommitted edits the agent usually wants to
+/// verify before claiming done.
+async fn gather_diff_evidence(
     workspace: &Path,
     staged: bool,
     base: Option<&str>,
-) -> Result<Option<String>, ToolError> {
+) -> Result<Vec<EvidenceBlock>, ToolError> {
+    let base = base.filter(|b| !b.trim().is_empty());
+    let mut blocks = Vec::new();
+
+    if staged {
+        // Staged scope: the index (optionally vs an explicit base).
+        let mut args: Vec<String> = vec!["--cached".to_string()];
+        if let Some(base) = base {
+            args.push(base.to_string());
+        }
+        if let Some(diff) = run_git_diff(workspace, &args).await? {
+            blocks.push(EvidenceBlock {
+                label: "git diff --cached (staged)".to_string(),
+                body: diff,
+            });
+        }
+        return Ok(blocks);
+    }
+
+    // Working-tree scope.
+    if let Some(base) = base {
+        // Committed changes on this branch since the merge-base with `base`.
+        if let Some(diff) = run_git_diff(workspace, &[format!("{base}...HEAD")]).await? {
+            blocks.push(EvidenceBlock {
+                label: format!("committed changes since {base} (git diff {base}...HEAD)"),
+                body: diff,
+            });
+        }
+    }
+    // Uncommitted changes (staged + unstaged) — what "before claiming done"
+    // usually means. `git diff HEAD` captures both; fall back to a plain
+    // working-tree diff on an unborn HEAD (empty repo / no commits yet).
+    let worktree = match run_git_diff(workspace, &["HEAD".to_string()]).await {
+        Ok(diff) => diff,
+        Err(_) => run_git_diff(workspace, &[]).await?,
+    };
+    if let Some(diff) = worktree {
+        blocks.push(EvidenceBlock {
+            label: "uncommitted changes (git diff HEAD, working tree)".to_string(),
+            body: diff,
+        });
+    }
+    Ok(blocks)
+}
+
+/// Run `git diff <args>` in `workspace`. Returns `Ok(None)` for an empty diff or
+/// when git is unavailable, and `Err` when git runs but reports failure.
+async fn run_git_diff(workspace: &Path, args: &[String]) -> Result<Option<String>, ToolError> {
     let Some(mut cmd) = crate::dependencies::Git::command() else {
         // git not installed: degrade gracefully rather than failing the tool.
         return Ok(None);
     };
     cmd.arg("diff");
-    if staged {
-        cmd.arg("--cached");
-    }
-    if let Some(base) = base.filter(|b| !b.trim().is_empty()) {
-        cmd.arg(format!("{base}...HEAD"));
+    for arg in args {
+        cmd.arg(arg);
     }
     cmd.current_dir(workspace);
 
@@ -904,6 +965,40 @@ mod tests {
         assert!(report.unresolved_risk);
     }
 
+    #[test]
+    fn upheld_with_medium_finding_flags_unresolved_risk() {
+        // The exact green-but-wrong gap: verdict=upheld + a MEDIUM finding +
+        // critic-set unresolved_risk=false must still surface as unresolved
+        // risk, and the verdict must not stay "upheld".
+        let report = CritiqueReport::from_model_text(
+            r#"{"verdict":"upheld","summary":"seems fine","findings":[{"severity":"medium","issue":"unhandled empty-input case"}],"unresolved_risk":false}"#,
+        );
+        assert!(
+            report.unresolved_risk,
+            "a medium finding must force unresolved_risk=true"
+        );
+        assert_ne!(
+            report.verdict, "upheld",
+            "cannot remain 'upheld' with an open medium finding"
+        );
+        assert_eq!(
+            report.verdict, "uncertain",
+            "medium (not serious) downgrades upheld to uncertain, not refuted"
+        );
+    }
+
+    #[test]
+    fn upheld_with_only_low_finding_stays_upheld() {
+        // Intentional carve-out: low-severity nits do not block a claim, so an
+        // otherwise-clean "upheld" with only a low finding stays upheld and
+        // does not raise unresolved_risk.
+        let report = CritiqueReport::from_model_text(
+            r#"{"verdict":"upheld","summary":"clean","findings":[{"severity":"low","issue":"nit: rename variable"}],"unresolved_risk":false}"#,
+        );
+        assert_eq!(report.verdict, "upheld");
+        assert!(!report.unresolved_risk);
+    }
+
     // === Recursion / re-entry guard ===
 
     #[tokio::test]
@@ -967,5 +1062,87 @@ mod tests {
         assert_eq!(normalize_severity("nit"), "low");
         assert_eq!(normalize_severity("weird"), "medium");
         assert_eq!(normalize_severity(""), "medium");
+    }
+
+    // === git diff evidence gathering ===
+
+    fn run_git(dir: &Path, args: &[&str]) {
+        let mut cmd = crate::dependencies::Git::command().expect("git available");
+        cmd.args(args).current_dir(dir);
+        let out = cmd.output().expect("run git");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    #[tokio::test]
+    async fn diff_scope_with_base_includes_uncommitted_worktree_changes() {
+        // Regression for the base-omits-worktree gap: `git diff base...HEAD`
+        // captures branch commits but drops the uncommitted edits the agent
+        // usually wants to verify before claiming done. With a base set, the
+        // gatherer must include BOTH the committed-since-base changes AND the
+        // uncommitted working-tree changes.
+        if crate::dependencies::Git::command().is_none() {
+            return; // no git in this environment — nothing to exercise.
+        }
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = tmp.path();
+        run_git(repo, &["init", "-q"]);
+        run_git(repo, &["config", "user.email", "t@example.com"]);
+        run_git(repo, &["config", "user.name", "Test"]);
+        run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+        // Base commit.
+        std::fs::write(repo.join("f.txt"), "line1\n").expect("write");
+        run_git(repo, &["add", "."]);
+        run_git(repo, &["commit", "-q", "-m", "base"]);
+
+        // A committed change on top of the base.
+        std::fs::write(repo.join("f.txt"), "line1\nCOMMITTED_MARKER\n").expect("write");
+        run_git(repo, &["add", "."]);
+        run_git(repo, &["commit", "-q", "-m", "second"]);
+
+        // An UNCOMMITTED working-tree change.
+        std::fs::write(
+            repo.join("f.txt"),
+            "line1\nCOMMITTED_MARKER\nUNCOMMITTED_MARKER\n",
+        )
+        .expect("write");
+
+        let blocks = gather_diff_evidence(repo, false, Some("HEAD~1"))
+            .await
+            .expect("gather diff");
+        let joined = blocks
+            .iter()
+            .map(|b| format!("[{}]\n{}", b.label, b.body))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            joined.contains("UNCOMMITTED_MARKER"),
+            "uncommitted working-tree change must appear in evidence with a base set:\n{joined}"
+        );
+        assert!(
+            joined.contains("COMMITTED_MARKER"),
+            "committed-since-base change must also appear:\n{joined}"
+        );
+        // Two distinct labelled blocks: committed-since-base and uncommitted.
+        assert!(
+            blocks
+                .iter()
+                .any(|b| b.label.contains("committed changes since")),
+            "expected a committed-since-base block: {:?}",
+            blocks.iter().map(|b| &b.label).collect::<Vec<_>>()
+        );
+        assert!(
+            blocks
+                .iter()
+                .any(|b| b.label.contains("uncommitted changes")),
+            "expected an uncommitted working-tree block: {:?}",
+            blocks.iter().map(|b| &b.label).collect::<Vec<_>>()
+        );
     }
 }
