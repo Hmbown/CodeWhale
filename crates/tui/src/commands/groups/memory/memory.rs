@@ -317,7 +317,7 @@ mod tests {
         let mut app = create_test_app_with_memory(&tmpdir, true);
         let result = memory(&mut app, Some("help"));
         let msg = result.message.expect("help should return text");
-        assert!(msg.contains("Usage: /memory [show|path|clear|edit|help]"));
+        assert!(msg.contains("Usage: /memory [show|path|clear|edit|native ...|help]"));
         assert!(msg.contains("/memory edit"));
         assert!(msg.contains(app.memory_path.to_string_lossy().as_ref()));
     }
