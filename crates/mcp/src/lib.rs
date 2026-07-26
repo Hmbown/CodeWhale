@@ -7,6 +7,12 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+mod stdio_client;
+#[cfg(test)]
+mod test_support;
+
+pub use stdio_client::ChildProcessMcpClient;
+
 /// Configuration for a single MCP server process.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerConfig {
@@ -130,7 +136,12 @@ pub trait McpManagedClient: Send + Sync {
     fn read_resource(&self, uri: &str) -> Result<Value>;
 }
 
-/// A simple in-memory MCP client for testing and default server stubs.
+/// A simple in-memory MCP client for tests and embedding callers.
+///
+/// This is **not** wired into `codewhale mcp-server`: that path spawns
+/// [`ChildProcessMcpClient`] and reports a typed error when the configured
+/// command cannot be run. Serving canned values there made a broken
+/// integration look identical to a working one (#4727).
 #[derive(Debug, Default)]
 pub struct InMemoryMcpClient {
     tools: HashMap<String, Value>,
@@ -585,7 +596,43 @@ struct StdioMcpState {
     manager: McpManager,
     definitions: HashMap<String, McpServerDefinition>,
     running: HashMap<String, bool>,
+    /// Why a defined server is not running, surfaced in every lifecycle
+    /// snapshot so a failed spawn cannot be mistaken for a healthy server.
+    errors: HashMap<String, String>,
     lifecycle_state: String,
+}
+
+impl StdioMcpState {
+    /// Spawn `definition`'s configured command and register the resulting
+    /// connection, recording the failure reason when the server cannot be
+    /// brought up.
+    ///
+    /// This is the only way a server enters `manager`, and it has no stub
+    /// branch: there is no configuration under which a registered server
+    /// answers from anything but its own process.
+    fn start_definition(&mut self, definition: &McpServerDefinition) -> Result<()> {
+        let name = definition.config.name.clone();
+        let outcome = ChildProcessMcpClient::spawn(&definition.config).and_then(|client| {
+            self.manager.register_server(
+                definition.config.clone(),
+                definition.filter.clone(),
+                Box::new(client),
+            )
+        });
+        match outcome {
+            Ok(()) => {
+                self.errors.remove(&name);
+                self.running.insert(name, true);
+                Ok(())
+            }
+            Err(err) => {
+                let message = format!("{err:#}");
+                self.errors.insert(name.clone(), message.clone());
+                self.running.insert(name, false);
+                Err(err)
+            }
+        }
+    }
 }
 
 /// Run an MCP stdio server that reads JSON-RPC requests from stdin and writes responses to stdout.
@@ -670,83 +717,32 @@ pub fn run_stdio_server(
 }
 
 fn build_stdio_state(initial_definitions: Vec<McpServerDefinition>) -> StdioMcpState {
-    let mut manager = McpManager::default();
-    let mut definitions = HashMap::new();
-    let mut running = HashMap::new();
+    let mut state = StdioMcpState {
+        manager: McpManager::default(),
+        definitions: HashMap::new(),
+        running: HashMap::new(),
+        errors: HashMap::new(),
+        lifecycle_state: "running".to_string(),
+    };
 
     for definition in initial_definitions {
         let name = definition.config.name.clone();
-        let should_start = definition.config.enabled;
-        definitions.insert(name.clone(), definition.clone());
-        let registered = should_start
-            && match manager.register_server(
-                definition.config.clone(),
-                definition.filter.clone(),
-                default_stdio_client(&name),
-            ) {
-                Ok(()) => true,
-                Err(err) => {
-                    // A name collision must not silently shadow the server
-                    // already holding that qualified prefix. Leave it stopped.
-                    tracing::warn!("skipping MCP server '{name}': {err}");
-                    false
-                }
-            };
-        running.insert(name, registered);
+        state.definitions.insert(name.clone(), definition.clone());
+        if !definition.config.enabled {
+            state.running.insert(name, false);
+            continue;
+        }
+        // A server that cannot be spawned stays stopped and says so on stderr.
+        // stdout is the JSON-RPC channel, so the warning goes to stderr where
+        // it will not corrupt the protocol stream but is still visible to the
+        // operator; `lifecycle` carries the same text for programmatic clients.
+        if let Err(err) = state.start_definition(&definition) {
+            tracing::warn!("MCP server '{name}' is not available: {err:#}");
+            eprintln!("codewhale mcp-server: server '{name}' is not available: {err:#}");
+        }
     }
 
-    StdioMcpState {
-        manager,
-        definitions,
-        running,
-        lifecycle_state: "running".to_string(),
-    }
-}
-
-fn default_stdio_client(server_name: &str) -> Box<dyn McpManagedClient> {
-    let health_uri = format!("mcp://{server_name}/health");
-    let capabilities_uri = format!("mcp://{server_name}/capabilities");
-    Box::new(
-        InMemoryMcpClient::default()
-            .with_tool(
-                "health",
-                json!({
-                    "status": "ok",
-                    "server_name": server_name
-                }),
-            )
-            .with_tool(
-                "capabilities",
-                json!({
-                    "tools": ["health", "capabilities"],
-                    "resources": [health_uri.clone(), capabilities_uri.clone()]
-                }),
-            )
-            .with_resource(
-                &health_uri,
-                json!({
-                    "status": "ok",
-                    "server_name": server_name
-                }),
-            )
-            .with_resource(
-                &capabilities_uri,
-                json!({
-                    "server_name": server_name,
-                    "methods": [
-                        "tools/list",
-                        "tools/call",
-                        "resources/list",
-                        "resources/read",
-                        "server/list",
-                        "server/register",
-                        "server/start",
-                        "server/stop",
-                        "server/unregister"
-                    ]
-                }),
-            ),
-    )
+    state
 }
 
 fn default_rpc_methods() -> Vec<&'static str> {
@@ -779,6 +775,10 @@ fn lifecycle_snapshot(state: &StdioMcpState) -> Value {
                 "running": is_running,
                 "command": definition.config.command.clone(),
                 "args": definition.config.args.clone(),
+                // Null when the server is healthy. A client polling
+                // `server/list` must be able to tell "up" from "never
+                // started" without guessing.
+                "error": state.errors.get(name).cloned(),
             })
         })
         .collect();
@@ -924,25 +924,22 @@ fn dispatch_stdio_request(
             if state.definitions.contains_key(&name) {
                 let _ = state.manager.unregister_server(&name);
             }
-            state.definitions.insert(
-                name.clone(),
-                McpServerDefinition {
-                    config: parsed.server.clone(),
-                    filter: parsed.filter.clone(),
-                },
-            );
-            let should_run = parsed.start && parsed.server.enabled;
-            if should_run {
+            let definition = McpServerDefinition {
+                config: parsed.server.clone(),
+                filter: parsed.filter.clone(),
+            };
+            state.definitions.insert(name.clone(), definition.clone());
+            state.errors.remove(&name);
+            if parsed.start && parsed.server.enabled {
+                // Registration is only "ok" if the configured command actually
+                // came up. Reporting success here and answering later tool
+                // calls from a stub is what #4727 was.
                 state
-                    .manager
-                    .register_server(
-                        parsed.server.clone(),
-                        parsed.filter.clone(),
-                        default_stdio_client(&name),
-                    )
-                    .map_err(|err| JsonRpcError::invalid_params(err.to_string()))?;
+                    .start_definition(&definition)
+                    .map_err(|err| JsonRpcError::internal(format!("{err:#}")))?;
+            } else {
+                state.running.insert(name, false);
             }
-            state.running.insert(name, should_run);
             Ok((json!({ "lifecycle": lifecycle_snapshot(state) }), false))
         }
         "server/start" | "servers/start" => {
@@ -961,14 +958,8 @@ fn dispatch_stdio_request(
             }
             if !state.running.get(&parsed.name).copied().unwrap_or(false) {
                 state
-                    .manager
-                    .register_server(
-                        definition.config.clone(),
-                        definition.filter.clone(),
-                        default_stdio_client(&parsed.name),
-                    )
-                    .map_err(|err| JsonRpcError::invalid_params(err.to_string()))?;
-                state.running.insert(parsed.name, true);
+                    .start_definition(&definition)
+                    .map_err(|err| JsonRpcError::internal(format!("{err:#}")))?;
             }
             Ok((json!({ "lifecycle": lifecycle_snapshot(state) }), false))
         }
@@ -980,6 +971,9 @@ fn dispatch_stdio_request(
                     .stop_server(&parsed.name)
                     .map_err(|err| JsonRpcError::internal(err.to_string()))?;
             }
+            // A deliberate stop is not a failure, so it clears any recorded
+            // startup error rather than leaving a stale one on display.
+            state.errors.remove(&parsed.name);
             state.running.insert(parsed.name, false);
             Ok((json!({ "lifecycle": lifecycle_snapshot(state) }), false))
         }
@@ -993,6 +987,7 @@ fn dispatch_stdio_request(
             }
             let _ = state.manager.unregister_server(&parsed.name);
             state.running.remove(&parsed.name);
+            state.errors.remove(&parsed.name);
             Ok((json!({ "lifecycle": lifecycle_snapshot(state) }), false))
         }
         "shutdown" => {
@@ -1678,6 +1673,107 @@ mod tests {
     fn jsonrpc_notifications_do_not_require_responses() {
         assert!(!should_respond_to_jsonrpc(&None));
         assert!(should_respond_to_jsonrpc(&Some(json!(1))));
+    }
+
+    // ── stdio dispatch: no stub may answer for a configured server ─────
+
+    fn definition(name: &str, command: &str, args: &[&str]) -> McpServerDefinition {
+        McpServerDefinition {
+            config: McpServerConfig {
+                name: name.to_string(),
+                command: command.to_string(),
+                args: args.iter().map(|arg| (*arg).to_string()).collect(),
+                env: HashMap::new(),
+                enabled: true,
+            },
+            filter: ToolFilter::default(),
+        }
+    }
+
+    fn call(state: &mut StdioMcpState, method: &str, params: Value) -> Value {
+        dispatch_stdio_request(state, method, params)
+            .unwrap_or_else(|err| panic!("{method} failed: {}", err.message))
+            .0
+    }
+
+    #[test]
+    fn a_server_that_cannot_be_spawned_is_reported_not_running() {
+        // #4727: this used to register a stub and report `running: true`, so a
+        // typo in `command` was indistinguishable from a working server.
+        let mut state = build_stdio_state(vec![definition(
+            "broken",
+            "codewhale-nonexistent-mcp-server-binary",
+            &[],
+        )]);
+
+        let lifecycle = call(&mut state, "server/list", json!({}))["lifecycle"].clone();
+        assert_eq!(lifecycle["servers"][0]["running"], json!(false));
+        let error = lifecycle["servers"][0]["error"]
+            .as_str()
+            .expect("a stopped server must carry its failure reason");
+        assert!(
+            error.contains("failed to spawn command"),
+            "unexpected error: {error}"
+        );
+
+        // And nothing answers on its behalf.
+        let err = dispatch_stdio_request(
+            &mut state,
+            "tools/call",
+            json!({"name": "mcp__broken__health", "arguments": {}}),
+        )
+        .expect_err("a server that never started must not answer tool calls");
+        assert_eq!(err.code, -32603);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tools_come_from_the_spawned_process_not_a_stub() {
+        let script = crate::test_support::write_fake_mcp_server("dispatch_tools");
+        let mut state = build_stdio_state(vec![definition(
+            "fake",
+            "/bin/sh",
+            &[script.path().to_str().expect("utf-8 script path")],
+        )]);
+
+        let tools = call(&mut state, "tools/list", json!({}))["tools"].clone();
+        let names: Vec<&str> = tools
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .filter_map(|tool| tool["tool_name"].as_str())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["add"],
+            "only the child's real tools may be listed, got {names:?}"
+        );
+
+        let result = call(
+            &mut state,
+            "tools/call",
+            json!({"name": "mcp__fake__add", "arguments": {"a": 2, "b": 3}}),
+        );
+        assert_eq!(result["result"]["content"][0]["text"], "5");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn server_register_fails_when_the_command_cannot_be_started() {
+        let mut state = build_stdio_state(Vec::new());
+        let err = dispatch_stdio_request(
+            &mut state,
+            "server/register",
+            json!({"server": {"name": "late", "command": "/bin/sh", "args": ["-c", "exit 1"]}}),
+        )
+        .expect_err("registering an unstartable server must not report success");
+        assert_eq!(err.code, -32603);
+        assert!(
+            err.message.contains("initialize"),
+            "unexpected error: {}",
+            err.message
+        );
+        assert_eq!(state.running.get("late"), Some(&false));
     }
 
     // ── McpServerConfig serialization ──────────────────────────────────

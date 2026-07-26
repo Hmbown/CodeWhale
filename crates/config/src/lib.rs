@@ -2120,6 +2120,19 @@ impl ConfigToml {
         }
     }
 
+    /// The unquoted contents of an extras key that holds a TOML string.
+    ///
+    /// [`Config::get_value`] renders extras through `toml::Value::to_string`,
+    /// which re-applies TOML quoting — and switches to a single-quoted literal
+    /// string whenever the payload contains a `"`. A JSON blob written with
+    /// [`Config::set_value`] therefore comes back as `'[{"a":1}]'` and no
+    /// longer parses as JSON (#4727). Callers that stored structured text want
+    /// the payload, not its TOML rendering.
+    #[must_use]
+    pub fn get_raw_string(&self, key: &str) -> Option<&str> {
+        self.extras.get(key).and_then(toml::Value::as_str)
+    }
+
     #[must_use]
     pub fn get_display_value(&self, key: &str) -> Option<String> {
         if let Some((provider, field)) = parse_provider_config_key(key) {

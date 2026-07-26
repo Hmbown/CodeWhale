@@ -3867,7 +3867,17 @@ fn run_mcp_server_command(store: &mut ConfigStore) -> Result<()> {
 }
 
 fn load_mcp_server_definitions(store: &ConfigStore) -> Vec<McpServerDefinition> {
-    let Some(raw) = store.config.get_value(MCP_SERVER_DEFINITIONS_KEY) else {
+    // `get_raw_string` first: `get_value` re-renders the extras entry as TOML,
+    // which quotes a JSON payload into `'[{"config":…}]'` and makes it
+    // unparseable — so every persisted definition was silently dropped and
+    // `mcp-server` started with an empty server list (#4727). `get_value`
+    // remains as the fallback for keys that are not plain extras strings.
+    let raw = store
+        .config
+        .get_raw_string(MCP_SERVER_DEFINITIONS_KEY)
+        .map(ToOwned::to_owned)
+        .or_else(|| store.config.get_value(MCP_SERVER_DEFINITIONS_KEY));
+    let Some(raw) = raw else {
         return Vec::new();
     };
 
