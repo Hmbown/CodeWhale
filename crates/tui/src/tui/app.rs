@@ -1026,6 +1026,8 @@ pub struct App {
     /// The catalog remains separately discoverable and selecting from it adds
     /// to this set rather than replacing earlier enabled choices.
     pub enabled_provider_models: HashMap<String, Vec<String>>,
+    /// Exact provider/model pins loaded from settings, in user order.
+    pub pinned_models: Vec<crate::settings::PinnedModel>,
     /// When true, the model is auto-selected based on request complexity
     /// rather than using a fixed model. The `/model auto` command sets this.
     /// `dispatch_user_message` calls `auto_model_heuristic` to resolve the

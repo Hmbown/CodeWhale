@@ -571,6 +571,7 @@ impl App {
             model,
             provider_models,
             enabled_provider_models,
+            pinned_models: settings.pinned_models.clone(),
             auto_model,
             last_effective_model: None,
             last_effective_provider: None,

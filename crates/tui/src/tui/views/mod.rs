@@ -721,6 +721,15 @@ pub enum ViewEvent {
     /// blocked and open the provider auth/setup path when possible.
     /// Re-resolve readiness + rebuild catalog rows for the open model picker.
     ModelPickerRefresh,
+    ModelPickerTogglePin {
+        provider: crate::config::ApiProvider,
+        model: String,
+    },
+    ModelPickerMovePin {
+        provider: crate::config::ApiProvider,
+        model: String,
+        delta: isize,
+    },
     ModelPickerNeedsAuth {
         provider: crate::config::ApiProvider,
         model: String,

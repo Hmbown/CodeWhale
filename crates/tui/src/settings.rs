@@ -270,6 +270,17 @@ fn resolve_tui_prefs_path_from_candidates(
 }
 
 /// User settings with defaults
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PinnedModel {
+    /// Exact configured provider identity; labels never replace this value.
+    pub provider: String,
+    /// Exact provider-owned model id.
+    pub model: String,
+    /// Optional presentation-only label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -398,6 +409,10 @@ pub struct Settings {
     /// seeded at load time so the migration is additive and non-breaking.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled_models: Option<std::collections::HashMap<String, Vec<String>>>,
+    /// Exact provider/model tuples pinned to the top of model choosers, in
+    /// user-defined order. Stale entries remain persisted and visible.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pinned_models: Vec<PinnedModel>,
     /// Header status indicator next to the effort chip. Cycles through a
     /// per-turn animation keyed off `App::turn_started_at`:
     /// - `"cw"` (default): static typographic Codewhale mark.
@@ -522,6 +537,7 @@ impl Default for Settings {
             sandbox_mode: None,
             provider_models: None,
             enabled_models: None,
+            pinned_models: Vec::new(),
             // The whale lives in the terminal window title (OSC 0). The in-app
             // header defaults to the static typographic `cw` mark so the two
             // surfaces do not compete with a second spinner.
@@ -1527,6 +1543,67 @@ impl Settings {
         {
             models.push(model.to_string());
         }
+    }
+
+    /// Toggle one exact provider/model pin without touching credentials or
+    /// the provider's default route.
+    pub fn toggle_pinned_model(&mut self, provider: &str, model: &str) -> bool {
+        let provider = provider.trim();
+        let model = model.trim();
+        if provider.is_empty() || model.is_empty() || model.eq_ignore_ascii_case("auto") {
+            return false;
+        }
+        if let Some(index) = self.pinned_models.iter().position(|pin| {
+            pin.provider.eq_ignore_ascii_case(provider) && pin.model.eq_ignore_ascii_case(model)
+        }) {
+            self.pinned_models.remove(index);
+            return false;
+        }
+        self.pinned_models.push(PinnedModel {
+            provider: provider.to_string(),
+            model: model.to_string(),
+            label: None,
+        });
+        true
+    }
+
+    #[allow(dead_code)] // label editing surface is exposed through settings serialization first
+    pub fn set_pinned_model_label(
+        &mut self,
+        provider: &str,
+        model: &str,
+        label: Option<String>,
+    ) -> bool {
+        self.pinned_models
+            .iter_mut()
+            .find(|pin| {
+                pin.provider.eq_ignore_ascii_case(provider) && pin.model.eq_ignore_ascii_case(model)
+            })
+            .map(|pin| {
+                pin.label = label.filter(|value| !value.trim().is_empty());
+                true
+            })
+            .unwrap_or(false)
+    }
+
+    pub fn move_pinned_model(&mut self, provider: &str, model: &str, delta: isize) -> bool {
+        let Some(index) = self.pinned_models.iter().position(|pin| {
+            pin.provider.eq_ignore_ascii_case(provider) && pin.model.eq_ignore_ascii_case(model)
+        }) else {
+            return false;
+        };
+        let target = if delta.is_negative() {
+            index.saturating_sub(delta.unsigned_abs())
+        } else {
+            index.saturating_add(delta as usize)
+        };
+        let target = target.min(self.pinned_models.len().saturating_sub(1));
+        if target == index {
+            return false;
+        }
+        let pin = self.pinned_models.remove(index);
+        self.pinned_models.insert(target, pin);
+        true
     }
 
     /// Persist a provider's model selection.
@@ -4001,5 +4078,21 @@ mod tests {
         let got = TuiPrefs::path().expect("path should resolve");
 
         assert_eq!(got, tmp.path().join(".codewhale").join("tui.toml"));
+    }
+
+    #[test]
+    fn pinned_models_are_exact_ordered_and_round_trip() {
+        let mut settings = Settings::default();
+        assert!(settings.toggle_pinned_model("zai", "glm-5.2"));
+        assert!(settings.toggle_pinned_model("openrouter", "glm-5.2"));
+        assert_eq!(settings.pinned_models[0].provider, "zai");
+        assert!(settings.move_pinned_model("openrouter", "glm-5.2", -1));
+        assert_eq!(settings.pinned_models[0].provider, "openrouter");
+        assert!(settings.set_pinned_model_label("openrouter", "glm-5.2", Some("fast".to_string())));
+        let encoded = toml::to_string(&settings).unwrap();
+        let decoded: Settings = toml::from_str(&encoded).unwrap();
+        assert_eq!(decoded.pinned_models, settings.pinned_models);
+        assert!(!settings.toggle_pinned_model("openrouter", "glm-5.2"));
+        assert_eq!(settings.pinned_models.len(), 1);
     }
 }

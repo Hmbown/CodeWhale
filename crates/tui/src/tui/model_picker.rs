@@ -10,7 +10,7 @@
 
 use std::cell::RefCell;
 
-use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -38,6 +38,7 @@ use crate::palette;
 use crate::provider_lake::{
     all_catalog_models_for_provider, catalog_offering_for_model, configured_providers,
 };
+use crate::settings::PinnedModel;
 use crate::tui::app::{App, ReasoningEffort};
 use crate::tui::views::{
     ActionHint, ListDetailLayout, ModalKind, ModalView, ViewAction, ViewEvent, render_modal_footer,
@@ -201,6 +202,7 @@ pub struct ModelPickerView {
     last_mouse_selected: Option<(Pane, usize)>,
     /// UI locale captured from the app at construction (#4057 wave 2).
     locale: Locale,
+    pinned_models: Vec<PinnedModel>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -312,6 +314,7 @@ impl ModelPickerView {
             row_hitboxes: RefCell::new(Vec::new()),
             last_mouse_selected: None,
             locale: app.ui_locale,
+            pinned_models: app.pinned_models.clone(),
         };
         view.restore_memory(app.model_picker_memory.as_ref());
         view
@@ -371,7 +374,7 @@ impl ModelPickerView {
             })
             .collect();
         if query.is_empty() {
-            sort_model_rows_for_view(&mut rows, self.view);
+            sort_model_rows_for_view(&mut rows, self.view, &self.pinned_models);
         } else {
             // Rank typed results (#4639): rows whose provider matches the
             // query first (provider drill-down), then exact/prefix id
@@ -974,6 +977,43 @@ fn picker_model_rows_for_app(app: &App, config: &Config) -> Vec<ModelPickerRow> 
 
     for row in &mut rows {
         row.enabled = model_row_enabled_for_app(app, config, row);
+        if let Some(pin) = app.pinned_models.iter().find(|pin| {
+            row.provider.is_some_and(|provider| {
+                provider.as_str().eq_ignore_ascii_case(&pin.provider)
+                    && row.id.eq_ignore_ascii_case(&pin.model)
+            })
+        }) {
+            let label = pin.label.as_deref().unwrap_or("pinned");
+            row.hint = format!(
+                "{label} · exact {} / {} · {}",
+                pin.provider, pin.model, row.hint
+            );
+        }
+    }
+
+    for pin in &app.pinned_models {
+        let provider = ApiProvider::parse(&pin.provider).unwrap_or(ApiProvider::Custom);
+        if rows
+            .iter()
+            .any(|row| row.provider == Some(provider) && row.id.eq_ignore_ascii_case(&pin.model))
+        {
+            continue;
+        }
+        let metadata = effective_picker_metadata(config, Some(provider), &pin.model);
+        push_model_row(
+            &mut rows,
+            pin.model.clone(),
+            Some(provider),
+            format!(
+                "stale pinned · exact {} / {} · unavailable; repair or remove",
+                pin.provider, pin.model
+            ),
+            metadata,
+            false,
+        );
+        if let Some(row) = rows.last_mut() {
+            row.enabled = true;
+        }
     }
 
     rows
@@ -1325,9 +1365,23 @@ fn model_row_visible_by_default(row: &ModelPickerRow) -> bool {
     row.provider.is_none() || row.enabled
 }
 
-fn sort_model_rows_for_view(rows: &mut [&ModelPickerRow], view: ModelListView) {
+fn sort_model_rows_for_view(
+    rows: &mut [&ModelPickerRow],
+    view: ModelListView,
+    pins: &[PinnedModel],
+) {
+    let pin_rank = |row: &ModelPickerRow| {
+        row.provider
+            .and_then(|provider| {
+                pins.iter().position(|pin| {
+                    provider.as_str().eq_ignore_ascii_case(&pin.provider)
+                        && row.id.eq_ignore_ascii_case(&pin.model)
+                })
+            })
+            .unwrap_or(usize::MAX)
+    };
     match view {
-        ModelListView::Configured | ModelListView::Catalog => {}
+        ModelListView::Configured | ModelListView::Catalog => rows.sort_by_key(|row| pin_rank(row)),
         ModelListView::Recent => rows.sort_by(|left, right| {
             offering_fetched_at(right)
                 .cmp(&offering_fetched_at(left))
@@ -1667,6 +1721,7 @@ impl ModelPickerView {
     pub fn re_resolve_from_app(&mut self, app: &App, config: &Config) {
         self.provider_health = app.provider_health.clone();
         self.route_config = config.clone();
+        self.pinned_models = app.pinned_models.clone();
         self.model_rows = picker_model_rows_for_app(app, config);
         self.configured_providers = configured_providers(config, app.api_provider)
             .into_iter()
@@ -1677,6 +1732,23 @@ impl ModelPickerView {
         if self.selected_model_idx >= rows.len() + usize::from(self.show_custom_model_row) {
             self.selected_model_idx = rows.len().saturating_sub(1);
         }
+    }
+}
+
+impl ModelPickerView {
+    fn emit_pin_move(&self, delta: isize) -> ViewAction {
+        let rows = self.visible_model_rows();
+        let Some(row) = rows.get(self.selected_model_idx) else {
+            return ViewAction::None;
+        };
+        let Some(provider) = row.provider else {
+            return ViewAction::None;
+        };
+        ViewAction::Emit(ViewEvent::ModelPickerMovePin {
+            provider,
+            model: row.id.clone(),
+            delta,
+        })
     }
 }
 
@@ -1708,6 +1780,25 @@ impl ModalView for ModelPickerView {
                 self.explain_unselectable_selection()
             }
             KeyCode::Enter => ViewAction::EmitAndClose(self.build_event()),
+            KeyCode::Char('p') if key.modifiers.is_empty() && self.query.is_empty() => {
+                let rows = self.visible_model_rows();
+                let Some(row) = rows.get(self.selected_model_idx) else {
+                    return ViewAction::None;
+                };
+                let Some(provider) = row.provider else {
+                    return ViewAction::None;
+                };
+                ViewAction::Emit(ViewEvent::ModelPickerTogglePin {
+                    provider,
+                    model: row.id.clone(),
+                })
+            }
+            KeyCode::Up if key.modifiers.contains(KeyModifiers::ALT) && self.query.is_empty() => {
+                self.emit_pin_move(-1)
+            }
+            KeyCode::Down if key.modifiers.contains(KeyModifiers::ALT) && self.query.is_empty() => {
+                self.emit_pin_move(1)
+            }
             // Cycle catalog views (#4115). Handled before the query-typing arm
             // so `a`/`A` always advances the view instead of filtering.
             KeyCode::Char(c)
