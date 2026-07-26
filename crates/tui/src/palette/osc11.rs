@@ -41,6 +41,13 @@ const OSC11_QUERY: &[u8] = b"\x1b]11;?\x1b\\";
 /// Returns `None` when no color spec is present or a channel is malformed.
 /// Channels wider than 8 bits are scaled down, not truncated, so `ffff` is
 /// `255` rather than `0`.
+// The parser is deliberately cross-platform while the query is Unix-only:
+// there is no portable way to read a raw OSC reply off a Windows console
+// handle yet, so on Windows nothing calls these. They are kept (rather than
+// cfg'd out) because they are pure, fully tested on every platform, and are
+// exactly what a future Windows read path would need — but that leaves them
+// dead in a non-test Windows build, which `-D warnings` rejects.
+#[cfg_attr(not(unix), allow(dead_code))]
 #[must_use]
 pub fn parse_osc11_reply(reply: &str) -> Option<(u8, u8, u8)> {
     if let Some(idx) = reply.find("rgb:") {
@@ -52,6 +59,7 @@ pub fn parse_osc11_reply(reply: &str) -> Option<(u8, u8, u8)> {
     None
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
 fn parse_slash_separated(spec: &str) -> Option<(u8, u8, u8)> {
     let spec: String = spec
         .chars()
@@ -67,6 +75,7 @@ fn parse_slash_separated(spec: &str) -> Option<(u8, u8, u8)> {
     Some((r, g, b))
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
 fn parse_hash_hex(spec: &str) -> Option<(u8, u8, u8)> {
     let digits: String = spec.chars().take_while(char::is_ascii_hexdigit).collect();
     if !digits.len().is_multiple_of(3) || digits.is_empty() || digits.len() > 12 {
@@ -82,6 +91,7 @@ fn parse_hash_hex(spec: &str) -> Option<(u8, u8, u8)> {
 /// Normalize a hex channel of arbitrary width (1–4 digits) to 8 bits by
 /// rescaling across the channel's full range: `f` → `255`, `ffff` → `255`,
 /// `8000` → `128`.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn scale_hex_channel(digits: &str) -> Option<u8> {
     if digits.is_empty() || digits.len() > 4 || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
         return None;
