@@ -7,10 +7,12 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{Duration, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail};
 use rusqlite::{Connection, OptionalExtension, params};
+use sha2::{Digest, Sha256};
 
 const SCHEMA_VERSION: i64 = 1;
 const MAX_NOTE_BYTES: usize = 64 * 1024;
@@ -69,6 +71,38 @@ impl NativeMemoryStore {
             .join(MemoryScope::Workspace.directory())
             .join(id)
             .join("MEMORY.md"))
+    }
+
+    /// Derive a stable workspace identity from the repository's origin. Git
+    /// worktrees that share an origin therefore share memory; unrelated or
+    /// temporary directories do not acquire a persistent workspace scope.
+    pub fn workspace_id(workspace: &Path) -> Result<Option<String>> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(workspace)
+            .args(["config", "--get", "remote.origin.url"])
+            .output()
+            .with_context(|| format!("resolve git origin for {}", workspace.display()))?;
+        if !output.status.success() {
+            return Ok(None);
+        }
+        let origin = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if origin.is_empty() {
+            return Ok(None);
+        }
+        let digest = Sha256::digest(origin.as_bytes());
+        let id = digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        Ok(Some(id))
+    }
+
+    pub fn workspace_path_for(&self, workspace: &Path) -> Result<Option<PathBuf>> {
+        let Some(id) = Self::workspace_id(workspace)? else {
+            return Ok(None);
+        };
+        Ok(Some(self.workspace_path(&id)?))
     }
 
     pub fn index_path(&self) -> PathBuf {
@@ -141,7 +175,9 @@ impl NativeMemoryStore {
         if query.is_empty() || query.chars().count() > MAX_QUERY_CHARS {
             bail!("memory search query is empty or too long");
         }
-        self.ensure_index()?;
+        // Markdown is authoritative. Refresh before retrieval so direct edits
+        // become visible even when no file-watcher thread is running.
+        self.reindex()?;
         let conn = self.connection()?;
         let mut stmt = conn.prepare(
             "SELECT e.id,e.text,e.source,e.line_start,e.line_end,
@@ -164,6 +200,29 @@ impl NativeMemoryStore {
             },
         )?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Search global memory plus the current repository's origin-scoped
+    /// workspace memory, bounded for prompt or UI use.
+    pub fn search_for_workspace(
+        &self,
+        workspace: &Path,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryHit>> {
+        let workspace_path = self.workspace_path_for(workspace)?;
+        let global = self.global_path();
+        Ok(self
+            .search(query, limit.saturating_mul(2).clamp(1, 100))?
+            .into_iter()
+            .filter(|hit| {
+                hit.source == global
+                    || workspace_path
+                        .as_ref()
+                        .is_some_and(|workspace_path| hit.source == *workspace_path)
+            })
+            .take(limit.clamp(1, 100))
+            .collect())
     }
 
     pub fn reindex(&self) -> Result<usize> {
@@ -212,11 +271,6 @@ impl NativeMemoryStore {
         conn.execute("CREATE TABLE IF NOT EXISTS memory_entries (id INTEGER PRIMARY KEY, text TEXT NOT NULL, source TEXT NOT NULL, line_start INTEGER NOT NULL, line_end INTEGER NOT NULL, source_mtime INTEGER NOT NULL)", [])?;
         conn.execute_batch("CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(text, content='memory_entries', content_rowid='id');")?;
         Ok(conn)
-    }
-
-    fn ensure_index(&self) -> Result<()> {
-        let _ = self.connection()?;
-        Ok(())
     }
 
     fn reindex_file(&self, path: &Path) -> Result<()> {
@@ -432,5 +486,52 @@ mod tests {
         );
         assert!(!store.import_legacy(&legacy).unwrap());
         assert_eq!(store.search("legacy", 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn direct_markdown_edits_are_visible_on_next_search() {
+        let tmp = TempDir::new().unwrap();
+        let store = NativeMemoryStore::new(tmp.path());
+        let path = store.global_path();
+        ensure_memory_file(&path).unwrap();
+        fs::write(&path, "- first value\n").unwrap();
+        assert_eq!(store.search("first", 10).unwrap().len(), 1);
+        fs::write(&path, "- second value\n").unwrap();
+        assert!(store.search("first", 10).unwrap().is_empty());
+        assert_eq!(store.search("second", 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn origin_identity_is_shared_by_worktrees_and_absent_without_git() {
+        let first = TempDir::new().unwrap();
+        let second = TempDir::new().unwrap();
+        let git = |path: &Path, args: &[&str]| {
+            let status = Command::new("git")
+                .arg("-C")
+                .arg(path)
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(status.success());
+        };
+        git(first.path(), &["init", "-q"]);
+        git(second.path(), &["init", "-q"]);
+        git(
+            first.path(),
+            &["remote", "add", "origin", "https://example.test/repo.git"],
+        );
+        git(
+            second.path(),
+            &["remote", "add", "origin", "https://example.test/repo.git"],
+        );
+        assert_eq!(
+            NativeMemoryStore::workspace_id(first.path()).unwrap(),
+            NativeMemoryStore::workspace_id(second.path()).unwrap()
+        );
+        let unrelated = TempDir::new().unwrap();
+        assert_eq!(
+            NativeMemoryStore::workspace_id(unrelated.path()).unwrap(),
+            None
+        );
     }
 }

@@ -73,7 +73,7 @@ fn native_command(app: &App, input: &str) -> CommandResult {
             let Some(query) = arg else {
                 return CommandResult::error("Usage: /memory native search <query>");
             };
-            match store.search(query, 10) {
+            match store.search_for_workspace(&app.workspace, query, 10) {
                 Ok(hits) if hits.is_empty() => CommandResult::message("No native memory matches."),
                 Ok(hits) => CommandResult::message(
                     hits.into_iter()
@@ -95,33 +95,50 @@ fn native_command(app: &App, input: &str) -> CommandResult {
         "remember" => {
             let Some(input) = arg else {
                 return CommandResult::error(
-                    "Usage: /memory native remember [global|workspace <id>] <note>",
+                    "Usage: /memory native remember [global|workspace] <note>",
                 );
             };
             let mut words = input.splitn(3, char::is_whitespace);
             let scope_word = words.next().unwrap_or_default();
-            let (scope, workspace_id, note) = if scope_word == "workspace" {
-                let Some(id) = words.next() else {
-                    return CommandResult::error(
-                        "Usage: /memory native remember workspace <id> <note>",
-                    );
-                };
+            if scope_word == "workspace" {
                 let Some(note) = words.next() else {
-                    return CommandResult::error(
-                        "Usage: /memory native remember workspace <id> <note>",
-                    );
+                    return CommandResult::error("Usage: /memory native remember workspace <note>");
                 };
-                (crate::native_memory::MemoryScope::Workspace, Some(id), note)
+                let workspace_id =
+                    match crate::native_memory::NativeMemoryStore::workspace_id(&app.workspace) {
+                        Ok(Some(id)) => id,
+                        Ok(None) => {
+                            return CommandResult::error(
+                                "workspace memory requires a git repository with an origin",
+                            );
+                        }
+                        Err(err) => {
+                            return CommandResult::error(format!(
+                                "failed to resolve workspace identity: {err}"
+                            ));
+                        }
+                    };
+                match store.remember(
+                    crate::native_memory::MemoryScope::Workspace,
+                    Some(&workspace_id),
+                    note,
+                ) {
+                    Ok(hit) => CommandResult::message(format!(
+                        "native memory remembered at {}:{}",
+                        hit.source.display(),
+                        hit.line_start
+                    )),
+                    Err(err) => CommandResult::error(format!("native memory write failed: {err}")),
+                }
             } else {
-                (crate::native_memory::MemoryScope::Global, None, input)
-            };
-            match store.remember(scope, workspace_id, note) {
-                Ok(hit) => CommandResult::message(format!(
-                    "native memory remembered at {}:{}",
-                    hit.source.display(),
-                    hit.line_start
-                )),
-                Err(err) => CommandResult::error(format!("native memory write failed: {err}")),
+                match store.remember(crate::native_memory::MemoryScope::Global, None, input) {
+                    Ok(hit) => CommandResult::message(format!(
+                        "native memory remembered at {}:{}",
+                        hit.source.display(),
+                        hit.line_start
+                    )),
+                    Err(err) => CommandResult::error(format!("native memory write failed: {err}")),
+                }
             }
         }
         "import" => match store.import_legacy(&app.memory_path) {
