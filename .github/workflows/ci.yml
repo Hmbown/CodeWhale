@@ -244,6 +244,12 @@ jobs:
       - name: Check README translations stay in sync
         if: github.event_name != 'schedule'
         run: python3 scripts/check-readme-translations.py
+      - name: Check README locale link symmetry
+        if: github.event_name != 'schedule'
+        run: bash scripts/check-readme-locales.sh
+      - name: Check TUI locale pack parity
+        if: github.event_name != 'schedule'
+        run: python3 scripts/check-tui-locale-parity.py
       - name: Check harvested contributor credit
         if: github.event_name != 'schedule'
         shell: bash
