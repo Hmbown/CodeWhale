@@ -4925,6 +4925,341 @@ fn config_provider_records_provider_source() {
     assert_eq!(resolved.provider_source, ProviderSource::Config);
 }
 
+#[test]
+fn runtime_config_honors_zai_root_default_text_model() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+    let config = ConfigToml {
+        provider: ProviderKind::Zai,
+        default_text_model: Some("GLM-4.6".to_string()),
+        ..ConfigToml::default()
+    };
+
+    let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+    assert_eq!(resolved.provider, ProviderKind::Zai);
+    assert_eq!(resolved.model, "GLM-4.6");
+    assert_eq!(resolved.model_source, ModelSource::RootDefaultTextModel);
+
+    let cli = CliRuntimeOverrides {
+        provider: Some(ProviderKind::Zai),
+        ..CliRuntimeOverrides::default()
+    };
+    let overridden = ConfigToml {
+        provider: ProviderKind::Deepseek,
+        default_text_model: Some("GLM-4.6".to_string()),
+        ..ConfigToml::default()
+    }
+    .resolve_runtime_options(&cli);
+    assert_eq!(overridden.provider, ProviderKind::Zai);
+    assert_eq!(overridden.model, "GLM-4.6");
+    assert_eq!(overridden.model_source, ModelSource::RootDefaultTextModel);
+}
+
+#[test]
+fn runtime_config_rejects_stale_deepseek_root_model_for_zai() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+    let config = ConfigToml {
+        provider: ProviderKind::Zai,
+        default_text_model: Some("deepseek-chat".to_string()),
+        ..ConfigToml::default()
+    };
+
+    let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+    assert_eq!(resolved.provider, ProviderKind::Zai);
+    assert_eq!(resolved.model, DEFAULT_ZAI_MODEL);
+    assert_eq!(resolved.model_source, ModelSource::ProviderDefault);
+
+    let cli = CliRuntimeOverrides {
+        provider: Some(ProviderKind::Zai),
+        ..CliRuntimeOverrides::default()
+    };
+    let overridden = ConfigToml {
+        provider: ProviderKind::Deepseek,
+        default_text_model: Some("deepseek-chat".to_string()),
+        ..ConfigToml::default()
+    }
+    .resolve_runtime_options(&cli);
+    assert_eq!(overridden.provider, ProviderKind::Zai);
+    assert_eq!(overridden.model, DEFAULT_ZAI_MODEL);
+    assert_eq!(overridden.model_source, ModelSource::ProviderDefault);
+}
+
+#[test]
+fn runtime_config_root_model_keeps_precedence_over_legacy_fallback() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+    let config = ConfigToml {
+        provider: ProviderKind::Zai,
+        default_text_model: Some("GLM-4.6".to_string()),
+        model: Some("project-choice".to_string()),
+        ..ConfigToml::default()
+    };
+
+    let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+    assert_eq!(resolved.model, "project-choice");
+    assert_eq!(resolved.model_source, ModelSource::RootModel);
+}
+
+#[test]
+fn runtime_config_gates_official_deepseek_anthropic_root_models() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+
+    let foreign = ConfigToml {
+        provider: ProviderKind::DeepseekAnthropic,
+        default_text_model: Some("GLM-4.6".to_string()),
+        ..ConfigToml::default()
+    }
+    .resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(foreign.model, DEFAULT_DEEPSEEK_ANTHROPIC_MODEL);
+    assert_eq!(foreign.model_source, ModelSource::ProviderDefault);
+
+    let alias = ConfigToml {
+        provider: ProviderKind::DeepseekAnthropic,
+        default_text_model: Some("pro".to_string()),
+        ..ConfigToml::default()
+    }
+    .resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(alias.model, "deepseek-v4-pro");
+    assert_eq!(alias.model_source, ModelSource::RootDefaultTextModel);
+
+    let mut custom_endpoint = ConfigToml {
+        provider: ProviderKind::DeepseekAnthropic,
+        default_text_model: Some("pro".to_string()),
+        ..ConfigToml::default()
+    };
+    custom_endpoint.providers.deepseek_anthropic.base_url =
+        Some("https://proxy.example.test/anthropic".to_string());
+    let custom = custom_endpoint.resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(custom.model, "pro");
+    assert_eq!(custom.model_source, ModelSource::RootDefaultTextModel);
+}
+
+#[test]
+fn runtime_config_keeps_protocol_specific_root_model_fallbacks() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+
+    let codex = ConfigToml {
+        provider: ProviderKind::OpenaiCodex,
+        default_text_model: Some("auto".to_string()),
+        ..ConfigToml::default()
+    }
+    .resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(codex.model, DEFAULT_OPENAI_CODEX_MODEL);
+    assert_eq!(codex.model_source, ModelSource::ProviderDefault);
+
+    let mut kimi_code_config = ConfigToml {
+        provider: ProviderKind::Moonshot,
+        default_text_model: Some("deepseek-v4-pro".to_string()),
+        ..ConfigToml::default()
+    };
+    kimi_code_config.providers.moonshot.base_url = Some(DEFAULT_KIMI_CODE_BASE_URL.to_string());
+    let kimi_code = kimi_code_config.resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(kimi_code.model, DEFAULT_KIMI_CODE_MODEL);
+    assert_eq!(kimi_code.model_source, ModelSource::ProviderDefault);
+
+    for (model, expected, source) in [
+        (
+            "mimo-v2-5-pro",
+            DEFAULT_XIAOMI_MIMO_MODEL,
+            ModelSource::RootDefaultTextModel,
+        ),
+        ("auto", "auto", ModelSource::RootDefaultTextModel),
+        (
+            "deepseek-chat",
+            DEFAULT_XIAOMI_MIMO_MODEL,
+            ModelSource::ProviderDefault,
+        ),
+    ] {
+        let resolved = ConfigToml {
+            provider: ProviderKind::XiaomiMimo,
+            default_text_model: Some(model.to_string()),
+            ..ConfigToml::default()
+        }
+        .resolve_runtime_options(&CliRuntimeOverrides::default());
+        assert_eq!(resolved.model, expected, "Xiaomi root model {model}");
+        assert_eq!(resolved.model_source, source, "Xiaomi root model {model}");
+    }
+
+    for (model, expected, source) in [
+        (
+            OPENCODE_GO_GLM_5_2_MODEL,
+            OPENCODE_GO_GLM_5_2_MODEL,
+            ModelSource::RootDefaultTextModel,
+        ),
+        ("auto", "auto", ModelSource::RootDefaultTextModel),
+        (
+            "claude-sonnet-4",
+            DEFAULT_OPENCODE_GO_MODEL,
+            ModelSource::ProviderDefault,
+        ),
+    ] {
+        let resolved = ConfigToml {
+            provider: ProviderKind::OpencodeGo,
+            default_text_model: Some(model.to_string()),
+            ..ConfigToml::default()
+        }
+        .resolve_runtime_options(&CliRuntimeOverrides::default());
+        assert_eq!(resolved.model, expected, "OpenCode root model {model}");
+        assert_eq!(resolved.model_source, source, "OpenCode root model {model}");
+    }
+}
+
+#[test]
+fn runtime_config_isolates_foreign_root_models_on_official_routes() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+
+    for (provider, expected) in [
+        (ProviderKind::Openai, DEFAULT_OPENAI_MODEL),
+        (ProviderKind::Moonshot, DEFAULT_MOONSHOT_MODEL),
+        (ProviderKind::Xai, DEFAULT_XAI_MODEL),
+    ] {
+        let resolved = ConfigToml {
+            provider,
+            default_text_model: Some("deepseek-v4-pro".to_string()),
+            ..ConfigToml::default()
+        }
+        .resolve_runtime_options(&CliRuntimeOverrides::default());
+        assert_eq!(resolved.model, expected, "official {provider:?}");
+        assert_eq!(
+            resolved.model_source,
+            ModelSource::ProviderDefault,
+            "official {provider:?}"
+        );
+    }
+
+    let mut custom_xiaomi = ConfigToml {
+        provider: ProviderKind::XiaomiMimo,
+        default_text_model: Some("mimo-v2-5-pro".to_string()),
+        ..ConfigToml::default()
+    };
+    custom_xiaomi.providers.xiaomi_mimo.base_url =
+        Some("https://proxy.example.test/v1".to_string());
+    let custom_xiaomi = custom_xiaomi.resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(custom_xiaomi.model, DEFAULT_XIAOMI_MIMO_MODEL);
+    assert_eq!(
+        custom_xiaomi.model_source,
+        ModelSource::RootDefaultTextModel
+    );
+
+    let mut custom_xai = ConfigToml {
+        provider: ProviderKind::Xai,
+        default_text_model: Some("deepseek-v4-pro".to_string()),
+        ..ConfigToml::default()
+    };
+    custom_xai.providers.xai.base_url = Some("https://proxy.example.test/v1".to_string());
+    let resolved = custom_xai.resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(resolved.model, "deepseek-v4-pro");
+    assert_eq!(resolved.model_source, ModelSource::RootDefaultTextModel);
+}
+
+#[test]
+fn runtime_config_matches_tui_root_models_on_hosting_providers() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+
+    for (provider, model, expected) in [
+        (ProviderKind::Openrouter, "deepseek-chat", "deepseek-chat"),
+        (ProviderKind::Openrouter, "glm-5-turbo", "z-ai/glm-5-turbo"),
+        (
+            ProviderKind::Openrouter,
+            "nemotron-3-ultra",
+            "nvidia/nemotron-3-ultra-550b-a55b",
+        ),
+        (
+            ProviderKind::Arcee,
+            "TRINITY_LARGE_PREVIEW",
+            ARCEE_TRINITY_LARGE_PREVIEW_MODEL,
+        ),
+        (ProviderKind::NvidiaNim, "pro", DEFAULT_NVIDIA_NIM_MODEL),
+        (ProviderKind::NvidiaNim, "deepseek-chat", "deepseek-chat"),
+        (
+            ProviderKind::Together,
+            "inkling",
+            "thinkingmachines/inkling",
+        ),
+        (
+            ProviderKind::Siliconflow,
+            "deepseek-chat",
+            DEFAULT_SILICONFLOW_FLASH_MODEL,
+        ),
+    ] {
+        let resolved = ConfigToml {
+            provider,
+            default_text_model: Some(model.to_string()),
+            ..ConfigToml::default()
+        }
+        .resolve_runtime_options(&CliRuntimeOverrides::default());
+        assert_eq!(resolved.model, expected, "{provider:?}: {model}");
+        assert_eq!(
+            resolved.model_source,
+            ModelSource::RootDefaultTextModel,
+            "{provider:?}: {model}"
+        );
+    }
+}
+
+#[test]
+fn runtime_config_preserves_root_models_on_tui_passthrough_providers() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+
+    for (provider, model) in [
+        (ProviderKind::Huggingface, "deepseek-chat"),
+        (ProviderKind::Moonshot, "kimi"),
+        (ProviderKind::Volcengine, "deepseek-v4pro"),
+    ] {
+        let resolved = ConfigToml {
+            provider,
+            default_text_model: Some(model.to_string()),
+            ..ConfigToml::default()
+        }
+        .resolve_runtime_options(&CliRuntimeOverrides::default());
+        assert_eq!(resolved.model, model, "{provider:?}");
+        assert_eq!(
+            resolved.model_source,
+            ModelSource::RootDefaultTextModel,
+            "{provider:?}"
+        );
+    }
+}
+
+#[test]
+fn runtime_config_rejects_malformed_root_models_on_normalized_routes() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+
+    for model in ["", "bad\nmodel"] {
+        let resolved = ConfigToml {
+            provider: ProviderKind::Zai,
+            default_text_model: Some(model.to_string()),
+            ..ConfigToml::default()
+        }
+        .resolve_runtime_options(&CliRuntimeOverrides::default());
+        assert_eq!(resolved.model, DEFAULT_ZAI_MODEL, "{model:?}");
+        assert_eq!(
+            resolved.model_source,
+            ModelSource::ProviderDefault,
+            "{model:?}"
+        );
+    }
+
+    let spaced = ConfigToml {
+        provider: ProviderKind::Zai,
+        default_text_model: Some("  GLM-4.6  ".to_string()),
+        ..ConfigToml::default()
+    }
+    .resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(spaced.model, "GLM-4.6");
+    assert_eq!(spaced.model_source, ModelSource::RootDefaultTextModel);
+}
+
 /// `CODEWHALE_MODEL` is the user-facing env alias for picking a model
 /// against the active provider. It must be honored by the runtime
 /// resolver in place of `DEEPSEEK_MODEL`.

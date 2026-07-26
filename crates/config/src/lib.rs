@@ -525,7 +525,7 @@ pub struct ConfigToml {
     /// Optional extra HTTP headers forwarded to model API requests.
     #[serde(default, skip_serializing_if = "http_headers_are_effectively_empty")]
     pub http_headers: BTreeMap<String, String>,
-    /// TUI-compatible default DeepSeek model.
+    /// Legacy TUI-compatible default model, resolved against the active route.
     pub default_text_model: Option<String>,
     #[serde(default, deserialize_with = "deserialize_root_provider")]
     pub provider: ProviderKind,
@@ -2394,9 +2394,6 @@ impl ConfigToml {
         let root_deepseek_base_url = (provider == ProviderKind::Deepseek)
             .then(|| self.base_url.clone())
             .flatten();
-        let root_deepseek_model = (provider == ProviderKind::Deepseek)
-            .then(|| self.default_text_model.clone())
-            .flatten();
         let auth_mode = cli
             .auth_mode
             .clone()
@@ -2488,6 +2485,37 @@ impl ConfigToml {
                 ProviderKind::Custom => provider.provider().default_base_url().to_string(),
             })
         };
+        // The TUI request path treats the legacy root `default_text_model` as
+        // an active-route fallback, not as a DeepSeek-only field. Apply the
+        // same route guard here so RuntimeConfig consumers (including
+        // `model resolve`) agree with the model that the TUI actually sends.
+        let root_default_text_model = self.default_text_model.clone().filter(|model| {
+            root_default_text_model_is_compatible_with_route(
+                provider,
+                &base_url,
+                auth_mode.as_deref(),
+                model,
+            )
+        });
+        // A project-level/provider-neutral `model` overrides the legacy root
+        // fallback on non-DeepSeek routes. Keep DeepSeek's released ordering
+        // unchanged, where `default_text_model` has always won.
+        let (primary_root_model, primary_root_source, fallback_root_model, fallback_root_source) =
+            if provider == ProviderKind::Deepseek {
+                (
+                    root_default_text_model,
+                    ModelSource::RootDefaultTextModel,
+                    self.model.clone(),
+                    ModelSource::RootModel,
+                )
+            } else {
+                (
+                    self.model.clone(),
+                    ModelSource::RootModel,
+                    root_default_text_model,
+                    ModelSource::RootDefaultTextModel,
+                )
+            };
         // `auth_mode = "none"` is an endpoint contract, so it suppresses every
         // credential source (including explicit CLI/config values). Otherwise
         // CLI and route-local config win outright. Ambient provider credentials
@@ -2547,10 +2575,10 @@ impl ConfigToml {
             ModelSource::Env
         } else if provider_cfg.model.is_some() {
             ModelSource::ProviderConfig
-        } else if root_deepseek_model.is_some() {
-            ModelSource::RootDefaultTextModel
-        } else if self.model.is_some() {
-            ModelSource::RootModel
+        } else if primary_root_model.is_some() {
+            primary_root_source
+        } else if fallback_root_model.is_some() {
+            fallback_root_source
         } else {
             ModelSource::ProviderDefault
         };
@@ -2561,8 +2589,8 @@ impl ConfigToml {
             .or_else(|| env.model.clone())
             .or(env_provider_model)
             .or_else(|| provider_cfg.model.clone())
-            .or(root_deepseek_model)
-            .or_else(|| self.model.clone())
+            .or(primary_root_model)
+            .or(fallback_root_model)
             .unwrap_or_else(|| {
                 if provider == ProviderKind::Moonshot
                     && (auth_mode
@@ -2575,7 +2603,11 @@ impl ConfigToml {
                     default_model_for_provider(provider).to_string()
                 }
             });
-        let model = if provider == ProviderKind::OpencodeGo {
+        let model = if provider != ProviderKind::Deepseek
+            && model_source == ModelSource::RootDefaultTextModel
+        {
+            normalize_root_default_text_model_for_provider(provider, &base_url, &model)
+        } else if provider == ProviderKind::OpencodeGo {
             // OpenCode Go's `/models` response also contains models that only
             // speak Anthropic Messages. This provider is deliberately bound to
             // Chat Completions, so even custom endpoint/env overrides cannot
@@ -2829,6 +2861,323 @@ fn project_config_candidate_exists(path: &Path) -> bool {
         let file_type = metadata.file_type();
         file_type.is_file() || file_type.is_symlink()
     })
+}
+
+fn root_default_text_model_is_compatible_with_route(
+    provider: ProviderKind,
+    base_url: &str,
+    auth_mode: Option<&str>,
+    model: &str,
+) -> bool {
+    // Preserve the released DeepSeek behavior byte-for-byte. This helper only
+    // widens the root fallback to routes on which the TUI already accepts it.
+    if provider == ProviderKind::Deepseek {
+        return true;
+    }
+
+    // These protocol-specific routes choose their own model family before the
+    // TUI considers the legacy root default.
+    if provider == ProviderKind::OpenaiCodex
+        || (provider == ProviderKind::Moonshot
+            && (auth_mode.is_some_and(auth_mode_uses_kimi_imported_token)
+                || moonshot_base_url_uses_kimi_code(base_url)))
+    {
+        return false;
+    }
+
+    if model.trim().eq_ignore_ascii_case("auto") {
+        return true;
+    }
+
+    // Xiaomi and OpenCode expose strict, protocol-specific model rosters.
+    if provider == ProviderKind::XiaomiMimo {
+        return canonical_xiaomi_mimo_model_id(model).is_some();
+    }
+    if provider == ProviderKind::OpencodeGo {
+        return opencode_go_chat_model_id(model).is_some();
+    }
+
+    // A custom endpoint owns its model namespace and may legitimately serve
+    // any identifier, including a DeepSeek-family id.
+    if provider_preserves_custom_base_url_model(provider, base_url) {
+        return true;
+    }
+
+    if provider == ProviderKind::DeepseekAnthropic {
+        return is_deepseek_family_model_id(model);
+    }
+
+    // These pass-through providers are vendor-locked on their official
+    // endpoints. Match the TUI's extra guard before applying the general
+    // direct-provider classification below.
+    if matches!(
+        provider,
+        ProviderKind::Openai | ProviderKind::Moonshot | ProviderKind::Xai
+    ) && is_deepseek_family_model_id(model)
+    {
+        return false;
+    }
+
+    if !provider_passes_root_model_through(provider)
+        && (model.trim().is_empty() || model.chars().any(char::is_control))
+    {
+        return false;
+    }
+
+    !root_deepseek_model_is_foreign_to_direct_provider(provider, model)
+}
+
+fn root_deepseek_model_is_foreign_to_direct_provider(provider: ProviderKind, model: &str) -> bool {
+    if matches!(
+        provider,
+        ProviderKind::Deepseek | ProviderKind::DeepseekAnthropic
+    ) || provider_passes_root_model_through(provider)
+    {
+        return false;
+    }
+    if provider_hosts_deepseek_models(provider) {
+        return false;
+    }
+    is_deepseek_family_model_id(model)
+}
+
+fn provider_passes_root_model_through(provider: ProviderKind) -> bool {
+    matches!(
+        provider,
+        ProviderKind::Openai
+            | ProviderKind::Atlascloud
+            | ProviderKind::WanjieArk
+            | ProviderKind::Volcengine
+            | ProviderKind::XiaomiMimo
+            | ProviderKind::Moonshot
+            | ProviderKind::Qianfan
+            | ProviderKind::Openmodel
+            | ProviderKind::Ollama
+            | ProviderKind::Huggingface
+            | ProviderKind::Meta
+            | ProviderKind::Xai
+            | ProviderKind::Telecomjs
+            | ProviderKind::Custom
+    )
+}
+
+fn provider_hosts_deepseek_models(provider: ProviderKind) -> bool {
+    matches!(
+        provider,
+        ProviderKind::NvidiaNim
+            | ProviderKind::Openrouter
+            | ProviderKind::Novita
+            | ProviderKind::Fireworks
+            | ProviderKind::Siliconflow
+            | ProviderKind::SiliconflowCN
+            | ProviderKind::Deepinfra
+            | ProviderKind::Together
+            | ProviderKind::Sglang
+            | ProviderKind::Vllm
+            | ProviderKind::Volcengine
+            | ProviderKind::Atlascloud
+            | ProviderKind::OpencodeGo
+            | ProviderKind::WanjieArk
+    )
+}
+
+fn is_deepseek_family_model_id(model: &str) -> bool {
+    let trimmed = model.trim();
+    let normalized = trimmed.to_ascii_lowercase();
+    if matches!(
+        normalized.as_str(),
+        "pro" | "flash" | "deepseek-v4pro" | "deepseek-v4flash"
+    ) {
+        return true;
+    }
+    if !normalized.starts_with("deepseek") && !normalized.contains("/deepseek") {
+        return false;
+    }
+    trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':' | '/'))
+}
+
+fn normalize_root_default_text_model_for_provider(
+    provider: ProviderKind,
+    base_url: &str,
+    model: &str,
+) -> String {
+    let trimmed = model.trim();
+    if trimmed.eq_ignore_ascii_case("auto") {
+        return "auto".to_string();
+    }
+    if provider == ProviderKind::XiaomiMimo {
+        return canonical_xiaomi_mimo_model_id(trimmed)
+            .unwrap_or(DEFAULT_XIAOMI_MIMO_MODEL)
+            .to_string();
+    }
+    if provider == ProviderKind::OpencodeGo {
+        // OpenCode's Chat-Completions protocol boundary remains strict even
+        // when its endpoint is overridden, matching the config route resolver.
+        return opencode_go_chat_model_id(trimmed)
+            .unwrap_or(DEFAULT_OPENCODE_GO_MODEL)
+            .to_string();
+    }
+    if provider_preserves_custom_base_url_model(provider, base_url)
+        || provider_passes_root_model_through(provider)
+    {
+        return trimmed.to_string();
+    }
+    if provider == ProviderKind::DeepseekAnthropic {
+        return normalize_direct_deepseek_root_model(trimmed);
+    }
+
+    let canonical = canonical_root_model_id_for_provider(provider, trimmed);
+    root_wire_model_for_provider(provider, canonical)
+}
+
+fn canonical_root_model_id_for_provider(provider: ProviderKind, model: &str) -> String {
+    if let Some(canonical) = match provider {
+        ProviderKind::Openrouter => canonical_openrouter_root_model_id(model),
+        ProviderKind::Arcee => canonical_arcee_root_model_id(model),
+        ProviderKind::Zai => canonical_zai_model_id(model),
+        ProviderKind::Minimax | ProviderKind::MinimaxAnthropic => canonical_minimax_model_id(model),
+        _ => None,
+    } {
+        return canonical.to_string();
+    }
+    if matches!(
+        provider,
+        ProviderKind::NvidiaNim
+            | ProviderKind::Novita
+            | ProviderKind::Fireworks
+            | ProviderKind::Siliconflow
+            | ProviderKind::SiliconflowCN
+            | ProviderKind::Sglang
+            | ProviderKind::Vllm
+            | ProviderKind::Deepinfra
+            | ProviderKind::WanjieArk
+            | ProviderKind::Volcengine
+    ) && let Some(canonical) = canonical_official_deepseek_root_model(model)
+    {
+        return canonical.to_string();
+    }
+    model.to_string()
+}
+
+fn canonical_openrouter_root_model_id(model: &str) -> Option<&'static str> {
+    let normalized = model.trim().to_ascii_lowercase();
+    let normalized = normalized.replace(['_', ' '], "-");
+    match normalized.as_str() {
+        "z-ai/glm-5-turbo" | "glm-5-turbo" | "glm-5turbo" | "zai-glm-5-turbo" => {
+            Some("z-ai/glm-5-turbo")
+        }
+        "nvidia/nemotron-3-ultra-550b-a55b"
+        | "nvidia/nemotron-3-ultra"
+        | "nemotron-3-ultra"
+        | "nemotron-3-ultra-550b-a55b"
+        | "nvidia-nemotron-3-ultra"
+        | "nvidia-nemotron-3-ultra-550b-a55b" => Some("nvidia/nemotron-3-ultra-550b-a55b"),
+        _ => canonical_openrouter_recent_model_id(model),
+    }
+}
+
+fn canonical_arcee_root_model_id(model: &str) -> Option<&'static str> {
+    let normalized = model.trim().to_ascii_lowercase();
+    let normalized = normalized.replace(['_', ' '], "-");
+    match normalized.as_str() {
+        "trinity" | "arcee-trinity" | "trinity-large-thinking" | "arcee-trinity-large-thinking" => {
+            Some(DEFAULT_ARCEE_MODEL)
+        }
+        "arcee-trinity-mini" | ARCEE_TRINITY_MINI_MODEL => Some(ARCEE_TRINITY_MINI_MODEL),
+        "arcee-trinity-large-preview" | ARCEE_TRINITY_LARGE_PREVIEW_MODEL => {
+            Some(ARCEE_TRINITY_LARGE_PREVIEW_MODEL)
+        }
+        _ => None,
+    }
+}
+
+fn canonical_official_deepseek_root_model(model: &str) -> Option<&'static str> {
+    match model.trim().to_ascii_lowercase().as_str() {
+        "pro"
+        | "deepseek-v4-pro"
+        | "deepseek-v4pro"
+        | "deepseek-ai/deepseek-v4-pro"
+        | "deepseek-ai/deepseek-v4pro"
+        | "deepseek/deepseek-v4-pro"
+        | "deepseek/deepseek-v4pro" => Some("deepseek-v4-pro"),
+        "flash"
+        | "deepseek-v4-flash"
+        | "deepseek-v4flash"
+        | "deepseek-ai/deepseek-v4-flash"
+        | "deepseek-ai/deepseek-v4flash"
+        | "deepseek/deepseek-v4-flash"
+        | "deepseek/deepseek-v4flash" => Some("deepseek-v4-flash"),
+        _ => None,
+    }
+}
+
+fn root_wire_model_for_provider(provider: ProviderKind, model: String) -> String {
+    let lowered = model.to_ascii_lowercase();
+    match (provider, lowered.as_str()) {
+        (ProviderKind::NvidiaNim, "deepseek-v4-pro") => DEFAULT_NVIDIA_NIM_MODEL.to_string(),
+        (ProviderKind::NvidiaNim, "deepseek-v4-flash") => {
+            DEFAULT_NVIDIA_NIM_FLASH_MODEL.to_string()
+        }
+        (ProviderKind::Openrouter, "deepseek-v4-pro") => DEFAULT_OPENROUTER_MODEL.to_string(),
+        (ProviderKind::Openrouter, "deepseek-v4-flash") => {
+            DEFAULT_OPENROUTER_FLASH_MODEL.to_string()
+        }
+        (ProviderKind::Novita, "deepseek-v4-pro") => DEFAULT_NOVITA_MODEL.to_string(),
+        (ProviderKind::Novita, "deepseek-v4-flash") => DEFAULT_NOVITA_FLASH_MODEL.to_string(),
+        (ProviderKind::Fireworks, "deepseek-v4-pro") => DEFAULT_FIREWORKS_MODEL.to_string(),
+        (
+            ProviderKind::Siliconflow | ProviderKind::SiliconflowCN,
+            "deepseek-v4-pro" | "deepseek-reasoner" | "deepseek-r1",
+        ) => DEFAULT_SILICONFLOW_MODEL.to_string(),
+        (
+            ProviderKind::Siliconflow | ProviderKind::SiliconflowCN,
+            "deepseek-v4-flash" | "deepseek-chat" | "deepseek-v3",
+        ) => DEFAULT_SILICONFLOW_FLASH_MODEL.to_string(),
+        (ProviderKind::Sglang, "deepseek-v4-pro") => DEFAULT_SGLANG_MODEL.to_string(),
+        (ProviderKind::Sglang, "deepseek-v4-flash") => DEFAULT_SGLANG_FLASH_MODEL.to_string(),
+        (ProviderKind::Vllm, "deepseek-v4-pro") => DEFAULT_VLLM_MODEL.to_string(),
+        (ProviderKind::Vllm, "deepseek-v4-flash") => DEFAULT_VLLM_FLASH_MODEL.to_string(),
+        (ProviderKind::Deepinfra, "deepseek-v4-pro" | "deepseek-v4pro") => {
+            DEFAULT_DEEPINFRA_MODEL.to_string()
+        }
+        (ProviderKind::Deepinfra, "deepseek-v4-flash" | "deepseek-chat" | "deepseek-reasoner") => {
+            DEFAULT_DEEPINFRA_FLASH_MODEL.to_string()
+        }
+        (ProviderKind::Together, "deepseek-v4-pro" | "deepseek-v4pro") => {
+            DEFAULT_TOGETHER_MODEL.to_string()
+        }
+        (
+            ProviderKind::Together,
+            "deepseek-v4-flash" | "deepseek-v4flash" | "deepseek-chat" | "deepseek-reasoner",
+        ) => DEFAULT_TOGETHER_FLASH_MODEL.to_string(),
+        (ProviderKind::Together, "inkling" | "together-inkling" | "thinkingmachines/inkling") => {
+            "thinkingmachines/inkling".to_string()
+        }
+        _ => model,
+    }
+}
+
+fn normalize_direct_deepseek_root_model(model: &str) -> String {
+    let trimmed = model.trim();
+    match trimmed.to_ascii_lowercase().as_str() {
+        "pro"
+        | "deepseek-v4pro"
+        | "deepseek-ai/deepseek-v4-pro"
+        | "deepseek-ai/deepseek-v4pro"
+        | "deepseek/deepseek-v4-pro"
+        | "deepseek/deepseek-v4pro" => "deepseek-v4-pro".to_string(),
+        "flash"
+        | "deepseek-v4flash"
+        | "deepseek-chat"
+        | "deepseek-reasoner"
+        | "deepseek-ai/deepseek-v4-flash"
+        | "deepseek-ai/deepseek-v4flash"
+        | "deepseek/deepseek-v4-flash"
+        | "deepseek/deepseek-v4flash" => "deepseek-v4-flash".to_string(),
+        _ => trimmed.to_string(),
+    }
 }
 
 fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
@@ -3652,7 +4001,8 @@ pub enum ModelSource {
     Env,
     /// `[providers.<name>].model`.
     ProviderConfig,
-    /// The root `default_text_model` key, which is DeepSeek-scoped.
+    /// The legacy root `default_text_model` key, when compatible with the
+    /// active provider route.
     RootDefaultTextModel,
     /// The provider-neutral root `model` key.
     RootModel,
