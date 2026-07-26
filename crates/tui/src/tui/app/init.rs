@@ -551,6 +551,7 @@ impl App {
             history_revisions: Vec::new(),
             next_history_revision: 1,
             api_messages: Vec::new(),
+            context_token_cache: std::cell::RefCell::new(Default::default()),
             is_loading: false,
             dispatch_completion_tx: None,
             dispatch_in_flight: false,

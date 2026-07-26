@@ -52,7 +52,7 @@ use crate::client::{
 };
 use crate::commands;
 use crate::compaction::CompactionConfig;
-use crate::compaction::estimate_input_tokens_conservative;
+use crate::compaction::{estimate_input_tokens_conservative, estimate_tokens};
 use crate::config::{
     ApiProvider, Config, ProviderConfig, ProviderIdentity, ProvidersConfig, StatusItem,
     UpdateConfig, persist_external_credential_consent_for_at,
@@ -15837,11 +15837,37 @@ fn jump_to_adjacent_tool_cell(app: &mut App, direction: SearchDirection) -> bool
 }
 
 fn estimated_context_tokens(app: &App) -> Option<i64> {
-    i64::try_from(estimate_input_tokens_conservative(
-        &app.api_messages,
-        app.system_prompt.as_ref(),
-    ))
-    .ok()
+    let message_count = app.api_messages.len();
+    let mut cache = app.context_token_cache.borrow_mut();
+    if cache.message_tokens.len() > message_count {
+        cache.message_tokens.truncate(message_count);
+    }
+    while cache.message_tokens.len() < message_count {
+        let index = cache.message_tokens.len();
+        cache
+            .message_tokens
+            .push(estimate_tokens(&app.api_messages[index..=index]));
+    }
+    // The final assistant/tool message may grow while streaming. Recompute
+    // only that tail entry; historical messages remain O(1) on steady frames.
+    if message_count > 0 {
+        let last = message_count - 1;
+        cache.message_tokens[last] = estimate_tokens(&app.api_messages[last..=last]);
+    }
+    let message_tokens = cache
+        .message_tokens
+        .iter()
+        .copied()
+        .sum::<usize>()
+        .saturating_mul(3)
+        .div_ceil(2);
+    let system_tokens =
+        estimate_input_tokens_conservative(&[], app.system_prompt.as_ref()).saturating_sub(48);
+    let estimated = message_tokens
+        .saturating_add(system_tokens)
+        .saturating_add(message_count.saturating_mul(12))
+        .saturating_add(48);
+    i64::try_from(estimated).ok()
 }
 
 pub(crate) fn context_usage_snapshot(app: &App) -> Option<(i64, u32, f64)> {

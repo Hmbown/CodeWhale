@@ -1,6 +1,7 @@
 //! Application state for the `DeepSeek` TUI.
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -85,6 +86,14 @@ pub struct ActiveTurnMetadata {
     pub route: Option<TurnRoute>,
     /// Auto decision metadata captured with this exact authoritative route.
     pub auto_route_receipt: Option<crate::model_routing::AutoRouteReceipt>,
+}
+
+/// Per-message context estimates used by the render-time context meter.
+/// Messages are append-only in the steady state; only the streaming tail is
+/// mutable, so the tail is refreshed while older entries remain cached.
+#[derive(Debug, Default)]
+pub(crate) struct ContextTokenCache {
+    pub(crate) message_tokens: Vec<usize>,
 }
 
 /// State machine for onboarding new users.
@@ -978,6 +987,7 @@ pub struct App {
     /// Monotonic counter used to issue fresh per-cell revisions.
     pub next_history_revision: u64,
     pub api_messages: Vec<Message>,
+    pub(crate) context_token_cache: RefCell<ContextTokenCache>,
     pub is_loading: bool,
     /// Sender for spawned dispatch tasks to report completion back to the
     /// event loop. The closure is called with `&mut App` so the async phase

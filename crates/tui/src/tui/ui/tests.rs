@@ -9211,6 +9211,34 @@ fn context_usage_snapshot_prefers_estimate_when_reported_exceeds_window() {
 }
 
 #[test]
+fn context_usage_cache_tracks_append_and_compaction_lengths() {
+    let mut app = create_test_app();
+    app.api_messages = vec![Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::Text {
+            text: "first".to_string(),
+            cache_control: None,
+        }],
+    }];
+    context_usage_snapshot(&app).expect("context usage should be available");
+    assert_eq!(app.context_token_cache.borrow().message_tokens.len(), 1);
+
+    app.api_messages.push(Message {
+        role: "assistant".to_string(),
+        content: vec![ContentBlock::Text {
+            text: "second".to_string(),
+            cache_control: None,
+        }],
+    });
+    context_usage_snapshot(&app).expect("context usage should be available");
+    assert_eq!(app.context_token_cache.borrow().message_tokens.len(), 2);
+
+    app.api_messages.truncate(1);
+    context_usage_snapshot(&app).expect("context usage should be available");
+    assert_eq!(app.context_token_cache.borrow().message_tokens.len(), 1);
+}
+
+#[test]
 fn context_usage_snapshot_prefers_estimate_when_reported_is_inflated_by_old_reasoning() {
     let mut app = create_test_app();
     app.session.last_prompt_tokens = Some(980_000);
