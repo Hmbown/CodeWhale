@@ -45,6 +45,10 @@ fn memory_help(path: &Path) -> String {
 }
 
 fn native_store(app: &App) -> crate::native_memory::NativeMemoryStore {
+    if let Some(store) = crate::native_memory::NativeMemoryStore::from_global_path(&app.memory_path)
+    {
+        return store;
+    }
     let root = app
         .memory_path
         .parent()
@@ -141,14 +145,23 @@ fn native_command(app: &App, input: &str) -> CommandResult {
                 }
             }
         }
-        "import" => match store.import_legacy(&app.memory_path) {
-            Ok(true) => CommandResult::message(format!(
-                "legacy memory imported non-destructively into {}",
-                store.global_path().display()
-            )),
-            Ok(false) => CommandResult::message("legacy memory was already imported or is empty"),
-            Err(err) => CommandResult::error(format!("legacy memory import failed: {err}")),
-        },
+        "import" => {
+            let legacy_path = store
+                .root()
+                .parent()
+                .map(|parent| parent.join("memory.md"))
+                .unwrap_or_else(|| app.memory_path.clone());
+            match store.import_legacy(&legacy_path) {
+                Ok(true) => CommandResult::message(format!(
+                    "legacy memory imported non-destructively into {}",
+                    store.global_path().display()
+                )),
+                Ok(false) => {
+                    CommandResult::message("legacy memory was already imported or is empty")
+                }
+                Err(err) => CommandResult::error(format!("legacy memory import failed: {err}")),
+            }
+        }
         "reindex" => match store.reindex() {
             Ok(count) => {
                 CommandResult::message(format!("native memory reindexed: {count} entries"))

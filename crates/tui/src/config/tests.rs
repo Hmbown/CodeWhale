@@ -10182,3 +10182,24 @@ fn validate_still_rejects_unknown_model_on_official_deepseek() {
         "error should name the model and the active provider, got: {err}"
     );
 }
+
+#[test]
+fn native_memory_backend_owns_explicit_path_and_disables_legacy_fallback() {
+    let tmp = tempfile::tempdir().unwrap();
+    let legacy = tmp.path().join("legacy-memory.md");
+    let config = Config {
+        memory_path: Some(legacy.to_string_lossy().into_owned()),
+        memory: Some(MemoryConfig {
+            backend: Some(MemoryBackend::Native),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    assert_eq!(config.memory_backend(), MemoryBackend::Native);
+    assert!(config.memory_enabled());
+    assert!(!config.moraine_fallback());
+    assert_eq!(
+        config.memory_path(),
+        tmp.path().join("memory/global/MEMORY.md")
+    );
+}

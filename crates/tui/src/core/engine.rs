@@ -1025,10 +1025,19 @@ impl Engine {
         // Set up stable system prompt with project context (default to agent mode).
         // Per-turn working-set metadata is injected into the latest user
         // message at request time so file churn does not rewrite this prefix.
-        let user_memory_block = crate::memory::compose_block(
-            config.memory_enabled && !config.moraine_fallback, // TODO(v0.8.71): remove when Moraine recall stable; see #3490, #3495
-            &config.memory_path,
-        );
+        let user_memory_block = if let Some(store) =
+            crate::native_memory::NativeMemoryStore::from_global_path(&config.memory_path)
+        {
+            store
+                .prompt_block(&config.workspace, 32, 12_000)
+                .ok()
+                .flatten()
+        } else {
+            crate::memory::compose_block(
+                config.memory_enabled && !config.moraine_fallback,
+                &config.memory_path,
+            )
+        };
         let prompt_goal_objective =
             goal_objective_for_prompt(config.goal_objective.as_deref(), &config.goal_state);
         let system_prompt =
@@ -4309,10 +4318,19 @@ impl Engine {
     #[allow(clippy::too_many_lines)]
     /// Refresh the stable system prompt based on current non-mode context.
     fn refresh_system_prompt(&mut self) {
-        let user_memory_block = crate::memory::compose_block(
-            self.config.memory_enabled && !self.config.moraine_fallback, // TODO(v0.8.71): remove when Moraine recall stable; see #3490, #3495
-            &self.config.memory_path,
-        );
+        let user_memory_block = if let Some(store) =
+            crate::native_memory::NativeMemoryStore::from_global_path(&self.config.memory_path)
+        {
+            store
+                .prompt_block(&self.config.workspace, 32, 12_000)
+                .ok()
+                .flatten()
+        } else {
+            crate::memory::compose_block(
+                self.config.memory_enabled && !self.config.moraine_fallback,
+                &self.config.memory_path,
+            )
+        };
         let prompt_goal_objective = goal_objective_for_prompt(
             self.config.goal_objective.as_deref(),
             &self.config.goal_state,
