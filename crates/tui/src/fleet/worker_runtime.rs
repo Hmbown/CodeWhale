@@ -824,6 +824,9 @@ pub(crate) fn fleet_role_to_agent_type(role: Option<&str>) -> FleetRole {
         Some("builder") => FleetRole::Builder,
         Some("verifier") | Some("tester") => FleetRole::Verifier,
         Some("planner") => FleetRole::Planner,
+        // Advisory counsel (#4752). "advisor" is accepted because that is what
+        // people call it before they learn the roster name.
+        Some("oracle") | Some("advisor") => FleetRole::Oracle,
         Some("explorer") => FleetRole::Scout,
         // Coordination happens through delegation, which needs the full
         // General surface (#fleet-roster cutover (v0.8.67)). The operator is

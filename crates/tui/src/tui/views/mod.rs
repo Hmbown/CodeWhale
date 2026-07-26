@@ -4197,7 +4197,8 @@ fn agent_type_order(agent_type: &FleetRole) -> u8 {
         FleetRole::Builder => 3,
         FleetRole::Verifier => 4,
         FleetRole::Reviewer => 5,
-        FleetRole::Custom => 6,
+        FleetRole::Oracle => 6,
+        FleetRole::Custom => 7,
     }
 }
 
