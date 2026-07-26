@@ -1927,3 +1927,16 @@ emits one compact `status` notice per turn so the user can see why their
 visible text shrank. Treat any change that re-enables text-based tool
 execution as a regression; the protocol-recovery tests in
 `crates/tui/tests/protocol_recovery.rs` lock the contract.
+
+### Durable hunk attribution and selective review
+
+Codewhale keeps agent-authored hunk attribution in a versioned ledger beside
+its side-git snapshots, not in the user's repository. Each record binds the
+turn, tool call, agent identity, path, base snapshot, and exact before/after
+content digests. Accepting a hunk records the decision without rewriting the
+workspace. Rejecting one is deliberately fail-closed: Codewhale restores the
+recorded base only when the current file still matches the exact recorded
+post-image; a later user, agent, or external edit produces a conflict and is
+left untouched. When snapshot retention prunes a base snapshot, the active
+record is removed while its stable hunk id remains as pruned lineage, so the
+attribution history does not silently imply that review is still actionable.

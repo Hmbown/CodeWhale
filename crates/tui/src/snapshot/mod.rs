@@ -33,6 +33,8 @@
 //! turn proceeds and the engine logs a warning. The snapshot is a
 //! safety net, not a correctness gate.
 
+#[cfg_attr(not(test), allow(dead_code))]
+pub mod ledger;
 pub mod paths;
 pub mod prune;
 pub mod repo;
