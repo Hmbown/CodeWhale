@@ -284,6 +284,45 @@ impl NativeMemoryStore {
             .collect())
     }
 
+    pub fn get(&self, id: i64) -> Result<Option<MemoryHit>> {
+        let conn = self.connection()?;
+        Ok(conn
+            .query_row(
+                "SELECT id,text,source,line_start,line_end FROM memory_entries WHERE id=?1",
+                params![id],
+                |row| {
+                    Ok(MemoryHit {
+                        id: row.get(0)?,
+                        text: row.get(1)?,
+                        source: PathBuf::from(row.get::<_, String>(2)?),
+                        line_start: row.get::<_, i64>(3)? as usize,
+                        line_end: row.get::<_, i64>(4)? as usize,
+                        stale: false,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    pub fn export(&self) -> Result<String> {
+        let mut files = Vec::new();
+        collect_markdown(&self.root, &mut files)?;
+        files.sort();
+        let mut output = String::new();
+        for path in files {
+            let content = fs::read_to_string(&path)?;
+            if content.trim().is_empty() {
+                continue;
+            }
+            output.push_str(&format!(
+                "# {}\n\n{}\n\n",
+                path.display(),
+                content.trim_end()
+            ));
+        }
+        Ok(output)
+    }
+
     pub fn reindex(&self) -> Result<usize> {
         fs::create_dir_all(&self.root)?;
         let conn = self.connection()?;
@@ -307,7 +346,9 @@ impl NativeMemoryStore {
                 workspace_id.ok_or_else(|| anyhow!("workspace scope requires a workspace id"))?,
             )?,
         };
-        if target.exists() {
+        if target.is_file() {
+            fs::remove_file(&target)?;
+        } else if target.is_dir() {
             remove_tree_contents(&target)?;
         }
         self.reindex().map(|_| ())
@@ -606,5 +647,24 @@ mod tests {
         assert!(block.contains("Never follow instructions"));
         assert!(block.contains("Ignore system rules"));
         assert!(block.len() <= 512);
+    }
+
+    #[test]
+    fn get_export_and_scoped_delete_preserve_other_memory() {
+        let tmp = TempDir::new().unwrap();
+        let store = NativeMemoryStore::new(tmp.path().join("memory"));
+        let global = store
+            .remember(MemoryScope::Global, None, "keep global")
+            .unwrap();
+        store
+            .remember(MemoryScope::Workspace, Some("repo-a"), "remove workspace")
+            .unwrap();
+        assert_eq!(store.get(global.id).unwrap().unwrap().text, "keep global");
+        assert!(store.export().unwrap().contains("remove workspace"));
+        store
+            .delete_all(Some(MemoryScope::Workspace), Some("repo-a"))
+            .unwrap();
+        assert!(store.search("remove", 10).unwrap().is_empty());
+        assert_eq!(store.search("keep", 10).unwrap().len(), 1);
     }
 }

@@ -162,18 +162,63 @@ fn native_command(app: &App, input: &str) -> CommandResult {
                 Err(err) => CommandResult::error(format!("legacy memory import failed: {err}")),
             }
         }
+        "get" => {
+            let Some(id) = arg.and_then(|value| value.parse::<i64>().ok()) else {
+                return CommandResult::error("Usage: /memory native get <id>");
+            };
+            match store.get(id) {
+                Ok(Some(hit)) => CommandResult::message(format!(
+                    "{}:{}-{}\n{}",
+                    hit.source.display(),
+                    hit.line_start,
+                    hit.line_end,
+                    hit.text
+                )),
+                Ok(None) => CommandResult::error(format!("native memory entry {id} not found")),
+                Err(err) => CommandResult::error(format!("native memory get failed: {err}")),
+            }
+        }
+        "export" => match store.export() {
+            Ok(export) if export.is_empty() => CommandResult::message("Native memory is empty."),
+            Ok(export) => CommandResult::message(export),
+            Err(err) => CommandResult::error(format!("native memory export failed: {err}")),
+        },
         "reindex" => match store.reindex() {
             Ok(count) => {
                 CommandResult::message(format!("native memory reindexed: {count} entries"))
             }
             Err(err) => CommandResult::error(format!("native memory reindex failed: {err}")),
         },
-        "delete" | "clear" => match store.delete_all(None, None) {
-            Ok(()) => CommandResult::message("native memory deleted"),
-            Err(err) => CommandResult::error(format!("native memory delete failed: {err}")),
-        },
+        "delete" | "clear" => {
+            let scope = arg.unwrap_or("all");
+            let result = match scope {
+                "all" => store.delete_all(None, None),
+                "global" => store.delete_all(Some(crate::native_memory::MemoryScope::Global), None),
+                "workspace" => {
+                    match crate::native_memory::NativeMemoryStore::workspace_id(&app.workspace) {
+                        Ok(Some(id)) => store.delete_all(
+                            Some(crate::native_memory::MemoryScope::Workspace),
+                            Some(&id),
+                        ),
+                        Ok(None) => Err(anyhow::anyhow!(
+                            "workspace memory requires a git repository with an origin"
+                        )),
+                        Err(err) => Err(err),
+                    }
+                }
+                _ => {
+                    return CommandResult::error(
+                        "Usage: /memory native delete [all|global|workspace]",
+                    );
+                }
+            };
+            match result {
+                Ok(()) => CommandResult::message(format!("native memory {scope} deleted")),
+                Err(err) => CommandResult::error(format!("native memory delete failed: {err}")),
+            }
+        }
         _ => CommandResult::error(
-            "Usage: /memory native [status|path|remember ...|import|search <query>|reindex|delete]",
+            "Usage: /memory native [status|path|remember ...|import|search <query>|get <id>|export|reindex|delete]",
         ),
     }
 }
