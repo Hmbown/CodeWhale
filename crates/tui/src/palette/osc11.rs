@@ -26,6 +26,9 @@ pub const OSC11_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_m
 
 /// The query sequence. `ESC \` (ST) is the terminator we prefer in the reply,
 /// but terminals may answer with BEL instead, so the reader accepts both.
+///
+/// Only the Unix query path writes it — see the note on [`parse_osc11_reply`].
+#[cfg_attr(not(unix), allow(dead_code))]
 const OSC11_QUERY: &[u8] = b"\x1b]11;?\x1b\\";
 
 /// Extract an RGB triple from an OSC 11 reply body.
