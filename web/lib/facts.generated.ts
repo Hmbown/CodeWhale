@@ -27,7 +27,7 @@ export interface RepoFacts {
 }
 
 export const FACTS: RepoFacts = {
-  "generatedAt": "2026-07-26T10:15:23.806Z",
+  "generatedAt": "2026-07-26T23:47:32.882Z",
   "sourceRevision": null,
   "sourceCommittedAt": null,
   "version": "0.9.1",
@@ -215,6 +215,11 @@ export const FACTS: RepoFacts = {
       "id": "opencode-go",
       "label": "OpenCode Go",
       "env": "OPENCODE_GO_API_KEY"
+    },
+    {
+      "id": "opencode-zen",
+      "label": "OpenCode Zen",
+      "env": "OPENCODE_ZEN_API_KEY / OPENCODE_API_KEY"
     },
     {
       "id": "meta",
