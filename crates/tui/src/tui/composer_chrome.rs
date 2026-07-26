@@ -1,32 +1,30 @@
 //! Ocean composer chrome policy.
 //!
-//! Keeps the prompt roomy by default and sheds padding before content when
-//! the terminal is short. Content-driven growth still wins once the user
-//! types past the baseline.
+//! The composer auto-fits its content: one input row when empty or
+//! single-line, growing with typed content up to the density cap. Density
+//! no longer forces a multi-row baseline — it only bounds how tall the
+//! composer may grow. Content-driven growth still wins once the user
+//! types past one row, and submit/clear collapses the composer back to
+//! a single input row.
 
 use crate::tui::app::ComposerDensity;
 
 /// Top/bottom chrome rows for the quiet rule (TOP border only) or the
-/// enclosed panel (TOP + BOTTOM).
+/// enclosed panel (TOP + BOTTOM), plus the total-row growth cap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ComposerChrome {
     pub border_rows: u16,
-    pub min_content_rows: usize,
     pub max_total_rows: u16,
 }
 
 impl ComposerChrome {
     /// Baseline for the given density. Panel shape gets both borders;
     /// quiet shape keeps a single top rule so the prompt still has a
-    /// clear ledge without reading as a card.
+    /// clear ledge without reading as a card. Density picks the growth
+    /// cap only — the composer starts at one content row regardless.
     #[must_use]
     pub fn for_density(density: ComposerDensity, enclosed_panel: bool) -> Self {
         let border_rows = if enclosed_panel { 2 } else { 1 };
-        let min_content_rows = match density {
-            ComposerDensity::Compact => 2,
-            ComposerDensity::Comfortable => 3,
-            ComposerDensity::Spacious => 4,
-        };
         let max_total_rows = match density {
             ComposerDensity::Compact => 7,
             ComposerDensity::Comfortable => 9,
@@ -34,29 +32,18 @@ impl ComposerChrome {
         };
         Self {
             border_rows,
-            min_content_rows,
             max_total_rows,
         }
-    }
-
-    /// Absolute floor so the composer never collapses to a one-line
-    /// afterthought when any vertical room remains.
-    #[must_use]
-    pub fn absolute_min_total(self) -> u16 {
-        u16::try_from(
-            self.min_content_rows
-                .saturating_add(usize::from(self.border_rows)),
-        )
-        .unwrap_or(3)
-        .max(2)
     }
 }
 
 /// Decide how many rows the composer should occupy.
 ///
-/// Compact terminals shed padding (drop forced baseline down toward
-/// content) before they shed typed content. When height allows, the
-/// density minimum always applies — including the empty quiet composer.
+/// The height follows the content: one input row when the composer is
+/// empty or holds a single line, growing one row per content line up to
+/// the density cap (`max_total_rows`) or the available height, whichever
+/// is smaller. Menu rows and the border chrome add on top. Compact
+/// terminals shed the border before they shed typed content.
 #[must_use]
 pub fn desired_height(
     content_lines: usize,
@@ -70,15 +57,6 @@ pub fn desired_height(
     let content = content_lines.max(1);
     let wants_panel = enclosed_panel && available >= 3;
 
-    // Shed padding first: if the full baseline does not fit, fall back to
-    // content (+ menu) + whatever border still fits, never inventing a
-    // cramped one-row total while two rows are available.
-    let baseline_content = if available >= chrome.absolute_min_total() {
-        content.max(chrome.min_content_rows)
-    } else {
-        content
-    };
-
     let border = if wants_panel {
         usize::from(chrome.border_rows)
     } else if available >= 2 {
@@ -87,7 +65,7 @@ pub fn desired_height(
         0
     };
 
-    let total = baseline_content
+    let total = content
         .saturating_add(extra_menu_lines)
         .saturating_add(border);
     let max_height = usize::from(available.min(chrome.max_total_rows).max(1));
@@ -95,7 +73,7 @@ pub fn desired_height(
 }
 
 /// Top padding inside the content budget. Keep at least one quiet row below a
-/// short prompt when the density baseline has room, instead of bottom-pinning
+/// short prompt when the budget has room, instead of bottom-pinning
 /// the caret directly against the phase footer. Compact heights naturally
 /// report zero padding once the budget collapses.
 #[must_use]
@@ -110,37 +88,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn comfortable_empty_composer_keeps_multi_line_baseline() {
+    fn empty_composer_fits_one_input_row_plus_chrome() {
+        // Auto-fit: an empty/single-line composer takes exactly one input
+        // row plus the quiet-rule border, regardless of density.
         let height = desired_height(1, 0, 8, ComposerDensity::Comfortable, false);
-        assert!(
-            height >= 4,
-            "expected roomy baseline, got {height} (1 border + 3 content)"
-        );
+        assert_eq!(height, 2, "1 content row + 1 border row");
     }
 
     #[test]
-    fn compact_height_sheds_padding_before_content() {
-        // Only two rows available: keep a border + one content row rather
-        // than forcing the comfortable 3-line baseline.
+    fn compact_height_sheds_border_before_content() {
+        // Only two rows available: keep a border + one content row.
         let height = desired_height(1, 0, 2, ComposerDensity::Comfortable, false);
         assert_eq!(height, 2);
     }
 
     #[test]
-    fn content_growth_still_expands_past_baseline() {
+    fn content_growth_expands_up_to_the_density_cap() {
+        // Six content rows + border fits under the Comfortable cap of 9.
         let height = desired_height(6, 0, 12, ComposerDensity::Comfortable, false);
-        assert!(
-            height >= 7,
-            "typed content must grow the composer: {height}"
-        );
+        assert_eq!(height, 7, "typed content must grow the composer: {height}");
+
+        // Past the cap the density setting wins, not the content.
+        let capped = desired_height(20, 0, 30, ComposerDensity::Comfortable, false);
+        assert_eq!(capped, 9, "Comfortable caps total rows at 9");
+        let spacious = desired_height(20, 0, 30, ComposerDensity::Spacious, false);
+        assert_eq!(spacious, 12, "Spacious caps total rows at 12");
     }
 
     #[test]
-    fn spacious_panel_keeps_four_content_rows() {
+    fn single_line_panel_is_one_input_row_plus_both_borders() {
         let height = desired_height(1, 0, 12, ComposerDensity::Spacious, true);
-        assert!(
-            height >= 6,
-            "spacious panel = 2 borders + 4 content, got {height}"
-        );
+        assert_eq!(height, 3, "panel = 2 borders + 1 content row, got {height}");
     }
 }
