@@ -17,7 +17,6 @@ use sha2::{Digest, Sha256};
 
 const SCHEMA_VERSION: i64 = 1;
 const MAX_NOTE_BYTES: usize = 64 * 1024;
-#[cfg(test)]
 const MAX_QUERY_CHARS: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -239,12 +238,8 @@ impl NativeMemoryStore {
         })
     }
 
-    #[cfg(test)]
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<MemoryHit>> {
-        let query = query.trim();
-        if query.is_empty() || query.chars().count() > MAX_QUERY_CHARS {
-            bail!("memory search query is empty or too long");
-        }
+        let query = validate_query(query)?;
         // Markdown is authoritative. Refresh before retrieval so direct edits
         // become visible even when no file-watcher thread is running.
         self.with_write_lock(|| {
@@ -262,7 +257,11 @@ impl NativeMemoryStore {
         query: &str,
         limit: usize,
     ) -> Result<Vec<MemoryHit>> {
+        let query = validate_query(query)?;
         let workspace_path = self.workspace_path_for(workspace)?;
+        if workspace_path.is_none() {
+            return self.search(query, limit);
+        }
         let global = self.global_path();
         self.with_write_lock(|| {
             self.reindex_unlocked()?;
@@ -278,6 +277,7 @@ impl NativeMemoryStore {
 
     pub fn get(&self, id: i64) -> Result<Option<MemoryHit>> {
         self.with_write_lock(|| {
+            self.reindex_unlocked()?;
             let conn = self.connection_unlocked()?;
             Ok(conn
                 .query_row(
@@ -570,6 +570,14 @@ fn normalize_note(note: &str) -> Result<String> {
         bail!("memory note exceeds {MAX_NOTE_BYTES} bytes");
     }
     Ok(note.trim_start_matches('-').trim().to_string())
+}
+
+fn validate_query(query: &str) -> Result<&str> {
+    let query = query.trim();
+    if query.is_empty() || query.chars().count() > MAX_QUERY_CHARS {
+        bail!("memory search query is empty or too long");
+    }
+    Ok(query)
 }
 
 fn safe_component(value: &str) -> Result<String> {

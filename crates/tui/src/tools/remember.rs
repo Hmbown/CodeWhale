@@ -43,6 +43,11 @@ impl ToolSpec for RememberTool {
                 "note": {
                     "type": "string",
                     "description": "The single-sentence durable note to remember."
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": ["global", "workspace"],
+                    "description": "Native backend scope; defaults to global."
                 }
             },
             "required": ["note"]
@@ -68,6 +73,58 @@ impl ToolSpec for RememberTool {
                  `DEEPSEEK_MEMORY=on` in the environment to enable",
             )
         })?;
+
+        if let Some(store) = crate::native_memory::NativeMemoryStore::from_global_path(path) {
+            let scope = match input
+                .get("scope")
+                .and_then(Value::as_str)
+                .unwrap_or("global")
+            {
+                "global" => crate::native_memory::MemoryScope::Global,
+                "workspace" => crate::native_memory::MemoryScope::Workspace,
+                other => {
+                    return Err(ToolError::invalid_input(format!(
+                        "unknown memory scope `{other}`; expected global or workspace"
+                    )));
+                }
+            };
+            let workspace_id = if scope == crate::native_memory::MemoryScope::Workspace {
+                Some(
+                    crate::native_memory::NativeMemoryStore::workspace_id(&context.workspace)
+                        .map_err(|error| {
+                            ToolError::execution_failed(format!(
+                                "failed to resolve workspace memory scope: {error}"
+                            ))
+                        })?
+                        .ok_or_else(|| {
+                            ToolError::execution_failed(
+                                "workspace memory requires a git repository with an origin",
+                            )
+                        })?,
+                )
+            } else {
+                None
+            };
+            let hit = store
+                .remember(scope, workspace_id.as_deref(), note)
+                .map_err(|error| {
+                    ToolError::execution_failed(format!("failed to write native memory: {error}"))
+                })?;
+            return Ok(ToolResult::success(format!(
+                "remembered in native memory: {}:{}-{}",
+                hit.source.display(),
+                hit.line_start,
+                hit.line_end
+            ))
+            .with_metadata(json!({
+                "memory_backend": "native",
+                "scope": if scope == crate::native_memory::MemoryScope::Global { "global" } else { "workspace" },
+                "source": hit.source,
+                "line_start": hit.line_start,
+                "line_end": hit.line_end,
+                "untrusted": true
+            })));
+        }
 
         crate::memory::append_entry(path, note).map_err(|err| {
             ToolError::execution_failed(format!("failed to append to {}: {err}", path.display()))
@@ -123,6 +180,31 @@ mod tests {
         let body = std::fs::read_to_string(&path).expect("read");
         assert!(body.contains("4 spaces"));
         assert!(body.starts_with("- ("), "{body}");
+    }
+
+    #[tokio::test]
+    async fn native_backend_capture_updates_markdown_and_fts_index() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().join("memory");
+        let path = root.join("global/MEMORY.md");
+        let mut ctx = ToolContext::new(tmp.path());
+        ctx.memory_path = Some(path);
+
+        let result = RememberTool
+            .execute(
+                json!({"note": "Prefer bounded receipts", "scope": "global"}),
+                &ctx,
+            )
+            .await
+            .expect("native capture should succeed");
+        assert!(result.success);
+        assert_eq!(result.metadata.unwrap()["memory_backend"], "native");
+
+        let hits = crate::native_memory::NativeMemoryStore::new(root)
+            .search("receipts", 5)
+            .expect("native capture should update index");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].text, "Prefer bounded receipts");
     }
 
     #[tokio::test]
