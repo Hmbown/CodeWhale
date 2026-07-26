@@ -190,8 +190,7 @@ Known limitations:
   prefer provider environment variables when file-backed plaintext storage is
   not acceptable.
 - Terminal rendering varies by Android terminal app. The TUI always owns the
-  alternate screen; `--no-alt-screen` is accepted only as a deprecated
-  compatibility no-op. If a terminal app cannot render the full-screen TUI,
+  alternate screen. If a terminal app cannot render the full-screen TUI,
   use `codewhale exec` for headless runs instead.
 
 ---

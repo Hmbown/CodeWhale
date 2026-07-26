@@ -213,11 +213,6 @@ struct Cli {
     #[arg(short = 'c', long = "continue")]
     continue_session: bool,
 
-    /// Deprecated compatibility flag; the interactive TUI always owns the
-    /// alternate screen so terminal scrollback cannot hijack the viewport.
-    #[arg(long = "no-alt-screen", hide = true)]
-    no_alt_screen: bool,
-
     /// Enable TUI mouse capture for internal scrolling, transcript selection,
     /// and scrollbar dragging
     /// (default off on Windows)
@@ -14504,11 +14499,16 @@ mod terminal_mode_tests {
     }
 
     #[test]
-    fn no_alt_screen_flag_is_accepted_but_keeps_alternate_screen() {
-        let cli = parse_cli(&["codewhale", "--no-alt-screen"]);
-        let config = Config::default();
-
-        assert!(should_use_alt_screen(&cli, &config));
+    fn removed_no_alt_screen_flag_is_rejected() {
+        // Negative test: the retired compatibility flag must not be silently
+        // accepted and must not reach the alternate-screen decision at all.
+        let error = Cli::try_parse_from(["codewhale", "--no-alt-screen"])
+            .expect_err("--no-alt-screen must no longer parse");
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::UnknownArgument,
+            "retired flag should fail as an unknown argument, not be absorbed"
+        );
     }
 
     #[test]

@@ -189,8 +189,6 @@ struct Cli {
     /// Workspace directory for TUI file tools
     #[arg(short = 'C', long = "workspace", alias = "cd", value_name = "DIR")]
     workspace: Option<PathBuf>,
-    #[arg(long = "no-alt-screen", hide = true)]
-    no_alt_screen: bool,
     #[arg(long = "mouse-capture", conflicts_with = "no_mouse_capture")]
     mouse_capture: bool,
     #[arg(long = "no-mouse-capture", conflicts_with = "mouse_capture")]
@@ -4303,9 +4301,6 @@ fn build_tui_command_with_paths(
     if let Some(workspace) = workspace_path {
         cmd.arg("--workspace").arg(workspace);
     }
-    // Accepted for older scripts, but no longer forwarded: the interactive TUI
-    // always owns the alternate screen to avoid host scrollback hijacking.
-    let _ = cli.no_alt_screen;
     if cli.mouse_capture {
         cmd.arg("--mouse-capture");
     }
@@ -7492,7 +7487,6 @@ model = "qwen-2.5-7b"
             "sk-test",
             "--workspace",
             "/tmp/workspace",
-            "--no-alt-screen",
             "--no-mouse-capture",
             "--skip-onboarding",
             "model",
@@ -7516,7 +7510,6 @@ model = "qwen-2.5-7b"
         );
         assert_eq!(cli.api_key.as_deref(), Some("sk-test"));
         assert_eq!(cli.workspace, Some(PathBuf::from("/tmp/workspace")));
-        assert!(cli.no_alt_screen);
         assert!(cli.no_mouse_capture);
         assert!(!cli.mouse_capture);
         assert!(cli.skip_onboarding);
