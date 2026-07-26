@@ -1122,6 +1122,7 @@
     "ApprovalRepoLawRuleLabel": "규칙  ",
     "FilePickerMatchSingular": "@ 첨부 · 일치 1개",
     "FilePickerMatchesPlural": "@ 첨부 · 일치 {count}개",
+    "FilePickerScanning": "작업 공간 스캔 중…",
     "BehavioralTipPlanning": "계획 중인가요? {key} 키로 Plan 모드로 전환합니다",
     "BehavioralTipBackgroundReceipt": "영수증은 Work 패널에 있습니다 — {key} 키로 검사기를 엽니다",
     "BehavioralTipClearedInput": "지움 · {chord} 키로 복원",

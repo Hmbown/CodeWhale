@@ -1122,6 +1122,7 @@
     "ApprovalRepoLawRuleLabel": "规则  ",
     "FilePickerMatchSingular": "@ 附加 · 1 个匹配",
     "FilePickerMatchesPlural": "@ 附加 · {count} 个匹配",
+    "FilePickerScanning": "正在扫描工作区…",
     "BehavioralTipPlanning": "在规划？按 {key} 可切换到 Plan 模式",
     "BehavioralTipBackgroundReceipt": "回执在 Work 面板中 — 按 {key} 打开检查器",
     "BehavioralTipClearedInput": "已清空 · 按 {chord} 恢复",

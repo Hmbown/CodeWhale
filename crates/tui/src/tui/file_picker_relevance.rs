@@ -40,12 +40,13 @@ pub(super) fn open_file_picker(app: &mut App) {
         ));
 }
 
+/// Compose the in-memory relevance signals (@-mentions, tool-touched paths).
+///
+/// The git-reported `modified` signal is deliberately *not* gathered here: it
+/// costs a subprocess, so the picker folds it in from its background scan
+/// (#3905).
 pub(super) fn build_relevance(app: &App) -> FilePickerRelevance {
     let mut relevance = FilePickerRelevance::default();
-
-    for path in modified_workspace_paths(&app.workspace) {
-        relevance.mark_modified(path);
-    }
 
     for record in app.session_context_references.iter().rev().take(64) {
         let reference = &record.reference;
@@ -75,7 +76,12 @@ pub(super) fn build_relevance(app: &App) -> FilePickerRelevance {
     relevance
 }
 
-fn modified_workspace_paths(workspace: &Path) -> Vec<String> {
+/// Paths git reports as staged/unstaged/untracked.
+///
+/// Blocking: spawns `git status` and waits. The picker runs this on a blocking
+/// task rather than the event loop (#3905), so it lives here but is called
+/// from `file_picker.rs`.
+pub(super) fn modified_workspace_paths(workspace: &Path) -> Vec<String> {
     let Some(mut cmd) = Git::command() else {
         return Vec::new();
     };

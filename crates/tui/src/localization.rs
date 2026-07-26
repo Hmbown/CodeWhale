@@ -1262,6 +1262,7 @@ pub enum MessageId {
     // Fuzzy file picker (@ attach overlay).
     FilePickerMatchSingular,
     FilePickerMatchesPlural,
+    FilePickerScanning,
     // Quiet action-triggered product guidance.
     BehavioralTipPlanning,
     BehavioralTipBackgroundReceipt,
@@ -2396,6 +2397,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::ApprovalRepoLawRuleLabel,
     MessageId::FilePickerMatchSingular,
     MessageId::FilePickerMatchesPlural,
+    MessageId::FilePickerScanning,
     MessageId::BehavioralTipPlanning,
     MessageId::BehavioralTipBackgroundReceipt,
     MessageId::BehavioralTipClearedInput,

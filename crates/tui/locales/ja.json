@@ -1122,6 +1122,7 @@
     "ApprovalRepoLawRuleLabel": "ルール  ",
     "FilePickerMatchSingular": "@ 添付 · 1 件一致",
     "FilePickerMatchesPlural": "@ 添付 · {count} 件一致",
+    "FilePickerScanning": "ワークスペースをスキャン中…",
     "BehavioralTipPlanning": "計画中ですか？ {key} で Plan モードへ切り替えられます",
     "BehavioralTipBackgroundReceipt": "レシートは Work パネルにあります — {key} でインスペクターを開く",
     "BehavioralTipClearedInput": "クリアしました · {chord} で復元",

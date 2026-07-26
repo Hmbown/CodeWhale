@@ -1122,6 +1122,7 @@
     "ApprovalRepoLawRuleLabel": "Regra  ",
     "FilePickerMatchSingular": "@ anexar · 1 resultado",
     "FilePickerMatchesPlural": "@ anexar · {count} resultados",
+    "FilePickerScanning": "Varrendo o workspace…",
     "BehavioralTipPlanning": "Planejando? {key} alterna para o modo Plan",
     "BehavioralTipBackgroundReceipt": "Os recibos ficam no painel Work — {key} abre o inspetor",
     "BehavioralTipClearedInput": "Limpo · {chord} restaura",

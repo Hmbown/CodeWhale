@@ -1122,6 +1122,7 @@
     "ApprovalRepoLawRuleLabel": "Rule  ",
     "FilePickerMatchSingular": "@ attach · 1 match",
     "FilePickerMatchesPlural": "@ attach · {count} matches",
+    "FilePickerScanning": "Scanning workspace…",
     "BehavioralTipPlanning": "Planning? {key} cycles to Plan mode",
     "BehavioralTipBackgroundReceipt": "Receipts live in the Work panel — {key} opens the inspector",
     "BehavioralTipClearedInput": "Cleared · {chord} restores",

@@ -1122,6 +1122,7 @@
     "ApprovalRepoLawRuleLabel": "Quy tắc  ",
     "FilePickerMatchSingular": "@ đính kèm · 1 kết quả",
     "FilePickerMatchesPlural": "@ đính kèm · {count} kết quả",
+    "FilePickerScanning": "Đang quét không gian làm việc…",
     "BehavioralTipPlanning": "Đang lập kế hoạch? {key} chuyển sang chế độ Plan",
     "BehavioralTipBackgroundReceipt": "Biên nhận nằm trong bảng Work — {key} mở trình kiểm tra",
     "BehavioralTipClearedInput": "Đã xóa · {chord} để khôi phục",
