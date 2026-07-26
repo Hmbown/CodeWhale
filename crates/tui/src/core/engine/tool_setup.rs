@@ -28,6 +28,7 @@ impl Engine {
         };
         options.speech_output_dir = self.config.speech_output_dir.clone();
         options.goal_state = Some(self.config.goal_state.clone());
+        options.verify_tool_enabled = self.config.features.enabled(Feature::Verify);
         options
     }
 
