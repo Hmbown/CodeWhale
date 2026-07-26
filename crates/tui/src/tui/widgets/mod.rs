@@ -203,11 +203,26 @@ impl ChatWidget {
 
         let history_len = app.history.len();
         let tool_runs = if app.tool_collapse_active() {
-            crate::tui::history::detect_tool_runs_from_slices(
-                &app.history,
-                active_entries,
-                app.tool_collapse_threshold,
-            )
+            let cache_key_matches = app.tool_run_cache.history_version == app.history_version
+                && app.tool_run_cache.active_cell_revision == app.active_cell_revision
+                && app.tool_run_cache.active_len == active_entries.len()
+                && app.tool_run_cache.threshold == app.tool_collapse_threshold
+                && app.tool_run_cache.mode == app.tool_collapse_mode
+                && app.tool_run_cache.calm_mode == app.calm_mode;
+            if !cache_key_matches {
+                app.tool_run_cache.runs = crate::tui::history::detect_tool_runs_from_slices(
+                    &app.history,
+                    active_entries,
+                    app.tool_collapse_threshold,
+                );
+                app.tool_run_cache.history_version = app.history_version;
+                app.tool_run_cache.active_cell_revision = app.active_cell_revision;
+                app.tool_run_cache.active_len = active_entries.len();
+                app.tool_run_cache.threshold = app.tool_collapse_threshold;
+                app.tool_run_cache.mode = app.tool_collapse_mode;
+                app.tool_run_cache.calm_mode = app.calm_mode;
+            }
+            app.tool_run_cache.runs.clone()
         } else {
             Vec::new()
         };

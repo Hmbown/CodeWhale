@@ -549,6 +549,7 @@ impl App {
             history: Vec::new(),
             history_version: 0,
             history_revisions: Vec::new(),
+            tool_run_cache: ToolRunCache::default(),
             next_history_revision: 1,
             api_messages: Vec::new(),
             is_loading: false,

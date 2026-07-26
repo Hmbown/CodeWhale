@@ -975,6 +975,10 @@ pub struct App {
     pub history_version: u64,
     /// Per-cell revision counter, kept in lockstep with `history`.
     pub history_revisions: Vec<u64>,
+    /// Cached tool-run grouping for transcript collapse. The detector is
+    /// keyed by the same mutation generation that invalidates transcript
+    /// cells, so idle frames do not rescan the full history.
+    pub(crate) tool_run_cache: ToolRunCache,
     /// Monotonic counter used to issue fresh per-cell revisions.
     pub next_history_revision: u64,
     pub api_messages: Vec<Message>,
@@ -1721,6 +1725,30 @@ pub struct App {
     pub receipt_started_at: Option<Instant>,
     /// Tool evidence collected during the current turn for the receipt.
     pub tool_evidence: Vec<ToolEvidence>,
+}
+
+pub(crate) struct ToolRunCache {
+    pub(crate) history_version: u64,
+    pub(crate) active_cell_revision: u64,
+    pub(crate) active_len: usize,
+    pub(crate) threshold: usize,
+    pub(crate) mode: ToolCollapseMode,
+    pub(crate) calm_mode: bool,
+    pub(crate) runs: Vec<crate::tui::history::ToolRun>,
+}
+
+impl Default for ToolRunCache {
+    fn default() -> Self {
+        Self {
+            history_version: u64::MAX,
+            active_cell_revision: u64::MAX,
+            active_len: usize::MAX,
+            threshold: usize::MAX,
+            mode: ToolCollapseMode::Expanded,
+            calm_mode: false,
+            runs: Vec::new(),
+        }
+    }
 }
 
 // === Deref to ComposerState for backward compat ===
