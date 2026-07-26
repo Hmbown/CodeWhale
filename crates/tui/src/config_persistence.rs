@@ -1267,4 +1267,153 @@ slot = 1
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "config.toml can hold api keys");
     }
+
+    /// Clears every model override the dispatcher's env layer reads for the
+    /// providers exercised below, so the assertion is about config precedence
+    /// and cannot be flipped by an ambient variable on a developer machine.
+    struct ModelEnvGuard {
+        saved: Vec<(&'static str, Option<OsString>)>,
+    }
+
+    impl ModelEnvGuard {
+        const VARS: &'static [&'static str] = &[
+            "CODEWHALE_MODEL",
+            "DEEPSEEK_MODEL",
+            "DEEPSEEK_DEFAULT_TEXT_MODEL",
+            "GLM_MODEL",
+            "BIGMODEL_MODEL",
+            "ZAI_MODEL",
+            "XAI_MODEL",
+            "GROK_MODEL",
+            "OPENROUTER_MODEL",
+            "OLLAMA_MODEL",
+        ];
+
+        fn new() -> Self {
+            let saved = Self::VARS
+                .iter()
+                .map(|name| (*name, env::var_os(name)))
+                .collect();
+            // Safety: test-only environment mutation; the caller holds the
+            // process-wide test-env lock via `EnvGuard`.
+            unsafe {
+                for name in Self::VARS {
+                    env::remove_var(name);
+                }
+            }
+            Self { saved }
+        }
+    }
+
+    impl Drop for ModelEnvGuard {
+        fn drop(&mut self) {
+            // Safety: test-only environment restoration under the same lock.
+            unsafe {
+                for (name, value) in &self.saved {
+                    match value {
+                        Some(value) => env::set_var(name, value),
+                        None => env::remove_var(name),
+                    }
+                }
+            }
+        }
+    }
+
+    /// The active model must be one answer, not two.
+    ///
+    /// The TUI resolves it with `Config::default_model()`, which is what
+    /// `client.rs` puts on the wire and what `doctor` reports. The dispatcher
+    /// resolves it independently in `codewhale-config`'s
+    /// `resolve_runtime_options`, which is what `codewhale model resolve`
+    /// reports and what the app-server and route descriptors consume. The two
+    /// silently disagreed for every non-DeepSeek provider (#4832, #4838): the
+    /// dispatcher gated root `default_text_model` behind `provider == Deepseek`
+    /// and so reported a provider default while the wire carried the user's
+    /// chosen model.
+    ///
+    /// A diagnostic that contradicts the request it is diagnosing is worse than
+    /// no diagnostic, so this pins the two chains together by construction
+    /// rather than asserting either one's internals.
+    #[test]
+    fn the_dispatcher_and_the_tui_resolve_the_same_active_model() {
+        // (case, config body, what both chains must answer)
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "a non-DeepSeek provider honours the user's chosen model",
+                "provider = \"zai\"\ndefault_text_model = \"GLM-4.6\"\n\n[providers.zai]\napi_key = \"k\"\n",
+                "GLM-4.6",
+            ),
+            (
+                "a stale DeepSeek id must not be forwarded to a native non-DeepSeek endpoint",
+                "provider = \"zai\"\ndefault_text_model = \"deepseek-chat\"\n\n[providers.zai]\napi_key = \"k\"\n",
+                crate::config::DEFAULT_ZAI_MODEL,
+            ),
+            (
+                "no root default falls through to the provider default",
+                "provider = \"zai\"\n\n[providers.zai]\napi_key = \"k\"\n",
+                crate::config::DEFAULT_ZAI_MODEL,
+            ),
+            (
+                "a provider-scoped model outranks the root default",
+                "provider = \"zai\"\ndefault_text_model = \"GLM-4.6\"\n\n[providers.zai]\napi_key = \"k\"\nmodel = \"GLM-4.5-Air\"\n",
+                "GLM-4.5-Air",
+            ),
+            (
+                "DeepSeek itself keeps honouring the root default",
+                "provider = \"deepseek\"\ndefault_text_model = \"deepseek-v4-pro\"\n\n[providers.deepseek]\napi_key = \"k\"\n",
+                "deepseek-v4-pro",
+            ),
+            (
+                "a vendor-locked endpoint refuses a DeepSeek id (#3227)",
+                "provider = \"xai\"\ndefault_text_model = \"deepseek-v4-pro\"\n\n[providers.xai]\napi_key = \"k\"\n",
+                crate::config::DEFAULT_XAI_MODEL,
+            ),
+            (
+                "an aggregator legitimately serves DeepSeek ids",
+                "provider = \"openrouter\"\ndefault_text_model = \"deepseek/deepseek-v4-pro\"\n\n[providers.openrouter]\napi_key = \"k\"\n",
+                "deepseek/deepseek-v4-pro",
+            ),
+            (
+                "a local runtime passes its own tag through",
+                "provider = \"ollama\"\ndefault_text_model = \"qwen3-coder:30b\"\n",
+                "qwen3-coder:30b",
+            ),
+            (
+                "a custom base URL keeps full pass-through (#1519)",
+                "provider = \"zai\"\ndefault_text_model = \"deepseek-chat\"\n\n[providers.zai]\napi_key = \"k\"\nbase_url = \"https://proxy.example.invalid/v1\"\n",
+                "deepseek-chat",
+            ),
+        ];
+
+        for (case, body, expected) in cases {
+            let temp_root = temp_root("codewhale-model-chain-agreement");
+            fs::create_dir_all(&temp_root).unwrap();
+            let _guard = EnvGuard::new(&temp_root);
+            let _model_guard = ModelEnvGuard::new();
+            let path = temp_root.join(".deepseek").join("config.toml");
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, body).unwrap();
+
+            let tui = crate::config::Config::load(Some(path.clone()), None)
+                .expect("the TUI must parse this config");
+            let tui_model = tui.default_model();
+
+            let dispatcher = codewhale_config::ConfigStore::load(Some(path.clone()))
+                .expect("the dispatcher must parse the same config");
+            let runtime = dispatcher
+                .config
+                .resolve_runtime_options(&codewhale_config::CliRuntimeOverrides::default());
+
+            assert_eq!(
+                tui_model, *expected,
+                "{case}: the TUI chain (what actually reaches the provider) is wrong"
+            );
+            assert_eq!(
+                runtime.model, *expected,
+                "{case}: the dispatcher chain (what `model resolve` reports) is wrong"
+            );
+
+            let _ = fs::remove_dir_all(&temp_root);
+        }
+    }
 }

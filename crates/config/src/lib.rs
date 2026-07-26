@@ -2381,9 +2381,6 @@ impl ConfigToml {
         let root_deepseek_base_url = (provider == ProviderKind::Deepseek)
             .then(|| self.base_url.clone())
             .flatten();
-        let root_deepseek_model = (provider == ProviderKind::Deepseek)
-            .then(|| self.default_text_model.clone())
-            .flatten();
         let auth_mode = cli
             .auth_mode
             .clone()
@@ -2526,6 +2523,22 @@ impl ConfigToml {
         };
 
         let env_provider_model = env.model_for(provider, &base_url);
+        // Root `default_text_model` is the key `codewhale model set` writes and
+        // the setup wizard writes, for every provider. It used to enter this
+        // chain only when `provider == Deepseek`, which made this resolver
+        // disagree with `Config::default_model()` in the TUI — the chain that
+        // actually builds the request — for every non-DeepSeek provider
+        // (#4832, #4838). The user's model still shipped; only this resolver,
+        // and therefore `codewhale model resolve`, reported a provider default.
+        //
+        // It is honoured for any provider now, minus the one case the DeepSeek
+        // gate was accidentally covering: a stale DeepSeek id left behind by a
+        // provider switch must not be forwarded to an endpoint that cannot
+        // serve it.
+        let root_default_model = self
+            .default_text_model
+            .clone()
+            .filter(|model| !root_default_model_is_foreign_to_provider(provider, model, &base_url));
         // Derived from the same chain as `model` below so the reported
         // provenance cannot drift from the id that is actually used.
         let model_source = if cli.model.is_some() {
@@ -2534,7 +2547,7 @@ impl ConfigToml {
             ModelSource::Env
         } else if provider_cfg.model.is_some() {
             ModelSource::ProviderConfig
-        } else if root_deepseek_model.is_some() {
+        } else if root_default_model.is_some() {
             ModelSource::RootDefaultTextModel
         } else if self.model.is_some() {
             ModelSource::RootModel
@@ -2548,7 +2561,7 @@ impl ConfigToml {
             .or_else(|| env.model.clone())
             .or(env_provider_model)
             .or_else(|| provider_cfg.model.clone())
-            .or(root_deepseek_model)
+            .or(root_default_model)
             .or_else(|| self.model.clone())
             .unwrap_or_else(|| {
                 if provider == ProviderKind::Moonshot
@@ -2816,6 +2829,134 @@ fn project_config_candidate_exists(path: &Path) -> bool {
         let file_type = metadata.file_type();
         file_type.is_file() || file_type.is_symlink()
     })
+}
+
+/// Canonical id for a DeepSeek-family model name, or `None` for anything else.
+///
+/// Kept behaviourally identical to `normalize_model_name` in
+/// `crates/tui/src/config.rs`, which is the definition the TUI's own model
+/// chain uses. It exists here only so this crate can answer "is this root
+/// default a DeepSeek id?" without depending on the TUI.
+fn deepseek_family_model_id(model: &str) -> Option<String> {
+    let trimmed = model.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    match trimmed.to_ascii_lowercase().as_str() {
+        "pro" | "deepseek-v4pro" => return Some("deepseek-v4-pro".to_string()),
+        "flash" | "deepseek-v4flash" => return Some("deepseek-v4-flash".to_string()),
+        _ => {}
+    }
+
+    let normalized = trimmed.to_ascii_lowercase();
+    if !normalized.starts_with("deepseek") && !normalized.contains("/deepseek") {
+        return None;
+    }
+    if trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':' | '/'))
+    {
+        return Some(trimmed.to_string());
+    }
+    None
+}
+
+/// Providers whose model id is forwarded verbatim, because the upstream
+/// service — not this crate — is the authority on what ids it serves.
+///
+/// Mirrors `provider_passes_model_through` in `crates/tui/src/config.rs`.
+fn provider_passes_model_through(provider: ProviderKind) -> bool {
+    matches!(
+        provider,
+        ProviderKind::Openai
+            | ProviderKind::Atlascloud
+            | ProviderKind::WanjieArk
+            | ProviderKind::Volcengine
+            | ProviderKind::XiaomiMimo
+            | ProviderKind::Moonshot
+            | ProviderKind::Qianfan
+            | ProviderKind::Openmodel
+            | ProviderKind::Ollama
+            | ProviderKind::Huggingface
+            | ProviderKind::Meta
+            | ProviderKind::Xai
+            | ProviderKind::Telecomjs
+            | ProviderKind::Custom
+    )
+}
+
+/// Whether a root `default_text_model` would be foreign to the active
+/// provider's endpoint, i.e. honouring it would send an id the endpoint cannot
+/// serve.
+///
+/// This is the narrow case the old `provider == Deepseek` gate was covering by
+/// accident: a user switches `provider` and leaves a DeepSeek id behind in
+/// `default_text_model`. Forwarding `deepseek-chat` to Z.ai fails every
+/// request, so the root default is dropped and the provider default used
+/// instead — matching the decision `Config::default_model()` makes via
+/// `root_deepseek_model_is_foreign_to_direct_provider`
+/// (`crates/tui/src/config.rs`), whose provider lists this mirrors.
+fn root_default_model_is_foreign_to_provider(
+    provider: ProviderKind,
+    model: &str,
+    base_url: &str,
+) -> bool {
+    // Not a DeepSeek id at all: nothing to protect against here. A model the
+    // provider does not serve for some other reason is the provider's error to
+    // report, not ours to silently rewrite.
+    if deepseek_family_model_id(model).is_none() {
+        return false;
+    }
+    // DeepSeek's own endpoints serve DeepSeek ids.
+    if matches!(
+        provider,
+        ProviderKind::Deepseek | ProviderKind::DeepseekAnthropic
+    ) {
+        return false;
+    }
+    // A custom base URL may be any OpenAI-compatible proxy, and a proxy may
+    // legitimately serve DeepSeek ids (#1519). Full pass-through.
+    if provider_preserves_custom_base_url_model(provider, base_url) {
+        return false;
+    }
+    // Vendor-locked official endpoints. These pass model ids through, but
+    // api.x.ai will never answer to `deepseek-v4-pro`, so pass-through does not
+    // make the id servable — this is the #3227 contamination case.
+    if matches!(
+        provider,
+        ProviderKind::Xai | ProviderKind::Openai | ProviderKind::Moonshot
+    ) {
+        return true;
+    }
+    // Remaining pass-through providers forward the id verbatim to a service
+    // that is the authority on its own catalog.
+    if provider_passes_model_through(provider) {
+        return false;
+    }
+    // Aggregators, local runtimes, and multi-vendor clouds host DeepSeek
+    // models under their own catalogs, so a DeepSeek id is valid there.
+    if matches!(
+        provider,
+        ProviderKind::NvidiaNim
+            | ProviderKind::Openrouter
+            | ProviderKind::Novita
+            | ProviderKind::Fireworks
+            | ProviderKind::Siliconflow
+            | ProviderKind::SiliconflowCN
+            | ProviderKind::Deepinfra
+            | ProviderKind::Together
+            | ProviderKind::Sglang
+            | ProviderKind::Vllm
+            | ProviderKind::Volcengine
+            | ProviderKind::Atlascloud
+            | ProviderKind::OpencodeGo
+            | ProviderKind::WanjieArk
+    ) {
+        return false;
+    }
+    // Everything else is a vendor serving only its own family (Z.ai, Stepfun,
+    // MiniMax, Anthropic, …): a DeepSeek id there is the stale-config case.
+    true
 }
 
 fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
