@@ -382,13 +382,43 @@ impl NativeMemoryStore {
 
     fn connection(&self) -> Result<Connection> {
         fs::create_dir_all(&self.root)?;
-        let conn = Connection::open(self.index_path())?;
+        let path = self.index_path();
+        let mut conn = Connection::open(&path)?;
+        if let Err(initialization_error) = self.initialize_connection(&conn) {
+            // The SQLite file is a disposable cache. Preserve source Markdown
+            // and rebuild after corruption or an unsupported schema version.
+            drop(conn);
+            reset_cache_files(&path).with_context(|| {
+                format!("reset corrupt native memory cache after: {initialization_error}")
+            })?;
+            conn = Connection::open(&path)?;
+            self.initialize_connection(&conn)?;
+        }
+        Ok(conn)
+    }
+
+    fn initialize_connection(&self, conn: &Connection) -> Result<()> {
         conn.busy_timeout(Duration::from_secs(2))?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
         conn.execute(
             "CREATE TABLE IF NOT EXISTS memory_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
             [],
         )?;
+        let existing_version = conn
+            .query_row(
+                "SELECT value FROM memory_meta WHERE key='schema_version'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        if existing_version.is_some_and(|version| version != SCHEMA_VERSION.to_string()) {
+            conn.execute_batch(
+                "DROP TABLE IF EXISTS memory_fts;
+                 DROP TABLE IF EXISTS memory_entries;
+                 DROP TABLE IF EXISTS memory_sources;
+                 DELETE FROM memory_meta;",
+            )?;
+        }
         conn.execute(
             "INSERT OR REPLACE INTO memory_meta(key,value) VALUES ('schema_version',?1)",
             params![SCHEMA_VERSION.to_string()],
@@ -396,7 +426,7 @@ impl NativeMemoryStore {
         conn.execute("CREATE TABLE IF NOT EXISTS memory_sources (path TEXT PRIMARY KEY, mtime INTEGER NOT NULL)", [])?;
         conn.execute("CREATE TABLE IF NOT EXISTS memory_entries (id INTEGER PRIMARY KEY, text TEXT NOT NULL, source TEXT NOT NULL, line_start INTEGER NOT NULL, line_end INTEGER NOT NULL, source_mtime INTEGER NOT NULL)", [])?;
         conn.execute_batch("CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(text, content='memory_entries', content_rowid='id');")?;
-        Ok(conn)
+        Ok(())
     }
 
     fn reindex_file(&self, path: &Path) -> Result<()> {
@@ -493,6 +523,22 @@ fn file_mtime(path: &Path) -> Result<i64> {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64)
+}
+
+fn reset_cache_files(path: &Path) -> io::Result<()> {
+    for suffix in ["", "-wal", "-shm"] {
+        let candidate = if suffix.is_empty() {
+            path.to_path_buf()
+        } else {
+            PathBuf::from(format!("{}{}", path.display(), suffix))
+        };
+        if let Err(error) = fs::remove_file(candidate)
+            && error.kind() != io::ErrorKind::NotFound
+        {
+            return Err(error);
+        }
+    }
+    Ok(())
 }
 
 fn fts_query(query: &str) -> String {
@@ -719,5 +765,24 @@ mod tests {
         for index in 0..8 {
             assert!(content.contains(&format!("concurrent note {index}")));
         }
+    }
+
+    #[test]
+    fn corrupt_or_old_cache_rebuilds_from_markdown() {
+        let tmp = TempDir::new().unwrap();
+        let store = NativeMemoryStore::new(tmp.path().join("memory"));
+        store
+            .remember(MemoryScope::Global, None, "recoverable cache")
+            .unwrap();
+        fs::write(store.index_path(), b"not sqlite").unwrap();
+        assert_eq!(store.search("recoverable", 10).unwrap().len(), 1);
+
+        let conn = Connection::open(store.index_path()).unwrap();
+        conn.execute(
+            "UPDATE memory_meta SET value='0' WHERE key='schema_version'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(store.search("recoverable", 10).unwrap().len(), 1);
     }
 }
