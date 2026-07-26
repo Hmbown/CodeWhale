@@ -9491,6 +9491,75 @@ async fn apply_model_and_compaction_update(
         .await;
 }
 
+/// Queue a live compaction update without waiting on the engine mailbox.
+///
+/// Config edits are valid while a turn is streaming, but awaiting a bounded
+/// engine mailbox from the UI event loop can make the whole TUI appear frozen
+/// when the turn is busy. A dropped refresh is safe: the next turn rebuilds
+/// its compaction config from `App`, and the status message tells the user
+/// whether the update was queued or deferred.
+fn try_apply_model_and_compaction_update(
+    engine_handle: &EngineHandle,
+    compaction: crate::compaction::CompactionConfig,
+    mode: AppMode,
+    route_limits: Option<codewhale_config::route::RouteLimits>,
+) -> bool {
+    if engine_handle
+        .try_send(Op::SetModel {
+            model: compaction.model.clone(),
+            mode,
+            route_limits,
+        })
+        .is_err()
+    {
+        return false;
+    }
+    engine_handle
+        .try_send(Op::SetCompaction { config: compaction })
+        .is_ok()
+}
+
+#[cfg(test)]
+mod config_update_tests {
+    use super::*;
+    use crate::core::engine::mock_engine_handle;
+    use crate::core::ops::Op;
+
+    #[tokio::test]
+    async fn live_compaction_update_queues_without_waiting_on_engine() {
+        let mut mock = mock_engine_handle();
+        let compaction = crate::compaction::CompactionConfig {
+            enabled: false,
+            token_threshold: 123,
+            model: "deepseek-v4-flash".to_string(),
+            effective_context_window: Some(128_000),
+            cache_summary: true,
+            focus: None,
+            live_state: None,
+        };
+
+        assert!(try_apply_model_and_compaction_update(
+            &mock.handle,
+            compaction.clone(),
+            AppMode::Agent,
+            None,
+        ));
+
+        assert!(matches!(
+            mock.rx_op.recv().await,
+            Some(Op::SetModel {
+                model,
+                mode: AppMode::Agent,
+                route_limits: None,
+            }) if model == compaction.model
+        ));
+        assert!(matches!(
+            mock.rx_op.recv().await,
+            Some(Op::SetCompaction { config }) if config == compaction
+        ));
+    }
+}
+
 async fn drain_web_config_events(
     web_config_session: &mut Option<WebConfigSession>,
     app: &mut App,
@@ -10724,13 +10793,27 @@ async fn apply_command_result(
                 .await;
             }
             AppAction::UpdateCompaction(compaction) => {
-                apply_model_and_compaction_update(
-                    engine_handle,
-                    compaction,
-                    app.mode,
-                    app.active_route_limits,
-                )
-                .await;
+                if app.is_loading || app.is_compacting {
+                    let queued = try_apply_model_and_compaction_update(
+                        engine_handle,
+                        compaction,
+                        app.mode,
+                        app.active_route_limits,
+                    );
+                    app.status_message = Some(if queued {
+                        "Config change queued; the active turn remains responsive.".to_string()
+                    } else {
+                        "Config change deferred; it will apply to the next turn.".to_string()
+                    });
+                } else {
+                    apply_model_and_compaction_update(
+                        engine_handle,
+                        compaction,
+                        app.mode,
+                        app.active_route_limits,
+                    )
+                    .await;
+                }
             }
             AppAction::UpdateStreamChunkTimeout(timeout_secs) => {
                 let _ = engine_handle
