@@ -2,6 +2,7 @@
 name: review
 description: Read-only correctness review with actionable findings first, tight file/line evidence, severity, and a concise residual-risk summary.
 invocation: model+user
+aliases-for: code-review
 ---
 
 # Review

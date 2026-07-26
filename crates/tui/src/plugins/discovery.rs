@@ -388,6 +388,8 @@ fn parse_skill_snapshots(
                 name: skill.name.clone(),
                 description: skill.description.clone(),
                 localized_descriptions: skill.localized_descriptions.clone(),
+                invocation: skill.invocation,
+                aliases: skill.aliases.clone(),
                 body: skill.body.clone(),
                 path: skill.path.clone(),
                 source_hash: actual_hash,

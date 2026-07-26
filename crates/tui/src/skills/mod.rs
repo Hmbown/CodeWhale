@@ -89,6 +89,14 @@ pub struct Skill {
     /// frontmatter keys so a skill author can ship a shorter, native-language
     /// description for non-English sessions (saves prompt tokens; see #3354).
     pub localized_descriptions: HashMap<String, String>,
+    /// Whether the skill may be selected from the model's catalogue or only
+    /// loaded after an explicit user request. Missing metadata preserves the
+    /// historical model-and-user behavior.
+    pub invocation: SkillInvocation,
+    /// Alternate names accepted by `load_skill`; aliases never become extra
+    /// prompt entries, so they do not inflate the catalogue or create a
+    /// second instruction surface.
+    pub aliases: Vec<String>,
     pub body: String,
     /// On-disk path to the `SKILL.md` this was loaded from. The directory
     /// name can differ from the frontmatter `name` for community installs
@@ -96,6 +104,23 @@ pub struct Skill {
     /// reconstructing `<dir>/<name>/SKILL.md`.
     pub path: PathBuf,
     pub source: SkillSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillInvocation {
+    ModelAndUser,
+    ExplicitOnly,
+}
+
+impl SkillInvocation {
+    fn from_frontmatter(value: Option<&str>) -> Self {
+        match value.map(str::trim).map(|value| value.to_ascii_lowercase()) {
+            Some(value) if value == "explicit-only" || value == "explicit_only" => {
+                Self::ExplicitOnly
+            }
+            _ => Self::ModelAndUser,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -499,6 +524,18 @@ impl SkillRegistry {
 
             let description = metadata.get("description").cloned().unwrap_or_default();
 
+            let invocation =
+                SkillInvocation::from_frontmatter(metadata.get("invocation").map(String::as_str));
+            let aliases = metadata
+                .get("aliases-for")
+                .into_iter()
+                .flat_map(|value| value.split([',', ' ', '\t']))
+                .map(str::trim)
+                .filter(|alias| !alias.is_empty())
+                .map(normalize_skill_name_for_lookup)
+                .filter(|alias| is_valid_skill_name(alias))
+                .collect();
+
             // Collect `description_<tag>:` frontmatter keys (already lowercased
             // above) into locale-specific descriptions, e.g. `description_zh`.
             let localized_descriptions = metadata
@@ -514,6 +551,8 @@ impl SkillRegistry {
                 name,
                 description,
                 localized_descriptions,
+                invocation,
+                aliases,
                 body: body.trim().to_string(),
                 // Filled in by `discover` after parse succeeds; default to an
                 // empty path so direct constructors (e.g. tests) compile.
@@ -538,6 +577,8 @@ impl SkillRegistry {
             name,
             description: String::new(),
             localized_descriptions: HashMap::new(),
+            invocation: SkillInvocation::ModelAndUser,
+            aliases: Vec::new(),
             body: content.trim().to_string(),
             path: PathBuf::new(),
             source: SkillSource::Native,
@@ -562,7 +603,14 @@ impl SkillRegistry {
     /// Lookup a skill by name.
     pub fn get(&self, name: &str) -> Option<&Skill> {
         let normalized = normalize_skill_name_for_lookup(name);
-        self.skills.iter().find(|s| s.name == normalized)
+        self.skills
+            .iter()
+            .find(|s| s.name == normalized)
+            .or_else(|| {
+                self.skills
+                    .iter()
+                    .find(|s| s.aliases.iter().any(|alias| alias == &normalized))
+            })
     }
 
     /// Return all loaded skills.
@@ -911,6 +959,8 @@ fn merge_plugin_skills_from_plugins(
                 name: qualified_name,
                 description: snapshot.description,
                 localized_descriptions: snapshot.localized_descriptions,
+                invocation: snapshot.invocation,
+                aliases: snapshot.aliases,
                 body: snapshot.body,
                 path: snapshot.path,
                 source: SkillSource::Plugin {
@@ -1123,6 +1173,13 @@ reviewed plugin snapshots must be opened with `load_skill`.\n\n",
 
     let mut omitted = 0usize;
     for skill in registry.list() {
+        if skill.invocation == SkillInvocation::ExplicitOnly {
+            // Explicit-only skills remain loadable by their canonical name or
+            // alias, but must not be presented as model-selectable catalogue
+            // entries. This keeps opt-in power skills from becoming ambient
+            // instructions or consuming prompt budget.
+            continue;
+        }
         // Native skills expose the real on-disk path captured at discovery.
         // Plugin skills expose only their reviewed snapshot identity so the
         // model cannot bypass the content-bound trust receipt via a mutable
@@ -1375,6 +1432,8 @@ mod tests {
             name: "workspace-priority".to_string(),
             description: "must survive truncation".to_string(),
             localized_descriptions: std::collections::HashMap::new(),
+            invocation: super::SkillInvocation::ModelAndUser,
+            aliases: Vec::new(),
             body: "body".to_string(),
             path: tmpdir
                 .path()
@@ -1391,6 +1450,8 @@ mod tests {
                 name: format!("aaa-global-{i:03}"),
                 description: big_desc.clone(),
                 localized_descriptions: std::collections::HashMap::new(),
+                invocation: super::SkillInvocation::ModelAndUser,
+                aliases: Vec::new(),
                 body: "body".to_string(),
                 path: tmpdir
                     .path()
@@ -1443,6 +1504,61 @@ body";
     }
 
     #[test]
+    fn parse_skill_exposes_invocation_and_alias_metadata() {
+        let content = "---\n\
+name: spreadsheets\n\
+description: Spreadsheet workflows\n\
+invocation: explicit-only\n\
+aliases-for: xlsx, spreadsheet\n\
+---\n\
+body";
+        let skill = super::SkillRegistry::parse_skill(std::path::Path::new("SKILL.md"), content)
+            .expect("parse should succeed");
+
+        assert_eq!(skill.invocation, super::SkillInvocation::ExplicitOnly);
+        assert_eq!(
+            skill.aliases,
+            vec!["xlsx".to_string(), "spreadsheet".to_string()]
+        );
+
+        let mut registry = super::SkillRegistry::default();
+        registry.skills.push(skill);
+        assert_eq!(
+            registry.get("spreadsheet").map(|s| s.name.as_str()),
+            Some("spreadsheets")
+        );
+        assert_eq!(
+            registry.get("xlsx").map(|s| s.name.as_str()),
+            Some("spreadsheets")
+        );
+
+        let rendered = super::render_skills_block(&registry, "en", std::path::Path::new("/"));
+        assert!(
+            rendered.is_some(),
+            "an explicit-only skill remains loadable"
+        );
+        assert!(
+            !rendered.unwrap_or_default().contains("spreadsheets"),
+            "explicit-only skills must not enter the model catalogue"
+        );
+    }
+
+    #[test]
+    fn missing_or_unknown_invocation_keeps_model_and_user_compatibility() {
+        for invocation in [None, Some("future-mode")] {
+            let invocation_line =
+                invocation.map_or(String::new(), |value| format!("invocation: {value}\n"));
+            let content = format!(
+                "---\nname: compatible\ndescription: compatible\n{invocation_line}---\nbody"
+            );
+            let skill =
+                super::SkillRegistry::parse_skill(std::path::Path::new("SKILL.md"), &content)
+                    .expect("parse should succeed");
+            assert_eq!(skill.invocation, super::SkillInvocation::ModelAndUser);
+        }
+    }
+
+    #[test]
     fn description_for_locale_matches_exact_then_primary_then_falls_back() {
         let mut localized = std::collections::HashMap::new();
         localized.insert("zh".to_string(), "中文描述".to_string());
@@ -1451,6 +1567,8 @@ body";
             name: "demo".to_string(),
             description: "English description".to_string(),
             localized_descriptions: localized,
+            invocation: super::SkillInvocation::ModelAndUser,
+            aliases: Vec::new(),
             body: String::new(),
             path: std::path::PathBuf::new(),
             source: super::SkillSource::Native,
@@ -1483,6 +1601,8 @@ body";
             name: "demo".to_string(),
             description: "English".to_string(),
             localized_descriptions: localized,
+            invocation: super::SkillInvocation::ModelAndUser,
+            aliases: Vec::new(),
             body: String::new(),
             path: std::path::PathBuf::new(),
             source: super::SkillSource::Native,
@@ -1500,6 +1620,8 @@ body";
             name: "demo".to_string(),
             description: "only english".to_string(),
             localized_descriptions: std::collections::HashMap::new(),
+            invocation: super::SkillInvocation::ModelAndUser,
+            aliases: Vec::new(),
             body: String::new(),
             path: std::path::PathBuf::new(),
             source: super::SkillSource::Native,
@@ -1516,6 +1638,8 @@ body";
             name: "compress".to_string(),
             description: "Compress logs to save space".to_string(),
             localized_descriptions: localized,
+            invocation: super::SkillInvocation::ModelAndUser,
+            aliases: Vec::new(),
             body: "body".to_string(),
             path: std::path::PathBuf::from("/skills/compress/SKILL.md"),
             source: super::SkillSource::Native,
@@ -2535,6 +2659,8 @@ body";
             name: "native-recovery".to_string(),
             description: "native recovery skill".to_string(),
             localized_descriptions: std::collections::HashMap::new(),
+            invocation: super::SkillInvocation::ModelAndUser,
+            aliases: Vec::new(),
             body: "recovery".to_string(),
             path: tmp.path().join("native/SKILL.md"),
             source: super::SkillSource::Native,

@@ -108,6 +108,40 @@ advertise capabilities the runtime lacks. In particular, image understanding
 is available, but an image-generation skill is not bundled until a real
 image-generation tool exists.
 
+### Invocation and alias metadata
+
+Bundled and user skills may declare two runtime-routing fields in frontmatter:
+
+| Field | Meaning |
+| --- | --- |
+| `invocation: model+user` | The default; the skill appears in the model's compact catalogue and can be loaded by the model or user. |
+| `invocation: explicit-only` | The skill remains loadable by an explicit name, but is omitted from the model catalogue so opt-in instructions do not become ambient context. |
+| `aliases-for: name, other-name` | Additional lookup names for the same canonical skill. Aliases are not separate catalogue entries and do not duplicate prompt content. |
+
+Missing or unknown invocation values retain the historical `model+user`
+behavior. Canonical names win over aliases when a collision exists. Loading a
+skill reports its canonical invocation and aliases so receipts remain
+inspectable.
+
+### Starter-pack parity decisions
+
+The v0.9.2 parity audit in [#4698](https://github.com/Hmbown/CodeWhale/issues/4698)
+compared the five `xai-grok-memory` / `xai-grok-shell` reference skills with
+the actual Codewhale bundle. This is a decision matrix, not a request to copy
+reference text or advertise unsupported tools:
+
+| Reference skill | Codewhale decision | Runtime grounding |
+| --- | --- | --- |
+| `check-work` | Canonical alias/compatibility mapping to `verify` | `verify` is the shipped evidence-collection workflow. |
+| `code-review` | Canonical alias/compatibility mapping to `review` | `review` is the shipped read-only correctness workflow. |
+| `create-skill` | Canonical alias/compatibility mapping to `skill-creator` | `skill-creator` is the shipped authoring workflow. |
+| `help` | Do not add a giant ambient skill; resolve help from installed docs/config on request | `read_file`, `/help`, and the documented skill manager are the existing surfaces. |
+| `imagine` | Intentionally out of scope | Codewhale has no image-generation/edit tool, so the starter pack must not advertise one. |
+
+No reference skill body is copied by this compatibility slice. The explicit
+aliases and invocation metadata are bounded routing facts; the full skill body
+still enters context only through `load_skill`.
+
 ## Audit statuses
 
 Each audited row carries precedence and relationship flags:

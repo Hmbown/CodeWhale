@@ -220,6 +220,15 @@ fn format_skill_body(skill: &Skill) -> String {
     if !skill.description.trim().is_empty() {
         out.push_str(&format!("> {}\n\n", skill.description.trim()));
     }
+    let invocation = match skill.invocation {
+        crate::skills::SkillInvocation::ModelAndUser => "model+user",
+        crate::skills::SkillInvocation::ExplicitOnly => "explicit-only",
+    };
+    out.push_str(&format!("Invocation: `{invocation}`\n"));
+    if !skill.aliases.is_empty() {
+        out.push_str(&format!("Aliases: `{}`\n", skill.aliases.join("`, `")));
+    }
+    out.push('\n');
     match &skill.source {
         SkillSource::Native => out.push_str(&format!("Source: `{}`\n\n", skill.path.display())),
         SkillSource::Plugin {
@@ -355,6 +364,8 @@ mod tests {
             name: "demo:hello".to_string(),
             description: "hello".to_string(),
             localized_descriptions: std::collections::HashMap::new(),
+            invocation: crate::skills::SkillInvocation::ModelAndUser,
+            aliases: Vec::new(),
             body: "reviewed body".to_string(),
             path: skill_path.clone(),
             source: SkillSource::Plugin {

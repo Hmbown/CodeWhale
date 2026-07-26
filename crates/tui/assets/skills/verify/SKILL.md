@@ -2,6 +2,7 @@
 name: verify
 description: Exercise the real app/API/CLI and collect observable evidence; tests alone do not count as end-to-end verification.
 invocation: model+user
+aliases-for: check-work
 ---
 
 # Verify
