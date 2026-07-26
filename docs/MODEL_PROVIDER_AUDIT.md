@@ -457,6 +457,29 @@ verbatim; a `provider_hint` narrows the search; Atlascloud/Arcee/XiaomiMimo
 accept arbitrary ids for their provider; otherwise falls back to the hinted
 provider's first model, ultimate default `deepseek-v4-pro`.
 
+## 8. Fast-tier derivation contract
+
+Auto routing and `model_strength = faster` use the provider-scoped family map
+in `crates/tui/src/model_routing.rs`. A pair is valid only when the current
+provider's catalog has both model ids; model-name similarity alone is not
+enough. Current non-DeepSeek pairs are:
+
+| Provider | Strong family | Fast sibling |
+|---|---|---|
+| OpenAI / OpenAI Codex | `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra` | `gpt-5.6-luna` |
+| Anthropic | Claude Opus/Sonnet rows listed in §4.3 | `claude-haiku-4-5` |
+| OpenRouter | Qwen 3.6, Claude, MiMo, Trinity, Kimi rows | provider-prefixed catalog sibling |
+| Xiaomi MiMo | `mimo-v2.5-pro` | `mimo-v2.5` |
+| Arcee | `trinity-large-thinking` / `trinity-large-preview` | `trinity-mini` |
+| Moonshot | `kimi-k2.7-code` | `kimi-k2.6` |
+| MiniMax | `MiniMax-M2.7` | `MiniMax-M2.7-highspeed` |
+| OpenCode Go | `kimi-k3` | `kimi-k2.7-code` |
+
+Already-fast rows and true singles return no further sibling. Local/custom
+providers never inherit cloud families. New catalog multi-tier families must
+add an explicit same-provider pair and a matrix test before they become an
+Auto fast route.
+
 ## Appendix B — file map (where each fact lives)
 
 | Fact | Primary file |

@@ -41,6 +41,84 @@ impl RouterCandidates {
     }
 }
 
+/// Return a provider-owned strong/fast pair for model families whose catalog
+/// exposes more than one tier.  The ids here are deliberately explicit: a
+/// model name alone is not evidence that another provider can serve its
+/// sibling, so unknown providers and unknown families remain single-tier.
+fn catalog_family_candidates(
+    provider: ApiProvider,
+    current_model: &str,
+) -> Option<RouterCandidates> {
+    let normalized = normalize_model_name_for_provider(provider, current_model)
+        .unwrap_or_else(|| current_model.trim().to_string());
+    let lower = normalized.to_ascii_lowercase();
+
+    let cheap = match provider {
+        ApiProvider::Openai | ApiProvider::OpenaiCodex
+            if matches!(lower.as_str(), "gpt-5.6" | "gpt-5.6-sol" | "gpt-5.6-terra") =>
+        {
+            Some("gpt-5.6-luna".to_string())
+        }
+        ApiProvider::Anthropic
+            if matches!(
+                lower.as_str(),
+                "claude-opus-4-8" | "claude-sonnet-4-6" | "claude-sonnet-5"
+            ) =>
+        {
+            Some("claude-haiku-4-5".to_string())
+        }
+        ApiProvider::XiaomiMimo if lower == "mimo-v2.5-pro" => Some("mimo-v2.5".to_string()),
+        ApiProvider::Arcee
+            if matches!(
+                lower.as_str(),
+                "trinity-large-thinking" | "trinity-large-preview"
+            ) =>
+        {
+            Some("trinity-mini".to_string())
+        }
+        ApiProvider::Moonshot if lower == "kimi-k2.7-code" => Some("kimi-k2.6".to_string()),
+        ApiProvider::Minimax | ApiProvider::MinimaxAnthropic if lower == "minimax-m2.7" => {
+            Some("MiniMax-M2.7-highspeed".to_string())
+        }
+        ApiProvider::OpencodeGo if lower == "kimi-k3" => Some("kimi-k2.7-code".to_string()),
+        ApiProvider::Openrouter
+            if lower == "qwen/qwen3.6-max-preview"
+                || lower == "qwen/qwen3.6-plus"
+                || lower == "qwen/qwen3.6-27b"
+                || lower == "qwen/qwen3.6-35b-a3b" =>
+        {
+            Some("qwen/qwen3.6-flash".to_string())
+        }
+        ApiProvider::Openrouter if lower == "xiaomi/mimo-v2.5-pro" => {
+            Some("xiaomi/mimo-v2.5".to_string())
+        }
+        ApiProvider::Openrouter
+            if matches!(
+                lower.as_str(),
+                "arcee-ai/trinity-large-thinking" | "arcee-ai/trinity-large-preview"
+            ) =>
+        {
+            Some("arcee-ai/trinity-mini".to_string())
+        }
+        ApiProvider::Openrouter if lower == "moonshotai/kimi-k2.7-code" => {
+            Some("moonshotai/kimi-k2.6".to_string())
+        }
+        ApiProvider::Openrouter
+            if lower == "anthropic/claude-opus-4-8"
+                || lower == "anthropic/claude-sonnet-4-6"
+                || lower == "anthropic/claude-sonnet-5" =>
+        {
+            Some("anthropic/claude-haiku-4-5".to_string())
+        }
+        _ => None,
+    }?;
+
+    Some(RouterCandidates {
+        big: normalized,
+        cheap: Some(cheap),
+    })
+}
+
 /// Derive the auto-router's candidate pair for the active provider (#3018).
 ///
 /// DeepSeek providers route between the canonical pro/flash pair. Hosted
@@ -54,6 +132,10 @@ pub(crate) fn provider_router_candidates(
     current_model: &str,
 ) -> RouterCandidates {
     use crate::config::ApiProvider;
+    if let Some(candidates) = catalog_family_candidates(provider, current_model) {
+        return candidates;
+    }
+
     if provider == ApiProvider::Zai {
         let normalized = crate::config::normalize_model_name_for_provider(provider, current_model)
             .unwrap_or_else(|| current_model.to_string());
@@ -101,17 +183,23 @@ pub(crate) fn provider_router_candidates(
         | ApiProvider::SiliconflowCn
         | ApiProvider::Sglang
         | ApiProvider::Vllm
-        | ApiProvider::WanjieArk => RouterCandidates {
-            big: crate::config::wire_model_for_provider(provider, "deepseek-v4-pro"),
-            cheap: Some(crate::config::wire_model_for_provider(
-                provider,
-                "deepseek-v4-flash",
-            )),
-        },
-        ApiProvider::Volcengine => RouterCandidates {
-            big: crate::config::DEFAULT_VOLCENGINE_MODEL.to_string(),
-            cheap: Some(crate::config::DEFAULT_VOLCENGINE_FLASH_MODEL.to_string()),
-        },
+        | ApiProvider::WanjieArk
+            if current_model.to_ascii_lowercase().contains("deepseek") =>
+        {
+            RouterCandidates {
+                big: crate::config::wire_model_for_provider(provider, "deepseek-v4-pro"),
+                cheap: Some(crate::config::wire_model_for_provider(
+                    provider,
+                    "deepseek-v4-flash",
+                )),
+            }
+        }
+        ApiProvider::Volcengine if current_model.to_ascii_lowercase().contains("deepseek") => {
+            RouterCandidates {
+                big: crate::config::DEFAULT_VOLCENGINE_MODEL.to_string(),
+                cheap: Some(crate::config::DEFAULT_VOLCENGINE_FLASH_MODEL.to_string()),
+            }
+        }
         _ => RouterCandidates {
             big: current_model.to_string(),
             cheap: None,
@@ -1759,6 +1847,58 @@ mod tests {
         let moonshot = provider_router_candidates(ApiProvider::Moonshot, "kimi-k2.6");
         assert_eq!(moonshot.big, "kimi-k2.6");
         assert_eq!(moonshot.cheap, None);
+    }
+
+    #[test]
+    fn provider_router_candidates_cover_catalog_fast_siblings() {
+        use crate::config::ApiProvider;
+
+        let cases = [
+            (ApiProvider::OpenaiCodex, "gpt-5.6-sol", "gpt-5.6-luna"),
+            (
+                ApiProvider::Anthropic,
+                "claude-sonnet-4-6",
+                "claude-haiku-4-5",
+            ),
+            (ApiProvider::XiaomiMimo, "mimo-v2.5-pro", "mimo-v2.5"),
+            (ApiProvider::Arcee, "trinity-large-thinking", "trinity-mini"),
+            (ApiProvider::Moonshot, "kimi-k2.7-code", "kimi-k2.6"),
+            (
+                ApiProvider::Minimax,
+                "MiniMax-M2.7",
+                "MiniMax-M2.7-highspeed",
+            ),
+            (ApiProvider::OpencodeGo, "kimi-k3", "kimi-k2.7-code"),
+            (
+                ApiProvider::Openrouter,
+                "qwen/qwen3.6-max-preview",
+                "qwen/qwen3.6-flash",
+            ),
+            (
+                ApiProvider::Openrouter,
+                "anthropic/claude-sonnet-4-6",
+                "anthropic/claude-haiku-4-5",
+            ),
+        ];
+
+        for (provider, strong, fast) in cases {
+            let candidates = provider_router_candidates(provider, strong);
+            assert_eq!(candidates.big, strong);
+            assert_eq!(candidates.cheap.as_deref(), Some(fast));
+            assert_eq!(
+                provider_router_candidates(provider, fast).cheap,
+                None,
+                "already-fast model must not downgrade again: {provider:?}/{fast}"
+            );
+        }
+
+        for (provider, model) in [
+            (ApiProvider::Ollama, "qwen3:32b"),
+            (ApiProvider::Custom, "gpt-5.6-sol"),
+            (ApiProvider::OpenaiCodex, "gpt-5.6-luna"),
+        ] {
+            assert_eq!(provider_router_candidates(provider, model).cheap, None);
+        }
     }
 
     #[test]
