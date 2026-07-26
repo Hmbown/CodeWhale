@@ -47,6 +47,13 @@ pub(super) fn refresh_if_needed(app: &mut App, now: Instant, allow_refresh: bool
         return;
     }
 
+    // The Session sidebar shows the memory file's size every frame it is
+    // visible. Stat it here, on the same TTL as the git context, so the draw
+    // closure reads a cached string instead of issuing a syscall per frame
+    // (#3908). Cheap on a local disk; tens of ms on NFS/SSHFS/cloud-synced
+    // home directories, which is exactly where the stutter was reported.
+    refresh_memory_size_hint(app);
+
     // Offload git query to a background thread when a Tokio runtime is
     // available. Fall back to synchronous execution for tests and other
     // non-async contexts (#399 S1).
@@ -65,6 +72,37 @@ pub(super) fn refresh_if_needed(app: &mut App, now: Instant, allow_refresh: bool
         app.workspace_context = collect(&app.workspace);
     }
     app.workspace_context_refreshed_at = Some(now);
+}
+
+/// Re-read the memory file's size into [`App::memory_size_hint`].
+///
+/// A missing or unreadable file renders as an em dash, matching what the
+/// sidebar showed when it stat-ed inline.
+fn refresh_memory_size_hint(app: &mut App) {
+    let hint = if app.use_memory {
+        Some(
+            std::fs::metadata(&app.memory_path)
+                .map(|meta| format_size(meta.len()))
+                .unwrap_or_else(|_| "\u{2014}".to_string()),
+        )
+    } else {
+        None
+    };
+    if app.memory_size_hint != hint {
+        app.needs_redraw = true;
+        app.memory_size_hint = hint;
+    }
+}
+
+/// Human-readable byte size, in the exact shape the sidebar rendered inline.
+fn format_size(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else if bytes >= 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 /// Force a workspace-context re-query on the next render tick, bypassing the
@@ -279,6 +317,44 @@ fn run_git(workspace: &Path, args: &[&str]) -> std::io::Result<String> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn memory_size_hint_is_cached_off_the_render_path() {
+        // #3908: the Session sidebar rendered this by stat-ing the memory file
+        // inside the draw closure, once per frame. The stat now happens here,
+        // on the workspace-context TTL, so the sidebar reads a plain String.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let memory = dir.path().join("MEMORY.md");
+        std::fs::write(&memory, vec![b'x'; 2048]).unwrap();
+
+        let mut app = crate::tui::app::App::new(
+            crate::test_support::test_tui_options(dir.path().to_path_buf()),
+            &crate::config::Config::default(),
+        );
+        app.use_memory = true;
+        app.memory_path = memory.clone();
+
+        refresh_memory_size_hint(&mut app);
+        assert_eq!(app.memory_size_hint.as_deref(), Some("2.0 KB"));
+
+        // A file that is not there reads the same as one we cannot stat: the
+        // sidebar's original em dash, not a crash or a stale number.
+        std::fs::remove_file(&memory).unwrap();
+        refresh_memory_size_hint(&mut app);
+        assert_eq!(app.memory_size_hint.as_deref(), Some("\u{2014}"));
+
+        // Memory off means nothing to show at all.
+        app.use_memory = false;
+        refresh_memory_size_hint(&mut app);
+        assert_eq!(app.memory_size_hint, None);
+    }
+
+    #[test]
+    fn memory_size_formats_match_the_sidebar_original() {
+        assert_eq!(format_size(512), "512 B");
+        assert_eq!(format_size(1024), "1.0 KB");
+        assert_eq!(format_size(1024 * 1024), "1.0 MB");
+    }
 
     #[test]
     fn identity_in_git_repo_carries_name_and_branch() {

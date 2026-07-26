@@ -3102,18 +3102,14 @@ fn render_context_panel(f: &mut Frame, area: Rect, app: &mut App) {
 
     // ── Memory ───────────────────────────────────────────────────
     if app.use_memory {
-        let size_hint = std::fs::metadata(&app.memory_path)
-            .map(|m| m.len())
-            .map(|bytes| {
-                if bytes >= 1024 * 1024 {
-                    format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
-                } else if bytes >= 1024 {
-                    format!("{:.1} KB", bytes as f64 / 1024.0)
-                } else {
-                    format!("{bytes} B")
-                }
-            })
-            .unwrap_or_else(|_| "—".to_string());
+        // Cached by `workspace_context::refresh_if_needed` on its TTL tick.
+        // This used to `stat` inline, on every frame the panel was visible
+        // (#3908). Before the first refresh lands there is nothing to show,
+        // which reads the same as an unreadable file.
+        let size_hint = app
+            .memory_size_hint
+            .clone()
+            .unwrap_or_else(|| "—".to_string());
         lines.push(Line::from(Span::styled(
             format!("memory: {} ({})", app.memory_path.display(), size_hint),
             Style::default().fg(theme.text_muted),

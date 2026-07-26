@@ -802,6 +802,7 @@ impl App {
             workspace_context: None,
             workspace_context_cell: std::sync::Arc::new(std::sync::Mutex::new(None)),
             workspace_context_refreshed_at: None,
+            memory_size_hint: None,
             task_panel: Vec::new(),
             behavioral_tips: crate::tui::behavioral_tips::BehavioralTipState::default(),
             decision_card: None,

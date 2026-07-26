@@ -1620,6 +1620,13 @@ pub struct App {
     pub workspace_context_cell: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     /// Timestamp for cached workspace context.
     pub workspace_context_refreshed_at: Option<Instant>,
+    /// Cached size of the memory file, formatted for the Session sidebar.
+    ///
+    /// Rendered every frame the Session/Context panel is visible, so the
+    /// `stat` behind it is refreshed on the workspace-context TTL tick
+    /// instead of inside the draw closure (#3908) — tens of ms per frame on
+    /// NFS/SSHFS/cloud-synced homes otherwise.
+    pub memory_size_hint: Option<String>,
     /// Cached background tasks for sidebar rendering.
     pub task_panel: Vec<TaskPanelEntry>,
     /// Session-local quieting and command detectors for event-driven tips.

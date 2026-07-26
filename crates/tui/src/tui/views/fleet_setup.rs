@@ -398,6 +398,13 @@ pub struct FleetSetupView {
     model_idx: usize,
     thinking_idx: usize,
     profile_scope: FleetProfileScope,
+    /// Cached `profile_file_status` for the Review step.
+    ///
+    /// `render_review` used to recompute this on every paint — `exists()` +
+    /// `is_dir()` + a full `read_dir` extension count, inside the draw closure
+    /// (#3908). Recomputed on entry to Review and when the scope toggles,
+    /// which are the only inputs it depends on.
+    profile_status: Option<(String, String)>,
     review_scroll: usize,
     /// A model-drafted profile awaiting save (already sanitized and
     /// bounded by the untrusted gate). Cleared when the selection changes so
@@ -471,6 +478,7 @@ impl FleetSetupView {
             model_idx: 0,
             thinking_idx: 0,
             profile_scope: FleetProfileScope::Project,
+            profile_status: None,
             review_scroll: 0,
             model_draft: None,
             model_draft_label: None,
@@ -670,6 +678,16 @@ impl FleetSetupView {
     }
 
     /// Advance to the next step, or — on the review step — preview the exact
+    /// Re-stat the profile directory. Called on the two transitions that can
+    /// change the answer — entering Review, and toggling project/user scope —
+    /// so the Review step never touches the filesystem while painting.
+    fn refresh_profile_status(&mut self) {
+        self.profile_status = Some(profile_file_status(
+            self.profile_scope,
+            &self.snapshot.workspace,
+        ));
+    }
+
     /// starter profile TOML the next save keypress would persist.
     fn advance(&mut self) -> ViewAction {
         match self.step {
@@ -688,6 +706,7 @@ impl FleetSetupView {
                     // Thinking defaults to inherit; adjust on review with `t`.
                     self.step = Step::Review;
                     self.review_scroll = 0;
+                    self.refresh_profile_status();
                 }
                 ViewAction::None
             }
@@ -882,6 +901,7 @@ impl ModalView for FleetSetupView {
                 self.profile_scope = self.profile_scope.toggled();
                 self.discard_model_draft();
                 self.review_scroll = 0;
+                self.refresh_profile_status();
                 ViewAction::None
             }
             KeyCode::Char('t') if self.step == Step::Review => {
@@ -1108,7 +1128,12 @@ impl FleetSetupView {
         }
 
         let role = &ROLES[self.role_idx.min(ROLES.len() - 1)];
-        let (profile_value, _) = profile_file_status(self.profile_scope, &self.snapshot.workspace);
+        // Cached on entry to this step and on scope toggle; see `profile_status`.
+        let profile_value = self
+            .profile_status
+            .as_ref()
+            .map(|(value, _)| value.clone())
+            .unwrap_or_default();
         let file_stem = profile_file_stem(&role.label);
         let mut lines: Vec<Line> = Vec::new();
         let section = |lines: &mut Vec<Line>, label: &str, body: String| {
@@ -1862,6 +1887,46 @@ mod tests {
                 .iter()
                 .any(|(_, idx)| *idx == ROLES.len() - 1),
             "selected row needs an aligned mouse hitbox"
+        );
+    }
+
+    /// #3908: `render_review` recomputed `profile_file_status` — `exists()` +
+    /// `is_dir()` + a full `read_dir` extension count — on every paint. It is
+    /// now computed on the transitions that can change it, so the value the
+    /// Review step paints must be present and must track a scope toggle.
+    #[test]
+    fn review_profile_status_is_cached_on_transitions_not_recomputed_per_paint() {
+        let mut view = FleetSetupView::from_snapshot(snapshot());
+        assert!(
+            view.profile_status.is_none(),
+            "nothing is stat-ed before the user reaches Review"
+        );
+
+        view.advance();
+        view.advance();
+        assert_eq!(view.step, Step::Review);
+        let on_entry = view
+            .profile_status
+            .clone()
+            .expect("entering Review must populate the cached status");
+
+        // Painting repeatedly must not change the cached value — that is the
+        // whole point — and must not panic on the cached-read path.
+        let area = Rect::new(0, 0, 80, 24);
+        for _ in 0..3 {
+            let mut buf = Buffer::empty(area);
+            view.render(area, &mut buf);
+        }
+        assert_eq!(view.profile_status.as_ref(), Some(&on_entry));
+
+        // Toggling scope changes which directory is described, so the cache
+        // has to be refreshed on that keypress.
+        let before_scope = view.profile_scope;
+        view.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+        assert_ne!(view.profile_scope, before_scope);
+        assert!(
+            view.profile_status.is_some(),
+            "a scope toggle must leave a freshly computed status behind"
         );
     }
 
