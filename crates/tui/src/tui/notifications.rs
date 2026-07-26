@@ -10,6 +10,11 @@
 //! When `method = "auto"`, the resolver picks the best method for the
 //! current terminal; Windows falls back to `Bel`, which is routed through
 //! `MessageBeep(MB_OK)` for an audible default notification sound.
+//!
+//! Every mechanism is fed a [`NotificationPayload`] — a typed, bounded,
+//! redaction-aware value — rather than a free-form `String` (#4834). See
+//! [`crate::tui::notification_payload`] for the per-kind disclosure
+//! policy.
 
 #[cfg(target_os = "windows")]
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
@@ -22,6 +27,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::atomic::{AtomicU8, AtomicU64};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
+
+pub use super::notification_payload::NotificationPayload;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::ffi::OsStrExt;
@@ -41,7 +48,22 @@ pub enum Method {
     Osc9,
     /// Plain BEL character: `\x07`
     Bel,
-    /// osascript
+    /// macOS Notification Center via `osascript`.
+    ///
+    /// Only reachable through [`Method::Auto`], and only on the macOS
+    /// terminals that expose no notification escape of their own (Apple
+    /// Terminal, the VS Code and JetBrains embedded terminals, plain tmux
+    /// without `LC_TERMINAL`). iTerm2, WezTerm, Ghostty, and kitty are
+    /// matched earlier in [`resolve_method`] and never get here.
+    ///
+    /// Known limitation (#4834): `display notification` is a Standard
+    /// Additions command, so the banner is attributed to the *bundled*
+    /// host process. `/usr/bin/osascript` is unbundled, so macOS credits
+    /// `com.apple.ScriptEditor2` — which is what supplies the Script
+    /// Editor icon and owns the System Settings → Notifications entry
+    /// (alert style, previews, Do Not Disturb). `display notification`
+    /// takes no icon parameter; fixing the attribution requires shipping
+    /// a real `.app` bundle, not a change in this file.
     MacOS,
     /// Kitty notification protocol (OSC 99) with ST terminator.
     /// Uses `ESC ] 99 ; params ST` — no audible beep, unlike BEL.
@@ -173,14 +195,14 @@ fn build_escape(method: Method, in_tmux: bool, msg: &str) -> Vec<u8> {
     }
 }
 
-/// Emit a turn-complete notification to `sink` if the elapsed time meets or
-/// exceeds `threshold`, and `method` is not `Off`.
+/// Emit a notification to `sink` if the elapsed time meets or exceeds
+/// `threshold`, and `method` is not `Off`.
 ///
 /// This variant takes a `W: Write` sink for testability.
 pub fn notify_done_to<W: Write>(
     method: Method,
     in_tmux: bool,
-    msg: &str,
+    payload: &NotificationPayload,
     threshold: Duration,
     elapsed: Duration,
     sink: &mut W,
@@ -194,14 +216,23 @@ pub fn notify_done_to<W: Write>(
         other => other,
     };
 
+    // "I get no notifications" and "the wrong app posted it" (#4834) are
+    // both diagnosed by knowing which kind resolved to which mechanism.
+    tracing::debug!(
+        kind = ?payload.kind(),
+        method = ?effective,
+        in_tmux,
+        "emitting desktop notification"
+    );
+
     // macOS Notification Center: handled via osascript, not terminal escapes.
     #[cfg(target_os = "macos")]
     if Method::MacOS == effective {
-        macos_display_notification(msg);
+        macos_display_notification(payload);
         return;
     }
 
-    let bytes = build_escape(effective, in_tmux, msg);
+    let bytes = build_escape(effective, in_tmux, &payload.render_inline());
     if bytes.is_empty() {
         return;
     }
@@ -218,7 +249,7 @@ pub fn notify_done_to<W: Write>(
     }
 }
 
-/// Emit a turn-complete notification to **stdout** if `elapsed >= threshold`.
+/// Emit a notification to **stdout** if `elapsed >= threshold`.
 ///
 /// With `method = Auto`, selects the best protocol for the current terminal
 /// (OSC 9, Kitty OSC 99, Ghostty OSC 777, or Bel). The unknown-terminal
@@ -230,11 +261,18 @@ pub fn notify_done_to<W: Write>(
 pub fn notify_done(
     method: Method,
     in_tmux: bool,
-    msg: &str,
+    payload: &NotificationPayload,
     threshold: Duration,
     elapsed: Duration,
 ) {
-    notify_done_to(method, in_tmux, msg, threshold, elapsed, &mut io::stdout());
+    notify_done_to(
+        method,
+        in_tmux,
+        payload,
+        threshold,
+        elapsed,
+        &mut io::stdout(),
+    );
 }
 
 /// Set the terminal taskbar progress state via OSC 9 ; 4.
@@ -593,13 +631,14 @@ fn completion_sound_state_for_tests() -> (crate::config::CompletionSound, Option
 ///
 /// The notification includes:
 /// - **Title**: "Codewhale"
-/// - **Subtitle**: First line of `msg` (when the message contains a newline,
-///   e.g. the localized completion status from a completed turn)
-/// - **Body**: Remaining lines of `msg`, if any
+/// - **Subtitle**: [`NotificationPayload::headline`] (≤ 80 chars)
+/// - **Body**: [`NotificationPayload::body`] (≤ 322 chars: a ≤ 120-char
+///   detail, a separator, and a ≤ 200-char preview)
 /// - **Sound**: Default macOS notification sound
 ///
-/// The message body is capped at 200 **characters** (not bytes) to keep the
-/// bubble readable while correctly handling multi-byte text.
+/// Both fields arrive already sanitized, redacted, and character-bounded
+/// by [`NotificationPayload`]; this function does not re-derive them from
+/// free-form text (#4834).
 ///
 /// **Security**: The message is passed to `osascript` as a command-line
 /// argument via `ARGV`, never embedded inline in the AppleScript source.
@@ -609,13 +648,18 @@ fn completion_sound_state_for_tests() -> (crate::config::CompletionSound, Option
 /// evaluated as raw AppleScript code — a code-injection vector for
 /// AI-generated notification text. Passing via `ARGV` avoids this
 /// entirely because the message is never parsed as AppleScript syntax.
+/// Keep it that way.
+///
+/// **Attribution**: the banner is posted on behalf of `osascript`, which
+/// is unbundled, so macOS attributes it to `com.apple.ScriptEditor2`. See
+/// [`Method::MacOS`] — that is not fixable from here.
 ///
 /// This is best-effort: if `osascript` is not available (e.g. headless SSH
 /// session) the error is logged via `tracing::warn!` instead of silently
 /// swallowed.
 #[cfg(target_os = "macos")]
-fn macos_display_notification(msg: &str) {
-    let message = msg.to_string();
+fn macos_display_notification(payload: &NotificationPayload) {
+    let (subtitle, body) = macos_notification_parts(payload);
 
     // Spawn on a background thread so we don't block the caller.
     // osascript itself is fast (~50 ms), but spawning a subprocess
@@ -629,7 +673,6 @@ fn macos_display_notification(msg: &str) {
             // string literals, so `\"` would terminate the string at
             // the `"` and leave a dangling `\`. Passing the message as
             // a command-line argument avoids any injection risk.
-            let (subtitle, body) = macos_notification_parts(&message);
             let args = [
                 "-e".to_string(),
                 "on run argv".to_string(),
@@ -662,36 +705,12 @@ fn macos_display_notification(msg: &str) {
         });
 }
 
+/// Split a payload into the `(subtitle, body)` pair `display notification`
+/// wants. Both halves are already bounded and redacted by the payload
+/// constructors, so this is a projection, not a sanitizer.
 #[cfg(target_os = "macos")]
-fn macos_notification_parts(msg: &str) -> (String, String) {
-    const SUBTITLE_MAX_CHARS: usize = 80;
-    const BODY_MAX_CHARS: usize = 200;
-
-    let sanitized = super::ui::sanitize_stream_chunk(msg);
-    let lines: Vec<&str> = sanitized
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect();
-
-    if lines.is_empty() {
-        return ("Codewhale".to_string(), String::new());
-    }
-
-    let subtitle = truncate_notification_text(lines[0], SUBTITLE_MAX_CHARS);
-    let body = truncate_notification_text(&lines[1..].join("\n"), BODY_MAX_CHARS);
-    (subtitle, body)
-}
-
-#[cfg(target_os = "macos")]
-fn truncate_notification_text(text: &str, max_chars: usize) -> String {
-    if text.chars().count() <= max_chars {
-        return text.to_string();
-    }
-    let take = max_chars.saturating_sub(3);
-    let mut out = text.chars().take(take).collect::<String>();
-    out.push_str("...");
-    out
+fn macos_notification_parts(payload: &NotificationPayload) -> (String, String) {
+    (payload.headline().to_string(), payload.body())
 }
 
 // ── Per-turn notification composition ────────────────────────────────
@@ -746,47 +765,47 @@ pub fn settings(config: &crate::config::Config) -> Option<(Method, Duration, boo
     ))
 }
 
-/// Build the notification body for a completed turn. Prefers the live
+/// Build the notification payload for a completed turn. Prefers the live
 /// streaming text the user just saw; falls back to the latest assistant
 /// message in `api_messages` if streaming text is empty (for example, the
 /// turn finished entirely through tool output). When `include_summary` is
-/// true, an elapsed/cost line is appended.
-pub fn completed_turn_message(
+/// true, an elapsed/cost suffix is appended to the headline.
+///
+/// The assistant text becomes the payload's *preview*, which means it is
+/// redacted and capped at 200 characters before it can reach the OS.
+pub fn completed_turn_payload(
     app: &App,
     current_streaming_text: &str,
     include_summary: bool,
     turn_elapsed: Duration,
     turn_cost: Option<crate::pricing::CostEstimate>,
-) -> String {
-    let mut msg = completion_status(
+) -> NotificationPayload {
+    let headline = completion_status(
         &tr(app.ui_locale, MessageId::NotificationTurnComplete),
         include_summary,
         turn_elapsed,
         turn_cost.map(|cost| crate::pricing::format_cost_estimate(cost, app.cost_currency)),
     );
 
-    if let Some(preview) =
-        text_summary(current_streaming_text).or_else(|| latest_assistant_text(&app.api_messages))
-    {
-        msg.push('\n');
-        msg.push_str(&preview);
-    }
+    let preview =
+        text_summary(current_streaming_text).or_else(|| latest_assistant_text(&app.api_messages));
 
-    msg
+    NotificationPayload::turn_complete(&headline).with_preview(preview.as_deref())
 }
 
-/// Compose a notification body for a terminal sub-agent outcome. Falls back
-/// to the agent id if no human-readable line can be teased out of the child's
-/// transcript. The heading reflects the actual status so a Stop/failed worker
-/// is never announced as successfully complete (#4408).
-pub fn subagent_terminal_message(
+/// Compose a notification payload for a terminal sub-agent outcome. The
+/// agent id is always the detail line; the child's first human-readable
+/// summary line, when there is one, becomes the (redacted, bounded)
+/// preview. The headline reflects the actual status so a Stop/failed
+/// worker is never announced as successfully complete (#4408).
+pub fn subagent_terminal_payload(
     locale: Locale,
     id: &str,
     result: &str,
     status: &SubAgentStatus,
     include_summary: bool,
     elapsed: Duration,
-) -> String {
+) -> NotificationPayload {
     let result_line = result
         .lines()
         .map(str::trim)
@@ -799,16 +818,10 @@ pub fn subagent_terminal_message(
         SubAgentStatus::BudgetExhausted => MessageId::NotificationSubagentBudgetExhausted,
         SubAgentStatus::Running => MessageId::NotificationSubagentComplete,
     };
-    let mut msg = completion_status(&tr(locale, label), include_summary, elapsed, None);
-    let detail = result_line
-        .and_then(text_summary)
-        .map(|summary| format!("{id}: {summary}"))
-        .unwrap_or_else(|| id.to_string());
+    let headline = completion_status(&tr(locale, label), include_summary, elapsed, None);
+    let preview = result_line.and_then(text_summary);
 
-    msg.push('\n');
-    msg.push_str(&detail);
-
-    msg
+    NotificationPayload::subagent_terminal(&headline, id).with_preview(preview.as_deref())
 }
 
 fn completion_status(
@@ -929,6 +942,8 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    /// Escape-protocol tests care about the bytes, not the composition
+    /// policy, so they go through the least-privileged constructor.
     fn capture(
         method: Method,
         in_tmux: bool,
@@ -940,7 +955,7 @@ mod tests {
         notify_done_to(
             method,
             in_tmux,
-            msg,
+            &NotificationPayload::input_needed(msg),
             Duration::from_secs(threshold_secs),
             Duration::from_secs(elapsed_secs),
             &mut buf,
@@ -1013,26 +1028,55 @@ mod tests {
         assert!(!out.is_empty());
     }
 
+    /// The subtitle is the localized status headline and the body is
+    /// everything else. Previously this was re-derived by splitting a
+    /// free-form string on its first newline; now it is a projection of
+    /// the typed payload, so the split cannot drift from what the
+    /// composer intended (#4834).
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_notification_keeps_localized_status_as_subtitle() {
-        let (subtitle, body) = macos_notification_parts("ターン完了 (1m 5s)\n完了しました。");
+        let payload = NotificationPayload::turn_complete("ターン完了 (1m 5s)")
+            .with_preview(Some("完了しました。"));
+
+        let (subtitle, body) = macos_notification_parts(&payload);
 
         assert_eq!(subtitle, "ターン完了 (1m 5s)");
         assert_eq!(body, "完了しました。");
     }
 
+    /// The preview is capped at `PREVIEW_MAX_CHARS` *inclusive* of the
+    /// ellipsis, so the string handed to `osascript` never exceeds the
+    /// declared bound.
     #[cfg(target_os = "macos")]
     #[test]
-    fn macos_notification_truncates_body_after_status_line() {
-        let msg = format!("Turn complete\n{}", "assistant preview ".repeat(40));
+    fn macos_notification_truncates_preview() {
+        let payload = NotificationPayload::turn_complete("Turn complete")
+            .with_preview(Some(&"assistant preview ".repeat(40)));
 
-        let (subtitle, body) = macos_notification_parts(&msg);
+        let (subtitle, body) = macos_notification_parts(&payload);
 
         assert_eq!(subtitle, "Turn complete");
         assert!(body.starts_with("assistant preview"));
         assert!(body.ends_with("..."));
-        assert_eq!(body.chars().count(), 200);
+        assert_eq!(
+            body.chars().count(),
+            super::super::notification_payload::PREVIEW_MAX_CHARS
+        );
+    }
+
+    /// #4834: an approval banner is the one place a raw shell command
+    /// used to reach Notification Center. Pin the macOS projection, not
+    /// just the payload, so a future refactor of either half is caught.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_approval_notification_never_carries_the_command() {
+        let payload = NotificationPayload::approval_needed("Approval needed", "bash");
+
+        let (subtitle, body) = macos_notification_parts(&payload);
+
+        assert_eq!(subtitle, "Approval needed");
+        assert_eq!(body, "bash");
     }
 
     #[test]

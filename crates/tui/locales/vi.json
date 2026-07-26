@@ -252,7 +252,6 @@
     "CmdQueueIndexPositive": "Chỉ mục phải là số dương",
     "CmdQueueIndexMin": "Chỉ mục phải >= 1",
     "CmdRelayDescription": "Tạo một phiên tiếp sức cho một luồng mới",
-    "CmdRemoteControlDescription": "Tiếp tục chính phiên này từ tài khoản web Codewhale",
     "CmdRenameDescription": "Đổi tên phiên làm việc hiện tại",
     "CmdRestoreDescription": "Khôi phục không gian làm việc về bản chụp trước/sau lượt. Nếu không có đối số, hiển thị các bản chụp gần đây.",
     "CmdRetryDescription": "Thử lại yêu cầu gần nhất",

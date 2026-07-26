@@ -17005,14 +17005,18 @@ fn notification_settings_no_tui_override_uses_notifications_block() {
 #[test]
 fn completed_turn_notification_uses_streaming_text() {
     let app = create_test_app();
-    let msg = crate::tui::notifications::completed_turn_message(
+    let payload = crate::tui::notifications::completed_turn_payload(
         &app,
         "Hello there.\n\nWhat's next?",
         false,
         Duration::from_secs(12),
         None,
     );
-    assert_eq!(msg, "Turn complete\nHello there.\nWhat's next?");
+    assert_eq!(payload.headline(), "Turn complete");
+    // #4834: the assistant text is now a *preview* field, so it is
+    // collapsed to a single bounded line instead of riding along as
+    // free-form newline-separated text.
+    assert_eq!(payload.preview(), Some("Hello there. What's next?"));
 }
 
 #[test]
@@ -17040,65 +17044,77 @@ fn completed_turn_notification_falls_back_to_latest_assistant_message() {
         }],
     });
 
-    let msg = crate::tui::notifications::completed_turn_message(
+    let payload = crate::tui::notifications::completed_turn_payload(
         &app,
         "",
         false,
         Duration::from_secs(75),
         None,
     );
-    assert_eq!(msg, "Turn complete\nLatest reply");
+    assert_eq!(payload.headline(), "Turn complete");
+    assert_eq!(payload.preview(), Some("Latest reply"));
 }
 
 #[test]
 fn completed_turn_notification_falls_back_to_default_when_empty() {
     let app = create_test_app();
-    let msg = crate::tui::notifications::completed_turn_message(
+    let payload = crate::tui::notifications::completed_turn_payload(
         &app,
         "",
         false,
         Duration::from_secs(5),
         None,
     );
-    assert_eq!(msg, "Turn complete");
+    assert_eq!(payload.headline(), "Turn complete");
+    assert_eq!(payload.preview(), None);
+    assert_eq!(payload.render_inline(), "Turn complete");
 }
 
 #[test]
 fn completed_turn_notification_truncates_long_text() {
     let app = create_test_app();
-    let long = "a".repeat(500);
-    let msg = crate::tui::notifications::completed_turn_message(
+    // Word-shaped text on purpose: a 500-character unbroken run is
+    // credential-shaped and is now redacted wholesale (see
+    // `notification_payload::redact_credentials`), which would test the
+    // wrong thing here.
+    let long = "assistant preview ".repeat(40);
+    let payload = crate::tui::notifications::completed_turn_payload(
         &app,
         &long,
         false,
         Duration::from_secs(5),
         None,
     );
-    assert!(msg.ends_with("..."));
-    let preview = msg
-        .strip_prefix("Turn complete\n")
-        .expect("notification should lead with completion status");
-    // 360-char body + 3-char ellipsis
-    assert_eq!(preview.chars().count(), 363);
+    assert_eq!(payload.headline(), "Turn complete");
+    let preview = payload.preview().expect("long text should yield a preview");
+    assert!(preview.ends_with("..."));
+    // #4834: the cap moved from 363 chars of untyped tail text to the
+    // payload's declared PREVIEW_MAX_CHARS, *inclusive* of the ellipsis,
+    // so the bound the type promises is the bound the OS receives.
+    assert_eq!(
+        preview.chars().count(),
+        crate::tui::notification_payload::PREVIEW_MAX_CHARS
+    );
 }
 
 #[test]
 fn completed_turn_notification_leads_with_user_locale() {
     let mut app = create_test_app();
     app.ui_locale = crate::localization::Locale::Ja;
-    let msg = crate::tui::notifications::completed_turn_message(
+    let payload = crate::tui::notifications::completed_turn_payload(
         &app,
         "完了しました。",
         true,
         Duration::from_secs(65),
         None,
     );
-    assert_eq!(msg, "ターン完了 (1m 05s)\n完了しました。");
+    assert_eq!(payload.headline(), "ターン完了 (1m 05s)");
+    assert_eq!(payload.preview(), Some("完了しました。"));
 }
 
 #[test]
 fn subagent_completion_notification_uses_summary_line_not_sentinel() {
-    let msg = crate::tui::notifications::subagent_terminal_message(
+    let payload = crate::tui::notifications::subagent_terminal_payload(
         crate::localization::Locale::En,
         "agent_live",
         "Finished the docs audit.\n<codewhale:subagent.done>{}</codewhale:subagent.done>",
@@ -17107,16 +17123,15 @@ fn subagent_completion_notification_uses_summary_line_not_sentinel() {
         Duration::from_secs(42),
     );
 
-    assert_eq!(
-        msg,
-        "Sub-agent complete\nagent_live: Finished the docs audit."
-    );
-    assert!(!msg.contains("codewhale:subagent.done"));
+    assert_eq!(payload.headline(), "Sub-agent complete");
+    assert_eq!(payload.detail(), Some("agent_live"));
+    assert_eq!(payload.preview(), Some("Finished the docs audit."));
+    assert!(!payload.render_inline().contains("codewhale:subagent.done"));
 }
 
 #[test]
 fn subagent_completion_notification_can_include_elapsed_summary() {
-    let msg = crate::tui::notifications::subagent_terminal_message(
+    let payload = crate::tui::notifications::subagent_terminal_payload(
         crate::localization::Locale::En,
         "agent_live",
         "",
@@ -17125,12 +17140,14 @@ fn subagent_completion_notification_can_include_elapsed_summary() {
         Duration::from_secs(65),
     );
 
-    assert_eq!(msg, "Sub-agent complete (1m 05s)\nagent_live");
+    assert_eq!(payload.headline(), "Sub-agent complete (1m 05s)");
+    assert_eq!(payload.detail(), Some("agent_live"));
+    assert_eq!(payload.preview(), None);
 }
 
 #[test]
 fn subagent_cancelled_notification_never_claims_completion() {
-    let msg = crate::tui::notifications::subagent_terminal_message(
+    let payload = crate::tui::notifications::subagent_terminal_payload(
         crate::localization::Locale::En,
         "agent_stopped",
         "Cancelled\n<codewhale:subagent.done>{\"status\":\"cancelled\"}</codewhale:subagent.done>",
@@ -17139,8 +17156,10 @@ fn subagent_cancelled_notification_never_claims_completion() {
         Duration::from_secs(2),
     );
 
-    assert_eq!(msg, "Sub-agent cancelled\nagent_stopped: Cancelled");
-    assert!(!msg.contains("Sub-agent complete"));
+    assert_eq!(payload.headline(), "Sub-agent cancelled");
+    assert_eq!(payload.detail(), Some("agent_stopped"));
+    assert_eq!(payload.preview(), Some("Cancelled"));
+    assert!(!payload.render_inline().contains("Sub-agent complete"));
 }
 
 #[test]

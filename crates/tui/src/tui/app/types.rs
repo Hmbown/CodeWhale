@@ -540,8 +540,6 @@ pub enum InitialInput {
     /// Pre-populate the composer, submit it once startup is ready, then keep
     /// the interactive session open for follow-up messages (#2370).
     Submit(String),
-    /// Begin account-owned web remote control after the TUI is initialized.
-    RemoteControl,
 }
 
 // === Sub-state structs for App field organization (#377) ===
@@ -693,7 +691,6 @@ pub enum AppAction {
     SaveSession(PathBuf),
     #[allow(dead_code)] // For explicit /load command
     LoadSession(PathBuf),
-    RemoteControl(crate::remote_control::RemoteControlAction),
     SyncSession {
         session_id: Option<String>,
         messages: Vec<Message>,

@@ -252,7 +252,6 @@
     "CmdQueueIndexPositive": "索引必须为正数",
     "CmdQueueIndexMin": "索引必须 >= 1",
     "CmdRelayDescription": "为新线程创建会话接力摘要",
-    "CmdRemoteControlDescription": "从 Codewhale 网页账户继续这个会话",
     "CmdRenameDescription": "重命名当前会话",
     "CmdRestoreDescription": "将工作区回滚到此前的轮次前/后快照。不带参数时列出最近的快照。",
     "CmdRetryDescription": "重试上一次请求",

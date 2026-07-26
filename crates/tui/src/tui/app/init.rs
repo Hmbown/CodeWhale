@@ -473,7 +473,6 @@ impl App {
 
         let input_history = crate::composer_history::load_history();
         let mention_cwd = std::env::current_dir().ok();
-        let start_remote_control = matches!(initial_input, Some(InitialInput::RemoteControl));
         let (initial_input_text, initial_input_cursor, auto_submit_initial_input) =
             match initial_input {
                 // #451: pre-populate the composer when invoked via
@@ -488,7 +487,6 @@ impl App {
                     let cursor = text.chars().count();
                     (text, cursor, true)
                 }
-                Some(InitialInput::RemoteControl) => (String::new(), 0, false),
                 _ => (String::new(), 0, false),
             };
         let mcp_configured_count = crate::mcp::load_config_with_workspace_and_plugins(
@@ -553,8 +551,6 @@ impl App {
             history_revisions: Vec::new(),
             next_history_revision: 1,
             api_messages: Vec::new(),
-            remote_control: crate::remote_control::RemoteControlController::default(),
-            start_remote_control_on_launch: start_remote_control,
             is_loading: false,
             dispatch_completion_tx: None,
             dispatch_in_flight: false,

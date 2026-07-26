@@ -59,6 +59,7 @@ pub(crate) mod mention_completion;
 pub mod model_picker;
 pub mod motion;
 pub mod mouse_ui;
+pub mod notification_payload;
 pub mod notifications;
 pub mod ocean;
 pub mod onboarding;

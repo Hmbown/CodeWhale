@@ -233,8 +233,6 @@ enum Commands {
     Sessions(TuiPassthroughArgs),
     /// Resume a saved TUI session.
     Resume(TuiPassthroughArgs),
-    /// Launch an interactive session and hand it to the Codewhale web app.
-    Rc(TuiPassthroughArgs),
     /// Fork a saved TUI session.
     Fork(TuiPassthroughArgs),
     /// Create a default AGENTS.md in the current directory.
@@ -1662,12 +1660,6 @@ fn run() -> Result<()> {
         Some(Commands::Resume(args)) => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
             run_resume_command(&cli, &resolved_runtime, args)
-        }
-        Some(Commands::Rc(args)) => {
-            let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
-            let mut passthrough = vec!["--remote-control".to_string()];
-            passthrough.extend(args.args);
-            delegate_to_tui(&cli, &resolved_runtime, passthrough)
         }
         Some(Commands::Fork(args)) => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
@@ -8275,16 +8267,6 @@ model = "qwen-2.5-7b"
         assert!(cli.prompt_flag.is_none());
         assert!(cli.prompt.is_empty());
         assert_eq!(root_tui_passthrough(&cli).unwrap(), vec!["--continue"]);
-    }
-
-    #[test]
-    fn parses_rc_as_the_account_owned_interactive_handoff() {
-        let cli = parse_ok(&["codewhale", "rc"]);
-
-        let Some(Commands::Rc(args)) = cli.command else {
-            panic!("rc should parse as the remote-control TUI handoff");
-        };
-        assert!(args.args.is_empty());
     }
 
     #[test]

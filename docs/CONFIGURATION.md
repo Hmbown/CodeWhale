@@ -1659,6 +1659,47 @@ Windows users who run inside a known OSC-9 terminal (e.g. WezTerm on Windows) ke
 completion sound without changing the global Windows sound scheme. It plays the
 configured WAV `sound_file` asynchronously via the native Windows audio API.
 
+#### What a notification can contain
+
+A desktop notification is a glance surface: on macOS it can appear on the
+lock screen, and on every platform it is visible to anyone near the machine.
+Codewhale therefore builds notifications from a typed payload with a fixed
+per-event disclosure policy rather than from whatever text was on hand:
+
+| Event | Shown | Never shown |
+|---|---|---|
+| Turn complete | status line (+ elapsed/cost when `include_summary`), preview of the assistant's reply | — |
+| Sub-agent finished | status line, agent id, preview of the child's summary line | — |
+| Approval needed | the tool name | the tool description, the command, the arguments |
+| Input needed | "please respond in the terminal" | the question |
+| Sandbox elevation needed | the tool name and the denial reason | the command |
+| `notify` tool | model-supplied title and body | — |
+
+Every field is capped (80 characters for the status line, 120 for the
+identifier, 200 for the preview), stripped of control bytes and escape
+sequences, and passed through a redactor that replaces credential-shaped
+strings with `[redacted]`, reduces absolute local paths to `…/basename`,
+and replaces raw tool JSON with `[details hidden]`. The redactor is
+deliberately over-eager: an unbroken 40-character run has no word
+structure, so it is redacted even when it is not a secret.
+
+#### macOS: why the banner says "Script Editor"
+
+On macOS terminals that provide no notification escape of their own —
+Apple Terminal, the VS Code and JetBrains embedded terminals, plain tmux
+without `LC_TERMINAL` — `method = "auto"` falls back to `osascript`'s
+`display notification`. That command posts on behalf of the *bundled*
+host process, and `/usr/bin/osascript` is unbundled, so macOS attributes
+the banner to `com.apple.ScriptEditor2`. That attribution supplies the
+Script Editor icon and owns the System Settings → Notifications entry
+(alert style, previews, Do Not Disturb). `display notification` has no
+icon parameter, so this cannot be fixed from the notification code; it
+needs Codewhale to ship a real `.app` bundle. Tracked in
+[#4834](https://github.com/Hmbown/CodeWhale/issues/4834). In the meantime,
+iTerm2, WezTerm, Ghostty, and kitty are matched first and use their own
+notification protocols, and `method = "osc9"` / `"bel"` / `"off"` opt out
+of the `osascript` path explicitly.
+
 ### Parsed but currently unused (reserved for future versions)
 
 These keys are accepted by the config loader but not currently used by the interactive TUI or built-in tools:
