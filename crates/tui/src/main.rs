@@ -72,6 +72,7 @@ mod model_registry;
 mod model_routing;
 mod models;
 mod models_dev_live;
+mod native_memory;
 mod network_policy;
 mod oauth;
 mod palette;

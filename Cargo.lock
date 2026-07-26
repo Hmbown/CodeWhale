@@ -1120,6 +1120,7 @@ dependencies = [
  "regex",
  "reqwest 0.13.4",
  "rmcp",
+ "rusqlite",
  "rust-i18n",
  "rustls",
  "schemars",

@@ -23,7 +23,7 @@ use std::path::Path;
 use crate::commands::CommandResult;
 use crate::tui::app::App;
 
-const MEMORY_USAGE: &str = "/memory [show|path|clear|edit|help]";
+const MEMORY_USAGE: &str = "/memory [show|path|clear|edit|native ...|help]";
 
 fn memory_help(path: &Path) -> String {
     format!(
@@ -36,11 +36,116 @@ fn memory_help(path: &Path) -> String {
            /memory path     Print just the resolved path\n\
            /memory clear    Replace the file contents with an empty marker\n\
            /memory edit     Print the editor command for this file\n\
+           /memory native   Manage the local-native Markdown + FTS5 store\n\
            /memory help     Show this help\n\n\
          Quick capture: type `# foo` in the composer to append a timestamped\n\
          bullet without firing a turn.",
         path.display()
     )
+}
+
+fn native_store(app: &App) -> crate::native_memory::NativeMemoryStore {
+    let root = app
+        .memory_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("memory");
+    crate::native_memory::NativeMemoryStore::new(root)
+}
+
+fn native_command(app: &App, input: &str) -> CommandResult {
+    let store = native_store(app);
+    let mut parts = input.splitn(2, char::is_whitespace);
+    let command = parts.next().unwrap_or("status");
+    let arg = parts
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    match command {
+        "status" => CommandResult::message(format!(
+            "native memory: {}\nsource: {}\nindex: {}",
+            store.root().display(),
+            store.global_path().display(),
+            store.index_path().display()
+        )),
+        "path" => CommandResult::message(store.root().display().to_string()),
+        "search" => {
+            let Some(query) = arg else {
+                return CommandResult::error("Usage: /memory native search <query>");
+            };
+            match store.search(query, 10) {
+                Ok(hits) if hits.is_empty() => CommandResult::message("No native memory matches."),
+                Ok(hits) => CommandResult::message(
+                    hits.into_iter()
+                        .map(|hit| {
+                            format!(
+                                "{}:{}-{} {}",
+                                hit.source.display(),
+                                hit.line_start,
+                                hit.line_end,
+                                hit.text
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                ),
+                Err(err) => CommandResult::error(format!("native memory search failed: {err}")),
+            }
+        }
+        "remember" => {
+            let Some(input) = arg else {
+                return CommandResult::error(
+                    "Usage: /memory native remember [global|workspace <id>] <note>",
+                );
+            };
+            let mut words = input.splitn(3, char::is_whitespace);
+            let scope_word = words.next().unwrap_or_default();
+            let (scope, workspace_id, note) = if scope_word == "workspace" {
+                let Some(id) = words.next() else {
+                    return CommandResult::error(
+                        "Usage: /memory native remember workspace <id> <note>",
+                    );
+                };
+                let Some(note) = words.next() else {
+                    return CommandResult::error(
+                        "Usage: /memory native remember workspace <id> <note>",
+                    );
+                };
+                (crate::native_memory::MemoryScope::Workspace, Some(id), note)
+            } else {
+                (crate::native_memory::MemoryScope::Global, None, input)
+            };
+            match store.remember(scope, workspace_id, note) {
+                Ok(hit) => CommandResult::message(format!(
+                    "native memory remembered at {}:{}",
+                    hit.source.display(),
+                    hit.line_start
+                )),
+                Err(err) => CommandResult::error(format!("native memory write failed: {err}")),
+            }
+        }
+        "import" => match store.import_legacy(&app.memory_path) {
+            Ok(true) => CommandResult::message(format!(
+                "legacy memory imported non-destructively into {}",
+                store.global_path().display()
+            )),
+            Ok(false) => CommandResult::message("legacy memory was already imported or is empty"),
+            Err(err) => CommandResult::error(format!("legacy memory import failed: {err}")),
+        },
+        "reindex" => match store.reindex() {
+            Ok(count) => {
+                CommandResult::message(format!("native memory reindexed: {count} entries"))
+            }
+            Err(err) => CommandResult::error(format!("native memory reindex failed: {err}")),
+        },
+        "delete" | "clear" => match store.delete_all(None, None) {
+            Ok(()) => CommandResult::message("native memory deleted"),
+            Err(err) => CommandResult::error(format!("native memory delete failed: {err}")),
+        },
+        _ => CommandResult::error(
+            "Usage: /memory native [status|path|remember ...|import|search <query>|reindex|delete]",
+        ),
+    }
 }
 
 fn memory(app: &mut App, arg: Option<&str>) -> CommandResult {
@@ -52,6 +157,10 @@ fn memory(app: &mut App, arg: Option<&str>) -> CommandResult {
 
     let path = app.memory_path.clone();
     let sub = arg.unwrap_or("show").trim();
+
+    if let Some(native_arg) = sub.strip_prefix("native").map(str::trim) {
+        return native_command(app, native_arg);
+    }
 
     match sub {
         "" | "show" => {

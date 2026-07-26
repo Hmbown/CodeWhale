@@ -1607,6 +1607,15 @@ impl Default for SnapshotsConfig {
 /// Default is opt-in: when this table is absent or `enabled = false`, the
 /// memory file is neither read nor written, and `# foo` quick-adds in the
 /// composer fall through to the normal turn-submission path.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryBackend {
+    Native,
+    Moraine,
+    #[default]
+    Off,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct MemoryConfig {
     /// When `true`, load the user memory file at `Config::memory_path()`
@@ -1620,6 +1629,10 @@ pub struct MemoryConfig {
     /// skipped even when `enabled = true`. Default `false`.
     #[serde(default)]
     pub moraine_fallback: Option<bool>,
+    /// Explicit backend selection for the v0.9.2 memory lifecycle.
+    /// `None` preserves the pre-native opt-in behavior for old configs.
+    #[serde(default)]
+    pub backend: Option<MemoryBackend>,
 }
 
 /// Xiaomi MiMo speech/TTS output configuration.
@@ -5412,6 +5425,9 @@ impl Config {
     /// `DEEPSEEK_MEMORY=on` is set in the environment.
     #[must_use]
     pub fn memory_enabled(&self) -> bool {
+        if let Some(backend) = self.memory.as_ref().and_then(|memory| memory.backend) {
+            return backend != MemoryBackend::Off;
+        }
         self.memory
             .as_ref()
             .and_then(|m| m.enabled)
@@ -5425,10 +5441,34 @@ impl Config {
     /// when `memory_enabled()` returns `true`. Default `false`.
     #[must_use]
     pub fn moraine_fallback(&self) -> bool {
+        if let Some(backend) = self.memory.as_ref().and_then(|memory| memory.backend) {
+            return backend != MemoryBackend::Off;
+        }
         self.memory
             .as_ref()
             .and_then(|m| m.moraine_fallback)
             .unwrap_or(false)
+    }
+
+    /// Resolve the explicit local-memory backend without silently falling
+    /// back from an unavailable Moraine server to a different owner.
+    #[must_use]
+    pub fn memory_backend(&self) -> MemoryBackend {
+        self.memory
+            .as_ref()
+            .and_then(|memory| memory.backend)
+            .unwrap_or_else(|| {
+                let Some(memory) = self.memory.as_ref() else {
+                    return MemoryBackend::Off;
+                };
+                if memory.moraine_fallback.unwrap_or(false) {
+                    MemoryBackend::Moraine
+                } else if memory.enabled.unwrap_or(false) {
+                    MemoryBackend::Native
+                } else {
+                    MemoryBackend::Off
+                }
+            })
     }
 
     /// Return the configured vision model config, inheriting api_key from main config.
