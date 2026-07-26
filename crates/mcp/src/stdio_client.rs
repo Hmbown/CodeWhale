@@ -36,6 +36,10 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 /// before it kills the child.
 const SHUTDOWN_GRACE: Duration = Duration::from_millis(500);
 
+/// How long a failure path waits for a dying child's exit status before giving
+/// up and reporting the failure without one.
+const EXIT_STATUS_GRACE: Duration = Duration::from_millis(200);
+
 /// Upper bound on `*/list` pagination follow-ups, so a server that keeps
 /// echoing the same cursor cannot pin us in a loop.
 const MAX_LIST_PAGES: usize = 100;
@@ -320,13 +324,27 @@ impl Connection {
     ) -> Result<Value> {
         let id = self.next_id;
         self.next_id += 1;
-        self.send(&json!({
+        if let Err(err) = self.send(&json!({
             "jsonrpc": "2.0",
             "id": id,
             "method": method,
             "params": params
-        }))
-        .with_context(|| format!("MCP server '{server}': failed to send {method}"))?;
+        })) {
+            // A child that has already exited leaves us racing two symptoms of
+            // the same fact: either the reader thread sees EOF first, or our
+            // write loses the race and returns EPIPE. Which one wins is
+            // platform- and timing-dependent (macOS reliably reports the write
+            // error where Linux reports the EOF), so both report the death the
+            // same way rather than leaking a bare "Broken pipe".
+            if is_broken_pipe(&err) {
+                bail!(
+                    "MCP server '{server}': process closed stdin before answering {method}{}",
+                    self.exit_note()
+                );
+            }
+            return Err(err)
+                .with_context(|| format!("MCP server '{server}': failed to send {method}"));
+        }
 
         let deadline = Instant::now() + timeout;
         loop {
@@ -363,12 +381,34 @@ impl Connection {
         }
     }
 
+    /// The child's exit status, when it has one, for appending to a failure
+    /// message. Polls briefly because both callers run at the moment the child
+    /// is dying: the write can return EPIPE, or stdout can hit EOF, before the
+    /// kernel has finished reaping the process. Bounded and error-path-only,
+    /// so the cost buys a real diagnostic ("exited with status 127" is the
+    /// difference between a crashed server and a missing one).
     fn exit_note(&mut self) -> String {
-        match self.child.try_wait() {
-            Ok(Some(status)) => format!(" (process exited with {status})"),
-            _ => String::new(),
+        let deadline = Instant::now() + EXIT_STATUS_GRACE;
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(status)) => return format!(" (process exited with {status})"),
+                Ok(None) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                _ => return String::new(),
+            }
         }
     }
+}
+
+/// Whether an error chain bottoms out in a broken-pipe I/O error, i.e. we wrote
+/// to a child that had already closed its end.
+fn is_broken_pipe(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::BrokenPipe)
+    })
 }
 
 impl Drop for Connection {
@@ -440,8 +480,31 @@ mod tests {
     fn spawn_fails_when_the_child_exits_without_answering_initialize() {
         let err = ChildProcessMcpClient::spawn(&config("/bin/sh", &["-c", "exit 0"])).unwrap_err();
         let message = format!("{err:#}");
+        // Which end reports the death first is a race the OS arbitrates —
+        // stdout EOF on Linux, an EPIPE write on macOS — so assert on what is
+        // actually contractual: the server is named, the failure is attributed
+        // to the child dying before it answered, and no raw io::Error leaks.
         assert!(
-            message.contains("closed stdout before answering initialize"),
+            message.contains("probe") && message.contains("before answering initialize"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            !message.contains("Broken pipe"),
+            "a dead child must not surface as a raw pipe error: {message}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_child_that_dies_mid_handshake_reports_its_exit_status() {
+        // The child closes both pipes and exits nonzero: the diagnostic has to
+        // carry the status, because "exited with 127" is what distinguishes a
+        // crashed server from a missing one.
+        let err =
+            ChildProcessMcpClient::spawn(&config("/bin/sh", &["-c", "exit 127"])).unwrap_err();
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("before answering initialize") && message.contains("127"),
             "unexpected error: {message}"
         );
     }
