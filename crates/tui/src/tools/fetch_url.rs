@@ -11,7 +11,9 @@ use super::handle::query_jsonpath;
 use super::spec::{
     ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec, optional_u64,
 };
-use super::web::extract::{DocumentKind, ExtractedDocument, extract_document};
+use super::web::extract::{
+    DocumentKind, ExtractedDocument, decode_response_body, extract_document,
+};
 use super::web::fetch::{
     DEFAULT_MAX_BYTES, DEFAULT_TIMEOUT, FetchOptions, HARD_MAX_BYTES, HARD_MAX_TIMEOUT, fetch,
 };
@@ -172,8 +174,14 @@ impl ToolSpec for FetchUrlTool {
         )
         .await?;
         let is_success = (200..300).contains(&fetched.status);
-        let mut body_text = (!requested_fields.is_empty())
-            .then(|| String::from_utf8_lossy(&fetched.bytes).into_owned());
+        let body_text = if requested_fields.is_empty() {
+            None
+        } else {
+            Some(decode_response_body(
+                &fetched.bytes,
+                Some(&fetched.content_type),
+            ))
+        };
         let fields = match body_text.as_deref() {
             Some(body) => project_json_fields(body, &fetched.content_type, &requested_fields)?,
             None => None,
@@ -184,9 +192,10 @@ impl ToolSpec for FetchUrlTool {
                 Err(_error)
                     if format == Format::Raw && is_declared_textual(&fetched.content_type) =>
                 {
-                    let body_text = body_text
-                        .get_or_insert_with(|| String::from_utf8_lossy(&fetched.bytes).into_owned())
-                        .clone();
+                    let body_text = match body_text.as_ref() {
+                        Some(body_text) => body_text.clone(),
+                        None => decode_response_body(&fetched.bytes, Some(&fetched.content_type)),
+                    };
                     ExtractedDocument {
                         kind: DocumentKind::Text,
                         title: None,
@@ -198,9 +207,10 @@ impl ToolSpec for FetchUrlTool {
                     }
                 }
                 Err(_error) if !is_success => {
-                    let body_text = body_text
-                        .get_or_insert_with(|| String::from_utf8_lossy(&fetched.bytes).into_owned())
-                        .clone();
+                    let body_text = match body_text.as_ref() {
+                        Some(body_text) => body_text.clone(),
+                        None => decode_response_body(&fetched.bytes, Some(&fetched.content_type)),
+                    };
                     ExtractedDocument {
                         kind: DocumentKind::Text,
                         title: None,
@@ -327,7 +337,7 @@ fn render_extracted(
     }
 
     let content = match format {
-        Format::Raw => String::from_utf8_lossy(bytes).into_owned(),
+        Format::Raw => decode_response_body(bytes, Some(content_type)),
         Format::Text => document.text,
         Format::Markdown => document.markdown,
     };

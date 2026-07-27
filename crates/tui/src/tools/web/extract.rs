@@ -9,6 +9,7 @@ use std::sync::OnceLock;
 #[cfg(feature = "pdf")]
 use std::fmt::Display;
 
+use encoding_rs::Encoding;
 use regex::Regex;
 
 use crate::tools::spec::ToolError;
@@ -54,6 +55,8 @@ static FALLBACK_RE: OnceLock<Vec<Regex>> = OnceLock::new();
 static PAGE_CHROME_RE: OnceLock<Regex> = OnceLock::new();
 static TAG_RE: OnceLock<Regex> = OnceLock::new();
 static WHITESPACE_RE: OnceLock<Regex> = OnceLock::new();
+static CHARSET_RE: OnceLock<Regex> = OnceLock::new();
+static META_CHARSET_RE: OnceLock<Regex> = OnceLock::new();
 
 pub(crate) fn extract_document(
     url: &str,
@@ -117,7 +120,7 @@ pub(crate) fn extract_document(
         )));
     }
 
-    let body = decode_text(bytes)?;
+    let body = decode_text(bytes, content_type)?;
     if is_html(declared, url, &body) {
         return extract_html(url, &body);
     }
@@ -289,13 +292,50 @@ fn js_required_error(url: &str) -> ToolError {
     ))
 }
 
-fn decode_text(bytes: &[u8]) -> Result<String, ToolError> {
+fn decode_text(bytes: &[u8], content_type: Option<&str>) -> Result<String, ToolError> {
     if bytes.iter().take(8_192).any(|byte| *byte == 0) {
         return Err(ToolError::execution_failed(
             "Unsupported binary response contained NUL bytes",
         ));
     }
-    Ok(String::from_utf8_lossy(bytes).into_owned())
+    Ok(decode_response_body(bytes, content_type))
+}
+
+pub(crate) fn decode_response_body(bytes: &[u8], content_type: Option<&str>) -> String {
+    let declared_encoding = content_type
+        .and_then(charset_label)
+        .or_else(|| html_meta_charset_label(bytes));
+    if let Some(encoding) =
+        declared_encoding.and_then(|label| Encoding::for_label(label.as_bytes()))
+    {
+        let (decoded, _, _) = encoding.decode(bytes);
+        return decoded.into_owned();
+    }
+
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+fn charset_label(value: &str) -> Option<String> {
+    CHARSET_RE
+        .get_or_init(|| {
+            Regex::new(r#"(?i)\bcharset\s*=\s*["']?\s*([a-z0-9._-]+)"#).expect("charset regex")
+        })
+        .captures(value)
+        .and_then(|captures| captures.get(1))
+        .map(|label| label.as_str().to_ascii_lowercase())
+}
+
+fn html_meta_charset_label(bytes: &[u8]) -> Option<String> {
+    let sniff_len = bytes.len().min(8 * 1024);
+    let prefix = String::from_utf8_lossy(&bytes[..sniff_len]);
+    META_CHARSET_RE
+        .get_or_init(|| {
+            Regex::new(r#"(?is)<meta\b[^>]*\bcharset\s*=\s*["']?\s*([a-z0-9._-]+)"#)
+                .expect("meta charset regex")
+        })
+        .captures(&prefix)
+        .and_then(|captures| captures.get(1))
+        .map(|label| label.as_str().to_ascii_lowercase())
 }
 
 fn normalized_content_type(content_type: Option<&str>) -> Option<String> {
@@ -632,6 +672,35 @@ mod tests {
 
         assert_eq!(document.kind, DocumentKind::Text);
         assert_eq!(document.text, r#"{"status":"ok"}"#);
+    }
+
+    #[test]
+    fn declared_and_sniffed_non_utf8_charsets_decode_before_extraction() {
+        let html = r#"<html><head><title>央广网要闻</title><meta charset="gb2312"></head>
+            <body><article><h1>央广网要闻</h1>
+            <p>这是 一段 包含 足够 中文 词语 的 新闻 内容 用于 验证 网页 解码。</p>
+            </article></body></html>"#;
+        let (gbk_bytes, _, _) = encoding_rs::GBK.encode(html);
+
+        let from_http_header = decode_response_body(&gbk_bytes, Some("text/html; charset=gb2312"));
+        assert!(from_http_header.contains("央广网要闻"));
+        assert!(!from_http_header.contains('\u{fffd}'));
+
+        let from_html_meta = decode_response_body(&gbk_bytes, Some("text/html"));
+        assert!(from_html_meta.contains("央广网要闻"));
+        assert!(!from_html_meta.contains('\u{fffd}'));
+
+        let (gbk_plain_bytes, _, _) = encoding_rs::GBK.encode("要闻_央广网");
+        let plain_text = extract_document(
+            "https://example.com/news.txt",
+            Some("text/plain; charset=gbk"),
+            &gbk_plain_bytes,
+        )
+        .expect("extract declared non-utf8 text");
+        assert!(plain_text.text.contains("要闻_央广网"));
+
+        let utf8 = decode_response_body("保持 UTF-8".as_bytes(), Some("text/plain"));
+        assert_eq!(utf8, "保持 UTF-8");
     }
 
     #[test]
