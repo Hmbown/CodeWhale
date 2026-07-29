@@ -29,6 +29,8 @@ Global key chords are not yet user-configurable — tracked for a future release
 | `Ctrl-Alt-0`         | Hide/show the pinned sidebar                                    |
 | `Esc`                | Close topmost modal · cancel slash menu · dismiss toast        |
 
+> **AltGr layouts:** On Windows, AltGr is reported to applications as `Ctrl+Alt`. On layouts where a printable character needs AltGr (for example `/` is `AltGr+Q` on Brazilian ABNT2), that keystroke is treated as literal text and typed into the composer — it does not trigger the `Ctrl-/` help chord. Use `F1` (or `/help`) for help on those layouts.
+
 ## Composer
 
 Editing the message you're about to send.
