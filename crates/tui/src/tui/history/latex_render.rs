@@ -1,14 +1,15 @@
 //! LaTeX math expression rendering for the TUI transcript.
 //! Renders `$...$` (inline) and `$$...$$` (display) math expressions using
 //! Unicode approximations for terminal display.
-#![allow(dead_code)]
 use ratatui::style::{Color, Modifier, Style};
 use std::sync::OnceLock;
+#[allow(dead_code)]
 fn math_style() -> Style {
     Style::default()
         .fg(Color::Rgb(80, 180, 230))
         .add_modifier(Modifier::ITALIC)
 }
+#[allow(dead_code)]
 fn math_display_style() -> Style {
     Style::default()
         .fg(Color::Rgb(60, 160, 220))
@@ -495,6 +496,7 @@ fn build_symbols() -> SymbolMap {
     m
 }
 static SYMBOLS: OnceLock<SymbolMap> = OnceLock::new();
+#[allow(dead_code)]
 pub fn lookup_symbol(cmd: &str) -> Option<&'static str> {
     SYMBOLS.get_or_init(build_symbols).get(cmd).copied()
 }
