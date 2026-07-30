@@ -449,6 +449,31 @@ impl ResolvedProviderReadiness {
                 | Self::SavedLastCheckFailed { .. }
         )
     }
+
+    /// Whether the provider needs an explicit human activation step before it
+    /// can be used. Fleet uses this to turn a dormant external-consent route
+    /// into a real selection without weakening the global readiness boundary.
+    pub(crate) fn requires_explicit_activation(&self) -> bool {
+        matches!(self, Self::ExternalConsentPendingSelection)
+    }
+
+    /// A short, non-sensitive reason this row cannot be activated. `None`
+    /// means the row is either ready or requires explicit activation.
+    pub(crate) fn blocked_reason(&self) -> Option<Cow<'static, str>> {
+        match self {
+            Self::MissingKey => Some(Cow::Borrowed("missing API key")),
+            Self::MissingLogin => Some(Cow::Borrowed("missing login")),
+            Self::InvalidRoute => Some(Cow::Borrowed("invalid route")),
+            Self::Legacy => Some(Cow::Borrowed("legacy route")),
+            Self::SavedLastCheckFailed { message, .. } => Some(Cow::Owned(message.clone())),
+            Self::SavedUnchecked
+            | Self::ImportedTokenUnchecked
+            | Self::NoAuthUnchecked
+            | Self::LocalUnchecked
+            | Self::Ready
+            | Self::ExternalConsentPendingSelection => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -532,9 +557,16 @@ pub(crate) fn resolve_with_identity(
         CredentialState::Legacy => ResolvedProviderReadiness::Legacy,
         CredentialState::MissingKey => ResolvedProviderReadiness::MissingKey,
         CredentialState::MissingLogin => ResolvedProviderReadiness::MissingLogin,
-        CredentialState::ExternalConsent => {
-            ResolvedProviderReadiness::ExternalConsentPendingSelection
-        }
+        CredentialState::ExternalConsent => match checks.last(identity) {
+            Some(LastProviderCheck::Passed) => ResolvedProviderReadiness::Ready,
+            Some(LastProviderCheck::Failed { category, message }) => {
+                ResolvedProviderReadiness::SavedLastCheckFailed {
+                    category: *category,
+                    message: message.clone(),
+                }
+            }
+            None => ResolvedProviderReadiness::ExternalConsentPendingSelection,
+        },
         CredentialState::Saved
         | CredentialState::ImportedToken
         | CredentialState::NoAuth
@@ -710,6 +742,73 @@ mod tests {
         assert_eq!(
             resolve_for_model(&lower, ApiProvider::Custom, "vendor/modela", &checks),
             ResolvedProviderReadiness::SavedUnchecked
+        );
+    }
+
+    #[test]
+    fn external_consent_with_passed_check_becomes_ready() {
+        let config = crate::config::Config::default();
+        let mut checks = ProviderReadinessSnapshot::default();
+        checks.record_success(
+            &config,
+            ApiProvider::OpenaiCodex,
+            crate::config::DEFAULT_OPENAI_CODEX_MODEL,
+        );
+        assert_eq!(
+            resolve_test_route(
+                &config,
+                ApiProvider::OpenaiCodex,
+                crate::config::DEFAULT_OPENAI_CODEX_MODEL,
+                CredentialState::ExternalConsent,
+                true,
+                &checks,
+            ),
+            ResolvedProviderReadiness::Ready
+        );
+    }
+
+    #[test]
+    fn external_consent_with_failed_check_surfaces_reason() {
+        let config = crate::config::Config::default();
+        let mut checks = ProviderReadinessSnapshot::default();
+        checks.record_failure_message(
+            &config,
+            ApiProvider::Xai,
+            "grok-4.5",
+            ErrorCategory::Authentication,
+            "consent revoked",
+        );
+        assert!(
+            matches!(
+                resolve_test_route(
+                    &config,
+                    ApiProvider::Xai,
+                    "grok-4.5",
+                    CredentialState::ExternalConsent,
+                    true,
+                    &checks,
+                ),
+                ResolvedProviderReadiness::SavedLastCheckFailed { category, .. }
+                    if category == ErrorCategory::Authentication
+            ),
+            "failed activation should surface the sanitized reason"
+        );
+    }
+
+    #[test]
+    fn external_consent_without_check_stays_pending_selection() {
+        let config = crate::config::Config::default();
+        let checks = ProviderReadinessSnapshot::default();
+        assert_eq!(
+            resolve_test_route(
+                &config,
+                ApiProvider::OpenaiCodex,
+                crate::config::DEFAULT_OPENAI_CODEX_MODEL,
+                CredentialState::ExternalConsent,
+                true,
+                &checks,
+            ),
+            ResolvedProviderReadiness::ExternalConsentPendingSelection
         );
     }
 

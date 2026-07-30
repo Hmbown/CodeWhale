@@ -22,7 +22,7 @@ pub(crate) fn default_config_path() -> Option<PathBuf> {
     #[cfg(test)]
     {
         let honor_guarded_environment = crate::test_support::current_thread_holds_test_env_lock();
-        return crate::test_support::with_test_env_lock(|| {
+        crate::test_support::with_test_env_lock(|| {
             if honor_guarded_environment {
                 default_config_path_from_environment()
             } else {
@@ -31,7 +31,7 @@ pub(crate) fn default_config_path() -> Option<PathBuf> {
                         .join(codewhale_config::CONFIG_FILE_NAME),
                 )
             }
-        });
+        })
     }
 
     #[cfg(not(test))]

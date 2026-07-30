@@ -385,9 +385,8 @@
     "KbFuzzyFilePicker": "Ouvrir le sélecteur de fichiers flou (insère @path avec Enter)",
     "KbCompactInspector": "Ouvrir l'inspecteur de contexte de la session compactée",
     "KbLastMessagePager": "Ouvrir le pager du dernier message (quand la saisie est vide)",
-    "KbSelectedDetails": "Afficher le détail brut de l'outil ou du message sélectionné ; Ctrl+O ouvre la vue d'ensemble du tour",
+    "KbSelectedDetails": "Afficher le détail brut de l'outil ou du message sélectionné ; Ctrl+Alt+O ouvre la vue d'ensemble du tour",
     "KbToolDetailsPager": "Afficher le détail brut de l'élément sélectionné (Alt+V)",
-    "KbThinkingPager": "Ouvrir l'inspecteur de tour",
     "KbExternalEditor": "Ouvrir le brouillon du composer dans un éditeur externe",
     "KbLiveTranscript": "Ouvrir la transcription en direct (Ctrl+Shift+T ; défilement automatique)",
     "KbBacktrackMessage": "Revenir à un message utilisateur précédent (Gauche/Droite pour naviguer, Enter pour rembobiner)",
@@ -846,7 +845,6 @@
     "FooterWorkedChip": "a travaillé {duration}",
     "FleetDraftTitle": "Profil Fleet — brouillon par {model_label} (g enregistre)",
     "FleetDraftHeader": "# .codewhale/agents/{name}\n# Rédigé par {model_label}, validé et borné par Codewhale.\n# Les permissions restent au plancher de la fleet : pas de shell, pas de confiance, approbation requise.\n# Rien n'est enregistré tant que vous n'appuyez pas sur g dans l'assistant.\n\n",
-    "FleetPreviewHeader": "# .codewhale/agents/{name}\n# Profil de départ déterministe généré par Codewhale à partir de vos choix de rôle/modèle.\n# Les permissions restent au plancher de la fleet : pas de shell, pas de confiance, approbation requise.\n# Rien n'est enregistré tant que vous n'appuyez pas sur Enter ou g dans l'assistant.\n\n",
     "SetupRemoteOnRampText": "Amorçage du runtime distant\n\n/setup n'affiche que les faits du runtime distant. Il ne génère pas de bundle de déploiement, n'écrit pas d'identifiants, n'appelle pas de CLI cloud et n'exécute pas `remote-setup`.\n\nFaits actuels :\n- Clouds : {clouds_result}\n- Ponts de chat : {bridges_result}\n- Fournisseurs : {providers_result}\n- Mode : {mode_result}\n\nPour générer un bundle de déploiement, exécutez explicitement dans un terminal normal :\n\n```sh\n{command}\n```\n\nLe RUNBOOK généré inclut les étapes hôte pour revue humaine. `--apply` reste non implémenté ; ne le considérez pas comme un déploiement automatique.",
     "ApprovalDescSafe": "Demande une opération sûre/en lecture seule.",
     "ApprovalDescFileWrite": "Demande la modification d'un fichier. Veuillez confirmer le chemin et le contenu.",
@@ -1246,5 +1244,8 @@
     "SessionsArchiveFailed": "Échec de l'archivage : {error}",
     "SessionsShowingArchived": "Sessions archivées affichées",
     "SessionsHidingArchived": "Sessions archivées masquées",
-    "SessionsArchivedCompact": "archivée"
+    "SessionsArchivedCompact": "archivée",
+    "KbReasoningDetail": "Open reasoning detail for the selected or current turn",
+    "KbTurnInspector": "Ouvrir l'inspecteur de tour",
+    "CmdTurnInspectDescription": "Open the whole-turn inspector"
 }

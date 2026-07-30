@@ -315,6 +315,7 @@ pub fn classify_error_message(message: &str) -> ErrorCategory {
         || lower.contains("too many requests")
         || lower.contains("429")
         || lower.contains("quota")
+        || lower.contains("usage limit")
     {
         return ErrorCategory::RateLimit;
     }
@@ -541,6 +542,7 @@ mod tests {
             "Too Many Requests",
             "HTTP 429 from upstream",
             "Your quota has been exceeded",
+            "Authorization failed: You've reached your usage limit for this billing cycle",
         ] {
             assert_eq!(
                 classify(msg),

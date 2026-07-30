@@ -186,6 +186,46 @@ pub(crate) fn resolve_route_candidate(
     .map(|resolution| resolution.candidate)
 }
 
+/// Reject only a provider-less model mismatch that existing route knowledge
+/// proves foreign. Partial catalogs are not allowlists: unknown ids, local
+/// runtimes, gateways, and custom endpoints remain provider-authoritative.
+pub(crate) fn validate_unpinned_model_provider(
+    provider: ApiProvider,
+    model: &str,
+    base_url: &str,
+) -> Result<(), String> {
+    let Some(kind) = provider.kind() else {
+        return Ok(());
+    };
+    let Some(owner) = codewhale_config::known_foreign_model_owner(kind, model, base_url) else {
+        return Ok(());
+    };
+    Err(format!(
+        "Model `{}` was supplied without an explicit provider pin, but the resolved route is `{}` and the owning provider is `{}`. Pin the provider together with the model, or inherit the session route.",
+        model.trim(),
+        provider.as_str(),
+        owner.as_str()
+    ))
+}
+
+/// Resolve a provider-less fixed model to the provider's exact wire id before
+/// child admission. This shares the runtime resolver used by Fleet receipts,
+/// including aggregator alias translation, without making a live request.
+pub(crate) fn resolve_unpinned_model_candidate(
+    provider: ApiProvider,
+    model: &str,
+    base_url: &str,
+) -> Result<ReadyRouteCandidate, String> {
+    validate_unpinned_model_provider(provider, model, base_url)?;
+    resolve_route_candidate(
+        provider,
+        Some(model),
+        None,
+        Some(base_url.to_string()),
+        None,
+    )
+}
+
 /// Resolve a candidate together with a non-secret context-window provenance
 /// receipt.  `provider_reported_context` is accepted only for the exact Kimi
 /// Code bare-K3 endpoint, only at the documented 1M entitlement, and only
@@ -1000,6 +1040,46 @@ mod tests {
                 .and_then(|providers| providers.zai.model.as_deref()),
             None
         );
+    }
+
+    #[test]
+    fn unpinned_spawn_route_is_conservative_and_returns_exact_wire_id() {
+        let err = resolve_unpinned_model_candidate(
+            ApiProvider::Moonshot,
+            "deepseek-v4-pro",
+            ApiProvider::Moonshot.default_base_url(),
+        )
+        .expect_err("official Moonshot cannot inherit a DeepSeek-owned pin");
+        assert!(err.contains("deepseek-v4-pro"), "names model: {err}");
+        assert!(err.contains("moonshot"), "names route: {err}");
+        assert!(err.contains("deepseek"), "names owner: {err}");
+
+        let openrouter = resolve_unpinned_model_candidate(
+            ApiProvider::Openrouter,
+            "deepseek-v4-pro",
+            ApiProvider::Openrouter.default_base_url(),
+        )
+        .expect("aggregator alias should resolve offline");
+        assert_eq!(
+            openrouter.wire_model_id().as_str(),
+            crate::config::DEFAULT_OPENROUTER_MODEL,
+        );
+
+        let vllm = resolve_unpinned_model_candidate(
+            ApiProvider::Vllm,
+            "deepseek-v4-pro",
+            ApiProvider::Vllm.default_base_url(),
+        )
+        .expect("local runtime model ids stay provider-authoritative");
+        assert!(!vllm.wire_model_id().as_str().is_empty());
+
+        let custom = resolve_unpinned_model_candidate(
+            ApiProvider::Moonshot,
+            "deepseek-v4-pro",
+            "https://gateway.example.test/v1",
+        )
+        .expect("a custom endpoint owns its model namespace");
+        assert_eq!(custom.wire_model_id().as_str(), "deepseek-v4-pro");
     }
 
     fn custom_config(base_url: &str, model: &str) -> Config {

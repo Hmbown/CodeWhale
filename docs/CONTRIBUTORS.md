@@ -33,15 +33,21 @@ notes, and relevant issue/PR comments.
 - **[greyfreedom](https://github.com/greyfreedom)** — exact repository-scoped
   allow grants and the cross-platform path-semantics repairs from PR #4761
 - **[nightt5879](https://github.com/nightt5879)** — off-event-loop terminal
-  clipboard writes and complete locale exposure in settings
+  clipboard writes (PR #4896), complete locale exposure in settings (PR #4856),
+  CRLF-safe edits (PR #4942), and automatic-routing reasoning preservation
+  (PR #4961)
 - **[XhesicaFrost](https://github.com/XhesicaFrost)** — the configurable
   session-token header from PR #4610 and context-menu hover alignment in PR #4897
 - **[cyq1017](https://github.com/cyq1017)** — the hooks configuration/executor
   split from PR #4087
-- **[snailoniu](https://github.com/snailoniu)** — OpenCode Zen's model-aware
-  route, authentication, documentation, and test-isolation implementation
+- **[snail-vs](https://github.com/snail-vs)** (snailoniu) — OpenCode Zen's
+  model-aware route, authentication, documentation, and test-isolation work
+  from closed PR #4467, whose contributor commits are preserved in the
+  candidate
 - **[Sh1Zuku / SparkofSpike](https://github.com/SparkofSpike)** — the zh-Hans
-  translation quality review harvested from PR #4908
+  translation quality review harvested from PR #4908, duplicate-session fix in
+  PR #4963, LaTeX implementation from PR #4973 landed through #4974, and the
+  context-menu reproduction in #4803
 - **[GTC2080](https://github.com/GTC2080)** (TaoMu) — the `dryrun` concept
   behind `/preview-request`: preview the next outbound request from the real
   request-building seam rather than a hand-rolled summary (PR #1099,
@@ -53,6 +59,40 @@ notes, and relevant issue/PR comments.
   regression in PR #4673 (issue #4674)
 - **[LmeSzinc](https://github.com/LmeSzinc)** — the Windows CRLF `edit_file`
   reproduction, root-cause analysis, and affected-code anchors in issue #4764
+- **[atmosuwiryo](https://github.com/atmosuwiryo)** — ACP numeric-id
+  compatibility (PR #4929) and the Indonesian documentation and website locale
+  (PRs #4962 and #4972)
+- **[M-Maciej](https://github.com/M-Maciej)** — the expanded-by-default
+  reasoning setting and report (PR #4928, issue #4925)
+- **[raphamorim](https://github.com/raphamorim)** — migration of the QA PTY
+  frame parser to `rio-vt` (PR #4931)
+- **[LI-Jialu](https://github.com/LI-Jialu)** — truthful finalization of stale
+  restored shell cells (PR #4937)
+- **[kobihikri](https://github.com/kobihikri)** — release-container SBOM and
+  explicit provenance mode (PR #4958)
+- **[EvanProgramming](https://github.com/EvanProgramming)**,
+  **[adity982](https://github.com/adity982)**, and
+  **[vibecoding-skills](https://github.com/vibecoding-skills)** — equivalent
+  fix direction for effective-home resolution (#4760), MCP call-once behavior
+  (#4756), and streaming/non-streaming timeout separation (#4743)
+- **[antarikshraya](https://github.com/antarikshraya)** — the LaTeX transcript
+  rendering report in #4957
+- **[eugenicum](https://github.com/eugenicum)** — the token-header request and
+  output-presentation measurements in #4520 and #4468
+- **[whp233](https://github.com/whp233)** — the StepFun/OpenCode subscription
+  route request in #4526
+- **[redjade75723](https://github.com/redjade75723)** — stale resumed-workspace
+  diagnosis input from #4100
+- **[hardy922](https://github.com/hardy922)** — the native DeepSeek tool-token
+  visibility report in #3880
+- **[JayBeest](https://github.com/JayBeest)** — contributor-onboarding product
+  direction in #4227
+- **[elijahchan2019](https://github.com/elijahchan2019)** — the optional
+  reasoning-highlight request in #4089
+- **[cy2311](https://github.com/cy2311)** — sessions rail, archive, and
+  auto-resume direction in #2934
+- **[wywsoor](https://github.com/wywsoor)** — export/restore correlation
+  direction in #2494
 
 </details>
 

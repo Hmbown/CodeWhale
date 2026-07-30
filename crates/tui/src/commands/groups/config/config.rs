@@ -1535,8 +1535,22 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
             }
             let mode = ApprovalMode::from_config_value(value);
             return match mode {
+                Some(ApprovalMode::Bypass)
+                    if persist
+                        && matches!(control, crate::config::ApprovalPolicyControl::RootConfig) =>
+                {
+                    match app.adopt_root_approval_posture(ApprovalMode::Bypass) {
+                        Ok(()) => CommandResult::with_message_and_action(
+                            "approval_mode = Full Access (saved as the TUI permission posture; removed the root approval_policy override)",
+                            AppAction::ApprovalPolicyPersisted { policy: None },
+                        ),
+                        Err(reason) => {
+                            CommandResult::error(format!("Failed to save Full Access: {reason}"))
+                        }
+                    }
+                }
                 Some(ApprovalMode::Bypass) if persist => CommandResult::error(
-                    "Full Access is not a valid top-level approval_policy. Use Shift+Tab to save the TUI-only posture.",
+                    "Full Access is saved as the TUI permission posture, not as a top-level approval_policy. Remove the controlling policy first.",
                 ),
                 Some(m) => {
                     if persist {
@@ -4234,6 +4248,49 @@ context_window = 262144
         let saved = fs::read_to_string(config_path).unwrap();
         assert!(saved.contains("# keep"));
         assert!(!saved.contains("approval_policy"));
+    }
+
+    #[test]
+    fn config_approval_policy_full_access_adopts_tui_posture_and_releases_root_override() {
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-approval-policy-full-access-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(temp_root.join(".deepseek")).unwrap();
+        let _guard = EnvGuard::new(&temp_root);
+        let config_path = temp_root.join("custom-config.toml");
+        fs::write(&config_path, "# keep\napproval_policy = \"on-request\"\n").unwrap();
+        fs::write(
+            temp_root.join(".deepseek").join("settings.toml"),
+            "permission_posture = \"ask\"\n",
+        )
+        .unwrap();
+        let loaded = Config::load(Some(config_path.clone()), None).unwrap();
+        let mut app = create_test_app_with_config(&loaded);
+        app.config_path = Some(config_path.clone());
+        // The production constructor receives the path up front and marks a
+        // user-owned root policy editable. This focused fixture attaches the
+        // path after construction, so mirror that resolved ownership here.
+        app.mark_approval_policy_locked();
+        assert!(app.approval_policy_locked());
+
+        let result = set_config_value(&mut app, "approval_policy", "full-access", true);
+
+        assert!(!result.is_error, "{:?}", result.message);
+        assert_eq!(app.approval_mode, ApprovalMode::Bypass);
+        assert!(!app.approval_policy_locked());
+        assert_eq!(
+            result.action,
+            Some(AppAction::ApprovalPolicyPersisted { policy: None })
+        );
+        let saved_config = fs::read_to_string(config_path).unwrap();
+        assert!(saved_config.contains("# keep"));
+        assert!(!saved_config.contains("approval_policy"));
+        let saved_settings = Settings::load_persisted().expect("saved TUI settings");
+        assert_eq!(
+            saved_settings.permission_posture.as_deref(),
+            Some("full-access")
+        );
     }
 
     #[test]

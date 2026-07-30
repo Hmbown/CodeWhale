@@ -755,7 +755,7 @@ mod tests {
             memory_path: temp.path().join("memory.md"),
             notes_path: temp.path().join("notes.txt"),
             mcp_config_path: temp.path().join("mcp.json"),
-            ..crate::test_support::test_tui_options(root.to_path_buf())
+            ..crate::test_support::test_tui_options(root)
         };
         let config = Config {
             tools: Some(crate::config::ToolsConfig {

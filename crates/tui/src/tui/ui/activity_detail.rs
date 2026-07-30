@@ -1,10 +1,11 @@
-//! Activity Detail, raw tool-detail, and pager-text helpers extracted from
-//! `ui.rs` (issue #4103).
+//! Reasoning Detail, Turn Inspector, raw tool-detail, and pager-text helpers
+//! extracted from `ui.rs` (issue #4103).
 //!
-//! Behavior-preserving move: these helpers build the Ctrl+O "Activity Detail" /
-//! "Reasoning Timeline" pager, the `v` raw tool-details pager (including #500
-//! spillover folding), the copy-cell actions, and the footer detail labels.
-//! No logic changes were made during the extraction.
+//! Ctrl+O opens the full recorded Reasoning Detail timeline for the selected
+//! reasoning block or the current/latest turn. The whole-turn Turn Inspector
+//! moved to a dedicated surface (Ctrl+Alt+O and `/turn inspect`). The `v` raw
+//! tool-details pager (including #500 spillover folding), copy-cell actions, and
+//! footer detail labels live here too.
 
 use crate::snapshot::SnapshotRepo;
 use crate::tui::app::App;
@@ -13,54 +14,16 @@ use crate::tui::history::{HistoryCell, ToolCell, ToolStatus};
 use crate::tui::key_shortcuts;
 use crate::tui::pager::PagerView;
 use crate::tui::ui_text::{history_cell_to_text, truncate_line_to_width};
-// Only the test-gated single-cell Activity Detail renderer needs these
-// (Ctrl+O now opens the Turn Inspector, #4104).
-#[cfg(test)]
-use crate::tui::history::TranscriptRenderOptions;
-#[cfg(test)]
-use crate::tui::ui_text::line_to_plain;
 
-/// Open a pager for the activity the user is most likely asking about.
+/// Resolve the activity cell the user is most likely asking about.
 ///
-/// Ctrl+O uses this path. It prefers an explicitly selected activity cell,
-/// then a live activity in the current turn, then the most recent meaningful
-/// activity across history + active cells. Tool activity is intentionally
-/// rendered through the compact live view so Activity Detail does not become
-/// an accidental raw-output dump; `v` remains the direct full tool-detail
-/// surface.
+/// Used by the Space fold/unfold gesture and detail footer hints. It prefers
+/// an explicitly selected activity cell, then a live activity in the current
+/// turn, then the most recent meaningful activity across history + active
+/// cells. Tool activity is intentionally rendered through the compact live
+/// view so the Activity Detail pager does not become an accidental raw-output
+/// dump; `v` remains the direct full tool-detail surface.
 ///
-/// Ctrl+O now opens the whole-turn Turn Inspector (#4104), so this single-cell
-/// pager and its private helper chain are retained for tests (and potential
-/// reuse by the #4106/#4107/#4108 follow-ups) but are no longer bound to a key.
-#[cfg(test)]
-pub(super) fn open_activity_detail_pager(app: &mut App) -> bool {
-    let Some(idx) = activity_target_cell_index(app) else {
-        app.status_message = Some("No activity detail available".to_string());
-        return true;
-    };
-
-    let width = app
-        .viewport
-        .last_transcript_area
-        .map(|area| area.width)
-        .unwrap_or(80);
-    let Some(text) = activity_detail_text(app, idx, width) else {
-        app.status_message = Some("No activity detail available".to_string());
-        return true;
-    };
-    let title = if matches!(
-        app.cell_at_virtual_index(idx),
-        Some(HistoryCell::Thinking { .. })
-    ) {
-        "Reasoning Timeline"
-    } else {
-        "Activity Detail"
-    };
-    app.view_stack
-        .push(PagerView::from_text(title, &text, width.saturating_sub(2)));
-    true
-}
-
 fn activity_target_cell_index(app: &App) -> Option<usize> {
     if let Some(selected) = selected_transcript_cell_index(app)
         && app
@@ -132,54 +95,79 @@ fn activity_cell_rank(cell: &HistoryCell) -> Option<u8> {
     }
 }
 
-#[cfg(test)]
-fn activity_detail_text(app: &App, cell_index: usize, width: u16) -> Option<String> {
-    let cell = app.cell_at_virtual_index(cell_index)?;
-    if matches!(cell, HistoryCell::Thinking { .. }) {
-        return reasoning_timeline_text(app, cell_index);
-    }
-
-    let mut sections = Vec::new();
-
-    if let Some(turn_id) = app.runtime_turn_id.as_ref() {
-        let status = humanized_turn_status(app);
-        sections.push(format!("Turn {} \u{00B7} {status}", short_turn_id(turn_id)));
-    }
-
-    sections.push(format!(
-        "Activity: {}",
-        activity_cell_label(app, cell_index, cell)
+/// Open the full recorded-reasoning detail pager for the selected thinking
+/// block, or for the current/latest turn when no reasoning block is selected.
+/// Ctrl+O routes here; only provider-supplied reasoning is shown.
+pub(super) fn open_reasoning_detail_pager(app: &mut App) -> bool {
+    let width = app
+        .viewport
+        .last_transcript_area
+        .map(|area| area.width)
+        .unwrap_or(80);
+    let Some(text) = reasoning_detail_text(app) else {
+        app.status_message = Some("No reasoning detail available".to_string());
+        return true;
+    };
+    app.view_stack.push(PagerView::from_text(
+        "Reasoning Detail",
+        &text,
+        width.saturating_sub(2),
     ));
-
-    if let Some(status) = activity_status_line(cell) {
-        sections.push(status);
-    }
-
-    let activity_indices = activity_indices(app);
-    if let Some(position) = activity_indices.iter().position(|&idx| idx == cell_index) {
-        sections.push(format!(
-            "Activity chunk: {} of {}",
-            position + 1,
-            activity_indices.len()
-        ));
-        sections.extend(activity_navigation_lines(app, position, &activity_indices));
-    }
-
-    if let Some(handle) = activity_detail_handle_line(app, cell_index, cell) {
-        sections.push(handle);
-    }
-    if let Some(summary) = activity_input_summary_line(cell) {
-        sections.push(summary);
-    }
-
-    sections.push(String::new());
-    sections.push(activity_cell_to_text(cell, width));
-    Some(sections.join("\n"))
+    true
 }
 
-#[cfg(test)]
-fn reasoning_timeline_text(app: &App, selected_cell_index: usize) -> Option<String> {
-    let thinking_indices: Vec<usize> = (0..app.virtual_cell_count())
+/// Resolve the turn range that contains the given virtual cell index.
+/// The turn starts at the most recent user cell at or before the index and
+/// ends at the next user cell after the index, or the end of the transcript.
+fn turn_range_for_index(app: &App, index: usize) -> (usize, usize) {
+    let end = app.virtual_cell_count();
+    let start = (0..index.saturating_add(1))
+        .rev()
+        .find(|&idx| {
+            matches!(
+                app.cell_at_virtual_index(idx),
+                Some(HistoryCell::User { .. })
+            )
+        })
+        .unwrap_or(0);
+    let turn_end = (index..end)
+        .find(|&idx| {
+            idx > index
+                && matches!(
+                    app.cell_at_virtual_index(idx),
+                    Some(HistoryCell::User { .. })
+                )
+        })
+        .unwrap_or(end);
+    (start, turn_end)
+}
+
+/// Assemble the full recorded reasoning for the selected thinking block's
+/// turn, or for the current/latest turn when nothing is selected. Empty
+/// chunks are surfaced as "(no reasoning text recorded)" rather than invented.
+pub(super) fn reasoning_detail_text(app: &App) -> Option<String> {
+    let selected = selected_transcript_cell_index(app).filter(|&idx| {
+        matches!(
+            app.cell_at_virtual_index(idx),
+            Some(HistoryCell::Thinking { .. })
+        )
+    });
+    let (start, end) = selected
+        .map(|idx| turn_range_for_index(app, idx))
+        .unwrap_or_else(|| current_turn_range(app));
+    reasoning_timeline_text(app, selected, start, end)
+}
+
+/// Build the full recorded-reasoning text for a turn-scoped set of thinking
+/// cells. Only provider-supplied reasoning Codewhale actually recorded is
+/// shown; nothing is fabricated when a chunk is empty.
+pub(super) fn reasoning_timeline_text(
+    app: &App,
+    selected_cell_index: Option<usize>,
+    start: usize,
+    end: usize,
+) -> Option<String> {
+    let thinking_indices: Vec<usize> = (start..end)
         .filter(|&idx| {
             matches!(
                 app.cell_at_virtual_index(idx),
@@ -191,10 +179,12 @@ fn reasoning_timeline_text(app: &App, selected_cell_index: usize) -> Option<Stri
         return None;
     }
 
-    let selected_position = thinking_indices
-        .iter()
-        .position(|&idx| idx == selected_cell_index)
-        .map(|idx| idx + 1);
+    let selected_position = selected_cell_index.and_then(|selected| {
+        thinking_indices
+            .iter()
+            .position(|&idx| idx == selected)
+            .map(|idx| idx + 1)
+    });
     let total = thinking_indices.len();
     let running = thinking_indices.iter().any(|&idx| {
         matches!(
@@ -278,7 +268,6 @@ fn reasoning_timeline_text(app: &App, selected_cell_index: usize) -> Option<Stri
     Some(sections.join("\n"))
 }
 
-#[cfg(test)]
 fn thinking_chunk_preview(app: &App, cell_index: usize) -> String {
     let Some(HistoryCell::Thinking { content, .. }) = app.cell_at_virtual_index(cell_index) else {
         return "thinking".to_string();
@@ -306,42 +295,6 @@ fn activity_cell_label(app: &App, cell_index: usize, cell: &HistoryCell) -> Stri
             detail_target_label(app, cell_index).unwrap_or_else(|| "tool activity".to_string())
         }
         _ => "message".to_string(),
-    }
-}
-
-#[cfg(test)]
-fn activity_status_line(cell: &HistoryCell) -> Option<String> {
-    match cell {
-        HistoryCell::Thinking {
-            streaming,
-            duration_secs,
-            ..
-        } => {
-            let mut line = if *streaming {
-                "Status: running".to_string()
-            } else {
-                "Status: done".to_string()
-            };
-            if let Some(duration_secs) = duration_secs {
-                line.push_str(" · ");
-                line.push_str(&crate::elapsed::format_elapsed_ms(
-                    (duration_secs * 1000.0) as u64,
-                ));
-            }
-            Some(line)
-        }
-        HistoryCell::Tool(tool) => {
-            let status = tool_status_for_activity(tool)?;
-            let mut line = format!("Status: {}", activity_status_label(status));
-            if let Some(duration_ms) = tool_duration_for_activity(tool) {
-                line.push_str(" · ");
-                line.push_str(&crate::elapsed::format_elapsed_ms(duration_ms));
-            }
-            Some(line)
-        }
-        HistoryCell::Error { severity, .. } => Some(format!("Status: {severity:?}")),
-        HistoryCell::SubAgent(_) => None,
-        _ => None,
     }
 }
 
@@ -407,139 +360,19 @@ fn activity_status_label(status: ToolStatus) -> &'static str {
     }
 }
 
-#[cfg(test)]
-fn activity_indices(app: &App) -> Vec<usize> {
-    (0..app.virtual_cell_count())
-        .filter(|&idx| {
-            app.cell_at_virtual_index(idx)
-                .is_some_and(is_meaningful_activity_cell)
-        })
-        .collect()
-}
-
-#[cfg(test)]
-fn activity_navigation_lines(
-    app: &App,
-    position: usize,
-    activity_indices: &[usize],
-) -> Vec<String> {
-    let total = activity_indices.len();
-    let mut lines = Vec::new();
-    if position > 0 {
-        let previous_idx = activity_indices[position - 1];
-        if let Some(cell) = app.cell_at_virtual_index(previous_idx) {
-            let label = activity_cell_label(app, previous_idx, cell);
-            lines.push(format!(
-                "Previous activity: {} of {total} - {}",
-                position,
-                truncate_line_to_width(&label, 56)
-            ));
-        }
-    }
-    if position + 1 < total {
-        let next_idx = activity_indices[position + 1];
-        if let Some(cell) = app.cell_at_virtual_index(next_idx) {
-            let label = activity_cell_label(app, next_idx, cell);
-            lines.push(format!(
-                "Next activity: {} of {total} - {}",
-                position + 2,
-                truncate_line_to_width(&label, 56)
-            ));
-        }
-    }
-    lines
-}
-
-#[cfg(test)]
-fn activity_detail_handle_line(app: &App, cell_index: usize, cell: &HistoryCell) -> Option<String> {
-    if let Some(detail) = app.tool_detail_record_for_cell(cell_index) {
-        if let Some(artifact) = app
-            .session_artifacts
-            .iter()
-            .find(|artifact| artifact.tool_call_id == detail.tool_id)
-        {
-            let details = crate::tui::shell_key_routing::display_chord(
-                crate::tui::shell_key_routing::binding(
-                    crate::tui::shell_key_routing::ShellBindingId::ToolDetails,
-                )
-                .footer_chord,
-            );
-            return Some(format!(
-                "Detail handle: {} (retrieve_tool_result ref={}; {details} raw details)",
-                artifact.id, artifact.id
-            ));
-        }
-        let details = crate::tui::shell_key_routing::display_chord(
-            crate::tui::shell_key_routing::binding(
-                crate::tui::shell_key_routing::ShellBindingId::ToolDetails,
-            )
-            .footer_chord,
-        );
-        return Some(format!(
-            "Detail handle: tool:{} ({details} raw details)",
-            detail.tool_id
-        ));
-    }
-
-    let details = crate::tui::shell_key_routing::display_chord(
-        crate::tui::shell_key_routing::binding(
-            crate::tui::shell_key_routing::ShellBindingId::ToolDetails,
-        )
-        .footer_chord,
-    );
-    match cell {
-        HistoryCell::Tool(_) => Some(format!("Detail handle: {details} details")),
-        HistoryCell::SubAgent(_) => Some(format!("Detail handle: {details} details")),
-        _ => None,
-    }
-}
-
-#[cfg(test)]
-fn activity_input_summary_line(cell: &HistoryCell) -> Option<String> {
-    let HistoryCell::Tool(ToolCell::Generic(generic)) = cell else {
-        return None;
-    };
-    let summary = generic.input_summary.as_deref()?.trim();
-    if summary.is_empty() {
-        None
-    } else {
-        Some(format!("Input: {summary}"))
-    }
-}
-
-#[cfg(test)]
-fn activity_cell_to_text(cell: &HistoryCell, width: u16) -> String {
-    let lines = match cell {
-        HistoryCell::Tool(_) => cell.lines_with_options(
-            width,
-            TranscriptRenderOptions {
-                calm_mode: true,
-                low_motion: true,
-                ..TranscriptRenderOptions::default()
-            },
-        ),
-        _ => cell.transcript_lines(width),
-    };
-    lines
-        .iter()
-        .map(line_to_plain)
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 /// Empty-state hint shown when the selection has no raw leaf detail to open.
 /// `v` / `Alt+V` only ever surface the raw detail of the ONE selected
 /// tool/card/leaf, so when there is nothing leaf-level to show we point the
-/// user at Ctrl+O for the whole-turn context instead of failing silently
+/// user at Ctrl+Alt+O for the whole-turn context instead of failing silently
 /// (#4105).
 const NO_RAW_DETAIL_HINT: &str =
-    "No raw detail for this item — press Ctrl+O for the turn overview.";
+    "No raw detail for this item — press Ctrl+Alt+O for the turn overview.";
 
 /// Intro line prepended to the raw tool-detail pager body so the surface reads
-/// as the raw detail of the single selected item — not the whole turn. Ctrl+O
-/// remains the whole-turn Turn Inspector (#4105).
+/// as the raw detail of the single selected item — not the whole turn.
+/// Ctrl+Alt+O is now the whole-turn Turn Inspector (#v092-reasoning-fix).
 const RAW_DETAIL_PAGER_INTRO: &str =
-    "Raw detail for the selected item — press Ctrl+O for the whole-turn overview.";
+    "Raw detail for the selected item — press Ctrl+Alt+O for the whole-turn overview.";
 
 pub(super) fn open_tool_details_pager(app: &mut App) -> bool {
     let target_cell = detail_target_cell_index(app);
@@ -800,10 +633,17 @@ pub(crate) fn selected_detail_footer_label(app: &App) -> Option<String> {
     } else {
         String::new()
     };
-    Some(format!(
-        "{} Turn Inspector · {label}{detail_hint}",
-        key_shortcuts::activity_shortcut_label()
-    ))
+    if matches!(cell, HistoryCell::Thinking { .. }) {
+        Some(format!(
+            "{} Reasoning detail · {label}{detail_hint}",
+            key_shortcuts::reasoning_detail_shortcut_label()
+        ))
+    } else {
+        Some(format!(
+            "{} Turn Inspector · {label}{detail_hint}",
+            key_shortcuts::turn_inspector_shortcut_label()
+        ))
+    }
 }
 
 fn activity_footer_target_cell_index(app: &App) -> Option<usize> {
@@ -1859,5 +1699,145 @@ mod tests {
             "Auto data: latest request + bounded recent context -> DeepSeek / deepseek-v4-flash"
         ));
         assert!(!joined.contains("API_KEY"));
+    }
+
+    #[test]
+    fn reasoning_detail_text_empty_when_no_thinking() {
+        let app = test_app();
+        assert!(reasoning_detail_text(&app).is_none());
+    }
+
+    #[test]
+    fn reasoning_detail_text_includes_active_cell_reasoning() {
+        let mut app = test_app();
+        let mut active = crate::tui::active_cell::ActiveCell::new();
+        active.push_thinking(HistoryCell::Thinking {
+            content: "active reasoning one".to_string(),
+            streaming: true,
+            duration_secs: None,
+        });
+        active.push_thinking(HistoryCell::Thinking {
+            content: "active reasoning two".to_string(),
+            streaming: false,
+            duration_secs: Some(1.0),
+        });
+        app.active_cell = Some(active);
+        app.runtime_turn_id = Some("turn-active-123".to_string());
+        app.runtime_turn_status = Some("in_progress".to_string());
+
+        let body = reasoning_detail_text(&app).expect("active reasoning should produce detail");
+        assert!(body.contains("Thinking chunk 1 of 2"), "{body}");
+        assert!(body.contains("Thinking chunk 2 of 2"), "{body}");
+        assert!(body.contains("active reasoning one"), "{body}");
+        assert!(body.contains("active reasoning two"), "{body}");
+        assert!(body.contains("running"), "{body}");
+    }
+
+    #[test]
+    fn reasoning_detail_text_scopes_to_latest_turn_without_selection() {
+        let mut app = test_app();
+        app.history = vec![
+            HistoryCell::User {
+                content: "first prompt".to_string(),
+            },
+            HistoryCell::Thinking {
+                content: "first turn reasoning".to_string(),
+                streaming: false,
+                duration_secs: Some(1.0),
+            },
+            HistoryCell::Assistant {
+                content: "first reply".to_string(),
+                streaming: false,
+            },
+            HistoryCell::User {
+                content: "second prompt".to_string(),
+            },
+            HistoryCell::Thinking {
+                content: "second turn reasoning".to_string(),
+                streaming: false,
+                duration_secs: Some(1.0),
+            },
+            HistoryCell::Assistant {
+                content: "second reply".to_string(),
+                streaming: false,
+            },
+        ];
+        app.resync_history_revisions();
+
+        let body =
+            reasoning_detail_text(&app).expect("latest turn reasoning should produce detail");
+        assert!(body.contains("second turn reasoning"), "{body}");
+        assert!(
+            !body.contains("first turn reasoning"),
+            "reasoning detail without selection must scope to the latest turn: {body}"
+        );
+    }
+
+    #[test]
+    fn turn_range_for_index_scopes_to_containing_turn() {
+        let mut app = test_app();
+        app.history = vec![
+            HistoryCell::User {
+                content: "first prompt".to_string(),
+            },
+            HistoryCell::Thinking {
+                content: "first turn reasoning".to_string(),
+                streaming: false,
+                duration_secs: Some(1.0),
+            },
+            HistoryCell::Assistant {
+                content: "first reply".to_string(),
+                streaming: false,
+            },
+            HistoryCell::User {
+                content: "second prompt".to_string(),
+            },
+            HistoryCell::Thinking {
+                content: "second turn reasoning".to_string(),
+                streaming: false,
+                duration_secs: Some(1.0),
+            },
+            HistoryCell::Assistant {
+                content: "second reply".to_string(),
+                streaming: false,
+            },
+        ];
+        app.resync_history_revisions();
+
+        let (start, end) = turn_range_for_index(&app, 1);
+        assert_eq!(start, 0, "first turn should start at user cell 0");
+        assert_eq!(end, 3, "first turn should end before second user cell");
+
+        let (start, end) = turn_range_for_index(&app, 4);
+        assert_eq!(start, 3, "second turn should start at user cell 3");
+        assert_eq!(end, 6, "second turn should run to end of transcript");
+    }
+
+    #[test]
+    fn open_reasoning_detail_pager_pushes_reasoning_detail_pager() {
+        let mut app = test_app();
+        app.history = vec![HistoryCell::Thinking {
+            content: "recorded reasoning".to_string(),
+            streaming: false,
+            duration_secs: Some(1.0),
+        }];
+        app.resync_history_revisions();
+        let revisions = app.history_revisions.clone();
+        app.viewport.transcript_cache.ensure(
+            &app.history,
+            &revisions,
+            100,
+            app.transcript_render_options(),
+        );
+        app.viewport.last_transcript_area = Some(ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        assert!(open_reasoning_detail_pager(&mut app));
+        let top = app.view_stack.top_kind();
+        assert_eq!(top, Some(crate::tui::views::ModalKind::Pager));
     }
 }

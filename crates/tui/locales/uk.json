@@ -385,9 +385,8 @@
     "KbFuzzyFilePicker": "Відкрити нечіткий вибір файлів (Enter вставляє @path)",
     "KbCompactInspector": "Відкрити інспектор контексту стиснутого сеансу",
     "KbLastMessagePager": "Відкрити пейджер для останнього повідомлення (коли ввід порожній)",
-    "KbSelectedDetails": "Показати необроблені деталі вибраного інструмента або повідомлення; Ctrl+O відкриває огляд усього кроку",
+    "KbSelectedDetails": "Показати необроблені деталі вибраного інструмента або повідомлення; Ctrl+Alt+O відкриває огляд усього кроку",
     "KbToolDetailsPager": "Показати необроблені деталі вибраного елемента (Alt+V)",
-    "KbThinkingPager": "Відкрити інспектор кроку",
     "KbExternalEditor": "Відкрити чернетку композера у зовнішньому редакторі",
     "KbLiveTranscript": "Відкрити накладення живого транскрипту (Ctrl+Shift+T; автопрокручування до кінця)",
     "KbBacktrackMessage": "Повернутися до попереднього повідомлення користувача (Left/Right — крок, Enter — перемотати)",
@@ -846,7 +845,6 @@
     "FooterWorkedChip": "працював {duration}",
     "FleetDraftTitle": "Профіль Fleet — чернетка від {model_label} (g зберігає)",
     "FleetDraftHeader": "# .codewhale/agents/{name}\n# Чернетка від {model_label}, перевірена й обмежена Codewhale.\n# Дозволи залишаються на базовому рівні fleet: без shell, без довіри, потрібне схвалення.\n# Нічого не буде збережено, доки ви не натиснете g у майстрі.\n\n",
-    "FleetPreviewHeader": "# .codewhale/agents/{name}\n# Детермінований стартовий профіль, згенерований Codewhale з вашого вибору ролі/моделі.\n# Дозволи залишаються на базовому рівні fleet: без shell, без довіри, потрібне схвалення.\n# Нічого не буде збережено, доки ви не натиснете Enter або g у майстрі.\n\n",
     "SetupRemoteOnRampText": "Безпечний старт віддаленого середовища виконання\n\n/setup лише показує факти про віддалене середовище виконання. Він не генерує пакети розгортання, не записує облікові дані, не викликає хмарні CLI й не запускає `remote-setup`.\n\nПоточні факти:\n- Хмари: {clouds_result}\n- Мости чатів: {bridges_result}\n- Провайдери: {providers_result}\n- Режим: {mode_result}\n\nЩоб згенерувати пакет розгортання, виконайте явно у звичайному терміналі:\n\n```sh\n{command}\n```\n\nЗгенерований RUNBOOK містить кроки для хоста, призначені для перегляду людиною. `--apply` лишається нереалізованим; не вважайте це авторозгортанням.",
     "ApprovalDescSafe": "Запит на безпечну операцію лише для читання.",
     "ApprovalDescFileWrite": "Запит на змінення файлу. Підтвердьте шлях і вміст.",
@@ -1246,5 +1244,8 @@
     "SessionsArchiveFailed": "Не вдалося заархівувати: {error}",
     "SessionsShowingArchived": "Показано архівні сеанси",
     "SessionsHidingArchived": "Архівні сеанси приховано",
-    "SessionsArchivedCompact": "в архіві"
+    "SessionsArchivedCompact": "в архіві",
+    "KbReasoningDetail": "Open reasoning detail for the selected or current turn",
+    "KbTurnInspector": "Відкрити інспектор кроку",
+    "CmdTurnInspectDescription": "Open the whole-turn inspector"
 }

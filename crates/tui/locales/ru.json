@@ -385,9 +385,8 @@
     "KbFuzzyFilePicker": "Открыть нечёткий выбор файлов (Enter вставляет @path)",
     "KbCompactInspector": "Открыть инспектор контекста сжатой сессии",
     "KbLastMessagePager": "Открыть последнее сообщение в пейджере (при пустом вводе)",
-    "KbSelectedDetails": "Показать сырые детали выбранного инструмента или сообщения; Ctrl+O — обзор всего хода",
+    "KbSelectedDetails": "Показать сырые детали выбранного инструмента или сообщения; Ctrl+Alt+O — обзор всего хода",
     "KbToolDetailsPager": "Показать сырые детали выбранного элемента (Alt+V)",
-    "KbThinkingPager": "Открыть инспектор хода",
     "KbExternalEditor": "Открыть черновик во внешнем редакторе",
     "KbLiveTranscript": "Открыть живую ленту поверх (Ctrl+Shift+T; автопрокрутка с привязкой к концу)",
     "KbBacktrackMessage": "Вернуться к предыдущему сообщению пользователя (Left/Right — шаг, Enter — откат)",
@@ -846,7 +845,6 @@
     "FooterWorkedChip": "работал {duration}",
     "FleetDraftTitle": "Профиль Fleet — черновик от {model_label} (g сохраняет)",
     "FleetDraftHeader": "# .codewhale/agents/{name}\n# Черновик от {model_label}, проверен и ограничен Codewhale.\n# Права остаются на минимуме Fleet: без shell, без доверия, требуется одобрение.\n# Ничего не сохраняется, пока вы не нажмёте g в мастере.\n\n",
-    "FleetPreviewHeader": "# .codewhale/agents/{name}\n# Детерминированный стартовый профиль, созданный Codewhale из выбранных роли и модели.\n# Права остаются на минимуме Fleet: без shell, без доверия, требуется одобрение.\n# Ничего не сохраняется, пока вы не нажмёте Enter или g в мастере.\n\n",
     "SetupRemoteOnRampText": "Запуск удалённой среды\n\n/setup только показывает факты об удалённой среде выполнения. Он не генерирует пакеты развёртывания, не записывает учётные данные, не вызывает облачные CLI и не запускает `remote-setup`.\n\nТекущие факты:\n- Облака: {clouds_result}\n- Мосты чатов: {bridges_result}\n- Провайдеры: {providers_result}\n- Режим: {mode_result}\n\nЧтобы сгенерировать пакет развёртывания, выполните явно в обычном терминале:\n\n```sh\n{command}\n```\n\nСгенерированный RUNBOOK включает шаги для проверки человеком. `--apply` не реализован; не воспринимайте это как авторазвёртывание.",
     "ApprovalDescSafe": "Запрашивается безопасная операция только для чтения.",
     "ApprovalDescFileWrite": "Запрашивается изменение файла. Проверьте путь и содержимое.",
@@ -1246,5 +1244,8 @@
     "SessionsArchiveFailed": "Не удалось архивировать: {error}",
     "SessionsShowingArchived": "Показаны архивные сеансы",
     "SessionsHidingArchived": "Архивные сеансы скрыты",
-    "SessionsArchivedCompact": "в архиве"
+    "SessionsArchivedCompact": "в архиве",
+    "KbReasoningDetail": "Open reasoning detail for the selected or current turn",
+    "KbTurnInspector": "Открыть инспектор хода",
+    "CmdTurnInspectDescription": "Open the whole-turn inspector"
 }

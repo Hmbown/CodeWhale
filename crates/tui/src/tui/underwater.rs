@@ -572,25 +572,24 @@ fn permission_label(app: &App) -> Cow<'static, str> {
     Cow::Owned(format!("{approval} · {fs}"))
 }
 
-/// Always-legible filesystem sandbox scope for the shell chrome.
-///
-/// Defaults to workspace-write (the safe product default). Callers that change
-/// sandbox mid-session should update the process env `CODEWHALE_SANDBOX_MODE`.
+/// Always-legible effective filesystem scope for the shell chrome.
 #[must_use]
-fn filesystem_scope_label(_app: &App) -> Cow<'static, str> {
+fn filesystem_scope_label(app: &App) -> Cow<'static, str> {
     // Spelled out because the old `fs:` prefix read as an unexplained
     // acronym (user report, 2026-07-23): this chip states which files the
     // session may write.
-    let mode = std::env::var("CODEWHALE_SANDBOX_MODE").unwrap_or_default();
-    match mode.trim().to_ascii_lowercase().as_str() {
-        "read-only" | "readonly" | "read_only" => Cow::Borrowed("files: read-only"),
-        "danger-full-access" | "danger_full_access" | "full" => Cow::Borrowed("files: full disk"),
-        "external-sandbox" | "external_sandbox" | "opensandbox" => {
+    match crate::core::authority::sandbox_policy_for_turn(
+        app.mode,
+        app.approval_mode,
+        app.configured_sandbox_mode.as_deref(),
+        &app.workspace,
+    ) {
+        crate::sandbox::SandboxPolicy::ReadOnly => Cow::Borrowed("files: read-only"),
+        crate::sandbox::SandboxPolicy::DangerFullAccess => Cow::Borrowed("files: full disk"),
+        crate::sandbox::SandboxPolicy::ExternalSandbox { .. } => {
             Cow::Borrowed("files: external sandbox")
         }
-        "workspace-write" | "workspace_write" | "workspace" => Cow::Borrowed("files: workspace"),
-        // Empty / unknown: product default is workspace-only.
-        _ => Cow::Borrowed("files: workspace"),
+        crate::sandbox::SandboxPolicy::WorkspaceWrite { .. } => Cow::Borrowed("files: workspace"),
     }
 }
 
@@ -1594,6 +1593,26 @@ mod tests {
                 assert_eq!(buf[(label_x, 0)].fg, expected_color, "{approval_mode:?}");
             }
         }
+    }
+
+    #[test]
+    fn permission_chip_reports_the_same_effective_scope_as_execution() {
+        let mut app = test_app();
+        app.approval_mode = ApprovalMode::Bypass;
+        assert_eq!(
+            permission_label(&app),
+            Cow::Borrowed("Full Access · files: full disk")
+        );
+
+        app.configured_sandbox_mode = Some("workspace-write".to_string());
+        assert_eq!(
+            permission_label(&app),
+            Cow::Borrowed("Full Access · files: workspace")
+        );
+
+        app.mode = AppMode::Plan;
+        app.configured_sandbox_mode = Some("danger-full-access".to_string());
+        assert_eq!(permission_label(&app), Cow::Borrowed("read only"));
     }
 
     #[test]

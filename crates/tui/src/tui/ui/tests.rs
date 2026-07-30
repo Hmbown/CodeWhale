@@ -3789,6 +3789,7 @@ fn setup_runtime_preset_apply_persists_settings_config_and_state() {
     assert_eq!(config.allow_shell, Some(false));
     assert_eq!(config.approval_policy.as_deref(), Some("on-request"));
     assert_eq!(config.sandbox_mode.as_deref(), Some("read-only"));
+    assert_eq!(app.configured_sandbox_mode.as_deref(), Some("read-only"));
 
     let body = std::fs::read_to_string(&config_path).expect("read saved config");
     assert!(
@@ -3933,6 +3934,10 @@ fn setup_high_trust_persists_full_access_without_legacy_yolo_mode() {
     assert_eq!(app.approval_mode, ApprovalMode::Bypass);
     assert!(app.allow_shell);
     assert!(app.trust_mode);
+    assert_eq!(
+        app.configured_sandbox_mode.as_deref(),
+        Some("danger-full-access")
+    );
 
     app.set_mode(AppMode::Plan);
     assert!(!app.allow_shell);
@@ -5454,6 +5459,7 @@ async fn mode_change_update_notifies_engine() {
             trust_mode,
             auto_approve,
             approval_mode,
+            configured_sandbox_mode,
         } => {
             // The deprecated YOLO alias lands in Agent mode with full-access
             // compat policies (M6 shim); the engine sees the remapped mode.
@@ -5462,6 +5468,7 @@ async fn mode_change_update_notifies_engine() {
             assert!(trust_mode);
             assert!(auto_approve);
             assert_eq!(approval_mode, crate::tui::approval::ApprovalMode::Bypass);
+            assert_eq!(configured_sandbox_mode, app.configured_sandbox_mode);
         }
         other => panic!("expected ChangeMode, got {other:?}"),
     }
@@ -5485,12 +5492,14 @@ async fn mode_change_update_sends_restored_agent_policy() {
             trust_mode,
             auto_approve,
             approval_mode,
+            configured_sandbox_mode,
         } => {
             assert_eq!(mode, crate::tui::app::AppMode::Agent);
             assert!(allow_shell);
             assert!(!trust_mode);
             assert!(!auto_approve);
             assert_eq!(approval_mode, crate::tui::approval::ApprovalMode::Never);
+            assert_eq!(configured_sandbox_mode, app.configured_sandbox_mode);
         }
         other => panic!("expected ChangeMode, got {other:?}"),
     }
@@ -9114,6 +9123,27 @@ fn subagent_completion_status_reads_done_sentinel() {
 }
 
 #[test]
+fn subagent_failure_notice_surfaces_receipt_fields() {
+    let result = concat!(
+        "Failed: quota exhausted\n",
+        "<codewhale:subagent.done>{\"event\":\"subagent.failed\",",
+        "\"agent_id\":\"agent_x\",\"name\":\"Tide\",",
+        "\"status\":\"failed\",\"failure_class\":\"auth_or_quota\",",
+        "\"steps\":12,\"elapsed_ms\":3456,",
+        "\"transcript_handle\":\"agent:agent_x/full_transcript\"}",
+        "</codewhale:subagent.done>",
+    );
+
+    let notice = subagent_failure_notice(result).expect("failure notice");
+    assert!(notice.contains("Tide (agent_x)"), "{notice}");
+    assert!(notice.contains("auth_or_quota"), "{notice}");
+    assert!(notice.contains("12 steps"), "{notice}");
+    assert!(notice.contains("3456 ms"), "{notice}");
+    assert!(notice.contains("agent:agent_x/full_transcript"), "{notice}");
+    assert!(subagent_failure_notice("plain completion").is_none());
+}
+
+#[test]
 fn subagent_completion_status_reads_summary_fallbacks() {
     assert_eq!(
         subagent_completion_status("Cancelled").as_deref(),
@@ -10604,7 +10634,7 @@ fn turn_started_route_is_captured_before_cancel_suppression() {
                 billing_surface: Some(crate::pricing::FIRST_PARTY_PAYG_BILLING_SURFACE.to_string()),
                 endpoint_fingerprint: Some("openai-endpoint".to_string()),
                 billing_mode: crate::cost_status::RouteBillingMode::Metered,
-                dispatched_at: created_at.clone(),
+                dispatched_at: created_at,
             }),
             base_url: String::new(),
             billing_product: crate::route_billing::RouteProduct::Unproven,
@@ -11701,6 +11731,58 @@ async fn steer_user_message_records_prompt_for_cancel_restore() {
 }
 
 #[tokio::test]
+async fn steer_user_message_backgrounds_foreground_shell_before_dispatch() {
+    let mut app = create_test_app();
+    app.is_loading = true;
+    let shell_manager = app
+        .runtime_services
+        .shell_manager
+        .clone()
+        .expect("test app shell manager");
+    let mut active = ActiveCell::new();
+    active.push_tool(
+        "foreground-shell",
+        HistoryCell::Tool(ToolCell::Exec(ExecCell {
+            command: "cargo test --workspace".to_string(),
+            status: ToolStatus::Running,
+            output: None,
+            live_output: None,
+            shell_task_id: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
+            started_at: Some(Instant::now()),
+            duration_ms: None,
+            stale_elapsed_since_output_ms: None,
+            source: ExecSource::Assistant,
+            interaction: None,
+            output_summary: None,
+        })),
+    );
+    app.active_cell = Some(active);
+    let mut engine = crate::core::engine::mock_engine_handle();
+
+    steer_user_message(
+        &mut app,
+        &engine.handle,
+        QueuedMessage::new("use the partial results".to_string(), None),
+    )
+    .await
+    .expect("steer user message");
+
+    assert!(
+        shell_manager
+            .lock()
+            .expect("shell manager lock")
+            .foreground_background_requested_for_test(),
+        "foreground shell must receive its detach request"
+    );
+    assert_eq!(
+        engine.rx_steer.recv().await.as_deref(),
+        Some("use the partial results")
+    );
+}
+
+#[tokio::test]
 async fn empty_enter_sends_next_queued_message_into_running_turn() {
     let mut app = create_test_app();
     app.is_loading = true;
@@ -12662,7 +12744,7 @@ fn detail_target_prefers_visible_tool_card() {
     assert_eq!(detail_target_cell_index(&app), Some(1));
     let expected = format!(
         "{} Turn Inspector · find · {}",
-        crate::tui::key_shortcuts::activity_shortcut_label(),
+        crate::tui::key_shortcuts::turn_inspector_shortcut_label(),
         crate::tui::key_shortcuts::tool_details_shortcut_action_hint("raw details")
     );
     assert_eq!(
@@ -12692,7 +12774,7 @@ fn activity_footer_hint_surfaces_visible_thinking_without_raw_tool_hint() {
 
     assert_eq!(
         selected_detail_footer_label(&app).as_deref(),
-        Some("Ctrl+O Turn Inspector · thinking")
+        Some("Ctrl+O Reasoning detail · thinking")
     );
 }
 
@@ -12717,7 +12799,7 @@ fn activity_footer_hint_uses_details_for_subagent_cards() {
 
     let expected = format!(
         "{} Turn Inspector · sub-agent · {}",
-        crate::tui::key_shortcuts::activity_shortcut_label(),
+        crate::tui::key_shortcuts::turn_inspector_shortcut_label(),
         crate::tui::key_shortcuts::tool_details_shortcut_action_hint("details")
     );
     assert_eq!(
@@ -12817,9 +12899,9 @@ fn tool_details_pager_frames_leaf_scope_and_preserves_raw_content() {
     );
 
     let body = pager.body_text();
-    // Body frames leaf scope and points to Ctrl+O for whole-turn context.
+    // Body frames leaf scope and points to the dedicated whole-turn chord.
     assert!(body.contains("Raw detail for the selected item"), "{body}");
-    assert!(body.contains("Ctrl+O"), "{body}");
+    assert!(body.contains("Ctrl+Alt+O"), "{body}");
     // Existing raw input/output visibility must be preserved.
     assert!(body.contains("Input:"), "{body}");
     assert!(body.contains("Output:"), "{body}");
@@ -12878,8 +12960,8 @@ fn tool_details_empty_state_points_to_turn_inspector() {
     assert!(!open_details_pager_for_cell(&mut app, 999));
     let msg = app.status_message.clone().unwrap_or_default();
     assert!(
-        msg.contains("Ctrl+O"),
-        "empty state should point to Ctrl+O for the turn overview: {msg}"
+        msg.contains("Ctrl+Alt+O"),
+        "empty state should point to Ctrl+Alt+O for the turn overview: {msg}"
     );
 }
 
@@ -13097,6 +13179,46 @@ fn terminal_pause_has_live_owner_only_for_running_exec_cells() {
         !terminal_pause_has_live_owner(&app),
         "non-interactive RLM work must not keep the terminal in host-scrollback mode"
     );
+}
+
+#[test]
+fn active_foreground_shell_running_excludes_detached_background_jobs() {
+    let mut app = create_test_app();
+    let mut active = ActiveCell::new();
+    active.push_tool(
+        "shell",
+        HistoryCell::Tool(ToolCell::Exec(ExecCell {
+            command: "cargo test --workspace".to_string(),
+            status: ToolStatus::Running,
+            output: None,
+            live_output: None,
+            shell_task_id: Some("shell-42".to_string()),
+            owner_agent_id: None,
+            owner_agent_name: None,
+            started_at: Some(Instant::now()),
+            duration_ms: None,
+            stale_elapsed_since_output_ms: None,
+            source: ExecSource::Assistant,
+            interaction: None,
+            output_summary: None,
+        })),
+    );
+    app.active_cell = Some(active);
+
+    assert!(
+        !active_foreground_shell_running(&app),
+        "a detached job remains Running but is no longer a foreground wait"
+    );
+
+    let Some(HistoryCell::Tool(ToolCell::Exec(exec))) = app
+        .active_cell
+        .as_mut()
+        .and_then(|active| active.entry_mut(0))
+    else {
+        panic!("running shell cell");
+    };
+    exec.shell_task_id = None;
+    assert!(active_foreground_shell_running(&app));
 }
 
 #[test]
@@ -13889,7 +14011,6 @@ fn child_usage_metadata_carries_cache_write_and_reasoning_end_to_end() {
             code_execution_requests: Some(2),
             tool_search_requests: Some(1),
         }),
-        ..Default::default()
     };
 
     // The shared producer emits every class.
@@ -16423,7 +16544,7 @@ fn open_thinking_pager_finds_thinking_in_active_cell() {
 }
 
 #[test]
-fn activity_detail_opens_reasoning_timeline_for_selected_thinking() {
+fn reasoning_detail_opens_timeline_for_selected_thinking() {
     let mut app = create_test_app();
     app.history = vec![
         HistoryCell::Thinking {
@@ -16457,7 +16578,7 @@ fn activity_detail_opens_reasoning_timeline_for_selected_thinking() {
     app.viewport.transcript_selection.anchor = Some(point);
     app.viewport.transcript_selection.head = Some(point);
 
-    assert!(open_activity_detail_pager(&mut app));
+    assert!(open_reasoning_detail_pager(&mut app));
     let body = pop_pager_body(&mut app);
 
     assert!(
@@ -16478,187 +16599,6 @@ fn activity_detail_opens_reasoning_timeline_for_selected_thinking() {
     assert!(
         body.contains("second chunk reasoning"),
         "timeline should include the whole session's thinking: {body}"
-    );
-}
-
-#[test]
-fn activity_detail_includes_tool_handle_and_neighbor_context() {
-    let mut app = create_test_app();
-    app.history = vec![
-        HistoryCell::Thinking {
-            content: "checked approach".to_string(),
-            streaming: false,
-            duration_secs: Some(0.6),
-        },
-        HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
-            name: "read_file".to_string(),
-            status: ToolStatus::Success,
-            input_summary: Some("src/main.rs".to_string()),
-            output: Some("bounded preview".to_string()),
-            prompts: None,
-            spillover_path: None,
-            output_summary: None,
-            is_diff: false,
-        })),
-        HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
-            name: "grep_files".to_string(),
-            status: ToolStatus::Success,
-            input_summary: Some("TODO".to_string()),
-            output: Some("grep summary".to_string()),
-            prompts: None,
-            spillover_path: None,
-            output_summary: None,
-            is_diff: false,
-        })),
-    ];
-    app.tool_details_by_cell.insert(
-        1,
-        ToolDetailRecord {
-            tool_id: "call-read".to_string(),
-            tool_name: "read_file".to_string(),
-            input: serde_json::json!({"path": "src/main.rs"}),
-            output: Some("full output behind raw details".to_string()),
-        },
-    );
-    app.session_artifacts
-        .push(crate::artifacts::ArtifactRecord {
-            id: "art_call-read".to_string(),
-            kind: crate::artifacts::ArtifactKind::ToolOutput,
-            session_id: "session-activity".to_string(),
-            tool_call_id: "call-read".to_string(),
-            tool_name: "read_file".to_string(),
-            created_at: chrono::Utc::now(),
-            byte_size: 42,
-            preview: "bounded preview".to_string(),
-            storage_path: PathBuf::from("artifacts").join("art_call-read.txt"),
-        });
-    app.resync_history_revisions();
-    let revisions = app.history_revisions.clone();
-    app.viewport.transcript_cache.ensure(
-        &app.history,
-        &revisions,
-        100,
-        app.transcript_render_options(),
-    );
-    let line = first_line_for_cell(&app, 1);
-    let point = TranscriptSelectionPoint {
-        line_index: line,
-        column: 0,
-    };
-    app.viewport.transcript_selection.anchor = Some(point);
-    app.viewport.transcript_selection.head = Some(point);
-
-    assert!(open_activity_detail_pager(&mut app));
-    let body = pop_pager_body(&mut app);
-
-    assert!(body.contains("Activity: read"), "{body}");
-    assert!(body.contains("Activity chunk: 2 of 3"), "{body}");
-    assert!(
-        body.contains("Previous activity: 1 of 3 - thinking"),
-        "{body}"
-    );
-    assert!(body.contains("Next activity: 3 of 3 - find"), "{body}");
-    assert!(body.contains("Detail handle: art_call-read"), "{body}");
-    assert!(
-        body.contains("retrieve_tool_result ref=art_call-read"),
-        "{body}"
-    );
-    let details_chord = crate::tui::shell_key_routing::display_chord(
-        crate::tui::shell_key_routing::binding(
-            crate::tui::shell_key_routing::ShellBindingId::ToolDetails,
-        )
-        .footer_chord,
-    );
-    // The pager wraps this line at a platform-dependent point ("⌥V raw /
-    // details" on macOS, "Alt+V / raw details" on Windows), so normalize
-    // whitespace before asserting the full truthful hint.
-    let flat = body.split_whitespace().collect::<Vec<_>>().join(" ");
-    assert!(
-        flat.contains(&format!("{details_chord} raw details)")),
-        "{body}"
-    );
-}
-
-#[test]
-fn activity_detail_fallback_prefers_live_activity_context() {
-    let mut app = create_test_app();
-    let mut active = ActiveCell::new();
-    active.push_tool(
-        "active-1",
-        HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
-            name: "agent".to_string(),
-            status: ToolStatus::Running,
-            input_summary: Some("agent_id: agent_af58ba3a".to_string()),
-            output: None,
-            prompts: None,
-            spillover_path: None,
-            output_summary: None,
-            is_diff: false,
-        })),
-    );
-    app.active_cell = Some(active);
-    app.runtime_turn_id = Some("turn_live_123456789".to_string());
-    app.runtime_turn_status = Some("in_progress".to_string());
-
-    assert!(open_activity_detail_pager(&mut app));
-    let body = pop_pager_body(&mut app);
-
-    // A6 (#4102): short id + humanized status, never the raw UUID/"in_progress".
-    assert!(
-        body.contains("Turn turn_live_12 \u{00B7} in progress"),
-        "{body}"
-    );
-    assert!(!body.contains("turn_live_123456789"), "{body}");
-    assert!(body.contains("Activity: delegate"));
-    assert!(body.contains("Status: running"));
-    assert!(body.contains("agent_id: agent_af58ba3a"));
-}
-
-#[test]
-fn activity_detail_fallback_uses_recent_meaningful_activity_without_full_tool_dump() {
-    let mut app = create_test_app();
-    let output = (0..20)
-        .map(|idx| format!("line {idx}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    app.history
-        .push(HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
-            name: "read_file".to_string(),
-            status: ToolStatus::Success,
-            input_summary: Some("src/large.rs".to_string()),
-            output: Some(output),
-            prompts: None,
-            spillover_path: None,
-            output_summary: None,
-            is_diff: false,
-        })));
-
-    assert!(open_activity_detail_pager(&mut app));
-    let body = pop_pager_body(&mut app);
-
-    assert!(body.contains("Activity: read"));
-    assert!(body.contains("Status: done"));
-    let details = crate::tui::shell_key_routing::display_chord(
-        crate::tui::shell_key_routing::binding(
-            crate::tui::shell_key_routing::ShellBindingId::ToolDetails,
-        )
-        .footer_chord,
-    );
-    assert!(
-        body.contains(&format!("Detail handle: {details} details")),
-        "{body}"
-    );
-    assert!(
-        !body.contains(&format!("Detail handle: {details} raw details")),
-        "fallback tool details should not be labeled raw: {body}"
-    );
-    assert!(
-        !body.contains("Detail handle: v details"),
-        "bare-v details claim must not appear: {body}"
-    );
-    assert!(
-        !body.contains("line 10"),
-        "middle of large raw output should not be dumped into Activity Detail: {body}"
     );
 }
 

@@ -1362,6 +1362,35 @@ fn compact_base_url(base_url: &str) -> String {
     crate::tui::ui_text::truncate_line_to_width(stripped, 24)
 }
 
+/// Resolve the external credential target for a provider that supports
+/// read-only external consent. This is the same lower-level fact the
+/// provider picker uses to build its consent flow; Fleet setup reuses it
+/// for route-scoped activation without switching the parent session.
+#[must_use]
+pub(crate) fn external_consent_target_for_provider(
+    provider: ApiProvider,
+) -> Option<(
+    codewhale_config::ProviderKind,
+    codewhale_config::ExternalCredentialSource,
+    std::path::PathBuf,
+)> {
+    let (consent_provider, source, path) = match provider {
+        ApiProvider::OpenaiCodex => (
+            codewhale_config::ProviderKind::OpenaiCodex,
+            codewhale_config::ExternalCredentialSource::CodexCli,
+            crate::oauth::auth_file_path(),
+        ),
+        ApiProvider::Xai => (
+            codewhale_config::ProviderKind::Xai,
+            codewhale_config::ExternalCredentialSource::GrokCli,
+            crate::xai_oauth::auth_file_path(),
+        ),
+        _ => return None,
+    };
+    let path = codewhale_config::resolve_external_credential_path(path).ok()?;
+    Some((consent_provider, source, path))
+}
+
 impl ProviderPickerView {
     #[cfg(test)]
     #[must_use]
@@ -1737,21 +1766,7 @@ impl ProviderPickerView {
         codewhale_config::ExternalCredentialSource,
         std::path::PathBuf,
     )> {
-        let (provider, source, path) = match self.selected_provider() {
-            ApiProvider::OpenaiCodex => (
-                codewhale_config::ProviderKind::OpenaiCodex,
-                codewhale_config::ExternalCredentialSource::CodexCli,
-                crate::oauth::auth_file_path(),
-            ),
-            ApiProvider::Xai => (
-                codewhale_config::ProviderKind::Xai,
-                codewhale_config::ExternalCredentialSource::GrokCli,
-                crate::xai_oauth::auth_file_path(),
-            ),
-            _ => return None,
-        };
-        let path = codewhale_config::resolve_external_credential_path(path).ok()?;
-        Some((provider, source, path))
+        external_consent_target_for_provider(self.selected_provider())
     }
 
     fn enter_external_consent_choice(&mut self) {
@@ -2379,6 +2394,7 @@ impl ProviderPickerView {
         let codex_oauth = row.provider == ApiProvider::OpenaiCodex;
         let xai_oauth = row.provider == ApiProvider::Xai;
         let oauth_provider = codex_oauth || xai_oauth;
+        let saved_credential = !oauth_provider && row.has_key;
         let outer = Block::default()
             .title(Line::from(Span::styled(
                 if oauth_provider {
@@ -2417,6 +2433,15 @@ impl ProviderPickerView {
                     ActionHint::new("Esc", self.tr(MessageId::SetupActionBack)),
                 ],
             )
+        } else if saved_credential && self.api_key_input.trim().is_empty() {
+            render_modal_footer(
+                inner,
+                buf,
+                &[
+                    ActionHint::new("Type/paste", "replace saved key"),
+                    ActionHint::new("Esc", "keep current key"),
+                ],
+            )
         } else {
             render_modal_footer(
                 inner,
@@ -2433,6 +2458,8 @@ impl ProviderPickerView {
             "(run codex login; then explicitly grant read-only access)".to_string()
         } else if xai_oauth {
             "(browser/device-code sign-in; tokens use Codewhale-owned storage)".to_string()
+        } else if masked.is_empty() && saved_credential {
+            "Saved credential configured".to_string()
         } else if masked.is_empty() {
             "(paste key here)".to_string()
         } else {
@@ -2485,6 +2512,16 @@ impl ProviderPickerView {
                     Style::default().fg(palette::TEXT_MUTED),
                 )),
             ]
+        } else if saved_credential && self.api_key_input.trim().is_empty() {
+            vec![Line::from(Span::styled(
+                "This terminal can use the stored credential. Type or paste only to replace it; Esc keeps it unchanged.",
+                Style::default().fg(palette::TEXT_MUTED),
+            ))]
+        } else if saved_credential {
+            vec![Line::from(Span::styled(
+                "The replacement is validated before it replaces the stored credential.",
+                Style::default().fg(palette::TEXT_MUTED),
+            ))]
         } else {
             vec![Line::from(Span::styled(
                 format!(
@@ -2535,7 +2572,13 @@ impl ProviderPickerView {
             )));
         }
 
-        let hint_height = hint_lines.len().clamp(1, 5) as u16;
+        // `Line` count is not rendered row count: long environment-variable
+        // guidance can wrap to two or three terminal rows. Ask ratatui for the
+        // exact wrapped height instead of duplicating its layout arithmetic.
+        let hint = Paragraph::new(hint_lines).wrap(Wrap { trim: true });
+        let hint_height = u16::try_from(hint.line_count(content.width.max(1)))
+            .unwrap_or(u16::MAX)
+            .clamp(1, 6);
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -2546,7 +2589,7 @@ impl ProviderPickerView {
             .split(content);
 
         Paragraph::new(key_lines).render(layout[0], buf);
-        Paragraph::new(hint_lines).render(layout[1], buf);
+        hint.render(layout[1], buf);
     }
 
     fn render_external_consent_choice(&self, area: Rect, buf: &mut Buffer) {
@@ -3515,18 +3558,10 @@ impl ModalView for ProviderPickerView {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let preferred_height = match self.stage {
             Stage::List => (self.rows.len() as u16).saturating_add(2),
-            Stage::KeyEntry => {
-                let row = &self.rows[self.selected_idx];
-                // The Kimi Code membership route renders two extra hint lines
-                // (plan console + no-credential-import); keep them visible.
-                if row.provider == ApiProvider::Moonshot
-                    && crate::config::moonshot_base_url_is_exact_kimi_code(&row.base_url)
-                {
-                    12
-                } else {
-                    10
-                }
-            }
+            // Key/OAuth help is intentionally multi-line and wraps at narrow
+            // widths. One shared height keeps every provider's final guidance
+            // visible instead of special-casing whichever route clipped last.
+            Stage::KeyEntry => 14,
             Stage::ExternalConsentChoice => 12,
             Stage::ExternalConsentConfirm => 13,
             Stage::ModelPick => 12,
@@ -3993,6 +4028,33 @@ mod tests {
 
         assert!(rendered.contains("NVIDIA_API_KEY / NVIDIA_NIM_API_KEY / DEEPSEEK_API_KEY"));
         assert!(rendered.contains("https://build.nvidia.com/settings/api-keys"));
+    }
+
+    #[test]
+    fn zai_key_entry_wraps_long_environment_guidance_without_hiding_credentials_url() {
+        let config = Config::default();
+        let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+        move_to_provider(&mut picker, ApiProvider::Zai);
+        picker.handle_key(key(KeyCode::Enter));
+
+        // Reproduce the width from the dogfood screenshot: the old renderer
+        // allocated one row per logical line, so the long env-var sentence
+        // clipped and displaced the credentials URL.
+        let rendered = render_text(&picker, 100, 20);
+
+        for name in [
+            "ZAI_API_KEY",
+            "Z_AI_API_KEY",
+            "ZHIPU_API_KEY",
+            "GLM_API_KEY",
+        ] {
+            assert!(rendered.contains(name), "missing {name}:\n{rendered}");
+        }
+        assert!(rendered.contains("re-open /provider."), "{rendered}");
+        assert!(
+            rendered.contains("Credentials: https://z.ai/model-api"),
+            "{rendered}"
+        );
     }
 
     #[test]
@@ -6027,6 +6089,56 @@ mod tests {
     }
 
     #[test]
+    fn configured_api_key_editors_acknowledge_saved_credentials_across_providers() {
+        for (provider, config, secret) in [
+            (
+                ApiProvider::Zai,
+                Config {
+                    providers: Some(crate::config::ProvidersConfig {
+                        zai: crate::config::ProviderConfig {
+                            api_key: Some("stored-zai-key".to_string()),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }),
+                    ..Config::default()
+                },
+                "stored-zai-key",
+            ),
+            (
+                ApiProvider::Openrouter,
+                Config {
+                    providers: Some(crate::config::ProvidersConfig {
+                        openrouter: crate::config::ProviderConfig {
+                            api_key: Some("stored-openrouter-key".to_string()),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }),
+                    ..Config::default()
+                },
+                "stored-openrouter-key",
+            ),
+        ] {
+            let mut picker = ProviderPickerView::new(provider, &config);
+            move_to_provider(&mut picker, provider);
+            picker.handle_key(key(KeyCode::Char('r')));
+
+            let rendered = render_text(&picker, 100, 20);
+
+            assert!(
+                rendered.contains("Saved credential configured"),
+                "{provider:?}:\n{rendered}"
+            );
+            assert!(rendered.contains("stored credential"), "{rendered}");
+            assert!(rendered.contains("replace saved key"), "{rendered}");
+            assert!(rendered.contains("keep current key"), "{rendered}");
+            assert!(!rendered.contains("paste key here"), "{rendered}");
+            assert!(!rendered.contains(secret), "{rendered}");
+        }
+    }
+
+    #[test]
     fn ctrl_r_does_not_trigger_key_entry() {
         let config = Config::default();
         let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
@@ -6093,8 +6205,8 @@ mod tests {
         assert_eq!(picker.stage, Stage::KeyEntry);
 
         let rendered = render_text(&picker, 96, 20);
-        assert!(rendered.contains("OAuth login"));
-        assert!(rendered.contains("no token is stored here"));
+        assert!(rendered.contains("OAuth login"), "{rendered}");
+        assert!(rendered.contains("no token is stored here"), "{rendered}");
         assert!(!rendered.contains("save & switch"));
         assert!(!rendered.contains("(paste key here)"));
         assert!(!rendered.contains("Credentials:"));

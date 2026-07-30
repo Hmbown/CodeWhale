@@ -385,9 +385,8 @@
     "KbFuzzyFilePicker": "फ़ज़ी फ़ाइल चयनकर्ता खोलें (Enter पर @path डालता है)",
     "KbCompactInspector": "कॉम्पैक्ट सत्र संदर्भ निरीक्षक खोलें",
     "KbLastMessagePager": "अंतिम संदेश के लिए पेजर खोलें (जब इनपुट खाली हो)",
-    "KbSelectedDetails": "चुने टूल या संदेश का कच्चा विवरण दिखाएँ; Ctrl+O पूरे टर्न का अवलोकन खोलता है",
+    "KbSelectedDetails": "चुने टूल या संदेश का कच्चा विवरण दिखाएँ; Ctrl+Alt+O पूरे टर्न का अवलोकन खोलता है",
     "KbToolDetailsPager": "चुने आइटम का कच्चा विवरण दिखाएँ (Alt+V)",
-    "KbThinkingPager": "Turn Inspector खोलें",
     "KbExternalEditor": "कम्पोज़र मसौदा बाहरी संपादक में खोलें",
     "KbLiveTranscript": "लाइव ट्रांसक्रिप्ट ओवरले खोलें (Ctrl+Shift+T; स्टिकी-टेल ऑटो-स्क्रॉल)",
     "KbBacktrackMessage": "पिछले उपयोगकर्ता संदेश पर वापस जाएँ (Left/Right कदम, रिवाइंड के लिए Enter)",
@@ -846,7 +845,6 @@
     "FooterWorkedChip": "{duration} काम किया",
     "FleetDraftTitle": "Fleet प्रोफ़ाइल — {model_label} का मसौदा (g से सहेजें)",
     "FleetDraftHeader": "# .codewhale/agents/{name}\n# {model_label} द्वारा मसौदा, Codewhale द्वारा सत्यापित और सीमाबद्ध।\n# अनुमतियाँ fleet न्यूनतम स्तर पर रहती हैं: कोई शेल नहीं, कोई ट्रस्ट नहीं, अनुमति आवश्यक।\n# जब तक आप विज़ार्ड में g नहीं दबाते, कुछ सहेजा नहीं जाता।\n\n",
-    "FleetPreviewHeader": "# .codewhale/agents/{name}\n# आपकी भूमिका/मॉडल पसंद से Codewhale द्वारा बनाया नियत स्टार्टर प्रोफ़ाइल।\n# अनुमतियाँ fleet न्यूनतम स्तर पर रहती हैं: कोई शेल नहीं, कोई ट्रस्ट नहीं, अनुमति आवश्यक।\n# जब तक आप विज़ार्ड में Enter या g नहीं दबाते, कुछ सहेजा नहीं जाता।\n\n",
     "SetupRemoteOnRampText": "रिमोट रनटाइम ऑन-रैंप\n\n/setup केवल रिमोट रनटाइम तथ्य दिखाता है। यह डिप्लॉय बंडल नहीं बनाता, क्रेडेंशल नहीं लिखता, क्लाउड CLI नहीं बुलाता, और `remote-setup` नहीं चलाता।\n\nवर्तमान तथ्य:\n- क्लाउड: {clouds_result}\n- चैट ब्रिज: {bridges_result}\n- प्रोवाइडर: {providers_result}\n- मोड: {mode_result}\n\nडिप्लॉय बंडल बनाने के लिए, सामान्य टर्मिनल में स्पष्ट रूप से चलाएँ:\n\n```sh\n{command}\n```\n\nबनाया गया RUNBOOK मानव समीक्षा के लिए होस्ट चरण शामिल करता है। `--apply` अभी लागू नहीं है; इसे ऑटो-डिप्लॉय न समझें।",
     "ApprovalDescSafe": "सुरक्षित/रीड-ओनली ऑपरेशन का अनुरोध।",
     "ApprovalDescFileWrite": "फ़ाइल बदलने का अनुरोध। पथ और सामग्री की पुष्टि करें।",
@@ -1246,5 +1244,8 @@
     "SessionsArchiveFailed": "संग्रह विफल: {error}",
     "SessionsShowingArchived": "संग्रहित सत्र दिखाए जा रहे हैं",
     "SessionsHidingArchived": "संग्रहित सत्र छिपाए गए",
-    "SessionsArchivedCompact": "संग्रहित"
+    "SessionsArchivedCompact": "संग्रहित",
+    "KbReasoningDetail": "Open reasoning detail for the selected or current turn",
+    "KbTurnInspector": "Turn Inspector खोलें",
+    "CmdTurnInspectDescription": "Open the whole-turn inspector"
 }

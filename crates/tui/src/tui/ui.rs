@@ -14,6 +14,7 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use crate::error_taxonomy::{ErrorCategory, ErrorEnvelope, ErrorSeverity};
 use crate::resource_telemetry::{TokenThroughput, estimate_output_tokens_from_text};
 use anyhow::{Context, Result};
 // On Windows the push/pop helpers write the escapes directly; crossterm's
@@ -167,14 +168,12 @@ pub(crate) use self::activity_detail::{
     selected_detail_footer_label, turn_handoff_markdown,
 };
 use self::activity_detail::{
-    copy_focused_cell, detail_target_cell_index, extract_reasoning_header, open_tool_details_pager,
-    open_turn_inspector_pager,
+    copy_focused_cell, detail_target_cell_index, extract_reasoning_header,
+    open_reasoning_detail_pager, open_tool_details_pager, open_turn_inspector_pager,
 };
-// Ctrl+O now opens the whole-turn Turn Inspector (#4104); the single-cell
-// Activity Detail pager is no longer bound to a key, so it is only referenced
-// from tests. (`v` raw leaf detail keeps using `open_tool_details_pager`.)
-#[cfg(test)]
-use self::activity_detail::open_activity_detail_pager;
+// Ctrl+O now opens the full recorded Reasoning Detail for the selected or
+// current reasoning block. The whole-turn Turn Inspector moved to Ctrl+Alt+O
+// and `/turn inspect`. (`v` raw leaf detail keeps using `open_tool_details_pager`.)
 
 // === Constants ===
 
@@ -2002,6 +2001,44 @@ fn subagent_completion_status(result: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+fn subagent_failure_notice(result: &str) -> Option<String> {
+    const START: &str = "<codewhale:subagent.done>";
+    const END: &str = "</codewhale:subagent.done>";
+    let start = result.find(START)? + START.len();
+    let end = result[start..].find(END)? + start;
+    let value = serde_json::from_str::<serde_json::Value>(&result[start..end]).ok()?;
+    (value.get("event").and_then(serde_json::Value::as_str) == Some("subagent.failed"))
+        .then(|| {
+            let name = value
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown");
+            let agent_id = value
+                .get("agent_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown");
+            let class = value
+                .get("failure_class")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unavailable");
+            let steps = value
+                .get("steps")
+                .and_then(serde_json::Value::as_u64)
+                .map_or_else(|| "?".to_string(), |steps| steps.to_string());
+            let elapsed_ms = value
+                .get("elapsed_ms")
+                .and_then(serde_json::Value::as_u64)
+                .map_or_else(|| "?".to_string(), |elapsed| elapsed.to_string());
+            let transcript_handle = value
+                .get("transcript_handle")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unavailable");
+            format!(
+                "{name} ({agent_id}) · {class} · {steps} steps · {elapsed_ms} ms · inspect {transcript_handle}"
+            )
+        })
 }
 
 fn subagent_status_from_completion_result(result: &str) -> SubAgentStatus {
@@ -4533,6 +4570,19 @@ async fn run_event_loop(
                         );
                         // #3030: stable label with raw-id fallback.
                         apply_agent_complete_status_and_observer(app, &id, &result, terminal_verb);
+                        if let Some(failure) = subagent_failure_notice(&result) {
+                            let message_id =
+                                if matches!(terminal_status, SubAgentStatus::BudgetExhausted) {
+                                    MessageId::NotificationSubagentBudgetExhausted
+                                } else {
+                                    MessageId::NotificationSubagentFailed
+                                };
+                            app.set_sticky_status(
+                                format!("{} · {failure}", app.tr(message_id)),
+                                StatusToastLevel::Error,
+                                None,
+                            );
+                        }
                         let should_recapture_terminal =
                             !has_other_running_subagents && app.use_alt_screen;
                         let subagent_notification_mode =
@@ -6562,6 +6612,11 @@ async fn run_event_loop(
                 {
                     continue;
                 }
+                _ if key_shortcuts::is_reasoning_detail_shortcut(&key)
+                    && open_reasoning_detail_pager(app) =>
+                {
+                    continue;
+                }
                 _ if key_shortcuts::is_turn_inspector_shortcut(&key)
                     && open_turn_inspector_pager(app) =>
                 {
@@ -6570,7 +6625,8 @@ async fn run_event_loop(
                 // Space toggles fold/unfold of the focused thinking block
                 // when the composer is empty. For thinking cells, toggles
                 // between summary and full content; for other cells, toggles
-                // visibility (#1972, #2348).
+                // visibility (#1972, #2348). Uses virtual-cell lookup so
+                // in-flight active reasoning works too.
                 KeyCode::Char(' ')
                     if key.modifiers == KeyModifiers::NONE && app.input.is_empty() =>
                 {
@@ -6579,8 +6635,7 @@ async fn run_event_loop(
                             continue;
                         }
                         let is_thinking = app
-                            .history
-                            .get(idx)
+                            .cell_at_virtual_index(idx)
                             .is_some_and(|c| matches!(c, HistoryCell::Thinking { .. }));
                         if is_thinking {
                             if app.folded_thinking.contains(&idx) {
@@ -10557,6 +10612,7 @@ async fn sync_mode_update(app: &App, engine_handle: &EngineHandle) {
             trust_mode: app.trust_mode,
             auto_approve: app_auto_approve_enabled(app),
             approval_mode: app.approval_mode,
+            configured_sandbox_mode: app.configured_sandbox_mode.clone(),
         })
         .await;
 }
@@ -12368,6 +12424,9 @@ async fn apply_command_result(
             AppAction::OpenLiveTranscript => {
                 open_live_transcript_overlay(app);
             }
+            AppAction::OpenTurnInspector => {
+                open_turn_inspector_pager(app);
+            }
             AppAction::CompactContext { focus } => {
                 app.status_message = Some("Compacting context...".to_string());
                 match validated_app_runtime_route(app, config) {
@@ -13251,6 +13310,17 @@ async fn steer_user_message(
         content.push_str(note);
     }
     let message_index = app.api_messages.len();
+
+    // A foreground shell blocks the turn loop that consumes steer input.
+    // Ask the shared shell manager to detach it before enqueueing the steer so
+    // the loop can leave the foreground wait and process this message (#4930).
+    if active_foreground_shell_running(app)
+        && let Err(err) = request_active_foreground_shell_background(app)
+    {
+        restore_steer_paused_state(app, &paused_snapshot);
+        engine_handle.set_paused(paused_snapshot.paused);
+        return Err(err.context("could not move foreground shell to /jobs before steering"));
+    }
 
     if let Err(err) = engine_handle.steer(content.clone()).await {
         restore_steer_paused_state(app, &paused_snapshot);
@@ -14913,15 +14983,17 @@ async fn handle_view_events(
                 )
                 .await;
             }
-            ViewEvent::FleetRosterOpenSetupRequested => {
+            ViewEvent::FleetRosterOpenSetupRequested { role } => {
                 // The roster view hands off to the authoring wizard (same
-                // path as AppAction::OpenFleetSetup).
+                // path as AppAction::OpenFleetSetup), carrying the member role
+                // already selected so the wizard can begin at Model.
                 if app.view_stack.top_kind() != Some(ModalKind::FleetSetup) {
                     let _ = app.next_draft_gen();
-                    app.view_stack
-                        .push(crate::tui::views::fleet_setup::FleetSetupView::new(
-                            app, config,
-                        ));
+                    app.view_stack.push(
+                        crate::tui::views::fleet_setup::FleetSetupView::new_for_role(
+                            app, config, &role,
+                        ),
+                    );
                 }
             }
             ViewEvent::FleetRosterOpenWorkersRequested => {
@@ -14933,6 +15005,79 @@ async fn handle_view_events(
                 app.status_message =
                     Some(tr(app.ui_locale, MessageId::SubagentsFetching).to_string());
                 let _ = engine_handle.try_send(Op::ListSubAgents);
+            }
+            ViewEvent::FleetSetupExternalConsentActivationRequested { provider_id, model } => {
+                // Validate the selected Fleet route by minting the read-only
+                // external credential capability only for this exact
+                // provider/source/path. The check is route-scoped: a cloned
+                // config has the target provider active so credential discovery
+                // succeeds, but the parent session provider/model are never
+                // mutated.
+                let Some(provider) = ApiProvider::parse(&provider_id) else {
+                    app.set_sticky_status(
+                        format!("Fleet route activation failed: unknown provider `{provider_id}`"),
+                        crate::tui::app::StatusToastLevel::Error,
+                        None,
+                    );
+                    app.needs_redraw = true;
+                    continue;
+                };
+                let provider_label = provider.display_name();
+                let mut scoped = config.clone();
+                scoped.provider = Some(provider_id.clone());
+                let validation =
+                    crate::route_runtime::resolve_runtime_route(&scoped, provider, Some(&model))
+                        .and_then(|route| route.validate().map_err(|err| err.to_string()));
+                match validation {
+                    Ok(validated) => {
+                        app.provider_health
+                            .record_success(&scoped, provider, &validated.model);
+                        app.push_status_toast(
+                            format!(
+                                "{provider_label} route activated for Fleet: {}",
+                                validated.model
+                            ),
+                            crate::tui::app::StatusToastLevel::Success,
+                            Some(5_000),
+                        );
+                    }
+                    Err(error) => {
+                        let envelope = ErrorEnvelope::new(
+                            ErrorCategory::Authentication,
+                            ErrorSeverity::Error,
+                            false,
+                            "route_validation_failed",
+                            &error,
+                        );
+                        app.provider_health
+                            .record_failure(&scoped, provider, &model, &envelope);
+                        app.push_status_toast(
+                            format!("{provider_label} route activation failed: {error}"),
+                            crate::tui::app::StatusToastLevel::Error,
+                            None,
+                        );
+                    }
+                }
+                // Refresh the Fleet setup view from a snapshot built against the
+                // updated health state so the activated row becomes Ready
+                // without closing the modal.
+                if app.view_stack.top_kind() == Some(crate::tui::views::ModalKind::FleetSetup) {
+                    if let Some(view) = app.view_stack.pop() {
+                        let mut restored = view;
+                        if let Some(fleet_setup) = restored
+                            .as_any_mut()
+                            .downcast_mut::<crate::tui::views::fleet_setup::FleetSetupView>(
+                        ) {
+                            let fresh =
+                                crate::tui::views::fleet_setup::FleetSetupSnapshot::from_app(
+                                    app, config,
+                                );
+                            fleet_setup.refresh_from_snapshot(fresh);
+                        }
+                        app.view_stack.push_boxed(restored);
+                    }
+                }
+                app.needs_redraw = true;
             }
             ViewEvent::FleetProfileDraftCommitRequested { draft, scope } => {
                 // The TOML is rendered deterministically from the validated
@@ -15062,6 +15207,7 @@ async fn handle_view_events(
                 message,
             } => match apply_setup_runtime_preset(app, config, preset, state) {
                 Ok(summary) => {
+                    sync_mode_update(app, engine_handle).await;
                     app.status_message = Some(format!("{message} {summary}"));
                 }
                 Err(err) => {
@@ -15885,6 +16031,7 @@ fn apply_setup_runtime_preset(
     }
     config.allow_shell = Some(preset.allow_shell());
     config.sandbox_mode = Some(preset.sandbox_mode().to_string());
+    app.configured_sandbox_mode = config.sandbox_mode.clone();
 
     let approval_mode = ApprovalMode::from_config_value(
         preset
@@ -17471,22 +17618,27 @@ pub(crate) fn request_foreground_shell_background(app: &mut App) {
         return;
     }
 
-    let Some(shell_manager) = app.runtime_services.shell_manager.clone() else {
-        app.status_message = Some("No shell session is active.".to_string());
-        return;
-    };
-
-    match shell_manager.lock() {
-        Ok(mut manager) => {
-            manager.request_foreground_background();
+    match request_active_foreground_shell_background(app) {
+        Ok(()) => {
             app.status_message = Some("Moving current shell command to /jobs...".to_string());
         }
-        Err(_) => {
-            app.status_message = Some(
-                "Shell tracking hit an internal error — restart Codewhale to recover.".to_string(),
-            );
+        Err(err) => {
+            app.status_message = Some(err.to_string());
         }
     }
+}
+
+fn request_active_foreground_shell_background(app: &App) -> Result<()> {
+    let shell_manager = app
+        .runtime_services
+        .shell_manager
+        .clone()
+        .context("No shell session is active.")?;
+    let mut manager = shell_manager.lock().map_err(|_| {
+        anyhow::anyhow!("Shell tracking hit an internal error — restart Codewhale to recover.")
+    })?;
+    manager.request_foreground_background();
+    Ok(())
 }
 
 pub(crate) fn prefill_jobs_cancel_all_if_tasks_sidebar(app: &mut App) -> bool {
@@ -17512,7 +17664,9 @@ pub(crate) fn active_foreground_shell_running(app: &App) -> bool {
             matches!(
                 cell,
                 HistoryCell::Tool(ToolCell::Exec(exec))
-                    if exec.status == ToolStatus::Running && exec.interaction.is_none()
+                    if exec.status == ToolStatus::Running
+                        && exec.interaction.is_none()
+                        && exec.shell_task_id.is_none()
             )
         })
     })
@@ -17932,12 +18086,12 @@ fn open_pager_for_last_message(app: &mut App) -> bool {
     true
 }
 
-/// Compatibility wrapper for the old test name. Exercises the single-cell
-/// Activity Detail helper (still used by `v`-adjacent detail paths); the
-/// user-facing Ctrl+O surface is now the whole-turn Turn Inspector (#4104).
+/// Compatibility wrapper for tests that exercise Ctrl+O on a thinking cell.
+/// The user-facing Ctrl+O surface is now the turn-scoped Reasoning Detail
+/// pager (#v092-reasoning-fix).
 #[cfg(test)]
 fn open_thinking_pager(app: &mut App) -> bool {
-    open_activity_detail_pager(app)
+    open_reasoning_detail_pager(app)
 }
 
 // Keyboard-shortcut predicates moved to `tui/key_shortcuts.rs`.

@@ -402,9 +402,8 @@
     "KbFuzzyFilePicker": "Abrir selector de archivo fuzzy (inserta @ruta al presionar Enter)",
     "KbCompactInspector": "Abrir inspector compacto de contexto de la sesión",
     "KbLastMessagePager": "Abrir paginador para el último mensaje (cuando la entrada está vacía)",
-    "KbSelectedDetails": "Mostrar el detalle sin procesar de la herramienta o mensaje seleccionado; Ctrl+O abre la vista general de todo el turno",
+    "KbSelectedDetails": "Mostrar el detalle sin procesar de la herramienta o mensaje seleccionado; Ctrl+Alt+O abre la vista general de todo el turno",
     "KbToolDetailsPager": "Mostrar el detalle sin procesar del elemento seleccionado (Alt+V)",
-    "KbThinkingPager": "Abrir Inspector de turno",
     "KbExternalEditor": "Abrir borrador en el editor externo",
     "KbLiveTranscript": "Abrir superposición de transcripción en vivo (auto-scroll)",
     "KbBacktrackMessage": "Retroceder al mensaje anterior del usuario (izquierda/derecha, Enter para rebobinar)",
@@ -867,7 +866,6 @@
     "FooterWorkedChip": "trabajó {duration}",
     "FleetDraftTitle": "Perfil Fleet — borrador de {model_label} (g para guardar)",
     "FleetDraftHeader": "# .codewhale/agents/{name}\n# Borrador por {model_label}, validado y limitado por Codewhale.\n# Permisos en el piso del Fleet: sin shell, sin confianza, aprobación requerida.\n# Nada se guarda hasta que presione g en el asistente.\n\n",
-    "FleetPreviewHeader": "# .codewhale/agents/{name}\n# Perfil inicial determinístico renderizado por Codewhale de sus elecciones de rol/modelo.\n# Permisos en el piso del Fleet: sin shell, sin confianza, aprobación requerida.\n# Nada se guarda hasta que presione Enter o g en el asistente.\n\n",
     "SetupRemoteOnRampText": "Remote Runtime On-Ramp\n\n/setup solo muestra datos del runtime remoto. No genera bundles, no escribe credenciales, no llama CLIs de cloud ni ejecuta `remote-setup`.\n\nDatos actuales:\n- Clouds: {clouds_result}\n- Puentes: {bridges_result}\n- Proveedores: {providers_result}\n- Modo: {mode_result}\n\nPara generar un bundle de deploy, ejecute explícitamente en un terminal normal:\n\n```sh\n{command}\n```\n\nEl RUNBOOK generado contiene los pasos de host para revisión humana. `--apply` sigue sin implementarse; no trate esto como auto-deploy.",
     "ApprovalDescSafe": "Solicitando una operación segura/solo lectura.",
     "ApprovalDescFileWrite": "Solicitando modificar un archivo. Confirme ruta y contenido.",
@@ -1246,5 +1244,8 @@
     "SessionsArchiveFailed": "Error al archivar: {error}",
     "SessionsShowingArchived": "Mostrando sesiones archivadas",
     "SessionsHidingArchived": "Ocultando sesiones archivadas",
-    "SessionsArchivedCompact": "archivada"
+    "SessionsArchivedCompact": "archivada",
+    "KbReasoningDetail": "Open reasoning detail for the selected or current turn",
+    "KbTurnInspector": "Abrir Inspector de turno",
+    "CmdTurnInspectDescription": "Open the whole-turn inspector"
 }

@@ -138,13 +138,13 @@ impl TuiPrefs {
         {
             let honor_guarded_environment =
                 crate::test_support::current_thread_holds_test_env_lock();
-            return crate::test_support::with_test_env_lock(|| {
+            crate::test_support::with_test_env_lock(|| {
                 if honor_guarded_environment {
                     tui_prefs_path_from_environment()
                 } else {
                     Ok(crate::test_support::isolated_test_state_root().join(TUI_PREFS_FILE_NAME))
                 }
-            });
+            })
         }
 
         #[cfg(not(test))]
@@ -160,7 +160,7 @@ impl TuiPrefs {
         let path = Self::path()?;
         #[cfg(test)]
         {
-            return crate::test_support::with_test_state_io_lock(|| Self::load_from_path(&path));
+            crate::test_support::with_test_state_io_lock(|| Self::load_from_path(&path))
         }
         #[cfg(not(test))]
         Self::load_from_path(&path)
@@ -188,7 +188,7 @@ impl TuiPrefs {
         let path = Self::path()?;
         #[cfg(test)]
         {
-            return crate::test_support::with_test_state_io_lock(|| self.save_to_path(&path));
+            crate::test_support::with_test_state_io_lock(|| self.save_to_path(&path))
         }
         #[cfg(not(test))]
         self.save_to_path(&path)
@@ -718,14 +718,14 @@ impl Settings {
     ) -> Result<Self> {
         #[cfg(test)]
         {
-            return crate::test_support::with_test_state_io_lock(|| {
+            crate::test_support::with_test_state_io_lock(|| {
                 Self::load_persisted_from_candidates_with_migration_unlocked(
                     primary,
                     legacy_home,
                     legacy_config_dir,
                     migrate_legacy_file,
                 )
-            });
+            })
         }
         #[cfg(not(test))]
         Self::load_persisted_from_candidates_with_migration_unlocked(
@@ -860,9 +860,9 @@ impl Settings {
         let candidates = settings_path_candidates();
         #[cfg(test)]
         {
-            return crate::test_support::with_test_state_io_lock(|| {
+            crate::test_support::with_test_state_io_lock(|| {
                 auto_compact_explicitly_configured_from_candidates(candidates)
-            });
+            })
         }
         #[cfg(not(test))]
         auto_compact_explicitly_configured_from_candidates(candidates)
@@ -1062,7 +1062,7 @@ impl Settings {
     fn save_locked(&self, path: &Path) -> Result<()> {
         #[cfg(test)]
         {
-            return crate::test_support::with_test_state_io_lock(|| self.save_to_path(path));
+            crate::test_support::with_test_state_io_lock(|| self.save_to_path(path))
         }
         #[cfg(not(test))]
         self.save_to_path(path)
@@ -2256,7 +2256,7 @@ fn settings_path_candidates() -> (Option<PathBuf>, Option<PathBuf>, Option<PathB
     #[cfg(test)]
     {
         let honor_guarded_environment = crate::test_support::current_thread_holds_test_env_lock();
-        return crate::test_support::with_test_env_lock(|| {
+        crate::test_support::with_test_env_lock(|| {
             if honor_guarded_environment {
                 settings_path_candidates_from_environment()
             } else {
@@ -2266,7 +2266,7 @@ fn settings_path_candidates() -> (Option<PathBuf>, Option<PathBuf>, Option<PathB
                     None,
                 )
             }
-        });
+        })
     }
 
     #[cfg(not(test))]
@@ -3178,8 +3178,10 @@ mod tests {
     fn unrelated_save_does_not_materialize_implicit_auto_compact_defaults() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let path = tmp.path().join("settings.toml");
-        let mut settings = Settings::default();
-        settings.calm_mode = false;
+        let settings = Settings {
+            calm_mode: false,
+            ..Settings::default()
+        };
 
         settings.save_to_path(&path).expect("save settings");
 

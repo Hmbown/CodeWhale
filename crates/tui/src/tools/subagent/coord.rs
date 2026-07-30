@@ -139,8 +139,8 @@ impl AgentsMessageTool {
     }
 
     #[must_use]
-    pub fn with_caller(mut self, caller_agent_id: impl Into<String>) -> Self {
-        self.caller_agent_id = Some(caller_agent_id.into());
+    pub(crate) fn with_optional_caller(mut self, caller_agent_id: Option<String>) -> Self {
+        self.caller_agent_id = caller_agent_id;
         self
     }
 }
@@ -202,7 +202,7 @@ impl ToolSpec for AgentsMessageTool {
                 )
                 .map_err(|err| ToolError::invalid_input(err.to_string()))?;
             manager
-                .queue_parent_message(&agent_ref, message, false)
+                .queue_running_parent_message(&agent_ref, message)
                 .map_err(|err| ToolError::invalid_input(err.to_string()))?
         };
 
@@ -244,8 +244,8 @@ impl AgentsFollowupTool {
     }
 
     #[must_use]
-    pub fn with_caller(mut self, caller_agent_id: impl Into<String>) -> Self {
-        self.caller_agent_id = Some(caller_agent_id.into());
+    pub(crate) fn with_optional_caller(mut self, caller_agent_id: Option<String>) -> Self {
+        self.caller_agent_id = caller_agent_id;
         self
     }
 }
@@ -356,6 +356,12 @@ impl AgentsInterruptTool {
     #[allow(dead_code)] // arms self-interrupt fail-closed when child registries thread caller (P1.2)
     pub fn with_caller(mut self, caller_agent_id: impl Into<String>) -> Self {
         self.caller_agent_id = Some(caller_agent_id.into());
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn with_optional_caller(mut self, caller_agent_id: Option<String>) -> Self {
+        self.caller_agent_id = caller_agent_id;
         self
     }
 }
@@ -691,18 +697,11 @@ pub fn register_coordination_tools(
     // hierarchy tool: a child may control only its own descendants, while the
     // root registry (`None`) may control any child (TUI-DOG-017).
     let caller = runtime.parent_agent_id.clone();
-    let message = caller.as_deref().map_or_else(
-        || AgentsMessageTool::new(Arc::clone(&manager)),
-        |caller| AgentsMessageTool::new(Arc::clone(&manager)).with_caller(caller),
-    );
-    let followup = caller.as_deref().map_or_else(
-        || AgentsFollowupTool::new(Arc::clone(&manager)),
-        |caller| AgentsFollowupTool::new(Arc::clone(&manager)).with_caller(caller),
-    );
-    let interrupt = caller.as_deref().map_or_else(
-        || AgentsInterruptTool::new(Arc::clone(&manager)),
-        |caller| AgentsInterruptTool::new(Arc::clone(&manager)).with_caller(caller),
-    );
+    let message = AgentsMessageTool::new(Arc::clone(&manager)).with_optional_caller(caller.clone());
+    let followup =
+        AgentsFollowupTool::new(Arc::clone(&manager)).with_optional_caller(caller.clone());
+    let interrupt =
+        AgentsInterruptTool::new(Arc::clone(&manager)).with_optional_caller(caller.clone());
     let coordinate = AgentsCoordinateTool::new(Arc::clone(&manager), caller);
     builder
         .with_tool(Arc::new(AgentsListTool::new(Arc::clone(&manager))))
@@ -784,13 +783,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn followup_does_not_claim_wake_when_live_channel_is_closed() {
+        let tmp = tempdir().unwrap();
+        let (manager, agent_id) = manager_with_running_child(tmp.path()).await;
+        let result = AgentsFollowupTool::new(Arc::clone(&manager))
+            .execute(
+                json!({ "agent_id": agent_id, "message": "try to wake" }),
+                &ToolContext::new(tmp.path()),
+            )
+            .await
+            .expect("truthful closed-channel receipt");
+        let body: Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(body["woke"], json!(false));
+        assert_eq!(body["queue_depth"], json!(1));
+        assert!(
+            body["note"].as_str().unwrap_or_default().contains("closed"),
+            "{body}"
+        );
+
+        let guard = manager.read().await;
+        assert_eq!(guard.queued_mail_depth(&agent_id), Some(1));
+        assert!(!guard.child_was_woken(&agent_id));
+    }
+
+    #[tokio::test]
     async fn hierarchy_mutations_allow_own_descendants_and_deny_siblings_or_ancestors() {
         let tmp = tempdir().unwrap();
         let (manager, parent, child, sibling) = manager_with_agent_hierarchy(tmp.path()).await;
         let context = ToolContext::new(tmp.path());
 
         AgentsMessageTool::new(Arc::clone(&manager))
-            .with_caller(parent.clone())
+            .with_optional_caller(Some(parent.clone()))
             .execute(
                 json!({ "agent_id": child, "message": "bounded parent note" }),
                 &context,
@@ -798,7 +821,7 @@ mod tests {
             .await
             .expect("parent may message its own child");
         AgentsFollowupTool::new(Arc::clone(&manager))
-            .with_caller(parent.clone())
+            .with_optional_caller(Some(parent.clone()))
             .execute(
                 json!({ "agent_id": child, "message": "resume own child" }),
                 &context,
@@ -807,7 +830,7 @@ mod tests {
             .expect("parent may follow up its own child");
 
         let sibling_message = AgentsMessageTool::new(Arc::clone(&manager))
-            .with_caller(parent.clone())
+            .with_optional_caller(Some(parent.clone()))
             .execute(
                 json!({ "agent_id": sibling, "message": "cross branch" }),
                 &context,
@@ -821,7 +844,7 @@ mod tests {
         );
 
         let ancestor_followup = AgentsFollowupTool::new(Arc::clone(&manager))
-            .with_caller(child.clone())
+            .with_optional_caller(Some(child.clone()))
             .execute(
                 json!({ "agent_id": parent, "message": "wake ancestor" }),
                 &context,
@@ -835,7 +858,7 @@ mod tests {
         );
 
         let sibling_interrupt = AgentsInterruptTool::new(Arc::clone(&manager))
-            .with_caller(parent.clone())
+            .with_optional_caller(Some(parent.clone()))
             .execute(json!({ "agent_id": sibling }), &context)
             .await
             .expect_err("sibling interrupt must fail closed")
@@ -846,7 +869,7 @@ mod tests {
         );
 
         let interrupted = AgentsInterruptTool::new(Arc::clone(&manager))
-            .with_caller(parent)
+            .with_optional_caller(Some(parent))
             .execute(json!({ "agent_id": child }), &context)
             .await
             .expect("parent may interrupt its own child");

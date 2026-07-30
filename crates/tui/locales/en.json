@@ -402,9 +402,8 @@
     "KbFuzzyFilePicker": "Open the fuzzy file picker (insert @path on Enter)",
     "KbCompactInspector": "Open compact session context inspector",
     "KbLastMessagePager": "Open pager for the last message (when input is empty)",
-    "KbSelectedDetails": "Show raw detail for the selected tool or message; Ctrl+O opens the whole-turn overview",
+    "KbSelectedDetails": "Show raw detail for the selected tool or message; Ctrl+Alt+O opens the whole-turn overview",
     "KbToolDetailsPager": "Show raw detail for the selected item (Alt+V)",
-    "KbThinkingPager": "Open Turn Inspector",
     "KbExternalEditor": "Open composer draft in external editor",
     "KbLiveTranscript": "Open live transcript overlay (Ctrl+Shift+T; sticky-tail auto-scroll)",
     "KbBacktrackMessage": "Backtrack to a previous user message (Left/Right step, Enter to rewind)",
@@ -869,7 +868,6 @@
     "FooterWorkedChip": "worked {duration}",
     "FleetDraftTitle": "Fleet profile — draft by {model_label} (g saves)",
     "FleetDraftHeader": "# .codewhale/agents/{name}\n# Drafted by {model_label}, validated and bounded by Codewhale.\n# Permissions stay at the fleet floor: no shell, no trust, approval required.\n# Nothing is saved until you press g in the wizard.\n\n",
-    "FleetPreviewHeader": "# .codewhale/agents/{name}\n# Deterministic starter profile rendered by Codewhale from your role/model choices.\n# Permissions stay at the fleet floor: no shell, no trust, approval required.\n# Nothing is saved until you press Enter or g in the wizard.\n\n",
     "SetupRemoteOnRampText": "Remote Runtime On-Ramp\n\n/setup shows remote runtime facts only. It does not generate deploy bundles, write credentials, call cloud CLIs, or run `remote-setup`.\n\nCurrent facts:\n- Clouds: {clouds_result}\n- Chat bridges: {bridges_result}\n- Providers: {providers_result}\n- Mode: {mode_result}\n\nTo generate a deploy bundle, run explicitly in a normal terminal:\n\n```sh\n{command}\n```\n\nThe generated RUNBOOK includes host steps for human review. `--apply` remains unimplemented; do not treat this as auto-deploy.",
     "ApprovalDescSafe": "Requesting a safe/read-only operation.",
     "ApprovalDescFileWrite": "Requesting to modify a file. Please confirm path and content.",
@@ -1246,5 +1244,8 @@
     "SessionsArchiveFailed": "Archive failed: {error}",
     "SessionsShowingArchived": "Showing archived sessions",
     "SessionsHidingArchived": "Hiding archived sessions",
-    "SessionsArchivedCompact": "archived"
+    "SessionsArchivedCompact": "archived",
+    "KbReasoningDetail": "Open reasoning detail for the selected or current turn",
+    "KbTurnInspector": "Open Turn Inspector",
+    "CmdTurnInspectDescription": "Open the whole-turn inspector"
 }

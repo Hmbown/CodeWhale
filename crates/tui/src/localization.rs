@@ -311,6 +311,7 @@ pub enum MessageId {
     CmdCacheDescription,
     CmdPreviewRequestDescription,
     CmdToolsDescription,
+    CmdTurnInspectDescription,
     CmdChangeDescription,
     CmdChangeHeader,
     CmdChangeTranslationQueued,
@@ -530,7 +531,8 @@ pub enum MessageId {
     KbLastMessagePager,
     KbSelectedDetails,
     KbToolDetailsPager,
-    KbThinkingPager,
+    KbReasoningDetail,
+    KbTurnInspector,
     KbExternalEditor,
     KbLiveTranscript,
     KbBacktrackMessage,
@@ -1035,7 +1037,6 @@ pub enum MessageId {
     // Fleet setup wizard.
     FleetDraftTitle,
     FleetDraftHeader,
-    FleetPreviewHeader,
     // Remote setup on-ramp.
     SetupRemoteOnRampText,
     // Approval dialog — localized descriptions.
@@ -1621,6 +1622,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdCacheDescription,
     MessageId::CmdPreviewRequestDescription,
     MessageId::CmdToolsDescription,
+    MessageId::CmdTurnInspectDescription,
     MessageId::CmdClearDescription,
     MessageId::CmdCompactDescription,
     MessageId::CmdPurgeDescription,
@@ -1839,7 +1841,8 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::KbLastMessagePager,
     MessageId::KbSelectedDetails,
     MessageId::KbToolDetailsPager,
-    MessageId::KbThinkingPager,
+    MessageId::KbReasoningDetail,
+    MessageId::KbTurnInspector,
     MessageId::KbExternalEditor,
     MessageId::KbLiveTranscript,
     MessageId::KbBacktrackMessage,
@@ -2324,7 +2327,6 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::FooterWorkedChip,
     MessageId::FleetDraftTitle,
     MessageId::FleetDraftHeader,
-    MessageId::FleetPreviewHeader,
     MessageId::SetupRemoteOnRampText,
     MessageId::ApprovalDescSafe,
     MessageId::ApprovalDescFileWrite,
@@ -3844,7 +3846,7 @@ mod tests {
             .split(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '/')
             .filter(|token| token.len() >= 2)
             .filter(|token| !token.contains('/') && !token.contains("://"))
-            .filter(|token| token.chars().all(|c| c.is_ascii()))
+            .filter(|token| token.is_ascii())
             .filter(|token| !token.chars().any(|c| c.is_ascii_digit()))
             .filter(|token| !token.chars().all(|c| c.is_ascii_uppercase()))
             .filter(|token| !ALLOWED.contains(&token.to_ascii_lowercase().as_str()))

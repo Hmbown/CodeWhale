@@ -1064,6 +1064,58 @@ fn classify_compaction_failure(e: &anyhow::Error) -> CompactionFailureKind {
     }
 }
 
+/// Record and render a compaction failure as actionable, credential-safe text.
+///
+/// This classifies only the error supplied by the failed request; it never
+/// infers a cause from later provider failures. Unknown diagnostics stay
+/// visible after central secret/path redaction, and the same safe detail is
+/// written to the runtime log so a transient status message remains auditable.
+#[must_use]
+pub fn report_compaction_failure(
+    prefix: &str,
+    id: &str,
+    auto: bool,
+    error: &anyhow::Error,
+) -> String {
+    let raw = error.to_string();
+    let safe_raw = crate::safe_label::safe_error_text(&raw);
+    tracing::warn!(
+        compaction_id = %id,
+        auto,
+        error = %safe_raw,
+        "context compaction failed"
+    );
+    let lower = raw.to_ascii_lowercase();
+    let plan_exhausted = lower.contains("usage limit")
+        || lower.contains("insufficient_quota")
+        || lower.contains("insufficientquota")
+        || lower.contains("quota exhausted")
+        || lower.contains("quota has been exceeded");
+
+    let detail = if plan_exhausted {
+        "provider plan quota exhausted — switch provider/model or renew the provider plan"
+            .to_string()
+    } else {
+        match crate::error_taxonomy::classify_error_message(&raw) {
+            crate::error_taxonomy::ErrorCategory::RateLimit => {
+                "provider rate limit blocked compaction — retry after the limit resets or switch provider/model"
+                    .to_string()
+            }
+            crate::error_taxonomy::ErrorCategory::Authentication => {
+                "provider authentication failed — sign in or replace the credential, then retry"
+                    .to_string()
+            }
+            crate::error_taxonomy::ErrorCategory::Authorization => {
+                "provider authorization rejected compaction — verify account access or switch provider/model"
+                    .to_string()
+            }
+            _ => safe_raw,
+        }
+    };
+
+    format!("{prefix}: {detail}")
+}
+
 /// Check if an error is transient and worth retrying. Categories that map to
 /// transient retry: Network, RateLimit, Timeout. Context overflow is *not*
 /// transient — it needs a smaller input (ladder), not the same payload.
@@ -2167,6 +2219,36 @@ mod tests {
             panic!("expected tool result");
         };
         assert_eq!(content, &verbose);
+    }
+
+    #[test]
+    fn compaction_failure_names_plan_exhaustion_behind_auth_prefix() {
+        let error = anyhow::anyhow!(
+            "[auth] Authorization failed: You've reached your usage limit for this billing cycle"
+        );
+
+        let message = report_compaction_failure(
+            "Manual context compaction failed",
+            "compact_fixture",
+            false,
+            &error,
+        );
+
+        assert_eq!(
+            message,
+            "Manual context compaction failed: provider plan quota exhausted — switch provider/model or renew the provider plan"
+        );
+        assert!(!message.contains("Authorization failed"));
+    }
+
+    #[test]
+    fn compaction_failure_keeps_unknown_diagnostic() {
+        let error = anyhow::anyhow!("summary response was structurally empty");
+
+        assert_eq!(
+            report_compaction_failure("Auto-compaction failed", "compact_fixture", true, &error,),
+            "Auto-compaction failed: summary response was structurally empty"
+        );
     }
 
     #[test]

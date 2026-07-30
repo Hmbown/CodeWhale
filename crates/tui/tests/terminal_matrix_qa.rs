@@ -501,7 +501,7 @@ fn paste_matrix_lands_in_the_composer_without_autosubmitting() -> Result<()> {
 
         let marker = payload
             .trim_end()
-            .rsplit(|c: char| c == '\n' || c == ' ')
+            .rsplit(['\n', ' '])
             .next()
             .expect("every payload ends with a marker token")
             .to_string();

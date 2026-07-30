@@ -378,7 +378,7 @@ mod tests {
             memory_path: home.join("memory.md"),
             notes_path: home.join("notes.txt"),
             mcp_config_path: home.join("mcp.json"),
-            ..crate::test_support::test_tui_options(home.to_path_buf())
+            ..crate::test_support::test_tui_options(home)
         };
         App::new(options, &Config::default())
     }

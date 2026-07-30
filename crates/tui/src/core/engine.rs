@@ -2090,6 +2090,7 @@ impl Engine {
                         trust_mode,
                         auto_approve,
                         approval_mode,
+                        configured_sandbox_mode,
                     } => {
                         let authority = TurnAuthority::from_effective_fields(
                             mode,
@@ -2098,6 +2099,7 @@ impl Engine {
                             auto_approve,
                             approval_mode,
                         );
+                        self.api_config.sandbox_mode = configured_sandbox_mode;
                         self.apply_runtime_mode_policy(&authority);
                         self.emit_session_updated().await;
                         let _ = self
@@ -2904,15 +2906,29 @@ impl Engine {
         let content = completions
             .iter()
             .map(|completion| {
-                crate::runtime_handoff::subagent_completion_runtime_text(&completion.payload)
+                if completion.is_high_priority_failure() {
+                    crate::runtime_handoff::subagent_failure_runtime_text(&completion.payload)
+                } else {
+                    crate::runtime_handoff::subagent_completion_runtime_text(&completion.payload)
+                }
             })
             .collect::<Vec<_>>()
             .join("\n\n");
 
+        let failed = completions
+            .iter()
+            .filter(|completion| completion.is_high_priority_failure())
+            .count();
+        let failure_suffix = if failed == 0 {
+            String::new()
+        } else {
+            format!(" ({failed} failed)")
+        };
+
         let _ = self
             .tx_event
             .send(Event::status(format!(
-                "Resuming turn with {count} idle sub-agent completion(s)"
+                "Resuming turn with {count} idle sub-agent completion(s){failure_suffix}"
             )))
             .await;
 
@@ -4223,7 +4239,12 @@ impl Engine {
                 }
             }
             Err(err) => {
-                let message = format!("Manual context compaction failed: {err}");
+                let message = crate::compaction::report_compaction_failure(
+                    "Manual context compaction failed",
+                    &id,
+                    false,
+                    &err,
+                );
                 self.emit_compaction_failed(id, false, message.clone())
                     .await;
                 let _ = self.tx_event.send(Event::status(message.clone())).await;
@@ -4634,7 +4655,10 @@ impl Engine {
                 .and_then(crate::client::ProviderNativeSearchClient::new);
         }
 
-        let policy = authority.sandbox_policy(&self.session.workspace);
+        let policy = authority.sandbox_policy(
+            &self.session.workspace,
+            self.api_config.sandbox_mode.as_deref(),
+        );
         let mut ctx = ctx.with_elevated_sandbox_policy(policy);
         if matches!(authority.mode, AppMode::Plan) {
             ctx = ctx.with_shell_network_denied_hint(

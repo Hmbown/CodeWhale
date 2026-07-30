@@ -5546,7 +5546,7 @@ model = "qwen-2.5-7b"
         use codewhale_lane::{ControlDomain, ControlOperation, ControlSurface};
 
         for descriptor in codewhale_lane::control::operations_for_domain(ControlDomain::Lane) {
-            let argv = vec![
+            let argv = [
                 "codewhale".to_string(),
                 "lane".to_string(),
                 descriptor.verb.to_string(),

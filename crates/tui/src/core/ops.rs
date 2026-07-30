@@ -208,6 +208,7 @@ pub enum Op {
         trust_mode: bool,
         auto_approve: bool,
         approval_mode: ApprovalMode,
+        configured_sandbox_mode: Option<String>,
     },
 
     /// Update the model being used and refresh stable prompt context.

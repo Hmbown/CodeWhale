@@ -67,6 +67,11 @@ use coord::{
 
 pub mod coord;
 pub mod mailbox;
+mod worktree;
+
+use worktree::{SubAgentWorktreeRequest, prepare_child_workspace};
+#[cfg(test)]
+use worktree::{create_isolated_worktree, git_repo_root};
 
 #[allow(unused_imports)] // re-exported for hosts / tests; registration uses concrete types
 pub use coord::{
@@ -283,7 +288,6 @@ const SUBAGENT_TRANSCRIPT_ARTIFACT_DIR: &str = "subagent-transcripts";
 const SUBAGENT_STATE_SCHEMA_VERSION: u32 = 1;
 const SUBAGENT_STATE_FILE: &str = "subagents.v1.json";
 const SUBAGENT_STATE_LOCK_FILE: &str = "subagents.v1.lock";
-const SUBAGENT_WORKTREE_ROOT_DIR: &str = ".codewhale-worktrees";
 const SUBAGENT_RESTART_REASON: &str = "Interrupted by process restart";
 #[cfg(test)]
 const SUBAGENT_MODEL_WAIT_REASON: &str = "waiting for model response";
@@ -1936,6 +1940,23 @@ struct SubAgentInput {
     interrupt: bool,
 }
 
+fn append_subagent_inputs_as_user_messages(
+    messages: &mut Vec<Message>,
+    pending_inputs: &mut VecDeque<SubAgentInput>,
+) {
+    while let Some(input) = pending_inputs.pop_front() {
+        if !input.text.trim().is_empty() {
+            messages.push(Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: input.text,
+                    cache_control: None,
+                }],
+            });
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct SpawnRequest {
     session_name: Option<String>,
@@ -2022,13 +2043,6 @@ enum SpawnWriteAuthority {
     ReadOnly,
     WorkspaceWrite,
     WorktreeWrite,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct SubAgentWorktreeRequest {
-    branch: Option<String>,
-    path: Option<PathBuf>,
-    base_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2172,6 +2186,15 @@ pub struct SubAgentCompletion {
     /// Human summary on line 1, sentinel on line 2. Same payload shape as
     /// `Event::AgentComplete::result`.
     pub payload: String,
+}
+
+impl SubAgentCompletion {
+    /// Terminal failures are marked inside the model-visible sentinel so the
+    /// same fact survives channel fan-in, transcript persistence, and replay.
+    #[must_use]
+    pub fn is_high_priority_failure(&self) -> bool {
+        self.payload.contains(r#""event":"subagent.failed""#)
+    }
 }
 
 /// Live-only sinks needed to publish one terminal child outcome.
@@ -4655,15 +4678,50 @@ impl SubAgentManager {
         })
     }
 
-    /// Queue mail and attempt a live wake (`agents/followup`).
-    pub fn followup_child(&mut self, agent_ref: &str, text: String) -> Result<ParentMailReceipt> {
-        let mut receipt = self.queue_parent_message(agent_ref, text.clone(), true)?;
-        let agent_id = receipt.agent_id.clone();
+    /// Queue-only message entrypoint for live children. Terminal records are
+    /// immutable receipts, not mailboxes, so the message surface fails closed
+    /// instead of acknowledging undeliverable work.
+    pub fn queue_running_parent_message(
+        &mut self,
+        agent_ref: &str,
+        text: String,
+    ) -> Result<ParentMailReceipt> {
+        let agent_id = self.resolve_agent_ref(agent_ref)?;
         let status = self
             .agents
             .get(&agent_id)
             .map(|agent| agent.status.clone())
             .ok_or_else(|| anyhow!("Agent {agent_id} not found"))?;
+        if status != SubAgentStatus::Running {
+            return Err(anyhow!(
+                "Cannot queue a parent message for agent {agent_id}: status is {} (only running children accept messages)",
+                subagent_status_name(&status)
+            ));
+        }
+        self.queue_parent_message(&agent_id, text, false)
+    }
+
+    /// Queue mail and attempt a live wake (`agents/followup`).
+    pub fn followup_child(&mut self, agent_ref: &str, text: String) -> Result<ParentMailReceipt> {
+        let agent_id = self.resolve_agent_ref(agent_ref)?;
+        let status = self
+            .agents
+            .get(&agent_id)
+            .map(|agent| agent.status.clone())
+            .ok_or_else(|| anyhow!("Agent {agent_id} not found"))?;
+        if matches!(
+            status,
+            SubAgentStatus::Completed
+                | SubAgentStatus::Failed(_)
+                | SubAgentStatus::Cancelled
+                | SubAgentStatus::BudgetExhausted
+        ) {
+            return Err(anyhow!(
+                "Cannot follow up agent {agent_id}: status is {} and the child cannot resume",
+                subagent_status_name(&status)
+            ));
+        }
+        let mut receipt = self.queue_parent_message(&agent_id, text.clone(), true)?;
         let has_input_tx = self
             .agents
             .get(&agent_id)
@@ -4678,22 +4736,55 @@ impl SubAgentManager {
         match status {
             SubAgentStatus::Running if has_input_tx => {
                 let pending = self.queued_mail.remove(&agent_id).unwrap_or_default();
-                if let Some(agent) = self.agents.get_mut(&agent_id)
-                    && let Some(tx) = agent.input_tx.as_ref()
-                {
-                    for mail in pending {
-                        let _ = tx.send(SubAgentInput {
-                            text: mail.text,
-                            interrupt: false,
-                        });
+                let input_tx = self
+                    .agents
+                    .get(&agent_id)
+                    .and_then(|agent| agent.input_tx.clone());
+                let mut pending = pending.into_iter();
+                let mut undelivered = VecDeque::new();
+                let mut delivered = 0_usize;
+                if let Some(tx) = input_tx {
+                    while let Some(mail) = pending.next() {
+                        if tx
+                            .send(SubAgentInput {
+                                text: mail.text.clone(),
+                                interrupt: false,
+                            })
+                            .is_ok()
+                        {
+                            delivered = delivered.saturating_add(1);
+                        } else {
+                            undelivered.push_back(mail);
+                            undelivered.extend(pending);
+                            break;
+                        }
                     }
                 }
-                self.woken_agents.insert(agent_id.clone(), true);
-                receipt.woke = true;
-                receipt.queue_depth = 0;
+                if !undelivered.is_empty() {
+                    self.queued_mail.insert(agent_id.clone(), undelivered);
+                }
+                receipt.woke = delivered > 0;
+                receipt.queue_depth = self
+                    .queued_mail
+                    .get(&agent_id)
+                    .map(VecDeque::len)
+                    .unwrap_or(0);
                 receipt.continuation_handle = None;
-                receipt.note = "queued and delivered to running child".to_string();
-                if let Some(record) = self.worker_records.get_mut(&agent_id) {
+                receipt.note = if receipt.woke && receipt.queue_depth == 0 {
+                    self.woken_agents.insert(agent_id.clone(), true);
+                    "queued and delivered to running child".to_string()
+                } else if receipt.woke {
+                    self.woken_agents.insert(agent_id.clone(), true);
+                    format!(
+                        "partially delivered to running child; {} message(s) remain queued after the live input channel closed",
+                        receipt.queue_depth
+                    )
+                } else {
+                    "queued; running child's live input channel is closed".to_string()
+                };
+                if receipt.woke
+                    && let Some(record) = self.worker_records.get_mut(&agent_id)
+                {
                     record.follow_up.latest_delivery = Some(AgentRunFollowUpDelivery {
                         delivered: true,
                         timestamp_ms: epoch_millis_now(),
@@ -4912,8 +5003,19 @@ impl SubAgentManager {
     /// Test helper: seed a running child with a live input channel.
     #[cfg(test)]
     pub fn insert_test_running_agent(&mut self, name: &str, workspace: &Path) -> String {
+        self.insert_test_running_agent_with_input(name, workspace).0
+    }
+
+    /// Test helper exposing the receiving side so delivery and provenance can
+    /// be verified rather than inferred from a still-present sender handle.
+    #[cfg(test)]
+    fn insert_test_running_agent_with_input(
+        &mut self,
+        name: &str,
+        workspace: &Path,
+    ) -> (String, mpsc::UnboundedReceiver<SubAgentInput>) {
         let agent_id = format!("agent_{name}");
-        let (input_tx, _input_rx) = mpsc::unbounded_channel();
+        let (input_tx, input_rx) = mpsc::unbounded_channel();
         let mut agent = SubAgent::new(
             agent_id.clone(),
             FleetRole::Worker,
@@ -4950,7 +5052,7 @@ impl SubAgentManager {
             launch_manifest: None,
         };
         self.register_worker(spec);
-        agent_id
+        (agent_id, input_rx)
     }
 
     /// Test helper: seed a current-session direct child whose future terminal
@@ -6604,6 +6706,9 @@ enum AgentToolAction {
     Start,
     Status,
     Peek,
+    Message,
+    Followup,
+    Interrupt,
     Wait,
     Cancel,
 }
@@ -6616,10 +6721,13 @@ fn parse_agent_tool_action(input: &Value) -> Result<AgentToolAction, ToolError> 
         "" | "start" | "spawn" | "run" => Ok(AgentToolAction::Start),
         "status" | "list" | "inspect" => Ok(AgentToolAction::Status),
         "peek" | "progress" => Ok(AgentToolAction::Peek),
+        "message" | "queue_message" => Ok(AgentToolAction::Message),
+        "followup" | "follow_up" | "steer" => Ok(AgentToolAction::Followup),
+        "interrupt" | "pause" => Ok(AgentToolAction::Interrupt),
         "wait" | "join" | "await" | "block" => Ok(AgentToolAction::Wait),
         "cancel" | "stop" | "abort" => Ok(AgentToolAction::Cancel),
         other => Err(ToolError::invalid_input(format!(
-            "Invalid agent action '{other}'. Use start, status, peek, wait, or cancel."
+            "Invalid agent action '{other}'. Use start, status, peek, message, followup, interrupt, wait, or cancel."
         ))),
     }
 }
@@ -6643,9 +6751,10 @@ impl ToolSpec for AgentTool {
             "Use multiple starts for independent parallel tasks. Prefer type=implementer for write work and type=verifier (or run_verifiers) after writes settle — dispatch is not completion. ",
             "For parallel write work use worktree=true so children do not collide in the parent checkout. ",
             "Add a Fleet profile, role, or explicit limits only when they improve the task. ",
-            "Coordinate later with agents/list, agents/message, agents/followup, agents/interrupt, or agents/wait instead of polling. ",
+            "Coordinate through this same tool: action=message queues a note without waking the child; action=followup delivers queued notes and wakes a running child for its next user-provenance turn; action=interrupt stops the current child turn while preserving its checkpoint; action=wait only observes. ",
+            "The narrow agents/list, agents/message, agents/followup, agents/interrupt, and agents/wait tools expose the same semantics directly; there is no second transport. ",
             "In Operate, background workers are the default for independent or long work; a write-capable root start also declares bounded write_roots, exact_files, or coordination_contracts; arbitrary shell remains gated. ",
-            "Legacy action=status|peek|wait|cancel remain for compatibility."
+            "Legacy action=status|peek|cancel remain for compatibility."
         )
     }
 
@@ -6655,18 +6764,26 @@ impl ToolSpec for AgentTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["start", "status", "peek", "wait", "cancel"],
-                    "description": "start (default) launches a background worker and returns immediately. status lists current children or inspects agent_id. peek is status for one child. wait blocks until a running child settles (agent_id for one specific child, otherwise the next completion). cancel stops a running child by agent_id."
+                    "enum": ["start", "status", "peek", "message", "followup", "interrupt", "wait", "cancel"],
+                    "description": "start (default) launches a background worker and returns immediately. status/peek inspect. message queues a note without waking a running child. followup delivers queued notes and wakes a running child for its next user-provenance model turn. interrupt stops the current turn while preserving the child checkpoint. wait only observes until a child settles. cancel permanently cancels a running child."
                 },
                 "agent_id": {
                     "type": "string",
-                    "description": "Agent id or session name for action=status, action=peek, action=wait, or action=cancel."
+                    "description": "Agent id or session name for any action except start and unscoped status/wait."
                 },
                 "timeout_secs": {
                     "type": "integer",
                     "minimum": 5,
                     "maximum": 1800,
                     "description": "For action=wait: maximum seconds to block before returning a still-running snapshot. Default 300."
+                },
+                "message": {
+                    "type": "string",
+                    "description": "Parent note for action=message or action=followup. message queues only; followup also wakes a running child."
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Optional bounded reason for action=interrupt."
                 },
                 "include_archived": {
                     "type": "boolean",
@@ -6855,6 +6972,24 @@ impl ToolSpec for AgentTool {
                     Some(&self.inspect_memo),
                 )
                 .await;
+            }
+            AgentToolAction::Message => {
+                return AgentsMessageTool::new(self.manager.clone())
+                    .with_optional_caller(self.runtime.parent_agent_id.clone())
+                    .execute(input, context)
+                    .await;
+            }
+            AgentToolAction::Followup => {
+                return AgentsFollowupTool::new(self.manager.clone())
+                    .with_optional_caller(self.runtime.parent_agent_id.clone())
+                    .execute(input, context)
+                    .await;
+            }
+            AgentToolAction::Interrupt => {
+                return AgentsInterruptTool::new(self.manager.clone())
+                    .with_optional_caller(self.runtime.parent_agent_id.clone())
+                    .execute(input, context)
+                    .await;
             }
             AgentToolAction::Wait => {
                 return wait_for_subagents_from_input(&input, self.manager.clone(), context).await;
@@ -7251,13 +7386,7 @@ fn provider_pin_matches_session(runtime: &SubAgentRuntime, provider_id: &str) ->
     if let Some(provider) = crate::config::ApiProvider::parse(provider_id) {
         return provider == session_provider;
     }
-    session_provider == crate::config::ApiProvider::Custom
-        && runtime
-            .api_config
-            .as_ref()
-            .and_then(|config| config.provider.as_deref())
-            .map(str::trim)
-            .is_some_and(|active| active == provider_id)
+    false
 }
 
 struct ChildProviderBinding {
@@ -7360,25 +7489,33 @@ async fn spawn_subagent_from_input(
         )));
     }
 
+    // Bind and validate the exact child route before admission can create a
+    // git worktree. Provider credentials, explicit profile ids, and fixed
+    // model selectors therefore fail without leaving filesystem artifacts.
+    let mut child_runtime = runtime.background_runtime();
+    let provider_binding = child_provider_binding(&runtime, profile_member.as_ref())?;
+    child_runtime.client = provider_binding.client;
+    child_runtime.api_config = provider_binding.api_config;
+    let mut model_selection =
+        resolve_spawn_model_selection(&child_runtime, &spawn_request, profile_member.as_ref())?;
+    let providerless =
+        crate::fleet::worker_runtime::explicit_fleet_provider_id(profile_member.as_ref()).is_none();
+    resolve_fixed_spawn_model_route(&child_runtime, &mut model_selection, providerless)?;
+
     if spawn_request.worktree.is_some() {
         let manager_guard = manager.read().await;
         manager_guard
             .check_admission_capacity()
             .map_err(|err| ToolError::execution_failed(err.to_string()))?;
     }
-    let child_workspace = prepare_child_workspace(&runtime.context.workspace, &spawn_request)?;
+    let child_workspace = prepare_child_workspace(
+        &runtime.context.workspace,
+        spawn_request.cwd.as_deref(),
+        spawn_request.worktree.as_ref(),
+        spawn_request.session_name.as_deref(),
+        &spawn_request.agent_type,
+    )?;
 
-    let mut child_runtime = runtime.background_runtime();
-    // #4193 seam 3 (the substantive fix): if the resolved roster member's
-    // profile pins a provider different from the session's, rebind the child to
-    // a fresh client for that provider BEFORE any model normalization/routing.
-    // Every downstream model decision below derives its provider from
-    // `child_runtime.client.api_provider()`, so swapping the client here is what
-    // actually routes the request to provider B's endpoint with B's creds —
-    // rather than tagging `provider = B` on a client still pointed at A (#4093).
-    let provider_binding = child_provider_binding(&runtime, profile_member.as_ref())?;
-    child_runtime.client = provider_binding.client;
-    child_runtime.api_config = provider_binding.api_config;
     child_runtime.max_spawn_depth = child_max_spawn_depth_for_spawn(
         child_runtime.max_spawn_depth,
         child_runtime.spawn_depth,
@@ -7429,11 +7566,6 @@ async fn spawn_subagent_from_input(
     }
     apply_spawn_write_authority(&mut child_runtime, &spawn_request);
     let write_capable = spawn_request_is_write_capable(&spawn_request);
-    // Resolve the model once against the CHILD's (possibly profile-pinned)
-    // provider. The typed selection carries both precedence and provenance so
-    // a role default cannot override a saved AgentProfile model (#4177).
-    let model_selection =
-        resolve_spawn_model_selection(&child_runtime, &spawn_request, profile_member.as_ref())?;
     let resident_context = spawn_request
         .resident_file
         .as_deref()
@@ -8326,7 +8458,10 @@ pub(crate) fn subagent_completion_from_result(result: &SubAgentResult) -> SubAge
     let (summary, truncated) = stamp_subagent_summary(&summary_source);
     let summary_truncated = truncated || evidence_truncated;
     let sentinel = match &result.status {
-        SubAgentStatus::Failed(error) => subagent_failed_sentinel(&result.agent_id, error),
+        SubAgentStatus::Failed(error) => subagent_failed_sentinel(result, error),
+        SubAgentStatus::BudgetExhausted => {
+            subagent_failed_sentinel(result, "child token budget exhausted")
+        }
         _ => subagent_done_sentinel(&result.agent_id, result, summary_truncated),
     };
     let payload = match evidence_block {
@@ -8429,15 +8564,45 @@ fn subagent_done_sentinel(agent_id: &str, res: &SubAgentResult, truncated: bool)
     format!("<codewhale:subagent.done>{payload}</codewhale:subagent.done>")
 }
 
-/// Build a `<codewhale:subagent.done>` sentinel for a failed child.
-///
-/// Kept lean: the (annotated) error is on the previous line (`error_location`)
-/// so the sentinel only signals completion state rather than re-embedding the
-/// error text.
-fn subagent_failed_sentinel(agent_id: &str, _err: &str) -> String {
+fn subagent_failure_class(status: &SubAgentStatus, error: &str) -> &'static str {
+    if matches!(status, SubAgentStatus::BudgetExhausted) {
+        return "token_budget";
+    }
+    let error = error.to_ascii_lowercase();
+    if error.contains("no assistant text") || error.contains("without returning a final summary") {
+        "empty_turn"
+    } else if error.contains("step budget exhausted") {
+        "step_budget"
+    } else if error.contains("wall-time budget exhausted") {
+        "wall_time_budget"
+    } else if error.contains("authorization failed")
+        || error.contains("usage limit")
+        || error.contains("quota")
+    {
+        "auth_or_quota"
+    } else if error.contains("timed out") || error.contains("timeout") {
+        "timeout"
+    } else {
+        "runtime_error"
+    }
+}
+
+/// Build the distinct high-priority failure event carried to the owning
+/// parent. The human-readable, already-sanitized reason stays on the previous
+/// line; this sentinel carries only bounded routing and recovery metadata.
+fn subagent_failed_sentinel(res: &SubAgentResult, error: &str) -> String {
+    let transcript_handle = format!("agent:{}/full_transcript", res.agent_id);
     let payload = json!({
-        "agent_id": agent_id,
-        "status": "failed",
+        "event": "subagent.failed",
+        "priority": "high",
+        "agent_id": res.agent_id,
+        "name": res.nickname.as_deref().unwrap_or(&res.name),
+        "agent_type": res.agent_type.as_str(),
+        "status": subagent_status_name(&res.status),
+        "failure_class": subagent_failure_class(&res.status, error),
+        "steps": res.steps_taken,
+        "elapsed_ms": res.duration_ms,
+        "transcript_handle": transcript_handle,
         "error_location": "previous_line",
     });
     format!("<codewhale:subagent.done>{payload}</codewhale:subagent.done>")
@@ -8916,7 +9081,9 @@ fn child_completion_runtime_message(completions: &[SubAgentCompletion]) -> Messa
 This is an internal runtime event, not user input. One or more child sub-agents \
 you spawned have finished. Treat each child summary as an unverified self-report: \
 if you rely on it, cite the child agent_id and the EVIDENCE lines it provided, \
-and distinguish that from evidence you personally verified.\n",
+and distinguish that from evidence you personally verified. A sentinel marked \
+event=subagent.failed is high priority: inspect its failure_class and transcript_handle, \
+then re-plan dependent work before claiming completion.\n",
     );
     for completion in completions {
         text.push_str("\n--- child sub-agent completion ---\n");
@@ -9160,17 +9327,7 @@ async fn run_subagent(
             pending_inputs.push_back(input);
         }
 
-        while let Some(input) = pending_inputs.pop_front() {
-            if !input.text.trim().is_empty() {
-                messages.push(Message {
-                    role: "user".to_string(),
-                    content: vec![ContentBlock::Text {
-                        text: input.text,
-                        cache_control: None,
-                    }],
-                });
-            }
-        }
+        append_subagent_inputs_as_user_messages(&mut messages, &mut pending_inputs);
 
         let child_completions = drain_child_completion_events(&mut child_completion_rx);
         if !child_completions.is_empty() {
@@ -10743,6 +10900,48 @@ fn resolve_spawn_model_selection(
     })
 }
 
+/// Resolve caller/config model pins to the child provider's exact wire id
+/// before a child reserves worktree or concurrency resources. Provider-less
+/// pins also receive the conservative known-foreign check; explicit provider
+/// pairs keep their deliberate route intent. Inherited/strength routes stay
+/// unchanged.
+fn resolve_fixed_spawn_model_route(
+    runtime: &SubAgentRuntime,
+    selection: &mut SpawnModelSelection,
+    providerless: bool,
+) -> Result<(), ToolError> {
+    if !matches!(
+        selection.source,
+        SpawnRouteSource::TaskModel
+            | SpawnRouteSource::AgentProfileModel
+            | SpawnRouteSource::RoleDefault
+    ) {
+        return Ok(());
+    }
+    let ModelRoute::Fixed(model) = &selection.model_route else {
+        return Ok(());
+    };
+    let provider = runtime.client.api_provider();
+    let candidate = if providerless {
+        crate::route_runtime::resolve_unpinned_model_candidate(
+            provider,
+            model,
+            runtime.client.base_url(),
+        )
+    } else {
+        crate::route_runtime::resolve_route_candidate(
+            provider,
+            Some(model),
+            None,
+            Some(runtime.client.base_url().to_string()),
+            None,
+        )
+    }
+    .map_err(ToolError::invalid_input)?;
+    selection.model_route = ModelRoute::Fixed(candidate.wire_model_id().as_str().to_string());
+    Ok(())
+}
+
 /// Effective absolute `max_spawn_depth` for a child, combining the inherited
 /// runtime budget, the caller's `max_depth` request, and a fleet profile's
 /// `delegation.max_spawn_depth` hint. An explicit request keeps its existing
@@ -11262,333 +11461,6 @@ fn parse_optional_bool_strict(input: &Value, names: &[&str]) -> Result<Option<bo
         });
     }
     Ok(None)
-}
-
-fn prepare_child_workspace(
-    parent_workspace: &Path,
-    request: &SpawnRequest,
-) -> Result<Option<PathBuf>, ToolError> {
-    let discovery_anchor = if let Some(requested_cwd) = request.cwd.as_ref() {
-        validate_existing_child_cwd(parent_workspace, requested_cwd)?
-    } else {
-        parent_workspace
-            .canonicalize()
-            .unwrap_or_else(|_| parent_workspace.to_path_buf())
-    };
-
-    if let Some(worktree) = request.worktree.as_ref() {
-        return create_isolated_worktree(
-            &discovery_anchor,
-            worktree,
-            request.session_name.as_deref(),
-            &request.agent_type,
-        )
-        .map(Some);
-    }
-
-    if request.cwd.is_some() {
-        return Ok(Some(discovery_anchor));
-    }
-
-    Ok(None)
-}
-
-fn validate_existing_child_cwd(
-    parent_workspace: &Path,
-    requested_cwd: &Path,
-) -> Result<PathBuf, ToolError> {
-    let resolved = if requested_cwd.is_absolute() {
-        requested_cwd.to_path_buf()
-    } else {
-        parent_workspace.join(requested_cwd)
-    };
-    let canonical = resolved.canonicalize().map_err(|e| {
-        ToolError::invalid_input(format!(
-            "Invalid cwd '{}': {e} (path may not exist yet — use worktree=true to let Codewhale create an isolated checkout)",
-            requested_cwd.display()
-        ))
-    })?;
-    let workspace_canonical = parent_workspace
-        .canonicalize()
-        .unwrap_or_else(|_| parent_workspace.to_path_buf());
-    if !canonical.starts_with(&workspace_canonical) {
-        return Err(ToolError::invalid_input(format!(
-            "cwd must be inside the parent workspace: {} is not under {}",
-            canonical.display(),
-            workspace_canonical.display()
-        )));
-    }
-    Ok(canonical)
-}
-
-fn create_isolated_worktree(
-    parent_workspace: &Path,
-    request: &SubAgentWorktreeRequest,
-    session_name: Option<&str>,
-    agent_type: &FleetRole,
-) -> Result<PathBuf, ToolError> {
-    let repo_root = git_repo_root(parent_workspace)?;
-    let branch = request
-        .branch
-        .clone()
-        .unwrap_or_else(|| default_worktree_branch(session_name, agent_type));
-    validate_git_branch_name(&repo_root, &branch)?;
-
-    let base_ref = request
-        .base_ref
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("HEAD")
-        .to_string();
-    let worktree_path = resolve_worktree_path(&repo_root, &branch, request.path.as_ref())?;
-    if let Some(parent) = worktree_path.parent() {
-        fs::create_dir_all(parent).map_err(|err| {
-            ToolError::execution_failed(format!(
-                "Failed to create worktree parent '{}': {err}",
-                parent.display()
-            ))
-        })?;
-    }
-
-    let path_arg = worktree_path.to_string_lossy().to_string();
-    let args = vec![
-        "worktree".to_string(),
-        "add".to_string(),
-        "-b".to_string(),
-        branch,
-        path_arg,
-        base_ref,
-    ];
-    run_git_checked(&repo_root, &args, "create sub-agent worktree")?;
-    worktree_path.canonicalize().map_err(|err| {
-        ToolError::execution_failed(format!(
-            "Created worktree path '{}' could not be resolved: {err}",
-            worktree_path.display()
-        ))
-    })
-}
-
-fn git_repo_root(workspace: &Path) -> Result<PathBuf, ToolError> {
-    const MAX_PARENT_LEVELS: usize = 4;
-    let start = workspace
-        .canonicalize()
-        .unwrap_or_else(|_| workspace.to_path_buf());
-    let mut paths_tried = Vec::new();
-    let mut current = Some(start.as_path());
-    let mut levels = 0usize;
-
-    while let Some(dir) = current {
-        paths_tried.push(dir.display().to_string());
-
-        if let Some(root) = try_git_toplevel(dir) {
-            return Ok(root);
-        }
-
-        if let Ok(entries) = fs::read_dir(dir) {
-            let mut nested_roots = Vec::new();
-            for entry in entries.flatten() {
-                let child = entry.path();
-                if !child.is_dir() || !path_looks_like_git_checkout(&child) {
-                    continue;
-                }
-                if child
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.starts_with('.'))
-                {
-                    continue;
-                }
-                if let Some(root) = try_git_toplevel(&child) {
-                    nested_roots.push(root);
-                }
-            }
-            match nested_roots.len() {
-                0 => {}
-                1 => return Ok(nested_roots.into_iter().next().expect("single nested root")),
-                _ => {
-                    let repos = nested_roots
-                        .iter()
-                        .map(|path| path.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    return Err(ToolError::invalid_input(format!(
-                        "Multiple git repositories found under {}. Specify cwd to disambiguate: {repos}",
-                        dir.display()
-                    )));
-                }
-            }
-        }
-
-        levels += 1;
-        if levels > MAX_PARENT_LEVELS {
-            break;
-        }
-        current = dir.parent();
-    }
-
-    Err(ToolError::invalid_input(format!(
-        "worktree=true requires a git repository. Tried: {}",
-        paths_tried.join(", ")
-    )))
-}
-
-fn path_looks_like_git_checkout(path: &Path) -> bool {
-    let git_path = path.join(".git");
-    git_path.is_dir() || git_path.is_file()
-}
-
-fn try_git_toplevel(path: &Path) -> Option<PathBuf> {
-    let output = Git::output(&["rev-parse", "--show-toplevel"], path).ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if root.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(root))
-    }
-}
-
-fn validate_git_branch_name(repo_root: &Path, branch: &str) -> Result<(), ToolError> {
-    let branch = branch.trim();
-    if branch.is_empty() {
-        return Err(ToolError::invalid_input(
-            "worktree_branch cannot be blank".to_string(),
-        ));
-    }
-    run_git_checked(
-        repo_root,
-        &[
-            "check-ref-format".to_string(),
-            "--branch".to_string(),
-            branch.to_string(),
-        ],
-        "validate sub-agent worktree branch",
-    )
-    .map(|_| ())
-    .map_err(|err| ToolError::invalid_input(format!("Invalid worktree_branch '{branch}': {err}")))
-}
-
-fn default_worktree_branch(session_name: Option<&str>, agent_type: &FleetRole) -> String {
-    let seed = session_name
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| agent_type.as_str());
-    format!(
-        "codex/agent-{}-{}",
-        sanitize_worktree_slug(seed),
-        &Uuid::new_v4().to_string()[..8]
-    )
-}
-
-fn resolve_worktree_path(
-    repo_root: &Path,
-    branch: &str,
-    requested_path: Option<&PathBuf>,
-) -> Result<PathBuf, ToolError> {
-    let default_root = default_worktree_root(repo_root);
-    let path = match requested_path {
-        Some(path) if path.is_absolute() => path.to_path_buf(),
-        Some(path) => {
-            let resolved = normalize_path_lexically(&default_root.join(path));
-            if !resolved.starts_with(&default_root) {
-                return Err(ToolError::invalid_input(format!(
-                    "relative worktree_path '{}' must stay under {}",
-                    path.display(),
-                    default_root.display()
-                )));
-            }
-            resolved
-        }
-        None => default_root.join(sanitize_worktree_slug(branch)),
-    };
-    let normalized = normalize_path_lexically(&path);
-    let repo_canonical = repo_root
-        .canonicalize()
-        .unwrap_or_else(|_| repo_root.to_path_buf());
-    if normalized.starts_with(&repo_canonical) {
-        return Err(ToolError::invalid_input(format!(
-            "worktree_path must not be inside the parent checkout: {} is under {}",
-            normalized.display(),
-            repo_canonical.display()
-        )));
-    }
-    Ok(normalized)
-}
-
-fn default_worktree_root(repo_root: &Path) -> PathBuf {
-    let repo_name = repo_root
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(sanitize_worktree_slug)
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| "repo".to_string());
-    let parent = repo_root.parent().unwrap_or(repo_root);
-    normalize_path_lexically(&parent.join(SUBAGENT_WORKTREE_ROOT_DIR).join(repo_name))
-}
-
-fn sanitize_worktree_slug(input: &str) -> String {
-    let mut slug = String::new();
-    for ch in input.chars() {
-        let normalized = if ch.is_ascii_alphanumeric() {
-            ch.to_ascii_lowercase()
-        } else if matches!(ch, '-' | '_' | '.') {
-            ch
-        } else {
-            '-'
-        };
-        if normalized == '-' && slug.ends_with('-') {
-            continue;
-        }
-        slug.push(normalized);
-        if slug.len() >= 48 {
-            break;
-        }
-    }
-    let slug = slug.trim_matches(['-', '.', '_']).to_string();
-    if slug.is_empty() {
-        "task".to_string()
-    } else {
-        slug
-    }
-}
-
-fn normalize_path_lexically(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                normalized.pop();
-            }
-            other => normalized.push(other.as_os_str()),
-        }
-    }
-    normalized
-}
-
-fn run_git_checked(workspace: &Path, args: &[String], action: &str) -> Result<String, ToolError> {
-    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    let output = Git::output(&arg_refs, workspace).map_err(|err| {
-        ToolError::execution_failed(format!("Failed to {action}: could not run git: {err}"))
-    })?;
-    if output.status.success() {
-        return Ok(String::from_utf8_lossy(&output.stdout).to_string());
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let detail = if !stderr.is_empty() {
-        stderr
-    } else if !stdout.is_empty() {
-        stdout
-    } else {
-        format!("git exited with status {}", output.status)
-    };
-    Err(ToolError::execution_failed(format!(
-        "Failed to {action}: {detail}"
-    )))
 }
 
 /// Resolve a user-supplied role/agent_role value to a canonical role string.

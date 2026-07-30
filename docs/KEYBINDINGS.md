@@ -20,7 +20,8 @@ Global key chords are not yet user-configurable — tracked for a future release
 | `Ctrl-Shift-T`       | Toggle live transcript overlay (sticky-tail auto-scroll)                       |
 | `Ctrl-R`             | Open the resume-session picker                                 |
 | `Ctrl-L`             | Refresh / clear the screen                                     |
-| `Ctrl-O`             | Open the whole-turn Turn Inspector, regardless of composer contents |
+| `Ctrl-O`             | Open the reasoning detail for the selected or current turn, regardless of composer contents |
+| `Ctrl-Alt-O`         | Open the whole-turn Turn Inspector, regardless of composer contents |
 | `Alt-V` / `Option-V` (macOS) | Open the details pager for the selected, visible, or most recent tool/sub-agent card; terminals that emit the legacy Option-V glyph are also handled |
 | `Ctrl-Shift-E` / `Cmd-Shift-E` | Toggle the file-tree sidebar                          |
 | `Alt-G`              | Scroll transcript to top when the composer is empty             |

@@ -206,7 +206,7 @@ mod tests {
             memory_path: tmp.path().join("memory.md"),
             notes_path: tmp.path().join("notes.txt"),
             mcp_config_path: tmp.path().join("mcp.json"),
-            yolo: yolo,
+            yolo,
             ..crate::test_support::test_tui_options(workspace)
         };
         App::new(options, &Config::default())

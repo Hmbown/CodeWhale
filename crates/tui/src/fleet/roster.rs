@@ -519,6 +519,39 @@ mod tests {
     }
 
     #[test]
+    fn personal_setup_target_round_trips_through_the_runtime_roster() {
+        let _env_lock = crate::test_support::lock_test_env();
+        let home = TempDir::new().unwrap();
+        let _codewhale_home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.path());
+        let workspace = TempDir::new().unwrap();
+        let personal_dir = super::super::profile::agent_profile_dir_for_scope(
+            super::super::profile::FleetProfileScope::Personal,
+            workspace.path(),
+        )
+        .expect("personal profile directory");
+        assert_eq!(personal_dir, home.path().join("agents"));
+
+        let target = personal_dir.join("reviewer.toml");
+        let mut transaction = codewhale_config::persistence::SetupTransaction::new();
+        transaction.stage(
+            target.clone(),
+            b"id = \"reviewer\"\nrole_hint = \"reviewer\"\nprovider = \"deepseek\"\nmodel = \"deepseek-v4-flash\"\n"
+                .to_vec(),
+        );
+        transaction.commit().expect("atomic personal save");
+        assert!(target.is_file(), "save must land under CODEWHALE_HOME");
+
+        let roster = FleetRoster::load(&FleetConfigToml::default(), workspace.path());
+        let reviewer = roster
+            .get("reviewer")
+            .expect("saved personal profile must be loaded");
+        assert_eq!(reviewer.origin, ProfileOrigin::Personal);
+        assert_eq!(reviewer.source, target);
+        assert_eq!(reviewer.profile.provider.as_deref(), Some("deepseek"));
+        assert_eq!(reviewer.profile.model.as_deref(), Some("deepseek-v4-flash"));
+    }
+
+    #[test]
     fn broken_workspace_dir_degrades_to_built_ins_and_config() {
         let tmp = TempDir::new().unwrap();
         // A malformed provider token is still a load failure (#4093 / #3965):

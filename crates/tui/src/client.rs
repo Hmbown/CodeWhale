@@ -3687,6 +3687,9 @@ mod tests {
         (path, body)
     }
 
+    // This synchronous guard deliberately spans every await: the assertions
+    // require exclusive access to process-global retry state for the full call.
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn cache_free_message_call_neither_reads_nor_writes_global_cache() {
         let _retry_guard = crate::retry_status::test_guard();
@@ -3785,6 +3788,9 @@ mod tests {
         crate::retry_status::clear_rate_limit();
     }
 
+    // This synchronous guard deliberately spans every await: the assertions
+    // require exclusive access to process-global retry state for the full call.
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn cache_free_classifier_429_does_not_publish_global_retry_or_rate_limit_state() {
         let _retry_guard = crate::retry_status::test_guard();

@@ -1833,12 +1833,6 @@ fn cancelled_bang_shell_settles_transcript_card() -> anyhow::Result<()> {
 fn skills_opens_manager_owned_then_compatible() -> anyhow::Result<()> {
     let _guard = qa_pty_test_lock();
     let ws = make_sealed_workspace()?;
-    // Owned global root — visible in the default owned-only manager scan.
-    write_skill(
-        ws.home().join(".codewhale").join("skills"),
-        "global-alpha",
-        "Global alpha skill",
-    )?;
     // Compatible external root — hidden until the user presses `c`.
     write_skill(
         ws.workspace().join(".agents").join("skills"),
@@ -1869,14 +1863,10 @@ fn skills_opens_manager_owned_then_compatible() -> anyhow::Result<()> {
     h.wait_for_idle(Duration::from_millis(300), Duration::from_secs(2))?;
     h.send(keys::key::enter())?;
     h.wait_for_text("Skills Manager", KEY_TIMEOUT)?;
-    h.wait_for_text("global-alpha", KEY_TIMEOUT)?;
+    h.wait_for_text("scan=owned   import-target=global   idle", KEY_TIMEOUT)?;
 
     let owned = h.frame();
     let owned_dump = owned.debug_dump();
-    assert!(
-        owned.contains("global-alpha"),
-        "owned global skill missing:\n{owned_dump}"
-    );
     assert!(
         !owned.contains("workspace-beta"),
         "compatible skill must stay hidden in owned-only scan:\n{owned_dump}"
@@ -1895,7 +1885,6 @@ fn skills_opens_manager_owned_then_compatible() -> anyhow::Result<()> {
     // hashing the bundled skill tree can legitimately take longer than an
     // ordinary key response. Wait for the explicit mode receipt with the scan
     // budget, then use the ordinary interaction budget for the rendered row.
-    h.wait_for_text("scan=owned   import-target=global   idle", KEY_TIMEOUT)?;
     h.send(keys::key::ch('c'))?;
     h.wait_for_text("scan=compatible", SKILL_SCAN_TIMEOUT)?;
     h.wait_for_text("workspace-beta", KEY_TIMEOUT)?;

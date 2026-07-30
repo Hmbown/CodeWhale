@@ -128,6 +128,10 @@ struct AmbientMark {
     x: u16,
     y: u16,
     glyph: &'static str,
+    /// Multi-row creature identity. When any part would clip or collide with
+    /// transcript text, every part is withheld for that frame so a jellyfish
+    /// never degrades into a detached dome or punctuation-like tentacles.
+    jellyfish: Option<usize>,
     depth: Depth,
     style_mod: Option<Modifier>,
     /// Time-varying glow in `[0, 1]`: the mark's ink is lerped from the
@@ -316,6 +320,7 @@ fn build_frame_marks(
             x: x_i32 as u16,
             y,
             glyph: body,
+            jellyfish: None,
             depth: if m == 0 {
                 Depth::Foreground
             } else {
@@ -398,46 +403,51 @@ fn build_frame_marks(
         } else {
             1
         };
-        let dome_rows = [
-            (y, dome_top[pulse_frame]),
-            (y.saturating_add(1), dome_skirt[pulse_frame]),
-        ];
-        for (row, glyph) in dome_rows {
-            if row < area.height && !in_band(row) {
-                marks.push(AmbientMark {
-                    x,
-                    y: row,
-                    glyph,
-                    depth: Depth::Midground,
-                    style_mod: None,
-                    brightness: Some(dome_brightness),
-                });
-            }
-        }
+        let skirt_row = y.saturating_add(1);
         let tentacle_row = y.saturating_add(2);
-        if tentacle_row < area.height && !in_band(tentacle_row) {
-            for (col, &dx) in tentacle_cols.iter().enumerate() {
-                // Each column runs the sway table with its own phase offset
-                // so the trio lags left-to-right; the parked pose holds a
-                // mid-sway frame.
-                let sway = if animated {
-                    let frame = t
-                        .saturating_add(phase)
-                        .saturating_add((col as u128) * JELLY_TENTACLE_PHASE_STEP_MS)
-                        / JELLY_TENTACLE_SWAY_MS;
-                    JELLY_TENTACLE_FRAMES[(frame as usize) % JELLY_TENTACLE_FRAMES.len()]
-                } else {
-                    JELLY_TENTACLE_FRAMES[1]
-                };
-                marks.push(AmbientMark {
-                    x: x.saturating_add(dx),
-                    y: tentacle_row,
-                    glyph: sway,
-                    depth: Depth::Background,
-                    style_mod: None,
-                    brightness: Some(tentacle_brightness),
-                });
-            }
+        // Treat the silhouette as one visual unit. The former per-row quiet
+        // band checks deliberately allowed the dome, skirt, or tentacles to
+        // disappear independently, which is exactly the broken punctuation
+        // visible in the v0.9.2 dogfood screenshot.
+        if tentacle_row >= area.height || [y, skirt_row, tentacle_row].into_iter().any(in_band) {
+            continue;
+        }
+        for (row, glyph) in [
+            (y, dome_top[pulse_frame]),
+            (skirt_row, dome_skirt[pulse_frame]),
+        ] {
+            marks.push(AmbientMark {
+                x,
+                y: row,
+                glyph,
+                jellyfish: Some(j),
+                depth: Depth::Midground,
+                style_mod: None,
+                brightness: Some(dome_brightness),
+            });
+        }
+        for (col, &dx) in tentacle_cols.iter().enumerate() {
+            // Each column runs the sway table with its own phase offset
+            // so the trio lags left-to-right; the parked pose holds a
+            // mid-sway frame.
+            let sway = if animated {
+                let frame = t
+                    .saturating_add(phase)
+                    .saturating_add((col as u128) * JELLY_TENTACLE_PHASE_STEP_MS)
+                    / JELLY_TENTACLE_SWAY_MS;
+                JELLY_TENTACLE_FRAMES[(frame as usize) % JELLY_TENTACLE_FRAMES.len()]
+            } else {
+                JELLY_TENTACLE_FRAMES[1]
+            };
+            marks.push(AmbientMark {
+                x: x.saturating_add(dx),
+                y: tentacle_row,
+                glyph: sway,
+                jellyfish: Some(j),
+                depth: Depth::Background,
+                style_mod: None,
+                brightness: Some(tentacle_brightness),
+            });
         }
     }
 
@@ -486,6 +496,7 @@ fn build_frame_marks(
             x: column.min(area.width.saturating_sub(1)),
             y,
             glyph,
+            jellyfish: None,
             depth: Depth::Foreground,
             style_mod: None,
             brightness: Some(brightness),
@@ -516,6 +527,7 @@ fn build_frame_marks(
                     x: ax,
                     y: ay.saturating_add(y_off).min(area.height.saturating_sub(1)),
                     glyph,
+                    jellyfish: None,
                     depth: Depth::Foreground,
                     style_mod: None,
                     brightness: None,
@@ -525,6 +537,7 @@ fn build_frame_marks(
                         x: ax.saturating_add(1).min(area.width.saturating_sub(1)),
                         y: ay.saturating_sub(1),
                         glyph: "˚",
+                        jellyfish: None,
                         depth: Depth::Foreground,
                         style_mod: Some(Modifier::DIM),
                         brightness: None,
@@ -572,7 +585,7 @@ const JELLY_DOME_TOP_COMPACT: &[&str] = &[".-.", "'.'"];
 const JELLY_DOME_SKIRT_COMPACT: &[&str] = &["\\_/", "(_)"];
 /// Tentacle sway frames (all width-1). Each column runs the same table with
 /// a phase offset so the trio lags instead of strobing in sync.
-const JELLY_TENTACLE_FRAMES: &[&str] = &["|", ":", "|", "."];
+const JELLY_TENTACLE_FRAMES: &[&str] = &["|", "/", "|", "\\"];
 
 const JELLY_PULSE_MS: u128 = 2_900;
 /// The tentacles repeat the dome pulse this much later.
@@ -635,7 +648,54 @@ fn paint_marks(
     frame: &FrameMarks,
     stats: &mut AmbientFrameStats,
 ) {
+    #[derive(Clone, Copy)]
+    enum SkipReason {
+        Text,
+        Clipped,
+    }
+
+    // Jellyfish are multi-mark silhouettes. Preflight every part and apply a
+    // single decision to the group; otherwise a collision on only the
+    // tentacle row leaves a floating dome behind. Density is construction-
+    // bounded to at most two jellies per frame.
+    let mut jellyfish_skip: [Option<SkipReason>; 2] = [None, None];
+    for mark in frame.marks.iter().filter(|mark| mark.jellyfish.is_some()) {
+        let Some(slot) = mark
+            .jellyfish
+            .and_then(|index| jellyfish_skip.get_mut(index))
+        else {
+            continue;
+        };
+        let mark_width = UnicodeWidthStr::width(mark.glyph);
+        if mark.x.saturating_add(mark_width as u16) > area.width {
+            *slot = Some(SkipReason::Clipped);
+            continue;
+        }
+        let protected = lines
+            .get(usize::from(mark.y))
+            .and_then(occupied_text_bounds);
+        let collides = protected.is_some_and(|(start, end)| {
+            usize::from(mark.x) < end.saturating_add(1)
+                && usize::from(mark.x) + mark_width > start.saturating_sub(1)
+        });
+        if collides && !matches!(slot, Some(SkipReason::Clipped)) {
+            *slot = Some(SkipReason::Text);
+        }
+    }
+
     for mark in &frame.marks {
+        if let Some(reason) = mark
+            .jellyfish
+            .and_then(|index| jellyfish_skip.get(index))
+            .copied()
+            .flatten()
+        {
+            match reason {
+                SkipReason::Text => stats.marks_skipped_text += 1,
+                SkipReason::Clipped => stats.marks_clipped += 1,
+            }
+            continue;
+        }
         let mark_width = UnicodeWidthStr::width(mark.glyph);
         // Clipped is checked before text collision so a mark that fails
         // both is charged to the bound it could never satisfy.
@@ -1063,7 +1123,7 @@ mod tests {
                     && mark.x == top.x
                     && mark.y == top.y + 1
             }) else {
-                continue; // skirt row culled by the quiet band this frame
+                panic!("visible jellyfish dome lost its skirt: {frame:?}");
             };
             let tentacles: Vec<&AmbientMark> = frame
                 .marks
@@ -1075,9 +1135,11 @@ mod tests {
                         && mark.x < top.x + dome_w
                 })
                 .collect();
-            if tentacles.len() != 3 {
-                continue; // tentacle row culled by the quiet band this frame
-            }
+            assert_eq!(
+                tentacles.len(),
+                3,
+                "visible jellyfish must keep all tentacles: {frame:?}"
+            );
             let dome_glow = top.brightness.expect("dome pulses");
             assert!(dome_glow >= JELLY_BRIGHTNESS_FLOOR - f32::EPSILON);
             for tentacle in &tentacles {
@@ -1173,14 +1235,25 @@ mod tests {
                 .iter()
                 .filter(|mark| JELLY_TENTACLE_FRAMES.contains(&mark.glyph) && mark.y == top.y + 2)
                 .count();
-            if tentacles > 0 {
-                assert!(tentacles <= 2, "compact dome grew extra tentacles");
-                saw_two_tentacles |= tentacles == 2;
-            }
+            assert_eq!(
+                tentacles, 2,
+                "visible compact jelly must keep both tentacles: {frame:?}"
+            );
+            saw_two_tentacles = true;
         }
         assert!(saw_compact, "sparse water never showed the compact dome");
         assert!(!saw_full, "sparse water used the full-size dome");
         assert!(saw_two_tentacles, "compact jelly lost its tentacles");
+    }
+
+    #[test]
+    fn animated_tentacle_frames_never_collapse_to_punctuation_dots() {
+        assert!(
+            JELLY_TENTACLE_FRAMES
+                .iter()
+                .all(|glyph| matches!(*glyph, "|" | "/" | "\\")),
+            "every animation frame must retain a legible tentacle stroke"
+        );
     }
 
     #[test]

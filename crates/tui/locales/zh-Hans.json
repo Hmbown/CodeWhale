@@ -402,9 +402,8 @@
     "KbFuzzyFilePicker": "打开模糊文件选择器（按 Enter 插入 @path）",
     "KbCompactInspector": "打开压缩会话上下文检查器",
     "KbLastMessagePager": "打开最后一条消息的分页器（输入框为空时）",
-    "KbSelectedDetails": "显示所选工具或消息的原始详情；Ctrl+O 打开整轮概览",
+    "KbSelectedDetails": "显示所选工具或消息的原始详情；Ctrl+Alt+O 打开整轮概览",
     "KbToolDetailsPager": "显示所选项的原始详情（Alt+V）",
-    "KbThinkingPager": "打开回合检查器 (Turn Inspector)",
     "KbExternalEditor": "在外部编辑器中打开撰写中的草稿",
     "KbLiveTranscript": "打开实时对话覆盖层（Ctrl+Shift+T；尾部自动滚动）",
     "KbBacktrackMessage": "回退到之前的用户消息（左右键步进，Enter 回退）",
@@ -867,7 +866,6 @@
     "FooterWorkedChip": "已运行{duration}",
     "FleetDraftTitle": "Fleet 配置 — 由 {model_label} 起草（按 g 保存）",
     "FleetDraftHeader": "# .codewhale/agents/{name}\n# 由 {model_label} 起草，并由 Codewhale 校验与限界。\n# 权限保持在 Fleet 底线：无 shell、无 trust、需审批。\n# 在向导中按 g 之前不会保存任何内容。\n\n",
-    "FleetPreviewHeader": "# .codewhale/agents/{name}\n# Codewhale 根据当前角色和模型选择确定性渲染。\n# 权限保持在 Fleet 底线：无 shell、无 trust、需审批。\n# 在向导中按 Enter 或 g 之前不会保存任何内容。\n\n",
     "SetupRemoteOnRampText": "Remote Runtime On-Ramp\n\n/setup 只展示远程运行时事实，不会生成部署包、写入凭据、调用云 CLI 或运行 `remote-setup`。\n\n当前事实：\n- 云目标：{clouds_result}\n- 聊天桥：{bridges_result}\n- 提供商：{providers_result}\n- 模式：{mode_result}\n\n生成部署包时，请在普通终端显式运行：\n\n```sh\n{command}\n```\n\n生成的 RUNBOOK 会包含需要人工复核的主机步骤。`--apply` 仍未实现；不要把它当成自动部署。",
     "ApprovalDescSafe": "请求执行只读操作。",
     "ApprovalDescFileWrite": "请求修改文件。请确认路径和内容符合预期。",
@@ -1246,5 +1244,8 @@
     "SessionsArchiveFailed": "归档失败：{error}",
     "SessionsShowingArchived": "正在显示已归档会话",
     "SessionsHidingArchived": "已隐藏归档会话",
-    "SessionsArchivedCompact": "已归档"
+    "SessionsArchivedCompact": "已归档",
+    "KbReasoningDetail": "Open reasoning detail for the selected or current turn",
+    "KbTurnInspector": "打开回合检查器 (Turn Inspector)",
+    "CmdTurnInspectDescription": "Open the whole-turn inspector"
 }

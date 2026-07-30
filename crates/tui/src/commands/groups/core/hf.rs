@@ -179,7 +179,7 @@ mod tests {
             TuiOptions {
                 use_alt_screen: false,
                 max_subagents: 2,
-                mcp_config_path: mcp_config_path,
+                mcp_config_path,
                 ..crate::test_support::test_tui_options(PathBuf::from("."))
             },
             &Config::default(),

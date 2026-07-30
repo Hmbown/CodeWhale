@@ -402,9 +402,8 @@
     "KbFuzzyFilePicker": "퍼지 파일 선택기 열기 (Enter로 @경로 삽입)",
     "KbCompactInspector": "간단한 세션 컨텍스트 인스펙터 열기",
     "KbLastMessagePager": "마지막 메시지의 페이저 열기 (입력창이 비어 있을 때)",
-    "KbSelectedDetails": "선택한 도구나 메시지의 원본 세부 정보 표시; Ctrl+O로 전체 턴 개요 열기",
+    "KbSelectedDetails": "선택한 도구나 메시지의 원본 세부 정보 표시; Ctrl+Alt+O로 전체 턴 개요 열기",
     "KbToolDetailsPager": "선택한 항목의 원본 세부 정보 표시 (Alt+V)",
-    "KbThinkingPager": "턴 인스펙터 열기",
     "KbExternalEditor": "작성 중인 초안을 외부 편집기에서 열기",
     "KbLiveTranscript": "실시간 대화 기록 오버레이 열기 (Ctrl+Shift+T; 하단 고정 자동 스크롤)",
     "KbBacktrackMessage": "이전 사용자 메시지로 되돌아가기 (Left/Right로 이동, Enter로 되감기)",
@@ -869,7 +868,6 @@
     "FooterWorkedChip": "작업 시간 {duration}",
     "FleetDraftTitle": "플릿 프로필 — {model_label} 초안 (g로 저장)",
     "FleetDraftHeader": "# .codewhale/agents/{name}\n# {model_label}이(가) 작성한 초안이며, Codewhale이 검증하고 범위를 제한했습니다.\n# 권한은 플릿 최저 기준을 유지합니다: 셸 없음, 신뢰 없음, 승인 필수.\n# 마법사에서 g를 누르기 전까지는 아무것도 저장되지 않습니다.\n\n",
-    "FleetPreviewHeader": "# .codewhale/agents/{name}\n# 여러분이 선택한 역할/모델을 바탕으로 Codewhale이 만든 결정적 시작 프로필입니다.\n# 권한은 플릿 최저 기준을 유지합니다: 셸 없음, 신뢰 없음, 승인 필수.\n# 마법사에서 Enter나 g를 누르기 전까지는 아무것도 저장되지 않습니다.\n\n",
     "SetupRemoteOnRampText": "원격 런타임 온램프\n\n/setup은 원격 런타임 정보만 보여줍니다. 배포 번들을 생성하거나, 자격 증명을 쓰거나, 클라우드 CLI를 호출하거나, `remote-setup`을 실행하지 않습니다.\n\n현재 정보:\n- 클라우드: {clouds_result}\n- 채팅 브리지: {bridges_result}\n- 프로바이더: {providers_result}\n- 모드: {mode_result}\n\n배포 번들을 생성하려면 일반 터미널에서 다음을 직접 실행하세요:\n\n```sh\n{command}\n```\n\n생성된 RUNBOOK에는 사람이 검토할 호스트 단계가 포함되어 있습니다. `--apply`는 아직 구현되지 않았으니 이를 자동 배포로 취급하지 마세요.",
     "ApprovalDescSafe": "안전한/읽기 전용 작업을 요청하고 있습니다.",
     "ApprovalDescFileWrite": "파일 수정을 요청하고 있습니다. 경로와 내용을 확인해 주세요.",
@@ -1246,5 +1244,8 @@
     "SessionsArchiveFailed": "보관에 실패했습니다: {error}",
     "SessionsShowingArchived": "보관된 세션을 표시하는 중",
     "SessionsHidingArchived": "보관된 세션을 숨기는 중",
-    "SessionsArchivedCompact": "보관됨"
+    "SessionsArchivedCompact": "보관됨",
+    "KbReasoningDetail": "Open reasoning detail for the selected or current turn",
+    "KbTurnInspector": "턴 인스펙터 열기",
+    "CmdTurnInspectDescription": "Open the whole-turn inspector"
 }

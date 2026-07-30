@@ -5,7 +5,7 @@ use std::path::Path;
 
 use super::CommandResult;
 use crate::compaction::estimate_input_tokens_conservative;
-use crate::tui::app::{App, AppMode};
+use crate::tui::app::App;
 use crate::utils::{display_path, estimate_message_chars};
 
 /// Show a compact runtime status report for the current TUI session.
@@ -149,10 +149,21 @@ fn permission_summary(app: &App) -> String {
 }
 
 fn safety_summary(app: &App) -> &'static str {
-    match app.mode {
-        AppMode::Plan => "sandbox read-only, network off",
-        AppMode::Agent | AppMode::Auto | AppMode::Operate => "sandbox workspace-write, network on",
-        AppMode::Yolo => "sandbox disabled, network unrestricted",
+    let policy = crate::core::authority::sandbox_policy_for_turn(
+        app.mode,
+        app.approval_mode,
+        app.configured_sandbox_mode.as_deref(),
+        &app.workspace,
+    );
+    match policy {
+        crate::sandbox::SandboxPolicy::ReadOnly => "sandbox read-only, network off",
+        crate::sandbox::SandboxPolicy::WorkspaceWrite { .. } => {
+            "sandbox workspace-write, network on"
+        }
+        crate::sandbox::SandboxPolicy::DangerFullAccess => "sandbox disabled, network unrestricted",
+        crate::sandbox::SandboxPolicy::ExternalSandbox { .. } => {
+            "external sandbox, network delegated to host"
+        }
     }
 }
 
@@ -297,10 +308,19 @@ mod tests {
         assert!(agent.contains("Safety:"));
         assert!(agent.contains("sandbox workspace-write, network on"));
 
+        app.approval_mode = crate::tui::approval::ApprovalMode::Bypass;
+        let full_access = format_status(&app);
+        assert!(full_access.contains("sandbox disabled, network unrestricted"));
+
+        app.configured_sandbox_mode = Some("workspace-write".to_string());
+        let clamped = format_status(&app);
+        assert!(clamped.contains("sandbox workspace-write, network on"));
+
         app.mode = AppMode::Plan;
         let plan = format_status(&app);
         assert!(plan.contains("sandbox read-only, network off"));
 
+        app.configured_sandbox_mode = None;
         app.mode = AppMode::Yolo;
         let yolo = format_status(&app);
         assert!(yolo.contains("sandbox disabled, network unrestricted"));

@@ -239,7 +239,12 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
     },
     KeybindingEntry {
         chord: "Ctrl+O",
-        description_id: crate::localization::MessageId::KbThinkingPager,
+        description_id: crate::localization::MessageId::KbReasoningDetail,
+        section: KeybindingSection::Submission,
+    },
+    KeybindingEntry {
+        chord: "Ctrl+Alt+O",
+        description_id: crate::localization::MessageId::KbTurnInspector,
         section: KeybindingSection::Submission,
     },
     KeybindingEntry {
@@ -516,22 +521,33 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_o_help_copy_matches_turn_inspector_behavior() {
+    fn ctrl_o_and_ctrl_alt_o_help_copy_match_split_surfaces() {
         let ctrl_o = KEYBINDINGS
             .iter()
             .find(|entry| entry.chord == "Ctrl+O")
             .expect("Ctrl+O keybinding should be documented");
 
-        // Ctrl+O now opens the whole-turn Turn Inspector (#4104), not the
-        // single-cell Activity Detail. The message id is intentionally kept
-        // (`KbThinkingPager`) to avoid an existing-symbol rename; only the
-        // copy changes.
+        // Ctrl+O now opens the full recorded Reasoning Detail; the whole-turn
+        // Turn Inspector moved to Ctrl+Alt+O.
         assert_eq!(
             ctrl_o.description_id,
-            crate::localization::MessageId::KbThinkingPager
+            crate::localization::MessageId::KbReasoningDetail
         );
         assert_eq!(
             crate::localization::tr(crate::localization::Locale::En, ctrl_o.description_id,),
+            "Open reasoning detail for the selected or current turn"
+        );
+
+        let ctrl_alt_o = KEYBINDINGS
+            .iter()
+            .find(|entry| entry.chord == "Ctrl+Alt+O")
+            .expect("Ctrl+Alt+O keybinding should be documented");
+        assert_eq!(
+            ctrl_alt_o.description_id,
+            crate::localization::MessageId::KbTurnInspector
+        );
+        assert_eq!(
+            crate::localization::tr(crate::localization::Locale::En, ctrl_alt_o.description_id,),
             "Open Turn Inspector"
         );
 

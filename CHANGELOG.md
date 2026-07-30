@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.9.2] - 2026-07-27
+## [0.9.2] - 2026-07-29
 
 This is the Codewhale v0.9.2 source candidate. It is not a published release
 until the matching tag, packages, checksums, and release assets exist.
@@ -36,10 +36,10 @@ until the matching tag, packages, checksums, and release assets exist.
 Landed since v0.9.1, not yet released. A cluster of defects found by a
 read-through audit of the policy engine, the MCP proxy, the session index,
 and the app-server bridge — several of them cases where the wrong outcome
-was reached silently, behind a response or a log line that looked fine.
-Apart from one opt-in header setting, nothing here changes a public
-interface; every other entry below makes an existing one behave the way it
-already claimed to.
+was reached silently, behind a response or a log line that looked fine. The
+release also adds opt-in session, reasoning, localization, and inspectability
+surfaces; existing defaults remain stable unless an entry below explicitly
+says otherwise.
 
 ### Added
 
@@ -154,9 +154,136 @@ already claimed to.
   meter, and version stamp keep their space, and narrow terminals drop the
   chip rather than the baseline chrome. Unknown entries are warned about and
   skipped so configs written by newer builds stay loadable by older ones
-  (#4520, PR #4610 by @XhesicaFrost; harvested with co-authorship).
+  (#4520 requested by @eugenicum; PR #4610 by @XhesicaFrost, harvested with
+  co-authorship).
+
+- `thinking_default_expanded` lets reasoning blocks start open while keeping
+  Space as the per-block toggle. The setting is persisted, available through
+  native and runtime configuration, and documented for SSH/tmux accessibility
+  (issue #4925 and PR #4928 by @M-Maciej).
+
+- The transcript renders a conservative subset of LaTeX math as readable
+  Unicode without rewriting fenced/inline code, ordinary currency, escaped
+  dollars, or unknown commands. The contribution from PR #4973 by
+  @SparkofSpike was hardened and landed through PR #4974; reported by
+  @antarikshraya in #4957.
+
+- Session control now includes a sessions rail, shared archive projection,
+  picker archive controls, and opt-in interactive auto-resume with explicit
+  handoff behavior. The work closes the remaining session-browsing direction
+  from #2934; thanks @cy2311 for the original report.
+
+- The bundled contributor-onboarding skill can sync contribution context,
+  select the appropriate gate, and prepare a digest without inflating the
+  ambient skill catalog. It follows the contributor-navigation request in
+  #4227 by @JayBeest.
+
+- Bahasa Indonesia now has a complete repository documentation suite and a
+  registered website dictionary alongside the shipped TUI locale (PRs #4962
+  and #4972 by @atmosuwiryo, closing #4789).
+
+- Reasoning content can keep its rail, italics, cursor, and expansion controls
+  while disabling only the warm background highlight. The independent setting
+  is persisted and localized (#4089; reported by @elijahchan2019).
+
+- StepFun setup now asks whether a key belongs to PAYG or Step Plan, keeps the
+  two endpoint/billing routes distinct, and localizes the choice across the
+  complete packs (#4526; reported by @whp233).
+
+- OpenCode Zen is a separate model-aware API-key provider. Its curated catalog
+  selects Responses, Anthropic Messages, or Chat Completions per model;
+  unsupported Gemini and unknown models fail closed, and missing Zen
+  credentials never fall through to ChatGPT/Codex OAuth guidance. The
+  implementation from closed PR #4467 by @snail-vs (snailoniu) is preserved in
+  the candidate.
+
+- Markdown exports correlate prompts with stable workspace restore-point ids
+  and say when correlation is unavailable or ambiguous, completing the
+  remaining restoration/export direction from #2494 by @wywsoor.
 
 ### Fixed
+
+- Permission setup now consistently presents the product postures Ask,
+  Auto-Review, and Full Access instead of leaking the internal `never` token.
+  The same resolved sandbox policy now drives execution and UI receipts: Plan
+  stays read-only, Ask and Auto-Review stay workspace-scoped, and Full Access
+  is actually unsandboxed unless a stricter effective configuration wins.
+
+- Fleet setup no longer stalls when a user explicitly selects a configured
+  Codex or Grok external-consent route. The selected route is activated and
+  validated before saving, roster roles open directly on their Model step,
+  Review saves on the first Enter, and new profiles default to the personal
+  profile directory that the roster loads on the next session.
+
+- Provider credential dialogs now share one wrapping, secret-safe API-key
+  surface across every non-OAuth provider. A key already present in durable
+  storage is reported as configured without rendering it, typing or pasting is
+  clearly framed as replacement, narrow help text remains visible, and Codex
+  and Grok OAuth flows remain token-free in this modal.
+
+- Ctrl+O again opens the complete recorded reasoning detail for the selected,
+  active, or latest reasoning block. The whole-turn Turn Inspector moved to
+  Ctrl+Alt+O and `/turn inspect`, removing the shortcut collision while keeping
+  raw leaf detail and post-flush reasoning discoverable.
+
+- Failed child agents now deliver a distinct high-priority failure receipt to
+  their owning parent with a sanitized failure class, elapsed work, and a full
+  transcript handle. Parent-to-child message, follow-up, and interrupt tools
+  now use one hierarchy-checked mailbox path, and persisted nested completion
+  envelopes remain safely restorable across instruction-text revisions.
+
+- Background-shell completion events now carry only bounded tails plus a
+  retrievable exact-evidence handle. Terminal foreground Bash results are
+  acknowledged at the direct tool-result boundary and are no longer emitted a
+  second time as background completion artifacts.
+
+- Providerless Fleet and child-agent fixed-model routes now reject only
+  high-confidence foreign-provider model ids before creating a worktree, while
+  explicit provider/model pairs, custom and local endpoints, unknown ids, and
+  aggregator wire-id resolution retain their intended behavior.
+
+- Manual compaction now preserves and reports the supplied provider failure
+  class instead of replacing it with an opaque generic error. This does not
+  infer quota exhaustion when the recorded failure does not prove it.
+
+- The ambient jellyfish keep complete, readable silhouettes while animating,
+  and the website favicon now uses the Signal Current desktop tile instead of
+  the legacy whale mark.
+
+- ACP JSON-RPC responses preserve numeric request ids for avante.nvim while
+  retaining the negotiated string-id exception for Zed (PR #4929 by
+  @atmosuwiryo).
+
+- Restored shell cells whose job no longer exists stop displaying live
+  spinners and settle into a truthful stale/no-output state across transcript,
+  phase strip, and sidebar (PR #4937 by @LI-Jialu, closing #4547).
+
+- Interrupted checkpoints and timed recovery snapshots remain checkpoints
+  instead of being promoted into orphan session files, preventing duplicate
+  `/resume` entries (PR #4963 by @SparkofSpike).
+
+- Every shipped locale is admitted by the typed settings schema and native
+  chooser, with complete/partial status kept independent and tested (PR #4856
+  by @nightt5879, closing #4786). Context-menu hover hit-testing also accounts
+  for its title row (PR #4897 by @XhesicaFrost; reported by @SparkofSpike in
+  #4803).
+
+- OSC 52 and SSH/tmux clipboard transport run on one bounded background worker
+  rather than blocking input and rendering on the TUI loop; late transport
+  failures still surface through the status path (PR #4896 by @nightt5879,
+  closing #4159).
+
+- Non-streaming model calls receive a generation-length response budget rather
+  than the SSE header-open timeout, while actual SSE opens share the bounded
+  cross-provider transport seam. The equivalent fix direction came from
+  closed PR #4743 by @vibecoding-skills.
+
+- Resumed sessions diagnose a deleted inherited workspace before shell launch
+  instead of failing as an opaque Windows process error (report #4100 by
+  @redjade75723). DeepSeek native tool-call wrapper tokens are also scrubbed
+  from visible streaming and completed output as a grounded fail-soft follow-up
+  to report #3880 by @hardy922; that report's exact emitted marker remained
+  unconfirmed.
 
 - Auto model routing now preserves the user's requested reasoning effort
   through startup, provider/model changes, session restore, the picker,
@@ -188,7 +315,8 @@ already claimed to.
 - `edit_file` now matches LF-only model search text against CRLF files,
   preserves the file's line-ending style for replacement text, and still
   rejects newline-normalized duplicate matches as non-unique (#4764).
-  Reported and root-caused by @LmeSzinc.
+  Implemented in PR #4942 by @nightt5879; reported and root-caused by
+  @LmeSzinc.
 
 - `/fleet status` read the current TUI session's sub-agents while `codewhale
   fleet status` read the durable `.codewhale/fleet.jsonl` ledger — two different
@@ -256,6 +384,8 @@ already claimed to.
   reports an ambiguity instead of taking whichever the hash map yielded
   first, and registering a server whose name collides with an existing one
   after sanitization is now an error rather than a silent overwrite.
+  The equivalent call-once fix direction came from closed PR #4756 by
+  @adity982.
 
 - The session index survives a torn line: an unparseable entry is skipped
   rather than aborting the whole read, appends carry their data through to
@@ -304,7 +434,9 @@ already claimed to.
 - Modal lists and config pickers wrap selection at both ends (Down past the
   last row returns to the top). Home-directory resolution prefers
   `HOME`/`USERPROFILE` via `effective_home_dir` across remaining call sites so
-  Windows tests that fake the home env vars match production paths.
+  Windows tests that fake the home env vars match production paths. The
+  equivalent home-directory sweep came from closed PR #4760 by
+  @EvanProgramming.
 
 ### Changed
 
@@ -332,6 +464,25 @@ already claimed to.
   own opt-in for the classifier call). Same-provider strong/fast selection and
   `[auto] cost_saving` are unchanged.
 
+- The QA pseudo-terminal acceptance harness now parses frames with `rio-vt`
+  behind its existing neutral frame/color surface, retaining the assertions
+  while removing the `vt100` dependency (PR #4931 by @raphamorim).
+
+- Anthropic Messages and OpenAI Responses stream opening now share the
+  `client/stream_entry.rs` seam already used by Chat Completions: one bounded
+  response-header wait, shared dual/HTTP-1.1 policy selection, at most one
+  HTTP/1.1 fallback on a classified HTTP/2 header stall, and common idle-timeout
+  diagnostics. Wire-specific authentication, headers, endpoints, decoding, and
+  rate-limit behavior remain at each adapter edge. The timeout-placement
+  diagnosis and fix direction came from closed PR #4743 by
+  @vibecoding-skills.
+
+### Security
+
+- Release containers now publish an SBOM attestation and pin maximum-mode
+  provenance explicitly so supply-chain metadata cannot silently weaken with a
+  builder-default change (PR #4958 by @kobihikri).
+
 ### Contributors
 
 Thank you to the contributors whose code, reports, and reviews shaped v0.9.2:
@@ -340,16 +491,20 @@ Thank you to the contributors whose code, reports, and reviews shaped v0.9.2:
   allow grants and cross-platform path semantics (PR #4761), plus safe
   permission-rule listing and snapshot-bound removal (PR #4960).
 - [@nightt5879](https://github.com/nightt5879) — off-event-loop clipboard
-  writes, complete locale exposure in settings, and reasoning-effort
-  preservation across automatic model routing (PR #4961).
+  writes (PR #4896), complete locale exposure in settings (PR #4856), CRLF-safe
+  edits (PR #4942), and reasoning-effort preservation across automatic model
+  routing (PR #4961).
 - [@XhesicaFrost](https://github.com/XhesicaFrost) — the configurable
   session-token header (PR #4610) and context-menu hover alignment (PR #4897).
 - [@cyq1017](https://github.com/cyq1017) — the hooks configuration/executor
   split from PR #4087.
-- [@snailoniu](https://github.com/snailoniu) — OpenCode Zen's model-aware
-  routes, authentication, documentation, and test isolation.
+- [@snail-vs](https://github.com/snail-vs) (snailoniu) — OpenCode Zen's
+  model-aware routes, authentication, documentation, and test isolation from
+  closed PR #4467, whose contributor commits are preserved in the candidate.
 - [@SparkofSpike](https://github.com/SparkofSpike) — the zh-Hans translation
-  quality review harvested from PR #4908.
+  quality review harvested from PR #4908, duplicate-session fix in PR #4963,
+  LaTeX implementation from PR #4973 landed through #4974, and the context-menu
+  reproduction in #4803.
 - [@GTC2080](https://github.com/GTC2080) — the request-preview concept from
   PR #1099.
 - [@h3c-hexin](https://github.com/h3c-hexin) — non-UTF-8 `fetch_url`
@@ -359,6 +514,37 @@ Thank you to the contributors whose code, reports, and reviews shaped v0.9.2:
   (issue #4674).
 - [@LmeSzinc](https://github.com/LmeSzinc) — the Windows CRLF `edit_file`
   reproduction, root-cause analysis, and affected-code anchors in issue #4764.
+- [@atmosuwiryo](https://github.com/atmosuwiryo) — ACP numeric-id compatibility
+  (PR #4929) and the Indonesian documentation and website locale (PRs #4962
+  and #4972).
+- [@M-Maciej](https://github.com/M-Maciej) — the expanded-by-default reasoning
+  setting and its original report (PR #4928, issue #4925).
+- [@raphamorim](https://github.com/raphamorim) — migration of the QA PTY frame
+  parser to `rio-vt` (PR #4931).
+- [@LI-Jialu](https://github.com/LI-Jialu) — truthful finalization of restored
+  stale shell cells (PR #4937).
+- [@kobihikri](https://github.com/kobihikri) — release-container SBOM and
+  explicit provenance mode (PR #4958).
+- [@EvanProgramming](https://github.com/EvanProgramming),
+  [@adity982](https://github.com/adity982), and
+  [@vibecoding-skills](https://github.com/vibecoding-skills) — equivalent fix
+  direction for the effective-home sweep (#4760), MCP call-once behavior
+  (#4756), and streaming/non-streaming timeout split (#4743).
+- [@antarikshraya](https://github.com/antarikshraya) — the LaTeX transcript
+  rendering report in #4957.
+- [@eugenicum](https://github.com/eugenicum) — the token-header request and
+  output-presentation measurements in #4520 and #4468.
+- [@whp233](https://github.com/whp233) — the StepFun/OpenCode subscription-route
+  request in #4526.
+- [@redjade75723](https://github.com/redjade75723),
+  [@hardy922](https://github.com/hardy922),
+  [@JayBeest](https://github.com/JayBeest),
+  [@elijahchan2019](https://github.com/elijahchan2019),
+  [@cy2311](https://github.com/cy2311), and
+  [@wywsoor](https://github.com/wywsoor) — reports and product direction behind
+  the stale-workspace diagnosis (#4100), native-tool-token filtering (#3880),
+  contributor onboarding (#4227), optional reasoning highlight (#4089),
+  session control (#2934), and export/restore correlation (#2494).
 
 ## [0.9.1] - 2026-07-24
 
@@ -417,16 +603,6 @@ Thank you to the contributors whose code, reports, and reviews shaped v0.9.2:
   and occasional raised-cosine glints on bubbles, with deliberately
   non-matching periods so nothing strobes in sync.
 
-- Consolidate Anthropic Messages and OpenAI Responses stream opening
-  through the shared `client/stream_entry.rs` transport seam already used
-  by Chat Completions: one bounded response-header wait, shared
-  dual/HTTP-1.1 client policy selection, at most one HTTP/1.1 fallback
-  retry on a classified HTTP/2 header stall (never after a stream body
-  has begun), and the shared idle-timeout diagnostics format. Both
-  adapters gain the bounded open wait and `CODEWHALE_FORCE_HTTP1`
-  H1 pinning; wire-specific headers, authentication, endpoints, and
-  stream decoding stay at the adapter edge, and the Responses provider
-  retry loop for rate limits / transient upstream errors is preserved.
 - Rename the internal delegated-worker role type from `SubAgentType` to
   `FleetRole` with canonical variants (`Worker`, `Scout`, `Planner`,
   `Reviewer`, `Builder`, `Verifier`, `Custom`) matching the public Fleet
@@ -464,10 +640,6 @@ surface.
   of this narrow route until Codewhale supports per-model wire selection
   (#1481 by @seanthefuturegorilla; implementation harvested from PR #773 by
   @zhangweiii and PR #1050 by @sternelee).
-- Add OpenCode Zen as a separate model-aware API-key provider. Its curated
-  model catalog selects Responses, Anthropic Messages, or Chat Completions per
-  model; unsupported Gemini and unknown models fail closed, and Zen missing
-  credentials never fall through to ChatGPT/Codex OAuth guidance.
 - Add TelecomJS TokenHub as a first-class Chat Completions provider with
   `[providers.telecomjs]`, `TELECOMJS_API_KEY`, and a key-scoped live
   `/v1/models` refresh. Models.dev and provider-specific catalogs remain in

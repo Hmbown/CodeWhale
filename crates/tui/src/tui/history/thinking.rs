@@ -80,7 +80,7 @@ fn extract_explicit_reasoning_summary(text: &str) -> Option<String> {
 /// (#4146/#4148). Each `snake_case` token (e.g. `refresh_catalog_cache`,
 /// `agent_id`, `DEEPSEEK_API_KEY`) collapses to a single `…` so the
 /// surrounding prose still reads; the full, un-redacted body remains
-/// available on expand (Space / Ctrl+O) and in the pager/clipboard transcript.
+/// available on expand (Space) or in the reasoning detail pager (Ctrl+O) and in the pager/clipboard transcript.
 fn redact_internal_identifiers(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut token = String::new();
@@ -214,7 +214,7 @@ pub(crate) fn render_thinking_with_highlight(
     // don't leak. Streaming reasoning stays verbatim (the user is watching it
     // think) and the expanded / pager / clipboard transcript keeps the full,
     // un-redacted body. The redaction changes `body_text`, which trips the
-    // affordance below so the user still sees the "expand for full reasoning"
+    // affordance below so the user still sees the "Ctrl+O: reasoning detail"
     // hint.
     let body_text = if collapsed && !streaming {
         redact_internal_identifiers(&body_text)
@@ -283,7 +283,7 @@ pub(crate) fn render_thinking_with_highlight(
         let label = if streaming {
             "More reasoning in Ctrl+O"
         } else {
-            "Space: expand here · Ctrl+O: full reasoning"
+            "Space: expand here · Ctrl+O: reasoning detail"
         };
         lines.push(Line::from(vec![
             Span::styled(REASONING_RAIL.to_string(), rail_style),

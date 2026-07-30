@@ -1006,7 +1006,7 @@ mod tests {
             "preview must not drain or report the completion"
         );
         let _ = manager.kill_running();
-        let _ = manager.drain_finished_jobs();
+        let _ = manager.drain_finished_jobs_with_evidence();
     }
 
     #[tokio::test]
@@ -1152,7 +1152,7 @@ mod tests {
                 ContentBlock::Text { text, .. } => Some(text.as_str()),
                 _ => None,
             })
-            .last()
+            .next_back()
             .expect("turn metadata text");
         assert!(metadata.contains("123456 tokens"), "{metadata}");
         assert!(!metadata.contains(" / 4096 tokens"), "{metadata}");

@@ -388,7 +388,6 @@
     "FooterWorkedChip": "已運行{duration}",
     "FleetDraftTitle": "Fleet 設定 — 由 {model_label} 起草（按 g 儲存）",
     "FleetDraftHeader": "# .codewhale/agents/{name}\n# 由 {model_label} 起草，並由 Codewhale 校驗與限界。\n# 權限保持在 Fleet 底線：無 shell、無 trust、需審批。\n# 在向導中按 g 之前不會儲存任何內容。\n\n",
-    "FleetPreviewHeader": "# .codewhale/agents/{name}\n# Codewhale 根據目前角色與模型選擇確定性渲染。\n# 權限保持在 Fleet 底線：無 shell、無 trust、需審批。\n# 在向導中按 Enter 或 g 之前不會儲存任何內容。\n\n",
     "SetupRemoteOnRampText": "Remote Runtime On-Ramp\n\n/setup 只顯示遠端執行時事實，不會生成部署包、寫入憑證、呼叫雲端 CLI 或執行 `remote-setup`。\n\n目前事實：\n- 雲端：{clouds_result}\n- 橋接：{bridges_result}\n- 供應商：{providers_result}\n- 模式：{mode_result}\n\n生成部署包時，請在一般終端明確執行：\n\n```sh\n{command}\n```\n\n生成的 RUNBOOK 會包含需要人工複核的主機步驟。`--apply` 仍未實作；不要把它當成自動部署。",
     "ApprovalDescSafe": "請求執行唯讀操作。",
     "ApprovalDescFileWrite": "請求修改檔案。請確認路徑和內容符合預期。",
@@ -497,5 +496,8 @@
     "CmdCostLivePricingDowngraded": "無法驗證此路由的即時供應商價格（{defects}）；改用內建的公開價格。",
     "CmdCostLivePricingUnavailable": "無法驗證此路由的即時供應商價格（{defects}），且沒有可用的內建費率；此筆支出未知。",
     "CmdCostRoutesHeader": "已稽核路由（已脫敏）：",
-    "CmdTokensReport": "Token 用量：\n─────────────────────────────\n作用中內容：       {active}\n上次 API 輸入：    {input}（回合遙測；工具往返可能重複計入相同前綴）\n上次 API 輸出：    {output}\n快取命中/未命中：  {cache}（僅用於遙測/費用）\n累計 token：       {total}（工作階段用量遙測）\n已定價金額：       {cost}\nAPI 訊息數：       {api_messages}\n聊天訊息數：       {chat_messages}\n模型：             {model}"
+    "CmdTokensReport": "Token 用量：\n─────────────────────────────\n作用中內容：       {active}\n上次 API 輸入：    {input}（回合遙測；工具往返可能重複計入相同前綴）\n上次 API 輸出：    {output}\n快取命中/未命中：  {cache}（僅用於遙測/費用）\n累計 token：       {total}（工作階段用量遙測）\n已定價金額：       {cost}\nAPI 訊息數：       {api_messages}\n聊天訊息數：       {chat_messages}\n模型：             {model}",
+    "KbReasoningDetail": "Open reasoning detail for the selected or current turn",
+    "KbTurnInspector": "Open Turn Inspector",
+    "CmdTurnInspectDescription": "Open the whole-turn inspector"
 }

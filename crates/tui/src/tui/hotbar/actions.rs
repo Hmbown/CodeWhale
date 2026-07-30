@@ -1447,7 +1447,7 @@ mod tests {
         config: &Config,
     ) -> App {
         let options = TuiOptions {
-            skills_dir: skills_dir,
+            skills_dir,
             start_in_agent_mode: true,
             ..crate::test_support::test_tui_options(workspace)
         };

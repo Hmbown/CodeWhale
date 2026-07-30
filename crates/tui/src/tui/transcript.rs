@@ -1234,8 +1234,10 @@ mod tests {
         let mut content = String::new();
         let mut revision = 1u64;
         let mut cache = TranscriptViewCache::new();
-        let mut options = TranscriptRenderOptions::default();
-        options.low_motion = true;
+        let options = TranscriptRenderOptions {
+            low_motion: true,
+            ..TranscriptRenderOptions::default()
+        };
 
         content.push_str("start\n```rust\nlet value_0 = 0;\n```\n\n");
         let mut cells = vec![assistant_cell(&content, true)];

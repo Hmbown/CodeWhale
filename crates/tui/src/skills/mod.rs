@@ -1120,18 +1120,6 @@ fn sanitize_prompt_path_text(text: &str, workspace: &Path) -> String {
             out.replace_range(start..user_start + user_len, "~");
         }
     }
-    // Environment variables are process-global, and concurrent embedders or
-    // tests may temporarily redirect HOME after discovery recorded a warning.
-    // Scrub conventional home roots by shape as a final privacy boundary.
-    for marker in ["/Users/", "/home/"] {
-        while let Some(start) = out.find(marker) {
-            let user_start = start + marker.len();
-            let user_len = out[user_start..]
-                .find(|ch: char| ch == '/' || ch.is_whitespace())
-                .unwrap_or(out.len() - user_start);
-            out.replace_range(start..user_start + user_len, "~");
-        }
-    }
     out
 }
 

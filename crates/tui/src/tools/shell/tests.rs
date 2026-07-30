@@ -207,12 +207,13 @@ fn shell_descendant_helper_process() {
     }
     let pid_file =
         PathBuf::from(std::env::var(SHELL_DESCENDANT_PID_FILE_ENV).expect("descendant pid file"));
-    let child = Command::new("sleep")
+    let mut child = Command::new("sleep")
         .arg("30")
         .spawn()
         .expect("spawn cheap descendant");
     std::fs::write(pid_file, child.id().to_string()).expect("write descendant pid");
     std::thread::sleep(Duration::from_secs(30));
+    let _ = child.wait();
 }
 
 #[cfg(unix)]
@@ -651,15 +652,59 @@ async fn drain_finished_jobs_reports_once() {
     assert_ne!(completed.status, ShellStatus::Running);
     assert!(manager.may_have_undelivered_completion());
 
-    let first = manager.drain_finished_jobs();
+    let first = manager
+        .drain_finished_jobs_with_evidence()
+        .into_iter()
+        .map(|completion| completion.event)
+        .collect::<Vec<_>>();
     assert_eq!(first.len(), 1);
     assert_eq!(first[0].task_id, task_id);
     assert_eq!(first[0].status, ShellStatus::Completed);
     assert!(first[0].stdout_tail.contains("drain-finished-once"));
 
-    let second = manager.drain_finished_jobs();
+    let second = manager.drain_finished_jobs_with_evidence();
     assert!(second.is_empty(), "completion should be reported only once");
     assert!(!manager.may_have_undelivered_completion());
+}
+
+#[test]
+fn completion_evidence_preserves_arbitrary_stream_bytes() {
+    use base64::Engine as _;
+
+    let stdout = vec![b'o', 0, 0xff, b'k'];
+    let stderr = vec![0xfe, b'e', b'r', b'r'];
+    let evidence = ShellCompletionEvidence {
+        event: ShellCompletionEvent {
+            task_id: "shell_binary".to_string(),
+            command: "binary-output".to_string(),
+            status: ShellStatus::Completed,
+            exit_code: Some(0),
+            duration_ms: 17,
+            stdout_tail: String::new(),
+            stderr_tail: String::new(),
+            stdout_len: stdout.len(),
+            stderr_len: stderr.len(),
+            evidence_ref: None,
+            linked_task_id: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
+        },
+        stdout: stdout.clone(),
+        stderr: stderr.clone(),
+    };
+
+    let payload: serde_json::Value =
+        serde_json::from_slice(&evidence.artifact_bytes()).expect("evidence JSON");
+    assert_eq!(payload["stdout"]["encoding"], "base64");
+    assert_eq!(payload["stderr"]["encoding"], "base64");
+    let decoded_stdout = base64::engine::general_purpose::STANDARD
+        .decode(payload["stdout"]["content"].as_str().expect("stdout data"))
+        .expect("decode stdout");
+    let decoded_stderr = base64::engine::general_purpose::STANDARD
+        .decode(payload["stderr"]["content"].as_str().expect("stderr data"))
+        .expect("decode stderr");
+    assert_eq!(decoded_stdout, stdout);
+    assert_eq!(decoded_stderr, stderr);
 }
 
 #[test]

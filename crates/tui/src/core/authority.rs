@@ -215,8 +215,17 @@ impl TurnAuthority {
     }
 
     #[must_use]
-    pub(crate) fn sandbox_policy(&self, workspace: &Path) -> SandboxPolicy {
-        sandbox_policy_for_mode(self.mode, workspace)
+    pub(crate) fn sandbox_policy(
+        &self,
+        workspace: &Path,
+        configured_mode: Option<&str>,
+    ) -> SandboxPolicy {
+        sandbox_policy_for_turn(
+            self.mode,
+            self.approval_mode_for_session(),
+            configured_mode,
+            workspace,
+        )
     }
 }
 
@@ -316,18 +325,51 @@ pub(crate) fn agent_approval_mode_for_turn(
     }
 }
 
-/// Pick the sandbox policy that gates shell commands for a given UI mode.
+/// Resolve the filesystem boundary for one turn.
+///
+/// Permission posture and filesystem scope are separate controls, but the
+/// named Full Access posture must have a truthful default: outside Plan it
+/// disables Codewhale's own sandbox, matching the product meaning of the
+/// name. An explicit effective sandbox setting may still *tighten* that
+/// default. It can never loosen Plan, Ask, or Auto-Review.
 #[must_use]
-pub(crate) fn sandbox_policy_for_mode(mode: AppMode, workspace: &Path) -> SandboxPolicy {
-    match mode {
-        AppMode::Plan => SandboxPolicy::ReadOnly,
-        AppMode::Agent | AppMode::Auto | AppMode::Operate => SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![workspace.to_path_buf()],
-            network_access: true,
-            exclude_tmpdir: false,
-            exclude_slash_tmp: false,
-        },
-        AppMode::Yolo => SandboxPolicy::DangerFullAccess,
+pub(crate) fn sandbox_policy_for_turn(
+    mode: AppMode,
+    approval_mode: ApprovalMode,
+    configured_mode: Option<&str>,
+    workspace: &Path,
+) -> SandboxPolicy {
+    let default = if mode == AppMode::Plan {
+        SandboxPolicy::ReadOnly
+    } else if mode == AppMode::Yolo || approval_mode == ApprovalMode::Bypass {
+        SandboxPolicy::DangerFullAccess
+    } else {
+        workspace_write_policy(workspace)
+    };
+
+    // The effective Config has already applied managed/project precedence.
+    // Only stricter scopes clamp the posture-derived default: a configured
+    // danger-full-access value must not silently loosen Ask or Auto-Review.
+    match (default, configured_mode) {
+        (SandboxPolicy::ReadOnly, _) | (_, Some("read-only")) => SandboxPolicy::ReadOnly,
+        (SandboxPolicy::DangerFullAccess, Some("workspace-write")) => {
+            workspace_write_policy(workspace)
+        }
+        (SandboxPolicy::DangerFullAccess, Some("external-sandbox")) => {
+            SandboxPolicy::ExternalSandbox {
+                network_access: true,
+            }
+        }
+        (policy, _) => policy,
+    }
+}
+
+fn workspace_write_policy(workspace: &Path) -> SandboxPolicy {
+    SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![workspace.to_path_buf()],
+        network_access: true,
+        exclude_tmpdir: false,
+        exclude_slash_tmp: false,
     }
 }
 
@@ -461,6 +503,50 @@ mod tests {
 
     fn authority(mode: AppMode, auto_approve: bool, approval_mode: ApprovalMode) -> TurnAuthority {
         TurnAuthority::from_effective_fields(mode, true, false, auto_approve, approval_mode)
+    }
+
+    #[test]
+    fn full_access_is_unsandboxed_unless_effective_config_is_stricter() {
+        let workspace = Path::new("/work");
+        let full_access = authority(AppMode::Agent, true, ApprovalMode::Bypass);
+
+        assert_eq!(
+            full_access.sandbox_policy(workspace, None),
+            SandboxPolicy::DangerFullAccess
+        );
+        assert!(matches!(
+            full_access.sandbox_policy(workspace, Some("workspace-write")),
+            SandboxPolicy::WorkspaceWrite { writable_roots, .. }
+                if writable_roots == vec![workspace.to_path_buf()]
+        ));
+        assert_eq!(
+            full_access.sandbox_policy(workspace, Some("read-only")),
+            SandboxPolicy::ReadOnly
+        );
+        assert!(matches!(
+            full_access.sandbox_policy(workspace, Some("external-sandbox")),
+            SandboxPolicy::ExternalSandbox {
+                network_access: true
+            }
+        ));
+    }
+
+    #[test]
+    fn plan_ask_and_auto_review_cannot_be_loosened_by_sandbox_config() {
+        let workspace = Path::new("/work");
+        for approval_mode in [ApprovalMode::Suggest, ApprovalMode::Auto] {
+            let authority = authority(AppMode::Agent, false, approval_mode);
+            assert!(matches!(
+                authority.sandbox_policy(workspace, Some("danger-full-access")),
+                SandboxPolicy::WorkspaceWrite { .. }
+            ));
+        }
+
+        let plan = authority(AppMode::Plan, true, ApprovalMode::Bypass);
+        assert_eq!(
+            plan.sandbox_policy(workspace, Some("danger-full-access")),
+            SandboxPolicy::ReadOnly
+        );
     }
 
     #[test]

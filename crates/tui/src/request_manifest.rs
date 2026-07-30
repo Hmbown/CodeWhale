@@ -1489,8 +1489,10 @@ mod tests {
 
     #[test]
     fn body_hash_moves_for_every_wire_mutation() {
+        type BodyMutation = (&'static str, Box<dyn Fn(&mut serde_json::Value)>);
+
         let baseline = body_facts(&manifest(chat_body())).body_sha256.clone();
-        let mutations: Vec<(&str, Box<dyn Fn(&mut serde_json::Value)>)> = vec![
+        let mutations: Vec<BodyMutation> = vec![
             (
                 "max_tokens",
                 Box::new(|b: &mut serde_json::Value| b["max_tokens"] = json!(1024)),

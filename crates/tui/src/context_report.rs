@@ -1088,7 +1088,7 @@ mod tests {
                 mcp_config_path: tmp.path().join("mcp.json"),
                 use_memory: true,
                 start_in_agent_mode: true,
-                ..crate::test_support::test_tui_options(tmp.path().to_path_buf())
+                ..crate::test_support::test_tui_options(tmp.path())
             },
             &config,
         );

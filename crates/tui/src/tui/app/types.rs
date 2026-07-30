@@ -982,6 +982,8 @@ pub enum AppAction {
     },
     /// Open the live transcript overlay through a terminal-safe command path.
     OpenLiveTranscript,
+    /// Open the whole-turn inspector (Ctrl+Alt+O, /turn inspect).
+    OpenTurnInspector,
     OpenContextInspector,
     CompactContext {
         /// Optional user focus from `/compact <focus>`, forwarded into the

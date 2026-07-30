@@ -1374,7 +1374,13 @@ mod dialect_seam_tests {
     /// thinking differently, so each is checked against its own builder run.
     #[test]
     fn anthropic_messages_preview_matches_the_production_messages_builder() {
-        let cases: Vec<(&str, &str, Box<dyn Fn(&mut ProvidersConfig)>)> = vec![
+        type ProviderCase = (
+            &'static str,
+            &'static str,
+            Box<dyn Fn(&mut ProvidersConfig)>,
+        );
+
+        let cases: Vec<ProviderCase> = vec![
             (
                 "anthropic",
                 "claude-sonnet-4-5",

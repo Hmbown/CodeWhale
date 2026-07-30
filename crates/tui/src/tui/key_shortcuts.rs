@@ -68,14 +68,14 @@ pub(super) fn tool_details_shortcut_action_hint(noun: &str) -> String {
     format!("{} opens {noun}", tool_details_shortcut_label())
 }
 
-pub(super) fn activity_shortcut_label() -> &'static str {
+pub(super) fn reasoning_detail_shortcut_label() -> &'static str {
     "Ctrl+O"
 }
 
-/// Open the whole-turn inspector. Keep this exact so the shifted variant can
-/// remain available to the external editor and a draft never changes where
-/// plain Ctrl+O routes (#4482).
-pub(super) fn is_turn_inspector_shortcut(key: &KeyEvent) -> bool {
+/// Open the full reasoning detail pager for the selected or current turn.
+/// Ctrl+O now shows the recorded reasoning timeline, not the whole-turn
+/// inspector (#v092-reasoning-fix).
+pub(super) fn is_reasoning_detail_shortcut(key: &KeyEvent) -> bool {
     matches!(key.code, KeyCode::Char('o') | KeyCode::Char('O'))
         && key.modifiers.contains(KeyModifiers::CONTROL)
         && !key
@@ -83,10 +83,27 @@ pub(super) fn is_turn_inspector_shortcut(key: &KeyEvent) -> bool {
             .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT | KeyModifiers::SUPER)
 }
 
+pub(super) fn turn_inspector_shortcut_label() -> &'static str {
+    "Ctrl+Alt+O"
+}
+
+/// Open the whole-turn inspector on a dedicated, collision-free chord.
+/// Ctrl+Alt+O was free in the keybinding registry; it is distinct from
+/// Ctrl+O (reasoning detail) and Ctrl+Shift+O (external editor).
+pub(super) fn is_turn_inspector_shortcut(key: &KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Char('o') | KeyCode::Char('O'))
+        && key.modifiers.contains(KeyModifiers::CONTROL)
+        && key.modifiers.contains(KeyModifiers::ALT)
+        && !key
+            .modifiers
+            .intersects(KeyModifiers::SHIFT | KeyModifiers::SUPER)
+}
+
 /// Open the composer draft in `$VISUAL` / `$EDITOR` without colliding with
-/// the Turn Inspector. Enhanced protocols can report either character case,
-/// but SHIFT must be explicit so Windows Caps Lock cannot misroute Ctrl+O.
-/// F4 is the fallback for legacy protocols that cannot encode Ctrl+Shift+O.
+/// the reasoning detail or Turn Inspector shortcuts. Enhanced protocols can
+/// report either character case, but SHIFT must be explicit so Windows Caps
+/// Lock cannot misroute Ctrl+O. F4 is the fallback for legacy protocols that
+/// cannot encode Ctrl+Shift+O.
 pub(super) fn is_external_editor_shortcut(key: &KeyEvent) -> bool {
     let ctrl_shift_o = matches!(key.code, KeyCode::Char('o') | KeyCode::Char('O'))
         && key.modifiers.contains(KeyModifiers::CONTROL)
@@ -220,10 +237,10 @@ mod tests {
 
     #[test]
     fn ctrl_o_and_ctrl_shift_o_have_stable_distinct_routes() {
-        let inspector = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL);
+        let reasoning = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL);
         // Crossterm's native Windows decoder applies Caps Lock to the
         // character but does not expose Caps Lock as a modifier.
-        let inspector_caps_lock = KeyEvent::new(KeyCode::Char('O'), KeyModifiers::CONTROL);
+        let reasoning_caps_lock = KeyEvent::new(KeyCode::Char('O'), KeyModifiers::CONTROL);
         let editor_lower = KeyEvent::new(
             KeyCode::Char('o'),
             KeyModifiers::CONTROL | KeyModifiers::SHIFT,
@@ -233,17 +250,45 @@ mod tests {
             KeyModifiers::CONTROL | KeyModifiers::SHIFT,
         );
 
-        for inspector in [&inspector, &inspector_caps_lock] {
-            assert!(is_turn_inspector_shortcut(inspector));
-            assert!(!is_external_editor_shortcut(inspector));
+        for reasoning in [&reasoning, &reasoning_caps_lock] {
+            assert!(is_reasoning_detail_shortcut(reasoning));
+            assert!(!is_turn_inspector_shortcut(reasoning));
+            assert!(!is_external_editor_shortcut(reasoning));
         }
         for editor in [&editor_lower, &editor_upper] {
+            assert!(!is_reasoning_detail_shortcut(editor));
             assert!(!is_turn_inspector_shortcut(editor));
             assert!(is_external_editor_shortcut(editor));
         }
 
         let editor_legacy_fallback = KeyEvent::new(KeyCode::F(4), KeyModifiers::NONE);
         assert!(is_external_editor_shortcut(&editor_legacy_fallback));
+    }
+
+    #[test]
+    fn turn_inspector_uses_collision_free_ctrl_alt_o() {
+        let turn_inspector = KeyEvent::new(
+            KeyCode::Char('o'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        );
+        let turn_inspector_caps = KeyEvent::new(
+            KeyCode::Char('O'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        );
+        for key in [&turn_inspector, &turn_inspector_caps] {
+            assert!(is_turn_inspector_shortcut(key));
+            assert!(!is_reasoning_detail_shortcut(key));
+            assert!(!is_external_editor_shortcut(key));
+        }
+
+        // Must not fire for bare Alt+O (would shadow typing) or Ctrl+Shift+O.
+        let alt_o = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::ALT);
+        let ctrl_shift_o = KeyEvent::new(
+            KeyCode::Char('o'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert!(!is_turn_inspector_shortcut(&alt_o));
+        assert!(!is_turn_inspector_shortcut(&ctrl_shift_o));
     }
 
     #[test]

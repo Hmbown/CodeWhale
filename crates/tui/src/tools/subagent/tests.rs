@@ -3008,6 +3008,58 @@ fn spawn_model_selection_has_stable_four_tier_precedence_and_source() {
 }
 
 #[test]
+fn providerless_spawn_model_gate_rejects_known_foreign_route_before_spawn() {
+    let runtime = stub_runtime_for_provider("moonshot");
+    let mut selection = SpawnModelSelection {
+        model_route: ModelRoute::Fixed("deepseek-v4-pro".to_string()),
+        source: SpawnRouteSource::TaskModel,
+    };
+
+    let err = resolve_fixed_spawn_model_route(&runtime, &mut selection, true)
+        .expect_err("Moonshot must not receive a provider-less DeepSeek model pin");
+    let message = err.to_string();
+    assert!(
+        message.contains("deepseek-v4-pro"),
+        "names model: {message}"
+    );
+    assert!(
+        message.contains("moonshot"),
+        "names resolved route: {message}"
+    );
+    assert!(
+        message.contains("deepseek"),
+        "names catalog owner: {message}"
+    );
+
+    let mut unknown = SpawnModelSelection {
+        model_route: ModelRoute::Fixed("private-finetune-v7".to_string()),
+        source: SpawnRouteSource::TaskModel,
+    };
+    resolve_fixed_spawn_model_route(&runtime, &mut unknown, true)
+        .expect("unknown custom model ids remain provider-authoritative");
+
+    let mut inherited = SpawnModelSelection {
+        model_route: ModelRoute::Inherit,
+        source: SpawnRouteSource::RunModel,
+    };
+    resolve_fixed_spawn_model_route(&runtime, &mut inherited, true)
+        .expect("session-inherited routes are unchanged");
+
+    let openrouter = stub_runtime_for_provider("openrouter");
+    let mut explicit = SpawnModelSelection {
+        model_route: ModelRoute::Fixed("deepseek-v4-pro".to_string()),
+        source: SpawnRouteSource::AgentProfileModel,
+    };
+    resolve_fixed_spawn_model_route(&openrouter, &mut explicit, false)
+        .expect("an explicit aggregator route remains allowed");
+    assert_eq!(
+        explicit.model_route,
+        ModelRoute::Fixed(crate::config::DEFAULT_OPENROUTER_MODEL.to_string()),
+        "the child and receipt must use the provider's exact wire id"
+    );
+}
+
+#[test]
 fn test_child_max_spawn_depth_profile_hint_only_narrows() {
     // Profile hint narrows the inherited budget...
     assert_eq!(child_max_spawn_depth_for_spawn(3, 1, None, Some(1)), 2);
@@ -3768,7 +3820,7 @@ fn agent_tool_prompt_schema_keeps_ordinary_starts_message_first() {
 }
 
 #[test]
-fn agent_tool_schema_advertises_status_peek_cancel_actions() {
+fn agent_tool_schema_advertises_lifecycle_and_coordination_actions() {
     let tmp = tempdir().expect("tempdir");
     let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 1);
     let agent_schema = AgentTool::new(manager, stub_runtime()).input_schema();
@@ -3776,8 +3828,114 @@ fn agent_tool_schema_advertises_status_peek_cancel_actions() {
     let action = schema_property_description(&agent_schema, "action");
     assert!(action.contains("status"));
     assert!(action.contains("peek"));
+    assert!(action.contains("message"));
+    assert!(action.contains("followup"));
+    assert!(action.contains("interrupt"));
+    assert!(action.contains("wait only observes"));
     assert!(action.contains("cancel"));
     assert!(agent_schema["properties"].get("agent_id").is_some());
+    assert!(agent_schema["properties"].get("message").is_some());
+    assert!(agent_schema["properties"].get("reason").is_some());
+}
+
+#[tokio::test]
+async fn agent_message_queues_and_followup_delivers_as_user_provenance() {
+    let tmp = tempdir().expect("tempdir");
+    let mut inner = SubAgentManager::new(tmp.path().to_path_buf(), 2);
+    let (agent_id, mut input_rx) =
+        inner.insert_test_running_agent_with_input("steer_target", tmp.path());
+    let manager = Arc::new(RwLock::new(inner));
+    let tool = AgentTool::new(manager.clone(), stub_runtime());
+    let context = ToolContext::new(tmp.path());
+
+    let queued = tool
+        .execute(
+            json!({
+                "action": "message",
+                "agent_id": agent_id,
+                "message": "first queued note"
+            }),
+            &context,
+        )
+        .await
+        .expect("queue parent message");
+    let queued: Value = serde_json::from_str(&queued.content).expect("queued receipt JSON");
+    assert_eq!(queued["queued"], json!(true));
+    assert_eq!(queued["woke"], json!(false));
+    assert!(matches!(
+        input_rx.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+
+    let followed_up = tool
+        .execute(
+            json!({
+                "action": "followup",
+                "agent_id": agent_id,
+                "message": "wake with this steer"
+            }),
+            &context,
+        )
+        .await
+        .expect("follow up running child");
+    let followed_up: Value =
+        serde_json::from_str(&followed_up.content).expect("followup receipt JSON");
+    assert_eq!(followed_up["woke"], json!(true));
+    assert_eq!(followed_up["queue_depth"], json!(0));
+
+    let mut pending_inputs = VecDeque::from([
+        input_rx.try_recv().expect("queued note delivered"),
+        input_rx.try_recv().expect("followup note delivered"),
+    ]);
+    let mut messages = Vec::new();
+    append_subagent_inputs_as_user_messages(&mut messages, &mut pending_inputs);
+    assert_eq!(messages.len(), 2);
+    assert!(messages.iter().all(|message| message.role == "user"));
+    let delivered = messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .filter_map(|block| match block {
+            ContentBlock::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(delivered, vec!["first queued note", "wake with this steer"]);
+
+    {
+        let mut manager = manager.write().await;
+        manager
+            .agents
+            .get_mut(&agent_id)
+            .expect("test child")
+            .status = SubAgentStatus::Completed;
+    }
+    let terminal = tool
+        .execute(
+            json!({
+                "action": "message",
+                "agent_id": agent_id,
+                "message": "too late"
+            }),
+            &context,
+        )
+        .await
+        .expect_err("terminal child must fail closed")
+        .to_string();
+    assert!(terminal.contains("only running children"), "{terminal}");
+
+    let absent = tool
+        .execute(
+            json!({
+                "action": "message",
+                "agent_id": "agent_absent",
+                "message": "nowhere"
+            }),
+            &context,
+        )
+        .await
+        .expect_err("absent child must fail closed")
+        .to_string();
+    assert!(absent.contains("not found"), "{absent}");
 }
 
 #[tokio::test]
@@ -7083,6 +7241,58 @@ fn subagent_done_sentinel_marks_truncated_summaries() {
 }
 
 #[test]
+fn failed_subagent_completion_is_high_priority_and_retrievable() {
+    let mut res = make_snapshot(SubAgentStatus::Failed(
+        "child stopped without returning a final summary (its last turn produced no assistant text)"
+            .to_string(),
+    ));
+    res.name = "research-lane".to_string();
+    res.nickname = Some("Tide".to_string());
+    res.steps_taken = 7;
+    res.duration_ms = 12_345;
+
+    let completion = subagent_completion_from_result(&res);
+
+    assert!(completion.is_high_priority_failure());
+    assert!(completion.payload.contains(r#""event":"subagent.failed""#));
+    assert!(completion.payload.contains(r#""priority":"high""#));
+    assert!(
+        completion
+            .payload
+            .contains(r#""failure_class":"empty_turn""#)
+    );
+    assert!(completion.payload.contains(r#""name":"Tide""#));
+    assert!(completion.payload.contains(r#""steps":7"#));
+    assert!(completion.payload.contains(r#""elapsed_ms":12345"#));
+    assert!(
+        completion
+            .payload
+            .contains(r#""transcript_handle":"agent:agent_test/full_transcript""#)
+    );
+
+    let completed = subagent_completion_from_result(&make_snapshot(SubAgentStatus::Completed));
+    assert!(!completed.is_high_priority_failure());
+}
+
+#[test]
+fn budget_exhaustion_is_a_high_priority_failure_event() {
+    let completion =
+        subagent_completion_from_result(&make_snapshot(SubAgentStatus::BudgetExhausted));
+
+    assert!(completion.is_high_priority_failure());
+    assert!(
+        completion
+            .payload
+            .contains(r#""status":"budget_exhausted""#)
+    );
+    assert!(
+        completion
+            .payload
+            .contains(r#""failure_class":"token_budget""#)
+    );
+}
+
+#[test]
 fn stamp_subagent_summary_appends_note_when_short() {
     // issue #2652: a short (complete) summary gets the soft self-report note
     // and is NOT marked truncated.
@@ -7131,13 +7341,23 @@ fn stamp_subagent_summary_truncates_when_over_budget() {
 
 #[test]
 fn subagent_failed_sentinel_format_is_well_formed() {
-    let sentinel = subagent_failed_sentinel("agent_zzz", "boom");
+    let mut result = make_snapshot(SubAgentStatus::Failed("boom".to_string()));
+    result.agent_id = "agent_zzz".to_string();
+    result.name = "agent_zzz".to_string();
+    let sentinel = subagent_failed_sentinel(&result, "boom");
     let inner = sentinel
         .trim_start_matches("<codewhale:subagent.done>")
         .trim_end_matches("</codewhale:subagent.done>");
     let parsed: serde_json::Value = serde_json::from_str(inner).expect("inner JSON parses");
     assert_eq!(parsed["agent_id"], "agent_zzz");
     assert_eq!(parsed["status"], "failed");
+    assert_eq!(parsed["event"], "subagent.failed");
+    assert_eq!(parsed["priority"], "high");
+    assert_eq!(parsed["failure_class"], "runtime_error");
+    assert_eq!(
+        parsed["transcript_handle"],
+        "agent:agent_zzz/full_transcript"
+    );
     assert_eq!(parsed["error_location"], "previous_line");
     assert!(parsed.get("details").is_none());
     assert!(parsed.get("next_action").is_none());
@@ -10137,8 +10357,11 @@ fn subagent_budget_exhaustion_completion_carries_budget_exhausted_sentinel() {
         .and_then(|chunk| chunk.split("</codewhale:subagent.done>").next())
         .expect("sentinel json");
     let parsed: serde_json::Value = serde_json::from_str(inner).expect("sentinel parses");
+    assert_eq!(parsed["event"], "subagent.failed");
+    assert_eq!(parsed["priority"], "high");
     assert_eq!(parsed["status"], "budget_exhausted");
-    assert_eq!(parsed["summary_location"], "previous_line");
+    assert_eq!(parsed["failure_class"], "token_budget");
+    assert_eq!(parsed["error_location"], "previous_line");
 }
 
 #[test]

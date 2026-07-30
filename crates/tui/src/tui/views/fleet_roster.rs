@@ -4,7 +4,8 @@
 //! row is the **operator** — the live session route (your main model): when a
 //! user picks a session model they are picking the operator, and the roster
 //! is that operator's team. Below it the merged [`FleetRoster`] (built-in <
-//! `[fleet.profiles]` config < `.codewhale/agents/*.toml` project members)
+//! `[fleet.profiles]` config < `$CODEWHALE_HOME/agents/*.toml` personal <
+//! `.codewhale/agents/*.toml` project members)
 //! renders as a scrollable list with a detail pane for the selected row. The
 //! view never writes anything; `s` / Enter on a member hands off to the
 //! `/fleet setup` wizard for authoring and overrides (the operator row is
@@ -168,15 +169,17 @@ impl ModalView for FleetRosterView {
                 ViewAction::None
             }
             KeyCode::Enter | KeyCode::Char('s') => {
-                if self.operator_selected() {
+                if let Some(member) = self.selected_member() {
+                    let role = member.profile.role.name.clone();
+                    // Carry the role the operator already chose. The setup
+                    // wizard can still step back to Role when they want to
+                    // change it, but does not force a duplicate selection.
+                    ViewAction::EmitAndClose(ViewEvent::FleetRosterOpenSetupRequested { role })
+                } else {
                     // The operator is not a wizard-authored profile; its
                     // route changes via /model or /provider (the detail pane
                     // says so).
                     ViewAction::None
-                } else {
-                    // Hand off to the authoring wizard; the roster itself
-                    // never writes anything.
-                    ViewAction::EmitAndClose(ViewEvent::FleetRosterOpenSetupRequested)
                 }
             }
             KeyCode::Char('w') => {
@@ -706,13 +709,12 @@ mod tests {
             // Member row: hands off to the setup wizard.
             view.handle_key(key(KeyCode::Down));
             let action = view.handle_key(key(code));
-            assert!(
-                matches!(
-                    action,
-                    ViewAction::EmitAndClose(ViewEvent::FleetRosterOpenSetupRequested)
-                ),
-                "{code:?} should hand off to the setup wizard"
-            );
+            let ViewAction::EmitAndClose(ViewEvent::FleetRosterOpenSetupRequested { role }) =
+                action
+            else {
+                panic!("{code:?} should hand off to the setup wizard");
+            };
+            assert_eq!(role, "manager");
         }
     }
 

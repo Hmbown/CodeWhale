@@ -305,8 +305,8 @@ mod tests {
             memory_path: tmpdir.path().join("memory.md"),
             notes_path: tmpdir.path().join("notes.txt"),
             mcp_config_path: tmpdir.path().join("mcp.json"),
-            use_memory: use_memory,
-            ..crate::test_support::test_tui_options(tmpdir.path().to_path_buf())
+            use_memory,
+            ..crate::test_support::test_tui_options(tmpdir.path())
         };
         App::new(options, &Config::default())
     }

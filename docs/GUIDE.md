@@ -324,9 +324,11 @@ fails validation or errors, Auto falls back to that heuristic while retaining
 the attempted classifier data path in the turn receipt.
 
 The `/model` picker states which data path is available and shows the last
-resolved route. `Ctrl+O` opens the Turn Inspector, whose model-route section
-records the concrete provider/model, strong/fast pair, selected tier, selection
-scope, route reason, and whether the classifier received routing context. Use a
+resolved route. `Ctrl+O` opens the reasoning detail for the selected or current
+turn; `Ctrl+Alt+O` (or `/turn inspect`) opens the whole-turn Turn Inspector,
+whose model-route section records the concrete provider/model, strong/fast pair,
+selected tier, selection scope, route reason, and whether the classifier received
+routing context. Use a
 fixed model when you need repeatable comparisons, a strict provider boundary,
 or no classification request.
 

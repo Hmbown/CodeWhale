@@ -1039,7 +1039,7 @@ fn render_thinking_collapsed_shows_details_affordance() {
         .iter()
         .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
         .collect::<String>();
-    assert!(text.contains("Ctrl+O: full reasoning"));
+    assert!(text.contains("Ctrl+O: reasoning detail"));
     // Pin the actual header shape ("… reasoning done") — a bare
     // `contains("reasoning")` is already satisfied by the Ctrl+O
     // affordance line above and would never fail on its own.
@@ -2406,11 +2406,11 @@ fn long_thinking_display_is_shorter_than_transcript() {
         "live thinking must drop the tail when collapsed"
     );
     assert!(
-        live_text.contains("Ctrl+O: full reasoning"),
+        live_text.contains("Ctrl+O: reasoning detail"),
         "live thinking must offer the pager affordance"
     );
     assert!(
-        !transcript_text.contains("Ctrl+O: full reasoning"),
+        !transcript_text.contains("Ctrl+O: reasoning detail"),
         "transcript thinking must not include the live affordance"
     );
 }
@@ -2447,7 +2447,7 @@ fn completed_short_thinking_without_summary_stays_visible_in_live_view() {
         "transcript thinking must keep the full reasoning body"
     );
     assert!(
-        !live_text.contains("Ctrl+O: full reasoning"),
+        !live_text.contains("Ctrl+O: reasoning detail"),
         "complete short reasoning should not need the detail affordance: {live_text}"
     );
 }
@@ -2482,7 +2482,7 @@ fn completed_reasoning_receipt_hides_internal_function_names_until_expanded() {
         "surrounding prose must still read: {collapsed_text}"
     );
     assert!(
-        collapsed_text.contains("Ctrl+O: full reasoning"),
+        collapsed_text.contains("Ctrl+O: reasoning detail"),
         "collapsed receipt must offer the expand affordance: {collapsed_text}"
     );
 
@@ -2534,7 +2534,7 @@ fn thinking_default_expanded_inverts_but_preserves_the_space_toggle() {
         "Space must still collapse a default-expanded reasoning cell"
     );
     assert!(
-        collapsed_text.contains("Ctrl+O: full reasoning"),
+        collapsed_text.contains("Ctrl+O: reasoning detail"),
         "the collapsed state must retain the full-reasoning affordance"
     );
 }

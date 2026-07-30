@@ -34,6 +34,7 @@ mod stash;
 mod subagents;
 mod transcript;
 mod translate;
+mod turn;
 pub mod util;
 pub mod voice;
 mod workflow;
@@ -132,6 +133,10 @@ impl CommandGroup for CoreCommands {
             Box::new(FunctionCommand::new(
                 transcript::TranscriptCmd::info(),
                 transcript::TranscriptCmd::execute,
+            )),
+            Box::new(FunctionCommand::new(
+                turn::TurnCmd::info(),
+                turn::TurnCmd::execute,
             )),
             Box::new(FunctionCommand::new(
                 feedback::FeedbackCmd::info(),

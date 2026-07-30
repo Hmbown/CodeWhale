@@ -402,9 +402,8 @@
     "KbFuzzyFilePicker": "Mở trình tìm file nhanh (fuzzy) (chèn @path khi nhấn Enter)",
     "KbCompactInspector": "Mở trình kiểm tra ngữ cảnh phiên thu gọn",
     "KbLastMessagePager": "Mở trang xem cho tin nhắn cuối cùng (khi khung nhập trống)",
-    "KbSelectedDetails": "Hiển thị chi tiết thô của công cụ hoặc tin nhắn đã chọn; Ctrl+O mở tổng quan cả lượt",
+    "KbSelectedDetails": "Hiển thị chi tiết thô của công cụ hoặc tin nhắn đã chọn; Ctrl+Alt+O mở tổng quan cả lượt",
     "KbToolDetailsPager": "Hiển thị chi tiết thô của mục đã chọn (Alt+V)",
-    "KbThinkingPager": "Mở Trình kiểm tra lượt (Turn Inspector)",
     "KbExternalEditor": "Mở bản nháp trong trình soạn thảo bên ngoài",
     "KbLiveTranscript": "Mở lớp phủ bản ghi trực tiếp (tự động cuộn theo đuôi)",
     "KbBacktrackMessage": "Quay lại tin nhắn trước đó của người dùng (nhấn Trái/Phải để chuyển bước, Enter để lùi lại)",
@@ -867,7 +866,6 @@
     "FooterWorkedChip": "đã chạy {duration}",
     "FleetDraftTitle": "Hồ sơ Fleet — bản nháp của {model_label} (nhấn g để lưu)",
     "FleetDraftHeader": "# .codewhale/agents/{name}\n# Được soạn bởi {model_label}, xác thực và giới hạn bởi Codewhale.\n# Quyền giữ ở mức sàn Fleet: không shell, không tin cậy, cần phê duyệt.\n# Không có gì được lưu cho đến khi bạn nhấn g trong trình hướng dẫn.\n\n",
-    "FleetPreviewHeader": "# .codewhale/agents/{name}\n# Hồ sơ khởi tạo xác định được Codewhale hiển thị từ lựa chọn vai trò/mô hình của bạn.\n# Quyền giữ ở mức sàn Fleet: không shell, không tin cậy, cần phê duyệt.\n# Không có gì được lưu cho đến khi bạn nhấn Enter hoặc g trong trình hướng dẫn.\n\n",
     "SetupRemoteOnRampText": "Remote Runtime On-Ramp\n\n/setup chỉ hiển thị dữ kiện runtime từ xa. Nó không tạo gói triển khai, ghi thông tin xác thực, gọi CLI đám mây hay chạy `remote-setup`.\n\nDữ kiện hiện tại:\n- Đám mây: {clouds_result}\n- Cầu nối: {bridges_result}\n- Nhà cung cấp: {providers_result}\n- Chế độ: {mode_result}\n\nĐể tạo gói triển khai, hãy chạy rõ ràng trong terminal thông thường:\n\n```sh\n{command}\n```\n\nRUNBOOK được tạo bao gồm các bước máy chủ cần xem xét thủ công. `--apply` vẫn chưa được triển khai; đừng coi đây là tự động triển khai.",
     "ApprovalDescSafe": "Yêu cầu thao tác an toàn/chỉ đọc.",
     "ApprovalDescFileWrite": "Yêu cầu sửa đổi tệp. Vui lòng xác nhận đường dẫn và nội dung.",
@@ -1246,5 +1244,8 @@
     "SessionsArchiveFailed": "Lưu trữ thất bại: {error}",
     "SessionsShowingArchived": "Đang hiển thị phiên đã lưu trữ",
     "SessionsHidingArchived": "Đang ẩn phiên đã lưu trữ",
-    "SessionsArchivedCompact": "đã lưu trữ"
+    "SessionsArchivedCompact": "đã lưu trữ",
+    "KbReasoningDetail": "Open reasoning detail for the selected or current turn",
+    "KbTurnInspector": "Mở Trình kiểm tra lượt (Turn Inspector)",
+    "CmdTurnInspectDescription": "Open the whole-turn inspector"
 }

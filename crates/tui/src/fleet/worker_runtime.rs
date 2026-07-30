@@ -76,11 +76,28 @@ pub fn validate_fleet_task_routes(
             .flatten();
         let (model, source) =
             effective_fleet_model_with_source(run_model, task.worker.as_ref(), agent_profile);
+        let pinned_model = matches!(source, "task.model" | "agent_profile.model");
+        let explicit_provider = explicit_fleet_provider_id(agent_profile);
+        if pinned_model && explicit_provider.is_none() {
+            let (provider, base_url) = config.map_or_else(
+                || {
+                    let provider = ApiProvider::Deepseek;
+                    (provider, provider.default_base_url().to_string())
+                },
+                |config| (config.api_provider(), config.deepseek_base_url()),
+            );
+            if let Err(reason) =
+                crate::route_runtime::validate_unpinned_model_provider(provider, &model, &base_url)
+            {
+                bail!("Fleet task `{}`: {reason} (source={source})", task.id);
+            }
+        }
+
         let route = resolve_fleet_route_with_config(task, agent_profiles, session_model, config);
         if route.is_some() {
             validate_fleet_reasoning_effort(task, agent_profiles, session_model, config)?;
         }
-        if !matches!(source, "task.model" | "agent_profile.model") {
+        if !pinned_model {
             continue;
         }
         // A concrete model is pinned at the task/profile level; it must resolve
@@ -88,7 +105,7 @@ pub fn validate_fleet_task_routes(
         if route.is_some() {
             continue;
         }
-        let provider = explicit_fleet_provider_id(agent_profile)
+        let provider = explicit_provider
             .map(|provider| format!("provider=`{provider}`"))
             .unwrap_or_else(|| {
                 "no explicit provider (resolves against the session/default provider)".to_string()
@@ -2111,6 +2128,51 @@ mod tests {
             msg.contains("provider") || msg.contains("inherit"),
             "error tells the user how to fix it: {msg}"
         );
+    }
+
+    #[test]
+    fn validate_fleet_task_routes_rejects_known_foreign_providerless_pin() {
+        let mut providers = crate::config::ProvidersConfig::default();
+        providers.moonshot.api_key = Some("test-key".to_string());
+        let config = Config {
+            provider: Some("moonshot".to_string()),
+            providers: Some(providers),
+            ..Config::default()
+        };
+        let mut profile = agent_profile(
+            "moonshot-builder",
+            "builder",
+            None,
+            codewhale_config::FleetLoadout::Inherit,
+        );
+        profile.profile.model = Some("deepseek-v4-pro".to_string());
+        let task = fleet_task(
+            "foreign-model",
+            Some(worker_profile(
+                Some("moonshot-builder"),
+                None,
+                None,
+                None,
+                None,
+                vec![],
+            )),
+        );
+
+        let err = validate_fleet_task_routes(
+            std::slice::from_ref(&task),
+            std::slice::from_ref(&profile),
+            None,
+            Some(&config),
+        )
+        .expect_err("known foreign model must fail before Fleet dispatch");
+        let msg = err.to_string();
+        assert!(msg.contains("deepseek-v4-pro"), "names model: {msg}");
+        assert!(msg.contains("moonshot"), "names resolved route: {msg}");
+        assert!(msg.contains("deepseek"), "names catalog owner: {msg}");
+
+        profile.profile.provider = Some("moonshot".to_string());
+        validate_fleet_task_routes(&[task], &[profile], None, Some(&config))
+            .expect("an explicit provider+model pair remains deliberate route intent");
     }
 
     #[test]

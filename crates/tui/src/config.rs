@@ -6394,7 +6394,7 @@ pub(crate) fn resolve_load_config_path(path: Option<PathBuf>) -> Option<PathBuf>
     #[cfg(test)]
     {
         let honor_guarded_environment = crate::test_support::current_thread_holds_test_env_lock();
-        return crate::test_support::with_test_env_lock(|| {
+        crate::test_support::with_test_env_lock(|| {
             if honor_guarded_environment {
                 resolve_default_load_config_path()
             } else {
@@ -6403,7 +6403,7 @@ pub(crate) fn resolve_load_config_path(path: Option<PathBuf>) -> Option<PathBuf>
                         .join(codewhale_config::CONFIG_FILE_NAME),
                 )
             }
-        });
+        })
     }
 
     #[cfg(not(test))]
@@ -6586,9 +6586,9 @@ fn codewhale_env_var(
 fn apply_env_overrides(config: &mut Config) {
     #[cfg(test)]
     {
-        return crate::test_support::with_test_env_lock(|| {
+        crate::test_support::with_test_env_lock(|| {
             apply_env_overrides_unlocked(config);
-        });
+        })
     }
     #[cfg(not(test))]
     {

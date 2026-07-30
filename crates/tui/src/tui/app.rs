@@ -1219,6 +1219,9 @@ pub struct App {
     /// Last effective thinking receipt for the most recently accepted route.
     pub(crate) last_effective_reasoning_effort: Option<EffectiveReasoningEffort>,
     pub workspace: PathBuf,
+    /// Effective explicit/managed filesystem scope captured at startup. The
+    /// named permission posture supplies the default when this is `None`.
+    pub configured_sandbox_mode: Option<String>,
     /// Off-event-loop worker for durable Lane control writes. `/lane interrupt`
     /// submits here instead of tearing down a Runtime on the composer thread
     /// (#4022).
@@ -2597,6 +2600,28 @@ impl App {
             return false;
         }
 
+        if let Err(reason) = self.adopt_root_approval_posture(next) {
+            self.push_status_toast(
+                format!("Permissions were not changed: {reason}"),
+                StatusToastLevel::Warning,
+                Some(8_000),
+            );
+            self.needs_redraw = true;
+            return false;
+        }
+
+        true
+    }
+
+    /// Save a real TUI permission posture and release the user-owned root
+    /// `approval_policy` that would otherwise shadow it. This is shared by
+    /// Shift+Tab and the config choice editor so both surfaces make the same
+    /// atomic transition from raw policy tokens to the three product postures.
+    pub(crate) fn adopt_root_approval_posture(&mut self, next: ApprovalMode) -> Result<(), String> {
+        if !self.approval_policy_root_editable {
+            return Err("the root approval policy is not editable".to_string());
+        }
+
         let active_config_path = crate::config::resolve_load_config_path(self.config_path.clone());
         // The posture commit, the root-key release, and the rollback are one
         // critical section. Two `Settings::transact` calls would expose the
@@ -2648,18 +2673,12 @@ impl App {
             RootPostureOutcome::Failed(format!("could not lock TUI settings ({err})"))
         });
         if let RootPostureOutcome::Failed(reason) = outcome {
-            self.push_status_toast(
-                format!("Permissions were not changed: {reason}"),
-                StatusToastLevel::Warning,
-                Some(8_000),
-            );
-            self.needs_redraw = true;
-            return false;
+            return Err(reason);
         }
 
         self.clear_saved_approval_policy_lock();
         self.finish_approval_posture_change(next);
-        true
+        Ok(())
     }
 
     fn next_approval_posture(&mut self, allow_root_policy: bool) -> Option<ApprovalMode> {

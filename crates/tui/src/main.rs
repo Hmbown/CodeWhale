@@ -9927,7 +9927,16 @@ async fn build_direct_workflow_tool(
     .with_plugin_registry(std::sync::Arc::clone(&plugin_registry))
     .with_shell_policy(shell_policy)
     .with_trusted_external_paths(trusted.paths().to_vec())
-    .with_elevated_sandbox_policy(workflow_host_sandbox_policy(config, mode, workspace));
+    .with_elevated_sandbox_policy(crate::core::authority::sandbox_policy_for_turn(
+        mode,
+        if yolo {
+            crate::tui::approval::ApprovalMode::Bypass
+        } else {
+            crate::tui::approval::ApprovalMode::Suggest
+        },
+        config.sandbox_mode.as_deref(),
+        workspace,
+    ));
     let network_policy = config.network.clone().map(|network| {
         crate::network_policy::NetworkPolicyDecider::with_default_audit(network.into_runtime())
     });
@@ -10038,29 +10047,6 @@ async fn build_direct_workflow_tool(
         crate::tools::workflow::WorkflowTool::new(manager, runtime).with_explicit_cli_approval(),
         context,
     ))
-}
-
-fn workflow_host_sandbox_policy(
-    config: &Config,
-    mode: crate::tui::app::AppMode,
-    workspace: &Path,
-) -> crate::sandbox::SandboxPolicy {
-    use crate::sandbox::SandboxPolicy;
-
-    match config.sandbox_mode.as_deref() {
-        Some("read-only") => SandboxPolicy::ReadOnly,
-        Some("workspace-write") => SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![workspace.to_path_buf()],
-            network_access: true,
-            exclude_tmpdir: false,
-            exclude_slash_tmp: false,
-        },
-        Some("danger-full-access") => SandboxPolicy::DangerFullAccess,
-        Some("external-sandbox") => SandboxPolicy::ExternalSandbox {
-            network_access: true,
-        },
-        _ => crate::core::authority::sandbox_policy_for_mode(mode, workspace),
-    }
 }
 
 async fn forward_direct_workflow_events(

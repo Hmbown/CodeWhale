@@ -402,9 +402,8 @@
     "KbFuzzyFilePicker": "ファジーファイルピッカーを開く（Enter で @path を挿入）",
     "KbCompactInspector": "コンパクトなセッションコンテキスト検査ツールを開く",
     "KbLastMessagePager": "最後のメッセージのページャーを開く（入力が空の時）",
-    "KbSelectedDetails": "選択したツールまたはメッセージの生の詳細を表示（Ctrl+O でターン全体の概要）",
+    "KbSelectedDetails": "選択したツールまたはメッセージの生の詳細を表示（Ctrl+Alt+O でターン全体の概要）",
     "KbToolDetailsPager": "選択した項目の生の詳細を表示（Alt+V）",
-    "KbThinkingPager": "ターン インスペクターを開く",
     "KbExternalEditor": "作成中の下書きを外部エディターで開く",
     "KbLiveTranscript": "ライブ会話履歴オーバーレイを開く（自動追尾スクロール）",
     "KbBacktrackMessage": "前のユーザーメッセージに戻る（左右でステップ、Enter で巻き戻し）",
@@ -867,7 +866,6 @@
     "FooterWorkedChip": "経過{duration}",
     "FleetDraftTitle": "Fleet 設定 — {model_label} によるドラフト（g で保存）",
     "FleetDraftHeader": "# .codewhale/agents/{name}\n# {model_label} が作成し、Codewhale が検証・制限を適用しました。\n# 権限は Fleet の下限に維持されます：シェル不可、信頼不可、承認必須。\n# ウィザードで g を押すまで何も保存されません。\n\n",
-    "FleetPreviewHeader": "# .codewhale/agents/{name}\n# Codewhale が現在の役割とモデル選択から決定論的にレンダリングしました。\n# 権限は Fleet の下限に維持されます：シェル不可、信頼不可、承認必須。\n# ウィザードで Enter または g を押すまで何も保存されません。\n\n",
     "SetupRemoteOnRampText": "Remote Runtime On-Ramp\n\n/setup はリモートランタイムの事実だけを表示します。デプロイバンドルの生成、認証情報の書き込み、クラウド CLI の呼び出し、`remote-setup` の実行は行いません。\n\n現在の事実:\n- クラウド: {clouds_result}\n- ブリッジ: {bridges_result}\n- プロバイダー: {providers_result}\n- モード: {mode_result}\n\nデプロイバンドルを生成する場合は、通常の端末で明示的に実行してください:\n\n```sh\n{command}\n```\n\n生成された RUNBOOK には人間が確認するホスト手順が含まれます。`--apply` は未実装です。自動デプロイとして扱わないでください。",
     "ApprovalDescSafe": "安全/読み取り専用操作をリクエストしています。",
     "ApprovalDescFileWrite": "ファイルの変更をリクエストしています。パスと内容を確認してください。",
@@ -1246,5 +1244,8 @@
     "SessionsArchiveFailed": "アーカイブに失敗しました: {error}",
     "SessionsShowingArchived": "アーカイブ済みセッションを表示中",
     "SessionsHidingArchived": "アーカイブ済みセッションを非表示",
-    "SessionsArchivedCompact": "アーカイブ済み"
+    "SessionsArchivedCompact": "アーカイブ済み",
+    "KbReasoningDetail": "Open reasoning detail for the selected or current turn",
+    "KbTurnInspector": "ターン インスペクターを開く",
+    "CmdTurnInspectDescription": "Open the whole-turn inspector"
 }

@@ -385,9 +385,8 @@
     "KbFuzzyFilePicker": "Buka pemilih file fuzzy (sisipkan @path saat Enter)",
     "KbCompactInspector": "Buka inspektor konteks sesi padat",
     "KbLastMessagePager": "Buka pager untuk pesan terakhir (saat input kosong)",
-    "KbSelectedDetails": "Tampilkan detail mentah alat atau pesan terpilih; Ctrl+O membuka ikhtisar seluruh giliran",
+    "KbSelectedDetails": "Tampilkan detail mentah alat atau pesan terpilih; Ctrl+Alt+O membuka ikhtisar seluruh giliran",
     "KbToolDetailsPager": "Tampilkan detail mentah item terpilih (Alt+V)",
-    "KbThinkingPager": "Buka Turn Inspector",
     "KbExternalEditor": "Buka draf komposer di editor eksternal",
     "KbLiveTranscript": "Buka overlay transkrip langsung (Ctrl+Shift+T; auto-scroll mengikuti ekor)",
     "KbBacktrackMessage": "Mundur ke pesan pengguna sebelumnya (Left/Right berpindah, Enter untuk memutar balik)",
@@ -846,7 +845,6 @@
     "FooterWorkedChip": "bekerja {duration}",
     "FleetDraftTitle": "Profil Fleet — draf oleh {model_label} (g menyimpan)",
     "FleetDraftHeader": "# .codewhale/agents/{name}\n# Draf oleh {model_label}, divalidasi dan dibatasi oleh Codewhale.\n# Izin tetap di batas dasar fleet: tanpa shell, tanpa trust, perlu persetujuan.\n# Tidak ada yang disimpan sampai Anda menekan g di wizard.\n\n",
-    "FleetPreviewHeader": "# .codewhale/agents/{name}\n# Profil awal deterministik dirender oleh Codewhale dari pilihan peran/model Anda.\n# Izin tetap di batas dasar fleet: tanpa shell, tanpa trust, perlu persetujuan.\n# Tidak ada yang disimpan sampai Anda menekan Enter atau g di wizard.\n\n",
     "SetupRemoteOnRampText": "Jalur Awal Runtime Remote\n\n/setup hanya menampilkan fakta runtime remote. Tidak membuat bundle deploy, menulis kredensial, memanggil CLI cloud, atau menjalankan `remote-setup`.\n\nFakta saat ini:\n- Cloud: {clouds_result}\n- Bridge chat: {bridges_result}\n- Provider: {providers_result}\n- Mode: {mode_result}\n\nUntuk membuat bundle deploy, jalankan secara eksplisit di terminal normal:\n\n```sh\n{command}\n```\n\nRUNBOOK yang dihasilkan mencakup langkah host untuk ditinjau manusia. `--apply` belum diimplementasikan; jangan anggap ini auto-deploy.",
     "ApprovalDescSafe": "Meminta operasi aman/baca-saja.",
     "ApprovalDescFileWrite": "Meminta untuk mengubah file. Harap konfirmasi path dan konten.",
@@ -1246,5 +1244,8 @@
     "SessionsArchiveFailed": "Gagal mengarsipkan: {error}",
     "SessionsShowingArchived": "Menampilkan sesi terarsip",
     "SessionsHidingArchived": "Menyembunyikan sesi terarsip",
-    "SessionsArchivedCompact": "diarsipkan"
+    "SessionsArchivedCompact": "diarsipkan",
+    "KbReasoningDetail": "Open reasoning detail for the selected or current turn",
+    "KbTurnInspector": "Buka Turn Inspector",
+    "CmdTurnInspectDescription": "Open the whole-turn inspector"
 }

@@ -616,7 +616,8 @@ impl SetupRuntimePreset {
     pub fn sandbox_mode(self) -> &'static str {
         match self {
             Self::AskFirst => "read-only",
-            Self::NormalAgent | Self::HighTrustLocal => "workspace-write",
+            Self::NormalAgent => "workspace-write",
+            Self::HighTrustLocal => "danger-full-access",
         }
     }
 

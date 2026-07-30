@@ -9,6 +9,7 @@
 //! - Streaming output (future)
 
 use anyhow::{Context, Result, anyhow};
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -171,11 +172,76 @@ pub struct ShellCompletionEvent {
     pub duration_ms: u64,
     pub stdout_tail: String,
     pub stderr_tail: String,
+    #[serde(default)]
+    pub stdout_len: usize,
+    #[serde(default)]
+    pub stderr_len: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_ref: Option<String>,
     pub linked_task_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_agent_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_agent_name: Option<String>,
+}
+
+/// Exact byte evidence captured alongside a bounded completion event.
+#[derive(Debug, Clone)]
+pub(crate) struct ShellCompletionEvidence {
+    pub event: ShellCompletionEvent,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+impl ShellCompletionEvidence {
+    /// Encode each stream losslessly. UTF-8 remains readable; arbitrary bytes
+    /// use base64 so `retrieve_tool_result` can still recover exact output.
+    pub(crate) fn artifact_bytes(&self) -> Vec<u8> {
+        fn stream(bytes: &[u8]) -> serde_json::Value {
+            match std::str::from_utf8(bytes) {
+                Ok(content) => serde_json::json!({
+                    "encoding": "utf-8",
+                    "byte_length": bytes.len(),
+                    "content": content,
+                }),
+                Err(_) => serde_json::json!({
+                    "encoding": "base64",
+                    "byte_length": bytes.len(),
+                    "content": base64::engine::general_purpose::STANDARD.encode(bytes),
+                }),
+            }
+        }
+
+        serde_json::json!({
+            "schema": "codewhale.shell_completion.evidence.v1",
+            "task_id": self.event.task_id,
+            "command": self.event.command,
+            "status": format!("{:?}", self.event.status),
+            "exit_code": self.event.exit_code,
+            "duration_ms": self.event.duration_ms,
+            "stdout": stream(&self.stdout),
+            "stderr": stream(&self.stderr),
+        })
+        .to_string()
+        .into_bytes()
+    }
+}
+
+// Keep the two inline streams at a 2 KiB combined hard ceiling. The durable
+// artifact carries the exact bytes beyond these diagnostic tails.
+const SHELL_COMPLETION_TAIL_BYTES: usize = 1_024;
+
+fn bounded_completion_tail(buffer: &Arc<Mutex<Vec<u8>>>, max_bytes: usize) -> (usize, String) {
+    let (total, candidate) = tail_from_buffer(buffer, max_bytes);
+    if candidate.len() <= max_bytes {
+        return (total, candidate);
+    }
+    let content_budget = max_bytes.saturating_sub(3);
+    let mut start = candidate.len().saturating_sub(content_budget);
+    while start < candidate.len() && !candidate.is_char_boundary(start) {
+        start += 1;
+    }
+    (total, format!("...{}", &candidate[start..]))
 }
 
 /// Optional owner attribution for background shell work.
@@ -830,6 +896,19 @@ impl BackgroundShell {
     }
 
     fn full_output(&self) -> (String, String, usize, usize) {
+        let (stdout_bytes, stderr_bytes) = self.full_output_bytes();
+        let stdout_len = stdout_bytes.len();
+        let stderr_len = stderr_bytes.len();
+
+        (
+            String::from_utf8_lossy(&stdout_bytes).to_string(),
+            String::from_utf8_lossy(&stderr_bytes).to_string(),
+            stdout_len,
+            stderr_len,
+        )
+    }
+
+    fn full_output_bytes(&self) -> (Vec<u8>, Vec<u8>) {
         let stdout_bytes = self
             .stdout_buffer
             .lock()
@@ -840,16 +919,7 @@ impl BackgroundShell {
             .as_ref()
             .and_then(|buffer| buffer.lock().ok().map(|data| data.clone()))
             .unwrap_or_default();
-
-        let stdout_len = stdout_bytes.len();
-        let stderr_len = stderr_bytes.len();
-
-        (
-            String::from_utf8_lossy(&stdout_bytes).to_string(),
-            String::from_utf8_lossy(&stderr_bytes).to_string(),
-            stdout_len,
-            stderr_len,
-        )
+        (stdout_bytes, stderr_bytes)
     }
 
     fn take_delta(&mut self) -> (String, String, usize, usize, usize, usize) {
@@ -1000,17 +1070,37 @@ impl BackgroundShell {
 
     fn completion_event(&self) -> ShellCompletionEvent {
         let snapshot = self.job_snapshot();
+        let (stdout_len, stdout_tail) =
+            bounded_completion_tail(&self.stdout_buffer, SHELL_COMPLETION_TAIL_BYTES);
+        let (stderr_len, stderr_tail) = self
+            .stderr_buffer
+            .as_ref()
+            .map(|buffer| bounded_completion_tail(buffer, SHELL_COMPLETION_TAIL_BYTES))
+            .unwrap_or((0, String::new()));
         ShellCompletionEvent {
             task_id: snapshot.id,
             command: snapshot.command,
             status: snapshot.status,
             exit_code: snapshot.exit_code,
             duration_ms: snapshot.elapsed_ms,
-            stdout_tail: snapshot.stdout_tail,
-            stderr_tail: snapshot.stderr_tail,
+            stdout_tail,
+            stderr_tail,
+            stdout_len,
+            stderr_len,
+            evidence_ref: None,
             linked_task_id: snapshot.linked_task_id,
             owner_agent_id: snapshot.owner_agent_id,
             owner_agent_name: snapshot.owner_agent_name,
+        }
+    }
+
+    fn completion_evidence(&self) -> ShellCompletionEvidence {
+        let event = self.completion_event();
+        let (stdout, stderr) = self.full_output_bytes();
+        ShellCompletionEvidence {
+            event,
+            stdout,
+            stderr,
         }
     }
 
@@ -1144,6 +1234,11 @@ impl ShellManager {
     /// process running in the background job table.
     pub fn request_foreground_background(&mut self) {
         self.foreground_background_requested = true;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn foreground_background_requested_for_test(&self) -> bool {
+        self.foreground_background_requested
     }
 
     fn clear_foreground_background_request(&mut self) {
@@ -2113,19 +2208,28 @@ impl ShellManager {
         jobs
     }
 
-    /// Drain finished background shell jobs that have not yet been reported to
-    /// runtime status.
-    pub fn drain_finished_jobs(&mut self) -> Vec<ShellCompletionEvent> {
-        let mut events = Vec::new();
+    /// Drain once-only completion events together with lossless stream bytes.
+    /// The engine publishes the bytes outside this manager's mutex and puts
+    /// only the bounded event plus resulting handle into model context.
+    pub(crate) fn drain_finished_jobs_with_evidence(&mut self) -> Vec<ShellCompletionEvidence> {
+        let mut completions = Vec::new();
         for shell in self.processes.values_mut() {
             shell.poll();
             if shell.status != ShellStatus::Running && !shell.completion_reported {
                 shell.completion_reported = true;
-                events.push(shell.completion_event());
+                completions.push(shell.completion_evidence());
             }
         }
-        events.sort_by(|a, b| a.task_id.cmp(&b.task_id));
-        events
+        completions.sort_by(|a, b| a.event.task_id.cmp(&b.event.task_id));
+        completions
+    }
+
+    /// A terminal foreground result is already returned as the tool result;
+    /// do not emit it again through the background-completion channel.
+    fn acknowledge_foreground_completion(&mut self, task_id: &str) {
+        if let Some(shell) = self.processes.get_mut(task_id) {
+            shell.completion_reported = true;
+        }
     }
 
     /// Whether the next production turn may inject a shell completion event.
@@ -2608,7 +2712,11 @@ async fn execute_foreground_via_background(
                 .shell_manager
                 .lock()
                 .map_err(|_| anyhow!("shell manager lock poisoned"))?;
-            return manager.kill(&task_id);
+            let result = manager.kill(&task_id);
+            if result.is_ok() {
+                manager.acknowledge_foreground_completion(&task_id);
+            }
+            return result;
         }
 
         let snapshot = {
@@ -2619,7 +2727,11 @@ async fn execute_foreground_via_background(
             if manager.take_foreground_background_request() {
                 return manager.get_output(&task_id, false, 0);
             }
-            manager.get_output(&task_id, false, 0)?
+            let snapshot = manager.get_output(&task_id, false, 0)?;
+            if snapshot.status != ShellStatus::Running {
+                manager.acknowledge_foreground_completion(&task_id);
+            }
+            snapshot
         };
 
         if snapshot.status != ShellStatus::Running {
@@ -2632,6 +2744,7 @@ async fn execute_foreground_via_background(
                 .lock()
                 .map_err(|_| anyhow!("shell manager lock poisoned"))?;
             let mut result = manager.kill(&task_id)?;
+            manager.acknowledge_foreground_completion(&task_id);
             result.status = ShellStatus::TimedOut;
             return Ok(result);
         }

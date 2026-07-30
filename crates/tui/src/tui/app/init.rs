@@ -640,6 +640,7 @@ impl App {
             reasoning_effort_preference,
             last_effective_reasoning_effort: None,
             workspace,
+            configured_sandbox_mode: config.sandbox_mode.clone(),
             // #4022: the worker thread is spawned lazily on first submit, so
             // constructing an App never costs a thread.
             lane_control: crate::lane_control::LaneControlQueue::new(),

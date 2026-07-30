@@ -385,9 +385,8 @@
     "KbFuzzyFilePicker": "Obre el selector difús de fitxers (insereix @ruta en prémer Enter)",
     "KbCompactInspector": "Obre l'inspector de context de sessió compactada",
     "KbLastMessagePager": "Obre el paginador de l'últim missatge (quan l'entrada és buida)",
-    "KbSelectedDetails": "Mostra el detall en brut de l'eina o el missatge seleccionat; Ctrl+O obre la visió general de tot el torn",
+    "KbSelectedDetails": "Mostra el detall en brut de l'eina o el missatge seleccionat; Ctrl+Alt+O obre la visió general de tot el torn",
     "KbToolDetailsPager": "Mostra el detall en brut de l'element seleccionat (Alt+V)",
-    "KbThinkingPager": "Obre l'inspector del torn",
     "KbExternalEditor": "Obre l'esborrany del redactor en un editor extern",
     "KbLiveTranscript": "Obre la superposició de transcripció en viu (Ctrl+Shift+T; desplaçament automàtic fixat al final)",
     "KbBacktrackMessage": "Torna enrere fins a un missatge anterior de l'usuari (Esquerra/Dreta per anar pas a pas, Enter per rebobinar)",
@@ -846,7 +845,6 @@
     "FooterWorkedChip": "ha treballat {duration}",
     "FleetDraftTitle": "Perfil de Fleet — esborrany de {model_label} (g desa)",
     "FleetDraftHeader": "# .codewhale/agents/{name}\n# Esborrany de {model_label}, validat i limitat per Codewhale.\n# Els permisos es mantenen al mínim del Fleet: sense shell, sense confiança, aprovació requerida.\n# No es desa res fins que premis g a l'assistent.\n\n",
-    "FleetPreviewHeader": "# .codewhale/agents/{name}\n# Perfil inicial determinista generat per Codewhale a partir de les teves eleccions de rol/model.\n# Els permisos es mantenen al mínim del Fleet: sense shell, sense confiança, aprovació requerida.\n# No es desa res fins que premis Enter o g a l'assistent.\n\n",
     "SetupRemoteOnRampText": "Incorporació al runtime remot\n\n/setup només mostra dades del runtime remot. No genera paquets de desplegament, no escriu credencials, no crida CLI de núvol ni executa `remote-setup`.\n\nDades actuals:\n- Núvols: {clouds_result}\n- Ponts de xat: {bridges_result}\n- Proveïdors: {providers_result}\n- Mode: {mode_result}\n\nPer generar un paquet de desplegament, executa explícitament en un terminal normal:\n\n```sh\n{command}\n```\n\nEl RUNBOOK generat inclou passos de l'amfitrió per a revisió humana. `--apply` continua sense implementar; no ho tractis com un desplegament automàtic.",
     "ApprovalDescSafe": "Sol·licita una operació segura/de només lectura.",
     "ApprovalDescFileWrite": "Sol·licita modificar un fitxer. Confirma el camí i el contingut.",
@@ -1246,5 +1244,8 @@
     "SessionsArchiveFailed": "No s'ha pogut arxivar: {error}",
     "SessionsShowingArchived": "Es mostren les sessions arxivades",
     "SessionsHidingArchived": "S'amaguen les sessions arxivades",
-    "SessionsArchivedCompact": "arxivada"
+    "SessionsArchivedCompact": "arxivada",
+    "KbReasoningDetail": "Open reasoning detail for the selected or current turn",
+    "KbTurnInspector": "Obre l'inspector del torn",
+    "CmdTurnInspectDescription": "Open the whole-turn inspector"
 }

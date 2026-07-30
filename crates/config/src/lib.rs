@@ -3052,6 +3052,23 @@ fn root_default_model_is_foreign_to_provider(
     true
 }
 
+/// A provider owner that Codewhale can identify with high confidence when an
+/// official route is handed a foreign model id.
+///
+/// This intentionally reuses the conservative stale-root-model guard instead
+/// of treating the partial provider catalog as a closed-world allowlist.
+/// Unknown ids, custom endpoints, local runtimes, and multi-model gateways
+/// therefore remain provider-authoritative.
+#[must_use]
+pub fn known_foreign_model_owner(
+    provider: ProviderKind,
+    model: &str,
+    base_url: &str,
+) -> Option<ProviderKind> {
+    root_default_model_is_foreign_to_provider(provider, model, base_url)
+        .then_some(ProviderKind::Deepseek)
+}
+
 fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
     if matches!(provider, ProviderKind::OpencodeGo) {
         return opencode_go_chat_model_id(model)
