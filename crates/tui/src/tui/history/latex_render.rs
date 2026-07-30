@@ -164,9 +164,10 @@ pub fn render_latex_in_text(text: &str) -> String {
 fn render_environment(env_name: &str, content: &str) -> String {
     match env_name {
         "aligned" | "align" | "gather" | "eqnarray" | "split" => render_aligned(content),
-        "pmatrix" | "bmatrix" | "vmatrix" | "matrix" | "smallmatrix" => {
+        "pmatrix" | "bmatrix" | "vmatrix" | "Bmatrix" | "matrix" | "smallmatrix" => {
             render_matrix(env_name, content)
         }
+        "array" => render_array(content),
         "cases" | "dcases" => render_cases(content, false),
         "rcases" | "drcases" => render_cases(content, true),
         _ => {
@@ -402,40 +403,93 @@ fn render_matrix(env_name: &str, content: &str) -> String {
 
 /// --- Brackets ---
 fn surround_with(left: &str, right: &str, rows: &[String], pad: usize) -> String {
+    if rows.is_empty() {
+        return format!("{left}{right}");
+    }
     let mut result = String::new();
+    if rows.len() == 1 {
+        result.push_str(left);
+        for _ in 0..pad {
+            result.push(' ');
+        }
+        result.push_str(&rows[0]);
+        for _ in 0..pad {
+            result.push(' ');
+        }
+        result.push_str(right);
+        return result;
+    }
+    // Multi-row: brackets on their own lines
+    result.push_str(left);
+    result.push('\n');
     for (ri, s) in rows.iter().enumerate() {
         if ri > 0 {
             result.push('\n');
-        }
-        if ri == 0 {
-            result.push_str(left);
-        } else if ri == rows.len() - 1 {
-            if rows.len() == 1 {
-                result.push_str(left);
-            } else {
-                result.push(' ');
-            }
-        } else {
-            result.push(' ');
         }
         for _ in 0..pad {
             result.push(' ');
         }
         result.push_str(s);
-        if ri == 0 && rows.len() == 1 {
-            result.push_str(right);
-        } else if ri == 0 {
-            // no right bracket on first row of multi-row
-            // --- Brackets ---
-            result.push(' ');
-        } else if ri == rows.len() - 1 {
-            // last row
-            for _ in 0..pad {
+    }
+    result.push('\n');
+    result.push_str(right);
+    result
+}
+
+/// Array environment: parse column spec and render table with vertical bars.
+fn render_array(content: &str) -> String {
+    let trimmed = content.trim_start();
+    let (col_spec, body) = if trimmed.starts_with('{') {
+        let close = trimmed[1..].find('}').map(|i| i + 1).unwrap_or(0);
+        if close > 0 {
+            (&trimmed[1..close], trimmed[close + 1..].trim_start())
+        } else {
+            ("", trimmed)
+        }
+    } else {
+        ("", trimmed)
+    };
+    let mut has_vline_start = false;
+    let mut vlines = Vec::new();
+    let mut cols = Vec::new();
+    for ch in col_spec.chars() {
+        match ch {
+            'c' | 'l' | 'r' => cols.push(ch),
+            '|' => {
+                if cols.is_empty() {
+                    has_vline_start = true;
+                } else {
+                    vlines.push(cols.len());
+                }
+            }
+            _ => {}
+        }
+    }
+    let n = cols.len();
+    if n == 0 {
+        return body.to_string();
+    }
+    let mut rows = Vec::new();
+    parse_rows(body, |cells| rows.push(cells));
+    let mut result = String::new();
+    for (ri, row) in rows.iter().enumerate() {
+        if ri > 0 {
+            result.push('\n');
+        }
+        if has_vline_start {
+            result.push_str("| ");
+        }
+        for ci in 0..n {
+            if ci > 0 {
+                result.push(if vlines.contains(&ci) { '|' } else { ' ' });
                 result.push(' ');
             }
-            result.push_str(right);
-        } else {
-            result.push(' ');
+            result.push_str(&render_latex_to_string(
+                row.get(ci).unwrap_or(&String::new()),
+            ));
+        }
+        if vlines.contains(&n) || has_vline_start {
+            result.push_str(" |");
         }
     }
     result
@@ -549,6 +603,19 @@ fn render_styled_symbol(
         ("mathcal", "L") => Some("\u{2112}"),
         ("mathcal", "H") => Some("\u{210b}"),
         ("mathcal", "R") => Some("\u{211b}"),
+        ("mathcal", "A") => Some("\u{1d49c}"),
+        ("mathcal", "B") => Some("\u{212c}"),
+        ("mathcal", "C") => Some("\u{212d}"),
+        ("mathcal", "D") => Some("\u{1d49f}"),
+        ("mathcal", "E") => Some("\u{2130}"),
+        ("mathcal", "F") => Some("\u{2131}"),
+        ("mathcal", "I") => Some("\u{2110}"),
+        ("mathcal", "M") => Some("\u{2133}"),
+        ("mathcal", "O") => Some("\u{1d4aa}"),
+        ("mathcal", "P") => Some("\u{1d4ab}"),
+        ("mathcal", "S") => Some("\u{1d4ae}"),
+        ("mathcal", "T") => Some("\u{1d4af}"),
+        ("mathcal", "Z") => Some("\u{2128}"),
         _ => None,
     };
     if let Some(symbol) = rendered {
@@ -753,6 +820,35 @@ fn render_latex_to_string(latex: &str) -> String {
                             pos = total_cmd_end;
                         }
                     }
+                    // --- Underbrace / Overbrace (passthrough) ---
+                    "underbrace" | "overbrace" | "underbracket" | "overbracket" => {
+                        if let Some((arg, after_arg)) = read_braced_at(input, total_cmd_end) {
+                            out.push_str(&render_latex_to_string(&arg));
+                            pos = after_arg;
+                        } else {
+                            out.push_str(&format!("\\{cmd}"));
+                            pos = total_cmd_end;
+                        }
+                    }
+                    // --- Vertical/horizontal phantom (no-op) ---
+                    "vphantom" | "hphantom" | "phantom" => {
+                        if let Some((_, after_arg)) = read_braced_at(input, total_cmd_end) {
+                            pos = after_arg;
+                        } else {
+                            out.push_str(&format!("\\{cmd}"));
+                            pos = total_cmd_end;
+                        }
+                    }
+                    // --- Substack ---
+                    "substack" => {
+                        if let Some((arg, after_arg)) = read_braced_at(input, total_cmd_end) {
+                            out.push_str(&arg);
+                            pos = after_arg;
+                        } else {
+                            out.push_str(&format!("\\{cmd}"));
+                            pos = total_cmd_end;
+                        }
+                    }
                     // --- Fonts ---
                     "mathbf" | "bf" => {
                         if let Some((arg, new_pos)) = read_braced_at(input, total_cmd_end) {
@@ -857,7 +953,7 @@ fn render_latex_to_string(latex: &str) -> String {
                         }
                     }
                     // --- Fractions ---
-                    "frac" | "dfrac" | "tfrac" => {
+                    "frac" | "dfrac" | "tfrac" | "cfrac" => {
                         if let Some((num_s, after_num)) = read_braced_at(input, total_cmd_end) {
                             if let Some((den_s, after_den)) = read_braced_at(input, after_num) {
                                 let n = render_latex_to_string(&num_s);
@@ -873,14 +969,27 @@ fn render_latex_to_string(latex: &str) -> String {
                             pos = total_cmd_end;
                         }
                     }
+                    // --- Binomial coefficient ---
+                    "binom" => {
+                        if let Some((top_s, after_top)) = read_braced_at(input, total_cmd_end) {
+                            if let Some((bot_s, after_bot)) = read_braced_at(input, after_top) {
+                                out.push_str(&format!(
+                                    "({}/{})",
+                                    render_latex_to_string(&top_s),
+                                    render_latex_to_string(&bot_s)
+                                ));
+                                pos = after_bot;
+                            }
+                        }
+                    }
                     // --- Square root ---
                     "sqrt" => {
                         let after = &input[total_cmd_end..];
                         // Optional [n] root index
-                        let (root_text, after_root) = if after.starts_with('[') {
-                            let end_bracket = after[1..].find(']').map(|i| i + 1);
+                        let (root_text, after_root) = if let Some(after_lb) = after.strip_prefix('[') {
+                            let end_bracket = after_lb.find(']').map(|i| i + 1);
                             if let Some(e) = end_bracket {
-                                (Some(&after[1..e]), total_cmd_end + e + 1)
+                                (Some(&after_lb[..e]), total_cmd_end + e + 1)
                             } else {
                                 (None, total_cmd_end)
                             }
@@ -1072,10 +1181,9 @@ fn render_latex_to_string(latex: &str) -> String {
                     }
                 } else {
                     // Subscript with command like _\mu _\nu
-                    if after.starts_with('\\') {
-                        let cmd_end = after[1..]
-                            .find(|c: char| !c.is_ascii_alphabetic())
-                            .unwrap_or(after[1..].len());
+                    if let Some(after_bs) = after.strip_prefix('\\') {
+                        let cmd_end = after_bs.find(|c: char| !c.is_ascii_alphabetic())
+                            .unwrap_or(after_bs.len());
                         let rendered = render_latex_to_string(&after[..1 + cmd_end]);
                         append_subscript(&rendered, &mut out);
                         pos += 1 + 1 + cmd_end;
