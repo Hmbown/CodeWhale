@@ -229,10 +229,7 @@ fn at005_then_user_executes(world: &mut DispatchWorld005) {
         .alias_result
         .as_ref()
         .expect("alias result should exist");
-    assert!(
-        !result.is_error,
-        "user command dispatch should succeed"
-    );
+    assert!(!result.is_error, "user command dispatch should succeed");
     assert_eq!(
         sent_message(result),
         "custom dashboard ",
@@ -246,10 +243,7 @@ fn at005_then_canonical_reachable(world: &mut DispatchWorld005) {
         .canonical_result
         .as_ref()
         .expect("canonical result should exist");
-    assert!(
-        !result.is_error,
-        "canonical built-in should still work"
-    );
+    assert!(!result.is_error, "canonical built-in should still work");
     assert!(
         result
             .message
@@ -460,7 +454,10 @@ fn at007_when_run_invalid(world: &mut DispatchWorld007) {
 fn at007_then_user_error(world: &mut DispatchWorld007) {
     let result = world.result.as_ref().expect("result should exist");
     assert!(result.is_error, "invalid command should produce error");
-    let message = result.message.as_deref().expect("error message should exist");
+    let message = result
+        .message
+        .as_deref()
+        .expect("error message should exist");
     assert!(
         message.contains("User command"),
         "error should identify the user command: {message}"
