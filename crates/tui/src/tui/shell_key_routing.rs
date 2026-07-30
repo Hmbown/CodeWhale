@@ -173,13 +173,25 @@ pub fn is_help_shortcut(key: &KeyEvent) -> bool {
     if matches!(key.code, KeyCode::F(1)) {
         return true;
     }
-    if matches!(key.code, KeyCode::Char('/')) && key.modifiers.contains(KeyModifiers::CONTROL) {
+    // AltGr on European/Latin keyboards (e.g. Brazilian ABNT2, where `/` is
+    // AltGr+Q, or AZERTY) is reported by Windows as Ctrl+Alt. Such chords are
+    // AltGr-typed text, not the `Ctrl+/` help chord, so leave them to the
+    // composer as a literal character. Reuse the same platform-gated primitive
+    // the composer's `is_plain_char` guard uses so the two agree exactly on
+    // what counts as text; Alt-only chords (e.g. the unadvertised Alt+? below)
+    // stay live. Same philosophy as the sidebar-focus fix in #2863/#2867.
+    let is_altgr = crate::tui::widgets::key_hint::is_altgr(key.modifiers);
+    if !is_altgr
+        && matches!(key.code, KeyCode::Char('/'))
+        && key.modifiers.contains(KeyModifiers::CONTROL)
+    {
         return true;
     }
     // Some legacy terminal stacks encode Ctrl+/ as the ASCII unit separator,
     // which crossterm reports as Ctrl+7 or Ctrl+_. Accept both portable
     // decodings so the documented fallback remains real.
-    if matches!(key.code, KeyCode::Char('7') | KeyCode::Char('_'))
+    if !is_altgr
+        && matches!(key.code, KeyCode::Char('7') | KeyCode::Char('_'))
         && key.modifiers.contains(KeyModifiers::CONTROL)
     {
         return true;
@@ -285,6 +297,43 @@ mod tests {
         )));
         let inverted_question = KeyEvent::new(KeyCode::Char('\u{00bf}'), KeyModifiers::NONE);
         assert!(!is_help_shortcut(&inverted_question));
+    }
+
+    // On Windows, AltGr is delivered as Ctrl+Alt (e.g. Brazilian ABNT2 types
+    // `/` via AltGr+Q, AZERTY via other keys). Those chords must fall through
+    // to the composer as literal characters instead of opening help. This is
+    // platform-specific: `key_hint::is_altgr` only treats Ctrl+Alt as AltGr on
+    // Windows, matching the composer's own `is_plain_char` guard.
+    #[cfg(windows)]
+    #[test]
+    fn altgr_typed_slash_is_text_not_the_help_chord() {
+        let altgr = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL | KeyModifiers::ALT);
+        assert!(!is_help_shortcut(&altgr('/')));
+        // The legacy ASCII-unit-separator fallbacks must stay guarded too, so
+        // an AltGr chord that happens to land on `7`/`_` still types text.
+        assert!(!is_help_shortcut(&altgr('7')));
+        assert!(!is_help_shortcut(&altgr('_')));
+        // Plain Ctrl+/ (no Alt) still opens help.
+        assert!(is_help_shortcut(&KeyEvent::new(
+            KeyCode::Char('/'),
+            KeyModifiers::CONTROL
+        )));
+    }
+
+    // Off Windows there is no AltGr remapping, so a genuine Ctrl+Alt+/ chord
+    // is not layout text and help still fires — the fix must not regress it.
+    #[cfg(not(windows))]
+    #[test]
+    fn ctrl_alt_slash_still_opens_help_off_windows() {
+        let chord = KeyEvent::new(
+            KeyCode::Char('/'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        );
+        assert!(is_help_shortcut(&chord));
+        assert!(is_help_shortcut(&KeyEvent::new(
+            KeyCode::Char('/'),
+            KeyModifiers::CONTROL
+        )));
     }
 
     #[test]
