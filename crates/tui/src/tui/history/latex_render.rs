@@ -1062,14 +1062,23 @@ fn render_latex_to_string(latex: &str) -> String {
                         pos += 1;
                     }
                 } else {
-                    // Single char subscript
-                    let next = after.chars().next();
-                    if let Some(c) = next {
-                        append_subscript(&c.to_string(), &mut out);
-                        pos += 1 + c.len_utf8();
+                    // Subscript with command like _\mu _\nu
+                    if after.starts_with('\\') {
+                        let cmd_end = after[1..]
+                            .find(|c: char| !c.is_ascii_alphabetic())
+                            .unwrap_or(after[1..].len());
+                        let rendered = render_latex_to_string(&after[..1 + cmd_end]);
+                        append_subscript(&rendered, &mut out);
+                        pos += 1 + 1 + cmd_end;
                     } else {
-                        out.push('_');
-                        pos += 1;
+                        let next = after.chars().next();
+                        if let Some(c) = next {
+                            append_subscript(&c.to_string(), &mut out);
+                            pos += 1 + c.len_utf8();
+                        } else {
+                            out.push('_');
+                            pos += 1;
+                        }
                     }
                 }
             }
