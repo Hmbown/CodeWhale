@@ -682,6 +682,9 @@ not persisted in `TurnRecord`.
   are auto-approved in the non-interactive runtime path, shell safety checks
   run in auto-approved mode, and spawned sub-agents inherit that setting.
 - When omitted, `auto_approve` defaults to `false`.
+- [Authorization order](AUTHORIZATION_ORDER.md) describes where typed rules,
+  registered tool requirements, safety floors, repository law, approval
+  transport, and sandbox enforcement sit relative to one another.
 
 ### SSE event stream
 

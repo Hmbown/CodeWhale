@@ -1446,6 +1446,10 @@ If you are upgrading from older releases:
   with process-tree containment only and must not be described as read-only
   filesystem isolation, workspace-write enforcement, network blocking,
   registry isolation, or AppContainer isolation until those are implemented.
+- The cross-layer relationship between mode admission, hooks, registered tool
+  requirements, typed rules, auto-review, repo law, human approval, and the
+  execution sandbox is defined in
+  [Authorization order](AUTHORIZATION_ORDER.md).
 - `permissions.toml` (sibling file, optional): typed permission rule records
   loaded next to `config.toml`, for example `~/.codewhale/permissions.toml`.
   This active user file is the only permission-rule source today; project

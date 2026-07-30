@@ -7,8 +7,9 @@ use bash_arity::BashArityDict;
 use codewhale_protocol::NetworkPolicyAmendment;
 use serde::{Deserialize, Serialize};
 
-/// Priority layer for a permission ruleset. Higher ordinal = higher priority.
-/// On conflict, the highest-priority layer's longest matching prefix wins.
+/// Priority layer for typed permission-rule selection. Higher ordinal = higher
+/// priority. Matching typed rules compare layer before action and specificity.
+/// Hard denied prefixes are merged across layers and checked first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RulesetLayer {
@@ -92,10 +93,12 @@ fn default_rule_action() -> PermissionAction {
 /// - `"ask"` — the approval prompt is forced (default, backward compatible).
 /// - `"allow"` — the tool call proceeds without asking.
 ///
-/// Deny always wins over ask, which wins over allow.  Command-prefix-based
-/// deny and allow rules are promoted into the execution-policy engine's
-/// `denied_prefixes` / `trusted_prefixes` for arity-aware matching;
-/// path-only rules are evaluated separately.
+/// Inside one ruleset layer, deny wins over ask, which wins over allow.
+/// Higher-priority layers are selected before action and specificity.
+/// Command-prefix-based deny and allow rules loaded from `permissions.toml`
+/// are also promoted into the execution-policy engine's `denied_prefixes` /
+/// `trusted_prefixes` for arity-aware matching; path-only rules are evaluated
+/// separately.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ToolAskRule {
@@ -433,8 +436,9 @@ impl ExecPolicyEngine {
 
     /// Evaluates a command against the policy and returns a decision.
     ///
-    /// The evaluation order is: deny rules first (always win), then trusted prefix
-    /// matching (arity-aware), then typed ask rules, and finally the approval mode.
+    /// The evaluation order is: hard denied prefixes, a trusted-prefix candidate,
+    /// the winning typed rule (layer, action, specificity), and finally the
+    /// approval-mode fallback. A typed ask can override the trusted candidate.
     pub fn check(&self, ctx: ExecPolicyContext<'_>) -> Result<ExecPolicyDecision> {
         let (trusted_prefixes, denied_prefixes) = self.resolve_prefixes();
         // Deny rules match positional tokens at a word boundary: the command
@@ -504,8 +508,9 @@ impl ExecPolicyEngine {
 
         let ask_rule = self.matching_ask_rule(&ctx);
 
-        // Handle explicit deny/allow actions before mode-based resolution.
-        // Deny wins over everything; allow skips approval regardless of mode.
+        // Apply the one typed rule selected by layer, action, and specificity
+        // before mode-based resolution. Within a layer, deny outranks ask and
+        // allow; a higher-layer rule has already won before this match.
         if let Some(rule) = &ask_rule {
             match rule.action {
                 PermissionAction::Deny => {

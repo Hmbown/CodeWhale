@@ -6,6 +6,8 @@ controls: an approval is not a sandbox, and selecting `workspace-write` does
 not prove that the current platform has an OS wrapper available.
 
 This document describes only behavior wired into the command execution path.
+See [Authorization order](AUTHORIZATION_ORDER.md) for the policy layers that
+run before execution reaches this boundary.
 
 ## Platform overview
 

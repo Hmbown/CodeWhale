@@ -72,6 +72,9 @@ path.
 - [docs/FLEET.md](docs/FLEET.md) — fleets, the ledger, and resume
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — `config.toml`, hooks, and
   the constitution
+- [docs/AUTHORIZATION_ORDER.md](docs/AUTHORIZATION_ORDER.md) — how modes,
+  hooks, permission rules, safety floors, repo law, approvals, and sandboxing
+  compose
 - [docs/HOOKS.md](docs/HOOKS.md) — the eleven TUI lifecycle hook events, their
   payloads, and which three of them can steer a turn (`codewhale exec` and the
   CLI subcommands do not fire hooks)

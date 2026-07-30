@@ -7146,7 +7146,7 @@ async fn full_access_blocks_non_bypassable_registered_tools_at_engine_boundary()
 
 #[tokio::test]
 #[allow(clippy::await_holding_lock)]
-async fn full_access_blocks_repo_law_ask_without_prompt_or_write() {
+async fn full_access_permission_allow_cannot_bypass_repo_law() {
     let _lock = lock_test_env();
     let workspace = tempdir().expect("tempdir");
     let law_dir = workspace.path().join(".codewhale");
@@ -7162,20 +7162,34 @@ async fn full_access_blocks_repo_law_ask_without_prompt_or_write() {
     )
     .expect("write repo law fixture");
     let target = workspace.path().join("CHANGELOG.md");
+    let allow_rule = codewhale_execpolicy::ToolAskRule::file_path("write_file", "CHANGELOG.md")
+        .into_exact_workspace_allow(workspace.path().to_string_lossy().into_owned());
     let engine_config = EngineConfig {
         model: crate::config::DEFAULT_TEXT_MODEL.to_string(),
         workspace: workspace.path().to_path_buf(),
         snapshots_enabled: false,
         subagents_enabled: false,
+        exec_policy_engine: codewhale_execpolicy::ExecPolicyEngine::with_rulesets(vec![
+            codewhale_execpolicy::Ruleset::user(vec![], vec![]).with_ask_rules(vec![allow_rule]),
+        ]),
         ..EngineConfig::default()
     };
+    let tool_input = json!({"path": "CHANGELOG.md", "content": "must not be written\n"});
+    assert_eq!(
+        file_tool_ask_rule_decision(
+            &engine_config,
+            "write_file",
+            &tool_input,
+            workspace.path(),
+            crate::tui::approval::ApprovalMode::Bypass,
+        ),
+        Some(ToolAskRuleDecision::Allow),
+        "precondition: the remembered grant must match before repo law tightens the plan"
+    );
 
     assert_full_access_model_tool_batch_is_blocked(
         engine_config,
-        vec![(
-            "write_file",
-            json!({"path": "CHANGELOG.md", "content": "must not be written\n"}),
-        )],
+        vec![("write_file", tool_input)],
         &[(
             "write_file",
             "Repository law blocked tool 'write_file' in Full Access: Repo law holds this write: \"Release notes need human review\"",
@@ -7364,7 +7378,7 @@ async fn auto_review_auto_resolves_hallucinated_question_without_prompting() {
 
 #[tokio::test]
 #[allow(clippy::await_holding_lock)]
-async fn full_access_blocks_background_catastrophic_shell_without_prompt_or_side_effect() {
+async fn full_access_permission_allow_cannot_bypass_background_catastrophic_floor() {
     use wiremock::matchers::{body_string_contains, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -7379,11 +7393,13 @@ async fn full_access_blocks_background_catastrophic_shell_without_prompt_or_side
     // sentinel. The policy-level sibling tests exercise real destructive
     // command shapes directly without ever dispatching them to a shell.
     let command = format!("echo \"rm -rf /\" > \"{}\"", victim.display());
-    let arguments = serde_json::to_string(&json!({
+    let allow_rule = codewhale_execpolicy::ToolAskRule::exec_shell(command.clone())
+        .into_exact_workspace_allow(workspace.path().to_string_lossy().into_owned());
+    let tool_input = json!({
         "command": command,
         "background": true,
-    }))
-    .expect("serialize tool arguments");
+    });
+    let arguments = serde_json::to_string(&tool_input).expect("serialize tool arguments");
 
     let tool_delta = json!({
         "id": "chatcmpl-bg",
@@ -7440,16 +7456,28 @@ async fn full_access_blocks_background_catastrophic_shell_without_prompt_or_side
         base_url: Some(server.uri()),
         ..Config::default()
     };
-    let (engine, handle) = Engine::new(
-        EngineConfig {
-            model: crate::config::DEFAULT_TEXT_MODEL.to_string(),
-            workspace: workspace.path().to_path_buf(),
-            snapshots_enabled: false,
-            subagents_enabled: false,
-            ..EngineConfig::default()
-        },
-        &api_config,
+    let engine_config = EngineConfig {
+        model: crate::config::DEFAULT_TEXT_MODEL.to_string(),
+        workspace: workspace.path().to_path_buf(),
+        snapshots_enabled: false,
+        subagents_enabled: false,
+        exec_policy_engine: codewhale_execpolicy::ExecPolicyEngine::with_rulesets(vec![
+            codewhale_execpolicy::Ruleset::user(vec![], vec![]).with_ask_rules(vec![allow_rule]),
+        ]),
+        ..EngineConfig::default()
+    };
+    assert_eq!(
+        exec_shell_ask_rule_decision(
+            &engine_config,
+            "exec_shell",
+            &tool_input,
+            workspace.path(),
+            crate::tui::approval::ApprovalMode::Bypass,
+        ),
+        Some(ToolAskRuleDecision::Allow),
+        "precondition: the remembered grant must match before the safety floor tightens the plan"
     );
+    let (engine, handle) = Engine::new(engine_config, &api_config);
     let run_task = tokio::spawn(engine.run());
 
     handle

@@ -158,7 +158,10 @@ the way out instead of disappearing with the alternate screen.
 ## Permission Posture
 
 Permission posture controls tool approval and whether a turn may pause for a
-missing user decision. Cycle it with `Shift+Tab`, or edit it at runtime:
+missing user decision. It is one layer of the full
+[authorization order](AUTHORIZATION_ORDER.md), not a bypass for tool admission,
+repository law, or sandbox enforcement. Cycle it with `Shift+Tab`, or edit it
+at runtime:
 
 ```text
 /config
