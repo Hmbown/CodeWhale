@@ -157,14 +157,16 @@ pub fn render_latex_in_text(text: &str) -> String {
     result
 }
 
-// 鈹€鈹€鈹€ Environment rendering 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// --- Environment rendering ---
 
 /// Render a `\begin{name}...\end{name}` block.
 /// `content` is everything between the braces.
 fn render_environment(env_name: &str, content: &str) -> String {
     match env_name {
         "aligned" | "align" | "gather" | "eqnarray" | "split" => render_aligned(content),
-        "pmatrix" | "bmatrix" | "vmatrix" | "matrix" | "smallmatrix" => render_matrix(env_name, content),
+        "pmatrix" | "bmatrix" | "vmatrix" | "matrix" | "smallmatrix" => {
+            render_matrix(env_name, content)
+        }
         "cases" | "dcases" => render_cases(content, false),
         "rcases" | "drcases" => render_cases(content, true),
         _ => {
@@ -210,8 +212,8 @@ where
                 row_fn(parse_row_cells(&current));
                 current.clear();
             } else if chars.peek() == Some(&'[') || chars.peek() == Some(&'{') {
-                // \\[...] or \\{...} spacing 鈥?treat as line break
-                // Skip the spacing command content
+                // --- Spacing ---
+                // --- Spacing ---
                 if chars.peek() == Some(&'[') {
                     chars.next();
                     while let Some(&c) = chars.peek() {
@@ -312,9 +314,8 @@ fn render_aligned(content: &str) -> String {
         }
         for ci in 0..max_cols {
             if ci > 0 {
-                let pad = col_widths[ci - 1].saturating_sub(
-                    UnicodeWidthStr::width(row[ci - 1].as_str()),
-                );
+                let pad =
+                    col_widths[ci - 1].saturating_sub(UnicodeWidthStr::width(row[ci - 1].as_str()));
                 for _ in 0..pad {
                     result.push(' ');
                 }
@@ -327,7 +328,7 @@ fn render_aligned(content: &str) -> String {
     result
 }
 
-/// Matrices: pmatrix = ( ), bmatrix = [ ], vmatrix = | |, matrix = no brackets.
+/// --- Brackets ---
 fn render_matrix(env_name: &str, content: &str) -> String {
     let mut rows: Vec<Vec<String>> = Vec::new();
     parse_rows(content, |cells| rows.push(cells));
@@ -385,7 +386,7 @@ fn render_matrix(env_name: &str, content: &str) -> String {
         "vmatrix" => surround_with("|", "|", &cell_strings, 1),
         "smallmatrix" => surround_with("(", ")", &cell_strings, 0),
         _ => {
-            // plain matrix, no brackets
+            // --- Brackets ---
             let mut result = String::new();
             for (ri, s) in cell_strings.iter().enumerate() {
                 if ri > 0 {
@@ -398,7 +399,7 @@ fn render_matrix(env_name: &str, content: &str) -> String {
     }
 }
 
-/// Surround each row of content with left/right brackets.
+/// --- Brackets ---
 fn surround_with(left: &str, right: &str, rows: &[String], pad: usize) -> String {
     let mut result = String::new();
     for (ri, s) in rows.iter().enumerate() {
@@ -424,7 +425,7 @@ fn surround_with(left: &str, right: &str, rows: &[String], pad: usize) -> String
             result.push_str(right);
         } else if ri == 0 {
             // no right bracket on first row of multi-row
-            // (use unicode light diagonal brackets for multi-row)
+            // --- Brackets ---
             result.push(' ');
         } else if ri == rows.len() - 1 {
             // last row
@@ -495,7 +496,7 @@ fn render_cases(content: &str, right_brace: bool) -> String {
     result
 }
 
-// 鈹€鈹€鈹€ Helper: read_braced for chars iterator 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// --- Helper: read_braced for chars iterator ---
 
 fn read_braced_chars(chars: &mut std::iter::Peekable<std::str::Chars>) -> String {
     let mut s = String::new();
@@ -527,7 +528,7 @@ fn read_braced_chars(chars: &mut std::iter::Peekable<std::str::Chars>) -> String
     s
 }
 
-// 鈹€鈹€鈹€ Styled symbols (mathbb, mathcal) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// --- Styled symbols ---
 
 fn render_styled_symbol(
     command: &str,
@@ -560,7 +561,7 @@ fn render_styled_symbol(
     }
 }
 
-// 鈹€鈹€鈹€ Main render function 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// --- Main render function ---
 
 /// Read a braced group `{...}` from an index-based cursor in a string.
 /// Returns (content_string, new_cursor_position).
@@ -644,7 +645,8 @@ fn render_latex_to_string(latex: &str) -> String {
                             }
                             _ => {
                                 // Unknown single-char escape 鈥?output the char
-                                let char_len = rest.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+                                let char_len =
+                                    rest.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
                                 out.push(rest.chars().next().unwrap_or(ch));
                                 pos += 1 + char_len;
                                 continue;
@@ -660,7 +662,7 @@ fn render_latex_to_string(latex: &str) -> String {
                 let total_cmd_end = pos + 1 + cmd_len; // \ + name
 
                 match cmd {
-                    // 鈹€鈹€鈹€ Environments (handled above, just in case) 鈹€鈹€鈹€鈹€鈹€
+                    // --- Environments (handled above, just in case) ---
                     "begin" => {
                         // Should have been caught by try_render_env above.
                         // Fallback: try inline parsing
@@ -690,7 +692,7 @@ fn render_latex_to_string(latex: &str) -> String {
                             pos = after_end;
                         }
                     }
-                    // 鈹€鈹€鈹€ Text 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+                    // --- Text ---
                     "text" | "mathrm" | "mathit" | "mathsf" | "textrm" | "textit" | "textbf" => {
                         if let Some((arg, new_pos)) = read_braced_at(input, total_cmd_end) {
                             out.push_str(&arg);
@@ -716,7 +718,7 @@ fn render_latex_to_string(latex: &str) -> String {
                             pos = total_cmd_end;
                         }
                     }
-                    // 鈹€鈹€鈹€ Fonts 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+                    // --- Fonts ---
                     "mathbf" | "bf" => {
                         if let Some((arg, new_pos)) = read_braced_at(input, total_cmd_end) {
                             out.push_str(&render_latex_to_string(&arg));
@@ -732,7 +734,7 @@ fn render_latex_to_string(latex: &str) -> String {
                             }
                         }
                     }
-                    // 鈹€鈹€鈹€ Brackets 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+                    // --- Brackets ---
                     "left" | "bigl" | "Bigl" | "biggl" | "Biggl" => {
                         // Consume the next token (bracket/pipe/dot) and output it
                         let after = &input[total_cmd_end..].trim_start();
@@ -767,12 +769,14 @@ fn render_latex_to_string(latex: &str) -> String {
                         let after = &input[total_cmd_end..].trim_start();
                         if let Some(next) = after.chars().next() {
                             out.push(next);
-                            pos = total_cmd_end + (after.len() - after.trim_start().len()) + next.len_utf8();
+                            pos = total_cmd_end
+                                + (after.len() - after.trim_start().len())
+                                + next.len_utf8();
                         } else {
                             pos = total_cmd_end;
                         }
                     }
-                    // 鈹€鈹€鈹€ Spacing 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+                    // --- Spacing ---
                     "quad" => {
                         out.push_str("    ");
                         pos = total_cmd_end;
@@ -801,7 +805,7 @@ fn render_latex_to_string(latex: &str) -> String {
                         out.push(' ');
                         pos = total_cmd_end;
                     }
-                    // 鈹€鈹€鈹€ Styled symbols 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+                    // --- Styled symbols ---
                     "mathbb" | "mathcal" => {
                         let before = out.len();
                         if let Some((arg, after_arg)) = read_braced_at(input, total_cmd_end) {
@@ -817,7 +821,7 @@ fn render_latex_to_string(latex: &str) -> String {
                             pos = total_cmd_end;
                         }
                     }
-                    // 鈹€鈹€鈹€ Fractions 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+                    // --- Fractions ---
                     "frac" | "dfrac" | "tfrac" => {
                         if let Some((num_s, after_num)) = read_braced_at(input, total_cmd_end) {
                             if let Some((den_s, after_den)) = read_braced_at(input, after_num) {
@@ -834,7 +838,7 @@ fn render_latex_to_string(latex: &str) -> String {
                             pos = total_cmd_end;
                         }
                     }
-                    // 鈹€鈹€鈹€ Square root 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+                    // --- Square root ---
                     "sqrt" => {
                         let after = &input[total_cmd_end..];
                         // Optional [n] root index
@@ -859,7 +863,7 @@ fn render_latex_to_string(latex: &str) -> String {
                             pos = after_root;
                         }
                     }
-                    // 鈹€鈹€鈹€ Sum, product, integral 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+                    // --- Sum, product, integral ---
                     "sum" => {
                         out.push('\u{2211}');
                         pos = total_cmd_end;
@@ -884,44 +888,113 @@ fn render_latex_to_string(latex: &str) -> String {
                         out.push('\u{222e}');
                         pos = total_cmd_end;
                     }
-                    // 鈹€鈹€鈹€ Named operators 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+                    // --- Named operators ---
                     "lim" => {
                         out.push_str("lim");
                         pos = total_cmd_end;
                     }
-                    "sin" | "cos" | "tan" | "cot" | "sec" | "csc" | "log" | "ln" | "lg"
-                    | "exp" | "det" | "dim" | "ker" | "hom" | "max" | "min" | "sup"
-                    | "inf" | "arg" | "deg" | "mod" | "gcd" | "lcm" | "Pr" | "Var"
-                    | "Cov" | "Corr" | "tr" | "rank" | "Re" | "Im" | "sinh" | "cosh"
-                    | "tanh" | "coth" | "arcsin" | "arccos" | "arctan" => {
+                    "sin" | "cos" | "tan" | "cot" | "sec" | "csc" | "log" | "ln" | "lg" | "exp"
+                    | "det" | "dim" | "ker" | "hom" | "max" | "min" | "sup" | "inf" | "arg"
+                    | "deg" | "mod" | "gcd" | "lcm" | "Pr" | "Var" | "Cov" | "Corr" | "tr"
+                    | "rank" | "Re" | "Im" | "sinh" | "cosh" | "tanh" | "coth" | "arcsin"
+                    | "arccos" | "arctan" => {
                         out.push_str(cmd);
                         pos = total_cmd_end;
                     }
-                    // 鈹€鈹€鈹€ Arrows 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
-                    "to" | "rightarrow" => { out.push('\u{2192}'); pos = total_cmd_end; }
-                    "leftarrow" => { out.push('\u{2190}'); pos = total_cmd_end; }
-                    "Rightarrow" => { out.push('\u{21d2}'); pos = total_cmd_end; }
-                    "Leftarrow" => { out.push('\u{21d0}'); pos = total_cmd_end; }
-                    "Leftrightarrow" | "iff" => { out.push('\u{21d4}'); pos = total_cmd_end; }
-                    "mapsto" => { out.push('\u{21a6}'); pos = total_cmd_end; }
-                    "longrightarrow" => { out.push('\u{27f6}'); pos = total_cmd_end; }
-                    "Longrightarrow" => { out.push('\u{27f9}'); pos = total_cmd_end; }
-                    "uparrow" => { out.push('\u{2191}'); pos = total_cmd_end; }
-                    "downarrow" => { out.push('\u{2193}'); pos = total_cmd_end; }
-                    "Uparrow" => { out.push('\u{21d1}'); pos = total_cmd_end; }
-                    "Downarrow" => { out.push('\u{21d3}'); pos = total_cmd_end; }
-                    "longleftrightarrow" => { out.push('\u{27f7}'); pos = total_cmd_end; }
-                    "Longleftrightarrow" => { out.push('\u{27fa}'); pos = total_cmd_end; }
-                    "hookrightarrow" => { out.push('\u{21aa}'); pos = total_cmd_end; }
-                    "hookleftarrow" => { out.push('\u{21a9}'); pos = total_cmd_end; }
-                    "rightharpoonup" => { out.push('\u{21c0}'); pos = total_cmd_end; }
-                    "rightharpoondown" => { out.push('\u{21c1}'); pos = total_cmd_end; }
-                    "leftharpoonup" => { out.push('\u{21bc}'); pos = total_cmd_end; }
-                    "leftharpoondown" => { out.push('\u{21bd}'); pos = total_cmd_end; }
-                    "rightleftharpoons" => { out.push('\u{21cc}'); pos = total_cmd_end; }
-                    "nrightarrow" => { out.push('\u{219b}'); pos = total_cmd_end; }
-                    "nleftarrow" => { out.push('\u{219a}'); pos = total_cmd_end; }
-                    // 鈹€鈹€鈹€ Unknown command 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+                    // --- Arrows ---
+                    "to" | "rightarrow" => {
+                        out.push('\u{2192}');
+                        pos = total_cmd_end;
+                    }
+                    "leftarrow" => {
+                        out.push('\u{2190}');
+                        pos = total_cmd_end;
+                    }
+                    "Rightarrow" => {
+                        out.push('\u{21d2}');
+                        pos = total_cmd_end;
+                    }
+                    "Leftarrow" => {
+                        out.push('\u{21d0}');
+                        pos = total_cmd_end;
+                    }
+                    "Leftrightarrow" | "iff" => {
+                        out.push('\u{21d4}');
+                        pos = total_cmd_end;
+                    }
+                    "mapsto" => {
+                        out.push('\u{21a6}');
+                        pos = total_cmd_end;
+                    }
+                    "longrightarrow" => {
+                        out.push('\u{27f6}');
+                        pos = total_cmd_end;
+                    }
+                    "Longrightarrow" => {
+                        out.push('\u{27f9}');
+                        pos = total_cmd_end;
+                    }
+                    "uparrow" => {
+                        out.push('\u{2191}');
+                        pos = total_cmd_end;
+                    }
+                    "downarrow" => {
+                        out.push('\u{2193}');
+                        pos = total_cmd_end;
+                    }
+                    "Uparrow" => {
+                        out.push('\u{21d1}');
+                        pos = total_cmd_end;
+                    }
+                    "Downarrow" => {
+                        out.push('\u{21d3}');
+                        pos = total_cmd_end;
+                    }
+                    "longleftrightarrow" => {
+                        out.push('\u{27f7}');
+                        pos = total_cmd_end;
+                    }
+                    "Longleftrightarrow" => {
+                        out.push('\u{27fa}');
+                        pos = total_cmd_end;
+                    }
+                    "hookrightarrow" => {
+                        out.push('\u{21aa}');
+                        pos = total_cmd_end;
+                    }
+                    "hookleftarrow" => {
+                        out.push('\u{21a9}');
+                        pos = total_cmd_end;
+                    }
+                    "rightharpoonup" => {
+                        out.push('\u{21c0}');
+                        pos = total_cmd_end;
+                    }
+                    "rightharpoondown" => {
+                        out.push('\u{21c1}');
+                        pos = total_cmd_end;
+                    }
+                    "leftharpoonup" => {
+                        out.push('\u{21bc}');
+                        pos = total_cmd_end;
+                    }
+                    "leftharpoondown" => {
+                        out.push('\u{21bd}');
+                        pos = total_cmd_end;
+                    }
+                    "rightleftharpoons" => {
+                        out.push('\u{21cc}');
+                        pos = total_cmd_end;
+                    }
+                    "nrightarrow" => {
+                        out.push('\u{219b}');
+                        pos = total_cmd_end;
+                    }
+                    "nleftarrow" => {
+                        out.push('\u{219a}');
+                        pos = total_cmd_end;
+                    }
+                    // --- Unknown command ---
                     _ => {
                         if let Some(sym) = SYMBOLS.get_or_init(build_symbols).get(cmd) {
                             out.push_str(sym);
@@ -930,7 +1003,7 @@ fn render_latex_to_string(latex: &str) -> String {
                             // The subscript/superscript will be handled by the
                             // main loop as _ and ^
                         } else {
-                            // Unknown command: output as is
+                            // --- Unknown command ---
                             out.push('\\');
                             out.push_str(cmd);
                             pos = total_cmd_end;
@@ -1057,7 +1130,7 @@ fn try_render_env(input: &str) -> Option<(String, usize)> {
             let env_content = &rest[..search_pos];
             let rendered = render_environment(env_name, env_content);
             let consumed = content_start + search_pos + end_tag.len();
-            // Handle optional trailing spacing (\\[...])
+            // --- Spacing ---
             return Some((rendered, consumed));
         }
 
@@ -1072,7 +1145,7 @@ fn try_render_env(input: &str) -> Option<(String, usize)> {
     None
 }
 
-// 鈹€鈹€鈹€ Superscript / Subscript 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// --- Superscript / Subscript ---
 
 fn append_superscript(s: &str, out: &mut String) {
     for c in s.chars() {
@@ -1136,7 +1209,7 @@ fn append_subscript(s: &str, out: &mut String) {
     }
 }
 
-// 鈹€鈹€鈹€ Symbol table 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// --- Symbol table ---
 
 type SymbolMap = HashMap<&'static str, &'static str>;
 fn build_symbols() -> SymbolMap {
@@ -1411,7 +1484,10 @@ mod tests {
     }
     #[test]
     fn preserves_markdown_code() {
-        assert_eq!(render_latex_in_text("`$x^2$` and $y^2$"), "`$x^2$` and y\u{00b2}");
+        assert_eq!(
+            render_latex_in_text("`$x^2$` and $y^2$"),
+            "`$x^2$` and y\u{00b2}"
+        );
         assert_eq!(
             render_latex_in_text("```sh\necho $HOME\n```"),
             "```sh\necho $HOME\n```"
@@ -1434,24 +1510,15 @@ mod tests {
     }
     #[test]
     fn test_left_right() {
-        assert_eq!(
-            render_latex_to_string(r"\left(\frac{a}{b}\right)"),
-            "(a/b)"
-        );
+        assert_eq!(render_latex_to_string(r"\left(\frac{a}{b}\right)"), "(a/b)");
     }
     #[test]
     fn test_mathbf() {
-        assert_eq!(
-            render_latex_to_string(r"\mathbf{E}"),
-            "E"
-        );
+        assert_eq!(render_latex_to_string(r"\mathbf{E}"), "E");
     }
     #[test]
     fn test_quad() {
-        assert_eq!(
-            render_latex_to_string(r"a \quad b"),
-            "a     b"
-        );
+        assert_eq!(render_latex_to_string(r"a \quad b"), "a     b");
     }
     #[test]
     fn test_environment_aligned() {
