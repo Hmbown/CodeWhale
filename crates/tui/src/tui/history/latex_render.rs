@@ -177,18 +177,6 @@ fn render_environment(env_name: &str, content: &str) -> String {
     }
 }
 
-/// Find matching `\end{env_name}` and return (content_before, total_consumed_bytes).
-/// Returns None if no matching end is found.
-#[allow(dead_code)]
-fn find_matching_end<'a>(input: &'a str, env_name: &str) -> Option<(&'a str, usize)> {
-    let end_tag = format!("\\end{{{env_name}}}");
-    if let Some(end_pos) = input.find(&end_tag) {
-        Some((&input[..end_pos], end_pos + end_tag.len()))
-    } else {
-        None
-    }
-}
-
 /// Split a multi-row env content into rows (`\\` separator), each rendered.
 /// `row_fn` is called for each parsed row (list of cell strings).
 fn parse_rows<F>(content: &str, mut row_fn: F)
@@ -1261,7 +1249,7 @@ fn render_latex_to_string(latex: &str) -> String {
         }
     }
 
-    out.trim().to_string()
+    out.trim_end().to_string()
 }
 
 /// Try to parse a `\begin{env_name}...\end{env_name}` block at the start of `input`.
