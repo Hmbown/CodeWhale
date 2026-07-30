@@ -709,6 +709,24 @@ fn render_latex_to_string(latex: &str) -> String {
                             }
                         }
                     }
+                    // --- Accents ---
+                    "hat" | "bar" | "tilde" | "dot" | "ddot" | "vec" | "breve" | "check" | "acute" | "grave" => {
+                        if let Some((arg, new_pos)) = read_braced_at(input, total_cmd_end) {
+                            let rendered = render_latex_to_string(&arg);
+                            let accent = match cmd {
+                                "hat" => "\u{0302}", "bar" => "\u{0304}", "tilde" => "\u{0303}",
+                                "dot" => "\u{0307}", "ddot" => "\u{0308}", "vec" => "\u{20d7}",
+                                "breve" => "\u{0306}", "check" => "\u{030c}", "acute" => "\u{0301}", "grave" => "\u{0300}",
+                                _ => unreachable!(),
+                            };
+                            out.push_str(&rendered);
+                            out.push_str(accent);
+                            pos = new_pos;
+                        } else {
+                            out.push_str(&format!("\\{cmd}"));
+                            pos = total_cmd_end;
+                        }
+                    }
                     "operatorname" => {
                         if let Some((arg, new_pos)) = read_braced_at(input, total_cmd_end) {
                             out.push_str(&arg);
@@ -886,6 +904,10 @@ fn render_latex_to_string(latex: &str) -> String {
                     }
                     "oint" => {
                         out.push('\u{222e}');
+                        pos = total_cmd_end;
+                    }
+                    "oiint" => {
+                        out.push('\u{222f}');
                         pos = total_cmd_end;
                     }
                     // --- Named operators ---
@@ -1167,6 +1189,29 @@ fn append_superscript(s: &str, out: &mut String) {
             ')' => '\u{207e}',
             'n' => '\u{207f}',
             'i' => '\u{2071}',
+            'a' => '\u{1d43}',
+            'b' => '\u{1d47}',
+            'c' => '\u{1d9c}',
+            'd' => '\u{1d48}',
+            'e' => '\u{1d49}',
+            'f' => '\u{1da0}',
+            'g' => '\u{1d4d}',
+            'h' => '\u{02b0}',
+            'j' => '\u{02b2}',
+            'k' => '\u{1d4f}',
+            'l' => '\u{02e1}',
+            'm' => '\u{1d50}',
+            'o' => '\u{1d52}',
+            'p' => '\u{1d56}',
+            'r' => '\u{02b3}',
+            's' => '\u{02e2}',
+            't' => '\u{1d57}',
+            'u' => '\u{1d58}',
+            'v' => '\u{1d5b}',
+            'w' => '\u{02b7}',
+            'x' => '\u{02e3}',
+            'y' => '\u{02b8}',
+            'z' => '\u{1dbb}',
             _ => c,
         });
     }
@@ -1276,6 +1321,8 @@ fn build_symbols() -> SymbolMap {
         ("aleph", "\u{2135}"),
         ("angle", "\u{2220}"),
         ("measuredangle", "\u{2221}"),
+        ("langle", "\u{27e8}"),
+        ("rangle", "\u{27e9}"),
         ("perp", "\u{22a5}"),
         ("parallel", "\u{2225}"),
         ("nparallel", "\u{2226}"),
