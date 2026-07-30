@@ -109,6 +109,9 @@ apps/
 # Maintainer-internal design notes (trade-secret material, never published)
 .private/
 
+# Coverage reports (build artifacts)
+web/coverage/
+
 # Agent handoffs and version-specific setup plans are working-state notes, not
 # public docs. Keep durable setup guidance in docs/runbooks instead.
 docs/*HANDOFF*.md

@@ -38,6 +38,7 @@
     "postcss": "^8.5.18",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.3",
+    "@vitest/coverage-v8": "^4.1.9",
     "vitest": "^4.1.9",
     "wrangler": "^4.107.0"
   },

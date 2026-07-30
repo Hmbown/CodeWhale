@@ -18,5 +18,10 @@ export default defineConfig({
       // JS test job CI has.
       "../crates/tui/src/runtime_web/**/*.test.mjs",
     ],
+    coverage: {
+      provider: "v8",
+      reporter: ["lcov"],
+      reportsDirectory: "coverage",
+    },
   },
 });
