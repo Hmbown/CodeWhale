@@ -439,10 +439,10 @@ fn surround_with(left: &str, right: &str, rows: &[String], pad: usize) -> String
 /// Array environment: parse column spec and render table with vertical bars.
 fn render_array(content: &str) -> String {
     let trimmed = content.trim_start();
-    let (col_spec, body) = if trimmed.starts_with('{') {
-        let close = trimmed[1..].find('}').map(|i| i + 1).unwrap_or(0);
+    let (col_spec, body) = if let Some(after_brace) = trimmed.strip_prefix('{') {
+        let close = after_brace.find('}').map(|i| i + 1).unwrap_or(0);
         if close > 0 {
-            (&trimmed[1..close], trimmed[close + 1..].trim_start())
+            (&after_brace[..close], after_brace[close..].trim_start())
         } else {
             ("", trimmed)
         }
@@ -683,7 +683,7 @@ fn render_latex_to_string(latex: &str) -> String {
                 || rendered.starts_with('(')                     // pmatrix
                 || rendered.starts_with('[')                     // bmatrix
                 || rendered.starts_with('\u{2502}'); // vmatrix
-            if needs_newline && !out.is_empty() && !out.ends_with('\n') {
+            if needs_newline && !out.ends_with('\n') {
                 out.push('\n');
             }
             out.push_str(&rendered);
@@ -986,16 +986,17 @@ fn render_latex_to_string(latex: &str) -> String {
                     "sqrt" => {
                         let after = &input[total_cmd_end..];
                         // Optional [n] root index
-                        let (root_text, after_root) = if let Some(after_lb) = after.strip_prefix('[') {
-                            let end_bracket = after_lb.find(']').map(|i| i + 1);
-                            if let Some(e) = end_bracket {
-                                (Some(&after_lb[..e]), total_cmd_end + e + 1)
+                        let (root_text, after_root) =
+                            if let Some(after_lb) = after.strip_prefix('[') {
+                                let end_bracket = after_lb.find(']').map(|i| i + 1);
+                                if let Some(e) = end_bracket {
+                                    (Some(&after_lb[..e]), total_cmd_end + e + 1)
+                                } else {
+                                    (None, total_cmd_end)
+                                }
                             } else {
                                 (None, total_cmd_end)
-                            }
-                        } else {
-                            (None, total_cmd_end)
-                        };
+                            };
                         if let Some((arg, _new_pos)) = read_braced_at(input, after_root) {
                             let r = render_latex_to_string(&arg);
                             if let Some(_root) = root_text {
@@ -1182,7 +1183,8 @@ fn render_latex_to_string(latex: &str) -> String {
                 } else {
                     // Subscript with command like _\mu _\nu
                     if let Some(after_bs) = after.strip_prefix('\\') {
-                        let cmd_end = after_bs.find(|c: char| !c.is_ascii_alphabetic())
+                        let cmd_end = after_bs
+                            .find(|c: char| !c.is_ascii_alphabetic())
                             .unwrap_or(after_bs.len());
                         let rendered = render_latex_to_string(&after[..1 + cmd_end]);
                         append_subscript(&rendered, &mut out);
@@ -1212,10 +1214,10 @@ fn render_latex_to_string(latex: &str) -> String {
                     }
                 } else {
                     // Superscript with command like ^\dagger ^\rho
-                    if after.starts_with('\\') {
-                        let cmd_end = after[1..]
+                    if let Some(after_bs) = after.strip_prefix('\\') {
+                        let cmd_end = after_bs
                             .find(|c: char| !c.is_ascii_alphabetic())
-                            .unwrap_or(after[1..].len());
+                            .unwrap_or(after_bs.len());
                         let rendered = render_latex_to_string(&after[..1 + cmd_end]);
                         append_superscript(&rendered, &mut out);
                         pos += 1 + 1 + cmd_end;
