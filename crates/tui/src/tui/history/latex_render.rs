@@ -383,7 +383,8 @@ fn render_matrix(env_name: &str, content: &str) -> String {
     match env_name {
         "pmatrix" => surround_with("(", ")", &cell_strings, 1),
         "bmatrix" => surround_with("[", "]", &cell_strings, 1),
-        "vmatrix" => surround_with("|", "|", &cell_strings, 1),
+        "vmatrix" => surround_with("\u{2502}", "\u{2502}", &cell_strings, 1),
+        "Bmatrix" => surround_with("{", "}", &cell_strings, 1),
         "smallmatrix" => surround_with("(", ")", &cell_strings, 0),
         _ => {
             // --- Brackets ---
@@ -610,6 +611,14 @@ fn render_latex_to_string(latex: &str) -> String {
         // 1. Environment detection: \begin{name}...\end{name}
         if let Some(env_rendered) = try_render_env(remaining) {
             let (rendered, consumed) = env_rendered;
+            // Start multi-line envs on a fresh line for alignment
+            let needs_newline = rendered.starts_with('\u{23a7}') // cases ??
+                || rendered.starts_with('(')                     // pmatrix
+                || rendered.starts_with('[')                     // bmatrix
+                || rendered.starts_with('\u{2502}'); // vmatrix
+            if needs_newline && !out.is_empty() && !out.ends_with('\n') {
+                out.push('\n');
+            }
             out.push_str(&rendered);
             pos += consumed;
             continue;
@@ -644,7 +653,7 @@ fn render_latex_to_string(latex: &str) -> String {
                                 continue;
                             }
                             _ => {
-                                // Unknown single-char escape 閳?output the char
+                                // Unknown single-char escape 闁?output the char
                                 let char_len =
                                     rest.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
                                 out.push(rest.chars().next().unwrap_or(ch));
@@ -766,7 +775,7 @@ fn render_latex_to_string(latex: &str) -> String {
                         let after = &input[total_cmd_end..].trim_start();
                         if let Some(next) = after.chars().next() {
                             if next == '.' {
-                                // \left. 閳?invisible delimiter, skip
+                                // \left. 闁?invisible delimiter, skip
                             } else {
                                 out.push(next);
                             }
@@ -780,7 +789,7 @@ fn render_latex_to_string(latex: &str) -> String {
                         let after = &input[total_cmd_end..].trim_start();
                         if let Some(next) = after.chars().next() {
                             if next == '.' {
-                                // \right. 閳?invisible delimiter, skip
+                                // \right. 闁?invisible delimiter, skip
                             } else {
                                 out.push(next);
                             }
@@ -791,7 +800,7 @@ fn render_latex_to_string(latex: &str) -> String {
                         }
                     }
                     "big" | "Big" | "bigg" | "Bigg" => {
-                        // Size modifiers 閳?skip them, the next token is what matters
+                        // Size modifiers 闁?skip them, the next token is what matters
                         let after = &input[total_cmd_end..].trim_start();
                         if let Some(next) = after.chars().next() {
                             out.push(next);
