@@ -1,7 +1,8 @@
 {
   "name": "CodeWhale",
-  "dockerFile": "../Dockerfile",
   "build": {
+    "context": "..",
+    "dockerfile": "Dockerfile",
     "args": {
       "RUST_VERSION": "1.88"
     }
@@ -20,15 +21,13 @@
     }
   },
   "remoteEnv": {
-    "DEEPSEEK_API_KEY": "${localEnv:DEEPSEEK_API_KEY}"
+    "DEEPSEEK_API_KEY": "${localEnv:DEEPSEEK_API_KEY}",
+    "CARGO_TARGET_DIR": "/home/codewhale/.cargo/target"
   },
   "mounts": [
-    "source=${localEnv:HOME}/.codewhale,target=/home/codewhale/.codewhale,type=bind,consistency=cached"
+    "source=codewhale-state,target=/home/codewhale/.codewhale,type=volume",
+    "source=codewhale-cargo-target,target=/home/codewhale/.cargo/target,type=volume"
   ],
-  "features": {
-    "ghcr.io/devcontainers/features/rust:1": {},
-    "ghcr.io/devcontainers/features/git:1": {}
-  },
-  "postCreateCommand": "cargo build",
+  "postCreateCommand": "cargo build --locked",
   "remoteUser": "codewhale"
 }
