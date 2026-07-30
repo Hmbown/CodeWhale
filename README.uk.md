@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:f25cf99b305a -->
+<!-- source: README.md sha256:e2678f36a915 -->
 # Codewhale
 
 Агент для програмування з відкритим кодом у вашому терміналі — модель приносите ви.
@@ -77,6 +77,9 @@ Ask / Auto-Review / Full Access. `!` виконує команду оболон�
 - [docs/FLEET.md](docs/FLEET.md) — флоти, журнал і відновлення
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — `config.toml`, хуки й
   конституція
+- [docs/AUTHORIZATION_ORDER.md](docs/AUTHORIZATION_ORDER.md) — як поєднуються
+  режими, хуки, правила дозволів, мінімальні вимоги безпеки, правила репозиторію,
+  затвердження та пісочниця
 - [docs/HOOKS.md](docs/HOOKS.md) — одинадцять подій хуків життєвого циклу TUI,
   їхні корисні навантаження та три з них, що можуть скеровувати хід (`codewhale
   exec` і підкоманди CLI хуків не запускають)

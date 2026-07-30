@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:f25cf99b305a -->
+<!-- source: README.md sha256:e2678f36a915 -->
 # Codewhale
 
 ターミナルで動くオープンソースのコーディングエージェント — モデルはあなたが持ち込む。
@@ -49,6 +49,8 @@ TUI では、`/model` がプロバイダとモデルをまとめて切り替え�
 - [docs/FLEET.md](docs/FLEET.md) — Fleet、台帳、再開
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — `config.toml`、フック、
   constitution
+- [docs/AUTHORIZATION_ORDER.md](docs/AUTHORIZATION_ORDER.md) — モード、フック、
+  権限ルール、安全フロア、リポジトリルール、承認、サンドボックスの組み合わせ方
 - [docs/HOOKS.md](docs/HOOKS.md) — 11 個の TUI ライフサイクルフックイベント、
   そのペイロード、ターンを誘導できる 3 イベント（`codewhale exec` と CLI
   サブコマンドではフックは発火しません）

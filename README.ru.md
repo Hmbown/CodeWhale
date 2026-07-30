@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:f25cf99b305a -->
+<!-- source: README.md sha256:e2678f36a915 -->
 # Codewhale
 
 Открытый агент для программирования в вашем терминале — модель приносите с собой.
@@ -79,6 +79,9 @@ Ask / Auto-Review / Full Access. `!` запускает команду обол�
 - [docs/FLEET.md](docs/FLEET.md) — флиты, журнал и возобновление работы
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — `config.toml`, хуки и
   constitution
+- [docs/AUTHORIZATION_ORDER.md](docs/AUTHORIZATION_ORDER.md) — как сочетаются
+  режимы, хуки, правила разрешений, минимальные требования безопасности, правила
+  репозитория, подтверждения и песочница
 - [docs/HOOKS.md](docs/HOOKS.md) — одиннадцать событий хуков жизненного цикла
   TUI, их полезная нагрузка и три из них, способные направлять ход (`codewhale
   exec` и подкоманды CLI хуки не запускают)

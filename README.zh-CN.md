@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:f25cf99b305a -->
+<!-- source: README.md sha256:e2678f36a915 -->
 # Codewhale
 
 一个面向终端的开源编程智能体——模型由你自带。
@@ -47,6 +47,7 @@ codewhale web                            # local browser client on 127.0.0.1
 - [docs/PROVIDERS.md](docs/PROVIDERS.md) — 每一条 provider 路由:托管、网关与本地
 - [docs/FLEET.md](docs/FLEET.md) — Fleet、账本与恢复
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — `config.toml`、hooks 与 constitution
+- [docs/AUTHORIZATION_ORDER.md](docs/AUTHORIZATION_ORDER.md) — 模式、hook、权限规则、安全下限、仓库规则、审批和沙箱如何组合
 - [docs/HOOKS.md](docs/HOOKS.md) — 十一个 TUI 生命周期 hook 事件、其载荷，以及其中可引导回合的三个事件（`codewhale exec` 和 CLI 子命令不会触发 hooks）
 - [docs/WEB.md](docs/WEB.md) — 仅限回环地址的内置浏览器客户端及其一次性身份验证边界
 

@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:f25cf99b305a -->
+<!-- source: README.md sha256:e2678f36a915 -->
 # Codewhale
 
 Un agente de programación de código abierto para tu terminal — trae tu propio modelo.
@@ -76,6 +76,9 @@ la ruta normal de aprobación.
 - [docs/FLEET.md](docs/FLEET.md) — fleets, el libro mayor y resume
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — `config.toml`, hooks y la
   constitution
+- [docs/AUTHORIZATION_ORDER.md](docs/AUTHORIZATION_ORDER.md) — cómo se combinan
+  los modos, hooks, reglas de permisos, límites mínimos de seguridad, reglas del
+  repositorio, aprobaciones y sandboxing
 - [docs/HOOKS.md](docs/HOOKS.md) — los once eventos de hooks del ciclo de vida
   de la TUI, sus payloads y los tres que pueden dirigir un turno (`codewhale
   exec` y los subcomandos de la CLI no activan hooks)
