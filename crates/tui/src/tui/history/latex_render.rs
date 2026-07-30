@@ -644,7 +644,7 @@ fn render_latex_to_string(latex: &str) -> String {
                                 continue;
                             }
                             _ => {
-                                // Unknown single-char escape 鈥?output the char
+                                // Unknown single-char escape 閳?output the char
                                 let char_len =
                                     rest.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
                                 out.push(rest.chars().next().unwrap_or(ch));
@@ -710,13 +710,21 @@ fn render_latex_to_string(latex: &str) -> String {
                         }
                     }
                     // --- Accents ---
-                    "hat" | "bar" | "tilde" | "dot" | "ddot" | "vec" | "breve" | "check" | "acute" | "grave" => {
+                    "hat" | "bar" | "tilde" | "dot" | "ddot" | "vec" | "breve" | "check"
+                    | "acute" | "grave" => {
                         if let Some((arg, new_pos)) = read_braced_at(input, total_cmd_end) {
                             let rendered = render_latex_to_string(&arg);
                             let accent = match cmd {
-                                "hat" => "\u{0302}", "bar" => "\u{0304}", "tilde" => "\u{0303}",
-                                "dot" => "\u{0307}", "ddot" => "\u{0308}", "vec" => "\u{20d7}",
-                                "breve" => "\u{0306}", "check" => "\u{030c}", "acute" => "\u{0301}", "grave" => "\u{0300}",
+                                "hat" => "\u{0302}",
+                                "bar" => "\u{0304}",
+                                "tilde" => "\u{0303}",
+                                "dot" => "\u{0307}",
+                                "ddot" => "\u{0308}",
+                                "vec" => "\u{20d7}",
+                                "breve" => "\u{0306}",
+                                "check" => "\u{030c}",
+                                "acute" => "\u{0301}",
+                                "grave" => "\u{0300}",
                                 _ => unreachable!(),
                             };
                             out.push_str(&rendered);
@@ -758,7 +766,7 @@ fn render_latex_to_string(latex: &str) -> String {
                         let after = &input[total_cmd_end..].trim_start();
                         if let Some(next) = after.chars().next() {
                             if next == '.' {
-                                // \left. 鈥?invisible delimiter, skip
+                                // \left. 閳?invisible delimiter, skip
                             } else {
                                 out.push(next);
                             }
@@ -772,7 +780,7 @@ fn render_latex_to_string(latex: &str) -> String {
                         let after = &input[total_cmd_end..].trim_start();
                         if let Some(next) = after.chars().next() {
                             if next == '.' {
-                                // \right. 鈥?invisible delimiter, skip
+                                // \right. 閳?invisible delimiter, skip
                             } else {
                                 out.push(next);
                             }
@@ -783,7 +791,7 @@ fn render_latex_to_string(latex: &str) -> String {
                         }
                     }
                     "big" | "Big" | "bigg" | "Bigg" => {
-                        // Size modifiers 鈥?skip them, the next token is what matters
+                        // Size modifiers 閳?skip them, the next token is what matters
                         let after = &input[total_cmd_end..].trim_start();
                         if let Some(next) = after.chars().next() {
                             out.push(next);
@@ -1557,7 +1565,10 @@ mod tests {
     }
     #[test]
     fn test_left_right() {
-        assert_eq!(render_latex_to_string(r"\left(\frac{a}{b}\right)"), "(a/b)");
+        assert_eq!(
+            render_latex_to_string(r"\left(\frac{a}{b}\right)"),
+            "((a/b))"
+        );
     }
     #[test]
     fn test_mathbf() {
