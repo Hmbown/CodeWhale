@@ -11701,6 +11701,58 @@ async fn steer_user_message_records_prompt_for_cancel_restore() {
 }
 
 #[tokio::test]
+async fn steer_user_message_backgrounds_foreground_shell_before_dispatch() {
+    let mut app = create_test_app();
+    app.is_loading = true;
+    let shell_manager = app
+        .runtime_services
+        .shell_manager
+        .clone()
+        .expect("test app shell manager");
+    let mut active = ActiveCell::new();
+    active.push_tool(
+        "foreground-shell",
+        HistoryCell::Tool(ToolCell::Exec(ExecCell {
+            command: "cargo test --workspace".to_string(),
+            status: ToolStatus::Running,
+            output: None,
+            live_output: None,
+            shell_task_id: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
+            started_at: Some(Instant::now()),
+            duration_ms: None,
+            stale_elapsed_since_output_ms: None,
+            source: ExecSource::Assistant,
+            interaction: None,
+            output_summary: None,
+        })),
+    );
+    app.active_cell = Some(active);
+    let mut engine = crate::core::engine::mock_engine_handle();
+
+    steer_user_message(
+        &mut app,
+        &engine.handle,
+        QueuedMessage::new("use the partial results".to_string(), None),
+    )
+    .await
+    .expect("steer user message");
+
+    assert!(
+        shell_manager
+            .lock()
+            .expect("shell manager lock")
+            .foreground_background_requested_for_test(),
+        "foreground shell must receive its detach request"
+    );
+    assert_eq!(
+        engine.rx_steer.recv().await.as_deref(),
+        Some("use the partial results")
+    );
+}
+
+#[tokio::test]
 async fn empty_enter_sends_next_queued_message_into_running_turn() {
     let mut app = create_test_app();
     app.is_loading = true;
@@ -13097,6 +13149,46 @@ fn terminal_pause_has_live_owner_only_for_running_exec_cells() {
         !terminal_pause_has_live_owner(&app),
         "non-interactive RLM work must not keep the terminal in host-scrollback mode"
     );
+}
+
+#[test]
+fn active_foreground_shell_running_excludes_detached_background_jobs() {
+    let mut app = create_test_app();
+    let mut active = ActiveCell::new();
+    active.push_tool(
+        "shell",
+        HistoryCell::Tool(ToolCell::Exec(ExecCell {
+            command: "cargo test --workspace".to_string(),
+            status: ToolStatus::Running,
+            output: None,
+            live_output: None,
+            shell_task_id: Some("shell-42".to_string()),
+            owner_agent_id: None,
+            owner_agent_name: None,
+            started_at: Some(Instant::now()),
+            duration_ms: None,
+            stale_elapsed_since_output_ms: None,
+            source: ExecSource::Assistant,
+            interaction: None,
+            output_summary: None,
+        })),
+    );
+    app.active_cell = Some(active);
+
+    assert!(
+        !active_foreground_shell_running(&app),
+        "a detached job remains Running but is no longer a foreground wait"
+    );
+
+    let Some(HistoryCell::Tool(ToolCell::Exec(exec))) = app
+        .active_cell
+        .as_mut()
+        .and_then(|active| active.entry_mut(0))
+    else {
+        panic!("running shell cell");
+    };
+    exec.shell_task_id = None;
+    assert!(active_foreground_shell_running(&app));
 }
 
 #[test]

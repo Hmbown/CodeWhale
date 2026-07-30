@@ -13252,6 +13252,17 @@ async fn steer_user_message(
     }
     let message_index = app.api_messages.len();
 
+    // A foreground shell blocks the turn loop that consumes steer input.
+    // Ask the shared shell manager to detach it before enqueueing the steer so
+    // the loop can leave the foreground wait and process this message (#4930).
+    if active_foreground_shell_running(app)
+        && let Err(err) = request_active_foreground_shell_background(app)
+    {
+        restore_steer_paused_state(app, &paused_snapshot);
+        engine_handle.set_paused(paused_snapshot.paused);
+        return Err(err.context("could not move foreground shell to /jobs before steering"));
+    }
+
     if let Err(err) = engine_handle.steer(content.clone()).await {
         restore_steer_paused_state(app, &paused_snapshot);
         engine_handle.set_paused(paused_snapshot.paused);
@@ -17471,22 +17482,27 @@ pub(crate) fn request_foreground_shell_background(app: &mut App) {
         return;
     }
 
-    let Some(shell_manager) = app.runtime_services.shell_manager.clone() else {
-        app.status_message = Some("No shell session is active.".to_string());
-        return;
-    };
-
-    match shell_manager.lock() {
-        Ok(mut manager) => {
-            manager.request_foreground_background();
+    match request_active_foreground_shell_background(app) {
+        Ok(()) => {
             app.status_message = Some("Moving current shell command to /jobs...".to_string());
         }
-        Err(_) => {
-            app.status_message = Some(
-                "Shell tracking hit an internal error — restart Codewhale to recover.".to_string(),
-            );
+        Err(err) => {
+            app.status_message = Some(err.to_string());
         }
     }
+}
+
+fn request_active_foreground_shell_background(app: &App) -> Result<()> {
+    let shell_manager = app
+        .runtime_services
+        .shell_manager
+        .clone()
+        .context("No shell session is active.")?;
+    let mut manager = shell_manager.lock().map_err(|_| {
+        anyhow::anyhow!("Shell tracking hit an internal error — restart Codewhale to recover.")
+    })?;
+    manager.request_foreground_background();
+    Ok(())
 }
 
 pub(crate) fn prefill_jobs_cancel_all_if_tasks_sidebar(app: &mut App) -> bool {
@@ -17512,7 +17528,9 @@ pub(crate) fn active_foreground_shell_running(app: &App) -> bool {
             matches!(
                 cell,
                 HistoryCell::Tool(ToolCell::Exec(exec))
-                    if exec.status == ToolStatus::Running && exec.interaction.is_none()
+                    if exec.status == ToolStatus::Running
+                        && exec.interaction.is_none()
+                        && exec.shell_task_id.is_none()
             )
         })
     })

@@ -1146,6 +1146,11 @@ impl ShellManager {
         self.foreground_background_requested = true;
     }
 
+    #[cfg(test)]
+    pub(crate) fn foreground_background_requested_for_test(&self) -> bool {
+        self.foreground_background_requested
+    }
+
     fn clear_foreground_background_request(&mut self) {
         self.foreground_background_requested = false;
     }
