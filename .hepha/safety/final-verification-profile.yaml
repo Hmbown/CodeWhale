@@ -1,0 +1,133 @@
+version: "2.0"
+description: "CodeWhale final verification profile for independent Rust and web quality gates."
+
+checks:
+  - id: "rust-format"
+    description: "Verify Rust workspace formatting."
+    intent: "lint"
+    command: ["cargo", "fmt", "--all", "--", "--check"]
+    workingDirectory: "."
+    timeout: 120000
+    required: true
+
+  - id: "rust-workspace-tests"
+    description: "Run the complete locked Rust workspace test suite."
+    intent: "test"
+    command: ["cargo", "test", "--workspace", "--locked"]
+    workingDirectory: "."
+    timeout: 1800000
+    required: true
+
+  - id: "rust-release-build"
+    description: "Build the release CLI and TUI binaries with locked dependencies."
+    intent: "build"
+    command: ["cargo", "build", "--release", "-p", "codewhale-cli", "-p", "codewhale-tui", "--locked"]
+    workingDirectory: "."
+    timeout: 1800000
+    required: true
+
+  - id: "web-prebuild"
+    description: "Regenerate the web facts artifact."
+    intent: "build"
+    command: ["npm", "run", "prebuild"]
+    workingDirectory: "web"
+    timeout: 300000
+    required: true
+
+  - id: "web-facts-check"
+    description: "Verify committed web facts match the Rust workspace."
+    intent: "test"
+    command: ["npm", "run", "check:facts"]
+    workingDirectory: "web"
+    timeout: 120000
+    required: true
+
+  - id: "web-docs-check"
+    description: "Verify repository-backed web documentation references."
+    intent: "test"
+    command: ["npm", "run", "check:docs"]
+    workingDirectory: "web"
+    timeout: 120000
+    required: true
+
+  - id: "web-tests"
+    description: "Run all Vitest web tests."
+    intent: "test"
+    command: ["npm", "test"]
+    workingDirectory: "web"
+    timeout: 900000
+    required: true
+
+  - id: "web-lint"
+    description: "Run the web ESLint gate."
+    intent: "lint"
+    command: ["npm", "run", "lint"]
+    workingDirectory: "web"
+    timeout: 300000
+    required: true
+
+  - id: "web-build"
+    description: "Build the production Next.js website."
+    intent: "build"
+    command: ["npm", "run", "build"]
+    workingDirectory: "web"
+    timeout: 900000
+    required: true
+
+  - id: "rust-test-coverage"
+    description: "Measure changed executable Rust production lines and overall workspace coverage."
+    intent: "coverage"
+    command: ["cargo", "llvm-cov", "--workspace", "--all-features", "--locked", "--lcov", "--output-path", "target/llvm-cov/lcov.info"]
+    workingDirectory: "."
+    timeout: 1800000
+    required: true
+    runAt: "final_checkpoint"
+    coverage:
+      reportPath: "target/llvm-cov/lcov.info"
+      format: "lcov"
+      include:
+        - "crates/*/src/**/*.rs"
+      exclude:
+        - "**/tests/**"
+        - "**/test/**"
+        - "**/fixtures/**"
+        - "**/snapshots/**"
+        - "**/generated/**"
+        - "target/**"
+        - "**/scripts/**"
+        - "**/examples/**"
+      minimumPercent: 80
+      targetPercent: 95
+      improvementAttempts: 5
+
+  - id: "web-test-coverage"
+    description: "Measure changed executable web production lines and overall web coverage."
+    intent: "coverage"
+    command: ["npx", "vitest", "run", "--coverage"]
+    workingDirectory: "web"
+    timeout: 900000
+    required: true
+    runAt: "final_checkpoint"
+    coverage:
+      reportPath: "web/coverage/lcov.info"
+      format: "lcov"
+      include:
+        - "web/app/**"
+        - "web/components/**"
+        - "web/lib/**"
+      exclude:
+        - "**/*.test.ts"
+        - "**/*.test.tsx"
+        - "**/*.spec.ts"
+        - "**/*.spec.tsx"
+        - "**/tests/**"
+        - "**/test/**"
+        - "**/fixtures/**"
+        - "**/snapshots/**"
+        - "**/generated/**"
+        - "web/coverage/**"
+        - "web/node_modules/**"
+        - "web/scripts/**"
+      minimumPercent: 80
+      targetPercent: 95
+      improvementAttempts: 5

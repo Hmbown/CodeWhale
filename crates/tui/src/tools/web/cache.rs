@@ -168,16 +168,6 @@ pub(crate) fn insert_search(
 }
 
 #[cfg(test)]
-pub(crate) fn reset() {
-    cache().lock().clear();
-}
-
-#[cfg(test)]
-pub(crate) fn reset_search() {
-    search_cache().lock().clear();
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -228,7 +218,6 @@ mod tests {
 
     #[test]
     fn truncated_entry_refetches_only_when_request_asks_for_more() {
-        reset();
         let url = reqwest::Url::parse("https://example.com/doc#fragment").unwrap();
         insert("cache-unit", &url, "text/plain", payload(b"12345", true));
 
@@ -242,7 +231,6 @@ mod tests {
 
     #[test]
     fn cache_is_scoped_by_session_and_accept_header() {
-        reset();
         let url = reqwest::Url::parse("https://example.com/doc").unwrap();
         insert("session-a", &url, "text/html", payload(b"body", false));
 
@@ -253,7 +241,6 @@ mod tests {
 
     #[test]
     fn search_cache_is_scoped_by_session_backend_endpoint_and_query() {
-        reset_search();
         let query = SearchQuery::new("cached query".to_string(), 5, None, Vec::new(), None);
         insert_search(
             "session-a",

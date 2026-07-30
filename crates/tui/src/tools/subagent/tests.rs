@@ -6,7 +6,7 @@ use axum::{Json, Router, http::StatusCode, response::IntoResponse, routing::post
 use std::collections::HashSet;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tempfile::{Builder as TempDirBuilder, tempdir};
+use tempfile::tempdir;
 
 fn built_in_whale_name_that_cannot_be_generated_for(agent_id: &str) -> &'static str {
     WHALE_NICKNAMES
@@ -6836,12 +6836,10 @@ fn git_repo_root_discovers_one_level_nested_repo_from_harness() {
 
 #[test]
 fn git_repo_root_reports_attempted_paths_when_no_repo_found() {
-    let repo_root = git_repo_root(&std::env::current_dir().expect("current dir"))
-        .expect("test should run inside the checkout");
-    let harness = TempDirBuilder::new()
-        .prefix(".codewhale-no-repo-")
-        .tempdir_in(repo_root.parent().expect("repo parent"))
-        .expect("empty harness outside checkout");
+    // Use the system temporary directory rather than the checkout's parent.
+    // The checkout may itself be nested inside another repository, in which
+    // case Git correctly treats every sibling fixture as part of that parent.
+    let harness = tempdir().expect("empty harness outside checkout");
     let empty = harness
         .path()
         .join("isolated")

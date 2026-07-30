@@ -3077,11 +3077,9 @@ mod tests {
     async fn repeated_search_uses_session_cache_and_marks_receipt() {
         use crate::config::SearchProvider;
         use crate::tools::spec::{ToolContext, ToolSpec};
-        use crate::tools::web::cache;
         use wiremock::matchers::{method, path, query_param};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
-        cache::reset_search();
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/html/"))
