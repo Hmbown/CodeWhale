@@ -257,6 +257,7 @@ pub struct TaskSummary {
     pub prompt_summary: String,
     pub model: String,
     pub mode: String,
+    pub workspace: PathBuf,
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
     pub ended_at: Option<DateTime<Utc>>,
@@ -281,6 +282,7 @@ impl From<&TaskRecord> for TaskSummary {
             prompt_summary: summarize_text(&value.prompt, TIMELINE_SUMMARY_LIMIT),
             model: value.model.clone(),
             mode: value.mode.clone(),
+            workspace: value.workspace.clone(),
             created_at: value.created_at,
             started_at: value.started_at,
             ended_at: value.ended_at,
@@ -1003,12 +1005,24 @@ impl TaskManager {
 
     /// List tasks, newest first.
     pub async fn list_tasks(&self, limit: Option<usize>) -> Vec<TaskSummary> {
+        self.list_tasks_scoped(limit, None).await
+    }
+
+    /// List tasks, newest first, optionally scoped to a workspace.
+    pub async fn list_tasks_scoped(
+        &self,
+        limit: Option<usize>,
+        workspace: Option<&Path>,
+    ) -> Vec<TaskSummary> {
         let state = self.state.lock().await;
         let mut items = state
             .tasks
             .values()
             .map(TaskSummary::from)
             .collect::<Vec<_>>();
+        if let Some(workspace) = workspace {
+            items.retain(|item| item.workspace.as_path() == workspace);
+        }
         items.sort_by_key(|i| std::cmp::Reverse(i.created_at));
         if let Some(limit) = limit {
             items.truncate(limit);
@@ -2061,6 +2075,35 @@ mod tests {
                 .exists(),
             "a failed queue write may leave no replayable or staged task record"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_tasks_scopes_results_to_workspace_before_limit() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("deepseek-task-test-{}", Uuid::new_v4()));
+        let manager =
+            TaskManager::start_with_executor(test_config(root), Arc::new(MockExecutor)).await?;
+
+        manager
+            .add_task(NewTaskRequest {
+                prompt: "task in workspace a".to_string(),
+                workspace: Some(PathBuf::from("/tmp/workspace-a")),
+                ..NewTaskRequest::from_prompt("task in workspace a")
+            })
+            .await?;
+        manager
+            .add_task(NewTaskRequest {
+                prompt: "task in workspace b".to_string(),
+                workspace: Some(PathBuf::from("/tmp/workspace-b")),
+                ..NewTaskRequest::from_prompt("task in workspace b")
+            })
+            .await?;
+
+        let scoped = manager
+            .list_tasks_scoped(Some(1), Some(Path::new("/tmp/workspace-a")))
+            .await;
+        assert_eq!(scoped.len(), 1);
+        assert_eq!(scoped[0].workspace, PathBuf::from("/tmp/workspace-a"));
         Ok(())
     }
 

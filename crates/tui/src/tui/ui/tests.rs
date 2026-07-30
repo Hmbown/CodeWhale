@@ -19307,6 +19307,7 @@ mod work_sidebar_projection_tests {
             prompt_summary: format!("task {id}"),
             model: "deepseek-v4-flash".to_string(),
             mode: "agent".to_string(),
+            workspace: std::path::PathBuf::from("/tmp"),
             created_at,
             started_at: Some(created_at + Duration::seconds(1)),
             ended_at,

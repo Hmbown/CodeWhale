@@ -224,6 +224,7 @@ struct TasksResponse {
 #[derive(Debug, Deserialize)]
 struct TasksQuery {
     limit: Option<usize>,
+    workspace: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2153,7 +2154,10 @@ async fn list_tasks(
     State(state): State<RuntimeApiState>,
     Query(query): Query<TasksQuery>,
 ) -> Result<Json<TasksResponse>, ApiError> {
-    let tasks = state.task_manager.list_tasks(query.limit).await;
+    let tasks = state
+        .task_manager
+        .list_tasks_scoped(query.limit, query.workspace.as_deref())
+        .await;
     let counts = state.task_manager.counts().await;
     Ok(Json(TasksResponse { tasks, counts }))
 }
