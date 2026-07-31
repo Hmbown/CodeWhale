@@ -290,21 +290,33 @@ pub(super) fn slice_text(text: &str, start: usize, end: usize) -> String {
 }
 
 pub(super) fn char_display_width(ch: char) -> usize {
-    if ch == '\t' {
-        4
-    } else {
-        // `width()` returns `None` for control/unassigned chars (default them to
-        // one column so layout doesn't collapse) and `Some(0)` for genuinely
-        // zero-width chars — combining marks, ZWJ, zero-width spaces — which must
-        // stay 0 so display-width math (truncation, slicing, overflow, copy)
-        // matches what the terminal actually renders.
-        UnicodeWidthChar::width(ch).unwrap_or(1)
+    match ch {
+        '\t' => 4,
+        // Enclosed Alphanumerics (U+2460-U+24FF), Dingbat Circled Digits
+        // (U+2776-U+2793), and Circled Numbers on Black Square (U+3248-U+324F)
+        // have East Asian Width "Ambiguous" but are rendered as 2 columns in
+        // CJK terminals. unicode-width's width() conservatively reports 1; we
+        // match the terminal. (#4479)
+        '\u{2460}'..='\u{24FF}' | '\u{2776}'..='\u{2793}' | '\u{3248}'..='\u{324F}' => 2,
+        _ => {
+            // `width()` returns `None` for control/unassigned chars (default them to
+            // one column so layout doesn't collapse) and `Some(0)` for genuinely
+            // zero-width chars — combining marks, ZWJ, zero-width spaces — which must
+            // stay 0 so display-width math (truncation, slicing, overflow, copy)
+            // matches what the terminal actually renders.
+            UnicodeWidthChar::width(ch).unwrap_or(1)
+        }
     }
 }
 
 /// Measure one extended grapheme using the same string-level Unicode rules as
 /// Ratatui. String width intentionally differs from the sum of codepoint widths
 /// for keycaps, ZWJ emoji, modifiers, and other terminal ligatures.
+///
+/// Keycap sequences (such as 1\u{fe0f}\u{20e3}) that lack an FE0F variation
+/// selector still render as 2 columns in terminals, but unicode-width's
+/// `grapheme.width()` only reports 1. We force 2 when U+20E3 is present in a
+/// multi-codepoint grapheme. (#4479)
 pub(super) fn grapheme_display_width(grapheme: &str) -> usize {
     if grapheme == "\t" {
         return 4;
@@ -313,6 +325,11 @@ pub(super) fn grapheme_display_width(grapheme: &str) -> usize {
         && ch.len_utf8() == grapheme.len()
     {
         return char_display_width(ch);
+    }
+    // Keycap sequences always render as 2 columns. unicode-width's
+    // `width()` undercounts the non-FE0F variant to 1.
+    if grapheme.contains('\u{20e3}') {
+        return 2;
     }
     UnicodeWidthStr::width(grapheme)
 }
@@ -570,10 +587,35 @@ mod tests {
             assert_eq!(text_display_width(keycap), 2);
             assert_eq!(text_display_width(keycap), UnicodeWidthStr::width(keycap));
         }
-        // Preserve unicode-width's distinction between fully-qualified emoji
-        // presentation and text/standalone combining-mark forms.
-        assert_eq!(text_display_width("1\u{20e3}"), 1);
+        // A digit directly followed by U+20E3 (without FE0F variation selector)
+        // still renders as a 2-column keycap in terminals. We force this in
+        // grapheme_display_width when the grapheme contains U+20E3.
+        // A standalone U+20E3 is a zero-width combining mark.
+        assert_eq!(text_display_width("1\u{20e3}"), 2);
         assert_eq!(text_display_width("\u{20e3}"), 0);
+    }
+
+    #[test]
+    fn circled_digit_display_width() {
+        assert_eq!(char_display_width('\u{2460}'), 2);
+        assert_eq!(char_display_width('\u{2461}'), 2);
+        assert_eq!(char_display_width('\u{24ea}'), 2);
+        assert_eq!(char_display_width('\u{2776}'), 2);
+        assert_eq!(text_display_width("\u{2460}\u{2461}\u{2462}"), 6);
+        assert_eq!(text_display_width("Step \u{2460}: init"), 13);
+        assert_eq!(text_display_width("A\u{24d0}B"), 4);
+    }
+
+    #[test]
+    fn unicode_width_reports_circled_digits_as_two_columns() {
+        // Regression guard for the unicode-width patch (#4479): Ratatui
+        // renders text through UnicodeWidthChar::width(), so the patch must
+        // make even the raw crate API report 2 columns for ambiguous-width
+        // characters — otherwise Ratatui places them in 1 cell while the
+        // terminal paints 2, shifting every downstream column.
+        assert_eq!(UnicodeWidthChar::width('\u{2460}'), Some(2));
+        assert_eq!(UnicodeWidthChar::width('\u{24ea}'), Some(2));
+        assert_eq!(UnicodeWidthStr::width("\u{2460}\u{2461}\u{2462}"), 6);
     }
 
     #[test]
