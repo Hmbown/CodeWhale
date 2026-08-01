@@ -6223,6 +6223,14 @@ mod tests {
     #[test]
     fn underwater_launch_is_visibly_deep_and_preserves_text_cells() {
         let mut app = create_test_app();
+        // App::new reads persisted presentation settings. Other tests swap the
+        // isolated settings home in parallel, so this visual contract must pin
+        // the treatment it is actually asserting instead of inheriting a
+        // transient Flat/Terminal choice from the process.
+        app.ui_theme = palette::UI_THEME;
+        app.ocean_treatment = crate::tui::ocean::OceanTreatment::Ombre;
+        app.low_motion = false;
+        app.fancy_animations = true;
         app.workspace = PathBuf::from("codewhale-test-workspace");
         app.model = "deepseek-v4-pro".to_string();
 
