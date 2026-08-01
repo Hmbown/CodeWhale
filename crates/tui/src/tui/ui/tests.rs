@@ -4404,9 +4404,9 @@ async fn tool_result_api_content_never_advertises_unowned_live_output_as_retriev
     assert!(content.contains("[TOOL_OUTPUT_RECEIPT]"));
     assert!(content.contains("tool: exec_shell"));
     assert!(content.contains("tool_call_id: call-live-big"));
-    assert!(content.contains("detail_handle: unavailable (sha256:"));
-    assert!(content.contains("retrieve: unavailable"));
-    assert!(content.contains("storage: no session-owned artifact was recorded"));
+    assert!(content.contains("full output in the tool details view"));
+    assert!(!content.contains("detail_handle"));
+    assert!(!content.contains("storage:"));
     assert!(!content.contains("retrieve_tool_result"));
     assert!(!content.contains(&raw));
     assert!(
@@ -13318,7 +13318,7 @@ fn spillover_pager_section_loads_file_when_present() {
     app.resync_history_revisions();
 
     let section = spillover_pager_section(&app, 0).expect("section present");
-    assert!(section.contains("Full output (spillover)"));
+    assert!(section.contains("── Full output ──"));
     assert!(
         section.contains("FULL_OUTPUT_BYTES_HERE"),
         "section missing file body: {section}"
@@ -13378,7 +13378,7 @@ fn spillover_pager_uses_session_artifact_for_specialized_bash_cell() {
     app.history = vec![HistoryCell::Tool(ToolCell::Exec(ExecCell {
         command: "cargo test".to_string(),
         status: ToolStatus::Success,
-        output: Some("[Exact evidence retained · 23 B]".to_string()),
+        output: Some("head\n\n… 23 B of output omitted — view full output in the tool details view\n\n[tail]\ntail".to_string()),
         live_output: None,
         shell_task_id: None,
         owner_agent_id: None,
@@ -13396,7 +13396,7 @@ fn spillover_pager_uses_session_artifact_for_specialized_bash_cell() {
             tool_id: "call-bash".to_string(),
             tool_name: "Bash".to_string(),
             input: serde_json::json!({"action": "run", "command": "cargo test"}),
-            output: Some("[Exact evidence retained · 23 B]".to_string()),
+            output: Some("head\n\n… 23 B of output omitted — view full output in the tool details view\n\n[tail]\ntail".to_string()),
         },
     );
     let artifact = crate::artifacts::ArtifactRecord {
