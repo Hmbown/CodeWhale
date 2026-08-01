@@ -582,12 +582,7 @@ fn normalize_key(key: &OsStr) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
+    use crate::test_support::EnvVarGuard;
 
     #[test]
     fn mcp_env_allowlist_inherits_base_keys() {
@@ -783,26 +778,11 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn sanitized_child_env_preserves_custom_sdk_root_vars() {
-        let _guard = env_lock().lock().expect("env lock");
-        let previous_sdk = std::env::var_os("BIMRV_SDK_ROOT");
-        let previous_secret = std::env::var_os("MY_SECRET_ROOT");
-        unsafe {
-            std::env::set_var("BIMRV_SDK_ROOT", r"F:\Lib\BimRv27.5");
-            std::env::set_var("MY_SECRET_ROOT", r"F:\Secrets");
-        }
+        let _guard = crate::test_support::lock_test_env();
+        let _sdk = EnvVarGuard::set("BIMRV_SDK_ROOT", r"F:\Lib\BimRv27.5");
+        let _secret = EnvVarGuard::set("MY_SECRET_ROOT", r"F:\Secrets");
 
         let env = sanitized_child_env(std::iter::empty::<(OsString, OsString)>());
-
-        unsafe {
-            match previous_sdk {
-                Some(value) => std::env::set_var("BIMRV_SDK_ROOT", value),
-                None => std::env::remove_var("BIMRV_SDK_ROOT"),
-            }
-            match previous_secret {
-                Some(value) => std::env::set_var("MY_SECRET_ROOT", value),
-                None => std::env::remove_var("MY_SECRET_ROOT"),
-            }
-        }
 
         assert!(
             env.iter()
@@ -962,18 +942,10 @@ mod tests {
 
     #[test]
     fn sanitized_mcp_env_passes_through_node_bootstrap() {
-        let _guard = env_lock().lock().expect("env lock");
-        let prev = std::env::var_os("NVM_DIR");
-        unsafe {
-            std::env::set_var("NVM_DIR", "/tmp/test-nvm");
-        }
+        let _guard = crate::test_support::lock_test_env();
+        let _nvm_dir = EnvVarGuard::set("NVM_DIR", "/tmp/test-nvm");
 
         let env = sanitized_mcp_env(std::iter::empty::<(OsString, OsString)>());
-
-        match prev {
-            Some(value) => unsafe { std::env::set_var("NVM_DIR", value) },
-            None => unsafe { std::env::remove_var("NVM_DIR") },
-        }
 
         let nvm_dir = env
             .iter()
@@ -984,22 +956,10 @@ mod tests {
 
     #[test]
     fn sanitized_mcp_env_drops_unrelated_secret_like_values() {
-        let _guard = env_lock().lock().expect("env lock");
-        let prev = std::env::var_os("DEEPSEEK_MCP_TEST_SECRET");
-        unsafe {
-            std::env::set_var("DEEPSEEK_MCP_TEST_SECRET", "should-not-leak");
-        }
+        let _guard = crate::test_support::lock_test_env();
+        let _secret = EnvVarGuard::set("DEEPSEEK_MCP_TEST_SECRET", "should-not-leak");
 
         let env = sanitized_mcp_env(std::iter::empty::<(OsString, OsString)>());
-
-        match prev {
-            Some(value) => unsafe {
-                std::env::set_var("DEEPSEEK_MCP_TEST_SECRET", value);
-            },
-            None => unsafe {
-                std::env::remove_var("DEEPSEEK_MCP_TEST_SECRET");
-            },
-        }
 
         assert!(
             env.iter().all(|(key, _)| key != "DEEPSEEK_MCP_TEST_SECRET"),
@@ -1009,23 +969,15 @@ mod tests {
 
     #[test]
     fn reviewed_plugin_mcp_env_requires_explicit_proxy_provenance() {
-        let _guard = env_lock().lock().expect("env lock");
-        let previous = std::env::var_os("HTTP_PROXY");
-        unsafe {
-            let synthetic_proxy = format!(
-                "{}://{}:{}@{}",
-                "http", "fixture-user", "fixture-password", "127.0.0.1:9"
-            );
-            std::env::set_var("HTTP_PROXY", synthetic_proxy);
-        }
+        let _guard = crate::test_support::lock_test_env();
+        let synthetic_proxy = format!(
+            "{}://{}:{}@{}",
+            "http", "fixture-user", "fixture-password", "127.0.0.1:9"
+        );
+        let _proxy = EnvVarGuard::set("HTTP_PROXY", synthetic_proxy);
 
         let ambient = sanitized_plugin_mcp_env(std::iter::empty::<(OsString, OsString)>());
         let explicit = sanitized_plugin_mcp_env([("HTTP_PROXY", "http://proxy.invalid")]);
-
-        match previous {
-            Some(value) => unsafe { std::env::set_var("HTTP_PROXY", value) },
-            None => unsafe { std::env::remove_var("HTTP_PROXY") },
-        }
 
         assert!(
             ambient
@@ -1040,22 +992,10 @@ mod tests {
 
     #[test]
     fn sanitized_child_env_drops_parent_secret_like_values() {
-        let _guard = env_lock().lock().expect("env lock");
-        let previous = std::env::var_os("DEEPSEEK_CHILD_ENV_TEST_SECRET");
-        unsafe {
-            std::env::set_var("DEEPSEEK_CHILD_ENV_TEST_SECRET", "parent-secret");
-        }
+        let _guard = crate::test_support::lock_test_env();
+        let _secret = EnvVarGuard::set("DEEPSEEK_CHILD_ENV_TEST_SECRET", "parent-secret");
 
         let env = sanitized_child_env(std::iter::empty::<(OsString, OsString)>());
-
-        match previous {
-            Some(value) => unsafe {
-                std::env::set_var("DEEPSEEK_CHILD_ENV_TEST_SECRET", value);
-            },
-            None => unsafe {
-                std::env::remove_var("DEEPSEEK_CHILD_ENV_TEST_SECRET");
-            },
-        }
 
         assert!(
             env.iter()
@@ -1065,22 +1005,10 @@ mod tests {
 
     #[test]
     fn explicit_child_env_values_win_over_parent_allowlist() {
-        let _guard = env_lock().lock().expect("env lock");
-        let previous = std::env::var_os("PATH");
-        unsafe {
-            std::env::set_var("PATH", "/parent/bin");
-        }
+        let _guard = crate::test_support::lock_test_env();
+        let _path = EnvVarGuard::set("PATH", "/parent/bin");
 
         let env = sanitized_child_env([(OsString::from("PATH"), OsString::from("/explicit/bin"))]);
-
-        match previous {
-            Some(value) => unsafe {
-                std::env::set_var("PATH", value);
-            },
-            None => unsafe {
-                std::env::remove_var("PATH");
-            },
-        }
 
         let path = env
             .iter()
@@ -1091,37 +1019,12 @@ mod tests {
 
     #[test]
     fn sanitized_child_env_preserves_windows_toolchain_vars() {
-        let _guard = env_lock().lock().expect("env lock");
-        let prev_lib = std::env::var_os("LIB");
-        let prev_include = std::env::var_os("INCLUDE");
-        let prev_sdk = std::env::var_os("WINDOWSSDKDIR");
-        // SAFETY: serialised by env_lock above. Restoring after the
-        // assertion is also under the same guard so concurrent tests
-        // never see our staged values.
-        unsafe {
-            std::env::set_var("LIB", r"C:\sdk\lib");
-            std::env::set_var("INCLUDE", r"C:\sdk\include");
-            std::env::set_var("WINDOWSSDKDIR", r"C:\sdk");
-        }
+        let _guard = crate::test_support::lock_test_env();
+        let _lib = EnvVarGuard::set("LIB", r"C:\sdk\lib");
+        let _include = EnvVarGuard::set("INCLUDE", r"C:\sdk\include");
+        let _sdk = EnvVarGuard::set("WINDOWSSDKDIR", r"C:\sdk");
 
         let env = sanitized_child_env(std::iter::empty::<(OsString, OsString)>());
-
-        // Restore prior state before asserting so a panic still leaves
-        // the process env clean for the next test.
-        unsafe {
-            match prev_lib {
-                Some(value) => std::env::set_var("LIB", value),
-                None => std::env::remove_var("LIB"),
-            }
-            match prev_include {
-                Some(value) => std::env::set_var("INCLUDE", value),
-                None => std::env::remove_var("INCLUDE"),
-            }
-            match prev_sdk {
-                Some(value) => std::env::set_var("WINDOWSSDKDIR", value),
-                None => std::env::remove_var("WINDOWSSDKDIR"),
-            }
-        }
 
         assert!(
             env.iter()

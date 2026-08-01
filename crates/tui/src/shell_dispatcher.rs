@@ -42,11 +42,11 @@ pub enum ShellKind {
     WindowsPowerShell,
     /// Command Prompt (`cmd.exe`).
     Cmd,
-    /// Unix `/bin/sh` (or `$SHELL`-detected bash/zsh).
+    /// Unix `/bin/sh` fallback.
     Sh,
-    /// Bash — detected via `$SHELL` on either Unix or WSL/Git Bash on Windows.
+    /// Bash — detected via `$SHELL` on WSL/Git Bash, or constructed explicitly.
     Bash,
-    /// Any other POSIX shell from $SHELL (zsh, fish, dash, ...).
+    /// The exact shell executable selected by Unix `$SHELL`.
     Custom { binary: String, flag: String },
 }
 
@@ -69,7 +69,10 @@ impl ShellKind {
             #[cfg(not(windows))]
             ShellKind::Cmd => "cmd",
 
+            #[cfg(windows)]
             ShellKind::Sh => "sh",
+            #[cfg(not(windows))]
+            ShellKind::Sh => "/bin/sh",
             ShellKind::Bash => "bash",
             ShellKind::Custom { binary, .. } => binary,
         }
@@ -95,7 +98,17 @@ impl ShellKind {
 
     /// Returns true when this is a PowerShell-family shell.
     pub fn is_powershell(&self) -> bool {
-        matches!(self, ShellKind::Pwsh | ShellKind::WindowsPowerShell)
+        match self {
+            ShellKind::Pwsh | ShellKind::WindowsPowerShell => true,
+            ShellKind::Custom { binary, .. } => Path::new(binary)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    let name = name.to_ascii_lowercase();
+                    name.contains("pwsh") || name.contains("powershell")
+                }),
+            ShellKind::Cmd | ShellKind::Sh | ShellKind::Bash => false,
+        }
     }
 }
 
@@ -217,8 +230,8 @@ impl ShellDispatcher {
     ///
     /// ## Detection order (Unix)
     ///
-    /// 1. `$SHELL` — if it contains `bash`, use `Bash`; otherwise use the
-    ///    actual binary path via `Custom`.
+    /// 1. `$SHELL` — preserve its actual executable via `Custom`; bare names
+    ///    are resolved against the current `PATH` once at detection time.
     /// 2. `/bin/sh` fallback.
     pub fn detect() -> Self {
         let kind = Self::detect_shell();
@@ -403,6 +416,17 @@ impl ShellDispatcher {
     // -- Detection --------------------------------------------------------
 
     fn detect_shell() -> ShellKind {
+        #[cfg(test)]
+        {
+            crate::test_support::with_test_env_lock(Self::detect_shell_unlocked)
+        }
+        #[cfg(not(test))]
+        {
+            Self::detect_shell_unlocked()
+        }
+    }
+
+    fn detect_shell_unlocked() -> ShellKind {
         #[cfg(windows)]
         {
             // 1. $env:SHELL — WSL interop or Git Bash often set this.
@@ -430,26 +454,41 @@ impl ShellDispatcher {
 
         #[cfg(not(windows))]
         {
-            // 1. $SHELL environment variable (Unix)
-            if let Ok(shell) = std::env::var("SHELL") {
-                let lower = shell.to_lowercase();
-                if lower.contains("bash") {
-                    return ShellKind::Bash;
-                }
-                if lower.contains("pwsh") {
-                    return ShellKind::Pwsh;
-                }
-                if lower.contains("powershell") {
-                    return ShellKind::WindowsPowerShell;
-                }
-                return ShellKind::Custom {
-                    binary: shell,
-                    flag: "-c".to_string(),
-                };
+            if let Ok(shell) = std::env::var("SHELL")
+                && let Some(kind) = Self::unix_shell_kind(&shell)
+            {
+                return kind;
             }
 
             ShellKind::Sh
         }
+    }
+
+    #[cfg(not(windows))]
+    fn unix_shell_kind(shell: &str) -> Option<ShellKind> {
+        let shell = shell.trim();
+        if shell.is_empty() {
+            return None;
+        }
+        let path = Path::new(shell);
+        let binary = if path.is_absolute() || path.components().count() > 1 {
+            shell.to_string()
+        } else {
+            std::env::var_os("PATH")
+                .and_then(|path| {
+                    std::env::split_paths(&path)
+                        .map(|dir| dir.join(shell))
+                        .find(|candidate| candidate.is_file())
+                })
+                .map_or_else(
+                    || shell.to_string(),
+                    |path| path.to_string_lossy().into_owned(),
+                )
+        };
+        Some(ShellKind::Custom {
+            binary,
+            flag: "-c".to_string(),
+        })
     }
 
     /// Check PATH first, then fall back to well-known install directories.
@@ -522,8 +561,38 @@ mod tests {
             assert_eq!(ShellKind::WindowsPowerShell.binary(), "powershell");
             assert_eq!(ShellKind::Cmd.binary(), "cmd");
         }
+        #[cfg(windows)]
         assert_eq!(ShellKind::Sh.binary(), "sh");
+        #[cfg(not(windows))]
+        assert_eq!(ShellKind::Sh.binary(), "/bin/sh");
         assert_eq!(ShellKind::Bash.binary(), "bash");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_shell_detection_preserves_absolute_executable_paths() {
+        let bash = ShellDispatcher::unix_shell_kind("/bin/bash").expect("bash shell");
+        assert_eq!(
+            bash,
+            ShellKind::Custom {
+                binary: "/bin/bash".to_string(),
+                flag: "-c".to_string(),
+            }
+        );
+
+        let pwsh =
+            ShellDispatcher::unix_shell_kind("/opt/homebrew/bin/pwsh").expect("PowerShell path");
+        assert!(pwsh.is_powershell());
+        assert_eq!(pwsh.binary(), "/opt/homebrew/bin/pwsh");
+
+        let dispatcher = ShellDispatcher {
+            kind: ShellDispatcher::unix_shell_kind("/bin/sh").expect("POSIX shell"),
+        };
+        let mut command = dispatcher.build_command("printf path-independent");
+        command.env_clear();
+        let output = command.output().expect("absolute shell must not need PATH");
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, b"path-independent");
     }
 
     #[test]
