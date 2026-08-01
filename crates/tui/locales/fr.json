@@ -293,7 +293,6 @@
     "CmdSidebarDescription": "Basculer ou cibler la barre latérale droite",
     "CmdSkillDescription": "Activer une skill, ou installer/mettre à jour/désinstaller/approuver une skill communautaire",
     "CmdSkillsDescription": "Lister les skills locales, filtrer par préfixe ou parcourir le registre distant sélectionné",
-    "CmdDebtDescription": "Inspecter ou exporter le registre de dette",
     "CmdStashDescription": "Mettre de côté ou restaurer un brouillon du composer",
     "CmdStatusDescription": "Afficher l'état d'exécution de la session",
     "CmdStatuslineDescription": "Configurer les éléments affichés dans le pied de page",

@@ -109,8 +109,6 @@ impl Engine {
             .with_user_input_tool()
             .with_parallel_tool();
 
-        // SlopLedger: plan mode only gets read-only query + export.
-        builder = builder.with_slop_ledger_read_only_tools();
         if self.config.features.enabled(Feature::WebSearch) {
             builder = builder.with_web_tools();
         }

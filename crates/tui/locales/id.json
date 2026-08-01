@@ -293,7 +293,6 @@
     "CmdSidebarDescription": "Alihkan atau fokuskan bilah sisi kanan",
     "CmdSkillDescription": "Aktifkan keterampilan, atau pasang/perbarui/copot/percayai keterampilan komunitas",
     "CmdSkillsDescription": "Tampilkan keterampilan lokal, saring menurut prefiks, atau telusuri registri remote terkurasi",
-    "CmdDebtDescription": "Periksa atau ekspor buku besar utang",
     "CmdStashDescription": "Simpan sementara atau pulihkan draf komposer",
     "CmdStatusDescription": "Tampilkan status runtime sesi",
     "CmdStatuslineDescription": "Atur item yang muncul di footer",
