@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use codewhale_execpolicy::{AskForApproval, ExecPolicyContext};
@@ -623,10 +623,6 @@ pub struct Engine {
     /// Diagnostics collected during the current step's tool calls. Drained
     /// and forwarded as a synthetic user message before the next API call.
     pending_lsp_blocks: Vec<crate::lsp::DiagnosticBlock>,
-    /// Cached SlopLedger gate block keyed by the ledger file's modified time.
-    /// This keeps user-turn tail assembly cheap while still noticing
-    /// append/update writes from slop ledger tools during the same session.
-    slop_ledger_gate_cache: Option<(Option<SystemTime>, Option<String>)>,
     /// Current operating mode. Updated on `ChangeMode` and `SendMessage`.
     current_mode: AppMode,
     /// The most recent authority narrowing, if any (#3947). Kept on the engine
@@ -1191,7 +1187,6 @@ impl Engine {
             turn_counter: 0,
             lsp_manager,
             pending_lsp_blocks: Vec::new(),
-            slop_ledger_gate_cache: None,
             workshop_vars,
             sandbox_backend,
             current_mode: AppMode::Agent,
@@ -2784,40 +2779,6 @@ impl Engine {
         )
     }
 
-    /// Snapshot the mutable completion gate once for a new top-level user
-    /// turn. Mid-turn steers stay inside the same `handle_deepseek_turn` and
-    /// reuse this already-present block; reinjecting it on every steer would
-    /// duplicate debt text and erase the token-economy benefit of this seam.
-    fn with_slop_ledger_gate_for_initial_user_turn(
-        &mut self,
-        message: Message,
-        provenance: UserInputProvenance,
-    ) -> Message {
-        if provenance != UserInputProvenance::ExternalUser {
-            return message;
-        }
-        Self::attach_slop_ledger_gate(message, self.slop_ledger_gate_block())
-    }
-
-    fn attach_slop_ledger_gate(mut message: Message, gate_block: Option<String>) -> Message {
-        let Some(gate_block) = gate_block else {
-            return message;
-        };
-
-        // Preserve the stable user-text prefix and keep `<turn_meta>` last.
-        // The debt gate changes with local ledger state, so placing it here
-        // avoids invalidating the fingerprinted system prompt for every turn.
-        let insert_at = message.content.len().saturating_sub(1);
-        message.content.insert(
-            insert_at,
-            ContentBlock::Text {
-                text: gate_block,
-                cache_control: None,
-            },
-        );
-        message
-    }
-
     fn user_text_message_with_turn_metadata_for_route_and_provenance(
         &self,
         text: String,
@@ -3908,10 +3869,6 @@ impl Engine {
                 policy_narrowing: self.last_policy_narrowing.as_ref(),
             },
         );
-        let base_content_blocks = user_msg.content.len();
-        let user_msg = self.with_slop_ledger_gate_for_initial_user_turn(user_msg, provenance);
-        turn.active_slop_gate_message =
-            (user_msg.content.len() > base_content_blocks).then(|| user_msg.clone());
         self.session.add_message(user_msg);
 
         self.emit_session_updated().await;
@@ -4361,25 +4318,12 @@ impl Engine {
         removed
     }
 
-    /// Merge working-set pins with the mutable completion gate carried by the
-    /// current top-level user turn. The exact message identity matters: an
-    /// unchanged ledger can produce identical gate text on older turns, and
-    /// pinning every historical copy would defeat compaction.
     fn compaction_pins_for_messages(
         &self,
         messages: &[Message],
         working_set: &crate::working_set::WorkingSet,
-        active_slop_gate_message: Option<&Message>,
     ) -> Vec<usize> {
         let mut pins = working_set.pinned_message_indices(messages, &self.session.workspace);
-
-        if let Some(active_message) = active_slop_gate_message
-            && let Some(index) = messages
-                .iter()
-                .rposition(|message| message == active_message)
-        {
-            pins.push(index);
-        }
 
         pins.sort_unstable();
         pins.dedup();
@@ -4390,7 +4334,6 @@ impl Engine {
         &mut self,
         client: &dyn crate::core::model_client::ModelClient,
         reason: &str,
-        active_slop_gate_message: Option<&Message>,
     ) -> bool {
         let Some(target_budget) = context_input_budget_for_route(
             self.api_provider,
@@ -4428,11 +4371,8 @@ impl Engine {
         // Previously this passed None/None, so a compaction routed here (which,
         // on large windows, is the path that actually fires) could summarize
         // away pinned errors, patches, and the files the user is editing.
-        let compaction_pins = self.compaction_pins_for_messages(
-            &self.session.messages,
-            &self.session.working_set,
-            active_slop_gate_message,
-        );
+        let compaction_pins =
+            self.compaction_pins_for_messages(&self.session.messages, &self.session.working_set);
         let compaction_paths = self.session.working_set.top_paths(24);
 
         match compact_messages_safe(
@@ -4914,37 +4854,6 @@ impl Engine {
             self.config.translation_enabled,
             self.config.verbosity.clone(),
         )
-    }
-
-    fn slop_ledger_gate_block(&mut self) -> Option<String> {
-        let modified = slop_ledger_gate_mtime();
-
-        if let Some((cached_modified, cached_block)) = &self.slop_ledger_gate_cache
-            && *cached_modified == modified
-        {
-            return cached_block.clone();
-        }
-
-        let loaded = load_slop_ledger_gate_block();
-        self.slop_ledger_gate_cache = Some((modified, loaded.clone()));
-        loaded
-    }
-
-    /// The same gate block, evaluated without writing the memoization cache.
-    ///
-    /// `/preview-request` must describe the block a real turn would attach
-    /// while leaving the engine byte-identical. Writing `slop_ledger_gate_cache`
-    /// is engine state — small, but it is state, and an inspection that
-    /// changes it is no longer an inspection. Reading the ledger file is a
-    /// pure read, so the answer is identical; only the memo is skipped.
-    fn slop_ledger_gate_block_readonly(&self) -> Option<String> {
-        let modified = slop_ledger_gate_mtime();
-        if let Some((cached_modified, cached_block)) = &self.slop_ledger_gate_cache
-            && *cached_modified == modified
-        {
-            return cached_block.clone();
-        }
-        load_slop_ledger_gate_block()
     }
 
     /// Merge a compaction summary into the system prompt.
@@ -5536,27 +5445,6 @@ impl NextTurnPromptContext {
             verbosity,
         }
     }
-}
-
-/// Last-modified time of the slop ledger, or `None` when there is no ledger.
-fn slop_ledger_gate_mtime() -> Option<SystemTime> {
-    crate::slop_ledger::SlopLedger::default_path()
-        .ok()
-        .and_then(|path| std::fs::metadata(path).ok())
-        .and_then(|metadata| metadata.modified().ok())
-}
-
-/// Load the completion-gate block from disk. A pure read.
-fn load_slop_ledger_gate_block() -> Option<String> {
-    crate::slop_ledger::SlopLedger::load()
-        .ok()
-        .and_then(|ledger| {
-            if ledger.has_open_entries() {
-                ledger.completion_gate_summary()
-            } else {
-                None
-            }
-        })
 }
 
 /// Result of one turn tool-catalog build.

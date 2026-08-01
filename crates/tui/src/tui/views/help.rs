@@ -684,50 +684,6 @@ mod tests {
     }
 
     #[test]
-    fn workspace_help_hides_user_shadowed_debt_aliases_from_copy_and_search() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let commands_dir = tmp.path().join(".codewhale").join("commands");
-        std::fs::create_dir_all(&commands_dir).unwrap();
-        std::fs::write(
-            commands_dir.join("slop.md"),
-            "---\ndescription: Internal cleanup\nhidden: true\n---\ninternal cleanup",
-        )
-        .unwrap();
-        std::fs::write(
-            commands_dir.join("custom-debt.md"),
-            "---\ndescription: Custom debt flow\nalias: canzha\n---\ncustom debt",
-        )
-        .unwrap();
-
-        for (term, mut view) in [
-            (
-                "slop",
-                HelpView::new_for_workspace(Locale::En, tmp.path(), &[]),
-            ),
-            (
-                "canzha",
-                HelpView::new_for_shortcuts(Locale::En, tmp.path(), &[]),
-            ),
-        ] {
-            let debt = view
-                .entries
-                .iter()
-                .find(|entry| entry.label == "/debt")
-                .expect("canonical /debt help should remain visible");
-            assert!(debt.description.contains("/cleanup"));
-            assert!(!debt.description.contains("/slop"));
-            assert!(!debt.description.contains("/canzha"));
-
-            type_filter(&mut view, term);
-            assert!(
-                view.filtered
-                    .iter()
-                    .all(|idx| view.entries[*idx].label != "/debt")
-            );
-        }
-    }
-
-    #[test]
     fn workspace_commands_and_skills_are_findable_with_provenance() {
         // #3912: both surfaces executed and autocompleted but were absent
         // from the surface that teaches the product.
@@ -806,8 +762,8 @@ mod tests {
     #[test]
     fn help_hides_builtins_with_shadowed_canonical_names() {
         let registry = commands::user_registry::UserCommandRegistry::from_loaded(vec![(
-            "debt".to_string(),
-            "---\ndescription: Custom debt\n---\ncustom debt".to_string(),
+            "help".to_string(),
+            "---\ndescription: Custom help workflow\n---\ncustom help".to_string(),
         )]);
         let entries = build_entries(Locale::En, &registry, &[]);
 
@@ -815,17 +771,17 @@ mod tests {
         assert!(
             !entries
                 .iter()
-                .any(|entry| entry.label == "/debt" && entry.section == HelpSection::Command),
+                .any(|entry| entry.label == "/help" && entry.section == HelpSection::Command),
             "the shadowed built-in must not keep its own row"
         );
         // Since #3912 the shadowing workspace command supplies the row instead
         // of the name vanishing from help entirely.
         let user = entries
             .iter()
-            .find(|entry| entry.label == "/debt")
-            .expect("the user command that shadows /debt should be listed");
+            .find(|entry| entry.label == "/help")
+            .expect("the user command that shadows /help should be listed");
         assert_eq!(user.section, HelpSection::UserCommand);
-        assert!(user.description.contains("Custom debt"));
+        assert!(user.description.contains("Custom help workflow"));
     }
 
     #[test]

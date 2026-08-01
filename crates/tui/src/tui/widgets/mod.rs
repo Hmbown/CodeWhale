@@ -72,6 +72,8 @@ pub struct ChatWidget {
     ambient_inks: Option<(Color, Color)>,
     ocean_elapsed_ms: u128,
     ocean_animated: bool,
+    /// Fixed-point (0..=1000) life presence; see `ocean::life_presence`.
+    life_presence_fixed: u16,
     fish_flee_elapsed_ms: Option<u128>,
     ambient_life: bool,
     scroll_track: Color,
@@ -89,6 +91,16 @@ struct TranscriptScrollbar {
 
 impl ChatWidget {
     pub fn new(app: &mut App, area: Rect) -> Self {
+        let ocean_elapsed_ms = app.ocean_started_at.elapsed().as_millis();
+        Self::new_with_ocean_elapsed(app, area, ocean_elapsed_ms)
+    }
+
+    /// Build one render snapshot from an already sampled ocean clock.
+    ///
+    /// Production samples the monotonic clock in [`Self::new`]. Keeping the
+    /// sampled value as an explicit input here gives render tests a stable
+    /// frame without adding a second clock or freezing the runtime animation.
+    fn new_with_ocean_elapsed(app: &mut App, area: Rect, ocean_elapsed_ms: u128) -> Self {
         let content_area = area;
         let background = app.ui_theme.surface_bg;
         let ocean_ramp = app
@@ -100,7 +112,6 @@ impl ChatWidget {
             .ocean_treatment
             .supports_ambient_life()
             .then(|| crate::tui::ocean::ambient_inks(&app.ui_theme));
-        let ocean_elapsed_ms = app.ocean_started_at.elapsed().as_millis();
         let completion_elapsed_ms = (!app.low_motion && app.fancy_animations)
             .then_some(())
             .and(app.ocean_completion_started_at)
@@ -119,6 +130,19 @@ impl ChatWidget {
             && (render_empty_state
                 || browsing_history
                 || matches!(phase, ShellPhase::Working | ShellPhase::Verifying));
+        // Life presence eases the animated/static boundary as a pure function
+        // of the monotonic clocks (see ocean::life_presence): bursty fast
+        // streams ramp in, quiet waits settle out, never a hard snap.
+        let life_presence = crate::tui::ocean::life_presence(
+            app.ocean_completion_started_at
+                .map(|started| started.elapsed().as_millis()),
+            app.turn_started_at
+                .map(|started| started.elapsed().as_millis()),
+            ocean_animated,
+            browsing_history,
+            render_empty_state,
+        );
+        let life_presence_fixed = (life_presence * 1000.0).round().clamp(0.0, 1000.0) as u16;
         let ocean_column = ocean_ramp.map(|ramp| {
             crate::tui::ocean::OceanColumn::new(
                 ramp,
@@ -127,6 +151,7 @@ impl ChatWidget {
                 completion_elapsed_ms,
                 phase,
                 ocean_animated,
+                life_presence_fixed,
             )
         });
         let fish_flee_elapsed_ms = underwater_motion_enabled
@@ -161,6 +186,7 @@ impl ChatWidget {
                 ambient_inks,
                 ocean_elapsed_ms,
                 ocean_animated,
+                life_presence_fixed,
                 fish_flee_elapsed_ms,
                 // Reduced-motion users still get the quiet, static scene;
                 // only movement itself is opt-in.
@@ -549,6 +575,7 @@ impl ChatWidget {
             ambient_inks,
             ocean_elapsed_ms,
             ocean_animated,
+            life_presence_fixed,
             fish_flee_elapsed_ms,
             // Fish also accompany intentional transcript browsing. They only
             // occupy blank cells and are collision-checked, so history stays
@@ -859,7 +886,7 @@ impl ChatWidget {
                 inks,
                 &self.lines,
                 self.ocean_elapsed_ms,
-                self.ocean_animated,
+                self.ocean_presence_f32(),
                 cursor,
                 whale,
             );
@@ -874,6 +901,13 @@ impl ChatWidget {
                 );
             }
         }
+    }
+}
+
+impl ChatWidget {
+    /// Life presence as a 0..=1 fraction; drives ambient-life ink fading.
+    fn ocean_presence_f32(&self) -> f32 {
+        (f32::from(self.life_presence_fixed) / 1000.0).clamp(0.0, 1.0)
     }
 }
 
@@ -4833,70 +4867,6 @@ mod tests {
     }
 
     #[test]
-    fn slash_completion_hints_discover_debt_from_compat_aliases() {
-        for alias in ["slop", "canzha"] {
-            let hints = slash_completion_hints(
-                &format!("/{alias}"),
-                128,
-                &[],
-                Locale::En,
-                None,
-                ApiProvider::Deepseek,
-            );
-            let debt = hints
-                .iter()
-                .find(|hint| hint.name == "/debt")
-                .unwrap_or_else(|| panic!("/debt should appear for /{alias}"));
-            assert_eq!(debt.alias_hint.as_deref(), Some(alias));
-        }
-    }
-
-    #[test]
-    fn slash_completion_debt_aliases_prefer_user_command_shadows() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let commands_dir = tmp.path().join(".codewhale").join("commands");
-        std::fs::create_dir_all(&commands_dir).unwrap();
-        std::fs::write(
-            commands_dir.join("slop.md"),
-            "---\ndescription: User slop workflow\n---\ncustom slop",
-        )
-        .unwrap();
-        std::fs::write(
-            commands_dir.join("review.md"),
-            "---\ndescription: User canzha workflow\nalias: canzha\n---\ncustom canzha",
-        )
-        .unwrap();
-
-        for (alias, canonical, description, alias_hint) in [
-            ("slop", "/slop", "User slop workflow", None),
-            ("canzha", "/review", "User canzha workflow", Some("canzha")),
-        ] {
-            let hints = slash_completion_hints(
-                &format!("/{alias}"),
-                128,
-                &[],
-                Locale::En,
-                Some(tmp.path()),
-                ApiProvider::Deepseek,
-            );
-            let user_command = hints
-                .iter()
-                .find(|hint| hint.name == canonical)
-                .unwrap_or_else(|| panic!("{canonical} should own /{alias} completion"));
-            assert_eq!(user_command.description, description);
-            assert_eq!(user_command.alias_hint.as_deref(), alias_hint);
-            let hint_names = hints
-                .iter()
-                .map(|hint| hint.name.as_str())
-                .collect::<Vec<_>>();
-            assert!(
-                !hints.iter().any(|hint| hint.name == "/debt"),
-                "/debt must not complete through user-shadowed /{alias}: {hint_names:?}"
-            );
-        }
-    }
-
-    #[test]
     fn slash_completion_hints_rank_exact_alias_above_prefix_alias() {
         // `/q` should rank `/exit` (exact alias `q`) above `/clear` (alias
         // `qingping` only matches by prefix). Before #1811 the entries were
@@ -5265,41 +5235,6 @@ mod tests {
             !alias_hints.iter().any(|hint| hint.name == "/attach"),
             "built-in /attach should not complete through shadowed /image alias"
         );
-    }
-
-    #[test]
-    fn slash_completion_hints_hide_shadowed_debt_aliases_from_canonical_copy() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let commands_dir = tmp.path().join(".codewhale").join("commands");
-        std::fs::create_dir_all(&commands_dir).unwrap();
-        std::fs::write(
-            commands_dir.join("slop.md"),
-            "---\ndescription: Internal cleanup\nhidden: true\n---\ninternal cleanup",
-        )
-        .unwrap();
-        std::fs::write(
-            commands_dir.join("custom-debt.md"),
-            "---\ndescription: Custom debt flow\nalias: canzha\n---\ncustom debt",
-        )
-        .unwrap();
-
-        let hints = slash_completion_hints(
-            "/debt",
-            128,
-            &[],
-            Locale::En,
-            Some(tmp.path()),
-            ApiProvider::Deepseek,
-        );
-        let debt = hints
-            .iter()
-            .find(|hint| hint.name == "/debt")
-            .expect("canonical /debt should remain visible when only aliases are shadowed");
-
-        assert_eq!(debt.alias_hint, None);
-        assert!(debt.description.contains("/cleanup"));
-        assert!(!debt.description.contains("/slop"));
-        assert!(!debt.description.contains("/canzha"));
     }
 
     #[test]
@@ -6288,13 +6223,17 @@ mod tests {
     #[test]
     fn underwater_launch_is_visibly_deep_and_preserves_text_cells() {
         let mut app = create_test_app();
-        app.workspace = PathBuf::from("/tmp/codewhale-test-workspace");
+        app.workspace = PathBuf::from("codewhale-test-workspace");
         app.model = "deepseek-v4-pro".to_string();
 
         let area = Rect::new(0, 0, 100, 20);
         let base = app.ui_theme.surface_bg;
+        let context = format!("codewhale · {} · no git · mcp 0", app.workspace.display());
         let mut buf = Buffer::empty(area);
-        ChatWidget::new(&mut app, area).render(area, &mut buf);
+        // Sample one known point in the live motion path. The old test raced
+        // the scheduler between App construction and rendering, which could
+        // move the school off-screen on slower Windows runners.
+        ChatWidget::new_with_ocean_elapsed(&mut app, area, 0).render(area, &mut buf);
 
         assert_ne!(buf[(0, 0)].bg, buf[(0, 19)].bg);
         let rendered = buffer_text(&buf, area);
@@ -6314,8 +6253,7 @@ mod tests {
         let leads = rendered.matches("><o>").count() + rendered.matches("<o><").count();
         assert_eq!(leads, 1, "exactly one eyed lead fish:\n{rendered}");
 
-        let context = "codewhale · /tmp/codewhale-test-workspace · no git · mcp 0";
-        let context_x = ((100usize - UnicodeWidthStr::width(context)) / 2) as u16;
+        let context_x = ((100usize - UnicodeWidthStr::width(context.as_str())) / 2) as u16;
         let context_cell = (0..area.height)
             .find_map(|y| (buf[(context_x, y)].symbol() == "c").then_some((context_x, y)))
             .expect("context line");
