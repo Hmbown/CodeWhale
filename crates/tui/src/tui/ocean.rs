@@ -89,6 +89,7 @@ pub const COMPLETION_BREATH_MS: u128 = 800;
 
 /// Extra ms after the breath during which ambient life eases out of view.
 pub const SETTLE_MS: u128 = 600;
+pub(crate) const COMPLETION_SETTLE_MS: u128 = COMPLETION_BREATH_MS + SETTLE_MS;
 
 /// Ms over which animated life ramps in when a working phase begins.
 pub const RAMP_MS: u128 = 450;

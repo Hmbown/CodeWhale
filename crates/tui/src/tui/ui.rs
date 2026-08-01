@@ -107,6 +107,7 @@ use crate::tui::onboarding;
 use crate::tui::pager::PagerView;
 use crate::tui::persistence_actor::{self, PersistRequest};
 use crate::tui::scrolling::TranscriptScroll;
+use crate::tui::sidebar::sidebar_width_for_chat_area;
 use crate::turn_route_plan::{PlannedTurnRoute, TurnRoutePlanRequest, plan_turn_route};
 use crate::work_graph::task_owner_snapshot;
 // SelectionAutoscroll unused
@@ -407,24 +408,6 @@ fn sidebar_host_width_hint(app: &App) -> Option<u16> {
             .unwrap_or(0);
         Some(transcript_width.saturating_add(sidebar_width))
     })
-}
-
-fn sidebar_width_for_chat_area(app: &App, chat_width: u16) -> Option<u16> {
-    if app.sidebar_focus == SidebarFocus::Hidden || chat_width < SIDEBAR_VISIBLE_MIN_WIDTH {
-        return None;
-    }
-
-    let preferred_sidebar =
-        (u32::from(chat_width) * u32::from(app.sidebar_width_percent.clamp(10, 50)) / 100) as u16;
-    // Width-aware floor: the classic 24-column sidebar feels cramped next to
-    // status/status-adjacent info at ultrawide sizes. At 120+ columns a 28
-    // column rail still leaves the transcript most of the room.
-    let sidebar_width = preferred_sidebar
-        .max(28)
-        .max(chat_width / 10)
-        .min(chat_width.saturating_sub(40));
-
-    (sidebar_width >= 20).then_some(sidebar_width)
 }
 
 type AppTerminal = Terminal<ColorCompatBackend<Stdout>>;
@@ -5186,16 +5169,12 @@ async fn run_event_loop(
                         | crate::tui::underwater::ShellPhase::Verifying
                 )
                 || empty_water_visible);
-        // Keep requesting frames through the completion breath AND the
-        // life-presence settle so ambient life eases out instead of freezing
-        // the moment the breath ends (v0.9.4 motion contract).
-        let completion_settle_window_ms =
-            crate::tui::ocean::COMPLETION_BREATH_MS + crate::tui::ocean::SETTLE_MS;
         let underwater_completion_motion = shell_motion_enabled
             && !underwater_surface_obscured
             && matches!(app.runtime_turn_status.as_deref(), Some("completed"))
             && app.ocean_completion_started_at.is_some_and(|started| {
-                started.elapsed() < Duration::from_millis(completion_settle_window_ms as u64)
+                started.elapsed()
+                    < Duration::from_millis(crate::tui::ocean::COMPLETION_SETTLE_MS as u64)
             });
         let status_motion = should_tick_status_animation(
             app,

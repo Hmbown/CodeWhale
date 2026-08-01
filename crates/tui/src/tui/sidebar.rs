@@ -34,6 +34,7 @@ use super::history::{GenericToolCell, HistoryCell, ToolCell, ToolStatus, summari
 use super::motion::MotionPolicy;
 use super::spinner::{LIVE_MARKER_DELAY_MS, braille_spinner_frame_for_elapsed_ms};
 use super::subagent_routing::active_fanout_counts;
+use super::ui::SIDEBAR_VISIBLE_MIN_WIDTH;
 use super::ui_text::{concise_shell_command_label, truncate_line_to_width};
 
 /// Tolerance for floating-point cost comparison in the sidebar breakdown.
@@ -47,6 +48,24 @@ const TASK_STOP_TARGET_LABEL: &str = "[x]";
 const TASK_STOP_TARGET_SUFFIX: &str = " [x]";
 const HOTBAR_PANEL_HEIGHT: u16 = 4;
 const HOTBAR_ROW_COLUMNS: usize = 4;
+
+pub(crate) fn sidebar_width_for_chat_area(app: &App, chat_width: u16) -> Option<u16> {
+    if app.sidebar_focus == SidebarFocus::Hidden || chat_width < SIDEBAR_VISIBLE_MIN_WIDTH {
+        return None;
+    }
+
+    let preferred_sidebar =
+        (u32::from(chat_width) * u32::from(app.sidebar_width_percent.clamp(10, 50)) / 100) as u16;
+    // Width-aware floor: the classic 24-column sidebar feels cramped next to
+    // status/status-adjacent info at ultrawide sizes. At 120+ columns a 28
+    // column rail still leaves the transcript most of the room.
+    let sidebar_width = preferred_sidebar
+        .max(28)
+        .max(chat_width / 10)
+        .min(chat_width.saturating_sub(40));
+
+    (sidebar_width >= 20).then_some(sidebar_width)
+}
 
 pub fn render_sidebar(f: &mut Frame, area: Rect, app: &mut App, config: &Config) {
     // Clear hover state at the start of each render

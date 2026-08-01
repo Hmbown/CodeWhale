@@ -91,6 +91,16 @@ struct TranscriptScrollbar {
 
 impl ChatWidget {
     pub fn new(app: &mut App, area: Rect) -> Self {
+        let ocean_elapsed_ms = app.ocean_started_at.elapsed().as_millis();
+        Self::new_with_ocean_elapsed(app, area, ocean_elapsed_ms)
+    }
+
+    /// Build one render snapshot from an already sampled ocean clock.
+    ///
+    /// Production samples the monotonic clock in [`Self::new`]. Keeping the
+    /// sampled value as an explicit input here gives render tests a stable
+    /// frame without adding a second clock or freezing the runtime animation.
+    fn new_with_ocean_elapsed(app: &mut App, area: Rect, ocean_elapsed_ms: u128) -> Self {
         let content_area = area;
         let background = app.ui_theme.surface_bg;
         let ocean_ramp = app
@@ -102,7 +112,6 @@ impl ChatWidget {
             .ocean_treatment
             .supports_ambient_life()
             .then(|| crate::tui::ocean::ambient_inks(&app.ui_theme));
-        let ocean_elapsed_ms = app.ocean_started_at.elapsed().as_millis();
         let completion_elapsed_ms = (!app.low_motion && app.fancy_animations)
             .then_some(())
             .and(app.ocean_completion_started_at)
@@ -6313,13 +6322,17 @@ mod tests {
     #[test]
     fn underwater_launch_is_visibly_deep_and_preserves_text_cells() {
         let mut app = create_test_app();
-        app.workspace = PathBuf::from("/tmp/codewhale-test-workspace");
+        app.workspace = PathBuf::from("codewhale-test-workspace");
         app.model = "deepseek-v4-pro".to_string();
 
         let area = Rect::new(0, 0, 100, 20);
         let base = app.ui_theme.surface_bg;
+        let context = format!("codewhale · {} · no git · mcp 0", app.workspace.display());
         let mut buf = Buffer::empty(area);
-        ChatWidget::new(&mut app, area).render(area, &mut buf);
+        // Sample one known point in the live motion path. The old test raced
+        // the scheduler between App construction and rendering, which could
+        // move the school off-screen on slower Windows runners.
+        ChatWidget::new_with_ocean_elapsed(&mut app, area, 0).render(area, &mut buf);
 
         assert_ne!(buf[(0, 0)].bg, buf[(0, 19)].bg);
         let rendered = buffer_text(&buf, area);
@@ -6339,8 +6352,7 @@ mod tests {
         let leads = rendered.matches("><o>").count() + rendered.matches("<o><").count();
         assert_eq!(leads, 1, "exactly one eyed lead fish:\n{rendered}");
 
-        let context = "codewhale · /tmp/codewhale-test-workspace · no git · mcp 0";
-        let context_x = ((100usize - UnicodeWidthStr::width(context)) / 2) as u16;
+        let context_x = ((100usize - UnicodeWidthStr::width(context.as_str())) / 2) as u16;
         let context_cell = (0..area.height)
             .find_map(|y| (buf[(context_x, y)].symbol() == "c").then_some((context_x, y)))
             .expect("context line");

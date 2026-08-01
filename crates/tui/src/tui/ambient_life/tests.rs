@@ -322,7 +322,11 @@ fn motion_is_a_deterministic_function_of_elapsed_time() {
             .map(|mark| (mark.glyph, mark.x, mark.y))
             .collect::<Vec<_>>()
     };
-    assert_eq!(pose(&first), pose(&second), "motion must be a pure function of t");
+    assert_eq!(
+        pose(&first),
+        pose(&second),
+        "motion must be a pure function of t"
+    );
     let top = first
         .marks
         .iter()
