@@ -20,7 +20,14 @@ jobs:
   link:
     runs-on: ubuntu-latest
     steps:
+      # Automated dependency bumps (dependabot and any other GitHub-verified
+      # bot account) are machine-generated and can never carry a closing
+      # keyword; failing them here would require hand-editing every bot body,
+      # which defeats the automation. The gate stays strict for every human
+      # PR. `user.type` is set by GitHub for verified bot accounts, so a PR
+      # author cannot spoof it to dodge the check.
       - name: Require a closing keyword or an explicit opt-out
+        if: github.event.pull_request.user.type != 'Bot'
         env:
           # Fetched live rather than read from the event payload. A rerun
           # replays the payload the run started with, so a body-only fix could
