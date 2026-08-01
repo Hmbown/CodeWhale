@@ -422,7 +422,7 @@ pub(super) fn spillover_pager_section(app: &App, cell_index: usize) -> Option<St
             })
         })
         .unwrap_or_else(|| "(retained output is unavailable)".to_string());
-    Some(format!("── Full output (spillover) ──\n\n{body}"))
+    Some(format!("── Full output ──\n\n{body}"))
 }
 
 fn read_owned_session_artifact(artifact: &crate::artifacts::ArtifactRecord) -> Option<String> {

@@ -256,6 +256,7 @@ fn cache_fingerprint_changes_when_only_ramp_colors_change() {
         None,
         ShellPhase::Working,
         true,
+        1000,
     );
     let second = OceanColumn::new(
         second_ramp,
@@ -264,6 +265,7 @@ fn cache_fingerprint_changes_when_only_ramp_colors_change() {
         None,
         ShellPhase::Working,
         true,
+        1000,
     );
 
     assert_ne!(first.color_at_y(viewport.y), second.color_at_y(viewport.y));
@@ -283,7 +285,15 @@ fn each_ramp_color_participates_in_the_typed_cache_identity() {
         deep: Color::Rgb(7, 8, 9),
         ambient: Color::Rgb(10, 11, 12),
     };
-    let baseline = OceanColumn::new(ramp, viewport, 22_500, None, ShellPhase::Working, true);
+    let baseline = OceanColumn::new(
+        ramp,
+        viewport,
+        22_500,
+        None,
+        ShellPhase::Working,
+        true,
+        1000,
+    );
     let alternatives = [
         OceanRamp {
             surface: Color::Rgb(101, 2, 3),
@@ -311,6 +321,7 @@ fn each_ramp_color_participates_in_the_typed_cache_identity() {
             None,
             ShellPhase::Working,
             true,
+            1000,
         );
         assert_ne!(
             baseline.ramp_cache_identity(),
@@ -324,8 +335,24 @@ fn each_ramp_color_participates_in_the_typed_cache_identity() {
 fn identical_semantic_cache_inputs_have_identical_identity() {
     let ramp = OceanRamp::for_theme(&crate::palette::UI_THEME).expect("RGB theme");
     let viewport = Rect::new(3, 5, 80, 24);
-    let first = OceanColumn::new(ramp, viewport, 22_500, None, ShellPhase::Working, true);
-    let second = OceanColumn::new(ramp, viewport, 22_500, None, ShellPhase::Working, true);
+    let first = OceanColumn::new(
+        ramp,
+        viewport,
+        22_500,
+        None,
+        ShellPhase::Working,
+        true,
+        1000,
+    );
+    let second = OceanColumn::new(
+        ramp,
+        viewport,
+        22_500,
+        None,
+        ShellPhase::Working,
+        true,
+        1000,
+    );
 
     assert_eq!(first.ramp_cache_identity(), second.ramp_cache_identity());
     assert_eq!(first.ramp_fingerprint(), second.ramp_fingerprint());
@@ -351,7 +378,7 @@ fn split_shell_surfaces_share_one_absolute_row_column() {
     }
     buf[(4, 10)].set_bg(theme.selection_bg);
 
-    let column = OceanColumn::new(ramp, viewport, 0, None, ShellPhase::Idle, false);
+    let column = OceanColumn::new(ramp, viewport, 0, None, ShellPhase::Idle, false, 0);
     column.paint_matching(header, &mut buf, theme.header_bg);
     column.paint_matching(composer, &mut buf, theme.composer_bg);
 
@@ -363,4 +390,96 @@ fn split_shell_surfaces_share_one_absolute_row_column() {
         theme.selection_bg,
         "semantic surfaces must survive the shell ombre pass"
     );
+}
+
+// ---- v0.9.4: life presence eases the animated/static boundary ----
+
+#[test]
+fn life_presence_is_pure_and_bounded() {
+    // Same inputs -> same output; presence never leaves 0..=1.
+    let inputs = [
+        (None, None, false, false, false),
+        (None, None, true, false, false),
+        (Some(0), Some(0), true, false, false),
+        (Some(500), Some(10_000), false, false, false),
+        (Some(2_000), None, true, false, false),
+        (None, Some(30_000), true, true, false),
+    ];
+    for (completion, turn, animated, browsing, empty) in inputs {
+        let a = life_presence(completion, turn, animated, browsing, empty);
+        let b = life_presence(completion, turn, animated, browsing, empty);
+        assert_eq!(a, b, "life_presence must be a pure function of its inputs");
+        assert!(
+            (0.0..=1.0).contains(&a),
+            "presence must stay in 0..=1, got {a}"
+        );
+    }
+}
+
+#[test]
+fn life_presence_holds_full_through_completion_breath_then_settles() {
+    // During the breath the water keeps full life so the settle flourish is
+    // accompanied by swimming fish, then presence eases out.
+    assert_eq!(life_presence(Some(0), None, false, false, false), 1.0);
+    assert_eq!(
+        life_presence(Some(COMPLETION_BREATH_MS - 1), None, false, false, false),
+        1.0
+    );
+    assert_eq!(
+        life_presence(Some(COMPLETION_BREATH_MS), None, false, false, false),
+        1.0,
+        "presence holds at the breath boundary before easing"
+    );
+    let mid = life_presence(
+        Some(COMPLETION_BREATH_MS + SETTLE_MS / 2),
+        None,
+        false,
+        false,
+        false,
+    );
+    assert!(
+        mid > 0.0 && mid < 1.0,
+        "presence must be mid-fade during the settle window, got {mid}"
+    );
+    assert_eq!(
+        life_presence(
+            Some(COMPLETION_BREATH_MS + SETTLE_MS),
+            None,
+            false,
+            false,
+            false
+        ),
+        0.0,
+        "presence reaches zero at the end of the settle window"
+    );
+}
+
+#[test]
+fn life_presence_ramps_in_from_turn_anchor_with_bounded_velocity() {
+    // Working/Verifying ramps in over RAMP_MS; the ramp is monotone and
+    // zero-velocity at both ends (smoothstep), so bursty streams ease in.
+    let at = |ms: u128| life_presence(None, Some(ms), true, false, false);
+    assert_eq!(at(0), 0.0);
+    assert_eq!(at(RAMP_MS / 2), 0.5, "smoothstep midpoint is 0.5");
+    assert_eq!(at(RAMP_MS), 1.0);
+    assert_eq!(at(RAMP_MS * 10), 1.0);
+    // Monotone non-decreasing across the ramp.
+    let mut prev = 0.0f32;
+    for step in 1..=16u128 {
+        let ms = step * RAMP_MS / 16;
+        let value = at(ms);
+        assert!(value >= prev, "presence must not regress while ramping");
+        prev = value;
+    }
+}
+
+#[test]
+fn life_presence_user_driven_states_are_immediate() {
+    // Browsing history and the pristine empty state are deliberate user
+    // surfaces: full presence with no ramp.
+    assert_eq!(life_presence(None, Some(0), true, true, false), 1.0);
+    assert_eq!(life_presence(None, Some(0), true, false, true), 1.0);
+    // Fully static contexts are exactly zero.
+    assert_eq!(life_presence(None, None, false, false, false), 0.0);
+    assert_eq!(life_presence(None, Some(50_000), false, false, false), 0.0);
 }

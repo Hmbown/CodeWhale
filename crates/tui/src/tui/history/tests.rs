@@ -414,21 +414,24 @@ fn render_spillover_annotation_truncates_to_width() {
         output_summary: None,
         is_diff: false,
     };
-    let lines = cell.lines_with_mode(40, true, super::RenderMode::Live);
+    let width = 80;
+    let lines = cell.lines_with_mode(width, true, super::RenderMode::Live);
     let rendered: String = lines
         .iter()
         .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
         .collect();
     assert!(
-        rendered.contains("Exact evidence retained"),
-        "compact live rows should expose the calm path-free receipt: {rendered:?}"
+        rendered.contains("Output shortened"),
+        "compact live rows should expose the calm expand affordance: {rendered:?}"
     );
+    assert!(rendered.contains("opens full output"), "{rendered:?}");
+    assert!(text_display_width(&rendered) <= usize::from(width));
     assert!(!rendered.contains(long_path));
 }
 
 #[test]
-fn specialized_bash_and_mcp_cells_share_the_calm_evidence_receipt() {
-    let receipt = "[Exact evidence retained · 200 KiB · inspect with `retrieve_tool_result ref=art_call-big`]\n\nhead\n\n[final excerpt]\ntail";
+fn specialized_bash_and_mcp_cells_share_the_calm_expand_affordance() {
+    let receipt = "head\n\n… 200 KiB of output omitted — view full output in the tool details view\n\n…\ntail";
     let bash = ExecCell {
         command: "cargo test".to_string(),
         status: ToolStatus::Failed,
@@ -454,8 +457,9 @@ fn specialized_bash_and_mcp_cells_share_the_calm_evidence_receipt() {
         lines_text(&ToolCell::Exec(bash).lines_with_motion(80, true)),
         lines_text(&ToolCell::Mcp(mcp).lines_with_motion(80, true)),
     ] {
-        assert!(rendered.contains("Exact evidence retained"), "{rendered}");
-        // Option+V is a global details affordance, not a per-card stamp (#4718).
+        assert!(rendered.contains("Output shortened"), "{rendered}");
+        assert!(rendered.contains("opens full output"), "{rendered}");
+        // The chord is a global details affordance, not a per-card stamp (#4718).
         assert!(!rendered.contains("Option+V to inspect"), "{rendered}");
         assert!(!rendered.contains("retrieve_tool_result"), "{rendered}");
         assert!(!rendered.contains("head"), "{rendered}");
@@ -463,23 +467,29 @@ fn specialized_bash_and_mcp_cells_share_the_calm_evidence_receipt() {
 }
 
 #[test]
-fn adaptive_evidence_receipt_is_calm_path_free_and_width_bounded() {
+fn adaptive_evidence_affordance_is_calm_path_free_and_width_bounded() {
     use std::path::Path;
 
     let secret_path = Path::new("/Users/private/.codewhale/sessions/session-a/artifacts/hash.txt");
+    let expected = format!(
+        "Output shortened — {}",
+        crate::tui::key_shortcuts::tool_details_shortcut_action_hint("full output")
+    );
     for width in [18_u16, 40, 80, 120] {
-        let rendered = line_to_plain(&render_spillover_annotation(secret_path, width));
+        let rendered = line_to_plain(&render_spillover_annotation(width));
         assert!(
             text_display_width(&rendered) <= usize::from(width),
-            "receipt exceeds width {width}: {rendered:?}"
+            "affordance exceeds width {width}: {rendered:?}"
         );
         assert!(!rendered.contains("/Users"));
         assert!(!rendered.contains("hash.txt"));
         assert!(!rendered.contains("Option+V"));
-        if width >= 32 {
-            assert_eq!(rendered, "  Exact evidence retained");
+        if usize::from(width) >= text_display_width(&expected) {
+            assert_eq!(rendered, expected);
         }
     }
+    // The path parameter is gone: the annotation never exposes storage paths.
+    let _ = secret_path;
 }
 
 #[test]
