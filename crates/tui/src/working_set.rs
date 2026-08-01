@@ -1079,7 +1079,6 @@ impl WorkingSet {
 
         let mut lines: Vec<String> = Vec::new();
         lines.push("## Repo Working Set".to_string());
-        lines.push(format!("Workspace: {}", workspace.display()));
 
         if let Some(summary) = repo_summary {
             lines.push(summary);
@@ -1771,6 +1770,7 @@ mod tests {
         let block = ws.summary_block(tmp.path()).expect("block");
 
         assert!(block.contains("Repo Working Set"));
+        assert!(!block.contains("Workspace:"));
         assert!(block.contains("Cargo.toml"));
         assert!(block.contains("src"));
         assert!(block.contains("src/lib.rs"));

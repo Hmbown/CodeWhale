@@ -41,7 +41,6 @@ use crate::models::{
 };
 use crate::prompts;
 use crate::purge::{emit_purge_completed, emit_purge_failed, emit_purge_started, run_purge};
-use crate::resource_telemetry::ResourceTelemetry;
 #[cfg(test)]
 use crate::route_runtime::resolve_runtime_route;
 use crate::route_runtime::{
@@ -87,6 +86,20 @@ use super::turn::{TurnContext, post_turn_snapshot, pre_turn_snapshot};
 
 const ENGINE_OP_CHANNEL_CAPACITY: usize = 32;
 const GOAL_CONTINUATION_FAILURE_DETAIL_MAX_BYTES: usize = 512;
+
+fn context_pressure_message(usage_percent: f64) -> Option<&'static str> {
+    if usage_percent >= crate::tui::context_inspector::CONTEXT_CRITICAL_THRESHOLD_PERCENT {
+        Some(
+            "Context pressure: critical — CRITICAL: stop expanding scope; run /compact immediately or finish the current task",
+        )
+    } else if usage_percent >= crate::tui::context_inspector::CONTEXT_WARNING_THRESHOLD_PERCENT {
+        Some(
+            "Context pressure: warning — ESCALATED: prefer /compact, narrow scope, or finish the current task",
+        )
+    } else {
+        None
+    }
+}
 
 fn agent_list_event(manager: &SubAgentManager) -> Event {
     Event::AgentList {
@@ -2488,90 +2501,55 @@ impl Engine {
         prompt_context: &NextTurnPromptContext,
         system_prompt: Option<&SystemPrompt>,
     ) {
+        if let Some(line) = self.context_pressure_line(current_text, prompt_context, system_prompt)
+        {
+            lines.push(line);
+        }
+        if let Some(line) = self.active_goal_token_budget_line(prompt_context) {
+            lines.push(line);
+        }
+    }
+
+    /// One-line context-pressure signal, emitted **only** while the input
+    /// estimate sits at or above the warning/critical thresholds. No token
+    /// counts, percentages, or headroom figures: the model only learns that
+    /// the pressure band it is in has crossed a threshold. Between crossings
+    /// the line is byte-stable, so ordinary turns do not bust the prefix
+    /// cache.
+    fn context_pressure_line(
+        &self,
+        current_text: &str,
+        prompt_context: &NextTurnPromptContext,
+        system_prompt: Option<&SystemPrompt>,
+    ) -> Option<String> {
         let input_tokens = self.active_input_tokens_with_current_text(current_text, system_prompt);
-        if let Some(budget) = route_context_budget_for_route(
+        let budget = route_context_budget_for_route(
             prompt_context.provider,
             &prompt_context.model,
             prompt_context.route_limits,
             input_tokens,
-        ) {
-            let usage_percent = budget.usage_percent();
-            let escalation = if usage_percent
-                >= crate::tui::context_inspector::CONTEXT_CRITICAL_THRESHOLD_PERCENT
-            {
-                " — CRITICAL: stop expanding scope; run /compact immediately or finish the current task"
-            } else if usage_percent
-                >= crate::tui::context_inspector::CONTEXT_WARNING_THRESHOLD_PERCENT
-            {
-                " — ESCALATED: prefer /compact, narrow scope, or finish the current task"
-            } else {
-                ""
-            };
-            lines.push(format!(
-                "Context pressure: {} ({usage_percent:.1}% used, {} / {} tokens; {} input tokens available){escalation}",
-                budget.pressure.label(),
-                budget.input_tokens,
-                budget.window_tokens,
-                budget.available_input_tokens,
-            ));
-        }
-
-        if let Some(line) = self.session_token_usage_line() {
-            lines.push(line);
-        }
-        if let Some(line) = self.active_goal_resource_line(prompt_context) {
-            lines.push(line);
-        }
+        )?;
+        context_pressure_message(budget.usage_percent()).map(str::to_string)
     }
 
-    fn session_token_usage_line(&self) -> Option<String> {
-        let usage = &self.session.total_usage;
-        let total = usage.input_tokens.saturating_add(usage.output_tokens);
-        if total == 0 {
-            return None;
-        }
-
-        let mut line = format!(
-            "Session token usage: {total} total ({} input, {} output)",
-            usage.input_tokens, usage.output_tokens,
-        );
-        if let Some(hit_tokens) = usage.cache_read_input_tokens {
-            line.push_str(&format!(", cache hits {hit_tokens}"));
-        }
-        if let Some(write_tokens) = usage.cache_creation_input_tokens {
-            line.push_str(&format!(", cache writes {write_tokens}"));
-        }
-        Some(line)
-    }
-
-    fn active_goal_resource_line(&self, prompt_context: &NextTurnPromptContext) -> Option<String> {
+    /// Goal pacing for the model: the budget figure only, and only while a
+    /// goal is actually active. Usage/time deltas, rates, and continuation
+    /// counts are UI telemetry — they changed every turn and invalidated the
+    /// prefix cache without adding model-steering signal.
+    fn active_goal_token_budget_line(
+        &self,
+        prompt_context: &NextTurnPromptContext,
+    ) -> Option<String> {
         let objective = prompt_context.goal_objective.as_deref()?;
         let snapshot = self.config.goal_state.lock().ok()?.snapshot();
         let same_goal =
             normalized_goal_objective(snapshot.objective.as_deref()).as_deref() == Some(objective);
-        let (tokens_used, time_used_seconds, continuation_count, token_budget) = if same_goal {
-            (
-                snapshot.tokens_used,
-                snapshot.time_used_seconds,
-                snapshot.continuation_count,
-                snapshot.token_budget,
-            )
+        let token_budget = if same_goal {
+            snapshot.token_budget
         } else {
-            (0, 0, 0, prompt_context.goal_token_budget)
-        };
-
-        let mut telemetry = ResourceTelemetry::new(tokens_used, time_used_seconds);
-        if let Some(token_budget) = token_budget {
-            telemetry = telemetry.with_token_budget(u64::from(token_budget));
-        }
-
-        let mut line = format!("Active goal resource usage: {}", telemetry.human_summary());
-        if tokens_used > 0 && time_used_seconds > 0 {
-            let rate = tokens_used as f64 / time_used_seconds as f64;
-            line.push_str(&format!("; {rate:.1} tok/s"));
-        }
-        line.push_str(&format!("; {continuation_count} continuations"));
-        Some(line)
+            prompt_context.goal_token_budget
+        }?;
+        Some(format!("Active goal token budget: {token_budget}"))
     }
 
     async fn add_session_message(&mut self, message: Message) {
@@ -2611,7 +2589,7 @@ impl Engine {
     /// Build `<turn_meta>` from an explicit snapshot of the session state a
     /// turn installs *before* it writes the block.
     ///
-    /// Production installs mode, approval posture, policy narrowing, and the
+    /// Production installs approval posture, policy narrowing, and the
     /// observed working set on `self`, then reads them back here.
     /// `/preview-request` cannot install any of that — it describes a turn
     /// that has not started — so it passes the values it would have installed,
@@ -2622,9 +2600,9 @@ impl Engine {
     fn turn_metadata_block_from_snapshot(
         &self,
         _routed_model: &str,
-        auto_model: bool,
-        reasoning_effort: Option<&str>,
-        reasoning_effort_auto: bool,
+        _auto_model: bool,
+        _reasoning_effort: Option<&str>,
+        _reasoning_effort_auto: bool,
         provenance: UserInputProvenance,
         current_text: &str,
         snapshot: TurnMetadataSnapshot<'_>,
@@ -2642,42 +2620,36 @@ impl Engine {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
 
-        // Facts only (#4780). Mode doctrine and permission-question discipline
-        // ship once in the stable system prefix (mode/approval overlays); re-
-        // asserting hundreds of tokens of doctrine here out-shouts the
-        // constitution by salience every user message.
+        // Facts only (#4780 + turn-meta diet). Mode doctrine ships once in the
+        // stable system prefix. The permission posture does not: preserve its
+        // compact label so the model can distinguish Ask, Auto-Review, Full
+        // Access, and Never without repeating question-discipline prose.
+        // Route/effort/model lines are telemetry the model cannot act on.
         let mut lines = vec![
             format!("Current local date: {today}"),
             // Workspace path moved here from the static `## Environment` block so
             // the static system prefix stays byte-stable across sessions (see
             // `render_environment_block` for the prefix-cache rationale).
             format!("Current workspace: {}", self.config.workspace.display()),
-            format!("Current model: {}", prompt_context.model),
-            format!("Current mode: {}", prompt_context.mode.as_setting()),
             format!(
                 "Current permission posture: {}",
                 approval_mode.permission_chip_label()
             ),
-            format!("Input provenance: {}", provenance.as_str()),
-            format!(
-                "Input authority: {}",
-                if provenance.can_authorize_work() {
-                    "external_current_turn"
-                } else {
-                    "non_authoritative"
-                }
-            ),
         ];
-        if auto_model {
-            lines.push(format!("Auto model route: {}", prompt_context.model));
-        }
-        if reasoning_effort_auto && let Some(reasoning_effort) = reasoning_effort {
-            lines.push(format!("Auto reasoning effort: {reasoning_effort}"));
+        // On ordinary external turns the user's own message is authoritative by
+        // construction, so provenance is redundant. On non-external turns
+        // (sub-agent handoff, runtime events) the *reduced* authority is the
+        // sole signal, so surface it as one condensed line.
+        if !provenance.can_authorize_work() {
+            lines.push(format!(
+                "Input provenance: {} (non-authoritative)",
+                provenance.as_str()
+            ));
         }
         // #3947: when runtime policy narrowed this turn's authority, the model
-        // learns that it happened, why, and the exact sentence the user saw —
-        // not merely the already-narrowed posture above. Emitted only on a
-        // narrowed turn, so the ordinary turn's metadata stays byte-stable.
+        // learns that it happened, why, and the exact sentence the user saw.
+        // Emitted only on a narrowed turn, so the ordinary turn's metadata
+        // stays byte-stable.
         if let Some(event) = policy_narrowing {
             lines.push(format!("Authority narrowing: {}", event.reason().as_str()));
             lines.push(format!("Authority transition: {}", event.transition()));
