@@ -308,16 +308,33 @@ impl StateStore {
     /// and sets a multi-second busy timeout so a second process retries on
     /// `SQLITE_BUSY` instead of failing immediately (issue #4734).
     fn configure_connection(conn: &Connection, db_path: &Path) -> Result<()> {
-        conn.pragma_update(None, "foreign_keys", "ON")
-            .with_context(|| format!("failed to enable foreign keys for {}", db_path.display()))?;
-        // WAL is a persistent DB-level mode; applying it on every open is
-        // idempotent and keeps freshly created files on the right journal.
-        conn.pragma_update(None, "journal_mode", "WAL")
-            .with_context(|| format!("failed to enable WAL for {}", db_path.display()))?;
-        // A few seconds covers brief writer contention between processes
-        // (e.g. TUI + app-server, or two CLI invocations sharing state.db).
+        // Install our wait policy before touching database-level settings or
+        // schema. Connection::open may currently provide a dependency default,
+        // but StateStore must not rely on that incidental behavior.
         conn.busy_timeout(std::time::Duration::from_secs(5))
             .with_context(|| format!("failed to set busy_timeout for {}", db_path.display()))?;
+        conn.pragma_update(None, "foreign_keys", "ON")
+            .with_context(|| format!("failed to enable foreign keys for {}", db_path.display()))?;
+
+        // WAL persists in the database header, so established stores need no
+        // write-like journal transition on every process start. Fresh or
+        // explicitly downgraded stores still transition once, and we verify
+        // SQLite accepted the requested mode instead of silently retaining the
+        // previous one (for example on an unsupported VFS).
+        let journal_mode: String = conn
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .with_context(|| format!("failed to read journal mode for {}", db_path.display()))?;
+        if !journal_mode.eq_ignore_ascii_case("wal") {
+            let configured_mode: String = conn
+                .pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get(0))
+                .with_context(|| format!("failed to enable WAL for {}", db_path.display()))?;
+            if !configured_mode.eq_ignore_ascii_case("wal") {
+                anyhow::bail!(
+                    "failed to enable WAL for {}: SQLite retained journal mode {configured_mode}",
+                    db_path.display()
+                );
+            }
+        }
         Ok(())
     }
 
@@ -1975,11 +1992,11 @@ fn row_to_thread_goal(row: &rusqlite::Row<'_>) -> rusqlite::Result<ThreadGoalRec
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::sync::{Arc, Barrier, Mutex};
+    use std::sync::{Arc, Barrier, Mutex, mpsc};
     use std::thread;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    fn temp_state_store(name: &str) -> StateStore {
+    fn temp_state_dir(name: &str) -> PathBuf {
         let suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system time")
@@ -1989,6 +2006,11 @@ mod tests {
             std::process::id()
         ));
         fs::create_dir_all(&dir).expect("create temp state dir");
+        dir
+    }
+
+    fn temp_state_store(name: &str) -> StateStore {
+        let dir = temp_state_dir(name);
         StateStore::open(Some(dir.join("state.db"))).expect("open state store")
     }
 
@@ -2178,87 +2200,108 @@ mod tests {
         );
     }
 
-    /// Two independent connections (as two CodeWhale processes would open)
-    /// must be able to write concurrently without failing with SQLITE_BUSY
-    /// once WAL + busy_timeout are applied at open (#4734).
-    ///
-    /// Uses `upsert_job` so the test only stresses SQLite (not the session
-    /// index JSONL path, which is a separate single-process file).
     #[test]
-    fn two_connections_can_write_concurrently_without_sqlite_busy() {
-        let suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "codewhale-state-concurrent-write-{}-{suffix}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&dir).expect("create temp state dir");
+    fn connection_setup_waits_for_database_lock_before_enabling_wal() {
+        let dir = temp_state_dir("locked-open");
         let db_path = dir.join("state.db");
 
-        // Create schema once so both writers share a real file.
-        let bootstrap = StateStore::open(Some(db_path.clone())).expect("bootstrap open");
-        {
-            let conn = bootstrap.conn().expect("bootstrap conn");
-            let journal_mode: String = conn
-                .query_row("PRAGMA journal_mode;", [], |row| row.get(0))
-                .expect("journal_mode");
-            assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
-        }
-        drop(bootstrap);
-
-        let path_a = db_path.clone();
-        let path_b = db_path.clone();
-        const WRITES_PER_CONN: usize = 50;
-
-        let handle_a = std::thread::spawn(move || {
-            let store = StateStore::open(Some(path_a)).expect("open store a");
-            for i in 0..WRITES_PER_CONN {
-                let job = JobStateRecord {
-                    id: format!("job-a-{i}"),
-                    name: format!("writer-a-{i}"),
-                    status: JobStateStatus::Running,
-                    progress: Some((i % 100) as u8),
-                    detail: Some("concurrent write a".to_string()),
-                    created_at: i as i64,
-                    updated_at: i as i64,
-                };
-                store.upsert_job(&job).unwrap_or_else(|err| {
-                    panic!("connection A write {i} failed (must not be SQLITE_BUSY): {err:#}");
-                });
-            }
-        });
-        let handle_b = std::thread::spawn(move || {
-            let store = StateStore::open(Some(path_b)).expect("open store b");
-            for i in 0..WRITES_PER_CONN {
-                let job = JobStateRecord {
-                    id: format!("job-b-{i}"),
-                    name: format!("writer-b-{i}"),
-                    status: JobStateStatus::Running,
-                    progress: Some((i % 100) as u8),
-                    detail: Some("concurrent write b".to_string()),
-                    created_at: i as i64,
-                    updated_at: i as i64,
-                };
-                store.upsert_job(&job).unwrap_or_else(|err| {
-                    panic!("connection B write {i} failed (must not be SQLITE_BUSY): {err:#}");
-                });
-            }
+        let candidate = Connection::open(&db_path).expect("open candidate connection");
+        // Do not let rusqlite's current default mask StateStore's own setup
+        // contract: configure_connection must install the wait policy before
+        // it performs any operation that can need a database lock.
+        candidate
+            .busy_timeout(Duration::ZERO)
+            .expect("disable dependency default timeout");
+        let blocker = Connection::open(&db_path).expect("open blocking connection");
+        let (locked_tx, locked_rx) = mpsc::sync_channel(0);
+        let blocker_thread = thread::spawn(move || {
+            blocker
+                .execute_batch("BEGIN EXCLUSIVE;")
+                .expect("acquire exclusive database lock");
+            locked_tx.send(()).expect("announce database lock");
+            thread::sleep(Duration::from_millis(200));
+            blocker
+                .execute_batch("COMMIT;")
+                .expect("release exclusive database lock");
         });
 
-        handle_a.join().expect("writer A panicked");
-        handle_b.join().expect("writer B panicked");
+        locked_rx.recv().expect("wait for database lock");
+        StateStore::configure_connection(&candidate, &db_path)
+            .expect("connection setup should wait for the brief database lock");
+        blocker_thread.join().expect("blocking thread panicked");
+
+        let journal_mode: String = candidate
+            .query_row("PRAGMA journal_mode;", [], |row| row.get(0))
+            .expect("read journal_mode");
+        assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
+
+        drop(candidate);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// A second process must wait for a brief active writer instead of
+    /// surfacing SQLITE_BUSY (#4734).
+    ///
+    /// The lock handoff is explicit: unlike a race between many autocommit
+    /// writes, this proves the busy timeout while keeping the contention
+    /// duration below its documented five-second bound on every platform.
+    #[test]
+    fn second_connection_waits_for_active_writer() {
+        let dir = temp_state_dir("concurrent-write");
+        let db_path = dir.join("state.db");
+
+        let store_a = StateStore::open(Some(db_path.clone())).expect("open store a");
+        let store_b = StateStore::open(Some(db_path.clone())).expect("open store b");
+        let (locked_tx, locked_rx) = mpsc::sync_channel(0);
+        let (release_tx, release_rx) = mpsc::sync_channel(0);
+
+        let writer_a = thread::spawn(move || {
+            let conn = store_a.conn().expect("connection a");
+            conn.execute_batch(
+                r#"
+                BEGIN IMMEDIATE;
+                INSERT INTO jobs(id, name, status, created_at, updated_at)
+                VALUES ('job-a', 'writer-a', 'running', 0, 0);
+                "#,
+            )
+            .expect("writer a should acquire the database write lock");
+            locked_tx.send(()).expect("announce active writer");
+            release_rx.recv().expect("wait to release active writer");
+            conn.execute_batch("COMMIT;")
+                .expect("writer a should commit");
+        });
+
+        locked_rx.recv().expect("wait for active writer");
+        let (attempting_tx, attempting_rx) = mpsc::sync_channel(0);
+        let writer_b = thread::spawn(move || {
+            attempting_tx.send(()).expect("announce second write");
+            store_b.upsert_job(&JobStateRecord {
+                id: "job-b".to_string(),
+                name: "writer-b".to_string(),
+                status: JobStateStatus::Running,
+                progress: None,
+                detail: Some("waited for writer a".to_string()),
+                created_at: 1,
+                updated_at: 1,
+            })
+        });
+
+        attempting_rx.recv().expect("wait for second write attempt");
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            !writer_b.is_finished(),
+            "second writer should still be waiting while the first holds the lock"
+        );
+        release_tx.send(()).expect("release active writer");
+        writer_a.join().expect("writer a panicked");
+        writer_b
+            .join()
+            .expect("writer b panicked")
+            .expect("writer b should succeed after the lock is released");
 
         let store = StateStore::open(Some(db_path)).expect("reopen for verify");
-        let listed = store
-            .list_jobs(Some(WRITES_PER_CONN * 2))
-            .expect("list jobs");
-        assert_eq!(
-            listed.len(),
-            WRITES_PER_CONN * 2,
-            "both connections should have persisted all jobs"
-        );
+        let listed = store.list_jobs(Some(2)).expect("list jobs");
+        assert_eq!(listed.len(), 2, "both writers should persist their jobs");
 
         let _ = fs::remove_dir_all(dir);
     }
