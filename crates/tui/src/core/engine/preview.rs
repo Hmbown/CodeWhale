@@ -1047,10 +1047,20 @@ mod tests {
         let config = deepseek_config();
         let (mut engine, _handle, _tmp) = preview_engine(&config);
         engine.api_provider = ApiProvider::Deepseek;
-        engine.active_route_limits = Some(codewhale_config::route::RouteLimits {
+        let installed_limits = codewhale_config::route::RouteLimits {
             context_tokens: Some(4_096),
             input_tokens: None,
             output_tokens: Some(512),
+        };
+        engine.active_route_limits = Some(installed_limits);
+        // Large enough to be critical for the installed 4K route, but safely
+        // below the warning threshold for the planned 123K route.
+        engine.session.messages.push(Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::Text {
+                text: "x".repeat(20_000),
+                cache_control: None,
+            }],
         });
         let prompt_context = NextTurnPromptContext::for_planned_turn(
             ApiProvider::Openrouter,
@@ -1068,6 +1078,35 @@ mod tests {
             None,
         );
         let system_prompt = engine.compose_stable_system_prompt(&prompt_context);
+        assert_eq!(
+            engine.context_pressure_line(
+                "cross-route budget",
+                &prompt_context,
+                system_prompt.as_ref()
+            ),
+            None,
+            "the planned 123K route must not inherit the installed route's pressure"
+        );
+        let installed_context = NextTurnPromptContext::for_planned_turn(
+            ApiProvider::Deepseek,
+            "deepseek-v4-flash".to_string(),
+            Some(installed_limits),
+            AppMode::Agent,
+            None,
+            GoalStatus::Active,
+            None,
+            false,
+            None,
+        );
+        assert_eq!(
+            engine
+                .context_pressure_line("cross-route budget", &installed_context, None)
+                .as_deref(),
+            Some(
+                "Context pressure: critical — CRITICAL: stop expanding scope; run /compact immediately or finish the current task"
+            ),
+            "control fixture must be critical under the installed 4K limits"
+        );
         let message = engine.user_text_message_from_snapshot(
             "cross-route budget".to_string(),
             &prompt_context.model,
@@ -1092,8 +1131,12 @@ mod tests {
             })
             .next_back()
             .expect("turn metadata text");
-        assert!(metadata.contains("123456 tokens"), "{metadata}");
-        assert!(!metadata.contains(" / 4096 tokens"), "{metadata}");
+        assert!(
+            !metadata.contains("Context pressure:"),
+            "planned route metadata must remain below warning: {metadata}"
+        );
+        assert!(!metadata.contains("123456 tokens"), "{metadata}");
+        assert!(!metadata.contains("4096 tokens"), "{metadata}");
     }
 
     #[tokio::test]

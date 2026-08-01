@@ -6564,8 +6564,8 @@ fn normalize_representative_prompt(text: &str, workspace: &Path, home: &Path) ->
             .fold(text.to_string(), |normalized, (path, replacement)| {
                 normalized.replace(path.to_string_lossy().as_ref(), replacement)
             });
-    // The environment block truthfully reports the host OS per render; the
-    // contract tracks content stability modulo host facts, so pin it here.
+    // Platform remains an actionable host fact in the stable environment
+    // block. Pin it so this fixture measures prompt structure across hosts.
     normalized.replace(
         &format!("- platform: {}", std::env::consts::OS),
         "- platform: <PLATFORM>",
@@ -9300,7 +9300,6 @@ fn mode_invariant_matrix_covers_context_catalog_subagents_and_prompt_metadata() 
     struct ModeCase {
         name: &'static str,
         mode: AppMode,
-        setting: &'static str,
         prompt_marker: &'static str,
         shell_policy: ShellPolicy,
         sandbox: ExpectedSandbox,
@@ -9315,7 +9314,6 @@ fn mode_invariant_matrix_covers_context_catalog_subagents_and_prompt_metadata() 
         ModeCase {
             name: "plan",
             mode: AppMode::Plan,
-            setting: "plan",
             prompt_marker: "##### Mode: Plan",
             shell_policy: ShellPolicy::None,
             sandbox: ExpectedSandbox::ReadOnly,
@@ -9328,7 +9326,6 @@ fn mode_invariant_matrix_covers_context_catalog_subagents_and_prompt_metadata() 
         ModeCase {
             name: "agent",
             mode: AppMode::Agent,
-            setting: "agent",
             prompt_marker: "##### Mode: Agent",
             shell_policy: ShellPolicy::Full,
             sandbox: ExpectedSandbox::WorkspaceWrite,
@@ -9341,7 +9338,6 @@ fn mode_invariant_matrix_covers_context_catalog_subagents_and_prompt_metadata() 
         ModeCase {
             name: "agent-full-access",
             mode: AppMode::Agent,
-            setting: "agent",
             prompt_marker: "##### Mode: Agent",
             shell_policy: ShellPolicy::Full,
             sandbox: ExpectedSandbox::DangerFullAccess,
@@ -9354,7 +9350,6 @@ fn mode_invariant_matrix_covers_context_catalog_subagents_and_prompt_metadata() 
         ModeCase {
             name: "auto-compat",
             mode: AppMode::Auto,
-            setting: "agent",
             prompt_marker: "##### Mode: Agent",
             shell_policy: ShellPolicy::Full,
             sandbox: ExpectedSandbox::WorkspaceWrite,
@@ -9367,7 +9362,6 @@ fn mode_invariant_matrix_covers_context_catalog_subagents_and_prompt_metadata() 
         ModeCase {
             name: "operate",
             mode: AppMode::Operate,
-            setting: "operate",
             prompt_marker: "##### Mode: Operate",
             shell_policy: ShellPolicy::Full,
             sandbox: ExpectedSandbox::WorkspaceWrite,
@@ -9382,7 +9376,6 @@ fn mode_invariant_matrix_covers_context_catalog_subagents_and_prompt_metadata() 
             // surfaces now speak Act (invisible one-way permission shorthand).
             name: "yolo",
             mode: AppMode::Yolo,
-            setting: "agent",
             prompt_marker: "##### Mode: Agent",
             shell_policy: ShellPolicy::Full,
             sandbox: ExpectedSandbox::DangerFullAccess,
@@ -9516,13 +9509,20 @@ fn mode_invariant_matrix_covers_context_catalog_subagents_and_prompt_metadata() 
             panic!("{}: expected text metadata block", case.name);
         };
         assert!(
-            text.contains(&format!("Current mode: {}", case.setting)),
+            text.contains(&format!(
+                "Current permission posture: {}",
+                case.approval_mode.permission_chip_label()
+            )),
             "{}: {text}",
             case.name
         );
-        // turn_meta carries the mode as a *fact*; the doctrine ships once in
-        // the stable prefix (#4780). Assert both halves so neither can be
-        // dropped silently the way the overlay was.
+        // Mode doctrine ships once in the stable prefix (#4780). The turn
+        // block carries only the independently actionable permission posture.
+        assert!(
+            !text.contains("Current mode:"),
+            "{}: turn metadata must not repeat the mode: {text}",
+            case.name
+        );
         assert!(
             !text.contains(case.prompt_marker),
             "{}: turn metadata must not re-embed mode doctrine: {text}",
@@ -11705,13 +11705,35 @@ fn turn_metadata_includes_current_local_date_without_working_set() {
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     assert!(text.starts_with("<turn_meta>\n"));
     assert!(text.contains(&format!("Current local date: {today}")));
-    assert!(text.contains("Current model: deepseek-v4-flash"));
-    assert!(text.contains("Input provenance: external_user"));
-    assert!(text.contains("Input authority: external_current_turn"));
+    assert!(
+        text.contains(&format!("Current workspace: {}", tmp.path().display())),
+        "workspace must remain in the block: {text}"
+    );
+    assert!(
+        text.contains("Current permission posture: Ask"),
+        "the active posture must remain model-visible: {text}"
+    );
+    // Turn-meta diet: no telemetry may re-enter the per-turn block.
+    for telemetry in [
+        "Current model:",
+        "Current mode:",
+        "Input provenance:",
+        "Input authority:",
+        "Auto model route:",
+        "Auto reasoning effort:",
+        "Session token usage:",
+        "Active goal resource usage:",
+        "Active goal token budget:",
+    ] {
+        assert!(
+            !text.contains(telemetry),
+            "{telemetry} leaked into turn_meta: {text}"
+        );
+    }
 }
 
 #[test]
-fn turn_metadata_surfaces_context_and_resource_usage() {
+fn turn_metadata_surfaces_goal_budget_only_while_goal_active() {
     let tmp = tempdir().expect("tempdir");
     let config = EngineConfig {
         model: "deepseek-v4-flash".to_string(),
@@ -11719,6 +11741,8 @@ fn turn_metadata_surfaces_context_and_resource_usage() {
         ..Default::default()
     };
     let (mut engine, _handle) = Engine::new(config, &Config::default());
+    // Even with session usage recorded, the per-turn block must not surface
+    // it: totals/cache figures are UI telemetry, not model steering signal.
     engine.session.total_usage.add(&Usage {
         input_tokens: 1_200,
         output_tokens: 300,
@@ -11741,81 +11765,68 @@ fn turn_metadata_surfaces_context_and_resource_usage() {
         panic!("expected text metadata block");
     };
 
-    assert!(text.contains("Context pressure:"), "got: {text}");
-    assert!(text.contains("tokens;"), "got: {text}");
+    // The goal budget stays (model pacing), and only while the goal is active.
     assert!(
-        text.contains("input tokens available"),
-        "context headroom should be model-visible: {text}"
+        text.contains("Active goal token budget: 2000"),
+        "goal budget should be model-visible: {text}"
     );
-    assert!(
-        text.contains("Session token usage: 1500 total (1200 input, 300 output"),
-        "session usage should be model-visible: {text}"
-    );
-    assert!(text.contains("cache hits 800"), "got: {text}");
-    assert!(text.contains("cache writes 400"), "got: {text}");
-    assert!(
-        text.contains("Active goal resource usage:"),
-        "active goal resource usage should be model-visible: {text}"
-    );
-    assert!(text.contains("50% budget"), "got: {text}");
-    assert!(text.contains("10.0 tok/s"), "got: {text}");
-}
+    // Usage/time deltas, rates, and continuation counts are telemetry.
+    for telemetry in [
+        "Session token usage:",
+        "cache hits",
+        "cache writes",
+        "Active goal resource usage:",
+        "tok/s",
+        "continuations",
+        "50% budget",
+    ] {
+        assert!(
+            !text.contains(telemetry),
+            "{telemetry} leaked into turn_meta: {text}"
+        );
+    }
 
-#[test]
-fn turn_metadata_escalates_context_pressure_at_warning_threshold() {
+    // Without an active goal the budget line must vanish entirely.
     let tmp = tempdir().expect("tempdir");
     let config = EngineConfig {
         model: "deepseek-v4-flash".to_string(),
         workspace: tmp.path().to_path_buf(),
         ..Default::default()
     };
-    let (mut engine, _handle) = Engine::new(config, &Config::default());
-
-    // Fabricate high context usage by stuffing the session with a large user message.
-    let large = "x".repeat(900_000);
-    engine.session.messages.push(Message {
-        role: "user".to_string(),
-        content: vec![ContentBlock::Text {
-            text: large,
-            cache_control: None,
-        }],
-    });
-
-    let user_msg = engine.user_text_message_with_turn_metadata("wrap up".to_string());
-    let last_block = user_msg.content.last().expect("turn metadata block");
-    let ContentBlock::Text { text, .. } = last_block else {
+    let (engine, _handle) = Engine::new(config, &Config::default());
+    let user_msg = engine.user_text_message_with_turn_metadata("no goal".to_string());
+    let ContentBlock::Text { text, .. } = user_msg.content.last().expect("turn metadata block")
+    else {
         panic!("expected text metadata block");
     };
+    assert!(
+        !text.contains("Active goal token budget:"),
+        "budget must not be emitted when no goal is active: {text}"
+    );
+}
 
-    if text.contains("Context pressure:") {
-        let usage_line = text
-            .lines()
-            .find(|line| line.starts_with("Context pressure:"))
-            .expect("context pressure line");
-        if usage_line.contains('%') {
-            let percent = usage_line
-                .split('(')
-                .nth(1)
-                .and_then(|rest| rest.split('%').next())
-                .and_then(|value| value.trim().parse::<f64>().ok())
-                .unwrap_or(0.0);
-            if percent >= crate::tui::context_inspector::CONTEXT_WARNING_THRESHOLD_PERCENT {
-                assert!(
-                    usage_line.contains("ESCALATED"),
-                    "expected escalation copy at >=85%: {usage_line}"
-                );
-            } else {
-                assert!(
-                    !usage_line.contains("ESCALATED"),
-                    "below 85% should stay informational: {usage_line}"
-                );
-            }
-        }
+#[test]
+fn context_pressure_message_emits_only_at_warning_and_critical_thresholds() {
+    const WARNING: &str = "Context pressure: warning — ESCALATED: prefer /compact, narrow scope, or finish the current task";
+    const CRITICAL: &str = "Context pressure: critical — CRITICAL: stop expanding scope; run /compact immediately or finish the current task";
+
+    assert_eq!(context_pressure_message(84.99), None);
+    assert_eq!(context_pressure_message(85.0), Some(WARNING));
+    assert_eq!(context_pressure_message(94.99), Some(WARNING));
+    assert_eq!(context_pressure_message(95.0), Some(CRITICAL));
+    assert_eq!(context_pressure_message(100.0), Some(CRITICAL));
+
+    // Threshold labels steer a decision without exposing a continuously
+    // changing percentage, token count, or headroom value.
+    for line in [WARNING, CRITICAL] {
+        assert!(!line.contains('%'), "{line}");
+        assert!(!line.contains("tokens"), "{line}");
+        assert!(!line.contains("headroom"), "{line}");
     }
 }
 
 #[test]
-fn runtime_turn_metadata_marks_non_authoritative_input() {
+fn runtime_turn_metadata_condenses_non_authoritative_provenance_to_one_line() {
     let tmp = tempdir().expect("tempdir");
     let config = EngineConfig {
         workspace: tmp.path().to_path_buf(),
@@ -11831,12 +11842,18 @@ fn runtime_turn_metadata_marks_non_authoritative_input() {
         panic!("expected text metadata block");
     };
 
-    assert!(text.contains("Input provenance: assistant_generated"));
-    assert!(text.contains("Input authority: non_authoritative"));
+    // Reduced authority on a non-external turn is the sole signal: one
+    // condensed line, not the former two-line provenance/authority pair.
+    assert!(
+        text.contains("Input provenance: assistant_generated (non-authoritative)"),
+        "{text}"
+    );
+    assert!(!text.contains("Input authority:"), "{text}");
+    assert!(!text.contains("Input provenance: external_user"), "{text}");
 }
 
 #[test]
-fn turn_metadata_includes_auto_model_route() {
+fn turn_metadata_omits_route_and_reasoning_effort_telemetry() {
     let tmp = tempdir().expect("tempdir");
     let config = EngineConfig {
         workspace: tmp.path().to_path_buf(),
@@ -11856,10 +11873,103 @@ fn turn_metadata_includes_auto_model_route() {
         panic!("expected text metadata block");
     };
 
-    assert!(text.contains("Current model: deepseek-v4-pro"));
-    assert!(text.contains("Auto model route: deepseek-v4-pro"));
-    assert!(text.contains("Auto reasoning effort: max"));
+    // Model, auto-route, and auto-reasoning-effort lines were pure telemetry
+    // and must never re-enter the per-turn block.
+    assert!(!text.contains("Current model:"), "{text}");
+    assert!(!text.contains("Auto model route:"), "{text}");
+    assert!(!text.contains("Auto reasoning effort:"), "{text}");
     assert!(!text.contains("debug this regression"));
+    assert!(
+        text.starts_with(
+            "<turn_meta>
+Current local date:"
+        ),
+        "{text}"
+    );
+}
+
+#[test]
+fn turn_metadata_is_byte_identical_across_identical_consecutive_turns() {
+    // Diet acceptance (captains-log #18/#21/#22): two identical consecutive
+    // turns must produce byte-identical `<turn_meta>` blocks. Pre-diet the
+    // block carried session totals, context-pressure counts, and goal usage
+    // rates that drifted between turns even with unchanged inputs; today the
+    // block carries only facts that are stable across ordinary turns.
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        model: "deepseek-v4-flash".to_string(),
+        workspace: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let (mut engine, _handle) = Engine::new(config, &Config::default());
+
+    // Use explicit route limits so the fixture exercises the critical band
+    // without depending on a model catalog entry or provider default.
+    engine.session.messages.push(Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::Text {
+            text: "x".repeat(100_000),
+            cache_control: None,
+        }],
+    });
+    let prompt_context = NextTurnPromptContext::for_planned_turn(
+        ApiProvider::Deepseek,
+        "deepseek-v4-flash".to_string(),
+        Some(codewhale_config::route::RouteLimits {
+            context_tokens: Some(10_000),
+            input_tokens: None,
+            output_tokens: Some(512),
+        }),
+        AppMode::Agent,
+        None,
+        crate::tools::goal::GoalStatus::Active,
+        None,
+        false,
+        None,
+    );
+
+    let meta_of = |msg: &Message| -> String {
+        let ContentBlock::Text { text, .. } = msg.content.last().expect("turn metadata block")
+        else {
+            panic!("expected text metadata block");
+        };
+        text.clone()
+    };
+    let message_for = |engine: &Engine| {
+        engine.user_text_message_from_snapshot(
+            "stable input".to_string(),
+            &prompt_context.model,
+            false,
+            None,
+            false,
+            UserInputProvenance::ExternalUser,
+            TurnMetadataSnapshot {
+                prompt_context: &prompt_context,
+                system_prompt: None,
+                approval_mode: engine.session.approval_mode,
+                working_set: &engine.session.working_set,
+                policy_narrowing: None,
+            },
+        )
+    };
+
+    let first = message_for(&engine);
+    let first_meta = meta_of(&first);
+    assert!(
+        first_meta.contains("Context pressure: critical"),
+        "fixture must exercise the pressure line: {first_meta}"
+    );
+
+    // Turn 2 builds with the first message already in the session, exactly as
+    // a real turn sequence would; the block must not change.
+    engine.session.add_message(first);
+    let second = message_for(&engine);
+    let second_meta = meta_of(&second);
+
+    assert_eq!(
+        first_meta, second_meta,
+        "turn_meta must be byte-identical across identical consecutive turns"
+    );
 }
 
 #[test]
@@ -12110,8 +12220,11 @@ fn external_user_wording_does_not_downgrade_standing_authority() {
 }
 
 #[test]
-fn turn_metadata_includes_plan_mode_as_fact_only() {
-    // #4780: turn_meta carries mode as a label, not the full mode doctrine.
+fn turn_metadata_leaves_mode_entirely_to_the_system_overlay() {
+    // #4780 + turn-meta diet: mode doctrine ships once in the stable system
+    // overlay, and the steady-state mode label was removed from turn_meta as
+    // redundant with that overlay. Neither the label nor the doctrine may
+    // re-enter the per-turn block.
     let tmp = tempdir().expect("tempdir");
     let config = EngineConfig {
         workspace: tmp.path().to_path_buf(),
@@ -12132,7 +12245,7 @@ fn turn_metadata_includes_plan_mode_as_fact_only() {
         panic!("expected text metadata block");
     };
 
-    assert!(text.contains("Current mode: plan"), "got: {text}");
+    assert!(!text.contains("Current mode:"), "got: {text}");
     assert!(
         !text.contains("Current mode policy"),
         "mode doctrine must not re-enter turn_meta: {text}"
@@ -12149,7 +12262,8 @@ fn turn_metadata_includes_plan_mode_as_fact_only() {
 
 #[test]
 fn turn_metadata_projects_permission_posture_as_fact_only() {
-    // #4780: posture is a fact; question-discipline prose stays out of turn_meta.
+    // #4780 + turn-meta diet: the active posture remains an actionable fact;
+    // question-discipline prose stays out of turn_meta.
     use crate::tui::approval::ApprovalMode;
 
     let cases = [
@@ -12225,15 +12339,15 @@ fn turn_metadata_preserves_standing_full_access_for_subagent_handoff() {
         panic!("expected text turn metadata");
     };
 
-    // Act mode and the permission posture are independent: the child handoff
-    // must keep the visible Act mode and the standing Full Access authority.
-    assert!(text.contains("Current mode: agent"), "{text}");
+    // A child handoff cannot grant new authority, but it retains the standing
+    // posture and names its reduced provenance in one condensed line.
+    assert!(!text.contains("Current mode:"), "{text}");
     assert!(
         text.contains("Current permission posture: Full Access"),
         "{text}"
     );
     assert!(
-        text.contains("Input authority: non_authoritative"),
+        text.contains("Input provenance: subagent_handoff (non-authoritative)"),
         "{text}"
     );
 }
@@ -14356,9 +14470,11 @@ async fn background_completion_after_a_turn_is_delivered_once_on_the_next_turn()
 /// Providers cache on the longest common prefix of the request, so anything
 /// that rewrites an *already-sent* message — or the system prompt — between
 /// turns invalidates every cached token after it and silently raises cost.
-/// This is easy to regress because per-turn `<turn_meta>` legitimately varies
-/// (context pressure and session token totals change every turn); what makes
-/// that safe is that a message is frozen once it enters the session.
+/// The turn-meta diet removed the per-turn telemetry (session totals, pressure
+/// counts, goal rates) that used to make `<turn_meta>` drift every turn; it
+/// now varies only on genuinely new signal (date boundary, working-set
+/// changes, threshold crossings). Freezing a message once it enters the
+/// session keeps every earlier message byte-identical regardless.
 ///
 /// The test pins both halves of that contract:
 ///   1. `<turn_meta>` is the *last* content block of a user message, so the

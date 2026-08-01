@@ -171,39 +171,30 @@ fn translation_target_language_for_tag(locale_tag: &str) -> &'static str {
     }
 }
 
-/// Render a `## Environment` block listing the resolved locale tag,
-/// runtime version, host platform, login shell, and current working directory.
+/// Render a `## Environment` block listing the resolved locale tag and the
+/// actionable host facts that affect command syntax.
 ///
-/// The block is appended to the workspace-static portion of the
-/// system prompt (after mode prompt + project context, before
-/// configured instructions / skills). `locale_tag` is resolved by the caller
-/// from `Settings` so this function stays I/O-free.
+/// The block is appended to the workspace-static portion of the system
+/// prompt (after mode prompt + project context, before configured
+/// instructions / skills). `locale_tag` is resolved by the caller from
+/// `Settings` so this function stays I/O-free.
+///
+/// `platform` and `shell` remain because they change how commands must be
+/// written and are stable for the life of the process. The release version was
+/// removed by the turn-meta diet: it is telemetry the model cannot act on and
+/// churned the otherwise-static prefix on every release. The live workspace
+/// path is delivered per-turn via `<turn_meta>` (see `turn_metadata_block`).
 fn render_environment_block(_workspace: &Path, locale_tag: &str) -> String {
-    let codewhale_version = env!("CARGO_PKG_VERSION");
     let platform = std::env::consts::OS;
     let shell = crate::shell_dispatcher::global_dispatcher()
         .kind()
         .binary()
         .to_string();
 
-    // The workspace path (`pwd`) is intentionally delivered per-turn via the
-    // `<turn_meta>` block (see `turn_metadata_block`) rather than embedded here.
-    //
-    // Rationale: when the workspace path changes between sessions (e.g. an
-    // ephemeral per-session workspace), a volatile value inside the otherwise
-    // static system prefix invalidates the inference server's prefix cache at
-    // that exact point. The cache then only partially matches and the tail must
-    // be re-prefilled from the divergence boundary. On backends that pair prefix
-    // caching with speculative decoding, this partial re-prefill can perturb the
-    // logits at the boundary enough to degrade structured tool-call emission
-    // (the model regresses to bare text). Keeping the static system prefix
-    // byte-identical across sessions lets the prefix cache be reused; the live
-    // workspace path still reaches the model every turn through `turn_meta`.
     format!(
         "## Environment\n\
          \n\
          - lang: {locale_tag}\n\
-         - codewhale_version: {codewhale_version}\n\
          - platform: {platform}\n\
          - shell: {shell}"
     )
@@ -1359,7 +1350,8 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
     // Permissions fragment: configured `instructions = [...]` files (#454).
     let permissions_body = instructions.and_then(render_instructions_block);
 
-    // Route fragment: active model / verbosity / translation posture.
+    // Route fragment: verbosity / translation posture (the model id was
+    // removed by the turn-meta diet — it is telemetry the model cannot act on).
     let route_body = render_route_fragment(&session_context);
 
     // Token-budget / continuity fragment: prior-session handoff relay.
@@ -1417,9 +1409,7 @@ fn render_route_fragment(session_context: &PromptSessionContext<'_>) -> String {
         .filter(|value| !value.is_empty())
         .unwrap_or("default");
     format!(
-        "model: {}\nverbosity: {}\ntranslation: {}",
-        session_context.model_id.trim(),
-        verbosity,
+        "verbosity: {verbosity}\ntranslation: {}",
         if session_context.translation_enabled {
             "on"
         } else {
@@ -2082,17 +2072,15 @@ mod tests {
     }
 
     #[test]
-    fn render_environment_block_lists_supplied_locale_and_workspace() {
+    fn render_environment_block_keeps_actionable_host_facts_without_version() {
         let tmp = tempdir().expect("tempdir");
         let block = render_environment_block(tmp.path(), "zh-Hans");
         assert!(block.starts_with("## Environment"));
         assert!(block.contains("- lang: zh-Hans"));
-        assert!(block.contains(&format!(
-            "- codewhale_version: {}",
-            env!("CARGO_PKG_VERSION")
-        )));
-        // pwd is now delivered per-turn via `turn_meta`, not in the static block.
+        // The workspace remains per-turn and the release version is telemetry;
+        // platform and shell still steer valid command syntax.
         assert!(!block.contains("- pwd:"));
+        assert!(!block.contains("- codewhale_version:"));
         assert!(block.contains("- platform:"));
         assert!(block.contains("- shell:"));
     }
@@ -2435,7 +2423,9 @@ mod tests {
             ));
         assert!(prompt.contains("## Environment"));
         assert!(prompt.contains("- lang: ja"));
-        assert!(prompt.contains("- codewhale_version:"));
+        assert!(!prompt.contains("- codewhale_version:"));
+        assert!(prompt.contains("- platform:"));
+        assert!(prompt.contains("- shell:"));
     }
 
     #[test]
@@ -2479,9 +2469,7 @@ mod tests {
         let user_block_at = prompt
             .find("<codewhale_user_constitution")
             .expect("user constitution block");
-        let env_at = prompt
-            .find("- codewhale_version:")
-            .expect("rendered environment block");
+        let env_at = prompt.find("- lang:").expect("rendered environment block");
         assert!(
             base_at < user_block_at && user_block_at < env_at,
             "user constitution should be its own layer after the base/project context and before volatile environment data"
@@ -3881,7 +3869,11 @@ mod tests {
         assert!(flat.contains(crate::model_context::FragmentId::Workspace.marker()));
         assert!(flat.contains(crate::model_context::FragmentId::Route.marker()));
         assert!(flat.contains("## Environment"));
-        assert!(flat.contains("model: deepseek-v4-pro"));
+        assert!(
+            flat.contains("verbosity: concise") && flat.contains("translation: off"),
+            "route fragment keeps verbosity/translation but drops the model id"
+        );
+        assert!(!flat.contains("model: deepseek-v4-pro"));
         assert!(flat.contains("<session_goal>"));
         assert!(flat.contains("ship WorldState Blocks"));
         assert!(flat.contains("remember the cutover"));

@@ -53,20 +53,17 @@ const SHELL_COMPLETION_EVENT_SUFFIX: &str = "\n</codewhale:runtime_event>";
 
 const SUBAGENT_HANDOFF_TURN_META: &str = concat!(
     "<turn_meta>\n",
-    "Input provenance: subagent_handoff\n",
-    "Input authority: non_authoritative\n",
+    "Input provenance: subagent_handoff (non-authoritative)\n",
     "</turn_meta>",
 );
 const SHELL_COMPLETION_HANDOFF_TURN_META: &str = concat!(
     "<turn_meta>\n",
-    "Input provenance: shell_completion\n",
-    "Input authority: non_authoritative\n",
+    "Input provenance: shell_completion (non-authoritative)\n",
     "</turn_meta>",
 );
 const RESTORED_CHECKPOINT_TURN_META: &str = concat!(
     "<turn_meta>\n",
-    "Input provenance: subagent_handoff\n",
-    "Input authority: non_authoritative\n",
+    "Input provenance: subagent_handoff (non-authoritative)\n",
     "Restore projection: subagent_checkpoint_v1\n",
     "</turn_meta>",
 );
@@ -258,6 +255,15 @@ fn is_subagent_handoff_turn_meta(text: &str) -> bool {
         return false;
     };
 
+    // Current shape (turn-meta diet): a single condensed provenance line.
+    if has_one_exact_metadata_line(
+        body,
+        "Input provenance:",
+        "Input provenance: subagent_handoff (non-authoritative)",
+    ) {
+        return true;
+    }
+    // Legacy shape (pre-diet saved sessions): the two-line pair.
     has_one_exact_metadata_line(
         body,
         "Input provenance:",
@@ -748,7 +754,7 @@ mod tests {
     }
 
     #[test]
-    fn restore_projection_accepts_runtime_generated_rich_turn_metadata() {
+    fn restore_projection_accepts_legacy_rich_turn_metadata() {
         let raw = Message {
             role: "user".to_string(),
             content: vec![
