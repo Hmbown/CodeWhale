@@ -961,15 +961,15 @@ fn render_latex_to_string(latex: &str) -> String {
                     }
                     // --- Binomial coefficient ---
                     "binom" => {
-                        if let Some((top_s, after_top)) = read_braced_at(input, total_cmd_end) {
-                            if let Some((bot_s, after_bot)) = read_braced_at(input, after_top) {
-                                out.push_str(&format!(
-                                    "({}/{})",
-                                    render_latex_to_string(&top_s),
-                                    render_latex_to_string(&bot_s)
-                                ));
-                                pos = after_bot;
-                            }
+                        if let Some((top_s, after_top)) = read_braced_at(input, total_cmd_end)
+                            && let Some((bot_s, after_bot)) = read_braced_at(input, after_top)
+                        {
+                            out.push_str(&format!(
+                                "({}/{})",
+                                render_latex_to_string(&top_s),
+                                render_latex_to_string(&bot_s)
+                            ));
+                            pos = after_bot;
                         }
                     }
                     // --- Square root ---
@@ -1147,13 +1147,13 @@ fn render_latex_to_string(latex: &str) -> String {
                             out.push_str(cmd);
                             pos = total_cmd_end;
                             // If followed by {, include the braced argument
-                            if input[pos..].starts_with('{') {
-                                if let Some((arg, new_pos)) = read_braced_at(input, pos) {
-                                    out.push('{');
-                                    out.push_str(&arg);
-                                    out.push('}');
-                                    pos = new_pos;
-                                }
+                            if input[pos..].starts_with('{')
+                                && let Some((arg, new_pos)) = read_braced_at(input, pos)
+                            {
+                                out.push('{');
+                                out.push_str(&arg);
+                                out.push('}');
+                                pos = new_pos;
                             }
                         }
                     }

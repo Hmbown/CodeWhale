@@ -23,13 +23,15 @@
 //! * [`apply_spillover`] — invoked from the engine's tool-execution
 //!   path (`turn_loop.rs`) so any successful tool result over
 //!   [`SPILLOVER_THRESHOLD_BYTES`] spills to disk and the model
-//!   receives a [`SPILLOVER_HEAD_BYTES`] head plus a pointer footer.
+//!   receives a bounded plain preview: a [`SPILLOVER_HEAD_BYTES`] head,
+//!   a short retained tail, and an ordinary footer pointing at the
+//!   tool details view.
 //! * Boot prune in `main.rs` deletes files older than
 //!   [`SPILLOVER_MAX_AGE`].
 //!
 //! UI-side rendering is owned by `tui/history.rs::render_spillover_annotation`;
-//! it exposes a path-free receipt and the tool-details shortcut opens the
-//! session artifact.
+//! it exposes a calm expand affordance and the tool-details shortcut opens the
+//! full retained output.
 
 use std::fs;
 use std::io;
@@ -321,8 +323,8 @@ pub fn maybe_spillover(
 /// result. 32 KiB is large enough for the model to keep meaningful
 /// context (a long stack trace, a `git diff` head, a directory
 /// listing of typical depth) without consuming the lion's share of
-/// the per-turn context budget. The full output is preserved on
-/// disk; the model can `read_file` it back if it needs the tail.
+/// the per-turn context budget. The full output is preserved
+/// internally and opens in the tool details view.
 pub const SPILLOVER_HEAD_BYTES: usize = 32 * 1024;
 /// Inline tail retained alongside the head so compiler summaries and final
 /// test failures are not systematically hidden by truncation.
@@ -336,13 +338,41 @@ fn retained_tail(content: &str, max_bytes: usize) -> &str {
     &content[start..]
 }
 
+/// Phrase shared by the model-facing preview footer and the TUI expand
+/// affordance, so both surfaces agree on where the full output lives.
+/// The phrase itself is deliberately ordinary: no handles, paths, or
+/// retrieval references.
+pub const SPILLOVER_PREVIEW_HINT: &str = "view full output in the tool details view";
+
+/// Ordinary footer for a truncated tool result. The full output is retained
+/// internally; this text only tells the model the preview is bounded and
+/// where the complete output can be seen (the tool details view).
+fn spillover_preview_footer(omitted_bytes: usize) -> String {
+    format!(
+        "… {} of output omitted — {SPILLOVER_PREVIEW_HINT}",
+        crate::artifacts::format_byte_size(omitted_bytes.try_into().unwrap_or(u64::MAX))
+    )
+}
+
+/// Build the model-facing preview for a truncated tool result: the head, an
+/// ordinary footer naming how much was omitted and where the full output can
+/// be seen, and a short retained tail. The full output is still retained
+/// internally; this is only the conversation-facing shape.
+fn truncated_preview(head: &str, tail: &str, original_len: usize) -> String {
+    let omitted = original_len.saturating_sub(head.len() + tail.len());
+    format!(
+        "{head}\n\n{}\n\n…\n{tail}",
+        spillover_preview_footer(omitted)
+    )
+}
+
 /// Apply spillover to a tool result in place. If the result's
 /// content exceeds [`SPILLOVER_THRESHOLD_BYTES`], writes the full
 /// content to a sibling file under `~/.codewhale/tool_outputs/`,
 /// replaces `result.content` with a [`SPILLOVER_HEAD_BYTES`] head
-/// plus a footer pointing the model at the spillover file, and
-/// stamps `metadata.spillover_path` so the UI can render its
-/// "full output: …" annotation.
+/// plus an ordinary preview footer pointing at the tool details
+/// view, and stamps `metadata.spillover_path` so the UI can render
+/// its expand annotation.
 ///
 /// Returns the spillover path on success, `None` if no spillover
 /// happened (content small enough, error result, write failure).
@@ -352,7 +382,7 @@ fn retained_tail(content: &str, max_bytes: usize) -> &str {
 /// original (large) content.
 ///
 /// Error results (`success == false`) are skipped: error messages
-/// are typically short, and turning them into a "see file" pointer
+/// are typically short, and turning them into a truncated preview
 /// would just hide the error from the model's reasoning.
 #[allow(dead_code)]
 pub fn apply_spillover(result: &mut ToolResult, tool_id: &str) -> Option<PathBuf> {
@@ -403,7 +433,6 @@ fn apply_spillover_inner(
         return None;
     }
     let original_content = result.content.clone();
-    let total = original_content.len();
     let outcome = match maybe_spillover(
         tool_id,
         &original_content,
@@ -427,24 +456,23 @@ fn apply_spillover_inner(
     let digest = crate::hashing::sha256_hex(original_content.as_bytes());
     let path_str = path.display().to_string();
 
-    let legacy_owner_published = artifact_context.is_some_and(|context| {
-        match publish_legacy_spillover_ownership(
+    // Keep publishing the legacy ownership proof even though the model-facing
+    // footer no longer mentions retrieval: the tool-details pager authorizes
+    // legacy spillover reads through this sidecar.
+    if let Some(context) = artifact_context
+        && let Err(err) = publish_legacy_spillover_ownership(
             &path,
             context.session_id,
             original_content.as_bytes(),
-        ) {
-            Ok(_) => true,
-            Err(err) => {
-                tracing::warn!(
-                    target: "spillover",
-                    ?err,
-                    tool_id,
-                    "legacy spillover ownership publication failed"
-                );
-                false
-            }
-        }
-    });
+        )
+    {
+        tracing::warn!(
+            target: "spillover",
+            ?err,
+                tool_id,
+                "legacy spillover ownership publication failed"
+        );
+    }
 
     let mut artifact_path = None;
     if let Some(context) = artifact_context {
@@ -462,13 +490,7 @@ fn apply_spillover_inner(
                     relative_path.clone(),
                     &original_content,
                 );
-                let transcript_ref = crate::artifacts::TranscriptArtifactRef::from(&record);
-                let reference = crate::artifacts::render_transcript_artifact_ref(&transcript_ref);
-                result.content = format!(
-                    "{reference}\n\n[retained head: {} bytes]\n{head}\n\n[retained tail: {} bytes]\n{tail}",
-                    head.len(),
-                    tail.len(),
-                );
+                result.content = truncated_preview(&head, tail, original_content.len());
                 artifact_path = Some((absolute_path, relative_path, record));
             }
             Err(err) => {
@@ -483,25 +505,7 @@ fn apply_spillover_inner(
     }
 
     if artifact_path.is_none() {
-        let retrieval = if legacy_owner_published {
-            format!(
-                "Use `retrieve_tool_result ref={tool_id} mode=tail` or \
-                 `retrieve_tool_result ref={tool_id} mode=query query=<text>` \
-                 to inspect the retained evidence."
-            )
-        } else {
-            "Exact retrieval is unavailable because session ownership could not be recorded."
-                .to_string()
-        };
-        let footer = format!(
-            "\n\n[Output truncated: {head_kib} KiB of {total_kib} KiB shown. {retrieval}]",
-            head_kib = head.len() / 1024,
-            total_kib = total / 1024,
-        );
-        result.content = format!(
-            "{head}\n\n[retained tail: {} bytes]\n{tail}{footer}",
-            tail.len()
-        );
+        result.content = truncated_preview(&head, tail, original_content.len());
     }
 
     let metadata = result.metadata.get_or_insert_with(|| serde_json::json!({}));
@@ -607,7 +611,7 @@ fn apply_spillover_inner(
         );
         obj.insert(
             "original_byte_count".into(),
-            serde_json::Value::Number(serde_json::Number::from(total as u64)),
+            serde_json::Value::Number(serde_json::Number::from(original_content.len() as u64)),
         );
         obj.insert(
             "retained_head_bytes".into(),
@@ -747,13 +751,7 @@ fn apply_adaptive_evidence_inner(
         .find(|index| original.is_char_boundary(*index))
         .unwrap_or(0);
     let tail = retained_tail(&original, tail_limit);
-    result.content = format!(
-        "[Exact evidence retained · {} · inspect with `retrieve_tool_result ref={}`]\n\n{}\n\n[final excerpt]\n{}",
-        crate::artifacts::format_byte_size(original.len().try_into().unwrap_or(u64::MAX)),
-        artifact_id,
-        &original[..head_end],
-        tail,
-    );
+    result.content = truncated_preview(&original[..head_end], tail, original.len());
     let metadata = result.metadata.get_or_insert_with(|| serde_json::json!({}));
     if let Some(object) = metadata.as_object_mut() {
         object.insert(
@@ -1094,17 +1092,17 @@ mod tests {
             let mut result = ToolResult::success(big.clone());
             let path = apply_spillover(&mut result, "call-big").expect("should spill");
 
-            // Inline content shrunk to head + footer.
+            // Inline content shrunk to head + plain preview footer.
             assert!(result.content.len() < big.len());
             assert!(
-                result.content.contains("Output truncated:"),
+                result.content.contains(SPILLOVER_PREVIEW_HINT),
                 "footer missing: {}",
                 &result.content[result.content.len().saturating_sub(200)..]
             );
             assert!(
                 result
                     .content
-                    .contains("Exact retrieval is unavailable because session ownership")
+                    .contains("of output omitted — view full output in the tool details view")
             );
             assert!(!result.content.contains("retrieve_tool_result"));
 
@@ -1133,7 +1131,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_spillover_with_artifact_writes_session_file_and_ref_block() {
+    fn apply_spillover_with_artifact_writes_session_file_and_plain_preview() {
         let _g = setup();
         let tmp = tempdir().unwrap();
         with_test_home(tmp.path(), || {
@@ -1158,12 +1156,12 @@ mod tests {
                     .exists(),
                 "adaptive evidence stores one exact origin-session copy"
             );
-            assert!(result.content.starts_with("[Exact evidence retained"));
-            assert!(
-                result
-                    .content
-                    .contains("retrieve_tool_result ref=art_call-big")
-            );
+            // The model sees a plain preview with an ordinary footer — no
+            // artifact handle, no retrieval reference.
+            assert!(result.content.contains(SPILLOVER_PREVIEW_HINT));
+            assert!(result.content.contains("\n…\n"));
+            assert!(!result.content.contains("Exact evidence retained"));
+            assert!(!result.content.contains("retrieve_tool_result"));
             assert!(!result.content.contains("artifacts/art_call-big.txt"));
             assert!(
                 session_artifact
@@ -1288,7 +1286,7 @@ mod tests {
 
             assert!(path.is_none());
             assert_eq!(result.content, raw);
-            assert!(!result.content.contains("Exact evidence retained"));
+            assert!(!result.content.contains(SPILLOVER_PREVIEW_HINT));
             assert!(!result.content.contains("retrieve_tool_result"));
             assert!(
                 result
@@ -1335,7 +1333,7 @@ mod tests {
 
             assert!(path.is_none());
             assert_eq!(result.content, raw);
-            assert!(!result.content.contains("Exact evidence retained"));
+            assert!(!result.content.contains(SPILLOVER_PREVIEW_HINT));
             assert!(!result.content.contains("retrieve_tool_result"));
             assert!(
                 !artifact_dir.join("art_call-failed-metadata.txt").exists(),

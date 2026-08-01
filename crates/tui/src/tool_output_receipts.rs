@@ -1,8 +1,9 @@
 //! Compact receipts for oversized tool outputs in saved session history.
 
+use crate::artifacts::{ArtifactKind, ArtifactRecord};
+
 use serde_json::Value;
 
-use crate::artifacts::{ArtifactKind, ArtifactRecord, format_artifact_relative_path};
 use crate::fast_hash::FastHashMap;
 use crate::models::{ContentBlock, Message};
 
@@ -37,7 +38,10 @@ struct ToolUseInfo {
 #[derive(Debug, Clone)]
 enum DetailHandle {
     Artifact(ArtifactRecord),
-    Unavailable { sha256: String },
+    /// Raw legacy result with no session-owned artifact. Compacted
+    /// truthfully, but never given a retrieval handle: a process-wide
+    /// SHA store cannot prove which session owns the bytes.
+    Unavailable,
 }
 
 /// Return a copy of `messages` with oversized raw tool-result bodies replaced
@@ -89,12 +93,10 @@ pub fn compact_messages_for_persistence(
                         .get(tool_use_id.as_str())
                         .cloned()
                         .map(|artifact| DetailHandle::Artifact((*artifact).clone()))
-                        .unwrap_or_else(|| DetailHandle::Unavailable {
-                            sha256: sha256_hex(content.as_bytes()),
-                        });
+                        .unwrap_or(DetailHandle::Unavailable);
                     let source = match &handle {
                         DetailHandle::Artifact(_) => ReceiptSource::Artifact,
-                        DetailHandle::Unavailable { .. } => ReceiptSource::Unavailable,
+                        DetailHandle::Unavailable => ReceiptSource::Unavailable,
                     };
 
                     *content = render_tool_output_receipt(
@@ -217,18 +219,6 @@ fn render_tool_output_receipt(
     };
     let exit_status = infer_exit_status(original_content).unwrap_or_else(|| "unknown".to_string());
     let preview = preview_for_receipt(handle, original_content);
-    let (detail_handle, retrieve, storage) = match handle {
-        DetailHandle::Artifact(record) => (
-            record.id.clone(),
-            format!("retrieve_tool_result ref={}", record.id),
-            format_artifact_relative_path(&record.storage_path),
-        ),
-        DetailHandle::Unavailable { sha256 } => (
-            format!("unavailable (sha256:{sha256})"),
-            "unavailable".to_string(),
-            "no session-owned artifact was recorded".to_string(),
-        ),
-    };
 
     format!(
         "[TOOL_OUTPUT_RECEIPT]\n\
@@ -238,10 +228,7 @@ fn render_tool_output_receipt(
          exit_status: {exit_status}\n\
          elapsed: unknown\n\
          output: {bytes} ({chars} chars, ~{tokens} tokens)\n\
-         truncation: raw output omitted from saved/resumed context\n\
-         detail_handle: {detail_handle}\n\
-         retrieve: {retrieve}\n\
-         storage: {storage}\n\
+         truncation: raw output omitted — full output in the tool details view\n\
          command_or_query: {command_or_query}\n\
          preview: {preview}\n\
          [/TOOL_OUTPUT_RECEIPT]",
@@ -304,10 +291,6 @@ fn summarize_text(text: &str, max_chars: usize) -> String {
         summary.push_str("...");
     }
     summary
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    crate::hashing::sha256_hex(bytes)
 }
 
 fn approx_tokens(chars: usize) -> usize {
@@ -387,17 +370,17 @@ mod tests {
         assert!(!content.contains("RAW_SENTINEL"));
         assert!(content.contains("[TOOL_OUTPUT_RECEIPT]"));
         assert!(content.contains("tool: exec_shell"));
-        assert!(content.contains("detail_handle: art_call-big"));
-        assert!(content.contains("retrieve: retrieve_tool_result ref=art_call-big"));
+        assert!(!content.contains("detail_handle"));
+        assert!(!content.contains("retrieve_tool_result"));
+        assert!(content.contains("full output in the tool details view"));
         assert!(
             content.contains("command_or_query: {\"command\":\"cargo test -p codewhale-tui\"}")
         );
     }
 
     #[test]
-    fn compacts_unowned_large_tool_result_without_false_retrieval_handle() {
+    fn compacts_unowned_large_tool_result_without_false_storage_claims() {
         let raw = format!("{}\n{}", "H".repeat(320), "NO_ARTIFACT_RAW\n".repeat(2_000));
-        let sha = sha256_hex(raw.as_bytes());
         let messages = vec![
             tool_use_message("call-big", "grep_files", json!({"pattern": "TODO"})),
             tool_result_message("call-big", &raw),
@@ -412,10 +395,10 @@ mod tests {
         assert_eq!(stats.sha_receipts, 0);
         assert_eq!(stats.unavailable_receipts, 1);
         assert!(!content.contains("NO_ARTIFACT_RAW"));
-        assert!(content.contains(&format!("detail_handle: unavailable (sha256:{sha})")));
-        assert!(content.contains("retrieve: unavailable"));
-        assert!(content.contains("storage: no session-owned artifact was recorded"));
+        assert!(!content.contains("detail_handle"));
+        assert!(!content.contains("storage:"));
         assert!(!content.contains("retrieve_tool_result"));
+        assert!(content.contains("full output in the tool details view"));
     }
 
     #[test]
@@ -437,7 +420,7 @@ mod tests {
     #[test]
     fn status_reports_raw_large_receipts_and_artifacts() {
         let raw = "RAW_STATUS\n".repeat(2_000);
-        let receipt = "[TOOL_OUTPUT_RECEIPT]\ndetail_handle: art_call-big";
+        let receipt = "[TOOL_OUTPUT_RECEIPT]\ntruncation: raw output omitted — full output in the tool details view";
         let messages = vec![
             tool_result_message("call-raw", &raw),
             tool_result_message("call-receipt", receipt),

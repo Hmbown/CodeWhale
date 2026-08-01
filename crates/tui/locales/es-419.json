@@ -296,7 +296,6 @@
     "CmdSidebarDescription": "Alternar o enfocar la barra lateral derecha",
     "CmdSkillDescription": "Activar una skill, o instalar/actualizar/desinstalar/confiar en una skill de la comunidad",
     "CmdSkillsDescription": "Listar skills locales, filtrar por prefijo o explorar el registro remoto curado",
-    "CmdDebtDescription": "Inspeccionar o exportar el libro de deuda técnica",
     "CmdStashDescription": "Estacionar o restaurar el borrador del compositor",
     "CmdStatusDescription": "Mostrar el estado de la sesión en ejecución",
     "CmdStatuslineDescription": "Configurar qué elementos aparecen en el pie de página",

@@ -29,7 +29,6 @@ pub(crate) const ADVANCED_DISCOVERY_COMMANDS: &[&str] = &[
     "cache",
     "change",
     "context",
-    "debt",
     "diff",
     "edit",
     "goal",

@@ -293,7 +293,6 @@
     "CmdSidebarDescription": "Rechte Seitenleiste umschalten oder fokussieren",
     "CmdSkillDescription": "Skill aktivieren oder Community-Skill installieren/aktualisieren/deinstallieren/vertrauen",
     "CmdSkillsDescription": "Lokale Skills auflisten, nach Präfix filtern oder kuratierte Remote-Registry durchsuchen",
-    "CmdDebtDescription": "Debt-Ledger ansehen oder exportieren",
     "CmdStashDescription": "Composer-Entwurf parken oder wiederherstellen",
     "CmdStatusDescription": "Laufzeit-Sitzungsstatus anzeigen",
     "CmdStatuslineDescription": "Konfigurieren, welche Elemente in der Fußzeile erscheinen",
