@@ -876,9 +876,9 @@ impl ExecCell {
             && self
                 .output
                 .as_deref()
-                .is_some_and(is_exact_evidence_receipt)
+                .is_some_and(is_truncated_output_preview)
         {
-            lines.push(render_spillover_annotation(std::path::Path::new(""), width));
+            lines.push(render_spillover_annotation(width));
             return wrap_card_rail(lines);
         }
         if mode == RenderMode::Live && self.status == ToolStatus::Success {
@@ -1371,8 +1371,8 @@ impl McpToolCell {
         }
 
         if let Some(content) = self.content.as_ref() {
-            if mode == RenderMode::Live && is_exact_evidence_receipt(content) {
-                lines.push(render_spillover_annotation(std::path::Path::new(""), width));
+            if mode == RenderMode::Live && is_truncated_output_preview(content) {
+                lines.push(render_spillover_annotation(width));
                 return lines;
             }
             lines.extend(render_tool_output_mode(
@@ -1596,8 +1596,8 @@ impl GenericToolCell {
                     None,
                     low_motion,
                 )];
-                if let Some(path) = self.spillover_path.as_ref() {
-                    collapsed.push(render_spillover_annotation(path, width));
+                if self.spillover_path.is_some() {
+                    collapsed.push(render_spillover_annotation(width));
                 }
                 return wrap_card_rail(collapsed);
             }
@@ -1688,10 +1688,8 @@ impl GenericToolCell {
                 ));
             }
 
-            if matches!(mode, RenderMode::Live)
-                && let Some(path) = self.spillover_path.as_ref()
-            {
-                lines.push(render_spillover_annotation(path, width));
+            if matches!(mode, RenderMode::Live) && self.spillover_path.is_some() {
+                lines.push(render_spillover_annotation(width));
             }
         }
         wrap_card_rail(lines)
@@ -1878,21 +1876,28 @@ impl GenericToolCell {
 }
 
 /// Render the inline annotation for a tool cell whose full output was
-/// retained as exact evidence. The receipt stays calm and path-free; the
-/// activity-detail shortcut opens the verified retained file.
-fn render_spillover_annotation(_path: &std::path::Path, width: u16) -> Line<'static> {
-    // Keep the per-card receipt path-free and short. The Option+V / details
-    // shortcut is a global chrome affordance — stamping it under every tool
-    // card made transcript density too high (#4718).
-    let receipt = "  Exact evidence retained";
+/// retained internally and replaced by a bounded preview. The annotation
+/// stays calm and path-free: it only says the output was shortened and that
+/// the details shortcut opens the full retained output.
+fn render_spillover_annotation(width: u16) -> Line<'static> {
+    // Matches the model-facing preview footer (truncate.rs) and the existing
+    // "Alt+V opens …" hint style (#3256): one quiet line, no handles or paths.
+    let affordance = format!(
+        "Output shortened — {}",
+        crate::tui::key_shortcuts::tool_details_shortcut_action_hint("full output")
+    );
     Line::from(Span::styled(
-        truncate_text(receipt, usize::from(width).max(8)),
+        truncate_text(&affordance, usize::from(width).max(8)),
         Style::default().fg(palette::TEXT_MUTED).italic(),
     ))
 }
 
-fn is_exact_evidence_receipt(content: &str) -> bool {
-    content.trim_start().starts_with("[Exact evidence retained")
+/// Detect a truncated-output preview: either the current plain footer or the
+/// legacy receipt header still present in older saved sessions. Live cards
+/// collapse to the expand affordance for both.
+fn is_truncated_output_preview(content: &str) -> bool {
+    content.contains(crate::tools::truncate::SPILLOVER_PREVIEW_HINT)
+        || content.trim_start().starts_with("[Exact evidence retained")
 }
 
 fn render_command_mode(command: &str, width: u16, mode: RenderMode) -> Vec<Line<'static>> {

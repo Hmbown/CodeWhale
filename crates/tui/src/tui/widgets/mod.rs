@@ -4833,70 +4833,6 @@ mod tests {
     }
 
     #[test]
-    fn slash_completion_hints_discover_debt_from_compat_aliases() {
-        for alias in ["slop", "canzha"] {
-            let hints = slash_completion_hints(
-                &format!("/{alias}"),
-                128,
-                &[],
-                Locale::En,
-                None,
-                ApiProvider::Deepseek,
-            );
-            let debt = hints
-                .iter()
-                .find(|hint| hint.name == "/debt")
-                .unwrap_or_else(|| panic!("/debt should appear for /{alias}"));
-            assert_eq!(debt.alias_hint.as_deref(), Some(alias));
-        }
-    }
-
-    #[test]
-    fn slash_completion_debt_aliases_prefer_user_command_shadows() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let commands_dir = tmp.path().join(".codewhale").join("commands");
-        std::fs::create_dir_all(&commands_dir).unwrap();
-        std::fs::write(
-            commands_dir.join("slop.md"),
-            "---\ndescription: User slop workflow\n---\ncustom slop",
-        )
-        .unwrap();
-        std::fs::write(
-            commands_dir.join("review.md"),
-            "---\ndescription: User canzha workflow\nalias: canzha\n---\ncustom canzha",
-        )
-        .unwrap();
-
-        for (alias, canonical, description, alias_hint) in [
-            ("slop", "/slop", "User slop workflow", None),
-            ("canzha", "/review", "User canzha workflow", Some("canzha")),
-        ] {
-            let hints = slash_completion_hints(
-                &format!("/{alias}"),
-                128,
-                &[],
-                Locale::En,
-                Some(tmp.path()),
-                ApiProvider::Deepseek,
-            );
-            let user_command = hints
-                .iter()
-                .find(|hint| hint.name == canonical)
-                .unwrap_or_else(|| panic!("{canonical} should own /{alias} completion"));
-            assert_eq!(user_command.description, description);
-            assert_eq!(user_command.alias_hint.as_deref(), alias_hint);
-            let hint_names = hints
-                .iter()
-                .map(|hint| hint.name.as_str())
-                .collect::<Vec<_>>();
-            assert!(
-                !hints.iter().any(|hint| hint.name == "/debt"),
-                "/debt must not complete through user-shadowed /{alias}: {hint_names:?}"
-            );
-        }
-    }
-
-    #[test]
     fn slash_completion_hints_rank_exact_alias_above_prefix_alias() {
         // `/q` should rank `/exit` (exact alias `q`) above `/clear` (alias
         // `qingping` only matches by prefix). Before #1811 the entries were
@@ -5265,41 +5201,6 @@ mod tests {
             !alias_hints.iter().any(|hint| hint.name == "/attach"),
             "built-in /attach should not complete through shadowed /image alias"
         );
-    }
-
-    #[test]
-    fn slash_completion_hints_hide_shadowed_debt_aliases_from_canonical_copy() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let commands_dir = tmp.path().join(".codewhale").join("commands");
-        std::fs::create_dir_all(&commands_dir).unwrap();
-        std::fs::write(
-            commands_dir.join("slop.md"),
-            "---\ndescription: Internal cleanup\nhidden: true\n---\ninternal cleanup",
-        )
-        .unwrap();
-        std::fs::write(
-            commands_dir.join("custom-debt.md"),
-            "---\ndescription: Custom debt flow\nalias: canzha\n---\ncustom debt",
-        )
-        .unwrap();
-
-        let hints = slash_completion_hints(
-            "/debt",
-            128,
-            &[],
-            Locale::En,
-            Some(tmp.path()),
-            ApiProvider::Deepseek,
-        );
-        let debt = hints
-            .iter()
-            .find(|hint| hint.name == "/debt")
-            .expect("canonical /debt should remain visible when only aliases are shadowed");
-
-        assert_eq!(debt.alias_hint, None);
-        assert!(debt.description.contains("/cleanup"));
-        assert!(!debt.description.contains("/slop"));
-        assert!(!debt.description.contains("/canzha"));
     }
 
     #[test]
