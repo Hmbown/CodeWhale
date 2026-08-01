@@ -34,6 +34,7 @@ use super::history::{GenericToolCell, HistoryCell, ToolCell, ToolStatus, summari
 use super::motion::MotionPolicy;
 use super::spinner::{LIVE_MARKER_DELAY_MS, braille_spinner_frame_for_elapsed_ms};
 use super::subagent_routing::active_fanout_counts;
+use super::ui::SIDEBAR_VISIBLE_MIN_WIDTH;
 use super::ui_text::{concise_shell_command_label, truncate_line_to_width};
 
 /// Tolerance for floating-point cost comparison in the sidebar breakdown.
@@ -47,6 +48,24 @@ const TASK_STOP_TARGET_LABEL: &str = "[x]";
 const TASK_STOP_TARGET_SUFFIX: &str = " [x]";
 const HOTBAR_PANEL_HEIGHT: u16 = 4;
 const HOTBAR_ROW_COLUMNS: usize = 4;
+
+pub(crate) fn sidebar_width_for_chat_area(app: &App, chat_width: u16) -> Option<u16> {
+    if app.sidebar_focus == SidebarFocus::Hidden || chat_width < SIDEBAR_VISIBLE_MIN_WIDTH {
+        return None;
+    }
+
+    let preferred_sidebar =
+        (u32::from(chat_width) * u32::from(app.sidebar_width_percent.clamp(10, 50)) / 100) as u16;
+    // Width-aware floor: the classic 24-column sidebar feels cramped next to
+    // status/status-adjacent info at ultrawide sizes. At 120+ columns a 28
+    // column rail still leaves the transcript most of the room.
+    let sidebar_width = preferred_sidebar
+        .max(28)
+        .max(chat_width / 10)
+        .min(chat_width.saturating_sub(40));
+
+    (sidebar_width >= 20).then_some(sidebar_width)
+}
 
 pub fn render_sidebar(f: &mut Frame, area: Rect, app: &mut App, config: &Config) {
     // Clear hover state at the start of each render
@@ -74,6 +93,7 @@ pub fn render_sidebar(f: &mut Frame, area: Rect, app: &mut App, config: &Config)
         && !is_hotbar_disabled(config)
         && !(work_has_content && area.height < 12);
     let (main_area, hotbar_area) = split_sidebar_hotbar_area(area, hotbar_enabled);
+    let (main_area, goal_banner_area) = split_sidebar_goal_banner_area(main_area, app);
     let fixed_focus = matches!(
         app.sidebar_focus,
         SidebarFocus::Tasks | SidebarFocus::Agents | SidebarFocus::Context
@@ -104,6 +124,9 @@ pub fn render_sidebar(f: &mut Frame, area: Rect, app: &mut App, config: &Config)
             SidebarFocus::Hidden => unreachable!("hidden sidebar returned before render dispatch"),
         }
     }
+    if let Some(goal_banner_area) = goal_banner_area {
+        render_sidebar_goal_banner(f, goal_banner_area, app);
+    }
     if let Some(hotbar_area) = hotbar_area {
         render_hotbar_panel(f, hotbar_area, app, config);
     }
@@ -121,6 +144,50 @@ fn split_sidebar_hotbar_area(area: Rect, show_hotbar: bool) -> (Rect, Option<Rec
         .constraints([Constraint::Min(3), Constraint::Length(HOTBAR_PANEL_HEIGHT)])
         .split(area);
     (sections[0], Some(sections[1]))
+}
+
+/// Carve the active-goal banner off the top of the sidebar when a goal is
+/// live. The banner is one compact row so status/status-adjacent info below
+/// keeps its real estate; it disappears on complete via
+/// [`active_goal_banner_text`].
+fn split_sidebar_goal_banner_area(area: Rect, app: &App) -> (Rect, Option<Rect>) {
+    if active_goal_banner_text(app).is_none() || area.height < 4 {
+        return (area, None);
+    }
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(0)])
+        .split(area);
+    (sections[1], Some(sections[0]))
+}
+
+/// Render the active goal objective at the very top of the sidebar. Calm and
+/// truncation-safe: a single muted "Goal" label plus the objective, clipped
+/// to the available width.
+fn render_sidebar_goal_banner(f: &mut Frame, area: Rect, app: &App) {
+    let Some(objective) = active_goal_banner_text(app) else {
+        return;
+    };
+    let theme = &app.ui_theme;
+    let content_width = usize::from(area.width.saturating_sub(2).max(1));
+    let label = format!(
+        "{} {}",
+        crate::tui::glyphs::ATTENTION,
+        truncate_line_to_width(&objective, content_width)
+    );
+    let line = Line::from(Span::styled(
+        label,
+        Style::default()
+            .fg(theme.warning)
+            .add_modifier(ratatui::style::Modifier::BOLD),
+    ));
+    let block = Block::default()
+        .style(Style::default().bg(theme.surface_bg))
+        .borders(ratatui::widgets::Borders::BOTTOM)
+        .border_style(Style::default().fg(theme.border));
+    Paragraph::new(line)
+        .block(block)
+        .render(area, f.buffer_mut());
 }
 
 /// The Hotbar is "disabled" when the user persisted an explicit empty
@@ -675,18 +742,35 @@ pub(crate) fn compact_work_indicator(app: &App) -> Option<String> {
     None
 }
 
-fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
-    fn live_goal_objective(app: &App) -> Option<String> {
-        if app.paused || app.paused_quarry.is_some() {
-            app.hunt
-                .quarry
-                .clone()
-                .or_else(|| app.paused_quarry.clone())
-        } else {
-            app.hunt.quarry.clone()
-        }
+/// Objective of the active goal, if any. Paused goals keep showing their
+/// quarry; the work summary uses this so a completed goal can still render
+/// with its DONE state.
+pub(crate) fn live_goal_objective(app: &App) -> Option<String> {
+    if app.paused || app.paused_quarry.is_some() {
+        app.hunt
+            .quarry
+            .clone()
+            .or_else(|| app.paused_quarry.clone())
+    } else {
+        app.hunt.quarry.clone()
     }
+}
 
+/// Objective for the top-of-sidebar banner: like [`live_goal_objective`] but
+/// yields `None` once the goal is terminal (Hunted/Escaped), so the banner
+/// appears on set and clears on complete while the work summary keeps its
+/// completed-goal line.
+pub(crate) fn active_goal_banner_text(app: &App) -> Option<String> {
+    if matches!(
+        app.hunt.verdict,
+        crate::tui::app::HuntVerdict::Hunted | crate::tui::app::HuntVerdict::Escaped
+    ) {
+        return None;
+    }
+    live_goal_objective(app).filter(|objective| !objective.trim().is_empty())
+}
+
+fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
     fn live_pause_indicator(app: &App) -> Option<String> {
         if app.paused && app.is_loading {
             Some("(Pausing)".to_string())

@@ -54,7 +54,6 @@ fn frame_at(t: u128) -> FrameMarks {
     build_frame_marks(
         area,
         t,
-        true,
         LifeDensity::from_area(area),
         AmbientCursor::default(),
         WhaleCameo::default(),
@@ -255,7 +254,6 @@ fn sparse_water_gets_a_compact_jellyfish() {
         let frame = build_frame_marks(
             area,
             probe * 500,
-            true,
             LifeDensity::from_area(area),
             AmbientCursor::default(),
             WhaleCameo::default(),
@@ -299,16 +297,16 @@ fn animated_tentacle_frames_never_collapse_to_punctuation_dots() {
 }
 
 #[test]
-fn reduced_motion_parks_a_complete_jellyfish() {
-    // The static pose is deterministic and visible: a half-pulsed dome
-    // with its tentacles mid-sway, parked just below the hero band.
+fn motion_is_a_deterministic_function_of_elapsed_time() {
+    // v0.9.4: positions always ride the monotonic clock (presence fades the
+    // marks in/out instead of parking them), so a fixed t must produce the
+    // exact same complete jellyfish: dome, skirt, and tentacles visible.
     let area = Rect::new(0, 0, 100, 30);
     let build = || {
         let mut stats = AmbientFrameStats::default();
         build_frame_marks(
             area,
             0,
-            false,
             LifeDensity::from_area(area),
             AmbientCursor::default(),
             WhaleCameo::default(),
@@ -324,25 +322,29 @@ fn reduced_motion_parks_a_complete_jellyfish() {
             .map(|mark| (mark.glyph, mark.x, mark.y))
             .collect::<Vec<_>>()
     };
-    assert_eq!(pose(&first), pose(&second), "static pose must repeat");
+    assert_eq!(
+        pose(&first),
+        pose(&second),
+        "motion must be a pure function of t"
+    );
     let top = first
         .marks
         .iter()
         .find(|mark| JELLY_DOME_TOP_FRAMES.contains(&mark.glyph))
-        .expect("parked jellyfish dome");
+        .expect("jellyfish dome at t=0");
     assert!(
         first
             .marks
             .iter()
             .any(|mark| { JELLY_DOME_SKIRT_FRAMES.contains(&mark.glyph) && mark.y == top.y + 1 }),
-        "parked jellyfish lost its skirt"
+        "jellyfish lost its skirt at t=0"
     );
     let tentacles = first
         .marks
         .iter()
         .filter(|mark| JELLY_TENTACLE_FRAMES.contains(&mark.glyph) && mark.y == top.y + 2)
         .count();
-    assert!(tentacles >= 3, "parked jellyfish lost its tentacles");
+    assert!(tentacles >= 3, "jellyfish lost its tentacles at t=0");
 }
 
 #[test]
@@ -368,7 +370,7 @@ fn frame_stats_account_for_every_mark() {
         (Color::Cyan, Color::Blue),
         &[],
         12_000,
-        true,
+        1.0,
         AmbientCursor::default(),
         WhaleCameo::default(),
     );
@@ -407,7 +409,7 @@ fn frame_stats_stay_within_the_render_budget() {
         (Color::Cyan, Color::Blue),
         &[],
         12_000,
-        true,
+        1.0,
         AmbientCursor::default(),
         whale,
     );
@@ -444,7 +446,7 @@ fn frame_stats_never_overwrite_text() {
         (Color::Cyan, Color::Blue),
         &lines,
         12_000,
-        true,
+        1.0,
         AmbientCursor::default(),
         WhaleCameo::default(),
     );
@@ -513,6 +515,7 @@ fn paint_fixture(
         (Color::Cyan, Color::Blue),
         lines,
         frame,
+        1.0,
         &mut stats,
     );
     (buf, stats)

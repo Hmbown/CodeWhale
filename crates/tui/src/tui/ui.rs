@@ -107,6 +107,7 @@ use crate::tui::onboarding;
 use crate::tui::pager::PagerView;
 use crate::tui::persistence_actor::{self, PersistRequest};
 use crate::tui::scrolling::TranscriptScroll;
+use crate::tui::sidebar::sidebar_width_for_chat_area;
 use crate::turn_route_plan::{PlannedTurnRoute, TurnRoutePlanRequest, plan_turn_route};
 use crate::work_graph::task_owner_snapshot;
 // SelectionAutoscroll unused
@@ -407,18 +408,6 @@ fn sidebar_host_width_hint(app: &App) -> Option<u16> {
             .unwrap_or(0);
         Some(transcript_width.saturating_add(sidebar_width))
     })
-}
-
-fn sidebar_width_for_chat_area(app: &App, chat_width: u16) -> Option<u16> {
-    if app.sidebar_focus == SidebarFocus::Hidden || chat_width < SIDEBAR_VISIBLE_MIN_WIDTH {
-        return None;
-    }
-
-    let preferred_sidebar =
-        (u32::from(chat_width) * u32::from(app.sidebar_width_percent.clamp(10, 50)) / 100) as u16;
-    let sidebar_width = preferred_sidebar.max(24).min(chat_width.saturating_sub(40));
-
-    (sidebar_width >= 20).then_some(sidebar_width)
 }
 
 type AppTerminal = Terminal<ColorCompatBackend<Stdout>>;
@@ -4129,23 +4118,6 @@ async fn run_event_loop(
                         // composer receipt), regardless of notification method
                         // or platform.
                         if status == crate::core::events::TurnOutcomeStatus::Completed {
-                            // Debt ledger completion-gate: after every completed
-                            // turn, check whether there are unresolved entries
-                            // the agent should address before claiming the task is
-                            // done (#2127). This runs autonomously — no tool call
-                            // required — so the agent can't forget to check.
-                            if let Ok(ledger) = crate::slop_ledger::SlopLedger::load()
-                                && ledger.has_open_entries()
-                                && let Some(gate_msg) = ledger.completion_gate_summary()
-                            {
-                                let short = gate_msg.lines().nth(4).unwrap_or("review before done");
-                                app.push_status_toast(
-                                    format!("⚠️ Debt ledger: {short}"),
-                                    crate::tui::app::StatusToastLevel::Warning,
-                                    Some(12_000),
-                                );
-                            }
-
                             let tool_count = app.tool_evidence.len();
                             let mut receipt = "✓ turn completed".to_string();
                             if tool_count > 0 {
@@ -5183,9 +5155,10 @@ async fn run_event_loop(
         let underwater_completion_motion = shell_motion_enabled
             && !underwater_surface_obscured
             && matches!(app.runtime_turn_status.as_deref(), Some("completed"))
-            && app
-                .ocean_completion_started_at
-                .is_some_and(|started| started.elapsed() < Duration::from_millis(800));
+            && app.ocean_completion_started_at.is_some_and(|started| {
+                started.elapsed()
+                    < Duration::from_millis(crate::tui::ocean::COMPLETION_SETTLE_MS as u64)
+            });
         let status_motion = should_tick_status_animation(
             app,
             has_running_agents,
@@ -9799,6 +9772,7 @@ struct UserDispatchSnapshot {
     history_version: u64,
     next_history_revision: u64,
     api_messages_len: usize,
+    last_send_at: Option<Instant>,
 }
 
 /// Data captured synchronously before the async dispatch phase. All values are
@@ -10069,6 +10043,7 @@ fn prepare_user_dispatch(
         history_version: app.history_version,
         next_history_revision: app.next_history_revision,
         api_messages_len: app.api_messages.len(),
+        last_send_at: app.last_send_at,
     };
 
     // --- Sync prepare: show the user message and spinner immediately so the
@@ -10086,6 +10061,10 @@ fn prepare_user_dispatch(
     });
     let history_cell = app.history.len().saturating_sub(1);
     app.scroll_to_bottom();
+    // Anchor the tail-flash to the moment the user message appears, not to
+    // the async dispatch completion (which can lag by a route plan). The
+    // failure path restores the pre-send timestamp from the snapshot.
+    app.last_send_at = Some(Instant::now());
     app.api_messages.push(Message {
         role: "user".to_string(),
         content: vec![ContentBlock::Text {
@@ -10307,7 +10286,8 @@ fn build_dispatch_success_closure(
             app.is_loading = true;
             app.dispatch_started_at = Some(dispatch_started_at);
             app.runtime_turn_status = None;
-            app.last_send_at = Some(dispatch_started_at);
+            // last_send_at was already anchored in the sync prepare phase so
+            // the tail-flash starts together with the visible user cell.
             app.last_submitted_prompt = Some(prepare.message.display.clone());
             app.clear_receipt();
             app.tool_evidence.clear();
@@ -10409,6 +10389,7 @@ fn build_dispatch_error_closure(
             app.history_version = prepare.snapshot.history_version;
             app.next_history_revision = prepare.snapshot.next_history_revision;
             app.api_messages.truncate(prepare.snapshot.api_messages_len);
+            app.last_send_at = prepare.snapshot.last_send_at;
             app.needs_redraw = true;
 
             match recovery {

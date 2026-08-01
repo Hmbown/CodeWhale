@@ -296,7 +296,6 @@
     "CmdSidebarDescription": "오른쪽 사이드바를 전환하거나 포커스를 옮깁니다",
     "CmdSkillDescription": "스킬을 활성화하거나 커뮤니티 스킬을 설치/업데이트/제거/신뢰합니다",
     "CmdSkillsDescription": "로컬 스킬을 나열하고, 접두사로 필터링하거나 큐레이션된 원격 레지스트리를 조회합니다",
-    "CmdDebtDescription": "부채 원장을 확인하거나 내보냅니다",
     "CmdStashDescription": "입력창 초안을 보관하거나 복원합니다",
     "CmdStatusDescription": "런타임 세션 상태를 표시합니다",
     "CmdStatuslineDescription": "하단 표시줄에 표시할 항목을 설정합니다",
