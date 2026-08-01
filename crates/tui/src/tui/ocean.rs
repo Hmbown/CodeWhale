@@ -84,6 +84,64 @@ pub fn ambient_inks(theme: &UiTheme) -> (Color, Color) {
     }
 }
 
+/// Length of the completion breath (the column's settle flourish), ms.
+pub const COMPLETION_BREATH_MS: u128 = 800;
+
+/// Extra ms after the breath during which ambient life eases out of view.
+pub const SETTLE_MS: u128 = 600;
+pub(crate) const COMPLETION_SETTLE_MS: u128 = COMPLETION_BREATH_MS + SETTLE_MS;
+
+/// Ms over which animated life ramps in when a working phase begins.
+pub const RAMP_MS: u128 = 450;
+
+/// Smoothstep easing: 0 at t=0, 1 at t=1, zero velocity at both ends.
+#[must_use]
+pub fn smoothstep(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Life presence (0..=1) as a pure function of the monotonic clocks. There is
+/// deliberately NO per-frame mutable state here: the same inputs always yield
+/// the same output, which keeps ambient-life renders deterministic.
+///
+/// Rules:
+/// - A turn just ended (`completion_elapsed_ms` within the breath) holds full
+///   presence so ambient life keeps swimming through the settle flourish.
+/// - After the breath, presence eases out over [`SETTLE_MS`] so the water
+///   settles instead of snapping from animated to frozen.
+/// - Browsing history or the pristine empty state is user-driven: full
+///   presence immediately.
+/// - A Working/Verifying phase ramps in from `turn_elapsed_ms` over
+///   [`RAMP_MS`], giving bursty fast streams a calm, bounded onset.
+/// - Everything else is fully static.
+#[must_use]
+pub fn life_presence(
+    completion_elapsed_ms: Option<u128>,
+    turn_elapsed_ms: Option<u128>,
+    animated: bool,
+    browsing_history: bool,
+    empty_state: bool,
+) -> f32 {
+    if let Some(elapsed) = completion_elapsed_ms {
+        if elapsed < COMPLETION_BREATH_MS {
+            return 1.0;
+        }
+        let t = (elapsed - COMPLETION_BREATH_MS) as f32 / SETTLE_MS as f32;
+        return 1.0 - smoothstep(t);
+    }
+    if !animated {
+        return 0.0;
+    }
+    if browsing_history || empty_state {
+        return 1.0;
+    }
+    match turn_elapsed_ms {
+        Some(elapsed) => smoothstep(elapsed as f32 / RAMP_MS as f32),
+        None => 1.0,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OceanRamp {
     pub surface: Color,
@@ -107,6 +165,8 @@ pub struct OceanColumn {
     completion_elapsed_ms: Option<u128>,
     phase: ShellPhase,
     animated: bool,
+    /// Fixed-point (0..=1000) life presence; keeps `Eq` derivable.
+    presence: u16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,6 +177,7 @@ struct OceanRampCacheIdentity {
     phase_tag: u8,
     animated: bool,
     completion_active: bool,
+    presence: u16,
 }
 
 impl OceanRampCacheIdentity {
@@ -134,6 +195,7 @@ impl OceanRampCacheIdentity {
             u32::from(self.phase_tag),
             u32::from(self.animated),
             u32::from(self.completion_active),
+            u32::from(self.presence),
         ]
         .into_iter()
         .flat_map(u32::to_le_bytes)
@@ -176,6 +238,7 @@ impl OceanColumn {
         completion_elapsed_ms: Option<u128>,
         phase: ShellPhase,
         animated: bool,
+        presence: u16,
     ) -> Self {
         Self {
             ramp,
@@ -185,6 +248,7 @@ impl OceanColumn {
             completion_elapsed_ms,
             phase,
             animated,
+            presence,
         }
     }
 
@@ -193,12 +257,25 @@ impl OceanColumn {
         let row = y.saturating_sub(self.top).min(self.height - 1);
         if let Some(elapsed) = self.completion_elapsed_ms {
             self.ramp.color_at_completion(row, self.height, elapsed)
-        } else if self.animated {
-            self.ramp
-                .color_at_phase(row, self.height, self.elapsed_ms, self.phase)
         } else {
-            self.ramp.color_at(row, self.height)
+            // Ease between the static gradient and the phase treatment by
+            // life presence, so mood/activity changes blend instead of snap.
+            let static_color = self.ramp.color_at(row, self.height);
+            if self.animated || self.presence > 0 {
+                let phase_color =
+                    self.ramp
+                        .color_at_phase(row, self.height, self.elapsed_ms, self.phase);
+                mix_colors(static_color, phase_color, self.presence_f32())
+            } else {
+                static_color
+            }
         }
+    }
+
+    /// Life presence as a 0..=1 fraction of the fixed-point field.
+    #[must_use]
+    fn presence_f32(self) -> f32 {
+        (f32::from(self.presence) / 1000.0).clamp(0.0, 1.0)
     }
 
     /// Elapsed milliseconds of the completion breath, when active. Ambient
@@ -231,6 +308,7 @@ impl OceanColumn {
             phase_tag: self.phase_tag(),
             animated: self.animated,
             completion_active: self.completion_elapsed_ms.is_some(),
+            presence: self.presence,
         }
     }
 
