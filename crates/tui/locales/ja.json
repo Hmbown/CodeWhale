@@ -296,7 +296,6 @@
     "CmdSidebarDescription": "右サイドバーの表示/フォーカスを切り替え",
     "CmdSkillDescription": "スキルを有効化、またはコミュニティスキルをインストール／更新／アンインストール／信頼",
     "CmdSkillsDescription": "ローカルスキルを一覧表示し、接頭辞で絞り込むか、精選レジストリを参照する",
-    "CmdDebtDescription": "負債台帳を確認またはエクスポート",
     "CmdStashDescription": "コンポーザーの下書きを退避／復元する",
     "CmdStatusDescription": "実行中のセッション状態を表示",
     "CmdStatuslineDescription": "フッターに表示する項目を設定",

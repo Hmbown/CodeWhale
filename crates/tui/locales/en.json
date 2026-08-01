@@ -296,7 +296,6 @@
     "CmdSidebarDescription": "Toggle or focus the right sidebar",
     "CmdSkillDescription": "Activate a skill, or install/update/uninstall/trust a community skill",
     "CmdSkillsDescription": "List local skills, filter by prefix, or browse the curated remote registry",
-    "CmdDebtDescription": "Inspect or export the debt ledger",
     "CmdStashDescription": "Park or restore a composer draft",
     "CmdStatusDescription": "Show runtime session status",
     "CmdStatuslineDescription": "Configure which items appear in the footer",
