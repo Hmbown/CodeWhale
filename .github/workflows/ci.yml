@@ -247,6 +247,17 @@ jobs:
       - name: Check dead-code budget
         if: needs.changes.outputs.heavy == 'true'
         run: python3 scripts/check-dead-code-budget.py
+      # The offline runtime-contract measurement needs the full locked graph,
+      # dev-dependencies included (e.g. wiremock -> assert-json-diff), but
+      # clippy above builds no test targets and the rust-cache registry key
+      # derives from Cargo.lock, so any lock-changing PR (every dependabot
+      # bump) restores an empty cache and the hermetic `cargo test --offline`
+      # dies with "failed to download ... --offline was specified" before a
+      # single budget is measured. Fetch the locked graph once here so the
+      # measurement below is deterministic on every branch.
+      - name: Fetch locked dependency graph for offline measurement
+        if: needs.changes.outputs.heavy == 'true'
+        run: cargo fetch --locked
       # Provider-free local measurement. The checker forces Cargo offline and
       # the measurement script runs only locked, ignored Rust metric tests.
       - name: Check runtime-contract budget

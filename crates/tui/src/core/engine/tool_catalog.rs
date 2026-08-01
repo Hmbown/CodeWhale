@@ -727,7 +727,7 @@ fn suggest_tool_names(catalog: &[Tool], requested: &str, limit: usize) -> Vec<St
 /// Catalog tools the engine injects itself rather than registering, plus the
 /// legacy tool-search spellings. Exposed so the read-only request projection
 /// can label their provenance as `synthetic` from the same source of truth as
-/// [`is_synthetic_catalog_tool`] instead of guessing.
+/// `is_synthetic_catalog_tool` test coverage instead of guessing.
 ///
 /// MCP-contributed names are deliberately *not* here: those resolve through the
 /// real pool, and stay unknown when the pool did not resolve them.

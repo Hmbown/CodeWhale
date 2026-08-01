@@ -133,6 +133,7 @@
     "crates/tui/src/tui/file_picker.rs",
     "crates/tui/src/tui/footer_ui.rs",
     "crates/tui/src/tui/history.rs",
+    "crates/tui/src/tui/history/latex_render.rs",
     "crates/tui/src/tui/hotbar/actions.rs",
     "crates/tui/src/tui/hotbar/setup.rs",
     "crates/tui/src/tui/live_transcript.rs",
@@ -183,7 +184,7 @@
   "large_module_threshold_lines": 1000,
   "max_large_module_count": 172,
   "max_module_lines": 19017,
-  "max_total_owned_rust_lines": 643745,
+  "max_total_owned_rust_lines": 644756,
   "schema_version": 1,
   "workspace_packages": [
     "codewhale-agent",
