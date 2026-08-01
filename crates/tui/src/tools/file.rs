@@ -832,6 +832,12 @@ impl ToolSpec for EditFileTool {
             ));
         }
 
+        if let Some(reason) = invalid_preprocessor_edit(&file_path, &contents, &updated) {
+            return Err(ToolError::invalid_input(format!(
+                "edit_file refused corrupted payload: {reason}. Recovery: re-read the file and retry with a complete replace (or use apply_patch for brace-heavy multi-line edits)."
+            )));
+        }
+
         // Fidelity: the intended replace text must appear in the updated buffer
         // (empty replace is a valid deletion). Catches host/tool bridges that
         // claim success after mangling the payload.
@@ -944,42 +950,86 @@ fn edit_payload_looks_corrupted(search: &str, replace: &str) -> Option<&'static 
         );
     }
 
-    // #5003 — a C file edit that replaced `#if 0` but left the matching
-    // `#endif` behind returned success with structurally broken output.
-    // Brace counts cannot catch this (the region between `#if 0` and
-    // `#endif` often has no braces). Require the replace to preserve the
-    // preprocessor conditional balance of the search span: the net number
-    // of open/close directives must be unchanged, otherwise the edit would
-    // orphan a directive. Languages without `#if`/`#endif` are unaffected
-    // (both balances are zero).
-    let search_pp = preprocessor_conditional_balance(search);
-    let replace_pp = preprocessor_conditional_balance(replace);
-    if search_pp != replace_pp {
-        return Some(
-            "replace would change the C/C++ preprocessor conditional balance (#if/#ifdef/#ifndef vs #endif) — the search or replace text is missing a matching directive; copy the complete block including both its opening and closing directives",
-        );
-    }
-
     None
 }
 
-/// Count `#if`/`#ifdef`/`#ifndef` openings and `#endif` closings in a text
-/// payload. `#else`/`#elif` do not affect the open/close balance. Directives
-/// are matched at line start (leading whitespace allowed) and may carry
-/// trailing comments (`#endif // FOO`).
-fn preprocessor_conditional_balance(text: &str) -> (usize, usize) {
-    let opens = text
-        .lines()
-        .filter(|line| {
-            let trimmed = line.trim_start();
-            trimmed.starts_with("#if") && !trimmed.starts_with("#include")
+const PREPROCESSOR_CONDITIONAL_ERROR: &str = "replace would change the C/C++ preprocessor conditional balance (#if/#ifdef/#ifndef vs #endif) — the search or replace text is missing a matching directive; copy the complete block including both its opening and closing directives";
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct PreprocessorConditionalDebt {
+    orphaned_closes: usize,
+    unclosed_opens: usize,
+}
+
+impl PreprocessorConditionalDebt {
+    fn total(self) -> usize {
+        self.orphaned_closes + self.unclosed_opens
+    }
+}
+
+/// Reject an edit only when it introduces new conditional-structure damage in
+/// a file whose extension identifies it as C-family source. The whole file is
+/// checked before and after the edit: complete block insertion/removal is safe,
+/// while an orphaned opener or closer increases the structural debt. Existing
+/// debt may be preserved or reduced so this guard never prevents a repair.
+fn invalid_preprocessor_edit(path: &Path, before: &str, after: &str) -> Option<&'static str> {
+    if !is_c_family_source(path) {
+        return None;
+    }
+
+    let before_debt = preprocessor_conditional_debt(before);
+    let after_debt = preprocessor_conditional_debt(after);
+    let safe = after_debt == before_debt
+        || after_debt.total() == 0
+        || after_debt.total() < before_debt.total();
+
+    (!safe).then_some(PREPROCESSOR_CONDITIONAL_ERROR)
+}
+
+fn is_c_family_source(path: &Path) -> bool {
+    const EXTENSIONS: &[&str] = &[
+        "c", "cc", "cp", "cpp", "cxx", "h", "h++", "hh", "hpp", "hxx", "inl", "ipp", "ixx", "m",
+        "mm", "tpp", "cu", "cuh", "cppm",
+    ];
+
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            EXTENSIONS
+                .iter()
+                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
         })
-        .count();
-    let closes = text
-        .lines()
-        .filter(|line| line.trim_start().starts_with("#endif"))
-        .count();
-    (opens, closes)
+}
+
+/// Measure unmatched preprocessor conditionals across an entire source file.
+/// Tracking nesting (instead of comparing span-level tuple counts) also catches
+/// an `#endif` moved before its opener. Whitespace between `#` and the directive
+/// name is accepted, as it is by C preprocessors.
+fn preprocessor_conditional_debt(text: &str) -> PreprocessorConditionalDebt {
+    let mut depth = 0usize;
+    let mut orphaned_closes = 0usize;
+
+    for line in text.lines() {
+        match preprocessor_directive(line) {
+            Some("if" | "ifdef" | "ifndef") => depth += 1,
+            Some("endif") if depth == 0 => orphaned_closes += 1,
+            Some("endif") => depth -= 1,
+            _ => {}
+        }
+    }
+
+    PreprocessorConditionalDebt {
+        orphaned_closes,
+        unclosed_opens: depth,
+    }
+}
+
+fn preprocessor_directive(line: &str) -> Option<&str> {
+    let rest = line.trim_start().strip_prefix('#')?.trim_start();
+    let name_end = rest
+        .find(|character: char| !character.is_ascii_alphabetic())
+        .unwrap_or(rest.len());
+    (name_end > 0).then_some(&rest[..name_end])
 }
 
 /// Build a short, line-truncated preview of a (possibly very long) search
@@ -2795,38 +2845,44 @@ mod tests {
     }
 
     #[test]
-    fn test_edit_payload_rejects_unbalanced_preprocessor() {
-        // #5003 - search is a complete #if 0 block; replace loses the #endif.
-        let search = "#if 0\nold code\n#endif\n";
-        let replace_missing_close = "#if 1\nnew code\n";
-        assert!(
-            edit_payload_looks_corrupted(search, replace_missing_close).is_some(),
-            "replace missing #endif must be rejected"
-        );
-
-        // Reverse: an orphan #endif in replace is rejected too.
-        let replace_extra_close = "#if 1\nnew code\n#endif\n#endif\n";
-        assert!(
-            edit_payload_looks_corrupted(search, replace_extra_close).is_some(),
-            "replace with orphan #endif must be rejected"
+    fn test_c_preprocessor_rejects_missing_close() {
+        let before = "#if FEATURE\nold code\n#endif\n";
+        let after = "#if FEATURE\nnew code\n";
+        assert_eq!(
+            invalid_preprocessor_edit(Path::new("source.c"), before, after),
+            Some(PREPROCESSOR_CONDITIONAL_ERROR)
         );
     }
 
     #[test]
-    fn test_edit_payload_accepts_balanced_preprocessor() {
-        // Balanced full-block replacement is allowed.
-        let search = "#if 0\nold code\n#endif\n";
-        let replace = "#if 1\nnew code\n#endif\n";
-        assert!(edit_payload_looks_corrupted(search, replace).is_none());
+    fn test_c_preprocessor_rejects_extra_close() {
+        let before = "#if FEATURE\nold code\n#endif\n";
+        let after = "#if FEATURE\nnew code\n#endif\n#endif\n";
+        assert_eq!(
+            invalid_preprocessor_edit(Path::new("source.hpp"), before, after),
+            Some(PREPROCESSOR_CONDITIONAL_ERROR)
+        );
+    }
 
-        // One-line toggle #if 0 -> #if 1 (net +1 on both sides) is allowed.
-        assert!(edit_payload_looks_corrupted("#if 0\n", "#if 1\n").is_none());
+    #[test]
+    fn test_c_preprocessor_allows_balanced_block_removal_and_insertion() {
+        let block = "#ifdef FEATURE\nfeature();\n#endif\n";
+        assert!(invalid_preprocessor_edit(Path::new("source.cc"), block, "").is_none());
+        assert!(invalid_preprocessor_edit(Path::new("source.cc"), "", block).is_none());
+    }
 
-        // In-block local edit (no directives) is allowed.
-        assert!(edit_payload_looks_corrupted("old code\n", "new code\n").is_none());
+    #[test]
+    fn test_c_preprocessor_allows_in_block_edit() {
+        let before = "#if FEATURE\nold_call();\n#endif\n";
+        let after = "#if FEATURE\nnew_call();\n#endif\n";
+        assert!(invalid_preprocessor_edit(Path::new("source.cxx"), before, after).is_none());
+    }
 
-        // Non-C code without #if/#endif is unaffected.
-        assert!(edit_payload_looks_corrupted("fn foo() {}", "fn bar() {}").is_none());
+    #[test]
+    fn test_non_c_directive_prose_is_not_validated() {
+        let before = "#if this example is enabled\nexplanation\n#endif\n";
+        let after = "#if this example is enabled\nupdated explanation\n";
+        assert!(invalid_preprocessor_edit(Path::new("guide.md"), before, after).is_none());
     }
 
     #[test]
