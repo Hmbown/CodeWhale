@@ -14061,9 +14061,82 @@ fn engine_handle_try_send_does_not_block_when_op_channel_is_full() {
         .try_send(Op::ListSubAgents)
         .expect("first send should succeed");
 
-    // try_send must return Err immediately — never block.
-    let result = handle.try_send(Op::ListSubAgents);
+    // A live posture update must publish immediately even though its wake-up
+    // cannot fit. The already-queued operation will wake the engine, which
+    // applies this pending authority before handling it.
+    let result = handle.try_send(Op::ChangeMode {
+        mode: AppMode::Operate,
+        allow_shell: true,
+        trust_mode: false,
+        auto_approve: false,
+        approval_mode: crate::tui::approval::ApprovalMode::Auto,
+        configured_sandbox_mode: None,
+    });
     assert!(result.is_err(), "try_send should fail when channel is full");
+    let authority = handle.runtime_permission_authority();
+    assert_eq!(
+        authority.approval_mode,
+        crate::tui::approval::ApprovalMode::Auto
+    );
+    assert!(!authority.auto_approve);
+}
+
+#[tokio::test]
+async fn full_mailbox_posture_update_supersedes_queued_change_mode() {
+    use crate::tui::approval::ApprovalMode;
+
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let (engine, handle) = Engine::new(config, &Config::default());
+
+    handle
+        .try_send(Op::ChangeMode {
+            mode: AppMode::Plan,
+            allow_shell: false,
+            trust_mode: false,
+            auto_approve: false,
+            approval_mode: ApprovalMode::Suggest,
+            configured_sandbox_mode: None,
+        })
+        .expect("queue older posture");
+    for _ in 1..ENGINE_OP_CHANNEL_CAPACITY {
+        handle
+            .try_send(Op::ListSubAgents)
+            .expect("fill operation mailbox");
+    }
+
+    let result = handle.try_send(Op::ChangeMode {
+        mode: AppMode::Operate,
+        allow_shell: true,
+        trust_mode: false,
+        auto_approve: false,
+        approval_mode: ApprovalMode::Auto,
+        configured_sandbox_mode: Some("read-only".to_string()),
+    });
+    assert!(
+        result.is_err(),
+        "latest posture wake-up must see a full mailbox"
+    );
+
+    let run = tokio::spawn(engine.run());
+    let snapshot = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        handle.get_session_snapshot(),
+    )
+    .await
+    .expect("snapshot after mailbox drain")
+    .expect("session snapshot");
+
+    assert_eq!(snapshot.mode, "operate");
+    let authority = handle.runtime_permission_authority();
+    assert_eq!(authority.approval_mode, ApprovalMode::Auto);
+    assert!(!authority.auto_approve);
+
+    handle.send(Op::Shutdown).await.expect("shutdown engine");
+    run.await.expect("engine task");
 }
 
 #[tokio::test]

@@ -44,10 +44,18 @@ impl EngineHandle {
     /// safely be dropped and re-requested on the next drain cycle.
     pub fn try_send(&self, op: Op) -> Result<()> {
         let authority = Self::change_mode_authority(&op);
-        self.tx_op.try_send(op)?;
-        if let Some(authority) = authority {
+        let result = self.tx_op.try_send(op);
+        // A full channel already guarantees that the engine will wake and
+        // drain an operation. Publish the typed authority anyway: the drain
+        // applies pending authority before handling that queued operation, so
+        // a posture edit never blocks behind refresh traffic. A closed
+        // channel has no engine left to observe the update.
+        if !matches!(&result, Err(mpsc::error::TrySendError::Closed(_)))
+            && let Some(authority) = authority
+        {
             self.publish_runtime_authority(authority);
         }
+        result?;
         Ok(())
     }
 

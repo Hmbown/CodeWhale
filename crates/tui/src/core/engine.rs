@@ -1681,10 +1681,15 @@ impl Engine {
         Some(state.authority.clone())
     }
 
-    async fn apply_pending_runtime_authority(&mut self) -> bool {
-        let Some(authority) = self.take_pending_runtime_authority() else {
-            return false;
-        };
+    fn runtime_authority_snapshot(&self) -> LiveRuntimeAuthority {
+        self.live_runtime_authority
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .authority
+            .clone()
+    }
+
+    async fn apply_runtime_authority(&mut self, authority: LiveRuntimeAuthority) {
         self.apply_change_mode(
             authority.mode,
             authority.allow_shell,
@@ -1694,6 +1699,13 @@ impl Engine {
             authority.configured_sandbox_mode,
         )
         .await;
+    }
+
+    async fn apply_pending_runtime_authority(&mut self) -> bool {
+        let Some(authority) = self.take_pending_runtime_authority() else {
+            return false;
+        };
+        self.apply_runtime_authority(authority).await;
         true
     }
 
@@ -1919,6 +1931,15 @@ impl Engine {
             let Some(input) = self.next_run_input(host_managed_turns).await else {
                 break;
             };
+
+            // Runtime posture updates publish through shared typed state
+            // before attempting their best-effort wake-up. If the mailbox was
+            // already full, its next queued operation is the wake-up: apply
+            // the latest authority before doing any work under an obsolete
+            // policy.
+            if matches!(&input, EngineRunInput::Operation(_)) {
+                self.apply_pending_runtime_authority().await;
+            }
 
             match input {
                 EngineRunInput::SubAgentCompletion(completion) => {
@@ -2278,23 +2299,13 @@ impl Engine {
                             }
                         }
                     }
-                    Op::ChangeMode {
-                        mode,
-                        allow_shell,
-                        trust_mode,
-                        auto_approve,
-                        approval_mode,
-                        configured_sandbox_mode,
-                    } => {
-                        self.apply_change_mode(
-                            mode,
-                            allow_shell,
-                            trust_mode,
-                            auto_approve,
-                            approval_mode,
-                            configured_sandbox_mode,
-                        )
-                        .await;
+                    Op::ChangeMode { .. } => {
+                        // The mailbox payload may predate a newer posture that
+                        // was published while the channel was full. Apply the
+                        // single live snapshot so a stale queued ChangeMode
+                        // can never roll authority backward.
+                        let authority = self.runtime_authority_snapshot();
+                        self.apply_runtime_authority(authority).await;
                     }
                     Op::SetModel {
                         model,

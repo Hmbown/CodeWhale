@@ -3035,16 +3035,14 @@ impl RuntimeThreadManager {
                 thread.permission_posture.as_deref(),
                 thread.auto_approve,
             );
-            let _ = engine
-                .send(Op::ChangeMode {
-                    mode: policy.mode,
-                    allow_shell: thread.allow_shell,
-                    trust_mode: thread.trust_mode,
-                    auto_approve: policy.auto_approve(),
-                    approval_mode: policy.permission,
-                    configured_sandbox_mode,
-                })
-                .await;
+            let _ = engine.try_send(Op::ChangeMode {
+                mode: policy.mode,
+                allow_shell: thread.allow_shell,
+                trust_mode: thread.trust_mode,
+                auto_approve: policy.auto_approve(),
+                approval_mode: policy.permission,
+                configured_sandbox_mode,
+            });
         }
     }
 
@@ -3889,16 +3887,14 @@ impl RuntimeThreadManager {
                 thread.permission_posture.as_deref(),
                 thread.auto_approve,
             );
-            let _ = engine
-                .send(Op::ChangeMode {
-                    mode: policy.mode,
-                    allow_shell: thread.allow_shell,
-                    trust_mode: thread.trust_mode,
-                    auto_approve: policy.auto_approve(),
-                    approval_mode: policy.permission,
-                    configured_sandbox_mode: configured_sandbox_mode.clone(),
-                })
-                .await;
+            let _ = engine.try_send(Op::ChangeMode {
+                mode: policy.mode,
+                allow_shell: thread.allow_shell,
+                trust_mode: thread.trust_mode,
+                auto_approve: policy.auto_approve(),
+                approval_mode: policy.permission,
+                configured_sandbox_mode: configured_sandbox_mode.clone(),
+            });
         }
 
         if !changes.is_empty() {
