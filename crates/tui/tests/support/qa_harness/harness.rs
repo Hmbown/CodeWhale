@@ -35,6 +35,7 @@ pub struct Harness {
     pty: PtySession,
     frame: Frame,
     last_pump: Instant,
+    cursor_query_tail: Vec<u8>,
 }
 
 pub struct HarnessBuilder {
@@ -132,6 +133,7 @@ impl HarnessBuilder {
             pty,
             frame,
             last_pump: Instant::now(),
+            cursor_query_tail: Vec::new(),
         })
     }
 }
@@ -169,7 +171,18 @@ impl Harness {
         let bytes = self.pty.drain();
         let any = !bytes.is_empty();
         if any {
+            let cursor_queries =
+                consume_cursor_position_queries(&mut self.cursor_query_tail, &bytes);
             self.frame.feed(&bytes);
+            if cursor_queries > 0 {
+                let (row, col) = self.frame.cursor();
+                let response = format!("\x1b[{};{}R", row.saturating_add(1), col.saturating_add(1));
+                for _ in 0..cursor_queries {
+                    if self.pty.write_bytes(response.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
             self.last_pump = Instant::now();
         }
         any
@@ -290,6 +303,49 @@ impl Harness {
     }
 }
 
+const CURSOR_POSITION_QUERIES: [&[u8]; 2] = [b"\x1b[6n", b"\x1b[?6n"];
+
+/// Consume terminal cursor-position queries from a chunked PTY output stream.
+///
+/// Crossterm asks the terminal for its cursor after Ratatui clears the screen.
+/// A real terminal answers that DSR request; the QA PTY must do the same or the
+/// child waits for crossterm's timeout before it can paint its first frame.
+fn consume_cursor_position_queries(tail: &mut Vec<u8>, bytes: &[u8]) -> usize {
+    let mut stream = std::mem::take(tail);
+    stream.extend_from_slice(bytes);
+
+    let mut count = 0;
+    let mut index = 0;
+    while index < stream.len() {
+        if let Some(query) = CURSOR_POSITION_QUERIES
+            .iter()
+            .find(|query| stream[index..].starts_with(query))
+        {
+            count += 1;
+            index += query.len();
+        } else {
+            index += 1;
+        }
+    }
+
+    let max_tail = CURSOR_POSITION_QUERIES
+        .iter()
+        .map(|query| query.len().saturating_sub(1))
+        .max()
+        .unwrap_or(0)
+        .min(stream.len());
+    let keep = (1..=max_tail)
+        .rev()
+        .find(|&len| {
+            CURSOR_POSITION_QUERIES
+                .iter()
+                .any(|query| len < query.len() && query.starts_with(&stream[stream.len() - len..]))
+        })
+        .unwrap_or(0);
+    tail.extend_from_slice(&stream[stream.len() - keep..]);
+    count
+}
+
 /// Construct a sealed-`HOME` workspace under a `tempfile::TempDir` so the
 /// scenario can never read or mutate the developer's real config / skills.
 pub fn make_sealed_workspace() -> Result<SealedWorkspace> {
@@ -332,5 +388,31 @@ impl SealedWorkspace {
     }
     pub fn user_skills_dir(&self) -> PathBuf {
         self.home.join(".deepseek").join("skills")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::consume_cursor_position_queries;
+
+    #[test]
+    fn cursor_position_queries_survive_chunk_boundaries() {
+        let mut tail = Vec::new();
+        assert_eq!(
+            consume_cursor_position_queries(&mut tail, b"before\x1b["),
+            0
+        );
+        assert_eq!(consume_cursor_position_queries(&mut tail, b"6nafter"), 1);
+        assert!(tail.is_empty());
+    }
+
+    #[test]
+    fn cursor_position_queries_accept_standard_and_dec_forms() {
+        let mut tail = Vec::new();
+        assert_eq!(
+            consume_cursor_position_queries(&mut tail, b"\x1b[6n\x1b[?6n"),
+            2
+        );
+        assert!(tail.is_empty());
     }
 }
