@@ -6461,9 +6461,9 @@ fn print_mode_runtime_contract_metrics() {
     let _userprofile = EnvVarGuard::set("USERPROFILE", &home);
     let codewhale_home = home.join(".codewhale");
     let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", &codewhale_home);
-    // Keep the model-visible shell fact stable across developer and CI hosts.
-    // ShellDispatcher recognizes this token without executing a shell.
-    let _shell = EnvVarGuard::set("SHELL", "bash");
+    // Keep the model-visible shell fact stable across developer and CI hosts
+    // while exercising the exact-path contract used at runtime.
+    let _shell = EnvVarGuard::set("SHELL", "/bin/bash");
     let mut mode_metrics = serde_json::Map::new();
     for (mode_name, mode, mode_instructions) in [
         ("plan", AppMode::Plan, crate::prompts::PLAN_MODE),
@@ -6601,8 +6601,9 @@ fn measure_representative_runtime_context()
     let _userprofile = EnvVarGuard::set("USERPROFILE", &home);
     let codewhale_home = home.join(".codewhale");
     let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", &codewhale_home);
-    // Keep the model-visible shell fact stable across developer and CI hosts.
-    let _shell = EnvVarGuard::set("SHELL", "bash");
+    // Keep the model-visible shell fact stable across developer and CI hosts
+    // while exercising the exact-path contract used at runtime.
+    let _shell = EnvVarGuard::set("SHELL", "/bin/bash");
 
     let mut stages = vec![representative_stage(
         "base",
