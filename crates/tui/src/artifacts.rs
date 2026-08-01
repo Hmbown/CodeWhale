@@ -303,52 +303,6 @@ pub fn record_tool_output_artifact_with_size(
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TranscriptArtifactRef {
-    pub artifact_id: String,
-    pub tool_name: String,
-    pub tool_call_id: String,
-    pub byte_size: u64,
-    pub storage_path: PathBuf,
-    pub preview: String,
-}
-
-impl From<&ArtifactRecord> for TranscriptArtifactRef {
-    fn from(record: &ArtifactRecord) -> Self {
-        Self {
-            artifact_id: record.id.clone(),
-            tool_name: record.tool_name.clone(),
-            tool_call_id: record.tool_call_id.clone(),
-            byte_size: record.byte_size,
-            storage_path: record.storage_path.clone(),
-            preview: record.preview.clone(),
-        }
-    }
-}
-
-#[must_use]
-pub fn render_transcript_artifact_ref(reference: &TranscriptArtifactRef) -> String {
-    // The model sees several identifiers in this block. Keep a literal
-    // retrieve command next to them so it does not have to infer which
-    // field is accepted by `retrieve_tool_result`.
-    format!(
-        "[artifact: {tool}]\n\
-         id:           {id}\n\
-         tool:         {tool}\n\
-         tool_call_id: {tool_call_id}\n\
-         size:         {size}\n\
-         path:         {path}\n\
-         preview:      {preview}\n\
-         retrieve:     retrieve_tool_result ref={id}",
-        tool = reference.tool_name,
-        id = reference.artifact_id,
-        tool_call_id = reference.tool_call_id,
-        size = format_byte_size(reference.byte_size),
-        path = format_artifact_relative_path(&reference.storage_path),
-        preview = reference.preview.replace('\n', " "),
-    )
-}
-
 #[must_use]
 pub fn format_artifact_relative_path(path: &Path) -> String {
     path.display().to_string().replace('\\', "/")
@@ -385,26 +339,6 @@ mod tests {
         TestArtifactSessionsRoot {
             prior: set_test_artifact_sessions_root(Some(root)),
         }
-    }
-
-    #[test]
-    fn transcript_ref_renders_relative_paths_with_forward_slashes() {
-        let reference = TranscriptArtifactRef {
-            artifact_id: "art_call-big".to_string(),
-            tool_name: "exec_shell".to_string(),
-            tool_call_id: "call-big".to_string(),
-            byte_size: 1024,
-            storage_path: PathBuf::from(r"artifacts\art_call-big.txt"),
-            preview: "checking crate".to_string(),
-        };
-
-        let rendered = render_transcript_artifact_ref(&reference);
-
-        assert!(rendered.contains("path:         artifacts/art_call-big.txt"));
-        assert!(
-            rendered.contains("retrieve:     retrieve_tool_result ref=art_call-big"),
-            "rendered block must embed the literal retrieve command: {rendered}"
-        );
     }
 
     #[test]

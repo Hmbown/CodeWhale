@@ -820,16 +820,43 @@ fn parse_responses_usage(val: &Value) -> Usage {
         .get("output_tokens")
         .and_then(|v| v.as_u64())
         .map_or(0, super::saturating_u32);
-    let cached = val
+    // Cache telemetry arrives in two dialects. DeepSeek's Responses payload
+    // uses the same top-level `prompt_cache_hit_tokens` /
+    // `prompt_cache_miss_tokens` fields as its Chat-Completions endpoint,
+    // while OpenAI-style payloads nest `cached_tokens` under
+    // `input_tokens_details`. Prefer the top-level hit, falling back to the
+    // nested form when the payload only reports that.
+    let nested_cached_tokens = val
         .get("input_tokens_details")
         .and_then(|d| d.get("cached_tokens"))
+        .and_then(|v| v.as_u64());
+    let prompt_cache_hit_tokens = val
+        .get("prompt_cache_hit_tokens")
         .and_then(|v| v.as_u64())
-        .map_or(0, super::saturating_u32);
-    // Mirror the Chat-Completions parser: derive cache-miss as input minus the
-    // cached hit when the payload reports cached input tokens. Responses nests
+        .or(nested_cached_tokens)
+        .map(super::saturating_u32);
+    // DeepSeek reports the miss explicitly; otherwise mirror the
+    // Chat-Completions parser: derive the miss as input minus the cached hit
+    // when the payload reported cached input tokens. Responses nests
     // reasoning under `output_tokens_details` (not `completion_tokens_details`).
-    let prompt_cache_hit_tokens = if cached > 0 { Some(cached) } else { None };
-    let prompt_cache_miss_tokens = prompt_cache_hit_tokens.map(|hit| input.saturating_sub(hit));
+    let prompt_cache_miss_tokens = val
+        .get("prompt_cache_miss_tokens")
+        .and_then(|v| v.as_u64())
+        .map(super::saturating_u32)
+        .or_else(|| prompt_cache_hit_tokens.map(|hit| input.saturating_sub(hit)));
+    // Cache-creation tokens, kept as their own class so pricing can apply the
+    // write rate where the provider publishes one. DeepSeek-style payloads
+    // nest these under `input_tokens_details`; accept a top-level spelling
+    // too for providers that flatten the object.
+    let prompt_cache_write_tokens = val
+        .get("prompt_cache_write_tokens")
+        .and_then(|v| v.as_u64())
+        .or_else(|| {
+            val.get("input_tokens_details")
+                .and_then(|d| d.get("cache_write_tokens"))
+                .and_then(|v| v.as_u64())
+        })
+        .map(super::saturating_u32);
     // `output_tokens` is already the total billable completion count, with
     // reasoning a subset of it. A payload reporting more reasoning than output
     // violates that, so the value is rejected as invalid telemetry rather than
@@ -840,12 +867,16 @@ fn parse_responses_usage(val: &Value) -> Usage {
         .and_then(|v| v.as_u64())
         .map(super::saturating_u32)
         .filter(|reasoning| *reasoning <= output);
+    // `input_tokens` stays the provider-reported *total* (cache-hit + miss +
+    // write + uncategorized): `token_usage_for_pricing` partitions it into
+    // billable classes and the context budget measures the window with it.
+    // Reducing it here to miss-only would double-subtract at those surfaces.
     Usage {
         input_tokens: input,
         output_tokens: output,
         prompt_cache_hit_tokens,
         prompt_cache_miss_tokens,
-        prompt_cache_write_tokens: None,
+        prompt_cache_write_tokens,
         reasoning_tokens,
         reasoning_replay_tokens: None,
         server_tool_use: None,
@@ -1492,6 +1523,66 @@ mod tests {
         assert_eq!(parsed.prompt_cache_hit_tokens, Some(u32::MAX));
         assert_eq!(parsed.prompt_cache_miss_tokens, Some(0));
         assert_eq!(parsed.reasoning_tokens, Some(u32::MAX));
+    }
+
+    #[test]
+    fn parse_responses_usage_reads_deepseek_top_level_cache_fields() {
+        // DeepSeek's Responses dialect reports cache telemetry as top-level
+        // `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` with
+        // `cache_write_tokens` nested under `input_tokens_details` -- none of
+        // which the old parser read (it only looked at
+        // `input_tokens_details.cached_tokens`, which DeepSeek leaves unset,
+        // so every V4 Flash turn recorded cache_hit = None).
+        let usage = json!({
+            "input_tokens": 1_000,
+            "output_tokens": 200,
+            "prompt_cache_hit_tokens": 600,
+            "prompt_cache_miss_tokens": 200,
+            "input_tokens_details": { "cached_tokens": 999, "cache_write_tokens": 100 },
+            "output_tokens_details": { "reasoning_tokens": 120 }
+        });
+
+        let parsed = parse_responses_usage(&usage);
+
+        // Top-level DeepSeek fields win over the nested OpenAI-style shape,
+        // and the explicit miss is trusted over the derived fallback.
+        assert_eq!(parsed.prompt_cache_hit_tokens, Some(600));
+        assert_eq!(parsed.prompt_cache_miss_tokens, Some(200));
+        assert_eq!(parsed.prompt_cache_write_tokens, Some(100));
+        // `input_tokens` remains the provider-reported total; the pricing
+        // layer partitions it into hit / miss / write classes.
+        assert_eq!(parsed.input_tokens, 1_000);
+        assert_eq!(parsed.output_tokens, 200);
+        assert_eq!(parsed.reasoning_tokens, Some(120));
+
+        // The parsed fields must reach the pricing classes unchanged: 600 hit
+        // at the cache-read rate, 100 write at the creation rate, and the
+        // remaining 300 (200 reported miss + 100 uncategorized) at the miss
+        // rate -- instead of the pre-fix all-raw-input miss billing.
+        let classes = crate::pricing::token_usage_for_pricing(&parsed);
+        assert_eq!(classes.input, 300);
+        assert_eq!(classes.cache_read, 600);
+        assert_eq!(classes.cache_write, 100);
+    }
+
+    #[test]
+    fn parse_responses_usage_keeps_old_shape_with_cache_write_fallback() {
+        // OpenAI-style payloads still parse from `input_tokens_details` alone:
+        // hit from `cached_tokens` (fallback), miss derived as input minus
+        // hit, and the write class from `cache_write_tokens` when present.
+        let usage = json!({
+            "input_tokens": 1_000,
+            "output_tokens": 200,
+            "input_tokens_details": { "cached_tokens": 600, "cache_write_tokens": 100 }
+        });
+
+        let parsed = parse_responses_usage(&usage);
+
+        assert_eq!(parsed.input_tokens, 1_000);
+        assert_eq!(parsed.prompt_cache_hit_tokens, Some(600));
+        assert_eq!(parsed.prompt_cache_miss_tokens, Some(400));
+        assert_eq!(parsed.prompt_cache_write_tokens, Some(100));
+        assert_eq!(parsed.reasoning_tokens, None);
     }
 
     /// Regression fixture for the reasoning double-billing bug: a real

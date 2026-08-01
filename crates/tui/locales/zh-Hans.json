@@ -296,7 +296,6 @@
     "CmdSidebarDescription": "切换或聚焦右侧边栏",
     "CmdSkillDescription": "激活技能，或安装/更新/卸载/信任社区技能",
     "CmdSkillsDescription": "列出本地技能、按前缀筛选，或浏览精选远程注册表",
-    "CmdDebtDescription": "检查或导出债务账本",
     "CmdStashDescription": "暂存或恢复输入草稿",
     "CmdStatusDescription": "显示当前运行状态",
     "CmdStatuslineDescription": "配置底栏要显示哪些条目",

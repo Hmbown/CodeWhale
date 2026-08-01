@@ -14,7 +14,7 @@
 //! snapshots.
 
 use crate::core::events::TurnRoute;
-use crate::models::{Message, Usage};
+use crate::models::Usage;
 use crate::snapshot::SnapshotRepo;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -47,11 +47,6 @@ pub struct TurnContext {
     /// Route facts resolved for this turn but not timestamped until the first
     /// provider request is actually dispatched.
     pub(crate) pending_route: Option<TurnRoute>,
-
-    /// Exact initial user message carrying the mutable SlopLedger gate, when
-    /// one was attached. Compaction uses this turn-scoped identity as an
-    /// authoritative pin without retaining matching gates from older turns.
-    pub(crate) active_slop_gate_message: Option<Message>,
 }
 
 impl TurnContext {
@@ -69,7 +64,6 @@ impl TurnContext {
                 ..Usage::default()
             },
             pending_route: None,
-            active_slop_gate_message: None,
         }
     }
 

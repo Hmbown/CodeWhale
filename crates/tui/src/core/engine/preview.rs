@@ -377,10 +377,10 @@ impl Engine {
         };
 
         // The hypothetical user message goes through the same constructor
-        // production uses — turn metadata, route stamp, provenance, and the
-        // slop-ledger gate included — so the body being hashed is the body a
-        // real turn would build. It is appended to a *clone* of the history
-        // and discarded: the session never sees it.
+        // production uses — turn metadata, route stamp, and provenance — so
+        // the body being hashed is the body a real turn would build. It is
+        // appended to a *clone* of the history and discarded: the session
+        // never sees it.
         //
         // A real submit calls `working_set.observe_user_message` before it
         // writes `<turn_meta>`, so the block reflects files the new message
@@ -390,34 +390,21 @@ impl Engine {
         // changes any.
         let mut previewed_working_set = self.session.working_set.clone();
         previewed_working_set.observe_user_message(&hypothetical_content, &self.session.workspace);
-        let (hypothetical_user_message, active_slop_gate_message) = {
-            let message = self.user_text_message_from_snapshot(
-                hypothetical_content.clone(),
-                &model,
-                inputs.auto_model,
-                reasoning_effort.as_deref(),
-                reasoning_effort_auto,
-                inputs.provenance,
-                TurnMetadataSnapshot {
-                    prompt_context: &prompt_context,
-                    system_prompt: system_prompt.as_ref(),
-                    approval_mode: input_policy.approval_mode_for_session(),
-                    working_set: &previewed_working_set,
-                    policy_narrowing: input_policy.narrowing.as_ref(),
-                },
-            );
-            let base_content_blocks = message.content.len();
-            let message = if inputs.provenance == UserInputProvenance::ExternalUser {
-                // Read-only variant: the mutating one memoizes into
-                // `slop_ledger_gate_cache`, which an inspection must not write.
-                Engine::attach_slop_ledger_gate(message, self.slop_ledger_gate_block_readonly())
-            } else {
-                message
-            };
-            let active_gate =
-                (message.content.len() > base_content_blocks).then(|| message.clone());
-            (message, active_gate)
-        };
+        let hypothetical_user_message = self.user_text_message_from_snapshot(
+            hypothetical_content.clone(),
+            &model,
+            inputs.auto_model,
+            reasoning_effort.as_deref(),
+            reasoning_effort_auto,
+            inputs.provenance,
+            TurnMetadataSnapshot {
+                prompt_context: &prompt_context,
+                system_prompt: system_prompt.as_ref(),
+                approval_mode: input_policy.approval_mode_for_session(),
+                working_set: &previewed_working_set,
+                policy_narrowing: input_policy.narrowing.as_ref(),
+            },
+        );
         // Classification input for the provenance section: the prompt this
         // request actually carries, not the session's current one.
         let system_prompt_text = crate::prefix_cache::system_prompt_text(system_prompt.as_ref());
@@ -429,12 +416,7 @@ impl Engine {
         // dispatch and the wire. Detected read-only; nothing pending is
         // consumed, drained, or flushed by looking.
         let mut runtime_transforms = self
-            .preview_runtime_transforms(
-                &messages,
-                &previewed_working_set,
-                active_slop_gate_message.as_ref(),
-                &planned_compaction,
-            )
+            .preview_runtime_transforms(&messages, &previewed_working_set, &planned_compaction)
             .await;
 
         // Resolve the same authoritative transient Work/To-do tail that the
@@ -635,7 +617,6 @@ impl Engine {
         &self,
         messages: &[Message],
         working_set: &crate::working_set::WorkingSet,
-        active_slop_gate_message: Option<&Message>,
         compaction: &crate::compaction::CompactionConfig,
     ) -> Vec<&'static str> {
         let mut reasons = Vec::new();
@@ -661,8 +642,7 @@ impl Engine {
         }
 
         if compaction.enabled {
-            let pins =
-                self.compaction_pins_for_messages(messages, working_set, active_slop_gate_message);
+            let pins = self.compaction_pins_for_messages(messages, working_set);
             let paths = working_set.top_paths(24);
             if should_compact(
                 messages,
@@ -917,40 +897,6 @@ mod tests {
             standard_and_full_collapse(&catalog, &always_load),
             "Standard and Full apply no narrowing today, so they must report collapsed"
         );
-    }
-
-    #[test]
-    fn preview_compaction_pins_the_local_hypothetical_slop_gate() {
-        let config = deepseek_config();
-        let (engine, _handle, _tmp) = preview_engine(&config);
-        assert!(engine.session.messages.is_empty());
-
-        let active_gate = Message {
-            role: "user".to_string(),
-            content: vec![ContentBlock::Text {
-                text: "hypothetical prompt plus active slop gate".to_string(),
-                cache_control: None,
-            }],
-        };
-        let mut preview_messages = vec![active_gate.clone()];
-        preview_messages.extend((0..12).map(|index| Message {
-            role: if index == 10 { "user" } else { "assistant" }.to_string(),
-            content: vec![ContentBlock::Text {
-                text: format!("history {index} {}", "x".repeat(1_024)),
-                cache_control: None,
-            }],
-        }));
-        let preview_working_set = engine.session.working_set.clone();
-
-        let without_active =
-            engine.compaction_pins_for_messages(&preview_messages, &preview_working_set, None);
-        let with_active = engine.compaction_pins_for_messages(
-            &preview_messages,
-            &preview_working_set,
-            Some(&active_gate),
-        );
-        assert!(!without_active.contains(&0));
-        assert!(with_active.contains(&0));
     }
 
     #[tokio::test]
@@ -2825,7 +2771,6 @@ mod tests {
 
         let allowed_before = engine.config.allowed_tools.clone();
         let disallowed_before = engine.config.disallowed_tools.clone();
-        let slop_cache_before = format!("{:?}", engine.slop_ledger_gate_cache);
         let messages_before = engine.messages_with_turn_metadata();
         let model_before = engine.session.model.clone();
         let system_prompt_before = system_prompt_hash(engine.session.system_prompt.as_ref());
@@ -2853,11 +2798,6 @@ mod tests {
 
         assert_eq!(engine.config.allowed_tools, allowed_before, "tool gate");
         assert_eq!(engine.config.disallowed_tools, disallowed_before);
-        assert_eq!(
-            format!("{:?}", engine.slop_ledger_gate_cache),
-            slop_cache_before,
-            "the slop-ledger memo is engine state; an inspection must not write it"
-        );
         assert_eq!(
             engine.messages_with_turn_metadata(),
             messages_before,
