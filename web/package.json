@@ -24,13 +24,13 @@
   "dependencies": {
     "mermaid": "^11.16.0",
     "next": "^15.5.18",
-    "react": "^19.0.0",
+    "react": "^19.2.8",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "@opennextjs/cloudflare": "^1.19.11",
     "@types/node": "^22.10.5",
-    "@types/react": "^19.0.7",
+    "@types/react": "^19.2.17",
     "@types/react-dom": "^19.0.3",
     "autoprefixer": "^10.4.20",
     "eslint": "^9.39.4",
