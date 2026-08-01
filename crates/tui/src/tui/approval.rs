@@ -81,7 +81,9 @@ impl ApprovalMode {
         match value.trim().to_ascii_lowercase().as_str() {
             "auto" | "auto-review" | "auto_review" => Some(ApprovalMode::Auto),
             "bypass" | "yolo" | "dontask" | "dont_ask" | "bypass-permissions"
-            | "bypasspermissions" | "full-access" | "full" => Some(ApprovalMode::Bypass),
+            | "bypasspermissions" | "full-access" | "full_access" | "full" => {
+                Some(ApprovalMode::Bypass)
+            }
             "suggest" | "suggested" | "on-request" | "untrusted" | "ask" => {
                 Some(ApprovalMode::Suggest)
             }
@@ -4376,6 +4378,10 @@ diff --git a/src/b.rs b/src/b.rs
         assert_eq!(
             ApprovalMode::from_config_value("on-request"),
             Some(ApprovalMode::Suggest)
+        );
+        assert_eq!(
+            ApprovalMode::from_config_value("full_access"),
+            Some(ApprovalMode::Bypass)
         );
         assert_eq!(
             ApprovalMode::from_config_value("deny"),

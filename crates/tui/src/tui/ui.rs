@@ -4798,6 +4798,20 @@ async fn run_event_loop(
                                 );
                                 let _ = engine_handle.approve_tool_call(id.clone()).await;
                             }
+                            ApprovalRequestDisposition::AutoDenyAutoReview => {
+                                log_sensitive_event(
+                                    "tool.approval.auto_deny_auto_review",
+                                    serde_json::json!({
+                                        "tool_name": tool_name,
+                                        "session_id": app.current_session_id,
+                                        "mode": app.mode.label(),
+                                    }),
+                                );
+                                let _ = engine_handle.deny_tool_call(id.clone()).await;
+                                app.status_message = Some(format!(
+                                    "Auto-Review held tool '{tool_name}' without pausing"
+                                ));
+                            }
                             ApprovalRequestDisposition::AutoDenyNeverPosture => {
                                 log_sensitive_event(
                                     "tool.approval.auto_deny",

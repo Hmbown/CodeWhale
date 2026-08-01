@@ -458,6 +458,9 @@ pub(crate) enum ApprovalRequestDisposition {
     /// A forced (non-bypassable) policy hold arrived under a full-access
     /// posture that opens no modal: fail closed.
     AutoDenyFullAccessPolicyHold,
+    /// Auto-Review is autonomous: unresolved holds fail closed instead of
+    /// opening a user-approval modal.
+    AutoDenyAutoReview,
     /// approval_mode=Never: deny without a modal.
     AutoDenyNeverPosture,
     /// Open the approval modal.
@@ -480,6 +483,9 @@ pub(crate) fn resolve_approval_request_disposition(
 ) -> ApprovalRequestDisposition {
     if session_denied {
         return ApprovalRequestDisposition::AutoDenySessionDenied;
+    }
+    if authority.approval_mode_for_session() == ApprovalMode::Auto {
+        return ApprovalRequestDisposition::AutoDenyAutoReview;
     }
     // The request exists, so the engine already resolved Prompt for the tool
     // itself. What remains is the posture question: how does this authority
@@ -642,6 +648,7 @@ mod tests {
     #[test]
     fn approval_request_disposition_preserves_legacy_branch_order() {
         let ask = authority(AppMode::Agent, false, ApprovalMode::Suggest);
+        let auto = authority(AppMode::Agent, false, ApprovalMode::Auto);
         let full_access = authority(AppMode::Agent, true, ApprovalMode::Bypass);
         let never = authority(AppMode::Agent, false, ApprovalMode::Never);
 
@@ -674,6 +681,12 @@ mod tests {
             resolve_approval_request_disposition(&never, false, false, false),
             ApprovalRequestDisposition::AutoDenyNeverPosture
         );
+        for force_prompt in [false, true] {
+            assert_eq!(
+                resolve_approval_request_disposition(&auto, false, false, force_prompt),
+                ApprovalRequestDisposition::AutoDenyAutoReview
+            );
+        }
         // Ask posture with no grant opens the modal.
         assert_eq!(
             resolve_approval_request_disposition(&ask, false, false, false),

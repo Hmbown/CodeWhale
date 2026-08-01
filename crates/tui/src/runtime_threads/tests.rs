@@ -318,6 +318,7 @@ fn sample_thread(thread_id: &str) -> ThreadRecord {
         model_provider_id: None,
         workspace: PathBuf::from("."),
         mode: AppMode::Agent.as_setting().to_string(),
+        permission_posture: Some("ask".to_string()),
         allow_shell: false,
         trust_mode: false,
         auto_approve: false,
@@ -344,6 +345,7 @@ fn sample_turn(thread_id: &str, turn_id: &str, status: RuntimeTurnStatus) -> Tur
         ended_at: None,
         duration_ms: None,
         usage: None,
+        permission_posture: None,
         effective_provider: None,
         effective_provider_id: None,
         effective_billing_surface: None,
@@ -3422,8 +3424,6 @@ fn enforce_lru_capacity_does_not_loop_when_all_threads_are_active() {
             active_turn: Some(ActiveTurnState {
                 turn_id: "turn_a".to_string(),
                 interrupt_requested: false,
-                auto_approve: true,
-                trust_mode: false,
             }),
             route_identity: crate::config::ProviderIdentity {
                 provider: ApiProvider::Deepseek,
@@ -3441,8 +3441,6 @@ fn enforce_lru_capacity_does_not_loop_when_all_threads_are_active() {
             active_turn: Some(ActiveTurnState {
                 turn_id: "turn_b".to_string(),
                 interrupt_requested: false,
-                auto_approve: true,
-                trust_mode: false,
             }),
             route_identity: crate::config::ProviderIdentity {
                 provider: ApiProvider::Deepseek,
@@ -4210,8 +4208,6 @@ async fn update_thread_workspace_rejects_active_turn() -> Result<()> {
         state.active_turn = Some(ActiveTurnState {
             turn_id: "turn_live".to_string(),
             interrupt_requested: false,
-            auto_approve: false,
-            trust_mode: false,
         });
     }
 
@@ -4268,7 +4264,7 @@ async fn start_turn_passes_effective_auto_approve_to_engine() -> Result<()> {
     let harness = install_mock_engine(&manager, &thread.id).await;
     let mut rx_op = harness.rx_op;
 
-    let _turn = manager
+    let turn = manager
         .start_turn(
             &thread.id,
             StartTurnRequest {
@@ -4283,9 +4279,17 @@ async fn start_turn_passes_effective_auto_approve_to_engine() -> Result<()> {
             },
         )
         .await?;
+    assert_eq!(turn.permission_posture.as_deref(), Some("full_access"));
 
     match rx_op.recv().await {
-        Some(Op::SendMessage { auto_approve, .. }) => assert!(auto_approve),
+        Some(Op::SendMessage {
+            auto_approve,
+            approval_mode,
+            ..
+        }) => {
+            assert!(auto_approve);
+            assert_eq!(approval_mode, crate::tui::approval::ApprovalMode::Bypass);
+        }
         other => panic!("expected SendMessage op, got {other:?}"),
     }
 
@@ -4313,7 +4317,7 @@ async fn start_turn_can_override_thread_auto_approve_to_false() -> Result<()> {
     let harness = install_mock_engine(&manager, &thread.id).await;
     let mut rx_op = harness.rx_op;
 
-    let _turn = manager
+    let turn = manager
         .start_turn(
             &thread.id,
             StartTurnRequest {
@@ -4328,10 +4332,156 @@ async fn start_turn_can_override_thread_auto_approve_to_false() -> Result<()> {
             },
         )
         .await?;
+    assert_eq!(turn.permission_posture.as_deref(), Some("ask"));
 
     match rx_op.recv().await {
-        Some(Op::SendMessage { auto_approve, .. }) => assert!(!auto_approve),
+        Some(Op::SendMessage {
+            auto_approve,
+            approval_mode,
+            ..
+        }) => {
+            assert!(!auto_approve);
+            assert_eq!(approval_mode, crate::tui::approval::ApprovalMode::Suggest);
+        }
         other => panic!("expected SendMessage op, got {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn start_turn_enforces_and_records_auto_review_without_legacy_bypass() -> Result<()> {
+    let manager = test_manager(test_runtime_dir())?;
+    let thread = manager
+        .create_thread(CreateThreadRequest {
+            permission_posture: Some("ask".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let harness = install_mock_engine(&manager, &thread.id).await;
+    let mut rx_op = harness.rx_op;
+
+    let turn = manager
+        .start_turn(
+            &thread.id,
+            StartTurnRequest {
+                prompt: "review autonomously".to_string(),
+                permission_posture: Some("auto-review".to_string()),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+    assert_eq!(turn.permission_posture.as_deref(), Some("auto_review"));
+    assert_eq!(
+        manager
+            .store
+            .load_turn(&turn.id)?
+            .permission_posture
+            .as_deref(),
+        Some("auto_review")
+    );
+    match rx_op.recv().await {
+        Some(Op::SendMessage {
+            auto_approve,
+            approval_mode,
+            ..
+        }) => {
+            assert!(!auto_approve);
+            assert_eq!(approval_mode, crate::tui::approval::ApprovalMode::Auto);
+        }
+        other => panic!("expected SendMessage op, got {other:?}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn active_turn_permission_posture_switches_use_the_engine_live_authority() -> Result<()> {
+    let manager = test_manager(test_runtime_dir())?;
+    let thread = manager
+        .create_thread(CreateThreadRequest {
+            permission_posture: Some("ask".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let mut harness = install_mock_engine(&manager, &thread.id).await;
+    let turn = manager
+        .start_turn(
+            &thread.id,
+            StartTurnRequest {
+                prompt: "keep working while permissions change".to_string(),
+                ..Default::default()
+            },
+        )
+        .await?;
+    assert!(matches!(
+        harness.rx_op.recv().await,
+        Some(Op::SendMessage {
+            approval_mode: crate::tui::approval::ApprovalMode::Suggest,
+            ..
+        })
+    ));
+
+    for (requested, canonical, expected_auto, expected_approval) in [
+        (
+            "auto-review",
+            "auto_review",
+            false,
+            crate::tui::approval::ApprovalMode::Auto,
+        ),
+        (
+            "full-access",
+            "full_access",
+            true,
+            crate::tui::approval::ApprovalMode::Bypass,
+        ),
+        (
+            "ask",
+            "ask",
+            false,
+            crate::tui::approval::ApprovalMode::Suggest,
+        ),
+    ] {
+        let updated = manager
+            .update_thread(
+                &thread.id,
+                UpdateThreadRequest {
+                    permission_posture: Some(requested.to_string()),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        assert_eq!(updated.permission_posture.as_deref(), Some(canonical));
+        assert_eq!(updated.auto_approve, expected_auto);
+
+        match harness.rx_op.recv().await {
+            Some(Op::ChangeMode {
+                auto_approve,
+                approval_mode,
+                ..
+            }) => {
+                assert_eq!(auto_approve, expected_auto, "{requested}");
+                assert_eq!(approval_mode, expected_approval, "{requested}");
+            }
+            other => panic!("expected ChangeMode for {requested}, got {other:?}"),
+        }
+
+        let authority = {
+            let active = manager.active.lock().await;
+            active
+                .engines
+                .get(&thread.id)
+                .expect("active engine")
+                .engine
+                .runtime_permission_authority()
+        };
+        assert_eq!(authority.auto_approve, expected_auto, "{requested}");
+        assert_eq!(authority.approval_mode, expected_approval, "{requested}");
+        assert_eq!(
+            manager.active_turn_flags(&thread.id, &turn.id).await,
+            Some((expected_auto, false)),
+            "{requested} must replace the running turn's authority immediately"
+        );
     }
 
     Ok(())
@@ -7340,6 +7490,78 @@ async fn approval_required_external_deny_is_denied() -> Result<()> {
 }
 
 #[tokio::test]
+async fn auto_review_force_prompt_is_denied_without_opening_a_modal() -> Result<()> {
+    let manager = test_manager(test_runtime_dir())?;
+    let thread = manager
+        .create_thread(CreateThreadRequest {
+            permission_posture: Some("auto-review".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let mut harness = install_mock_engine(&manager, &thread.id).await;
+    let turn = manager
+        .start_turn(
+            &thread.id,
+            StartTurnRequest {
+                prompt: "review the gated action".to_string(),
+                ..Default::default()
+            },
+        )
+        .await?;
+    assert!(matches!(
+        harness.rx_op.recv().await,
+        Some(Op::SendMessage {
+            approval_mode: crate::tui::approval::ApprovalMode::Auto,
+            ..
+        })
+    ));
+
+    harness
+        .tx_event
+        .send(EngineEvent::ApprovalRequired {
+            approval_key: "auto_hold".to_string(),
+            approval_grouping_key: "auto_hold".to_string(),
+            id: "tool_auto_hold".to_string(),
+            tool_name: "exec_command".to_string(),
+            description: "policy hold under auto review".to_string(),
+            input: serde_json::json!({}),
+            intent_summary: None,
+            approval_force_prompt: true,
+        })
+        .await?;
+
+    let decision = tokio::time::timeout(Duration::from_secs(2), harness.recv_approval_event())
+        .await
+        .context("Auto-Review hold should resolve without a modal")?;
+    assert_eq!(
+        decision,
+        Some(MockApprovalEvent::Denied {
+            id: "tool_auto_hold".to_string(),
+        })
+    );
+    assert_eq!(manager.pending_approvals_count(), 0);
+    assert!(manager.events_since(&thread.id, None)?.iter().any(|event| {
+        event.event == "approval.decided"
+            && event.payload.get("approval_id").and_then(Value::as_str) == Some("tool_auto_hold")
+            && event.payload.get("posture").and_then(Value::as_str) == Some("auto_review")
+    }));
+
+    harness
+        .tx_event
+        .send(EngineEvent::TurnComplete {
+            usage: Usage::default(),
+            status: TurnOutcomeStatus::Completed,
+            error: None,
+            tool_catalog: None,
+            base_url: None,
+        })
+        .await?;
+    let terminal = wait_for_terminal_turn(&manager, &turn.id, Duration::from_secs(2)).await?;
+    assert_eq!(terminal.status, RuntimeTurnStatus::Completed);
+    Ok(())
+}
+
+#[tokio::test]
 async fn approval_timeout_denies_clears_ui_and_next_turn_can_start() -> Result<()> {
     let _timeout_guard = test_approval_timeout_ms(25);
     let manager = test_manager(test_runtime_dir())?;
@@ -8492,6 +8714,7 @@ fn opening_manager_recovers_stale_queued_and_in_progress_work() -> Result<()> {
         model_provider_id: None,
         workspace: PathBuf::from("."),
         mode: "agent".to_string(),
+        permission_posture: None,
         allow_shell: false,
         trust_mode: false,
         auto_approve: false,
@@ -8559,6 +8782,7 @@ fn opening_manager_recovers_stale_queued_and_in_progress_work() -> Result<()> {
         ended_at: None,
         duration_ms: None,
         usage: None,
+        permission_posture: None,
         effective_provider: None,
         effective_provider_id: None,
         effective_billing_surface: None,
@@ -8584,6 +8808,7 @@ fn opening_manager_recovers_stale_queued_and_in_progress_work() -> Result<()> {
         ended_at: None,
         duration_ms: None,
         usage: None,
+        permission_posture: None,
         effective_provider: None,
         effective_provider_id: None,
         effective_billing_surface: None,
@@ -8658,13 +8883,29 @@ fn parse_mode_defaults_to_agent() {
 }
 
 #[test]
+fn mode_only_override_preserves_legacy_full_access_posture() -> Result<()> {
+    let mut thread = sample_thread("thr_legacy_full_access");
+    thread.permission_posture = None;
+    thread.auto_approve = true;
+
+    let policy = runtime_policy_with_overrides(&thread, Some("plan"), None, None)?;
+    assert_eq!(policy.mode, AppMode::Plan);
+    assert_eq!(policy.permission_wire(), "full_access");
+
+    let ask = runtime_policy_with_overrides(&thread, Some("act"), None, Some(false))?;
+    assert_eq!(ask.permission_wire(), "ask");
+    Ok(())
+}
+
+#[test]
 fn parse_mode_opt_resolves_explicit_tokens_and_aliases() {
     assert_eq!(parse_mode_opt("agent"), Some(AppMode::Agent));
     assert_eq!(parse_mode_opt("1"), Some(AppMode::Agent));
     assert_eq!(parse_mode_opt("plan"), Some(AppMode::Plan));
     assert_eq!(parse_mode_opt("2"), Some(AppMode::Plan));
     assert_eq!(parse_mode_opt("auto"), Some(AppMode::Agent));
-    assert_eq!(parse_mode_opt("3"), None);
+    assert_eq!(parse_mode_opt("operate"), Some(AppMode::Operate));
+    assert_eq!(parse_mode_opt("3"), Some(AppMode::Operate));
     assert_eq!(parse_mode_opt("yolo"), Some(AppMode::Yolo));
     assert_eq!(parse_mode_opt("4"), Some(AppMode::Yolo));
     assert_eq!(parse_mode_opt(" PLAN "), Some(AppMode::Plan));
@@ -8689,7 +8930,7 @@ fn parse_mode_wrapper_defaults_and_resolves_numeric_aliases() {
     assert_eq!(parse_mode("auto"), AppMode::Agent);
     assert_eq!(parse_mode("1"), AppMode::Agent);
     assert_eq!(parse_mode("2"), AppMode::Plan);
-    assert_eq!(parse_mode("3"), AppMode::Agent);
+    assert_eq!(parse_mode("3"), AppMode::Operate);
     assert_eq!(parse_mode("4"), AppMode::Yolo);
 }
 
@@ -8839,6 +9080,7 @@ fn seed_turns_with_user_messages(
             ended_at: Some(created_at),
             duration_ms: Some(0),
             usage: None,
+            permission_posture: None,
             effective_provider: None,
             effective_provider_id: None,
             effective_billing_surface: None,

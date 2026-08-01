@@ -4568,7 +4568,7 @@ async fn operate_conversation_reaches_provider_when_workers_are_disabled() {
 }
 
 #[test]
-fn auto_review_classifies_publish_and_force_prompts_it() {
+fn auto_review_classifies_publish_and_holds_without_prompting() {
     let (decision, audit) = auto_review_plan_decision(
         &crate::tui::auto_review::AutoReviewPolicy::default(),
         "exec_shell",
@@ -4582,7 +4582,7 @@ fn auto_review_classifies_publish_and_force_prompts_it() {
 
     assert_eq!(
         decision,
-        AutoReviewPlanDecision::ForcePrompt(
+        AutoReviewPlanDecision::Block(
             "Built-in safety gate requires approval: publish-like action requires durable review"
                 .to_string()
         )
@@ -4592,7 +4592,24 @@ fn auto_review_classifies_publish_and_force_prompts_it() {
 }
 
 #[test]
-fn auto_review_policy_does_not_force_prompt_for_shell_git_tag_list_probe() {
+fn auto_review_classifier_allow_executes_without_prompting() {
+    let (decision, audit) = auto_review_plan_decision(
+        &crate::tui::auto_review::AutoReviewPolicy::default(),
+        "read_file",
+        &json!({"path": "Cargo.toml"}),
+        crate::tui::auto_review::RunOrigin::Interactive,
+        crate::tui::approval::ApprovalMode::Auto,
+        Some("inspect the manifest"),
+        true,
+        false,
+    );
+
+    assert_eq!(decision, AutoReviewPlanDecision::Allow);
+    assert_eq!(audit["decision"], "allow");
+}
+
+#[test]
+fn auto_review_holds_unclassified_shell_probe_without_prompting() {
     let (decision, audit) = auto_review_plan_decision(
         &crate::tui::auto_review::AutoReviewPolicy::default(),
         "exec_shell",
@@ -4604,7 +4621,13 @@ fn auto_review_policy_does_not_force_prompt_for_shell_git_tag_list_probe() {
         false,
     );
 
-    assert_eq!(decision, AutoReviewPlanDecision::NoChange);
+    assert_eq!(
+        decision,
+        AutoReviewPlanDecision::Block(
+            "Auto-Review held tool 'exec_shell': destructive action requires explicit review"
+                .to_string()
+        )
+    );
     assert_eq!(audit["decision"], "ask_user");
     assert_eq!(audit["action_kind"], "shell");
 }
@@ -4704,7 +4727,7 @@ fn generic_required_tools_keep_auto_approve_behavior() {
 }
 
 #[test]
-fn auto_review_policy_does_not_change_generic_destructive_auto_approval_yet() {
+fn auto_review_holds_generic_destructive_call_without_prompting() {
     let (decision, audit) = auto_review_plan_decision(
         &crate::tui::auto_review::AutoReviewPolicy::default(),
         "exec_shell",
@@ -4716,7 +4739,13 @@ fn auto_review_policy_does_not_change_generic_destructive_auto_approval_yet() {
         false,
     );
 
-    assert_eq!(decision, AutoReviewPlanDecision::NoChange);
+    assert_eq!(
+        decision,
+        AutoReviewPlanDecision::Block(
+            "Auto-Review held tool 'exec_shell': destructive action requires explicit review"
+                .to_string()
+        )
+    );
     assert_eq!(audit["decision"], "ask_user");
     assert_eq!(audit["risk"], "destructive");
 }
@@ -10016,6 +10045,76 @@ async fn change_mode_refreshes_session_prompt_and_updates_session() {
     );
 }
 
+#[tokio::test]
+async fn live_runtime_authority_applies_latest_posture_and_sandbox_before_tools() {
+    use crate::sandbox::SandboxPolicy;
+    use crate::tui::approval::ApprovalMode;
+
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let (mut engine, handle) = Engine::new(config, &Config::default());
+    let registry = ToolRegistryBuilder::new()
+        .build(engine.build_tool_context(engine.current_mode, engine.session.auto_approve));
+
+    for (mode, posture, auto_approve, sandbox_mode, expected_sandbox) in [
+        (
+            AppMode::Operate,
+            ApprovalMode::Auto,
+            false,
+            Some("read-only".to_string()),
+            SandboxPolicy::ReadOnly,
+        ),
+        (
+            AppMode::Agent,
+            ApprovalMode::Bypass,
+            true,
+            None,
+            SandboxPolicy::DangerFullAccess,
+        ),
+        (
+            AppMode::Agent,
+            ApprovalMode::Suggest,
+            false,
+            None,
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![tmp.path().to_path_buf()],
+                network_access: true,
+                exclude_tmpdir: false,
+                exclude_slash_tmp: false,
+            },
+        ),
+    ] {
+        handle
+            .try_send(Op::ChangeMode {
+                mode,
+                allow_shell: true,
+                trust_mode: false,
+                auto_approve,
+                approval_mode: posture,
+                configured_sandbox_mode: sandbox_mode,
+            })
+            .expect("publish live runtime authority");
+
+        let published = handle.runtime_permission_authority();
+        assert_eq!(published.approval_mode, posture);
+        assert_eq!(published.auto_approve, auto_approve);
+        assert!(engine.apply_pending_runtime_authority().await);
+        assert_eq!(engine.current_mode, mode);
+        assert_eq!(engine.session.approval_mode, posture);
+        assert_eq!(engine.session.auto_approve, auto_approve);
+        assert_eq!(
+            engine
+                .live_tool_context(Some(&registry))
+                .expect("live registry context")
+                .elevated_sandbox_policy,
+            Some(expected_sandbox),
+        );
+    }
+}
+
 #[test]
 fn turn_approval_mode_prefers_auto_approve_flag() {
     use crate::tui::approval::ApprovalMode;
@@ -13830,6 +13929,16 @@ fn engine_handle_try_send_does_not_block_when_op_channel_is_full() {
         tx_steer: mpsc::channel(1).0,
         shared_paused: Arc::new(StdMutex::new(false)),
         client_preflight_required: true,
+        live_runtime_authority: Arc::new(StdMutex::new(LiveRuntimeAuthorityState::new(
+            LiveRuntimeAuthority::from_fields(
+                AppMode::Agent,
+                false,
+                false,
+                false,
+                crate::tui::approval::ApprovalMode::Suggest,
+                None,
+            ),
+        ))),
     };
 
     // Fill the op channel with one message (capacity = 1).

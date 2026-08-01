@@ -3743,13 +3743,12 @@ fn session_approved_cache_keeps_tool_name_session_grants() {
 }
 
 #[test]
-fn forced_approval_prompt_bypasses_auto_mode_shortcut() {
+fn auto_review_force_prompt_fails_closed_without_a_modal() {
     use crate::core::authority::ApprovalRequestDisposition;
     let mut app = create_test_app();
     app.approval_mode = ApprovalMode::Auto;
 
-    // Auto-Review does not full-access auto-approve; a forced hold still
-    // reaches a modal Prompt disposition (not Full Access policy deny).
+    // Auto-Review is autonomous: a forced hold is denied without pausing.
     assert_eq!(
         resolve_ui_approval_disposition(
             &app,
@@ -3758,7 +3757,7 @@ fn forced_approval_prompt_bypasses_auto_mode_shortcut() {
             "key",
             true,
         ),
-        ApprovalRequestDisposition::Prompt
+        ApprovalRequestDisposition::AutoDenyAutoReview
     );
 }
 
@@ -3786,7 +3785,7 @@ fn forced_approval_prompt_bypasses_session_approval_shortcut() {
 }
 
 #[test]
-fn full_access_auto_approves_requests_while_auto_review_does_not() {
+fn full_access_auto_approves_requests_while_auto_review_holds_without_a_modal() {
     use crate::core::authority::ApprovalRequestDisposition;
     let mut app = create_test_app();
     app.approval_mode = ApprovalMode::Auto;
@@ -3798,7 +3797,7 @@ fn full_access_auto_approves_requests_while_auto_review_does_not() {
             "key",
             false,
         ),
-        ApprovalRequestDisposition::Prompt
+        ApprovalRequestDisposition::AutoDenyAutoReview
     );
 
     app.approval_mode = ApprovalMode::Bypass;

@@ -232,6 +232,7 @@ impl Engine {
         input: serde_json::Value,
         tool_registry: Option<&crate::tools::ToolRegistry>,
         tool_exec_lock: Arc<RwLock<()>>,
+        context_override: Option<crate::tools::ToolContext>,
     ) -> Result<ToolResult, ToolError> {
         let calls = parse_parallel_tool_calls(&input)?;
         let mcp_pool = if calls.iter().any(|(tool, _)| McpPool::is_mcp_tool(tool)) {
@@ -291,6 +292,7 @@ impl Engine {
             let mcp_pool = mcp_pool.clone();
             let shell_permits = shell_permits.clone();
             let workspace = self.session.workspace.clone();
+            let context_override = context_override.clone();
             tasks.push(async move {
                 let _shell_permit = if tool_name == "exec_shell" {
                     shell_permits.acquire_owned().await.ok()
@@ -307,7 +309,7 @@ impl Engine {
                     workspace,
                     Some(registry_ref),
                     mcp_pool,
-                    None,
+                    context_override,
                 )
                 .await;
                 (index, tool_name, result)

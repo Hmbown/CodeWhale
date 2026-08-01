@@ -87,6 +87,7 @@ use super::turn::{TurnContext, post_turn_snapshot, pre_turn_snapshot};
 
 const ENGINE_OP_CHANNEL_CAPACITY: usize = 32;
 const GOAL_CONTINUATION_FAILURE_DETAIL_MAX_BYTES: usize = 512;
+const PLAN_SHELL_NETWORK_DENIED_HINT: &str = "Shell command blocked: Plan mode runs shell commands in a read-only sandbox — no writes, no network. Use Act mode (`/mode act`) for any command that creates or modifies files, or that needs network access.";
 
 fn agent_list_event(manager: &SubAgentManager) -> Event {
     Event::AgentList {
@@ -528,6 +529,10 @@ pub struct EngineHandle {
     /// before it mutates turn state. Real engines own concrete provider I/O;
     /// explicit injected/mock engines own that seam themselves.
     client_preflight_required: bool,
+    /// Typed live permission authority shared with the running turn. A mode
+    /// change publishes here before its mailbox op is queued, so gates never
+    /// consult a stale per-turn copy.
+    live_runtime_authority: Arc<StdMutex<LiveRuntimeAuthorityState>>,
 }
 
 // `impl EngineHandle { ... }` moved to `engine/handle.rs` so the
@@ -573,6 +578,7 @@ pub struct Engine {
     active_route_limits: Option<codewhale_config::route::RouteLimits>,
     active_route_capabilities: codewhale_config::route::RouteCapabilities,
     rx_op: mpsc::Receiver<Op>,
+    live_runtime_authority: Arc<StdMutex<LiveRuntimeAuthorityState>>,
     /// Clone of the op-channel sender, so the engine can self-dispatch ops
     /// (e.g. a goal-continuation `SendMessage` after a turn completes).
     tx_op: mpsc::Sender<Op>,
@@ -638,6 +644,85 @@ pub struct Engine {
     token_estimate_cache: TokenEstimateCache,
     /// Shared pause flag set by the TUI and read before tool execution.
     shared_paused: Arc<StdMutex<bool>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LiveRuntimeAuthority {
+    mode: AppMode,
+    allow_shell: bool,
+    trust_mode: bool,
+    auto_approve: bool,
+    approval_mode: crate::tui::approval::ApprovalMode,
+    configured_sandbox_mode: Option<String>,
+}
+
+impl LiveRuntimeAuthority {
+    fn from_fields(
+        mode: AppMode,
+        allow_shell: bool,
+        trust_mode: bool,
+        auto_approve: bool,
+        approval_mode: crate::tui::approval::ApprovalMode,
+        configured_sandbox_mode: Option<String>,
+    ) -> Self {
+        let authority = TurnAuthority::from_effective_fields(
+            mode,
+            allow_shell,
+            trust_mode,
+            auto_approve,
+            approval_mode,
+        );
+        Self::from_turn_authority(&authority, configured_sandbox_mode)
+    }
+
+    fn from_turn_authority(
+        authority: &TurnAuthority,
+        configured_sandbox_mode: Option<String>,
+    ) -> Self {
+        let approval_mode = authority.approval_mode_for_session();
+        Self {
+            mode: authority.mode,
+            allow_shell: authority.allow_shell,
+            trust_mode: authority.trust_mode,
+            auto_approve: authority.auto_approve
+                || approval_mode == crate::tui::approval::ApprovalMode::Bypass,
+            approval_mode,
+            configured_sandbox_mode,
+        }
+    }
+
+    fn permission_snapshot(&self) -> RuntimePermissionAuthority {
+        RuntimePermissionAuthority {
+            auto_approve: self.auto_approve,
+            trust_mode: self.trust_mode,
+            approval_mode: self.approval_mode,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct LiveRuntimeAuthorityState {
+    revision: u64,
+    applied_revision: u64,
+    authority: LiveRuntimeAuthority,
+}
+
+impl LiveRuntimeAuthorityState {
+    fn new(authority: LiveRuntimeAuthority) -> Self {
+        Self {
+            revision: 0,
+            applied_revision: 0,
+            authority,
+        }
+    }
+}
+
+/// Runtime-facing view of the engine's exact live permission authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RuntimePermissionAuthority {
+    pub(crate) auto_approve: bool,
+    pub(crate) trust_mode: bool,
+    pub(crate) approval_mode: crate::tui::approval::ApprovalMode,
 }
 
 fn claim_subagent_completion(
@@ -1005,6 +1090,16 @@ impl Engine {
         let shared_cancel_token = Arc::new(StdMutex::new(cancel_token.clone()));
         let cancel_reason: Arc<StdMutex<Option<CancelReason>>> = Arc::new(StdMutex::new(None));
         let shared_paused = Arc::new(StdMutex::new(false));
+        let live_runtime_authority = Arc::new(StdMutex::new(LiveRuntimeAuthorityState::new(
+            LiveRuntimeAuthority::from_fields(
+                AppMode::Agent,
+                config.allow_shell,
+                config.trust_mode,
+                false,
+                crate::tui::approval::ApprovalMode::Suggest,
+                api_config.sandbox_mode.clone(),
+            ),
+        )));
         let tool_exec_lock = Arc::new(RwLock::new(()));
         let plugin_registry = config
             .plugin_registry
@@ -1170,6 +1265,7 @@ impl Engine {
             active_route_limits,
             active_route_capabilities: codewhale_config::route::RouteCapabilities::default(),
             rx_op,
+            live_runtime_authority: Arc::clone(&live_runtime_authority),
             tx_op: tx_op.clone(),
             scheduled_goal_continuation: None,
             goal_continuation_schedule_seq: 0,
@@ -1204,6 +1300,7 @@ impl Engine {
             tx_steer,
             shared_paused,
             client_preflight_required: true,
+            live_runtime_authority,
         };
 
         (engine, handle)
@@ -1514,6 +1611,96 @@ impl Engine {
         }
     }
 
+    /// Apply a user/host mode-or-posture change to the live session.
+    ///
+    /// Single authority source for mode/permission state: both the run loop
+    /// and the active turn's typed live-authority drain land here.
+    async fn apply_change_mode(
+        &mut self,
+        mode: AppMode,
+        allow_shell: bool,
+        trust_mode: bool,
+        auto_approve: bool,
+        approval_mode: crate::tui::approval::ApprovalMode,
+        configured_sandbox_mode: Option<String>,
+    ) {
+        let authority = TurnAuthority::from_effective_fields(
+            mode,
+            allow_shell,
+            trust_mode,
+            auto_approve,
+            approval_mode,
+        );
+        let effective_approval = authority.approval_mode_for_session();
+        let changed = self.current_mode != authority.mode
+            || self.session.allow_shell != authority.allow_shell
+            || self.session.trust_mode != authority.trust_mode
+            || self.session.auto_approve
+                != (authority.auto_approve
+                    || effective_approval == crate::tui::approval::ApprovalMode::Bypass)
+            || self.session.approval_mode != effective_approval
+            || self.api_config.sandbox_mode != configured_sandbox_mode;
+        self.api_config.sandbox_mode = configured_sandbox_mode;
+        self.apply_runtime_mode_policy(&authority);
+        if !changed {
+            return;
+        }
+        self.emit_session_updated().await;
+        let _ = self
+            .tx_event
+            .send(Event::status(format!(
+                "Runtime policy changed to: {} / {}",
+                mode.description(),
+                effective_approval.permission_chip_label(),
+            )))
+            .await;
+    }
+
+    fn take_pending_runtime_authority(&self) -> Option<LiveRuntimeAuthority> {
+        let mut state = self
+            .live_runtime_authority
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.applied_revision == state.revision {
+            return None;
+        }
+        state.applied_revision = state.revision;
+        Some(state.authority.clone())
+    }
+
+    async fn apply_pending_runtime_authority(&mut self) -> bool {
+        let Some(authority) = self.take_pending_runtime_authority() else {
+            return false;
+        };
+        self.apply_change_mode(
+            authority.mode,
+            authority.allow_shell,
+            authority.trust_mode,
+            authority.auto_approve,
+            authority.approval_mode,
+            authority.configured_sandbox_mode,
+        )
+        .await;
+        true
+    }
+
+    fn record_applied_runtime_authority(&self, authority: &TurnAuthority) {
+        let applied = LiveRuntimeAuthority::from_turn_authority(
+            authority,
+            self.api_config.sandbox_mode.clone(),
+        );
+        let mut state = self
+            .live_runtime_authority
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Never overwrite a newer, not-yet-applied user change with the turn
+        // posture that preceded it.
+        if state.revision == state.applied_revision || state.authority == applied {
+            state.authority = applied;
+            state.applied_revision = state.revision;
+        }
+    }
+
     fn apply_runtime_mode_policy(&mut self, authority: &TurnAuthority) {
         // Mode doctrine lives in the stable prefix (#4780), so a mode change
         // has to rebuild it. `refresh_system_prompt` is hash-guarded and only
@@ -1531,6 +1718,7 @@ impl Engine {
         self.session.approval_mode = authority.approval_mode_for_session();
         self.session.auto_approve = authority.auto_approve
             || self.session.approval_mode == crate::tui::approval::ApprovalMode::Bypass;
+        self.record_applied_runtime_authority(authority);
     }
 
     fn schedule_goal_continuation(&mut self, dynamic_tools: Vec<DynamicToolSpec>) {
@@ -2085,23 +2273,15 @@ impl Engine {
                         approval_mode,
                         configured_sandbox_mode,
                     } => {
-                        let authority = TurnAuthority::from_effective_fields(
+                        self.apply_change_mode(
                             mode,
                             allow_shell,
                             trust_mode,
                             auto_approve,
                             approval_mode,
-                        );
-                        self.api_config.sandbox_mode = configured_sandbox_mode;
-                        self.apply_runtime_mode_policy(&authority);
-                        self.emit_session_updated().await;
-                        let _ = self
-                            .tx_event
-                            .send(Event::status(format!(
-                                "Mode changed to: {}",
-                                mode.description()
-                            )))
-                            .await;
+                            configured_sandbox_mode,
+                        )
+                        .await;
                     }
                     Op::SetModel {
                         model,
@@ -4483,6 +4663,34 @@ impl Engine {
         self.build_tool_context_for_turn(&authority, &route)
     }
 
+    /// Project the current engine authority onto an already-built registry.
+    /// Registries own long-lived services and tool definitions; permission,
+    /// shell, and sandbox policy are live turn state and must not be read from
+    /// the registry's start-of-turn snapshot after a Runtime posture switch.
+    fn live_tool_context(
+        &self,
+        registry: Option<&crate::tools::ToolRegistry>,
+    ) -> Option<ToolContext> {
+        let mut context = registry?.context().clone();
+        let authority = TurnAuthority::from_effective_fields(
+            self.current_mode,
+            self.session.allow_shell,
+            self.session.trust_mode,
+            self.session.auto_approve,
+            self.session.approval_mode,
+        );
+        context.trust_mode = authority.trust_mode;
+        context.auto_approve = authority.auto_approve;
+        context.shell_policy = authority.shell_policy();
+        context.elevated_sandbox_policy = Some(authority.sandbox_policy(
+            &self.session.workspace,
+            self.api_config.sandbox_mode.as_deref(),
+        ));
+        context.shell_network_denied_hint = matches!(authority.mode, AppMode::Plan)
+            .then(|| PLAN_SHELL_NETWORK_DENIED_HINT.to_string());
+        Some(context)
+    }
+
     /// Build one tool context from the already-resolved turn authority and
     /// route. A preview owns values that are deliberately not installed on the
     /// session; rebuilding either from `self.session` would give it the prior
@@ -4587,9 +4795,7 @@ impl Engine {
         );
         let mut ctx = ctx.with_elevated_sandbox_policy(policy);
         if matches!(authority.mode, AppMode::Plan) {
-            ctx = ctx.with_shell_network_denied_hint(
-                "Shell command blocked: Plan mode runs shell commands in a read-only sandbox — no writes, no network. Use Act mode (`/mode act`) for any command that creates or modifies files, or that needs network access.",
-            );
+            ctx = ctx.with_shell_network_denied_hint(PLAN_SHELL_NETWORK_DENIED_HINT);
         }
         ctx
     }
@@ -5041,6 +5247,7 @@ pub(super) enum ToolAskRuleDecision {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum AutoReviewPlanDecision {
     NoChange,
+    Allow,
     ForcePrompt(String),
     Block(String),
 }
@@ -5080,36 +5287,60 @@ pub(super) fn auto_review_plan_decision(
     );
     let decision = policy.evaluate(&context);
     let audit_event = policy.audit_event(&context, &decision);
-    let plan_decision = match decision.action {
-        crate::tui::auto_review::AutoReviewAction::Allow
-        | crate::tui::auto_review::AutoReviewAction::AskUser => AutoReviewPlanDecision::NoChange,
-        crate::tui::auto_review::AutoReviewAction::HoldForReview => {
-            // HoldForReview only originates from the built-in safety floor
-            // (configured rules produce Allow/Block), so name the gate
-            // honestly instead of blaming an "auto-review policy" the user
-            // may never have configured (#3883).
-            let reason = format!(
-                "Built-in safety gate requires approval: {}",
-                decision.reason
-            );
-            if matches!(
-                approval_mode,
-                crate::tui::approval::ApprovalMode::Never
-                    | crate::tui::approval::ApprovalMode::Bypass
-            ) {
-                // Never and Full Access are both non-interactive postures for
-                // approval holds. Full Access auto-runs ordinary calls, but a
-                // non-bypassable safety floor fails closed instead of opening
-                // a contradictory modal or being silently auto-approved.
-                AutoReviewPlanDecision::Block(reason)
-            } else {
-                AutoReviewPlanDecision::ForcePrompt(reason)
+    let plan_decision = if approval_mode == crate::tui::approval::ApprovalMode::Auto
+        && tool_name == REQUEST_USER_INPUT_NAME
+    {
+        // This synthetic tool does not execute user work. Let the turn loop
+        // return its ordinary autonomous guidance result instead of treating
+        // a hallucinated question as an unknown external action.
+        AutoReviewPlanDecision::Allow
+    } else {
+        match decision.action {
+            crate::tui::auto_review::AutoReviewAction::Allow
+                if approval_mode == crate::tui::approval::ApprovalMode::Auto =>
+            {
+                AutoReviewPlanDecision::Allow
+            }
+            crate::tui::auto_review::AutoReviewAction::Allow => AutoReviewPlanDecision::NoChange,
+            crate::tui::auto_review::AutoReviewAction::AskUser
+                if approval_mode == crate::tui::approval::ApprovalMode::Auto =>
+            {
+                AutoReviewPlanDecision::Block(format!(
+                    "Auto-Review held tool '{tool_name}': {}",
+                    decision.reason
+                ))
+            }
+            crate::tui::auto_review::AutoReviewAction::AskUser => AutoReviewPlanDecision::NoChange,
+            crate::tui::auto_review::AutoReviewAction::HoldForReview => {
+                // HoldForReview only originates from the built-in safety floor
+                // (configured rules produce Allow/Block), so name the gate
+                // honestly instead of blaming an "auto-review policy" the user
+                // may never have configured (#3883).
+                let reason = format!(
+                    "Built-in safety gate requires approval: {}",
+                    decision.reason
+                );
+                if matches!(
+                    approval_mode,
+                    crate::tui::approval::ApprovalMode::Auto
+                        | crate::tui::approval::ApprovalMode::Never
+                        | crate::tui::approval::ApprovalMode::Bypass
+                ) {
+                    // Auto-Review, Never, and Full Access are non-interactive for
+                    // approval holds. Full Access auto-runs ordinary calls, but a
+                    // non-bypassable safety floor always fails closed.
+                    AutoReviewPlanDecision::Block(reason)
+                } else {
+                    AutoReviewPlanDecision::ForcePrompt(reason)
+                }
+            }
+            crate::tui::auto_review::AutoReviewAction::Block => {
+                AutoReviewPlanDecision::Block(format!(
+                    "Auto-review policy blocked tool '{tool_name}': {}",
+                    decision.reason
+                ))
             }
         }
-        crate::tui::auto_review::AutoReviewAction::Block => AutoReviewPlanDecision::Block(format!(
-            "Auto-review policy blocked tool '{tool_name}': {}",
-            decision.reason
-        )),
     };
     (plan_decision, audit_event)
 }
@@ -5363,6 +5594,16 @@ pub(crate) fn mock_engine_handle() -> MockEngineHandle {
     let shared_cancel_token = Arc::new(StdMutex::new(cancel_token.clone()));
     let cancel_reason: Arc<StdMutex<Option<CancelReason>>> = Arc::new(StdMutex::new(None));
     let shared_paused = Arc::new(StdMutex::new(false));
+    let live_runtime_authority = Arc::new(StdMutex::new(LiveRuntimeAuthorityState::new(
+        LiveRuntimeAuthority::from_fields(
+            AppMode::Agent,
+            false,
+            false,
+            false,
+            crate::tui::approval::ApprovalMode::Suggest,
+            None,
+        ),
+    )));
     let handle = EngineHandle {
         tx_op,
         rx_event: Arc::new(RwLock::new(rx_event)),
@@ -5373,6 +5614,7 @@ pub(crate) fn mock_engine_handle() -> MockEngineHandle {
         tx_steer,
         shared_paused,
         client_preflight_required: false,
+        live_runtime_authority,
     };
 
     MockEngineHandle {

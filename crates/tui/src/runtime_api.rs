@@ -202,6 +202,7 @@ struct StreamTurnRequest {
     prompt: String,
     model: Option<String>,
     mode: Option<String>,
+    permission_posture: Option<String>,
     workspace: Option<PathBuf>,
     allow_shell: Option<bool>,
     trust_mode: Option<bool>,
@@ -2044,6 +2045,7 @@ async fn retry_thread_turn(
                 input_summary: None,
                 model: None,
                 mode: None,
+                permission_posture: None,
                 allow_shell: None,
                 trust_mode: None,
                 auto_approve: None,
@@ -2357,6 +2359,7 @@ async fn stream_turn(
         .clone()
         .unwrap_or_else(|| state.workspace.clone());
     let mode = req.mode.clone().unwrap_or_else(|| "agent".to_string());
+    let permission_posture = req.permission_posture.clone();
     let allow_shell = req.allow_shell.unwrap_or(state.config.read().allow_shell());
     let trust_mode = req.trust_mode.unwrap_or(false);
     let auto_approve = req.auto_approve.unwrap_or(false);
@@ -2368,6 +2371,7 @@ async fn stream_turn(
             model: Some(model.clone()),
             workspace: Some(workspace.clone()),
             mode: Some(mode.clone()),
+            permission_posture: permission_posture.clone(),
             allow_shell: Some(allow_shell),
             trust_mode: Some(trust_mode),
             auto_approve: Some(auto_approve),
@@ -2401,6 +2405,7 @@ async fn stream_turn(
                 input_summary: None,
                 model: Some(model.clone()),
                 mode: Some(mode.clone()),
+                permission_posture,
                 allow_shell: Some(allow_shell),
                 trust_mode: Some(trust_mode),
                 auto_approve: Some(auto_approve),

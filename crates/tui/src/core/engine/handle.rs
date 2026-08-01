@@ -12,7 +12,10 @@ use anyhow::Result;
 use tokio::sync::mpsc;
 
 use super::approval::{ApprovalDecision, UserInputDecision};
-use super::{CancelReason, EngineHandle, Op, UserInputResponse};
+use super::{
+    CancelReason, EngineHandle, LiveRuntimeAuthority, Op, RuntimePermissionAuthority,
+    UserInputResponse,
+};
 
 impl EngineHandle {
     /// True when the caller must preflight a concrete provider client before
@@ -25,7 +28,12 @@ impl EngineHandle {
 
     /// Send an operation to the engine
     pub async fn send(&self, op: Op) -> Result<()> {
-        self.tx_op.send(op).await?;
+        let authority = Self::change_mode_authority(&op);
+        let permit = self.tx_op.reserve().await?;
+        if let Some(authority) = authority {
+            self.publish_runtime_authority(authority);
+        }
+        permit.send(op);
         Ok(())
     }
 
@@ -35,8 +43,73 @@ impl EngineHandle {
     /// non-critical, refresh-type ops (e.g. `Op::ListSubAgents`) that can
     /// safely be dropped and re-requested on the next drain cycle.
     pub fn try_send(&self, op: Op) -> Result<()> {
+        let authority = Self::change_mode_authority(&op);
         self.tx_op.try_send(op)?;
+        if let Some(authority) = authority {
+            self.publish_runtime_authority(authority);
+        }
         Ok(())
+    }
+
+    fn change_mode_authority(op: &Op) -> Option<LiveRuntimeAuthority> {
+        let Op::ChangeMode {
+            mode,
+            allow_shell,
+            trust_mode,
+            auto_approve,
+            approval_mode,
+            configured_sandbox_mode,
+        } = op
+        else {
+            return None;
+        };
+        Some(LiveRuntimeAuthority::from_fields(
+            *mode,
+            *allow_shell,
+            *trust_mode,
+            *auto_approve,
+            *approval_mode,
+            configured_sandbox_mode.clone(),
+        ))
+    }
+
+    fn publish_runtime_authority(&self, authority: LiveRuntimeAuthority) {
+        let mut state = self
+            .live_runtime_authority
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.revision = state.revision.wrapping_add(1).max(1);
+        state.authority = authority;
+    }
+
+    pub(crate) fn publish_turn_authority(
+        &self,
+        mode: crate::tui::app::AppMode,
+        allow_shell: bool,
+        trust_mode: bool,
+        auto_approve: bool,
+        approval_mode: crate::tui::approval::ApprovalMode,
+        configured_sandbox_mode: Option<String>,
+    ) {
+        self.publish_runtime_authority(LiveRuntimeAuthority::from_fields(
+            mode,
+            allow_shell,
+            trust_mode,
+            auto_approve,
+            approval_mode,
+            configured_sandbox_mode,
+        ));
+    }
+
+    /// Exact live permission authority for runtime approval and elevation
+    /// gates. This is the same typed state the active engine turn drains.
+    #[must_use]
+    pub(crate) fn runtime_permission_authority(&self) -> RuntimePermissionAuthority {
+        self.live_runtime_authority
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .authority
+            .permission_snapshot()
     }
 
     /// Reserve capacity for a runtime steer before it mutates durable state.

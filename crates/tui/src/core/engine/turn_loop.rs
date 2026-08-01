@@ -390,7 +390,8 @@ impl Engine {
         let mut turn_error: Option<String> = None;
         let mut context_recovery_attempts = 0u8;
         let mut tool_policy = tool_policy;
-        let mode = tool_policy.mode;
+        let mut mode = tool_policy.mode;
+        let mut questions_allowed = tool_policy.allows_questions();
         let strict_tool_mode = tool_policy.strict_tool_mode;
         let tool_catalog = std::mem::take(&mut tool_policy.catalog);
         let mut active_tool_names = std::mem::take(&mut tool_policy.active_names);
@@ -412,6 +413,13 @@ impl Engine {
             if self.cancel_token.is_cancelled() {
                 let _ = self.tx_event.send(Event::status("Request cancelled")).await;
                 return (TurnOutcomeStatus::Interrupted, None);
+            }
+
+            if self.apply_pending_runtime_authority().await {
+                mode = self.current_mode;
+                questions_allowed = crate::core::authority::permission_posture_allows_questions(
+                    self.session.approval_mode,
+                );
             }
 
             while let Ok(steer) = self.rx_steer.try_recv() {
@@ -1722,6 +1730,17 @@ impl Engine {
                 break;
             }
 
+            // A user can change Ask / Auto-Review / Full Access while the
+            // provider is streaming. Apply the newest typed authority before
+            // planning this tool batch; already-running tools are never
+            // retroactively reclassified.
+            if self.apply_pending_runtime_authority().await {
+                mode = self.current_mode;
+                questions_allowed = crate::core::authority::permission_posture_allows_questions(
+                    self.session.approval_mode,
+                );
+            }
+
             // Execute tools
             if self.shared_paused.lock().is_ok_and(|paused| *paused) {
                 let _ = self
@@ -2137,6 +2156,11 @@ impl Engine {
                     }));
                     match decision {
                         AutoReviewPlanDecision::NoChange => {}
+                        AutoReviewPlanDecision::Allow => {
+                            if !hook_requires_approval && !approval_force_prompt {
+                                approval_required = false;
+                            }
+                        }
                         AutoReviewPlanDecision::ForcePrompt(reason) => {
                             // The built-in safety floor is deliberately
                             // non-bypassable. Ask/Auto-Review surface the hold;
@@ -2337,6 +2361,40 @@ impl Engine {
                     ToolExecutionBatch::Serial(plan) => (false, vec![*plan]),
                 };
 
+                // Planning can run hooks and other async gates. If policy
+                // changed after this batch was planned, never execute it with
+                // stale approval or sandbox facts. Return one typed retry to
+                // the model; the next call is planned under the new posture.
+                if self.apply_pending_runtime_authority().await {
+                    mode = self.current_mode;
+                    questions_allowed = crate::core::authority::permission_posture_allows_questions(
+                        self.session.approval_mode,
+                    );
+                    for plan in plans {
+                        let result = Err(ToolError::permission_denied(
+                            "Runtime permission posture changed while this tool call was being planned; retry it under the current posture."
+                                .to_string(),
+                        ));
+                        let _ = self
+                            .tx_event
+                            .send(Event::ToolCallComplete {
+                                id: plan.id.clone(),
+                                name: plan.name.clone(),
+                                result: result.clone(),
+                            })
+                            .await;
+                        outcomes[plan.index] = Some(ToolExecOutcome {
+                            index: plan.index,
+                            id: plan.id,
+                            name: plan.name,
+                            input: plan.input,
+                            started_at: Instant::now(),
+                            terminal: ToolExecutionOutcome::from_legacy(result),
+                        });
+                    }
+                    continue;
+                }
+
                 // #3216 / #2211: once the turn is cancelled, do not start any
                 // further tool batches. Cancellation arrives out-of-band (the
                 // TUI cancels the shared token directly), so we can observe it
@@ -2372,6 +2430,8 @@ impl Engine {
                     }
                     continue;
                 }
+
+                let batch_tool_context = self.live_tool_context(tool_registry);
 
                 if parallel_allowed {
                     let parallel_plan_receipts: Vec<_> = plans
@@ -2428,6 +2488,7 @@ impl Engine {
                         let started_at = Instant::now();
                         let shell_permits = shell_permits.clone();
                         let workspace = self.session.workspace.clone();
+                        let context_override = batch_tool_context.clone();
 
                         tool_tasks.push(async move {
                             let _shell_permit = if plan.name == "exec_shell" {
@@ -2445,7 +2506,7 @@ impl Engine {
                                 workspace,
                                 registry,
                                 mcp_pool,
-                                None,
+                                context_override,
                             )
                             .await;
 
@@ -2595,6 +2656,7 @@ impl Engine {
                                     tool_input.clone(),
                                     tool_registry,
                                     tool_exec_lock.clone(),
+                                    batch_tool_context.clone(),
                                 ) => ToolExecutionOutcome::from_legacy(result),
                             };
                             let result = terminal.legacy_result();
@@ -2650,7 +2712,7 @@ impl Engine {
 
                         if tool_name == REQUEST_USER_INPUT_NAME {
                             let started_at = Instant::now();
-                            let result = if tool_policy.allows_questions() {
+                            let result = if questions_allowed {
                                 match UserInputRequest::from_value(&tool_input) {
                                     Ok(request) => self
                                         .await_user_input(&tool_id, request)
@@ -2768,9 +2830,10 @@ impl Engine {
                                         "policy": format!("{policy:?}"),
                                         "caller": caller_type_for_tool_use(tool_caller.as_ref()),
                                     }));
-                                    let elevated_context = tool_registry.map(|r| {
-                                        r.context().clone().with_elevated_sandbox_policy(policy)
-                                    });
+                                    let elevated_context =
+                                        batch_tool_context.clone().map(|context| {
+                                            context.with_elevated_sandbox_policy(policy)
+                                        });
                                     (
                                         None,
                                         elevated_context,
@@ -2781,6 +2844,26 @@ impl Engine {
                             }
                         } else {
                             (None, None, None)
+                        };
+
+                        // An approval wait can outlive a posture switch. Do
+                        // not start a tool from the stale plan; the
+                        // model can retry immediately under the newly applied
+                        // authority.
+                        let mut result_override = if self.apply_pending_runtime_authority().await {
+                            mode = self.current_mode;
+                            questions_allowed =
+                                crate::core::authority::permission_posture_allows_questions(
+                                    self.session.approval_mode,
+                                );
+                            result_override.or_else(|| {
+                                Some(Err(ToolError::permission_denied(
+                                    "Runtime permission posture changed before this tool call executed; retry it under the current posture."
+                                        .to_string(),
+                                )))
+                            })
+                        } else {
+                            result_override
                         };
 
                         // Per-tool snapshot for surgical undo (#384): capture workspace
@@ -2799,6 +2882,20 @@ impl Engine {
                                 crate::core::turn::pre_tool_snapshot(&ws, &tid, cap)
                             })
                             .await;
+                        }
+
+                        if self.apply_pending_runtime_authority().await {
+                            mode = self.current_mode;
+                            questions_allowed =
+                                crate::core::authority::permission_posture_allows_questions(
+                                    self.session.approval_mode,
+                                );
+                            result_override.get_or_insert_with(|| {
+                                Err(ToolError::permission_denied(
+                                    "Runtime permission posture changed before this tool call executed; retry it under the current posture."
+                                        .to_string(),
+                                ))
+                            });
                         }
 
                         let started_at = Instant::now();
@@ -2821,7 +2918,7 @@ impl Engine {
                                         self.session.workspace.clone(),
                                         tool_registry,
                                         mcp_pool.clone(),
-                                        context_override,
+                                        context_override.or_else(|| batch_tool_context.clone()),
                                     ) => (result, false),
                                 }
                             };

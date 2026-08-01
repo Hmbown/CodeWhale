@@ -105,6 +105,7 @@ mod route_runtime;
 mod runtime_api;
 mod runtime_handoff;
 mod runtime_log;
+mod runtime_policy;
 mod runtime_threads;
 mod safe_label;
 mod sandbox;
