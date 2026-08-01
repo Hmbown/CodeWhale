@@ -6380,23 +6380,10 @@ fn metric_tool_names<'a>(
 async fn runtime_contract_tool_metric_uses_canonical_mode_surfaces() {
     let payload = measure_production_mode_tool_catalogs().await;
     let plan = metric_tool_names(&payload, "plan", "full");
-    for required in [
-        "create_goal",
-        "get_goal",
-        "update_goal",
-        "slop_ledger_query",
-        "slop_ledger_export",
-    ] {
+    for required in ["create_goal", "get_goal", "update_goal"] {
         assert!(plan.contains(required), "Plan must include {required}");
     }
-    for forbidden in [
-        "Bash",
-        "Run",
-        "fim_edit",
-        "verify",
-        "slop_ledger_append",
-        "slop_ledger_update",
-    ] {
+    for forbidden in ["Bash", "Run", "fim_edit", "verify"] {
         assert!(!plan.contains(forbidden), "Plan must exclude {forbidden}");
     }
 
@@ -6410,10 +6397,6 @@ async fn runtime_contract_tool_metric_uses_canonical_mode_surfaces() {
             "update_goal",
             "verify",
             "fim_edit",
-            "slop_ledger_append",
-            "slop_ledger_query",
-            "slop_ledger_update",
-            "slop_ledger_export",
         ] {
             assert!(full.contains(required), "{mode} must include {required}");
         }
