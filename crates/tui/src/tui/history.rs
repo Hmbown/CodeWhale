@@ -195,6 +195,14 @@ impl Default for TranscriptRenderOptions {
     }
 }
 
+/// Max wrap measure (in columns) for prose cells - user messages, assistant
+/// answers, and reasoning/thinking blocks - in the live transcript. At
+/// ultrawide terminal widths this stops prose from stretching edge-to-edge
+/// while tool and status cells keep the full content width. Applied at the
+/// live-transcript render entry points so the main cache and the
+/// full-screen overlay agree on the same effective width.
+pub(crate) const PROSE_MAX_MEASURE: u16 = 105;
+
 impl HistoryCell {
     #[must_use]
     pub(crate) fn has_live_motion(&self) -> bool {
@@ -242,6 +250,7 @@ impl HistoryCell {
             *cache = crate::tui::markdown_render::IncrementalMarkdownRenderCache::default();
             return Some(0);
         }
+        let width = width.clamp(1, PROSE_MAX_MEASURE);
         Some(update_streaming_message_render(
             cache,
             content,
@@ -453,10 +462,14 @@ impl HistoryCell {
         folded: bool,
     ) -> Vec<RenderedTranscriptLine> {
         match self {
-            HistoryCell::User { content } => {
-                hard_break_copy_lines(render_user_message(content, width))
-            }
+            // Prose cells wrap at the bounded measure; tool/status cells keep
+            // the caller's full width (see PROSE_MAX_MEASURE).
+            HistoryCell::User { content } => hard_break_copy_lines(render_user_message(
+                content,
+                width.clamp(1, PROSE_MAX_MEASURE),
+            )),
             HistoryCell::Assistant { content, streaming } => {
+                let width = width.clamp(1, PROSE_MAX_MEASURE);
                 let mut rendered = render_message_with_copy_metadata_for_palette(
                     ASSISTANT_GLYPH,
                     assistant_label_style_for(*streaming, options.low_motion),
@@ -493,6 +506,13 @@ impl HistoryCell {
                     }
                 })
                 .collect(),
+            // Reasoning blocks follow the prose measure: they are the longest
+            // single text surface at ultrawide sizes.
+            HistoryCell::Thinking { .. } => hard_break_copy_lines(self.lines_with_options_folded(
+                width.clamp(1, PROSE_MAX_MEASURE),
+                options,
+                folded,
+            )),
             _ => hard_break_copy_lines(self.lines_with_options_folded(width, options, folded)),
         }
     }

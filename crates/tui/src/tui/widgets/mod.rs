@@ -72,6 +72,8 @@ pub struct ChatWidget {
     ambient_inks: Option<(Color, Color)>,
     ocean_elapsed_ms: u128,
     ocean_animated: bool,
+    /// Fixed-point (0..=1000) life presence; see `ocean::life_presence`.
+    life_presence_fixed: u16,
     fish_flee_elapsed_ms: Option<u128>,
     ambient_life: bool,
     scroll_track: Color,
@@ -119,6 +121,19 @@ impl ChatWidget {
             && (render_empty_state
                 || browsing_history
                 || matches!(phase, ShellPhase::Working | ShellPhase::Verifying));
+        // Life presence eases the animated/static boundary as a pure function
+        // of the monotonic clocks (see ocean::life_presence): bursty fast
+        // streams ramp in, quiet waits settle out, never a hard snap.
+        let life_presence = crate::tui::ocean::life_presence(
+            app.ocean_completion_started_at
+                .map(|started| started.elapsed().as_millis()),
+            app.turn_started_at
+                .map(|started| started.elapsed().as_millis()),
+            ocean_animated,
+            browsing_history,
+            render_empty_state,
+        );
+        let life_presence_fixed = (life_presence * 1000.0).round().clamp(0.0, 1000.0) as u16;
         let ocean_column = ocean_ramp.map(|ramp| {
             crate::tui::ocean::OceanColumn::new(
                 ramp,
@@ -127,6 +142,7 @@ impl ChatWidget {
                 completion_elapsed_ms,
                 phase,
                 ocean_animated,
+                life_presence_fixed,
             )
         });
         let fish_flee_elapsed_ms = underwater_motion_enabled
@@ -161,6 +177,7 @@ impl ChatWidget {
                 ambient_inks,
                 ocean_elapsed_ms,
                 ocean_animated,
+                life_presence_fixed,
                 fish_flee_elapsed_ms,
                 // Reduced-motion users still get the quiet, static scene;
                 // only movement itself is opt-in.
@@ -549,6 +566,7 @@ impl ChatWidget {
             ambient_inks,
             ocean_elapsed_ms,
             ocean_animated,
+            life_presence_fixed,
             fish_flee_elapsed_ms,
             // Fish also accompany intentional transcript browsing. They only
             // occupy blank cells and are collision-checked, so history stays
@@ -859,7 +877,7 @@ impl ChatWidget {
                 inks,
                 &self.lines,
                 self.ocean_elapsed_ms,
-                self.ocean_animated,
+                self.ocean_presence_f32(),
                 cursor,
                 whale,
             );
@@ -874,6 +892,13 @@ impl ChatWidget {
                 );
             }
         }
+    }
+}
+
+impl ChatWidget {
+    /// Life presence as a 0..=1 fraction; drives ambient-life ink fading.
+    fn ocean_presence_f32(&self) -> f32 {
+        (f32::from(self.life_presence_fixed) / 1000.0).clamp(0.0, 1.0)
     }
 }
 

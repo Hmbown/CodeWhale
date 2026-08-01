@@ -1023,6 +1023,26 @@ mod tests {
         }
     }
 
+    fn exec_tool_cell_with_output(command: &str, output: String) -> HistoryCell {
+        // A failed shell cell keeps its full output in the live render, so
+        // this fixture proves tool cells do not inherit the prose measure.
+        HistoryCell::Tool(ToolCell::Exec(ExecCell {
+            command: command.to_string(),
+            status: ToolStatus::Failed,
+            output: Some(output),
+            live_output: None,
+            shell_task_id: None,
+            owner_agent_id: None,
+            owner_agent_name: None,
+            started_at: None,
+            duration_ms: None,
+            stale_elapsed_since_output_ms: None,
+            source: ExecSource::Assistant,
+            interaction: None,
+            output_summary: None,
+        }))
+    }
+
     fn exec_tool_cell(command: &str) -> HistoryCell {
         HistoryCell::Tool(ToolCell::Exec(ExecCell {
             command: command.to_string(),
@@ -2080,6 +2100,71 @@ mod tests {
         assert_eq!(cache.per_cell[0].revision, 1);
         assert_eq!(cache.per_cell[1].revision, 2);
         assert_eq!(cache.per_cell[2].revision, 1);
+    }
+
+    #[test]
+    fn prose_cells_wrap_at_bounded_measure_on_ultrawide() {
+        // v0.9.4: prose (user/assistant/thinking) must stop stretching
+        // edge-to-edge at ultrawide widths while tool cells keep the full
+        // content width. The cache key stays `(CellId, fed_width, revision)`
+        // so resize keeps its single-feed cost model; the per-cell measure is
+        // applied inside the render entry points.
+        let measure = crate::tui::history::PROSE_MAX_MEASURE;
+        let long = "prose line that is intentionally long enough to wrap \
+                    at one hundred and five columns but not at ordinary \
+                    widths, repeated to guarantee several wrapped rows "
+            .repeat(4);
+        let cells = [
+            user_cell(&long),
+            assistant_cell(&long, false),
+            HistoryCell::Thinking {
+                content: long.clone(),
+                streaming: false,
+                duration_secs: Some(2.0),
+            },
+            exec_tool_cell_with_output(
+                "cargo test --all",
+                "long tool output that itself wraps well past the prose measure "
+                    .repeat(6),
+            ),
+        ];
+        let refs: Vec<&HistoryCell> = cells.iter().collect();
+        let revisions = vec![1u64, 2, 3, 4];
+        let options = TranscriptRenderOptions {
+            low_motion: true,
+            motion_mode: crate::tui::motion::MotionMode::Still,
+            ..TranscriptRenderOptions::default()
+        };
+
+        let mut cache = TranscriptViewCache::new();
+        cache.ensure_filtered(&refs, &revisions, 220, options, &HashSet::new(), None);
+
+        fn max_line_width(cell: &CachedCell) -> usize {
+            cell.lines
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| unicode_width::UnicodeWidthStr::width(span.content.as_ref()))
+                        .sum()
+                })
+                .max()
+                .unwrap_or(0)
+        }
+
+        for idx in 0..3 {
+            let width = max_line_width(&cache.per_cell[idx]);
+            assert!(
+                width <= usize::from(measure),
+                "prose cell {idx} wrapped to {width} columns, over the \
+                 {measure}-column measure",
+            );
+        }
+        let tool_width = max_line_width(&cache.per_cell[3]);
+        assert!(
+            tool_width > usize::from(measure),
+            "tool cell must keep the full width, got {tool_width}",
+        );
     }
 
     #[test]

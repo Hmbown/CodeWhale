@@ -9056,6 +9056,26 @@ fn compact_sidebar_split_survives_eighty_column_file_tree_host() {
 }
 
 #[test]
+fn sidebar_width_floor_raises_with_chat_width() {
+    // The classic 24-column floor leaves status/status-adjacent info cramped
+    // at ultrawide sizes. The floor is now width-aware: at least 28 columns,
+    // scaling to 10% of the chat host on very wide terminals.
+    let mut app = create_test_app();
+    app.sidebar_focus = SidebarFocus::Pinned;
+    app.sidebar_width_percent = 10;
+
+    // Minimum percent at ordinary width: 12 preferred -> 28 floor.
+    assert_eq!(sidebar_width_for_chat_area(&app, 120), Some(28));
+    // Ultrawide: 10% floor grows past the 28-column constant.
+    assert_eq!(sidebar_width_for_chat_area(&app, 320), Some(32));
+    // The chat host still caps the rail (chat_width - 40).
+    assert_eq!(sidebar_width_for_chat_area(&app, 80), Some(28));
+    // Above the floor the configured percent still rules.
+    app.sidebar_width_percent = 50;
+    assert_eq!(sidebar_width_for_chat_area(&app, 200), Some(100));
+}
+
+#[test]
 fn sidebar_width_gate_uses_compact_sixty_column_boundary() {
     let mut app = create_test_app();
     app.sidebar_focus = SidebarFocus::Pinned;
@@ -16576,9 +16596,13 @@ fn exploring_label_for_list_files_uses_progressive() {
 // The contract: once the user scrolls away from the live tail mid-turn
 // (`user_scrolled_during_stream = true`), no path should yank them back to
 // the bottom until either (a) they explicitly scroll to tail, (b) the turn
-// ends, or (c) they hit an explicit jump-to-bottom key. Tool-cell handlers
-// only call `mark_history_updated`, which does NOT scroll. `add_message`
-// gates on the flag.
+// ends, or (c) they hit an explicit jump-to-bottom key. One deliberate
+// exception (v0.9.4): a composer-originated send anchors the new user
+// message at the tail via the sync prepare phase (`prepare_user_dispatch`),
+// so the freshly submitted message is always visible. Steer/replay sends
+// keep the user's local context and never yank. Tool-cell handlers only
+// call `mark_history_updated`, which does NOT scroll. `add_message` gates
+// on the flag.
 
 #[test]
 fn add_message_does_not_scroll_when_user_scrolled_away() {
@@ -16680,6 +16704,116 @@ fn mark_history_updated_does_not_call_scroll_to_bottom() {
     assert!(
         !app.viewport.transcript_scroll.is_at_tail(),
         "mark_history_updated must not scroll",
+    );
+}
+
+// ---- v0.9.4: composer-originated sends anchor at the tail ----
+//
+// Sending from the composer is a deliberate act: the new user message must be
+// visible. `prepare_user_dispatch` pins the view to the tail and stamps the
+// tail-flash timestamp at the moment the cell appears. Steer sends keep the
+// user's local context (they never yank), and a failed dispatch restores the
+// pre-send timestamp so no stale flash points at an older message.
+
+#[tokio::test]
+async fn composer_send_anchors_new_message_at_tail() {
+    let _env_lock = crate::test_support::lock_test_env();
+    let _zai = crate::test_support::EnvVarGuard::set("ZAI_API_KEY", "zai-test-key");
+    let mut app = create_test_app();
+    app.set_provider_identity(ApiProvider::Zai, "zai");
+    app.set_model_selection("auto".to_string());
+    let config = Config {
+        provider: Some("zai".to_string()),
+        default_text_model: Some("auto".to_string()),
+        ..Default::default()
+    };
+    let engine = mock_engine_handle();
+
+    // The user deliberately scrolled up to read history mid-turn.
+    use crate::tui::scrolling::TranscriptScroll;
+    app.viewport.transcript_scroll = TranscriptScroll::at_line(7);
+    app.user_scrolled_during_stream = true;
+    assert!(!app.viewport.transcript_scroll.is_at_tail());
+
+    dispatch_user_message(
+        &mut app,
+        &config,
+        &engine.handle,
+        QueuedMessage::new("fresh composer message".to_string(), None),
+    )
+    .await
+    .expect("dispatch succeeds against the mock engine");
+
+    assert!(
+        app.viewport.transcript_scroll.is_at_tail(),
+        "a composer-originated send must anchor the new message at the tail",
+    );
+    assert!(
+        app.last_send_at.is_some(),
+        "the send timestamp must be stamped so the tail-flash marks the new cell",
+    );
+    assert!(
+        app.history.iter().any(|cell| matches!(
+            cell,
+            HistoryCell::User { content }
+                if content == "fresh composer message"
+        )),
+        "the user message must be appended to the transcript",
+    );
+}
+
+#[tokio::test]
+async fn steer_send_keeps_local_scroll_context() {
+    let mut app = create_test_app();
+    let mut engine = crate::core::engine::mock_engine_handle();
+    use crate::tui::scrolling::TranscriptScroll;
+    app.viewport.transcript_scroll = TranscriptScroll::at_line(7);
+    app.user_scrolled_during_stream = true;
+
+    steer_user_message(
+        &mut app,
+        &engine.handle,
+        QueuedMessage::new("steer into the current turn".to_string(), None),
+    )
+    .await
+    .expect("steer user message");
+
+    assert!(
+        !app.viewport.transcript_scroll.is_at_tail(),
+        "a steer must keep the user's local scroll context",
+    );
+    assert!(
+        app.last_send_at.is_none(),
+        "a steer is not a composer send and must not flash the tail",
+    );
+    assert_eq!(
+        engine.rx_steer.recv().await.as_deref(),
+        Some("steer into the current turn")
+    );
+}
+
+#[tokio::test]
+async fn failed_dispatch_restores_presend_tail_flash_timestamp() {
+    let mut app = create_test_app();
+    let engine = mock_engine_handle();
+    let config = Config::default();
+    drop(engine.rx_op);
+
+    let result = dispatch_user_message(
+        &mut app,
+        &config,
+        &engine.handle,
+        QueuedMessage::new("will fail".to_string(), None),
+    )
+    .await;
+
+    assert!(
+        result.is_err(),
+        "closed engine channel must fail the dispatch"
+    );
+    assert!(
+        app.last_send_at.is_none(),
+        "a failed composer send must not leave a stale tail-flash timestamp",
     );
 }
 
