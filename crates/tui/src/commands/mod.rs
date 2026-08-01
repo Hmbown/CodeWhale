@@ -494,143 +494,6 @@ mod tests {
     }
 
     #[test]
-    fn debt_compat_aliases_use_registry_discovery_and_help() {
-        let debt = get_command_info("debt").expect("debt command should be registered");
-        assert_eq!(debt.aliases, &["cleanup", "slop", "canzha"]);
-        assert_eq!(debt.description_id, MessageId::CmdDebtDescription);
-
-        for alias in ["slop", "canzha"] {
-            let resolved = get_command_info(alias)
-                .unwrap_or_else(|| panic!("/{alias} should resolve through the registry"));
-            assert_eq!(resolved.name, "debt");
-
-            let mut app = create_test_app();
-            let result = execute(&format!("/help {alias}"), &mut app);
-            assert!(!result.is_error, "/help {alias} returned {result:?}");
-            let message = result
-                .message
-                .unwrap_or_else(|| panic!("/help {alias} should return text"));
-            assert!(
-                message.starts_with("debt\n"),
-                "unexpected help: {message:?}"
-            );
-            assert!(
-                message.contains("cleanup, slop, canzha"),
-                "help should list every debt alias: {message:?}"
-            );
-        }
-
-        let user_commands = user_registry::UserCommandRegistry::new();
-        assert!(
-            suggest_command_names("slpo", 3, &user_commands)
-                .iter()
-                .any(|name| name == "debt"),
-            "typo suggestions should consider the /slop alias"
-        );
-    }
-
-    #[test]
-    fn debt_alias_help_and_suggestions_respect_user_command_shadows() {
-        let temp = tempdir().unwrap();
-        let commands_dir = temp.path().join(".codewhale").join("commands");
-        std::fs::create_dir_all(&commands_dir).unwrap();
-        std::fs::write(
-            commands_dir.join("slop.md"),
-            "---\ndescription: User slop workflow\nusage: /slop <task>\n---\ncustom slop $ARGUMENTS",
-        )
-        .unwrap();
-        std::fs::write(
-            commands_dir.join("review.md"),
-            "---\ndescription: User canzha workflow\nusage: /review <task>\nalias: canzha\n---\ncustom canzha $ARGUMENTS",
-        )
-        .unwrap();
-        std::fs::write(
-            commands_dir.join("alpha.md"),
-            "---\nalias: beta\n---\nalpha body",
-        )
-        .unwrap();
-        std::fs::write(commands_dir.join("beta.md"), "beta body").unwrap();
-
-        let mut app = create_test_app();
-        app.workspace = temp.path().to_path_buf();
-        user_registry::reload(Some(temp.path()));
-
-        for (input, expected) in [
-            ("/slop now", "custom slop now"),
-            ("/canzha later", "custom canzha later"),
-        ] {
-            let result = execute(input, &mut app);
-            assert!(!result.is_error, "{input} returned {result:?}");
-            assert!(matches!(
-                result.action,
-                Some(AppAction::SendMessage(ref message)) if message == expected
-            ));
-        }
-
-        for (topic, canonical, description, usage) in [
-            ("slop", "slop", "User slop workflow", "/slop <task>"),
-            ("canzha", "review", "User canzha workflow", "/review <task>"),
-        ] {
-            let result = execute(&format!("/help {topic}"), &mut app);
-            assert!(!result.is_error, "/help {topic} returned {result:?}");
-            let message = result.message.expect("user command help text");
-            assert!(
-                message.starts_with(&format!("{canonical}\n")),
-                "{message:?}"
-            );
-            assert!(message.contains(description), "{message:?}");
-            assert!(message.contains(usage), "{message:?}");
-            assert!(!message.starts_with("debt\n"), "{message:?}");
-        }
-
-        for (typo, expected) in [("/slpo", "/slop"), ("/canzh", "/review")] {
-            let result = execute(typo, &mut app);
-            assert!(result.is_error, "{typo} should remain unknown");
-            let message = result.message.expect("unknown-command suggestion");
-            assert!(message.contains(expected), "{message:?}");
-            assert!(!message.contains("/debt"), "{message:?}");
-        }
-
-        let debt_help = execute("/help debt", &mut app);
-        assert!(!debt_help.is_error);
-        let debt_message = debt_help
-            .message
-            .expect("canonical debt help should render");
-        assert!(debt_message.contains("cleanup"), "{debt_message:?}");
-        assert!(!debt_message.contains("slop"), "{debt_message:?}");
-        assert!(!debt_message.contains("canzha"), "{debt_message:?}");
-
-        let slop_typo = execute("/slpo", &mut app);
-        let slop_typo_message = slop_typo.message.expect("typo should return guidance");
-        assert!(!slop_typo_message.contains("/debt"), "{slop_typo_message}");
-
-        let canzha_typo = execute("/canzhaa", &mut app);
-        let canzha_typo_message = canzha_typo.message.expect("typo should return guidance");
-        assert!(
-            !canzha_typo_message.contains("/debt"),
-            "{canzha_typo_message}"
-        );
-
-        let debt_typo = execute("/detb", &mut app);
-        let debt_typo_message = debt_typo.message.expect("typo should return guidance");
-        assert!(debt_typo_message.contains("/debt"), "{debt_typo_message}");
-
-        let alpha_help = execute("/help alpha", &mut app);
-        assert!(!alpha_help.is_error);
-        let alpha_message = alpha_help.message.expect("alpha help text");
-        assert!(!alpha_message.contains("beta"), "{alpha_message}");
-
-        let beta_help = execute("/help beta", &mut app);
-        assert!(!beta_help.is_error);
-        assert!(
-            beta_help
-                .message
-                .expect("beta help text")
-                .starts_with("beta\n")
-        );
-    }
-
-    #[test]
     fn transcript_command_is_discoverable_and_opens_live_overlay() {
         let transcript = command_infos()
             .into_iter()
@@ -953,9 +816,9 @@ mod tests {
                 has_config = true;
                 assert_eq!(
                     commands.len(),
-                    13,
+                    12,
                     "config group (group-local metadata exception) expected \
-                     exactly 13 commands, got {}",
+                     exactly 12 commands, got {}",
                     commands.len()
                 );
             }

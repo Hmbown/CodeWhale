@@ -11908,11 +11908,14 @@ fn subagent_tool_results_spill_to_disk_and_stay_bounded_inline() {
         );
 
         let path = spilled.expect("multi-MB output must spill");
-        // Model-visible content is bounded to head + footer.
+        // Model-visible content is a bounded, ordinary preview. Internal
+        // storage paths and retrieval machinery stay out of the transcript.
         assert!(inline.len() <= 4 * 1024);
-        assert!(inline.contains("Exact evidence retained"));
+        assert!(inline.contains(crate::tools::truncate::SPILLOVER_PREVIEW_HINT));
+        assert!(inline.contains("\n…\n"));
         assert!(!inline.contains(&path.display().to_string()));
-        assert!(inline.contains("retrieve_tool_result"));
+        assert!(!inline.contains("Exact evidence retained"));
+        assert!(!inline.contains("retrieve_tool_result"));
         // Full output remains recoverable from disk.
         let on_disk = std::fs::read_to_string(&path).expect("spill file readable");
         assert_eq!(on_disk.len(), raw_len);
@@ -11941,7 +11944,9 @@ fn subagent_tool_results_spill_to_disk_and_stay_bounded_inline() {
         );
         assert!(spilled.is_some());
         assert!(bounded_err.len() <= 4 * 1024);
-        assert!(bounded_err.contains("Exact evidence retained"));
+        assert!(bounded_err.contains(crate::tools::truncate::SPILLOVER_PREVIEW_HINT));
+        assert!(!bounded_err.contains("Exact evidence retained"));
+        assert!(!bounded_err.contains("retrieve_tool_result"));
     });
 }
 
