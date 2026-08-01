@@ -1390,13 +1390,12 @@ pub async fn run_tui(
 
         match load_result {
             Ok(Some(saved)) => match apply_loaded_session(&mut app, config, &saved) {
-                Ok(false) => {
+                Ok(()) => {
                     app.status_message = Some(format!(
                         "Resumed session: {}",
                         crate::session_manager::truncate_id(&saved.metadata.id)
                     ));
                 }
-                Ok(true) => {}
                 Err(err) => {
                     app.status_message = Some(format!("Failed to restore session: {err}"));
                 }
@@ -1426,23 +1425,7 @@ pub async fn run_tui(
     if let Ok(manager) = SessionManager::default_location() {
         match manager.load_offline_queue_state() {
             Ok(Some(state)) => {
-                // Only restore queue if session_id matches (or if we're resuming the same session)
-                let should_restore = match (&state.session_id, &app.current_session_id) {
-                    (Some(saved_id), Some(current_id)) => saved_id == current_id,
-                    (None, _) => false, // Legacy unscoped queues are stale-risky; fail closed.
-                    (_, None) => false, // No current session - don't restore
-                };
-
-                if should_restore {
-                    app.queued_messages = state
-                        .messages
-                        .into_iter()
-                        .map(queued_session_to_ui)
-                        .collect();
-                    let restored_draft = state.draft.map(queued_session_to_ui);
-                    if restored_draft.is_some() || app.queued_draft.is_none() {
-                        app.queued_draft = restored_draft;
-                    }
+                if restore_matching_offline_queue_state(&mut app, state) {
                     if app.status_message.is_none() && app.queued_message_count() > 0 {
                         app.status_message = Some(format!(
                             "Restored {} queued message(s) from previous session — ↑ to edit, Ctrl+X to discard",
@@ -8309,6 +8292,31 @@ fn queued_session_to_ui(msg: QueuedSessionMessage) -> QueuedMessage {
     }
 }
 
+fn restore_matching_offline_queue_state(app: &mut App, state: OfflineQueueState) -> bool {
+    if state.session_id.as_deref() != app.current_session_id.as_deref()
+        || state.session_id.is_none()
+    {
+        return false;
+    }
+    app.queued_messages = state
+        .messages
+        .into_iter()
+        .map(queued_session_to_ui)
+        .collect();
+    if let Some(draft) = state.draft.map(queued_session_to_ui) {
+        app.input.clone_from(&draft.display);
+        app.cursor_position = app.input.chars().count();
+        app.active_skill.clone_from(&draft.skill_instruction);
+        app.active_skill_provenance
+            .clone_from(&draft.skill_provenance);
+        app.queued_draft = Some(draft);
+    } else {
+        app.queued_draft = None;
+    }
+    app.needs_redraw = true;
+    true
+}
+
 fn reconcile_turn_liveness(app: &mut App, now: Instant, has_running_agents: bool) -> bool {
     if app.is_loading
         && app.runtime_turn_status.is_none()
@@ -11641,7 +11649,7 @@ async fn apply_command_result(
                             return Ok(false);
                         }
                     };
-                let (recovered, respawn) = match apply_loaded_session_config_snapshot(
+                let respawn = match apply_loaded_session_config_snapshot(
                     app,
                     config,
                     &session,
@@ -11692,9 +11700,7 @@ async fn apply_command_result(
                 app.add_message(HistoryCell::System {
                     content: success_message.clone(),
                 });
-                if !recovered {
-                    app.status_message = Some(success_message);
-                }
+                app.status_message = Some(success_message);
             }
             AppAction::SyncSession {
                 session_id,
@@ -14673,7 +14679,7 @@ async fn handle_view_events(
                 match manager.load_session(&session_id) {
                     Ok(session) => {
                         let next_config = config.clone();
-                        let (recovered, respawn) = match apply_loaded_session_config_snapshot(
+                        let respawn = match apply_loaded_session_config_snapshot(
                             app,
                             config,
                             &session,
@@ -14717,12 +14723,10 @@ async fn handle_view_events(
                                 config: app.compaction_config(),
                             })
                             .await;
-                        if !recovered {
-                            app.status_message = Some(format!(
-                                "Session loaded (ID: {})",
-                                crate::session_manager::truncate_id(&session_id)
-                            ));
-                        }
+                        app.status_message = Some(format!(
+                            "Session loaded (ID: {})",
+                            crate::session_manager::truncate_id(&session_id)
+                        ));
                         app.launch.visible = false;
                         app.launch.status = None;
                     }
@@ -16727,7 +16731,7 @@ fn apply_loaded_session(
     app: &mut App,
     config: &mut Config,
     session: &SavedSession,
-) -> Result<bool, String> {
+) -> Result<(), String> {
     if app.session_transition_blocked() {
         return Err(
             "runtime work is active; wait for the current turn, maintenance, and background tasks to finish, or cancel that specific work before switching sessions".to_string(),
@@ -16761,10 +16765,7 @@ fn apply_loaded_session(
     // provider response is rejected by `cost_status::report`.
     let _settled_old_cost_scope = crate::cost_status::close_current_scope();
     *config = *restored_route.config;
-    let projected_messages =
-        crate::runtime_handoff::project_messages_for_restore(&session.messages);
-    let (messages, recovered_draft) = recover_interrupted_user_tail(&projected_messages);
-    app.api_messages = messages;
+    app.api_messages = crate::runtime_handoff::project_messages_for_restore(&session.messages);
     app.clear_history();
     app.tool_cells.clear();
     app.tool_details_by_cell.clear();
@@ -16916,14 +16917,8 @@ fn apply_loaded_session(
     } else {
         app.system_prompt = None;
     }
-    let recovered = if let Some(draft) = recovered_draft {
-        restore_recovered_retry_draft(app, draft);
-        true
-    } else {
-        false
-    };
     app.scroll_to_bottom();
-    Ok(recovered)
+    Ok(())
 }
 
 fn loaded_session_requires_engine_respawn(
@@ -16943,7 +16938,7 @@ fn apply_loaded_session_config_snapshot(
     session: &SavedSession,
     mut next_config: Config,
     force_engine_respawn: bool,
-) -> Result<(bool, bool), String> {
+) -> Result<bool, String> {
     if force_engine_respawn {
         // File `/load` supplies a freshly loaded disk snapshot, but the live
         // Config also contains CLI and workspace/project overlays that are not
@@ -16956,7 +16951,7 @@ fn apply_loaded_session_config_snapshot(
     let previous_provider = app.api_provider;
     let previous_provider_identity = app.provider_identity_for_persistence().to_string();
     let previous_workspace = app.workspace.clone();
-    let recovered = apply_loaded_session(app, &mut next_config, session)?;
+    apply_loaded_session(app, &mut next_config, session)?;
     // A file load reads a fresh disk snapshot. Even when the route's enum and
     // exact identity are unchanged, endpoint, key, headers, TLS, or retry
     // settings may have changed. Rebuild from that same validated snapshot so
@@ -16969,7 +16964,7 @@ fn apply_loaded_session_config_snapshot(
             &previous_workspace,
         );
     *config = next_config;
-    Ok((recovered, respawn))
+    Ok(respawn)
 }
 
 fn restore_loaded_session_provider(app: &mut App, config: &mut Config, identity: ProviderIdentity) {
@@ -17101,55 +17096,6 @@ pub(crate) fn short_title_truncate(text: &str, max_chars: usize) -> String {
         .unwrap_or(max_chars.min(candidate.len()).saturating_sub(1));
     let cut: String = text.chars().take(boundary.max(1)).collect();
     format!("{cut}…")
-}
-
-fn recover_interrupted_user_tail(messages: &[Message]) -> (Vec<Message>, Option<QueuedMessage>) {
-    let mut recovered = messages.to_vec();
-    let Some(last) = recovered.last() else {
-        return (recovered, None);
-    };
-    if last.role != "user" {
-        return (recovered, None);
-    }
-    if crate::runtime_handoff::restored_subagent_checkpoint_display(last).is_some() {
-        return (recovered, None);
-    }
-    let Some(display) = retry_display_from_user_message(last) else {
-        return (recovered, None);
-    };
-    if looks_like_slash_command_input(&display) {
-        return (recovered, None);
-    }
-    recovered.pop();
-    (recovered, Some(QueuedMessage::new(display, None)))
-}
-
-fn retry_display_from_user_message(message: &Message) -> Option<String> {
-    let text = message
-        .content
-        .iter()
-        .filter_map(|block| match block {
-            ContentBlock::Text { text, .. } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let display = compact_user_context_display(&text).trim().to_string();
-    if display.is_empty() {
-        None
-    } else {
-        Some(display)
-    }
-}
-
-fn restore_recovered_retry_draft(app: &mut App, draft: QueuedMessage) {
-    app.input.clone_from(&draft.display);
-    app.cursor_position = app.input.chars().count();
-    app.queued_draft = Some(draft);
-    app.status_message = Some(
-        "Recovered interrupted prompt as an editable draft; press Enter to retry.".to_string(),
-    );
-    app.needs_redraw = true;
 }
 
 fn compact_user_context_display(content: &str) -> String {

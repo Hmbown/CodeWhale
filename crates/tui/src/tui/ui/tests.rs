@@ -4470,6 +4470,28 @@ fn text_message(role: &str, text: &str) -> Message {
     }
 }
 
+fn authoritative_user_message(text: &str) -> Message {
+    Message {
+        role: "user".to_string(),
+        content: vec![
+            ContentBlock::Text {
+                text: text.to_string(),
+                cache_control: None,
+            },
+            ContentBlock::Text {
+                text: concat!(
+                    "<turn_meta>\n",
+                    "Input provenance: external_user\n",
+                    "Input authority: external_current_turn\n",
+                    "</turn_meta>",
+                )
+                .to_string(),
+                cache_control: None,
+            },
+        ],
+    }
+}
+
 fn saved_session_with_messages(messages: Vec<Message>) -> SavedSession {
     SavedSession {
         schema_version: 1,
@@ -4522,55 +4544,94 @@ fn named_custom_session_config(name: &str, base_url: &str, model: &str) -> Confi
 }
 
 #[test]
-fn apply_loaded_session_restores_dangling_user_tail_as_retry_draft() {
+fn apply_loaded_session_keeps_submitted_user_tail_in_history() {
     let mut app = create_test_app();
-    let session = saved_session_with_messages(vec![text_message(
-        "user",
-        "finish the Qthresh proof bundle",
-    )]);
+    let submitted = authoritative_user_message("finish the Qthresh proof bundle");
+    let session = saved_session_with_messages(vec![submitted.clone()]);
 
-    let recovered =
-        apply_loaded_session(&mut app, &mut Config::default(), &session).expect("restore session");
+    apply_loaded_session(&mut app, &mut Config::default(), &session).expect("restore session");
 
-    assert!(recovered);
-    assert!(app.api_messages.is_empty());
-    assert_eq!(app.input, "finish the Qthresh proof bundle");
+    assert_eq!(app.api_messages, vec![submitted]);
+    assert!(app.input.is_empty());
+    assert!(app.queued_draft.is_none());
+    assert!(app.history.iter().any(|cell| {
+        matches!(cell, HistoryCell::User { content } if content == "finish the Qthresh proof bundle")
+    }));
+}
+
+#[test]
+fn apply_loaded_session_never_restores_background_shell_event_as_composer_draft() {
+    let mut app = create_test_app();
+    // Literal persisted shape from the v0.9.4 resume report. Runtime events
+    // use the user transport role for provider compatibility, but their
+    // provenance and authority make them categorically different from input
+    // submitted by the person at the composer.
+    let shell_completion = Message {
+        role: "user".to_string(),
+        content: vec![
+            ContentBlock::Text {
+                text: concat!(
+                    "<codewhale:runtime_event kind=\"background_shell_completion\" ",
+                    "visibility=\"internal\">\n",
+                    "This is an internal runtime event, not user input.\n\n",
+                    "{\"task_id\":\"shell_580e7816\",\"status\":\"Completed\",",
+                    "\"exit_code\":0,\"stdout_tail\":\"EXIT=0\\n\"}\n",
+                    "</codewhale:runtime_event>",
+                )
+                .to_string(),
+                cache_control: None,
+            },
+            ContentBlock::Text {
+                text: concat!(
+                    "<turn_meta>\n",
+                    "Input provenance: shell_completion\n",
+                    "Input authority: non_authoritative\n",
+                    "</turn_meta>",
+                )
+                .to_string(),
+                cache_control: None,
+            },
+        ],
+    };
+    let session = saved_session_with_messages(vec![
+        text_message("user", "please continue"),
+        text_message("assistant", "The corrected run is still in progress."),
+        shell_completion.clone(),
+    ]);
+
+    apply_loaded_session(&mut app, &mut Config::default(), &session).expect("restore session");
+
+    assert!(app.input.is_empty());
+    assert!(app.queued_draft.is_none());
+    assert_eq!(app.api_messages.last(), Some(&shell_completion));
+    assert!(app.history.iter().any(|cell| {
+        matches!(cell, HistoryCell::User { content } if content.contains("background_shell_completion"))
+    }));
+}
+
+#[test]
+fn same_session_persisted_draft_restores_exact_composer_text() {
+    let mut app = create_test_app();
+    app.current_session_id = Some("session-with-draft".to_string());
+    let state = OfflineQueueState {
+        session_id: Some("session-with-draft".to_string()),
+        draft: Some(QueuedSessionMessage {
+            display: "real unsent draft\nwith a second line".to_string(),
+            skill_instruction: Some("review this draft".to_string()),
+            skill_provenance: None,
+        }),
+        ..OfflineQueueState::default()
+    };
+
+    assert!(restore_matching_offline_queue_state(&mut app, state));
+    assert_eq!(app.input, "real unsent draft\nwith a second line");
+    assert_eq!(app.cursor_position, app.input.chars().count());
+    assert_eq!(app.active_skill.as_deref(), Some("review this draft"));
     assert_eq!(
         app.queued_draft
             .as_ref()
             .map(|draft| draft.display.as_str()),
-        Some("finish the Qthresh proof bundle")
-    );
-    assert!(
-        app.history
-            .iter()
-            .all(|cell| !matches!(cell, HistoryCell::User { .. }))
-    );
-    assert!(
-        app.status_message
-            .as_deref()
-            .is_some_and(|msg| msg.contains("Recovered interrupted prompt")),
-        "status was {:?}",
-        app.status_message
-    );
-}
-
-#[test]
-fn apply_loaded_session_does_not_restore_slash_command_tail_as_retry_draft() {
-    let mut app = create_test_app();
-    let session = saved_session_with_messages(vec![text_message("user", "/sessions")]);
-
-    let recovered =
-        apply_loaded_session(&mut app, &mut Config::default(), &session).expect("restore session");
-
-    assert!(!recovered);
-    assert_eq!(app.input, "");
-    assert!(app.queued_draft.is_none());
-    assert_eq!(app.api_messages.len(), 1);
-    assert!(
-        app.history
-            .iter()
-            .any(|cell| matches!(cell, HistoryCell::User { .. }))
+        Some("real unsent draft\nwith a second line")
     );
 }
 
@@ -4655,10 +4716,8 @@ XML unless the user explicitly asks to debug sub-agent internals.\n\n\
         persisted_handoff,
     ]);
 
-    let recovered =
-        apply_loaded_session(&mut app, &mut Config::default(), &session).expect("restore session");
+    apply_loaded_session(&mut app, &mut Config::default(), &session).expect("restore session");
 
-    assert!(!recovered);
     assert!(app.input.is_empty());
     assert!(app.queued_draft.is_none());
     assert_eq!(app.api_messages.len(), 3);
@@ -4741,10 +4800,7 @@ fn apply_loaded_session_resets_unpersisted_telemetry() {
     let mut session = saved_session_with_messages(vec![text_message("assistant", "ready")]);
     session.metadata.total_tokens = 500;
 
-    let recovered =
-        apply_loaded_session(&mut app, &mut Config::default(), &session).expect("restore session");
-
-    assert!(!recovered);
+    apply_loaded_session(&mut app, &mut Config::default(), &session).expect("restore session");
     assert_eq!(app.session.total_tokens, 500);
     assert_eq!(app.session.total_conversation_tokens, 500);
     assert_eq!(app.session.session_cost, 0.0);
@@ -4884,9 +4940,7 @@ async fn apply_loaded_session_resets_workspace_runtime_state() {
     let mut session = saved_session_with_messages(vec![text_message("assistant", "ready")]);
     session.metadata.workspace = TempDir::new().expect("temp dir").path().to_path_buf();
 
-    let recovered = apply_loaded_session(&mut app, &mut config, &session).expect("restore session");
-
-    assert!(!recovered);
+    apply_loaded_session(&mut app, &mut config, &session).expect("restore session");
     assert_eq!(app.workspace, session.metadata.workspace);
     assert!(app.workspace_context.is_none());
     assert!(app.workspace_context_refreshed_at.is_none());
@@ -4947,10 +5001,9 @@ fn apply_loaded_session_updates_current_workspace_display() {
     let mut session = saved_session_with_messages(vec![text_message("assistant", "ready")]);
     session.metadata.workspace = workspace.path().to_path_buf();
 
-    let recovered = apply_loaded_session(&mut app, &mut config, &session).expect("restore session");
+    apply_loaded_session(&mut app, &mut config, &session).expect("restore session");
     let result = commands::execute("/workspace", &mut app);
 
-    assert!(!recovered);
     assert_eq!(
         result.message,
         Some(format!("Current workspace: {}", workspace.path().display()))
@@ -14734,9 +14787,7 @@ fn session_snapshot_and_resume_round_trip_work_state() {
         .load_session(&snapshot.metadata.id)
         .expect("load session");
     let mut restored = create_test_app();
-    let recovered = apply_loaded_session(&mut restored, &mut Config::default(), &loaded)
-        .expect("restore session");
-    assert!(!recovered);
+    apply_loaded_session(&mut restored, &mut Config::default(), &loaded).expect("restore session");
     assert_eq!(
         restored.work_state_snapshot().expect("restored snapshot"),
         Some(expected)
@@ -15019,30 +15070,29 @@ fn custom_session_resume_requires_structural_route_not_client_construction() {
         .get_mut("lm-studio")
         .expect("lm-studio")
         .insecure_skip_tls_verify = Some(true);
-    let mut session = saved_session_with_messages(vec![text_message("user", "replacement")]);
+    let mut session = saved_session_with_messages(vec![authoritative_user_message("replacement")]);
     session.metadata.model_provider = "lm-studio".to_string();
     session.metadata.model = "local-code-model".to_string();
     session.metadata.workspace = PathBuf::from("/tmp/other-workspace");
 
-    let recovered = apply_loaded_session(&mut app, &mut config, &session)
+    apply_loaded_session(&mut app, &mut config, &session)
         .expect("session restore should not require provider credentials or TLS client setup");
 
-    assert!(recovered);
     assert_eq!(
         app.current_session_id.as_deref(),
         Some("resume-recovery-session")
     );
-    assert!(app.api_messages.is_empty());
-    assert_eq!(app.input, "replacement");
+    assert_eq!(app.api_messages, session.messages);
+    assert!(app.input.is_empty());
+    assert!(app.queued_draft.is_none());
     assert_eq!(app.workspace, PathBuf::from("/tmp/other-workspace"));
     assert_eq!(app.api_provider, ApiProvider::Custom);
     assert_eq!(app.provider_identity_for_persistence(), "lm-studio");
     assert_eq!(app.model_selection_for_persistence(), "local-code-model");
-    assert!(app.history.is_empty());
     assert!(
-        app.status_message
-            .as_deref()
-            .is_some_and(|message| message.contains("Recovered interrupted prompt"))
+        app.history
+            .iter()
+            .any(|cell| matches!(cell, HistoryCell::User { content } if content == "replacement"))
     );
     assert_eq!(config.provider.as_deref(), Some("lm-studio"));
 }
@@ -15140,7 +15190,7 @@ fn file_load_uses_one_fresh_config_snapshot_for_custom_route_and_app_state() {
     session.metadata.model = "model-b".to_string();
     session.metadata.workspace = workspace;
 
-    let (recovered, respawn) = apply_loaded_session_config_snapshot(
+    let respawn = apply_loaded_session_config_snapshot(
         &mut app,
         &mut stale_config,
         &session,
@@ -15149,7 +15199,6 @@ fn file_load_uses_one_fresh_config_snapshot_for_custom_route_and_app_state() {
     )
     .expect("fresh disk config should atomically restore custom B");
 
-    assert!(!recovered);
     assert!(respawn);
     assert_eq!(app.provider_identity_for_persistence(), "custom-b");
     assert_eq!(app.model_selection_for_persistence(), "model-b");
@@ -15178,9 +15227,8 @@ fn session_load_keeps_idless_custom_record_on_root_when_table_coexists() {
     session.metadata.model_provider_id = None;
     session.metadata.model = "legacy-saved-model".to_string();
 
-    let recovered = apply_loaded_session(&mut app, &mut config, &session)
+    apply_loaded_session(&mut app, &mut config, &session)
         .expect("id-less custom record must retain root provenance");
-    assert!(!recovered);
     assert_eq!(app.api_messages, session.messages);
     assert_eq!(app.api_provider, ApiProvider::Custom);
     assert_eq!(app.provider_identity_for_persistence(), "custom");
@@ -15294,7 +15342,7 @@ fn file_load_respawns_engine_when_same_custom_identity_changes_endpoint() {
     session.metadata.model = "model-a".to_string();
     session.metadata.workspace = workspace;
 
-    let (_, respawn) = apply_loaded_session_config_snapshot(
+    let respawn = apply_loaded_session_config_snapshot(
         &mut app,
         &mut stale_config,
         &session,
@@ -15361,7 +15409,7 @@ fn file_load_route_refresh_preserves_effective_permission_and_feature_overlays()
     session.metadata.model = "model-a".to_string();
     session.metadata.workspace = workspace;
 
-    let (_, respawn) = apply_loaded_session_config_snapshot(
+    let respawn = apply_loaded_session_config_snapshot(
         &mut app,
         &mut effective_config,
         &session,
@@ -15458,10 +15506,7 @@ fn apply_loaded_session_restores_concrete_model_mode() {
     ]);
     session.metadata.model = "deepseek-v4-flash".to_string();
 
-    let recovered =
-        apply_loaded_session(&mut app, &mut Config::default(), &session).expect("restore session");
-
-    assert!(!recovered);
+    apply_loaded_session(&mut app, &mut Config::default(), &session).expect("restore session");
     assert!(!app.auto_model);
     assert_eq!(app.model, "deepseek-v4-flash");
     assert_eq!(app.model_selection_for_persistence(), "deepseek-v4-flash");
@@ -15486,10 +15531,7 @@ fn apply_loaded_session_restores_auto_model_mode() {
     ]);
     session.metadata.model = "auto".to_string();
 
-    let recovered =
-        apply_loaded_session(&mut app, &mut Config::default(), &session).expect("restore session");
-
-    assert!(!recovered);
+    apply_loaded_session(&mut app, &mut Config::default(), &session).expect("restore session");
     assert!(app.auto_model);
     assert_eq!(app.model, "auto");
     assert_eq!(app.model_selection_for_persistence(), "auto");
@@ -15613,10 +15655,7 @@ fn apply_loaded_session_restores_saved_mode() {
     ]);
     session.metadata.mode = Some("plan".to_string());
 
-    let recovered =
-        apply_loaded_session(&mut app, &mut Config::default(), &session).expect("restore session");
-
-    assert!(!recovered);
+    apply_loaded_session(&mut app, &mut Config::default(), &session).expect("restore session");
     assert_eq!(app.mode, crate::tui::app::AppMode::Plan);
     assert!(!app.allow_shell);
     assert!(!app.trust_mode);
@@ -16224,10 +16263,7 @@ fn apply_loaded_session_restores_artifact_registry() {
         storage_path: PathBuf::from("/tmp/tool_outputs/call-big.txt"),
     });
 
-    let recovered =
-        apply_loaded_session(&mut app, &mut Config::default(), &session).expect("restore session");
-
-    assert!(!recovered);
+    apply_loaded_session(&mut app, &mut Config::default(), &session).expect("restore session");
     assert_eq!(app.session_artifacts, session.artifacts);
 }
 
