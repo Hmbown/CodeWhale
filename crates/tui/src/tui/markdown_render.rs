@@ -2039,9 +2039,12 @@ fn link_style() -> Style {
 /// Display-column width of one extended grapheme for terminal line-wrap
 /// calculations.
 ///
-/// A tab advances to the next 8-column tab stop. Single control characters
-/// retain the previous one-column fallback; multi-codepoint emoji and
-/// combining sequences use the same string-level width contract as Ratatui.
+/// A tab advances to the next 8-column tab stop. Single-codepoint characters
+/// retain the previous one-column fallback (with an override for enclosed
+/// alphanumerics that render as 2 columns in CJK terminals). Multi-codepoint
+/// emoji, keycaps, and combining sequences use the same string-level width
+/// contract as Ratatui, with an override for keycap sequences containing
+/// U+20E3 that unicode-width undercounts. (#4479)
 fn markdown_grapheme_width(grapheme: &str, col: usize) -> usize {
     if grapheme == "\t" {
         return 8 - (col % 8); // advance to next 8-column tab stop
@@ -2049,7 +2052,17 @@ fn markdown_grapheme_width(grapheme: &str, col: usize) -> usize {
     if let Some(ch) = grapheme.chars().next()
         && ch.len_utf8() == grapheme.len()
     {
-        return ch.width().unwrap_or(1);
+        return match ch {
+            // Enclosed alphanumerics, dingbat circled digits, and circled
+            // numbers on black square render as 2 columns in CJK terminals
+            // even though unicode-width reports 1. (#4479)
+            '\u{2460}'..='\u{24FF}' | '\u{2776}'..='\u{2793}' | '\u{3248}'..='\u{324F}' => 2,
+            _ => ch.width().unwrap_or(1),
+        };
+    }
+    // Keycap sequences (with or without FE0F) render as 2 columns.
+    if grapheme.contains('\u{20e3}') {
+        return 2;
     }
     grapheme.width()
 }

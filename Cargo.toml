@@ -73,3 +73,12 @@ strip = true
 # (catch_unwind/spawn_supervised) needs unwinding so one panicking tool call
 # or task fails gracefully instead of aborting the whole session.
 codegen-units = 1
+
+# Patch unicode-width so that width() uses CJK tables when the cjk feature
+# is enabled. Vanilla unicode-width 0.2.2 provides width_cjk() as a separate
+# method but the original width() always uses non-CJK tables, so Ratatui
+# (which calls width() internally) measures ambiguous-width characters
+# (circled digits, enclosed alphanumerics) as 1 column. CJK terminals render
+# them as 2 columns, causing cell-offset rendering glitches. (#4479)
+[patch.crates-io]
+unicode-width = { path = "patches/unicode-width-0.2.2" }
