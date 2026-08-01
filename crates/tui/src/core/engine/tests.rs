@@ -12413,6 +12413,7 @@ fn refresh_system_prompt_is_noop_when_unchanged() {
     assert_eq!(engine.session.system_prompt, first_prompt);
 }
 
+#[test]
 fn engine_prompt_keeps_reasoning_on_the_user_language_contract() {
     let tmp = tempdir().expect("tempdir");
     let config = EngineConfig {
