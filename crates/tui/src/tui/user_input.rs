@@ -100,8 +100,12 @@ impl UserInputView {
     }
 
     /// Whether the "Other" free-text row is offered for the current question.
+    /// Free text is ALWAYS available so the user can answer with their own
+    /// words even when the model did not offer it. `allow_free_text` remains
+    /// part of the wire request (backward-compatible) but no longer gates the
+    /// row: a custom response must always be reachable alongside the options.
     fn offers_other(&self) -> bool {
-        self.current_question().allow_free_text
+        true
     }
 
     fn option_count(&self) -> usize {
@@ -203,7 +207,10 @@ impl UserInputView {
             KeyCode::Char(' ') if self.is_multi_select() => {
                 // Space toggles the highlighted option in the pending set
                 // without leaving the picker (standard multi-select affordance).
-                if !self.is_other_selected() {
+                // The Other row and the Confirm row are not options: toggling
+                // them would corrupt the pending set.
+                let is_confirm = self.confirm_index() == Some(self.selected);
+                if !self.is_other_selected() && !is_confirm {
                     self.toggle_pending(self.selected);
                 }
                 ViewAction::None
@@ -474,27 +481,34 @@ impl ModalView for UserInputView {
             .wrap(Wrap { trim: true })
             .block(modal_block(&header));
 
-        let popup_area = centered_rect(82, 68, area);
+        let popup_area = compact_popup_rect(area);
         render_modal_chrome(area, popup_area, buf);
         paragraph.render(popup_area, buf);
     }
 }
 
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+/// Compact centered overlay: bounded width (max 110 columns) and height
+/// (max 22 rows / 60% of the screen) so the live conversation stays visible
+/// behind the modal instead of being covered edge-to-edge.
+fn compact_popup_rect(r: Rect) -> Rect {
+    let width = r.width.min(110);
+    let height = (r.height.saturating_mul(60) / 100)
+        .clamp(6, 22)
+        .min(r.height);
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Min(0),
+            Constraint::Length(height),
+            Constraint::Min(0),
         ])
         .split(r);
     let horizontal = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Min(0),
+            Constraint::Length(width),
+            Constraint::Min(0),
         ])
         .split(popup_layout[1]);
     horizontal[1]
@@ -568,27 +582,35 @@ mod tests {
     }
 
     #[test]
-    fn user_input_modal_hides_other_row_when_free_text_disabled() {
-        // Issue #3102: allow_free_text=false must NOT render the hardcoded
-        // "Other" pseudo-option. Previously "Other" was always appended.
+    fn user_input_modal_keeps_other_row_when_free_text_disabled() {
+        // v0.9.4: a custom free-text response is ALWAYS available alongside
+        // the options, even when the model did not offer it. The wire field
+        // `allow_free_text` stays for backward compatibility but no longer
+        // gates the row (#3102 originally hid it).
         let mut view = sample_view();
         view.request.questions[0].allow_free_text = false;
-        // Reset selection to a valid option index (no Other row to land on).
         view.selected = 0;
 
         let rendered = render_view(&view, 110, 36);
         assert!(
-            !rendered.contains("Type a custom response"),
-            "Other row should be hidden when allow_free_text is false"
+            rendered.contains("Type a custom response"),
+            "Other row must stay reachable even when allow_free_text is false"
         );
-        assert!(!rendered.contains("\nOther\n"));
+        assert!(rendered.contains("Other"));
+
+        // Entering the row switches to free-text input mode regardless.
+        view.selected = view.option_count() - 1;
+        let action = view.handle_selecting_key(KeyEvent::from(KeyCode::Enter));
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(view.mode, InputMode::OtherInput);
     }
 
     #[test]
     fn user_input_modal_renders_multi_select_ticks_and_confirm() {
         // Issue #3102: multi_select=true renders a check-mark gutter on
         // toggled options plus a trailing "Confirm selection" row, and the
-        // controls hint advertises Space/Enter toggle semantics.
+        // controls hint advertises Space/Enter toggle semantics. With the
+        // v0.9.4 always-available Other row, confirm sits at index 3.
         let mut view = sample_view();
         view.request.questions[0].multi_select = true;
         view.request.questions[0].allow_free_text = false;
@@ -606,12 +628,45 @@ mod tests {
         assert!(rendered.contains("Submit 1 selected"));
         assert!(rendered.contains("toggle"));
         assert!(
-            rendered.contains("▸  3) Confirm selection"),
+            rendered.contains("▸  4) Confirm selection"),
             "confirm row should display selected focus at its real quick-pick index"
         );
         assert!(
-            !rendered.contains("4) Confirm selection"),
+            !rendered.contains("5) Confirm selection"),
             "confirm row must not advertise an unreachable quick-pick number"
+        );
+    }
+
+    #[test]
+    fn user_input_modal_space_toggles_and_enter_confirms_multi_select() {
+        // Keyboard-first multi-select: Space toggles the highlighted option
+        // into the pending set without leaving the picker; Enter on the
+        // confirm row flushes the set.
+        let mut view = sample_view();
+        view.request.questions[0].multi_select = true;
+        view.selected = 0;
+
+        let action = view.handle_selecting_key(KeyEvent::from(KeyCode::Char(' ')));
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(view.multi_pending, vec![0], "Space toggles option 0 in");
+
+        let _action = view.handle_selecting_key(KeyEvent::from(KeyCode::Char(' ')));
+        assert!(view.multi_pending.is_empty(), "Space toggles option 0 out");
+
+        // Space on the confirm row must not toggle it (it is not an option).
+        view.selected = view.confirm_index().expect("confirm row present");
+        let before = view.multi_pending.clone();
+        let action = view.handle_selecting_key(KeyEvent::from(KeyCode::Char(' ')));
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(view.multi_pending, before, "Space on confirm is a no-op");
+
+        // Enter on the confirm row flushes the pending set as answers.
+        view.multi_pending.push(0);
+        let action = view.handle_selecting_key(KeyEvent::from(KeyCode::Enter));
+        assert!(
+            matches!(action, ViewAction::EmitAndClose(ViewEvent::UserInputSubmitted { tool_id, response })
+                if tool_id == "tool-1" && response.answers.first().is_some_and(|a| a.value == "Ship it")),
+            "Enter on confirm submits the toggled options"
         );
     }
 

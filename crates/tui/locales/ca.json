@@ -293,7 +293,6 @@
     "CmdSidebarDescription": "Commuta o enfoca la barra lateral dreta",
     "CmdSkillDescription": "Activa una skill, o instal·la/actualitza/desinstal·la/confia en una skill de la comunitat",
     "CmdSkillsDescription": "Llista les skills locals, filtra per prefix o explora el registre remot curat",
-    "CmdDebtDescription": "Inspecciona o exporta el llibre de deutes",
     "CmdStashDescription": "Aparca o restaura un esborrany del redactor",
     "CmdStatusDescription": "Mostra l'estat del runtime de la sessió",
     "CmdStatuslineDescription": "Configura quins elements apareixen al peu",

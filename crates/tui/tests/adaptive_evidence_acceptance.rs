@@ -52,17 +52,21 @@ async fn headless_bash_success_and_failure_are_distinct_bounded_exact_evidence()
         .filter_map(|request| request.body_json::<Value>().ok())
         .find_map(|body| tool_result_content_for(&body, FAILURE_CALL_ID).map(str::to_owned))
         .expect("model-visible Bash failure receipt");
-    for (receipt, call_id, sentinel) in [
-        (&success_receipt, SUCCESS_CALL_ID, SUCCESS_SENTINEL),
-        (&failure_receipt, FAILURE_CALL_ID, FAILURE_SENTINEL),
+    for (receipt, sentinel) in [
+        (&success_receipt, SUCCESS_SENTINEL),
+        (&failure_receipt, FAILURE_SENTINEL),
     ] {
-        assert!(receipt.starts_with("[Exact evidence retained"));
-        assert!(receipt.contains(&format!("retrieve_tool_result ref=art_{call_id}")));
+        assert!(
+            receipt.contains("of output omitted — view full output in the tool details view"),
+            "model-facing truncation must use the plain preview footer"
+        );
+        assert!(!receipt.contains("retrieve_tool_result"));
+        assert!(!receipt.contains("[Exact evidence retained"));
         assert!(!receipt.contains(sentinel));
         assert!(!receipt.contains("/artifacts/"));
         assert!(
             receipt.len() <= 3_200,
-            "handle-only receipt must stay bounded"
+            "bounded preview must stay within the receipt budget"
         );
     }
     assert_ne!(success_receipt, failure_receipt);
