@@ -2372,8 +2372,9 @@ fn pty_text_sse(content: &str) -> String {
 /// `File.patch` call performs an update, create, delete, and byte-identical
 /// delete/create rename in a single transaction; the second response settles
 /// the turn. No provider or external network is involved.
-fn spawn_file_mutation_screen_fixture()
--> anyhow::Result<(String, std::thread::JoinHandle<anyhow::Result<()>>)> {
+fn spawn_file_mutation_screen_fixture(
+    tool_allowed: bool,
+) -> anyhow::Result<(String, std::thread::JoinHandle<anyhow::Result<()>>)> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     listener.set_nonblocking(true)?;
     let address = listener.local_addr()?;
@@ -2412,6 +2413,11 @@ diff --git a/delete.txt b/delete.txt
         ),
         pty_text_sse("FILE-MUTATION-FIXTURE-DONE"),
     ];
+    let expected_result_marker = if tool_allowed {
+        "files_applied"
+    } else {
+        "destructive action requires explicit review"
+    };
 
     let handle = std::thread::spawn(move || -> anyhow::Result<()> {
         let deadline = Instant::now() + Duration::from_secs(45);
@@ -2451,12 +2457,12 @@ diff --git a/delete.txt b/delete.txt
                         contract_errors.push("initial request omitted the fixture prompt".into());
                     }
                     1 if !(request_contract.contains("call_file_mutation_pty")
-                        && request_contract.contains("files_applied")
+                        && request_contract.contains(expected_result_marker)
                         && request_contract.contains("\"role\":\"tool\"")) =>
                     {
                         let sample = request_contract.chars().take(1_200).collect::<String>();
                         contract_errors.push(format!(
-                            "settling request omitted the successful File result: {sample}"
+                            "settling request omitted the expected File result: {sample}"
                         ));
                     }
                     0 | 1 => {}
@@ -2545,7 +2551,7 @@ fn work_surface_file_mutation_modes_are_truthful_in_real_pty_frames() -> anyhow:
             "full", 140_u16, 40_u16, "dark", false, false, "ask", "ask", true,
         ),
         (
-            "summary", 100, 32, "light", false, false, "auto", "auto", true,
+            "summary", 100, 32, "light", false, false, "auto", "auto", false,
         ),
         (
             "off",
@@ -2618,7 +2624,10 @@ fn work_surface_file_mutation_modes_are_truthful_in_real_pty_frames() -> anyhow:
             );
         }
 
-        let (base_url, server) = spawn_file_mutation_screen_fixture()?;
+        // Auto-Review deliberately has no approval escape hatch for destructive
+        // create/delete work; Ask and Full Access can complete the transaction.
+        let tool_allowed = permission_posture != "auto";
+        let (base_url, server) = spawn_file_mutation_screen_fixture(tool_allowed)?;
         let mut h = spawn_file_mutation_harness(&ws, &base_url, rows, cols, ascii_safe)?;
         enter_launch_session(&mut h)?;
         assert_real_pty_frame_geometry(h.frame(), cols, rows);
@@ -2633,31 +2642,59 @@ fn work_surface_file_mutation_modes_are_truthful_in_real_pty_frames() -> anyhow:
             h.send(b"y")?;
         }
         h.wait_for_text("FILE-MUTATION-FIXTURE-DONE", Duration::from_secs(20))?;
-        h.wait_for(
-            |frame| frame.contains("4 files") && frame.contains("done"),
-            Duration::from_secs(10),
-        )?;
+        if tool_allowed {
+            h.wait_for(
+                |frame| frame.contains("4 files") && frame.contains("done"),
+                Duration::from_secs(10),
+            )?;
+        } else {
+            h.wait_for(
+                |frame| {
+                    frame.contains("tool issue")
+                        && frame.contains("destructive action")
+                        && frame.contains("done")
+                },
+                Duration::from_secs(10),
+            )?;
+        }
         h.wait_for_idle(Duration::from_millis(250), Duration::from_secs(3))?;
-        assert!(
-            !h.frame().contains("Wrote 4 files"),
-            "completed file-operation summary leaked into ambient chrome:\n{}",
-            h.frame().debug_dump()
-        );
 
-        assert_eq!(
-            std::fs::read_to_string(ws.workspace().join("new-name.txt"))?,
-            "RENAME-SENTINEL\n"
-        );
-        assert!(!ws.workspace().join("old-name.txt").exists());
-        assert_eq!(
-            std::fs::read_to_string(ws.workspace().join("update.txt"))?,
-            "DIFF-NEW-SENTINEL\n"
-        );
-        assert_eq!(
-            std::fs::read_to_string(ws.workspace().join("create.txt"))?,
-            "CREATE-SENTINEL\n"
-        );
-        assert!(!ws.workspace().join("delete.txt").exists());
+        if tool_allowed {
+            assert!(
+                !h.frame().contains("Wrote 4 files"),
+                "completed file-operation summary leaked into ambient chrome:\n{}",
+                h.frame().debug_dump()
+            );
+            assert_eq!(
+                std::fs::read_to_string(ws.workspace().join("new-name.txt"))?,
+                "RENAME-SENTINEL\n"
+            );
+            assert!(!ws.workspace().join("old-name.txt").exists());
+            assert_eq!(
+                std::fs::read_to_string(ws.workspace().join("update.txt"))?,
+                "DIFF-NEW-SENTINEL\n"
+            );
+            assert_eq!(
+                std::fs::read_to_string(ws.workspace().join("create.txt"))?,
+                "CREATE-SENTINEL\n"
+            );
+            assert!(!ws.workspace().join("delete.txt").exists());
+        } else {
+            assert_eq!(
+                std::fs::read_to_string(ws.workspace().join("old-name.txt"))?,
+                "RENAME-SENTINEL\n"
+            );
+            assert_eq!(
+                std::fs::read_to_string(ws.workspace().join("update.txt"))?,
+                "DIFF-OLD-SENTINEL\n"
+            );
+            assert!(!ws.workspace().join("new-name.txt").exists());
+            assert!(!ws.workspace().join("create.txt").exists());
+            assert_eq!(
+                std::fs::read_to_string(ws.workspace().join("delete.txt"))?,
+                "DELETE-SENTINEL\n"
+            );
+        }
 
         let settled_frame = h.frame().text();
         std::thread::sleep(Duration::from_millis(300));
@@ -2696,10 +2733,11 @@ fn work_surface_file_mutation_modes_are_truthful_in_real_pty_frames() -> anyhow:
             }
             "summary" => {
                 assert!(
-                    scroll_until(&mut h, ScrollDir::Up, "+2 -2"),
-                    "summary mode omitted semantic stats:\n{}",
+                    scroll_until(&mut h, ScrollDir::Up, "+3 / -3"),
+                    "held Auto-Review mutation omitted semantic stats:\n{}",
                     h.frame().debug_dump()
                 );
+                assert!(h.frame().contains("explicit review"));
                 assert!(!scroll_until(&mut h, ScrollDir::Up, "DIFF-NEW-SENTINEL"));
                 assert!(!scroll_until(&mut h, ScrollDir::Down, "DIFF-NEW-SENTINEL"));
             }
