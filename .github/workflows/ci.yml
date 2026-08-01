@@ -363,6 +363,18 @@ jobs:
         run: echo "No executable Rust changes detected; preserving required Test context."
       - uses: actions/checkout@v7
         if: needs.changes.outputs.heavy == 'true' && (matrix.os != 'ubuntu-latest' || github.event_name == 'workflow_dispatch')
+      - name: Test Windows installer PATH helper
+        if: needs.changes.outputs.heavy == 'true' && matrix.os == 'windows-latest'
+        shell: pwsh
+        run: ./scripts/installer/update-user-path.tests.ps1
+      - name: Install NSIS for Windows installer regression
+        if: needs.changes.outputs.heavy == 'true' && matrix.os == 'windows-latest'
+        shell: pwsh
+        run: choco install nsis -y --no-progress
+      - name: Test Windows installer PATH regression
+        if: needs.changes.outputs.heavy == 'true' && matrix.os == 'windows-latest'
+        shell: pwsh
+        run: ./scripts/installer/installer-path-regression.tests.ps1 -AllowUserPathMutation
       - uses: dtolnay/rust-toolchain@stable
         if: needs.changes.outputs.heavy == 'true' && (matrix.os != 'ubuntu-latest' || github.event_name == 'workflow_dispatch')
       - uses: mozilla-actions/sccache-action@v0.0.10

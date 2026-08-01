@@ -26,6 +26,12 @@ const MAX_FUZZ: usize = 50;
 /// position — landing in the wrong region of a file with repeated blocks.
 const DEFAULT_FUZZ: usize = 3;
 
+/// Minimum number of expected lines (context + removed) required before a hunk
+/// may be relocated to a unique whole-file context match when its stated line
+/// numbers are stale (#5003). Short anchors — a lone `}` or a 1-2 line snippet
+/// — appear in too many places to relocate safely.
+const MIN_ANCHOR_LINES: usize = 4;
+
 /// Reassemble hunk-processed logical lines back into file content, preserving
 /// the base file's line-ending style (CRLF vs LF) and its trailing-newline
 /// state. Processing round-trips through `str::lines()`, which strips both the
@@ -67,6 +73,8 @@ pub struct PatchResult {
     pub fuzz_used: usize,
     #[serde(default)]
     pub hunks_with_fuzz: usize,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub hunks_relocated: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub touched_files: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -82,6 +90,8 @@ pub struct FileSummary {
     pub hunks_applied: usize,
     pub fuzz_used: usize,
     pub hunks_with_fuzz: usize,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub hunks_relocated: usize,
     pub created: bool,
     pub deleted: bool,
 }
@@ -149,6 +159,11 @@ struct PatchStats {
     hunks_total: usize,
     fuzz_used: usize,
     hunks_with_fuzz: usize,
+    hunks_relocated: usize,
+}
+
+fn is_zero(value: &usize) -> bool {
+    *value == 0
 }
 
 #[derive(Debug, Default, Clone)]
@@ -176,6 +191,16 @@ struct HunkApplyStats {
     hunks_applied: usize,
     fuzz_used: usize,
     hunks_with_fuzz: usize,
+    hunks_relocated: usize,
+}
+
+/// Result of applying a single hunk: how much positional fuzz was used, and
+/// whether the hunk had to be relocated to a unique whole-file context match
+/// (stale line numbers after earlier edits, #5003).
+#[derive(Debug, Default, Clone, Copy)]
+struct HunkApplyOutcome {
+    fuzz_used: usize,
+    relocated: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -270,6 +295,13 @@ enum ApplyHunkError {
         expected_line: usize,
         adjusted_line: usize,
         offset: isize,
+    },
+    #[error(
+        "Hunk context is ambiguous: matches at multiple locations {candidate_lines:?}, expected around line {expected_line}"
+    )]
+    ContextAmbiguous {
+        expected_line: usize,
+        candidate_lines: Vec<usize>,
     },
 }
 
@@ -378,6 +410,7 @@ impl ToolSpec for ApplyPatchTool {
                 hunks_total: stats.stats.hunks_total,
                 fuzz_used: stats.stats.fuzz_used,
                 hunks_with_fuzz: stats.stats.hunks_with_fuzz,
+                hunks_relocated: stats.stats.hunks_relocated,
                 touched_files: stats.touched_files.clone(),
                 file_summaries: stats.file_summaries.clone(),
                 message: build_summary_message(&stats),
@@ -427,6 +460,7 @@ impl ToolSpec for ApplyPatchTool {
             hunks_total: stats.stats.hunks_total,
             fuzz_used: stats.stats.fuzz_used,
             hunks_with_fuzz: stats.stats.hunks_with_fuzz,
+            hunks_relocated: stats.stats.hunks_relocated,
             touched_files: stats.touched_files.clone(),
             file_summaries: stats.file_summaries.clone(),
             message: build_summary_message(&stats),
@@ -1016,6 +1050,13 @@ fn build_summary_message(stats: &PatchStatsExt) -> String {
         ));
     }
 
+    if stats.stats.hunks_relocated > 0 {
+        parts.push(format!(
+            "{} hunk(s) applied with stale line numbers (auto-relocated to unique context).",
+            stats.stats.hunks_relocated
+        ));
+    }
+
     if let Some(note) = stats.header_path_mismatch.as_deref() {
         parts.push(note.to_string());
     }
@@ -1081,6 +1122,7 @@ fn build_pending_writes_from_replace(
             hunks_applied: 0,
             fuzz_used: 0,
             hunks_with_fuzz: 0,
+            hunks_relocated: 0,
             created,
             deleted: false,
         });
@@ -1142,6 +1184,7 @@ fn build_pending_writes_from_patches(
         stats.stats.hunks_total += file_patch.hunks.len();
         stats.stats.fuzz_used += apply_stats.fuzz_used;
         stats.stats.hunks_with_fuzz += apply_stats.hunks_with_fuzz;
+        stats.stats.hunks_relocated += apply_stats.hunks_relocated;
         stats.stats.files_applied += 1;
         push_unique(&mut stats.touched_files, file_patch.path.clone());
         stats.file_summaries.push(FileSummary {
@@ -1150,6 +1193,7 @@ fn build_pending_writes_from_patches(
             hunks_applied: apply_stats.hunks_applied,
             fuzz_used: apply_stats.fuzz_used,
             hunks_with_fuzz: apply_stats.hunks_with_fuzz,
+            hunks_relocated: apply_stats.hunks_relocated,
             created: original.is_none() && !file_patch.delete_after,
             deleted: file_patch.delete_after,
         });
@@ -1295,7 +1339,20 @@ fn format_hunk_no_match_error(
             let expected_preview = preview_expected_lines(hunk, HUNK_PREVIEW_LINES).join("\n");
             let file_preview = snippet_around(lines, *adjusted_line, SNIPPET_RADIUS).join("\n");
             format!(
-                "could not find matching context near line {expected_line} (searched around line {adjusted_line} with offset {offset:+} and fuzz up to {max_fuzz}). Expected context preview:\n{expected_preview}\nFile snippet near line {adjusted_line}:\n{file_preview}\nHints: ensure the patch matches the current file contents, increase `fuzz`, or regenerate the patch."
+                "could not find matching context near line {expected_line} (searched around line {adjusted_line} with offset {offset:+} and fuzz up to {max_fuzz}). Expected context preview:\n{expected_preview}\nFile snippet near line {adjusted_line}:\n{file_preview}\nHints: the line numbers may be stale after earlier edits — call read_file to re-check the current contents, ensure the patch matches the file, increase `fuzz`, or regenerate the patch."
+            )
+        }
+        ApplyHunkError::ContextAmbiguous {
+            expected_line,
+            candidate_lines,
+        } => {
+            let candidates = candidate_lines
+                .iter()
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "could not find matching context near line {expected_line}: the hunk's context appears at multiple locations (lines {candidates}), and the line numbers may be stale after earlier edits, so it is not safe to relocate automatically. Hints: call read_file to inspect the candidate locations above, then regenerate the patch with more surrounding context lines that uniquely identify the target block."
             )
         }
     }
@@ -1312,11 +1369,14 @@ fn apply_hunks_to_lines(
 
     for (idx, hunk) in hunks.iter().enumerate() {
         match apply_hunk(lines, hunk, fuzz, &mut cumulative_offset) {
-            Ok(fuzz_used) => {
-                stats.fuzz_used += fuzz_used;
+            Ok(outcome) => {
                 stats.hunks_applied += 1;
-                if fuzz_used > 0 {
+                if outcome.fuzz_used > 0 {
+                    stats.fuzz_used += outcome.fuzz_used;
                     stats.hunks_with_fuzz += 1;
+                }
+                if outcome.relocated {
+                    stats.hunks_relocated += 1;
                 }
             }
             Err(e) => {
@@ -1341,7 +1401,7 @@ fn apply_hunk(
     hunk: &Hunk,
     max_fuzz: usize,
     cumulative_offset: &mut isize,
-) -> Result<usize, ApplyHunkError> {
+) -> Result<HunkApplyOutcome, ApplyHunkError> {
     // Build expected old lines from hunk
     let old_lines: Vec<&str> = hunk
         .lines
@@ -1396,7 +1456,10 @@ fn apply_hunk(
                 let delta = new_lines.len() as isize - old_lines.len() as isize;
                 *cumulative_offset += delta;
 
-                return Ok(fuzz);
+                return Ok(HunkApplyOutcome {
+                    fuzz_used: fuzz,
+                    relocated: false,
+                });
             }
         }
     }
@@ -1406,14 +1469,48 @@ fn apply_hunk(
         let delta = new_lines.len() as isize;
         lines.extend(new_lines);
         *cumulative_offset += delta;
-        return Ok(0);
+        return Ok(HunkApplyOutcome {
+            fuzz_used: 0,
+            relocated: false,
+        });
     }
 
-    Err(ApplyHunkError::NoMatch {
-        expected_line: hunk.old_start,
-        adjusted_line: start_idx + 1, // Convert back to 1-indexed
-        offset: *cumulative_offset,
-    })
+    // #5003 — positional search failed. The line numbers are probably stale
+    // because an earlier edit (this patch or a previous one) shifted the file
+    // and the model regenerated the patch from outdated read_file output.
+    // If the hunk carries enough anchor lines, look for a unique whole-file
+    // content match and relocate there; anything that matched within `fuzz`
+    // of `start_idx` was already tried above, so any unique match found here
+    // is genuinely relocated. Ambiguous matches are refused (applying to the
+    // wrong copy of a repeated block would corrupt the file).
+    let anchor_matches: Vec<usize> = if old_lines.len() >= MIN_ANCHOR_LINES {
+        (0..=lines.len().saturating_sub(old_lines.len()))
+            .filter(|&pos| matches_at_position(lines, &old_lines, pos))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    match anchor_matches.as_slice() {
+        [pos] => {
+            let end_pos = pos + old_lines.len();
+            lines.splice(*pos..end_pos, new_lines.clone());
+            let delta = new_lines.len() as isize - old_lines.len() as isize;
+            *cumulative_offset += delta;
+            Ok(HunkApplyOutcome {
+                fuzz_used: 0,
+                relocated: true,
+            })
+        }
+        [] => Err(ApplyHunkError::NoMatch {
+            expected_line: hunk.old_start,
+            adjusted_line: start_idx + 1, // Convert back to 1-indexed
+            offset: *cumulative_offset,
+        }),
+        multiple => Err(ApplyHunkError::ContextAmbiguous {
+            expected_line: hunk.old_start,
+            candidate_lines: multiple.iter().map(|&p| p + 1).collect(),
+        }),
+    }
 }
 
 /// Check if `old_lines` match at the given position
@@ -1655,8 +1752,9 @@ diff --git a/same.txt b/same.txt
         };
 
         let mut offset: isize = 0;
-        let fuzz = apply_hunk(&mut lines, &hunk, 0, &mut offset).unwrap();
-        assert_eq!(fuzz, 0);
+        let outcome = apply_hunk(&mut lines, &hunk, 0, &mut offset).unwrap();
+        assert_eq!(outcome.fuzz_used, 0);
+        assert!(!outcome.relocated);
         assert_eq!(lines, vec!["line1", "modified", "line3"]);
     }
 
@@ -1683,8 +1781,9 @@ diff --git a/same.txt b/same.txt
         };
 
         let mut offset: isize = 0;
-        let fuzz = apply_hunk(&mut lines, &hunk, 3, &mut offset).unwrap();
-        assert!(fuzz > 0);
+        let outcome = apply_hunk(&mut lines, &hunk, 3, &mut offset).unwrap();
+        assert!(outcome.fuzz_used > 0);
+        assert!(!outcome.relocated);
         assert_eq!(lines, vec!["line0", "modified", "line2", "line3"]);
     }
 
@@ -2357,8 +2456,9 @@ diff --git a/b.txt b/b.txt
         let mut offset: isize = 0;
 
         // Apply first hunk
-        let fuzz1 = apply_hunk(&mut lines, &hunk1, 3, &mut offset).unwrap();
-        assert_eq!(fuzz1, 0);
+        let outcome1 = apply_hunk(&mut lines, &hunk1, 3, &mut offset).unwrap();
+        assert_eq!(outcome1.fuzz_used, 0);
+        assert!(!outcome1.relocated);
         assert_eq!(offset, 2); // Added 2 lines (4 new - 2 old)
         assert_eq!(
             lines,
@@ -2368,9 +2468,272 @@ diff --git a/b.txt b/b.txt
         );
 
         // Apply second hunk - this would fail without offset tracking!
-        let fuzz2 = apply_hunk(&mut lines, &hunk2, 3, &mut offset).unwrap();
-        assert_eq!(fuzz2, 0);
+        let outcome2 = apply_hunk(&mut lines, &hunk2, 3, &mut offset).unwrap();
+        assert_eq!(outcome2.fuzz_used, 0);
+        assert!(!outcome2.relocated);
         assert!(lines.contains(&"modified5".to_string()));
         assert!(!lines.contains(&"line5".to_string()));
+    }
+
+    #[test]
+    fn test_apply_hunk_relocates_to_unique_context_match() {
+        // #5003 - stale line numbers (hunk says line 1, content is at line 20).
+        let mut lines: Vec<String> = (0..25).map(|i| format!("line{i}")).collect();
+        let hunk = Hunk {
+            old_start: 1, // stale line number
+            old_count: 5,
+            new_start: 1,
+            new_count: 5,
+            lines: vec![
+                HunkLine::Context("line19".to_string()),
+                HunkLine::Context("line20".to_string()),
+                HunkLine::Remove("line21".to_string()),
+                HunkLine::Add("line21-modified".to_string()),
+                HunkLine::Context("line22".to_string()),
+                HunkLine::Context("line23".to_string()),
+            ],
+        };
+
+        let mut offset: isize = 0;
+        let outcome = apply_hunk(&mut lines, &hunk, 1, &mut offset).unwrap();
+        assert!(
+            outcome.relocated,
+            "expected relocation for stale line numbers"
+        );
+        assert_eq!(outcome.fuzz_used, 0);
+        assert_eq!(lines[21], "line21-modified");
+        assert!(!lines.contains(&"line21".to_string()));
+    }
+
+    #[test]
+    fn test_apply_hunk_ambiguous_context_reports_candidates() {
+        // Two identical block-a..d blocks: anchor is not unique -> ContextAmbiguous.
+        let mut lines: Vec<String> = [
+            "header0", "header1", "header2", "block-a", "block-b", "block-c", "block-d", "middle",
+            "block-a", "block-b", "block-c", "block-d", "footer",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+        let hunk = Hunk {
+            old_start: 1,
+            old_count: 4,
+            new_start: 1,
+            new_count: 4,
+            lines: vec![
+                HunkLine::Remove("block-a".to_string()),
+                HunkLine::Remove("block-b".to_string()),
+                HunkLine::Remove("block-c".to_string()),
+                HunkLine::Remove("block-d".to_string()),
+                HunkLine::Add("block-a-modified".to_string()),
+                HunkLine::Add("block-b".to_string()),
+                HunkLine::Add("block-c".to_string()),
+                HunkLine::Add("block-d".to_string()),
+            ],
+        };
+
+        let mut offset: isize = 0;
+        let err = apply_hunk(&mut lines, &hunk, 1, &mut offset).unwrap_err();
+        match err {
+            ApplyHunkError::ContextAmbiguous {
+                expected_line,
+                candidate_lines,
+            } => {
+                assert_eq!(expected_line, 1);
+                // The two duplicate blocks start at 1-based lines 4 and 9.
+                assert_eq!(candidate_lines, vec![4, 9]);
+            }
+            other => panic!("expected ContextAmbiguous, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_apply_hunk_short_anchor_not_relocated() {
+        // Anchor too short (1 line < MIN_ANCHOR_LINES): keep NoMatch behavior.
+        let mut lines: Vec<String> = ["zero", "one", "two", "three", "four"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let hunk = Hunk {
+            old_start: 1,
+            old_count: 1,
+            new_start: 1,
+            new_count: 1,
+            lines: vec![
+                HunkLine::Remove("four".to_string()),
+                HunkLine::Add("four-modified".to_string()),
+            ],
+        };
+
+        let mut offset: isize = 0;
+        let err = apply_hunk(&mut lines, &hunk, 1, &mut offset).unwrap_err();
+        assert!(
+            matches!(err, ApplyHunkError::NoMatch { .. }),
+            "short anchors must not be relocated"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_apply_patch_relocates_stale_line_numbers() {
+        // #5003 - integration: hunk claims line 1 but content is at line 21.
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+        let tool = ApplyPatchTool;
+
+        let content = (0..30)
+            .map(|i| format!("line{i}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        fs::write(tmp.path().join("stale.txt"), &content).expect("write");
+
+        let patch = r"@@ -1,5 +1,5 @@
+ line19
+ line20
+-line21
++line21-modified
+ line22
+ line23
+";
+
+        let result = tool
+            .execute(
+                json!({"path": "stale.txt", "patch": patch, "fuzz": 1}),
+                &ctx,
+            )
+            .await
+            .expect("execute");
+        assert!(result.success);
+        let patch_result = parse_patch_result(result);
+        assert_eq!(patch_result.hunks_relocated, 1);
+        assert!(
+            patch_result.message.contains("stale line numbers"),
+            "message: {}",
+            patch_result.message
+        );
+        let summary = patch_result.file_summaries.first().unwrap();
+        assert_eq!(summary.hunks_relocated, 1);
+
+        let edited = fs::read_to_string(tmp.path().join("stale.txt")).expect("read");
+        assert!(edited.contains("line21-modified"));
+        assert!(!edited.contains("\nline21\n"));
+    }
+
+    #[tokio::test]
+    async fn test_apply_patch_ambiguous_context_reports_candidates() {
+        // #5003 - integration: duplicate context blocks, ambiguous relocation.
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+        let tool = ApplyPatchTool;
+
+        let content = "header0\nheader1\nheader2\nblock-a\nblock-b\nblock-c\nblock-d\nmiddle\nblock-a\nblock-b\nblock-c\nblock-d\nfooter\n";
+        fs::write(tmp.path().join("dup.txt"), content).expect("write");
+
+        let patch = r"@@ -1,4 +1,4 @@
+-block-a
+-block-b
+-block-c
+-block-d
++block-a-modified
++block-b
++block-c
++block-d
+";
+
+        let err = tool
+            .execute(json!({"path": "dup.txt", "patch": patch, "fuzz": 1}), &ctx)
+            .await
+            .unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("multiple locations"),
+            "expected ambiguity error, got: {message}"
+        );
+        // The two duplicate blocks start at 1-based lines 4 and 9.
+        assert!(
+            message.contains("lines 4, 9"),
+            "expected candidate lines, got: {message}"
+        );
+        let unchanged = fs::read_to_string(tmp.path().join("dup.txt")).expect("read");
+        assert_eq!(
+            unchanged, content,
+            "ambiguous hunk must not modify the file"
+        );
+    }
+    #[tokio::test]
+    async fn test_apply_patch_relocates_after_crlf_chinese_edit_shift() {
+        // #5003 - issue scenario: a C-style file with CRLF line endings and
+        // Chinese comments. A first edit shifts line numbers; a second patch
+        // still uses stale line numbers but its context is unique in the
+        // file, so apply_patch relocates instead of failing.
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+        let tool = ApplyPatchTool;
+
+        let mut lines = vec!["/* 扭矩控制模块 */".to_string()];
+        for i in 0..60 {
+            lines.push(format!("int cfg_{i} = {i}; // 配置项 {i}"));
+        }
+        let content = lines.join("\r\n") + "\r\n";
+        fs::write(tmp.path().join("app_foc.c"), &content).expect("write");
+
+        // First edit: insert 8 lines right after cfg_9 (old line 11). This
+        // shifts every later line number by +8.
+        let patch1 = r"@@ -11,1 +11,9 @@
+ int cfg_9 = 9; // 配置项 9
++int new_a = 100; // 新增配置 A
++int new_b = 101; // 新增配置 B
++int new_c = 102; // 新增配置 C
++int new_d = 103; // 新增配置 D
++int new_e = 104; // 新增配置 E
++int new_f = 105; // 新增配置 F
++int new_g = 106; // 新增配置 G
++int new_h = 107; // 新增配置 H
+";
+        let r1 = tool
+            .execute(
+                json!({"path": "app_foc.c", "patch": patch1, "fuzz": 0}),
+                &ctx,
+            )
+            .await
+            .expect("first patch");
+        assert!(r1.success, "first patch should apply: {}", r1.content);
+
+        // Second edit: claims line 31 (stale - cfg_21 now), but the replaced
+        // block cfg_30..cfg_34 actually lives at lines 40-44. Positional
+        // search with fuzz=1 fails; the unique whole-file anchor relocates.
+        let patch2 = r"@@ -31,5 +31,5 @@
+ int cfg_30 = 30; // 配置项 30
+ int cfg_31 = 31; // 配置项 31
+-int cfg_32 = 32; // 配置项 32
++int cfg_32 = 3200; // 配置项 32 已修改
+ int cfg_33 = 33; // 配置项 33
+ int cfg_34 = 34; // 配置项 34
+";
+        let r2 = tool
+            .execute(
+                json!({"path": "app_foc.c", "patch": patch2, "fuzz": 1}),
+                &ctx,
+            )
+            .await
+            .expect("second patch");
+        assert!(r2.success, "second patch should relocate: {}", r2.content);
+        let pr2 = parse_patch_result(r2);
+        assert_eq!(pr2.hunks_relocated, 1, "second patch must be relocated");
+
+        let edited = fs::read_to_string(tmp.path().join("app_foc.c")).expect("read");
+        assert!(
+            edited.contains("int cfg_32 = 3200;"),
+            "replacement must land"
+        );
+        assert!(
+            edited.contains("int cfg_33 = 33;"),
+            "context after the edit must stay intact"
+        );
+        assert!(
+            edited.contains("int new_h = 107;"),
+            "first edit must survive"
+        );
     }
 }

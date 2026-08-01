@@ -109,6 +109,9 @@ apps/
 # Maintainer-internal design notes (trade-secret material, never published)
 .private/
 
+# Coverage reports (build artifacts)
+web/coverage/
+
 # Agent handoffs and version-specific setup plans are working-state notes, not
 # public docs. Keep durable setup guidance in docs/runbooks instead.
 docs/*HANDOFF*.md
@@ -143,3 +146,6 @@ operations9.md
 OPERATIONS_0_9_0.md
 operations_0_9_0.md
 CODEWHALE_0_9_0_CUTOVER.md
+
+# Hepha project metadata (local only, not upstream)
+.hepha/

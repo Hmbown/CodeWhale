@@ -184,7 +184,7 @@
   "large_module_threshold_lines": 1000,
   "max_large_module_count": 172,
   "max_module_lines": 19017,
-  "max_total_owned_rust_lines": 644756,
+  "max_total_owned_rust_lines": 645500,
   "schema_version": 1,
   "workspace_packages": [
     "codewhale-agent",

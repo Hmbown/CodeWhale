@@ -11,6 +11,10 @@ pub mod traits;
 pub mod user_commands;
 pub mod user_registry;
 
+#[cfg(test)]
+#[path = "epic_dispatch_acceptance.rs"]
+mod epic_dispatch_acceptance;
+
 use std::sync::OnceLock;
 
 pub use traits::CommandInfo;

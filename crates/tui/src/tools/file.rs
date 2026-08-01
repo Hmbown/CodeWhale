@@ -712,9 +712,15 @@ impl ToolSpec for EditFileTool {
         let _fuzz = optional_bool(&input, "fuzz", false);
 
         if search == replace {
-            return Err(ToolError::invalid_input(
-                "search and replace are identical, no change intended",
-            ));
+            // #5003 — long-text edits repeatedly failed here because the model
+            // generated a `replace` identical to `search`. A bare "no change"
+            // message gave no hint of the root cause, so the model retried the
+            // same broken call. Spell out the failure and the recovery path.
+            let char_count = search.chars().count();
+            let line_count = search.lines().count();
+            return Err(ToolError::invalid_input(format!(
+                "search and replace are identical ({char_count} chars, {line_count} lines), so no change is possible. This usually means `replace` was copied verbatim from `search` instead of carrying the intended edits. Recovery: re-read the file with read_file, then retry with a `replace` that is genuinely different from `search`; for large multi-line rewrites prefer apply_patch with a unified diff."
+            )));
         }
         if search.is_empty() {
             return Err(ToolError::invalid_input("search must not be empty"));
@@ -772,9 +778,13 @@ impl ToolSpec for EditFileTool {
                     );
                     match punct_matches.as_slice() {
                         [] => {
+                            // #5003 — the model could not tell why its search
+                            // missed; show the first lines of the search text
+                            // so it can compare against the file's contents.
                             return Err(ToolError::execution_failed(format!(
-                                "Search string not found in {}. Recovery: call read_file with path=\"{path_str}\" to inspect the current contents, then retry with a search string copied from the file.",
+                                "Search string not found in {}. The search text starts with:\n{}\nRecovery: call read_file with path=\"{path_str}\" to inspect the current contents, then retry with a search string copied from the file.",
                                 file_path.display(),
+                                preview_search_for_error(search),
                             )));
                         }
                         [(start, end)] => ((*start, *end), Some("punctuation")),
@@ -934,7 +944,64 @@ fn edit_payload_looks_corrupted(search: &str, replace: &str) -> Option<&'static 
         );
     }
 
+    // #5003 — a C file edit that replaced `#if 0` but left the matching
+    // `#endif` behind returned success with structurally broken output.
+    // Brace counts cannot catch this (the region between `#if 0` and
+    // `#endif` often has no braces). Require the replace to preserve the
+    // preprocessor conditional balance of the search span: the net number
+    // of open/close directives must be unchanged, otherwise the edit would
+    // orphan a directive. Languages without `#if`/`#endif` are unaffected
+    // (both balances are zero).
+    let search_pp = preprocessor_conditional_balance(search);
+    let replace_pp = preprocessor_conditional_balance(replace);
+    if search_pp != replace_pp {
+        return Some(
+            "replace would change the C/C++ preprocessor conditional balance (#if/#ifdef/#ifndef vs #endif) — the search or replace text is missing a matching directive; copy the complete block including both its opening and closing directives",
+        );
+    }
+
     None
+}
+
+/// Count `#if`/`#ifdef`/`#ifndef` openings and `#endif` closings in a text
+/// payload. `#else`/`#elif` do not affect the open/close balance. Directives
+/// are matched at line start (leading whitespace allowed) and may carry
+/// trailing comments (`#endif // FOO`).
+fn preprocessor_conditional_balance(text: &str) -> (usize, usize) {
+    let opens = text
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            trimmed.starts_with("#if") && !trimmed.starts_with("#include")
+        })
+        .count();
+    let closes = text
+        .lines()
+        .filter(|line| line.trim_start().starts_with("#endif"))
+        .count();
+    (opens, closes)
+}
+
+/// Build a short, line-truncated preview of a (possibly very long) search
+/// payload for error messages, so the model can compare what it searched for
+/// against the file's actual contents without the error message ballooning.
+fn preview_search_for_error(search: &str) -> String {
+    const MAX_PREVIEW_LINES: usize = 3;
+    const MAX_PREVIEW_LINE_LEN: usize = 80;
+    search
+        .lines()
+        .take(MAX_PREVIEW_LINES)
+        .map(|line| {
+            if line.chars().count() > MAX_PREVIEW_LINE_LEN {
+                let mut truncated: String = line.chars().take(MAX_PREVIEW_LINE_LEN).collect();
+                truncated.push_str("...");
+                truncated
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Normalize Windows CRLF pairs to LF while retaining the normalized byte
@@ -2712,8 +2779,96 @@ mod tests {
             err.contains("search and replace are identical"),
             "error must explain the no-op input: {err}"
         );
+        // #5003 - the diagnostic must help the model self-correct: it should
+        // size the payload and point at the root cause instead of a bare
+        // "no change intended".
+        assert!(
+            err.contains("10 chars"),
+            "error should size the payload: {err}"
+        );
+        assert!(
+            err.contains("Recovery"),
+            "error should offer recovery: {err}"
+        );
         let unchanged = fs::read_to_string(&test_file).expect("read");
         assert_eq!(unchanged, "a := \"foo\"");
+    }
+
+    #[test]
+    fn test_edit_payload_rejects_unbalanced_preprocessor() {
+        // #5003 - search is a complete #if 0 block; replace loses the #endif.
+        let search = "#if 0\nold code\n#endif\n";
+        let replace_missing_close = "#if 1\nnew code\n";
+        assert!(
+            edit_payload_looks_corrupted(search, replace_missing_close).is_some(),
+            "replace missing #endif must be rejected"
+        );
+
+        // Reverse: an orphan #endif in replace is rejected too.
+        let replace_extra_close = "#if 1\nnew code\n#endif\n#endif\n";
+        assert!(
+            edit_payload_looks_corrupted(search, replace_extra_close).is_some(),
+            "replace with orphan #endif must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_edit_payload_accepts_balanced_preprocessor() {
+        // Balanced full-block replacement is allowed.
+        let search = "#if 0\nold code\n#endif\n";
+        let replace = "#if 1\nnew code\n#endif\n";
+        assert!(edit_payload_looks_corrupted(search, replace).is_none());
+
+        // One-line toggle #if 0 -> #if 1 (net +1 on both sides) is allowed.
+        assert!(edit_payload_looks_corrupted("#if 0\n", "#if 1\n").is_none());
+
+        // In-block local edit (no directives) is allowed.
+        assert!(edit_payload_looks_corrupted("old code\n", "new code\n").is_none());
+
+        // Non-C code without #if/#endif is unaffected.
+        assert!(edit_payload_looks_corrupted("fn foo() {}", "fn bar() {}").is_none());
+    }
+
+    #[test]
+    fn test_preview_search_for_error_truncates() {
+        let long_line = "x".repeat(200);
+        let search = format!("{long_line}\nsecond line\nthird line\nfourth line\n");
+        let preview = preview_search_for_error(&search);
+        assert!(preview.lines().count() <= 3);
+        assert!(preview.contains("..."));
+        assert!(!preview.contains("fourth line"));
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_not_found_shows_search_preview() {
+        // #5003 - when search misses, the error should preview the search text
+        // so the model can compare what it searched for against the file.
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        let test_file = tmp.path().join("preview.txt");
+        fs::write(&test_file, "foo bar baz").expect("write");
+        read_before_edit(&ctx, "preview.txt").await;
+
+        let tool = EditFileTool;
+        let result = tool
+            .execute(
+                json!({
+                    "path": "preview.txt",
+                    "search": "first line\nsecond line\n",
+                    "replace": "changed"
+                }),
+                &ctx,
+            )
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Search string not found"));
+        assert!(
+            err.contains("first line"),
+            "error should preview search text: {err}"
+        );
     }
 
     /// #157 — When the model uses `replacement` instead of `replace`,
