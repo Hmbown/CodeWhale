@@ -4129,23 +4129,6 @@ async fn run_event_loop(
                         // composer receipt), regardless of notification method
                         // or platform.
                         if status == crate::core::events::TurnOutcomeStatus::Completed {
-                            // Debt ledger completion-gate: after every completed
-                            // turn, check whether there are unresolved entries
-                            // the agent should address before claiming the task is
-                            // done (#2127). This runs autonomously — no tool call
-                            // required — so the agent can't forget to check.
-                            if let Ok(ledger) = crate::slop_ledger::SlopLedger::load()
-                                && ledger.has_open_entries()
-                                && let Some(gate_msg) = ledger.completion_gate_summary()
-                            {
-                                let short = gate_msg.lines().nth(4).unwrap_or("review before done");
-                                app.push_status_toast(
-                                    format!("⚠️ Debt ledger: {short}"),
-                                    crate::tui::app::StatusToastLevel::Warning,
-                                    Some(12_000),
-                                );
-                            }
-
                             let tool_count = app.tool_evidence.len();
                             let mut receipt = "✓ turn completed".to_string();
                             if tool_count > 0 {

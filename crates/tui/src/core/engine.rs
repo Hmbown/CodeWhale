@@ -4318,25 +4318,12 @@ impl Engine {
         removed
     }
 
-    /// Merge working-set pins with the mutable completion gate carried by the
-    /// current top-level user turn. The exact message identity matters: an
-    /// unchanged ledger can produce identical gate text on older turns, and
-    /// pinning every historical copy would defeat compaction.
     fn compaction_pins_for_messages(
         &self,
         messages: &[Message],
         working_set: &crate::working_set::WorkingSet,
-        active_slop_gate_message: Option<&Message>,
     ) -> Vec<usize> {
         let mut pins = working_set.pinned_message_indices(messages, &self.session.workspace);
-
-        if let Some(active_message) = active_slop_gate_message
-            && let Some(index) = messages
-                .iter()
-                .rposition(|message| message == active_message)
-        {
-            pins.push(index);
-        }
 
         pins.sort_unstable();
         pins.dedup();
@@ -4347,7 +4334,6 @@ impl Engine {
         &mut self,
         client: &dyn crate::core::model_client::ModelClient,
         reason: &str,
-        active_slop_gate_message: Option<&Message>,
     ) -> bool {
         let Some(target_budget) = context_input_budget_for_route(
             self.api_provider,
@@ -4385,11 +4371,8 @@ impl Engine {
         // Previously this passed None/None, so a compaction routed here (which,
         // on large windows, is the path that actually fires) could summarize
         // away pinned errors, patches, and the files the user is editing.
-        let compaction_pins = self.compaction_pins_for_messages(
-            &self.session.messages,
-            &self.session.working_set,
-            active_slop_gate_message,
-        );
+        let compaction_pins =
+            self.compaction_pins_for_messages(&self.session.messages, &self.session.working_set);
         let compaction_paths = self.session.working_set.top_paths(24);
 
         match compact_messages_safe(
