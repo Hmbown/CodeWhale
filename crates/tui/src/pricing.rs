@@ -600,9 +600,9 @@ fn known_pricing_for_model(model_lower: &str) -> Option<ModelPricing> {
         // Moonshot K2.7 Code cache-read rate per
         // https://platform.kimi.ai/docs/pricing/chat-k27-code
         "moonshotai/kimi-k2.7-code" | "kimi-k2.7-code" => Some(usd_only_pricing(0.19, 0.95, 4.00)),
-        // MiniMax-M3 uses the lower standard tier for metadata-only lookups;
-        // cost estimation selects the correct tier from total input usage.
-        "minimax-m3" => Some(minimax_m3_standard_pricing(false)),
+        // MiniMax-M3 is priced at a flat standard tier; metadata lookups and
+        // turn estimation should agree on the same rate.
+        "minimax-m3" => Some(minimax_m3_standard_pricing()),
         "minimax-m2.7" => Some(usd_pricing_with_write(0.06, 0.30, 1.20, 0.375)),
         // gpt-5-codex is deprecated upstream on the ChatGPT-OAuth path
         // (successor: gpt-5.3-codex); API usage is still billed at these rates.
@@ -705,7 +705,6 @@ fn usd_pricing(
     }
 }
 
-const MINIMAX_M3_LONG_CONTEXT_THRESHOLD: u32 = 512_000;
 const OPENAI_LONG_CONTEXT_SURCHARGE_THRESHOLD: u32 = 272_000;
 
 /// OpenAI applies a higher price to the full request once these models exceed
@@ -737,12 +736,8 @@ fn direct_openai_long_context_tier_is_unpriced(
         && affected_model
 }
 
-fn minimax_m3_standard_pricing(long_context: bool) -> ModelPricing {
-    if long_context {
-        usd_only_pricing(0.12, 0.60, 2.40)
-    } else {
-        usd_only_pricing(0.06, 0.30, 1.20)
-    }
+fn minimax_m3_standard_pricing() -> ModelPricing {
+    usd_only_pricing(0.12, 0.60, 2.40)
 }
 
 fn is_minimax_m3(model: &str) -> bool {
@@ -752,11 +747,9 @@ fn is_minimax_m3(model: &str) -> bool {
     )
 }
 
-fn pricing_for_model_and_usage(model: &str, usage: &Usage) -> Option<ModelPricing> {
+fn pricing_for_model_and_usage(model: &str, _usage: &Usage) -> Option<ModelPricing> {
     if is_minimax_m3(model) {
-        return Some(minimax_m3_standard_pricing(
-            usage.input_tokens > MINIMAX_M3_LONG_CONTEXT_THRESHOLD,
-        ));
+        return Some(minimax_m3_standard_pricing());
     }
     pricing_for_model(model)
 }
@@ -2650,28 +2643,31 @@ mod tests {
     }
 
     #[test]
-    fn minimax_m3_standard_pricing_tracks_the_512k_input_boundary() {
+    fn minimax_m3_standard_pricing_is_flat_for_metadata_and_usage() {
+        let metadata_pricing = pricing_for_model_at("MiniMax-M3", Utc::now()).expect("M3 pricing");
+        assert_eq!(metadata_pricing.usd.input_cache_hit_per_million, 0.12);
+        assert_eq!(metadata_pricing.usd.input_cache_miss_per_million, 0.60);
+        assert_eq!(metadata_pricing.usd.output_per_million, 2.40);
+
         for model in ["MiniMax-M3", "minimax/minimax-m3"] {
-            for (input_tokens, cache_read, input, output) in
-                [(512_000, 0.06, 0.30, 1.20), (512_001, 0.12, 0.60, 2.40)]
-            {
+            for input_tokens in [1, 512_000, 512_001, 1_000_000] {
                 let usage = Usage {
                     input_tokens,
                     ..Usage::default()
                 };
                 let pricing = pricing_for_model_and_usage(model, &usage).expect("M3 pricing");
-                assert_eq!(pricing.usd.input_cache_hit_per_million, cache_read);
-                assert_eq!(pricing.usd.input_cache_miss_per_million, input);
-                assert_eq!(pricing.usd.output_per_million, output);
+                assert_eq!(pricing.usd.input_cache_hit_per_million, 0.12);
+                assert_eq!(pricing.usd.input_cache_miss_per_million, 0.60);
+                assert_eq!(pricing.usd.output_per_million, 2.40);
             }
             assert!(calculate_cache_savings(model, 1).is_none());
         }
     }
 
     #[test]
-    fn provider_scoped_minimax_m3_keeps_usage_tiers_for_both_wire_protocols() {
+    fn provider_scoped_minimax_m3_reports_the_flat_standard_rate() {
         for provider in [ApiProvider::Minimax, ApiProvider::MinimaxAnthropic] {
-            for (input_tokens, input_rate) in [(512_000, 0.30), (512_001, 0.60)] {
+            for input_tokens in [1, 512_000, 512_001, 1_000_000] {
                 let usage = Usage {
                     input_tokens,
                     ..Usage::default()
@@ -2683,7 +2679,7 @@ mod tests {
                     Utc::now(),
                 )
                 .expect("direct MiniMax route has authoritative pricing");
-                let expected = f64::from(input_tokens) / 1_000_000.0 * input_rate;
+                let expected = f64::from(input_tokens) / 1_000_000.0 * 0.60;
                 assert!((estimate.usd - expected).abs() < 1e-12, "{provider:?}");
             }
         }

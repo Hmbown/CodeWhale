@@ -721,8 +721,8 @@ fn bundled_asset_pricing_is_honest() {
     assert_eq!(cost.output, Some(4.40));
     assert_eq!(cost.cache_read, Some(0.26));
 
-    // M3 has input-length and service tiers that the flat catalog cost shape
-    // cannot represent, so the bundled route row stays honestly unpriced.
+    // M3 pricing is supplied by the runtime table, so the bundled catalog row
+    // stays honestly unpriced here.
     let minimax_m3 = find(&rows, "minimax-anthropic", "MiniMax-M3");
     assert!(minimax_m3.cost.is_none());
 
