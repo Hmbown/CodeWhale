@@ -28,6 +28,11 @@ use std::sync::Mutex;
 
 static LOG_MUTEX: Mutex<()> = Mutex::new(());
 
+#[cfg(test)]
+#[allow(dead_code)] // Direct integration-harness inclusion only needs the read barrier.
+#[path = "test_env_lock.rs"]
+pub(crate) mod test_env_lock;
+
 // ---------------------------------------------------------------------------
 // Shell kind
 // ---------------------------------------------------------------------------
@@ -418,7 +423,7 @@ impl ShellDispatcher {
     fn detect_shell() -> ShellKind {
         #[cfg(test)]
         {
-            crate::test_support::with_test_env_lock(Self::detect_shell_unlocked)
+            test_env_lock::with_test_env_lock(Self::detect_shell_unlocked)
         }
         #[cfg(not(test))]
         {

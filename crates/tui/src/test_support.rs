@@ -2,9 +2,14 @@
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, OnceLock, TryLockError};
-use std::thread::ThreadId;
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+pub(crate) use crate::shell_dispatcher::test_env_lock::{
+    EnvScopeMembership, EnvScopeTicket, TestEnvLock, current_env_scope_generation,
+    current_thread_holds_test_env_lock, env_scope_ticket, join_env_scope, lock_test_env,
+    with_test_env_lock,
+};
 
 /// Process-wide state root for unit tests that do not intentionally provide an
 /// explicit config/settings path.
@@ -44,213 +49,9 @@ pub(crate) fn future_test_jwt(label: &str) -> String {
     format!("test.{payload}.{label}")
 }
 
-fn env_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
-
 fn state_io_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
-}
-
-/// Who currently counts as "inside" the process-wide env lock.
-///
-/// The owner is the thread holding [`TestEnvLock`]. `adopted` holds helper
-/// threads that owner explicitly enrolled with [`join_env_scope`] — see that
-/// function for why a *worker thread of the current test* must not be treated
-/// as a foreign reader.
-#[derive(Default)]
-struct EnvScope {
-    /// Bumped on every acquisition, so a ticket minted by an earlier test can
-    /// never enroll a thread into a later test's environment.
-    generation: u64,
-    owner: Option<ThreadId>,
-    adopted: Vec<ThreadId>,
-}
-
-fn env_scope() -> &'static Mutex<EnvScope> {
-    static SCOPE: OnceLock<Mutex<EnvScope>> = OnceLock::new();
-    SCOPE.get_or_init(|| Mutex::new(EnvScope::default()))
-}
-
-fn lock_env_scope() -> MutexGuard<'static, EnvScope> {
-    match env_scope().lock() {
-        Ok(scope) => scope,
-        Err(poisoned) => poisoned.into_inner(),
-    }
-}
-
-fn open_env_scope() {
-    let mut scope = lock_env_scope();
-    scope.generation = scope.generation.wrapping_add(1);
-    scope.owner = Some(std::thread::current().id());
-    scope.adopted.clear();
-}
-
-fn current_thread_owns_contended_env_lock() -> bool {
-    let scope = lock_env_scope();
-    let current = std::thread::current().id();
-    scope.owner == Some(current) || scope.adopted.contains(&current)
-}
-
-/// Proof that the calling thread owns a live [`lock_test_env`] scope, handed to
-/// a worker thread so it can join that scope with [`join_env_scope`].
-///
-/// Returns `None` when the caller is not the owner, so a ticket can never be
-/// minted on behalf of a test that did not seal the environment.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct EnvScopeTicket {
-    generation: u64,
-}
-
-impl EnvScopeTicket {
-    /// Which sealed environment this ticket authorizes. Callers that gate real
-    /// disk writes on a live scope key their bookkeeping by this value, so a
-    /// straggler from generation N can never be mistaken for work belonging to
-    /// generation N+1.
-    pub(crate) fn generation(&self) -> u64 {
-        self.generation
-    }
-}
-
-/// The generation of the env scope the *calling thread* is currently inside, as
-/// owner or as an [`join_env_scope`]-adopted worker; `None` when the thread is a
-/// foreign reader with no sealed environment of its own.
-///
-/// This is the authorization primitive for anything that must only touch disk on
-/// behalf of a test that actually sealed `HOME`. A process-global "writes are
-/// enabled" flag cannot answer that question: it is true for the whole time
-/// *some* test has sealed the environment, including for unrelated tests running
-/// in parallel that would then resolve — and write — that test's paths, or block
-/// on its env lock.
-pub(crate) fn current_env_scope_generation() -> Option<u64> {
-    let scope = lock_env_scope();
-    let current = std::thread::current().id();
-    if scope.owner == Some(current) || scope.adopted.contains(&current) {
-        Some(scope.generation)
-    } else {
-        None
-    }
-}
-
-pub(crate) fn env_scope_ticket() -> Option<EnvScopeTicket> {
-    let scope = lock_env_scope();
-    (scope.owner == Some(std::thread::current().id())).then_some(EnvScopeTicket {
-        generation: scope.generation,
-    })
-}
-
-/// Enroll the calling thread in the ticket's env scope for as long as the
-/// returned guard lives.
-///
-/// [`with_test_env_lock`] exists to stop a *foreign* test from resolving
-/// another test's temporary `HOME`. A helper thread doing work on behalf of the
-/// sealing test is not foreign: it must see that same temporary environment,
-/// and — decisively — it must not block on a mutex its own test holds for the
-/// whole test body. Blocking there is a lock-order inversion: the helper parks
-/// holding whatever lock it took first, and the test thread then parks waiting
-/// for that lock. Enrolling makes the barrier re-entrant for the helper, which
-/// is what makes the inversion impossible rather than merely unlikely.
-///
-/// Returns `None` (declining to enroll) when the scope has already closed or
-/// moved on, so a straggler thread from a finished test still gets the
-/// foreign-reader treatment.
-pub(crate) fn join_env_scope(ticket: Option<EnvScopeTicket>) -> Option<EnvScopeMembership> {
-    let ticket = ticket?;
-    let mut scope = lock_env_scope();
-    if scope.owner.is_none() || scope.generation != ticket.generation {
-        return None;
-    }
-    let thread = std::thread::current().id();
-    if !scope.adopted.contains(&thread) {
-        scope.adopted.push(thread);
-    }
-    Some(EnvScopeMembership {
-        generation: ticket.generation,
-        thread,
-    })
-}
-
-pub(crate) struct EnvScopeMembership {
-    generation: u64,
-    thread: ThreadId,
-}
-
-impl Drop for EnvScopeMembership {
-    fn drop(&mut self) {
-        let mut scope = lock_env_scope();
-        if scope.generation == self.generation {
-            scope.adopted.retain(|thread| *thread != self.thread);
-        }
-    }
-}
-
-/// Owned process-wide test-environment lock.
-///
-/// Clearing the owner before the underlying mutex unlocks keeps re-entrant
-/// reader detection exact; a stale thread id could otherwise let the previous
-/// owner bypass a newly acquired lock during its tiny owner-registration
-/// window. Closing the scope also evicts every adopted worker thread, so an
-/// enrollment cannot outlive the test that granted it.
-pub(crate) struct TestEnvLock {
-    _guard: MutexGuard<'static, ()>,
-}
-
-impl Drop for TestEnvLock {
-    fn drop(&mut self) {
-        let mut scope = lock_env_scope();
-        if scope.owner == Some(std::thread::current().id()) {
-            scope.owner = None;
-            scope.adopted.clear();
-        }
-    }
-}
-
-/// Acquire the process-wide env-var mutex.
-///
-/// If a prior test panicked while holding the lock, recover the guard instead
-/// of cascading failures across unrelated tests.
-pub(crate) fn lock_test_env() -> TestEnvLock {
-    let guard = match env_lock().lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    open_env_scope();
-    TestEnvLock { _guard: guard }
-}
-
-/// Read process-global test environment while respecting [`lock_test_env`].
-///
-/// Config-path writers hold the mutex for their whole test. Production path
-/// resolution normally only reads the environment, but those reads still have
-/// to wait or they can resolve another test's temporary config and later write
-/// into it. The owner check makes the barrier re-entrant for a test that reads
-/// its own guarded override.
-pub(crate) fn with_test_env_lock<T>(read: impl FnOnce() -> T) -> T {
-    if current_thread_owns_contended_env_lock() {
-        return read();
-    }
-
-    // Acquire through the owner-tracking guard so nested environment readers
-    // remain re-entrant. This matters for config loading: the outer override
-    // pass holds the barrier while helper functions read individual variables.
-    let _guard = lock_test_env();
-    read()
-}
-
-pub(crate) fn current_thread_holds_test_env_lock() -> bool {
-    match env_lock().try_lock() {
-        Ok(guard) => {
-            drop(guard);
-            false
-        }
-        Err(TryLockError::Poisoned(poisoned)) => {
-            drop(poisoned.into_inner());
-            false
-        }
-        Err(TryLockError::WouldBlock) => current_thread_owns_contended_env_lock(),
-    }
 }
 
 /// Serialize read/merge/write operations against the process-wide isolated
