@@ -192,7 +192,7 @@ pub fn render_ambient_life(
     inks: (Color, Color),
     lines: &[Line<'static>],
     elapsed_ms: u128,
-    animated: bool,
+    presence: f32,
     cursor: AmbientCursor,
     whale: WhaleCameo,
 ) -> AmbientFrameStats {
@@ -202,24 +202,24 @@ pub fn render_ambient_life(
 
     let density = LifeDensity::from_area(area);
     let mut stats = AmbientFrameStats::default();
-    let frame = build_frame_marks(
-        area, elapsed_ms, animated, density, cursor, whale, &mut stats,
-    );
-    paint_marks(area, buf, inks, lines, &frame, &mut stats);
+    // Positions always ride the live monotonic clock; `presence` fades the
+    // marks in and out, so the animated/static boundary eases instead of
+    // snapping fish between t=0 and their mid-path positions.
+    let frame = build_frame_marks(area, elapsed_ms, density, cursor, whale, &mut stats);
+    paint_marks(area, buf, inks, lines, &frame, presence, &mut stats);
     stats
 }
 
 fn build_frame_marks(
     area: Rect,
     elapsed_ms: u128,
-    animated: bool,
     density: LifeDensity,
     cursor: AmbientCursor,
     whale: WhaleCameo,
     stats: &mut AmbientFrameStats,
 ) -> FrameMarks {
     let mut marks = Vec::with_capacity(48);
-    let t = if animated { elapsed_ms } else { 0 };
+    let t = elapsed_ms;
 
     // Leave the empty-state brand band (center third) mostly clear so life
     // frames the room instead of littering the hero whale + status lines.
@@ -244,16 +244,11 @@ fn build_frame_marks(
     // Half-cycle head start: freshly opened water shows the school
     // mid-crossing instead of an empty entry beat.
     let school_clock = t.saturating_add(cycle_ms / 2);
-    let (cycle_index, cycle_step) = if animated {
-        (
-            school_clock / cycle_ms,
-            ((school_clock % cycle_ms) / SCHOOL_CELL_MS) as i32,
-        )
-    } else {
-        // Reduced motion: park the school mid-crossing, facing right.
-        (0, (travel / 2) as i32)
-    };
-    let swims_right = !animated || school_swims_right(cycle_index);
+    let (cycle_index, cycle_step) = (
+        school_clock / cycle_ms,
+        ((school_clock % cycle_ms) / SCHOOL_CELL_MS) as i32,
+    );
+    let swims_right = school_swims_right(cycle_index);
     // Alternate the travel band between crossings; both avoid the hero band.
     let swims_low = school_swims_low(cycle_index);
     let anchor_y = if swims_low {
@@ -276,11 +271,7 @@ fn build_frame_marks(
             i32::from(area.width) - cycle_step + i32::from(*dx)
         };
         // Slight per-fish vertical stagger + slow bob.
-        let bob = if animated {
-            sine_bob(t, 3_400 + (m as u128) * 640, 1)
-        } else {
-            0
-        };
+        let bob = sine_bob(t, 3_400 + (m as u128) * 640, 1);
         let mut y_i32 = i32::from(anchor_y) + i32::from(*dy) + i32::from(bob);
         // Fish flee the pointer in both dimensions (nearby motion only).
         if let Some(flee_ms) = cursor.flee_elapsed_ms {
@@ -308,13 +299,9 @@ fn build_frame_marks(
         if y > quiet_mid_lo && y < quiet_mid_hi {
             continue;
         }
-        let brightness = if animated {
-            FISH_BRIGHTNESS_FLOOR
-                + (1.0 - FISH_BRIGHTNESS_FLOOR)
-                    * wave01(t, FISH_WAVE_MS, (m as u128).saturating_mul(320))
-        } else {
-            0.7
-        };
+        let brightness = FISH_BRIGHTNESS_FLOOR
+            + (1.0 - FISH_BRIGHTNESS_FLOOR)
+                * wave01(t, FISH_WAVE_MS, (m as u128).saturating_mul(320));
         marks.push(AmbientMark {
             x: x_i32 as u16,
             y,
@@ -347,11 +334,7 @@ fn build_frame_marks(
         } else {
             area.width / 6
         };
-        let wobble = if animated {
-            sine_bob(t, 5_200 + phase, 1)
-        } else {
-            0
-        };
+        let wobble = sine_bob(t, 5_200 + phase, 1);
         let compact = density == LifeDensity::Sparse;
         let (dome_top, dome_skirt, tentacle_cols): (&[&str], &[&str], &[u16]) = if compact {
             (JELLY_DOME_TOP_COMPACT, JELLY_DOME_SKIRT_COMPACT, &[0, 2])
@@ -364,44 +347,23 @@ fn build_frame_marks(
             .min(area.width.saturating_sub(dome_w + 1));
         let rise_rows = u128::from(area.height.saturating_sub(4).max(1));
         let rise_period = 8_600u128.saturating_add((j as u128) * 1_400);
-        let y = if animated {
-            let risen = ((t.saturating_add(phase) / rise_period) % rise_rows) as u16;
-            area.height.saturating_sub(3).saturating_sub(risen)
-        } else {
-            // Parked mid-rise, just below the hero band: parking inside the
-            // band would be culled by the quiet-band rule and the static
-            // pose would vanish.
-            quiet_mid_hi
-                .saturating_add(2)
-                .min(area.height.saturating_sub(3))
-        };
+        let risen = ((t.saturating_add(phase) / rise_period) % rise_rows) as u16;
+        let y = area.height.saturating_sub(3).saturating_sub(risen);
         if y == 0 || in_band(y) {
             continue;
         }
-        let dome_brightness = if animated {
-            JELLY_BRIGHTNESS_FLOOR
-                + (1.0 - JELLY_BRIGHTNESS_FLOOR) * wave01(t, JELLY_PULSE_MS, phase)
-        } else {
-            0.6
-        };
-        let tentacle_brightness = if animated {
-            JELLY_BRIGHTNESS_FLOOR
-                + (1.0 - JELLY_BRIGHTNESS_FLOOR)
-                    * wave01(
-                        t.saturating_sub(JELLY_TENTACLE_LAG_MS),
-                        JELLY_PULSE_MS,
-                        phase,
-                    )
-        } else {
-            0.45
-        };
+        let dome_brightness = JELLY_BRIGHTNESS_FLOOR
+            + (1.0 - JELLY_BRIGHTNESS_FLOOR) * wave01(t, JELLY_PULSE_MS, phase);
+        let tentacle_brightness = JELLY_BRIGHTNESS_FLOOR
+            + (1.0 - JELLY_BRIGHTNESS_FLOOR)
+                * wave01(
+                    t.saturating_sub(JELLY_TENTACLE_LAG_MS),
+                    JELLY_PULSE_MS,
+                    phase,
+                );
         // The dome opens/closes on the same clock as its glow; the parked
         // pose holds the half-pulsed (contracted) frame.
-        let pulse_frame = if animated {
-            usize::from(wave01(t, JELLY_PULSE_MS, phase) > 0.5)
-        } else {
-            1
-        };
+        let pulse_frame = usize::from(wave01(t, JELLY_PULSE_MS, phase) > 0.5);
         let skirt_row = y.saturating_add(1);
         let tentacle_row = y.saturating_add(2);
         // Treat the silhouette as one visual unit. The former per-row quiet
@@ -429,15 +391,11 @@ fn build_frame_marks(
             // Each column runs the sway table with its own phase offset
             // so the trio lags left-to-right; the parked pose holds a
             // mid-sway frame.
-            let sway = if animated {
-                let frame = t
-                    .saturating_add(phase)
-                    .saturating_add((col as u128) * JELLY_TENTACLE_PHASE_STEP_MS)
-                    / JELLY_TENTACLE_SWAY_MS;
-                JELLY_TENTACLE_FRAMES[(frame as usize) % JELLY_TENTACLE_FRAMES.len()]
-            } else {
-                JELLY_TENTACLE_FRAMES[1]
-            };
+            let frame = t
+                .saturating_add(phase)
+                .saturating_add((col as u128) * JELLY_TENTACLE_PHASE_STEP_MS)
+                / JELLY_TENTACLE_SWAY_MS;
+            let sway = JELLY_TENTACLE_FRAMES[(frame as usize) % JELLY_TENTACLE_FRAMES.len()];
             marks.push(AmbientMark {
                 x: x.saturating_add(dx),
                 y: tentacle_row,
@@ -460,13 +418,9 @@ fn build_frame_marks(
             area.width.saturating_mul(7) / 8
         };
         let rise_period = 3_200u128.saturating_add(phase % 900);
-        let rise = if animated {
-            let cycle = (t.saturating_add(phase) % rise_period) as f64 / rise_period as f64;
-            let max_rise = area.height.saturating_sub(3) as f64;
-            (cycle * max_rise) as u16
-        } else {
-            area.height / 4
-        };
+        let cycle = (t.saturating_add(phase) % rise_period) as f64 / rise_period as f64;
+        let max_rise = area.height.saturating_sub(3) as f64;
+        let rise = (cycle * max_rise) as u16;
         let boost = if cursor.flee_elapsed_ms.is_some() && column.abs_diff(ptr) < 10 {
             2
         } else {
@@ -481,16 +435,8 @@ fn build_frame_marks(
         if y > quiet_mid_lo && y < quiet_mid_hi {
             continue;
         }
-        let glyph = if animated {
-            ["·", "˚", "·", "°"][((t.saturating_add(phase)) / 320) as usize % 4]
-        } else {
-            "·"
-        };
-        let brightness = if animated {
-            glint01(t, 2_600 + phase % 700, 600, BUBBLE_BRIGHTNESS_FLOOR, phase)
-        } else {
-            BUBBLE_BRIGHTNESS_FLOOR
-        };
+        let glyph = ["·", "˚", "·", "°"][((t.saturating_add(phase)) / 320) as usize % 4];
+        let brightness = glint01(t, 2_600 + phase % 700, 600, BUBBLE_BRIGHTNESS_FLOOR, phase);
         marks.push(AmbientMark {
             x: column.min(area.width.saturating_sub(1)),
             y,
@@ -645,8 +591,14 @@ fn paint_marks(
     inks: (Color, Color),
     lines: &[Line<'static>],
     frame: &FrameMarks,
+    presence: f32,
     stats: &mut AmbientFrameStats,
 ) {
+    if presence <= 0.0 {
+        // Fully static water: nothing to paint (all marks invisible).
+        return;
+    }
+    let presence = presence.clamp(0.0, 1.0);
     #[derive(Clone, Copy)]
     enum SkipReason {
         Text,
@@ -833,13 +785,16 @@ fn paint_marks(
         for (offset, ch) in mark.glyph.chars().enumerate() {
             let cell = &mut buf[(area.x + mark_x + offset as u16, area.y + mark.y)];
             // Glow language: lerp the mark's ink up from the water the cell
-            // already sits in, at the entity's time-varying brightness.
+            // already sits in, at the entity's time-varying brightness. The
+            // overall lerp is additionally scaled by life presence so marks
+            // fade in/out with the animated/static boundary.
             let fg = match (mark.brightness, cell.style().bg) {
                 (Some(amount), Some(water)) => {
-                    ocean::mix_colors(water, ink, amount.clamp(0.0, 1.0))
+                    ocean::mix_colors(water, ink, (amount * presence).clamp(0.0, 1.0))
                 }
                 (Some(amount), None) => ocean::scale_color(ink, amount.clamp(0.0, 1.0).max(0.4)),
-                (None, _) => ink,
+                (None, Some(water)) => ocean::mix_colors(water, ink, presence),
+                (None, None) => ocean::scale_color(ink, presence),
             };
             let mut style = Style::default().fg(fg);
             if let Some(m) = mark.style_mod {

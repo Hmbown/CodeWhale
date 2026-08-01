@@ -72,6 +72,8 @@ pub struct ChatWidget {
     ambient_inks: Option<(Color, Color)>,
     ocean_elapsed_ms: u128,
     ocean_animated: bool,
+    /// Fixed-point (0..=1000) life presence; see `ocean::life_presence`.
+    life_presence_fixed: u16,
     fish_flee_elapsed_ms: Option<u128>,
     ambient_life: bool,
     scroll_track: Color,
@@ -89,6 +91,16 @@ struct TranscriptScrollbar {
 
 impl ChatWidget {
     pub fn new(app: &mut App, area: Rect) -> Self {
+        let ocean_elapsed_ms = app.ocean_started_at.elapsed().as_millis();
+        Self::new_with_ocean_elapsed(app, area, ocean_elapsed_ms)
+    }
+
+    /// Build one render snapshot from an already sampled ocean clock.
+    ///
+    /// Production samples the monotonic clock in [`Self::new`]. Keeping the
+    /// sampled value as an explicit input here gives render tests a stable
+    /// frame without adding a second clock or freezing the runtime animation.
+    fn new_with_ocean_elapsed(app: &mut App, area: Rect, ocean_elapsed_ms: u128) -> Self {
         let content_area = area;
         let background = app.ui_theme.surface_bg;
         let ocean_ramp = app
@@ -100,7 +112,6 @@ impl ChatWidget {
             .ocean_treatment
             .supports_ambient_life()
             .then(|| crate::tui::ocean::ambient_inks(&app.ui_theme));
-        let ocean_elapsed_ms = app.ocean_started_at.elapsed().as_millis();
         let completion_elapsed_ms = (!app.low_motion && app.fancy_animations)
             .then_some(())
             .and(app.ocean_completion_started_at)
@@ -119,6 +130,19 @@ impl ChatWidget {
             && (render_empty_state
                 || browsing_history
                 || matches!(phase, ShellPhase::Working | ShellPhase::Verifying));
+        // Life presence eases the animated/static boundary as a pure function
+        // of the monotonic clocks (see ocean::life_presence): bursty fast
+        // streams ramp in, quiet waits settle out, never a hard snap.
+        let life_presence = crate::tui::ocean::life_presence(
+            app.ocean_completion_started_at
+                .map(|started| started.elapsed().as_millis()),
+            app.turn_started_at
+                .map(|started| started.elapsed().as_millis()),
+            ocean_animated,
+            browsing_history,
+            render_empty_state,
+        );
+        let life_presence_fixed = (life_presence * 1000.0).round().clamp(0.0, 1000.0) as u16;
         let ocean_column = ocean_ramp.map(|ramp| {
             crate::tui::ocean::OceanColumn::new(
                 ramp,
@@ -127,6 +151,7 @@ impl ChatWidget {
                 completion_elapsed_ms,
                 phase,
                 ocean_animated,
+                life_presence_fixed,
             )
         });
         let fish_flee_elapsed_ms = underwater_motion_enabled
@@ -161,6 +186,7 @@ impl ChatWidget {
                 ambient_inks,
                 ocean_elapsed_ms,
                 ocean_animated,
+                life_presence_fixed,
                 fish_flee_elapsed_ms,
                 // Reduced-motion users still get the quiet, static scene;
                 // only movement itself is opt-in.
@@ -549,6 +575,7 @@ impl ChatWidget {
             ambient_inks,
             ocean_elapsed_ms,
             ocean_animated,
+            life_presence_fixed,
             fish_flee_elapsed_ms,
             // Fish also accompany intentional transcript browsing. They only
             // occupy blank cells and are collision-checked, so history stays
@@ -859,7 +886,7 @@ impl ChatWidget {
                 inks,
                 &self.lines,
                 self.ocean_elapsed_ms,
-                self.ocean_animated,
+                self.ocean_presence_f32(),
                 cursor,
                 whale,
             );
@@ -874,6 +901,13 @@ impl ChatWidget {
                 );
             }
         }
+    }
+}
+
+impl ChatWidget {
+    /// Life presence as a 0..=1 fraction; drives ambient-life ink fading.
+    fn ocean_presence_f32(&self) -> f32 {
+        (f32::from(self.life_presence_fixed) / 1000.0).clamp(0.0, 1.0)
     }
 }
 
@@ -6189,13 +6223,25 @@ mod tests {
     #[test]
     fn underwater_launch_is_visibly_deep_and_preserves_text_cells() {
         let mut app = create_test_app();
-        app.workspace = PathBuf::from("/tmp/codewhale-test-workspace");
+        // App::new reads persisted presentation settings. Other tests swap the
+        // isolated settings home in parallel, so this visual contract must pin
+        // the treatment it is actually asserting instead of inheriting a
+        // transient Flat/Terminal choice from the process.
+        app.ui_theme = palette::UI_THEME;
+        app.ocean_treatment = crate::tui::ocean::OceanTreatment::Ombre;
+        app.low_motion = false;
+        app.fancy_animations = true;
+        app.workspace = PathBuf::from("codewhale-test-workspace");
         app.model = "deepseek-v4-pro".to_string();
 
         let area = Rect::new(0, 0, 100, 20);
         let base = app.ui_theme.surface_bg;
+        let context = format!("codewhale · {} · no git · mcp 0", app.workspace.display());
         let mut buf = Buffer::empty(area);
-        ChatWidget::new(&mut app, area).render(area, &mut buf);
+        // Sample one known point in the live motion path. The old test raced
+        // the scheduler between App construction and rendering, which could
+        // move the school off-screen on slower Windows runners.
+        ChatWidget::new_with_ocean_elapsed(&mut app, area, 0).render(area, &mut buf);
 
         assert_ne!(buf[(0, 0)].bg, buf[(0, 19)].bg);
         let rendered = buffer_text(&buf, area);
@@ -6215,8 +6261,7 @@ mod tests {
         let leads = rendered.matches("><o>").count() + rendered.matches("<o><").count();
         assert_eq!(leads, 1, "exactly one eyed lead fish:\n{rendered}");
 
-        let context = "codewhale · /tmp/codewhale-test-workspace · no git · mcp 0";
-        let context_x = ((100usize - UnicodeWidthStr::width(context)) / 2) as u16;
+        let context_x = ((100usize - UnicodeWidthStr::width(context.as_str())) / 2) as u16;
         let context_cell = (0..area.height)
             .find_map(|y| (buf[(context_x, y)].symbol() == "c").then_some((context_x, y)))
             .expect("context line");
