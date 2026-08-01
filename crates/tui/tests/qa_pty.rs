@@ -2746,7 +2746,7 @@ fn work_surface_file_mutation_modes_are_truthful_in_real_pty_frames() -> anyhow:
 /// Three-turn loopback fixture for the real screen acceptance path:
 /// `work_update` establishes canonical To-do/Work state, then an actual Bash
 /// call waits on a test-owned workspace sentinel before emitting enough exact
-/// output to exercise adaptive evidence, then a long final answer makes
+/// output to exercise the bounded plain preview, then a long final answer makes
 /// transcript retention and scrolling observable.
 fn spawn_tool_lifecycle_screen_fixture(
     release_signal: &str,
@@ -2863,15 +2863,20 @@ fn spawn_tool_lifecycle_screen_fixture(
                             .and_then(|message| message.get("content"))
                             .and_then(serde_json::Value::as_str)
                             .unwrap_or_default();
-                        if !bash_result.contains("Exact evidence retained")
-                            || !bash_result.contains("art_call_bash_pty")
+                        if !bash_result.contains(
+                            "of output omitted — view full output in the tool details view",
+                        ) || bash_result.contains("Exact evidence retained")
+                            || bash_result.contains("art_call_bash_pty")
+                            || bash_result.contains("retrieve_tool_result")
                             || bash_result.contains("PTY-EVIDENCE-DEEP-SENTINEL")
                             || bash_result.contains("/artifacts/")
                         {
                             contract_errors.push(format!(
-                                    "final request omitted the bounded session-owned Bash receipt (receipt={}, handle={}, deep_sentinel={}, artifact_path={})",
+                                    "final request violated the bounded plain Bash preview contract (preview={}, legacy_receipt={}, handle={}, retrieval_tool={}, deep_sentinel={}, artifact_path={})",
+                                    bash_result.contains("of output omitted — view full output in the tool details view"),
                                     bash_result.contains("Exact evidence retained"),
                                     bash_result.contains("art_call_bash_pty"),
+                                    bash_result.contains("retrieve_tool_result"),
                                     bash_result.contains("PTY-EVIDENCE-DEEP-SENTINEL"),
                                     bash_result.contains("/artifacts/"),
                                 ));
@@ -3812,8 +3817,8 @@ fn real_tool_lifecycle_crosses_work_status_resize_and_scroll_in_a_unix_pty() -> 
         h.frame().debug_dump()
     );
 
-    // The path-free evidence receipt is a real transcript row at every release
-    // geometry. Select that row with terminal mouse bytes, then exercise the
+    // The ordinary shortened-output hint is a real transcript row at every
+    // release geometry. Select it with terminal mouse bytes, then exercise the
     // shipped Alt/Option+V detail shortcut; screenshots remain genuine PTY
     // frames and never include a fabricated product surface.
     for (cols, rows) in [(80_u16, 24_u16), (100, 30), (140, 40)] {
@@ -3824,18 +3829,18 @@ fn real_tool_lifecycle_crosses_work_status_resize_and_scroll_in_a_unix_pty() -> 
             |frame| frame.rows() == rows && frame.cols() == cols,
             KEY_TIMEOUT,
         )?;
-        let receipt_visible = h.frame().contains("Exact evidence retained")
-            || scroll_until_with_motion(&mut h, ScrollDir::Up, "Exact evidence retained")
-            || scroll_until_with_motion(&mut h, ScrollDir::Down, "Exact evidence retained");
+        let hint_visible = h.frame().contains("Output shortened")
+            || scroll_until_with_motion(&mut h, ScrollDir::Up, "Output shortened")
+            || scroll_until_with_motion(&mut h, ScrollDir::Down, "Output shortened");
         assert!(
-            receipt_visible,
-            "evidence receipt is not reviewable at {cols}x{rows}:\n{}",
+            hint_visible,
+            "shortened-output hint is not reviewable at {cols}x{rows}:\n{}",
             h.frame().debug_dump()
         );
         let (row, col) = h
             .frame()
-            .find_text("Exact evidence retained")
-            .expect("visible selectable evidence receipt");
+            .find_text("Output shortened")
+            .expect("visible selectable shortened-output hint");
         h.send(keys::mouse::click(row, col))?;
         h.send(keys::key::alt('v'))?;
         h.wait_for(
@@ -3851,9 +3856,9 @@ fn real_tool_lifecycle_crosses_work_status_resize_and_scroll_in_a_unix_pty() -> 
         assert!(!frame.contains(".codewhale/sessions"));
         assert!(!frame.contains(ws.home().to_string_lossy().as_ref()));
         write_real_pty_evidence(
-            &format!("tool-lifecycle-evidence-detail-{cols}x{rows}"),
+            &format!("tool-lifecycle-output-detail-{cols}x{rows}"),
             &format!(
-                "size={cols}x{rows}\nreal_pty=true\nreceipt=selected\nshortcut=Alt+V\npath_leak=false"
+                "size={cols}x{rows}\nreal_pty=true\npreview=selected\nshortcut=Alt+V\npath_leak=false"
             ),
             frame,
         )?;
