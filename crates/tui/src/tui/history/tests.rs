@@ -414,7 +414,8 @@ fn render_spillover_annotation_truncates_to_width() {
         output_summary: None,
         is_diff: false,
     };
-    let lines = cell.lines_with_mode(40, true, super::RenderMode::Live);
+    let width = 80;
+    let lines = cell.lines_with_mode(width, true, super::RenderMode::Live);
     let rendered: String = lines
         .iter()
         .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
@@ -424,6 +425,7 @@ fn render_spillover_annotation_truncates_to_width() {
         "compact live rows should expose the calm expand affordance: {rendered:?}"
     );
     assert!(rendered.contains("opens full output"), "{rendered:?}");
+    assert!(text_display_width(&rendered) <= usize::from(width));
     assert!(!rendered.contains(long_path));
 }
 
@@ -482,7 +484,7 @@ fn adaptive_evidence_affordance_is_calm_path_free_and_width_bounded() {
         assert!(!rendered.contains("/Users"));
         assert!(!rendered.contains("hash.txt"));
         assert!(!rendered.contains("Option+V"));
-        if width >= 40 {
+        if usize::from(width) >= text_display_width(&expected) {
             assert_eq!(rendered, expected);
         }
     }

@@ -4404,9 +4404,9 @@ async fn tool_result_api_content_never_advertises_unowned_live_output_as_retriev
     assert!(content.contains("[TOOL_OUTPUT_RECEIPT]"));
     assert!(content.contains("tool: exec_shell"));
     assert!(content.contains("tool_call_id: call-live-big"));
-    assert!(content.contains("detail_handle: unavailable (sha256:"));
-    assert!(content.contains("retrieve: unavailable"));
-    assert!(content.contains("storage: no session-owned artifact was recorded"));
+    assert!(content.contains("full output in the tool details view"));
+    assert!(!content.contains("detail_handle"));
+    assert!(!content.contains("storage:"));
     assert!(!content.contains("retrieve_tool_result"));
     assert!(!content.contains(&raw));
     assert!(
