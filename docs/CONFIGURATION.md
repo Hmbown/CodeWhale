@@ -1809,9 +1809,10 @@ Notes:
 ### Goal loop (`[goal]`)
 
 Operate-mode goals run to their completion gate: the only terminal stops are a
-verified completion, a blocked report, or an exhausted token/time budget
-(#5052). A configurable safety backstop still halts a pathological loop that
-never emits a terminal signal:
+verified completion, a blocked report, or an exhausted configured token budget
+(#5052). The decision core also accepts an optional time budget, but the TUI
+does not currently configure or expose one. A configurable safety backstop
+still halts a pathological loop that never emits a terminal signal:
 
 ```toml
 [goal]
