@@ -59,6 +59,11 @@ const WORKFLOW_HANDOFF_MAX_CHARS: usize = 4_000;
 const WORKFLOW_RESULT_EVENTS_TAIL: usize = 50;
 /// Bounded tail for free-form progress lines in model-facing payloads.
 const WORKFLOW_RESULT_PROGRESS_TAIL: usize = 20;
+/// Bounded tail for rejected child dispatches in the model-facing payload.
+/// The durable run journal retains the complete failure ledger.
+const WORKFLOW_RESULT_DISPATCH_FAILURES_TAIL: usize = 12;
+/// Per-field cap for one model-facing dispatch-failure receipt.
+const WORKFLOW_RESULT_DISPATCH_FAILURE_FIELD_MAX_CHARS: usize = 320;
 /// Char cap for the VM `result` / `verification` values in model-facing
 /// payloads (matches the handoff compaction budget); oversized values
 /// collapse to a preview plus a journal pointer.
@@ -1848,6 +1853,8 @@ fn workflow_result_for(
         "event_count": summary.event_count,
         "events_returned": bounds.events_returned,
         "events_omitted": bounds.events_omitted,
+        "dispatch_failures_returned": bounds.dispatch_failures_returned,
+        "dispatch_failures_omitted": bounds.dispatch_failures_omitted,
         "events_dropped": summary.events_dropped,
         "last_event_type": summary.last_event_type,
         "leaf_count": summary.leaf_count,
@@ -1873,6 +1880,9 @@ struct RunPayloadBounds {
     events_returned: usize,
     events_omitted: usize,
     progress_omitted: usize,
+    dispatch_failures_returned: usize,
+    dispatch_failures_omitted: usize,
+    dispatch_failure_fields_truncated: usize,
     result_truncated: bool,
     leaf_outputs_truncated: usize,
 }
@@ -1881,6 +1891,8 @@ impl RunPayloadBounds {
     fn truncated(&self) -> bool {
         self.events_omitted > 0
             || self.progress_omitted > 0
+            || self.dispatch_failures_omitted > 0
+            || self.dispatch_failure_fields_truncated > 0
             || self.result_truncated
             || self.leaf_outputs_truncated > 0
     }
@@ -1892,6 +1904,8 @@ impl RunPayloadBounds {
 ///
 /// - `events`: newest `WORKFLOW_RESULT_EVENTS_TAIL` entries.
 /// - `progress`: newest `WORKFLOW_RESULT_PROGRESS_TAIL` lines.
+/// - `dispatch_failures`: newest `WORKFLOW_RESULT_DISPATCH_FAILURES_TAIL`
+///   entries with bounded string fields.
 /// - `result` / `verification`: collapsed to a preview + journal pointer
 ///   when the serialized value exceeds `WORKFLOW_RESULT_VALUE_MAX_CHARS`.
 /// - `execution.leaf_results[*].output`: per-leaf preview capped at
@@ -1940,6 +1954,48 @@ fn bounded_run_record_value(
             json!(format!(
                 "showing the newest {WORKFLOW_RESULT_PROGRESS_TAIL} of {} progress lines; full log: {journal}",
                 omitted + WORKFLOW_RESULT_PROGRESS_TAIL,
+            )),
+        );
+    }
+
+    if let Some(failures) = obj
+        .get_mut("dispatch_failures")
+        .and_then(Value::as_array_mut)
+    {
+        if failures.len() > WORKFLOW_RESULT_DISPATCH_FAILURES_TAIL {
+            let omitted = failures.len() - WORKFLOW_RESULT_DISPATCH_FAILURES_TAIL;
+            failures.drain(..omitted);
+            bounds.dispatch_failures_omitted = omitted;
+        }
+        bounds.dispatch_failures_returned = failures.len();
+        for failure in failures {
+            let Some(fields) = failure.as_object_mut() else {
+                continue;
+            };
+            for key in ["label", "phase", "message"] {
+                let Some(slot) = fields.get_mut(key) else {
+                    continue;
+                };
+                let Some(raw) = slot.as_str() else {
+                    continue;
+                };
+                if raw.chars().count() > WORKFLOW_RESULT_DISPATCH_FAILURE_FIELD_MAX_CHARS {
+                    *slot = Value::String(truncate_chars(
+                        raw,
+                        WORKFLOW_RESULT_DISPATCH_FAILURE_FIELD_MAX_CHARS,
+                    ));
+                    bounds.dispatch_failure_fields_truncated += 1;
+                }
+            }
+        }
+    }
+    if bounds.dispatch_failures_omitted > 0 || bounds.dispatch_failure_fields_truncated > 0 {
+        obj.insert(
+            "dispatch_failures_note".to_string(),
+            json!(format!(
+                "showing {} of {} dispatch failures with bounded fields; full ledger: {journal}",
+                bounds.dispatch_failures_returned,
+                bounds.dispatch_failures_returned + bounds.dispatch_failures_omitted,
             )),
         );
     }
@@ -6906,6 +6962,10 @@ export default workflow({
             typo.contains("worker, scout, planner, reviewer, builder"),
             "{typo}"
         );
+        assert!(
+            typo.contains("consultant/oracle/advisor"),
+            "accepted advisory aliases must remain visible in the guidance: {typo}"
+        );
 
         // `custom` is Agent-only; the rejection says why and what to use.
         let custom = parse_plan_agent_type(Some("custom"))
@@ -9267,6 +9327,14 @@ FINAL RECEIPT
         for index in 0..60 {
             record.progress.push(format!("progress line {index}"));
         }
+        for index in 0..40u64 {
+            record.dispatch_failures.push(WorkflowDispatchFailure {
+                at_ms: index,
+                label: Some(format!("rejected-{index}")),
+                phase: Some("fan-out".to_string()),
+                message: format!("dispatch rejected {index}: {}", "x".repeat(2_000)),
+            });
+        }
         record.result = Some(json!({ "blob": "r".repeat(10_000) }));
         record.execution = Some(IrWorkflowExecution {
             status: IrWorkflowRunStatus::Succeeded,
@@ -9316,6 +9384,29 @@ FINAL RECEIPT
         assert_eq!(progress.len(), WORKFLOW_RESULT_PROGRESS_TAIL, "{payload}");
         assert!(payload.get("progress_note").is_some(), "{payload}");
 
+        let dispatch_failures = payload["dispatch_failures"]
+            .as_array()
+            .expect("dispatch failures");
+        assert_eq!(
+            dispatch_failures.len(),
+            WORKFLOW_RESULT_DISPATCH_FAILURES_TAIL,
+            "{payload}"
+        );
+        assert_eq!(dispatch_failures[0]["at_ms"], 28);
+        assert!(
+            dispatch_failures.iter().all(|failure| failure["message"]
+                .as_str()
+                .is_some_and(|message| message.chars().count()
+                    <= WORKFLOW_RESULT_DISPATCH_FAILURE_FIELD_MAX_CHARS)),
+            "{dispatch_failures:?}"
+        );
+        assert!(
+            payload["dispatch_failures_note"]
+                .as_str()
+                .is_some_and(|note| note.contains("workflow-runs.jsonl")),
+            "{payload}"
+        );
+
         // Oversized VM result collapses to a preview with a journal pointer.
         assert_eq!(payload["result"]["truncated"], true, "{payload}");
         assert!(
@@ -9345,6 +9436,11 @@ FINAL RECEIPT
         assert_eq!(metadata["events_returned"], WORKFLOW_RESULT_EVENTS_TAIL);
         assert_eq!(metadata["events_omitted"], 150);
         assert_eq!(metadata["event_count"], 200);
+        assert_eq!(
+            metadata["dispatch_failures_returned"],
+            WORKFLOW_RESULT_DISPATCH_FAILURES_TAIL
+        );
+        assert_eq!(metadata["dispatch_failures_omitted"], 28);
         assert_eq!(metadata["truncated"], true);
         assert!(
             metadata["journal_path"]
