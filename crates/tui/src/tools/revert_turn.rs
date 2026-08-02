@@ -74,6 +74,7 @@ impl ToolSpec for RevertTurnTool {
 
         let workspace = context.workspace.clone();
         let label = format!("revert_turn(offset={offset})");
+        let session = context.state_namespace.clone();
         let result = tokio::task::spawn_blocking(move || -> Result<String, String> {
             let repo = SnapshotRepo::open_or_init(&workspace)
                 .map_err(|e| format!("Snapshot repo init failed: {e}"))?;
@@ -84,9 +85,17 @@ impl ToolSpec for RevertTurnTool {
             let snapshots = repo
                 .list((MAX_OFFSET as usize).saturating_mul(2) + 16)
                 .map_err(|e| format!("Snapshot list failed: {e}"))?;
+            let has_tagged = snapshots.iter().any(|s| s.session_id.is_some());
             let pre_turns: Vec<_> = snapshots
                 .into_iter()
                 .filter(|s| s.label.starts_with("pre-turn:"))
+                .filter(|s| {
+                    // On session-tagged chains only the current session's
+                    // snapshots are eligible, mirroring /undo's scoping so
+                    // the model can't roll back another conversation's work.
+                    // Fully legacy chains keep the old behavior.
+                    !has_tagged || s.session_id.as_deref() == Some(session.as_str())
+                })
                 .collect();
             let target = pre_turns
                 .get((offset - 1) as usize)

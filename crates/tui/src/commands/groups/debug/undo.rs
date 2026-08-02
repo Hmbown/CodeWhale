@@ -143,6 +143,16 @@ fn tool_result_id(block: &ContentBlock) -> Option<&String> {
 pub fn patch_undo(app: &mut App) -> CommandResult {
     let workspace = app.workspace.clone();
 
+    // Trust gate: restoring workspace files is a one-shot mutation. Align
+    // with `/restore` — require trusted mode (Full Access or `/trust on`)
+    // so a stray `/undo` can't silently roll back the working tree.
+    if !(app.yolo || app.trust_mode) {
+        return CommandResult::message(
+            "Refusing to undo workspace files outside trusted mode.\n\
+             Run `/trust on` or select Full Access with Shift+Tab, then re-run `/undo`.",
+        );
+    }
+
     let repo = match crate::snapshot::SnapshotRepo::open_or_init(&workspace) {
         Ok(r) => r,
         Err(e) => {
@@ -153,7 +163,7 @@ pub fn patch_undo(app: &mut App) -> CommandResult {
         }
     };
 
-    let snapshots = match repo.list(20) {
+    let snapshots = match repo.list(100) {
         Ok(s) => s,
         Err(e) => {
             return CommandResult::error(format!("Failed to list snapshots: {e}"));
@@ -164,23 +174,56 @@ pub fn patch_undo(app: &mut App) -> CommandResult {
         return CommandResult::message("No snapshots found to undo — nothing to revert.");
     }
 
-    // Prefer the newest revertable `tool:` / `pre-turn:` snapshot whose
-    // tracked content differs from the current workspace. This lets
-    // repeated `/undo` walk back through older snapshots instead of
-    // restoring the same no-op target forever.
-    let target = snapshots
-        .iter()
+    // Scope candidates to the current session when it is known. Snapshots
+    // taken before session tagging (`session_id == None`) may belong to a
+    // *different* conversation on the same workspace; auto-restoring them
+    // is what caused cross-session rollbacks. Once the chain has *any*
+    // tagged snapshot we never auto-pick untagged ones; when the current
+    // session id is known, a fully legacy (untagged) chain yields zero
+    // candidates and `/undo` safely degrades to conversation undo. Only
+    // when no session id is known at all (fresh process, `/clear`) does a
+    // legacy chain fall back to the newest-candidate walk.
+    let current_session = app.current_session_id.as_deref();
+    let has_tagged = snapshots.iter().any(|s| s.session_id.is_some());
+    let candidates: Vec<crate::snapshot::Snapshot> = snapshots
+        .into_iter()
         .filter(|s| s.label.starts_with("tool:") || s.label.starts_with("pre-turn:"))
-        .find(|s| match repo.work_tree_matches_snapshot(&s.id) {
-            Ok(matches) => !matches,
-            Err(_) => true,
-        });
+        .filter(|s| match current_session {
+            Some(sid) => s.session_id.as_deref() == Some(sid),
+            None if has_tagged => false,
+            None => true,
+        })
+        .collect();
+
+    if candidates.is_empty() {
+        return CommandResult::message(
+            "No undoable snapshots for the current session — nothing to revert.",
+        );
+    }
+
+    // Pick the newest candidate whose tree differs from the current
+    // workspace. On a session-tagged chain the candidate set is already
+    // scoped to this conversation, so skipping identical snapshots keeps
+    // repeated `/undo` working without ever crossing into another
+    // session. On a legacy chain we only ever consider the newest
+    // candidate — walking further back has no session boundary to stop
+    // us from rolling back someone else's work.
+    let differs = |s: &&crate::snapshot::Snapshot| {
+        matches!(repo.work_tree_matches_snapshot(&s.id), Ok(false))
+    };
+    let target = if has_tagged {
+        candidates.iter().find(differs)
+    } else {
+        candidates.iter().take(1).find(differs)
+    };
 
     let Some(target) = target else {
         return CommandResult::message(
-            "No older tool or pre-turn snapshots differ from the current workspace — nothing to revert.",
+            "No undoable snapshot differs from the current workspace — nothing to revert.",
         );
     };
+
+    }
 
     if let Err(e) = repo.restore(&target.id) {
         return CommandResult::error(format!("Restore failed: {e}"));

@@ -1216,6 +1216,7 @@ mod tests {
             id: crate::snapshot::SnapshotId(id.to_string()),
             label: label.to_string(),
             timestamp,
+            session_id: None,
         }
     }
 

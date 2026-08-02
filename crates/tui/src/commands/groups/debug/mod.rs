@@ -188,12 +188,15 @@ pub(in crate::commands) fn dispatch(
         "diff" => undo::diff(app),
         "undo" => {
             // Try surgical patch-undo first; fall back to conversation undo
-            // if no snapshots are available or if the snapshot undo couldn't
-            // find anything useful.
+            // when there is no snapshot-level change to revert. Never fall
+            // through when the trusted-mode gate refused the file rollback —
+            // that would silently crop the conversation instead of telling
+            // the user to switch modes.
             let result = undo::patch_undo(app);
             if result.message.as_deref().is_none_or(|m| {
                 m.starts_with("No snapshots found")
                     || m.starts_with("No older tool or pre-turn")
+                    || m.starts_with("No undoable snapshot")
                     || m.starts_with("Snapshot repo")
             }) {
                 undo::undo_conversation(app)
