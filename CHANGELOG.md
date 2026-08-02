@@ -113,6 +113,10 @@ terminal width, and Windows installation.
 - Shared CI now handles bot-authored issue-link checks, provisions cargo-deny's
   toolchain, and fetches the locked test graph before offline runtime-budget
   validation.
+- Re-quote each linker argument in the Windows OpenHarmony clang launcher so a
+  spaced SDK path (e.g. the default `D:\DevEco Studio\...` install) keeps its
+  `--sysroot` intact through the final Rust link, and extend the no-SDK release
+  guard to keep the re-quoting contract (PR #5095).
 
 ### Removed
 
@@ -133,6 +137,9 @@ terminal width, and Windows installation.
   multilingual, CRLF-heavy File-edit failure report in issue #5003.
 - [An Ziwu](https://github.com/MuRongMoQing) (`@MuRongMoQing`) reported the
   Windows PATH-overwrite defect in issue #4685.
+- [shenjackyuanjie](https://github.com/shenjackyuanjie) (`@shenjackyuanjie`)
+  fixed the Windows OpenHarmony linker re-quoting for spaced SDK paths in
+  PR #5095.
 
 ## [0.9.3] - 2026-07-31
 
