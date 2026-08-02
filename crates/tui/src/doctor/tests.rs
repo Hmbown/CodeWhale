@@ -233,3 +233,29 @@ fn structural_url_authority_omits_every_secret_capable_component() {
         assert!(!authority.contains(sentinel));
     }
 }
+
+#[test]
+fn credential_shaped_config_values_are_flagged_by_key_name_only() {
+    let raw = r#"
+# comment with sk-not-a-real-line
+model = "deepseek-v4-flash"
+base_url = "https://api.moonshot.ai/kimi-code/v1"
+chatgpt_access_token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.payload.signature"
+moonshot_api_key = "[redacted]"
+provider_api_key = "sk-abc123def456ghi789jkl012"
+workspace_token_note = "short"
+random_id = "0123456789abcdef0123456789abcdef"
+"#;
+    let flagged = super::config_credential_shaped_keys(raw);
+    assert_eq!(flagged, vec!["chatgpt_access_token", "provider_api_key"]);
+}
+
+#[test]
+fn credential_scan_ignores_urls_models_and_redacted_entries() {
+    let raw = r#"
+model = "kimi-k3-instruct-preview-2026"
+endpoint = "https://example.com/v1?key=nope"
+api_key = "[redacted]"
+"#;
+    assert!(super::config_credential_shaped_keys(raw).is_empty());
+}

@@ -154,6 +154,78 @@ pub(crate) fn secret_backend_human_lines(
     lines
 }
 
+/// Report key names — never values — for config entries whose value is
+/// shaped like a bearer credential. `config.toml` is plain text, not a
+/// secret store; doctor warns so tokens migrate to the secret backend
+/// (morning-report issue: a plaintext OAuth token sat beside a `[redacted]`
+/// sibling entry).
+pub(crate) fn config_credential_shaped_keys(raw: &str) -> Vec<String> {
+    fn strong_shape(value: &str) -> bool {
+        const PREFIXES: [&str; 9] = [
+            "sk-",
+            "sk_",
+            "xai-",
+            "ghp_",
+            "gho_",
+            "github_pat_",
+            "xoxb-",
+            "xoxp-",
+            "eyJ",
+        ];
+        value.len() >= 20 && PREFIXES.iter().any(|prefix| value.starts_with(prefix))
+    }
+    fn suspect_key(key: &str) -> bool {
+        let key = key.to_ascii_lowercase();
+        [
+            "token",
+            "secret",
+            "password",
+            "credential",
+            "api_key",
+            "apikey",
+            "access_key",
+        ]
+        .iter()
+        .any(|needle| key.contains(needle))
+    }
+    fn random_shape(value: &str) -> bool {
+        value.len() >= 24
+            && value
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+            && value.chars().any(|ch| ch.is_ascii_digit())
+            && value.chars().any(|ch| ch.is_ascii_alphabetic())
+    }
+
+    let mut flagged: Vec<String> = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim().trim_matches('"');
+        let value = value.trim();
+        let Some(value) = value
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+        else {
+            continue;
+        };
+        if value.is_empty() || value.eq_ignore_ascii_case("[redacted]") {
+            continue;
+        }
+        if (strong_shape(value) || (suspect_key(key) && random_shape(value)))
+            && !flagged.iter().any(|existing| existing == key)
+        {
+            flagged.push(key.to_string());
+        }
+    }
+    flagged
+}
+
 /// Return only the non-secret network authority of a configured URL.
 ///
 /// Userinfo, path, query keys and values, and fragments are all omitted because

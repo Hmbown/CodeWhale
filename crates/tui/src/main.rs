@@ -3715,6 +3715,18 @@ async fn run_doctor(
             "✓".truecolor(aqua_r, aqua_g, aqua_b),
             crate::utils::display_path(config_path)
         );
+        // Secret hygiene: name the keys, never the values. Plain-text config
+        // is not a secret store.
+        if let Ok(raw) = std::fs::read_to_string(config_path) {
+            let flagged = crate::doctor::config_credential_shaped_keys(&raw);
+            if !flagged.is_empty() {
+                println!(
+                    "  {} credential-shaped value(s) in config.toml ({}): move them to the secret backend, then scrub the file — config.toml is plain text",
+                    "!".truecolor(sky_r, sky_g, sky_b),
+                    flagged.join(", ")
+                );
+            }
+        }
     } else {
         println!(
             "  {} config.toml not found at {} (using defaults/env)",
