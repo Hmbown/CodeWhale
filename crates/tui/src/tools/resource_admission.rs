@@ -265,7 +265,7 @@ fn configured_heavy_command_limit() -> usize {
 }
 
 fn admission_root() -> PathBuf {
-    if let Some(home) = codewhale_paths::codewhale_home_override() {
+    if let Some(home) = codewhale_paths::codewhale_home_override().ok().flatten() {
         return home.join("resource-admission");
     }
     if let Some(home) = codewhale_paths::user_home() {

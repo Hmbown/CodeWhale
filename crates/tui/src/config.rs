@@ -3469,8 +3469,10 @@ impl Config {
         }
 
         if let Some(profile) = profile {
-            let Some(path) = resolve_load_config_path(config_path.map(Path::to_path_buf)) else {
-                return Some("an unresolved active config profile");
+            let path = match resolve_load_config_path(config_path.map(Path::to_path_buf)) {
+                Ok(Some(path)) => path,
+                Ok(None) => return Some("an unresolved active config profile"),
+                Err(_) => return Some("an invalid active config path override"),
             };
             let Some(parsed) = std::fs::read_to_string(path)
                 .ok()
@@ -3556,12 +3558,15 @@ impl Config {
             return ApprovalPolicyControl::Environment;
         }
 
-        let Some(path) = resolve_load_config_path(config_path.map(Path::to_path_buf)) else {
-            return if self.approval_policy.is_some() {
-                ApprovalPolicyControl::Ambiguous
-            } else {
-                ApprovalPolicyControl::Unset
-            };
+        let path = match resolve_load_config_path(config_path.map(Path::to_path_buf)) {
+            Ok(Some(path)) => path,
+            Ok(None) | Err(_) => {
+                return if self.approval_policy.is_some() {
+                    ApprovalPolicyControl::Ambiguous
+                } else {
+                    ApprovalPolicyControl::Unset
+                };
+            }
         };
         let parsed = std::fs::read_to_string(path)
             .ok()
@@ -3633,12 +3638,15 @@ impl Config {
             return ShellAccessControl::Environment;
         }
 
-        let Some(path) = resolve_load_config_path(config_path.map(Path::to_path_buf)) else {
-            return if self.allow_shell.is_some() {
-                ShellAccessControl::Ambiguous
-            } else {
-                ShellAccessControl::Unset
-            };
+        let path = match resolve_load_config_path(config_path.map(Path::to_path_buf)) {
+            Ok(Some(path)) => path,
+            Ok(None) | Err(_) => {
+                return if self.allow_shell.is_some() {
+                    ShellAccessControl::Ambiguous
+                } else {
+                    ShellAccessControl::Unset
+                };
+            }
         };
         let parsed = std::fs::read_to_string(path)
             .ok()
@@ -3814,7 +3822,7 @@ impl Config {
         profile: Option<&str>,
         environment_policy: ConfigEnvironmentPolicy,
     ) -> Result<Self> {
-        let path = resolve_load_config_path(path);
+        let path = resolve_load_config_path(path)?;
         let mut config = if let Some(path) = path.as_ref() {
             if path.exists() {
                 let contents = fs::read_to_string(path)
@@ -6368,17 +6376,34 @@ mod paths;
 use paths::{
     canonicalize_or_keep, codewhale_home_dir, default_config_path, default_managed_config_path,
     default_mcp_config_path, default_memory_path, default_notes_path, default_requirements_path,
-    default_skills_dir, env_config_path, expand_pathbuf, home_config_path, workspace_config_key,
+    default_skills_dir, env_config_path, expand_pathbuf, try_default_config_path,
+    workspace_config_key,
 };
 pub(crate) use paths::{effective_home_dir, expand_path};
 
 pub(crate) fn workspace_trust_config_candidate_paths() -> Vec<PathBuf> {
-    if let Some(path) = env_config_path() {
-        return vec![path];
+    match env_config_path() {
+        Ok(Some(path)) => return vec![path],
+        Ok(None) => {}
+        Err(error) => {
+            tracing::error!(
+                error = %error,
+                "invalid config path override; refusing workspace-trust fallback"
+            );
+            return Vec::new();
+        }
     }
 
-    if let Some(codewhale_home) = codewhale_home_dir() {
-        return vec![codewhale_home.join("config.toml")];
+    match codewhale_home_dir() {
+        Ok(Some(codewhale_home)) => return vec![codewhale_home.join("config.toml")],
+        Ok(None) => {}
+        Err(error) => {
+            tracing::error!(
+                error = %error,
+                "invalid Codewhale home override; refusing workspace-trust fallback"
+            );
+            return Vec::new();
+        }
     }
 
     let Some(home) = effective_home_dir() else {
@@ -6392,8 +6417,15 @@ pub(crate) fn workspace_trust_config_candidate_paths() -> Vec<PathBuf> {
 
 #[must_use]
 pub(crate) fn is_workspace_trusted(workspace: &Path) -> bool {
-    let Some(config_path) = default_config_path() else {
-        return false;
+    let config_path = match default_config_path() {
+        Ok(path) => path,
+        Err(error) => {
+            tracing::error!(
+                error = %error,
+                "failed to resolve workspace-trust config; treating workspace as untrusted"
+            );
+            return false;
+        }
     };
     let Ok(raw) = fs::read_to_string(config_path) else {
         return false;
@@ -6405,8 +6437,8 @@ pub(crate) fn is_workspace_trusted(workspace: &Path) -> bool {
 }
 
 pub(crate) fn save_workspace_trust(workspace: &Path) -> Result<PathBuf> {
-    let config_path = default_config_path()
-        .context("Failed to resolve config path: home directory not found.")?;
+    let config_path =
+        try_default_config_path().context("Failed to resolve config path for workspace trust.")?;
     ensure_parent_dir(&config_path)?;
 
     let project_key = workspace_config_key(workspace);
@@ -6446,9 +6478,9 @@ fn is_trusted_level(level: &str) -> bool {
     level.trim().eq_ignore_ascii_case("trusted")
 }
 
-pub(crate) fn resolve_load_config_path(path: Option<PathBuf>) -> Option<PathBuf> {
+pub(crate) fn resolve_load_config_path(path: Option<PathBuf>) -> Result<Option<PathBuf>> {
     if let Some(path) = path {
-        return Some(expand_pathbuf(path));
+        return Ok(Some(expand_pathbuf(path)));
     }
 
     #[cfg(test)]
@@ -6456,36 +6488,18 @@ pub(crate) fn resolve_load_config_path(path: Option<PathBuf>) -> Option<PathBuf>
         let honor_guarded_environment = crate::test_support::current_thread_holds_test_env_lock();
         crate::test_support::with_test_env_lock(|| {
             if honor_guarded_environment {
-                resolve_default_load_config_path()
+                try_default_config_path().map(Some)
             } else {
-                Some(
+                Ok(Some(
                     crate::test_support::isolated_test_state_root()
                         .join(codewhale_config::CONFIG_FILE_NAME),
-                )
+                ))
             }
         })
     }
 
     #[cfg(not(test))]
-    resolve_default_load_config_path()
-}
-
-fn resolve_default_load_config_path() -> Option<PathBuf> {
-    if let Some(path) = env_config_path() {
-        if path.exists() {
-            return Some(path);
-        }
-
-        if let Some(home_path) = home_config_path()
-            && home_path.exists()
-        {
-            return Some(home_path);
-        }
-
-        return Some(path);
-    }
-
-    home_config_path()
+    try_default_config_path().map(Some)
 }
 
 /// Create an inspectable config file on first interactive launch.
@@ -6493,10 +6507,10 @@ fn resolve_default_load_config_path() -> Option<PathBuf> {
 /// The file intentionally omits `api_key`; onboarding or `codewhale auth set`
 /// writes that field after the user supplies a key.
 pub fn ensure_config_file_exists(path: Option<PathBuf>) -> Result<Option<PathBuf>> {
-    let config_path = path
-        .map(expand_pathbuf)
-        .or_else(default_config_path)
-        .context("Failed to resolve config path: home directory not found.")?;
+    let config_path = match path {
+        Some(path) => expand_pathbuf(path),
+        None => default_config_path().context("Failed to resolve config path.")?,
+    };
     if config_path.exists() {
         return Ok(None);
     }
@@ -9047,9 +9061,10 @@ pub enum SavedCredential {
         /// Absolute path to the credential-free config metadata file.
         path: PathBuf,
     },
-    /// Stored in the Codewhale config file only. Fallback when the selected
-    /// secret backend cannot be written, or under `cfg(test)` so unit tests do
-    /// not pollute the host credential store.
+    /// Stored in the Codewhale config file only under `cfg(test)` so unit tests
+    /// without an explicitly isolated secret backend do not pollute the host
+    /// credential store. Production save flows never automatically downgrade
+    /// a failed secret-store write to plaintext.
     ConfigFile(PathBuf),
 }
 
@@ -9070,40 +9085,13 @@ impl SavedCredential {
     }
 }
 
-/// Resolve the config document for CREDENTIAL writes: api_key values,
-/// `auth_mode` markers, and oauth/external-credential pointers.
-///
-/// Credentials are user-global — a key saved while working in one repo must be
-/// visible from every other repo (#5045). The ambient
-/// `CODEWHALE_CONFIG_PATH`/`DEEPSEEK_CONFIG_PATH` override can point at a
-/// workspace-scoped document (`<repo>/.codewhale/config.toml`, plaintext and
-/// easy to commit by accident), so credential writes that would land there are
-/// rescoped to the user-global config instead. Non-credential settings keep
-/// the ambient scoping, and callers that pass an explicit config path never
-/// consult this resolver.
-fn credential_config_path() -> Option<PathBuf> {
-    let resolved = default_config_path()?;
-    if !codewhale_config::config_path_is_workspace_scoped(&resolved) {
-        return Some(resolved);
-    }
-    let global = home_config_path();
-    if let Some(global) = global.as_ref() {
-        tracing::info!(
-            ambient = %resolved.display(),
-            global = %global.display(),
-            "rescoping credential write from workspace config to user-global config"
-        );
-    }
-    global
-}
-
 /// Save the active provider's API key.
 ///
 /// The selected durable secret backend is attempted first. On success the
 /// config keeps only non-secret auth metadata and any older plaintext copy is
 /// removed. When the secret-store write fails (OS permission denied, corrupt
-/// or read-only file backend, etc.), `config.toml` remains the headless-safe
-/// fallback and the function reports [`SavedCredential::ConfigFile`].
+/// or read-only file backend, etc.), the save fails loudly rather than writing
+/// the key to plaintext `config.toml`.
 ///
 /// Under `cfg(test)` the secret-store path is enabled only when the test sets
 /// both an isolated `CODEWHALE_HOME` and an explicit backend, preventing unit
@@ -9122,8 +9110,7 @@ fn save_root_api_key_for_secret_slot(
         anyhow::bail!("Refusing to save an empty API key.");
     }
 
-    let path = credential_config_path()
-        .context("Failed to resolve config path: home directory not found.")?;
+    let path = try_default_config_path().context("Failed to resolve config path for API key.")?;
 
     if let Some(secrets) = credential_secret_store_for_save() {
         let prior_secret = secrets.get(secret_slot);
@@ -9165,16 +9152,13 @@ fn save_root_api_key_for_secret_slot(
                     return Ok(SavedCredential::KeyringAndConfigFile { backend, path });
                 }
                 Err(err) => {
-                    tracing::warn!(
-                        "secret-store write failed; key saved to config.toml only: {err}"
-                    );
-                    // Fall through to the ConfigFile-only outcome below.
+                    return Err(plaintext_credential_fallback_refused("write", &path, &err));
                 }
             },
             Err(error) => {
-                tracing::warn!(
-                    "secret-store snapshot failed; key saved to config.toml only: {error}"
-                );
+                return Err(plaintext_credential_fallback_refused(
+                    "snapshot", &path, &error,
+                ));
             }
         }
     }
@@ -9182,6 +9166,17 @@ fn save_root_api_key_for_secret_slot(
     let path = save_api_key_to_config_file(trimmed)?;
     codewhale_config::scrub_plaintext_api_keys_from_config_backup(&path)?;
     Ok(SavedCredential::ConfigFile(path))
+}
+
+fn plaintext_credential_fallback_refused(
+    operation: &str,
+    config_path: &Path,
+    failure: &dyn std::fmt::Display,
+) -> anyhow::Error {
+    anyhow::anyhow!(
+        "Secret storage {operation} failed: {failure}. Refusing to write the API key in plaintext to {}. Fix the configured secret backend and retry; Codewhale did not change that file.",
+        codewhale_config::quote_os_path(config_path)
+    )
 }
 
 #[cfg(not(test))]
@@ -9233,8 +9228,8 @@ fn save_root_api_key_metadata_without_plaintext(
 
 /// Write the `api_key` slot directly to `config.toml`.
 fn save_api_key_to_config_file(api_key: &str) -> Result<PathBuf> {
-    let config_path = credential_config_path()
-        .context("Failed to resolve config path: home directory not found.")?;
+    let config_path =
+        try_default_config_path().context("Failed to resolve config path for API key.")?;
 
     ensure_parent_dir(&config_path)?;
 
@@ -9700,8 +9695,8 @@ fn save_api_key_for_identity_unlocked(
     let api_key = api_key.trim();
     anyhow::ensure!(!api_key.is_empty(), "Refusing to save an empty API key.");
 
-    let config_path = credential_config_path()
-        .context("Failed to resolve config path: home directory not found.")?;
+    let config_path =
+        try_default_config_path().context("Failed to resolve config path for provider API key.")?;
     ensure_parent_dir(&config_path)?;
 
     let key_inside = if provider == ApiProvider::Custom {
@@ -9800,17 +9795,19 @@ fn save_api_key_for_identity_unlocked(
                     return Ok(config_path);
                 }
                 Err(err) => {
-                    tracing::warn!(
-                        provider = %identity.key,
-                        "secret-store write failed; key saved to config.toml only: {err}"
-                    );
+                    return Err(plaintext_credential_fallback_refused(
+                        "write",
+                        &config_path,
+                        &err,
+                    ));
                 }
             },
             Err(error) => {
-                tracing::warn!(
-                    provider = %identity.key,
-                    "secret-store snapshot failed; key saved to config.toml only: {error}"
-                );
+                return Err(plaintext_credential_fallback_refused(
+                    "snapshot",
+                    &config_path,
+                    &error,
+                ));
             }
         }
     }
@@ -9872,8 +9869,8 @@ pub(crate) fn save_provider_model_for_identity(
     let model = model.trim();
     anyhow::ensure!(!model.is_empty(), "model cannot be empty");
 
-    let config_path = default_config_path()
-        .context("Failed to resolve config path: home directory not found.")?;
+    let config_path =
+        try_default_config_path().context("Failed to resolve config path for provider model.")?;
     ensure_parent_dir(&config_path)?;
 
     let is_legacy_literal_custom = provider == ApiProvider::Custom
@@ -9920,8 +9917,8 @@ pub(crate) fn save_provider_base_url_for_identity(
 ) -> Result<PathBuf> {
     let base_url = base_url.trim();
     anyhow::ensure!(!base_url.is_empty(), "base URL cannot be empty");
-    let config_path = default_config_path()
-        .context("Failed to resolve config path: home directory not found.")?;
+    let config_path = try_default_config_path()
+        .context("Failed to resolve config path for provider base URL.")?;
     ensure_parent_dir(&config_path)?;
     let key_inside = if identity.provider == ApiProvider::Custom {
         let key = identity.key.trim();
@@ -9949,8 +9946,8 @@ pub(crate) fn save_provider_context_window_for_identity(
     context_window: u32,
 ) -> Result<PathBuf> {
     anyhow::ensure!(context_window > 0, "context window must be greater than 0");
-    let config_path = default_config_path()
-        .context("Failed to resolve config path: home directory not found.")?;
+    let config_path = try_default_config_path()
+        .context("Failed to resolve config path for provider context window.")?;
     ensure_parent_dir(&config_path)?;
     let key_inside = if identity.provider == ApiProvider::Custom {
         let key = identity.key.trim();
@@ -10006,8 +10003,8 @@ pub(crate) fn persist_external_credential_consent_for_at(
     )?;
     let config_path = match config_path {
         Some(path) => path.to_path_buf(),
-        None => credential_config_path()
-            .context("Failed to resolve config path: home directory not found.")?,
+        None => try_default_config_path()
+            .context("Failed to resolve config path for external credential consent.")?,
     };
     ensure_parent_dir(&config_path)?;
     let key_inside = provider_config_key(provider).context("external credential provider key")?;
@@ -10076,8 +10073,8 @@ pub(crate) fn revoke_external_credential_consent_for_at(
     );
     let config_path = match config_path {
         Some(path) => path.to_path_buf(),
-        None => credential_config_path()
-            .context("Failed to resolve config path: home directory not found.")?,
+        None => try_default_config_path()
+            .context("Failed to resolve config path for external credential consent.")?,
     };
     ensure_parent_dir(&config_path)?;
     let key_inside = provider_config_key(provider).context("external credential provider key")?;
@@ -10250,10 +10247,9 @@ pub fn clear_api_key() -> Result<()> {
 fn clear_api_key_unlocked() -> Result<()> {
     // Strip api_key entries from config.toml, including provider-scoped
     // nested entries. Clearing a config file must not trigger platform
-    // credential prompts. Clears target the same user-global document that
-    // credential saves write, so logout removes what login stored (#5045).
-    let config_path = credential_config_path()
-        .context("Failed to resolve config path: home directory not found.")?;
+    // credential prompts.
+    let config_path = try_default_config_path()
+        .context("Failed to resolve config path while clearing API keys.")?;
 
     if !config_path.exists() {
         return Ok(());
@@ -10299,8 +10295,8 @@ pub fn clear_active_provider_api_key(provider: &str) -> Result<()> {
 }
 
 fn clear_active_provider_api_key_unlocked(provider: &str) -> Result<()> {
-    let config_path = credential_config_path()
-        .context("Failed to resolve config path: home directory not found.")?;
+    let config_path = try_default_config_path()
+        .context("Failed to resolve config path while clearing API keys.")?;
 
     if !config_path.exists() {
         return Ok(());

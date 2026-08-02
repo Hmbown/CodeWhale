@@ -69,8 +69,18 @@ impl App {
                     true
                 }
                 crate::config::ApprovalPolicyControl::RootConfig => {
-                    let active_config_path =
-                        crate::config::resolve_load_config_path(config_path.clone());
+                    let active_config_path = match crate::config::resolve_load_config_path(
+                        config_path.clone(),
+                    ) {
+                        Ok(path) => path,
+                        Err(error) => {
+                            tracing::error!(
+                                error = %error,
+                                "could not resolve the active config path for legacy policy migration"
+                            );
+                            None
+                        }
+                    };
                     match crate::config_persistence::persist_unset_root_key(
                         active_config_path.as_deref(),
                         "approval_policy",

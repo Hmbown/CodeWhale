@@ -2597,7 +2597,8 @@ impl App {
             return Err("the root approval policy is not editable".to_string());
         }
 
-        let active_config_path = crate::config::resolve_load_config_path(self.config_path.clone());
+        let active_config_path = crate::config::resolve_load_config_path(self.config_path.clone())
+            .map_err(|error| error.to_string())?;
         // The posture commit, the root-key release, and the rollback are one
         // critical section. Two `Settings::transact` calls would expose the
         // uncommitted middle state — a concurrent writer (a queued startup-default

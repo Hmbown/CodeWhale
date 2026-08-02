@@ -1167,7 +1167,7 @@ pub fn default_automations_dir() -> PathBuf {
     // NOT fall back to the legacy ~/.deepseek path — silent fallback would
     // defeat the isolation the override promises. Check the env var directly
     // (not codewhale_home()'s Ok/Err, which succeeds for the default home too).
-    if let Some(home) = codewhale_paths::codewhale_home_override() {
+    if let Some(home) = codewhale_paths::codewhale_home_override().ok().flatten() {
         return home.join("automations");
     }
     codewhale_paths::user_home()

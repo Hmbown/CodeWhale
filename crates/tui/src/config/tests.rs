@@ -568,7 +568,7 @@ fn load_honors_codewhale_home_for_primary_config_path() -> Result<()> {
     let _deepseek_config = EnvVarGuard::remove("DEEPSEEK_CONFIG_PATH");
 
     let expected = codewhale_home.join("config.toml");
-    assert_eq!(default_config_path().as_deref(), Some(expected.as_path()));
+    assert_eq!(default_config_path()?, expected);
     let config = Config::load(None, None)?;
 
     assert_eq!(config.provider.as_deref(), Some("zai"));
@@ -2790,6 +2790,7 @@ fn whitespace_codewhale_home_never_opens_ambient_file_secret_store() -> Result<(
         .join("secrets.json");
     let before = fs::read(&ambient_secret_path)?;
     let _whitespace_home = EnvVarGuard::set("CODEWHALE_HOME", " \t ");
+    let resolved_config_path = codewhale_config::resolve_config_path(None)?;
 
     let read = provider_secret_store_api_key(&Config::default(), ApiProvider::Deepseek);
     let saved = save_api_key("replacement-secret-sentinel")?;
@@ -2799,7 +2800,7 @@ fn whitespace_codewhale_home_never_opens_ambient_file_secret_store() -> Result<(
         read, None,
         "whitespace must not opt tests into ambient reads"
     );
-    assert_eq!(saved, SavedCredential::ConfigFile(config_path));
+    assert_eq!(saved, SavedCredential::ConfigFile(resolved_config_path));
     assert_eq!(after, before, "ambient file secret store was modified");
     Ok(())
 }
@@ -2929,7 +2930,7 @@ fn root_api_key_config_failure_restores_absent_and_existing_secret_state() -> Re
 }
 
 #[test]
-fn save_key_falls_back_to_config_when_isolated_file_store_is_unwritable() -> Result<()> {
+fn save_key_refuses_plaintext_config_when_isolated_file_store_is_unwritable() -> Result<()> {
     let _lock = lock_test_env();
     let temp_root = tempfile::tempdir()?;
     let _guard = EnvGuard::new(temp_root.path());
@@ -2948,11 +2949,86 @@ fn save_key_falls_back_to_config_when_isolated_file_store_is_unwritable() -> Res
     let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", codewhale_home.as_os_str());
     let _config_path = EnvVarGuard::set("CODEWHALE_CONFIG_PATH", config_path.as_os_str());
     let _backend = EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+    let resolved_config_path = codewhale_config::resolve_config_path(None)?;
 
-    let saved = save_api_key("fallback-test-credential")?;
-    assert_eq!(saved, SavedCredential::ConfigFile(config_path.clone()));
-    let config = fs::read_to_string(config_path)?;
-    assert!(config.contains("fallback-test-credential"));
+    let error = save_api_key("fallback-test-credential")
+        .expect_err("secret-store failure must not downgrade to plaintext");
+    let message = format!("{error:#}");
+    assert!(message.contains("Secret storage"), "{message}");
+    assert!(message.contains("Refusing"), "{message}");
+    assert!(
+        message.contains(&codewhale_config::quote_os_path(&resolved_config_path)),
+        "{message}"
+    );
+    assert!(
+        !resolved_config_path.exists(),
+        "plaintext config must stay untouched"
+    );
+    Ok(())
+}
+
+#[test]
+fn provider_key_refuses_plaintext_config_when_secret_store_snapshot_fails() -> Result<()> {
+    let _lock = lock_test_env();
+    let temp_root = tempfile::tempdir()?;
+    let _guard = EnvGuard::new(temp_root.path());
+    let codewhale_home = temp_root.path().join("codewhale-home");
+    let config_path = codewhale_home.join("config.toml");
+    fs::create_dir_all(codewhale_home.join("secrets"))?;
+    fs::write(
+        codewhale_home.join("secrets/secrets.json"),
+        "not valid json",
+    )?;
+    let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", &codewhale_home);
+    let _config_path = EnvVarGuard::set("CODEWHALE_CONFIG_PATH", &config_path);
+    let _backend = EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+    let resolved_config_path = codewhale_config::resolve_config_path(None)?;
+    let identity = ProviderIdentity {
+        provider: ApiProvider::Openrouter,
+        key: ApiProvider::Openrouter.as_str().to_string(),
+        exact_id: Some(ApiProvider::Openrouter.as_str().to_string()),
+    };
+
+    let error = save_api_key_for_identity(&identity, &Config::default(), "provider-fallback-key")
+        .expect_err("provider key must not downgrade to plaintext");
+    let message = format!("{error:#}");
+    assert!(message.contains("snapshot"), "{message}");
+    assert!(
+        message.contains(&codewhale_config::quote_os_path(&resolved_config_path)),
+        "{message}"
+    );
+    assert!(
+        !resolved_config_path.exists(),
+        "plaintext config must stay untouched"
+    );
+    Ok(())
+}
+
+#[test]
+fn relative_codewhale_home_key_save_creates_no_workspace_state() -> Result<()> {
+    let _lock = lock_test_env();
+    let temp_root = tempfile::tempdir()?;
+    let _guard = EnvGuard::new(temp_root.path());
+    let relative_home = PathBuf::from(format!(
+        ".codewhale-relative-home-{}-{}",
+        std::process::id(),
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+    ));
+    assert!(!relative_home.exists());
+    let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", &relative_home);
+    let _config_path = EnvVarGuard::remove("CODEWHALE_CONFIG_PATH");
+    let _legacy_config_path = EnvVarGuard::remove("DEEPSEEK_CONFIG_PATH");
+    let _backend = EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+
+    let error = save_api_key("never-persisted")
+        .expect_err("relative CODEWHALE_HOME must fail before persistence");
+    let message = format!("{error:#}");
+    assert!(message.contains("CODEWHALE_HOME"), "{message}");
+    assert!(message.contains("absolute"), "{message}");
+    assert!(
+        !relative_home.exists(),
+        "relative home must not create workspace state"
+    );
     Ok(())
 }
 
@@ -4816,7 +4892,7 @@ fn codewhale_config_path_env_wins_over_legacy_env() -> Result<()> {
         env::set_var("DEEPSEEK_CONFIG_PATH", &legacy);
     }
 
-    assert_eq!(env_config_path().unwrap(), preferred);
+    assert_eq!(env_config_path().unwrap().unwrap(), preferred);
 
     unsafe {
         EnvGuard::restore_var("CODEWHALE_CONFIG_PATH", prev_codewhale);
@@ -4900,7 +4976,7 @@ fn test_load_uses_tilde_expanded_deepseek_config_path() -> Result<()> {
 }
 
 #[test]
-fn test_load_falls_back_to_home_config_when_env_path_missing() -> Result<()> {
+fn missing_env_config_path_does_not_fall_back_to_a_different_home_file() -> Result<()> {
     let _lock = lock_test_env();
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -4927,7 +5003,69 @@ fn test_load_falls_back_to_home_config_when_env_path_missing() -> Result<()> {
     }
 
     let config = Config::load(None, None)?;
-    assert_eq!(config.api_key.as_deref(), Some("home-key"));
+    assert_eq!(
+        config.api_key, None,
+        "reads must honor the same missing env target that writes will create"
+    );
+    Ok(())
+}
+
+#[test]
+fn save_then_load_uses_the_same_missing_absolute_env_config_path() -> Result<()> {
+    let _lock = lock_test_env();
+    let temp_root = tempfile::tempdir()?;
+    let _guard = EnvGuard::new(temp_root.path());
+    let config_path = temp_root.path().join("nested/config.toml");
+    let _config_path = EnvVarGuard::set("CODEWHALE_CONFIG_PATH", &config_path);
+    let _legacy_config_path = EnvVarGuard::remove("DEEPSEEK_CONFIG_PATH");
+    let identity = ProviderIdentity {
+        provider: ApiProvider::Openrouter,
+        key: ApiProvider::Openrouter.as_str().to_string(),
+        exact_id: Some(ApiProvider::Openrouter.as_str().to_string()),
+    };
+
+    let written =
+        save_provider_model_for_identity(&identity, &Config::default(), "round-trip-model")?;
+    assert_eq!(written, config_path);
+    let loaded = Config::load(None, None)?;
+    assert_eq!(
+        loaded
+            .provider_config_for(ApiProvider::Openrouter)
+            .and_then(|provider| provider.model.as_deref()),
+        Some("round-trip-model")
+    );
+    Ok(())
+}
+
+#[test]
+fn relative_config_env_is_a_load_error() -> Result<()> {
+    let _lock = lock_test_env();
+    let temp_root = tempfile::tempdir()?;
+    let _guard = EnvGuard::new(temp_root.path());
+    let _config_path = EnvVarGuard::set("CODEWHALE_CONFIG_PATH", ".codewhale/config.toml");
+    let _legacy_config_path = EnvVarGuard::remove("DEEPSEEK_CONFIG_PATH");
+
+    let error = Config::load(None, None).expect_err("relative config path must fail closed");
+    let message = format!("{error:#}");
+    assert!(message.contains("CODEWHALE_CONFIG_PATH"), "{message}");
+    assert!(message.contains("absolute"), "{message}");
+
+    for error in [
+        default_config_path().expect_err("default path must preserve the override error"),
+        resolve_load_config_path(None)
+            .expect_err("load-path helper must preserve the override error"),
+        ensure_config_file_exists(None)
+            .expect_err("first-run config creation must preserve the override error"),
+    ] {
+        let message = format!("{error:#}");
+        assert!(message.contains("CODEWHALE_CONFIG_PATH"), "{message}");
+        assert!(message.contains("absolute"), "{message}");
+        assert!(!message.contains("home directory not found"), "{message}");
+    }
+    let error = env_config_path().expect_err("env helper must preserve the override error");
+    let message = error.to_string();
+    assert!(message.contains("CODEWHALE_CONFIG_PATH"), "{message}");
+    assert!(workspace_trust_config_candidate_paths().is_empty());
     Ok(())
 }
 
@@ -4979,9 +5117,10 @@ fn test_save_api_key_doesnt_match_similar_keys() -> Result<()> {
         &config_path,
         "api_key_backup = \"old\"\napi_key = \"current\"\n",
     )?;
+    let resolved_config_path = codewhale_config::resolve_config_path(None)?;
 
     let saved = save_api_key("new-key")?;
-    assert_eq!(saved, SavedCredential::ConfigFile(config_path.clone()));
+    assert_eq!(saved, SavedCredential::ConfigFile(resolved_config_path));
 
     let contents = fs::read_to_string(&config_path)?;
     assert!(contents.contains("api_key_backup = \"old\""));
@@ -8960,9 +9099,10 @@ fn save_api_key_for_openrouter_writes_provider_table() -> Result<()> {
     let config_path = temp_root.join(".deepseek").join("config.toml");
     let _config_path = EnvVarGuard::set("CODEWHALE_CONFIG_PATH", config_path.as_os_str());
     let _secret_backend = EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "local");
+    let resolved_config_path = codewhale_config::resolve_config_path(None)?;
 
     let path = save_api_key_for(ApiProvider::Openrouter, "or-saved-key")?;
-    assert_eq!(path, config_path);
+    assert_eq!(path, resolved_config_path);
     let contents = fs::read_to_string(&path)?;
     let parsed: toml::Value = toml::from_str(&contents)?;
     assert_eq!(
@@ -8975,7 +9115,7 @@ fn save_api_key_for_openrouter_writes_provider_table() -> Result<()> {
     );
     // Re-saving must not duplicate or wipe sibling tables.
     let novita_path = save_api_key_for(ApiProvider::Novita, "novita-saved-key")?;
-    assert_eq!(novita_path, path);
+    assert_eq!(novita_path.canonicalize()?, path.canonicalize()?);
     let contents = fs::read_to_string(&path)?;
     let parsed: toml::Value = toml::from_str(&contents)?;
     assert_eq!(
@@ -9002,7 +9142,10 @@ fn save_api_key_for_openrouter_writes_provider_table() -> Result<()> {
         (ApiProvider::Siliconflow, "sf-saved-key"),
         (ApiProvider::Sglang, "sglang-saved-key"),
     ] {
-        assert_eq!(save_api_key_for(provider, key)?, path);
+        assert_eq!(
+            save_api_key_for(provider, key)?.canonicalize()?,
+            path.canonicalize()?
+        );
     }
     let contents = fs::read_to_string(&path)?;
     let parsed: toml::Value = toml::from_str(&contents)?;

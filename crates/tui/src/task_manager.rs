@@ -1869,7 +1869,7 @@ pub fn default_tasks_dir() -> PathBuf {
             return PathBuf::from(path);
         }
     }
-    if let Some(home) = codewhale_paths::codewhale_home_override() {
+    if let Some(home) = codewhale_paths::codewhale_home_override().ok().flatten() {
         return home.join("tasks");
     }
     codewhale_paths::user_home()

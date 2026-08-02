@@ -427,7 +427,7 @@ pub(crate) fn config_toml_path(config_path: Option<&Path>) -> anyhow::Result<Pat
     if let Some(path) = config_path {
         return Ok(expand_path(path.to_string_lossy().as_ref()));
     }
-    crate::config::resolve_load_config_path(None)
+    crate::config::resolve_load_config_path(None)?
         .context("failed to resolve the active config.toml path")
 }
 
@@ -640,11 +640,17 @@ mod tests {
             env::set_var("DEEPSEEK_CONFIG_PATH", &legacy);
         }
 
-        assert_eq!(config_toml_path(None).unwrap(), preferred);
+        let expected = preferred
+            .parent()
+            .expect("preferred path has a parent")
+            .canonicalize()
+            .expect("preferred parent should canonicalize")
+            .join("preferred.toml");
+        assert_eq!(config_toml_path(None).unwrap(), expected);
     }
 
     #[test]
-    fn config_toml_path_uses_existing_home_fallback_when_env_target_is_missing() {
+    fn config_toml_path_keeps_missing_env_target_authoritative() {
         let temp_root = temp_root("codewhale-config-path-missing-env-fallback");
         let home_config = temp_root.join(".codewhale").join("config.toml");
         fs::create_dir_all(home_config.parent().unwrap()).unwrap();
@@ -656,7 +662,8 @@ mod tests {
             env::set_var("DEEPSEEK_CONFIG_PATH", &missing_env);
         }
 
-        assert_eq!(config_toml_path(None).unwrap(), home_config);
+        assert_eq!(config_toml_path(None).unwrap(), missing_env);
+        assert!(home_config.exists());
         assert!(!missing_env.exists());
     }
 

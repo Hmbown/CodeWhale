@@ -3386,7 +3386,7 @@ fn legacy_yolo_migrates_root_policy_to_agent_full_access() {
 }
 
 #[test]
-fn legacy_yolo_migrates_the_actual_fallback_config_not_a_missing_env_path() {
+fn legacy_yolo_honors_a_missing_explicit_config_path_without_home_fallback() {
     let _env_lock = lock_test_env();
     let tmp = tempfile::tempdir().expect("tempdir");
     let home = tmp.path().join("home");
@@ -3413,8 +3413,8 @@ fn legacy_yolo_migrates_the_actual_fallback_config_not_a_missing_env_path() {
     let _deepseek_config = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &missing_override);
     let _approval_env = EnvVarGuard::remove("DEEPSEEK_APPROVAL_POLICY");
 
-    let config = Config::load(None, None).expect("load fallback config");
-    assert_eq!(config.approval_policy.as_deref(), Some("on-request"));
+    let config = Config::load(None, None).expect("load explicit missing config");
+    assert_eq!(config.approval_policy, None);
     let mut options = test_options(false);
     options.start_in_agent_mode = false;
     options.workspace = workspace;
@@ -3427,11 +3427,11 @@ fn legacy_yolo_migrates_the_actual_fallback_config_not_a_missing_env_path() {
     assert!(!app.approval_policy_locked());
     assert!(
         !missing_override.exists(),
-        "migration must not create the missing DEEPSEEK_CONFIG_PATH target"
+        "settings migration must not create an unrelated config document"
     );
-    let saved_home_config = std::fs::read_to_string(&home_config).expect("saved fallback config");
+    let saved_home_config = std::fs::read_to_string(&home_config).expect("untouched home config");
     assert!(saved_home_config.contains("# actual fallback"));
-    assert!(!saved_home_config.contains("approval_policy"));
+    assert!(saved_home_config.contains("approval_policy = \"on-request\""));
     let saved_settings =
         std::fs::read_to_string(&override_settings).expect("normalized override settings");
     assert!(saved_settings.contains("default_mode = \"agent\""));

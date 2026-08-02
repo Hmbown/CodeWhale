@@ -8813,11 +8813,11 @@ pub(crate) fn apply_engine_error_to_app(
         app.onboarding_needs_api_key = true;
         app.onboarding = OnboardingState::Provider;
         let provider = app.api_provider;
-        let config_path = crate::config::resolve_load_config_path(app.config_path.clone())
-            .map_or_else(
-                || "~/.codewhale/config.toml".to_string(),
-                |path| path.display().to_string(),
-            );
+        let config_path = match crate::config::resolve_load_config_path(app.config_path.clone()) {
+            Ok(Some(path)) => path.display().to_string(),
+            Ok(None) => "~/.codewhale/config.toml".to_string(),
+            Err(error) => error.to_string(),
+        };
         app.status_message = Some(
             tr(app.ui_locale, MessageId::OnboardApiKeyRejectedEnv)
                 .replace("{provider}", provider.as_str())
@@ -15899,13 +15899,12 @@ fn apply_setup_runtime_preset(
         settings.default_mode = preset.default_mode().to_string();
         settings.permission_posture = Some(preset.permission_posture().to_string());
 
-        // Persist into the same file Config::load actually selected. When an env
-        // override names a missing file, reads intentionally fall back to an
-        // existing home config; writing to the missing override would otherwise
-        // leave the controlling key untouched and shadow the home config on the
-        // next launch.
-        let selected_config_path = crate::config::resolve_load_config_path(app.config_path.clone())
-            .or_else(|| app.config_path.clone());
+        // Persist into the same file Config::load actually selected. A missing
+        // explicit env target remains authoritative for both reads and writes;
+        // an invalid target fails here instead of selecting a different file.
+        let selected_config_path =
+            crate::config::resolve_load_config_path(app.config_path.clone())?
+                .or_else(|| app.config_path.clone());
         let config_path =
             crate::config_persistence::config_toml_path(selected_config_path.as_deref())
                 .context("failed to resolve config path")?;

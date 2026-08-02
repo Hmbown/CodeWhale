@@ -2058,18 +2058,6 @@ fn no_keyring_secrets() -> Secrets {
     ))
 }
 
-fn write_provider_api_key_to_config(
-    store: &mut ConfigStore,
-    provider: ProviderKind,
-    api_key: &str,
-) {
-    prepare_provider_api_key_metadata(store, provider);
-    store.config.providers.for_provider_mut(provider).api_key = Some(api_key.to_string());
-    if provider == ProviderKind::Deepseek {
-        store.config.api_key = Some(api_key.to_string());
-    }
-}
-
 fn prepare_provider_api_key_metadata(store: &mut ConfigStore, provider: ProviderKind) {
     store.config.auth_mode = Some("api_key".to_string());
     let provider_config = store.config.providers.for_provider_mut(provider);
@@ -2091,8 +2079,8 @@ fn prepare_provider_api_key_metadata(store: &mut ConfigStore, provider: Provider
     }
 }
 
-/// Persist a provider credential to the durable secret store first. A
-/// plaintext config slot is used only when that write fails.
+/// Persist a provider credential to the durable secret store without silently
+/// downgrading a backend failure to plaintext config storage.
 fn persist_provider_api_key(
     store: &mut ConfigStore,
     secrets: &Secrets,
@@ -2118,7 +2106,7 @@ fn persist_provider_api_key_unlocked(
     let slot = provider_slot(provider);
     // A readable prior value is required before a secret-store write so a
     // later config failure can restore the exact prior state. If the backend
-    // cannot provide that snapshot, use the owner-only config fallback.
+    // cannot provide that snapshot, fail before changing the config file.
     let prior_secret = secrets.get(slot);
     let secret_store_saved = match prior_secret.as_ref().map_err(|error| error.to_string()) {
         Ok(_) => match secrets.set(slot, api_key) {
@@ -2127,20 +2115,19 @@ fn persist_provider_api_key_unlocked(
                 true
             }
             Err(err) => {
-                eprintln!(
-                    "warning: secret-store write failed for {}; using owner-only config fallback: {err}",
-                    provider_slot(provider)
-                );
-                write_provider_api_key_to_config(store, provider, api_key);
-                false
+                store.config = original_config;
+                return Err(anyhow::anyhow!(
+                    "Secret storage write failed for {slot}: {err}. Refusing to write the API key in plaintext to {}. Fix the configured secret backend and retry; Codewhale did not change that file.",
+                    codewhale_config::quote_os_path(store.path())
+                ));
             }
         },
         Err(error) => {
-            eprintln!(
-                "warning: secret-store snapshot failed for {slot}; using owner-only config fallback: {error}"
-            );
-            write_provider_api_key_to_config(store, provider, api_key);
-            false
+            store.config = original_config;
+            return Err(anyhow::anyhow!(
+                "Secret storage snapshot failed for {slot}: {error}. Refusing to write the API key in plaintext to {}. Fix the configured secret backend and retry; Codewhale did not change that file.",
+                codewhale_config::quote_os_path(store.path())
+            ));
         }
     };
     if let Err(error) = store.save() {
@@ -6223,7 +6210,7 @@ model = "qwen-2.5-7b"
     }
 
     #[test]
-    fn auth_set_uses_plaintext_config_only_when_secret_store_write_fails() {
+    fn auth_set_refuses_plaintext_config_when_secret_store_write_fails() {
         use codewhale_secrets::{KeyringStore, SecretsError};
         use std::sync::Arc;
 
@@ -6252,7 +6239,7 @@ model = "qwen-2.5-7b"
         let mut store = ConfigStore::load(Some(path.clone())).expect("load config");
         let secrets = Secrets::new(Arc::new(FailingStore));
 
-        run_auth_command_with_secrets(
+        let error = run_auth_command_with_secrets(
             &mut store,
             AuthCommand::Set {
                 provider: ProviderArg::Openrouter,
@@ -6261,14 +6248,17 @@ model = "qwen-2.5-7b"
             },
             &secrets,
         )
-        .expect("config fallback");
+        .expect_err("secret-store failure must not downgrade to plaintext");
 
-        assert_eq!(
-            store.config.providers.openrouter.api_key.as_deref(),
-            Some("fallback-test-credential")
+        let message = format!("{error:#}");
+        assert!(message.contains("Secret storage write failed"), "{message}");
+        assert!(message.contains("Refusing"), "{message}");
+        assert!(
+            message.contains(&codewhale_config::quote_os_path(store.path())),
+            "{message}"
         );
-        let saved = std::fs::read_to_string(path).expect("config fallback file");
-        assert!(saved.contains("fallback-test-credential"));
+        assert!(store.config.providers.openrouter.api_key.is_none());
+        assert!(!path.exists(), "plaintext config must stay untouched");
     }
 
     #[test]

@@ -216,7 +216,7 @@ pub(crate) fn log_directory() -> Option<PathBuf> {
     // check the env var directly rather than codewhale_home()'s Ok/Err because
     // that helper succeeds (returns $HOME/.codewhale) even when the override is
     // unset, which would short-circuit the legacy fallback below.
-    if let Some(home) = codewhale_paths::codewhale_home_override() {
+    if let Some(home) = codewhale_paths::codewhale_home_override().ok().flatten() {
         return Some(home.join("logs"));
     }
     let resolve = |base: PathBuf| -> Option<PathBuf> {

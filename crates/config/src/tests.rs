@@ -2710,6 +2710,25 @@ fn app_homes_prefer_home_env_before_platform_home_fallback() {
 }
 
 #[test]
+fn relative_codewhale_home_is_a_hard_error() {
+    let _lock = env_lock();
+    let _env = StateEnvRestore {
+        home: env::var_os("HOME"),
+        userprofile: env::var_os("USERPROFILE"),
+        codewhale_home: env::var_os("CODEWHALE_HOME"),
+    };
+    // Safety: test-only environment mutation is serialized by env_lock().
+    unsafe {
+        env::set_var("CODEWHALE_HOME", ".codewhale");
+    }
+
+    let error = codewhale_home().expect_err("relative global home must fail closed");
+    let message = format!("{error:#}");
+    assert!(message.contains("CODEWHALE_HOME"), "{message}");
+    assert!(message.contains("absolute"), "{message}");
+}
+
+#[test]
 fn migrate_config_reports_copied_legacy_path() {
     let _lock = env_lock();
     struct LegacyConfigGuard {
@@ -3175,7 +3194,7 @@ fn config_store_save_revalidates_path_before_parent_creation() {
 }
 
 #[test]
-fn resolve_config_path_rejects_env_traversal() {
+fn resolve_config_path_rejects_relative_env_path_before_cwd_resolution() {
     let _lock = env_lock();
     struct ConfigPathEnvGuard {
         codewhale: Option<OsString>,
@@ -3207,8 +3226,10 @@ fn resolve_config_path_rejects_env_traversal() {
         env::remove_var("DEEPSEEK_CONFIG_PATH");
     }
 
-    let err = resolve_config_path(None).expect_err("env traversal should fail");
-    assert!(format!("{err:#}").contains("cannot contain '..'"));
+    let err = resolve_config_path(None).expect_err("relative env path should fail");
+    let message = format!("{err:#}");
+    assert!(message.contains("CODEWHALE_CONFIG_PATH"), "{message}");
+    assert!(message.contains("absolute"), "{message}");
 }
 
 #[cfg(unix)]

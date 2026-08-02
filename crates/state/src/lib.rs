@@ -1819,7 +1819,7 @@ pub fn default_state_db_path() -> PathBuf {
     // defeat the isolation the override promises (CI, containers, multi-project,
     // test harnesses). Legacy ~/.deepseek migration only applies to the default
     // home location.
-    if let Some(overridden) = codewhale_home_override() {
+    if let Some(overridden) = codewhale_home_override().ok().flatten() {
         return overridden.join("state.db");
     }
     let home = codewhale_paths::user_home().unwrap_or_else(|| PathBuf::from("."));
@@ -2457,12 +2457,13 @@ mod tests {
     #[test]
     fn codewhale_home_override_returns_the_env_value_verbatim() {
         let _lock = CODEWHALE_HOME_TEST_LOCK.lock().unwrap();
-        let _g = CodeWhaleHomeGuard::set("/tmp/cw-isolated-state");
+        let override_path = std::env::temp_dir().join("cw-isolated-state");
+        let _g = CodeWhaleHomeGuard::set(override_path.to_str().unwrap());
         // The env var IS the home dir — no ".codewhale" appended. This matches
         // codewhale_home() in config ($CODEWHALE_HOME=/x means home is /x).
         assert_eq!(
-            codewhale_home_override().as_deref(),
-            Some(std::path::Path::new("/tmp/cw-isolated-state"))
+            codewhale_home_override().unwrap().as_deref(),
+            Some(override_path.as_path())
         );
     }
 
@@ -2470,7 +2471,7 @@ mod tests {
     fn codewhale_home_override_none_when_unset() {
         let _lock = CODEWHALE_HOME_TEST_LOCK.lock().unwrap();
         let _g = CodeWhaleHomeGuard::remove();
-        assert!(codewhale_home_override().is_none());
+        assert!(codewhale_home_override().unwrap().is_none());
     }
 
     #[test]
@@ -2478,7 +2479,7 @@ mod tests {
         let _lock = CODEWHALE_HOME_TEST_LOCK.lock().unwrap();
         let _g = CodeWhaleHomeGuard::set("   ");
         assert!(
-            codewhale_home_override().is_none(),
+            codewhale_home_override().unwrap().is_none(),
             "whitespace-only CODEWHALE_HOME must not establish isolation"
         );
     }

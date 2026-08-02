@@ -614,7 +614,7 @@ pub async fn run_http_server(
 }
 
 fn fallback_sessions_dir() -> PathBuf {
-    if let Some(home) = codewhale_paths::codewhale_home_override() {
+    if let Some(home) = codewhale_paths::codewhale_home_override().ok().flatten() {
         return home.join("sessions");
     }
     codewhale_paths::legacy_deepseek_home()

@@ -18,50 +18,34 @@ use std::path::{Path, PathBuf};
 /// includable from an integration test binary — see that file's header.
 pub(crate) use super::home::effective_home_dir;
 
-pub(crate) fn default_config_path() -> Option<PathBuf> {
+pub(crate) fn default_config_path() -> anyhow::Result<PathBuf> {
+    try_default_config_path()
+}
+
+pub(crate) fn try_default_config_path() -> anyhow::Result<PathBuf> {
     #[cfg(test)]
     {
         let honor_guarded_environment = crate::test_support::current_thread_holds_test_env_lock();
         crate::test_support::with_test_env_lock(|| {
             if honor_guarded_environment {
-                default_config_path_from_environment()
+                try_default_config_path_from_environment()
             } else {
-                Some(
-                    crate::test_support::isolated_test_state_root()
-                        .join(codewhale_config::CONFIG_FILE_NAME),
-                )
+                Ok(crate::test_support::isolated_test_state_root()
+                    .join(codewhale_config::CONFIG_FILE_NAME))
             }
         })
     }
 
     #[cfg(not(test))]
-    default_config_path_from_environment()
+    try_default_config_path_from_environment()
 }
 
-fn default_config_path_from_environment() -> Option<PathBuf> {
-    env_config_path_unlocked().or_else(home_config_path)
+fn try_default_config_path_from_environment() -> anyhow::Result<PathBuf> {
+    codewhale_config::resolve_config_path(None)
 }
 
-pub(crate) fn codewhale_home_dir() -> Option<PathBuf> {
+pub(crate) fn codewhale_home_dir() -> Result<Option<PathBuf>, codewhale_paths::PathOverrideError> {
     codewhale_paths::codewhale_home_override()
-}
-
-pub(crate) fn home_config_path() -> Option<PathBuf> {
-    if let Some(home) = codewhale_home_dir() {
-        return Some(home.join("config.toml"));
-    }
-
-    effective_home_dir().map(|home| {
-        let primary = home.join(".codewhale").join("config.toml");
-        if primary.exists() {
-            return primary;
-        }
-        let legacy = home.join(".deepseek").join("config.toml");
-        if legacy.exists() {
-            return legacy;
-        }
-        primary
-    })
 }
 
 pub(crate) fn workspace_config_key(workspace: &Path) -> String {
@@ -74,7 +58,7 @@ pub(crate) fn canonicalize_or_keep(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
-pub(crate) fn env_config_path() -> Option<PathBuf> {
+pub(crate) fn env_config_path() -> Result<Option<PathBuf>, codewhale_paths::PathOverrideError> {
     #[cfg(test)]
     {
         crate::test_support::with_test_env_lock(env_config_path_unlocked)
@@ -85,20 +69,8 @@ pub(crate) fn env_config_path() -> Option<PathBuf> {
     }
 }
 
-fn env_config_path_unlocked() -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("CODEWHALE_CONFIG_PATH") {
-        let trimmed = path.trim();
-        if !trimmed.is_empty() {
-            return Some(expand_path(trimmed));
-        }
-    }
-    if let Ok(path) = std::env::var("DEEPSEEK_CONFIG_PATH") {
-        let trimmed = path.trim();
-        if !trimmed.is_empty() {
-            return Some(expand_path(trimmed));
-        }
-    }
-    None
+fn env_config_path_unlocked() -> Result<Option<PathBuf>, codewhale_paths::PathOverrideError> {
+    codewhale_paths::config_path_override()
 }
 
 pub(crate) fn expand_pathbuf(path: PathBuf) -> PathBuf {
@@ -175,8 +147,16 @@ pub(crate) fn default_memory_path() -> Option<PathBuf> {
 }
 
 fn default_user_state_path(name: &str) -> Option<PathBuf> {
-    if let Some(home) = codewhale_home_dir() {
-        return Some(home.join(name));
+    match codewhale_home_dir() {
+        Ok(Some(home)) => return Some(home.join(name)),
+        Ok(None) => {}
+        Err(error) => {
+            tracing::error!(
+                error = %error,
+                "invalid Codewhale home override; refusing to substitute a different state root"
+            );
+            return None;
+        }
     }
     effective_home_dir().map(|home| {
         let primary = home.join(".codewhale").join(name);

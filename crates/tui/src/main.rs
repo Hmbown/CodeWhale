@@ -8893,8 +8893,16 @@ fn merge_user_workspace_config(
     let allow_shell_before = config.allow_shell;
     let allow_shell_from_env = std::env::var_os("CODEWHALE_ALLOW_SHELL").is_some()
         || std::env::var_os("DEEPSEEK_ALLOW_SHELL").is_some();
-    let Some(path) = crate::config::resolve_load_config_path(config_path) else {
-        return;
+    let path = match crate::config::resolve_load_config_path(config_path) {
+        Ok(Some(path)) => path,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::error!(
+                error = %error,
+                "failed to resolve workspace config overlay; refusing to substitute another file"
+            );
+            return;
+        }
     };
     let Ok(raw) = std::fs::read_to_string(path) else {
         return;

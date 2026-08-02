@@ -30,6 +30,7 @@ pub(crate) struct DoctorPathReport {
 impl DoctorPathReport {
     pub(crate) fn resolve(config_override: Option<&Path>) -> Result<Self> {
         let home = codewhale_paths::codewhale_home()
+            .map_err(anyhow::Error::new)?
             .context("could not resolve the canonical Codewhale state root")?;
         let config = match config_override {
             Some(path) => codewhale_config::resolve_config_path(Some(path.to_path_buf()))

@@ -658,6 +658,9 @@ impl KeyringStore for FileKeyringStore {
 
 fn default_codewhale_secrets_path() -> Result<PathBuf, SecretsError> {
     Ok(codewhale_paths::codewhale_home()
+        .map_err(|error| {
+            SecretsError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, error))
+        })?
         .ok_or_else(home_resolution_error)?
         .join("secrets")
         .join("secrets.json"))
