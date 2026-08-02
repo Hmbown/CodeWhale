@@ -775,9 +775,19 @@ enum SendMessageOutcome {
     },
 }
 
+/// Idle-poll cadence for unclaimed background shell completion while a
+/// goal is active. Coarse on purpose: this is a liveness backstop, not an
+/// animation loop.
+const SHELL_WAKE_POLL_MS: u64 = 750;
+
 enum EngineRunInput {
     Operation(Box<Op>),
     SubAgentCompletion(SubAgentCompletion),
+    /// A background shell job finished while the engine sat idle with an
+    /// active goal. Shell completion is pull-only (no channel), so without
+    /// this wake an active goal waiting on background work stayed inert until
+    /// the user typed something (morning-report continuation gap).
+    ShellCompletionWake,
 }
 
 impl SendMessageOutcome {
@@ -1908,13 +1918,68 @@ impl Engine {
                 .await
                 .map(|op| EngineRunInput::Operation(Box::new(op)))
         } else {
-            tokio::select! {
-                op = self.rx_op.recv() => op.map(|op| EngineRunInput::Operation(Box::new(op))),
-                completion = self.rx_subagent_completion.recv(), if !host_managed_turns => {
-                    completion.map(EngineRunInput::SubAgentCompletion)
+            loop {
+                let shell_wake_armed = !host_managed_turns && self.idle_shell_wake_armed();
+                tokio::select! {
+                    op = self.rx_op.recv() => {
+                        return op.map(|op| EngineRunInput::Operation(Box::new(op)));
+                    }
+                    completion = self.rx_subagent_completion.recv(), if !host_managed_turns => {
+                        return completion.map(EngineRunInput::SubAgentCompletion);
+                    }
+                    // Background shells have no completion channel, so an
+                    // idle engine polls only while a goal is active and a
+                    // background job is outstanding; the arm disarms itself
+                    // the moment either condition clears.
+                    () = tokio::time::sleep(Duration::from_millis(SHELL_WAKE_POLL_MS)), if shell_wake_armed => {
+                        if self.finished_background_shell_pending() {
+                            return Some(EngineRunInput::ShellCompletionWake);
+                        }
+                    }
                 }
             }
         }
+    }
+
+    /// Whether the idle loop should poll for background shell completion:
+    /// only while a goal is active and a background job is running or has
+    /// finished without being claimed yet.
+    fn idle_shell_wake_armed(&self) -> bool {
+        let goal_active = self
+            .config
+            .goal_state
+            .lock()
+            .map(|state| state.snapshot().is_active())
+            .unwrap_or(false);
+        if !goal_active {
+            return false;
+        }
+        self.shell_manager
+            .lock()
+            .map(|manager| manager.may_have_undelivered_completion())
+            .unwrap_or(false)
+    }
+
+    /// Whether a finished background job is waiting to be claimed.
+    fn finished_background_shell_pending(&self) -> bool {
+        self.shell_manager
+            .lock()
+            .map(|mut manager| manager.has_finished_unreported_jobs())
+            .unwrap_or(false)
+    }
+
+    /// An idle-engine wake for finished background shell work: queue a goal
+    /// continuation. The evidence itself is claimed by the boundary drain in
+    /// `handle_send_message`, so the continuation turn reads the completion
+    /// payload the same way a user-initiated turn would.
+    async fn handle_idle_shell_completion_wake(&mut self) {
+        let _ = self
+            .tx_event
+            .send(Event::status(
+                "Background shell work finished; continuing the active goal".to_string(),
+            ))
+            .await;
+        self.schedule_goal_continuation(Vec::new());
     }
 
     /// Run the engine event loop
@@ -1944,6 +2009,9 @@ impl Engine {
             match input {
                 EngineRunInput::SubAgentCompletion(completion) => {
                     self.handle_idle_subagent_completion(completion).await;
+                }
+                EngineRunInput::ShellCompletionWake => {
+                    self.handle_idle_shell_completion_wake().await;
                 }
                 EngineRunInput::Operation(op) => match *op {
                     Op::SendMessage {

@@ -14624,3 +14624,86 @@ async fn cacheable_prefix_is_byte_stable_across_unchanged_turns() {
         "the system prompt must not churn on an unchanged-mode turn"
     );
 }
+
+#[tokio::test]
+async fn idle_engine_wakes_for_finished_background_shell_only_while_goal_active() {
+    // Morning-report continuation gap: background shell completion is
+    // pull-only, so an idle engine with an active goal never learned the job
+    // finished and the goal sat inert until the user typed something.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config = EngineConfig {
+        snapshots_enabled: false,
+        terminal_chrome_enabled: false,
+        workspace: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let (mut engine, _handle) = Engine::new(config, &Config::default());
+
+    let _task_id = {
+        let mut shell = engine.shell_manager.lock().expect("shell manager");
+        let started = shell
+            .execute_with_options_env_for_owner(
+                "echo shell-wake-done",
+                None,
+                30_000,
+                true,
+                None,
+                false,
+                None,
+                std::collections::HashMap::new(),
+                None,
+            )
+            .expect("start background job");
+        started.task_id.expect("background task id")
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let done = {
+            let mut shell = engine.shell_manager.lock().expect("shell manager");
+            shell.has_finished_unreported_jobs()
+        };
+        if done {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "background job never finished"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    // No active goal: the wake stays disarmed and the idle receive keeps
+    // waiting — completions belong to the next user-initiated turn.
+    let disarmed =
+        tokio::time::timeout(Duration::from_millis(300), engine.next_run_input(false)).await;
+    assert!(
+        disarmed.is_err(),
+        "without an active goal the engine must not start turns for shell completions"
+    );
+
+    engine
+        .config
+        .goal_state
+        .lock()
+        .expect("goal state")
+        .sync_from_host_status(
+            Some("finish the background verification"),
+            None,
+            crate::tools::goal::GoalStatus::Active,
+        );
+
+    let input = tokio::time::timeout(Duration::from_secs(10), engine.next_run_input(false))
+        .await
+        .expect("idle engine must wake for finished background shell work")
+        .expect("engine input");
+    assert!(
+        matches!(input, EngineRunInput::ShellCompletionWake),
+        "wake input expected"
+    );
+
+    engine.handle_idle_shell_completion_wake().await;
+    assert!(
+        engine.has_scheduled_goal_continuation(),
+        "the wake must queue a goal continuation that will claim the evidence"
+    );
+}

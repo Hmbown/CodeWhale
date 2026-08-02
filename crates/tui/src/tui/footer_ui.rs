@@ -760,7 +760,16 @@ pub(crate) fn render_footer_from(
     // Right-cluster extension chips: append in `items` order so user
     // ordering is preserved across the new variants.
     let mut extra: Vec<Span<'static>> = Vec::new();
+    // Goal chip first: like the shell chip it is unconditional chrome, and an
+    // autonomous loop the user cannot see is worse than a busy footer.
+    let goal_chip = footer_goal_spans(app);
+    if !goal_chip.is_empty() {
+        extra.extend(goal_chip);
+    }
     if !shell_chip.is_empty() {
+        if !extra.is_empty() {
+            extra.push(Span::raw("  "));
+        }
         extra.extend(shell_chip);
     }
     for item in items {
@@ -818,6 +827,52 @@ pub(crate) fn footer_git_branch_spans(app: &App) -> Vec<Span<'static>> {
         label,
         Style::default().fg(app.ui_theme.text_muted),
     )]
+}
+
+/// Active-goal chip: a set goal stays visible in the always-on footer chrome
+/// (captains-log #12 — `create_goal` worked but the goal vanished once set
+/// whenever the sidebar was hidden). Shows the truncated objective while the
+/// goal hunts, and names the paused state so a stalled goal is never silent.
+fn footer_goal_spans(app: &App) -> Vec<Span<'static>> {
+    let theme = &app.ui_theme;
+    let (objective, paused) = match (&app.hunt.quarry, &app.paused_quarry) {
+        (Some(objective), _) => {
+            if matches!(
+                app.hunt.verdict,
+                crate::tui::app::HuntVerdict::Hunted | crate::tui::app::HuntVerdict::Escaped
+            ) {
+                return Vec::new();
+            }
+            (
+                objective.clone(),
+                app.hunt.verdict == crate::tui::app::HuntVerdict::Wounded,
+            )
+        }
+        (None, Some(objective)) => (objective.clone(), true),
+        (None, None) => return Vec::new(),
+    };
+    let mut label = objective.trim().replace(['\n', '\r'], " ");
+    if label.chars().count() > 32 {
+        label = label.chars().take(31).collect::<String>() + "…";
+    }
+    let mut spans = vec![Span::styled(
+        if paused { "goal paused " } else { "goal " }.to_string(),
+        Style::default()
+            .fg(if paused {
+                theme.warning
+            } else {
+                theme.status_working
+            })
+            .add_modifier(ratatui::style::Modifier::BOLD),
+    )];
+    spans.push(Span::styled(label, Style::default().fg(theme.text_muted)));
+    if !paused && app.hunt.continuation_count > 0 {
+        spans.push(Span::styled(
+            format!(" · pass {}", app.hunt.continuation_count),
+            Style::default().fg(theme.text_muted),
+        ));
+    }
+    spans
 }
 
 fn footer_shell_spans(app: &App) -> Vec<Span<'static>> {

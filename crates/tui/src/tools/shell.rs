@@ -2208,6 +2208,17 @@ impl ShellManager {
         jobs
     }
 
+    /// Whether a finished job's completion is waiting to be claimed. Unlike
+    /// [`Self::may_have_undelivered_completion`] this polls, so it reports
+    /// readiness the moment the process exits; the engine's idle shell wake
+    /// uses it to fire exactly when evidence exists.
+    pub(crate) fn has_finished_unreported_jobs(&mut self) -> bool {
+        self.processes.values_mut().any(|shell| {
+            shell.poll();
+            shell.status != ShellStatus::Running && !shell.completion_reported
+        })
+    }
+
     /// Drain once-only completion events together with lossless stream bytes.
     /// The engine publishes the bytes outside this manager's mutex and puts
     /// only the bounded event plus resulting handle into model context.
