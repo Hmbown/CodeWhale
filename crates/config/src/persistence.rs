@@ -258,10 +258,10 @@ pub const REDACTED: &str = "[redacted]";
 ///
 /// Two passes, both dependency-free:
 ///
-/// 1. **Keyed assignments.** Lines shaped like `key = value`, `key: value`, or
-///    `key=value` whose key (case-insensitively, ignoring quotes) contains a
-///    `SENSITIVE_KEY_HINTS` substring have their value replaced with
-///    [`REDACTED`].
+/// 1. **Keyed assignments.** Lines or whitespace-delimited inline tokens shaped
+///    like `key = value`, `key: value`, or `key=value` whose key
+///    (case-insensitively, ignoring quotes) contains a `SENSITIVE_KEY_HINTS`
+///    substring have their value replaced with [`REDACTED`].
 /// 2. **Bare tokens.** Whitespace-delimited words beginning with a known
 ///    `SECRET_TOKEN_PREFIXES` are replaced wholesale.
 ///
@@ -295,13 +295,17 @@ fn redact_line(line: &str) -> String {
         return format!("{redacted}{newline}");
     }
 
-    // Bare-token pass: mask any whitespace-delimited word with a known prefix.
+    // Inline-assignment / bare-token pass: mask any whitespace-delimited word
+    // carrying a sensitive keyed value or a known bare secret prefix.
     let mut changed = false;
     let masked: Vec<String> = body
         .split(' ')
         .map(|word| {
             let trimmed = word.trim_matches(|c| matches!(c, '"' | '\'' | ',' | ';'));
-            if !trimmed.is_empty() && looks_like_secret_token(trimmed) {
+            if let Some(redacted) = redact_inline_keyed_assignment(trimmed) {
+                changed = true;
+                word.replace(trimmed, &redacted)
+            } else if !trimmed.is_empty() && looks_like_secret_token(trimmed) {
                 changed = true;
                 word.replace(trimmed, REDACTED)
             } else {
@@ -315,6 +319,26 @@ fn redact_line(line: &str) -> String {
     } else {
         format!("{body}{newline}")
     }
+}
+
+fn redact_inline_keyed_assignment(word: &str) -> Option<String> {
+    let sep_idx = word.find(['=', ':'])?;
+    let (raw_key, rest) = word.split_at(sep_idx);
+    let raw_value = &rest[1..];
+    if raw_value.is_empty() {
+        return None;
+    }
+    let key_norm = raw_key
+        .trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-')
+        .to_ascii_lowercase();
+    if key_norm.is_empty()
+        || !SENSITIVE_KEY_HINTS
+            .iter()
+            .any(|hint| key_norm.contains(hint))
+    {
+        return None;
+    }
+    Some(format!("{}{}{}", raw_key, &rest[..1], REDACTED))
 }
 
 /// If `body` is a `key <sep> value` assignment with a sensitive key, return the
@@ -508,6 +532,17 @@ PASSWORD=hunter2hunter2";
         assert!(!out.contains("sk-abcdef1234567890"), "{out}");
         assert!(out.contains(REDACTED));
         assert!(out.contains("appeared in a log"));
+    }
+
+    #[test]
+    fn redact_masks_inline_sensitive_assignments_after_prose_prefixes() {
+        let out = redact_secrets(
+            "Decision: use token=plain-secret-value and api_key:another-secret-value",
+        );
+        assert!(!out.contains("plain-secret-value"), "{out}");
+        assert!(!out.contains("another-secret-value"), "{out}");
+        assert_eq!(out.matches(REDACTED).count(), 2, "{out}");
+        assert!(out.starts_with("Decision: use "), "{out}");
     }
 
     #[test]

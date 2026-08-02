@@ -852,7 +852,8 @@ fn tool_use_key(name: &str, input: &serde_json::Value) -> String {
 
 fn tool_args_preview(input: &serde_json::Value) -> String {
     let raw = serde_json::to_string(input).unwrap_or_else(|_| input.to_string());
-    truncate_chars(&raw, 120).to_string()
+    let redacted = codewhale_config::persistence::redact_secrets(&raw);
+    truncate_chars(&redacted, 120).to_string()
 }
 
 fn collect_tool_uses(messages: &[Message]) -> HashMap<String, ToolUseInfo> {
@@ -2031,12 +2032,14 @@ const CONTINUATION_EVIDENCE_MARKERS: &[&str] = &[
 ];
 
 fn continuation_line(text: &str) -> String {
-    let flattened = text.trim().replace('\n', " ");
+    let redacted = codewhale_config::persistence::redact_secrets(text);
+    let flattened = redacted.trim().replace('\n', " ");
     truncate_chars(&flattened, CONTINUATION_ITEM_MAX_CHARS).to_string()
 }
 
 fn quote_verbatim(text: &str, max_chars: usize) -> String {
-    truncate_chars(text.trim(), max_chars)
+    let redacted = codewhale_config::persistence::redact_secrets(text);
+    truncate_chars(redacted.trim(), max_chars)
         .lines()
         .map(|line| format!("> {line}"))
         .collect::<Vec<_>>()
@@ -2066,8 +2069,8 @@ fn user_text_of(msg: &Message) -> Option<String> {
 /// evidence, and in-flight tool state even when the summary model returns a
 /// generic or lossy transcript summary (#5043). This block is extracted by
 /// the runtime, not the summarizer, so a degenerate summary can never erase
-/// the working contract: the first user request survives verbatim alongside
-/// the latest one, and unresolved tool dispatches stay legible.
+/// the working contract: the first user request survives alongside the latest
+/// one after credential redaction, and unresolved tool dispatches stay legible.
 fn build_continuation_block(messages: &[Message]) -> String {
     let mut first_user: Option<String> = None;
     let mut last_user: Option<String> = None;
@@ -2177,7 +2180,7 @@ fn build_continuation_block(messages: &[Message]) -> String {
     if let Some(contract) = first_user.as_deref() {
         let _ = write!(
             body,
-            "### Working contract (first user request, verbatim)\n\n{}\n\n",
+            "### Working contract (first user request, credential-redacted quote)\n\n{}\n\n",
             quote_verbatim(contract, CONTINUATION_CONTRACT_MAX_CHARS)
         );
     }
@@ -2186,7 +2189,7 @@ fn build_continuation_block(messages: &[Message]) -> String {
     {
         let _ = write!(
             body,
-            "### Active intent (most recent user request, verbatim)\n\n{}\n\n",
+            "### Active intent (most recent user request, credential-redacted quote)\n\n{}\n\n",
             quote_verbatim(intent, CONTINUATION_CONTRACT_MAX_CHARS)
         );
     }
@@ -2727,10 +2730,13 @@ mod tests {
 
         let block = build_continuation_block(&messages);
 
-        // Intent: both the original working contract and the latest ask survive verbatim.
-        assert!(block.contains("Working contract (first user request, verbatim)"));
+        // Intent: both the original working contract and the latest ask survive
+        // after the credential-redaction boundary.
+        assert!(block.contains("Working contract (first user request, credential-redacted quote)"));
         assert!(block.contains("releases are blocked until login tests pass"));
-        assert!(block.contains("Active intent (most recent user request, verbatim)"));
+        assert!(
+            block.contains("Active intent (most recent user request, credential-redacted quote)")
+        );
         assert!(block.contains("re-run only the login tests"));
         // Decisions: the accepted approach and its rationale are carried forward.
         assert!(block.contains("Decisions already made"));
@@ -2749,6 +2755,42 @@ mod tests {
         assert!(build_continuation_block(&[]).is_empty());
         // Tool-result-only user messages carry no user text; nothing to quote.
         assert!(build_continuation_block(&[tool_result("tX", "plain output")]).is_empty());
+    }
+
+    #[test]
+    fn continuation_block_redacts_secrets_from_every_extracted_surface() {
+        let messages = vec![
+            msg(
+                "user",
+                "Ship the auth fix\nOPENAI_API_KEY=sk-user-secret-value",
+            ),
+            msg(
+                "assistant",
+                "Decision: use token=sk-decision-secret-value for the smoke test",
+            ),
+            tool_result("t1", "error: provider rejected sk-evidence-secret-value"),
+            tool_use(
+                "t2",
+                "Bash",
+                json!({"api_key": "sk-tool-secret-value", "command": "cargo test -p auth"}),
+            ),
+        ];
+
+        let block = build_continuation_block(&messages);
+
+        for secret in [
+            "sk-user-secret-value",
+            "sk-decision-secret-value",
+            "sk-evidence-secret-value",
+            "sk-tool-secret-value",
+        ] {
+            assert!(
+                !block.contains(secret),
+                "continuation block leaked {secret}"
+            );
+        }
+        assert!(block.contains(codewhale_config::persistence::REDACTED));
+        assert!(block.contains("Ship the auth fix"));
     }
 
     struct FixedSummaryClient;
