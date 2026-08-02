@@ -14328,6 +14328,123 @@ async fn parent_agent_surface_stays_within_measured_ceiling() {
     );
 }
 
+fn init_claim_repo(root: &Path) {
+    let run = |args: &[&str]| {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .expect("git available");
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+    };
+    run(&["init", "--quiet"]);
+    run(&["config", "user.email", "test@example.com"]);
+    run(&["config", "user.name", "Test"]);
+    std::fs::create_dir_all(root.join("src")).expect("mkdir src");
+    std::fs::write(root.join("src/lib.rs"), "pub fn baseline() {}\n").expect("seed file");
+    run(&["add", "-A"]);
+    // Backdate the baseline commit: claimed-diff verification treats commits
+    // newer than the worker's start as the child's own work, and the fixture
+    // must not let the baseline fall inside git --since's one-second blur.
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["commit", "--quiet", "-m", "init"])
+        .env("GIT_AUTHOR_DATE", "2026-01-01T00:00:00Z")
+        .env("GIT_COMMITTER_DATE", "2026-01-01T00:00:00Z")
+        .output()
+        .expect("git available");
+    assert!(output.status.success(), "git commit: {output:?}");
+}
+
+#[test]
+fn completed_claim_of_untouched_file_taints_verification() {
+    // R7 (finish-operator 2026-08-02): the morning report caught a child
+    // claiming edits git had never seen — by hand. At terminal delivery the
+    // claimed changed-files are checked against git status in the child's
+    // workspace; an invisible claim taints the verification summary.
+    let tmp = tempdir().expect("tempdir");
+    init_claim_repo(tmp.path());
+    let mut manager = SubAgentManager::new(tmp.path().to_path_buf(), 2);
+    manager.register_worker(make_worker_spec("agent_claims", tmp.path().to_path_buf()));
+
+    let mut snapshot = make_snapshot(SubAgentStatus::Completed);
+    snapshot.agent_id = "agent_claims".to_string();
+    snapshot.name = "agent_claims".to_string();
+    snapshot.workspace = Some(tmp.path().to_path_buf());
+    snapshot.result = Some("Fixed the bug: updated src/lib.rs and verified the fix.".to_string());
+    manager.complete_worker_from_result("agent_claims", &snapshot);
+
+    let record = manager
+        .get_worker_record("agent_claims")
+        .expect("worker record");
+    assert_eq!(record.verification.status, "claim_mismatch");
+    assert!(
+        record.verification.summary.contains("src/lib.rs"),
+        "{}",
+        record.verification.summary
+    );
+}
+
+#[test]
+fn completed_claim_matching_workspace_state_stays_untainted() {
+    let tmp = tempdir().expect("tempdir");
+    init_claim_repo(tmp.path());
+
+    // Honest dirty claim: the file really is modified and uncommitted.
+    let mut manager = SubAgentManager::new(tmp.path().to_path_buf(), 2);
+    manager.register_worker(make_worker_spec("agent_honest", tmp.path().to_path_buf()));
+    std::fs::write(tmp.path().join("src/lib.rs"), "pub fn improved() {}\n").expect("edit file");
+    let mut snapshot = make_snapshot(SubAgentStatus::Completed);
+    snapshot.agent_id = "agent_honest".to_string();
+    snapshot.name = "agent_honest".to_string();
+    snapshot.workspace = Some(tmp.path().to_path_buf());
+    snapshot.result = Some("Updated src/lib.rs with the new implementation.".to_string());
+    manager.complete_worker_from_result("agent_honest", &snapshot);
+    let record = manager
+        .get_worker_record("agent_honest")
+        .expect("worker record");
+    assert_eq!(record.verification.status, "self_report_only");
+
+    // Honest committed claim: the child committed its work, so git status is
+    // clean but the commit is newer than the worker record.
+    let run = |args: &[&str]| {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(tmp.path())
+            .args(args)
+            .output()
+            .expect("git available");
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+    };
+    run(&["add", "-A"]);
+    run(&["commit", "--quiet", "-m", "child work"]);
+    manager.register_worker(make_worker_spec(
+        "agent_committer",
+        tmp.path().to_path_buf(),
+    ));
+    if let Some(record) = manager.worker_records.get_mut("agent_committer") {
+        // Git --since has one-second granularity; back the worker start off
+        // so the just-made commit is unambiguously after it.
+        record.created_at_ms = record.created_at_ms.saturating_sub(60_000);
+    }
+    let mut snapshot = make_snapshot(SubAgentStatus::Completed);
+    snapshot.agent_id = "agent_committer".to_string();
+    snapshot.name = "agent_committer".to_string();
+    snapshot.workspace = Some(tmp.path().to_path_buf());
+    snapshot.result = Some("Updated src/lib.rs and committed the change.".to_string());
+    manager.complete_worker_from_result("agent_committer", &snapshot);
+    let record = manager
+        .get_worker_record("agent_committer")
+        .expect("worker record");
+    assert_eq!(
+        record.verification.status, "self_report_only",
+        "{}",
+        record.verification.summary
+    );
+}
+
 #[tokio::test]
 async fn spawn_receipt_compacts_and_verbose_restores_the_archive() {
     // Morning-report issue #4 (W6 rest): every spawn returned ~12KB because

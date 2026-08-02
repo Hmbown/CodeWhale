@@ -997,6 +997,119 @@ fn default_agent_run_verification() -> AgentRunVerificationSummary {
     }
 }
 
+/// Compare a completed child's claimed changed-files against `git status`
+/// in its workspace (R7, finish-operator 2026-08-02). The morning report
+/// caught a child claiming edits git had never seen — by hand. Extraction
+/// is deliberately conservative to keep taint high-signal: only path-like
+/// tokens on a line that also carries a change verb count as claims, and a
+/// claim is a mismatch only when git shows the path untouched. Returns
+/// `None` when there is nothing to dispute (no git, no claims, all claims
+/// visible in the status).
+fn claimed_diff_taint(
+    summary: &str,
+    workspace: &Path,
+    worker_started_at_ms: Option<u64>,
+) -> Option<AgentRunVerificationSummary> {
+    const CHANGE_VERBS: [&str; 14] = [
+        "changed",
+        "modified",
+        "updated",
+        "edited",
+        "wrote",
+        "rewrote",
+        "created",
+        "added",
+        "deleted",
+        "removed",
+        "renamed",
+        "fixed",
+        "patched",
+        "implemented",
+    ];
+
+    let status_output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(workspace)
+        .args(["status", "--porcelain"])
+        .output()
+        .ok()?;
+    if !status_output.status.success() {
+        return None;
+    }
+    let mut dirty: std::collections::HashSet<String> =
+        String::from_utf8_lossy(&status_output.stdout)
+            .lines()
+            .filter_map(|line| {
+                let entry = line.get(3..)?.trim();
+                // Renames report "old -> new"; the new path is the claimable one.
+                let path = entry.rsplit(" -> ").next().unwrap_or(entry);
+                Some(path.trim_matches('"').to_string())
+            })
+            .collect();
+    // A child that committed its work leaves git status clean; files changed
+    // by commits made after the worker started are visible claims too.
+    if let Some(started_ms) = worker_started_at_ms
+        && let Some(since) =
+            chrono::DateTime::from_timestamp_millis(i64::try_from(started_ms).unwrap_or(i64::MAX))
+        && let Ok(log_output) = std::process::Command::new("git")
+            .arg("-C")
+            .arg(workspace)
+            .args([
+                "log",
+                "--name-only",
+                "--pretty=format:",
+                &format!("--since={}", since.to_rfc3339()),
+            ])
+            .output()
+        && log_output.status.success()
+    {
+        dirty.extend(
+            String::from_utf8_lossy(&log_output.stdout)
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::to_string),
+        );
+    }
+
+    let mut mismatched: Vec<String> = Vec::new();
+    for line in summary.lines() {
+        let words: std::collections::HashSet<String> = line
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .map(str::to_ascii_lowercase)
+            .collect();
+        if !CHANGE_VERBS.iter().any(|verb| words.contains(*verb)) {
+            continue;
+        }
+        for token in line.split_whitespace() {
+            let token = token.trim_matches(|c: char| !(c.is_ascii_alphanumeric() || c == '/'));
+            // Path-shaped: has a directory separator and an extension-ish dot.
+            if !token.contains('/') || !token.contains('.') || token.len() < 4 {
+                continue;
+            }
+            let claimed = token.trim_start_matches("./").to_string();
+            if dirty.contains(&claimed) {
+                continue;
+            }
+            // A tracked-and-clean or nonexistent path claimed as changed is
+            // the mismatch; a dirty or renamed path is a visible claim.
+            if !mismatched.contains(&claimed) {
+                mismatched.push(claimed);
+            }
+        }
+    }
+    if mismatched.is_empty() {
+        return None;
+    }
+    Some(AgentRunVerificationSummary {
+        status: "claim_mismatch".to_string(),
+        summary: format!(
+            "Result claims changed file(s) that git status does not show at delivery: {}. Treat the self-report as unverified and inspect the transcript.",
+            mismatched.join(", ")
+        ),
+    })
+}
+
 fn default_agent_run_recommended_action() -> AgentRunRecommendedAction {
     AgentRunRecommendedAction {
         action: "inspect_transcript".to_string(),
@@ -4192,6 +4305,19 @@ impl SubAgentManager {
             record.steps_taken = result.steps_taken;
             if let SubAgentStatus::Failed(err) = &result.status {
                 record.error = Some(err.clone());
+            }
+            // R7 (finish-operator 2026-08-02): a completed child's claimed
+            // changed-files are checked against `git status` in its own
+            // workspace at terminal delivery. A claim git cannot see taints
+            // the verification summary the worker record already carries —
+            // the parent keeps the result, but labeled, not trusted.
+            if matches!(result.status, SubAgentStatus::Completed)
+                && let Some(summary_text) = result.result.as_deref()
+                && let Some(workspace) = result.workspace.as_deref()
+                && let Some(taint) =
+                    claimed_diff_taint(summary_text, workspace, Some(record.created_at_ms))
+            {
+                record.verification = taint;
             }
         }
         self.record_worker_event(worker_id, status, message, Some(result.steps_taken), None);
