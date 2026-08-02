@@ -1065,9 +1065,21 @@ impl WorkingSet {
     /// conversation; any byte that drifts here cache-misses everything that
     /// follows in DeepSeek's KV prefix cache.
     pub fn summary_block(&self, workspace: &Path) -> Option<String> {
-        let prompt_entries: Vec<&WorkingSetEntry> = self
+        // Only stat-verified paths reach the model. Prose observation happily
+        // records tokens that merely look like paths ("120x40",
+        // "Hmbown/CodeWhale"), and a fabricated Active-paths line teaches the
+        // model false workspace facts it then spends turns disproving.
+        // Re-statting at render time also drops files deleted mid-session.
+        // Bytes only change when the filesystem genuinely changed — the same
+        // exception the #280 stability contract already makes for newly
+        // observed paths.
+        let prompt_entries: Vec<(&WorkingSetEntry, bool)> = self
             .sorted_for_prompt()
             .into_iter()
+            .filter_map(|entry| {
+                let metadata = fs::metadata(workspace.join(&entry.path)).ok()?;
+                Some((entry, metadata.is_dir()))
+            })
             .take(self.config.max_prompt_entries)
             .collect();
 
@@ -1086,8 +1098,8 @@ impl WorkingSet {
 
         if !prompt_entries.is_empty() {
             lines.push("Active paths (prioritize these):".to_string());
-            for entry in &prompt_entries {
-                let kind = if entry.is_dir { "dir" } else { "file" };
+            for (entry, is_dir) in &prompt_entries {
+                let kind = if *is_dir { "dir" } else { "file" };
                 lines.push(format!("- {} ({kind})", entry.path));
             }
         }
@@ -1103,7 +1115,9 @@ impl WorkingSet {
         // per-file and total byte caps; order follows `sorted_for_prompt` so
         // the block is byte-stable while the files are unchanged.
         if self.cache_maximal_enabled() && !prompt_entries.is_empty() {
-            self.append_resident_file_contents(&mut lines, workspace, &prompt_entries);
+            let content_entries: Vec<&WorkingSetEntry> =
+                prompt_entries.iter().map(|(entry, _)| *entry).collect();
+            self.append_resident_file_contents(&mut lines, workspace, &content_entries);
         }
 
         Some(lines.join("\n"))
@@ -1830,6 +1844,39 @@ mod tests {
 
         assert_ne!(before, after, "new path must update the rendered summary");
         assert!(after.contains("src/c.rs"));
+    }
+
+    #[test]
+    fn summary_block_renders_only_paths_that_stat_verify() {
+        // Prose observation records tokens that merely look like paths
+        // ("120x40", "Hmbown/CodeWhale"); the rendered Active-paths list must
+        // never teach the model a workspace fact the filesystem contradicts.
+        let tmp = TempDir::new().expect("tempdir");
+        let src = tmp.path().join("src");
+        fs::create_dir_all(&src).expect("mkdir");
+        fs::write(src.join("real.rs"), "real").expect("write");
+
+        let mut ws = WorkingSet::default();
+        ws.observe_user_message(
+            "Fix src/real.rs, test at 120x40/80x24, and check Hmbown/CodeWhale",
+            tmp.path(),
+        );
+
+        let block = ws.summary_block(tmp.path()).expect("block");
+        assert!(block.contains("- src/real.rs (file)"), "{block}");
+        assert!(!block.contains("120x40"), "{block}");
+        assert!(!block.contains("Hmbown/CodeWhale"), "{block}");
+
+        // A file deleted mid-session falls out on the next render — the same
+        // filesystem-changed exception #280 makes for newly observed paths.
+        fs::remove_file(src.join("real.rs")).expect("remove");
+        let after_delete = ws.summary_block(tmp.path());
+        assert!(
+            after_delete
+                .as_deref()
+                .is_none_or(|block| !block.contains("src/real.rs")),
+            "{after_delete:?}"
+        );
     }
 
     // ── Cache-maximal context mode (#528) ──
