@@ -632,35 +632,74 @@ async fn task_host(
     envelope.to_string()
 }
 
+/// Best-effort `label`/`phase` from raw `task()` options, for rejection
+/// receipts when the options never survived parsing.
+fn task_identity_hint(opts_json: &str) -> (Option<String>, Option<String>) {
+    let value: serde_json::Value =
+        serde_json::from_str(opts_json).unwrap_or(serde_json::Value::Null);
+    let pluck = |key: &str| {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_string)
+    };
+    (pluck("label"), pluck("phase"))
+}
+
+/// Record a pre-spawn `task()` rejection on the host ledger, then hand the
+/// message back for the JS throw. Rejections that never reach `spawn_task`
+/// would otherwise be invisible to the run record (#5035's surviving gap).
+fn reject_task(driver: &Arc<dyn WorkflowDriver>, opts_json: &str, message: String) -> String {
+    let (label, phase) = task_identity_hint(opts_json);
+    driver.progress(ProgressEvent::TaskRejected {
+        label,
+        phase,
+        message: message.clone(),
+    });
+    message
+}
+
 async fn task_host_inner(
     opts_json: String,
     driver: Arc<dyn WorkflowDriver>,
     cancel: CancelHandle,
     spawned: Rc<Cell<u64>>,
 ) -> Result<serde_json::Value, String> {
-    let request = parse_task_options(&opts_json)?;
+    let request = parse_task_options(&opts_json)
+        .map_err(|message| reject_task(&driver, &opts_json, message))?;
     // Compile the schema before spawning so a malformed one fails fast
     // instead of burning a subagent.
     let validator = request
         .response_schema
         .as_ref()
         .map(compile_schema)
-        .transpose()?;
+        .transpose()
+        .map_err(|message| reject_task(&driver, &opts_json, message))?;
 
     // Lifetime backstop (design §4.3) — checked and bumped before any await.
     if spawned.get() >= WORKFLOW_LIFETIME_CAP {
-        return Err(format!(
-            "task(): Workflow lifetime agent cap ({WORKFLOW_LIFETIME_CAP}) reached for this run"
+        return Err(reject_task(
+            &driver,
+            &opts_json,
+            format!(
+                "task(): Workflow lifetime agent cap ({WORKFLOW_LIFETIME_CAP}) reached for this run"
+            ),
         ));
     }
     // Fast-fail budget gate. The authoritative reservation lives in the
     // driver (design §5.3); this only stops obviously-doomed spawns early.
     let snapshot = driver.budget();
     if snapshot.exhausted() {
-        return Err(format!(
-            "task(): budget exhausted ({} of {} tokens spent)",
-            snapshot.spent,
-            snapshot.total.unwrap_or(0)
+        return Err(reject_task(
+            &driver,
+            &opts_json,
+            format!(
+                "task(): budget exhausted ({} of {} tokens spent)",
+                snapshot.spent,
+                snapshot.total.unwrap_or(0)
+            ),
         ));
     }
     if cancel.is_cancelled() {
@@ -704,39 +743,54 @@ async fn task_host_inner(
 
 /// JS-facing option names for `task()` (design §3.3). Unknown fields are
 /// rejected so a typo (`responseschema`) fails loudly instead of being
-/// silently dropped.
+/// silently dropped. Every multi-word field also accepts its snake_case
+/// spelling, and the `agent` tool's `workspace_policy` name is accepted as an
+/// alias for worktree isolation — the two spawn surfaces are written by the
+/// same authors (often models), so a schema that runs on one must not be an
+/// unknown-field error on the other.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct TaskOptions {
     description: Option<String>,
     prompt: Option<String>,
-    #[serde(alias = "type")]
+    #[serde(alias = "type", alias = "subagent_type")]
     subagent_type: Option<String>,
     /// Fleet role name (#4177). Preferred step identity field.
     role: Option<String>,
     profile: Option<String>,
     model: Option<String>,
+    #[serde(alias = "model_strength")]
     model_strength: Option<String>,
     thinking: Option<String>,
     cwd: Option<String>,
     #[serde(default)]
     worktree: bool,
+    /// `agent`-tool alias for worktree isolation: "shared" | "worktree".
+    #[serde(default, alias = "workspace_policy")]
+    workspace_policy: Option<String>,
+    #[serde(alias = "write_authority")]
     write_authority: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "write_roots")]
     write_roots: Vec<String>,
-    #[serde(default)]
+    #[serde(default, alias = "exact_files")]
     exact_files: Vec<String>,
-    #[serde(default)]
+    #[serde(default, alias = "coordination_contracts")]
     coordination_contracts: Vec<String>,
     #[serde(default)]
     dependencies: Vec<String>,
     #[serde(default)]
     acceptance: Vec<String>,
+    #[serde(alias = "allowed_tools")]
     allowed_tools: Option<Vec<String>>,
+    #[serde(alias = "max_depth")]
     max_depth: Option<u32>,
+    #[serde(alias = "token_budget")]
     token_budget: Option<u64>,
+    #[serde(alias = "max_steps")]
     max_steps: Option<u32>,
+    #[serde(alias = "wall_time_secs")]
     wall_time_secs: Option<u64>,
+    #[serde(alias = "response_schema")]
     response_schema: Option<serde_json::Value>,
     label: Option<String>,
     phase: Option<String>,
@@ -745,6 +799,24 @@ struct TaskOptions {
 fn parse_task_options(opts_json: &str) -> Result<TaskRequest, String> {
     let mut options: TaskOptions =
         serde_json::from_str(opts_json).map_err(|err| format!("task(): invalid options: {err}"))?;
+    if let Some(policy) = options.workspace_policy.take() {
+        match policy.trim().to_ascii_lowercase().as_str() {
+            "worktree" => options.worktree = true,
+            "shared" => {
+                if options.worktree {
+                    return Err(
+                        "task(): workspacePolicy 'shared' conflicts with worktree: true"
+                            .to_string(),
+                    );
+                }
+            }
+            other => {
+                return Err(format!(
+                    "task(): workspacePolicy must be shared or worktree; got {other:?}"
+                ));
+            }
+        }
+    }
     let description = options
         .prompt
         .or(options.description)

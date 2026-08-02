@@ -1339,3 +1339,101 @@ return template.includes("export default async function");
     .unwrap();
     assert_eq!(value, json!(true));
 }
+
+#[tokio::test]
+async fn task_accepts_agent_tool_spellings() {
+    // The `agent` tool and `task()` are written by the same authors; a schema
+    // that runs on one surface must not be an unknown-field error on the
+    // other. snake_case spellings and `workspace_policy` are aliases.
+    let driver = Arc::new(FakeDriver::new());
+    let value = run(
+        &driver,
+        r#"
+        return await task({
+            prompt: "cross-surface schema",
+            subagent_type: "implementer",
+            workspace_policy: "worktree",
+            write_authority: "worktree_write",
+            write_roots: ["crates/tui/src"],
+            token_budget: 5000,
+            max_steps: 4,
+        });
+        "#,
+        json!(null),
+    )
+    .await
+    .unwrap();
+    assert_eq!(value, json!("done:cross-surface schema"));
+    let requests = driver.requests();
+    assert_eq!(requests.len(), 1);
+    assert!(
+        requests[0].worktree,
+        "workspace_policy worktree maps to worktree isolation"
+    );
+    assert_eq!(
+        requests[0].write_authority.as_deref(),
+        Some("worktree_write")
+    );
+    assert_eq!(requests[0].token_budget, Some(5000));
+
+    // "shared" is accepted and stays non-worktree; contradictions and unknown
+    // values still fail loudly.
+    let error = run(
+        &driver,
+        r#"return await task({ prompt: "x", workspacePolicy: "shared", worktree: true });"#,
+        json!(null),
+    )
+    .await
+    .unwrap_err();
+    assert!(script_message(Err(error)).contains("conflicts with worktree"));
+    let error = run(
+        &driver,
+        r#"return await task({ prompt: "x", workspacePolicy: "solo" });"#,
+        json!(null),
+    )
+    .await
+    .unwrap_err();
+    assert!(script_message(Err(error)).contains("must be shared or worktree"));
+}
+
+#[tokio::test]
+async fn vm_rejected_task_options_notify_the_driver() {
+    // A task() whose options fail VM validation throws before spawn_task, and
+    // inside parallel() that throw collapses to a null slot. The driver must
+    // still receive a TaskRejected event so the run record can refuse to call
+    // the run a plain success (morning-report issue #2).
+    let driver = Arc::new(FakeDriver::new());
+    let value = run(
+        &driver,
+        r#"
+        return await parallel([
+            () => task({ prompt: "bad slot", label: "L-bad", phase: "P1", cwd: "/absolute/path" }),
+        ]);
+        "#,
+        json!(null),
+    )
+    .await
+    .unwrap();
+    assert_eq!(value, json!([null]));
+    assert!(
+        driver.requests().is_empty(),
+        "no dispatch reached the driver"
+    );
+    let rejected: Vec<_> = driver
+        .events()
+        .into_iter()
+        .filter_map(|event| match event {
+            ProgressEvent::TaskRejected {
+                label,
+                phase,
+                message,
+            } => Some((label, phase, message)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(rejected.len(), 1, "one rejection event per refused slot");
+    let (label, phase, message) = &rejected[0];
+    assert_eq!(label.as_deref(), Some("L-bad"));
+    assert_eq!(phase.as_deref(), Some("P1"));
+    assert!(message.contains("bounded repo-relative paths"), "{message}");
+}

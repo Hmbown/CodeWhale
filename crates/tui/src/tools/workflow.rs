@@ -173,7 +173,9 @@ impl WorkflowWorkLifecycle {
         });
         let state = match record.status {
             WorkflowRunStatus::Running => OwnerState::Running,
-            WorkflowRunStatus::Completed => OwnerState::Completed,
+            // Degraded still finished and produced output; the run record and
+            // report carry the dropped-slot truth.
+            WorkflowRunStatus::Completed | WorkflowRunStatus::Degraded => OwnerState::Completed,
             WorkflowRunStatus::Failed => OwnerState::Failed,
             WorkflowRunStatus::Cancelled => OwnerState::Cancelled,
         };
@@ -716,6 +718,12 @@ fn initial_gate_status(run_id: &str, gates: &[GateSpec]) -> Vec<GateStatusLine> 
 enum WorkflowRunStatus {
     Running,
     Completed,
+    /// The script returned a value, but at least one requested task slot
+    /// failed or was rejected without the script declaring a partial-failure
+    /// contract. The output is preserved; the status refuses to call a run
+    /// with dropped slots a plain success (receipt honesty, morning-report
+    /// issue #2).
+    Degraded,
     Failed,
     Cancelled,
 }
@@ -1632,20 +1640,43 @@ async fn run_workflow_vm(
             return;
         };
         if record.status != WorkflowRunStatus::Cancelled {
-            // #5035: every dispatch was rejected before a child ran. Inside
-            // `parallel()` those throws collapsed into null slots, so without
-            // this check the run reads as successful orchestration that ran
-            // nothing.
-            if status == WorkflowRunStatus::Completed
-                && record.child_ids.is_empty()
-                && !record.dispatch_failures.is_empty()
-            {
-                status = WorkflowRunStatus::Failed;
-                error = Some(format!(
-                    "no child agents ran: all {} task dispatch(es) were rejected; first: {}",
-                    record.dispatch_failures.len(),
-                    record.dispatch_failures[0].message
-                ));
+            // Receipt honesty: a script that returns a value has not
+            // necessarily orchestrated anything. Classify against the slot
+            // ledger — every requested task either became a child with a
+            // terminal record or landed in `dispatch_failures` (driver
+            // rejections and, via `ProgressEvent::TaskRejected`, VM-level
+            // rejections that previously vanished into null slots).
+            if status == WorkflowRunStatus::Completed {
+                let task_records = driver.task_records_snapshot();
+                let failed_children = task_records
+                    .iter()
+                    .filter(|task| task.status == IrWorkflowRunStatus::Failed)
+                    .count();
+                let rejected = record.dispatch_failures.len();
+                if record.child_ids.is_empty() && rejected > 0 {
+                    // #5035: every dispatch was rejected before a child ran.
+                    status = WorkflowRunStatus::Failed;
+                    error = Some(format!(
+                        "no child agents ran: all {rejected} task dispatch(es) were rejected; first: {}",
+                        record.dispatch_failures[0].message
+                    ));
+                } else if failed_children > 0 || rejected > 0 {
+                    status = WorkflowRunStatus::Degraded;
+                    let mut parts = Vec::new();
+                    if failed_children > 0 {
+                        parts.push(format!(
+                            "{failed_children} of {} task(s) failed",
+                            task_records.len()
+                        ));
+                    }
+                    if rejected > 0 {
+                        parts.push(format!("{rejected} dispatch(es) were rejected"));
+                    }
+                    error = Some(format!(
+                        "completed with dropped slots: {}; the recorded result may be partial",
+                        parts.join(" and ")
+                    ));
+                }
             }
             record.status = status;
             record.result = output;
@@ -1729,7 +1760,10 @@ async fn run_workflow_vm(
 fn write_run_report_artifact(workspace: &Path, record: &WorkflowRunRecord) {
     if !matches!(
         record.status,
-        WorkflowRunStatus::Completed | WorkflowRunStatus::Failed | WorkflowRunStatus::Cancelled
+        WorkflowRunStatus::Completed
+            | WorkflowRunStatus::Degraded
+            | WorkflowRunStatus::Failed
+            | WorkflowRunStatus::Cancelled
     ) {
         return;
     }
@@ -3915,6 +3949,17 @@ impl WorkflowDriver for SubAgentWorkflowDriver {
     fn progress(&self, event: ProgressEvent) {
         let mut schema_error = None;
         let (message, ui_event) = match event {
+            // Pre-spawn rejections share the dispatch-failure ledger so the
+            // completion classifier sees every requested slot, whether the VM
+            // or the driver refused it.
+            ProgressEvent::TaskRejected {
+                label,
+                phase,
+                message,
+            } => {
+                self.record_dispatch_failure(label, phase, message);
+                return;
+            }
             ProgressEvent::Log { message } => (
                 format!("log: {message}"),
                 WorkflowUiEvent::new(WorkflowUiEventKind::Log { message }),
@@ -4069,7 +4114,7 @@ fn execution_from_declarative_spec(
             })
         });
     match terminal_status {
-        WorkflowRunStatus::Completed => {}
+        WorkflowRunStatus::Completed | WorkflowRunStatus::Degraded => {}
         WorkflowRunStatus::Failed => mark_ir_status(&mut execution, IrWorkflowRunStatus::Failed),
         WorkflowRunStatus::Cancelled => {
             mark_ir_status(&mut execution, IrWorkflowRunStatus::Cancelled);
@@ -7451,8 +7496,15 @@ reviewer = "reviewer"
             .expect("partial-success workflow still returns run record");
         let payload: Value = serde_json::from_str(&result.content).expect("json result");
 
-        assert_eq!(payload["status"], "completed");
-        assert!(payload["error"].is_null());
+        // Receipt honesty (morning-report issue #2): the run keeps its output
+        // and the reduce still runs, but a dropped slot means the status is
+        // degraded, never a plain completed.
+        assert_eq!(payload["status"], "degraded", "{payload}");
+        let degradation = payload["error"].as_str().expect("degradation surfaced");
+        assert!(
+            degradation.contains("result may be partial"),
+            "{degradation}"
+        );
         assert!(
             payload["result"]["bad-profile"].is_null(),
             "failed parallel slot should be null: {}",
@@ -7490,6 +7542,112 @@ reviewer = "reviewer"
         assert!(
             calls.load(Ordering::SeqCst) >= 1,
             "reduce should still run after a null parallel slot"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn parallel_slots_rejected_by_the_vm_cannot_report_plain_success() {
+        // Morning-report issue #2: options that fail VM validation throw
+        // before the driver ever sees a dispatch, and parallel() collapses
+        // those throws into null slots. The run must classify against the
+        // slot ledger instead of reporting completed with [null, ...].
+        let _retry_guard = workflow_test_retry_guard();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+        let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 2);
+        let (client, calls) = fake_chat_client("unused").await;
+        let runtime = SubAgentRuntime::new(
+            client,
+            "deepseek-v4-flash".to_string(),
+            ctx.clone(),
+            true,
+            None,
+            manager,
+        );
+        let tool = WorkflowTool::new(runtime.manager.clone(), runtime);
+
+        let result = tool
+            .execute(
+                json!({
+                    "action": "run",
+                    "script": "return await parallel([() => task({ description: 'bad a', type: 'explore', allowedTools: [], cwd: '/absolute/a' }), () => task({ description: 'bad b', type: 'explore', allowedTools: [], cwd: '/absolute/b' })]);"
+                }),
+                &ctx,
+            )
+            .await
+            .expect("vm-rejected fan-out still returns the run record");
+        let payload: Value = serde_json::from_str(&result.content).expect("json result");
+
+        assert_eq!(payload["status"], "failed", "{payload}");
+        let error = payload["error"].as_str().expect("error surfaced");
+        assert!(
+            error.contains("all 2 task dispatch(es) were rejected"),
+            "error should name the total rejection: {error}"
+        );
+        let failures = payload["dispatch_failures"]
+            .as_array()
+            .expect("collected dispatch failures");
+        assert_eq!(failures.len(), 2, "{payload}");
+        for failure in failures {
+            let message = failure["message"].as_str().expect("failure message");
+            assert!(message.contains("bounded repo-relative paths"), "{message}");
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "no provider call should be spent on vm-rejected slots"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn partially_dropped_parallel_slots_degrade_the_run() {
+        // One slot completes, one is rejected before dispatch: the run keeps
+        // its output but must report degraded, not completed.
+        let _retry_guard = workflow_test_retry_guard();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+        let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 2);
+        let (client, calls) = fake_chat_client("child done").await;
+        let runtime = SubAgentRuntime::new(
+            client,
+            "deepseek-v4-flash".to_string(),
+            ctx.clone(),
+            true,
+            None,
+            manager,
+        );
+        let tool = WorkflowTool::new(runtime.manager.clone(), runtime);
+
+        let result = tool
+            .execute(
+                json!({
+                    "action": "run",
+                    "script": "return await parallel([() => task({ description: 'say done', type: 'explore', allowedTools: [] }), () => task({ description: 'bad slot', type: 'explore', allowedTools: [], cwd: '/absolute/path' })]);"
+                }),
+                &ctx,
+            )
+            .await
+            .expect("partially dropped fan-out still returns the run record");
+        let payload: Value = serde_json::from_str(&result.content).expect("json result");
+
+        assert_eq!(payload["status"], "degraded", "{payload}");
+        let error = payload["error"].as_str().expect("degradation surfaced");
+        assert!(
+            error.contains("1 dispatch(es) were rejected"),
+            "error should count the dropped slot: {error}"
+        );
+        assert!(
+            error.contains("result may be partial"),
+            "error should warn the result is partial: {error}"
+        );
+        let results = payload["result"].as_array().expect("run kept its output");
+        assert_eq!(results.len(), 2, "{payload}");
+        assert!(results[1].is_null(), "the rejected slot stays null");
+        assert!(
+            calls.load(Ordering::SeqCst) >= 1,
+            "the healthy slot still ran"
         );
     }
 

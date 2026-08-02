@@ -179,6 +179,20 @@ pub enum ProgressEvent {
         /// The validation error already surfaced to JS.
         message: String,
     },
+    /// A `task()` call was rejected before any child agent existed —
+    /// malformed options, a bad `responseSchema`, the lifetime cap, or an
+    /// exhausted budget. Inside `parallel()` the JS throw collapses to a
+    /// `null` slot, so without this event the host would have no record that
+    /// a slot was ever requested; drivers fold it into the same ledger as
+    /// `spawn_task` rejections so run status can stay honest.
+    TaskRejected {
+        /// Best-effort `label` from the raw options, when parseable.
+        label: Option<String>,
+        /// Best-effort `phase` from the raw options, when parseable.
+        phase: Option<String>,
+        /// The rejection already surfaced to JS.
+        message: String,
+    },
 }
 
 /// Host-side executor for a Workflow run.
