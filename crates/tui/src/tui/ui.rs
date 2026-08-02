@@ -2438,6 +2438,7 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         goal_objective: app.hunt.quarry.clone(),
         goal_token_budget: app.hunt.token_budget,
         goal_status: app.hunt.verdict.goal_status(),
+        goal_max_continuations: config.goal_max_continuations(),
         locale_tag: app.ui_locale.tag().to_string(),
         workshop: config.workshop.clone(),
         search_provider: config.search_provider(),
