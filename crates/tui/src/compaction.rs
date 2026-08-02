@@ -2923,10 +2923,7 @@ mod tests {
                 "Bash",
                 json!({"command": "cargo test -p session-store"}),
             ),
-            tool_result(
-                "t1",
-                "test session_store::roundtrip ... FAILED\nerror: 1 test failed",
-            ),
+            tool_result("t1", "test session_store::roundtrip ... ok\nexit code 0"),
             msg(
                 "assistant",
                 "The flake comes from time-based expiry; adding a fixed clock.",
@@ -2973,7 +2970,7 @@ mod tests {
         // Decision marker.
         assert!(text.contains("keep the login table schema"));
         // Evidence marker, attributed to the tool.
-        assert!(text.contains("[Bash] test session_store::roundtrip ... FAILED"));
+        assert!(text.contains("[Bash] exit code 0"));
         // In-flight tool continuity: the unresolved dispatch is recorded even
         // though enforce_tool_call_pairs drops the orphaned call message.
         assert!(text.contains("In-flight tool state"));
