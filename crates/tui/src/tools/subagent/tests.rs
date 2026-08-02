@@ -14003,3 +14003,74 @@ fn the_launched_authority_is_the_one_the_spawn_boundary_accepts() {
         "one member's receipt must not authorize another member's child"
     );
 }
+
+#[tokio::test]
+async fn unscoped_status_compacts_running_children_and_keeps_terminal_full() {
+    // Morning-report issue #4: one unscoped status poll returned 203KB
+    // because every RUNNING child carried its full projection (launch
+    // manifest, event ring, checkpoint payloads). Supervision needs the
+    // top-level facts; the heavy fields belong to single-agent status or an
+    // explicit verbose request.
+    let mut inner = SubAgentManager::new(PathBuf::from("."), 1);
+    let current_boot = inner.session_boot_id().to_string();
+    let (input_tx, _input_rx) = mpsc::unbounded_channel();
+    let mut agent = SubAgent::new(
+        "test_agent_running_compact".to_string(),
+        FleetRole::Scout,
+        "prompt".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        Some("Blue".to_string()),
+        Some(vec!["read_file".to_string()]),
+        input_tx,
+        PathBuf::from("."),
+        current_boot,
+    );
+    // A live task handle plus a fresh heartbeat keeps the agent Running.
+    agent.task_handle = Some(tokio::spawn(async {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+    }));
+    inner.agents.insert(agent.id.clone(), agent);
+
+    let manager = Arc::new(RwLock::new(inner));
+    let context = ToolContext::new(".");
+    let result = inspect_agent_from_input(
+        &json!({"action": "status"}),
+        manager.clone(),
+        &context,
+        false,
+        None,
+    )
+    .await
+    .expect("status projection should succeed");
+    let payload: serde_json::Value =
+        serde_json::from_str(&result.content).expect("status payload should be json");
+    let agent_row = payload["agents"]
+        .as_array()
+        .and_then(|agents| agents.first())
+        .expect("running agent row");
+    assert_eq!(agent_row["status"], "running", "{agent_row}");
+    assert_eq!(agent_row["compact"], true, "{agent_row}");
+    assert!(agent_row.get("snapshot").is_none(), "{agent_row}");
+    assert!(agent_row.get("worker_record").is_none(), "{agent_row}");
+    assert!(agent_row["usage"].is_object(), "supervision keeps usage");
+
+    // verbose: true restores the full projection for the same running child.
+    let verbose = inspect_agent_from_input(
+        &json!({"action": "status", "verbose": true}),
+        manager,
+        &context,
+        false,
+        None,
+    )
+    .await
+    .expect("verbose status should succeed");
+    let verbose_payload: serde_json::Value =
+        serde_json::from_str(&verbose.content).expect("verbose payload json");
+    let verbose_row = verbose_payload["agents"]
+        .as_array()
+        .and_then(|agents| agents.first())
+        .expect("verbose agent row");
+    assert!(verbose_row.get("snapshot").is_some(), "{verbose_row}");
+    assert!(verbose_row.get("compact").is_none(), "{verbose_row}");
+}

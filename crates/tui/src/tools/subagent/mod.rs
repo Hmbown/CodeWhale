@@ -6710,11 +6710,41 @@ async fn inspect_agent_from_input(
             .collect::<Vec<_>>()
     };
 
+    // Unscoped status is a supervision poll, and it used to return the full
+    // projection for every agent — launch manifest, event ring, and any
+    // checkpointed message history included (one observed poll: 203KB).
+    // Running children now compact to their top-level supervision facts
+    // (status, usage, follow-up, verification stay; the heavy snapshot and
+    // worker_record drop). Terminal agents keep the full projection —
+    // fetching results is the point of a terminal row — and `verbose: true`
+    // restores the old shape everywhere.
+    let verbose = input
+        .get("verbose")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let mut projections = Vec::with_capacity(snapshots.len());
     for (snapshot, worker_record) in snapshots {
-        projections.push(
-            subagent_session_projection(snapshot, include_archived, context, worker_record).await,
-        );
+        let running = snapshot.status == SubAgentStatus::Running;
+        let projection =
+            subagent_session_projection(snapshot, include_archived, context, worker_record).await;
+        let mut value = serde_json::to_value(&projection)
+            .map_err(|err| ToolError::execution_failed(err.to_string()))?;
+        if running
+            && !verbose
+            && let Some(object) = value.as_object_mut()
+        {
+            object.remove("snapshot");
+            object.remove("worker_record");
+            object.remove("checkpoint");
+            object.insert("compact".to_string(), json!(true));
+            object.insert(
+                "compact_note".to_string(),
+                json!(
+                    "Running child compacted; pass agent_id (or verbose: true) for the full projection."
+                ),
+            );
+        }
+        projections.push(value);
     }
     let payload = json!({
         "action": if peek { "peek" } else { "status" },
