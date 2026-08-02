@@ -14005,6 +14005,82 @@ fn the_launched_authority_is_the_one_the_spawn_boundary_accepts() {
 }
 
 #[tokio::test]
+async fn spawn_receipt_compacts_and_verbose_restores_the_archive() {
+    // Morning-report issue #4 (W6 rest): every spawn returned ~12KB because
+    // the receipt carried the full child prompt (launch_manifest inside
+    // worker_record) plus a duplicated snapshot. A spawn receipt is an
+    // acknowledgement; the archive stays behind verbose/status.
+    let mut inner = SubAgentManager::new(PathBuf::from("."), 1);
+    let current_boot = inner.session_boot_id().to_string();
+    let (input_tx, _input_rx) = mpsc::unbounded_channel();
+    // Fat prompt stands in for the real assembled child prompt so the size
+    // assertion below is exercised against realistic weight.
+    let fat_prompt = "x".repeat(12_000);
+    let mut agent = SubAgent::new(
+        "test_agent_spawn_receipt".to_string(),
+        FleetRole::Scout,
+        fat_prompt,
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        Some("Blue".to_string()),
+        Some(vec!["read_file".to_string()]),
+        input_tx,
+        PathBuf::from("."),
+        current_boot,
+    );
+    agent.task_handle = Some(tokio::spawn(async {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+    }));
+    let agent_id = agent.id.clone();
+    inner.agents.insert(agent_id.clone(), agent);
+
+    let snapshot = inner.get_result(&agent_id).expect("snapshot");
+    let worker_record = inner.get_worker_record(&agent_id);
+    let context = ToolContext::new(".");
+    let projection = subagent_session_projection(snapshot, false, &context, worker_record).await;
+
+    let full = serde_json::to_value(&projection).expect("projection json");
+    let full_len = serde_json::to_string(&full).expect("serialize").len();
+
+    let mut compact = full.clone();
+    compact_spawn_receipt(&mut compact, false);
+    let compact_len = serde_json::to_string(&compact).expect("serialize").len();
+
+    assert!(compact.get("snapshot").is_none());
+    assert!(compact.get("worker_record").is_none());
+    assert!(compact.get("checkpoint").is_none());
+    assert!(compact.get("artifacts").is_none());
+    assert!(compact.get("takeover").is_none());
+    assert!(compact.get("transcript_handle").is_none());
+    assert!(compact.get("verification").is_none());
+    // The poll path must survive compaction — a spawn ack's one job is
+    // saying how to check on the child.
+    assert!(compact.get("follow_up").is_some());
+    assert!(compact.get("usage").is_some());
+    assert_eq!(compact["compact"], json!(true));
+    assert!(
+        compact["compact_note"]
+            .as_str()
+            .is_some_and(|note| note.contains("verbose: true")),
+        "{compact}"
+    );
+    assert!(
+        compact_len < 1_024,
+        "compact spawn receipt must stay under 1KB, got {compact_len}B (full: {full_len}B)"
+    );
+    assert!(
+        full_len > compact_len,
+        "full projection ({full_len}B) must outweigh the compact receipt ({compact_len}B)"
+    );
+
+    let mut verbose = full.clone();
+    compact_spawn_receipt(&mut verbose, true);
+    assert!(verbose.get("snapshot").is_some());
+    assert!(verbose.get("compact").is_none());
+    assert_eq!(verbose, full, "verbose: true must restore the old shape");
+}
+
+#[tokio::test]
 async fn unscoped_status_compacts_running_children_and_keeps_terminal_full() {
     // Morning-report issue #4: one unscoped status poll returned 203KB
     // because every RUNNING child carried its full projection (launch

@@ -6575,6 +6575,10 @@ impl ToolSpec for AgentTool {
             }
         }
         touch_running_shell_owners(&self.manager, &context.execution.shell_manager).await;
+        let verbose = input
+            .get("verbose")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let (snapshot, _) =
             spawn_subagent_from_input(input, self.manager.clone(), self.runtime.clone()).await?;
         let worker_record = {
@@ -6582,8 +6586,11 @@ impl ToolSpec for AgentTool {
             manager.get_worker_record(&snapshot.agent_id)
         };
         let projection = subagent_session_projection(snapshot, false, context, worker_record).await;
-        let mut tool_result = ToolResult::json(&projection)
+        let mut value = serde_json::to_value(&projection)
             .map_err(|e| ToolError::execution_failed(e.to_string()))?;
+        compact_spawn_receipt(&mut value, verbose);
+        let mut tool_result =
+            ToolResult::json(&value).map_err(|e| ToolError::execution_failed(e.to_string()))?;
         let metadata = json!({
             "action": "start",
             "agent_id": projection.agent_id,
@@ -6595,6 +6602,41 @@ impl ToolSpec for AgentTool {
         tool_result.metadata = Some(metadata);
         Ok(tool_result)
     }
+}
+
+/// A spawn receipt is an acknowledgement, not an archive: the full projection
+/// carried the complete child prompt (launch_manifest inside `worker_record`)
+/// plus a duplicated `snapshot` — ~12KB per spawn (morning-report issue #4).
+/// Same compaction contract as unscoped status (9fa5e04e6): strip the heavy
+/// keys, say so, and let `verbose: true` restore the old shape.
+fn compact_spawn_receipt(value: &mut Value, verbose: bool) {
+    if verbose {
+        return;
+    }
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    // Archive weight: the child prompt and its duplicate.
+    object.remove("snapshot");
+    object.remove("worker_record");
+    object.remove("checkpoint");
+    // Supervision detail that is meaningless seconds after spawn and fully
+    // retrievable via `agent status`: nothing has been written (artifacts),
+    // verified (verification), or worth taking over (takeover), and the
+    // transcript handle re-materializes on every status/peek. Unscoped
+    // status compaction keeps these because there they describe a child
+    // with history; a spawn ack has none yet.
+    object.remove("artifacts");
+    object.remove("takeover");
+    object.remove("transcript_handle");
+    object.remove("verification");
+    object.insert("compact".to_string(), json!(true));
+    object.insert(
+        "compact_note".to_string(),
+        json!(
+            "Spawn receipt compacted; transcript, takeover, artifacts, and the full projection are available via agent status with this agent_id, or pass verbose: true on start."
+        ),
+    );
 }
 
 /// Repeat peek/status calls on an unchanged running child inside this window
