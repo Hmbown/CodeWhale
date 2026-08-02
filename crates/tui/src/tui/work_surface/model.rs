@@ -117,9 +117,9 @@ pub(super) const SIDE_WIDTH_MAX: u16 = 80;
 pub(crate) struct SessionInstanceScope {
     pub(super) session_id: String,
     pub(super) from_prior_instance: bool,
-    /// Node ids present in the first graph capture of a prior-instance
-    /// session: the restored persisted rows, as opposed to work this
-    /// instance creates afterwards.
+    /// Node ids present in the graph supplied at session restore time: the
+    /// restored persisted rows, as opposed to work this instance creates
+    /// afterwards.
     pub(super) restored_nodes: HashSet<String>,
 }
 
@@ -242,6 +242,31 @@ impl WorkSurfaceState {
         self.user_turn_epoch = self.user_turn_epoch.wrapping_add(1);
     }
 
+    /// Record the exact graph restored from persisted session state. This
+    /// must happen at the restore boundary: the first later runtime capture
+    /// may already contain work created by this process.
+    pub(crate) fn record_restored_session(
+        &mut self,
+        session_id: &str,
+        graph: Option<&WorkGraphSnapshot>,
+    ) {
+        let from_prior_instance = session_record_from_prior_instance(self, session_id);
+        let restored_nodes = if from_prior_instance {
+            graph
+                .into_iter()
+                .flat_map(|graph| graph.nodes.iter())
+                .map(|node| node.id.as_str().to_string())
+                .collect()
+        } else {
+            HashSet::new()
+        };
+        self.session_instance = Some(SessionInstanceScope {
+            session_id: session_id.to_string(),
+            from_prior_instance,
+            restored_nodes,
+        });
+    }
+
     /// A restored graph row owned by a prior session instance whose terminal
     /// failure or staleness must not render as this session's live work
     /// (#4416). Plan steps stay: the resumed to-do list is the point of
@@ -359,7 +384,7 @@ pub(super) fn project(app: &mut App) -> Vec<WorkRow> {
         ),
     };
 
-    update_session_instance_scope(app, graph.as_ref());
+    update_session_instance_scope(app);
 
     let rows = match graph {
         Some(graph) => graph_rows(
@@ -451,9 +476,9 @@ pub(super) fn project_visible(app: &mut App) -> Vec<WorkRow> {
 
 /// Classify the current session against this process's session-instance
 /// boot id (#4416), mirroring the `SubAgentManager` prior-session pattern
-/// (#405). The probe runs once per session id; the first captured graph of
-/// a prior-instance session records which node ids are restored rows.
-fn update_session_instance_scope(app: &mut App, graph: Option<&WorkGraphSnapshot>) {
+/// (#405). The probe runs once per session id. Persisted row identity is
+/// recorded separately at the actual session restore boundary.
+fn update_session_instance_scope(app: &mut App) {
     let Some(session_id) = app.current_session_id.clone() else {
         app.work_surface.session_instance = None;
         return;
@@ -471,16 +496,6 @@ fn update_session_instance_scope(app: &mut App, graph: Option<&WorkGraphSnapshot
             from_prior_instance,
             restored_nodes: HashSet::new(),
         });
-    }
-    if let (Some(scope), Some(graph)) = (app.work_surface.session_instance.as_mut(), graph)
-        && scope.from_prior_instance
-        && scope.restored_nodes.is_empty()
-    {
-        scope.restored_nodes = graph
-            .nodes
-            .iter()
-            .map(|node| node.id.as_str().to_string())
-            .collect();
     }
 }
 

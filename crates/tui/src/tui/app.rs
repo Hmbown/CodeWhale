@@ -4419,6 +4419,12 @@ impl App {
                 todos: state.todos,
                 plan: state.plan,
             });
+            self.work_surface.record_restored_session(
+                session_id,
+                normalized_state
+                    .as_ref()
+                    .and_then(|state| state.graph.as_ref()),
+            );
             self.cached_work_summary = None;
             self.last_known_work_state = Some(normalized_state);
             return Ok(());
@@ -4444,6 +4450,7 @@ impl App {
         *plan = restored_plan;
         drop(plan);
         drop(todos);
+        self.work_surface.record_restored_session(session_id, None);
         self.cached_work_summary = None;
         self.last_known_work_state =
             Some((!normalized_state.is_empty()).then_some(normalized_state));

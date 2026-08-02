@@ -171,6 +171,17 @@ mod tests {
             .expect("restore graph");
     }
 
+    fn restore_saved_graph(app: &mut App, graph: &crate::work_graph::WorkGraphSnapshot) {
+        app.current_session_id = Some(SESSION.to_string());
+        let state = crate::session_manager::SessionWorkState {
+            graph: Some(graph.clone()),
+            todos: crate::work_graph::project_todos(graph),
+            plan: crate::work_graph::project_plan(graph),
+        };
+        app.restore_work_state(SESSION, std::path::Path::new("."), Some(&state))
+            .expect("restore saved graph");
+    }
+
     fn render_text(app: &mut App, width: u16, height: u16) -> String {
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).expect("terminal");
@@ -978,7 +989,7 @@ mod tests {
         let mut app = app();
         app.work_surface.session_owner_probe_dir = Some(dir.path().to_path_buf());
         let graph = durable_failed_operation_graph();
-        restore_graph(&mut app, &graph);
+        restore_saved_graph(&mut app, &graph);
 
         let rows = super::model::project(&mut app);
         assert!(
@@ -1027,6 +1038,34 @@ mod tests {
             rows.iter()
                 .any(|row| row.label.contains("Verify installed build")),
             "this instance's own failed work must stay visible: {rows:#?}"
+        );
+    }
+
+    // Regression for review of #5063: if a prior session persisted no graph,
+    // the first graph captured later belongs to this process and must not be
+    // mistaken for restored residue.
+    #[test]
+    fn first_live_graph_after_empty_prior_restore_stays_visible() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manager =
+            crate::session_manager::SessionManager::new(dir.path().to_path_buf()).expect("manager");
+        manager
+            .record_session_boot_owner(SESSION, "boot_other_instance")
+            .expect("stamp other instance");
+
+        let mut app = app();
+        app.work_surface.session_owner_probe_dir = Some(dir.path().to_path_buf());
+        app.current_session_id = Some(SESSION.to_string());
+        app.restore_work_state(SESSION, std::path::Path::new("."), None)
+            .expect("restore empty prior session");
+
+        let graph = durable_failed_operation_graph();
+        restore_graph(&mut app, &graph);
+        let rows = super::model::project(&mut app);
+        assert!(
+            rows.iter()
+                .any(|row| row.label.contains("Verify installed build")),
+            "this instance's first live graph must stay visible: {rows:#?}"
         );
     }
 
