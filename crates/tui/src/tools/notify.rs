@@ -44,8 +44,11 @@ impl ToolSpec for NotifyTool {
          routine progress updates, conversational acknowledgements, or \
          confirmation that the model is alive — that's noise. The user \
          can disable notifications entirely via \
-         `[notifications].method = \"off\"` in `~/.deepseek/config.toml`; \
-         when disabled this tool is a silent no-op."
+         `[notifications].method = \"off\"` or `[notifications].quiet = \
+         true`, or just this tool's category via \
+         `[notifications.events].model-notify = false`, in \
+         `~/.deepseek/config.toml`; when disabled this tool is a silent \
+         no-op."
     }
 
     fn input_schema(&self) -> Value {
