@@ -502,7 +502,7 @@
     "OnboardTrustFooterMiddle": " 信任并继续，",
     "OnboardTrustFooterUntrustedMiddle": " 不信任并继续，",
     "OnboardTrustFooterSuffix": " 退出 Codewhale",
-    "OnboardTrustEnterHint": "按 1 或 Y 信任，按 3 或 U 在不信任的情况下继续，按 2、N 或 Esc 退出 Codewhale。",
+    "OnboardTrustEnterHint": "按 1 或 Y 信任，按 2 或 U 在不信任的情况下继续，按 3、N 或 Esc 退出 Codewhale。",
     "OnboardTrustUntrustedNotice": "在未信任工作区的情况下继续 — 工具与钩子保持受限。",
     "OnboardMentalTitle": "Codewhale 的工作方式",
     "OnboardMentalModesLabel": "模式",

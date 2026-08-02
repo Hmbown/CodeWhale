@@ -479,7 +479,7 @@
     "OnboardTrustFooterMiddle": " zum Vertrauen und Fortfahren, ",
     "OnboardTrustFooterUntrustedMiddle": " zum Fortfahren ohne Vertrauen, ",
     "OnboardTrustFooterSuffix": " zum Beenden von Codewhale",
-    "OnboardTrustEnterHint": "Drücke 1 oder Y zum Vertrauen, 3 oder U, um ohne Vertrauen fortzufahren, oder 2, N oder Esc, um Codewhale zu beenden.",
+    "OnboardTrustEnterHint": "Drücke 1 oder Y zum Vertrauen, 2 oder U, um ohne Vertrauen fortzufahren, oder 3, N oder Esc, um Codewhale zu beenden.",
     "OnboardTrustUntrustedNotice": "Fortfahren ohne Workspace-Vertrauen — Tools und Hooks bleiben eingeschränkt.",
     "OnboardMentalTitle": "Wie Codewhale funktioniert",
     "OnboardMentalModesLabel": "Modi",

@@ -479,7 +479,7 @@
     "OnboardTrustFooterMiddle": " щоб довірити й продовжити, ",
     "OnboardTrustFooterUntrustedMiddle": " щоб продовжити без довіри, ",
     "OnboardTrustFooterSuffix": " щоб вийти з Codewhale",
-    "OnboardTrustEnterHint": "Натисніть 1 або Y, щоб довірити; 3 або U, щоб продовжити без довіри; або 2, N чи Esc, щоб вийти з Codewhale.",
+    "OnboardTrustEnterHint": "Натисніть 1 або Y, щоб довірити; 2 або U, щоб продовжити без довіри; або 3, N чи Esc, щоб вийти з Codewhale.",
     "OnboardTrustUntrustedNotice": "Продовження без довіри до робочої області — інструменти та хуки лишаються обмеженими.",
     "OnboardMentalTitle": "Як працює Codewhale",
     "OnboardMentalModesLabel": "Режими",

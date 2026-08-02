@@ -502,7 +502,7 @@
     "OnboardTrustFooterMiddle": " で信頼して続行、",
     "OnboardTrustFooterUntrustedMiddle": " で信頼せずに続行、",
     "OnboardTrustFooterSuffix": " で Codewhale を終了",
-    "OnboardTrustEnterHint": "1 または Y で信頼、3 または U で信頼せずに続行、2・N・Esc で Codewhale を終了します。",
+    "OnboardTrustEnterHint": "1 または Y で信頼、2 または U で信頼せずに続行、3・N・Esc で Codewhale を終了します。",
     "OnboardTrustUntrustedNotice": "ワークスペースを信頼せずに続行します — ツールとフックは制限されたままです。",
     "OnboardMentalTitle": "Codewhale のしくみ",
     "OnboardMentalModesLabel": "モード",

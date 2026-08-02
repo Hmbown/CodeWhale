@@ -3383,7 +3383,9 @@ pub(crate) fn composer_empty_hint_text(app: &App) -> Cow<'static, str> {
     if app.is_history_search_active() {
         app.tr(crate::localization::MessageId::HistorySearchPlaceholder)
     } else if app.mode == crate::tui::app::AppMode::Operate {
-        Cow::Borrowed("Coordinate parallel tasks...")
+        // Operate is goal-driven; the empty composer says what to type, not
+        // orchestration jargon a first-run user has no model for.
+        Cow::Borrowed("Describe the goal — Codewhale keeps working until it's done")
     } else {
         app.tr(crate::localization::MessageId::ComposerPlaceholder)
     }
@@ -5993,7 +5995,7 @@ mod tests {
 
         assert_eq!(
             composer_empty_hint_text(&app),
-            "Coordinate parallel tasks..."
+            "Describe the goal — Codewhale keeps working until it's done"
         );
     }
 

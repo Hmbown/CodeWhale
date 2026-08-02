@@ -6071,12 +6071,15 @@ async fn run_event_loop(
                             app.status_message = Some(format!("Failed to trust workspace: {err}"));
                         }
                     }
-                    KeyCode::Char('u') | KeyCode::Char('U') | KeyCode::Char('3')
+                    // Number keys mirror the footer's reading order (1 trust,
+                    // 2 continue untrusted, 3 quit) so the displayed digits
+                    // are sequential instead of 1/3/2.
+                    KeyCode::Char('u') | KeyCode::Char('U') | KeyCode::Char('2')
                         if app.onboarding == OnboardingState::TrustDirectory =>
                     {
                         continue_without_trusting_directory(app);
                     }
-                    KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Char('2')
+                    KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Char('3')
                         if app.onboarding == OnboardingState::TrustDirectory =>
                     {
                         let _ = engine_handle.send(Op::Shutdown).await;

@@ -479,7 +479,7 @@
     "OnboardTrustFooterMiddle": " विश्वास करके जारी रखें, ",
     "OnboardTrustFooterUntrustedMiddle": " बिना विश्वास के जारी रखें, ",
     "OnboardTrustFooterSuffix": " Codewhale बंद करें",
-    "OnboardTrustEnterHint": "विश्वास के लिए 1 या Y, बिना विश्वास के जारी रखने के लिए 3 या U, या Codewhale बंद करने के लिए 2, N या Esc दबाएँ।",
+    "OnboardTrustEnterHint": "विश्वास के लिए 1 या Y, बिना विश्वास के जारी रखने के लिए 2 या U, या Codewhale बंद करने के लिए 3, N या Esc दबाएँ।",
     "OnboardTrustUntrustedNotice": "वर्कस्पेस ट्रस्ट के बिना जारी — टूल और हुक प्रतिबंधित रहेंगे।",
     "OnboardMentalTitle": "Codewhale कैसे काम करता है",
     "OnboardMentalModesLabel": "मोड",

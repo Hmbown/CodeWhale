@@ -502,7 +502,7 @@
     "OnboardTrustFooterMiddle": " để tin cậy và tiếp tục, ",
     "OnboardTrustFooterUntrustedMiddle": " để tiếp tục mà không tin cậy, ",
     "OnboardTrustFooterSuffix": " để thoát Codewhale",
-    "OnboardTrustEnterHint": "Nhấn 1 hoặc Y để tin cậy, 3 hoặc U để tiếp tục mà không tin cậy, hoặc 2, N, Esc để thoát Codewhale.",
+    "OnboardTrustEnterHint": "Nhấn 1 hoặc Y để tin cậy, 2 hoặc U để tiếp tục mà không tin cậy, hoặc 3, N, Esc để thoát Codewhale.",
     "OnboardTrustUntrustedNotice": "Tiếp tục mà không tin cậy workspace — công cụ và hook vẫn bị hạn chế.",
     "OnboardMentalTitle": "Cách Codewhale hoạt động",
     "OnboardMentalModesLabel": "Chế độ",

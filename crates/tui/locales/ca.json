@@ -479,7 +479,7 @@
     "OnboardTrustFooterMiddle": " per confiar-hi i continuar, ",
     "OnboardTrustFooterUntrustedMiddle": " per continuar sense confiar-hi, ",
     "OnboardTrustFooterSuffix": " per sortir de Codewhale",
-    "OnboardTrustEnterHint": "Prem 1 o Y per confiar-hi, 3 o U per continuar sense confiar-hi, o 2, N o Esc per sortir de Codewhale.",
+    "OnboardTrustEnterHint": "Prem 1 o Y per confiar-hi, 2 o U per continuar sense confiar-hi, o 3, N o Esc per sortir de Codewhale.",
     "OnboardTrustUntrustedNotice": "S'ha continuat sense confiança a l'espai de treball — les eines i els hooks continuen restringits.",
     "OnboardMentalTitle": "Com funciona Codewhale",
     "OnboardMentalModesLabel": "Modes",

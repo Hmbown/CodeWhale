@@ -39,7 +39,10 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         OnboardingState::Language => language::lines(app),
         OnboardingState::Appearance => appearance_lines(app),
         OnboardingState::Provider => provider_lines(app),
-        OnboardingState::TrustDirectory => trust_directory::lines(app),
+        OnboardingState::TrustDirectory => {
+            // Inner text width: panel borders (2) plus horizontal padding (4).
+            trust_directory::lines(app, usize::from(content_width.saturating_sub(6)))
+        }
         OnboardingState::MentalModels => mental_models::lines(app),
         OnboardingState::Tips => tips_lines(app),
         OnboardingState::None => Vec::new(),
@@ -433,7 +436,7 @@ mod tests {
     #[test]
     fn trust_footer_advertises_only_explicit_trust_keys() {
         let app = test_app_with_locale(Locale::En);
-        let lines = trust_directory::lines(&app);
+        let lines = trust_directory::lines(&app, 70);
         let footer = lines
             .last()
             .expect("trust footer")
@@ -444,7 +447,7 @@ mod tests {
 
         assert_eq!(
             footer,
-            "Press 1/Y to trust and continue, 3/U to continue without trusting, 2/N/Esc to quit Codewhale"
+            "Press 1/Y to trust and continue, 2/U to continue without trusting, 3/N/Esc to quit Codewhale"
         );
     }
 

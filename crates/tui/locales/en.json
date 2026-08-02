@@ -502,7 +502,7 @@
     "OnboardTrustFooterMiddle": " to trust and continue, ",
     "OnboardTrustFooterUntrustedMiddle": " to continue without trusting, ",
     "OnboardTrustFooterSuffix": " to quit Codewhale",
-    "OnboardTrustEnterHint": "Press 1 or Y to trust, 3 or U to continue without trusting, or 2, N, or Esc to quit Codewhale.",
+    "OnboardTrustEnterHint": "Press 1 or Y to trust, 2 or U to continue without trusting, or 3, N, or Esc to quit Codewhale.",
     "OnboardTrustUntrustedNotice": "Continuing without workspace trust — tools and hooks stay restricted.",
     "OnboardMentalTitle": "How Codewhale works",
     "OnboardMentalModesLabel": "Modes",

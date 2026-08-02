@@ -477,7 +477,11 @@ impl<'a> HeaderWidget<'a> {
         let model_width = model.width();
         let total_width = workspace_width + model_width;
         let min_workspace = 4;
-        let min_model = 4;
+        // The model identity is a trust fact ("what am I talking to?"), so it
+        // keeps enough room to stay recognizable — "deepseek-v4-…" — before
+        // the proportional split lets a long workspace name squeeze it to a
+        // meaningless "deep…" (morning-report first-run copy batch).
+        let min_model = model_width.min(14).max(4);
 
         let proportional_workspace =
             ((content_width as f64 * workspace_width as f64) / total_width as f64).round() as usize;

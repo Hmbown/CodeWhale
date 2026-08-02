@@ -479,7 +479,7 @@
     "OnboardTrustFooterMiddle": " untuk mempercayai dan lanjut, ",
     "OnboardTrustFooterUntrustedMiddle": " untuk lanjut tanpa mempercayai, ",
     "OnboardTrustFooterSuffix": " untuk keluar dari Codewhale",
-    "OnboardTrustEnterHint": "Tekan 1 atau Y untuk mempercayai, 3 atau U untuk lanjut tanpa mempercayai, atau 2, N, atau Esc untuk keluar dari Codewhale.",
+    "OnboardTrustEnterHint": "Tekan 1 atau Y untuk mempercayai, 2 atau U untuk lanjut tanpa mempercayai, atau 3, N, atau Esc untuk keluar dari Codewhale.",
     "OnboardTrustUntrustedNotice": "Melanjutkan tanpa kepercayaan workspace — alat dan hook tetap dibatasi.",
     "OnboardMentalTitle": "Cara kerja Codewhale",
     "OnboardMentalModesLabel": "Mode",

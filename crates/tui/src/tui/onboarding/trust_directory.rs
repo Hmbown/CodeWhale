@@ -7,7 +7,44 @@ use crate::localization::MessageId;
 use crate::palette;
 use crate::tui::app::App;
 
-pub fn lines(app: &App) -> Vec<Line<'static>> {
+/// Wrap a path-bearing line at `/` boundaries so a deep workspace never
+/// hard-splits mid-component under ratatui's whitespace-only `Wrap`.
+/// Continuation lines are indented to read as one location.
+fn wrap_on_path_separators(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(8);
+    let mut out: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut chunk = String::new();
+    let mut flush = |current: &mut String, chunk: &mut String, out: &mut Vec<String>| {
+        if chunk.is_empty() {
+            return;
+        }
+        let candidate_len = current.chars().count() + chunk.chars().count();
+        if candidate_len > width && !current.is_empty() {
+            out.push(std::mem::take(current));
+            current.push_str("  ");
+        }
+        current.push_str(chunk);
+        chunk.clear();
+    };
+    for ch in text.chars() {
+        chunk.push(ch);
+        if ch == '/' {
+            flush(&mut current, &mut chunk, &mut out);
+        }
+    }
+    flush(&mut current, &mut chunk, &mut out);
+    if !current.is_empty() {
+        out.push(current);
+    }
+    if out.is_empty() {
+        vec![String::new()]
+    } else {
+        out
+    }
+}
+
+pub fn lines(app: &App, content_width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     lines.push(Line::from(Span::styled(
         app.tr(MessageId::OnboardTrustTitle).to_string(),
@@ -20,14 +57,17 @@ pub fn lines(app: &App) -> Vec<Line<'static>> {
         app.tr(MessageId::OnboardTrustQuestion).to_string(),
         Style::default().fg(palette::TEXT_PRIMARY),
     )));
-    lines.push(Line::from(Span::styled(
-        format!(
-            "{}{}",
-            app.tr(MessageId::OnboardTrustLocationPrefix),
-            crate::utils::display_path(&app.workspace)
-        ),
-        Style::default().fg(palette::TEXT_MUTED),
-    )));
+    let location = format!(
+        "{}{}",
+        app.tr(MessageId::OnboardTrustLocationPrefix),
+        crate::utils::display_path(&app.workspace)
+    );
+    for segment in wrap_on_path_separators(&location, content_width) {
+        lines.push(Line::from(Span::styled(
+            segment,
+            Style::default().fg(palette::TEXT_MUTED),
+        )));
+    }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         app.tr(MessageId::OnboardTrustRiskHint).to_string(),
@@ -61,7 +101,7 @@ pub fn lines(app: &App) -> Vec<Line<'static>> {
             Style::default().fg(palette::TEXT_MUTED),
         ),
         Span::styled(
-            "3/U",
+            "2/U",
             Style::default()
                 .fg(palette::TEXT_PRIMARY)
                 .add_modifier(Modifier::BOLD),
@@ -72,7 +112,7 @@ pub fn lines(app: &App) -> Vec<Line<'static>> {
             Style::default().fg(palette::TEXT_MUTED),
         ),
         Span::styled(
-            "2/N/Esc",
+            "3/N/Esc",
             Style::default()
                 .fg(palette::TEXT_PRIMARY)
                 .add_modifier(Modifier::BOLD),
@@ -100,7 +140,7 @@ mod tests {
         };
         let mut app = App::new(options, &Config::default());
         app.ui_locale = crate::localization::Locale::En;
-        let body = lines(&app)
+        let body = lines(&app, 70)
             .into_iter()
             .flat_map(|line| line.spans.into_iter().map(|span| span.content.to_string()))
             .collect::<Vec<_>>()
@@ -111,9 +151,9 @@ mod tests {
         assert!(body.contains("prompt injection"));
         assert!(body.contains("tools and hooks"));
         assert!(body.contains("1/Y"));
-        assert!(body.contains("3/U"));
+        assert!(body.contains("2/U"));
         assert!(body.contains("continue without trusting"));
-        assert!(body.contains("2/N/Esc"));
+        assert!(body.contains("3/N/Esc"));
         assert!(body.contains("quit Codewhale"));
     }
 }

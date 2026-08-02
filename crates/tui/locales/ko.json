@@ -502,7 +502,7 @@
     "OnboardTrustFooterMiddle": " 신뢰하고 계속, ",
     "OnboardTrustFooterUntrustedMiddle": " 신뢰하지 않고 계속, ",
     "OnboardTrustFooterSuffix": " Codewhale 종료",
-    "OnboardTrustEnterHint": "1 또는 Y로 신뢰, 3 또는 U로 신뢰 없이 계속, 2·N·Esc로 Codewhale을 종료합니다.",
+    "OnboardTrustEnterHint": "1 또는 Y로 신뢰, 2 또는 U로 신뢰 없이 계속, 3·N·Esc로 Codewhale을 종료합니다.",
     "OnboardTrustUntrustedNotice": "작업 공간을 신뢰하지 않고 계속합니다 — 도구와 훅은 제한된 상태로 유지됩니다.",
     "OnboardMentalTitle": "Codewhale 작동 방식",
     "OnboardMentalModesLabel": "모드",

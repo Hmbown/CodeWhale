@@ -502,7 +502,7 @@
     "OnboardTrustFooterMiddle": " para confiar y continuar, ",
     "OnboardTrustFooterUntrustedMiddle": " para continuar sin confiar, ",
     "OnboardTrustFooterSuffix": " para salir de Codewhale",
-    "OnboardTrustEnterHint": "Pulsa 1 o Y para confiar, 3 o U para continuar sin confiar, o 2, N o Esc para salir de Codewhale.",
+    "OnboardTrustEnterHint": "Pulsa 1 o Y para confiar, 2 o U para continuar sin confiar, o 3, N o Esc para salir de Codewhale.",
     "OnboardTrustUntrustedNotice": "Continuando sin confiar en el workspace: las herramientas y los hooks siguen restringidos.",
     "OnboardMentalTitle": "Cómo funciona Codewhale",
     "OnboardMentalModesLabel": "Modos",
