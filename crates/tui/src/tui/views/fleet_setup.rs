@@ -1690,8 +1690,11 @@ mod tests {
         ));
         let view = FleetSetupView::from_snapshot(snap);
 
-        let known = &view.model_choices[1];
-        assert_eq!(known.label, "deepseek-v4-pro");
+        let known = view
+            .model_choices
+            .iter()
+            .find(|choice| choice.label == "deepseek-v4-pro")
+            .expect("known catalog model row");
         assert!(
             known.description.contains("Capabilities:"),
             "{}",

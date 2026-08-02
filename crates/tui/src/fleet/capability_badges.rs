@@ -18,6 +18,7 @@ use codewhale_config::route::{CapabilityState, RouteCapabilities, RouteLimits};
 
 use crate::config::ApiProvider;
 use crate::model_registry::{self, ModelMetadata};
+use crate::tui::model_picker::format_picker_context_window;
 
 /// Resolved capability badges for one Fleet route.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,10 +106,10 @@ const fn catalog_provenance(source: &CatalogSource) -> &'static str {
 fn badges_from_route(limits: &RouteLimits, capabilities: &RouteCapabilities) -> Vec<String> {
     let mut badges = Vec::new();
     if let Some(context) = limits.context_tokens {
-        badges.push(format!("{} ctx", format_tokens(context)));
+        badges.push(format!("{} ctx", format_picker_context_window(context)));
     }
     if let Some(output) = limits.output_tokens {
-        badges.push(format!("{} out", format_tokens(output)));
+        badges.push(format!("{} out", format_picker_context_window(output)));
     }
     push_state_badge(&mut badges, capabilities.native_tool_calls, "tools");
     push_state_badge(&mut badges, capabilities.reasoning, "reasoning");
@@ -122,10 +123,16 @@ fn badges_from_route(limits: &RouteLimits, capabilities: &RouteCapabilities) -> 
 fn badges_from_registry(meta: &ModelMetadata) -> Vec<String> {
     let mut badges = Vec::new();
     if let Some(context) = meta.context_window {
-        badges.push(format!("{} ctx", format_tokens(u64::from(context))));
+        badges.push(format!(
+            "{} ctx",
+            format_picker_context_window(u64::from(context))
+        ));
     }
     if let Some(output) = meta.max_output {
-        badges.push(format!("{} out", format_tokens(u64::from(output))));
+        badges.push(format!(
+            "{} out",
+            format_picker_context_window(u64::from(output))
+        ));
     }
     if meta.supports_reasoning {
         badges.push("reasoning".to_string());
@@ -138,25 +145,6 @@ fn push_state_badge(badges: &mut Vec<String>, state: CapabilityState, name: &str
         CapabilityState::Supported => badges.push(name.to_string()),
         CapabilityState::Unsupported => badges.push(format!("no {name}")),
         CapabilityState::Unknown => {}
-    }
-}
-
-/// Compact token-count label matching the model picker's vocabulary
-/// (`1M`, `1.05M`, `262K`).
-fn format_tokens(tokens: u64) -> String {
-    if tokens >= 1_000_000 {
-        if tokens.is_multiple_of(1_000_000) {
-            format!("{}M", tokens / 1_000_000)
-        } else {
-            format!("{:.2}M", tokens as f64 / 1_000_000.0)
-                .trim_end_matches('0')
-                .trim_end_matches('.')
-                .to_string()
-        }
-    } else if tokens >= 1_000 {
-        format!("{}K", tokens / 1_000)
-    } else {
-        tokens.to_string()
     }
 }
 
@@ -259,9 +247,9 @@ mod tests {
 
     #[test]
     fn token_labels_match_picker_vocabulary() {
-        assert_eq!(format_tokens(1_000_000), "1M");
-        assert_eq!(format_tokens(1_050_000), "1.05M");
-        assert_eq!(format_tokens(262_144), "262K");
-        assert_eq!(format_tokens(500), "500");
+        assert_eq!(format_picker_context_window(1_000_000), "1M");
+        assert_eq!(format_picker_context_window(1_050_000), "1.05M");
+        assert_eq!(format_picker_context_window(262_144), "262K");
+        assert_eq!(format_picker_context_window(500), "500");
     }
 }

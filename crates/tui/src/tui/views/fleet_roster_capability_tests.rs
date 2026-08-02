@@ -54,4 +54,9 @@ fn operator_detail_surfaces_session_model_capabilities() {
         .join("\n");
     assert!(text.contains("Capabilities"), "{text}");
     assert!(text.contains("1M ctx"), "{text}");
+    assert!(text.contains("tools"), "{text}");
+    assert!(
+        text.contains("catalog"),
+        "operator should use provider-scoped catalog facts: {text}"
+    );
 }
