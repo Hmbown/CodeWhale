@@ -1613,6 +1613,9 @@ impl Engine {
             })
             .await;
 
+        if status == TurnOutcomeStatus::Interrupted {
+            self.emit_interrupted_survivor_status().await;
+        }
         let _ = self
             .tx_event
             .send(Event::TurnComplete {
@@ -4224,6 +4227,9 @@ impl Engine {
         // Emit turn complete event — after all post-turn bookkeeping so
         // the terminal is immediately responsive when the UI receives it.
         self.emit_goal_updated().await;
+        if status == TurnOutcomeStatus::Interrupted {
+            self.emit_interrupted_survivor_status().await;
+        }
         let turn_complete_delivered = self
             .tx_event
             .send(Event::TurnComplete {
@@ -4538,6 +4544,47 @@ impl Engine {
                 tool_catalog: None,
                 base_url: None,
             })
+            .await;
+    }
+
+    /// Turn-visible background shell jobs still running right now, formatted
+    /// for the interrupt-honesty status line (DGF-03, dogfood 2026-08-02):
+    /// Esc stops the model turn, not detached shell work. Without this,
+    /// files landing on disk after "Turn interrupted" read as a lie.
+    fn running_background_shell_survivors(&self) -> Vec<String> {
+        let Ok(mut manager) = self.shell_manager.lock() else {
+            return Vec::new();
+        };
+        manager
+            .list_jobs()
+            .into_iter()
+            .filter(|job| matches!(job.status, crate::tools::shell::ShellStatus::Running))
+            .map(|job| {
+                const MAX_COMMAND_CHARS: usize = 48;
+                let mut command: String = job.command.chars().take(MAX_COMMAND_CHARS).collect();
+                if job.command.chars().count() > MAX_COMMAND_CHARS {
+                    command.push('…');
+                }
+                format!("{} `{command}`", job.id)
+            })
+            .collect()
+    }
+
+    /// Emit the interrupt-honesty status naming still-running background
+    /// shell jobs. Called on the paths that can classify a turn as
+    /// Interrupted, immediately before their `TurnComplete` event.
+    async fn emit_interrupted_survivor_status(&self) {
+        let survivors = self.running_background_shell_survivors();
+        if survivors.is_empty() {
+            return;
+        }
+        let _ = self
+            .tx_event
+            .send(Event::status(format!(
+                "Turn interrupted, but {} background shell job(s) continue and may still write files: {}. Use /jobs to inspect or kill.",
+                survivors.len(),
+                survivors.join(", ")
+            )))
             .await;
     }
 

@@ -11973,6 +11973,74 @@ fn turn_metadata_is_byte_identical_across_identical_consecutive_turns() {
     );
 }
 
+#[tokio::test]
+async fn interrupted_turn_names_surviving_background_shell_jobs() {
+    // DGF-03 (dogfood 2026-08-02): Esc says "Turn interrupted" while
+    // detached background shells keep writing files. The interrupt path
+    // must name the survivors so the copy stops lying about what stopped.
+    let tmp = tempdir().expect("tempdir");
+    let marker = tmp.path().join("survivor-marker.txt");
+    let shell_manager = crate::tools::shell::new_shared_shell_manager(tmp.path().to_path_buf());
+
+    // Background sleep-then-write: still running at interrupt time, and its
+    // write lands only after the UI would have said "interrupted".
+    let task_id = {
+        let mut manager = shell_manager.lock().expect("shell manager");
+        let result = manager
+            .execute(
+                &format!("sleep 5 && touch '{}'", marker.display()),
+                None,
+                60_000,
+                true,
+            )
+            .expect("spawn background job");
+        result.task_id.expect("background task id")
+    };
+    assert!(
+        !marker.exists(),
+        "marker must not exist before the interrupt"
+    );
+
+    let runtime_services = crate::tools::spec::RuntimeToolServices {
+        shell_manager: Some(shell_manager.clone()),
+        ..crate::tools::spec::RuntimeToolServices::default()
+    };
+    let engine_config = EngineConfig {
+        model: "deepseek-v4-flash".to_string(),
+        workspace: tmp.path().to_path_buf(),
+        snapshots_enabled: false,
+        terminal_chrome_enabled: false,
+        runtime_services,
+        ..EngineConfig::default()
+    };
+    let (engine, handle) = Engine::new(engine_config, &Config::default());
+
+    engine.emit_interrupted_survivor_status().await;
+
+    let mut events = handle.rx_event.write().await;
+    let mut survivor_line = None;
+    while let Ok(event) = events.try_recv() {
+        if let Event::Status { message } = event
+            && message.contains("background shell job")
+        {
+            survivor_line = Some(message);
+        }
+    }
+    let survivor_line = survivor_line.expect("interrupt must name surviving background jobs");
+    assert!(survivor_line.contains(&task_id), "{survivor_line}");
+    assert!(
+        survivor_line.contains("may still write files"),
+        "{survivor_line}"
+    );
+    assert!(
+        !marker.exists(),
+        "the honesty line must fire while the job is still running"
+    );
+
+    // Cleanup: don't leave the sleeper running after the test.
+    let _ = shell_manager.lock().expect("shell manager").kill(&task_id);
+}
+
 #[test]
 fn turn_metadata_names_the_effective_sandbox_posture() {
     // DGF-02 (dogfood 2026-08-02): the model must know its own sandbox
