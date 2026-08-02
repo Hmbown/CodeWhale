@@ -2956,18 +2956,23 @@ pub(super) fn apply_reasoning_effort(
     let normalized = effort.trim().to_ascii_lowercase();
     match normalized.as_str() {
         "off" | "disabled" | "none" | "false" => match provider {
+            // DeepSeek dialect: the effort mapping lives in the
+            // date-annotated `deepseek_effort::DEEPSEEK_EFFORT_MAP` table
+            // (#5055) — do not inline labels here.
             ApiProvider::Deepseek
             | ApiProvider::DeepseekCN
-            | ApiProvider::Openrouter
-            | ApiProvider::XiaomiMimo
-            | ApiProvider::Novita
             | ApiProvider::Siliconflow
             | ApiProvider::SiliconflowCn
             | ApiProvider::Sglang
             | ApiProvider::Volcengine
             | ApiProvider::Deepinfra
+            | ApiProvider::Atlascloud => {
+                deepseek_effort::apply_deepseek_chat_effort(body, &normalized);
+            }
+            ApiProvider::Openrouter
+            | ApiProvider::XiaomiMimo
+            | ApiProvider::Novita
             | ApiProvider::Together
-            | ApiProvider::Atlascloud
             | ApiProvider::Zai => {
                 body["thinking"] = json!({ "type": "disabled" });
             }
@@ -3035,7 +3040,10 @@ pub(super) fn apply_reasoning_effort(
             ApiProvider::Xai => {}
         },
         "low" | "minimal" | "medium" | "mid" | "high" | "" => match provider {
-            // DeepSeek compatibility: low/medium both map to high
+            // DeepSeek compatibility: low/medium both map to high. The label
+            // comes from the date-annotated
+            // `deepseek_effort::DEEPSEEK_EFFORT_MAP` table (#5055) — do not
+            // inline it here.
             ApiProvider::Deepseek
             | ApiProvider::DeepseekCN
             | ApiProvider::Siliconflow
@@ -3044,8 +3052,7 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::Volcengine
             | ApiProvider::Deepinfra
             | ApiProvider::Atlascloud => {
-                body["reasoning_effort"] = json!("high");
-                body["thinking"] = json!({ "type": "enabled" });
+                deepseek_effort::apply_deepseek_chat_effort(body, &normalized);
             }
             // TelecomJS: see comment in the "off" branch above — the gateway's
             // Chat Completions API does not support reasoning_effort or thinking.
@@ -3131,6 +3138,9 @@ pub(super) fn apply_reasoning_effort(
             ApiProvider::Xai => {}
         },
         "xhigh" | "max" | "highest" | "ultracode" => match provider {
+            // DeepSeek dialect: the effort label comes from the
+            // date-annotated `deepseek_effort::DEEPSEEK_EFFORT_MAP` table
+            // (#5055) — do not inline it here.
             ApiProvider::Deepseek
             | ApiProvider::DeepseekCN
             | ApiProvider::Siliconflow
@@ -3139,8 +3149,7 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::Volcengine
             | ApiProvider::Deepinfra
             | ApiProvider::Atlascloud => {
-                body["reasoning_effort"] = json!("max");
-                body["thinking"] = json!({ "type": "enabled" });
+                deepseek_effort::apply_deepseek_chat_effort(body, &normalized);
             }
             // TelecomJS: see comment in the "off" branch above — the gateway's
             // Chat Completions API does not support reasoning_effort or thinking.
@@ -3345,6 +3354,7 @@ impl DeepSeekClient {
 
 mod anthropic;
 mod chat;
+mod deepseek_effort;
 mod prepared;
 mod provider_native_search;
 mod responses;
@@ -6975,6 +6985,53 @@ mod tests {
         );
         assert!(body.get("reasoning_effort").is_none());
         assert!(body.get("extra_body").is_none());
+    }
+
+    #[test]
+    fn deepseek_chat_effort_mapping_pinned_to_2026_07_31_docs() {
+        // Pins the full DeepSeek mapping through the Chat Completions path;
+        // source of truth is `deepseek_effort::DEEPSEEK_EFFORT_MAP` (#5055).
+        let disabled = json!({ "thinking": { "type": "disabled" } });
+        let high = json!({ "reasoning_effort": "high", "thinking": { "type": "enabled" } });
+        let max = json!({ "reasoning_effort": "max", "thinking": { "type": "enabled" } });
+        let cases: &[(&str, &Value)] = &[
+            ("off", &disabled),
+            ("disabled", &disabled),
+            ("none", &disabled),
+            ("false", &disabled),
+            ("minimal", &high),
+            ("low", &high),
+            ("medium", &high),
+            ("mid", &high),
+            ("", &high),
+            ("high", &high),
+            ("xhigh", &max),
+            ("max", &max),
+            ("highest", &max),
+            ("ultracode", &max),
+        ];
+        for provider in [
+            ApiProvider::Deepseek,
+            ApiProvider::DeepseekCN,
+            ApiProvider::Siliconflow,
+            ApiProvider::SiliconflowCn,
+            ApiProvider::Sglang,
+            ApiProvider::Volcengine,
+            ApiProvider::Deepinfra,
+            ApiProvider::Atlascloud,
+        ] {
+            for (effort, expected) in cases {
+                let mut body = json!({});
+                apply_reasoning_effort(&mut body, Some(effort), provider);
+                assert_eq!(body, **expected, "{provider:?} {effort:?}");
+            }
+            // Tiers the Chat path does not recognize leave the body untouched.
+            for effort in ["maximum", "unknown-tier"] {
+                let mut body = json!({});
+                apply_reasoning_effort(&mut body, Some(effort), provider);
+                assert_eq!(body, json!({}), "{provider:?} {effort:?}");
+            }
+        }
     }
 
     #[test]

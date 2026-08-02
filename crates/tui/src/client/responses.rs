@@ -744,14 +744,14 @@ fn responses_reasoning_effort(raw: &str, is_deepseek: bool) -> Option<&'static s
     if !is_deepseek {
         return codex_responses_reasoning_effort(raw);
     }
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "off" | "disabled" | "none" | "false" | "minimal" | "low" => Some("low"),
-        "xhigh" | "max" | "maximum" | "ultracode" => Some("max"),
-        // DeepSeek maps both low and medium to its normal high tier in
-        // thinking mode. Preserve explicit low for Codex compatibility, and
-        // normalize every remaining/automatic tier to a documented value.
-        _ => Some("high"),
-    }
+    // DeepSeek maps both low and medium to its normal high tier in thinking
+    // mode; explicit low is preserved for Codex compatibility. The labels
+    // come from the date-annotated
+    // `super::deepseek_effort::DEEPSEEK_EFFORT_MAP` table (#5055) — do not
+    // inline them here.
+    Some(super::deepseek_effort::responses_effort(
+        &raw.trim().to_ascii_lowercase(),
+    ))
 }
 
 fn responses_event_error_details(event: &Value) -> (String, String) {
@@ -1400,11 +1400,23 @@ mod tests {
 
     #[test]
     fn deepseek_responses_reasoning_effort_uses_documented_labels() {
-        assert_eq!(responses_reasoning_effort("low", true), Some("low"));
-        assert_eq!(responses_reasoning_effort("medium", true), Some("high"));
-        assert_eq!(responses_reasoning_effort("high", true), Some("high"));
-        assert_eq!(responses_reasoning_effort("xhigh", true), Some("max"));
-        assert_eq!(responses_reasoning_effort("max", true), Some("max"));
+        // Pins the full 2026-07-31 documented mapping through the Responses
+        // path; source of truth is `deepseek_effort::DEEPSEEK_EFFORT_MAP`
+        // (#5055).
+        for raw in ["off", "disabled", "none", "false", "minimal", "low"] {
+            assert_eq!(responses_reasoning_effort(raw, true), Some("low"), "{raw}");
+        }
+        for raw in ["medium", "mid", "", "high", "highest"] {
+            assert_eq!(responses_reasoning_effort(raw, true), Some("high"), "{raw}");
+        }
+        for raw in ["xhigh", "max", "maximum", "ultracode"] {
+            assert_eq!(responses_reasoning_effort(raw, true), Some("max"), "{raw}");
+        }
+        // Unknown tiers normalize to the documented default.
+        assert_eq!(
+            responses_reasoning_effort("unknown-tier", true),
+            Some("high")
+        );
     }
 
     #[test]
