@@ -19,8 +19,11 @@ pub(crate) const HARD_MAX_TIMEOUT: Duration = Duration::from_secs(60);
 pub(crate) const DEFAULT_MAX_BYTES: usize = 1_000_000;
 pub(crate) const HARD_MAX_BYTES: usize = 10 * 1024 * 1024;
 const MAX_REDIRECTS: usize = 5;
-const USER_AGENT: &str =
-    "Mozilla/5.0 (compatible; codewhale/0.9.1; +https://github.com/Hmbown/CodeWhale)";
+const USER_AGENT: &str = concat!(
+    "Mozilla/5.0 (compatible; codewhale/",
+    env!("CARGO_PKG_VERSION"),
+    "; +https://github.com/Hmbown/CodeWhale)"
+);
 
 #[derive(Debug, Clone)]
 pub(crate) struct FetchOptions {
@@ -462,6 +465,14 @@ mod tests {
         assert_eq!(&*large.bytes, b"0123456789");
         assert!(!large.truncated);
         assert!(!large.cache_hit);
+    }
+
+    #[test]
+    fn fetch_user_agent_tracks_the_crate_version() {
+        assert!(
+            USER_AGENT.contains(concat!("codewhale/", env!("CARGO_PKG_VERSION"))),
+            "guarded-fetch UA must never pin a stale release: {USER_AGENT}"
+        );
     }
 
     #[test]

@@ -9,6 +9,12 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) const MAX_SEARCH_RESULTS: u8 = 10;
 
+/// Shared retrieval defaults. `web_search` and `web.run` both derive their
+/// search knobs from these so the surfaces cannot drift apart.
+pub(crate) const DEFAULT_SEARCH_RESULTS: usize = 5;
+pub(crate) const DEFAULT_SEARCH_TIMEOUT_MS: u64 = 15_000;
+pub(crate) const MAX_SEARCH_TIMEOUT_MS: u64 = 60_000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum BackendId {
@@ -310,6 +316,23 @@ pub(crate) struct SearchResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retrieval_defaults_are_coherent_across_search_and_fetch() {
+        use super::super::fetch::{DEFAULT_TIMEOUT, HARD_MAX_TIMEOUT};
+
+        // Search and fetch share one default and one hard-cap timeout so the
+        // two halves of the retrieval path behave identically by default.
+        assert_eq!(
+            u128::from(DEFAULT_SEARCH_TIMEOUT_MS),
+            DEFAULT_TIMEOUT.as_millis()
+        );
+        assert_eq!(
+            u128::from(MAX_SEARCH_TIMEOUT_MS),
+            HARD_MAX_TIMEOUT.as_millis()
+        );
+        assert!(DEFAULT_SEARCH_RESULTS <= usize::from(MAX_SEARCH_RESULTS));
+    }
 
     #[test]
     fn search_query_normalizes_domains_and_bounds_count() {
