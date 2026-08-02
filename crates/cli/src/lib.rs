@@ -3633,6 +3633,14 @@ fn run_config_command(store: &mut ConfigStore, command: ConfigCommand) -> Result
             Ok(())
         }
         ConfigCommand::List => {
+            // Configured truth, not live-session truth (DGF-01): a running
+            // session keeps the route it resolved at launch, so these values
+            // must not be read as "what the current session is serving".
+            // `#` keeps the header safe for `key = value` line parsers.
+            println!("# configured values ({})", store.path().display());
+            println!(
+                "# a running session keeps the route it resolved at launch; `codewhale model resolve` reports the route a new session would take"
+            );
             for (key, value) in store.config.list_values() {
                 println!("{key} = {value}");
             }

@@ -3881,12 +3881,28 @@ async fn run_doctor(
     println!();
     println!("{}", "API Connectivity:".bold());
     let api_target = doctor_api_target(config);
+    // Configured-vs-active honesty (DGF-01): doctor describes the route a
+    // session launched NOW would resolve. It cannot see inside an already
+    // running session, which keeps the route it resolved at its own launch.
+    println!(
+        "  · scope: configured route — what a session launched now would use; a running session keeps the route it resolved at launch (its TUI header shows the live route)"
+    );
     println!("  · provider: {}", api_target.provider);
     println!(
         "  · base_url: {}",
         crate::doctor::structural_url_authority(&api_target.base_url)
     );
-    println!("  · model: {}", api_target.model);
+    match api_target.resolution {
+        DoctorModelResolution::Resolved => {
+            println!("  · model: {} (resolved)", api_target.model);
+        }
+        DoctorModelResolution::ConfiguredOnly => {
+            println!(
+                "  · model: {} (configured; route resolution unavailable)",
+                api_target.model
+            );
+        }
+    }
     let tls_status = doctor_tls_status(config);
     if !tls_status.certificate_verification {
         println!("  ! {}", tls_status.message);
@@ -6062,6 +6078,13 @@ fn run_doctor_json(
         "external_credentials": doctor_external_credential_consent_json(config),
         "base_url": crate::doctor::structural_url_authority(&api_target.base_url),
         "default_text_model": api_target.model,
+        // DGF-01: this report describes the route a session launched now
+        // would resolve; a running session keeps its launch-time route.
+        "route_scope": "configured_at_launch",
+        "model_resolution": match api_target.resolution {
+            DoctorModelResolution::Resolved => "resolved",
+            DoctorModelResolution::ConfiguredOnly => "configured_unresolved",
+        },
         "route": doctor_route_report(config),
         "strict_tool_mode": doctor_strict_tool_mode_report_json(&strict_tool_mode),
         "tls": {
@@ -6438,11 +6461,22 @@ fn doctor_search_provider_json(config: &Config) -> serde_json::Value {
     })
 }
 
+/// Whether the model in a [`DoctorApiTarget`] is the wire id the engine
+/// resolver produced, or only the raw configured value because resolution
+/// failed. Doctor never prints resolution error details — the JSON route
+/// report already redacts them for the same reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DoctorModelResolution {
+    Resolved,
+    ConfiguredOnly,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DoctorApiTarget {
     provider: String,
     base_url: String,
     model: String,
+    resolution: DoctorModelResolution,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -6456,10 +6490,25 @@ struct DoctorStrictToolModeStatus {
 
 fn doctor_api_target(config: &Config) -> DoctorApiTarget {
     let provider = config.api_provider();
+    // Report the model through the same resolver the live client uses at
+    // session launch (`client.rs` → `resolve_runtime_route`), so doctor's
+    // answer matches what a session started now would actually serve —
+    // saved provider models, alias normalization, and roster preference
+    // included — instead of re-deriving a config default that can diverge
+    // from the engine (DGF-01, dogfood 2026-08-02).
+    let (model, resolution) =
+        match crate::route_runtime::resolve_runtime_route(config, provider, None) {
+            Ok(route) => (route.model.clone(), DoctorModelResolution::Resolved),
+            Err(_) => (
+                config.default_model(),
+                DoctorModelResolution::ConfiguredOnly,
+            ),
+        };
     DoctorApiTarget {
         provider: config.provider_identity_for(provider),
         base_url: config.deepseek_base_url(),
-        model: config.default_model(),
+        model,
+        resolution,
     }
 }
 
@@ -12356,6 +12405,23 @@ mod doctor_endpoint_tests {
         assert_eq!(target.provider, "deepseek");
         assert_eq!(target.base_url, crate::config::DEFAULT_DEEPSEEK_BASE_URL);
         assert_eq!(target.model, crate::config::DEFAULT_TEXT_MODEL);
+        assert_eq!(target.resolution, DoctorModelResolution::Resolved);
+    }
+
+    #[test]
+    fn doctor_api_target_falls_back_to_configured_model_when_resolution_fails() {
+        // `custom` with no custom provider table cannot resolve an identity;
+        // doctor must fall back to the raw configured model and say so
+        // instead of presenting an unresolved value as the engine's route.
+        let config = Config {
+            provider: Some("custom".to_string()),
+            ..Default::default()
+        };
+
+        let target = doctor_api_target(&config);
+
+        assert_eq!(target.resolution, DoctorModelResolution::ConfiguredOnly);
+        assert_eq!(target.model, config.default_model());
     }
 
     #[test]
@@ -12371,6 +12437,7 @@ mod doctor_endpoint_tests {
         assert_eq!(target.base_url, crate::config::DEFAULT_DEEPSEEKCN_BASE_URL);
         assert_eq!(target.base_url, crate::config::DEFAULT_DEEPSEEK_BASE_URL);
         assert_eq!(target.model, crate::config::DEFAULT_TEXT_MODEL);
+        assert_eq!(target.resolution, DoctorModelResolution::Resolved);
     }
 
     #[test]
