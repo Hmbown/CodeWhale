@@ -1416,9 +1416,13 @@ impl ApprovalView {
     }
 
     pub fn new_for_locale(request: ApprovalRequest, locale: Locale) -> Self {
+        // A fresh card must never turn a reflexive Enter into authorization.
+        // Resolve the semantic deny option because its numeric index differs
+        // for persistent-allow and workflow approval cards.
+        let selected = ApprovalOption::Deny.index_for(&request);
         Self {
             request,
-            selected: 0,
+            selected,
             row_hitboxes: RefCell::new(Vec::new()),
             locale,
             timeout: None,
@@ -2587,7 +2591,7 @@ mod tests {
     #[test]
     fn test_approval_view_initial_state() {
         let view = ApprovalView::new(benign_request());
-        assert_eq!(view.selected, 0);
+        assert_eq!(view.current_option(), ApprovalOption::Deny);
         assert!(view.timeout.is_none());
         assert_eq!(view.risk(), RiskLevel::Benign);
     }
@@ -2976,25 +2980,25 @@ diff --git a/src/b.rs b/src/b.rs
     #[test]
     fn test_approval_view_navigation() {
         let mut view = ApprovalView::new(benign_request());
-        assert_eq!(view.selected, 0);
+        assert_eq!(view.current_option(), ApprovalOption::Deny);
 
         view.select_next();
-        assert_eq!(view.selected, 1);
+        assert_eq!(view.current_option(), ApprovalOption::Abort);
         view.select_next();
-        assert_eq!(view.selected, 2);
+        assert_eq!(view.current_option(), ApprovalOption::ApproveOnce);
         view.select_next();
-        assert_eq!(view.selected, 3);
+        assert_eq!(view.current_option(), ApprovalOption::ApproveAlways);
 
-        // Wraps to the first option rather than dead-ending (#4755).
+        // Continue through the semantic default rather than dead-ending (#4755).
         view.select_next();
-        assert_eq!(view.selected, 0);
+        assert_eq!(view.current_option(), ApprovalOption::Deny);
 
-        // And back around the other way.
+        // And back through the same order the other way.
         view.select_prev();
-        assert_eq!(view.selected, 3);
+        assert_eq!(view.current_option(), ApprovalOption::ApproveAlways);
 
         view.select_prev();
-        assert_eq!(view.selected, 2);
+        assert_eq!(view.current_option(), ApprovalOption::ApproveOnce);
     }
 
     #[test]
@@ -3134,13 +3138,13 @@ diff --git a/src/b.rs b/src/b.rs
     }
 
     #[test]
-    fn benign_enter_approves_in_one_step() {
+    fn benign_enter_denies_by_default() {
         let mut view = ApprovalView::new(benign_request());
         let action = view.handle_key(create_key_event(KeyCode::Enter));
         assert!(matches!(
             action,
             ViewAction::EmitAndClose(ViewEvent::ApprovalDecision {
-                decision: ReviewDecision::Approved,
+                decision: ReviewDecision::Denied,
                 ..
             })
         ));
@@ -3284,16 +3288,15 @@ diff --git a/src/b.rs b/src/b.rs
     fn test_approval_view_enter_uses_selected_option() {
         let mut view = ApprovalView::new(benign_request());
 
-        // Navigate to index 2 (Denied)
+        // The semantic default is Deny; navigate once to Abort and commit it.
         view.select_next();
-        view.select_next();
-        assert_eq!(view.selected, 2);
+        assert_eq!(view.current_option(), ApprovalOption::Abort);
 
         let action = view.handle_key(create_key_event(KeyCode::Enter));
         assert!(matches!(
             action,
             ViewAction::EmitAndClose(ViewEvent::ApprovalDecision {
-                decision: ReviewDecision::Denied,
+                decision: ReviewDecision::Abort,
                 ..
             })
         ));
@@ -3304,19 +3307,19 @@ diff --git a/src/b.rs b/src/b.rs
         let mut view = ApprovalView::new(benign_request());
 
         view.handle_key(create_key_event(KeyCode::Up));
-        assert_eq!(view.selected, 3); // wraps to the last option (#4755)
+        assert_eq!(view.current_option(), ApprovalOption::ApproveAlways);
 
         view.handle_key(create_key_event(KeyCode::Down));
-        assert_eq!(view.selected, 0); // and back around to the first
+        assert_eq!(view.current_option(), ApprovalOption::Deny);
 
         view.handle_key(create_key_event(KeyCode::Down));
-        assert_eq!(view.selected, 1);
+        assert_eq!(view.current_option(), ApprovalOption::Abort);
 
         view.handle_key(create_key_event(KeyCode::Char('j')));
-        assert_eq!(view.selected, 2);
+        assert_eq!(view.current_option(), ApprovalOption::ApproveOnce);
 
         view.handle_key(create_key_event(KeyCode::Char('k')));
-        assert_eq!(view.selected, 1);
+        assert_eq!(view.current_option(), ApprovalOption::Abort);
     }
 
     #[test]
@@ -3466,30 +3469,33 @@ diff --git a/src/b.rs b/src/b.rs
     }
 
     #[test]
-    fn destructive_enter_approves_selected_option() {
+    fn destructive_enter_denies_by_default() {
         let mut view = ApprovalView::new(destructive_request());
 
-        // Selection starts at ApproveOnce — Enter commits the selected option.
+        // The persistent-allow row changes numeric indices, but the semantic
+        // default still starts at Deny.
+        assert_eq!(view.current_option(), ApprovalOption::Deny);
         let action = view.handle_key(create_key_event(KeyCode::Enter));
         assert!(matches!(
             action,
             ViewAction::EmitAndClose(ViewEvent::ApprovalDecision {
-                decision: ReviewDecision::Approved,
+                decision: ReviewDecision::Denied,
                 ..
             })
         ));
     }
 
     #[test]
-    fn destructive_navigation_then_enter_commits_highlighted_option() {
+    fn destructive_navigation_then_enter_commits_highlighted_abort() {
         let mut view = ApprovalView::new(destructive_request());
 
         view.handle_key(create_key_event(KeyCode::Down));
+        assert_eq!(view.current_option(), ApprovalOption::Abort);
         let action = view.handle_key(create_key_event(KeyCode::Enter));
         assert!(matches!(
             action,
             ViewAction::EmitAndClose(ViewEvent::ApprovalDecision {
-                decision: ReviewDecision::ApprovedForSession,
+                decision: ReviewDecision::Abort,
                 ..
             })
         ));
@@ -4305,7 +4311,8 @@ diff --git a/src/b.rs b/src/b.rs
 
         let view = ApprovalView::new(request);
         assert!(view.is_workflow_plan_approval());
-        assert_eq!(view.current_decision(), ReviewDecision::Approved);
+        assert_eq!(view.current_option(), ApprovalOption::Deny);
+        assert_eq!(view.current_decision(), ReviewDecision::Denied);
     }
 
     #[test]
