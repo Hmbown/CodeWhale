@@ -1084,6 +1084,66 @@ fn network_restricted_hint_detects_silent_curl_failure() {
 }
 
 #[test]
+fn sandbox_denied_hint_names_the_effective_posture() {
+    // DGF-02: an approved write blocked by a read-only sandbox must come
+    // back naming the sandbox as the blocker, never as a bare failure.
+    let tmp = tempdir().expect("tempdir");
+    let ctx =
+        ToolContext::new(tmp.path()).with_elevated_sandbox_policy(ExecutionSandboxPolicy::ReadOnly);
+    let mut result =
+        failed_network_shell_result("", "sh: cannot create out.txt: Operation not permitted");
+    result.sandbox_denied = true;
+
+    let hint = shell_sandbox_denied_hint(&ctx, &result).expect("sandbox-denied hint");
+
+    assert!(hint.contains("read-only"), "{hint}");
+    assert!(hint.contains("approval"), "{hint}");
+}
+
+#[test]
+fn sandbox_denied_hint_absent_without_denial_or_policy() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx =
+        ToolContext::new(tmp.path()).with_elevated_sandbox_policy(ExecutionSandboxPolicy::ReadOnly);
+    let undenied = failed_network_shell_result("", "No such file or directory");
+    assert!(shell_sandbox_denied_hint(&ctx, &undenied).is_none());
+
+    let mut denied = failed_network_shell_result("", "");
+    denied.sandbox_denied = true;
+    let no_policy_ctx = ToolContext::new(tmp.path());
+    assert!(shell_sandbox_denied_hint(&no_policy_ctx, &denied).is_none());
+}
+
+#[test]
+fn shell_delta_result_surfaces_sandbox_denied_hint() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx =
+        ToolContext::new(tmp.path()).with_elevated_sandbox_policy(ExecutionSandboxPolicy::ReadOnly);
+    let mut result = failed_network_shell_result("", "Operation not permitted");
+    result.sandbox_denied = true;
+
+    let tool_result = build_shell_delta_tool_result(
+        ShellDeltaResult {
+            command: "touch out.txt".to_string(),
+            result,
+            stdout_total_len: 0,
+            stderr_total_len: 0,
+        },
+        &ctx,
+    );
+
+    assert!(
+        tool_result
+            .content
+            .contains("The execution sandbox blocked this command"),
+        "{}",
+        tool_result.content
+    );
+    let metadata = tool_result.metadata.expect("metadata");
+    assert!(metadata.get("sandbox_denied_hint").is_some());
+}
+
+#[test]
 fn network_restricted_hint_ignores_local_failures() {
     let tmp = tempdir().expect("tempdir");
     let ctx = network_restricted_context(tmp.path());

@@ -11974,6 +11974,70 @@ fn turn_metadata_is_byte_identical_across_identical_consecutive_turns() {
 }
 
 #[test]
+fn turn_metadata_names_the_effective_sandbox_posture() {
+    // DGF-02 (dogfood 2026-08-02): the model must know its own sandbox
+    // posture, derived from the same resolver tool execution uses, so an
+    // approved-then-sandbox-blocked write never reads as a mystery failure.
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        model: "deepseek-v4-flash".to_string(),
+        workspace: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let (engine, _handle) = Engine::new(config, &Config::default());
+
+    let meta_for_mode = |mode: AppMode| -> String {
+        let prompt_context = NextTurnPromptContext::for_planned_turn(
+            ApiProvider::Deepseek,
+            "deepseek-v4-flash".to_string(),
+            None,
+            mode,
+            None,
+            crate::tools::goal::GoalStatus::Active,
+            None,
+            false,
+            None,
+        );
+        let message = engine.user_text_message_from_snapshot(
+            "hello".to_string(),
+            &prompt_context.model,
+            false,
+            None,
+            false,
+            UserInputProvenance::ExternalUser,
+            TurnMetadataSnapshot {
+                prompt_context: &prompt_context,
+                system_prompt: None,
+                approval_mode: engine.session.approval_mode,
+                working_set: &engine.session.working_set,
+                policy_narrowing: None,
+            },
+        );
+        let ContentBlock::Text { text, .. } = message.content.last().expect("turn metadata block")
+        else {
+            panic!("expected text metadata block");
+        };
+        text.clone()
+    };
+
+    let agent_meta = meta_for_mode(AppMode::Agent);
+    assert!(
+        agent_meta.contains("Current sandbox posture: workspace-write"),
+        "{agent_meta}"
+    );
+
+    // Plan mode must surface the read-only clamp the executor will apply,
+    // including that approval cannot lift it.
+    let plan_meta = meta_for_mode(AppMode::Plan);
+    assert!(
+        plan_meta.contains(
+            "Current sandbox posture: read-only (shell writes are blocked; tool approval cannot lift this)"
+        ),
+        "{plan_meta}"
+    );
+}
+
+#[test]
 fn provenance_gate_preserves_standing_yolo_for_runtime_and_subagent_continuations() {
     let all_provenances = [
         UserInputProvenance::ExternalUser,

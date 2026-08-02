@@ -2879,6 +2879,18 @@ impl Engine {
         // compact label so the model can distinguish Ask, Auto-Review, Full
         // Access, and Never without repeating question-discipline prose.
         // Route/effort/model lines are telemetry the model cannot act on.
+        // DGF-02 (dogfood 2026-08-02): the model was never told its own
+        // sandbox posture, so an approved-then-sandbox-blocked write read as
+        // a mystery failure it burned turns "debugging". Derive the posture
+        // from the same resolver tool execution uses so the line and the
+        // enforcement can never disagree. Stable per session (mode, config,
+        // workspace), so ordinary turns stay byte-identical.
+        let sandbox_posture = crate::core::authority::sandbox_policy_for_turn(
+            prompt_context.mode,
+            approval_mode,
+            self.api_config.sandbox_mode.as_deref(),
+            &self.config.workspace,
+        );
         let mut lines = vec![
             format!("Current local date: {today}"),
             // Workspace path moved here from the static `## Environment` block so
@@ -2888,6 +2900,10 @@ impl Engine {
             format!(
                 "Current permission posture: {}",
                 approval_mode.permission_chip_label()
+            ),
+            format!(
+                "Current sandbox posture: {}",
+                sandbox_posture.posture_label()
             ),
         ];
         // On ordinary external turns the user's own message is authoritative by

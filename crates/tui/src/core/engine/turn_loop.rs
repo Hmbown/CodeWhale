@@ -1774,6 +1774,22 @@ impl Engine {
             let mut hook_contexts: std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
             let mut plans: Vec<ToolExecutionPlan> = Vec::with_capacity(tool_uses.len());
+            // DGF-02: an approval grant does not lift the execution sandbox.
+            // Resolve the batch's effective policy once so a read-only
+            // posture can be named on the approval gate below instead of
+            // letting an approved write fail with a bare sandbox denial.
+            let batch_sandbox_read_only = matches!(
+                crate::core::authority::sandbox_policy_for_turn(
+                    self.current_mode,
+                    crate::core::authority::agent_approval_mode_for_turn(
+                        self.session.auto_approve,
+                        self.session.approval_mode,
+                    ),
+                    self.api_config.sandbox_mode.as_deref(),
+                    &self.session.workspace,
+                ),
+                crate::sandbox::SandboxPolicy::ReadOnly
+            );
             for (index, tool) in tool_uses.iter_mut().enumerate() {
                 let tool_id = tool.id.clone();
                 let mut tool_name = tool.name.clone();
@@ -2255,6 +2271,22 @@ impl Engine {
                     }
                     // Do not set guard_result: the tool is activated for this batch
                     // and will execute immediately with the model's original input.
+                }
+
+                // DGF-02: when the gate will prompt for a sandbox-executed
+                // command under a read-only posture, say on the gate itself
+                // that approval cannot lift the sandbox. Scoped to the shell
+                // family — file tools do not execute through the sandbox.
+                if approval_required
+                    && batch_sandbox_read_only
+                    && matches!(
+                        tool_name.as_str(),
+                        "Bash" | "Run" | "exec_shell" | "task_shell_start"
+                    )
+                {
+                    approval_description = format!(
+                        "{approval_description} — note: the execution sandbox is read-only for this session; approving runs the command without write access (approval cannot lift the sandbox)"
+                    );
                 }
 
                 plans.push(ToolExecutionPlan {

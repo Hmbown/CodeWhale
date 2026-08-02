@@ -139,6 +139,44 @@ impl SandboxPolicy {
         )
     }
 
+    /// Compact, deterministic posture label for model- and user-facing
+    /// surfaces (`<turn_meta>`, sandbox-denial hints). Byte-stable for a
+    /// given policy so per-turn metadata stays cache-friendly.
+    #[must_use]
+    pub fn posture_label(&self) -> String {
+        match self {
+            SandboxPolicy::DangerFullAccess => "full access (sandbox disabled)".to_string(),
+            SandboxPolicy::ReadOnly => {
+                "read-only (shell writes are blocked; tool approval cannot lift this)".to_string()
+            }
+            SandboxPolicy::ExternalSandbox { network_access } => format!(
+                "external sandbox (host-managed; network {})",
+                if *network_access {
+                    "allowed"
+                } else {
+                    "blocked"
+                }
+            ),
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots,
+                network_access,
+                ..
+            } => format!(
+                "workspace-write (writes inside the workspace{}; network {})",
+                if writable_roots.len() > 1 {
+                    " and approved roots"
+                } else {
+                    ""
+                },
+                if *network_access {
+                    "allowed"
+                } else {
+                    "blocked"
+                }
+            ),
+        }
+    }
+
     /// Get the list of writable roots for this policy.
     ///
     /// This includes:
@@ -436,6 +474,34 @@ mod tests {
         assert!(policy.has_full_disk_write_access());
         assert!(policy.has_network_access());
         assert!(!policy.should_sandbox());
+    }
+
+    #[test]
+    fn posture_labels_name_the_binding_fact() {
+        // DGF-02: the read-only label must state that approval cannot lift
+        // the sandbox — that sentence is what stops the model (and the
+        // user) from treating a denial as a bug to debug.
+        let read_only = SandboxPolicy::ReadOnly.posture_label();
+        assert!(read_only.contains("read-only"), "{read_only}");
+        assert!(read_only.contains("approval cannot lift"), "{read_only}");
+
+        assert!(
+            SandboxPolicy::default()
+                .posture_label()
+                .starts_with("workspace-write"),
+        );
+        assert!(
+            SandboxPolicy::DangerFullAccess
+                .posture_label()
+                .contains("full access"),
+        );
+        assert!(
+            SandboxPolicy::ExternalSandbox {
+                network_access: false
+            }
+            .posture_label()
+            .contains("network blocked"),
+        );
     }
 
     #[test]

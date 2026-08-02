@@ -2582,6 +2582,23 @@ fn shell_network_restricted_hint<'a>(
     }
 }
 
+/// Coaching line when the execution sandbox denied a command and the
+/// Plan-mode network hint did not already explain it. Most often a write
+/// under a read-only posture: name the effective posture and state that a
+/// tool-approval grant does not lift the sandbox, so the model reports the
+/// restriction instead of debugging the command (DGF-02, dogfood
+/// 2026-08-02).
+fn shell_sandbox_denied_hint(context: &ToolContext, result: &ShellResult) -> Option<String> {
+    if !result.sandbox_denied {
+        return None;
+    }
+    let policy = context.elevated_sandbox_policy.as_ref()?;
+    Some(format!(
+        "The execution sandbox blocked this command. Effective sandbox posture: {}. This posture is session policy — user approval of a tool call does not lift it. If the task needs more access, say which access is missing instead of retrying command variants.",
+        policy.posture_label()
+    ))
+}
+
 fn shell_job_owner_from_context(context: &ToolContext) -> Option<ShellJobOwner> {
     let agent_id = context
         .owner_agent_id
@@ -3268,6 +3285,11 @@ impl ToolSpec for BashTool {
                 };
                 let network_restricted_hint =
                     shell_network_restricted_hint(context, command, &result).map(str::to_string);
+                let sandbox_denied_hint = if network_restricted_hint.is_none() {
+                    shell_sandbox_denied_hint(context, &result)
+                } else {
+                    None
+                };
                 let provenance_hint = macos_provenance_hint(&result);
                 let python_dependency_hint = python_build_dependency_hint(command, &result);
                 let mut output = if interactive {
@@ -3312,6 +3334,9 @@ impl ToolSpec for BashTool {
                     )
                 };
                 if let Some(hint) = network_restricted_hint.as_deref() {
+                    output = format!("{hint}\n\n{output}");
+                }
+                if let Some(hint) = sandbox_denied_hint.as_deref() {
                     output = format!("{hint}\n\n{output}");
                 }
                 if let Some(hint) = provenance_hint {
@@ -3393,6 +3418,9 @@ impl ToolSpec for BashTool {
                 if let Some(hint) = network_restricted_hint {
                     metadata["sandbox_network_restricted"] = json!(true);
                     metadata["sandbox_network_denied_hint"] = json!(hint);
+                }
+                if let Some(hint) = sandbox_denied_hint {
+                    metadata["sandbox_denied_hint"] = json!(hint);
                 }
                 if provenance_hint.is_some() {
                     metadata["macos_provenance_restricted"] = json!(true);
@@ -3611,6 +3639,11 @@ fn build_shell_delta_tool_result(delta: ShellDeltaResult, context: &ToolContext)
     let result = delta.result;
     let network_restricted_hint =
         shell_network_restricted_hint(context, &delta.command, &result).map(str::to_string);
+    let sandbox_denied_hint = if network_restricted_hint.is_none() {
+        shell_sandbox_denied_hint(context, &result)
+    } else {
+        None
+    };
     let provenance_hint = macos_provenance_hint(&result);
     let python_dependency_hint = python_build_dependency_hint(&delta.command, &result);
     let stdout_summary = summarize_output(&result.stdout);
@@ -3637,6 +3670,9 @@ fn build_shell_delta_tool_result(delta: ShellDeltaResult, context: &ToolContext)
         format!("{}\n\nSTDERR:\n{}", result.stdout, result.stderr)
     };
     if let Some(hint) = network_restricted_hint.as_deref() {
+        output = format!("{hint}\n\n{output}");
+    }
+    if let Some(hint) = sandbox_denied_hint.as_deref() {
         output = format!("{hint}\n\n{output}");
     }
     if let Some(hint) = provenance_hint {
@@ -3684,6 +3720,12 @@ fn build_shell_delta_tool_result(delta: ShellDeltaResult, context: &ToolContext)
     {
         object.insert("sandbox_network_restricted".to_string(), json!(true));
         object.insert("sandbox_network_denied_hint".to_string(), json!(hint));
+    }
+    if let Some(hint) = sandbox_denied_hint
+        && let Some(metadata) = tool_result.metadata.as_mut()
+        && let Some(object) = metadata.as_object_mut()
+    {
+        object.insert("sandbox_denied_hint".to_string(), json!(hint));
     }
     if provenance_hint.is_some()
         && let Some(metadata) = tool_result.metadata.as_mut()
