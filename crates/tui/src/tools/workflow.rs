@@ -59,6 +59,11 @@ const WORKFLOW_HANDOFF_MAX_CHARS: usize = 4_000;
 const WORKFLOW_RESULT_EVENTS_TAIL: usize = 50;
 /// Bounded tail for free-form progress lines in model-facing payloads.
 const WORKFLOW_RESULT_PROGRESS_TAIL: usize = 20;
+/// Bounded tail for rejected child dispatches in the model-facing payload.
+/// The durable run journal retains the complete failure ledger.
+const WORKFLOW_RESULT_DISPATCH_FAILURES_TAIL: usize = 12;
+/// Per-field cap for one model-facing dispatch-failure receipt.
+const WORKFLOW_RESULT_DISPATCH_FAILURE_FIELD_MAX_CHARS: usize = 320;
 /// Char cap for the VM `result` / `verification` values in model-facing
 /// payloads (matches the handoff compaction budget); oversized values
 /// collapse to a preview plus a journal pointer.
@@ -265,6 +270,7 @@ struct WorkflowRunSummary {
     token_budget: Option<u64>,
     child_count: usize,
     schema_error_count: usize,
+    dispatch_failure_count: usize,
     progress_count: usize,
     last_progress: Option<String>,
     event_count: usize,
@@ -286,6 +292,20 @@ struct WorkflowRunSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WorkflowSchemaError {
     task_id: String,
+    message: String,
+}
+
+/// One `task()` dispatch the driver rejected before any child agent existed.
+/// Inside `parallel()` the JS throw collapses into a `null` slot, so without
+/// this ledger a run whose fan-out never dispatched anything still reads as
+/// successful orchestration (#5035).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorkflowDispatchFailure {
+    at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    phase: Option<String>,
     message: String,
 }
 
@@ -368,6 +388,13 @@ enum WorkflowUiEventKind {
     },
     TaskSchemaValidationFailed {
         task_id: String,
+        message: String,
+    },
+    TaskDispatchFailed {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        phase: Option<String>,
         message: String,
     },
     BudgetUpdated {
@@ -517,6 +544,7 @@ impl WorkflowUiEventKind {
             Self::HandoffPromoted { .. } => "handoff_promoted",
             Self::HandoffConsumed { .. } => "handoff_consumed",
             Self::TaskSchemaValidationFailed { .. } => "task_schema_validation_failed",
+            Self::TaskDispatchFailed { .. } => "task_dispatch_failed",
             Self::BudgetUpdated { .. } => "budget_updated",
             Self::Log { .. } => "log",
         }
@@ -540,6 +568,9 @@ struct WorkflowRunRecord {
     #[serde(default)]
     events: Vec<WorkflowUiEvent>,
     schema_errors: Vec<WorkflowSchemaError>,
+    /// Task dispatches the driver rejected before any child ran (#5035).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    dispatch_failures: Vec<WorkflowDispatchFailure>,
     result: Option<Value>,
     execution: Option<IrWorkflowExecution>,
     error: Option<String>,
@@ -589,6 +620,7 @@ impl WorkflowRunRecord {
             progress: Vec::new(),
             events: Vec::new(),
             schema_errors: Vec::new(),
+            dispatch_failures: Vec::new(),
             result: None,
             execution: None,
             error: None,
@@ -631,6 +663,7 @@ impl WorkflowRunRecord {
             token_budget: self.token_budget,
             child_count: self.child_ids.len(),
             schema_error_count: self.schema_errors.len(),
+            dispatch_failure_count: self.dispatch_failures.len(),
             progress_count: self.progress.len(),
             last_progress: self.progress.last().cloned(),
             event_count: usize::try_from(self.events_total.max(self.events.len() as u64))
@@ -1599,6 +1632,21 @@ async fn run_workflow_vm(
             return;
         };
         if record.status != WorkflowRunStatus::Cancelled {
+            // #5035: every dispatch was rejected before a child ran. Inside
+            // `parallel()` those throws collapsed into null slots, so without
+            // this check the run reads as successful orchestration that ran
+            // nothing.
+            if status == WorkflowRunStatus::Completed
+                && record.child_ids.is_empty()
+                && !record.dispatch_failures.is_empty()
+            {
+                status = WorkflowRunStatus::Failed;
+                error = Some(format!(
+                    "no child agents ran: all {} task dispatch(es) were rejected; first: {}",
+                    record.dispatch_failures.len(),
+                    record.dispatch_failures[0].message
+                ));
+            }
             record.status = status;
             record.result = output;
             record.error = error.clone();
@@ -1732,6 +1780,20 @@ fn render_run_report(record: &WorkflowRunRecord) -> String {
     if let Some(error) = record.error.as_deref() {
         out.push_str(&format!("- error: {error}\n"));
     }
+    if !record.dispatch_failures.is_empty() {
+        out.push_str(&format!(
+            "\n## Dispatch failures ({})\n\n",
+            record.dispatch_failures.len()
+        ));
+        for failure in &record.dispatch_failures {
+            let slot = failure
+                .label
+                .as_deref()
+                .or(failure.phase.as_deref())
+                .unwrap_or("task");
+            out.push_str(&format!("- {slot}: {}\n", failure.message));
+        }
+    }
     if !record.gate_status.is_empty() {
         out.push_str("\n## Gates\n\n");
         for line in &record.gate_status {
@@ -1787,9 +1849,12 @@ fn workflow_result_for(
         "terminal": summary.status != WorkflowRunStatus::Running,
         "child_count": summary.child_count,
         "schema_error_count": summary.schema_error_count,
+        "dispatch_failure_count": summary.dispatch_failure_count,
         "event_count": summary.event_count,
         "events_returned": bounds.events_returned,
         "events_omitted": bounds.events_omitted,
+        "dispatch_failures_returned": bounds.dispatch_failures_returned,
+        "dispatch_failures_omitted": bounds.dispatch_failures_omitted,
         "events_dropped": summary.events_dropped,
         "last_event_type": summary.last_event_type,
         "leaf_count": summary.leaf_count,
@@ -1815,6 +1880,9 @@ struct RunPayloadBounds {
     events_returned: usize,
     events_omitted: usize,
     progress_omitted: usize,
+    dispatch_failures_returned: usize,
+    dispatch_failures_omitted: usize,
+    dispatch_failure_fields_truncated: usize,
     result_truncated: bool,
     leaf_outputs_truncated: usize,
 }
@@ -1823,6 +1891,8 @@ impl RunPayloadBounds {
     fn truncated(&self) -> bool {
         self.events_omitted > 0
             || self.progress_omitted > 0
+            || self.dispatch_failures_omitted > 0
+            || self.dispatch_failure_fields_truncated > 0
             || self.result_truncated
             || self.leaf_outputs_truncated > 0
     }
@@ -1834,6 +1904,8 @@ impl RunPayloadBounds {
 ///
 /// - `events`: newest `WORKFLOW_RESULT_EVENTS_TAIL` entries.
 /// - `progress`: newest `WORKFLOW_RESULT_PROGRESS_TAIL` lines.
+/// - `dispatch_failures`: newest `WORKFLOW_RESULT_DISPATCH_FAILURES_TAIL`
+///   entries with bounded string fields.
 /// - `result` / `verification`: collapsed to a preview + journal pointer
 ///   when the serialized value exceeds `WORKFLOW_RESULT_VALUE_MAX_CHARS`.
 /// - `execution.leaf_results[*].output`: per-leaf preview capped at
@@ -1882,6 +1954,48 @@ fn bounded_run_record_value(
             json!(format!(
                 "showing the newest {WORKFLOW_RESULT_PROGRESS_TAIL} of {} progress lines; full log: {journal}",
                 omitted + WORKFLOW_RESULT_PROGRESS_TAIL,
+            )),
+        );
+    }
+
+    if let Some(failures) = obj
+        .get_mut("dispatch_failures")
+        .and_then(Value::as_array_mut)
+    {
+        if failures.len() > WORKFLOW_RESULT_DISPATCH_FAILURES_TAIL {
+            let omitted = failures.len() - WORKFLOW_RESULT_DISPATCH_FAILURES_TAIL;
+            failures.drain(..omitted);
+            bounds.dispatch_failures_omitted = omitted;
+        }
+        bounds.dispatch_failures_returned = failures.len();
+        for failure in failures {
+            let Some(fields) = failure.as_object_mut() else {
+                continue;
+            };
+            for key in ["label", "phase", "message"] {
+                let Some(slot) = fields.get_mut(key) else {
+                    continue;
+                };
+                let Some(raw) = slot.as_str() else {
+                    continue;
+                };
+                if raw.chars().count() > WORKFLOW_RESULT_DISPATCH_FAILURE_FIELD_MAX_CHARS {
+                    *slot = Value::String(truncate_chars(
+                        raw,
+                        WORKFLOW_RESULT_DISPATCH_FAILURE_FIELD_MAX_CHARS,
+                    ));
+                    bounds.dispatch_failure_fields_truncated += 1;
+                }
+            }
+        }
+    }
+    if bounds.dispatch_failures_omitted > 0 || bounds.dispatch_failure_fields_truncated > 0 {
+        obj.insert(
+            "dispatch_failures_note".to_string(),
+            json!(format!(
+                "showing {} of {} dispatch failures with bounded fields; full ledger: {journal}",
+                bounds.dispatch_failures_returned,
+                bounds.dispatch_failures_returned + bounds.dispatch_failures_omitted,
             )),
         );
     }
@@ -2294,17 +2408,33 @@ fn plan_children_to_leaves(
     Ok(leaves)
 }
 
+/// Plan-child `type` vocabulary. Accepts the Agent tool's canonical types and
+/// legacy aliases so the same option value works for direct Agent dispatch and
+/// for Workflow plan children (#5035), normalized onto the workflow IR schema.
+/// Rejections use the Agent tool's error contract ("Invalid sub-agent type
+/// '<value>'. Use: ...") with field-specific guidance.
 fn parse_plan_agent_type(raw: Option<&str>) -> Result<AgentType, ToolError> {
-    match raw.map(str::trim).filter(|s| !s.is_empty()) {
-        None => Ok(AgentType::General),
-        Some("general") | Some("worker") | Some("delegate") => Ok(AgentType::General),
-        Some("explore") | Some("scout") => Ok(AgentType::Explore),
-        Some("plan") | Some("planner") => Ok(AgentType::Plan),
-        Some("review") | Some("reviewer") => Ok(AgentType::Review),
-        Some("implementer") | Some("builder") | Some("implement") => Ok(AgentType::Implementer),
-        Some("verifier") | Some("verify") => Ok(AgentType::Verifier),
-        Some(other) => Err(ToolError::invalid_input(format!(
-            "Invalid plan child type '{other}'. Use general, explore, plan, review, implementer, or verifier."
+    let Some(kind) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(AgentType::General);
+    };
+    match kind.to_ascii_lowercase().as_str() {
+        "general" | "worker" | "delegate" => Ok(AgentType::General),
+        "explore" | "explorer" | "scout" => Ok(AgentType::Explore),
+        "plan" | "planner" | "awaiter" => Ok(AgentType::Plan),
+        // Consultant/oracle/advisor are the Agent tool's read-only advisory
+        // roles; Review is the workflow IR's read-only advisory posture.
+        "review" | "reviewer" | "consultant" | "oracle" | "advisor" => Ok(AgentType::Review),
+        "implementer" | "implement" | "builder" => Ok(AgentType::Implementer),
+        "verifier" | "verify" => Ok(AgentType::Verifier),
+        "custom" => Err(ToolError::invalid_input(
+            "Invalid sub-agent type 'custom' for a Workflow plan child: custom requires an \
+             explicit allowed_tools list, which plan children cannot declare. Use role/profile \
+             or another type.",
+        )),
+        _ => Err(ToolError::invalid_input(format!(
+            "Invalid sub-agent type '{kind}'. Use: worker, scout, planner, reviewer, builder, \
+             verifier (legacy aliases remain accepted: general, explore/explorer, plan/awaiter, \
+             review, implementer, consultant/oracle/advisor)."
         ))),
     }
 }
@@ -3481,6 +3611,44 @@ impl SubAgentWorkflowDriver {
         }
     }
 
+    /// A rejected dispatch never produces a child agent, and inside
+    /// `parallel()` the JS throw collapses to a `null` slot; this ledger keeps
+    /// the rejection visible on the run record and result payload (#5035).
+    fn record_dispatch_failure(
+        &self,
+        label: Option<String>,
+        phase: Option<String>,
+        message: String,
+    ) {
+        let failure = WorkflowDispatchFailure {
+            at_ms: now_ms(),
+            label,
+            phase,
+            message,
+        };
+        let slot = failure
+            .label
+            .as_deref()
+            .or(failure.phase.as_deref())
+            .unwrap_or("task");
+        let progress_line = format!("dispatch failed for {slot}: {}", failure.message);
+        let ui_event = WorkflowUiEvent::new(WorkflowUiEventKind::TaskDispatchFailed {
+            label: failure.label.clone(),
+            phase: failure.phase.clone(),
+            message: failure.message.clone(),
+        });
+        if let Ok(mut runs) = self.state.runs.lock()
+            && let Some(record) = runs.get_mut(&self.run_id)
+        {
+            record.progress.push(progress_line.clone());
+            record.push_event(ui_event.clone());
+            record.dispatch_failures.push(failure);
+        }
+        self.state.record_progress(&self.run_id, &progress_line);
+        self.state.record_event(&self.run_id, &ui_event);
+        self.emit_ui_event(&ui_event);
+    }
+
     fn record_schema_validation_failure(&self, agent_id: &str, message: String) {
         if let Ok(mut records) = self.task_records.lock()
             && let Some(record) = records.get_mut(agent_id)
@@ -3546,9 +3714,13 @@ struct CompletionState {
     pending: HashMap<String, PendingCompletion>,
 }
 
-#[async_trait]
-impl WorkflowDriver for SubAgentWorkflowDriver {
-    async fn spawn_task(&self, mut request: TaskRequest) -> Result<SpawnedTask, DriverError> {
+impl SubAgentWorkflowDriver {
+    /// The admission half of [`WorkflowDriver::spawn_task`]; every `Err` it
+    /// returns is recorded as a dispatch failure by the trait wrapper.
+    async fn spawn_task_admitted(
+        &self,
+        mut request: TaskRequest,
+    ) -> Result<SpawnedTask, DriverError> {
         // Exact fleets resolve from the frozen snapshot; legacy role maps keep
         // their previous path unchanged.
         //
@@ -3699,6 +3871,35 @@ impl WorkflowDriver for SubAgentWorkflowDriver {
             task_id,
             completion: rx,
         })
+    }
+}
+
+#[async_trait]
+impl WorkflowDriver for SubAgentWorkflowDriver {
+    async fn spawn_task(&self, request: TaskRequest) -> Result<SpawnedTask, DriverError> {
+        let label = request
+            .label
+            .as_deref()
+            .map(str::trim)
+            .filter(|label| !label.is_empty())
+            .map(str::to_string);
+        let phase = request
+            .phase
+            .as_deref()
+            .map(str::trim)
+            .filter(|phase| !phase.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                self.current_phase
+                    .lock()
+                    .ok()
+                    .and_then(|phase| phase.clone())
+            });
+        let result = self.spawn_task_admitted(request).await;
+        if let Err(err) = &result {
+            self.record_dispatch_failure(label, phase, err.to_string());
+        }
+        result
     }
 
     fn cancel_all(&self) {
@@ -4580,6 +4781,7 @@ mod journal {
                 progress: Vec::new(),
                 events: Vec::new(),
                 schema_errors: Vec::new(),
+                dispatch_failures: Vec::new(),
                 result: None,
                 execution: None,
                 error: None,
@@ -6703,7 +6905,9 @@ export default workflow({
         )
         .unwrap_err();
         assert!(
-            bad_type.to_string().contains("Invalid plan child type"),
+            bad_type
+                .to_string()
+                .contains("Invalid sub-agent type 'wizard'"),
             "{bad_type}"
         );
 
@@ -6721,6 +6925,57 @@ export default workflow({
                 .contains("exactly one of script, source_path, or plan"),
             "{exclusive}"
         );
+    }
+
+    #[test]
+    fn plan_child_type_shares_the_agent_tool_option_vocabulary() {
+        // #5035: type values accepted by direct Agent dispatch must not be
+        // rejected by Workflow plan authoring; aliases normalize onto the IR.
+        for (alias, expected) in [
+            ("worker", AgentType::General),
+            ("delegate", AgentType::General),
+            ("scout", AgentType::Explore),
+            ("Explorer", AgentType::Explore),
+            ("planner", AgentType::Plan),
+            ("awaiter", AgentType::Plan),
+            ("reviewer", AgentType::Review),
+            ("consultant", AgentType::Review),
+            ("oracle", AgentType::Review),
+            ("advisor", AgentType::Review),
+            ("builder", AgentType::Implementer),
+            ("verifier", AgentType::Verifier),
+        ] {
+            assert_eq!(
+                parse_plan_agent_type(Some(alias))
+                    .unwrap_or_else(|err| panic!("{alias} rejected: {err}")),
+                expected,
+                "{alias}"
+            );
+        }
+
+        // Typos fail with the Agent tool's error contract and the full set.
+        let typo = parse_plan_agent_type(Some("wizard"))
+            .unwrap_err()
+            .to_string();
+        assert!(typo.contains("Invalid sub-agent type 'wizard'"), "{typo}");
+        assert!(
+            typo.contains("worker, scout, planner, reviewer, builder"),
+            "{typo}"
+        );
+        assert!(
+            typo.contains("consultant/oracle/advisor"),
+            "accepted advisory aliases must remain visible in the guidance: {typo}"
+        );
+
+        // `custom` is Agent-only; the rejection says why and what to use.
+        let custom = parse_plan_agent_type(Some("custom"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            custom.contains("Invalid sub-agent type 'custom'"),
+            "{custom}"
+        );
+        assert!(custom.contains("allowed_tools"), "{custom}");
     }
 
     #[test]
@@ -7215,9 +7470,111 @@ reviewer = "reviewer"
             progress.contains("missing-profile") && progress.contains("dropped a failed slot"),
             "breadcrumb should surface the spawn rejection:\n{progress}"
         );
+        // #5035: partial success is explicit — the rejected slot lands in the
+        // run record as a structured dispatch failure, not only a log line.
+        let failures = payload["dispatch_failures"]
+            .as_array()
+            .expect("dispatch failures surfaced on the run record");
+        assert_eq!(failures.len(), 1, "{payload}");
+        assert!(
+            failures[0]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("missing-profile"),
+            "{failures:?}"
+        );
+        assert_eq!(
+            result.metadata.as_ref().expect("metadata")["dispatch_failure_count"],
+            1
+        );
         assert!(
             calls.load(Ordering::SeqCst) >= 1,
             "reduce should still run after a null parallel slot"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn parallel_fan_out_with_every_dispatch_rejected_fails_the_run() {
+        // #5035: when every parallel slot is rejected before dispatch, the run
+        // must not report overall success that ran nothing — the collected
+        // per-slot failures surface and the run fails loudly.
+        let _retry_guard = workflow_test_retry_guard();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+        let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 2);
+        let (client, calls) = fake_chat_client("unused").await;
+        let runtime = SubAgentRuntime::new(
+            client,
+            "deepseek-v4-flash".to_string(),
+            ctx.clone(),
+            true,
+            None,
+            manager,
+        );
+        let tool = WorkflowTool::new(runtime.manager.clone(), runtime);
+
+        let result = tool
+            .execute(
+                json!({
+                    "action": "run",
+                    "script": r#"export default workflow({
+                        "goal": "total dispatch failure fan-out",
+                        "nodes": [
+                            {
+                                "branch": {
+                                    "id": "parallel",
+                                    "parallel": true,
+                                    "children": [
+                                        {
+                                            "agent": {
+                                                "id": "bad-one",
+                                                "prompt": "Rejected before model execution.",
+                                                "profile": "missing-profile"
+                                            }
+                                        },
+                                        {
+                                            "agent": {
+                                                "id": "bad-two",
+                                                "prompt": "Also rejected before model execution.",
+                                                "profile": "missing-profile"
+                                            }
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    });"#
+                }),
+                &ctx,
+            )
+            .await
+            .expect("total dispatch failure still returns the run record");
+        let payload: Value = serde_json::from_str(&result.content).expect("json result");
+
+        assert_eq!(payload["status"], "failed", "{payload}");
+        let error = payload["error"].as_str().expect("error surfaced");
+        assert!(
+            error.contains("all 2 task dispatch(es) were rejected"),
+            "error should name the total dispatch failure: {error}"
+        );
+        let failures = payload["dispatch_failures"]
+            .as_array()
+            .expect("collected dispatch failures");
+        assert_eq!(failures.len(), 2, "{payload}");
+        for failure in failures {
+            let message = failure["message"].as_str().expect("failure message");
+            assert!(message.contains("missing-profile"), "{message}");
+        }
+        assert_eq!(payload["child_ids"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            result.metadata.as_ref().expect("metadata")["dispatch_failure_count"],
+            2
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "no provider call should be spent on an all-rejected fan-out"
         );
     }
 
@@ -8970,6 +9327,14 @@ FINAL RECEIPT
         for index in 0..60 {
             record.progress.push(format!("progress line {index}"));
         }
+        for index in 0..40u64 {
+            record.dispatch_failures.push(WorkflowDispatchFailure {
+                at_ms: index,
+                label: Some(format!("rejected-{index}")),
+                phase: Some("fan-out".to_string()),
+                message: format!("dispatch rejected {index}: {}", "x".repeat(2_000)),
+            });
+        }
         record.result = Some(json!({ "blob": "r".repeat(10_000) }));
         record.execution = Some(IrWorkflowExecution {
             status: IrWorkflowRunStatus::Succeeded,
@@ -9019,6 +9384,29 @@ FINAL RECEIPT
         assert_eq!(progress.len(), WORKFLOW_RESULT_PROGRESS_TAIL, "{payload}");
         assert!(payload.get("progress_note").is_some(), "{payload}");
 
+        let dispatch_failures = payload["dispatch_failures"]
+            .as_array()
+            .expect("dispatch failures");
+        assert_eq!(
+            dispatch_failures.len(),
+            WORKFLOW_RESULT_DISPATCH_FAILURES_TAIL,
+            "{payload}"
+        );
+        assert_eq!(dispatch_failures[0]["at_ms"], 28);
+        assert!(
+            dispatch_failures.iter().all(|failure| failure["message"]
+                .as_str()
+                .is_some_and(|message| message.chars().count()
+                    <= WORKFLOW_RESULT_DISPATCH_FAILURE_FIELD_MAX_CHARS)),
+            "{dispatch_failures:?}"
+        );
+        assert!(
+            payload["dispatch_failures_note"]
+                .as_str()
+                .is_some_and(|note| note.contains("workflow-runs.jsonl")),
+            "{payload}"
+        );
+
         // Oversized VM result collapses to a preview with a journal pointer.
         assert_eq!(payload["result"]["truncated"], true, "{payload}");
         assert!(
@@ -9048,6 +9436,11 @@ FINAL RECEIPT
         assert_eq!(metadata["events_returned"], WORKFLOW_RESULT_EVENTS_TAIL);
         assert_eq!(metadata["events_omitted"], 150);
         assert_eq!(metadata["event_count"], 200);
+        assert_eq!(
+            metadata["dispatch_failures_returned"],
+            WORKFLOW_RESULT_DISPATCH_FAILURES_TAIL
+        );
+        assert_eq!(metadata["dispatch_failures_omitted"], 28);
         assert_eq!(metadata["truncated"], true);
         assert!(
             metadata["journal_path"]

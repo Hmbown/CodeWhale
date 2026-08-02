@@ -70,13 +70,13 @@ impl DeepSeekClient {
             };
         }
 
-        body["messages"] = json!(
-            request
-                .messages
-                .iter()
-                .filter_map(message_to_anthropic)
-                .collect::<Vec<_>>()
-        );
+        let mut messages: Vec<Value> = request
+            .messages
+            .iter()
+            .filter_map(message_to_anthropic)
+            .collect();
+        repair_dangling_tool_uses(&mut messages);
+        body["messages"] = Value::Array(messages);
 
         if let Some(tools) = request.tools.as_ref()
             && !tools.is_empty()
@@ -121,7 +121,10 @@ impl DeepSeekClient {
 
         // Thinking + effort shaping. MiniMax supports adaptive/disabled but
         // not Anthropic's output_config effort field; native Anthropic routes
-        // keep the existing effort mapping.
+        // keep the existing effort mapping. Other Messages-compatible
+        // gateways (#4978, e.g. Sensenova) only accept the documented
+        // enabled/disabled/auto thinking types, so non-native routes get the
+        // portable `{"type":"enabled","budget_tokens":N}` shape instead.
         let thinking_capable = crate::models::model_supports_reasoning(&model);
         let is_minimax_provider = self.api_provider == ApiProvider::MinimaxAnthropic;
         let is_minimax = crate::config::is_exact_minimax_anthropic_m3_route(
@@ -130,6 +133,10 @@ impl DeepSeekClient {
             &model,
         );
         let is_deepseek = self.api_provider == ApiProvider::DeepseekAnthropic;
+        // MiniMax's exact M3 route and DeepSeek's Messages dialect both
+        // document adaptive support; everything else needs the native host.
+        let supports_adaptive =
+            is_native_anthropic_base_url(&self.base_url) || is_minimax || is_deepseek;
         let effort = request
             .reasoning_effort
             .as_deref()
@@ -142,7 +149,7 @@ impl DeepSeekClient {
                 body["thinking"] = json!({ "type": "disabled" });
             }
             Some("off" | "disabled" | "none" | "false") => {}
-            Some(level) if thinking_capable => {
+            Some(level) if thinking_capable && supports_adaptive => {
                 body["thinking"] = json!({ "type": "adaptive" });
                 if !is_minimax {
                     let mapped = match level {
@@ -154,8 +161,14 @@ impl DeepSeekClient {
                     body["output_config"] = json!({ "effort": mapped });
                 }
             }
-            None if thinking_capable => {
+            None if thinking_capable && supports_adaptive => {
                 body["thinking"] = json!({ "type": "adaptive" });
+            }
+            _ if thinking_capable => {
+                if let Some(budget) = compat_thinking_budget(effort.as_deref(), request.max_tokens)
+                {
+                    body["thinking"] = json!({ "type": "enabled", "budget_tokens": budget });
+                }
             }
             _ => {}
         }
@@ -366,6 +379,116 @@ pub(super) fn anthropic_messages_url(base_url: &str) -> String {
     } else {
         format!("{trimmed}/v1/messages")
     }
+}
+
+/// Whether the route targets first-party Anthropic (`api.anthropic.com`),
+/// where the `{"type":"adaptive"}` thinking control is valid. Strict
+/// Anthropic-compatible gateways reject it (#4978).
+fn is_native_anthropic_base_url(base_url: &str) -> bool {
+    let rest = base_url
+        .trim()
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    let host = rest
+        .split(['/', ':', '?', '#'])
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    host == "api.anthropic.com" || host.ends_with(".anthropic.com")
+}
+
+/// Minimum `budget_tokens` the Messages API accepts for extended thinking.
+const MIN_THINKING_BUDGET_TOKENS: u32 = 1024;
+
+/// Effort-tier `budget_tokens` for gateways that only accept the documented
+/// `{"type":"enabled","budget_tokens":N}` thinking shape (#4978). The wire
+/// contract requires `budget_tokens >= 1024` and `< max_tokens`, so requests
+/// too small to fit the minimum budget send no thinking block at all.
+fn compat_thinking_budget(effort: Option<&str>, max_tokens: u32) -> Option<u32> {
+    let tier: u32 = match effort {
+        Some("low" | "minimal") => 4_096,
+        Some("medium" | "mid") => 8_192,
+        Some("max" | "xhigh" | "highest") => 32_768,
+        // "high" and unspecified effort share the adaptive default tier.
+        _ => 16_384,
+    };
+    let budget = tier.min(max_tokens.checked_sub(1)?);
+    (budget >= MIN_THINKING_BUDGET_TOKENS).then_some(budget)
+}
+
+/// Placeholder body for a `tool_use` that never produced a `tool_result`.
+const UNEXECUTED_TOOL_RESULT: &str = "tool call was not executed";
+
+/// Defensive wire repair (#5002): every assistant `tool_use` must be answered
+/// by a `tool_result` in the immediately following user message, or the API
+/// rejects the whole conversation with a 400 on every retry. Pre-dispatch
+/// failure paths (e.g. the model calling an unavailable tool) can strand an
+/// orphaned `tool_use` in history, so missing results get an explicit
+/// error placeholder instead of poisoning the session.
+fn repair_dangling_tool_uses(messages: &mut Vec<Value>) {
+    let mut index = 0;
+    while index < messages.len() {
+        let ids = assistant_tool_use_ids(&messages[index]);
+        if ids.is_empty() {
+            index += 1;
+            continue;
+        }
+        let next_is_user = messages
+            .get(index + 1)
+            .and_then(|message| message.get("role"))
+            .and_then(Value::as_str)
+            == Some("user");
+        if !next_is_user {
+            messages.insert(index + 1, json!({ "role": "user", "content": [] }));
+        }
+        if let Some(blocks) = messages[index + 1]
+            .get_mut("content")
+            .and_then(Value::as_array_mut)
+        {
+            let answered: std::collections::HashSet<String> = blocks
+                .iter()
+                .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
+                .filter_map(|block| block.get("tool_use_id").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect();
+            // tool_result blocks must lead the user turn, so placeholders are
+            // prepended in tool_use order.
+            for (offset, id) in ids
+                .iter()
+                .filter(|id| !answered.contains(id.as_str()))
+                .enumerate()
+            {
+                blocks.insert(
+                    offset,
+                    json!({
+                        "type": "tool_result",
+                        "tool_use_id": id,
+                        "content": UNEXECUTED_TOOL_RESULT,
+                        "is_error": true,
+                    }),
+                );
+            }
+        }
+        index += 1;
+    }
+}
+
+fn assistant_tool_use_ids(message: &Value) -> Vec<String> {
+    if message.get("role").and_then(Value::as_str) != Some("assistant") {
+        return Vec::new();
+    }
+    message
+        .get("content")
+        .and_then(Value::as_array)
+        .map(|blocks| {
+            blocks
+                .iter()
+                .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
+                .filter_map(|block| block.get("id").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Models that reject `temperature` / `top_p` outright (Claude 4.7+).
@@ -691,12 +814,17 @@ mod tests {
     }
 
     fn test_client() -> DeepSeekClient {
+        anthropic_test_client(None)
+    }
+
+    fn anthropic_test_client(base_url: Option<&str>) -> DeepSeekClient {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let config = crate::config::Config {
             provider: Some("anthropic".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 anthropic: crate::config::ProviderConfig {
                     api_key: Some("test-key".to_string()),
+                    base_url: base_url.map(str::to_string),
                     ..Default::default()
                 },
                 ..Default::default()
@@ -828,6 +956,181 @@ mod tests {
         );
         assert!(body.get("thinking").is_none(), "{body}");
         assert!(body.get("output_config").is_none(), "{body}");
+    }
+
+    #[test]
+    fn compat_gateway_sends_enabled_budget_thinking_instead_of_adaptive() {
+        // #4978: strict Anthropic-compatible gateways (e.g. Sensenova) reject
+        // {"type":"adaptive"} with a 400; non-native routes must send the
+        // documented enabled+budget shape and no output_config.
+        let client = anthropic_test_client(Some("https://api.sensenova.example/v1"));
+
+        let mut request = request_with("claude-sonnet-4-6", Some("high"), None, None);
+        request.max_tokens = 64_000;
+        let body = client.build_anthropic_body(&request, true);
+        assert_eq!(
+            body.pointer("/thinking/type").and_then(Value::as_str),
+            Some("enabled"),
+            "{body}"
+        );
+        assert_eq!(
+            body.pointer("/thinking/budget_tokens")
+                .and_then(Value::as_u64),
+            Some(16_384)
+        );
+        assert!(body.get("output_config").is_none(), "{body}");
+
+        // Effort tiers map onto budgets, capped below max_tokens.
+        let mut request = request_with("claude-sonnet-4-6", Some("max"), None, None);
+        request.max_tokens = 64_000;
+        let body = client.build_anthropic_body(&request, true);
+        assert_eq!(
+            body.pointer("/thinking/budget_tokens")
+                .and_then(Value::as_u64),
+            Some(32_768)
+        );
+        let mut request = request_with("claude-sonnet-4-6", Some("max"), None, None);
+        request.max_tokens = 8_000;
+        let body = client.build_anthropic_body(&request, true);
+        assert_eq!(
+            body.pointer("/thinking/budget_tokens")
+                .and_then(Value::as_u64),
+            Some(7_999),
+            "budget stays below max_tokens: {body}"
+        );
+
+        // Unspecified effort defaults to the "high" tier.
+        let mut request = request_with("claude-sonnet-4-6", None, None, None);
+        request.max_tokens = 64_000;
+        let body = client.build_anthropic_body(&request, true);
+        assert_eq!(
+            body.pointer("/thinking/type").and_then(Value::as_str),
+            Some("enabled")
+        );
+        assert_eq!(
+            body.pointer("/thinking/budget_tokens")
+                .and_then(Value::as_u64),
+            Some(16_384)
+        );
+
+        // "off" and requests too small for the 1024-token minimum budget
+        // omit thinking entirely.
+        let mut request = request_with("claude-sonnet-4-6", Some("off"), None, None);
+        request.max_tokens = 64_000;
+        let body = client.build_anthropic_body(&request, true);
+        assert!(body.get("thinking").is_none(), "{body}");
+        let body = client.build_anthropic_body(
+            &request_with("claude-sonnet-4-6", Some("high"), None, None),
+            true,
+        );
+        assert!(
+            body.get("thinking").is_none(),
+            "max_tokens=1024 cannot fit the minimum budget: {body}"
+        );
+
+        // The native route keeps adaptive; the compat shape is only for
+        // non-anthropic.com hosts.
+        let native = test_client().build_anthropic_body(
+            &request_with("claude-sonnet-4-6", Some("high"), None, None),
+            true,
+        );
+        assert_eq!(
+            native.pointer("/thinking/type").and_then(Value::as_str),
+            Some("adaptive")
+        );
+    }
+
+    #[test]
+    fn dangling_tool_use_gets_placeholder_tool_result() {
+        // #5002: an orphaned tool_use with no matching tool_result poisons
+        // the conversation with repeated 400s; request preparation must
+        // repair it with an explicit placeholder result.
+        let client = test_client();
+        let mut request = request_with("claude-sonnet-4-6", None, None, None);
+        request.messages = vec![
+            Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "run both tools".to_string(),
+                    cache_control: None,
+                }],
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: vec![
+                    ContentBlock::ToolUse {
+                        id: "toolu_ok".to_string(),
+                        name: "read_file".to_string(),
+                        input: json!({"path": "a.txt"}),
+                        caller: None,
+                    },
+                    ContentBlock::ToolUse {
+                        id: "toolu_orphan".to_string(),
+                        name: "task".to_string(),
+                        input: json!({}),
+                        caller: None,
+                    },
+                ],
+            },
+            // Pre-dispatch failure left only one tool_result behind.
+            Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "toolu_ok".to_string(),
+                    content: "contents".to_string(),
+                    is_error: None,
+                    content_blocks: None,
+                }],
+            },
+            // Trailing assistant tool_use with no user turn at all.
+            Message {
+                role: "assistant".to_string(),
+                content: vec![ContentBlock::ToolUse {
+                    id: "toolu_tail".to_string(),
+                    name: "task".to_string(),
+                    input: json!({}),
+                    caller: None,
+                }],
+            },
+        ];
+
+        let body = client.build_anthropic_body(&request, true);
+        let messages = body["messages"].as_array().expect("messages array");
+        assert_eq!(messages.len(), 5, "a repair turn is appended: {body}");
+
+        // The orphaned id gets a leading placeholder; the answered one is
+        // untouched (no duplicate result).
+        let repaired = messages[2]["content"].as_array().expect("user content");
+        assert_eq!(repaired.len(), 2, "{body}");
+        assert_eq!(repaired[0]["type"].as_str(), Some("tool_result"));
+        assert_eq!(repaired[0]["tool_use_id"].as_str(), Some("toolu_orphan"));
+        assert_eq!(
+            repaired[0]["content"].as_str(),
+            Some(UNEXECUTED_TOOL_RESULT)
+        );
+        assert_eq!(repaired[0]["is_error"].as_bool(), Some(true));
+        assert_eq!(repaired[1]["tool_use_id"].as_str(), Some("toolu_ok"));
+        assert_eq!(repaired[1]["content"].as_str(), Some("contents"));
+
+        // The trailing tool_use gains a synthesized user turn.
+        assert_eq!(messages[4]["role"].as_str(), Some("user"));
+        let tail = messages[4]["content"].as_array().expect("tail content");
+        assert_eq!(tail.len(), 1, "{body}");
+        assert_eq!(tail[0]["type"].as_str(), Some("tool_result"));
+        assert_eq!(tail[0]["tool_use_id"].as_str(), Some("toolu_tail"));
+        assert_eq!(tail[0]["content"].as_str(), Some(UNEXECUTED_TOOL_RESULT));
+
+        // A fully answered history is left alone.
+        request.messages.truncate(3);
+        request.messages[1].content.retain(
+            |block| !matches!(block, ContentBlock::ToolUse { id, .. } if id == "toolu_orphan"),
+        );
+        let body = client.build_anthropic_body(&request, true);
+        let messages = body["messages"].as_array().expect("messages array");
+        assert_eq!(messages.len(), 3, "no repair turn appended: {body}");
+        let untouched = messages[2]["content"].as_array().expect("user content");
+        assert_eq!(untouched.len(), 1, "{body}");
+        assert_eq!(untouched[0]["tool_use_id"].as_str(), Some("toolu_ok"));
     }
 
     #[test]

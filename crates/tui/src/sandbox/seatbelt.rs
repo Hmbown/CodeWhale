@@ -94,6 +94,29 @@ const SEATBELT_NETWORK_POLICY: &str = r"
 (allow network-bind)
 ";
 
+/// AppleEvents/LaunchServices allowances for the trusted (full-disk-write)
+/// tier only (#4828).
+///
+/// `open`, `osascript`, and `launchctl` send AppleEvents and drive
+/// LaunchServices; under `(deny default)` those calls die with exit -54.
+/// The base policy already allows `mach-lookup` broadly, so the missing
+/// operations are `appleevent-send` and the LaunchServices `lsopen`
+/// operation. The launchservicesd/appleevents mach names are listed
+/// explicitly so a future narrowing of the blanket `mach-lookup` rule
+/// cannot silently break this tier.
+///
+/// Restrictive tiers (workspace-write, read-only) intentionally stay locked
+/// down: AppleEvents automation can instruct other apps to act outside the
+/// sandbox, which would defeat the write restrictions.
+const SEATBELT_TRUSTED_AUTOMATION_POLICY: &str = r#"
+; AppleEvents + LaunchServices (trusted full-access tier only)
+(allow appleevent-send)
+(allow lsopen)
+(allow mach-lookup
+  (global-name "com.apple.coreservices.launchservicesd")
+  (global-name "com.apple.coreservices.appleevents"))
+"#;
+
 /// Check if sandbox-exec is available and permitted on this system.
 pub fn is_available() -> bool {
     static SEATBELT_AVAILABLE: OnceLock<bool> = OnceLock::new();
@@ -160,6 +183,16 @@ fn generate_policy(policy: &SandboxPolicy, cwd: &Path) -> String {
     if policy.has_network_access() {
         full_policy.push('\n');
         full_policy.push_str(SEATBELT_NETWORK_POLICY);
+    }
+
+    // Trusted tier (#4828): full-disk-write policies also get AppleEvents +
+    // LaunchServices so `open`/`osascript`/`launchctl` work when a
+    // full-access policy is still routed through seatbelt (e.g. a forced
+    // sandbox); in the normal flow danger-full-access bypasses the wrap
+    // entirely via `should_sandbox()`.
+    if policy.has_full_disk_write_access() {
+        full_policy.push('\n');
+        full_policy.push_str(SEATBELT_TRUSTED_AUTOMATION_POLICY);
     }
 
     // Add Darwin user cache directory access (needed by many macOS tools)
@@ -664,6 +697,89 @@ mod existing_tests {
         // Should end with the original command
         assert!(args.contains(&"echo".to_string()));
         assert!(args.contains(&"hello".to_string()));
+    }
+
+    /// #4828: `open`/`osascript`/`launchctl` die with exit -54 under
+    /// `(deny default)` because AppleEvent sends and the LaunchServices
+    /// `lsopen` operation are blocked. Only the trusted (full-disk-write)
+    /// tier gains those allowances; the restrictive tiers must stay locked
+    /// down since AppleEvents automation can drive other apps to act
+    /// outside the sandbox.
+    #[test]
+    fn test_apple_events_allowed_only_in_trusted_tier() {
+        let cwd = Path::new("/tmp/test");
+
+        let trusted = generate_policy(&SandboxPolicy::DangerFullAccess, cwd);
+        assert!(
+            trusted.contains("(allow appleevent-send)"),
+            "trusted tier must allow AppleEvent sends: {trusted}"
+        );
+        assert!(
+            trusted.contains("(allow lsopen)"),
+            "trusted tier must allow LaunchServices lsopen: {trusted}"
+        );
+        assert!(
+            trusted.contains(r#"(global-name "com.apple.coreservices.launchservicesd")"#),
+            "trusted tier must pin the launchservicesd mach name: {trusted}"
+        );
+        assert!(
+            trusted.contains(r#"(global-name "com.apple.coreservices.appleevents")"#),
+            "trusted tier must pin the appleevents mach name: {trusted}"
+        );
+
+        for (name, restrictive) in [
+            (
+                "workspace-write",
+                generate_policy(&SandboxPolicy::default(), cwd),
+            ),
+            (
+                "workspace-write+network",
+                generate_policy(&SandboxPolicy::workspace_with_network(), cwd),
+            ),
+            ("read-only", generate_policy(&SandboxPolicy::ReadOnly, cwd)),
+        ] {
+            assert!(
+                !restrictive.contains("appleevent-send"),
+                "{name} tier must NOT allow AppleEvent sends: {restrictive}"
+            );
+            assert!(
+                !restrictive.contains("lsopen"),
+                "{name} tier must NOT allow LaunchServices lsopen: {restrictive}"
+            );
+        }
+    }
+
+    /// #4828: the trusted-tier policy (with the AppleEvents/LaunchServices
+    /// additions) must still be a valid SBPL profile that sandbox-exec
+    /// accepts.
+    #[test]
+    fn test_trusted_tier_policy_parses_under_sandbox_exec() {
+        // generate_policy/generate_params both read HOME/CARGO_HOME; take the
+        // env lock so sibling tests mutating those vars can't desync the
+        // policy text from its -DKEY=VALUE params mid-call.
+        let _guard = crate::test_support::lock_test_env();
+
+        assert!(
+            is_available(),
+            "UNRUN: macOS sandbox-exec is unavailable; generated policy was not parsed"
+        );
+
+        let cwd = std::env::temp_dir();
+        let args = create_seatbelt_args(
+            vec!["/usr/bin/true".to_string()],
+            &SandboxPolicy::DangerFullAccess,
+            &cwd,
+        );
+        let output = Command::new(SANDBOX_EXEC_PATH)
+            .args(args)
+            .current_dir(&cwd)
+            .output()
+            .expect("run sandbox-exec with trusted-tier policy");
+        assert!(
+            output.status.success(),
+            "sandbox-exec rejected the trusted-tier policy: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]

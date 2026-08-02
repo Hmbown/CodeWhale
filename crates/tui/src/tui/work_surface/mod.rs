@@ -171,6 +171,17 @@ mod tests {
             .expect("restore graph");
     }
 
+    fn restore_saved_graph(app: &mut App, graph: &crate::work_graph::WorkGraphSnapshot) {
+        app.current_session_id = Some(SESSION.to_string());
+        let state = crate::session_manager::SessionWorkState {
+            graph: Some(graph.clone()),
+            todos: crate::work_graph::project_todos(graph),
+            plan: crate::work_graph::project_plan(graph),
+        };
+        app.restore_work_state(SESSION, std::path::Path::new("."), Some(&state))
+            .expect("restore saved graph");
+    }
+
     fn render_text(app: &mut App, width: u16, height: u16) -> String {
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).expect("terminal");
@@ -936,6 +947,126 @@ mod tests {
             "{body}"
         );
         assert!(body.contains("Owner cannot confirm liveness"), "{body}");
+    }
+
+    /// A durable failed operation, as a fleet agent task from a crashed or
+    /// sibling instance leaves behind in the persisted graph (#4416).
+    fn durable_failed_operation_graph() -> crate::work_graph::WorkGraphSnapshot {
+        let mut graph = WorkGraph::from_snapshot(operation_graph(NodeState::Failed));
+        let operation = WorkNodeId::derive(SESSION, "operation");
+        graph
+            .apply(
+                WorkGraphChange::BindOperation {
+                    node: operation,
+                    binding: OperationBinding {
+                        external: "fleet:run_1/task_1".to_string(),
+                        durable: true,
+                        last_observation: None,
+                    },
+                },
+                ChangeCtx {
+                    session_id: SESSION.to_string(),
+                    now: 6,
+                    idempotency_key: None,
+                },
+            )
+            .expect("durable binding");
+        graph.into_snapshot()
+    }
+
+    // Regression for #4416: a persisted failed-agent record stamped by
+    // another session instance (boot id) must not appear in the default
+    // work listing of a fresh session in the same workspace.
+    #[test]
+    fn prior_instance_failed_rows_stay_out_of_the_default_listing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manager =
+            crate::session_manager::SessionManager::new(dir.path().to_path_buf()).expect("manager");
+        manager
+            .record_session_boot_owner(SESSION, "boot_other_instance")
+            .expect("stamp other instance");
+
+        let mut app = app();
+        app.work_surface.session_owner_probe_dir = Some(dir.path().to_path_buf());
+        let graph = durable_failed_operation_graph();
+        restore_saved_graph(&mut app, &graph);
+
+        let rows = super::model::project(&mut app);
+        assert!(
+            rows.iter()
+                .all(|row| !row.label.contains("Verify installed build")),
+            "prior-instance failed row leaked into the default listing: {rows:#?}"
+        );
+        assert!(
+            rows.iter()
+                .all(|row| !row.label.contains("needs input") && !row.label.contains("1 active")),
+            "prior-instance residue must not count as live work: {rows:#?}"
+        );
+        // The record stays reachable through the explicit catalog, clearly
+        // marked historical.
+        let historical = app
+            .work_surface
+            .catalog_rows
+            .iter()
+            .find(|row| row.label.contains("Verify installed build"))
+            .expect("historical row remains in the catalog");
+        assert!(
+            historical.detail.starts_with("prior session · "),
+            "historical row must be labeled: {}",
+            historical.detail
+        );
+    }
+
+    // Ownership control for #4416: the same failed record owned by this
+    // session instance still renders as actionable work.
+    #[test]
+    fn current_instance_failed_rows_still_render_in_the_default_listing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manager =
+            crate::session_manager::SessionManager::new(dir.path().to_path_buf()).expect("manager");
+        manager
+            .record_session_boot_owner(SESSION, crate::session_manager::current_session_boot_id())
+            .expect("stamp current instance");
+
+        let mut app = app();
+        app.work_surface.session_owner_probe_dir = Some(dir.path().to_path_buf());
+        let graph = durable_failed_operation_graph();
+        restore_graph(&mut app, &graph);
+
+        let rows = super::model::project(&mut app);
+        assert!(
+            rows.iter()
+                .any(|row| row.label.contains("Verify installed build")),
+            "this instance's own failed work must stay visible: {rows:#?}"
+        );
+    }
+
+    // Regression for review of #5063: if a prior session persisted no graph,
+    // the first graph captured later belongs to this process and must not be
+    // mistaken for restored residue.
+    #[test]
+    fn first_live_graph_after_empty_prior_restore_stays_visible() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manager =
+            crate::session_manager::SessionManager::new(dir.path().to_path_buf()).expect("manager");
+        manager
+            .record_session_boot_owner(SESSION, "boot_other_instance")
+            .expect("stamp other instance");
+
+        let mut app = app();
+        app.work_surface.session_owner_probe_dir = Some(dir.path().to_path_buf());
+        app.current_session_id = Some(SESSION.to_string());
+        app.restore_work_state(SESSION, std::path::Path::new("."), None)
+            .expect("restore empty prior session");
+
+        let graph = durable_failed_operation_graph();
+        restore_graph(&mut app, &graph);
+        let rows = super::model::project(&mut app);
+        assert!(
+            rows.iter()
+                .any(|row| row.label.contains("Verify installed build")),
+            "this instance's first live graph must stay visible: {rows:#?}"
+        );
     }
 
     #[test]

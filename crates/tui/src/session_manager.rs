@@ -17,7 +17,7 @@ use crate::utils::write_atomic;
 use crate::work_graph::ReasoningEffortTier;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -242,6 +242,24 @@ fn live_session_conflict(session_id: &str) -> std::io::Error {
     )
 }
 
+/// File-name stem of the sidecar mapping session ids to the session
+/// instance (process boot) that created their persisted record. Lives in
+/// the sessions directory next to the `<id>.json` records it describes.
+const SESSION_BOOT_OWNERS_STEM: &str = "session_boot_owners";
+
+static SESSION_BOOT_ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Identity of this running session instance (one per process boot).
+///
+/// Mirrors the `SubAgentManager` boot id from #405: persisted records are
+/// stamped with the instance that created them, so a later Codewhale
+/// instance in the same workspace can tell restored rows from its own live
+/// work (#4416).
+#[must_use]
+pub fn current_session_boot_id() -> &'static str {
+    SESSION_BOOT_ID.get_or_init(|| format!("boot_{}", &Uuid::new_v4().to_string()[..12]))
+}
+
 /// Which archive states a session listing includes.
 ///
 /// Deliberately the same three-way shape as
@@ -369,30 +387,38 @@ pub struct SessionCostSnapshot {
 }
 
 impl SessionCostSnapshot {
-    /// Session + subagent cost in USD.
-    pub fn total_usd(&self) -> f64 {
+    /// Session + subagent spend as **one** dual-currency accumulator.
+    ///
+    /// The persisted USD and CNY columns are projections of per-turn
+    /// [`crate::pricing::CostEstimate`]s that were accumulated jointly; every
+    /// display total is derived from this single fold so the two currencies
+    /// cannot be re-summed by separate code paths that then drift (#4939).
+    /// CNY is *not* an FX multiple of USD: a turn carries CNY only when its
+    /// route published an authoritative CNY row (provider-published
+    /// dual-currency pricing, e.g. DeepSeek's CNY table), and a USD-only turn
+    /// contributes exactly zero CNY while `cny_unpriced_turns` records the gap.
+    #[must_use]
+    pub fn total_estimate(&self) -> crate::pricing::CostEstimate {
         crate::pricing::CostEstimate {
             usd: self.session_cost_usd,
-            cny: 0.0,
+            cny: self.session_cost_cny,
         }
         .saturating_add(crate::pricing::CostEstimate {
             usd: self.subagent_cost_usd,
-            cny: 0.0,
+            cny: self.subagent_cost_cny,
         })
-        .usd
+    }
+
+    /// Session + subagent cost in USD.
+    pub fn total_usd(&self) -> f64 {
+        self.total_estimate()
+            .amount(crate::pricing::CostCurrency::Usd)
     }
 
     /// Session + subagent cost in CNY.
     pub fn total_cny(&self) -> f64 {
-        crate::pricing::CostEstimate {
-            usd: 0.0,
-            cny: self.session_cost_cny,
-        }
-        .saturating_add(crate::pricing::CostEstimate {
-            usd: 0.0,
-            cny: self.subagent_cost_cny,
-        })
-        .cny
+        self.total_estimate()
+            .amount(crate::pricing::CostCurrency::Cny)
     }
 
     /// Whether this snapshot's coverage state must be shown as unknown.
@@ -539,6 +565,12 @@ impl SessionManager {
                 format!("Invalid session id '{id}'"),
             ));
         }
+        if trimmed == SESSION_BOOT_OWNERS_STEM {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("Session id '{trimmed}' collides with a reserved sessions file"),
+            ));
+        }
         Ok(trimmed)
     }
 
@@ -587,6 +619,10 @@ impl SessionManager {
     /// Save a session to disk using atomic write (temp file + fsync + rename).
     pub fn save_session(&self, session: &SavedSession) -> std::io::Result<PathBuf> {
         let path = self.validated_session_path(&session.metadata.id)?;
+        let already_persisted = path.exists()
+            || self
+                .validated_checkpoint_path(&session.metadata.id)
+                .is_ok_and(|checkpoint| checkpoint.exists());
 
         self.archive_before_first_graph_write(session, &path)?;
 
@@ -595,6 +631,7 @@ impl SessionManager {
 
         // Atomic write via write_atomic (NamedTempFile + fsync + persist)
         write_atomic(&path, content.as_bytes())?;
+        self.stamp_session_boot_owner_for_new_record(&session.metadata.id, already_persisted);
 
         // Clean up old sessions if we have too many
         self.cleanup_old_sessions()?;
@@ -611,10 +648,101 @@ impl SessionManager {
         let session_path = self.validated_session_path(&session.metadata.id)?;
         self.archive_before_first_graph_write(session, &session_path)?;
         fs::create_dir_all(self.checkpoints_dir())?;
+        let already_persisted = path.exists() || session_path.exists();
         let content = serde_json::to_string_pretty(&session)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         write_atomic(&path, content.as_bytes())?;
+        self.stamp_session_boot_owner_for_new_record(&session.metadata.id, already_persisted);
         Ok(path)
+    }
+
+    fn session_boot_owners_path(&self) -> PathBuf {
+        self.sessions_dir
+            .join(format!("{SESSION_BOOT_OWNERS_STEM}.json"))
+    }
+
+    fn load_session_boot_owners(&self) -> BTreeMap<String, String> {
+        fs::read_to_string(self.session_boot_owners_path())
+            .ok()
+            .and_then(|content| serde_json::from_str(&content).ok())
+            .unwrap_or_default()
+    }
+
+    /// Does any durable record (session file or crash checkpoint) exist for
+    /// this session id?
+    fn session_record_exists(&self, session_id: &str) -> bool {
+        self.validated_session_path(session_id)
+            .is_ok_and(|path| path.exists())
+            || self
+                .validated_checkpoint_path(session_id)
+                .is_ok_and(|path| path.exists())
+    }
+
+    /// Record which session instance owns `session_id`'s persisted record.
+    ///
+    /// Entries whose durable record no longer exists are pruned on the same
+    /// write, so the sidecar cannot grow without bound.
+    pub(crate) fn record_session_boot_owner(
+        &self,
+        session_id: &str,
+        boot_id: &str,
+    ) -> std::io::Result<()> {
+        let id = self.validated_session_id(session_id)?.to_string();
+        let mut owners = self.load_session_boot_owners();
+        owners.retain(|owned, _| owned == &id || self.session_record_exists(owned));
+        owners.insert(id, boot_id.to_string());
+        let content = serde_json::to_string_pretty(&owners)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        write_atomic(&self.session_boot_owners_path(), content.as_bytes())
+    }
+
+    /// The session-instance boot id stamped on this session's persisted
+    /// record, when one was recorded.
+    #[must_use]
+    pub fn session_boot_owner(&self, session_id: &str) -> Option<String> {
+        let id = self.validated_session_id(session_id).ok()?;
+        self.load_session_boot_owners().get(id).cloned()
+    }
+
+    /// Was this session's persisted record created by a different session
+    /// instance (an earlier or sibling Codewhale process)?
+    ///
+    /// Mirrors `SubAgentManager::is_from_prior_session` (#405): a durable
+    /// record with no stamped owner predates the marker and is classified as
+    /// prior-instance work, while an id with no durable record at all is
+    /// this instance's own not-yet-persisted session.
+    #[must_use]
+    pub fn session_from_prior_instance(&self, session_id: &str) -> bool {
+        match self.session_boot_owner(session_id) {
+            Some(owner) => owner != current_session_boot_id(),
+            None => self.session_record_exists(session_id),
+        }
+    }
+
+    /// Stamp this instance as creator when a save writes the first durable
+    /// record for `session_id`. A record that already existed keeps its
+    /// original owner: re-serializing another instance's work (crash
+    /// recovery, external mutation) must not re-badge it as ours.
+    fn stamp_session_boot_owner_for_new_record(&self, session_id: &str, already_persisted: bool) {
+        if already_persisted || self.session_boot_owner(session_id).is_some() {
+            return;
+        }
+        if let Err(error) = self.record_session_boot_owner(session_id, current_session_boot_id()) {
+            tracing::warn!(session_id, %error, "could not stamp session boot owner");
+        }
+    }
+
+    fn clear_session_boot_owner(&self, session_id: &str) {
+        let Ok(id) = self.validated_session_id(session_id) else {
+            return;
+        };
+        let mut owners = self.load_session_boot_owners();
+        if owners.remove(id).is_none() {
+            return;
+        }
+        if let Ok(content) = serde_json::to_string_pretty(&owners) {
+            let _ = write_atomic(&self.session_boot_owners_path(), content.as_bytes());
+        }
     }
 
     /// Preserve the exact pre-import session once, before the first graph-
@@ -1033,6 +1161,7 @@ impl SessionManager {
     pub fn delete_session(&self, id: &str) -> std::io::Result<()> {
         let path = self.validated_session_path(id)?;
         fs::remove_file(path)?;
+        self.clear_session_boot_owner(id);
         let session_dir = self.sessions_dir.join(id.trim());
         if session_dir.exists() {
             fs::remove_dir_all(session_dir)?;
@@ -1793,6 +1922,119 @@ mod tests {
         }
     }
 
+    /// The USD and CNY totals a snapshot reports are projections of one
+    /// dual-currency accumulation, never two independent sums that could
+    /// disagree (#4939).
+    ///
+    /// For any turn sequence — dual-priced, USD-only, CNY-only, or garbage
+    /// estimates — folding the turns jointly and projecting each currency must
+    /// equal accumulating that currency on its own. This is the invariant that
+    /// makes the persisted per-currency columns safe: they are written from the
+    /// same joint fold, so a code path can no longer update one and forget the
+    /// other. CNY is derived from provider-published CNY rows, not from an FX
+    /// multiple of USD, so a USD-only turn must contribute exactly zero CNY.
+    #[test]
+    fn cost_snapshot_currency_totals_are_projections_of_one_accumulator() {
+        use crate::pricing::CostEstimate;
+
+        let turn_sequences: &[&[CostEstimate]] = &[
+            // Dual-priced turns (DeepSeek-style routes with a published CNY row).
+            &[
+                CostEstimate {
+                    usd: 0.01,
+                    cny: 0.07,
+                },
+                CostEstimate {
+                    usd: 0.02,
+                    cny: 0.14,
+                },
+            ],
+            // USD-only turns: CNY unpublished, so the CNY projection stays zero.
+            &[
+                CostEstimate {
+                    usd: 0.25,
+                    cny: 0.0,
+                },
+                CostEstimate { usd: 1.5, cny: 0.0 },
+            ],
+            // Mixed: one currency priced per turn, alternating.
+            &[
+                CostEstimate { usd: 0.5, cny: 0.0 },
+                CostEstimate { usd: 0.0, cny: 3.5 },
+                CostEstimate {
+                    usd: 0.125,
+                    cny: 0.875,
+                },
+            ],
+            // Hostile values: sanitization must apply identically per currency.
+            &[
+                CostEstimate {
+                    usd: f64::NAN,
+                    cny: 0.25,
+                },
+                CostEstimate {
+                    usd: 0.75,
+                    cny: -1.0,
+                },
+                CostEstimate {
+                    usd: f64::INFINITY,
+                    cny: 0.25,
+                },
+            ],
+        ];
+
+        for turns in turn_sequences {
+            // Joint fold: how the app accumulates (one accumulator, both
+            // currencies advance together through the same saturating_add).
+            let joint = turns.iter().fold(CostEstimate::default(), |acc, turn| {
+                acc.saturating_add(*turn)
+            });
+
+            // Independent per-currency folds: what a drifted parallel
+            // accumulator would compute if it only saw one currency.
+            let usd_alone = turns.iter().fold(CostEstimate::default(), |acc, turn| {
+                acc.saturating_add(CostEstimate {
+                    usd: turn.usd,
+                    cny: 0.0,
+                })
+            });
+            let cny_alone = turns.iter().fold(CostEstimate::default(), |acc, turn| {
+                acc.saturating_add(CostEstimate {
+                    usd: 0.0,
+                    cny: turn.cny,
+                })
+            });
+
+            let snapshot = SessionCostSnapshot {
+                session_cost_usd: joint.usd,
+                session_cost_cny: joint.cny,
+                ..SessionCostSnapshot::default()
+            };
+            assert_eq!(
+                snapshot.total_usd(),
+                usd_alone.usd,
+                "USD projection drifted from independent accumulation for {turns:?}"
+            );
+            assert_eq!(
+                snapshot.total_cny(),
+                cny_alone.cny,
+                "CNY projection drifted from independent accumulation for {turns:?}"
+            );
+            assert_eq!(snapshot.total_estimate().usd, snapshot.total_usd());
+            assert_eq!(snapshot.total_estimate().cny, snapshot.total_cny());
+        }
+
+        // A USD-only session projects zero CNY — no fabricated FX conversion —
+        // and the subagent column joins the same fold.
+        let usd_only = SessionCostSnapshot {
+            session_cost_usd: 2.5,
+            subagent_cost_usd: 0.5,
+            ..SessionCostSnapshot::default()
+        };
+        assert_eq!(usd_only.total_usd(), 3.0);
+        assert_eq!(usd_only.total_cny(), 0.0);
+    }
+
     fn write_session_record(
         manager: &SessionManager,
         id: &str,
@@ -1866,6 +2108,64 @@ mod tests {
     }
 
     #[test]
+    fn session_boot_owner_stamps_only_the_creating_instance() {
+        let tmp = tempdir().expect("tempdir");
+        let manager = SessionManager::new(tmp.path().to_path_buf()).expect("manager");
+        let workspace = tmp.path().join("ws");
+
+        // A record this instance creates is stamped with this boot id and is
+        // therefore not prior-instance work.
+        write_session_record(&manager, "mine", &workspace, Utc::now());
+        assert_eq!(
+            manager.session_boot_owner("mine").as_deref(),
+            Some(current_session_boot_id())
+        );
+        assert!(!manager.session_from_prior_instance("mine"));
+
+        // An id with no durable record at all is this instance's own
+        // not-yet-persisted session.
+        assert!(!manager.session_from_prior_instance("unsaved"));
+
+        // A record stamped by another boot id stays owned by that instance,
+        // even after this instance re-serializes it (crash recovery must not
+        // re-badge restored work as ours).
+        manager
+            .record_session_boot_owner("theirs", "boot_other_instance")
+            .expect("stamp");
+        write_session_record(&manager, "theirs", &workspace, Utc::now());
+        assert_eq!(
+            manager.session_boot_owner("theirs").as_deref(),
+            Some("boot_other_instance")
+        );
+        assert!(manager.session_from_prior_instance("theirs"));
+
+        // A legacy record with no marker is classified as prior-instance
+        // work, and a later re-save keeps it unclaimed.
+        write_session_record(&manager, "legacy", &workspace, Utc::now());
+        manager.clear_session_boot_owner("legacy");
+        assert!(manager.session_from_prior_instance("legacy"));
+        write_session_record(&manager, "legacy", &workspace, Utc::now());
+        assert!(manager.session_from_prior_instance("legacy"));
+
+        // Deleting the record drops its marker.
+        manager.delete_session("theirs").expect("delete");
+        assert_eq!(manager.session_boot_owner("theirs"), None);
+    }
+
+    #[test]
+    fn session_boot_owner_sidecar_never_lists_as_a_session() {
+        let tmp = tempdir().expect("tempdir");
+        let manager = SessionManager::new(tmp.path().to_path_buf()).expect("manager");
+        write_session_record(&manager, "real", &tmp.path().join("ws"), Utc::now());
+        assert!(manager.session_boot_owners_path().exists());
+        let listed = manager.list_sessions().expect("list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "real");
+        // The reserved stem cannot be claimed as a session id either.
+        assert!(manager.load_session("session_boot_owners").is_err());
+    }
+
+    #[test]
     fn test_session_manager_new() {
         let tmp = tempdir().expect("tempdir");
         let manager = SessionManager::new(tmp.path().join("sessions")).expect("new");
@@ -1891,6 +2191,84 @@ mod tests {
         let loaded = manager.load_session(&session_id).expect("load");
         assert_eq!(loaded.metadata.id, session_id);
         assert_eq!(loaded.messages.len(), 2);
+    }
+
+    /// #4681: reopening a session must not surface `<turn_meta>` machine
+    /// blocks in the transcript. Covers the current trailing shape and the
+    /// legacy leading shape (sessions saved before the turn-meta tail move),
+    /// while the loaded API history keeps both envelopes intact for replay.
+    #[test]
+    fn rehydrated_turn_meta_blocks_never_render_in_history_cells() {
+        let tmp = tempdir().expect("tempdir");
+        let manager = SessionManager::new(tmp.path().join("sessions")).expect("new");
+
+        let turn_meta = "<turn_meta>\nCurrent local date: 2026-08-01\n</turn_meta>";
+        let trailing_shape = Message {
+            role: "user".to_string(),
+            content: vec![
+                ContentBlock::Text {
+                    text: "Fix the flaky test".to_string(),
+                    cache_control: None,
+                },
+                ContentBlock::Text {
+                    text: turn_meta.to_string(),
+                    cache_control: None,
+                },
+            ],
+        };
+        let legacy_leading_shape = Message {
+            role: "user".to_string(),
+            content: vec![
+                ContentBlock::Text {
+                    text: turn_meta.to_string(),
+                    cache_control: None,
+                },
+                ContentBlock::Text {
+                    text: "Now add the docs".to_string(),
+                    cache_control: None,
+                },
+            ],
+        };
+        let messages = vec![
+            trailing_shape,
+            make_test_message("assistant", "Done."),
+            legacy_leading_shape,
+        ];
+        let session = create_saved_session(&messages, "test-model", tmp.path(), 100, None);
+        let session_id = session.metadata.id.clone();
+        manager.save_session(&session).expect("save");
+
+        let loaded = manager.load_session(&session_id).expect("load");
+
+        // Display path: no rendered cell may carry turn_meta markup.
+        let rendered: Vec<HistoryCell> = loaded
+            .messages
+            .iter()
+            .flat_map(history_cells_from_message)
+            .collect();
+        let user_texts: Vec<&str> = rendered
+            .iter()
+            .filter_map(|cell| match cell {
+                HistoryCell::User { content } => Some(content.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(user_texts, vec!["Fix the flaky test", "Now add the docs"]);
+        assert!(
+            !user_texts.iter().any(|text| text.contains("<turn_meta")),
+            "rendered cells must not contain turn_meta markup: {user_texts:?}"
+        );
+
+        // Model-facing replay: the persisted envelopes survive the round trip.
+        let replayed_envelopes = loaded
+            .messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .filter(|block| {
+                matches!(block, ContentBlock::Text { text, .. } if text.contains("<turn_meta>"))
+            })
+            .count();
+        assert_eq!(replayed_envelopes, 2);
     }
 
     #[test]

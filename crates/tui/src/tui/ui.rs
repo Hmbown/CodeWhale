@@ -13608,6 +13608,10 @@ fn render_classic_header(area: Rect, buf: &mut Buffer, app: &App) {
     let model = app.model_display_label();
     let effort = app.reasoning_effort_display_label();
     let started_at = classic_header_indicator_started_at(app);
+    let workflow_chip = app
+        .workflow_panel
+        .as_ref()
+        .map(super::widgets::workflow_panel::WorkflowPanel::top_bar_chip);
     let data = HeaderData::new(
         app.mode,
         &model,
@@ -13627,7 +13631,8 @@ fn render_classic_header(area: Rect, buf: &mut Buffer, app: &App) {
         started_at,
         &app.status_indicator,
     ))
-    .with_running_agents(running_agent_count(app));
+    .with_running_agents(running_agent_count(app))
+    .with_workflow_status(workflow_chip.as_deref());
     HeaderWidget::new(data).render(area, buf);
 }
 
@@ -13726,11 +13731,14 @@ fn render(f: &mut Frame, app: &mut App, config: &Config) {
     let pending_preview = build_pending_input_preview(app);
     let desired_preview_height = pending_preview.desired_height(size.width);
 
-    // WorkflowPanel unified activity surface (#4121). Collapsed to one row
-    // while finished, expanded while running; zero height when no panel.
+    // WorkflowPanel unified activity surface (#4121). Expanded while running
+    // (interactive drill-in above the composer); when collapsed the panel
+    // takes no rows — its persistent status lives in the top status bar as a
+    // header chip instead (#5040). Zero height when no panel.
     let desired_workflow_panel_height = app
         .workflow_panel
         .as_ref()
+        .filter(|panel| panel.expanded)
         .map(|panel| panel.desired_height(size.width))
         .unwrap_or(0);
     let auxiliary_budget = body_height.saturating_sub(

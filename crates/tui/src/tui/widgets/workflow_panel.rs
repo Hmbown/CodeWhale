@@ -898,6 +898,21 @@ impl WorkflowPanel {
         truncate_line_to_width(&raw, width.max(1))
     }
 
+    /// One-chip summary for the top status bar (#5040): lifecycle,
+    /// done/total children, failures, elapsed. Intentionally terse — the
+    /// expanded panel and history card carry the detail.
+    #[must_use]
+    pub fn top_bar_chip(&self) -> String {
+        let (done, total) = self.done_total();
+        let (failed, _cancelled) = self.failure_cancel_counts();
+        let mut chip = format!("wf {} {done}/{total}", self.lifecycle.label());
+        if failed > 0 {
+            chip.push_str(&format!(" · {failed} fail"));
+        }
+        chip.push_str(&format!(" · {}", self.elapsed_label()));
+        chip
+    }
+
     /// Elapsed label shared with direct sub-agent cards.
     #[must_use]
     pub fn elapsed_label(&self) -> String {

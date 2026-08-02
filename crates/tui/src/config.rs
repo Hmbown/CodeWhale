@@ -9070,6 +9070,33 @@ impl SavedCredential {
     }
 }
 
+/// Resolve the config document for CREDENTIAL writes: api_key values,
+/// `auth_mode` markers, and oauth/external-credential pointers.
+///
+/// Credentials are user-global — a key saved while working in one repo must be
+/// visible from every other repo (#5045). The ambient
+/// `CODEWHALE_CONFIG_PATH`/`DEEPSEEK_CONFIG_PATH` override can point at a
+/// workspace-scoped document (`<repo>/.codewhale/config.toml`, plaintext and
+/// easy to commit by accident), so credential writes that would land there are
+/// rescoped to the user-global config instead. Non-credential settings keep
+/// the ambient scoping, and callers that pass an explicit config path never
+/// consult this resolver.
+fn credential_config_path() -> Option<PathBuf> {
+    let resolved = default_config_path()?;
+    if !codewhale_config::config_path_is_workspace_scoped(&resolved) {
+        return Some(resolved);
+    }
+    let global = home_config_path();
+    if let Some(global) = global.as_ref() {
+        tracing::info!(
+            ambient = %resolved.display(),
+            global = %global.display(),
+            "rescoping credential write from workspace config to user-global config"
+        );
+    }
+    global
+}
+
 /// Save the active provider's API key.
 ///
 /// The selected durable secret backend is attempted first. On success the
@@ -9095,7 +9122,7 @@ fn save_root_api_key_for_secret_slot(
         anyhow::bail!("Refusing to save an empty API key.");
     }
 
-    let path = default_config_path()
+    let path = credential_config_path()
         .context("Failed to resolve config path: home directory not found.")?;
 
     if let Some(secrets) = credential_secret_store_for_save() {
@@ -9206,7 +9233,7 @@ fn save_root_api_key_metadata_without_plaintext(
 
 /// Write the `api_key` slot directly to `config.toml`.
 fn save_api_key_to_config_file(api_key: &str) -> Result<PathBuf> {
-    let config_path = default_config_path()
+    let config_path = credential_config_path()
         .context("Failed to resolve config path: home directory not found.")?;
 
     ensure_parent_dir(&config_path)?;
@@ -9673,7 +9700,7 @@ fn save_api_key_for_identity_unlocked(
     let api_key = api_key.trim();
     anyhow::ensure!(!api_key.is_empty(), "Refusing to save an empty API key.");
 
-    let config_path = default_config_path()
+    let config_path = credential_config_path()
         .context("Failed to resolve config path: home directory not found.")?;
     ensure_parent_dir(&config_path)?;
 
@@ -9979,7 +10006,7 @@ pub(crate) fn persist_external_credential_consent_for_at(
     )?;
     let config_path = match config_path {
         Some(path) => path.to_path_buf(),
-        None => default_config_path()
+        None => credential_config_path()
             .context("Failed to resolve config path: home directory not found.")?,
     };
     ensure_parent_dir(&config_path)?;
@@ -10049,7 +10076,7 @@ pub(crate) fn revoke_external_credential_consent_for_at(
     );
     let config_path = match config_path {
         Some(path) => path.to_path_buf(),
-        None => default_config_path()
+        None => credential_config_path()
             .context("Failed to resolve config path: home directory not found.")?,
     };
     ensure_parent_dir(&config_path)?;
@@ -10223,8 +10250,9 @@ pub fn clear_api_key() -> Result<()> {
 fn clear_api_key_unlocked() -> Result<()> {
     // Strip api_key entries from config.toml, including provider-scoped
     // nested entries. Clearing a config file must not trigger platform
-    // credential prompts.
-    let config_path = default_config_path()
+    // credential prompts. Clears target the same user-global document that
+    // credential saves write, so logout removes what login stored (#5045).
+    let config_path = credential_config_path()
         .context("Failed to resolve config path: home directory not found.")?;
 
     if !config_path.exists() {
@@ -10271,7 +10299,7 @@ pub fn clear_active_provider_api_key(provider: &str) -> Result<()> {
 }
 
 fn clear_active_provider_api_key_unlocked(provider: &str) -> Result<()> {
-    let config_path = default_config_path()
+    let config_path = credential_config_path()
         .context("Failed to resolve config path: home directory not found.")?;
 
     if !config_path.exists() {
@@ -10345,3 +10373,101 @@ fn clear_active_provider_api_key_unlocked(provider: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests;
+
+/// #5045 regression coverage: credential writes must never land in a
+/// workspace-scoped `.codewhale/config.toml`.
+#[cfg(test)]
+mod credential_scope_tests {
+    use super::*;
+    use crate::test_support::{EnvVarGuard, lock_test_env};
+
+    /// With the ambient config path pointing at a workspace-local
+    /// `.codewhale/config.toml` (a checkout the user works in), saving an
+    /// API key must write the user-global config under the isolated
+    /// `CODEWHALE_HOME`, never the project file. The `.git` marker stands in
+    /// for cwd-inside-the-workspace: chdir is process-global and unsafe in a
+    /// parallel test binary, and production classifies on either signal.
+    #[test]
+    fn api_key_save_rescopes_workspace_config_to_user_global() -> Result<()> {
+        let _lock = lock_test_env();
+        let temp = tempfile::tempdir()?;
+        let workspace = temp.path().join("repo");
+        fs::create_dir_all(workspace.join(".git"))?;
+        let project_dir = workspace.join(".codewhale");
+        fs::create_dir_all(&project_dir)?;
+        let project_config = project_dir.join("config.toml");
+        fs::write(&project_config, "approval_policy = \"never\"\n")?;
+
+        let user_home = temp.path().join("user-global-home");
+        let _home = EnvVarGuard::set("CODEWHALE_HOME", user_home.as_os_str());
+        let _config = EnvVarGuard::set("CODEWHALE_CONFIG_PATH", project_config.as_os_str());
+        let _legacy_config = EnvVarGuard::remove("DEEPSEEK_CONFIG_PATH");
+        // No explicit secret backend: under cfg(test) the save takes the
+        // plaintext config-file path, which is exactly the surface this
+        // regression guards.
+        let _backend = EnvVarGuard::remove("CODEWHALE_SECRET_BACKEND");
+        let _legacy_backend = EnvVarGuard::remove("DEEPSEEK_SECRET_BACKEND");
+
+        let saved = save_api_key("workspace-rescope-test-key")?;
+
+        let global_config = user_home.join("config.toml");
+        assert_eq!(
+            saved,
+            SavedCredential::ConfigFile(global_config.clone()),
+            "credential save must surface the user-global destination"
+        );
+        let global = fs::read_to_string(&global_config)?;
+        assert!(
+            global.contains("workspace-rescope-test-key"),
+            "user-global config must hold the saved key: {global}"
+        );
+        let project = fs::read_to_string(&project_config)?;
+        assert!(
+            !project.contains("workspace-rescope-test-key"),
+            "credential leaked into workspace config: {project}"
+        );
+        assert!(
+            !project.contains("api_key"),
+            "workspace config must stay credential-free: {project}"
+        );
+        Ok(())
+    }
+
+    /// Provider-table saves go through the same resolver: an OpenRouter key
+    /// saved with a workspace-scoped ambient config path must land in the
+    /// user-global document.
+    #[test]
+    fn provider_api_key_save_rescopes_workspace_config_to_user_global() -> Result<()> {
+        let _lock = lock_test_env();
+        let temp = tempfile::tempdir()?;
+        let workspace = temp.path().join("repo");
+        fs::create_dir_all(workspace.join(".git"))?;
+        let project_dir = workspace.join(".codewhale");
+        fs::create_dir_all(&project_dir)?;
+        let project_config = project_dir.join("config.toml");
+        fs::write(&project_config, "approval_policy = \"never\"\n")?;
+
+        let user_home = temp.path().join("user-global-home");
+        let _home = EnvVarGuard::set("CODEWHALE_HOME", user_home.as_os_str());
+        let _config = EnvVarGuard::set("CODEWHALE_CONFIG_PATH", project_config.as_os_str());
+        let _legacy_config = EnvVarGuard::remove("DEEPSEEK_CONFIG_PATH");
+        let _backend = EnvVarGuard::remove("CODEWHALE_SECRET_BACKEND");
+        let _legacy_backend = EnvVarGuard::remove("DEEPSEEK_SECRET_BACKEND");
+
+        let path = save_api_key_for(ApiProvider::Openrouter, "workspace-rescope-openrouter-key")?;
+
+        assert_eq!(
+            path,
+            user_home.join("config.toml"),
+            "provider save must report the user-global destination"
+        );
+        let global = fs::read_to_string(&path)?;
+        assert!(global.contains("workspace-rescope-openrouter-key"));
+        let project = fs::read_to_string(&project_config)?;
+        assert!(
+            !project.contains("workspace-rescope-openrouter-key"),
+            "credential leaked into workspace config: {project}"
+        );
+        Ok(())
+    }
+}

@@ -108,6 +108,21 @@ pub(super) const TOP_HEIGHT_MAX: u16 = 16;
 pub(super) const SIDE_WIDTH_MIN: u16 = 26;
 pub(super) const SIDE_WIDTH_MAX: u16 = 80;
 
+/// Which restored work rows belong to a prior session instance (#4416).
+///
+/// Decided once per session id and cached: this instance's own later
+/// autosaves restamp the persisted record, and re-probing after that would
+/// re-badge restored rows as live work.
+#[derive(Debug, Clone)]
+pub(crate) struct SessionInstanceScope {
+    pub(super) session_id: String,
+    pub(super) from_prior_instance: bool,
+    /// Node ids present in the graph supplied at session restore time: the
+    /// restored persisted rows, as opposed to work this instance creates
+    /// afterwards.
+    pub(super) restored_nodes: HashSet<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct WorkSurfaceState {
     pub placement: WorkSurfacePlacement,
@@ -152,6 +167,11 @@ pub struct WorkSurfaceState {
     /// Bumped on accepted user turns / newly started operations.
     user_turn_epoch: u64,
     last_handled_user_turn_epoch: u64,
+    /// Session-instance ownership of the restored session record (#4416).
+    pub(crate) session_instance: Option<SessionInstanceScope>,
+    /// Test override for the sessions directory the ownership probe reads;
+    /// production resolves the default location lazily.
+    pub(crate) session_owner_probe_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for WorkSurfaceState {
@@ -205,6 +225,8 @@ impl WorkSurfaceState {
             activity_suppressed: false,
             user_turn_epoch: 0,
             last_handled_user_turn_epoch: 0,
+            session_instance: None,
+            session_owner_probe_dir: None,
         }
     }
 
@@ -218,6 +240,45 @@ impl WorkSurfaceState {
     /// Recent-only live chrome collapses immediately (#4688).
     pub fn note_user_turn_or_new_operation(&mut self) {
         self.user_turn_epoch = self.user_turn_epoch.wrapping_add(1);
+    }
+
+    /// Record the exact graph restored from persisted session state. This
+    /// must happen at the restore boundary: the first later runtime capture
+    /// may already contain work created by this process.
+    pub(crate) fn record_restored_session(
+        &mut self,
+        session_id: &str,
+        graph: Option<&WorkGraphSnapshot>,
+    ) {
+        let from_prior_instance = session_record_from_prior_instance(self, session_id);
+        let restored_nodes = if from_prior_instance {
+            graph
+                .into_iter()
+                .flat_map(|graph| graph.nodes.iter())
+                .map(|node| node.id.as_str().to_string())
+                .collect()
+        } else {
+            HashSet::new()
+        };
+        self.session_instance = Some(SessionInstanceScope {
+            session_id: session_id.to_string(),
+            from_prior_instance,
+            restored_nodes,
+        });
+    }
+
+    /// A restored graph row owned by a prior session instance whose terminal
+    /// failure or staleness must not render as this session's live work
+    /// (#4416). Plan steps stay: the resumed to-do list is the point of
+    /// restoring; failed/stale operations and blockers are the leak.
+    pub(super) fn is_prior_instance_residue(&self, node: &WorkNode) -> bool {
+        let Some(scope) = self.session_instance.as_ref() else {
+            return false;
+        };
+        scope.from_prior_instance
+            && scope.restored_nodes.contains(node.id.as_str())
+            && node.kind != NodeKind::PlanStep
+            && matches!(node.state, NodeState::Failed | NodeState::Stale)
     }
 
     fn now_ms(&self) -> u64 {
@@ -323,6 +384,8 @@ pub(super) fn project(app: &mut App) -> Vec<WorkRow> {
         ),
     };
 
+    update_session_instance_scope(app);
+
     let rows = match graph {
         Some(graph) => graph_rows(
             &mut app.work_surface,
@@ -409,6 +472,39 @@ pub(super) fn project_visible(app: &mut App) -> Vec<WorkRow> {
     todos.extend(agents);
     app.work_surface.latest_rows = todos.clone();
     todos
+}
+
+/// Classify the current session against this process's session-instance
+/// boot id (#4416), mirroring the `SubAgentManager` prior-session pattern
+/// (#405). The probe runs once per session id. Persisted row identity is
+/// recorded separately at the actual session restore boundary.
+fn update_session_instance_scope(app: &mut App) {
+    let Some(session_id) = app.current_session_id.clone() else {
+        app.work_surface.session_instance = None;
+        return;
+    };
+    let classified = app
+        .work_surface
+        .session_instance
+        .as_ref()
+        .is_some_and(|scope| scope.session_id == session_id);
+    if !classified {
+        let from_prior_instance =
+            session_record_from_prior_instance(&app.work_surface, &session_id);
+        app.work_surface.session_instance = Some(SessionInstanceScope {
+            session_id,
+            from_prior_instance,
+            restored_nodes: HashSet::new(),
+        });
+    }
+}
+
+fn session_record_from_prior_instance(surface: &WorkSurfaceState, session_id: &str) -> bool {
+    let manager = match surface.session_owner_probe_dir.as_ref() {
+        Some(dir) => crate::session_manager::SessionManager::new(dir.clone()),
+        None => crate::session_manager::SessionManager::default_location(),
+    };
+    manager.is_ok_and(|manager| manager.session_from_prior_instance(session_id))
 }
 
 fn graph_rows(
@@ -499,6 +595,7 @@ fn ordered_rows(
                     )
                 })
                 .filter(|node| !is_settled_transient_operation(node))
+                .filter(|node| !surface.is_prior_instance_residue(node))
                 .enumerate()
                 .map(|(order, node)| RankedWorkRow {
                     bucket: node_bucket(node),
@@ -651,6 +748,23 @@ fn ordered_rows(
     // Full catalog for inspector/history even when live chrome collapses.
     let mut catalog = vec![section_heading("work", &heading_label, &detail)];
     catalog.extend(ranked.iter().map(|item| item.row.clone()));
+    // Prior-instance terminal residue stays reachable through the explicit
+    // catalog, labeled historical, but never as this session's live work
+    // (#4416).
+    if let Some(snapshot) = snapshot {
+        catalog.extend(
+            snapshot
+                .nodes
+                .iter()
+                .filter(|node| surface.is_prior_instance_residue(node))
+                .map(|node| {
+                    let mut row = graph_node_row(snapshot, node);
+                    row.detail = format!("prior session · {}", row.detail);
+                    row.tone = WorkTone::Muted;
+                    row
+                }),
+        );
+    }
     surface.catalog_rows = catalog.clone();
 
     // Live chrome policy:
