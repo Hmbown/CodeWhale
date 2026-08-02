@@ -947,10 +947,14 @@ pub(crate) fn footer_context_percent_spans(app: &App) -> Vec<Span<'static>> {
 pub(crate) fn footer_cost_spans(app: &App) -> Vec<Span<'static>> {
     let chip = app.cumulative_usage_chip();
     // Footer owns positive priced spend, including an explicitly labelled
-    // subtotal. Allowance/local/bare unknown remain in the context panel.
+    // subtotal. Subscription routes have no dollar truth, so they render the
+    // plan-aware usage line ("usage: Kimi Code quota · 12%") instead of fake
+    // money or silence (morning-report issue: '$' is not a real charge on
+    // plan providers). Local/bare unknown remain in the context panel.
     let amount = match &chip {
         crate::route_billing::UsageChip::Money(amount) => amount.clone(),
-        crate::route_billing::UsageChip::PricedSubtotal { .. } => {
+        crate::route_billing::UsageChip::PricedSubtotal { .. }
+        | crate::route_billing::UsageChip::Allowance { .. } => {
             crate::route_billing::format_usage_chip(&chip).unwrap_or_default()
         }
         _ => return Vec::new(),

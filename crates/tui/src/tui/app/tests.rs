@@ -1617,7 +1617,15 @@ fn subscription_route_hides_stale_session_dollars_in_footer() {
     app.accrue_session_cost_estimate(CostEstimate::usd_only(12.34));
     app.billing_presentation =
         crate::route_billing::BillingPresentation::Subscription("Codex OAuth quota");
-    assert!(crate::tui::footer_ui::footer_cost_spans(&app).is_empty());
+    // Stale unaudited dollars must never render on a plan route; the footer
+    // shows the plan-aware usage line instead of money or silence.
+    let spans = crate::tui::footer_ui::footer_cost_spans(&app);
+    let rendered = spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert!(!rendered.contains('$'), "{rendered}");
+    assert!(rendered.contains("Codex OAuth quota"), "{rendered}");
 }
 
 #[test]
