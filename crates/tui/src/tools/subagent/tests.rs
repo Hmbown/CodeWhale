@@ -5588,6 +5588,27 @@ fn transient_provider_classifier_matches_sse_header_timeout() {
 }
 
 #[test]
+fn transient_provider_classifier_matches_body_decode_failures() {
+    // A provider that accepts the request and dies mid-response is a
+    // transport failure, not a fatal child error: one same-prompt retry is
+    // cheap next to re-planning 141 seconds of scout work (morning-report
+    // issue #7, DeepSeek stream decode).
+    let decode = anyhow::anyhow!("error decoding response body")
+        .context("Failed to read Chat API response body");
+    assert!(is_transient_subagent_provider_error(&decode));
+
+    let parse = anyhow::anyhow!("expected value at line 1 column 1")
+        .context("Failed to parse Chat API JSON");
+    assert!(is_transient_subagent_provider_error(&parse));
+
+    let auth = anyhow::anyhow!("401 unauthorized: invalid api key");
+    assert!(
+        !is_transient_subagent_provider_error(&auth),
+        "auth failures stay fatal"
+    );
+}
+
+#[test]
 fn transient_provider_classifier_matches_structured_rate_limit() {
     let err = anyhow::Error::new(crate::llm_client::LlmError::RateLimited {
         message: "please slow down".to_string(),

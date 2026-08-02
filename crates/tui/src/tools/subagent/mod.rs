@@ -8535,6 +8535,15 @@ fn is_transient_subagent_provider_error(error: &anyhow::Error) -> bool {
         "502",
         "503",
         "504",
+        // Body/decode failures are transport-class: the provider accepted the
+        // request and died mid-response (a DeepSeek stream decode error killed
+        // a 141s scout with zero retries — morning-report issue #7). One
+        // same-prompt retry is cheap next to re-planning the child.
+        "error decoding response body",
+        "failed to read chat api response body",
+        "failed to parse chat api json",
+        "unexpected end of file",
+        "incomplete message",
     ]
     .iter()
     .any(|needle| message.contains(needle))
