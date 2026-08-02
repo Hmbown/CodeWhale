@@ -1387,7 +1387,7 @@ pub async fn compact_messages(
     // compaction even when the model summary is generic or lossy, and the
     // system-prompt-adjacent working contract (the first user request) must
     // never be dropped merely because its message index was summarized.
-    let continuation = build_continuation_block(messages);
+    let continuation = build_continuation_block(messages, &plan.pinned_indices);
 
     let anchors_section = anchor_summary_section(workspace);
     let project_instructions = project_instructions_section(workspace);
@@ -2065,29 +2065,33 @@ fn user_text_of(msg: &Message) -> Option<String> {
 
 /// Build the deterministic continuation block from the transcript itself.
 ///
-/// Compaction must preserve active intent, accepted decisions, verification
-/// evidence, and in-flight tool state even when the summary model returns a
-/// generic or lossy transcript summary (#5043). This block is extracted by
-/// the runtime, not the summarizer, so a degenerate summary can never erase
-/// the working contract: the first user request survives alongside the latest
-/// one after credential redaction, and unresolved tool dispatches stay legible.
-fn build_continuation_block(messages: &[Message]) -> String {
+/// Compaction must preserve accepted decisions, verification evidence, and
+/// in-flight tool state that are at risk of leaving the retained transcript,
+/// even when the summary model returns a generic or lossy result (#5043).
+/// Content already present in the pinned tail is not duplicated here. The
+/// working contract remains a deliberate exception: the first user request
+/// is always retained after credential redaction.
+fn build_continuation_block(messages: &[Message], pinned_indices: &BTreeSet<usize>) -> String {
     let mut first_user: Option<String> = None;
-    let mut last_user: Option<String> = None;
-    for msg in messages {
+    let mut last_user: Option<(usize, String)> = None;
+    for (index, msg) in messages.iter().enumerate() {
         let Some(text) = user_text_of(msg) else {
             continue;
         };
         if first_user.is_none() {
             first_user = Some(text.clone());
         }
-        last_user = Some(text);
+        last_user = Some((index, text));
     }
 
     // Decisions: assistant prose lines that record a choice or approach.
     let mut decisions: Vec<String> = Vec::new();
     let mut seen_decisions: HashSet<String> = HashSet::new();
-    for msg in messages.iter().filter(|m| m.role == "assistant") {
+    for (_, msg) in messages
+        .iter()
+        .enumerate()
+        .filter(|(index, msg)| !pinned_indices.contains(index) && msg.role == "assistant")
+    {
         for block in &msg.content {
             let ContentBlock::Text { text, .. } = block else {
                 continue;
@@ -2107,7 +2111,9 @@ fn build_continuation_block(messages: &[Message]) -> String {
             }
         }
     }
-    // Keep the most recent decisions when over budget.
+    // Keep the most recent at-risk decisions when over budget. Pinned-tail
+    // decisions were excluded above, so these do not compete with duplicate
+    // content that already survives compaction verbatim.
     if decisions.len() > CONTINUATION_MAX_ITEMS {
         decisions.drain(0..decisions.len() - CONTINUATION_MAX_ITEMS);
     }
@@ -2117,8 +2123,21 @@ fn build_continuation_block(messages: &[Message]) -> String {
     let tool_uses = collect_tool_uses(messages);
     let mut evidence: Vec<String> = Vec::new();
     let mut seen_evidence: HashSet<String> = HashSet::new();
-    let mut resolved_tool_ids: HashSet<&str> = HashSet::new();
-    for msg in messages {
+    // Resolution is a transcript-wide fact even when the result itself is
+    // pinned and therefore excluded from the duplicated evidence section.
+    let resolved_tool_ids: HashSet<&str> = messages
+        .iter()
+        .flat_map(|msg| msg.content.iter())
+        .filter_map(|block| match block {
+            ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    for (_, msg) in messages
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !pinned_indices.contains(index))
+    {
         for block in &msg.content {
             let ContentBlock::ToolResult {
                 tool_use_id,
@@ -2128,7 +2147,6 @@ fn build_continuation_block(messages: &[Message]) -> String {
             else {
                 continue;
             };
-            resolved_tool_ids.insert(tool_use_id.as_str());
             let tool_name = tool_uses
                 .get(tool_use_id)
                 .map_or("tool", |info| info.name.as_str());
@@ -2155,7 +2173,11 @@ fn build_continuation_block(messages: &[Message]) -> String {
     // are exactly the calls `enforce_tool_call_pairs` must drop from the
     // retained messages, so this block is their only surviving record.
     let mut in_flight: Vec<String> = Vec::new();
-    for msg in messages {
+    for (_, msg) in messages
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !pinned_indices.contains(index))
+    {
         for block in &msg.content {
             let ContentBlock::ToolUse {
                 id, name, input, ..
@@ -2184,8 +2206,9 @@ fn build_continuation_block(messages: &[Message]) -> String {
             quote_verbatim(contract, CONTINUATION_CONTRACT_MAX_CHARS)
         );
     }
-    if let Some(intent) = last_user.as_deref()
-        && first_user.as_deref() != Some(intent)
+    if let Some((index, intent)) = last_user.as_ref()
+        && !pinned_indices.contains(index)
+        && first_user.as_deref() != Some(intent.as_str())
     {
         let _ = write!(
             body,
@@ -2728,7 +2751,7 @@ mod tests {
             tool_use("t2", "Bash", json!({"command": "cargo test -p auth login"})),
         ];
 
-        let block = build_continuation_block(&messages);
+        let block = build_continuation_block(&messages, &BTreeSet::new());
 
         // Intent: both the original working contract and the latest ask survive
         // after the credential-redaction boundary.
@@ -2752,9 +2775,12 @@ mod tests {
 
     #[test]
     fn continuation_block_is_empty_for_empty_transcript() {
-        assert!(build_continuation_block(&[]).is_empty());
+        assert!(build_continuation_block(&[], &BTreeSet::new()).is_empty());
         // Tool-result-only user messages carry no user text; nothing to quote.
-        assert!(build_continuation_block(&[tool_result("tX", "plain output")]).is_empty());
+        assert!(
+            build_continuation_block(&[tool_result("tX", "plain output")], &BTreeSet::new())
+                .is_empty()
+        );
     }
 
     #[test]
@@ -2776,7 +2802,7 @@ mod tests {
             ),
         ];
 
-        let block = build_continuation_block(&messages);
+        let block = build_continuation_block(&messages, &BTreeSet::new());
 
         for secret in [
             "sk-user-secret-value",
@@ -2791,6 +2817,41 @@ mod tests {
         }
         assert!(block.contains(codewhale_config::persistence::REDACTED));
         assert!(block.contains("Ship the auth fix"));
+    }
+
+    #[test]
+    fn continuation_block_excludes_content_that_already_survives_in_pinned_messages() {
+        let messages = vec![
+            msg("user", "Keep the release blocked until verification passes"),
+            msg("assistant", "Decision: run the exact auth regression first"),
+            tool_result("t1", "test result: 4 passed; 0 failed"),
+            tool_use("t2", "Bash", json!({"command": "cargo test auth"})),
+            tool_use(
+                "t3",
+                "Bash",
+                json!({"command": "cargo test already resolved"}),
+            ),
+            msg("assistant", "Decision: pinned tail decision"),
+            tool_result("t3", "test result: pinned evidence"),
+            tool_use("t4", "Bash", json!({"command": "pinned command"})),
+            msg("user", "Now rerun the final package check"),
+        ];
+        let pinned = BTreeSet::from([5, 6, 7, 8]);
+
+        let block = build_continuation_block(&messages, &pinned);
+
+        assert!(block.contains("Keep the release blocked"), "{block}");
+        assert!(block.contains("run the exact auth regression"), "{block}");
+        assert!(block.contains("4 passed; 0 failed"), "{block}");
+        assert!(block.contains("cargo test auth"), "{block}");
+        assert!(!block.contains("cargo test already resolved"), "{block}");
+        assert!(!block.contains("pinned tail decision"), "{block}");
+        assert!(!block.contains("pinned evidence"), "{block}");
+        assert!(!block.contains("pinned command"), "{block}");
+        assert!(
+            !block.contains("Now rerun the final package check"),
+            "pinned active intent must not be duplicated: {block}"
+        );
     }
 
     struct FixedSummaryClient;
