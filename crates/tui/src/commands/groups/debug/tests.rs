@@ -1273,13 +1273,16 @@ fn test_patch_undo_requests_session_resync_after_restore() {
 
     let repo = SnapshotRepo::open_or_init(&workspace).unwrap();
     std::fs::write(workspace.join("a.txt"), b"original").unwrap();
-    repo.snapshot("pre-turn:1").unwrap();
+    repo.snapshot_with_session("pre-turn:1", Some("test-session"))
+        .unwrap();
     std::fs::write(workspace.join("a.txt"), b"modified").unwrap();
-    repo.snapshot("post-turn:1").unwrap();
+    repo.snapshot_with_session("post-turn:1", Some("test-session"))
+        .unwrap();
 
     let mut app = create_test_app();
     app.workspace = workspace.clone();
     app.yolo = true;
+    app.current_session_id = Some("test-session".to_string());
     app.api_messages.push(Message {
         role: "user".to_string(),
         content: vec![ContentBlock::Text {
@@ -1302,7 +1305,7 @@ fn test_patch_undo_requests_session_resync_after_restore() {
 }
 
 #[test]
-fn test_patch_undo_legacy_chain_stops_at_matching_newest_snapshot() {
+fn test_undo_legacy_chain_falls_back_to_conversation_only() {
     use crate::snapshot::SnapshotRepo;
     use crate::test_support::lock_test_env;
     use tempfile::tempdir;
@@ -1349,27 +1352,26 @@ fn test_patch_undo_legacy_chain_stops_at_matching_newest_snapshot() {
 
     let mut app = create_test_app();
     app.workspace = workspace.clone();
-    app.yolo = true;
+    app.current_session_id = Some("current-session".to_string());
+    app.history.push(HistoryCell::User {
+        content: "chat only".to_string(),
+    });
+    app.history.push(HistoryCell::Assistant {
+        content: "reply".to_string(),
+        streaming: false,
+    });
 
-    let first = patch_undo(&mut app);
-    assert!(!first.is_error);
-    assert_eq!(std::fs::read_to_string(&file).unwrap(), "one");
-
-    // A legacy (untagged) chain never walks past a snapshot that matches
-    // the current workspace: there is no session boundary to stop it from
-    // rolling back another conversation's work, so the second /undo
-    // reports nothing to revert instead of restoring "zero".
-    let second = patch_undo(&mut app);
-    assert!(!second.is_error);
+    let result = super::dispatch(&mut app, "undo", None).expect("registered command");
+    assert!(!result.is_error);
     assert!(
-        second
+        result
             .message
             .as_deref()
-            .is_some_and(|m| m.contains("No undoable snapshot")),
-        "expected 'nothing to revert' message, got: {:?}",
-        second.message
+            .is_some_and(|m| m.contains("Removed")),
+        "expected conversation fallback, got: {:?}",
+        result.message
     );
-    assert_eq!(std::fs::read_to_string(&file).unwrap(), "one");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "two");
 }
 
 #[test]
@@ -1413,12 +1415,14 @@ fn test_patch_undo_prunes_tool_turn_context() {
     let repo = SnapshotRepo::open_or_init(&workspace).unwrap();
     let file = workspace.join("a.txt");
     std::fs::write(&file, b"alpha").unwrap();
-    repo.snapshot("tool:call-1").unwrap();
+    repo.snapshot_with_session("tool:call-1", Some("test-session"))
+        .unwrap();
     std::fs::write(&file, b"alpha-fixed").unwrap();
 
     let mut app = create_test_app();
     app.workspace = workspace.clone();
     app.yolo = true;
+    app.current_session_id = Some("test-session".to_string());
     app.history.push(HistoryCell::User {
         content: "please edit a.txt".to_string(),
     });
@@ -1544,12 +1548,14 @@ fn test_patch_undo_prunes_pre_turn_context() {
     let repo = SnapshotRepo::open_or_init(&workspace).unwrap();
     let file = workspace.join("a.txt");
     std::fs::write(&file, b"alpha").unwrap();
-    repo.snapshot("pre-turn:1").unwrap();
+    repo.snapshot_with_session("pre-turn:1", Some("test-session"))
+        .unwrap();
     std::fs::write(&file, b"alpha-fixed").unwrap();
 
     let mut app = create_test_app();
     app.workspace = workspace.clone();
     app.yolo = true;
+    app.current_session_id = Some("test-session".to_string());
     app.history.push(HistoryCell::User {
         content: "please edit a.txt".to_string(),
     });
@@ -1983,12 +1989,14 @@ fn test_patch_undo_refuses_outside_trusted_mode() {
 
     let repo = SnapshotRepo::open_or_init(&workspace).unwrap();
     std::fs::write(workspace.join("a.txt"), b"original").unwrap();
-    repo.snapshot("pre-turn:1").unwrap();
+    repo.snapshot_with_session("pre-turn:1", Some("test-session"))
+        .unwrap();
     std::fs::write(workspace.join("a.txt"), b"modified").unwrap();
 
     // yolo/trust_mode stay false (create_test_app defaults).
     let mut app = create_test_app();
     app.workspace = workspace.clone();
+    app.current_session_id = Some("test-session".to_string());
 
     let result = patch_undo(&mut app);
     assert!(!result.is_error);
@@ -2066,5 +2074,17 @@ fn test_patch_undo_never_crosses_session_boundary() {
     let result = patch_undo(&mut app);
     assert!(!result.is_error);
     // Must restore session B's pre-turn state — never session A's.
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "b-before");
+
+    let repeated = patch_undo(&mut app);
+    assert!(!repeated.is_error);
+    assert!(
+        repeated
+            .message
+            .as_deref()
+            .is_some_and(|m| m.contains("No undoable snapshot")),
+        "repeated undo must stop at the session boundary: {:?}",
+        repeated.message
+    );
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "b-before");
 }

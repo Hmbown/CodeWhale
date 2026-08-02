@@ -1632,7 +1632,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn prune_keep_last_n_preserves_session_tags() {
         let tmp = tempdir().unwrap();
         let (repo, _home) = make_repo(tmp.path());
@@ -1660,6 +1659,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn tagged_and_untagged_snapshots_coexist_in_one_chain() {
         let tmp = tempdir().unwrap();
         let (repo, _home) = make_repo(tmp.path());

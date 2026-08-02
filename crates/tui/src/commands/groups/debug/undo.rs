@@ -143,16 +143,6 @@ fn tool_result_id(block: &ContentBlock) -> Option<&String> {
 pub fn patch_undo(app: &mut App) -> CommandResult {
     let workspace = app.workspace.clone();
 
-    // Trust gate: restoring workspace files is a one-shot mutation. Align
-    // with `/restore` — require trusted mode (Full Access or `/trust on`)
-    // so a stray `/undo` can't silently roll back the working tree.
-    if !(app.yolo || app.trust_mode) {
-        return CommandResult::message(
-            "Refusing to undo workspace files outside trusted mode.\n\
-             Run `/trust on` or select Full Access with Shift+Tab, then re-run `/undo`.",
-        );
-    }
-
     let repo = match crate::snapshot::SnapshotRepo::open_or_init(&workspace) {
         Ok(r) => r,
         Err(e) => {
@@ -174,25 +164,19 @@ pub fn patch_undo(app: &mut App) -> CommandResult {
         return CommandResult::message("No snapshots found to undo — nothing to revert.");
     }
 
-    // Scope candidates to the current session when it is known. Snapshots
-    // taken before session tagging (`session_id == None`) may belong to a
-    // *different* conversation on the same workspace; auto-restoring them
-    // is what caused cross-session rollbacks. Once the chain has *any*
-    // tagged snapshot we never auto-pick untagged ones; when the current
-    // session id is known, a fully legacy (untagged) chain yields zero
-    // candidates and `/undo` safely degrades to conversation undo. Only
-    // when no session id is known at all (fresh process, `/clear`) does a
-    // legacy chain fall back to the newest-candidate walk.
-    let current_session = app.current_session_id.as_deref();
-    let has_tagged = snapshots.iter().any(|s| s.session_id.is_some());
+    // Automatic file rollback is allowed only when ownership is provable.
+    // Untagged legacy snapshots and snapshots from another conversation may
+    // describe unrelated user work in this same workspace, so fail closed
+    // and let the command dispatcher fall back to conversation-only undo.
+    let Some(current_session) = app.current_session_id.as_deref() else {
+        return CommandResult::message(
+            "No undoable snapshot is tagged for the current session — nothing to revert.",
+        );
+    };
     let candidates: Vec<crate::snapshot::Snapshot> = snapshots
         .into_iter()
         .filter(|s| s.label.starts_with("tool:") || s.label.starts_with("pre-turn:"))
-        .filter(|s| match current_session {
-            Some(sid) => s.session_id.as_deref() == Some(sid),
-            None if has_tagged => false,
-            None => true,
-        })
+        .filter(|s| s.session_id.as_deref() == Some(current_session))
         .collect();
 
     if candidates.is_empty() {
@@ -201,21 +185,13 @@ pub fn patch_undo(app: &mut App) -> CommandResult {
         );
     }
 
-    // Pick the newest candidate whose tree differs from the current
-    // workspace. On a session-tagged chain the candidate set is already
-    // scoped to this conversation, so skipping identical snapshots keeps
-    // repeated `/undo` working without ever crossing into another
-    // session. On a legacy chain we only ever consider the newest
-    // candidate — walking further back has no session boundary to stop
-    // us from rolling back someone else's work.
+    // Pick the newest current-session candidate whose tree differs from the
+    // workspace. Skipping identical snapshots makes repeated `/undo` walk
+    // backward only inside the proven session boundary.
     let differs = |s: &&crate::snapshot::Snapshot| {
         matches!(repo.work_tree_matches_snapshot(&s.id), Ok(false))
     };
-    let target = if has_tagged {
-        candidates.iter().find(differs)
-    } else {
-        candidates.iter().take(1).find(differs)
-    };
+    let target = candidates.iter().find(differs);
 
     let Some(target) = target else {
         return CommandResult::message(
@@ -223,6 +199,14 @@ pub fn patch_undo(app: &mut App) -> CommandResult {
         );
     };
 
+    // Restoring workspace files is a mutation. Apply the trust gate only
+    // after finding a real, current-session target so chat-only `/undo` can
+    // still fall back to conversation history in ordinary mode.
+    if !(app.yolo || app.trust_mode) {
+        return CommandResult::message(
+            "Refusing to undo workspace files outside trusted mode.\n\
+             Run `/trust on` or select Full Access with Shift+Tab, then re-run `/undo`.",
+        );
     }
 
     if let Err(e) = repo.restore(&target.id) {
