@@ -117,6 +117,9 @@ pub fn cost(app: &mut App) -> CommandResult {
         MessageId::CmdCostReport
     };
     let mut report = tr(locale, headline).replace("{cost}", &cost_report_amount(app, locale));
+    if priced > 0 || has_saved_legacy_subtotal {
+        report.push_str(&cost_breakdown_report(app));
+    }
     report.push_str(&cost_coverage_report(app, locale));
     CommandResult::message(report)
 }
@@ -129,6 +132,132 @@ fn cost_report_amount(app: &App, locale: Locale) -> String {
     } else {
         tr(locale, MessageId::CmdCostUnknownValue).to_string()
     }
+}
+
+/// The `/cost` headline decomposed into the exact terms it is computed from.
+///
+/// The headline is `max(parent turns + sub-agents, display high-water)` in the
+/// display currency (the #244 monotonic guarantee). Those are its only inputs,
+/// so the three components below always sum back to it — asserted by test, so
+/// the breakdown can never drift from the number above it (#4939).
+struct CostComponents {
+    /// Accumulated parent-turn spend.
+    parent_turns: f64,
+    /// Accumulated sub-agent/background spend.
+    subagents: f64,
+    /// Amount by which the monotonic display floor exceeds the live
+    /// accumulators after a downward reconciliation (#244). Zero whenever the
+    /// live sum is the headline.
+    display_floor: f64,
+}
+
+impl CostComponents {
+    fn compute(app: &App) -> Self {
+        // Each term is sanitized exactly the way the accumulator fold
+        // sanitizes it, so `current` here is bitwise the `current` inside
+        // `displayed_session_cost_for_currency` and the floor is exact.
+        fn sanitize(amount: f64) -> f64 {
+            if amount.is_finite() && amount >= 0.0 {
+                amount
+            } else {
+                0.0
+            }
+        }
+        let currency = app.cost_display_currency(app.cost_currency);
+        let parent_turns = sanitize(app.session_cost_for_currency(currency));
+        let subagents = sanitize(app.subagent_cost_for_currency(currency));
+        let current = {
+            let sum = parent_turns + subagents;
+            if sum.is_finite() { sum } else { f64::MAX }
+        };
+        let headline = app.displayed_session_cost_for_currency(app.cost_currency);
+        Self {
+            parent_turns,
+            subagents,
+            display_floor: (headline - current).max(0.0),
+        }
+    }
+
+    /// The recomposed headline. Test-only: production renders the components
+    /// and the headline from the same state, and the tests assert this sum
+    /// equals the displayed headline exactly.
+    #[cfg(test)]
+    fn sum(&self) -> f64 {
+        self.parent_turns + self.subagents + self.display_floor
+    }
+}
+
+/// Append the headline decomposition: the accumulator components the headline
+/// is computed from, then parent-turn spend attributed per route from the
+/// audited turn-telemetry ring.
+///
+/// Diagnostic composition detail like `/context report`, so plain English
+/// rather than a localized template.
+fn cost_breakdown_report(app: &App) -> String {
+    let components = CostComponents::compute(app);
+    let mut out = String::from("\n\nBreakdown (components sum to the total above):");
+    out.push_str(&format!(
+        "\n  Parent turns: {}",
+        app.format_cost_amount_precise(components.parent_turns)
+    ));
+    if components.subagents > 0.0 {
+        out.push_str(&format!(
+            "\n  Sub-agents: {}",
+            app.format_cost_amount_precise(components.subagents)
+        ));
+    }
+    if components.display_floor > 0.0 {
+        out.push_str(&format!(
+            "\n  Reconciliation floor: {} (monotonic display guarantee, kept after a downward cost reconciliation)",
+            app.format_cost_amount_precise(components.display_floor)
+        ));
+    }
+
+    // Per-route attribution from the per-turn audits that fed the total. The
+    // telemetry ring is bounded, so coverage is stated instead of implied:
+    // itemized turns out of all priced turns, never a claim of completeness.
+    let currency = app.cost_display_currency(app.cost_currency);
+    let mut by_route: std::collections::BTreeMap<String, f64> = std::collections::BTreeMap::new();
+    let mut itemized: u32 = 0;
+    for record in &app.session.turn_cache_history {
+        let Some(audit) = record.cost_audit.as_ref() else {
+            continue;
+        };
+        if !audit.is_priced_in(currency) {
+            continue;
+        }
+        let Some(estimate) = audit.estimate else {
+            continue;
+        };
+        let provider = record.provider_identity.clone().unwrap_or_else(|| {
+            record.provider.map_or_else(
+                || "unknown-provider".to_string(),
+                |p| p.as_str().to_string(),
+            )
+        });
+        let model = record.model.as_deref().unwrap_or("unknown-model");
+        *by_route.entry(format!("{provider}/{model}")).or_insert(0.0) += estimate.amount(currency);
+        itemized = itemized.saturating_add(1);
+    }
+    if !by_route.is_empty() {
+        let (priced, _) = cost_coverage_counts(app);
+        out.push_str(&format!(
+            "\n  Parent-turn spend by route ({itemized} of {priced} priced turns itemized):"
+        ));
+        for (route, amount) in &by_route {
+            out.push_str(&format!(
+                "\n    {route}: {}",
+                app.format_cost_amount_precise(*amount)
+            ));
+        }
+        if itemized < priced {
+            out.push_str(&format!(
+                "\n    (earlier turns not itemized: turn telemetry keeps the last {})",
+                App::TURN_CACHE_HISTORY_CAP
+            ));
+        }
+    }
+    out
 }
 
 fn joined(values: &std::collections::BTreeSet<String>) -> String {
@@ -296,5 +425,162 @@ pub fn context(app: &mut App, arg: Option<&str>) -> CommandResult {
         other => CommandResult::error(format!(
             "Unknown /context subcommand: {other}. Use report, json, prompt-json, or summary."
         )),
+    }
+}
+
+#[cfg(test)]
+mod cost_breakdown_tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::pricing::{CostCurrency, CostEstimate, TurnCostAudit};
+    use crate::tui::app::{TuiOptions, TurnCacheRecord};
+    use std::path::PathBuf;
+    use std::time::Instant;
+
+    fn test_app() -> App {
+        let options = TuiOptions {
+            skills_dir: PathBuf::from("/tmp/test-skills"),
+            ..crate::test_support::test_tui_options(PathBuf::from("/tmp/test-workspace"))
+        };
+        let mut app = App::new(options, &Config::default());
+        app.ui_locale = crate::localization::Locale::En;
+        app.cost_currency = CostCurrency::Usd;
+        app.api_provider = crate::config::ApiProvider::Deepseek;
+        app
+    }
+
+    fn priced_audit(estimate: CostEstimate) -> TurnCostAudit {
+        TurnCostAudit {
+            estimate: Some(estimate),
+            provenance: None,
+            unpriced_classes: Vec::new(),
+            unpriced_reason: None,
+            live_pricing_defect: None,
+            usd_priced: true,
+            cny_priced: estimate.cny > 0.0,
+        }
+    }
+
+    fn turn_record(model: &str, audit: TurnCostAudit) -> TurnCacheRecord {
+        TurnCacheRecord {
+            provider: Some(crate::config::ApiProvider::Deepseek),
+            provider_identity: None,
+            model: Some(model.to_string()),
+            auto_model: false,
+            input_tokens: 100,
+            output_tokens: 10,
+            cache_hit_tokens: None,
+            cache_miss_tokens: None,
+            cache_write_tokens: None,
+            reasoning_tokens: None,
+            cost_audit: Some(audit),
+            reasoning_replay_tokens: None,
+            recorded_at: Instant::now(),
+        }
+    }
+
+    /// The decomposition's terms are exactly the headline's inputs, so their
+    /// sum reproduces the headline — including when the #244 monotonic floor,
+    /// not the live accumulators, is the number on display (#4939).
+    #[test]
+    fn cost_breakdown_components_sum_to_headline() {
+        let mut app = test_app();
+        app.session.cost_priced_turns = 2;
+        app.accrue_session_cost_estimate(CostEstimate {
+            usd: 0.05,
+            cny: 0.0,
+        });
+        app.accrue_subagent_cost_estimate(CostEstimate {
+            usd: 0.02,
+            cny: 0.0,
+        });
+
+        // Live sum is the headline: no floor component.
+        let components = CostComponents::compute(&app);
+        assert_eq!(components.parent_turns, 0.05);
+        assert_eq!(components.subagents, 0.02);
+        assert_eq!(components.display_floor, 0.0);
+        assert_eq!(
+            components.sum(),
+            app.displayed_session_cost_for_currency(CostCurrency::Usd),
+            "components must sum to the /cost headline"
+        );
+
+        // After a downward reconciliation the high-water is the headline; the
+        // difference surfaces as an explicit floor component, and the sum still
+        // reproduces the headline exactly.
+        app.session.displayed_cost_high_water = 0.10;
+        let components = CostComponents::compute(&app);
+        assert!(components.display_floor > 0.0);
+        assert_eq!(
+            components.sum(),
+            app.displayed_session_cost_for_currency(CostCurrency::Usd),
+            "floor component must absorb exactly the high-water excess"
+        );
+
+        let msg = cost(&mut app).message.expect("cost report");
+        assert!(msg.contains("Breakdown"), "{msg}");
+        assert!(msg.contains("Parent turns: $0.0500"), "{msg}");
+        assert!(msg.contains("Sub-agents: $0.0200"), "{msg}");
+        assert!(msg.contains("Reconciliation floor:"), "{msg}");
+    }
+
+    /// Per-route attribution comes from the same `TurnCostAudit`s that fed the
+    /// total, in the display currency; with every priced turn itemized, the
+    /// route amounts account for the whole parent component. CNY amounts are
+    /// the audits' provider-published CNY figures — never an FX projection of
+    /// the USD column (#4939).
+    #[test]
+    fn cost_breakdown_itemizes_routes_from_turn_audits() {
+        let mut app = test_app();
+        app.cost_currency = CostCurrency::Cny;
+        let turns = [
+            CostEstimate {
+                usd: 0.01,
+                cny: 0.07,
+            },
+            CostEstimate {
+                usd: 0.02,
+                cny: 0.14,
+            },
+        ];
+        for estimate in turns {
+            let audit = priced_audit(estimate);
+            app.record_turn_cost_audit(&audit);
+            app.accrue_session_cost_estimate(estimate);
+            app.push_turn_cache_record(turn_record("deepseek-chat", audit));
+        }
+
+        let components = CostComponents::compute(&app);
+        assert_eq!(
+            components.sum(),
+            app.displayed_session_cost_for_currency(CostCurrency::Cny),
+            "CNY components must sum to the CNY headline"
+        );
+
+        let msg = cost(&mut app).message.expect("cost report");
+        assert!(
+            msg.contains("Parent-turn spend by route (2 of 2 priced turns itemized):"),
+            "{msg}"
+        );
+        // 0.07 + 0.14 accumulated in ring order equals the parent component's
+        // accumulation, so the route line shows the whole parent spend.
+        let route_amount = app.format_cost_amount_precise(components.parent_turns);
+        assert!(
+            msg.contains(&format!("deepseek/deepseek-chat: {route_amount}")),
+            "{msg}"
+        );
+        assert!(msg.contains("¥"), "CNY display must use CNY symbol: {msg}");
+    }
+
+    /// An unpriced headline renders no breakdown: decomposing a number that is
+    /// not being shown would fabricate amounts the report just declined to
+    /// claim.
+    #[test]
+    fn cost_breakdown_absent_when_headline_unknown() {
+        let mut app = test_app();
+        let msg = cost(&mut app).message.expect("cost report");
+        assert!(!msg.contains("Breakdown"), "{msg}");
+        assert!(!msg.contains("Parent turns:"), "{msg}");
     }
 }
