@@ -12041,6 +12041,58 @@ async fn interrupted_turn_names_surviving_background_shell_jobs() {
     let _ = shell_manager.lock().expect("shell manager").kill(&task_id);
 }
 
+/// R6 injection-size regression: the per-turn `<turn_meta>` block, built
+/// (never sent) from the same snapshot path production uses. Measured 254B
+/// on 2026-08-02; ceiling is measured +10% so growth is a reviewed act.
+const TURN_META_BYTE_CEILING: usize = 280;
+
+#[test]
+fn turn_meta_block_stays_within_measured_ceiling() {
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        model: "deepseek-v4-flash".to_string(),
+        workspace: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let (engine, _handle) = Engine::new(config, &Config::default());
+    let prompt_context = NextTurnPromptContext::for_planned_turn(
+        ApiProvider::Deepseek,
+        "deepseek-v4-flash".to_string(),
+        None,
+        AppMode::Agent,
+        None,
+        crate::tools::goal::GoalStatus::Active,
+        None,
+        false,
+        None,
+    );
+    let message = engine.user_text_message_from_snapshot(
+        "hello".to_string(),
+        &prompt_context.model,
+        false,
+        None,
+        false,
+        UserInputProvenance::ExternalUser,
+        TurnMetadataSnapshot {
+            prompt_context: &prompt_context,
+            system_prompt: None,
+            approval_mode: engine.session.approval_mode,
+            working_set: &engine.session.working_set,
+            policy_narrowing: None,
+        },
+    );
+    let ContentBlock::Text { text, .. } = message.content.last().expect("turn metadata block")
+    else {
+        panic!("expected text metadata block");
+    };
+    eprintln!("MEASURED turn_meta_bytes={}", text.len());
+    assert!(
+        text.len() <= TURN_META_BYTE_CEILING,
+        "turn_meta grew past its reviewed ceiling: {}B > {TURN_META_BYTE_CEILING}B. If deliberate, re-measure and raise the ceiling in the same commit.",
+        text.len()
+    );
+}
+
 #[test]
 fn turn_metadata_names_the_effective_sandbox_posture() {
     // DGF-02 (dogfood 2026-08-02): the model must know its own sandbox

@@ -1,8 +1,11 @@
-// Live acceptance on DeepSeek Flash and GLM-5-Turbo measured the inherited
-// read-only prompt/tool envelope at 17,457 and 17,550 tokens before the first
-// useful tool turn completed. Budget 24k per intended evidence turn, then add
-// token-neutral max_steps headroom for the required final verdict. The token
-// ceiling remains independent and the five role caps still total 360k.
+// The read-only child prompt/tool envelope is regression-pinned in
+// crates/tui/src/tools/subagent/tests.rs
+// (read_only_child_envelope_stays_within_measured_ceiling): 80,856 bytes
+// (~20k tokens) measured 2026-08-02 on this tree, ceiling +10%. Historical
+// live acceptance on DeepSeek Flash / GLM-5-Turbo measured 17,457–17,550
+// tokens. Budget 24k per intended evidence turn, then add token-neutral
+// max_steps headroom for the required final verdict. The token ceiling
+// remains independent and the five role caps still total 360k.
 export default workflow({
   "id": "stopship-release-acceptance",
   "goal": "Verify the current Codewhale Fleet, Workflow, Lane, Runtime, and gate receipt path without changing the workspace",

@@ -14250,6 +14250,84 @@ fn the_launched_authority_is_the_one_the_spawn_boundary_accepts() {
     );
 }
 
+/// R6 injection-size regressions (finish-operator 2026-08-02): build — never
+/// send — the real assembled payloads and pin them to measured-current +10%.
+/// Growth past the ceiling must be a deliberate, reviewed act, not drift.
+/// Ceilings are in serialized bytes (deterministic, unlike token estimates);
+/// the stale token figure in workflows/stopship.workflow.js:1-5 is
+/// superseded by these tests.
+/// Measured 80,856B on 2026-08-02 (commit body has the receipt); +10%.
+const READ_ONLY_CHILD_ENVELOPE_BYTE_CEILING: usize = 89_000;
+/// Measured 72,679B on 2026-08-02 (commit body has the receipt); +10%.
+const PARENT_SURFACE_BYTE_CEILING: usize = 80_000;
+
+#[tokio::test]
+async fn read_only_child_envelope_stays_within_measured_ceiling() {
+    let tmp = tempdir().expect("tempdir");
+    let mut runtime =
+        stub_runtime().with_agent_tool_surface_options(enabled_agent_surface_options());
+    runtime.context = ToolContext::new(tmp.path().to_path_buf());
+    let todo_list = crate::tools::todo::new_shared_todo_list();
+    let plan_state = crate::tools::plan::new_shared_plan_state();
+
+    let assignment = make_assignment();
+    let system_prompt =
+        build_subagent_system_prompt_with_skills(&FleetRole::Scout, &assignment, &runtime.context);
+    let messages = build_initial_subagent_messages_with_system(
+        "Inspect the runtime evidence and report",
+        &assignment,
+        &FleetRole::Scout,
+        &system_prompt,
+        None,
+    );
+    let registry =
+        SubAgentToolRegistry::new(runtime, FleetRole::Scout, None, todo_list, plan_state);
+    let tools = registry.tools_for_model(&FleetRole::Scout);
+
+    let envelope_bytes = system_prompt.len()
+        + serde_json::to_string(&messages)
+            .expect("messages json")
+            .len()
+        + serde_json::to_string(&tools).expect("tools json").len();
+    eprintln!("MEASURED read_only_child_envelope_bytes={envelope_bytes}");
+    assert!(
+        envelope_bytes <= READ_ONLY_CHILD_ENVELOPE_BYTE_CEILING,
+        "read-only child envelope grew past its reviewed ceiling: {envelope_bytes}B > {READ_ONLY_CHILD_ENVELOPE_BYTE_CEILING}B. If deliberate, re-measure and raise the ceiling in the same commit."
+    );
+}
+
+#[tokio::test]
+async fn parent_agent_surface_stays_within_measured_ceiling() {
+    let tmp = tempdir().expect("tempdir");
+    let mut runtime =
+        stub_runtime().with_agent_tool_surface_options(enabled_agent_surface_options());
+    runtime.context = ToolContext::new(tmp.path().to_path_buf());
+    let todo_list = crate::tools::todo::new_shared_todo_list();
+    let plan_state = crate::tools::plan::new_shared_plan_state();
+
+    let parent_registry = ToolRegistryBuilder::new()
+        .with_full_agent_surface_options(
+            Some(runtime.client.clone()),
+            runtime.model.clone(),
+            runtime.manager.clone(),
+            runtime.clone(),
+            runtime.agent_tool_surface_options.clone(),
+            todo_list,
+            plan_state,
+        )
+        .build(runtime.context.clone());
+
+    let surface_bytes = crate::prompts::text::BASE_PROMPT.len()
+        + serde_json::to_string(&parent_registry.to_api_tools())
+            .expect("parent tools json")
+            .len();
+    eprintln!("MEASURED parent_surface_bytes={surface_bytes}");
+    assert!(
+        surface_bytes <= PARENT_SURFACE_BYTE_CEILING,
+        "parent prompt+catalog surface grew past its reviewed ceiling: {surface_bytes}B > {PARENT_SURFACE_BYTE_CEILING}B. If deliberate, re-measure and raise the ceiling in the same commit."
+    );
+}
+
 #[tokio::test]
 async fn spawn_receipt_compacts_and_verbose_restores_the_archive() {
     // Morning-report issue #4 (W6 rest): every spawn returned ~12KB because
