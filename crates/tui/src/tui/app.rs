@@ -1285,6 +1285,20 @@ pub struct App {
     pub low_motion: bool,
     pub constrained_frame_rate: bool,
     pub ocean_started_at: Instant,
+    /// The ambient animation clock, in clamped milliseconds. Creature and
+    /// water positions are pure functions of this value; advancing it by at
+    /// most [`App::AMBIENT_MAX_STEP_MS`] per sampled frame keeps motion
+    /// continuous when draws arrive in bursts (fast token streams previously
+    /// sampled raw wall-clock time at irregular gaps, so fish "teleported"
+    /// between frames — captains-log #16).
+    pub ambient_clock_ms: u128,
+    /// When the ambient clock last advanced; `None` until the first sample.
+    pub ambient_clock_sampled_at: Option<Instant>,
+    /// When the shell last became fully idle (no turn, no live sub-agents,
+    /// no active durable tasks, completion exhale finished). After a short
+    /// grace of gentle motion the aquarium settles to a genuinely still
+    /// scene instead of repainting an idle screen forever.
+    pub ambient_idle_since: Option<Instant>,
     /// Start of the underwater shell's one-shot successful-turn exhale.
     /// Kept separate from the ambient ocean clock so completion can settle
     /// once without restarting or repainting the transcript field.
@@ -4070,6 +4084,46 @@ impl App {
     pub fn close_slash_menu(&mut self) {
         self.slash_menu_hidden = true;
         self.needs_redraw = true;
+    }
+
+    /// Ceiling on how far the ambient clock advances per sampled frame.
+    /// Bursty draw schedules (fast token streams) slow the aquarium down
+    /// instead of teleporting creatures across the gap.
+    pub const AMBIENT_MAX_STEP_MS: u128 = 160;
+    /// Gentle-motion grace before a fully idle aquarium settles still.
+    pub const AMBIENT_IDLE_SETTLE_MS: u64 = 6_000;
+
+    /// Advance and read the ambient animation clock. Every decorative
+    /// position derives from this value; it moves by real elapsed time
+    /// clamped to [`Self::AMBIENT_MAX_STEP_MS`] per sample, so motion stays
+    /// continuous no matter how irregular the draw schedule is.
+    pub fn sample_ambient_clock_ms(&mut self) -> u128 {
+        let now = Instant::now();
+        let step = self
+            .ambient_clock_sampled_at
+            .map(|last| {
+                now.duration_since(last)
+                    .as_millis()
+                    .min(Self::AMBIENT_MAX_STEP_MS)
+            })
+            .unwrap_or(0);
+        self.ambient_clock_sampled_at = Some(now);
+        self.ambient_clock_ms = self.ambient_clock_ms.saturating_add(step);
+        self.ambient_clock_ms
+    }
+
+    /// Track idleness and report whether the ambient scene has settled.
+    /// `busy` is the caller's aggregation of live activity signals (running
+    /// turn, live sub-agents, active durable tasks, completion exhale, user
+    /// browsing). While busy the idle anchor clears; once quiet, motion gets
+    /// [`Self::AMBIENT_IDLE_SETTLE_MS`] of grace and then stills.
+    pub fn ambient_idle_settled(&mut self, busy: bool, now: Instant) -> bool {
+        if busy {
+            self.ambient_idle_since = None;
+            return false;
+        }
+        let since = *self.ambient_idle_since.get_or_insert(now);
+        now.duration_since(since) >= Duration::from_millis(Self::AMBIENT_IDLE_SETTLE_MS)
     }
 
     /// Resolve one motion policy for every surface that can request or paint

@@ -5140,15 +5140,35 @@ async fn run_event_loop(
             underwater_surface_obscured,
         );
         let shell_motion_enabled = crate::tui::underwater::decorative_shell_motion_enabled(app);
+        let shell_phase_working = matches!(
+            crate::tui::underwater::ShellPhase::from_app(app),
+            crate::tui::underwater::ShellPhase::Working
+                | crate::tui::underwater::ShellPhase::Verifying
+        );
+        // A fully idle shell settles: no live turn, no sub-agents, no active
+        // durable tasks, completion exhale finished, and the user isn't
+        // browsing. After a short grace the aquarium stops requesting frames
+        // and the scene is genuinely still until real activity resumes
+        // (owner pain, captains-log #16).
+        let durable_tasks_active = app
+            .task_panel
+            .iter()
+            .any(|task| matches!(task.status.as_str(), "queued" | "running" | "waiting"));
+        let ambient_busy = shell_phase_working
+            || app.turn_started_at.is_some()
+            || has_running_agents
+            || durable_tasks_active
+            || app.is_loading
+            || browsing_history
+            || app.ocean_completion_started_at.is_some_and(|started| {
+                started.elapsed()
+                    < Duration::from_millis(crate::tui::ocean::COMPLETION_SETTLE_MS as u64)
+            });
+        let ambient_settled = app.ambient_idle_settled(ambient_busy, Instant::now());
         let underwater_ambient_motion = shell_motion_enabled
             && underwater_motion_visible
-            && (browsing_history
-                || matches!(
-                    crate::tui::underwater::ShellPhase::from_app(app),
-                    crate::tui::underwater::ShellPhase::Working
-                        | crate::tui::underwater::ShellPhase::Verifying
-                )
-                || empty_water_visible);
+            && !ambient_settled
+            && (browsing_history || shell_phase_working || empty_water_visible);
         let underwater_completion_motion = shell_motion_enabled
             && !underwater_surface_obscured
             && matches!(app.runtime_turn_status.as_deref(), Some("completed"))

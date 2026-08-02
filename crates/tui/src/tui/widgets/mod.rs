@@ -91,7 +91,10 @@ struct TranscriptScrollbar {
 
 impl ChatWidget {
     pub fn new(app: &mut App, area: Rect) -> Self {
-        let ocean_elapsed_ms = app.ocean_started_at.elapsed().as_millis();
+        // The clamped ambient clock, not raw wall time: sparse draw schedules
+        // advance the scene by at most one small step per frame, so creatures
+        // drift instead of teleporting between distant samples.
+        let ocean_elapsed_ms = app.sample_ambient_clock_ms();
         Self::new_with_ocean_elapsed(app, area, ocean_elapsed_ms)
     }
 
@@ -6482,13 +6485,13 @@ mod tests {
         app.low_motion = true;
         app.fancy_animations = true;
         let area = Rect::new(0, 0, 100, 20);
-        app.ocean_started_at = Instant::now() - Duration::from_secs(2);
+        // Drive the sampled clock directly: the freeze must hold even across
+        // a 9-second animation-clock jump.
         let mut first = Buffer::empty(area);
-        ChatWidget::new(&mut app, area).render(area, &mut first);
+        ChatWidget::new_with_ocean_elapsed(&mut app, area, 2_000).render(area, &mut first);
 
-        app.ocean_started_at = Instant::now() - Duration::from_secs(11);
         let mut second = Buffer::empty(area);
-        ChatWidget::new(&mut app, area).render(area, &mut second);
+        ChatWidget::new_with_ocean_elapsed(&mut app, area, 11_000).render(area, &mut second);
 
         assert_ne!(first[(0, 0)].bg, first[(0, 19)].bg);
         assert_eq!(first[(0, 0)].bg, second[(0, 0)].bg);

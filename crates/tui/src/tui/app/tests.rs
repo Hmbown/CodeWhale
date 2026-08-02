@@ -6694,3 +6694,41 @@ fn an_explicit_launch_model_outranks_the_remembered_provider_model() {
         "an explicit --model must never be silently replaced by session memory"
     );
 }
+
+#[test]
+fn ambient_clock_advances_by_clamped_steps() {
+    let mut app = App::new(test_options(false), &Config::default());
+    // First sample establishes the baseline without advancing.
+    assert_eq!(app.sample_ambient_clock_ms(), 0);
+    // Simulate a long gap between draws (a burst of stream work): the clock
+    // may advance by at most one clamped step, so positions derived from it
+    // cannot teleport across the gap.
+    app.ambient_clock_sampled_at = Some(Instant::now() - Duration::from_secs(9));
+    let advanced = app.sample_ambient_clock_ms();
+    assert!(
+        advanced <= App::AMBIENT_MAX_STEP_MS,
+        "a 9s draw gap must clamp to one step, got {advanced}ms"
+    );
+}
+
+#[test]
+fn ambient_idle_settles_after_grace_and_wakes_on_activity() {
+    let mut app = App::new(test_options(false), &Config::default());
+    let start = Instant::now();
+    // Fresh idle: not yet settled, anchor recorded.
+    assert!(!app.ambient_idle_settled(false, start));
+    // Still inside the grace window.
+    assert!(!app.ambient_idle_settled(
+        false,
+        start + Duration::from_millis(App::AMBIENT_IDLE_SETTLE_MS - 500)
+    ));
+    // Past the grace window: the aquarium is still.
+    assert!(app.ambient_idle_settled(
+        false,
+        start + Duration::from_millis(App::AMBIENT_IDLE_SETTLE_MS + 500)
+    ));
+    // Any live activity clears the anchor and wakes the scene…
+    assert!(!app.ambient_idle_settled(true, start + Duration::from_secs(60)));
+    // …and idleness afterwards restarts the full grace period.
+    assert!(!app.ambient_idle_settled(false, start + Duration::from_secs(61)));
+}
