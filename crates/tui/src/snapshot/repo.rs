@@ -42,6 +42,10 @@ pub struct Snapshot {
     pub label: String,
     /// Author timestamp (Unix seconds).
     pub timestamp: i64,
+    /// Session this snapshot belongs to, when recorded (encoded as a
+    /// `[sid=...] ` label prefix). `None` for legacy snapshots taken
+    /// before session tagging existed.
+    pub session_id: Option<String>,
 }
 
 /// Wrapper around the per-workspace side-git repo.
@@ -322,7 +326,24 @@ impl SnapshotRepo {
     /// [`MAX_SNAPSHOT_SIZE_MB`] and prunes the oldest snapshots if it does.
     ///
     /// Returns the snapshot's commit SHA.
+    #[allow(dead_code)] // convenience entry kept for tests and legacy callers; production writes go through snapshot_with_session
     pub fn snapshot(&self, label: &str) -> io::Result<SnapshotId> {
+        self.snapshot_with_session(label, None)
+    }
+
+    /// Take a snapshot, tagging it with the owning session id.
+    ///
+    /// The session id is encoded into the commit message as a `[sid=...] `
+    /// label prefix. [`Self::list`] decodes it back into
+    /// [`Snapshot::session_id`] and strips the prefix from the visible
+    /// label, so existing listing surfaces keep showing the plain label.
+    /// Legacy snapshots taken through [`Self::snapshot`] carry no prefix
+    /// and decode with `session_id == None`.
+    pub fn snapshot_with_session(
+        &self,
+        label: &str,
+        session_id: Option<&str>,
+    ) -> io::Result<SnapshotId> {
         // Guard against disk blowup (#1112): if the snapshot directory has
         // grown beyond the limit, prune aggressively before adding more.
         if let Ok(current_mb) = dir_size_mb(&self.git_dir)
@@ -402,7 +423,7 @@ impl SnapshotRepo {
             args.push(parent);
         }
         args.push("-m".to_string());
-        args.push(label.to_string());
+        args.push(Self::encode_session_label(label, session_id));
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
 
         // `commit-tree` creates marker commits even when the tree matches its
@@ -431,6 +452,33 @@ impl SnapshotRepo {
         Ok(SnapshotId(sha))
     }
 
+    /// Prefix a snapshot label with its owning session id, if any.
+    fn encode_session_label(label: &str, session_id: Option<&str>) -> String {
+        match session_id {
+            Some(sid) if !sid.is_empty() => format!("[sid={sid}] {label}"),
+            _ => label.to_string(),
+        }
+    }
+
+    /// Split a possibly session-tagged label back into `(session_id, label)`.
+    ///
+    /// Returns `(None, label)` for untagged labels. The decoded label is
+    /// the original one without the `[sid=...] ` prefix, so consumers that
+    /// match on `pre-turn:`/`tool:`/`redo:` prefixes keep working unchanged.
+    fn decode_session_label(label: &str) -> (Option<String>, String) {
+        let Some(rest) = label.strip_prefix("[sid=") else {
+            return (None, label.to_string());
+        };
+        let Some(end) = rest.find("] ") else {
+            return (None, label.to_string());
+        };
+        let sid = &rest[..end];
+        let plain = &rest[end + 2..];
+        if sid.is_empty() || plain.is_empty() {
+            return (None, label.to_string());
+        }
+        (Some(sid.to_string()), plain.to_string())
+    }
     /// Restore the workspace to the state at `id`.
     ///
     /// Uses `git checkout <sha> -- :/` which checks out every path in the
@@ -552,10 +600,12 @@ impl SnapshotRepo {
             if sha.is_empty() {
                 continue;
             }
+            let (session_id, label) = Self::decode_session_label(&subject);
             out.push(Snapshot {
                 id: SnapshotId(sha),
-                label: subject,
+                label,
                 timestamp: ts,
+                session_id,
             });
         }
         Ok(out)
@@ -685,7 +735,7 @@ impl SnapshotRepo {
             let mut args = vec![
                 "commit-tree".to_string(),
                 "-m".to_string(),
-                s.label.clone(),
+                Self::encode_session_label(&s.label, s.session_id.as_deref()),
                 tree_hash,
             ];
             if let Some(ref p) = prev_sha {
@@ -1549,5 +1599,83 @@ mod tests {
             .snapshot("pre-turn:1")
             .expect("snapshot under disabled cap");
         assert_eq!(id.as_str().len(), 40);
+    }
+
+    #[test]
+    fn session_tagged_snapshot_round_trips_through_list() {
+        let tmp = tempdir().unwrap();
+        let (repo, _home) = make_repo(tmp.path());
+        std::fs::write(repo.work_tree().join("a.txt"), b"x").unwrap();
+
+        repo.snapshot_with_session("pre-turn:1", Some("sess-42"))
+            .expect("snapshot with session");
+
+        let list = repo.list(10).expect("list");
+        assert_eq!(list.len(), 1);
+        // The visible label stays clean; the session id is decoded separately.
+        assert_eq!(list[0].label, "pre-turn:1");
+        assert_eq!(list[0].session_id.as_deref(), Some("sess-42"));
+    }
+
+    #[test]
+    fn untagged_snapshot_decodes_without_session() {
+        let tmp = tempdir().unwrap();
+        let (repo, _home) = make_repo(tmp.path());
+        std::fs::write(repo.work_tree().join("a.txt"), b"x").unwrap();
+
+        repo.snapshot("pre-turn:1").expect("snapshot");
+
+        let list = repo.list(10).expect("list");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].label, "pre-turn:1");
+        assert_eq!(list[0].session_id, None);
+    }
+
+    #[test]
+    fn prune_keep_last_n_preserves_session_tags() {
+        let tmp = tempdir().unwrap();
+        let (repo, _home) = make_repo(tmp.path());
+        let file = repo.work_tree().join("a.txt");
+
+        // More snapshots than DEFAULT_MAX_SNAPSHOTS (50) so the survivor
+        // chain is rebuilt as orphan commits — the path that previously
+        // dropped the [sid=...] label prefix and turned every surviving
+        // snapshot into a "legacy" (untagged) one.
+        for i in 0..55 {
+            std::fs::write(&file, format!("v{i}")).unwrap();
+            repo.snapshot_with_session(&format!("pre-turn:{i}"), Some("sess-p"))
+                .expect("tagged snapshot");
+        }
+
+        let removed = repo.prune_keep_last_n(50).expect("prune");
+        assert!(removed > 0, "expected prune to drop older snapshots");
+
+        let list = repo.list(usize::MAX).expect("list");
+        assert_eq!(list.len(), 50);
+        assert!(
+            list.iter()
+                .all(|s| s.session_id.as_deref() == Some("sess-p")),
+            "prune must preserve [sid=...] prefixes; got untagged survivors"
+        );
+    }
+
+    #[test]
+    fn tagged_and_untagged_snapshots_coexist_in_one_chain() {
+        let tmp = tempdir().unwrap();
+        let (repo, _home) = make_repo(tmp.path());
+        std::fs::write(repo.work_tree().join("a.txt"), b"v1").unwrap();
+
+        // Legacy untagged snapshot, then a session-tagged one.
+        repo.snapshot("pre-turn:1").expect("legacy snapshot");
+        std::fs::write(repo.work_tree().join("a.txt"), b"v2").unwrap();
+        repo.snapshot_with_session("pre-turn:1", Some("sess-a"))
+            .expect("tagged snapshot");
+
+        let list = repo.list(10).expect("list");
+        assert_eq!(list.len(), 2);
+        // Newest first.
+        assert_eq!(list[0].session_id.as_deref(), Some("sess-a"));
+        assert_eq!(list[1].session_id, None);
+        assert_eq!(list[1].label, "pre-turn:1");
     }
 }

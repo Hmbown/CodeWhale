@@ -297,6 +297,7 @@ mod tests {
             id: crate::snapshot::SnapshotId("abcdef123456".to_string()),
             label: "turn:demo".to_string(),
             timestamp: 1_700_000_000,
+            session_id: None,
         }];
 
         let msg = format_listing(&snapshots);

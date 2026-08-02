@@ -1279,6 +1279,7 @@ fn test_patch_undo_requests_session_resync_after_restore() {
 
     let mut app = create_test_app();
     app.workspace = workspace.clone();
+    app.yolo = true;
     app.api_messages.push(Message {
         role: "user".to_string(),
         content: vec![ContentBlock::Text {
@@ -1301,7 +1302,7 @@ fn test_patch_undo_requests_session_resync_after_restore() {
 }
 
 #[test]
-fn test_patch_undo_walks_back_to_older_snapshot_on_repeat() {
+fn test_patch_undo_legacy_chain_stops_at_matching_newest_snapshot() {
     use crate::snapshot::SnapshotRepo;
     use crate::test_support::lock_test_env;
     use tempfile::tempdir;
@@ -1348,14 +1349,27 @@ fn test_patch_undo_walks_back_to_older_snapshot_on_repeat() {
 
     let mut app = create_test_app();
     app.workspace = workspace.clone();
+    app.yolo = true;
 
     let first = patch_undo(&mut app);
     assert!(!first.is_error);
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "one");
 
+    // A legacy (untagged) chain never walks past a snapshot that matches
+    // the current workspace: there is no session boundary to stop it from
+    // rolling back another conversation's work, so the second /undo
+    // reports nothing to revert instead of restoring "zero".
     let second = patch_undo(&mut app);
     assert!(!second.is_error);
-    assert_eq!(std::fs::read_to_string(&file).unwrap(), "zero");
+    assert!(
+        second
+            .message
+            .as_deref()
+            .is_some_and(|m| m.contains("No undoable snapshot")),
+        "expected 'nothing to revert' message, got: {:?}",
+        second.message
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "one");
 }
 
 #[test]
@@ -1404,6 +1418,7 @@ fn test_patch_undo_prunes_tool_turn_context() {
 
     let mut app = create_test_app();
     app.workspace = workspace.clone();
+    app.yolo = true;
     app.history.push(HistoryCell::User {
         content: "please edit a.txt".to_string(),
     });
@@ -1534,6 +1549,7 @@ fn test_patch_undo_prunes_pre_turn_context() {
 
     let mut app = create_test_app();
     app.workspace = workspace.clone();
+    app.yolo = true;
     app.history.push(HistoryCell::User {
         content: "please edit a.txt".to_string(),
     });
@@ -1927,4 +1943,188 @@ fn tools_command_rejects_unknown_formats_without_mutating_state() {
 
     assert!(result.is_error);
     assert_eq!(app.session.last_tool_request_snapshot, before);
+}
+
+#[test]
+fn test_patch_undo_refuses_outside_trusted_mode() {
+    use crate::snapshot::SnapshotRepo;
+    use crate::test_support::lock_test_env;
+    use tempfile::tempdir;
+
+    struct HomeGuard {
+        prev: Option<std::ffi::OsString>,
+        _lock: crate::test_support::TestEnvLock,
+    }
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            // SAFETY: process-wide lock still held.
+            unsafe {
+                match self.prev.take() {
+                    Some(v) => std::env::set_var("HOME", v),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
+        }
+    }
+    fn scoped_home(home: &std::path::Path) -> HomeGuard {
+        let lock = lock_test_env();
+        let prev = std::env::var_os("HOME");
+        // SAFETY: serialised by the global env lock.
+        unsafe {
+            std::env::set_var("HOME", home);
+        }
+        HomeGuard { prev, _lock: lock }
+    }
+
+    let tmp = tempdir().unwrap();
+    let workspace = tmp.path().join("ws");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let _guard = scoped_home(tmp.path());
+
+    let repo = SnapshotRepo::open_or_init(&workspace).unwrap();
+    std::fs::write(workspace.join("a.txt"), b"original").unwrap();
+    repo.snapshot("pre-turn:1").unwrap();
+    std::fs::write(workspace.join("a.txt"), b"modified").unwrap();
+
+    // yolo/trust_mode stay false (create_test_app defaults).
+    let mut app = create_test_app();
+    app.workspace = workspace.clone();
+
+    let result = patch_undo(&mut app);
+    assert!(!result.is_error);
+    assert!(
+        result
+            .message
+            .as_deref()
+            .is_some_and(|m| m.contains("Refusing to undo workspace files")),
+        "expected refusal message, got: {:?}",
+        result.message
+    );
+    // Workspace must be untouched by the gate.
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("a.txt")).unwrap(),
+        "modified"
+    );
+}
+
+#[test]
+fn test_patch_undo_untagged_no_candidate_keeps_conversation_fallback() {
+    use crate::snapshot::SnapshotRepo;
+    use crate::test_support::lock_test_env;
+    use tempfile::tempdir;
+
+    struct HomeGuard {
+        prev: Option<std::ffi::OsString>,
+        _lock: crate::test_support::TestEnvLock,
+    }
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            // SAFETY: process-wide lock still held.
+            unsafe {
+                match self.prev.take() {
+                    Some(v) => std::env::set_var("HOME", v),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
+        }
+    }
+    fn scoped_home(home: &std::path::Path) -> HomeGuard {
+        let lock = lock_test_env();
+        let prev = std::env::var_os("HOME");
+        // SAFETY: serialised by the global env lock.
+        unsafe {
+            std::env::set_var("HOME", home);
+        }
+        HomeGuard { prev, _lock: lock }
+    }
+
+    let tmp = tempdir().unwrap();
+    let workspace = tmp.path().join("ws");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let _guard = scoped_home(tmp.path());
+
+    // Snapshot tree matches the working tree: no differing
+    // current-session file target exists.
+    let repo = SnapshotRepo::open_or_init(&workspace).unwrap();
+    std::fs::write(workspace.join("a.txt"), b"same").unwrap();
+    repo.snapshot("pre-turn:1").unwrap();
+
+    // yolo/trust_mode stay false — but with no candidate the gate must
+    // NOT fire; patch_undo reports "nothing to revert" so the dispatch
+    // layer keeps the existing conversation fallback in ordinary mode.
+    let mut app = create_test_app();
+    app.workspace = workspace.clone();
+
+    let result = patch_undo(&mut app);
+    assert!(!result.is_error);
+    assert!(
+        result
+            .message
+            .as_deref()
+            .is_some_and(|m| m.contains("No undoable snapshot")),
+        "expected no-candidate message (not gate refusal), got: {:?}",
+        result.message
+    );
+}
+
+#[test]
+fn test_patch_undo_never_crosses_session_boundary() {
+    use crate::snapshot::SnapshotRepo;
+    use crate::test_support::lock_test_env;
+    use tempfile::tempdir;
+
+    struct HomeGuard {
+        prev: Option<std::ffi::OsString>,
+        _lock: crate::test_support::TestEnvLock,
+    }
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            // SAFETY: process-wide lock still held.
+            unsafe {
+                match self.prev.take() {
+                    Some(v) => std::env::set_var("HOME", v),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
+        }
+    }
+    fn scoped_home(home: &std::path::Path) -> HomeGuard {
+        let lock = lock_test_env();
+        let prev = std::env::var_os("HOME");
+        // SAFETY: serialised by the global env lock.
+        unsafe {
+            std::env::set_var("HOME", home);
+        }
+        HomeGuard { prev, _lock: lock }
+    }
+
+    let tmp = tempdir().unwrap();
+    let workspace = tmp.path().join("ws");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let _guard = scoped_home(tmp.path());
+
+    let repo = SnapshotRepo::open_or_init(&workspace).unwrap();
+    let file = workspace.join("a.txt");
+
+    // Session A: an earlier conversation that modified the workspace.
+    std::fs::write(&file, b"a-before").unwrap();
+    repo.snapshot_with_session("pre-turn:1", Some("session-a"))
+        .unwrap();
+    std::fs::write(&file, b"a-after").unwrap();
+
+    // Session B (current): a later conversation that also modified it.
+    std::fs::write(&file, b"b-before").unwrap();
+    repo.snapshot_with_session("pre-turn:1", Some("session-b"))
+        .unwrap();
+    std::fs::write(&file, b"b-after").unwrap();
+
+    let mut app = create_test_app();
+    app.workspace = workspace.clone();
+    app.yolo = true;
+    app.current_session_id = Some("session-b".to_string());
+
+    let result = patch_undo(&mut app);
+    assert!(!result.is_error);
+    // Must restore session B's pre-turn state — never session A's.
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "b-before");
 }
