@@ -1963,6 +1963,7 @@ impl Engine {
                         approval_mode,
                         translation_enabled,
                         allowed_tools,
+                        disallowed_tools,
                         dynamic_tools,
                         hook_executor,
                         verbosity,
@@ -1985,6 +1986,7 @@ impl Engine {
                             approval_mode,
                             translation_enabled,
                             allowed_tools,
+                            disallowed_tools,
                             dynamic_tools,
                             hook_executor,
                             verbosity,
@@ -2054,6 +2056,7 @@ impl Engine {
                                 self.session.approval_mode,
                                 self.config.translation_enabled,
                                 self.config.allowed_tools.clone(),
+                                self.config.disallowed_tools.clone(),
                                 dynamic_tools,
                                 self.config.hook_executor.clone(),
                                 self.config.verbosity.clone(),
@@ -2581,6 +2584,7 @@ impl Engine {
                             self.session.approval_mode,
                             self.config.translation_enabled,
                             self.config.allowed_tools.clone(),
+                            self.config.disallowed_tools.clone(),
                             Vec::new(),
                             self.config.hook_executor.clone(),
                             self.config.verbosity.clone(),
@@ -3071,6 +3075,7 @@ impl Engine {
                 self.session.approval_mode,
                 self.config.translation_enabled,
                 self.config.allowed_tools.clone(),
+                self.config.disallowed_tools.clone(),
                 Vec::new(),
                 self.config.hook_executor.clone(),
                 self.config.verbosity.clone(),
@@ -3730,6 +3735,7 @@ impl Engine {
         approval_mode: crate::tui::approval::ApprovalMode,
         translation_enabled: bool,
         allowed_tools: Option<Vec<String>>,
+        disallowed_tools: Option<Vec<String>>,
         dynamic_tools: Vec<DynamicToolSpec>,
         hook_executor: Option<std::sync::Arc<crate::hooks::HookExecutor>>,
         verbosity: Option<String>,
@@ -3998,6 +4004,7 @@ impl Engine {
             );
         }
         self.config.allowed_tools = allowed_tools;
+        self.config.disallowed_tools = disallowed_tools;
         self.config.hook_executor = hook_executor;
         self.session.reasoning_effort = reasoning_effort;
         self.session.reasoning_effort_auto = reasoning_effort_auto;

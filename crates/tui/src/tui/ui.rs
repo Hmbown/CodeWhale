@@ -10271,6 +10271,7 @@ async fn spawned_dispatch_inner(
             approval_mode: prepare.approval_mode,
             translation_enabled: prepare.translation_enabled,
             allowed_tools: prepare.allowed_tools.clone(),
+            disallowed_tools: None,
             dynamic_tools: Vec::new(),
             hook_executor: prepare.hook_executor.clone(),
             verbosity: prepare.verbosity.clone(),

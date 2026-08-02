@@ -10694,6 +10694,7 @@ async fn run_exec_agent(
             goal_token_budget: None,
             goal_status: crate::tools::goal::GoalStatus::Active,
             allowed_tools: allowed_tools.clone(),
+            disallowed_tools: disallowed_tools.clone(),
             dynamic_tools: Vec::new(),
             hook_executor: None,
             reasoning_effort: effective_reasoning_effort,

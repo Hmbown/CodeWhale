@@ -115,6 +115,9 @@ pub enum Op {
         /// Tool restriction from custom slash command frontmatter.
         /// `None` means the current turn may use the normal tool set.
         allowed_tools: Option<Vec<String>>,
+        /// Tool deny-list for this turn. Deny always wins over allow (#3027).
+        /// `None` means no tools are explicitly denied.
+        disallowed_tools: Option<Vec<String>>,
         /// Runtime-supplied tools available only for this turn.
         dynamic_tools: Vec<DynamicToolSpec>,
         /// Hook executor for control-plane hooks.

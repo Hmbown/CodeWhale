@@ -4244,6 +4244,117 @@ async fn update_thread_workspace_rejects_active_turn() -> Result<()> {
 }
 
 #[tokio::test]
+async fn start_turn_forwards_normalized_turn_tool_lists_to_engine() -> Result<()> {
+    let manager = test_manager(test_runtime_dir())?;
+    let thread = manager
+        .create_thread(CreateThreadRequest::default())
+        .await?;
+    let harness = install_mock_engine(&manager, &thread.id).await;
+    let mut rx_op = harness.rx_op;
+
+    manager
+        .start_turn(
+            &thread.id,
+            StartTurnRequest {
+                prompt: "scope the tool surface".to_string(),
+                allowed_tools: Some(vec![
+                    " Bash ".to_string(),
+                    "read_file".to_string(),
+                    "  ".to_string(),
+                ]),
+                disallowed_tools: Some(vec!["Exec_Shell".to_string(), String::new()]),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+    match rx_op.recv().await {
+        Some(Op::SendMessage {
+            allowed_tools,
+            disallowed_tools,
+            ..
+        }) => {
+            assert_eq!(
+                allowed_tools,
+                Some(vec!["bash".to_string(), "read_file".to_string()]),
+                "entries must be trimmed, lowercased, and blanks dropped"
+            );
+            assert_eq!(disallowed_tools, Some(vec!["exec_shell".to_string()]));
+        }
+        other => panic!("expected SendMessage op, got {other:?}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn start_turn_without_tool_lists_leaves_tool_surface_unrestricted() -> Result<()> {
+    let manager = test_manager(test_runtime_dir())?;
+    let thread = manager
+        .create_thread(CreateThreadRequest::default())
+        .await?;
+    let harness = install_mock_engine(&manager, &thread.id).await;
+    let mut rx_op = harness.rx_op;
+
+    manager
+        .start_turn(
+            &thread.id,
+            StartTurnRequest {
+                prompt: "no restriction requested".to_string(),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+    match rx_op.recv().await {
+        Some(Op::SendMessage {
+            allowed_tools,
+            disallowed_tools,
+            ..
+        }) => {
+            assert_eq!(allowed_tools, None);
+            assert_eq!(disallowed_tools, None);
+        }
+        other => panic!("expected SendMessage op, got {other:?}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn start_turn_collapses_effectively_empty_tool_lists_to_none() -> Result<()> {
+    let manager = test_manager(test_runtime_dir())?;
+    let thread = manager
+        .create_thread(CreateThreadRequest::default())
+        .await?;
+    let harness = install_mock_engine(&manager, &thread.id).await;
+    let mut rx_op = harness.rx_op;
+
+    manager
+        .start_turn(
+            &thread.id,
+            StartTurnRequest {
+                prompt: "blank lists are not a block-everything gate".to_string(),
+                allowed_tools: Some(Vec::new()),
+                disallowed_tools: Some(vec!["   ".to_string()]),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+    match rx_op.recv().await {
+        Some(Op::SendMessage {
+            allowed_tools,
+            disallowed_tools,
+            ..
+        }) => {
+            assert_eq!(allowed_tools, None);
+            assert_eq!(disallowed_tools, None);
+        }
+        other => panic!("expected SendMessage op, got {other:?}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn start_turn_passes_effective_auto_approve_to_engine() -> Result<()> {
     let manager = test_manager(test_runtime_dir())?;
     let thread = manager

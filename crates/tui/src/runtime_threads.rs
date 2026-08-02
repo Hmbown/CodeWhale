@@ -1540,6 +1540,30 @@ pub struct StartTurnRequest {
     pub dynamic_tools: Vec<DynamicToolSpec>,
     #[serde(default)]
     pub environment_id: Option<String>,
+    /// Turn-scoped tool allow-list. `None` (or an empty/blank list) leaves the
+    /// normal tool set in place; matching is case-insensitive with `*` suffix
+    /// wildcards, same as `--allowed-tools`.
+    #[serde(default)]
+    pub allowed_tools: Option<Vec<String>>,
+    /// Turn-scoped tool deny-list. Deny always wins over allow (#3027).
+    #[serde(default)]
+    pub disallowed_tools: Option<Vec<String>>,
+}
+
+/// Normalize a turn-scoped tool list from the runtime API: trim and lowercase
+/// entries, drop empties, and collapse an empty result to `None` so a blank
+/// list cannot silently block every tool.
+fn normalize_turn_tool_list(list: Option<Vec<String>>) -> Option<Vec<String>> {
+    let normalized: Vec<String> = list?
+        .into_iter()
+        .map(|name| name.trim().to_ascii_lowercase())
+        .filter(|name| !name.is_empty())
+        .collect();
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -5138,7 +5162,8 @@ impl RuntimeThreadManager {
             trust_mode,
             auto_approve,
             translation_enabled: false,
-            allowed_tools: None,
+            allowed_tools: normalize_turn_tool_list(req.allowed_tools),
+            disallowed_tools: normalize_turn_tool_list(req.disallowed_tools),
             dynamic_tools: req.dynamic_tools,
             hook_executor: None,
             approval_mode: policy.permission,

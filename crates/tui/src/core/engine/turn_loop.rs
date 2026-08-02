@@ -754,8 +754,8 @@ impl Engine {
                 thinking: None,
                 reasoning_effort: effective_reasoning_effort,
                 stream: Some(true),
-                temperature: None,
-                top_p: None,
+                temperature: env_sampling_override("CODEWHALE_TURN_TEMPERATURE"),
+                top_p: env_sampling_override("CODEWHALE_TURN_TOP_P"),
             };
             let tool_request_snapshot =
                 crate::tool_inspection::ToolInspectionSnapshot::from_prepared_request_with_surface(
@@ -3758,6 +3758,21 @@ fn command_allows_tool(allowed_tools: Option<&[String]>, tool_name: &str) -> boo
     tool_allowed(allowed_tools, tool_name)
 }
 
+/// Env-gated sampling override for benchmarking runs (e.g. Terminal-Bench).
+/// Reads `var` and parses it as `f32`; absent, blank, or unparseable values
+/// yield `None` so the request keeps the provider default.
+fn env_sampling_override(var: &str) -> Option<f32> {
+    parse_sampling_override(std::env::var(var).ok().as_deref())
+}
+
+/// Parse half of [`env_sampling_override`], split out so tests don't have to
+/// mutate process-global environment variables.
+fn parse_sampling_override(raw: Option<&str>) -> Option<f32> {
+    let value: f32 = raw?.trim().parse().ok()?;
+    // A NaN/inf override would serialize into an invalid provider request.
+    value.is_finite().then_some(value)
+}
+
 /// Folded outcome of all `tool_call_before` hook results for one tool call
 /// (#3026). Precedence: deny (exit code 2 or JSON) > ask > allow;
 /// `updatedInput` is last-writer-wins; `additionalContext` is concatenated.
@@ -4398,6 +4413,23 @@ mod tests {
         assert!(command_allows_tool(Some(&allowed), "readfile"));
         assert!(command_allows_tool(Some(&allowed), "ReadFile"));
         assert!(!command_allows_tool(Some(&allowed), "exec_shell"));
+    }
+
+    #[test]
+    fn sampling_override_parses_valid_values() {
+        assert_eq!(parse_sampling_override(Some("0.7")), Some(0.7));
+        assert_eq!(parse_sampling_override(Some(" 1.0 ")), Some(1.0));
+        assert_eq!(parse_sampling_override(Some("0")), Some(0.0));
+    }
+
+    #[test]
+    fn sampling_override_rejects_absent_or_invalid_values() {
+        assert_eq!(parse_sampling_override(None), None);
+        assert_eq!(parse_sampling_override(Some("")), None);
+        assert_eq!(parse_sampling_override(Some("   ")), None);
+        assert_eq!(parse_sampling_override(Some("warm")), None);
+        assert_eq!(parse_sampling_override(Some("NaN")), None);
+        assert_eq!(parse_sampling_override(Some("inf")), None);
     }
 
     #[test]
