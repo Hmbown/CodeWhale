@@ -12085,7 +12085,6 @@ fn turn_meta_block_stays_within_measured_ceiling() {
     else {
         panic!("expected text metadata block");
     };
-    eprintln!("MEASURED turn_meta_bytes={}", text.len());
     assert!(
         text.len() <= TURN_META_BYTE_CEILING,
         "turn_meta grew past its reviewed ceiling: {}B > {TURN_META_BYTE_CEILING}B. If deliberate, re-measure and raise the ceiling in the same commit.",

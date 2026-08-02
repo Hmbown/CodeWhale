@@ -10478,7 +10478,7 @@ async fn fatal_provider_failure_mid_run_parks_a_continuable_checkpoint() {
     let resume_prompt = checkpoint
         .messages
         .iter()
-        .map(|message| text_of(message))
+        .map(&text_of)
         .collect::<Vec<_>>()
         .join("\n");
     let resumed_agent = SubAgent::new(
@@ -14289,7 +14289,6 @@ async fn read_only_child_envelope_stays_within_measured_ceiling() {
             .expect("messages json")
             .len()
         + serde_json::to_string(&tools).expect("tools json").len();
-    eprintln!("MEASURED read_only_child_envelope_bytes={envelope_bytes}");
     assert!(
         envelope_bytes <= READ_ONLY_CHILD_ENVELOPE_BYTE_CEILING,
         "read-only child envelope grew past its reviewed ceiling: {envelope_bytes}B > {READ_ONLY_CHILD_ENVELOPE_BYTE_CEILING}B. If deliberate, re-measure and raise the ceiling in the same commit."
@@ -14321,7 +14320,6 @@ async fn parent_agent_surface_stays_within_measured_ceiling() {
         + serde_json::to_string(&parent_registry.to_api_tools())
             .expect("parent tools json")
             .len();
-    eprintln!("MEASURED parent_surface_bytes={surface_bytes}");
     assert!(
         surface_bytes <= PARENT_SURFACE_BYTE_CEILING,
         "parent prompt+catalog surface grew past its reviewed ceiling: {surface_bytes}B > {PARENT_SURFACE_BYTE_CEILING}B. If deliberate, re-measure and raise the ceiling in the same commit."

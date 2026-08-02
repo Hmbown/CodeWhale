@@ -11446,9 +11446,11 @@ fn configured_inactive_provider_reads_its_secret_store_key() -> Result<()> {
     // The state guided setup leaves behind: auth_mode saved to config, the
     // key saved to the secret store only — and the operator then switches
     // the active provider away (#5033).
-    let mut providers = ProvidersConfig::default();
-    providers.moonshot = ProviderConfig {
-        auth_mode: Some("api_key".to_string()),
+    let providers = ProvidersConfig {
+        moonshot: ProviderConfig {
+            auth_mode: Some("api_key".to_string()),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let config = Config {

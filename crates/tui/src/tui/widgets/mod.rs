@@ -4262,10 +4262,7 @@ mod tests {
         style::{Color, Style},
         text::{Line, Span},
     };
-    use std::{
-        path::PathBuf,
-        time::{Duration, Instant},
-    };
+    use std::{path::PathBuf, time::Instant};
     use unicode_width::UnicodeWidthStr;
 
     fn create_test_app() -> App {

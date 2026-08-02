@@ -15,7 +15,7 @@ fn wrap_on_path_separators(text: &str, width: usize) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut current = String::new();
     let mut chunk = String::new();
-    let mut flush = |current: &mut String, chunk: &mut String, out: &mut Vec<String>| {
+    let flush = |current: &mut String, chunk: &mut String, out: &mut Vec<String>| {
         if chunk.is_empty() {
             return;
         }
