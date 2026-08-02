@@ -340,6 +340,9 @@ pub fn notify_done_to<W: Write>(
     if elapsed < threshold {
         return;
     }
+    if method == Method::Off {
+        return;
+    }
     if !gate.allows(payload.kind()) {
         tracing::debug!(
             kind = ?payload.kind(),
@@ -349,7 +352,7 @@ pub fn notify_done_to<W: Write>(
         return;
     }
     let effective = match method {
-        Method::Off => return,
+        Method::Off => unreachable!("Method::Off returned before gate evaluation"),
         Method::Auto => resolve_method(),
         other => other,
     };
@@ -1161,6 +1164,20 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    struct NotificationGateRestore(NotificationGate);
+
+    impl NotificationGateRestore {
+        fn capture() -> Self {
+            Self(current_notification_gate())
+        }
+    }
+
+    impl Drop for NotificationGateRestore {
+        fn drop(&mut self) {
+            install_notification_gate(self.0);
+        }
+    }
+
     /// Escape-protocol tests care about the bytes, not the composition
     /// policy, so they go through the least-privileged constructor.
     fn capture(
@@ -1288,6 +1305,7 @@ mod tests {
     #[test]
     fn settings_installs_gate_from_config() {
         let _lock = env_lock();
+        let _gate_restore = NotificationGateRestore::capture();
         let config: crate::config::Config = toml::from_str(
             r#"
             [notifications]
@@ -1305,9 +1323,6 @@ mod tests {
         assert!(gate.quiet);
         assert!(!gate.approval_needed);
         assert!(gate.turn_complete);
-
-        // Restore the process-wide default for the other tests.
-        install_notification_gate(NotificationGate::default());
     }
 
     /// #5041 copy contract: interactive banners lead with the action and
