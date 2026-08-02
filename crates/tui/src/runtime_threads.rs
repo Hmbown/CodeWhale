@@ -1554,11 +1554,22 @@ pub struct StartTurnRequest {
 /// entries, drop empties, and collapse an empty result to `None` so a blank
 /// list cannot silently block every tool.
 fn normalize_turn_tool_list(list: Option<Vec<String>>) -> Option<Vec<String>> {
-    let normalized: Vec<String> = list?
-        .into_iter()
-        .map(|name| name.trim().to_ascii_lowercase())
-        .filter(|name| !name.is_empty())
-        .collect();
+    let mut normalized: Vec<String> = Vec::new();
+    for name in list? {
+        let name = name.trim().to_ascii_lowercase();
+        if name.is_empty() {
+            continue;
+        }
+        // Pre-0.9 per-action ids (exec_shell, read_file, ...) are no longer
+        // catalog names; resolve them to their canonical family tool (Bash,
+        // File, ...) so older API clients keep addressing real tools instead
+        // of silently filtering the catalog to nothing.
+        let name = crate::tools::canonical_action::canonical_tool_for_action_id(&name)
+            .map_or(name, str::to_ascii_lowercase);
+        if !normalized.contains(&name) {
+            normalized.push(name);
+        }
+    }
     if normalized.is_empty() {
         None
     } else {

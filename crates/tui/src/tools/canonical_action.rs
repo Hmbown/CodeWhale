@@ -86,6 +86,18 @@ pub(crate) const CANONICAL_ACTION_ALIASES: &[(&str, &str, &str)] = &[
     ("github", "close_pr", "github_close_pr"),
 ];
 
+/// Resolve a legacy per-action tool id (e.g. `exec_shell`) to its canonical
+/// family tool name (`Bash`). `None` when the id is not a known legacy alias.
+/// Lets older API clients that still name pre-0.9 action ids in allow/deny
+/// lists keep addressing the tools that replaced them.
+#[must_use]
+pub(crate) fn canonical_tool_for_action_id(action_id: &str) -> Option<&'static str> {
+    CANONICAL_ACTION_ALIASES
+        .iter()
+        .find(|(_, _, alias)| alias.eq_ignore_ascii_case(action_id))
+        .map(|(tool, _, _)| *tool)
+}
+
 /// The action a family runs when the model omits `action`, mirroring each
 /// wrapper's own execution default.
 ///

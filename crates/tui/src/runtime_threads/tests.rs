@@ -4276,10 +4276,15 @@ async fn start_turn_forwards_normalized_turn_tool_lists_to_engine() -> Result<()
         }) => {
             assert_eq!(
                 allowed_tools,
-                Some(vec!["bash".to_string(), "read_file".to_string()]),
-                "entries must be trimmed, lowercased, and blanks dropped"
+                Some(vec!["bash".to_string(), "file".to_string()]),
+                "entries must be trimmed, lowercased, blank-dropped, and legacy \
+                 action ids (read_file) canonicalized to their family tool"
             );
-            assert_eq!(disallowed_tools, Some(vec!["exec_shell".to_string()]));
+            assert_eq!(
+                disallowed_tools,
+                Some(vec!["bash".to_string()]),
+                "legacy exec_shell resolves to its canonical family tool"
+            );
         }
         other => panic!("expected SendMessage op, got {other:?}"),
     }

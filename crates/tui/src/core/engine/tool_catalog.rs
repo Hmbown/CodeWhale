@@ -432,6 +432,16 @@ impl ToolSurfacePolicy {
             !tool_denied(disallowed_tools.as_deref(), &tool.name)
                 && tool_allowed(allowed_tools.as_deref(), &tool.name)
         });
+        if catalog.is_empty() && allowed_tools.is_some() {
+            // An allow-list that matches nothing sends the model a turn with
+            // zero tools; agent-tuned models then improvise tool markup as
+            // plain text and the turn dies silently. Surface it loudly.
+            tracing::warn!(
+                target: "engine",
+                allow_rules = ?allowed_tools,
+                "turn allow-list matched no catalog tools; the model will receive no tools"
+            );
+        }
         let questions_allowed =
             super::super::authority::permission_posture_allows_questions(approval_mode);
         if !questions_allowed {
