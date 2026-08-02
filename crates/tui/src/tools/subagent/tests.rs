@@ -10289,6 +10289,252 @@ async fn cancellation_wins_task_race_but_still_fans_in_exactly_once() {
     ));
 }
 
+/// Call 1 answers with a tool call (so the child banks a real step);
+/// every later call fails with a non-retryable 400.
+async fn tool_call_then_invalid_request_chat_client() -> (DeepSeekClient, Arc<AtomicUsize>) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let app = Router::new().route(
+        "/{*path}",
+        post({
+            let calls = Arc::clone(&calls);
+            move |Json(_body): Json<Value>| {
+                let calls = Arc::clone(&calls);
+                async move {
+                    let attempt = calls.fetch_add(1, Ordering::SeqCst) + 1;
+                    if attempt == 1 {
+                        Json(json!({
+                            "id": "chatcmpl-fatal-midrun-1",
+                            "model": "deepseek-v4-flash",
+                            "choices": [{
+                                "index": 0,
+                                "message": {
+                                    "role": "assistant",
+                                    "content": null,
+                                    "tool_calls": [{
+                                        "id": "call_step_one",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "read_file",
+                                            "arguments": "{\"path\":\"README.md\"}"
+                                        }
+                                    }]
+                                },
+                                "finish_reason": "tool_calls"
+                            }],
+                            "usage": {
+                                "prompt_tokens": 10,
+                                "completion_tokens": 5,
+                                "total_tokens": 15
+                            }
+                        }))
+                        .into_response()
+                    } else {
+                        (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({
+                                "error": {
+                                    "message": "model is not supported on this endpoint"
+                                }
+                            })),
+                        )
+                            .into_response()
+                    }
+                }
+            }
+        }),
+    );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test server");
+    let addr = listener.local_addr().expect("local addr");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+
+    let config = crate::config::Config {
+        api_key: Some("test-key".to_string()),
+        base_url: Some(format!("http://{addr}/v1")),
+        retry: Some(crate::config::RetryConfig {
+            enabled: Some(false),
+            max_retries: Some(0),
+            initial_delay: Some(0.0),
+            max_delay: Some(0.0),
+            exponential_base: Some(1.0),
+        }),
+        ..crate::config::Config::default()
+    };
+    let client = DeepSeekClient::new(&config).expect("fatal-midrun chat client");
+    (client, calls)
+}
+
+#[tokio::test]
+async fn fatal_provider_failure_mid_run_parks_a_continuable_checkpoint() {
+    // R4 (finish-operator 2026-08-02): the Fatal arm used to return bare
+    // Err — no checkpoint, no transcript — stranding every completed step
+    // (a 141s scout died unrecoverable in dogfood). Fatal mid-run must park
+    // exactly like transient exhaustion; only a zero-step child fails plain.
+    let tmp = tempdir().expect("tempdir");
+    let manager = Arc::new(RwLock::new(SubAgentManager::new(
+        tmp.path().to_path_buf(),
+        2,
+    )));
+    let agent_id = "agent_fatal_midrun".to_string();
+    let (task_input_tx, task_input_rx) = mpsc::unbounded_channel();
+    let agent = SubAgent::new(
+        agent_id.clone(),
+        FleetRole::Worker,
+        "Read the readme then stop".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        Some("Blue".to_string()),
+        None,
+        task_input_tx,
+        tmp.path().to_path_buf(),
+        "boot_test".to_string(),
+    );
+    {
+        let mut manager = manager.write().await;
+        manager.agents.insert(agent_id.clone(), agent);
+        manager.register_worker(make_worker_spec(&agent_id, tmp.path().to_path_buf()));
+    }
+
+    let (client, calls) = tool_call_then_invalid_request_chat_client().await;
+    let mut runtime = stub_runtime();
+    runtime.client = client;
+    runtime.manager = Arc::clone(&manager);
+    runtime.context = ToolContext::new(tmp.path());
+
+    run_subagent_task(SubAgentTask {
+        manager_handle: Arc::clone(&manager),
+        runtime: runtime.clone(),
+        agent_id: agent_id.clone(),
+        agent_type: FleetRole::Worker,
+        prompt: "Read the readme then stop".to_string(),
+        assignment: make_assignment(),
+        allowed_tools: None,
+        fork_context: false,
+        started_at: Instant::now(),
+        max_steps: 4,
+        token_budget: None,
+        wall_time: DEFAULT_CHILD_WALL_TIME,
+        input_rx: task_input_rx,
+        launch_gate: None,
+    })
+    .await;
+
+    assert!(
+        calls.load(Ordering::SeqCst) >= 2,
+        "the fatal error must arrive mid-run, after a banked step"
+    );
+
+    let parked = {
+        let manager = manager.read().await;
+        manager.get_result(&agent_id).expect("agent registered")
+    };
+    assert!(
+        matches!(parked.status, SubAgentStatus::Interrupted(_)),
+        "fatal mid-run must park, not fail: {:?}",
+        parked.status
+    );
+    let reason = match &parked.status {
+        SubAgentStatus::Interrupted(reason) => reason.clone(),
+        _ => unreachable!(),
+    };
+    assert!(reason.contains("fatal provider error"), "{reason}");
+    let checkpoint = parked
+        .checkpoint
+        .as_ref()
+        .expect("fatal mid-run must preserve a checkpoint");
+    assert!(checkpoint.continuable);
+    assert!(checkpoint.steps_taken >= 1);
+    let text_of = |message: &Message| -> String {
+        message
+            .content
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert!(
+        checkpoint
+            .messages
+            .iter()
+            .any(|message| text_of(message).contains("Read the readme then stop")),
+        "checkpoint must preserve the child conversation: {checkpoint:?}"
+    );
+    assert!(parked.needs_input.is_some());
+
+    // Resume contract: no automated run_subagent_from_checkpoint substrate
+    // exists (mod.rs documents re-dispatch via continuation_handle), so the
+    // resume is a re-dispatch seeded from the preserved checkpoint. Against
+    // a healthy route it must complete — nothing about the fatal park may
+    // strand the work.
+    let resumed_id = "agent_fatal_midrun_resume".to_string();
+    let (resume_input_tx, resume_input_rx) = mpsc::unbounded_channel();
+    let resume_prompt = checkpoint
+        .messages
+        .iter()
+        .map(|message| text_of(message))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let resumed_agent = SubAgent::new(
+        resumed_id.clone(),
+        FleetRole::Worker,
+        resume_prompt.clone(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        Some("Blue".to_string()),
+        None,
+        resume_input_tx,
+        tmp.path().to_path_buf(),
+        "boot_test".to_string(),
+    );
+    {
+        let mut manager = manager.write().await;
+        manager.agents.insert(resumed_id.clone(), resumed_agent);
+        manager.register_worker(make_worker_spec(&resumed_id, tmp.path().to_path_buf()));
+    }
+    let (healthy_client, _healthy_calls) =
+        token_heavy_chat_client(10, 5, "resumed and finished").await;
+    let mut resume_runtime = stub_runtime();
+    resume_runtime.client = healthy_client;
+    resume_runtime.manager = Arc::clone(&manager);
+    resume_runtime.context = ToolContext::new(tmp.path());
+
+    run_subagent_task(SubAgentTask {
+        manager_handle: Arc::clone(&manager),
+        runtime: resume_runtime,
+        agent_id: resumed_id.clone(),
+        agent_type: FleetRole::Worker,
+        prompt: resume_prompt,
+        assignment: make_assignment(),
+        allowed_tools: Some(vec![]),
+        fork_context: false,
+        started_at: Instant::now(),
+        max_steps: 2,
+        token_budget: None,
+        wall_time: DEFAULT_CHILD_WALL_TIME,
+        input_rx: resume_input_rx,
+        launch_gate: None,
+    })
+    .await;
+
+    let resumed = {
+        let manager = manager.read().await;
+        manager.get_result(&resumed_id).expect("resumed agent")
+    };
+    assert!(
+        matches!(resumed.status, SubAgentStatus::Completed),
+        "re-dispatch from the checkpoint must complete: {:?}",
+        resumed.status
+    );
+    assert_eq!(resumed.result.as_deref(), Some("resumed and finished"));
+}
+
 #[tokio::test]
 async fn non_retryable_provider_failure_fans_in_to_every_terminal_sink() {
     use tokio_util::sync::CancellationToken;

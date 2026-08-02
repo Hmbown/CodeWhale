@@ -9126,8 +9126,38 @@ async fn run_subagent(
             ) => {
                 match api {
                     Ok(response) => response,
-                    Err(SubAgentApiRequestFailure::Fatal(err)) => return Err(err),
-                    Err(SubAgentApiRequestFailure::Interrupted { reason, checkpoint_reason }) => {
+                    Err(failure) => {
+                        // Fatal provider failures used to return bare Err —
+                        // no checkpoint, no transcript handle — stranding
+                        // every completed step of child work (a 141s scout
+                        // died unrecoverable in dogfood). A fatal error is
+                        // not retried, but the work it interrupts is still
+                        // work: checkpoint and park exactly like the
+                        // transient-exhaustion arm so the parent can fix the
+                        // route and resume from the continuation handle.
+                        // Only a child with no steps fails plainly — there
+                        // is nothing to preserve yet.
+                        let (reason, checkpoint_reason) = match failure {
+                            SubAgentApiRequestFailure::Fatal(err) => {
+                                // `steps` was already incremented for THIS
+                                // attempt, so steps == 1 means the very first
+                                // request died with zero completed work —
+                                // fail plainly, exactly as before.
+                                if steps <= 1 {
+                                    return Err(err);
+                                }
+                                (
+                                    format!(
+                                        "fatal provider error: {err}; checkpoint preserved for continuation"
+                                    ),
+                                    "fatal_provider_error",
+                                )
+                            }
+                            SubAgentApiRequestFailure::Interrupted {
+                                reason,
+                                checkpoint_reason,
+                            } => (reason, checkpoint_reason),
+                        };
                         let checkpoint = checkpoint_subagent_progress(
                             runtime,
                             &agent_id,
