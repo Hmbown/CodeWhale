@@ -1020,7 +1020,7 @@ fn run_workflow_command(
             let roots = named_fleet_search_roots(&workspace);
             let named_fleet = codewhale_workflow::load_named_fleet(&fleet, &roots)
                 .with_context(|| format!("load fleet `{fleet}` from {}", display_roots(&roots)))?;
-            if workflow == "stopship" || fleet == "stopship" || fleet == "v0868-stopship" {
+            if workflow == "stopship" || fleet == "stopship" {
                 named_fleet
                     .validate_stopship_roles()
                     .with_context(|| format!("validate stopship roles in fleet `{fleet}`"))?;

@@ -91,7 +91,6 @@
     "crates/tui/src/skills/install.rs",
     "crates/tui/src/skills/mod.rs",
     "crates/tui/src/skills/mutation.rs",
-    "crates/tui/src/slop_ledger.rs",
     "crates/tui/src/snapshot/repo.rs",
     "crates/tui/src/task_manager.rs",
     "crates/tui/src/tool_inspection.rs",

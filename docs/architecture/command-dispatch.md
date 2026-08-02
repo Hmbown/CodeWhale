@@ -23,7 +23,7 @@ intentional:
 | 0 | `$skill` compatibility | `$name` is resolved as `/skill name` before slash parsing. |
 | 1 | User commands | `user_registry::try_dispatch()` checks workspace and global markdown commands first, so user commands can shadow built-ins. |
 | 2 | Permanent mode compatibility aliases | `/jihua` and `/zidong` route through config mode dispatch so each selects its fixed legacy mode. They remain registered aliases for discovery, but bypass normal `/mode` execution. |
-| 3 | Built-in registry | `CommandRegistry` resolves group-owned built-in commands by canonical name or alias, including `/slop` and `/canzha` as aliases of `/debt`. |
+| 3 | Built-in registry | `CommandRegistry` resolves group-owned built-in commands by canonical name or alias. |
 | 4 | Legacy migration hints | Retired commands such as `/set` and `/deepseek` return targeted replacement guidance. |
 | 5 | Skills fallback | If no command matches, a skill with the same name may run before unknown-command suggestions are shown. |
 
