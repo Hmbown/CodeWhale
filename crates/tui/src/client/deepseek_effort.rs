@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 /// What the Chat Completions path emits for a requested effort tier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ChatEffort {
-    /// Emit `"thinking": {"type": "disabled"}` and no `reasoning_effort`.
+    /// Emit `"thinking": {"type": "disabled"}` without setting `reasoning_effort`.
     DisableThinking,
     /// Emit `"reasoning_effort": <label>` and `"thinking": {"type": "enabled"}`.
     Label(&'static str),
