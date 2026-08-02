@@ -851,9 +851,9 @@ fn tool_use_key(name: &str, input: &serde_json::Value) -> String {
 }
 
 fn tool_args_preview(input: &serde_json::Value) -> String {
-    let raw = serde_json::to_string(input).unwrap_or_else(|_| input.to_string());
-    let redacted = codewhale_config::persistence::redact_secrets(&raw);
-    truncate_chars(&redacted, 120).to_string()
+    let redacted = codewhale_config::persistence::redact_json_secrets(input);
+    let raw = serde_json::to_string(&redacted).unwrap_or_else(|_| redacted.to_string());
+    truncate_chars(&raw, 120).to_string()
 }
 
 fn collect_tool_uses(messages: &[Message]) -> HashMap<String, ToolUseInfo> {
@@ -2817,6 +2817,71 @@ mod tests {
         }
         assert!(block.contains(codewhale_config::persistence::REDACTED));
         assert!(block.contains("Ship the auth fix"));
+        assert!(
+            block.contains(r#""command":"cargo test -p auth""#),
+            "redacting a sibling must not discard the command: {block}"
+        );
+    }
+
+    #[test]
+    fn tool_args_preview_redacts_sensitive_first_without_dropping_siblings() {
+        let input: serde_json::Value = serde_json::from_str(
+            r#"{"api_key":"sk-tool-secret-value","command":"cargo test -p auth"}"#,
+        )
+        .unwrap();
+
+        let preview: serde_json::Value = serde_json::from_str(&tool_args_preview(&input)).unwrap();
+
+        assert_eq!(preview["api_key"], codewhale_config::persistence::REDACTED);
+        assert_eq!(preview["command"], "cargo test -p auth");
+    }
+
+    #[test]
+    fn tool_args_preview_redacts_sensitive_later_without_touching_earlier_fields() {
+        let input: serde_json::Value =
+            serde_json::from_str(r#"{"command":"cargo test","api_key":"plain-secret-value"}"#)
+                .unwrap();
+
+        let preview: serde_json::Value = serde_json::from_str(&tool_args_preview(&input)).unwrap();
+
+        assert_eq!(preview["command"], "cargo test");
+        assert_eq!(preview["api_key"], codewhale_config::persistence::REDACTED);
+    }
+
+    #[test]
+    fn tool_args_preview_redacts_nested_sensitive_values_recursively() {
+        let input: serde_json::Value = serde_json::from_str(
+            r#"{"meta":{"token":"nested-secret","keep":"yes"},"steps":[{"password":"pw","name":"a"}]}"#,
+        )
+        .unwrap();
+
+        let preview: serde_json::Value = serde_json::from_str(&tool_args_preview(&input)).unwrap();
+
+        assert_eq!(
+            preview["meta"]["token"],
+            codewhale_config::persistence::REDACTED
+        );
+        assert_eq!(preview["meta"]["keep"], "yes");
+        assert_eq!(
+            preview["steps"][0]["password"],
+            codewhale_config::persistence::REDACTED
+        );
+        assert_eq!(preview["steps"][0]["name"], "a");
+    }
+
+    #[test]
+    fn tool_args_preview_redacts_complete_multi_word_secret_value() {
+        let input: serde_json::Value =
+            serde_json::from_str(r#"{"command":"run this","password":"hunter two words"}"#)
+                .unwrap();
+
+        let serialized = tool_args_preview(&input);
+        let preview: serde_json::Value = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(preview["command"], "run this");
+        assert_eq!(preview["password"], codewhale_config::persistence::REDACTED);
+        assert!(!serialized.contains("hunter"));
+        assert!(!serialized.contains("two words"));
     }
 
     #[test]

@@ -253,6 +253,42 @@ const SECRET_TOKEN_PREFIXES: &[&str] = &["sk-", "sk_", "ghp_", "gho_", "xoxb-", 
 /// The placeholder substituted for any redacted secret value.
 pub const REDACTED: &str = "[redacted]";
 
+/// Return a copy of a JSON value with secret-bearing data removed.
+///
+/// Object values whose key contains a sensitive hint are replaced wholesale,
+/// while all other objects and arrays are traversed recursively. String leaves
+/// still pass through [`redact_secrets`] so bare provider tokens and embedded
+/// assignments remain covered without treating the serialized JSON document as
+/// one flat keyed assignment.
+#[must_use]
+pub fn redact_json_secrets(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(object) => serde_json::Value::Object(
+            object
+                .iter()
+                .map(|(key, value)| {
+                    let value = if sensitive_json_key(key) {
+                        serde_json::Value::String(REDACTED.to_string())
+                    } else {
+                        redact_json_secrets(value)
+                    };
+                    (key.clone(), value)
+                })
+                .collect(),
+        ),
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.iter().map(redact_json_secrets).collect())
+        }
+        serde_json::Value::String(text) => serde_json::Value::String(redact_secrets(text)),
+        scalar => scalar.clone(),
+    }
+}
+
+fn sensitive_json_key(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    SENSITIVE_KEY_HINTS.iter().any(|hint| key.contains(hint))
+}
+
 /// Redact secret-bearing values from arbitrary text so it is safe to put in a
 /// setup report, log line, error message, or test snapshot.
 ///
