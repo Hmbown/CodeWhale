@@ -98,6 +98,10 @@ pub struct HeaderData<'a> {
     /// Live sub-agent count for the header chrome. `0` hides the chip.
     /// Drill-in is the Agents sidebar / SubAgents modal — not a transcript shelf.
     pub running_agents: usize,
+    /// Compact workflow-run status (e.g. `wf running 3/5 · 2m10s`). `None`
+    /// hides the chip. Persistent workflow status lives here in the top bar
+    /// rather than pinned above the composer (#5040).
+    pub workflow_status: Option<&'a str>,
 }
 
 impl<'a> HeaderData<'a> {
@@ -123,7 +127,15 @@ impl<'a> HeaderData<'a> {
             provider_label: None,
             status_indicator_frame: Some("cw"),
             running_agents: 0,
+            workflow_status: None,
         }
+    }
+
+    /// Attach a compact workflow-run status chip (#5040). `None` hides it.
+    #[must_use]
+    pub fn with_workflow_status(mut self, status: Option<&'a str>) -> Self {
+        self.workflow_status = status;
+        self
     }
 
     /// Live concurrent sub-agent count (`2 agents`). Hidden when zero.
@@ -566,6 +578,20 @@ impl<'a> HeaderWidget<'a> {
                 ));
             }
         }
+        // Workflow-run status (#5040): after the agents chip so identity and
+        // live-worker context still lead the row.
+        if let Some(workflow) = self.data.workflow_status
+            && !workflow.is_empty()
+            && Self::span_width(&spans) + 3 + workflow.width() <= max_width
+        {
+            spans.push(Span::styled(" · ", Style::default().fg(palette::TEXT_DIM)));
+            spans.push(Span::styled(
+                workflow.to_string(),
+                Style::default()
+                    .fg(palette::WHALE_INFO)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
         spans
     }
 
@@ -824,6 +850,39 @@ mod tests {
         assert!(
             rendered.contains("NIM"),
             "expected NIM chip in header, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn header_shows_workflow_status_chip_when_set() {
+        let rendered = render_header(
+            HeaderData::new(
+                AppMode::Agent,
+                "deepseek-ai/deepseek-v4-flash",
+                "codewhale-tui",
+                false,
+                palette::WHALE_BG,
+            )
+            .with_workflow_status(Some("wf running 3/5 · 2m10s")),
+            96,
+        );
+        assert!(
+            rendered.contains("wf running 3/5"),
+            "expected workflow chip in header, got: {rendered}"
+        );
+        let hidden = render_header(
+            HeaderData::new(
+                AppMode::Agent,
+                "deepseek-ai/deepseek-v4-flash",
+                "codewhale-tui",
+                false,
+                palette::WHALE_BG,
+            ),
+            96,
+        );
+        assert!(
+            !hidden.contains("wf "),
+            "no workflow chip without status, got: {hidden}"
         );
     }
 
