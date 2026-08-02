@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Re-quote each linker argument in the Windows OpenHarmony clang launcher so a
+  spaced SDK path (e.g. the default `D:\DevEco Studio\...` install) keeps its
+  `--sysroot` intact through the final Rust link, and extend the no-SDK release
+  guard to keep the re-quoting contract (#5095 by @shenjackyuanjie).
+
 ## [0.9.3] - 2026-07-31
 
 This is the Codewhale v0.9.3 source candidate. It is not a published release
