@@ -27,10 +27,9 @@
 //! re-asserts the equivalence for a sample so that if a future change replaces
 //! a seed with a hard-coded literal, CI catches the drift immediately.
 //!
-//! NOTE: the public surface here is intentionally not yet consumed by
-//! production call sites (consumers are wired in a later pass), so
-//! `dead_code` is allowed at the module level until then.
-#![allow(dead_code)]
+//! Production consumers: [`crate::model_profile`] (capability bridge),
+//! `crate::tui::model_picker` (picker hints), and
+//! [`crate::fleet::capability_badges`] (Fleet setup/roster badges, #5038).
 
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
