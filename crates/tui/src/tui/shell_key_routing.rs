@@ -173,7 +173,14 @@ pub fn is_help_shortcut(key: &KeyEvent) -> bool {
     if matches!(key.code, KeyCode::F(1)) {
         return true;
     }
-    if matches!(key.code, KeyCode::Char('/')) && key.modifiers.contains(KeyModifiers::CONTROL) {
+    // Windows delivers AltGr as Ctrl+Alt, so a layout-emitted glyph (e.g.
+    // AltGr+Q typing '/' on ABNT2) would satisfy a bare CONTROL check.
+    // AltGr chords are text, never shortcuts (#4723).
+    let altgr = crate::tui::widgets::key_hint::is_altgr(key.modifiers);
+    if matches!(key.code, KeyCode::Char('/'))
+        && key.modifiers.contains(KeyModifiers::CONTROL)
+        && !altgr
+    {
         return true;
     }
     // Some legacy terminal stacks encode Ctrl+/ as the ASCII unit separator,
@@ -181,6 +188,7 @@ pub fn is_help_shortcut(key: &KeyEvent) -> bool {
     // decodings so the documented fallback remains real.
     if matches!(key.code, KeyCode::Char('7') | KeyCode::Char('_'))
         && key.modifiers.contains(KeyModifiers::CONTROL)
+        && !altgr
     {
         return true;
     }
@@ -285,6 +293,33 @@ mod tests {
         )));
         let inverted_question = KeyEvent::new(KeyCode::Char('\u{00bf}'), KeyModifiers::NONE);
         assert!(!is_help_shortcut(&inverted_question));
+    }
+
+    #[test]
+    fn altgr_slash_types_text_instead_of_opening_help() {
+        // Windows encodes AltGr as Ctrl+Alt: AltGr+Q on ABNT2 delivers '/'
+        // with CONTROL|ALT and must reach the composer as text (#4723).
+        let altgr_slash = KeyEvent::new(
+            KeyCode::Char('/'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        );
+        let altgr_seven = KeyEvent::new(
+            KeyCode::Char('7'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        );
+        if cfg!(windows) {
+            assert!(!is_help_shortcut(&altgr_slash));
+            assert!(!is_help_shortcut(&altgr_seven));
+        } else {
+            // Elsewhere Ctrl+Alt is a deliberate chord and keeps working.
+            assert!(is_help_shortcut(&altgr_slash));
+            assert!(is_help_shortcut(&altgr_seven));
+        }
+        // Plain Ctrl+/ still opens help everywhere.
+        assert!(is_help_shortcut(&KeyEvent::new(
+            KeyCode::Char('/'),
+            KeyModifiers::CONTROL
+        )));
     }
 
     #[test]
