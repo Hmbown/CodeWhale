@@ -63,7 +63,10 @@ On Windows, `ohos-env.ps1` points Cargo at the repository's
 `ohos-clang.cmd` launcher. The launcher delegates to `ohos-clang.ps1`, so the
 final Rust link—not only C/C++ compilation and bindgen—always carries
 `-target aarch64-linux-ohos`, the SDK sysroot, and `-D__MUSL__` while preserving
-Cargo's linker arguments and exit status.
+Cargo's linker arguments and exit status. The launcher re-quotes every
+argument before forwarding, so an SDK path containing spaces (for example the
+default `D:\DevEco Studio\...` install) keeps its `--sysroot` intact through
+the final link.
 
 ## Compiler Wrappers
 
