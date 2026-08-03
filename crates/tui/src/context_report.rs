@@ -322,7 +322,7 @@ pub fn build_headless_context_report(config: &Config, workspace: &Path) -> Promp
     let memory_enabled = config.memory_enabled();
     let moraine_fallback = config.moraine_fallback();
 
-    // TODO(#3490, #3495): remove legacy memory push/inject when Moraine recall is stable.
+    // TODO(v0.9.4): remove legacy memory push/inject when Moraine recall stable; see #3490, #3495
     if let Some(memory_block) =
         crate::memory::compose_block(memory_enabled && !moraine_fallback, &memory_path)
     {
@@ -573,7 +573,7 @@ fn add_app_runtime_entries(builder: &mut ReportBuilder, app: &App) {
         Some(4),
     ));
 
-    // TODO(#3490, #3495): remove legacy memory push/inject when Moraine recall is stable.
+    // TODO(v0.9.4): remove legacy memory push/inject when Moraine recall stable; see #3490, #3495
     if let Some(memory_block) =
         crate::memory::compose_block(app.use_memory && !app.moraine_fallback, &app.memory_path)
     {

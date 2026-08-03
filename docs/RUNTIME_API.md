@@ -834,9 +834,9 @@ model is preserved. Cross-origin preflights advertise only `Authorization`,
 `X-DeepSeek-Runtime-Token` request header; custom request headers are not
 allowed. Added in v0.8.10 (#561), tightened in v0.9.1 (#4454).
 
-## Runtime SDK Fleet Helpers
+## Managed Fleet Runtime and SDK helpers
 
-The v0.8.60 Runtime SDK fixture lives in `npm/runtime-sdk` and is exposed as
+The Runtime SDK lives in `npm/runtime-sdk` and is exposed as
 the `@codewhale/runtime-sdk` workspace package. It is deliberately thin: every
 helper calls the local Rust Runtime API and therefore cannot bypass Codewhale's
 sandbox, approval prompts, provider configuration, or fleet ledger authority.
@@ -849,29 +849,83 @@ const client = createRuntimeClient({
   token: process.env.CODEWHALE_RUNTIME_TOKEN,
 });
 
-const { runs } = await client.listFleetRuns();
-const workers = await client.listFleetWorkers(runs[0].id);
-await client.restartWorker(workers.workers[0].worker_id);
+const created = await client.createFleetRun({
+  target: "this_computer",
+  roles: [{ name: "reviewer" }, { name: "verifier" }],
+  workflow: {
+    id: "release-check",
+    kind: "parallel",
+    tasks: [
+      { id: "review", name: "Review", instructions: "Review locally.", worker: { role: "reviewer" } },
+      { id: "verify", name: "Verify", instructions: "Verify locally.", worker: { role: "verifier" } },
+    ],
+  },
+});
+
+// POST /runs only prepares durable work. This call crosses the launch gate.
+await client.startFleetRun(created.run.id);
+
+let cursor;
+for await (const event of client.fleetEvents(created.run.id, { after: cursor })) {
+  if (event.cursor) cursor = event.cursor;
+  if (event.event === "fleet.replay.cursor_unavailable") {
+    // Reload getFleetRun(created.run.id), then reconnect without the old cursor.
+  }
+}
 ```
 
-Fleet helpers cover the v0.8.60 HTTP surface:
+The managed path is deliberately two-step. `POST /v1/fleet/runs` validates and
+persists the run and queue without starting a worker. A separate authenticated
+`POST /start` activates it and schedules the executor driver; its `202` response
+reports `leased: 0` because the driver performs all leasing after it owns the
+run. Creation requires named roles, one task owner per role, a `parallel`
+Workflow, and an explicit Runtime target. v0.9.4 executes
+only `this_computer`; `another_computer` and `cloud` return `501` rather than
+silently executing locally. Worker IDs are generated per run; caller-assigned
+`worker_specs` return `501` until custom workers can be given collision-free
+managed identities. Parallel tasks with overlapping effective write roots are
+rejected before the run is journaled. Managed `security_policy` overrides also
+fail closed until that document can be enforced end to end; executable
+authority comes from each named role's tool posture and bounded task workspace
+scope.
+
+Fleet helpers cover this HTTP surface:
 
 | Helper | Runtime API route |
 |---|---|
+| `createFleetRun(spec)` | `POST /v1/fleet/runs` |
+| `startFleetRun(runId)` | `POST /v1/fleet/runs/{run_id}/start` |
 | `listFleetRuns()` | `GET /v1/fleet/runs` |
 | `getFleetRun(runId)` | `GET /v1/fleet/runs/{run_id}` |
 | `listFleetWorkers(runId)` | `GET /v1/fleet/runs/{run_id}/workers` |
 | `getFleetWorker(workerId)` | `GET /v1/fleet/workers/{worker_id}` |
 | `interruptWorker(workerId)` | `POST /v1/fleet/workers/{worker_id}/interrupt` |
+| `stopWorker(workerId)` | `POST /v1/fleet/workers/{worker_id}/stop` |
 | `restartWorker(workerId)` | `POST /v1/fleet/workers/{worker_id}/restart` |
 | `stopFleetRun(runId)` | `POST /v1/fleet/runs/{run_id}/stop` |
+| `replayFleetEvents(runId, options)` | `GET /v1/fleet/runs/{run_id}/events/replay` |
+| `fleetEvents(runId, options)` | `GET /v1/fleet/runs/{run_id}/events` (SSE) |
 
-`createFleetRun(spec)` and `fleetEvents(runId)` are typed ahead of the current
-Rust routes so editor/web clients can code against the intended SDK contract.
-Until the Runtime API exposes `POST /v1/fleet/runs` and a fleet event stream,
-the SDK raises `RuntimeCapabilityError` with stable capability strings
-(`fleet_run_create`, `fleet_event_stream`) instead of surfacing those gaps as
-generic fetch failures.
+`stopWorker` durably cancels that worker's active task and leaves the rest of
+the Fleet running. `interruptWorker` is the compatibility name for the same
+attempt-fenced cancellation transition. `stopFleetRun` cancels every queued or
+active task and marks the whole run cancelled.
+
+Replay covers aggregate run/task transitions and privacy-bounded individual
+worker transitions. Event bodies omit prompts, tool call IDs, completion text,
+artifact paths/checksums, and cancellation identities; bounded failure reasons
+pass through secret redaction. `cursor` is opaque and stable across ordinary
+appends and Runtime restarts. Clients reconnect with `after=<cursor>`. A fresh
+request returns a bounded newest tail and marks `history_truncated` when older
+history exists. Ledger compaction can remove an old cursor; the JSON endpoint
+then returns `409`, while the SSE endpoint emits
+`fleet.replay.cursor_unavailable`, so the client reloads the current run
+projection instead of accepting a silent gap.
+
+`GET /v1/runtime/info` advertises `fleet_run_create`, `fleet_run_start`,
+`fleet_event_replay`, `fleet_event_stream`, and `fleet_local_target`. Older
+runtimes without a requested route still produce a typed SDK
+`RuntimeCapabilityError`.
 
 Verification:
 

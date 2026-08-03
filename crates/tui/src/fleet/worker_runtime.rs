@@ -289,7 +289,7 @@ pub fn fleet_task_to_worker_spec_with_profiles(
     })
 }
 
-fn fleet_write_roots(task_spec: &FleetTaskSpec) -> Result<Vec<String>> {
+pub(crate) fn fleet_write_roots(task_spec: &FleetTaskSpec) -> Result<Vec<String>> {
     let task_root = normalize_fleet_relative_path(
         task_spec
             .workspace

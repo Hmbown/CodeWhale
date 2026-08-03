@@ -18,6 +18,8 @@ invocation: model+user
 > checkpoint. The goal: the durable artifact survives, the context does not
 > need to.
 
+Invocation: `model+user`
+
 ## When to use
 
 - The user says "handoff", "hand off", "pass the baton", "takeover prompt",

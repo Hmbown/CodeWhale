@@ -46,7 +46,9 @@ use tracing;
 use windows::Win32::System::Console::{GetConsoleMode, GetStdHandle, SetConsoleMode};
 
 use crate::audit::log_sensitive_event;
-use crate::automation_manager::{AutomationManager, AutomationSchedulerConfig, spawn_scheduler};
+use crate::automation_manager::{
+    AutomationManager, AutomationSchedulerConfig, AutomationStatus, spawn_scheduler,
+};
 use crate::client::{
     CacheWarmupKey, DeepSeekClient, PromptInspection, build_cache_warmup_request,
     inspect_prompt_for_request,
@@ -2695,6 +2697,7 @@ async fn refresh_active_task_panel(app: &mut App, task_manager: &SharedTaskManag
         );
     changed || tip_shown
 }
+
 
 fn newly_completed_id<'a>(
     previously_active_ids: HashSet<&'a str>,
@@ -7114,7 +7117,7 @@ async fn run_event_loop(
                         // appended to the user memory file and the input
                         // is consumed without firing a turn. Disabled
                         // behaviour falls through to normal turn submit.
-                        // TODO(#3490, #3495): remove legacy quick-add when Moraine recall is stable.
+                        // TODO(v0.9.4): remove legacy quick-add when Moraine recall stable; see #3490, #3495
                         if should_intercept_memory_quick_add(config, &input) {
                             handle_memory_quick_add(app, &input, config);
                             continue;

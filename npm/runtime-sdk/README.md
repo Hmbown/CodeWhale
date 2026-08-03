@@ -12,9 +12,29 @@ const client = createRuntimeClient({
   token: process.env.CODEWHALE_RUNTIME_TOKEN,
 });
 
-const { runs } = await client.listFleetRuns();
-const workers = await client.listFleetWorkers(runs[0].id);
-await client.interruptWorker(workers.workers[0].worker_id);
+const created = await client.createFleetRun({
+  target: "this_computer",
+  roles: [{ name: "reviewer" }, { name: "verifier" }],
+  workflow: {
+    id: "release-check",
+    kind: "parallel",
+    tasks: [
+      { id: "review", name: "Review", instructions: "Review locally.", worker: { role: "reviewer" } },
+      { id: "verify", name: "Verify", instructions: "Verify locally.", worker: { role: "verifier" } },
+    ],
+  },
+});
+
+// Creation is durable but does not launch work. Launch remains explicit.
+await client.startFleetRun(created.run.id);
+
+let cursor;
+for await (const event of client.fleetEvents(created.run.id, { after: cursor })) {
+  if (event.cursor) cursor = event.cursor; // persist durable cursors only
+  if (event.event === "fleet.replay.cursor_unavailable") {
+    // Reload getFleetRun(created.run.id), then reconnect without the old cursor.
+  }
+}
 ```
 
 ## Fleet Helpers
@@ -24,12 +44,23 @@ await client.interruptWorker(workers.workers[0].worker_id);
 - `listFleetWorkers(runId)`
 - `getFleetWorker(workerId)`
 - `interruptWorker(workerId)`
+- `stopWorker(workerId)`
 - `restartWorker(workerId)`
 - `stopFleetRun(runId)`
-- `fleetEvents(runId)`
+- `startFleetRun(runId)`
+- `replayFleetEvents(runId, { after, limit })`
+- `fleetEvents(runId, { after, limit })`
 - `createFleetRun(spec)`
 
-`fleetEvents` and `createFleetRun` are typed ahead of the current v0.8.60 Rust
-Runtime API. If the local runtime does not expose those endpoints, the helpers
-raise `RuntimeCapabilityError` with a stable `capability` string instead of a
-generic fetch failure.
+The v0.9.4 Runtime implements the complete local managed-Fleet path. A creation
+request must name its roles, define a `parallel` Workflow, and select the
+explicit `this_computer` target. `another_computer` and `cloud` are contract
+values but fail closed until those targets are implemented. Event cursors are
+opaque and durable across Runtime restarts; if ledger compaction removes an old
+cursor, replay returns a conflict so the client can reload the run projection.
+Local worker IDs are generated per run; managed creation does not yet accept
+caller-assigned `worker_specs` because worker controls address IDs globally.
+
+Older runtimes that do not expose one of these endpoints produce a
+`RuntimeCapabilityError` with a stable capability string instead of a generic
+fetch failure.

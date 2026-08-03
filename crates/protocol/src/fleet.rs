@@ -41,6 +41,23 @@ pub struct FleetRun {
     pub id: FleetRunId,
     pub name: String,
     pub status: FleetRunStatus,
+    /// Explicit execution target selected by the managed client.
+    ///
+    /// Older CLI-created runs predate target selection and therefore omit
+    /// this field. Runtime API creation always persists it and currently
+    /// accepts only [`FleetRuntimeTarget::ThisComputer`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<FleetRuntimeTarget>,
+    /// Named Workflow descriptor that owns this Fleet run.
+    ///
+    /// The durable task specs below remain the executable source of truth;
+    /// this descriptor keeps the product identity and scheduling policy
+    /// inspectable without smuggling them through labels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<FleetWorkflowDescriptor>,
+    /// Canonical named roles declared for the run.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roles: Vec<String>,
     /// Maximum number of workers the manager may drive concurrently.
     ///
     /// Older ledgers omit this field; callers fall back to the persisted
@@ -60,6 +77,74 @@ pub struct FleetRun {
     pub updated_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<String>,
+}
+
+/// Product-level Runtime target for a managed Fleet run.
+///
+/// The enum intentionally names unsupported targets as contract values so a
+/// client receives a precise capability refusal instead of silently falling
+/// back to local execution.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FleetRuntimeTarget {
+    ThisComputer,
+    AnotherComputer,
+    Cloud,
+}
+
+/// Scheduling shape currently executable by the durable Fleet manager.
+///
+/// Fleet tasks are independent queue entries today, so only parallel
+/// workflows are advertised. Sequence/pipeline support must not be accepted
+/// until dependencies are durable in the Fleet ledger.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FleetWorkflowKind {
+    Parallel,
+}
+
+/// Durable identity for the Workflow that coordinates a Fleet run.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FleetWorkflowDescriptor {
+    pub id: String,
+    pub kind: FleetWorkflowKind,
+}
+
+/// One privacy-bounded durable event exposed to managed Fleet clients.
+///
+/// `cursor` is an opaque stable digest of the underlying ledger transition.
+/// Clients persist it and send it back on reconnect; they must not parse it.
+/// Worker-local sequence numbers remain available separately because they are
+/// monotonic only within one `(worker, task)` lifecycle, not across a run.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FleetRuntimeEvent {
+    pub cursor: String,
+    pub event: String,
+    pub run_id: FleetRunId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_seq: Option<u64>,
+    #[serde(default)]
+    pub payload: Value,
+}
+
+/// Bounded durable replay page.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FleetEventReplay {
+    pub run_id: FleetRunId,
+    pub events: Vec<FleetRuntimeEvent>,
+    #[serde(default)]
+    pub has_more: bool,
+    /// True when a no-cursor request returned only the newest bounded tail.
+    #[serde(default)]
+    pub history_truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
 }
 
 /// Lifecycle status for an entire fleet run.
@@ -1050,6 +1135,12 @@ mod tests {
             id: FleetRunId::from("run-001"),
             name: "dogfood smoke".to_string(),
             status: FleetRunStatus::Running,
+            target: Some(FleetRuntimeTarget::ThisComputer),
+            workflow: Some(FleetWorkflowDescriptor {
+                id: "release-checks".to_string(),
+                kind: FleetWorkflowKind::Parallel,
+            }),
+            roles: vec!["release-checker".to_string()],
             max_workers: Some(1),
             task_specs: vec![FleetTaskSpec {
                 id: "task-1".to_string(),
@@ -1102,6 +1193,12 @@ mod tests {
         let back: FleetRun = serde_json::from_str(&json).unwrap();
         assert_eq!(back.id, run.id);
         assert_eq!(back.status, FleetRunStatus::Running);
+        assert_eq!(back.target, Some(FleetRuntimeTarget::ThisComputer));
+        assert_eq!(back.roles, vec!["release-checker"]);
+        assert_eq!(
+            back.workflow.as_ref().map(|workflow| workflow.id.as_str()),
+            Some("release-checks")
+        );
         assert_eq!(back.task_specs.len(), 1);
         assert_eq!(
             back.task_specs[0].worker.as_ref().unwrap().role.as_deref(),

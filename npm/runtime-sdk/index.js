@@ -37,6 +37,23 @@ export class CodeWhaleRuntimeClient {
     });
   }
 
+  async startFleetRun(runId) {
+    return this.#jsonRequest(`/v1/fleet/runs/${segment(runId)}/start`, {
+      method: "POST",
+      capability: "fleet_run_start",
+    });
+  }
+
+  async replayFleetEvents(runId, options = {}) {
+    const path = fleetEventPath(
+      `/v1/fleet/runs/${segment(runId)}/events/replay`,
+      options,
+    );
+    return this.#jsonRequest(path, {
+      capability: "fleet_event_replay",
+    });
+  }
+
   async listFleetRuns() {
     return this.#jsonRequest("/v1/fleet/runs");
   }
@@ -59,6 +76,12 @@ export class CodeWhaleRuntimeClient {
     });
   }
 
+  async stopWorker(workerId) {
+    return this.#jsonRequest(`/v1/fleet/workers/${segment(workerId)}/stop`, {
+      method: "POST",
+    });
+  }
+
   async restartWorker(workerId) {
     return this.#jsonRequest(`/v1/fleet/workers/${segment(workerId)}/restart`, {
       method: "POST",
@@ -72,10 +95,14 @@ export class CodeWhaleRuntimeClient {
   }
 
   async *fleetEvents(runId, options = {}) {
-    const path = options.path ?? `/v1/fleet/runs/${segment(runId)}/events`;
+    const path = fleetEventPath(
+      options.path ?? `/v1/fleet/runs/${segment(runId)}/events`,
+      options,
+    );
     const response = await this.#rawRequest(path, {
       method: "GET",
       capability: "fleet_event_stream",
+      accept: "text/event-stream",
     });
     const contentType = response.headers.get("content-type") ?? "";
     if (contentType.includes("application/json")) {
@@ -154,6 +181,21 @@ function segment(value) {
   return encodeURIComponent(String(value));
 }
 
+function fleetEventPath(path, options) {
+  const query = new URLSearchParams();
+  if (options.after !== undefined && options.after !== null && String(options.after) !== "") {
+    query.set("after", String(options.after));
+  }
+  if (options.limit !== undefined && options.limit !== null) {
+    query.set("limit", String(options.limit));
+  }
+  const encoded = query.toString();
+  if (!encoded) {
+    return path;
+  }
+  return `${path}${path.includes("?") ? "&" : "?"}${encoded}`;
+}
+
 async function readErrorBody(response) {
   try {
     const text = await response.text();
@@ -169,9 +211,9 @@ async function* parseEventStream(body) {
   for await (const chunk of body) {
     buffer += decoder.decode(chunk, { stream: true });
     let boundary;
-    while ((boundary = buffer.indexOf("\n\n")) >= 0) {
-      const frame = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
+    while ((boundary = eventStreamBoundary(buffer)) !== null) {
+      const frame = buffer.slice(0, boundary.index);
+      buffer = buffer.slice(boundary.index + boundary.length);
       const event = parseSseFrame(frame);
       if (event !== undefined) {
         yield event;
@@ -185,14 +227,43 @@ async function* parseEventStream(body) {
   }
 }
 
+function eventStreamBoundary(buffer) {
+  const lf = buffer.indexOf("\n\n");
+  const crlf = buffer.indexOf("\r\n\r\n");
+  if (lf < 0 && crlf < 0) {
+    return null;
+  }
+  if (crlf >= 0 && (lf < 0 || crlf < lf)) {
+    return { index: crlf, length: 4 };
+  }
+  return { index: lf, length: 2 };
+}
+
 function parseSseFrame(frame) {
-  const data = frame
-    .split(/\r?\n/)
+  const lines = frame.split(/\r?\n/);
+  const eventName = lines
+    .find((line) => line.startsWith("event:"))
+    ?.slice("event:".length)
+    .trimStart();
+  const eventId = lines
+    .find((line) => line.startsWith("id:"))
+    ?.slice("id:".length)
+    .trimStart();
+  const data = lines
     .filter((line) => line.startsWith("data:"))
     .map((line) => line.slice("data:".length).trimStart())
     .join("\n");
   if (!data || data === "[DONE]") {
     return undefined;
   }
-  return JSON.parse(data);
+  const parsed = JSON.parse(data);
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    if (eventName && parsed.event === undefined) {
+      parsed.event = eventName;
+    }
+    if (eventId && parsed.cursor === undefined) {
+      parsed.cursor = eventId;
+    }
+  }
+  return parsed;
 }

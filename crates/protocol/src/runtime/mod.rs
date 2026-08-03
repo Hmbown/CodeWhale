@@ -49,6 +49,16 @@ pub struct RuntimeCapabilities {
     pub external_tools: bool,
     pub environments: bool,
     pub worker_runtime: bool,
+    #[serde(default)]
+    pub fleet_run_create: bool,
+    #[serde(default)]
+    pub fleet_run_start: bool,
+    #[serde(default)]
+    pub fleet_event_replay: bool,
+    #[serde(default)]
+    pub fleet_event_stream: bool,
+    #[serde(default)]
+    pub fleet_local_target: bool,
 }
 
 /// Experimental opt-in flags advertised by `GET /v1/runtime/info`.
@@ -340,6 +350,11 @@ mod tests {
             external_tools: false,
             environments: false,
             worker_runtime: false,
+            fleet_run_create: true,
+            fleet_run_start: true,
+            fleet_event_replay: true,
+            fleet_event_stream: true,
+            fleet_local_target: true,
         };
         let value = serde_json::to_value(&caps).unwrap();
         let obj = value.as_object().unwrap();
@@ -347,6 +362,8 @@ mod tests {
         assert_eq!(obj.get("account_session").unwrap(), &json!(true));
         assert_eq!(obj.get("external_tools").unwrap(), &json!(false));
         assert!(obj.contains_key("worker_runtime"));
+        assert_eq!(obj.get("fleet_run_create").unwrap(), &json!(true));
+        assert_eq!(obj.get("fleet_event_stream").unwrap(), &json!(true));
     }
 
     #[test]

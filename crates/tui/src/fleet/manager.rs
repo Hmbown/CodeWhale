@@ -23,7 +23,9 @@ use super::executor::{
     authority_envelope_for_worker, build_worker_exec_command_with_launch_spec,
 };
 use super::host::FleetHostErrorKind;
-use super::ledger::{FleetLedger, FleetLedgerState, FleetTaskLedgerStatus, FleetTaskState};
+use super::ledger::{
+    FleetEventReplayError, FleetLedger, FleetLedgerState, FleetTaskLedgerStatus, FleetTaskState,
+};
 use super::scheduler::{FleetScheduler, FleetSchedulerPolicy};
 use super::task_spec::{
     FleetTaskSpecDocument, FleetTaskVerificationInput, load_task_spec_document,
@@ -86,6 +88,18 @@ pub struct FleetRunReport {
     pub worker_ids: Vec<String>,
     /// Non-blocking dispatch warnings about a brief/profile mismatch.
     pub warnings: Vec<String>,
+}
+
+/// Product identity captured with a managed Fleet run.
+///
+/// CLI task-spec runs predate these fields and use the default descriptor.
+/// Runtime API callers provide all three values so target and Workflow
+/// identity remain durable and inspectable after the creating client exits.
+#[derive(Debug, Clone, Default)]
+pub struct ManagedFleetRunDescriptor {
+    pub target: Option<FleetRuntimeTarget>,
+    pub workflow: Option<FleetWorkflowDescriptor>,
+    pub roles: Vec<String>,
 }
 
 /// Durable restart transition plus the execution context a caller must drive.
@@ -295,6 +309,15 @@ impl FleetManager {
         self.ledger.rebuild_state()
     }
 
+    pub fn replay_events(
+        &self,
+        run_id: &FleetRunId,
+        after: Option<&str>,
+        limit: usize,
+    ) -> std::result::Result<FleetEventReplay, FleetEventReplayError> {
+        self.ledger.replay_events(run_id, after, limit)
+    }
+
     pub fn load_task_spec(path: &Path) -> Result<FleetTaskSpecDocument> {
         load_task_spec_document(path)
     }
@@ -310,8 +333,38 @@ impl FleetManager {
 
     pub fn create_run(
         &self,
+        doc: FleetTaskSpecDocument,
+        max_workers: usize,
+    ) -> Result<FleetRunReport> {
+        let mut prepared = self.create_queued_run(doc, max_workers)?;
+        let started = self.start_run(&prepared.run_id)?;
+        prepared.leased = started.leased;
+        prepared.queued = started.queued;
+        Ok(prepared)
+    }
+
+    /// Validate and durably create a queued run without launching work.
+    ///
+    /// Managed clients use this as the first half of an explicit two-step
+    /// launch gate. The CLI's historical `fleet run` path calls `create_run`,
+    /// which immediately invokes [`Self::start_run`] to preserve compatibility.
+    pub fn create_queued_run(
+        &self,
+        doc: FleetTaskSpecDocument,
+        max_workers: usize,
+    ) -> Result<FleetRunReport> {
+        self.create_queued_run_with_descriptor(
+            doc,
+            max_workers,
+            ManagedFleetRunDescriptor::default(),
+        )
+    }
+
+    pub fn create_queued_run_with_descriptor(
+        &self,
         mut doc: FleetTaskSpecDocument,
         max_workers: usize,
+        descriptor: ManagedFleetRunDescriptor,
     ) -> Result<FleetRunReport> {
         validate_task_spec_document(&doc)?;
         worker_runtime::canonicalize_fleet_task_roles(&mut doc.tasks);
@@ -347,6 +400,9 @@ impl FleetManager {
             id: run_id.clone(),
             name: doc.name.unwrap_or_else(|| run_id.0.clone()),
             status: FleetRunStatus::Queued,
+            target: descriptor.target,
+            workflow: descriptor.workflow,
+            roles: descriptor.roles,
             max_workers: Some(max_workers),
             task_specs: doc.tasks.clone(),
             worker_specs: doc.workers.clone(),
@@ -367,25 +423,87 @@ impl FleetManager {
                 attempts: 0,
             })?;
         }
-        let initial_status = if run.task_specs.is_empty() {
-            FleetRunStatus::Completed
-        } else {
-            FleetRunStatus::Running
-        };
-        self.ledger
-            .update_run_status(&run.id, initial_status, &timestamp())?;
-        let tick = self.schedule_run(&run.id, max_workers)?;
-        self.refresh_run_status(&run.id)?;
         let state = self.ledger.rebuild_state()?;
         let snapshot = self.status_from_state(Some(&run.id), &state);
         Ok(FleetRunReport {
             run_id: run.id,
             task_count: run.task_specs.len(),
-            leased: tick.leased,
+            leased: 0,
             queued: snapshot.queued,
             worker_ids: run.worker_specs.iter().map(|w| w.id.clone()).collect(),
             warnings,
         })
+    }
+
+    /// Activate one durable queued run without leasing work.
+    ///
+    /// Managed clients use this transition before spawning the executor
+    /// driver, so no partial scheduling failure can strand an unowned lease.
+    /// Terminal runs are never reactivated through this method; the existing
+    /// explicit worker restart control remains separate.
+    pub fn activate_run(&self, run_id: &FleetRunId) -> Result<FleetRunReport> {
+        let state = self.ledger.rebuild_state()?;
+        let run =
+            state
+                .runs
+                .get(&run_id.0)
+                .cloned()
+                .ok_or_else(|| FleetControlError::UnknownRun {
+                    run_id: run_id.0.clone(),
+                })?;
+        let lifecycle = state
+            .run_status_overrides
+            .get(&run_id.0)
+            .unwrap_or(&run.status);
+        if matches!(
+            lifecycle,
+            FleetRunStatus::Completed | FleetRunStatus::Failed | FleetRunStatus::Cancelled
+        ) {
+            bail!("fleet run {} is already terminal ({lifecycle:?})", run_id.0);
+        }
+        if !matches!(lifecycle, FleetRunStatus::Running) {
+            self.ledger
+                .update_run_status(run_id, FleetRunStatus::Running, &timestamp())?;
+        }
+        let state = self.ledger.rebuild_state()?;
+        let snapshot = self.status_from_state(Some(run_id), &state);
+        Ok(FleetRunReport {
+            run_id: run.id,
+            task_count: run.task_specs.len(),
+            leased: 0,
+            queued: snapshot.queued,
+            worker_ids: run
+                .worker_specs
+                .iter()
+                .map(|worker| worker.id.clone())
+                .collect(),
+            warnings: Vec::new(),
+        })
+    }
+
+    /// Activate a run and lease its first worker batch for the historical CLI
+    /// path. Managed Runtime callers use [`Self::activate_run`] and start the
+    /// executor driver before it performs scheduling.
+    pub fn start_run(&self, run_id: &FleetRunId) -> Result<FleetRunReport> {
+        let mut report = self.activate_run(run_id)?;
+        let state = self.ledger.rebuild_state()?;
+        let run = state
+            .runs
+            .get(&run_id.0)
+            .ok_or_else(|| FleetControlError::UnknownRun {
+                run_id: run_id.0.clone(),
+            })?;
+        let max_workers = run
+            .max_workers
+            .unwrap_or_else(|| run.worker_specs.len().max(1))
+            .clamp(1, 128);
+        let tick = self.schedule_run(run_id, max_workers)?;
+        self.refresh_run_status(run_id)?;
+        let state = self.ledger.rebuild_state()?;
+        let snapshot = self.status_from_state(Some(run_id), &state);
+        report.leased = tick.leased;
+        report.queued = snapshot.queued;
+        Ok(report)
     }
 
     pub fn schedule_run(&self, run_id: &FleetRunId, max_workers: usize) -> Result<FleetTickReport> {
@@ -436,9 +554,14 @@ impl FleetManager {
             let Some((entry, task_spec)) = next_enqueued_task_for_run(&state, run_id) else {
                 break;
             };
-            if self.start_worker_task(&worker_id, &entry, &task_spec, Some(max_workers))? {
-                report.leased += 1;
+            if !self.start_worker_task(&worker_id, &entry, &task_spec, Some(max_workers))? {
+                // Busy coordination or a write-claim contention leaves the
+                // task durably queued. Returning to the driver tick avoids a
+                // tight loop over unchanged state and lets live workers make
+                // progress before scheduling retries.
+                break;
             }
+            report.leased += 1;
         }
 
         self.refresh_run_status(run_id)?;
@@ -646,9 +769,26 @@ impl FleetManager {
             // Do not lease new work onto a logical worker until its executor
             // handle has been observed and forgotten below.
             let unavailable_workers = executor.worker_ids().into_iter().collect();
-            self.schedule_run_excluding(run_id, max_workers, &unavailable_workers)?;
+            let scheduling_error = self
+                .schedule_run_excluding(run_id, max_workers, &unavailable_workers)
+                .err();
             self.drive_executor_tick(run_id, executor, codewhale_binary, model)?;
             self.refresh_run_status(run_id)?;
+            if let Some(error) = scheduling_error {
+                if executor.worker_ids().is_empty() {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "scheduling Fleet run {} after draining owned workers",
+                            run_id.0
+                        )
+                    });
+                }
+                tracing::warn!(
+                    run_id = %run_id.0,
+                    error = %error,
+                    "Fleet scheduling paused while already-leased workers continue"
+                );
+            }
             // A separate `fleet interrupt` process can make the ledger
             // terminal while this manager still owns a live host child. Keep
             // driving until the executor has observed that cancellation and
@@ -1159,9 +1299,16 @@ impl FleetManager {
                 let Ok(mut guard) = manager.try_write() else {
                     return Ok(false);
                 };
-                guard
-                    .preflight_worker_coordination(&sub_agent_worker)
-                    .map_err(anyhow::Error::msg)?;
+                if let Err(error) = guard.preflight_worker_coordination(&sub_agent_worker) {
+                    tracing::debug!(
+                        worker_id,
+                        run_id = %entry.run_id.0,
+                        task_id = %entry.task_id,
+                        error = %error,
+                        "Fleet worker coordination is not currently admissible"
+                    );
+                    return Ok(false);
+                }
                 Some(guard)
             }
             None => None,
@@ -2502,6 +2649,184 @@ mod tests {
     }
 
     #[test]
+    fn queued_creation_waits_for_explicit_idempotent_start() {
+        let tmp = TempDir::new().unwrap();
+        let coordination =
+            crate::tools::subagent::new_shared_subagent_manager(tmp.path().to_path_buf(), 4);
+        let manager = FleetManager::open(tmp.path())
+            .unwrap()
+            .with_sub_agent_manager(coordination.clone());
+        let report = manager
+            .create_queued_run_with_descriptor(
+                FleetTaskSpecDocument {
+                    name: Some("managed launch gate".to_string()),
+                    labels: BTreeMap::new(),
+                    security_policy: None,
+                    workers: Vec::new(),
+                    tasks: vec![task("task-a")],
+                },
+                1,
+                ManagedFleetRunDescriptor {
+                    target: Some(FleetRuntimeTarget::ThisComputer),
+                    workflow: Some(FleetWorkflowDescriptor {
+                        id: "managed-launch".to_string(),
+                        kind: FleetWorkflowKind::Parallel,
+                    }),
+                    roles: vec!["reviewer".to_string()],
+                },
+            )
+            .unwrap();
+
+        let queued = manager.rebuild_state().unwrap();
+        assert_eq!(queued.runs[&report.run_id.0].status, FleetRunStatus::Queued);
+        assert_eq!(
+            queued.tasks[&task_key(&report.run_id.0, "task-a")].status,
+            FleetTaskLedgerStatus::Enqueued
+        );
+        assert!(
+            coordination
+                .try_read()
+                .unwrap()
+                .list_worker_records()
+                .is_empty()
+        );
+
+        let activated = manager.activate_run(&report.run_id).unwrap();
+        assert_eq!(activated.leased, 0);
+        let activated_state = manager.rebuild_state().unwrap();
+        assert_eq!(
+            activated_state.tasks[&task_key(&report.run_id.0, "task-a")].status,
+            FleetTaskLedgerStatus::Enqueued
+        );
+        assert!(
+            coordination
+                .try_read()
+                .unwrap()
+                .list_worker_records()
+                .is_empty()
+        );
+
+        let started = manager.start_run(&report.run_id).unwrap();
+        assert_eq!(started.leased, 1);
+        let running = manager.rebuild_state().unwrap();
+        let task = &running.tasks[&task_key(&report.run_id.0, "task-a")];
+        assert_eq!(task.status, FleetTaskLedgerStatus::Leased);
+        assert_eq!(task.entry.attempts, 1);
+        assert_eq!(
+            running.run_status_overrides[&report.run_id.0],
+            FleetRunStatus::Running
+        );
+        assert_eq!(
+            coordination.try_read().unwrap().list_worker_records().len(),
+            1
+        );
+
+        let repeated = manager.start_run(&report.run_id).unwrap();
+        assert_eq!(repeated.leased, 0);
+        let repeated_state = manager.rebuild_state().unwrap();
+        assert_eq!(
+            repeated_state.tasks[&task_key(&report.run_id.0, "task-a")]
+                .entry
+                .attempts,
+            1
+        );
+        assert_eq!(
+            coordination.try_read().unwrap().list_worker_records().len(),
+            1
+        );
+    }
+
+    #[test]
+    fn busy_coordination_yields_without_spinning_or_leasing() {
+        let tmp = TempDir::new().unwrap();
+        let coordination =
+            crate::tools::subagent::new_shared_subagent_manager(tmp.path().to_path_buf(), 4);
+        let manager = FleetManager::open(tmp.path())
+            .unwrap()
+            .with_sub_agent_manager(coordination.clone());
+        let prepared = manager
+            .create_queued_run(
+                FleetTaskSpecDocument {
+                    name: Some("busy coordination".to_string()),
+                    labels: BTreeMap::new(),
+                    security_policy: None,
+                    workers: Vec::new(),
+                    tasks: vec![task("task-a")],
+                },
+                1,
+            )
+            .unwrap();
+
+        let guard = coordination.try_write().unwrap();
+        let blocked = manager.start_run(&prepared.run_id).unwrap();
+        assert_eq!(blocked.leased, 0);
+        let blocked_state = manager.rebuild_state().unwrap();
+        assert_eq!(
+            blocked_state.tasks[&task_key(&prepared.run_id.0, "task-a")].status,
+            FleetTaskLedgerStatus::Enqueued
+        );
+
+        drop(guard);
+        let retried = manager.start_run(&prepared.run_id).unwrap();
+        assert_eq!(retried.leased, 1);
+    }
+
+    #[test]
+    fn cross_run_write_contention_leaves_later_work_queued_until_claim_releases() {
+        let tmp = TempDir::new().unwrap();
+        let coordination =
+            crate::tools::subagent::new_shared_subagent_manager(tmp.path().to_path_buf(), 4);
+        let manager = FleetManager::open(tmp.path())
+            .unwrap()
+            .with_sub_agent_manager(coordination);
+        let write_task = |id: &str| {
+            let mut task = task(id);
+            task.worker = Some(FleetTaskWorkerProfile {
+                agent_profile: None,
+                role: Some("builder".to_string()),
+                loadout: None,
+                model_class: None,
+                model: None,
+                tool_profile: Some("explicit".to_string()),
+                tools: vec!["apply_patch".to_string()],
+                capabilities: Vec::new(),
+            });
+            task.workspace = Some(FleetWorkspaceRequirements {
+                writable_paths: vec![PathBuf::from("src")],
+                ..FleetWorkspaceRequirements::default()
+            });
+            task
+        };
+        let prepare = |name: &str, task_id: &str| {
+            manager
+                .create_queued_run(
+                    FleetTaskSpecDocument {
+                        name: Some(name.to_string()),
+                        labels: BTreeMap::new(),
+                        security_policy: None,
+                        workers: Vec::new(),
+                        tasks: vec![write_task(task_id)],
+                    },
+                    1,
+                )
+                .unwrap()
+        };
+        let first = prepare("first writer", "write-a");
+        let second = prepare("second writer", "write-b");
+
+        assert_eq!(manager.start_run(&first.run_id).unwrap().leased, 1);
+        let blocked = manager.start_run(&second.run_id).unwrap();
+        assert_eq!(blocked.leased, 0);
+        assert_eq!(
+            manager.rebuild_state().unwrap().tasks[&task_key(&second.run_id.0, "write-b")].status,
+            FleetTaskLedgerStatus::Enqueued
+        );
+
+        assert_eq!(manager.stop_run(&first.run_id).unwrap(), 1);
+        assert_eq!(manager.start_run(&second.run_id).unwrap().leased, 1);
+    }
+
+    #[test]
     fn restored_lease_without_launch_record_fails_durably_instead_of_poisoning_ticks() {
         let tmp = TempDir::new().unwrap();
         let coordination =
@@ -2756,6 +3081,9 @@ mod tests {
                 id: run_id.clone(),
                 name: "resume smoke".to_string(),
                 status: FleetRunStatus::Running,
+                target: None,
+                workflow: None,
+                roles: Vec::new(),
                 max_workers: Some(workers.len().max(1)),
                 task_specs: tasks.to_vec(),
                 worker_specs: workers.to_vec(),

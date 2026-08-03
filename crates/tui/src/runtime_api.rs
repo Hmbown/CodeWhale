@@ -1,5 +1,6 @@
 //! Runtime HTTP/SSE API for local Codewhale automation.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::fs;
 use std::net::{IpAddr, SocketAddr, UdpSocket};
@@ -46,10 +47,14 @@ use crate::config::{
     ApiProvider, Config, DEFAULT_TEXT_MODEL, normalize_model_name_for_provider, validate_route,
 };
 use crate::fleet::executor::{FleetExecutor, configured_codewhale_binary};
-use crate::fleet::ledger::{FleetLedgerState, FleetTaskLedgerStatus};
+use crate::fleet::ledger::{FleetEventReplayError, FleetLedgerState, FleetTaskLedgerStatus};
 use crate::fleet::manager::{
     FleetManager, FleetStatusSnapshot, FleetWorkerInspection, FleetWorkerRuntimeProjection,
+    ManagedFleetRunDescriptor,
 };
+use crate::fleet::profile::canonical_public_role_name;
+use crate::fleet::task_spec::FleetTaskSpecDocument;
+use crate::fleet::worker_runtime::fleet_write_roots;
 use crate::mcp::McpPool;
 #[cfg(test)]
 pub(super) use crate::models::{ContentBlock, Message};
@@ -73,7 +78,9 @@ use crate::tools::subagent::{
     new_shared_subagent_manager_with_timeout,
 };
 use codewhale_protocol::fleet::{
-    FleetArtifactKind, FleetRun, FleetRunId, FleetWorkerEventPayload, FleetWorkerStatus,
+    FleetArtifactKind, FleetEventReplay, FleetRun, FleetRunId, FleetRuntimeEvent,
+    FleetRuntimeTarget, FleetSecurityPolicy, FleetTaskSpec, FleetWorkerEventPayload,
+    FleetWorkerSpec, FleetWorkerStatus, FleetWorkflowDescriptor, FleetWorkflowKind,
 };
 
 mod auth;
@@ -389,6 +396,11 @@ fn default_runtime_capabilities() -> RuntimeCapabilities {
         external_tools: true,
         environments: false,
         worker_runtime: true,
+        fleet_run_create: true,
+        fleet_run_start: true,
+        fleet_event_replay: true,
+        fleet_event_stream: true,
+        fleet_local_target: true,
     }
 }
 
@@ -451,6 +463,50 @@ struct AutomationRunsQuery {
 struct ThreadEventsQuery {
     since_seq: Option<u64>,
     replay_limit: Option<usize>,
+}
+
+const DEFAULT_FLEET_EVENT_REPLAY_LIMIT: usize = 250;
+const MAX_FLEET_EVENT_REPLAY_LIMIT: usize = 1_000;
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateFleetRunRequest {
+    #[serde(default)]
+    name: Option<String>,
+    target: FleetRuntimeTarget,
+    roles: Vec<ManagedFleetRoleRequest>,
+    workflow: ManagedFleetWorkflowRequest,
+    #[serde(default, alias = "workers")]
+    worker_specs: Vec<FleetWorkerSpec>,
+    #[serde(default)]
+    labels: BTreeMap<String, String>,
+    #[serde(default)]
+    security_policy: Option<FleetSecurityPolicy>,
+    #[serde(default)]
+    max_workers: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManagedFleetRoleRequest {
+    name: String,
+    #[serde(default)]
+    agent_profile: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManagedFleetWorkflowRequest {
+    id: String,
+    kind: FleetWorkflowKind,
+    #[serde(alias = "task_specs")]
+    tasks: Vec<FleetTaskSpec>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FleetEventsQuery {
+    after: Option<String>,
+    limit: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -642,17 +698,30 @@ pub fn build_router(state: RuntimeApiState) -> Router {
         .route("/v1/workspace/status", get(workspace_status))
         .route("/v1/agent-runs", get(list_agent_runs))
         .route("/v1/agent-runs/{run_id}", get(get_agent_run))
-        .route("/v1/fleet/runs", get(list_fleet_runs))
+        .route(
+            "/v1/fleet/runs",
+            get(list_fleet_runs).post(create_fleet_run),
+        )
         .route("/v1/fleet/runs/{run_id}", get(get_fleet_run))
         .route(
             "/v1/fleet/runs/{run_id}/workers",
             get(list_fleet_run_workers),
+        )
+        .route("/v1/fleet/runs/{run_id}/start", post(start_fleet_run))
+        .route("/v1/fleet/runs/{run_id}/events", get(stream_fleet_events))
+        .route(
+            "/v1/fleet/runs/{run_id}/events/replay",
+            get(replay_fleet_events),
         )
         .route("/v1/fleet/runs/{run_id}/stop", post(stop_fleet_run))
         .route("/v1/fleet/workers/{worker_id}", get(get_fleet_worker))
         .route(
             "/v1/fleet/workers/{worker_id}/interrupt",
             post(interrupt_fleet_worker),
+        )
+        .route(
+            "/v1/fleet/workers/{worker_id}/stop",
+            post(stop_fleet_worker),
         )
         .route(
             "/v1/fleet/workers/{worker_id}/restart",
@@ -1013,6 +1082,454 @@ async fn get_agent_run(
     Ok(Json(run))
 }
 
+async fn create_fleet_run(
+    State(state): State<RuntimeApiState>,
+    Json(request): Json<CreateFleetRunRequest>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if request.target != FleetRuntimeTarget::ThisComputer {
+        return Err(ApiError::not_implemented(format!(
+            "Fleet target {:?} is not available in this local Runtime; choose this_computer",
+            request.target
+        )));
+    }
+    let (document, descriptor, max_workers) = prepare_managed_fleet_run(request)?;
+    let manager = open_fleet_manager(&state)?;
+    let report = manager
+        .create_queued_run_with_descriptor(document, max_workers, descriptor)
+        .map_err(|error| ApiError::bad_request(format!("Failed to create Fleet run: {error}")))?;
+    let ledger_state = manager
+        .rebuild_state()
+        .map_err(|error| ApiError::internal(format!("Failed to rebuild Fleet state: {error}")))?;
+    let run = ledger_state
+        .runs
+        .get(&report.run_id.0)
+        .ok_or_else(|| ApiError::internal("Created Fleet run was missing from its ledger"))?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "execution": "awaiting_start",
+            "run": fleet_run_detail_json(&manager, run, &ledger_state)?,
+            "warnings": report.warnings,
+        })),
+    ))
+}
+
+fn prepare_managed_fleet_run(
+    request: CreateFleetRunRequest,
+) -> Result<(FleetTaskSpecDocument, ManagedFleetRunDescriptor, usize), ApiError> {
+    if request.security_policy.is_some() {
+        return Err(ApiError::not_implemented(
+            "Managed Fleet security_policy overrides are not executable yet; use named roles and bounded task workspace/tool scopes",
+        ));
+    }
+    if !request.worker_specs.is_empty() {
+        return Err(ApiError::not_implemented(
+            "Managed Fleet custom worker_specs are not available yet; local Runtime worker IDs are generated per run so worker controls cannot collide across Fleets",
+        ));
+    }
+    if request.roles.is_empty() {
+        return Err(ApiError::bad_request(
+            "roles must declare at least one named Fleet role",
+        ));
+    }
+    if request.roles.len() > 128 {
+        return Err(ApiError::bad_request(
+            "roles cannot contain more than 128 entries",
+        ));
+    }
+    let workflow_id = managed_fleet_token("workflow.id", &request.workflow.id)?;
+    let workflow_kind = request.workflow.kind;
+    let name = request
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or(workflow_id.as_str())
+        .to_string();
+    if name.len() > 256 || name.chars().any(char::is_control) {
+        return Err(ApiError::bad_request(
+            "name must be one printable line no longer than 256 bytes",
+        ));
+    }
+
+    let mut roles = BTreeMap::new();
+    for role in request.roles {
+        let normalized = canonical_public_role_name(&managed_fleet_token("role.name", &role.name)?);
+        let agent_profile = role
+            .agent_profile
+            .as_deref()
+            .map(|profile| managed_fleet_token("role.agent_profile", profile))
+            .transpose()?;
+        if roles.insert(normalized.clone(), agent_profile).is_some() {
+            return Err(ApiError::bad_request(format!(
+                "duplicate Fleet role '{normalized}'"
+            )));
+        }
+    }
+
+    let mut tasks = request.workflow.tasks;
+    let mut used_roles = BTreeSet::new();
+    for task in &mut tasks {
+        let worker = task.worker.as_mut().ok_or_else(|| {
+            ApiError::bad_request(format!(
+                "Fleet task '{}' must select one named role through worker.role",
+                task.id
+            ))
+        })?;
+        let role = worker.role.as_deref().ok_or_else(|| {
+            ApiError::bad_request(format!(
+                "Fleet task '{}' must select one named role through worker.role",
+                task.id
+            ))
+        })?;
+        let role = canonical_public_role_name(&managed_fleet_token("task.worker.role", role)?);
+        let declared_profile = roles.get(&role).ok_or_else(|| {
+            ApiError::bad_request(format!(
+                "Fleet task '{}' references undeclared role '{role}'",
+                task.id
+            ))
+        })?;
+        if let Some(profile) = declared_profile {
+            match worker.agent_profile.as_deref() {
+                Some(task_profile) if task_profile != profile => {
+                    return Err(ApiError::bad_request(format!(
+                        "Fleet task '{}' overrides role '{role}' agent_profile '{profile}' with '{task_profile}'",
+                        task.id
+                    )));
+                }
+                None => worker.agent_profile = Some(profile.clone()),
+                Some(_) => {}
+            }
+        }
+        worker.role = Some(role.clone());
+        used_roles.insert(role);
+    }
+    let unused_roles = roles
+        .keys()
+        .filter(|role| !used_roles.contains(*role))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unused_roles.is_empty() {
+        return Err(ApiError::bad_request(format!(
+            "Every declared Fleet role must own a Workflow task; unused roles: {}",
+            unused_roles.join(", ")
+        )));
+    }
+    reject_parallel_write_collisions(&tasks)?;
+
+    let default_workers = roles.len().min(tasks.len()).max(1);
+    let max_workers = request.max_workers.unwrap_or(default_workers);
+    if !(1..=128).contains(&max_workers) {
+        return Err(ApiError::bad_request(
+            "max_workers must be between 1 and 128",
+        ));
+    }
+    let role_names = roles.into_keys().collect::<Vec<_>>();
+    Ok((
+        FleetTaskSpecDocument {
+            name: Some(name),
+            labels: request.labels,
+            security_policy: None,
+            workers: Vec::new(),
+            tasks,
+        },
+        ManagedFleetRunDescriptor {
+            target: Some(request.target),
+            workflow: Some(FleetWorkflowDescriptor {
+                id: workflow_id,
+                kind: workflow_kind,
+            }),
+            roles: role_names,
+        },
+        max_workers,
+    ))
+}
+
+fn managed_fleet_token(field: &str, value: &str) -> Result<String, ApiError> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+    {
+        return Err(ApiError::bad_request(format!(
+            "{field} must be a simple ASCII token no longer than 128 bytes"
+        )));
+    }
+    Ok(value.to_string())
+}
+
+fn reject_parallel_write_collisions(tasks: &[FleetTaskSpec]) -> Result<(), ApiError> {
+    let mut claims: Vec<(String, String)> = Vec::new();
+    for task in tasks {
+        let write_roots = fleet_write_roots(task).map_err(|error| {
+            ApiError::bad_request(format!(
+                "Fleet task '{}' has an invalid write scope: {error}",
+                task.id
+            ))
+        })?;
+        for normalized in write_roots {
+            for (owner, existing) in &claims {
+                if owner != &task.id && managed_paths_overlap(existing.as_str(), &normalized) {
+                    return Err(ApiError::bad_request(format!(
+                        "Parallel Workflow write scope collision: tasks '{owner}' and '{}' both claim overlapping paths",
+                        task.id
+                    )));
+                }
+            }
+            claims.push((task.id.clone(), normalized));
+        }
+    }
+    Ok(())
+}
+
+fn managed_paths_overlap(left: &str, right: &str) -> bool {
+    left == right
+        || left
+            .strip_prefix(right)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+        || right
+            .strip_prefix(left)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+async fn start_fleet_run(
+    State(state): State<RuntimeApiState>,
+    Path(run_id): Path<String>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let manager = open_fleet_manager(&state)?;
+    let durable = manager
+        .rebuild_state()
+        .map_err(|error| ApiError::internal(format!("Failed to rebuild Fleet state: {error}")))?;
+    let run = durable
+        .runs
+        .get(&run_id)
+        .ok_or_else(|| ApiError::not_found(format!("fleet run '{run_id}' not found")))?;
+    match run.target {
+        Some(FleetRuntimeTarget::ThisComputer) => {}
+        Some(target) => {
+            return Err(ApiError::not_implemented(format!(
+                "Fleet target {target:?} is not available in this local Runtime"
+            )));
+        }
+        None => {
+            return Err(ApiError::bad_request(
+                "Fleet run has no explicit Runtime target and cannot be started through the managed API",
+            ));
+        }
+    }
+    if run.workflow.is_none() || run.roles.is_empty() {
+        return Err(ApiError::bad_request(
+            "Fleet run has no managed Workflow/role descriptor and cannot be started through the managed API",
+        ));
+    }
+    let run_id = FleetRunId::from(run_id);
+    let report = manager.activate_run(&run_id).map_err(|error| {
+        let message = format!("Failed to start Fleet run '{}': {error}", run_id.0);
+        if message.contains("already terminal") {
+            ApiError::conflict(message)
+        } else {
+            ApiError::bad_request(message)
+        }
+    })?;
+    let max_workers = durable
+        .runs
+        .get(&run_id.0)
+        .and_then(|run| run.max_workers)
+        .unwrap_or_else(|| report.worker_ids.len().max(1));
+    let workspace = state.workspace.clone();
+    let codewhale_binary = state.fleet_codewhale_binary.clone();
+    let execution_run_id = run_id.clone();
+    tokio::spawn(async move {
+        let mut executor = FleetExecutor::new(&workspace);
+        if let Err(error) = manager
+            .run_to_completion(
+                &execution_run_id,
+                max_workers,
+                &mut executor,
+                &codewhale_binary,
+                None,
+                Duration::from_millis(250),
+            )
+            .await
+        {
+            tracing::error!(
+                run_id = %execution_run_id.0,
+                error = %error,
+                "Runtime API Fleet manager exited with an error"
+            );
+        }
+    });
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "action": "start",
+            "execution": "scheduled",
+            "run_id": run_id.0,
+            "target": "this_computer",
+            "leased": report.leased,
+            "queued": report.queued,
+            "worker_ids": report.worker_ids,
+        })),
+    ))
+}
+
+async fn replay_fleet_events(
+    State(state): State<RuntimeApiState>,
+    Path(run_id): Path<String>,
+    Query(query): Query<FleetEventsQuery>,
+) -> Result<Json<FleetEventReplay>, ApiError> {
+    let (after, limit) = validate_fleet_events_query(query)?;
+    let replay = load_fleet_event_replay(state, FleetRunId::from(run_id), after, limit)
+        .await
+        .map_err(map_fleet_replay_error)?;
+    Ok(Json(replay))
+}
+
+async fn stream_fleet_events(
+    State(state): State<RuntimeApiState>,
+    Path(run_id): Path<String>,
+    Query(query): Query<FleetEventsQuery>,
+) -> Result<Sse<impl futures_util::Stream<Item = Result<SseEvent, Infallible>>>, ApiError> {
+    let (after, limit) = validate_fleet_events_query(query)?;
+    let run_id = FleetRunId::from(run_id);
+    let initial = load_fleet_event_replay(state.clone(), run_id.clone(), after.clone(), limit)
+        .await
+        .map_err(map_fleet_replay_error)?;
+    let event_stream = replay_live_fleet_events(state, run_id, after, limit, initial);
+    Ok(Sse::new(event_stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keepalive"),
+    ))
+}
+
+fn replay_live_fleet_events(
+    state: RuntimeApiState,
+    run_id: FleetRunId,
+    mut after: Option<String>,
+    limit: usize,
+    initial: FleetEventReplay,
+) -> impl futures_util::Stream<Item = Result<SseEvent, Infallible>> {
+    stream! {
+        let mut page = initial;
+        loop {
+            if page.history_truncated {
+                yield Ok(sse_json(
+                    "fleet.replay.truncated",
+                    json!({
+                        "run_id": run_id.0.clone(),
+                        "reload_projection": true,
+                    }),
+                ));
+            }
+            for event in page.events {
+                after = Some(event.cursor.clone());
+                yield Ok(fleet_sse_event(&event));
+            }
+            if !page.has_more {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+            match load_fleet_event_replay(
+                state.clone(),
+                run_id.clone(),
+                after.clone(),
+                limit,
+            )
+            .await
+            {
+                Ok(next) => page = next,
+                Err(FleetEventReplayError::CursorUnavailable { .. }) => {
+                    yield Ok(sse_json(
+                        "fleet.replay.cursor_unavailable",
+                        json!({
+                            "run_id": run_id.0.clone(),
+                            "reload_projection": true,
+                        }),
+                    ));
+                    return;
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        run_id = %run_id.0,
+                        error = %error,
+                        "Fleet event stream stopped while reading durable history"
+                    );
+                    yield Ok(sse_json(
+                        "fleet.stream.error",
+                        json!({ "retryable": true }),
+                    ));
+                    return;
+                }
+            }
+        }
+    }
+}
+
+async fn load_fleet_event_replay(
+    state: RuntimeApiState,
+    run_id: FleetRunId,
+    after: Option<String>,
+    limit: usize,
+) -> std::result::Result<FleetEventReplay, FleetEventReplayError> {
+    tokio::task::spawn_blocking(move || {
+        let manager =
+            open_fleet_manager(&state).map_err(|error| FleetEventReplayError::Storage {
+                message: error.message,
+            })?;
+        manager.replay_events(&run_id, after.as_deref(), limit)
+    })
+    .await
+    .map_err(|error| FleetEventReplayError::Storage {
+        message: format!("Fleet replay worker failed: {error}"),
+    })?
+}
+
+fn validate_fleet_events_query(
+    query: FleetEventsQuery,
+) -> Result<(Option<String>, usize), ApiError> {
+    let after = query
+        .after
+        .map(|cursor| cursor.trim().to_string())
+        .filter(|cursor| !cursor.is_empty());
+    if after.as_deref().is_some_and(|cursor| {
+        cursor.len() > 96
+            || !cursor.starts_with("fev1_")
+            || !cursor
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    }) {
+        return Err(ApiError::bad_request(
+            "after is not a valid Fleet event cursor",
+        ));
+    }
+    let limit = query.limit.unwrap_or(DEFAULT_FLEET_EVENT_REPLAY_LIMIT);
+    if !(1..=MAX_FLEET_EVENT_REPLAY_LIMIT).contains(&limit) {
+        return Err(ApiError::bad_request(format!(
+            "limit must be between 1 and {MAX_FLEET_EVENT_REPLAY_LIMIT}"
+        )));
+    }
+    Ok((after, limit))
+}
+
+fn map_fleet_replay_error(error: FleetEventReplayError) -> ApiError {
+    let message = error.to_string();
+    match error {
+        FleetEventReplayError::UnknownRun { .. } => ApiError::not_found(message),
+        FleetEventReplayError::CursorUnavailable { .. } => ApiError::conflict(message),
+        FleetEventReplayError::Storage { .. } => ApiError::internal(message),
+    }
+}
+
+fn fleet_sse_event(event: &FleetRuntimeEvent) -> SseEvent {
+    let data = serde_json::to_string(event).unwrap_or_else(|_| "{}".to_string());
+    SseEvent::default()
+        .id(event.cursor.clone())
+        .event(event.event.clone())
+        .data(data)
+}
+
 async fn list_fleet_runs(State(state): State<RuntimeApiState>) -> Result<Json<Value>, ApiError> {
     let manager = open_fleet_manager(&state)?;
     let ledger_state = manager
@@ -1107,6 +1624,20 @@ async fn interrupt_fleet_worker(
     })))
 }
 
+async fn stop_fleet_worker(
+    State(state): State<RuntimeApiState>,
+    Path(worker_id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let manager = open_fleet_manager(&state)?;
+    let inspection = manager.interrupt_worker(&worker_id).map_err(|err| {
+        ApiError::bad_request(format!("Failed to stop fleet worker '{worker_id}': {err}"))
+    })?;
+    Ok(Json(json!({
+        "action": "stop",
+        "worker": fleet_worker_json(&inspection),
+    })))
+}
+
 async fn restart_fleet_worker(
     State(state): State<RuntimeApiState>,
     Path(worker_id): Path<String>,
@@ -1171,7 +1702,7 @@ async fn stop_fleet_run(
 }
 
 fn open_fleet_manager(state: &RuntimeApiState) -> Result<FleetManager, ApiError> {
-    let (exec_config, session_model, route_config) = {
+    let (exec_config, fleet_config, session_model, route_config) = {
         let config = state.config.read();
         let exec_config = config
             .fleet
@@ -1180,12 +1711,18 @@ fn open_fleet_manager(state: &RuntimeApiState) -> Result<FleetManager, ApiError>
             .unwrap_or_default();
         // The active session route is the operator: workers without a
         // task/profile model pin inherit the model the user picked in /model.
-        (exec_config, config.default_model(), config.clone())
+        (
+            exec_config,
+            config.fleet_config(),
+            config.default_model(),
+            config.clone(),
+        )
     };
     FleetManager::open(&state.workspace)
         .map(|manager| {
             manager
                 .with_exec_config(exec_config)
+                .with_fleet_config(fleet_config)
                 .with_sub_agent_manager(state.sub_agent_manager.clone())
                 .with_session_model(session_model)
                 .with_route_config(route_config)
@@ -1217,7 +1754,14 @@ fn fleet_run_summary_json(
     Ok(json!({
         "id": run.id.0.clone(),
         "name": run.name.clone(),
+        "lifecycle_status": ledger_state
+            .run_status_overrides
+            .get(&run.id.0)
+            .unwrap_or(&run.status),
         "status": fleet_status_json(&status),
+        "target": run.target,
+        "workflow": run.workflow.clone(),
+        "roles": run.roles.clone(),
         "task_count": run.task_specs.len(),
         "worker_count": run.worker_specs.len(),
         "tasks": task_statuses,
@@ -3996,6 +4540,20 @@ impl ApiError {
     fn not_found(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
+            message: message.into(),
+        }
+    }
+
+    fn conflict(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            message: message.into(),
+        }
+    }
+
+    fn not_implemented(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::NOT_IMPLEMENTED,
             message: message.into(),
         }
     }

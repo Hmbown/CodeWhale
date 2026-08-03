@@ -756,6 +756,9 @@ mod tests {
                 id: run_id.clone(),
                 name: "scheduler smoke".to_string(),
                 status: FleetRunStatus::Queued,
+                target: None,
+                workflow: None,
+                roles: Vec::new(),
                 max_workers: Some(workers),
                 task_specs: tasks.clone(),
                 worker_specs: (1..=workers)

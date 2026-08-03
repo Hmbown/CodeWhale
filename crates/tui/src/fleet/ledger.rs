@@ -15,16 +15,41 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use codewhale_protocol::fleet::*;
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 const FLEET_DIR: &str = ".codewhale";
 const FLEET_LEDGER_FILE: &str = "fleet.jsonl";
 const FLEET_LEDGER_LOCK_FILE: &str = "fleet.lock";
 const PARTIAL_SUFFIX: &str = ".tmp";
 
+fn inline_secret_assignment_pattern() -> &'static regex::Regex {
+    static PATTERN: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    PATTERN.get_or_init(|| {
+        regex::Regex::new(
+            r#"(?i)(?:"|')?\b(api[_-]?key|apikey|secret|token|password|passwd|authorization|auth[_-]?token|access[_-]?key|client[_-]?secret|private[_-]?key)\b(?:"|')?\s*([:=])\s*(?:"[^"]*"|'[^']*'|[^\s,;}\]]+)"#,
+        )
+        .expect("Fleet inline secret redaction pattern must compile")
+    })
+}
+
+fn bearer_secret_pattern() -> &'static regex::Regex {
+    static PATTERN: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    PATTERN.get_or_init(|| {
+        regex::Regex::new(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}")
+            .expect("Fleet bearer secret redaction pattern must compile")
+    })
+}
+
 /// A single append-only record in the fleet ledger.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "record", rename_all = "snake_case")]
 pub enum FleetLedgerRecord {
+    /// Replay generation rotated whenever compaction replaces durable history.
+    /// Legacy ledgers omit this record and use the stable `legacy` generation
+    /// until their first compaction.
+    ReplayEpoch {
+        epoch: String,
+    },
     RunCreated {
         // Boxed: FleetRun is by far the largest payload; boxing keeps the enum
         // small (clippy::large_enum_variant). Serde treats Box<T> as T.
@@ -189,6 +214,17 @@ pub(crate) struct FleetEventSequenceOwner {
     run_id: FleetRunId,
     worker_id: String,
     task_id: String,
+}
+
+/// Precise failure boundary for managed-client replay.
+#[derive(Debug, thiserror::Error)]
+pub enum FleetEventReplayError {
+    #[error("fleet run {run_id} does not exist")]
+    UnknownRun { run_id: String },
+    #[error("fleet event cursor is no longer available for run {run_id}")]
+    CursorUnavailable { run_id: String },
+    #[error("failed to read fleet event history: {message}")]
+    Storage { message: String },
 }
 
 /// Append-only JSONL ledger for fleet runs.
@@ -1195,6 +1231,123 @@ impl FleetLedger {
         self.with_read_lock(|| self.rebuild_state_unlocked())
     }
 
+    /// Read one bounded page from the durable Fleet transition history.
+    ///
+    /// A cursor is the opaque digest of a ledger transition, not a global
+    /// worker sequence. That distinction matters because worker `seq` values
+    /// restart for each `(worker, task)` lifecycle. Recent cursors survive a
+    /// process restart and normal appends. Ledger compaction may intentionally
+    /// discard old history; in that case callers receive `CursorUnavailable`
+    /// and must reload the current run projection instead of silently skipping
+    /// an unknown gap.
+    pub fn replay_events(
+        &self,
+        run_id: &FleetRunId,
+        after: Option<&str>,
+        limit: usize,
+    ) -> std::result::Result<FleetEventReplay, FleetEventReplayError> {
+        let (run_exists, all_events, history_compacted) = self
+            .with_read_lock(|| self.scan_runtime_events_unlocked(run_id))
+            .map_err(|error| FleetEventReplayError::Storage {
+                message: error.to_string(),
+            })?;
+        if !run_exists {
+            return Err(FleetEventReplayError::UnknownRun {
+                run_id: run_id.0.clone(),
+            });
+        }
+
+        let limit = limit.clamp(1, 1_000);
+        let (events, has_more, history_truncated) = if let Some(after) = after {
+            let Some(position) = all_events.iter().position(|event| event.cursor == after) else {
+                return Err(FleetEventReplayError::CursorUnavailable {
+                    run_id: run_id.0.clone(),
+                });
+            };
+            let remaining = &all_events[position.saturating_add(1)..];
+            (
+                remaining.iter().take(limit).cloned().collect::<Vec<_>>(),
+                remaining.len() > limit,
+                false,
+            )
+        } else {
+            let start = all_events.len().saturating_sub(limit);
+            (
+                all_events[start..].to_vec(),
+                false,
+                start > 0 || history_compacted,
+            )
+        };
+        let next_cursor = events.last().map(|event| event.cursor.clone());
+        Ok(FleetEventReplay {
+            run_id: run_id.clone(),
+            events,
+            has_more,
+            history_truncated,
+            next_cursor,
+        })
+    }
+
+    fn scan_runtime_events_unlocked(
+        &self,
+        run_filter: &FleetRunId,
+    ) -> Result<(bool, Vec<FleetRuntimeEvent>, bool)> {
+        let mut state = FleetLedgerState::default();
+        let mut events = Vec::new();
+        let mut replay_epoch = "legacy".to_string();
+        let mut history_compacted = false;
+        if !self.ledger_path.exists() {
+            return Ok((false, events, history_compacted));
+        }
+        let file = std::fs::File::open(&self.ledger_path)
+            .with_context(|| format!("opening ledger {}", self.ledger_path.display()))?;
+        let reader = std::io::BufReader::new(file);
+        for (line_no, line) in reader.lines().enumerate() {
+            let line = match line {
+                Ok(line) => line,
+                Err(error) => {
+                    tracing::warn!(
+                        "fleet ledger line {} unreadable during event replay: {}",
+                        line_no + 1,
+                        error
+                    );
+                    continue;
+                }
+            };
+            if line.trim().is_empty() {
+                continue;
+            }
+            let record = match serde_json::from_str::<FleetLedgerRecord>(&line) {
+                Ok(record) => record,
+                Err(error) => {
+                    tracing::warn!(
+                        "fleet ledger line {} parse error during event replay (skipping): {}",
+                        line_no + 1,
+                        error
+                    );
+                    continue;
+                }
+            };
+            if let FleetLedgerRecord::ReplayEpoch { epoch } = &record {
+                replay_epoch.clone_from(epoch);
+                history_compacted = true;
+                apply_record(&mut state, record);
+                continue;
+            }
+            for event in runtime_events_from_record(&record, &state, line_no, &replay_epoch) {
+                if event.run_id == *run_filter {
+                    events.push(event);
+                }
+            }
+            apply_record(&mut state, record);
+        }
+        Ok((
+            state.runs.contains_key(&run_filter.0),
+            events,
+            history_compacted,
+        ))
+    }
+
     fn rebuild_state_unlocked(&self) -> Result<FleetLedgerState> {
         let mut state = FleetLedgerState::default();
         if !self.ledger_path.exists() {
@@ -1281,7 +1434,9 @@ impl FleetLedger {
             let state = self.rebuild_state_unlocked()?;
             after_snapshot();
             let tmp_path = self.ledger_path.with_extension(PARTIAL_SUFFIX);
-            let mut lines = Vec::new();
+            let mut lines = vec![serde_json::to_string(&FleetLedgerRecord::ReplayEpoch {
+                epoch: uuid::Uuid::new_v4().simple().to_string(),
+            })?];
             let mut terminal_lines = Vec::new();
             let mut lifecycle_lines = Vec::new();
             for run in state.runs.values() {
@@ -1456,6 +1611,348 @@ impl FleetLedger {
     }
 }
 
+fn runtime_events_from_record(
+    record: &FleetLedgerRecord,
+    state: &FleetLedgerState,
+    ledger_ordinal: usize,
+    replay_epoch: &str,
+) -> Vec<FleetRuntimeEvent> {
+    match record {
+        FleetLedgerRecord::ReplayEpoch { .. } => Vec::new(),
+        FleetLedgerRecord::RunCreated { run } => vec![FleetRuntimeEvent {
+            cursor: fleet_runtime_cursor(&run.id, "run_created", ledger_ordinal, replay_epoch),
+            event: "fleet.run.created".to_string(),
+            run_id: run.id.clone(),
+            worker_id: None,
+            task_id: None,
+            timestamp: Some(run.created_at.clone()),
+            worker_seq: None,
+            payload: json!({
+                "target": run.target,
+                "workflow": run.workflow,
+                "roles": run.roles,
+                "task_count": run.task_specs.len(),
+                "worker_count": run.worker_specs.len(),
+            }),
+        }],
+        FleetLedgerRecord::RunStatusChanged {
+            run_id,
+            status,
+            timestamp,
+        } => vec![FleetRuntimeEvent {
+            cursor: fleet_runtime_cursor(run_id, "run_status", ledger_ordinal, replay_epoch),
+            event: "fleet.run.status_changed".to_string(),
+            run_id: run_id.clone(),
+            worker_id: None,
+            task_id: None,
+            timestamp: Some(timestamp.clone()),
+            worker_seq: None,
+            payload: json!({ "status": status }),
+        }],
+        FleetLedgerRecord::TaskEnqueued { entry } => vec![FleetRuntimeEvent {
+            cursor: fleet_runtime_cursor(
+                &entry.run_id,
+                "task_enqueued",
+                ledger_ordinal,
+                replay_epoch,
+            ),
+            event: "fleet.task.enqueued".to_string(),
+            run_id: entry.run_id.clone(),
+            worker_id: None,
+            task_id: Some(entry.task_id.clone()),
+            timestamp: Some(entry.enqueued_at.clone()),
+            worker_seq: None,
+            payload: json!({
+                "priority": entry.priority,
+                "attempts": entry.attempts,
+            }),
+        }],
+        FleetLedgerRecord::TaskLeased {
+            run_id,
+            task_id,
+            worker_id,
+            leased_at,
+            lease_expires_at,
+        } => vec![FleetRuntimeEvent {
+            cursor: fleet_runtime_cursor(run_id, "task_leased", ledger_ordinal, replay_epoch),
+            event: "fleet.task.leased".to_string(),
+            run_id: run_id.clone(),
+            worker_id: Some(worker_id.clone()),
+            task_id: Some(task_id.clone()),
+            timestamp: Some(leased_at.clone()),
+            worker_seq: None,
+            payload: json!({ "lease_expires_at": lease_expires_at }),
+        }],
+        FleetLedgerRecord::TaskCompletedOrFailed {
+            run_id,
+            task_id,
+            worker_id,
+            timestamp,
+            status,
+        } => vec![FleetRuntimeEvent {
+            cursor: fleet_runtime_cursor(run_id, "task_terminal", ledger_ordinal, replay_epoch),
+            event: "fleet.task.terminal".to_string(),
+            run_id: run_id.clone(),
+            worker_id: (!worker_id.is_empty()).then(|| worker_id.clone()),
+            task_id: Some(task_id.clone()),
+            timestamp: Some(timestamp.clone()),
+            worker_seq: None,
+            payload: json!({ "status": status }),
+        }],
+        FleetLedgerRecord::TaskAttemptFinalized { event, receipt, .. } => vec![
+            runtime_worker_event("worker", ledger_ordinal, replay_epoch, event),
+            runtime_receipt_event("receipt", ledger_ordinal, replay_epoch, receipt),
+        ],
+        FleetLedgerRecord::EventAppended { event } => {
+            vec![runtime_worker_event(
+                "worker",
+                ledger_ordinal,
+                replay_epoch,
+                event,
+            )]
+        }
+        FleetLedgerRecord::Heartbeat {
+            worker_id,
+            timestamp,
+            cpu_percent,
+            memory_mb,
+        } => active_task_for_replay_worker(state, worker_id)
+            .map(|task| FleetRuntimeEvent {
+                cursor: fleet_runtime_cursor(
+                    &task.entry.run_id,
+                    "heartbeat",
+                    ledger_ordinal,
+                    replay_epoch,
+                ),
+                event: "fleet.worker.heartbeat".to_string(),
+                run_id: task.entry.run_id.clone(),
+                worker_id: Some(worker_id.clone()),
+                task_id: Some(task.entry.task_id.clone()),
+                timestamp: Some(timestamp.clone()),
+                worker_seq: None,
+                payload: json!({
+                    "cpu_percent": cpu_percent,
+                    "memory_mb": memory_mb,
+                }),
+            })
+            .into_iter()
+            .collect(),
+        FleetLedgerRecord::ReceiptRecorded { receipt } => {
+            vec![runtime_receipt_event(
+                "receipt",
+                ledger_ordinal,
+                replay_epoch,
+                receipt,
+            )]
+        }
+        FleetLedgerRecord::AlertSent {
+            run_id,
+            task_id,
+            timestamp,
+            worker_id,
+            attempt,
+            ..
+        } => vec![FleetRuntimeEvent {
+            cursor: fleet_runtime_cursor(run_id, "alert", ledger_ordinal, replay_epoch),
+            event: "fleet.alert.sent".to_string(),
+            run_id: run_id.clone(),
+            worker_id: worker_id.clone(),
+            task_id: Some(task_id.clone()),
+            timestamp: Some(timestamp.clone()),
+            worker_seq: None,
+            payload: json!({ "attempt": attempt }),
+        }],
+        FleetLedgerRecord::TaskLifecycleCheckpoint { .. }
+        | FleetLedgerRecord::EventSequenceCheckpoint { .. } => Vec::new(),
+    }
+}
+
+fn active_task_for_replay_worker<'a>(
+    state: &'a FleetLedgerState,
+    worker_id: &str,
+) -> Option<&'a FleetTaskState> {
+    state.tasks.values().find(|task| {
+        task.status == FleetTaskLedgerStatus::Leased && task.leased_to.as_deref() == Some(worker_id)
+    })
+}
+
+fn runtime_worker_event(
+    cursor_kind: &str,
+    ledger_ordinal: usize,
+    replay_epoch: &str,
+    event: &FleetWorkerEvent,
+) -> FleetRuntimeEvent {
+    let (event_name, payload) = privacy_bounded_worker_payload(&event.payload);
+    FleetRuntimeEvent {
+        cursor: fleet_runtime_cursor(&event.run_id, cursor_kind, ledger_ordinal, replay_epoch),
+        event: event_name,
+        run_id: event.run_id.clone(),
+        worker_id: Some(event.worker_id.clone()),
+        task_id: Some(event.task_id.clone()),
+        timestamp: Some(event.timestamp.clone()),
+        worker_seq: Some(event.seq),
+        payload,
+    }
+}
+
+fn runtime_receipt_event(
+    cursor_kind: &str,
+    ledger_ordinal: usize,
+    replay_epoch: &str,
+    receipt: &FleetReceipt,
+) -> FleetRuntimeEvent {
+    let score = receipt.score.as_ref().map(|score| {
+        json!({
+            "value": score.value,
+            "max": score.max,
+        })
+    });
+    FleetRuntimeEvent {
+        cursor: fleet_runtime_cursor(&receipt.run_id, cursor_kind, ledger_ordinal, replay_epoch),
+        event: "fleet.task.receipt_recorded".to_string(),
+        run_id: receipt.run_id.clone(),
+        worker_id: Some(receipt.worker_id.clone()),
+        task_id: Some(receipt.task_id.clone()),
+        timestamp: Some(receipt.completed_at.clone()),
+        worker_seq: receipt.terminal_seq,
+        payload: json!({
+            "attempt": receipt.attempt,
+            "result": receipt.result,
+            "failure_kind": receipt.failure_kind,
+            "score": score,
+            "artifact_kinds": receipt.artifacts.iter().map(|artifact| &artifact.kind).collect::<Vec<_>>(),
+        }),
+    }
+}
+
+fn privacy_bounded_worker_payload(payload: &FleetWorkerEventPayload) -> (String, Value) {
+    let state = match payload {
+        FleetWorkerEventPayload::Queued => "queued",
+        FleetWorkerEventPayload::Leased { .. } => "leased",
+        FleetWorkerEventPayload::Starting => "starting",
+        FleetWorkerEventPayload::Running => "running",
+        FleetWorkerEventPayload::ModelWait { .. } => "model_wait",
+        FleetWorkerEventPayload::RunningTool { .. } => "running_tool",
+        FleetWorkerEventPayload::WorkflowEvent { .. } => "workflow_event",
+        FleetWorkerEventPayload::Heartbeat { .. } => "heartbeat",
+        FleetWorkerEventPayload::Artifact(_) => "artifact",
+        FleetWorkerEventPayload::Completed { .. } => "completed",
+        FleetWorkerEventPayload::Failed { .. } => "failed",
+        FleetWorkerEventPayload::Cancelled { .. } => "cancelled",
+        FleetWorkerEventPayload::Interrupted { .. } => "interrupted",
+        FleetWorkerEventPayload::Stale { .. } => "stale",
+        FleetWorkerEventPayload::Restarted { .. } => "restarted",
+        FleetWorkerEventPayload::Escalated { .. } => "escalated",
+    };
+    let value = match payload {
+        FleetWorkerEventPayload::Leased { lease_expires_at } => {
+            json!({ "state": state, "lease_expires_at": lease_expires_at })
+        }
+        FleetWorkerEventPayload::ModelWait { model } => {
+            json!({ "state": state, "model": model })
+        }
+        FleetWorkerEventPayload::RunningTool { tool, .. } => {
+            json!({ "state": state, "tool": tool })
+        }
+        FleetWorkerEventPayload::WorkflowEvent {
+            workflow_run_id,
+            event,
+        } => json!({
+            "state": state,
+            "workflow_run_id": workflow_run_id,
+            "event_type": event.get("type").and_then(Value::as_str),
+        }),
+        FleetWorkerEventPayload::Heartbeat {
+            cpu_percent,
+            memory_mb,
+        } => json!({
+            "state": state,
+            "cpu_percent": cpu_percent,
+            "memory_mb": memory_mb,
+        }),
+        FleetWorkerEventPayload::Artifact(artifact) => json!({
+            "state": state,
+            "kind": artifact.kind,
+            "mime_type": artifact.mime_type,
+            "size_bytes": artifact.size_bytes,
+        }),
+        FleetWorkerEventPayload::Completed { exit_code, .. } => {
+            json!({ "state": state, "exit_code": exit_code })
+        }
+        FleetWorkerEventPayload::Failed {
+            reason,
+            recoverable,
+        } => json!({
+            "state": state,
+            "reason": redact_fleet_event_text(reason),
+            "recoverable": recoverable,
+        }),
+        FleetWorkerEventPayload::Stale { last_heartbeat_at } => {
+            json!({ "state": state, "last_heartbeat_at": last_heartbeat_at })
+        }
+        FleetWorkerEventPayload::Restarted { restart_count } => {
+            json!({ "state": state, "restart_count": restart_count })
+        }
+        FleetWorkerEventPayload::Escalated { channel, .. } => {
+            json!({ "state": state, "channel": channel })
+        }
+        FleetWorkerEventPayload::Queued
+        | FleetWorkerEventPayload::Starting
+        | FleetWorkerEventPayload::Running
+        | FleetWorkerEventPayload::Cancelled { .. }
+        | FleetWorkerEventPayload::Interrupted { .. } => json!({ "state": state }),
+    };
+    (format!("fleet.worker.{state}"), value)
+}
+
+fn redact_fleet_event_text(value: &str) -> String {
+    // The shared redactor deliberately treats one whole line as an assignment.
+    // Failure diagnostics often prefix an inline assignment (`provider failed:
+    // api_key=...`), so make a second token-level pass before exposing the
+    // bounded preview. Whitespace is normalized because this is a status
+    // summary, not the forensic worker log.
+    let redacted = bearer_secret_pattern()
+        .replace_all(value, "Bearer [redacted]")
+        .into_owned();
+    let redacted = inline_secret_assignment_pattern()
+        .replace_all(&redacted, "$1$2[redacted]")
+        .into_owned();
+    let redacted = codewhale_config::persistence::redact_secrets(&redacted);
+    let redacted = redacted
+        .split_whitespace()
+        .map(codewhale_config::persistence::redact_secrets)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut chars = redacted.chars();
+    let preview = chars.by_ref().take(1_000).collect::<String>();
+    if chars.next().is_some() {
+        format!("{preview}...")
+    } else {
+        preview
+    }
+}
+
+fn fleet_runtime_cursor(
+    run_id: &FleetRunId,
+    kind: &str,
+    ledger_ordinal: usize,
+    replay_epoch: &str,
+) -> String {
+    // Cursor material is deliberately metadata-only: hashing a raw ledger
+    // record would let a caller correlate or guess secret-bearing diagnostic
+    // text. The generation rotates on compaction, while the physical JSONL
+    // ordinal remains stable across ordinary appends and process restarts.
+    let material = format!(
+        "fleet-event-v1\0{replay_epoch}\0{}\0{ledger_ordinal}\0{kind}",
+        run_id.0
+    );
+    format!(
+        "fev1_{}_{}",
+        crate::hashing::sha256_hex(material.as_bytes()),
+        kind
+    )
+}
+
 fn task_key(run_id: &str, task_id: &str) -> String {
     format!("{run_id}:{task_id}")
 }
@@ -1545,6 +2042,7 @@ fn artifact_event_key(event: &FleetWorkerEvent, artifact: &FleetArtifactRef) -> 
 
 fn apply_record(state: &mut FleetLedgerState, record: FleetLedgerRecord) {
     match record {
+        FleetLedgerRecord::ReplayEpoch { .. } => {}
         FleetLedgerRecord::RunCreated { run } => {
             state.runs.insert(run.id.0.clone(), *run);
         }
@@ -1910,6 +2408,9 @@ mod tests {
             id: FleetRunId::from(id),
             name: "smoke".to_string(),
             status: FleetRunStatus::Running,
+            target: None,
+            workflow: None,
+            roles: Vec::new(),
             max_workers: None,
             task_specs: vec![],
             worker_specs: vec![],
@@ -1947,6 +2448,155 @@ mod tests {
         assert_eq!(
             state.run_status_overrides["run-1"],
             FleetRunStatus::Completed
+        );
+    }
+
+    #[test]
+    fn fleet_event_replay_is_durable_cursor_bounded_and_privacy_safe() {
+        let tmp = TempDir::new().unwrap();
+        let ledger = FleetLedger::open(tmp.path()).unwrap();
+        let mut run = sample_run("managed-run");
+        run.target = Some(FleetRuntimeTarget::ThisComputer);
+        run.workflow = Some(FleetWorkflowDescriptor {
+            id: "release-check".to_string(),
+            kind: FleetWorkflowKind::Parallel,
+        });
+        run.roles = vec!["reviewer".to_string()];
+        ledger.create_run(&run).unwrap();
+        ledger
+            .update_run_status(&run.id, FleetRunStatus::Paused, "2026-06-12T17:00:10Z")
+            .unwrap();
+        ledger
+            .update_run_status(&run.id, FleetRunStatus::Running, "2026-06-12T17:00:20Z")
+            .unwrap();
+        ledger
+            .enqueue(sample_entry("managed-run", "task-a"))
+            .unwrap();
+        ledger
+            .append_event(FleetWorkerEvent {
+                seq: 1,
+                run_id: run.id.clone(),
+                worker_id: "worker-1".to_string(),
+                task_id: "task-a".to_string(),
+                timestamp: "2026-06-12T17:01:00Z".to_string(),
+                payload: FleetWorkerEventPayload::Artifact(FleetArtifactRef {
+                    kind: FleetArtifactKind::Report,
+                    path: PathBuf::from(".codewhale/private/full-report.md"),
+                    checksum: Some("sha256:private-checksum".to_string()),
+                    mime_type: Some("text/markdown".to_string()),
+                    size_bytes: Some(42),
+                }),
+                extra: BTreeMap::new(),
+            })
+            .unwrap();
+        ledger
+            .record_receipt(FleetReceipt {
+                run_id: run.id.clone(),
+                task_id: "task-a".to_string(),
+                worker_id: "worker-1".to_string(),
+                attempt: Some(1),
+                terminal_seq: Some(2),
+                completed_at: "2026-06-12T17:02:00Z".to_string(),
+                result: FleetTaskResult::Fail,
+                failure_kind: Some(FleetTaskFailureKind::Task),
+                artifacts: vec![FleetArtifactRef {
+                    kind: FleetArtifactKind::Report,
+                    path: PathBuf::from(".codewhale/private/full-report.md"),
+                    checksum: Some("sha256:private-checksum".to_string()),
+                    mime_type: Some("text/markdown".to_string()),
+                    size_bytes: Some(42),
+                }],
+                score: Some(FleetScore {
+                    value: 0.0,
+                    max: Some(1.0),
+                    notes: Some("verifier note contained super-secret".to_string()),
+                }),
+                resolved_route: None,
+                effective_permissions: None,
+            })
+            .unwrap();
+        ledger
+            .append_event(FleetWorkerEvent {
+                seq: 2,
+                run_id: run.id.clone(),
+                worker_id: "worker-1".to_string(),
+                task_id: "task-a".to_string(),
+                timestamp: "2026-06-12T17:02:00Z".to_string(),
+                payload: FleetWorkerEventPayload::Failed {
+                    // Low-entropy fixtures on purpose: realistic tokens trip
+                    // push-time secret scanners (GitGuardian flagged the originals).
+                    reason: "provider failed: api_key = super-secret; bearer sk-aaaaaaaaaaaaaaaa; authorization: Bearer aaaaaaaaaaaaaa"
+                        .to_string(),
+                    recoverable: true,
+                },
+                extra: BTreeMap::new(),
+            })
+            .unwrap();
+
+        let page = ledger.replay_events(&run.id, None, 100).unwrap();
+        assert_eq!(page.run_id, run.id);
+        assert!(!page.history_truncated);
+        assert!(
+            page.events
+                .iter()
+                .any(|event| event.event == "fleet.run.created")
+        );
+        assert!(
+            page.events
+                .iter()
+                .any(|event| event.event == "fleet.worker.artifact")
+        );
+        assert!(
+            page.events
+                .iter()
+                .any(|event| event.event == "fleet.worker.failed")
+        );
+        let encoded = serde_json::to_string(&page).unwrap();
+        assert!(!encoded.contains("super-secret"));
+        assert!(!encoded.contains("sk-aaaaaaaaaaaaaaaa"));
+        assert!(!encoded.contains("aaaaaaaaaaaaaa\""));
+        assert!(!encoded.contains("private/full-report.md"));
+        assert!(!encoded.contains("private-checksum"));
+
+        let first_cursor = page.events[0].cursor.clone();
+        drop(ledger);
+        let reopened = FleetLedger::open(tmp.path()).unwrap();
+        let after_restart = reopened
+            .replay_events(&run.id, Some(&first_cursor), 100)
+            .unwrap();
+        assert_eq!(after_restart.events, page.events[1..]);
+        assert!(after_restart.next_cursor.is_some());
+
+        let tail = reopened.replay_events(&run.id, None, 2).unwrap();
+        assert_eq!(tail.events.len(), 2);
+        assert!(tail.history_truncated);
+        assert!(!tail.has_more);
+
+        assert!(matches!(
+            reopened.replay_events(&run.id, Some("fev1_missing_worker"), 100),
+            Err(FleetEventReplayError::CursorUnavailable { .. })
+        ));
+
+        reopened.compact().unwrap();
+        assert!(
+            matches!(
+                reopened.replay_events(&run.id, Some(&first_cursor), 100),
+                Err(FleetEventReplayError::CursorUnavailable { .. })
+            ),
+            "even a retained RunCreated transition must rotate its cursor when compaction deletes intervening history"
+        );
+        let compacted = reopened.replay_events(&run.id, None, 100).unwrap();
+        assert!(compacted.history_truncated);
+        assert!(
+            !compacted.events.is_empty(),
+            "current projection remains replayable after compaction"
+        );
+        assert!(
+            compacted
+                .events
+                .iter()
+                .all(|event| !page.events.iter().any(|old| old.cursor == event.cursor)),
+            "a compaction epoch must rotate every retained transition cursor"
         );
     }
 

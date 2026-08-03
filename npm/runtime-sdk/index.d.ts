@@ -8,6 +8,14 @@ export type FleetRunStatus =
   | "failed"
   | "cancelled";
 
+export type FleetRuntimeTarget = "this_computer" | "another_computer" | "cloud";
+export type FleetWorkflowKind = "parallel";
+
+export interface FleetWorkflowDescriptor {
+  id: string;
+  kind: FleetWorkflowKind;
+}
+
 export type FleetWorkerStatus =
   | "unknown"
   | "online"
@@ -53,7 +61,11 @@ export interface FleetTaskStatusSummary {
 export interface FleetRunSummary {
   id: string;
   name: string;
+  lifecycle_status: FleetRunStatus;
   status: FleetStatusSummary;
+  target?: FleetRuntimeTarget | null;
+  workflow?: FleetWorkflowDescriptor | null;
+  roles: string[];
   task_count: number;
   worker_count: number;
   tasks: FleetTaskStatusSummary[];
@@ -94,7 +106,11 @@ export interface FleetTaskSpec {
 }
 
 export interface FleetTaskWorkerProfile {
+  agent_profile?: string | null;
   role?: string | null;
+  loadout?: string | null;
+  model_class?: string | null;
+  model?: string | null;
   tool_profile?: string | null;
   tools?: string[];
   capabilities?: string[];
@@ -191,7 +207,7 @@ export interface FleetWorkersResponse {
 }
 
 export interface FleetWorkerActionResponse {
-  action: "interrupt" | "restart";
+  action: "interrupt" | "restart" | "stop";
   worker: FleetWorkerInspection;
 }
 
@@ -202,17 +218,82 @@ export interface StopFleetRunResponse {
   status: FleetStatusSummary;
 }
 
-export interface RuntimeClientOptions {
-  baseUrl?: string;
-  token?: string;
-  fetch?: typeof fetch;
+export interface ManagedFleetRole {
+  name: string;
+  agent_profile?: string | null;
+}
+
+export interface ManagedFleetWorkflow extends FleetWorkflowDescriptor {
+  tasks: FleetTaskSpec[];
 }
 
 export interface FleetRunCreateSpec {
   name?: string;
-  task_specs?: FleetTaskSpec[];
-  worker_specs?: FleetWorkerSpec[];
+  target: FleetRuntimeTarget;
+  roles: ManagedFleetRole[];
+  workflow: ManagedFleetWorkflow;
   labels?: Record<string, string>;
+  max_workers?: number;
+}
+
+export interface CreateFleetRunResponse {
+  execution: "awaiting_start";
+  run: FleetRunDetail;
+  warnings: string[];
+}
+
+export interface StartFleetRunResponse {
+  action: "start";
+  execution: "scheduled";
+  run_id: string;
+  target: "this_computer";
+  /** Leasing begins only after the scheduled driver owns the run. */
+  leased: 0;
+  queued: number;
+  worker_ids: string[];
+}
+
+export interface FleetRuntimeEvent {
+  cursor: string;
+  event: string;
+  run_id: string;
+  worker_id?: string | null;
+  task_id?: string | null;
+  timestamp?: string | null;
+  worker_seq?: number | null;
+  payload: Record<string, unknown>;
+}
+
+export interface FleetStreamControlEvent {
+  event:
+    | "fleet.replay.truncated"
+    | "fleet.replay.cursor_unavailable"
+    | "fleet.stream.error";
+  run_id?: string;
+  cursor?: never;
+  reload_projection?: boolean;
+  retryable?: boolean;
+}
+
+export type FleetStreamEvent = FleetRuntimeEvent | FleetStreamControlEvent;
+
+export interface FleetEventReplay {
+  run_id: string;
+  events: FleetRuntimeEvent[];
+  has_more: boolean;
+  history_truncated: boolean;
+  next_cursor?: string | null;
+}
+
+export interface FleetEventOptions {
+  after?: string;
+  limit?: number;
+}
+
+export interface RuntimeClientOptions {
+  baseUrl?: string;
+  token?: string;
+  fetch?: typeof fetch;
 }
 
 export class RuntimeApiError extends Error {
@@ -228,18 +309,21 @@ export class RuntimeCapabilityError extends RuntimeApiError {
 
 export class CodeWhaleRuntimeClient {
   constructor(options?: RuntimeClientOptions);
-  createFleetRun(spec: FleetRunCreateSpec | Record<string, unknown>): Promise<unknown>;
+  createFleetRun(spec: FleetRunCreateSpec): Promise<CreateFleetRunResponse>;
+  startFleetRun(runId: FleetRunId): Promise<StartFleetRunResponse>;
+  replayFleetEvents(runId: FleetRunId, options?: FleetEventOptions): Promise<FleetEventReplay>;
   listFleetRuns(): Promise<FleetRunsResponse>;
   getFleetRun(runId: FleetRunId): Promise<FleetRunDetail>;
   listFleetWorkers(runId: FleetRunId): Promise<FleetWorkersResponse>;
   getFleetWorker(workerId: string): Promise<FleetWorkerInspection>;
   interruptWorker(workerId: string): Promise<FleetWorkerActionResponse>;
+  stopWorker(workerId: string): Promise<FleetWorkerActionResponse>;
   restartWorker(workerId: string): Promise<FleetWorkerActionResponse>;
   stopFleetRun(runId: FleetRunId): Promise<StopFleetRunResponse>;
   fleetEvents(
     runId: FleetRunId,
-    options?: { path?: string },
-  ): AsyncIterable<FleetWorkerEvent>;
+    options?: FleetEventOptions & { path?: string },
+  ): AsyncIterable<FleetStreamEvent>;
 }
 
 export function createRuntimeClient(options?: RuntimeClientOptions): CodeWhaleRuntimeClient;

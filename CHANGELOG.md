@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.9.4] - 2026-08-01
+## [0.9.4] - Unreleased candidate
 
 This is the Codewhale v0.9.4 source candidate. It is not a published release
 until the matching tag, packages, checksums, and release assets exist.
