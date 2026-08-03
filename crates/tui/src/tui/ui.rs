@@ -9488,11 +9488,20 @@ fn queued_message_content_for_app(
     // Pass the process CWD explicitly so the resolver's two-pass logic can
     // honor the user's launch directory when it differs from `--workspace`
     // (issue #101 — file mentions silently routing to the wrong root).
+    // The completion index is the composer's already-built fuzzy scan: a
+    // bounded fallback for exact misses, with no submit-time tree walk (#4365).
+    let completion_index = app.composer.mention_discovery.fuzzy_candidates(
+        &app.workspace,
+        &app.composer.mention_cwd,
+        app.mention_walk_depth,
+        app.workspace_follow_symlinks,
+    );
     let user_request = crate::tui::file_mention::user_request_with_file_mentions_cached(
         &message.display,
         &app.workspace,
         cwd,
         git_cache,
+        completion_index,
     );
     if let Some(skill_instruction) = message.skill_instruction.as_ref() {
         Ok(format!(
@@ -10078,11 +10087,18 @@ fn prepare_user_dispatch(
     // otherwise each shell out for `@git`/`@diff`, making git compute a large
     // working-tree diff twice to attach it once (#4067 review follow-up).
     let mut git_cache = crate::tui::git_mention::GitMentionCache::default();
+    let completion_index = app.composer.mention_discovery.fuzzy_candidates(
+        &app.workspace,
+        &app.composer.mention_cwd,
+        app.mention_walk_depth,
+        app.workspace_follow_symlinks,
+    );
     let references = crate::tui::file_mention::context_references_from_input_cached(
         &message.display,
         &app.workspace,
         cwd.clone(),
         &mut git_cache,
+        completion_index,
     );
     let mut content = queued_message_content_for_app(app, &message, cwd, &mut git_cache)?;
     if let Some(note) = paused_dispatch.note() {
@@ -13275,11 +13291,18 @@ async fn steer_user_message(
     let cwd = std::env::current_dir().ok();
     // Same single-submit cache as the other send path — see #4067 follow-up.
     let mut git_cache = crate::tui::git_mention::GitMentionCache::default();
+    let completion_index = app.composer.mention_discovery.fuzzy_candidates(
+        &app.workspace,
+        &app.composer.mention_cwd,
+        app.mention_walk_depth,
+        app.workspace_follow_symlinks,
+    );
     let references = crate::tui::file_mention::context_references_from_input_cached(
         &message.display,
         &app.workspace,
         cwd.clone(),
         &mut git_cache,
+        completion_index,
     );
     let mut content = queued_message_content_for_app(app, &message, cwd, &mut git_cache)?;
     if let Some(note) = paused_note.as_deref() {

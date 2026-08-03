@@ -2818,7 +2818,7 @@ impl ToolSpec for BashTool {
     }
 
     fn description(&self) -> &'static str {
-        "Execute a shell command in the workspace. Action \"run\" (default) executes a command; \"wait\" polls a background task; \"interact\" sends stdin to a background task; \"cancel\" kills a background task. Foreground mode is for bounded commands; use background=true for work expected to take >5 seconds."
+        "Execute a shell command in the workspace. Action \"run\" (default) executes a command; \"wait\" polls a background task; \"interact\" sends stdin to a background task; \"cancel\" kills a background task. Foreground mode is for bounded commands; use background=true for work expected to take >5 seconds. Commands run via the user's login shell ($SHELL); when that shell is zsh, a bare word starting with `=` undergoes `=command` PATH expansion (e.g. `echo ===` fails) — quote such arguments, e.g. `echo '==='`."
     }
 
     fn input_schema(&self) -> serde_json::Value {

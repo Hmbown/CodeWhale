@@ -340,6 +340,27 @@ impl MentionDiscovery {
             .map(|cached| cached.entries.as_slice())
     }
 
+    /// Cached fuzzy-scan candidates for send-time `@`-mention fallback
+    /// resolution. Returns `Some` only when the cache holds a completed fuzzy
+    /// scan for exactly this workspace/cwd/depth/symlink configuration —
+    /// browser-mode caches cover a single directory and are not a usable
+    /// resolution index.
+    pub(crate) fn fuzzy_candidates(
+        &self,
+        workspace: &std::path::Path,
+        cwd: &Option<PathBuf>,
+        walk_depth: usize,
+        follow_links: bool,
+    ) -> Option<&[String]> {
+        let key = MentionDiscoveryKey::fuzzy(
+            workspace.to_path_buf(),
+            cwd.clone(),
+            walk_depth,
+            follow_links,
+        );
+        self.cached_entries(&key)
+    }
+
     /// Cancel the active generation while keeping a same-key cache available
     /// for the next mention.
     pub(crate) fn cancel(&mut self) {

@@ -475,10 +475,14 @@ pub fn longest_common_prefix<'a>(values: &[&'a str]) -> &'a str {
 /// anchor (their shell's pwd) wins when it diverges from `--workspace`.
 /// Pass `None` to disable the cwd pass entirely (workspace-only).
 ///
-/// Resolution here is deliberately exact. Fuzzy discovery belongs in the
-/// background completion popup; silently resolving a manually typed basename
-/// would require a tree walk on submit and could attach an arbitrary same-name
-/// file from a nested directory.
+/// Resolution here never walks the tree on submit (#4365). A miss on the
+/// exact two-pass lookup falls back to a bounded, unique-match-only search of
+/// the composer's already-built background completion index
+/// (`completion_index`, when the caller has one cached); the winning
+/// candidate must still exist on disk. Ambiguous, stale, or absent matches
+/// stay an honest `<missing-file>` that names only what the user typed —
+/// never a fabricated workspace-root path.
+///
 /// Convenience wrapper that allocates a throwaway cache. Test-only: the real
 /// send paths share one cache across the references and payload passes.
 #[cfg(test)]
@@ -487,7 +491,13 @@ pub fn user_request_with_file_mentions(
     workspace: &Path,
     cwd: Option<PathBuf>,
 ) -> String {
-    user_request_with_file_mentions_cached(input, workspace, cwd, &mut GitMentionCache::default())
+    user_request_with_file_mentions_cached(
+        input,
+        workspace,
+        cwd,
+        &mut GitMentionCache::default(),
+        None,
+    )
 }
 
 pub fn user_request_with_file_mentions_cached(
@@ -495,8 +505,11 @@ pub fn user_request_with_file_mentions_cached(
     workspace: &Path,
     cwd: Option<PathBuf>,
     git_cache: &mut GitMentionCache,
+    completion_index: Option<&[String]>,
 ) -> String {
-    let Some(context) = local_context_from_file_mentions(input, workspace, cwd, git_cache) else {
+    let Some(context) =
+        local_context_from_file_mentions(input, workspace, cwd, git_cache, completion_index)
+    else {
         return input.to_string();
     };
     format!("{input}\n\n---\n\nLocal context from @mentions:\n{context}")
@@ -563,7 +576,13 @@ pub fn context_references_from_input(
     workspace: &Path,
     cwd: Option<PathBuf>,
 ) -> Vec<ContextReference> {
-    context_references_from_input_cached(input, workspace, cwd, &mut GitMentionCache::default())
+    context_references_from_input_cached(
+        input,
+        workspace,
+        cwd,
+        &mut GitMentionCache::default(),
+        None,
+    )
 }
 
 #[must_use]
@@ -572,6 +591,7 @@ pub fn context_references_from_input_cached(
     workspace: &Path,
     cwd: Option<PathBuf>,
     git_cache: &mut GitMentionCache,
+    completion_index: Option<&[String]>,
 ) -> Vec<ContextReference> {
     let mut references = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -611,16 +631,8 @@ pub fn context_references_from_input_cached(
             continue;
         }
 
-        let (path, display_path, exists) = match ws.resolve_exact(&mention) {
-            Ok(path) => {
-                let display = path.display().to_string();
-                (path, display, true)
-            }
-            Err(path) => {
-                let display = path.display().to_string();
-                (path, display, false)
-            }
-        };
+        let (path, display_path, exists) =
+            resolve_mention_for_send(&ws, &mention, completion_index);
         let reference = context_reference_for_mention(&mention, &path, &display_path, exists);
         if !seen.insert(format!(
             "{:?}:{:?}:{}:{}",
@@ -669,7 +681,9 @@ fn context_reference_for_mention(
             source: ContextReferenceSource::AtMention,
             badge: "missing".to_string(),
             label: raw.to_string(),
-            target: display_path.to_string(),
+            // No resolved target exists; naming the workspace-root guess here
+            // would present a path we already know is wrong.
+            target: raw.to_string(),
             included: false,
             expanded: false,
             detail: Some("not found".to_string()),
@@ -782,6 +796,7 @@ fn local_context_from_file_mentions(
     workspace: &Path,
     cwd: Option<PathBuf>,
     git_cache: &mut GitMentionCache,
+    completion_index: Option<&[String]>,
 ) -> Option<String> {
     let mentions = extract_file_mentions(input);
     if mentions.is_empty() {
@@ -808,16 +823,8 @@ fn local_context_from_file_mentions(
         // skip `canonicalize()` here — it's per-mention I/O on the
         // message-send hot path. Accept the rare symlink-aliasing dedup
         // miss as the cost of avoiding a syscall (Gemini code-review).
-        let (path, display_path, exists) = match ws.resolve_exact(&mention) {
-            Ok(p) => {
-                let d = p.display().to_string();
-                (p, d, true)
-            }
-            Err(p) => {
-                let d = p.display().to_string();
-                (p, d, false)
-            }
-        };
+        let (path, display_path, exists) =
+            resolve_mention_for_send(&ws, &mention, completion_index);
         tracing::debug!(
             target: "codewhale_tui::file_mention",
             raw_typed = %mention,
@@ -831,16 +838,24 @@ fn local_context_from_file_mentions(
         // Gate every block — including <missing-file> — through the dedup
         // set so a user typing the same non-existent file twice doesn't
         // waste tokens on duplicate missing-file blocks (Devin code-review).
-        if !seen.insert(display_path.clone()) {
+        // Missing mentions dedup on the typed token: there is no resolved
+        // path to key on, and the workspace-root guess must not become one.
+        let dedup_key = if exists {
+            display_path.clone()
+        } else {
+            format!("missing:{mention}")
+        };
+        if !seen.insert(dedup_key) {
             continue;
         }
 
         if exists {
             blocks.push(render_file_mention_context(&mention, &path, &display_path));
         } else {
-            blocks.push(format!(
-                "<missing-file mention=\"@{mention}\" path=\"{display_path}\" />"
-            ));
+            // Honest miss: name only what the user typed. Emitting the
+            // workspace-root join as `path=` presented a non-existent file
+            // as if it were the resolved target.
+            blocks.push(format!("<missing-file mention=\"@{mention}\" />"));
         }
     }
 
@@ -849,6 +864,99 @@ fn local_context_from_file_mentions(
     } else {
         Some(blocks.join("\n\n"))
     }
+}
+
+/// Send-time mention resolution: exact two-pass lookup first (workspace root,
+/// then launch cwd), then a bounded fallback against the composer's cached
+/// background completion index. Returns the path, its display form, and
+/// whether it exists. On a miss the returned path is the workspace-root guess
+/// — callers must not present it as resolved when `exists` is false.
+fn resolve_mention_for_send(
+    ws: &Workspace,
+    mention: &str,
+    completion_index: Option<&[String]>,
+) -> (PathBuf, String, bool) {
+    let guess = match ws.resolve_exact(mention) {
+        Ok(path) => {
+            let display = path.display().to_string();
+            return (path, display, true);
+        }
+        Err(guess) => guess,
+    };
+    if let Some(resolved) = completion_index
+        .and_then(|candidates| resolve_mention_in_completion_index(mention, candidates, ws))
+    {
+        let display = resolved.display().to_string();
+        return (resolved, display, true);
+    }
+    let display = guess.display().to_string();
+    (guess, display, false)
+}
+
+/// Bounded send-time fallback for `@`-mention misses.
+///
+/// #4365 keeps filesystem walks off the submit path, so instead of walking we
+/// match the typed token against the composer's already-built background
+/// completion index (workspace- or cwd-relative display strings). A candidate
+/// wins only when it is the *unique* path-suffix or basename match and the
+/// winning path still resolves on disk — the index may be a few seconds
+/// stale. Anything else (no hit, ambiguous hit, stale hit) returns `None` so
+/// the caller emits an honest `<missing-file>` instead of attaching an
+/// arbitrary same-name file from a nested directory.
+fn resolve_mention_in_completion_index(
+    mention: &str,
+    candidates: &[String],
+    ws: &Workspace,
+) -> Option<PathBuf> {
+    // Absolute and home-anchored mentions name an exact location; a basename
+    // lookalike elsewhere in the tree would be a different file, not a fix-up.
+    if mention.starts_with('~') || Path::new(mention).is_absolute() {
+        return None;
+    }
+    let needle = mention.replace('\\', "/");
+    let needle = needle.trim_matches('/');
+    if needle.is_empty() {
+        return None;
+    }
+    let needle_lower = needle.to_lowercase();
+    let basename_lower = needle_lower.rsplit('/').next()?;
+
+    let normalized = |candidate: &str| candidate.replace('\\', "/");
+    let suffix_match = |candidate: &str| {
+        let cand = normalized(candidate);
+        let cand = cand.trim_end_matches('/').to_lowercase();
+        !cand.is_empty() && (cand == needle_lower || cand.ends_with(&format!("/{needle_lower}")))
+    };
+    let basename_match = |candidate: &str| {
+        let cand = normalized(candidate);
+        let cand = cand.trim_end_matches('/').to_lowercase();
+        !cand.is_empty() && cand.rsplit('/').next() == Some(basename_lower)
+    };
+
+    // Prefer path-suffix hits: they carry the user's typed directory context.
+    // Fall back to basename hits only when no suffix hit exists. Either way,
+    // more than one distinct winner is ambiguous and resolves nothing.
+    let predicates: [&dyn Fn(&str) -> bool; 2] = [&suffix_match, &basename_match];
+    for predicate in predicates {
+        let mut winner: Option<&str> = None;
+        for candidate in candidates {
+            if !predicate(candidate) {
+                continue;
+            }
+            match winner {
+                None => winner = Some(candidate.as_str()),
+                Some(existing) if existing == candidate.as_str() => {}
+                Some(_) => return None,
+            }
+        }
+        if let Some(winner) = winner {
+            // The index can be stale; only a path that still resolves exists.
+            // Display strings are workspace- or cwd-relative, which
+            // `resolve_exact` re-anchors exactly like a typed path.
+            return ws.resolve_exact(winner).ok();
+        }
+    }
+    None
 }
 
 fn extract_file_mentions(input: &str) -> Vec<String> {
@@ -1206,6 +1314,9 @@ mod tests {
         std::fs::create_dir_all(&nested).expect("mkdir");
         std::fs::write(nested.join("guide.md"), "nested secret").expect("write");
 
+        // With no completion index on hand there is no send-time fallback:
+        // the miss stays an explicit <missing-file> rather than attaching an
+        // arbitrary same-name file from a nested directory (#4365).
         let content = user_request_with_file_mentions("read @guide.md", tmp.path(), None);
 
         assert!(
@@ -1215,6 +1326,197 @@ mod tests {
         assert!(
             !content.contains("nested secret"),
             "exact resolution must not silently attach a fuzzy nested match: {content}",
+        );
+    }
+
+    // ---------------------------------------------------------------------
+    //  Send-time completion-index fallback
+    // ---------------------------------------------------------------------
+    //
+    // The dogfood failure this guards: `@FINISH-0.9.4.md` typed at the
+    // workspace root resolved "not found" and injected a <missing-file> block
+    // carrying the wrong (workspace-root) path, even though the file sat one
+    // directory down. Misses now fall back to a bounded unique-match search
+    // of the composer's background completion index; unresolvable misses emit
+    // an honest block that names only what the user typed.
+
+    fn expand_with_index(
+        input: &str,
+        workspace: &Path,
+        cwd: Option<PathBuf>,
+        index: &[String],
+    ) -> String {
+        user_request_with_file_mentions_cached(
+            input,
+            workspace,
+            cwd,
+            &mut GitMentionCache::default(),
+            Some(index),
+        )
+    }
+
+    /// A unique basename hit in the completion index resolves a nested file
+    /// and injects its real path.
+    #[test]
+    fn mention_miss_resolves_via_unique_index_basename() {
+        let tmp = TempDir::new().expect("tempdir");
+        let nested = tmp.path().join("ops");
+        std::fs::create_dir_all(&nested).expect("mkdir");
+        std::fs::write(nested.join("FINISH-0.9.4.md"), "ship list").expect("write");
+
+        let index = vec!["ops/FINISH-0.9.4.md".to_string(), "README.md".to_string()];
+        let content = expand_with_index("finish @FINISH-0.9.4.md", tmp.path(), None, &index);
+
+        assert!(content.contains("ship list"), "got: {content}");
+        assert!(!content.contains("<missing-file"), "got: {content}");
+        let real = nested.join("FINISH-0.9.4.md").display().to_string();
+        assert!(
+            content.contains(&real),
+            "expected resolved path {real} in content; got: {content}",
+        );
+    }
+
+    /// A typed partial path resolves through a unique path-suffix hit.
+    #[test]
+    fn mention_miss_resolves_via_unique_index_suffix() {
+        let tmp = TempDir::new().expect("tempdir");
+        let nested = tmp.path().join("nested/deep");
+        std::fs::create_dir_all(&nested).expect("mkdir");
+        std::fs::write(nested.join("file.md"), "deep body").expect("write");
+        // A same-basename file elsewhere must not make the suffix hit
+        // ambiguous: the typed directory context disambiguates.
+        let other = tmp.path().join("other");
+        std::fs::create_dir_all(&other).expect("mkdir");
+        std::fs::write(other.join("file.md"), "other body").expect("write");
+
+        let index = vec![
+            "nested/deep/file.md".to_string(),
+            "other/file.md".to_string(),
+        ];
+        let content = expand_with_index("see @deep/file.md", tmp.path(), None, &index);
+
+        assert!(content.contains("deep body"), "got: {content}");
+        assert!(!content.contains("other body"), "got: {content}");
+        assert!(!content.contains("<missing-file"), "got: {content}");
+    }
+
+    /// Two same-basename candidates with no typed directory context are
+    /// ambiguous: nothing is attached and the miss stays explicit.
+    #[test]
+    fn ambiguous_index_basename_stays_missing() {
+        let tmp = TempDir::new().expect("tempdir");
+        for dir in ["a", "b"] {
+            std::fs::create_dir_all(tmp.path().join(dir)).expect("mkdir");
+            std::fs::write(tmp.path().join(dir).join("guide.md"), format!("body {dir}"))
+                .expect("write");
+        }
+
+        let index = vec!["a/guide.md".to_string(), "b/guide.md".to_string()];
+        let content = expand_with_index("read @guide.md", tmp.path(), None, &index);
+
+        assert!(
+            content.contains("<missing-file mention=\"@guide.md\""),
+            "an ambiguous basename must not attach an arbitrary winner: {content}",
+        );
+        assert!(!content.contains("body a"), "got: {content}");
+        assert!(!content.contains("body b"), "got: {content}");
+    }
+
+    /// A stale index entry (file deleted after the scan) must not attach.
+    #[test]
+    fn stale_index_entry_stays_missing() {
+        let tmp = TempDir::new().expect("tempdir");
+
+        let index = vec!["ghost.md".to_string()];
+        let content = expand_with_index("boo @ghost.md", tmp.path(), None, &index);
+
+        assert!(
+            content.contains("<missing-file mention=\"@ghost.md\" />"),
+            "got: {content}",
+        );
+    }
+
+    /// Absolute mentions name an exact location; the index must never
+    /// substitute a same-basename file from inside the workspace.
+    #[test]
+    fn absolute_mention_miss_never_uses_index() {
+        let tmp = TempDir::new().expect("tempdir");
+        std::fs::write(tmp.path().join("guide.md"), "workspace guide").expect("write");
+
+        let index = vec!["guide.md".to_string()];
+        let content = expand_with_index(
+            "read @/definitely/absent/guide.md",
+            tmp.path(),
+            None,
+            &index,
+        );
+
+        assert!(
+            content.contains("<missing-file mention=\"@/definitely/absent/guide.md\" />"),
+            "got: {content}",
+        );
+        assert!(!content.contains("workspace guide"), "got: {content}");
+    }
+
+    /// The honest miss format: the block names only the typed mention and
+    /// never the non-existent workspace-root join.
+    #[test]
+    fn missing_file_block_names_only_the_typed_mention() {
+        let tmp = TempDir::new().expect("tempdir");
+
+        let content = user_request_with_file_mentions(
+            "huh @does/not/exist.txt",
+            tmp.path(),
+            Some(tmp.path().to_path_buf()),
+        );
+
+        assert!(
+            content.contains("<missing-file mention=\"@does/not/exist.txt\" />"),
+            "got: {content}",
+        );
+        let wrong = tmp.path().join("does/not/exist.txt").display().to_string();
+        assert!(
+            !content.contains(&wrong),
+            "must not inject the wrong workspace-root path {wrong}; got: {content}",
+        );
+    }
+
+    /// The context inspector mirrors the payload: index-resolved mentions
+    /// report their real path, unresolved ones report the typed token.
+    #[test]
+    fn context_references_reflect_index_resolution() {
+        let tmp = TempDir::new().expect("tempdir");
+        let nested = tmp.path().join("ops");
+        std::fs::create_dir_all(&nested).expect("mkdir");
+        std::fs::write(nested.join("runbook.md"), "steps").expect("write");
+
+        let index = vec!["ops/runbook.md".to_string()];
+        let references = context_references_from_input_cached(
+            "read @runbook.md and @absent.md",
+            tmp.path(),
+            None,
+            &mut GitMentionCache::default(),
+            Some(&index),
+        );
+
+        let resolved = references
+            .iter()
+            .find(|r| r.label == "runbook.md")
+            .expect("runbook reference");
+        assert_eq!(resolved.kind, ContextReferenceKind::File);
+        assert!(resolved.included);
+        let real = nested.join("runbook.md").display().to_string();
+        assert_eq!(resolved.target, real, "{resolved:?}");
+
+        let missing = references
+            .iter()
+            .find(|r| r.label == "absent.md")
+            .expect("absent reference");
+        assert_eq!(missing.kind, ContextReferenceKind::Missing);
+        assert!(!missing.included);
+        assert_eq!(
+            missing.target, "absent.md",
+            "a missing mention must not report the workspace-root guess as its target: {missing:?}",
         );
     }
 
@@ -1492,12 +1794,14 @@ mod tests {
             tmp.path(),
             Some(tmp.path().to_path_buf()),
             &mut cache,
+            None,
         );
         let expanded = user_request_with_file_mentions_cached(
             "@diff",
             tmp.path(),
             Some(tmp.path().to_path_buf()),
             &mut cache,
+            None,
         );
 
         // Both surfaces describe the same resolution.
