@@ -100,6 +100,12 @@ pub(crate) struct ContextTokenCache {
     pub(crate) message_tokens: Vec<usize>,
 }
 
+impl ContextTokenCache {
+    pub(crate) fn clear(&mut self) {
+        self.message_tokens.clear();
+    }
+}
+
 /// State machine for onboarding new users.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OnboardingState {

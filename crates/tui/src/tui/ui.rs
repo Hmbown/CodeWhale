@@ -4289,6 +4289,7 @@ async fn run_event_loop(
                         workspace,
                     } => {
                         app.current_session_id = Some(session_id.clone());
+                        app.context_token_cache.borrow_mut().clear();
                         app.api_messages = messages;
                         app.system_prompt = system_prompt;
                         if app.auto_model {
