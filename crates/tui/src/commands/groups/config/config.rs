@@ -19,8 +19,7 @@ use crate::config_ui::{ConfigUiMode, parse_mode};
 use crate::localization::{MessageId, resolve_locale};
 use crate::settings::Settings;
 use crate::tui::app::{
-    App, AppAction, AppMode, OnboardingState, ReasoningEffort, SettingSelection, SidebarFocus,
-    VimMode,
+    App, AppAction, AppMode, OnboardingState, ReasoningEffort, SettingSelection, VimMode,
 };
 use crate::tui::approval::ApprovalMode;
 use anyhow::Result;
@@ -367,8 +366,6 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
         }
         "mode" | "default_mode" => Some(app.mode.as_setting().to_string()),
         "max_history" | "history" => Some(app.max_input_history.to_string()),
-        "sidebar_width" | "sidebar" => Some(app.sidebar_width_percent.to_string()),
-        "sidebar_focus" | "focus" => Some(app.sidebar_focus.as_setting().to_string()),
         "work_surface_placement" | "work_surface" | "work_rail" => {
             Some(app.work_surface.placement.as_setting().to_string())
         }
@@ -2100,13 +2097,6 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
             app.update_model_compaction_budget();
             action = Some(AppAction::UpdateCompaction(app.compaction_config()));
         }
-        "sidebar_width" | "sidebar" => {
-            app.sidebar_width_percent = settings.sidebar_width_percent;
-            app.mark_history_updated();
-        }
-        "sidebar_focus" | "focus" => {
-            app.set_sidebar_focus(SidebarFocus::from_setting(&settings.sidebar_focus));
-        }
         "context_panel" | "context" | "session_panel" => {
             app.context_panel = settings.context_panel;
             app.needs_redraw = true;
@@ -2687,7 +2677,7 @@ mod tests {
                 "{key} mutates the active route and must be locked mid-turn"
             );
         }
-        for key in ["default_mode", "theme", "calm_mode", "sidebar_width"] {
+        for key in ["default_mode", "theme", "calm_mode", "rail_panel"] {
             assert!(
                 live_route_setting_subject(key).is_none(),
                 "{key} does not mutate the active route and must stay settable"

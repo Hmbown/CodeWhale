@@ -13,9 +13,7 @@ use crate::commands;
 use crate::config::{Config, StatusItem, normalize_model_name_for_provider, validate_route};
 use crate::localization::{normalize_configured_locale, resolve_locale};
 use crate::settings::Settings;
-use crate::tui::app::{
-    App, AppMode, ComposerDensity, ReasoningEffort, SidebarFocus, TranscriptSpacing,
-};
+use crate::tui::app::{App, AppMode, ComposerDensity, ReasoningEffort, TranscriptSpacing};
 use crate::tui::approval::ApprovalMode;
 
 #[cfg(feature = "web")]
@@ -104,9 +102,6 @@ pub struct SettingsSection {
     pub status_indicator: StatusIndicatorValue,
     pub synchronized_output: SynchronizedOutputValue,
     pub default_mode: DefaultModeValue,
-    #[schemars(range(min = 10, max = 50))]
-    pub sidebar_width: u16,
-    pub sidebar_focus: SidebarFocusValue,
     pub context_panel: bool,
     #[schemars(range(min = 0))]
     pub max_history: usize,
@@ -340,18 +335,6 @@ pub enum CostCurrencyValue {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum SidebarFocusValue {
-    Auto,
-    Pinned,
-    Tasks,
-    Agents,
-    Context,
-    Sessions,
-    Hidden,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
 pub enum ReasoningEffortValue {
     Off,
     Low,
@@ -471,8 +454,6 @@ pub fn build_document(app: &App, config: &Config) -> Result<ConfigUiDocument> {
             status_indicator: settings.status_indicator.as_str().into(),
             synchronized_output: settings.synchronized_output.as_str().into(),
             default_mode: settings.default_mode.as_str().into(),
-            sidebar_width: settings.sidebar_width_percent,
-            sidebar_focus: settings.sidebar_focus.as_str().into(),
             context_panel: settings.context_panel,
             max_history: settings.max_input_history,
             cost_currency: CostCurrencyValue::from_setting(&settings.cost_currency)?,
@@ -706,8 +687,6 @@ pub fn apply_document(
             doc.settings.synchronized_output.as_setting(),
         ),
         ("default_mode", doc.settings.default_mode.as_setting()),
-        ("sidebar_width", &doc.settings.sidebar_width.to_string()),
-        ("sidebar_focus", doc.settings.sidebar_focus.as_setting()),
         ("context_panel", bool_str(doc.settings.context_panel)),
         ("max_history", &doc.settings.max_history.to_string()),
         ("cost_currency", doc.settings.cost_currency.as_setting()),
@@ -1256,20 +1235,6 @@ impl CostCurrencyValue {
     }
 }
 
-impl SidebarFocusValue {
-    fn as_setting(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Pinned => "pinned",
-            Self::Tasks => "tasks",
-            Self::Agents => "agents",
-            Self::Context => "context",
-            Self::Sessions => "sessions",
-            Self::Hidden => "hidden",
-        }
-    }
-}
-
 impl From<ApprovalMode> for ApprovalModeValue {
     fn from(value: ApprovalMode) -> Self {
         match value {
@@ -1397,20 +1362,6 @@ impl From<&str> for StatusIndicatorValue {
             "off" | "none" | "hidden" | "false" => Self::Off,
             "whale" | "🐳" | "🐋" => Self::Whale,
             _ => Self::Cw,
-        }
-    }
-}
-
-impl From<&str> for SidebarFocusValue {
-    fn from(value: &str) -> Self {
-        match SidebarFocus::from_setting(value) {
-            SidebarFocus::Auto => Self::Auto,
-            SidebarFocus::Pinned => Self::Pinned,
-            SidebarFocus::Tasks => Self::Tasks,
-            SidebarFocus::Agents => Self::Agents,
-            SidebarFocus::Context => Self::Context,
-            SidebarFocus::Sessions => Self::Sessions,
-            SidebarFocus::Hidden => Self::Hidden,
         }
     }
 }

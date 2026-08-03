@@ -1890,20 +1890,6 @@ impl ConfigView {
             },
             ConfigRow {
                 section: ConfigSection::Sidebar,
-                key: "sidebar_width".to_string(),
-                value: settings.sidebar_width_percent.to_string(),
-                editable: true,
-                scope: ConfigScope::Saved,
-            },
-            ConfigRow {
-                section: ConfigSection::Sidebar,
-                key: "sidebar_focus".to_string(),
-                value: settings.sidebar_focus.clone(),
-                editable: true,
-                scope: ConfigScope::Saved,
-            },
-            ConfigRow {
-                section: ConfigSection::Sidebar,
                 key: "context_panel".to_string(),
                 value: settings.context_panel.to_string(),
                 editable: true,
@@ -2860,8 +2846,6 @@ fn config_label_message(key: &str) -> Option<MessageId> {
         "mention_menu_behavior" => MessageId::ConfigLabelMentionMenuBehavior,
         "mention_walk_depth" => MessageId::ConfigLabelMentionWalkDepth,
         "workspace_follow_symlinks" => MessageId::ConfigLabelWorkspaceFollowSymlinks,
-        "sidebar_width" => MessageId::ConfigLabelSidebarWidth,
-        "sidebar_focus" => MessageId::ConfigLabelSidebarFocus,
         "context_panel" => MessageId::ConfigLabelContextPanel,
         "sessions_rail" => MessageId::ConfigLabelSessionsRail,
         "session_auto_resume" => MessageId::ConfigLabelSessionAutoResume,
@@ -2984,8 +2968,6 @@ fn config_hint_for_key(key: &str) -> &'static str {
         }
         "synchronized_output" => "auto | on | off; terminal redraw pacing, not model speed",
         "default_mode" => "act (agent) | plan | operate",
-        "sidebar_width" => "10..=50",
-        "sidebar_focus" => "auto | work | tasks | agents | context | hidden",
         "max_history" => "integer (0 allowed)",
         "auto_compact_threshold_percent" => "10..=100",
         "default_model" => {
@@ -3051,7 +3033,6 @@ fn config_integer_key(key: &str) -> bool {
             | "work_surface_side_width"
             | "mention_menu_limit"
             | "mention_walk_depth"
-            | "sidebar_width"
             | "auto_compact_threshold_percent"
             | "max_history"
             | "fleet.exec.max_spawn_depth"
@@ -3085,7 +3066,6 @@ fn config_choice_values(key: &str, provider: ApiProvider) -> Option<Vec<String>>
         "inline_diffs" => vec!["full", "summary", "off"],
         "composer_vim_mode" => vec!["normal", "vim"],
         "mention_menu_behavior" => vec!["fuzzy", "browser"],
-        "sidebar_focus" => vec!["pinned", "auto", "tasks", "agents", "context", "hidden"],
         "theme" => {
             return Some(
                 crate::palette::SELECTABLE_THEMES
@@ -3179,9 +3159,6 @@ fn config_choice_label(locale: Locale, key: &str, value: &str) -> String {
         ("inline_diffs", "full") => "Full diff".to_string(),
         ("inline_diffs", "summary") => "Summary".to_string(),
         ("inline_diffs", "off") => "Off".to_string(),
-        ("sidebar_focus", "pinned") => "Work pinned".to_string(),
-        ("sidebar_focus", "tasks") => "Activity".to_string(),
-        ("sidebar_focus", "agents") => "Workers".to_string(),
         _ => value.to_string(),
     };
 
@@ -5949,8 +5926,6 @@ context_window = 262144
                 "work_surface_top_height",
                 "work_surface_side_width",
                 "rail_panel",
-                "sidebar_width",
-                "sidebar_focus",
                 "context_panel",
                 "sessions_rail",
                 "session_auto_resume",
@@ -5974,8 +5949,6 @@ context_window = 262144
                 "work_surface_top_height",
                 "work_surface_side_width",
                 "rail_panel",
-                "sidebar_width",
-                "sidebar_focus",
                 "context_panel",
                 "sessions_rail",
                 "session_auto_resume",
