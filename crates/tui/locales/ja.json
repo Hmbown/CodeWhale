@@ -402,6 +402,7 @@
   "KbCancelBackgroundShellJobs": "実行中のバックグラウンド shell ジョブをすべてキャンセル（Activity サイドバー）",
   "KbFuzzyFilePicker": "ファジーファイルピッカーを開く（Enter で @path を挿入）",
   "KbCompactInspector": "コンパクトなセッションコンテキスト検査ツールを開く",
+  "KbCompactContext": "会話コンテキストを圧縮",
   "KbLastMessagePager": "最後のメッセージのページャーを開く（入力が空の時）",
   "KbSelectedDetails": "選択したツールまたはメッセージの生の詳細を表示（Ctrl+Alt+O でターン全体の概要）",
   "KbToolDetailsPager": "選択した項目の生の詳細を表示（Alt+V）",

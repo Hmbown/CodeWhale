@@ -385,6 +385,7 @@
   "KbCancelBackgroundShellJobs": "Cancel·la tots els treballs de shell en segon pla en execució (barra lateral Activity)",
   "KbFuzzyFilePicker": "Obre el selector difús de fitxers (insereix @ruta en prémer Enter)",
   "KbCompactInspector": "Obre l'inspector de context de sessió compactada",
+  "KbCompactContext": "Compacta el contexte de la conversa",
   "KbLastMessagePager": "Obre el paginador de l'últim missatge (quan l'entrada és buida)",
   "KbSelectedDetails": "Mostra el detall en brut de l'eina o el missatge seleccionat; Ctrl+Alt+O obre la visió general de tot el torn",
   "KbToolDetailsPager": "Mostra el detall en brut de l'element seleccionat (Alt+V)",

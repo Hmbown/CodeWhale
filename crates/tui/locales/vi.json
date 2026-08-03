@@ -402,6 +402,7 @@
   "KbCancelBackgroundShellJobs": "Hủy mọi tác vụ shell nền đang chạy (thanh bên Activity)",
   "KbFuzzyFilePicker": "Mở trình tìm file nhanh (fuzzy) (chèn @path khi nhấn Enter)",
   "KbCompactInspector": "Mở trình kiểm tra ngữ cảnh phiên thu gọn",
+  "KbCompactContext": "Nén ngữ cảnh hội thoại",
   "KbLastMessagePager": "Mở trang xem cho tin nhắn cuối cùng (khi khung nhập trống)",
   "KbSelectedDetails": "Hiển thị chi tiết thô của công cụ hoặc tin nhắn đã chọn; Ctrl+Alt+O mở tổng quan cả lượt",
   "KbToolDetailsPager": "Hiển thị chi tiết thô của mục đã chọn (Alt+V)",

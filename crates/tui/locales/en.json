@@ -402,6 +402,7 @@
   "KbCancelBackgroundShellJobs": "Cancel all running background shell jobs (Activity sidebar)",
   "KbFuzzyFilePicker": "Open the fuzzy file picker (insert @path on Enter)",
   "KbCompactInspector": "Open compact session context inspector",
+  "KbCompactContext": "Compact the conversation context",
   "KbLastMessagePager": "Open pager for the last message (when input is empty)",
   "KbSelectedDetails": "Show raw detail for the selected tool or message; Ctrl+Alt+O opens the whole-turn overview",
   "KbToolDetailsPager": "Show raw detail for the selected item (Alt+V)",

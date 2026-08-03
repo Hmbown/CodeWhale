@@ -385,6 +385,7 @@
   "KbCancelBackgroundShellJobs": "Batalkan semua job shell latar belakang yang berjalan (bilah sisi Activity)",
   "KbFuzzyFilePicker": "Buka pemilih file fuzzy (sisipkan @path saat Enter)",
   "KbCompactInspector": "Buka inspektor konteks sesi padat",
+  "KbCompactContext": "Ringkas konteks percakapan",
   "KbLastMessagePager": "Buka pager untuk pesan terakhir (saat input kosong)",
   "KbSelectedDetails": "Tampilkan detail mentah alat atau pesan terpilih; Ctrl+Alt+O membuka ikhtisar seluruh giliran",
   "KbToolDetailsPager": "Tampilkan detail mentah item terpilih (Alt+V)",
