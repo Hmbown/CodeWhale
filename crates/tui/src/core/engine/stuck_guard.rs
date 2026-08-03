@@ -61,7 +61,7 @@ impl StepFingerprint {
 }
 
 /// Signal emitted by [`StuckGuard::observe`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum StuckSignal {
     Warn { reason: String },
     Stop { reason: String },
