@@ -130,6 +130,16 @@ impl DefaultKeyringStore {
 
     /// Probe the OS keyring without writing anything. Returns `Ok(())` if
     /// a backend is reachable, otherwise an error describing why not.
+    ///
+    /// The probe reads a deliberately-nonexistent entry: reaching the
+    /// backend and learning the entry is absent *is* the reachability
+    /// signal. This does not prompt on any supported platform — macOS only
+    /// surfaces Keychain UI when accessing an *existing* item owned by
+    /// another application, and Windows Credential Manager never prompts
+    /// for a missing target — so `__probe__` under our own service name is
+    /// safe to read. `Entry::new` alone validates only argument shapes,
+    /// which left this probe a no-op on macOS/Windows and the documented
+    /// file-store fallback unreachable there (#5172).
     pub fn probe(&self) -> Result<(), SecretsError> {
         #[cfg(any(
             target_os = "macos",
@@ -141,18 +151,8 @@ impl DefaultKeyringStore {
             )
         ))]
         {
-            // `Entry::new` is enough to validate the native macOS/Windows
-            // backend path. Avoid a dummy read there because it can trigger
-            // a second user-visible Keychain/Credential Manager access before
-            // the real provider key lookup.
             let entry = keyring::Entry::new(&self.service, "__probe__")
                 .map_err(|err| SecretsError::Keyring(err.to_string()))?;
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            {
-                let _ = entry;
-                Ok(())
-            }
-            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             match entry.get_password() {
                 Ok(_) | Err(keyring::Error::NoEntry) => Ok(()),
                 Err(keyring::Error::PlatformFailure(err)) => {
@@ -1307,6 +1307,20 @@ mod tests {
                 None => unsafe { std::env::remove_var(self.name) },
             }
         }
+    }
+
+    /// Live check for #5172: on macOS/Windows the probe used to return Ok
+    /// without touching the backend at all. Run explicitly with
+    /// `cargo test -p codewhale-secrets -- --ignored` on a desktop machine:
+    /// a healthy native keyring answers a read of the deliberately absent
+    /// `__probe__` entry with NoEntry, silently, and the probe succeeds.
+    #[test]
+    #[ignore = "touches the real OS keyring; run on a desktop machine"]
+    fn probe_performs_a_real_backend_read() {
+        let store = DefaultKeyringStore::new("codewhale-probe-live-check");
+        store
+            .probe()
+            .expect("the native keyring backend should be reachable on this machine");
     }
 
     #[test]
