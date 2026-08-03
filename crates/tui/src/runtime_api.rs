@@ -754,7 +754,9 @@ pub fn build_router(state: RuntimeApiState) -> Router {
         .route("/v1/threads/{id}/events", get(stream_thread_events))
         .route(
             "/v1/threads/{id}/goal",
-            get(get_thread_goal).put(upsert_thread_goal).delete(delete_thread_goal),
+            get(get_thread_goal)
+                .put(upsert_thread_goal)
+                .delete(delete_thread_goal),
         )
         .route("/v1/threads/{id}/goal/complete", post(complete_thread_goal))
         .route("/v1/threads/{id}/goal/block", post(block_thread_goal))
@@ -2876,14 +2878,8 @@ async fn upsert_thread_goal(
         status: codewhale_protocol::ThreadGoalStatus::Active,
         token_budget: req.token_budget,
         tokens_used: existing.as_ref().map(|g| g.tokens_used).unwrap_or(0),
-        time_used_seconds: existing
-            .as_ref()
-            .map(|g| g.time_used_seconds)
-            .unwrap_or(0),
-        continuation_count: existing
-            .as_ref()
-            .map(|g| g.continuation_count)
-            .unwrap_or(0),
+        time_used_seconds: existing.as_ref().map(|g| g.time_used_seconds).unwrap_or(0),
+        continuation_count: existing.as_ref().map(|g| g.continuation_count).unwrap_or(0),
         created_at,
         updated_at: now,
     };
@@ -2924,10 +2920,7 @@ async fn delete_thread_goal(
     if !deleted {
         return Err(ApiError::not_found(format!("thread '{id}' has no goal")));
     }
-    let _ = state
-        .runtime_threads
-        .emit_goal_cleared_event(&id)
-        .await;
+    let _ = state.runtime_threads.emit_goal_cleared_event(&id).await;
     Ok(StatusCode::NO_CONTENT)
 }
 

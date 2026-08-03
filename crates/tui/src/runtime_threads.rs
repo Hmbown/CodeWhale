@@ -3119,7 +3119,10 @@ impl RuntimeThreadManager {
     }
 
     /// Return the persistent goal for a thread, or `Ok(None)` if none exists.
-    pub async fn get_goal(&self, thread_id: &str) -> Result<Option<codewhale_protocol::ThreadGoal>> {
+    pub async fn get_goal(
+        &self,
+        thread_id: &str,
+    ) -> Result<Option<codewhale_protocol::ThreadGoal>> {
         let thread_id = thread_id.to_string();
         let store = self.store.clone();
         tokio::task::spawn_blocking(move || store.load_goal(&thread_id))
