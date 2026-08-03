@@ -4050,6 +4050,38 @@ async fn patch_undo_endpoint_forks_and_reports_file_rollback_state() -> Result<(
     Ok(())
 }
 
+#[test]
+fn patch_undo_helper_restores_only_the_bound_session() -> Result<()> {
+    let _lock = lock_test_env();
+    let root = tempfile::tempdir()?;
+    let home = root.path().join("home");
+    fs::create_dir_all(&home)?;
+    let _home = EnvVarGuard::set("HOME", &home);
+
+    let workspace = root.path().join("workspace");
+    fs::create_dir_all(&workspace)?;
+    let repo = crate::snapshot::SnapshotRepo::open_or_init(&workspace)?;
+    let file = workspace.join("a.txt");
+
+    fs::write(&file, "legacy")?;
+    repo.snapshot("pre-turn:legacy")?;
+    fs::write(&file, "current-before")?;
+    repo.snapshot_with_session("pre-turn:current", Some("session-current"))?;
+    fs::write(&file, "foreign-before")?;
+    repo.snapshot_with_session("pre-turn:foreign", Some("session-foreign"))?;
+    fs::write(&file, "current-after")?;
+
+    let restored = patch_undo_workspace_files(&workspace, Some("session-current"));
+    assert!(restored.files_restored, "{:?}", restored.summary);
+    assert_eq!(fs::read_to_string(&file)?, "current-before");
+
+    fs::write(&file, "must-stay")?;
+    let unbound = patch_undo_workspace_files(&workspace, None);
+    assert!(!unbound.files_restored);
+    assert_eq!(fs::read_to_string(&file)?, "must-stay");
+    Ok(())
+}
+
 #[tokio::test]
 async fn retry_endpoint_reuses_dropped_user_text_to_start_a_turn() -> Result<()> {
     let root = std::env::temp_dir().join(format!("deepseek-retry-endpoint-{}", Uuid::new_v4()));

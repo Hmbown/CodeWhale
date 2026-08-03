@@ -2534,7 +2534,7 @@ async fn patch_undo_thread_turn(
         .get_thread(&id)
         .await
         .map_err(map_thread_err)?;
-    let patch_result = patch_undo_workspace_files(&thread.workspace);
+    let patch_result = patch_undo_workspace_files(&thread.workspace, thread.session_id.as_deref());
 
     // Step 2: Remove the last conversation turn (undo_conversation).
     let (forked_thread, original_user_text) = state
@@ -2555,7 +2555,10 @@ async fn patch_undo_thread_turn(
 
 /// Restore the newest `tool:` or `pre-turn:` snapshot that differs from the
 /// current workspace — same target selection as the TUI's `patch_undo`.
-fn patch_undo_workspace_files(workspace: &FsPath) -> PatchUndoResult {
+fn patch_undo_workspace_files(
+    workspace: &FsPath,
+    current_session_id: Option<&str>,
+) -> PatchUndoResult {
     let repo = match crate::snapshot::SnapshotRepo::open_or_init(workspace) {
         Ok(repo) => repo,
         Err(e) => {
@@ -2566,7 +2569,17 @@ fn patch_undo_workspace_files(workspace: &FsPath) -> PatchUndoResult {
             };
         }
     };
-    let snapshots = match repo.list(20) {
+    let Some(current_session_id) = current_session_id else {
+        return PatchUndoResult {
+            files_restored: false,
+            summary: Some(
+                "No current session is bound to this thread; workspace files were not changed."
+                    .to_string(),
+            ),
+            snapshot_label: None,
+        };
+    };
+    let snapshots = match repo.list(100) {
         Ok(snapshots) => snapshots,
         Err(e) => {
             return PatchUndoResult {
@@ -2579,12 +2592,13 @@ fn patch_undo_workspace_files(workspace: &FsPath) -> PatchUndoResult {
     let target = snapshots
         .iter()
         .filter(|s| s.label.starts_with("tool:") || s.label.starts_with("pre-turn:"))
-        .find(|s| matches!(repo.work_tree_matches_snapshot(&s.id), Ok(false) | Err(_)));
+        .filter(|s| s.session_id.as_deref() == Some(current_session_id))
+        .find(|s| matches!(repo.work_tree_matches_snapshot(&s.id), Ok(false)));
     let Some(target) = target else {
         return PatchUndoResult {
             files_restored: false,
             summary: Some(
-                "No older tool or pre-turn snapshots differ from the current workspace."
+                "No current-session tool or pre-turn snapshots differ from the current workspace."
                     .to_string(),
             ),
             snapshot_label: None,

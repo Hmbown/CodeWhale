@@ -1388,8 +1388,15 @@ impl Engine {
             let pre_seq = self.turn_counter;
             let pre_cap = self.config.snapshots_max_workspace_bytes;
             let pre_prompt = snapshot_prompt.clone();
+            let pre_sid = self.session.id.clone();
             let _ = tokio::task::spawn_blocking(move || {
-                pre_turn_snapshot(&pre_workspace, pre_seq, pre_cap, Some(&pre_prompt))
+                pre_turn_snapshot(
+                    &pre_workspace,
+                    pre_seq,
+                    pre_cap,
+                    Some(&pre_prompt),
+                    Some(&pre_sid),
+                )
             })
             .await;
         }
@@ -1624,8 +1631,15 @@ impl Engine {
             let post_workspace = self.session.workspace.clone();
             let post_seq = self.turn_counter;
             let post_cap = self.config.snapshots_max_workspace_bytes;
+            let post_sid = self.session.id.clone();
             crate::utils::spawn_blocking_supervised("post-shell-turn-snapshot", move || {
-                post_turn_snapshot(&post_workspace, post_seq, post_cap, Some(&snapshot_prompt));
+                post_turn_snapshot(
+                    &post_workspace,
+                    post_seq,
+                    post_cap,
+                    Some(&snapshot_prompt),
+                    Some(&post_sid),
+                );
             });
         }
     }
@@ -4011,8 +4025,15 @@ impl Engine {
             let pre_workspace = self.session.workspace.clone();
             let pre_seq = self.turn_counter;
             let pre_cap = self.config.snapshots_max_workspace_bytes;
+            let pre_sid = self.session.id.clone();
             let _ = tokio::task::spawn_blocking(move || {
-                pre_turn_snapshot(&pre_workspace, pre_seq, pre_cap, Some(&snapshot_prompt))
+                pre_turn_snapshot(
+                    &pre_workspace,
+                    pre_seq,
+                    pre_cap,
+                    Some(&snapshot_prompt),
+                    Some(&pre_sid),
+                )
             })
             .await;
         }
@@ -4254,12 +4275,14 @@ impl Engine {
             let post_workspace = self.session.workspace.clone();
             let post_seq = self.turn_counter;
             let post_cap = self.config.snapshots_max_workspace_bytes;
+            let post_sid = self.session.id.clone();
             crate::utils::spawn_blocking_supervised("post-turn-snapshot", move || {
                 post_turn_snapshot(
                     &post_workspace,
                     post_seq,
                     post_cap,
                     Some(&snapshot_prompt_post),
+                    Some(&post_sid),
                 );
             });
         }

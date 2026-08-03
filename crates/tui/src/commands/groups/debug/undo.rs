@@ -153,7 +153,7 @@ pub fn patch_undo(app: &mut App) -> CommandResult {
         }
     };
 
-    let snapshots = match repo.list(20) {
+    let snapshots = match repo.list(100) {
         Ok(s) => s,
         Err(e) => {
             return CommandResult::error(format!("Failed to list snapshots: {e}"));
@@ -164,23 +164,50 @@ pub fn patch_undo(app: &mut App) -> CommandResult {
         return CommandResult::message("No snapshots found to undo — nothing to revert.");
     }
 
-    // Prefer the newest revertable `tool:` / `pre-turn:` snapshot whose
-    // tracked content differs from the current workspace. This lets
-    // repeated `/undo` walk back through older snapshots instead of
-    // restoring the same no-op target forever.
-    let target = snapshots
-        .iter()
+    // Automatic file rollback is allowed only when ownership is provable.
+    // Untagged legacy snapshots and snapshots from another conversation may
+    // describe unrelated user work in this same workspace, so fail closed
+    // and let the command dispatcher fall back to conversation-only undo.
+    let Some(current_session) = app.current_session_id.as_deref() else {
+        return CommandResult::message(
+            "No undoable snapshot is tagged for the current session — nothing to revert.",
+        );
+    };
+    let candidates: Vec<crate::snapshot::Snapshot> = snapshots
+        .into_iter()
         .filter(|s| s.label.starts_with("tool:") || s.label.starts_with("pre-turn:"))
-        .find(|s| match repo.work_tree_matches_snapshot(&s.id) {
-            Ok(matches) => !matches,
-            Err(_) => true,
-        });
+        .filter(|s| s.session_id.as_deref() == Some(current_session))
+        .collect();
+
+    if candidates.is_empty() {
+        return CommandResult::message(
+            "No undoable snapshots for the current session — nothing to revert.",
+        );
+    }
+
+    // Pick the newest current-session candidate whose tree differs from the
+    // workspace. Skipping identical snapshots makes repeated `/undo` walk
+    // backward only inside the proven session boundary.
+    let differs = |s: &&crate::snapshot::Snapshot| {
+        matches!(repo.work_tree_matches_snapshot(&s.id), Ok(false))
+    };
+    let target = candidates.iter().find(differs);
 
     let Some(target) = target else {
         return CommandResult::message(
-            "No older tool or pre-turn snapshots differ from the current workspace — nothing to revert.",
+            "No undoable snapshot differs from the current workspace — nothing to revert.",
         );
     };
+
+    // Restoring workspace files is a mutation. Apply the trust gate only
+    // after finding a real, current-session target so chat-only `/undo` can
+    // still fall back to conversation history in ordinary mode.
+    if !(app.yolo || app.trust_mode) {
+        return CommandResult::message(
+            "Refusing to undo workspace files outside trusted mode.\n\
+             Run `/trust on` or select Full Access with Shift+Tab, then re-run `/undo`.",
+        );
+    }
 
     if let Err(e) = repo.restore(&target.id) {
         return CommandResult::error(format!("Restore failed: {e}"));

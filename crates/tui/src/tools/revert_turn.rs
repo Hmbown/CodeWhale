@@ -74,6 +74,7 @@ impl ToolSpec for RevertTurnTool {
 
         let workspace = context.workspace.clone();
         let label = format!("revert_turn(offset={offset})");
+        let session = context.state_namespace.clone();
         let result = tokio::task::spawn_blocking(move || -> Result<String, String> {
             let repo = SnapshotRepo::open_or_init(&workspace)
                 .map_err(|e| format!("Snapshot repo init failed: {e}"))?;
@@ -87,12 +88,16 @@ impl ToolSpec for RevertTurnTool {
             let pre_turns: Vec<_> = snapshots
                 .into_iter()
                 .filter(|s| s.label.starts_with("pre-turn:"))
+                // Session ownership must be exact. Legacy snapshots are not
+                // safe automatic targets because they may belong to another
+                // conversation that used this workspace.
+                .filter(|s| s.session_id.as_deref() == Some(session.as_str()))
                 .collect();
             let target = pre_turns
                 .get((offset - 1) as usize)
                 .ok_or_else(|| {
                     format!(
-                        "Only {} pre-turn snapshot(s) exist; turn_offset={offset} is out of range.",
+                        "Only {} current-session pre-turn snapshot(s) exist; turn_offset={offset} is out of range.",
                         pre_turns.len(),
                     )
                 })?
@@ -173,9 +178,11 @@ mod tests {
         // Setup: create pre-turn:1, post-turn:1 with file modifications.
         let repo = SnapshotRepo::open_or_init(&workspace).unwrap();
         std::fs::write(workspace.join("a.txt"), b"original").unwrap();
-        repo.snapshot("pre-turn:1").unwrap();
+        repo.snapshot_with_session("pre-turn:1", Some("workspace"))
+            .unwrap();
         std::fs::write(workspace.join("a.txt"), b"modified").unwrap();
-        repo.snapshot("post-turn:1").unwrap();
+        repo.snapshot_with_session("post-turn:1", Some("workspace"))
+            .unwrap();
 
         let tool = RevertTurnTool;
         let ctx = ToolContext::new(workspace.clone());
@@ -208,7 +215,8 @@ mod tests {
 
         let repo = SnapshotRepo::open_or_init(&workspace).unwrap();
         std::fs::write(workspace.join("a.txt"), b"unchanged").unwrap();
-        repo.snapshot("pre-turn:1").unwrap();
+        repo.snapshot_with_session("pre-turn:1", Some("workspace"))
+            .unwrap();
 
         let tool = RevertTurnTool;
         let ctx = ToolContext::new(workspace);
@@ -229,5 +237,35 @@ mod tests {
         let r = tool.execute(json!({}), &ctx).await.expect("execute");
         assert!(!r.success);
         assert!(r.content.contains("out of range"));
+    }
+
+    #[tokio::test]
+    async fn revert_turn_rejects_legacy_and_foreign_session_snapshots() {
+        let tmp = tempdir().unwrap();
+        let workspace = tmp.path().join("ws");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let _guard = scoped_home(tmp.path());
+
+        let repo = SnapshotRepo::open_or_init(&workspace).unwrap();
+        std::fs::write(workspace.join("a.txt"), b"legacy").unwrap();
+        repo.snapshot("pre-turn:legacy").unwrap();
+        std::fs::write(workspace.join("a.txt"), b"foreign").unwrap();
+        repo.snapshot_with_session("pre-turn:foreign", Some("other-session"))
+            .unwrap();
+        std::fs::write(workspace.join("a.txt"), b"current").unwrap();
+
+        let tool = RevertTurnTool;
+        let ctx = ToolContext::new(workspace.clone());
+        let r = tool.execute(json!({}), &ctx).await.expect("execute");
+        assert!(!r.success);
+        assert!(
+            r.content.contains("Only 0 current-session"),
+            "{}",
+            r.content
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("a.txt")).unwrap(),
+            "current"
+        );
     }
 }

@@ -3006,8 +3006,9 @@ impl Engine {
                             let ws = self.session.workspace.clone();
                             let tid = tool_id.clone();
                             let cap = self.config.snapshots_max_workspace_bytes;
+                            let sid = self.session.id.clone();
                             let _ = tokio::task::spawn_blocking(move || {
-                                crate::core::turn::pre_tool_snapshot(&ws, &tid, cap)
+                                crate::core::turn::pre_tool_snapshot(&ws, &tid, cap, Some(&sid))
                             })
                             .await;
                         }
