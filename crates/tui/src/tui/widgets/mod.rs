@@ -16,12 +16,7 @@ pub use footer::{
     FooterProps, FooterToast, FooterWidget, footer_agents_chip, footer_shell_label_chip,
     footer_working_label,
 };
-// HeaderData/HeaderWidget rendered the classic-shell header; the classic
-// shell was removed in 0.9.4 and the widget's own file deletion is staged
-// for the rail-cutover follow-up. header_status_indicator_frame stays live
-// for the underwater header.
-#[allow(unused_imports)]
-pub use header::{HeaderData, HeaderWidget, header_status_indicator_frame};
+pub use header::header_status_indicator_frame;
 pub use renderable::Renderable;
 
 use std::borrow::Cow;
