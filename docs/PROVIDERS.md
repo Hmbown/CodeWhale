@@ -232,6 +232,20 @@ Create or copy a Model Studio API key from the
 [Bailian console](https://bailian.console.aliyun.com/). The API key is shared
 across all four provider IDs above; only the base URL and wire protocol differ.
 
+**Thinking / reasoning.** All listed models are hybrid-thinking per Model
+Studio's [deep-thinking docs](https://www.alibabacloud.com/help/en/model-studio/deep-thinking),
+and their reasoning surfaces in the TUI's Thinking view on both dialects. On
+the OpenAI-compatible routes, `reasoning_effort` maps to DashScope's
+`enable_thinking` switch: `off` sends `enable_thinking = false`, any other
+level sends `true` (there is no effort ladder on this dialect), and an unset
+effort sends nothing — the qwen3.x families default to thinking ON
+server-side. Reasoning streams back as `delta.reasoning_content`. On the
+Anthropic-compatible routes, thinking uses the documented
+`{"type":"enabled","budget_tokens":N}` / `{"type":"disabled"}` shapes from the
+[Anthropic-compatible Messages API](https://www.alibabacloud.com/help/en/model-studio/anthropic-api-messages),
+with `budget_tokens` derived from the effort level. Reasoning history is not
+replayed back to the provider on later turns (DashScope does not require it).
+
 DeepSeek (`deepseek-v4-pro`, `deepseek-v4-flash-0731`) and GLM (`glm-5.2`)
 models served by Model Studio are provider-scoped and do not collide with the
 first-party DeepSeek or Zhipu/Z.ai routes. Pay-as-you-go workspace-id

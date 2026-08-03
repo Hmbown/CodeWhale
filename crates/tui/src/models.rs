@@ -519,6 +519,20 @@ pub fn model_supports_reasoning(model: &str) -> bool {
             | "qwen/qwen3.6-27b"
             | "qwen/qwen3.6-plus"
             | "qwen/qwen3.7-plus"
+            // Bare qwen3.x ids are Alibaba Cloud Model Studio's own model ids
+            // (Token Plan / Coding Plan catalogs). Per Model Studio's
+            // deep-thinking docs these are hybrid-thinking models that stream
+            // `reasoning_content` (OpenAI dialect) or thinking blocks
+            // (Anthropic dialect); qwen3.7/3.6/3.5 families default thinking
+            // ON server-side.
+            | "qwen3.8-max"
+            | "qwen3.8-max-preview"
+            | "qwen3.7-max"
+            | "qwen3.7-plus"
+            | "qwen3.6-plus"
+            | "qwen3.6-flash"
+            | "qwen3.5-plus"
+            | "qwen3.5-flash"
             | "tencent/hy3-preview"
             | "xiaomi/mimo-v2.5-pro"
             | "xiaomi/mimo-v2.5"
@@ -930,6 +944,25 @@ mod tests {
         for model in ["qwen3.8-max", "qwen3.8-max-preview"] {
             assert_eq!(context_window_for_model(model), Some(1_000_000), "{model}");
             assert_eq!(max_output_tokens_for_model(model), Some(131_072), "{model}");
+        }
+    }
+
+    #[test]
+    fn modelstudio_bare_qwen_models_support_reasoning() {
+        // Model Studio's deep-thinking docs: every qwen3.x family the Token /
+        // Coding Plan catalogs carry is hybrid-thinking (reasoning_content on
+        // the OpenAI dialect, thinking blocks on the Anthropic dialect).
+        for model in [
+            "qwen3.8-max",
+            "qwen3.8-max-preview",
+            "qwen3.7-max",
+            "qwen3.7-plus",
+            "qwen3.6-plus",
+            "qwen3.6-flash",
+            "qwen3.5-plus",
+            "qwen3.5-flash",
+        ] {
+            assert!(model_supports_reasoning(model), "{model}");
         }
     }
 

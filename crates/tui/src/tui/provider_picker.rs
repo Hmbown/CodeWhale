@@ -1137,6 +1137,13 @@ fn default_reasoning_stream_visibility(provider: ApiProvider) -> ProviderReasoni
         | ApiProvider::Vllm
         | ApiProvider::Zai
         | ApiProvider::Xai
+        // Model Studio surfaces reasoning as structured Thinking on both
+        // dialects: `delta.reasoning_content` on the OpenAI-compatible
+        // routes, thinking blocks on the Anthropic-compatible routes.
+        | ApiProvider::ModelstudioTokenPlan
+        | ApiProvider::ModelstudioTokenPlanAnthropic
+        | ApiProvider::ModelstudioCodingPlan
+        | ApiProvider::ModelstudioCodingPlanAnthropic
         | ApiProvider::Moonshot => ProviderReasoningStreamVisibility::StructuredThinking,
         _ => ProviderReasoningStreamVisibility::Unknown,
     }
@@ -4558,6 +4565,33 @@ mod tests {
         );
         assert_eq!(row.reasoning.selected_control.as_deref(), Some("max"));
         assert!(row.compact_hint().contains("reasoning:high/max"));
+        assert!(row.compact_hint().contains("stream:structured"));
+    }
+
+    #[test]
+    fn provider_dashboard_row_surfaces_modelstudio_structured_thinking() {
+        let config = Config {
+            providers: Some(crate::config::ProvidersConfig {
+                modelstudio_token_plan: crate::config::ProviderConfig {
+                    api_key: Some("modelstudio-key".to_string()),
+                    model: Some("qwen3.8-max".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Config::default()
+        };
+        let row = ProviderDashboardRow::from_config(
+            ApiProvider::ModelstudioTokenPlan,
+            ApiProvider::ModelstudioTokenPlan,
+            &config,
+        );
+
+        assert_eq!(row.reasoning.support, ProviderReasoningSupport::Supported);
+        assert_eq!(
+            row.reasoning.stream_visibility,
+            ProviderReasoningStreamVisibility::StructuredThinking
+        );
         assert!(row.compact_hint().contains("stream:structured"));
     }
 
