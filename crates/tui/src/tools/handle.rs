@@ -140,6 +140,13 @@ impl HandleStore {
         self.records.get(&handle.key())
     }
 
+    /// Remove all handles for `session_id`. Called when an agent's records
+    /// are retired so resident transcript payloads are freed without waiting
+    /// for a full session reset (#3885).
+    pub fn evict_session(&mut self, session_id: &str) {
+        self.records.retain(|key, _| key.session_id != session_id);
+    }
+
     fn insert(
         &mut self,
         session_id: impl Into<String>,
