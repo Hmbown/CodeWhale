@@ -173,23 +173,44 @@ impl ToolResult {
 
 /// Helper to extract a required string field from JSON input.
 pub fn required_str<'a>(input: &'a Value, field: &str) -> std::result::Result<&'a str, ToolError> {
-    input.get(field).and_then(Value::as_str).ok_or_else(|| {
-        // When the field is missing, list the fields the caller *did*
-        // supply so the model can spot the mismatch without a retry.
-        let provided: Vec<&str> = input
-            .as_object()
-            .map(|obj| obj.keys().map(|k| k.as_str()).collect())
-            .unwrap_or_default();
-        if provided.is_empty() {
-            ToolError::missing_field(field)
-        } else {
-            let hint = format!(
-                "missing required field '{field}'. Input provided: {}",
-                provided.join(", ")
-            );
-            ToolError::invalid_input(hint)
+    if let Some(value) = input.get(field) {
+        if let Some(string_value) = value.as_str() {
+            return Ok(string_value);
         }
-    })
+
+        let json_type = match value {
+            Value::Null => "null",
+            Value::Bool(_) => "boolean",
+            Value::Number(_) => "number",
+            Value::String(_) => "string",
+            Value::Array(_) => "array",
+            Value::Object(_) => "object",
+        };
+        let mut preview = value.to_string();
+        if preview.chars().count() > 120 {
+            preview = preview.chars().take(117).collect::<String>() + "...";
+        }
+
+        return Err(ToolError::invalid_input(format!(
+            "field '{field}' must be a string; got {json_type}. Received: {preview}"
+        )));
+    }
+
+    // When the field is missing, list the fields the caller *did*
+    // supply so the model can spot the mismatch without a retry.
+    let provided: Vec<&str> = input
+        .as_object()
+        .map(|obj| obj.keys().map(|k| k.as_str()).collect())
+        .unwrap_or_default();
+    if provided.is_empty() {
+        Err(ToolError::missing_field(field))
+    } else {
+        let hint = format!(
+            "missing required field '{field}'. Input provided: {}",
+            provided.join(", ")
+        );
+        Err(ToolError::invalid_input(hint))
+    }
 }
 
 /// Helper to extract an optional string field from JSON input.
@@ -602,6 +623,16 @@ mod tests {
         assert!(message.contains("Input provided:"));
         assert!(message.contains("path"));
         assert!(message.contains("content"));
+    }
+
+    #[test]
+    fn required_str_reports_wrong_type_when_field_exists() {
+        let input = json!({"replace": [{"path": "src/lib.rs", "content": "new body"}]});
+        let err = required_str(&input, "replace").expect_err("replace has wrong type");
+        let message = err.to_string();
+        assert!(message.contains("field 'replace' must be a string"));
+        assert!(message.contains("got array"));
+        assert!(message.contains(r#"[{"content":"new body","path":"src/lib.rs"}]"#));
     }
 
     #[test]
