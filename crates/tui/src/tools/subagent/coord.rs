@@ -718,6 +718,24 @@ mod tests {
     use crate::tools::spec::ToolContext;
     use tempfile::tempdir;
 
+    #[test]
+    fn coordinate_tool_does_not_declare_read_only() {
+        // #5123-class: the tool mutates the coordination ledger and expands
+        // write claims; its declared capabilities must not say ReadOnly.
+        let manager = Arc::new(tokio::sync::RwLock::new(
+            super::super::SubAgentManager::new(std::path::PathBuf::from("."), 1),
+        ));
+        let tool = AgentsCoordinateTool::new(manager, None);
+        let capabilities = ToolSpec::capabilities(&tool);
+        assert!(
+            !capabilities.contains(&ToolCapability::ReadOnly),
+            "agents/coordinate mutates the ledger — ReadOnly is a lie: {capabilities:?}"
+        );
+        // …but the dynamic check still marks inspect as read-only.
+        assert!(tool.is_read_only_for(&json!({"action": "inspect"})));
+        assert!(!tool.is_read_only_for(&json!({"action": "propose"})));
+    }
+
     async fn manager_with_running_child(
         workspace: &std::path::Path,
     ) -> (SharedSubAgentManager, String) {
@@ -2552,9 +2570,16 @@ impl ToolSpec for AgentsCoordinateTool {
     }
 
     fn capabilities(&self) -> Vec<ToolCapability> {
-        vec![ToolCapability::ReadOnly]
+        // #5123-class: this tool mutates the coordination ledger and expands
+        // the caller's write claim (actions propose/accept/supersede/claim/
+        // reconcile) — declaring ReadOnly was a lie that let policy layers
+        // treat a mutating call as a safe read. Only `inspect` is read-only,
+        // which is what is_read_only_for reports.
+        vec![ToolCapability::WritesFiles]
     }
     fn approval_requirement(&self) -> ApprovalRequirement {
+        // Stays Auto: coordination records are session-scoped in-memory
+        // state, and gating them would deadlock autonomous sub-agent fan-in.
         ApprovalRequirement::Auto
     }
     fn is_read_only_for(&self, input: &Value) -> bool {
