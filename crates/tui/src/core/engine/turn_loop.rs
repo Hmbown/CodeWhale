@@ -2621,6 +2621,7 @@ impl Engine {
                         let shell_permits = shell_permits.clone();
                         let workspace = self.session.workspace.clone();
                         let context_override = batch_tool_context.clone();
+                        let cancel_token = self.cancel_token.clone();
 
                         tool_tasks.push(async move {
                             let _shell_permit = if plan.name == "exec_shell" {
@@ -2633,6 +2634,7 @@ impl Engine {
                                 plan.supports_parallel || plan.detached_start,
                                 plan.interactive,
                                 tx_event.clone(),
+                                Some(cancel_token),
                                 plan.name.clone(),
                                 plan.input.clone(),
                                 workspace,

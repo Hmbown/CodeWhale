@@ -976,6 +976,24 @@ pub fn render_header(area: Rect, buf: &mut Buffer, app: &App) {
             Style::default().fg(*color).add_modifier(Modifier::BOLD),
         ));
     }
+    // Workflow-run chip (#5040): the same `WorkflowPanel::top_bar_chip` the
+    // classic header shows, so a collapsed run stays visible on the ocean
+    // shell too. No workflow panel means no chip. The cramped-layout rebuild
+    // below keeps the chip in `suffix` alongside the goal chip.
+    let workflow_chip = app
+        .workflow_panel
+        .as_ref()
+        .map(|panel| (panel.top_bar_chip(), app.ui_theme.info));
+    if let Some((text, color)) = &workflow_chip {
+        left.push(Span::styled(
+            " · ",
+            Style::default().fg(app.ui_theme.text_dim),
+        ));
+        left.push(Span::styled(
+            text.clone(),
+            Style::default().fg(*color).add_modifier(Modifier::BOLD),
+        ));
+    }
 
     let context_meter = (tier != ShellTier::Compact)
         .then(|| crate::tui::ui::context_usage_snapshot(app))
@@ -1138,6 +1156,29 @@ pub fn render_header(area: Rect, buf: &mut Buffer, app: &App) {
                 ));
                 suffix.push(Span::styled(
                     truncate_to_width(text, goal_room),
+                    Style::default().fg(*color).add_modifier(Modifier::BOLD),
+                ));
+            }
+        }
+        // The workflow chip (#5040) is operator state too, so it gets the
+        // goal chip's treatment: whatever room remains after the chips ahead
+        // of it, clean truncation, and a clean drop when even a minimal chip
+        // cannot fit. The route label still yields its budget first.
+        if let Some((text, color)) = &workflow_chip {
+            let workflow_room = left_budget
+                .saturating_sub(
+                    4usize
+                        .saturating_add(indicator_width)
+                        .saturating_add(span_width(&suffix)),
+                )
+                .saturating_sub(3);
+            if workflow_room >= 8 {
+                suffix.push(Span::styled(
+                    " · ",
+                    Style::default().fg(app.ui_theme.text_dim),
+                ));
+                suffix.push(Span::styled(
+                    truncate_to_width(text, workflow_room),
                     Style::default().fg(*color).add_modifier(Modifier::BOLD),
                 ));
             }
@@ -1664,6 +1705,65 @@ mod tests {
         assert!(
             !narrow.contains("goal"),
             "unsupportable goal chip must drop, not clip: {narrow:?}"
+        );
+    }
+
+    #[test]
+    fn ocean_header_renders_running_workflow_chip_and_hides_it_when_idle() {
+        // #5040: a collapsed workflow run must stay visible in the ocean
+        // topbar — the same chip the classic header shows.
+        let mut app = test_app();
+        let idle = header_text(&app, 120);
+        assert!(
+            !idle.contains("wf "),
+            "no workflow chip without a run: {idle:?}"
+        );
+
+        app.workflow_panel = Some(crate::tui::widgets::workflow_panel::WorkflowPanel::new(
+            "wf_1", "ship it", 0,
+        ));
+        let running = header_text(&app, 120);
+        assert!(
+            running.contains("wf running"),
+            "running workflow chip missing from ocean topbar: {running:?}"
+        );
+    }
+
+    #[test]
+    fn ocean_header_keeps_completed_workflow_status_visible() {
+        let mut app = test_app();
+        let mut panel =
+            crate::tui::widgets::workflow_panel::WorkflowPanel::new("wf_2", "ship it", 1_000);
+        panel.lifecycle = crate::tui::widgets::workflow_panel::WorkflowPanelLifecycle::Succeeded;
+        panel.completed_at_ms = Some(61_000);
+        app.workflow_panel = Some(panel);
+        let header = header_text(&app, 120);
+        assert!(
+            header.contains("wf success"),
+            "completed workflow status missing: {header:?}"
+        );
+    }
+
+    #[test]
+    fn ocean_header_keeps_workflow_chip_in_cramped_layouts() {
+        let mut app = test_app();
+        app.model = "provider/model-with-a-deliberately-long-route-name".to_string();
+        app.workflow_panel = Some(crate::tui::widgets::workflow_panel::WorkflowPanel::new(
+            "wf_3", "ship it", 0,
+        ));
+        // Width pressure forces the cramped rebuild: the route yields first
+        // and the workflow chip survives whole.
+        let header = header_text(&app, 80);
+        assert!(
+            header.contains("wf running"),
+            "workflow chip must survive width pressure: {header:?}"
+        );
+        // When even a minimal chip cannot fit alongside mode, effort, and
+        // permission, it drops cleanly instead of clipping mid-word.
+        let narrow = header_text(&app, 48);
+        assert!(
+            !narrow.contains("wf "),
+            "unsupportable workflow chip must drop, not clip: {narrow:?}"
         );
     }
 
