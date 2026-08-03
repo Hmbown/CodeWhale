@@ -236,13 +236,15 @@ fn structural_url_authority_omits_every_secret_capable_component() {
 
 #[test]
 fn credential_shaped_config_values_are_flagged_by_key_name_only() {
+    // Fixture tokens stay low-entropy on purpose: realistic random strings
+    // trip secret scanners (GitGuardian flagged the originals as live credentials).
     let raw = r#"
 # comment with sk-not-a-real-line
 model = "deepseek-v4-flash"
 base_url = "https://api.moonshot.ai/kimi-code/v1"
-chatgpt_access_token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.payload.signature"
+chatgpt_access_token = "eyJ0000000000000000000000000"
 moonshot_api_key = "[redacted]"
-provider_api_key = "sk-abc123def456ghi789jkl012"
+provider_api_key = "sk-test0000000000000000"
 workspace_token_note = "short"
 random_id = "0123456789abcdef0123456789abcdef"
 "#;
