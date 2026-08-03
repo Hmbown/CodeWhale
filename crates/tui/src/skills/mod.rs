@@ -24,11 +24,11 @@ pub use roots::{
     CompatibleHarness, SkillRootAccess, SkillRootCatalog, SkillRootDescriptor, SkillRootId,
     SkillRootKind, SkillScope, classify_configured_skills_dir, safe_display_path,
 };
+#[allow(unused_imports)]
+pub use system::is_exact_bundled_skill;
 pub use system::{
     BundledSkillTier, bundled_skill_tier, install_system_skills, is_bundled_skill_name,
 };
-#[allow(unused_imports)]
-pub use system::{bundled_skill_body_sha256, is_exact_bundled_skill};
 
 use std::fs;
 use std::path::{Path, PathBuf};

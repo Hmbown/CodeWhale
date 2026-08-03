@@ -345,22 +345,6 @@ pub fn is_exact_bundled_skill(name: &str, skill_md_content: &str) -> bool {
         .any(|s| s.name == name && s.body == skill_md_content)
 }
 
-/// SHA-256 (hex) of the shipped `SKILL.md` body for a bundled skill, if any.
-#[must_use]
-#[allow(dead_code)] // available for managers / docs that prefer digest over body compare
-pub fn bundled_skill_body_sha256(name: &str) -> Option<String> {
-    use sha2::{Digest, Sha256};
-    BUNDLED_SKILLS.iter().find(|s| s.name == name).map(|s| {
-        let digest = Sha256::digest(s.body.as_bytes());
-        let mut out = String::with_capacity(digest.len() * 2);
-        for byte in digest {
-            use std::fmt::Write as _;
-            let _ = write!(&mut out, "{byte:02x}");
-        }
-        out
-    })
-}
-
 /// Attempt to install a single bundled skill into `skills_dir`.
 ///
 /// Returns `true` if installation occurred (fresh install or version bump).
@@ -490,25 +474,6 @@ fn write_marker_atomically(marker: &Path, version: &str) -> std::io::Result<()> 
         fs::remove_file(marker)?;
     }
     fs::rename(temporary.path(), marker)
-}
-
-/// Remove all system skills and the version marker.
-///
-/// Intended for tests and `deepseek setup --clean`.  Ignores missing files.
-#[allow(dead_code)]
-pub fn uninstall_system_skills(skills_dir: &Path) -> std::io::Result<()> {
-    let marker = skills_dir.join(".system-installed-version");
-
-    for skill in BUNDLED_SKILLS {
-        let dir = skills_dir.join(skill.name);
-        if dir.exists() {
-            fs::remove_dir_all(&dir)?;
-        }
-    }
-    if marker.exists() {
-        fs::remove_file(&marker)?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
