@@ -816,6 +816,24 @@ pub(super) fn missing_tool_error_message(tool_name: &str, catalog: &[Tool]) -> S
     } else {
         None
     };
+    // #5123-class: `exec_shell` was renamed to `Bash`. Name the rename first —
+    // otherwise the error misdiagnoses a retired-name call as an allow_shell
+    // permission problem and sends the model fixing the wrong thing.
+    let renamed_action = match tool_name {
+        "exec_shell" => Some("run"),
+        "exec_shell_wait" => Some("wait"),
+        "exec_shell_interact" => Some("interact"),
+        "exec_shell_cancel" => Some("cancel"),
+        _ => None,
+    };
+    if let Some(action) = renamed_action {
+        return format!(
+            "Tool '{tool_name}' is not available in the current tool catalog. \
+             `exec_shell` was renamed to `Bash` — call `Bash` with action \"{action}\" instead. \
+             If `Bash` is also absent: {shell_hint}.",
+            shell_hint = shell_tool_allow_shell_hint()
+        );
+    }
     if suggestions.is_empty() {
         if let Some(shell_hint) = shell_hint {
             return format!(

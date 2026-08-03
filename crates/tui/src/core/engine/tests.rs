@@ -13346,16 +13346,35 @@ fn missing_tool_error_message_redirects_checklist_item_miscalls() {
 }
 
 #[test]
+fn missing_tool_error_message_names_exec_shell_rename() {
+    // #5123-class: retired exec_shell names must be told the rename to Bash,
+    // not misdiagnosed as an allow_shell permission problem.
+    let catalog = vec![api_tool("read_file")];
+
+    for (tool_name, action) in [
+        ("exec_shell", "run"),
+        ("exec_shell_wait", "wait"),
+        ("exec_shell_interact", "interact"),
+        ("exec_shell_cancel", "cancel"),
+    ] {
+        let message = missing_tool_error_message(tool_name, &catalog);
+        assert!(message.contains("not available in the current tool catalog"));
+        assert!(
+            message.contains("renamed to `Bash`"),
+            "{tool_name}: {message}"
+        );
+        assert!(
+            message.contains(&format!("action \"{action}\"")),
+            "{tool_name}: {message}"
+        );
+    }
+}
+
+#[test]
 fn missing_shell_tool_error_message_names_allow_shell_gate() {
     let catalog = vec![api_tool("read_file")];
 
-    for tool_name in [
-        "exec_shell",
-        "exec_shell_wait",
-        "exec_shell_interact",
-        "task_shell_start",
-        "task_shell_wait",
-    ] {
+    for tool_name in ["task_shell_start", "task_shell_wait"] {
         let message = missing_tool_error_message(tool_name, &catalog);
         assert!(message.contains("not available in the current tool catalog"));
         assert!(
@@ -13381,12 +13400,12 @@ fn missing_shell_tool_error_message_names_allow_shell_gate() {
 
 #[test]
 fn missing_shell_tool_error_message_keeps_allow_shell_hint_with_suggestions() {
-    let catalog = vec![api_tool("exec")];
+    let catalog = vec![api_tool("task_shell_starter")];
 
-    let message = missing_tool_error_message("exec_shell", &catalog);
+    let message = missing_tool_error_message("task_shell_start", &catalog);
 
     assert!(message.contains("Did you mean:"));
-    assert!(message.contains("exec"));
+    assert!(message.contains("task_shell_starter"));
     assert!(message.contains("allow_shell = false"));
     assert!(message.contains("allow_shell"));
     assert!(message.contains("/config allow_shell true"));
