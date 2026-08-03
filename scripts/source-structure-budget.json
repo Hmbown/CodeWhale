@@ -183,7 +183,8 @@
   "large_module_threshold_lines": 1000,
   "max_large_module_count": 172,
   "max_module_lines": 19139,
-  "max_total_owned_rust_lines": 649350,
+  "max_total_owned_rust_lines": 659633,
+  "_todo_2026_08_03": "TODO(v0.9.5): aggregate ceiling bumped 649350 -> 659633 during v0.9.4 train hygiene. The 30-PR stack on 2026-08-02/03 grew owned production Rust by ~10.3k lines; both new thousand-line modules from the stack (crates/tui/src/native_memory.rs, crates/tui/src/tui/views/fleet_roster.rs) were split back under the threshold instead of raising the per-file ceilings. Pay the aggregate back down by deletion/dedup in v0.9.5 rather than treating this as the new normal.",
   "schema_version": 1,
   "workspace_packages": [
     "codewhale-agent",
