@@ -299,10 +299,12 @@ impl ToolRegistry {
     /// 2. Hyphens/spaces → underscores (read-file → read_file).
     /// 3. CamelCase → snake_case (ReadFile → read_file).
     /// 4. Strip trailing `_tool` / `-tool` suffix (twice).
-    /// 5. Fuzzy match via simple prefix/suffix similarity.
     ///
-    /// Returns `None` when no resolution is found (let the caller surface
-    /// "Unknown tool").
+    /// Returns `None` when no normalization matches (the caller surfaces
+    /// "Unknown tool … did you mean: …"). There is deliberately **no fuzzy
+    /// step**: a prefix guess over the registry would execute an arbitrary
+    /// sibling tool the model never asked for (#5123-class) — a hallucinated
+    /// name must fail, never dispatch.
     #[must_use]
     pub fn resolve(&self, requested: &str) -> Option<&str> {
         let names: Vec<&str> = self.tools.keys().map(String::as_str).collect();
@@ -336,14 +338,6 @@ impl ToolRegistry {
             && let Some(n) = names.iter().find(|n| **n == stripped)
         {
             return Some(n);
-        }
-        // 5. fuzzy: simple prefix match (at least 3 chars)
-        if lower.len() >= 3 {
-            for n in &names {
-                if n.len() >= 3 && (n.starts_with(&lower) || lower.starts_with(n)) {
-                    return Some(n);
-                }
-            }
         }
         None
     }
@@ -1382,6 +1376,34 @@ mod tests {
         registry.register(make_test_tool("read_file"));
 
         assert_eq!(registry.resolve("READ_FILE"), Some("read_file"));
+    }
+
+    #[test]
+    fn resolve_never_executes_a_fuzzy_prefix_guess() {
+        // #5123-class: a hallucinated name that merely shares a prefix with a
+        // real tool must NOT resolve — executing a prefix guess dispatched an
+        // arbitrary sibling tool ("agents" -> "agents/interrupt"). Exact and
+        // lossless normalizations still resolve; guesses return None so the
+        // caller can surface "unknown tool, did you mean: …".
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+        let mut registry = ToolRegistry::new(ctx);
+
+        registry.register(make_test_tool("agents/interrupt"));
+        registry.register(make_test_tool("read_file"));
+
+        // Prefix guesses in both directions are rejected.
+        assert_eq!(registry.resolve("agents"), None);
+        assert_eq!(registry.resolve("agents/int"), None);
+        assert_eq!(registry.resolve("read"), None);
+        assert_eq!(registry.resolve("read_file_extra"), None);
+
+        // Lossless normalizations still resolve.
+        let mut hyphen_registry = ToolRegistry::new(ToolContext::new(tmp.path().to_path_buf()));
+        hyphen_registry.register(make_test_tool("read_file"));
+        assert_eq!(hyphen_registry.resolve("read-file"), Some("read_file"));
+        assert_eq!(hyphen_registry.resolve("ReadFile"), Some("read_file"));
+        assert_eq!(hyphen_registry.resolve("read_file_tool"), Some("read_file"));
     }
 
     #[test]
