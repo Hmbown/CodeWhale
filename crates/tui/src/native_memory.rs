@@ -4,7 +4,7 @@
 //! index and may be deleted at any time. This module deliberately has no model
 //! or network dependency: callers decide when a note is reviewed and written.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -240,13 +240,10 @@ impl NativeMemoryStore {
 
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<MemoryHit>> {
         let query = validate_query(query)?;
-        // Markdown is authoritative. Refresh before retrieval so direct edits
-        // become visible even when no file-watcher thread is running.
-        self.with_write_lock(|| {
-            self.reindex_unlocked()?;
-            let conn = self.connection_unlocked()?;
-            self.query_hits(&conn, query, limit, None)
-        })
+        // Markdown stays authoritative, but the freshness check runs under
+        // a shared read lock; only a real tree change escalates to the
+        // write-locked reindex (#5173).
+        self.with_fresh_index(|conn| self.query_hits(conn, &query, limit, None))
     }
 
     /// Search global memory plus the current repository's origin-scoped
@@ -263,12 +260,10 @@ impl NativeMemoryStore {
             return self.search(query, limit);
         }
         let global = self.global_path();
-        self.with_write_lock(|| {
-            self.reindex_unlocked()?;
-            let conn = self.connection_unlocked()?;
+        self.with_fresh_index(|conn| {
             self.query_hits(
-                &conn,
-                query,
+                conn,
+                &query,
                 limit,
                 Some((&global, workspace_path.as_deref())),
             )
@@ -276,9 +271,7 @@ impl NativeMemoryStore {
     }
 
     pub fn get(&self, id: i64) -> Result<Option<MemoryHit>> {
-        self.with_write_lock(|| {
-            self.reindex_unlocked()?;
-            let conn = self.connection_unlocked()?;
+        self.with_fresh_index(|conn| {
             Ok(conn
                 .query_row(
                     "SELECT e.id,e.text,e.source,e.line_start,e.line_end,
@@ -306,9 +299,7 @@ impl NativeMemoryStore {
     }
 
     fn get_from_sources(&self, id: i64, sources: &[PathBuf]) -> Result<Option<MemoryHit>> {
-        self.with_write_lock(|| {
-            self.reindex_unlocked()?;
-            let conn = self.connection_unlocked()?;
+        self.with_fresh_index(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT e.id,e.text,e.source,e.line_start,e.line_end,
                         CASE WHEN e.source_mtime != s.mtime THEN 1 ELSE 0 END
@@ -425,6 +416,70 @@ impl NativeMemoryStore {
             .write()
             .with_context(|| format!("write-lock native memory at {}", self.root.display()))?;
         operation()
+    }
+
+    fn with_read_lock<T>(&self, operation: impl FnOnce() -> Result<T>) -> Result<T> {
+        fs::create_dir_all(&self.root)?;
+        let lock_path = self.root.join(".memory.lock");
+        let lock_file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&lock_path)?;
+        let mut lock = fd_lock::RwLock::new(lock_file);
+        let _guard = lock
+            .read()
+            .with_context(|| format!("read-lock native memory at {}", self.root.display()))?;
+        operation()
+    }
+
+    /// `true` when the Markdown tree differs from the index — a source file
+    /// was added, removed, or touched since the last reindex — so a reindex
+    /// would change index contents.
+    fn tree_changes_pending(&self, conn: &Connection) -> Result<bool> {
+        let mut files = Vec::new();
+        collect_markdown(&self.root, &mut files)?;
+        let indexed = conn
+            .prepare("SELECT path, mtime FROM memory_sources")?
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?
+            .collect::<rusqlite::Result<HashMap<_, _>>>()?;
+        if indexed.len() != files.len() {
+            return Ok(true);
+        }
+        for path in files {
+            let key = path.to_string_lossy();
+            match indexed.get(key.as_ref()) {
+                Some(&indexed_mtime) if indexed_mtime == file_mtime(&path)? => {}
+                _ => return Ok(true),
+            }
+        }
+        Ok(false)
+    }
+
+    /// Run `operation` against a fresh index under the lightest lock the
+    /// tree allows. The freshness check itself runs under a shared read
+    /// lock, so reads on an unchanged tree never queue behind the exclusive
+    /// write lock (#5173); a real tree change escalates to the write-locked
+    /// reindex, keeping direct Markdown edits visible on the next read.
+    fn with_fresh_index<T>(&self, operation: impl Fn(&Connection) -> Result<T>) -> Result<T> {
+        let fresh = self.with_read_lock(|| {
+            let conn = self.connection_unlocked()?;
+            self.tree_changes_pending(&conn).map(|changed| !changed)
+        })?;
+        if fresh {
+            return self.with_read_lock(|| {
+                let conn = self.connection_unlocked()?;
+                operation(&conn)
+            });
+        }
+        self.with_write_lock(|| {
+            self.reindex_unlocked()?;
+            let conn = self.connection_unlocked()?;
+            operation(&conn)
+        })
     }
 
     fn connection_unlocked(&self) -> Result<Connection> {
@@ -803,6 +858,45 @@ mod tests {
         fs::write(&path, "- second value\n").unwrap();
         assert!(store.search("first", 10).unwrap().is_empty());
         assert_eq!(store.search("second", 10).unwrap().len(), 1);
+    }
+
+    /// #5173: the read-path freshness check is what decides between the
+    /// shared read lock and the write-locked reindex — pin exactly which
+    /// tree states escalate.
+    #[test]
+    fn freshness_check_escalates_only_on_real_tree_changes() {
+        let tmp = TempDir::new().unwrap();
+        let store = NativeMemoryStore::new(tmp.path());
+        store.remember(MemoryScope::Global, None, "alpha").unwrap();
+        let conn = store.connection_unlocked().unwrap();
+        assert!(
+            !store.tree_changes_pending(&conn).unwrap(),
+            "an unchanged tree must take the shared read path"
+        );
+
+        let global = store.global_path();
+        OpenOptions::new()
+            .append(true)
+            .open(&global)
+            .unwrap()
+            .write_all(b"\n- beta\n")
+            .unwrap();
+        assert!(
+            store.tree_changes_pending(&conn).unwrap(),
+            "a direct edit must escalate to the reindex path"
+        );
+
+        store.reindex().unwrap();
+        assert!(
+            !store.tree_changes_pending(&conn).unwrap(),
+            "a reindexed tree is fresh again"
+        );
+
+        fs::remove_file(&global).unwrap();
+        assert!(
+            store.tree_changes_pending(&conn).unwrap(),
+            "a removed source must escalate to the reindex path"
+        );
     }
 
     #[test]
