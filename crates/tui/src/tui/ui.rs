@@ -364,51 +364,6 @@ fn should_suppress_user_input_prompt(app: &App) -> bool {
     !crate::core::authority::permission_posture_allows_questions(effective_posture)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SidebarRenderState {
-    Hidden,
-    SuppressedByWidth {
-        available_width: u16,
-        min_width: u16,
-    },
-    AutoCollapsed,
-    Visible,
-}
-
-pub(crate) fn sidebar_render_state(app: &mut App) -> SidebarRenderState {
-    if app.sidebar_focus == SidebarFocus::Hidden {
-        return SidebarRenderState::Hidden;
-    }
-
-    if let Some(available_width) = sidebar_host_width_hint(app)
-        && available_width < FILE_TREE_MIN_HOST_WIDTH
-    {
-        return SidebarRenderState::SuppressedByWidth {
-            available_width,
-            min_width: FILE_TREE_MIN_HOST_WIDTH,
-        };
-    }
-
-    if crate::tui::sidebar::sidebar_auto_idle(app) {
-        return SidebarRenderState::AutoCollapsed;
-    }
-
-    SidebarRenderState::Visible
-}
-
-fn sidebar_host_width_hint(app: &App) -> Option<u16> {
-    app.last_sidebar_host_width.or_else(|| {
-        let transcript_width = app.viewport.last_transcript_area.map(|area| area.width)?;
-        let sidebar_width = app
-            .viewport
-            .last_sidebar_area
-            .or(app.last_sidebar_area)
-            .map(|area| area.width)
-            .unwrap_or(0);
-        Some(transcript_width.saturating_add(sidebar_width))
-    })
-}
-
 type AppTerminal = Terminal<ColorCompatBackend<Stdout>>;
 
 type PendingToolUses = Vec<(String, String, serde_json::Value)>;

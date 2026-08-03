@@ -319,6 +319,9 @@ pub struct Settings {
     pub work_surface_top_height: u16,
     /// Remembered total width (content plus divider) for side Work placement.
     pub work_surface_side_width: u16,
+    /// Which panel the rail shows: tasks, agents, context, or pinned.
+    /// Orthogonal to `work_surface_placement` (rail unification, 0.9.4).
+    pub rail_panel: String,
     /// Runtime-only 30 FPS cap for terminals that flicker at high redraw
     /// rates. Separate from accessibility motion and text delivery.
     #[serde(skip)]
@@ -529,6 +532,7 @@ impl Default for Settings {
             // only grows to this many lines (user request, 2026-07-23).
             work_surface_top_height: 8,
             work_surface_side_width: 30,
+            rail_panel: "tasks".to_string(),
             constrained_frame_rate: false,
             bracketed_paste: true,
             paste_burst_detection: true,
@@ -608,7 +612,17 @@ fn normalize_work_surface_placement(value: &str) -> &'static str {
     match value.trim().to_ascii_lowercase().as_str() {
         "left" => "left",
         "right" => "right",
+        "off" => "off",
         _ => "top",
+    }
+}
+
+fn normalize_rail_panel(value: &str) -> &'static str {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "agents" => "agents",
+        "context" => "context",
+        "pinned" => "pinned",
+        _ => "tasks",
     }
 }
 
@@ -801,6 +815,7 @@ impl Settings {
             s.ocean_treatment = normalize_ocean_treatment(&s.ocean_treatment).to_string();
             s.work_surface_placement =
                 normalize_work_surface_placement(&s.work_surface_placement).to_string();
+            s.rail_panel = normalize_rail_panel(&s.rail_panel).to_string();
             s.work_surface_top_height = s.work_surface_top_height.clamp(2, 16);
             s.work_surface_side_width = s.work_surface_side_width.clamp(26, 80);
             s.inline_diffs = normalize_inline_diffs(&s.inline_diffs).to_string();
@@ -1144,12 +1159,24 @@ impl Settings {
             }
             "work_surface_placement" | "work_surface" | "work_rail" => {
                 let normalized = value.trim().to_ascii_lowercase();
-                if !matches!(normalized.as_str(), "top" | "left" | "right") {
+                if !matches!(normalized.as_str(), "top" | "left" | "right" | "off") {
                     anyhow::bail!(
-                        "Failed to update setting: invalid work surface placement '{value}'. Expected: top, left, or right."
+                        "Failed to update setting: invalid work surface placement '{value}'. Expected: top, left, right, or off."
                     );
                 }
                 self.work_surface_placement = normalized;
+            }
+            "rail_panel" | "rail" => {
+                let normalized = value.trim().to_ascii_lowercase();
+                if !matches!(
+                    normalized.as_str(),
+                    "tasks" | "agents" | "context" | "pinned"
+                ) {
+                    anyhow::bail!(
+                        "Failed to update setting: invalid rail panel '{value}'. Expected: tasks, agents, context, or pinned."
+                    );
+                }
+                self.rail_panel = normalized;
             }
             "work_surface_top_height" | "work_top_height" => {
                 self.work_surface_top_height =
@@ -1440,6 +1467,7 @@ impl Settings {
             "  work_side_width:    {}",
             self.work_surface_side_width
         ));
+        lines.push(format!("  rail_panel:         {}", self.rail_panel));
         lines.push(format!("  bracketed_paste:    {}", self.bracketed_paste));
         lines.push(format!(
             "  paste_burst_detect: {}",
@@ -1578,6 +1606,10 @@ impl Settings {
             (
                 "work_surface_side_width",
                 "Resizable To-do/Sub-agent side bar width: 26-80 columns",
+            ),
+            (
+                "rail_panel",
+                "Which panel the rail shows: tasks/agents/context/pinned",
             ),
             (
                 "bracketed_paste",
@@ -2961,11 +2993,11 @@ mod tests {
     }
 
     #[test]
-    fn work_surface_placement_persists_only_top_left_or_right() {
+    fn work_surface_placement_persists_top_left_right_and_off() {
         let mut settings = Settings::default();
         assert_eq!(settings.work_surface_placement, "top");
 
-        for placement in ["left", "right", "top"] {
+        for placement in ["left", "right", "top", "off"] {
             settings
                 .set("work_surface_placement", placement)
                 .expect("valid placement");
@@ -2978,8 +3010,31 @@ mod tests {
         let err = settings
             .set("work_surface_placement", "bottom")
             .expect_err("bottom is owned by composer/footer");
-        assert!(err.to_string().contains("top, left, or right"));
-        assert_eq!(settings.work_surface_placement, "top");
+        assert!(err.to_string().contains("top, left, right, or off"));
+        assert_eq!(settings.work_surface_placement, "off");
+    }
+
+    #[test]
+    fn rail_panel_persists_tasks_agents_context_and_pinned() {
+        let mut settings = Settings::default();
+        assert_eq!(settings.rail_panel, "tasks");
+
+        for panel in ["agents", "context", "pinned", "tasks"] {
+            settings.set("rail_panel", panel).expect("valid panel");
+            assert_eq!(settings.rail_panel, panel);
+            let body = toml::to_string(&settings).expect("serialize settings");
+            let restored: Settings = toml::from_str(&body).expect("restore settings");
+            assert_eq!(restored.rail_panel, panel);
+        }
+
+        let err = settings
+            .set("rail_panel", "auto")
+            .expect_err("auto-collapse was dropped with the legacy sidebar");
+        assert!(
+            err.to_string()
+                .contains("tasks, agents, context, or pinned")
+        );
+        assert_eq!(settings.rail_panel, "tasks");
     }
 
     #[test]

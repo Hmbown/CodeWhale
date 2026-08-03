@@ -1883,6 +1883,13 @@ impl ConfigView {
             },
             ConfigRow {
                 section: ConfigSection::Sidebar,
+                key: "rail_panel".to_string(),
+                value: settings.rail_panel.clone(),
+                editable: true,
+                scope: ConfigScope::Saved,
+            },
+            ConfigRow {
+                section: ConfigSection::Sidebar,
                 key: "sidebar_width".to_string(),
                 value: settings.sidebar_width_percent.to_string(),
                 editable: true,
@@ -2948,8 +2955,9 @@ fn config_hint_for_key(key: &str) -> &'static str {
         }
         "background_color" => "#RRGGBB | default",
         "work_surface_placement" => {
-            "top | left | right · side rails require Ocean mode and at least 72 columns"
+            "top | left | right | off · side rails require Ocean mode and at least 72 columns"
         }
+        "rail_panel" => "tasks | agents | context | pinned · which panel the rail shows",
         "work_surface_top_height" => "2..=16 rows · also adjustable by dragging the divider",
         "work_surface_side_width" => "26..=80 columns · also adjustable by dragging the divider",
         "base_url" => "global DeepSeek/root fallback; e.g. https://api.deepseek.com/beta",
@@ -3065,7 +3073,8 @@ fn config_choice_values(key: &str, provider: ApiProvider) -> Option<Vec<String>>
         }
         "ocean_treatment" => vec!["ombre", "flat"],
         "focus_texture" => vec!["off", "scrim", "grain"],
-        "work_surface_placement" => vec!["top", "left", "right"],
+        "work_surface_placement" => vec!["top", "left", "right", "off"],
+        "rail_panel" => vec!["tasks", "agents", "context", "pinned"],
         "status_indicator" => vec!["cw", "whale", "dots", "off"],
         "synchronized_output" => vec!["auto", "on", "off"],
         "cost_currency" => vec!["usd", "cny"],
@@ -3157,6 +3166,11 @@ fn config_choice_label(locale: Locale, key: &str, value: &str) -> String {
         ("work_surface_placement", "top") => "Top".to_string(),
         ("work_surface_placement", "left") => "Left sidebar".to_string(),
         ("work_surface_placement", "right") => "Right sidebar".to_string(),
+        ("work_surface_placement", "off") => "Off".to_string(),
+        ("rail_panel", "tasks") => "Tasks".to_string(),
+        ("rail_panel", "agents") => "Agents".to_string(),
+        ("rail_panel", "context") => "Context".to_string(),
+        ("rail_panel", "pinned") => "Pinned".to_string(),
         ("reasoning_effort", "default") => "Provider default".to_string(),
         ("status_indicator", "cw") => "Codewhale mark".to_string(),
         ("status_indicator", "whale") => "Animated whale".to_string(),
@@ -3214,6 +3228,11 @@ fn config_choice_detail(locale: Locale, key: &str, value: &str) -> Cow<'static, 
         ("work_surface_placement", "right") => {
             "Show Tasks, To-do, and Workers in a right sidebar when the terminal is wide enough."
         }
+        ("work_surface_placement", "off") => "Hide the rail entirely.",
+        ("rail_panel", "tasks") => "Rail shows the live Tasks / To-do / Workers list.",
+        ("rail_panel", "agents") => "Rail shows sub-agents and fan-out state.",
+        ("rail_panel", "context") => "Rail shows workspace, token, and cost context.",
+        ("rail_panel", "pinned") => "Rail shows the pinned goal and checklist summary.",
         ("low_motion", "true") => "Stops live-state movement without changing model output.",
         ("low_motion", "false") => "Allows motion selected by the other appearance settings.",
         ("fancy_animations", "true") => "Animates truthful tool, status, and ocean live state.",
@@ -5929,6 +5948,7 @@ context_window = 262144
                 "work_surface_placement",
                 "work_surface_top_height",
                 "work_surface_side_width",
+                "rail_panel",
                 "sidebar_width",
                 "sidebar_focus",
                 "context_panel",
@@ -5953,6 +5973,7 @@ context_window = 262144
                 "work_surface_placement",
                 "work_surface_top_height",
                 "work_surface_side_width",
+                "rail_panel",
                 "sidebar_width",
                 "sidebar_focus",
                 "context_panel",

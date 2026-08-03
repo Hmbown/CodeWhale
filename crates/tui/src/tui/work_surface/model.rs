@@ -240,6 +240,13 @@ impl WorkSurfaceState {
         self.resizing
     }
 
+    /// The placement actually rendered this frame (after the narrow-terminal
+    /// fallback), for truthful status readouts.
+    #[must_use]
+    pub fn effective_placement(&self) -> WorkSurfacePlacement {
+        self.effective_placement
+    }
+
     #[must_use]
     pub fn with_placement(placement: WorkSurfacePlacement) -> Self {
         Self::with_layout(placement, 3, 30)

@@ -363,7 +363,8 @@ mod tests {
     use crate::localization::{Locale, MessageId};
     use crate::tools::plan::{PlanItemArg, StepStatus, UpdatePlanArgs};
     use crate::tools::todo::TodoStatus;
-    use crate::tui::app::{App, AppAction, SidebarFocus, TuiOptions};
+    use crate::tui::app::{App, AppAction, TuiOptions};
+    use crate::tui::work_surface::{RailPanel, WorkSurfacePlacement};
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
     use tempfile::tempdir;
@@ -465,16 +466,13 @@ mod tests {
     #[test]
     fn command_registry_contains_config_and_links_but_not_set_or_deepseek() {
         assert!(command_infos().iter().any(|cmd| cmd.name == "config"));
-        let sidebar = command_infos()
+        let rail = command_infos()
             .into_iter()
-            .find(|cmd| cmd.name == "sidebar")
-            .expect("sidebar command should exist");
-        assert_eq!(sidebar.description_id, MessageId::CmdSidebarDescription);
-        assert!(
-            sidebar
-                .description_for(Locale::En)
-                .contains("right sidebar")
-        );
+            .find(|cmd| cmd.name == "rail")
+            .expect("rail command should exist");
+        assert_eq!(rail.aliases, &["sidebar"]);
+        assert_eq!(rail.description_id, MessageId::CmdSidebarDescription);
+        assert!(rail.description_for(Locale::En).contains("rail"));
         assert!(command_infos().iter().any(|cmd| cmd.name == "links"));
         let hf = command_infos()
             .into_iter()
@@ -1145,74 +1143,98 @@ mod tests {
     }
 
     #[test]
-    fn execute_sidebar_toggles_visibility() {
+    fn execute_rail_sets_placement_and_reports_actual_state() {
         let mut app = create_test_app();
-        app.set_sidebar_focus(SidebarFocus::Pinned);
-        app.last_sidebar_host_width = Some(120);
 
-        let result = execute("/sidebar", &mut app);
+        let result = execute("/rail off", &mut app);
         assert!(!result.is_error);
-        assert_eq!(app.sidebar_focus, SidebarFocus::Hidden);
-        assert!(app.status_message.is_none());
-        assert_eq!(result.message.as_deref(), Some("Sidebar is hidden"));
+        assert_eq!(app.work_surface.placement, WorkSurfacePlacement::Off);
+        assert!(
+            result
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Rail is off")
+        );
 
-        let result = execute("/sidebar", &mut app);
+        let result = execute("/rail right", &mut app);
         assert!(!result.is_error);
-        assert_eq!(app.sidebar_focus, SidebarFocus::Pinned);
-        assert!(app.status_message.is_none());
-        assert_eq!(result.message.as_deref(), Some("Sidebar is visible"));
+        assert_eq!(app.work_surface.placement, WorkSurfacePlacement::Right);
+        assert!(
+            result
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("right placement")
+        );
+
+        // The /sidebar alias drives the same rail.
+        let result = execute("/sidebar left", &mut app);
+        assert!(!result.is_error);
+        assert_eq!(app.work_surface.placement, WorkSurfacePlacement::Left);
+
+        // Bare /rail reports the actual rendered state; it must never claim
+        // visibility for a surface that cannot render.
+        app.work_surface.placement = WorkSurfacePlacement::Off;
+        let result = execute("/rail", &mut app);
+        assert!(!result.is_error);
+        assert!(
+            result
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Rail is off")
+        );
     }
 
     #[test]
-    fn execute_sidebar_accepts_explicit_focus_targets() {
+    fn execute_rail_accepts_panel_targets_and_legacy_words() {
         let mut app = create_test_app();
-        app.last_sidebar_host_width = Some(120);
 
-        let result = execute("/sidebar tasks", &mut app);
+        let result = execute("/rail agents", &mut app);
         assert!(!result.is_error);
-        assert_eq!(app.sidebar_focus, SidebarFocus::Tasks);
-        assert!(app.status_message.is_none());
+        assert_eq!(app.work_surface.panel, RailPanel::Agents);
 
-        let result = execute("/sidebar activity", &mut app);
+        let result = execute("/sidebar context", &mut app);
+        assert!(!result.is_error);
+        assert_eq!(app.work_surface.panel, RailPanel::Context);
+
+        let result = execute("/rail activity", &mut app);
         assert!(!result.is_error);
         assert_eq!(
-            app.sidebar_focus,
-            SidebarFocus::Tasks,
-            "activity is the user-facing alias for the Activity panel"
+            app.work_surface.panel,
+            RailPanel::Tasks,
+            "activity maps onto the Tasks panel"
         );
 
-        let result = execute("/sidebar off", &mut app);
+        let result = execute("/rail pinned", &mut app);
         assert!(!result.is_error);
-        assert_eq!(app.sidebar_focus, SidebarFocus::Hidden);
-        assert!(app.status_message.is_none());
-
-        let result = execute("/sidebar closed", &mut app);
-        assert!(!result.is_error);
-        assert_eq!(app.sidebar_focus, SidebarFocus::Hidden);
-        assert!(app.status_message.is_none());
-
-        let result = execute("/sidebar none", &mut app);
-        assert!(!result.is_error);
-        assert_eq!(app.sidebar_focus, SidebarFocus::Hidden);
-        assert!(app.status_message.is_none());
+        assert_eq!(app.work_surface.panel, RailPanel::Pinned);
 
         let result = execute("/sidebar on", &mut app);
         assert!(!result.is_error);
-        assert_eq!(app.sidebar_focus, SidebarFocus::Pinned);
-        assert!(app.status_message.is_none());
+        assert_eq!(
+            app.work_surface.placement,
+            WorkSurfacePlacement::Top,
+            "on restores the default top rail"
+        );
+
+        let result = execute("/sidebar none", &mut app);
+        assert!(!result.is_error);
+        assert_eq!(app.work_surface.placement, WorkSurfacePlacement::Off);
     }
 
     #[test]
-    fn execute_sidebar_rejects_invalid_args() {
+    fn execute_rail_rejects_invalid_args() {
         let mut app = create_test_app();
-        let result = execute("/sidebar maybe", &mut app);
+        let result = execute("/rail maybe", &mut app);
         assert!(result.is_error);
         assert!(
             result
                 .message
                 .as_deref()
                 .unwrap_or_default()
-                .contains("Usage: /sidebar")
+                .contains("Usage: /rail")
         );
     }
 

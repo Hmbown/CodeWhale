@@ -584,11 +584,15 @@ impl App {
                 selection_anchor: None,
             },
             viewport: ViewportState::default(),
-            work_surface: crate::tui::work_surface::WorkSurfaceState::with_layout(
-                work_surface_placement,
-                work_surface_top_height,
-                work_surface_side_width,
-            ),
+            work_surface: {
+                let mut state = crate::tui::work_surface::WorkSurfaceState::with_layout(
+                    work_surface_placement,
+                    work_surface_top_height,
+                    work_surface_side_width,
+                );
+                state.panel = crate::tui::work_surface::RailPanel::parse(&settings.rail_panel);
+                state
+            },
             hunt: HuntState::default(),
             session: SessionState::default(),
             active_allowed_tools: None,

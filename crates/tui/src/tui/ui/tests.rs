@@ -9207,42 +9207,23 @@ fn sidebar_width_floor_raises_with_chat_width() {
 }
 
 #[test]
-fn sidebar_width_gate_uses_compact_sixty_column_boundary() {
+fn rail_command_reports_off_without_claiming_visibility() {
+    // Replaces the old sidebar_render_state tests: the render-state machine
+    // is gone with the classic sidebar, and the /rail status readout is the
+    // contract that replaces it. It must never claim a surface that cannot
+    // render is visible.
     let mut app = create_test_app();
-    app.sidebar_focus = SidebarFocus::Pinned;
-    app.last_sidebar_host_width = Some(FILE_TREE_MIN_HOST_WIDTH - 1);
-
+    let result = crate::commands::execute("/rail off", &mut app);
+    assert!(!result.is_error);
     assert_eq!(
-        sidebar_render_state(&mut app),
-        SidebarRenderState::SuppressedByWidth {
-            available_width: FILE_TREE_MIN_HOST_WIDTH - 1,
-            min_width: FILE_TREE_MIN_HOST_WIDTH,
-        }
+        app.work_surface.placement,
+        crate::tui::work_surface::WorkSurfacePlacement::Off
     );
-
-    app.last_sidebar_host_width = Some(FILE_TREE_MIN_HOST_WIDTH);
-
-    assert_eq!(sidebar_render_state(&mut app), SidebarRenderState::Visible);
-}
-
-#[test]
-fn pinned_sidebar_is_visible_when_idle_and_wide() {
-    let mut app = create_test_app();
-    app.sidebar_focus = SidebarFocus::Pinned;
-    app.last_sidebar_host_width = Some(120);
-
-    assert_eq!(sidebar_render_state(&mut app), SidebarRenderState::Visible);
-}
-
-#[test]
-fn auto_sidebar_status_reports_idle_collapse_when_wide() {
-    let mut app = create_test_app();
-    app.sidebar_focus = SidebarFocus::Auto;
-    app.last_sidebar_host_width = Some(120);
-
-    assert_eq!(
-        sidebar_render_state(&mut app),
-        SidebarRenderState::AutoCollapsed
+    let message = result.message.unwrap_or_default();
+    assert!(message.contains("Rail is off"), "got: {message}");
+    assert!(
+        !message.contains("Sidebar is visible"),
+        "no control may claim the dead sidebar renders: {message}"
     );
 }
 
