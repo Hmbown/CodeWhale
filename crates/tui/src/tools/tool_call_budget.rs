@@ -1,10 +1,15 @@
 //! Hard per-turn tool-call admission budget (#4415).
 //!
 //! One counter per turn, built from the task's structured `max_tool_calls`
-//! constraint. Every proposed tool call is admitted through the same gate in
-//! proposal order, so a batch larger than the remaining budget is truncated
-//! to exactly the calls that still fit and the excess are rejected — never
+//! constraint. Every proposed tool call passes the same gate in proposal
+//! order, so a batch larger than the remaining budget is truncated to
+//! exactly the calls that still fit and the excess are rejected — never
 //! executed — with a typed reason carrying the remaining-call count.
+//!
+//! The cap counts *admitted* calls: a call that debits a slot but is then
+//! stopped by a later admission gate (deny-list, allow-list, sandbox,
+//! hooks, missing tool) is refunded before it would have executed (#5170),
+//! so blocked calls cannot burn the budget.
 
 use codewhale_tools::ToolError;
 
@@ -49,9 +54,11 @@ impl ToolCallBudget {
         }
     }
 
-    /// Admit one proposed tool call. Every proposed call counts: while budget
-    /// remains, the call is admitted and the remaining count decrements; once
-    /// exhausted, the call is rejected with [`ToolCallBudgetExceeded`].
+    /// Debit one proposed tool call at the admission gate. While budget
+    /// remains, the call is admitted and the remaining count decrements;
+    /// once exhausted, the call is rejected with [`ToolCallBudgetExceeded`].
+    /// A call stopped by a later gate before execution must be handed back
+    /// through [`refund`](Self::refund) so the cap counts admitted calls.
     pub(crate) fn admit(&mut self) -> Result<(), ToolCallBudgetExceeded> {
         let (Some(max), Some(remaining)) = (self.max, self.remaining.as_mut()) else {
             return Ok(());
@@ -61,5 +68,14 @@ impl ToolCallBudget {
         }
         *remaining -= 1;
         Ok(())
+    }
+
+    /// Hand back one debited slot when the call that took it is blocked by
+    /// a later admission gate and never executes (#5170). Clamped at the
+    /// declared maximum so a refund can never grow the budget.
+    pub(crate) fn refund(&mut self) {
+        if let (Some(max), Some(remaining)) = (self.max, self.remaining.as_mut()) {
+            *remaining = (*remaining + 1).min(max);
+        }
     }
 }

@@ -1861,14 +1861,17 @@ impl Engine {
                 let mut hook_requires_approval = false;
 
                 // #4415: hard per-turn tool-call budget. This gate runs first
-                // so the budget counts every proposed call in the batch: while
-                // calls remain, the call is admitted and the count decrements;
-                // once exhausted, the call is rejected with a typed reason and
-                // never executes — an over-budget batch is truncated to exactly
-                // the calls that still fit, in proposal order.
-                if let Err(exceeded) = tool_call_budget.admit()
-                    && blocked_error.is_none()
-                {
+                // so proposal order decides which calls fit: while calls
+                // remain, the call is admitted and the count decrements; once
+                // exhausted, the call is rejected with a typed reason and
+                // never executes — an over-budget batch is truncated to
+                // exactly the calls that still fit, in proposal order.
+                // #5170: the cap counts *admitted* calls — a debited call
+                // stopped by any gate below is refunded before plan
+                // construction, so blocked calls cannot burn the budget.
+                let admission = tool_call_budget.admit();
+                let budget_debited = admission.is_ok();
+                if let Err(exceeded) = admission {
                     blocked_error = Some(exceeded.into_tool_error(&tool_name));
                 }
 
@@ -2320,6 +2323,14 @@ impl Engine {
                     approval_description = format!(
                         "{approval_description} — note: the execution sandbox is read-only for this session; approving runs the command without write access (approval cannot lift the sandbox)"
                     );
+                }
+
+                // #5170: a call stopped by any admission gate above never
+                // executes, so hand its debited budget slot back. Only the
+                // budget gate's own rejection leaves nothing to refund —
+                // it never debited in the first place.
+                if blocked_error.is_some() && budget_debited {
+                    tool_call_budget.refund();
                 }
 
                 plans.push(ToolExecutionPlan {
