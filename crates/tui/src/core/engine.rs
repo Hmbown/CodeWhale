@@ -652,6 +652,13 @@ pub struct Engine {
     /// so doctor and debug surfaces can answer "why is this tool unavailable"
     /// with the same record the user and the model already saw.
     last_policy_narrowing: Option<PolicyNarrowingEvent>,
+    /// The git snapshot line last emitted in a `<turn_meta>` block this
+    /// session (#5187, k3-gap F3). The snapshot re-collects branch/dirty
+    /// state every turn, so without change-detection the block's bytes drift
+    /// after every edit the model itself makes, defeating cross-turn prefix
+    /// stability. `None` until the first block is built; the line is then
+    /// emitted only when the snapshot actually changed.
+    last_turn_meta_git_snapshot: StdMutex<Option<String>>,
     /// Process-local cache for `estimated_input_tokens`. Memoizes the most
     /// recent token estimate keyed on `(session.messages_revision,
     /// system_prompt_fingerprint)`. Five call sites per turn consult this
@@ -1311,6 +1318,7 @@ impl Engine {
             sandbox_backend,
             current_mode: AppMode::Agent,
             last_policy_narrowing: None,
+            last_turn_meta_git_snapshot: StdMutex::new(None),
             token_estimate_cache: TokenEstimateCache::new(),
             shared_paused: shared_paused.clone(),
             advisor_emission_guard: None,
@@ -2872,8 +2880,21 @@ impl Engine {
         if let Some(working_set_summary) = working_set_summary {
             lines.push(working_set_summary);
         }
+        // #5187 (k3-gap F3): the git snapshot re-collects branch/dirty state
+        // every turn, so the line's bytes changed after every edit the model
+        // itself made — churning the block and priming caution each turn.
+        // Emit it only when the snapshot actually changed since the last
+        // emitted block; the model can always run `git status` for a fresh
+        // read.
         if let Some(git_snapshot) = crate::tui::workspace_context::collect(&self.config.workspace) {
-            lines.push(format!("Git workspace: {git_snapshot}"));
+            let mut last = self
+                .last_turn_meta_git_snapshot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if last.as_deref() != Some(git_snapshot.as_str()) {
+                *last = Some(git_snapshot.clone());
+                lines.push(format!("Git workspace: {git_snapshot}"));
+            }
         }
         let summary = lines.join("\n");
 
