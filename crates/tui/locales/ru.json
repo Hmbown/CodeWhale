@@ -235,7 +235,7 @@
   "CmdLogoutDescription": "Удалить API-ключ и вернуться к настройке",
   "CmdMcpDescription": "Открыть список серверов MCP или управлять ими",
   "CmdPluginDescription": "Просмотр и управление доверенными пакетами плагинов; устаревшие исполняемые инструменты — отдельно",
-  "CmdPluginBundleUsage": "Использование: /plugin [list|show <name>|validate [name]|trust <name> [review-token]|enable <name>|disable <name>|revoke <name>|reload|tools [name]]",
+  "CmdPluginBundleUsage": "Использование: /plugin [list|show <name>|validate [name]|install <spec>|update <name>|uninstall <name>|trust <name> [review-token]|enable <name>|disable <name>|revoke <name>|reload|tools [name]]",
   "CmdPluginBundleNoneFound": "Пакеты плагинов Codewhale не найдены.",
   "CmdPluginBundleListHeader": "Пакеты плагинов ({count}):",
   "CmdPluginLegacyListHeader": "Устаревшие исполняемые плагины ({count}) в {dir}:",

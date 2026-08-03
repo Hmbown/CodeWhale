@@ -235,7 +235,7 @@
   "CmdLogoutDescription": "Effacer la clé API et revenir à la configuration",
   "CmdMcpDescription": "Ouvrir ou gérer les serveurs MCP",
   "CmdPluginDescription": "Inspecter et gérer les bundles de plugins de confiance ; les outils exécutables hérités restent à part",
-  "CmdPluginBundleUsage": "Usage : /plugin [list|show <name>|validate [name]|trust <name> [review-token]|enable <name>|disable <name>|revoke <name>|reload|tools [name]]",
+  "CmdPluginBundleUsage": "Usage : /plugin [list|show <name>|validate [name]|install <spec>|update <name>|uninstall <name>|trust <name> [review-token]|enable <name>|disable <name>|revoke <name>|reload|tools [name]]",
   "CmdPluginBundleNoneFound": "Aucun bundle de plugins Codewhale trouvé.",
   "CmdPluginBundleListHeader": "Bundles de plugins ({count}) :",
   "CmdPluginLegacyListHeader": "Outils de plugins exécutables hérités ({count}) dans {dir} :",

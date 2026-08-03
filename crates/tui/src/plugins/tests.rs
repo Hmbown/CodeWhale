@@ -650,3 +650,233 @@ fn workspace_scoped_registries_do_not_cross_load_skills() {
     assert_eq!(right_skills.get("demo:only").unwrap().body, "right body");
     assert_ne!(left.workspace(), right.workspace());
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Install on-ramp integration (#5182)
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn block_on<F: std::future::Future>(future: F) -> F::Output {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(future)
+}
+
+fn allow_all_network() -> crate::network_policy::NetworkPolicy {
+    crate::network_policy::NetworkPolicy {
+        default: crate::network_policy::DecisionToml::Allow,
+        ..Default::default()
+    }
+}
+
+fn write_install_source(root: &Path, name: &str) -> PathBuf {
+    let source = root.join(format!("source/{name}"));
+    fs::create_dir_all(source.join("skills/hello")).unwrap();
+    fs::write(
+        source.join("plugin.toml"),
+        format!(
+            "schema_version = 1\n[plugin]\nname = {name:?}\nversion = \"1.0.0\"\n[skills]\npath = \"skills\"\n"
+        ),
+    )
+    .unwrap();
+    fs::write(
+        source.join("skills/hello/SKILL.md"),
+        "---\nname: hello\ndescription: hi\n---\nbody\n",
+    )
+    .unwrap();
+    source
+}
+
+#[test]
+fn installed_bundles_land_disabled_and_untrusted_then_follow_the_trust_flow() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = config(tmp.path());
+    let source = write_install_source(tmp.path(), "demo");
+    let network = allow_all_network();
+
+    let outcome = block_on(super::install::install(
+        super::install::PluginInstallSource::parse(source.to_str().unwrap()).unwrap(),
+        &config.user_plugins_dir,
+        super::install::DEFAULT_MAX_SIZE_BYTES,
+        &network,
+        false,
+        &|_| None,
+    ))
+    .unwrap();
+    assert!(
+        matches!(outcome, super::install::PluginInstallOutcome::Installed(_)),
+        "local install must succeed"
+    );
+    assert!(
+        config
+            .user_plugins_dir
+            .join("demo")
+            .join(super::install::INSTALLED_FROM_MARKER)
+            .exists()
+    );
+
+    // The discovery invariant: freshly installed bits are disabled + untrusted.
+    let mut registry = discover_with_config(&config);
+    let plugin = registry.get("demo").unwrap();
+    assert!(!plugin.enabled);
+    assert!(!plugin.trusted());
+    assert!(registry.enable("demo").is_err());
+
+    registry.trust("demo").unwrap();
+    registry.enable("demo").unwrap();
+    assert!(registry.is_active("demo"));
+    assert_eq!(
+        registry
+            .get("demo")
+            .unwrap()
+            .skill_snapshots
+            .first()
+            .map(|snapshot| snapshot.name.as_str()),
+        Some("hello")
+    );
+}
+
+#[test]
+fn mutation_uninstall_requires_disabled_then_deletes_bits_and_prunes_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = config(tmp.path());
+    let source = write_install_source(tmp.path(), "demo");
+    let network = allow_all_network();
+
+    let mut registry = discover_with_config(&config);
+    let ctx = super::mutation::PluginMutationContext {
+        network: &network,
+        max_size: super::install::DEFAULT_MAX_SIZE_BYTES,
+    };
+    let receipt = block_on(super::mutation::execute(
+        super::mutation::PluginMutationRequest::Install {
+            source: super::install::PluginInstallSource::parse(source.to_str().unwrap()).unwrap(),
+        },
+        &ctx,
+        &mut registry,
+    ))
+    .unwrap();
+    assert_eq!(
+        receipt.outcome,
+        super::mutation::PluginMutationOutcome::Installed
+    );
+
+    let mut registry = discover_with_config(&config);
+    registry.trust("demo").unwrap();
+    registry.enable("demo").unwrap();
+
+    // Enabled bundles are refused before anything is deleted.
+    let refused = block_on(super::mutation::execute(
+        super::mutation::PluginMutationRequest::Uninstall {
+            selector: "demo".to_string(),
+        },
+        &ctx,
+        &mut registry,
+    ));
+    assert!(refused.is_err(), "uninstall must require disabled");
+    assert!(config.user_plugins_dir.join("demo").exists());
+
+    registry.disable("demo").unwrap();
+    let receipt = block_on(super::mutation::execute(
+        super::mutation::PluginMutationRequest::Uninstall {
+            selector: "demo".to_string(),
+        },
+        &ctx,
+        &mut registry,
+    ))
+    .unwrap();
+    assert_eq!(
+        receipt.outcome,
+        super::mutation::PluginMutationOutcome::Uninstalled
+    );
+    assert!(!config.user_plugins_dir.join("demo").exists());
+
+    let rediscovered = discover_with_config(&config);
+    assert!(rediscovered.is_empty());
+    let raw = fs::read_to_string(&config.state_path).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert!(
+        parsed["plugins"].as_object().unwrap().is_empty(),
+        "state entry must be pruned: {raw}"
+    );
+}
+
+#[test]
+fn mutation_install_rejects_names_claimed_by_other_scopes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = config(tmp.path());
+    // A hand-placed workspace bundle already owns the name `demo`.
+    let workspace_bundle = config.workspace_plugins_dir.join("demo");
+    fs::create_dir_all(&workspace_bundle).unwrap();
+    fs::write(
+        workspace_bundle.join("plugin.toml"),
+        "schema_version = 1\n[plugin]\nname = \"demo\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
+    let source = write_install_source(tmp.path(), "demo");
+    let network = allow_all_network();
+
+    let mut registry = discover_with_config(&config);
+    let ctx = super::mutation::PluginMutationContext {
+        network: &network,
+        max_size: super::install::DEFAULT_MAX_SIZE_BYTES,
+    };
+    let err = block_on(super::mutation::execute(
+        super::mutation::PluginMutationRequest::Install {
+            source: super::install::PluginInstallSource::parse(source.to_str().unwrap()).unwrap(),
+        },
+        &ctx,
+        &mut registry,
+    ))
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("already used by the workspace bundle"),
+        "got: {err:#}"
+    );
+    assert!(!config.user_plugins_dir.join("demo").exists());
+}
+
+#[test]
+fn mutation_update_refuses_local_installs_and_foreign_scopes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = config(tmp.path());
+    let source = write_install_source(tmp.path(), "demo");
+    let network = allow_all_network();
+
+    let mut registry = discover_with_config(&config);
+    let ctx = super::mutation::PluginMutationContext {
+        network: &network,
+        max_size: super::install::DEFAULT_MAX_SIZE_BYTES,
+    };
+    block_on(super::mutation::execute(
+        super::mutation::PluginMutationRequest::Install {
+            source: super::install::PluginInstallSource::parse(source.to_str().unwrap()).unwrap(),
+        },
+        &ctx,
+        &mut registry,
+    ))
+    .unwrap();
+
+    let mut registry = discover_with_config(&config);
+    let err = block_on(super::mutation::execute(
+        super::mutation::PluginMutationRequest::Update {
+            selector: "demo".to_string(),
+        },
+        &ctx,
+        &mut registry,
+    ))
+    .unwrap_err();
+    assert!(format!("{err:#}").contains("local path"), "got: {err:#}");
+
+    let err = block_on(super::mutation::execute(
+        super::mutation::PluginMutationRequest::Update {
+            selector: "missing".to_string(),
+        },
+        &ctx,
+        &mut registry,
+    ))
+    .unwrap_err();
+    assert!(format!("{err:#}").contains("was not found"), "got: {err:#}");
+}

@@ -238,7 +238,7 @@
   "CmdLogoutDescription": "API 키를 지우고 설정 화면으로 돌아갑니다",
   "CmdMcpDescription": "MCP 서버를 열거나 관리합니다",
   "CmdPluginDescription": "신뢰한 플러그인 번들을 검사하고 관리합니다. 기존 실행형 도구는 별도로 유지됩니다",
-  "CmdPluginBundleUsage": "사용법: /plugin [list|show <name>|validate [name]|trust <name> [review-token]|enable <name>|disable <name>|revoke <name>|reload|tools [name]]",
+  "CmdPluginBundleUsage": "사용법: /plugin [list|show <name>|validate [name]|install <spec>|update <name>|uninstall <name>|trust <name> [review-token]|enable <name>|disable <name>|revoke <name>|reload|tools [name]]",
   "CmdPluginBundleNoneFound": "Codewhale 플러그인 번들을 찾지 못했습니다.",
   "CmdPluginBundleListHeader": "플러그인 번들 ({count}개):",
   "CmdPluginLegacyListHeader": "{dir}의 기존 실행형 플러그인 도구 ({count}개):",

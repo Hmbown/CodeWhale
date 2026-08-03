@@ -235,7 +235,7 @@
   "CmdLogoutDescription": "API-Schlüssel löschen und zum Setup zurückkehren",
   "CmdMcpDescription": "MCP-Server öffnen oder verwalten",
   "CmdPluginDescription": "Vertrauenswürdige Plugin-Bundles ansehen und verwalten; ausführbare Legacy-Tools bleiben getrennt",
-  "CmdPluginBundleUsage": "Verwendung: /plugin [list|show <name>|validate [name]|trust <name> [review-token]|enable <name>|disable <name>|revoke <name>|reload|tools [name]]",
+  "CmdPluginBundleUsage": "Verwendung: /plugin [list|show <name>|validate [name]|install <spec>|update <name>|uninstall <name>|trust <name> [review-token]|enable <name>|disable <name>|revoke <name>|reload|tools [name]]",
   "CmdPluginBundleNoneFound": "Keine Codewhale-Plugin-Bundles gefunden.",
   "CmdPluginBundleListHeader": "Plugin-Bundles ({count}):",
   "CmdPluginLegacyListHeader": "Ausführbare Legacy-Plugin-Tools ({count}) in {dir}:",

@@ -235,7 +235,7 @@
   "CmdLogoutDescription": "Hapus kunci API dan kembali ke penyiapan",
   "CmdMcpDescription": "Buka atau kelola server MCP",
   "CmdPluginDescription": "Periksa dan kelola bundel plugin tepercaya; alat eksekusi lama tetap terpisah",
-  "CmdPluginBundleUsage": "Penggunaan: /plugin [list|show <name>|validate [name]|trust <name> [review-token]|enable <name>|disable <name>|revoke <name>|reload|tools [name]]",
+  "CmdPluginBundleUsage": "Penggunaan: /plugin [list|show <name>|validate [name]|install <spec>|update <name>|uninstall <name>|trust <name> [review-token]|enable <name>|disable <name>|revoke <name>|reload|tools [name]]",
   "CmdPluginBundleNoneFound": "Tidak ada bundel plugin Codewhale yang ditemukan.",
   "CmdPluginBundleListHeader": "Bundel plugin ({count}):",
   "CmdPluginLegacyListHeader": "Alat plugin eksekusi lama ({count}) di {dir}:",

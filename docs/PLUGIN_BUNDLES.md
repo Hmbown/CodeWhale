@@ -3,7 +3,8 @@
 Codewhale v0.9.1 supports a deliberately small plugin-bundle boundary. A
 bundle may contribute declarative Skills and MCP server configuration through
 Codewhale's existing engines. Discovery alone never executes, enables, trusts,
-downloads, updates, or installs anything.
+downloads, updates, or installs anything. For the `/plugin install` on-ramp
+that places bundles onto disk, see [PLUGINS.md](PLUGINS.md).
 
 ## Discovery and precedence
 

@@ -864,8 +864,8 @@ async fn sync_one_skill(
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
-struct InstalledFromMarker {
-    spec: String,
+pub(crate) struct InstalledFromMarker {
+    pub(crate) spec: String,
     /// v1 download checksum field.
     #[serde(default)]
     checksum: String,
@@ -880,7 +880,7 @@ struct InstalledFromMarker {
 }
 
 impl InstalledFromMarker {
-    fn source_checksum(&self) -> &str {
+    pub(crate) fn source_checksum(&self) -> &str {
         self.source_checksum
             .as_deref()
             .filter(|s| !s.is_empty())
@@ -978,6 +978,44 @@ enum DownloadOutcome {
     Bytes { bytes: Vec<u8>, url: String },
     NeedsApproval(String),
     Denied(String),
+}
+
+/// Outcome of [`fetch_tarball`], shared with the plugin installer (#5182) so
+/// both route `Prompt`/`Deny` hosts through their own approval flows instead
+/// of growing a second download path.
+#[derive(Debug)]
+pub(crate) enum FetchOutcome {
+    Bytes { bytes: Vec<u8>, url: String },
+    NeedsApproval(String),
+    Denied(String),
+}
+
+/// Resolve a *remote* [`InstallSource`] (GitHub repo or direct tarball URL)
+/// and download the first reachable candidate under the network policy.
+/// Registry sources are rejected: skill registry resolution stays inside
+/// [`candidate_urls`], and the plugin install on-ramp has no registry index.
+pub(crate) async fn fetch_tarball(
+    source: &InstallSource,
+    network: &NetworkPolicy,
+    max_size: u64,
+) -> Result<FetchOutcome> {
+    let urls = match source {
+        InstallSource::GitHubRepo(repo) => vec![
+            format!("https://github.com/{repo}/archive/refs/heads/main.tar.gz"),
+            format!("https://github.com/{repo}/archive/refs/heads/master.tar.gz"),
+        ],
+        InstallSource::DirectUrl(url) => vec![url.clone()],
+        InstallSource::Registry(name) => {
+            bail!("registry source '{name}' cannot be fetched as a plain tarball")
+        }
+    };
+    Ok(
+        match download_first_success(&urls, network, max_size).await? {
+            DownloadOutcome::Bytes { bytes, url } => FetchOutcome::Bytes { bytes, url },
+            DownloadOutcome::NeedsApproval(host) => FetchOutcome::NeedsApproval(host),
+            DownloadOutcome::Denied(host) => FetchOutcome::Denied(host),
+        },
+    )
 }
 
 /// Resolve the source spec into one or more candidate URLs to try in order.
@@ -1470,7 +1508,7 @@ fn is_within_selected_root(path: &str, prefix: &str, skill_root: &str) -> bool {
 }
 
 /// Ensure a tar path has no `..` segments and is not absolute.
-fn is_safe_path(path: &Path) -> bool {
+pub(crate) fn is_safe_path(path: &Path) -> bool {
     if path.is_absolute() {
         return false;
     }
@@ -1489,7 +1527,7 @@ fn skill_target_path(name: &str, skills_dir: &Path) -> Result<PathBuf> {
     Ok(skills_dir.join(name))
 }
 
-fn validate_skill_name_segment(name: &str) -> Result<&str> {
+pub(crate) fn validate_skill_name_segment(name: &str) -> Result<&str> {
     if name.is_empty() || name.trim() != name || name.chars().any(char::is_whitespace) {
         bail!("skill name must be a single path-safe segment (got '{name}')");
     }
@@ -1575,7 +1613,7 @@ fn parse_frontmatter_name(bytes: &[u8]) -> Result<String> {
     Ok(name)
 }
 
-fn source_spec_string(source: &InstallSource) -> String {
+pub(crate) fn source_spec_string(source: &InstallSource) -> String {
     match source {
         InstallSource::GitHubRepo(repo) => format!("github:{repo}"),
         InstallSource::DirectUrl(url) => url.clone(),
@@ -1583,7 +1621,7 @@ fn source_spec_string(source: &InstallSource) -> String {
     }
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     hex_bytes(Sha256::digest(bytes))
 }
 

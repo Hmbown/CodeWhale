@@ -297,6 +297,31 @@ impl PluginRegistry {
         self.state_path.as_deref()
     }
 
+    /// The pre-dotenv user plugins root, when this registry was built from a
+    /// discovery context. Registries without one (tests, fail-closed ad-hoc
+    /// values) return `None`, and the mutation controller refuses to write.
+    #[must_use]
+    pub fn user_plugins_dir(&self) -> Option<&Path> {
+        self.discovery_context
+            .as_ref()
+            .map(|context| context.user_plugins_dir())
+    }
+
+    /// Remove the persisted state entry for a bundle. This is the uninstall
+    /// hook (#5182): the caller deletes the bundle bits first, then prunes
+    /// the entry through the same locked, fail-closed state transaction used
+    /// by trust/enable/disable/revoke.
+    pub fn prune_state_entry(&mut self, selector: &str) -> Result<(), String> {
+        let id = self
+            .resolve_id(selector)
+            .cloned()
+            .ok_or_else(|| format!("Plugin bundle `{selector}` was not found"))?;
+        self.commit_state_change(|state| {
+            state.plugins.remove(&id);
+            Ok(())
+        })
+    }
+
     pub fn trust(&mut self, selector: &str) -> Result<(), String> {
         let plugin = self
             .get(selector)

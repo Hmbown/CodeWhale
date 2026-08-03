@@ -235,7 +235,7 @@
   "CmdLogoutDescription": "API कुंजी साफ़ करें और सेटअप पर लौटें",
   "CmdMcpDescription": "MCP सर्वर खोलें या प्रबंधित करें",
   "CmdPluginDescription": "विश्वसनीय प्लगिन बंडल देखें और प्रबंधित करें; लीगेसी एक्ज़िक्यूटेबल टूल अलग रहते हैं",
-  "CmdPluginBundleUsage": "उपयोग: /plugin [list|show <name>|validate [name]|trust <name> [review-token]|enable <name>|disable <name>|revoke <name>|reload|tools [name]]",
+  "CmdPluginBundleUsage": "उपयोग: /plugin [list|show <name>|validate [name]|install <spec>|update <name>|uninstall <name>|trust <name> [review-token]|enable <name>|disable <name>|revoke <name>|reload|tools [name]]",
   "CmdPluginBundleNoneFound": "कोई Codewhale प्लगिन बंडल नहीं मिला।",
   "CmdPluginBundleListHeader": "प्लगिन बंडल ({count}):",
   "CmdPluginLegacyListHeader": "{dir} में लीगेसी एक्ज़िक्यूटेबल प्लगिन टूल ({count}):",
