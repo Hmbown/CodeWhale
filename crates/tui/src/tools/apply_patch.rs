@@ -212,9 +212,8 @@ enum ApplyPatchPreflightKind {
 
 /// Canonicalized `apply_patch` payload mode.
 ///
-/// `replace` is the preferred spelling for full-file replacements. `changes`
-/// remains a compatibility alias for callers that learned the original tool
-/// schema before the clearer name was introduced.
+/// `files` is the preferred spelling for full-file replacements. `changes`
+/// remains a compatibility alias for callers that learned older schemas.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum NormalizedApplyPatchInput<'a> {
     Patch(&'a str),
@@ -231,7 +230,7 @@ pub(crate) enum NormalizedApplyPatchInput<'a> {
 pub(crate) fn normalize_apply_patch_input(
     input: &Value,
 ) -> Result<NormalizedApplyPatchInput<'_>, ToolError> {
-    let provided: Vec<&'static str> = ["patch", "replace", "changes"]
+    let provided: Vec<&'static str> = ["patch", "files", "changes"]
         .into_iter()
         .filter(|field| input.get(*field).is_some())
         .collect();
@@ -243,13 +242,13 @@ pub(crate) fn normalize_apply_patch_input(
             .collect::<Vec<_>>()
             .join(", ");
         return Err(ToolError::invalid_input(format!(
-            "Cannot use {fields} simultaneously. Choose exactly one of `patch`, `replace`, or the deprecated `changes` alias."
+            "Cannot use {fields} simultaneously. Choose exactly one of `patch`, `files`, or the deprecated `changes` alias."
         )));
     }
 
     let Some(field) = provided.first().copied() else {
         return Err(ToolError::missing_field(
-            "patch, replace, or deprecated changes",
+            "patch, files, or deprecated changes",
         ));
     };
 
@@ -331,7 +330,7 @@ impl ToolSpec for ApplyPatchTool {
                     "type": "string",
                     "description": "Unified diff patch content"
                 },
-                "replace": {
+                "files": {
                     "type": "array",
                     "description": "Optional full file replacements (path + content).",
                     "items": {
@@ -345,7 +344,7 @@ impl ToolSpec for ApplyPatchTool {
                 },
                 "changes": {
                     "type": "array",
-                    "description": "Deprecated compatibility alias for `replace` (full file replacements by path + content).",
+                    "description": "Deprecated compatibility alias for `files` (full file replacements by path + content).",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -366,7 +365,7 @@ impl ToolSpec for ApplyPatchTool {
             },
             "oneOf": [
                 { "required": ["patch"] },
-                { "required": ["replace"] },
+                { "required": ["files"] },
                 { "required": ["changes"] }
             ]
         })
@@ -431,7 +430,7 @@ impl ToolSpec for ApplyPatchTool {
 
         let file_patches = match preflight.kind {
             ApplyPatchPreflightKind::Replace => {
-                unreachable!("replace input returned before patch execution")
+                unreachable!("files input returned before patch execution")
             }
             ApplyPatchPreflightKind::PathOverride { path, hunks } => vec![FilePatch {
                 path,
@@ -1569,10 +1568,10 @@ mod tests {
     }
 
     #[test]
-    fn input_schema_exposes_replace_and_deprecated_changes_alias() {
+    fn input_schema_exposes_files_and_deprecated_changes_alias() {
         let schema = ApplyPatchTool.input_schema();
 
-        assert_eq!(schema["properties"]["replace"]["type"], "array");
+        assert_eq!(schema["properties"]["files"]["type"], "array");
         assert_eq!(schema["properties"]["changes"]["type"], "array");
         assert!(
             schema["properties"]["changes"]["description"]
@@ -1583,7 +1582,7 @@ mod tests {
             schema["oneOf"],
             json!([
                 { "required": ["patch"] },
-                { "required": ["replace"] },
+                { "required": ["files"] },
                 { "required": ["changes"] }
             ])
         );
@@ -1670,9 +1669,9 @@ diff --git a/old.rs b/old.rs
     }
 
     #[test]
-    fn test_preflight_apply_patch_replace_list() {
+    fn test_preflight_apply_patch_files_list() {
         let canonical = preflight_apply_patch(&json!({
-            "replace": [
+            "files": [
                 { "path": "one.txt", "content": "one" },
                 { "path": "two.txt", "content": "two" }
             ]
@@ -1694,9 +1693,9 @@ diff --git a/old.rs b/old.rs
     }
 
     #[test]
-    fn test_preflight_replace_files_total_counts_entries() {
+    fn test_preflight_files_total_counts_entries() {
         let preflight = preflight_apply_patch(&json!({
-            "replace": [
+            "files": [
                 { "path": "same.txt", "content": "one" },
                 { "path": "same.txt", "content": "two" }
             ]
@@ -2001,7 +2000,7 @@ diff --git a/same.txt b/same.txt
     }
 
     #[tokio::test]
-    async fn test_apply_patch_replace_list() {
+    async fn test_apply_patch_files_list() {
         let tmp = tempdir().expect("tempdir");
         let ctx = ToolContext::new(tmp.path().to_path_buf());
 
@@ -2011,7 +2010,7 @@ diff --git a/same.txt b/same.txt
         let result = tool
             .execute(
                 json!({
-                    "replace": [
+                    "files": [
                         { "path": "one.txt", "content": "new\n" },
                         { "path": "two.txt", "content": "second\n" }
                     ]
@@ -2094,17 +2093,17 @@ diff --git a/same.txt b/same.txt
         }]);
         let cases = [
             (
-                ["patch", "replace"],
-                json!({"patch": patch, "replace": replacement.clone()}),
+                ["patch", "files"],
+                json!({"patch": patch, "files": replacement.clone()}),
             ),
             (
                 ["patch", "changes"],
                 json!({"patch": patch, "changes": replacement.clone()}),
             ),
             (
-                ["replace", "changes"],
+                ["files", "changes"],
                 json!({
-                    "replace": replacement.clone(),
+                    "files": replacement.clone(),
                     "changes": replacement.clone()
                 }),
             ),
@@ -2131,7 +2130,7 @@ diff --git a/same.txt b/same.txt
     }
 
     #[tokio::test]
-    async fn test_apply_patch_replace_list_rolls_back_on_write_failure() {
+    async fn test_apply_patch_files_list_rolls_back_on_write_failure() {
         let tmp = tempdir().expect("tempdir");
         let ctx = ToolContext::new(tmp.path().to_path_buf());
 
@@ -2142,7 +2141,7 @@ diff --git a/same.txt b/same.txt
         let err = tool
             .execute(
                 json!({
-                    "replace": [
+                    "files": [
                         { "path": "one.txt", "content": "new\n" },
                         { "path": "blocked/two.txt", "content": "second\n" }
                     ]

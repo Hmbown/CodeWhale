@@ -858,7 +858,7 @@ mod tests {
             "properties": {
                 "path": {"type": "string"},
                 "patch": {"type": "string"},
-                "replace": {
+                "files": {
                     "type": "array",
                     "items": {
                         "type": "object",
@@ -883,7 +883,7 @@ mod tests {
             },
             "oneOf": [
                 {"required": ["patch"]},
-                {"required": ["replace"]},
+                {"required": ["files"]},
                 {"required": ["changes"]}
             ]
         });
@@ -897,12 +897,12 @@ mod tests {
         assert!(schema.get("enum").is_none());
         assert!(schema.get("not").is_none());
         assert!(schema["properties"].get("patch").is_some());
-        assert!(schema["properties"].get("replace").is_some());
+        assert!(schema["properties"].get("files").is_some());
         assert!(schema["properties"].get("changes").is_some());
         assert_eq!(
             note.as_deref(),
             Some(
-                "Exactly one of these parameter groups must be provided: `changes` | `patch` | `replace`."
+                "Exactly one of these parameter groups must be provided: `changes` | `files` | `patch`."
             )
         );
     }
@@ -978,11 +978,12 @@ mod tests {
         assert!(schema.get("oneOf").is_none());
         assert!(schema.get("anyOf").is_none());
         assert!(schema["properties"].get("patch").is_some());
+        assert!(schema["properties"].get("files").is_some());
         assert!(schema["properties"].get("changes").is_some());
         assert_eq!(
             note.as_deref(),
             Some(
-                "Exactly one of these parameter groups must be provided: `changes` | `patch` | `replace`."
+                "Exactly one of these parameter groups must be provided: `changes` | `files` | `patch`."
             )
         );
     }
@@ -2140,12 +2141,12 @@ mod kimi_tests {
         assert!(schema.get("anyOf").is_none());
         assert!(schema.get("allOf").is_none());
         assert_eq!(schema["properties"]["patch"]["type"], "string");
-        assert_eq!(schema["properties"]["replace"]["type"], "array");
+        assert_eq!(schema["properties"]["files"]["type"], "array");
         assert_eq!(schema["properties"]["changes"]["type"], "array");
         assert_eq!(
             note.as_deref(),
             Some(
-                "Exactly one of these parameter groups must be provided: `changes` | `patch` | `replace`."
+                "Exactly one of these parameter groups must be provided: `changes` | `files` | `patch`."
             )
         );
     }

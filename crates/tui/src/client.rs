@@ -4411,7 +4411,7 @@ mod tests {
         assert!(parameters.get("anyOf").is_none(), "{parameters}");
         assert!(parameters.get("allOf").is_none(), "{parameters}");
         assert_eq!(parameters["properties"]["patch"]["type"], "string");
-        assert_eq!(parameters["properties"]["replace"]["type"], "array");
+        assert_eq!(parameters["properties"]["files"]["type"], "array");
         assert_eq!(parameters["properties"]["changes"]["type"], "array");
         assert!(
             function["description"]

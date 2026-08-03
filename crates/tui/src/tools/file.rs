@@ -2961,6 +2961,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_edit_file_replace_wrong_type_reports_type_not_missing() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+        let tool = EditFileTool;
+
+        for (value, expected_type) in [
+            (json!([{"path": "src/lib.rs", "content": "after"}]), "array"),
+            (json!({"path": "src/lib.rs", "content": "after"}), "object"),
+        ] {
+            let err = tool
+                .execute(
+                    json!({"path": "test.txt", "search": "hello", "replace": value}),
+                    &ctx,
+                )
+                .await
+                .expect_err("wrong-type replace should fail");
+            let message = err.to_string();
+            assert!(
+                message.contains("field 'replace' must be a string"),
+                "{message}"
+            );
+            assert!(
+                message.contains(&format!("got {expected_type}")),
+                "{message}"
+            );
+            assert!(
+                !message.contains("missing required field 'replace'"),
+                "{message}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn test_list_dir_tool() {
         let tmp = tempdir().expect("tempdir");
         let ctx = ToolContext::new(tmp.path().to_path_buf());

@@ -572,7 +572,7 @@ mod tests {
         let claims = registered_resource_claims(
             "apply_patch",
             &json!({
-                "replace": [
+                "files": [
                     {"path": "b.rs", "content": "b"},
                     {"path": "a.rs", "content": "a"}
                 ]
@@ -597,7 +597,7 @@ mod tests {
         assert_eq!(
             registered_resource_claims(
                 "apply_patch",
-                &json!({"replace": [{"path": "../../outside", "content": "nope"}]}),
+                &json!({"files": [{"path": "../../outside", "content": "nope"}]}),
                 &context,
             )
             .expect("escaped target fallback"),

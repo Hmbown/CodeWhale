@@ -296,11 +296,11 @@ mod tests {
     fn grouping_key_collapses_patch_body_for_same_path() {
         let key_a = build_approval_grouping_key(
             "apply_patch",
-            &json!({"replace": [{"path": "a.rs", "content": "x"}]}),
+            &json!({"files": [{"path": "a.rs", "content": "x"}]}),
         );
         let key_b = build_approval_grouping_key(
             "apply_patch",
-            &json!({"replace": [{"path": "a.rs", "content": "y"}]}),
+            &json!({"files": [{"path": "a.rs", "content": "y"}]}),
         );
         assert_eq!(
             key_a, key_b,
@@ -309,10 +309,10 @@ mod tests {
     }
 
     #[test]
-    fn grouping_key_treats_replace_and_legacy_changes_as_the_same_path_set() {
+    fn grouping_key_treats_files_and_legacy_changes_as_the_same_path_set() {
         let canonical = build_approval_grouping_key(
             "apply_patch",
-            &json!({"replace": [{"path": "a.rs", "content": "new"}]}),
+            &json!({"files": [{"path": "a.rs", "content": "new"}]}),
         );
         let legacy = build_approval_grouping_key(
             "apply_patch",
@@ -339,11 +339,11 @@ mod tests {
     fn patch_keys_differ_by_path() {
         let key_a = build_approval_key(
             "apply_patch",
-            &json!({"replace": [{"path": "a.rs", "content": "x"}]}),
+            &json!({"files": [{"path": "a.rs", "content": "x"}]}),
         );
         let key_b = build_approval_key(
             "apply_patch",
-            &json!({"replace": [{"path": "b.rs", "content": "x"}]}),
+            &json!({"files": [{"path": "b.rs", "content": "x"}]}),
         );
         assert_ne!(key_a, key_b);
     }
@@ -352,11 +352,11 @@ mod tests {
     fn patch_keys_differ_by_body_for_same_path() {
         let key_a = build_approval_key(
             "apply_patch",
-            &json!({"replace": [{"path": "a.rs", "content": "x"}]}),
+            &json!({"files": [{"path": "a.rs", "content": "x"}]}),
         );
         let key_b = build_approval_key(
             "apply_patch",
-            &json!({"replace": [{"path": "a.rs", "content": "y"}]}),
+            &json!({"files": [{"path": "a.rs", "content": "y"}]}),
         );
         assert_ne!(key_a, key_b);
     }

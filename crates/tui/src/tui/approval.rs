@@ -2362,7 +2362,7 @@ mod tests {
             "apply_patch",
             "Apply a patch",
             &json!({
-                "replace": [
+                "files": [
                     {
                         "path": "src/lib.rs",
                         "content": "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight"
@@ -2431,7 +2431,7 @@ mod tests {
             "apply_patch",
             "Apply a patch",
             &json!({
-                "replace": [
+                "files": [
                     {
                         "path": "src/lib.rs",
                         "content": "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight"
@@ -2833,7 +2833,7 @@ diff --git a/src/b.rs b/src/b.rs
             "apply_patch",
             "Apply a patch",
             &json!({
-                "replace": [
+                "files": [
                     { "path": "src/a.rs", "content": "one" },
                     { "path": "/workspace/src/a.rs", "content": "two" }
                 ]
@@ -2902,7 +2902,7 @@ diff --git a/src/b.rs b/src/b.rs
             "apply_patch",
             "Apply a patch",
             &json!({
-                "replace": [
+                "files": [
                     { "path": "src/a.rs", "content": "safe" },
                     { "path": "../escape.rs", "content": "unsafe" }
                 ]

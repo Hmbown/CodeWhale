@@ -5138,7 +5138,7 @@ fn apply_patch_allow_requires_every_touched_path_to_match() {
         &config,
         "apply_patch",
         &json!({
-            "replace": [
+            "files": [
                 {"path": "src/a.rs", "content": "a"},
                 {"path": "src/b.rs", "content": "b"}
             ]
@@ -5152,7 +5152,7 @@ fn apply_patch_allow_requires_every_touched_path_to_match() {
         &config,
         "apply_patch",
         &json!({
-            "replace": [
+            "files": [
                 {"path": "src/a.rs", "content": "a"},
                 {"path": "src/c.rs", "content": "c"}
             ]
@@ -6108,6 +6108,14 @@ fn agent_catalog_keeps_canonical_file_tool_loaded() {
     assert_eq!(
         file.input_schema["properties"]["fuzz"]["oneOf"][0]["type"].as_str(),
         Some("boolean"),
+    );
+    assert_eq!(
+        file.input_schema["properties"]["replace"]["type"].as_str(),
+        Some("string"),
+    );
+    assert_eq!(
+        file.input_schema["properties"]["files"]["type"].as_str(),
+        Some("array"),
     );
 
     let active_at_batch_start = initial_active_tools(&catalog);
@@ -13811,9 +13819,9 @@ fn edited_paths_for_write_file_returns_path() {
 }
 
 #[test]
-fn edited_paths_for_apply_patch_with_replace_returns_each_path() {
+fn edited_paths_for_apply_patch_with_files_returns_each_path() {
     let input = json!({
-        "replace": [
+        "files": [
             { "path": "a.rs", "content": "" },
             { "path": "b.rs", "content": "" }
         ]

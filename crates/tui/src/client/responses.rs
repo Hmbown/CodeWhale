@@ -1714,12 +1714,12 @@ mod tests {
                 "type": "object",
                 "properties": {
                     "patch": {"type": "string"},
-                    "replace": {"type": "array"},
+                    "files": {"type": "array"},
                     "changes": {"type": "array"}
                 },
                 "oneOf": [
                     {"required": ["patch"]},
-                    {"required": ["replace"]},
+                    {"required": ["files"]},
                     {"required": ["changes"]}
                 ]
             }),
@@ -1741,11 +1741,11 @@ mod tests {
         assert!(parameters.get("enum").is_none());
         assert!(parameters.get("not").is_none());
         assert!(parameters["properties"].get("patch").is_some());
-        assert!(parameters["properties"].get("replace").is_some());
+        assert!(parameters["properties"].get("files").is_some());
         assert!(parameters["properties"].get("changes").is_some());
         assert_eq!(
             payload["description"],
-            "Apply patch\n\nExactly one of these parameter groups must be provided: `changes` | `patch` | `replace`."
+            "Apply patch\n\nExactly one of these parameter groups must be provided: `changes` | `files` | `patch`."
         );
         assert!(tool.input_schema.get("oneOf").is_some());
     }
@@ -1760,12 +1760,12 @@ mod tests {
                 "type": "object",
                 "properties": {
                     "patch": {"type": "string"},
-                    "replace": {"type": "array"},
+                    "files": {"type": "array"},
                     "changes": {"type": "array"}
                 },
                 "oneOf": [
                     {"required": ["patch"]},
-                    {"required": ["replace"]},
+                    {"required": ["files"]},
                     {"required": ["changes"]}
                 ]
             }),
@@ -1780,7 +1780,7 @@ mod tests {
 
         assert_eq!(
             payload["description"],
-            "Apply patch\n\nExactly one of these parameter groups must be provided: `changes` | `patch` | `replace`."
+            "Apply patch\n\nExactly one of these parameter groups must be provided: `changes` | `files` | `patch`."
         );
     }
 

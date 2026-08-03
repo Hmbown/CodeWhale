@@ -79,6 +79,32 @@ impl FileTool {
             ))
         }
     }
+
+    fn validate_edit_shape(&self, input: &Value) -> Result<(), ToolError> {
+        let Some(replace) = input.get("replace") else {
+            return Ok(());
+        };
+        if replace.is_string() {
+            return Ok(());
+        }
+
+        let json_type = match replace {
+            Value::Null => "null",
+            Value::Bool(_) => "boolean",
+            Value::Number(_) => "number",
+            Value::String(_) => "string",
+            Value::Array(_) => "array",
+            Value::Object(_) => "object",
+        };
+        let mut preview = replace.to_string();
+        if preview.chars().count() > 120 {
+            preview = preview.chars().take(117).collect::<String>() + "...";
+        }
+
+        Err(ToolError::invalid_input(format!(
+            "Invalid File action=edit input: `replace` must be a string (shape: {{\"action\":\"edit\",\"path\":\"...\",\"search\":\"...\",\"replace\":\"...\"}}), got {json_type}. Received: {preview}. For full-file replacements, use action=patch with `files` (or deprecated alias `changes`)."
+        )))
+    }
 }
 
 #[async_trait]
@@ -136,10 +162,13 @@ impl ToolSpec for FileTool {
                     "description": "Exact text to search for action=edit"
                 },
                 "replace": {
-                    "oneOf": [
-                        { "type": "string", "description": "Replacement text for action=edit" },
-                        { "type": "array", "items": { "type": "object", "properties": { "path": { "type": "string" }, "content": { "type": "string" } }, "required": ["path", "content"] }, "description": "Full-file replacements for action=patch" }
-                    ]
+                    "type": "string",
+                    "description": "Replacement text for action=edit"
+                },
+                "files": {
+                    "type": "array",
+                    "items": { "type": "object", "properties": { "path": { "type": "string" }, "content": { "type": "string" } }, "required": ["path", "content"] },
+                    "description": "Full-file replacement list for action=patch"
                 },
                 "fuzz": {
                     "oneOf": [{ "type": "boolean" }, { "type": "integer" }],
@@ -191,7 +220,7 @@ impl ToolSpec for FileTool {
                 "changes": {
                     "type": "array",
                     "items": { "type": "object", "properties": { "path": { "type": "string" }, "content": { "type": "string" } }, "required": ["path", "content"] },
-                    "description": "Deprecated alias for replace in action=patch"
+                    "description": "Deprecated alias for files in action=patch"
                 },
                 "create_if_missing": {
                     "type": "boolean",
@@ -255,6 +284,9 @@ impl ToolSpec for FileTool {
             return Err(ToolError::not_available(
                 "File.patch is unavailable because the patch feature is disabled",
             ));
+        }
+        if action == "edit" {
+            self.validate_edit_shape(&input)?;
         }
         let mut input = self.strip_action(input)?;
 

@@ -330,11 +330,11 @@ mod tests {
     fn apply_patch_targets_are_extracted_from_all_shapes() {
         let tmp = TempDir::new().unwrap();
         write_law(tmp.path(), LAW);
-        // Canonical replace[].path shape.
+        // Canonical files[].path shape.
         let decision = repo_law_plan_decision(
             tmp.path(),
             "apply_patch",
-            &json!({"replace": [{"path": "crates/protocol/msg.rs"}]}),
+            &json!({"files": [{"path": "crates/protocol/msg.rs"}]}),
         );
         assert!(matches!(decision, Some(RepoLawPlanDecision::Block(_))));
         // Legacy changes[].path shape must receive the same hold.
