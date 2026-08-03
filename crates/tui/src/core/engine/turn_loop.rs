@@ -69,6 +69,32 @@ pub(super) fn registered_tool_blocked_in_full_access(
     auto_approve && registered_tool_forces_prompt(tool_name, requirement)
 }
 
+/// The engine-side half of the in-workspace write carve-out (#5185): true
+/// when a `Suggest`-tier call is a canonical file-write tool whose targets
+/// all qualify under the default Ask posture. Callers still honor
+/// `approval_force_prompt`, typed ask-rules, the built-in safety floor, and
+/// repo law after this answer.
+#[must_use]
+pub(super) fn workspace_write_carve_out_applies(
+    mode: AppMode,
+    approval_mode: crate::tui::approval::ApprovalMode,
+    auto_approve: bool,
+    workspace: &std::path::Path,
+    tool_name: &str,
+    input: &serde_json::Value,
+    approval: ApprovalRequirement,
+) -> bool {
+    if approval != ApprovalRequirement::Suggest
+        || !crate::core::authority::write_carve_out_posture(mode, approval_mode, auto_approve)
+    {
+        return false;
+    }
+    let Some(paths) = file_write_tool_target_paths(tool_name, input) else {
+        return false;
+    };
+    crate::core::authority::paths_within_workspace_write_carve_out(workspace, &paths)
+}
+
 pub(super) fn registered_tool_forces_prompt(
     tool_name: &str,
     requirement: ApprovalRequirement,
@@ -2106,6 +2132,32 @@ impl Engine {
                     detached_start = prepared.call.starts_detached;
                     tool_input = prepared.call.input;
                     resources = prepared.call.resources;
+
+                    // #5185: in the default Ask posture, a file write whose
+                    // every target stays inside the workspace git work tree —
+                    // off `.git` internals, runtime state, and sensitive files
+                    // — runs without a modal. Everything evaluated after this
+                    // point (typed ask-rules, the built-in safety floor, repo
+                    // law) can still force a prompt; none of them is weakened.
+                    if approval_required
+                        && !approval_force_prompt
+                        && workspace_write_carve_out_applies(
+                            mode,
+                            self.session.approval_mode,
+                            self.session.auto_approve,
+                            &self.session.workspace,
+                            &tool_name,
+                            &tool_input,
+                            prepared.call.approval,
+                        )
+                    {
+                        approval_required = false;
+                        emit_tool_audit(json!({
+                            "event": "tool.workspace_write_carve_out",
+                            "tool_id": tool_id.clone(),
+                            "tool_name": tool_name.clone(),
+                        }));
+                    }
 
                     let approval = match prepared.call.approval {
                         ApprovalRequirement::Auto => "auto",

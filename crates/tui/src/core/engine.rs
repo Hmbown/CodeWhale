@@ -5562,6 +5562,17 @@ fn file_tool_permission_paths(tool_name: &str, input: &Value) -> Option<Vec<Stri
     }
 }
 
+/// Target paths when a call is one of the canonical workspace file-write
+/// tools (`write_file` / `edit_file` / `apply_patch`), `None` for any other
+/// tool. Feeds the in-workspace write carve-out (#5185).
+fn file_write_tool_target_paths(tool_name: &str, input: &Value) -> Option<Vec<String>> {
+    let canonical = crate::tools::canonical_action::canonical_action_alias(tool_name, input);
+    if !matches!(canonical, "write_file" | "edit_file" | "apply_patch") {
+        return None;
+    }
+    file_tool_permission_paths(canonical, input)
+}
+
 fn string_field(input: &Value, key: &str) -> Option<String> {
     input
         .get(key)
