@@ -666,10 +666,12 @@ pub(crate) fn reasoning_capability_for_route(
     // route normalizer that shapes the real request.
     //
     // This subsumes a min/max floor-and-ceiling and expresses what one cannot:
-    // every non-Codex route coerces `low` and `medium` to `high` while leaving
-    // `off` alone, and an always-thinking route raises `off` instead. Reporting
-    // a `low` a route silently sends as `high` is the invisible substitution
-    // receipts exist to prevent, so the map — not a clamp — is the authority.
+    // most non-Codex routes coerce `low` and `medium` to `high` while leaving
+    // `off` alone (first-party DeepSeek routes are the documented exception —
+    // their wire carries a real `low`), and an always-thinking route raises
+    // `off` instead. Reporting a `low` a route silently sends as `high` is
+    // the invisible substitution receipts exist to prevent, so the map — not
+    // a clamp — is the authority.
     let wire_tiers = [
         ReasoningEffort::Off,
         ReasoningEffort::Low,
@@ -2665,12 +2667,13 @@ permissions = "read_only"
         assert_eq!(capability.control, ProviderReasoningControl::Tiers);
     }
 
-    /// The capability must report the tier the route *sends*, not the tier the
-    /// selector named. CodeWhale's own normalizer coerces `low`/`medium` to
-    /// `high` on every non-Codex route, so a receipt saying `low` would name a
-    /// request that never happened.
+    /// First-party DeepSeek routes document `reasoning_effort` low/high/max
+    /// on the wire (no medium), so `low` is a real tier there. The capability
+    /// must report the tier the route *sends*, not the tier the selector
+    /// named: low reaches the wire as low, medium rounds up to high because
+    /// the dialect has no such value (#52).
     #[test]
-    fn a_route_that_collapses_low_onto_high_says_so_instead_of_reporting_low() {
+    fn a_deepseek_route_reports_low_as_low_and_medium_as_high() {
         let capability = reasoning_capability_for_route(
             ApiProvider::Deepseek,
             crate::config::DEFAULT_DEEPSEEK_BASE_URL,
@@ -2679,7 +2682,7 @@ permissions = "read_only"
 
         // Exactly what the request shaping does, read back off the capability.
         for (requested, expected) in [
-            (ReasoningTier::Low, ReasoningTier::High),
+            (ReasoningTier::Low, ReasoningTier::Low),
             (ReasoningTier::Medium, ReasoningTier::High),
             (ReasoningTier::High, ReasoningTier::High),
             (ReasoningTier::Max, ReasoningTier::Max),
@@ -2712,9 +2715,40 @@ permissions = "read_only"
         assert_eq!(resolved.requested(), RequestedReasoning::Low);
         assert_eq!(
             resolved.effective(),
-            codewhale_workflow::EffectiveReasoning::Tier(ReasoningTier::High)
+            codewhale_workflow::EffectiveReasoning::Tier(ReasoningTier::Low)
         );
-        assert!(resolved.capability_normalized());
+        assert!(!resolved.capability_normalized());
+    }
+
+    /// Routes whose dialect has no low tier still collapse low onto high, and
+    /// the capability must say so instead of reporting a `low` the wire never
+    /// carried. CodeWhale's normalizer keeps the historic low/medium → high
+    /// coercion for these DeepSeek-compatible hosted routes because their own
+    /// wire contracts are not verified.
+    #[test]
+    fn a_route_that_collapses_low_onto_high_says_so_instead_of_reporting_low() {
+        let capability = reasoning_capability_for_route(
+            ApiProvider::Siliconflow,
+            crate::config::DEFAULT_SILICONFLOW_BASE_URL,
+            "deepseek-ai/DeepSeek-V4-Pro",
+        );
+
+        for (requested, expected) in [
+            (ReasoningTier::Low, ReasoningTier::High),
+            (ReasoningTier::Medium, ReasoningTier::High),
+            (ReasoningTier::High, ReasoningTier::High),
+            (ReasoningTier::Max, ReasoningTier::Max),
+            (ReasoningTier::Off, ReasoningTier::Off),
+        ] {
+            assert_eq!(
+                capability.wire_tier(requested),
+                expected,
+                "requested {requested:?} must be reported as what the wire carries"
+            );
+            let (effective, normalized) = capability.normalize(requested);
+            assert_eq!(effective, expected);
+            assert_eq!(normalized, requested != expected);
+        }
     }
 
     /// Preflight resolves the provider, canonicalizes the model, identifies the
@@ -2774,8 +2808,9 @@ permissions = "read_only"
     /// at the provider default while its receipt claims a tier.
     #[test]
     fn a_call_reasoning_value_is_shaped_by_the_configured_route_not_a_tier_label() {
-        // A tiered non-Codex route spells the tiers the ordinary way, after the
-        // same low/medium → high coercion the client performs.
+        // A tiered non-Codex route spells the tiers the ordinary way, after
+        // the same route normalization the client performs (first-party
+        // DeepSeek keeps a real `low`; medium still rounds up to high).
         for (tier, expected) in [
             (ReasoningTier::Off, "off"),
             (ReasoningTier::High, "high"),

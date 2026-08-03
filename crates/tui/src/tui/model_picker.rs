@@ -54,6 +54,16 @@ const DEFAULT_PICKER_EFFORTS: &[ReasoningEffort] = &[
     ReasoningEffort::High,
     ReasoningEffort::Max,
 ];
+/// First-party DeepSeek routes document a real `low` wire tier alongside
+/// `high`/`max` (#52), so their picker exposes the cheaper tier the generic
+/// default list cannot claim for routes where low collapses onto high.
+const DEEPSEEK_PICKER_EFFORTS: &[ReasoningEffort] = &[
+    ReasoningEffort::Auto,
+    ReasoningEffort::Off,
+    ReasoningEffort::Low,
+    ReasoningEffort::High,
+    ReasoningEffort::Max,
+];
 /// Kimi Code K3 accepts route-specific low and medium controls at the
 /// official membership endpoint. Medium becomes K3's nested high wire effort,
 /// but keeping the selected intent visible is important for recovery and
@@ -2217,6 +2227,12 @@ fn picker_efforts_for_route(
     if let Some(catalog_efforts) = catalog_picker_efforts(provider, wire_model) {
         return catalog_efforts;
     }
+    if matches!(
+        provider,
+        crate::config::ApiProvider::Deepseek | crate::config::ApiProvider::DeepseekCN
+    ) {
+        return DEEPSEEK_PICKER_EFFORTS.to_vec();
+    }
     DEFAULT_PICKER_EFFORTS.to_vec()
 }
 
@@ -3351,8 +3367,8 @@ mod tests {
         assert_eq!(view.initial_effort, ReasoningEffort::Low);
         assert_eq!(
             view.resolved_effort(),
-            ReasoningEffort::High,
-            "the fixed route still previews its normalized tier"
+            ReasoningEffort::Low,
+            "first-party DeepSeek routes carry low as a real wire tier"
         );
 
         view.selected_model_idx = view
@@ -3468,7 +3484,9 @@ mod tests {
         .iter()
         .map(|effort| effort.as_setting())
         .collect();
-        assert_eq!(effort_labels, vec!["auto", "off", "high", "max"]);
+        // First-party DeepSeek documents a real `low` wire tier (#52), so the
+        // picker exposes it; medium stays hidden because the wire has none.
+        assert_eq!(effort_labels, vec!["auto", "off", "low", "high", "max"]);
     }
 
     #[test]
@@ -4363,12 +4381,12 @@ mod tests {
             crossterm::event::KeyModifiers::NONE,
         ));
         assert_eq!(view.focus, Pane::Effort);
-        assert_eq!(view.selected_effort_idx, 2);
+        assert_eq!(view.selected_effort_idx, 3);
         view.handle_key(KeyEvent::new(
             KeyCode::Down,
             crossterm::event::KeyModifiers::NONE,
         ));
-        assert_eq!(view.selected_effort_idx, 3);
+        assert_eq!(view.selected_effort_idx, 4);
     }
 
     #[test]
@@ -4455,7 +4473,7 @@ mod tests {
         app.enable_provider_model("deepseek", "deepseek-v4-flash");
         let mut view = ModelPickerView::new(&app, &config);
         assert_eq!(view.selected_model_idx, 1);
-        assert_eq!(view.selected_effort_idx, 2);
+        assert_eq!(view.selected_effort_idx, 3);
 
         // Move model from Pro to Flash, then switch to effort and move High to Max.
         view.handle_key(KeyEvent::new(
@@ -4500,7 +4518,7 @@ mod tests {
         app.enable_provider_model("deepseek", "deepseek-v4-flash");
         let view = ModelPickerView::new(&app, &config);
         assert_eq!(view.selected_model_idx, 2);
-        assert_eq!(view.selected_effort_idx, 3);
+        assert_eq!(view.selected_effort_idx, 4);
         assert_eq!(view.focus, Pane::Model);
         assert_eq!(view.resolved_model(), "deepseek-v4-flash");
         assert_eq!(view.resolved_effort(), ReasoningEffort::Max);
@@ -4578,7 +4596,7 @@ mod tests {
         let view = ModelPickerView::new(&app, &config);
         assert!(view.show_custom_model_row);
         assert_eq!(view.selected_model_idx, view.visible_model_rows().len());
-        assert_eq!(view.selected_effort_idx, 2);
+        assert_eq!(view.selected_effort_idx, 3);
         assert_eq!(view.resolved_model(), "deepseek-v4-pro-2026-04-XX");
         assert_eq!(view.resolved_effort(), ReasoningEffort::High);
     }
@@ -4900,7 +4918,7 @@ mod tests {
     }
 
     #[test]
-    fn deepseek_picker_exposes_auto_off_high_max() {
+    fn deepseek_picker_exposes_the_documented_wire_ladder() {
         let labels: Vec<&str> = picker_efforts_for_route(
             crate::config::ApiProvider::Deepseek,
             crate::config::DEFAULT_DEEPSEEK_BASE_URL,
@@ -4910,7 +4928,9 @@ mod tests {
         .iter()
         .map(|effort| effort.short_label())
         .collect();
-        assert_eq!(labels, vec!["auto", "off", "high", "max"]);
+        // First-party DeepSeek documents a real `low` wire tier (#52); medium
+        // stays hidden because the wire has no medium value.
+        assert_eq!(labels, vec!["auto", "off", "low", "high", "max"]);
     }
 
     #[test]
