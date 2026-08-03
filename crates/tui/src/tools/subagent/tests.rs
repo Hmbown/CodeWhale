@@ -8886,6 +8886,223 @@ async fn delegated_write_role_still_blocks_required_tools() {
     );
 }
 
+#[test]
+fn read_only_role_starts_do_not_require_approval() {
+    // #5186: an explicit canonical read-only role spawns without a modal in
+    // the default posture; the child's posture gates keep it read-only.
+    let tmp = tempdir().expect("tempdir");
+    let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 1);
+    let tool = AgentTool::new(manager, stub_runtime());
+
+    for role in [
+        "scout",
+        "explore",
+        "planner",
+        "plan",
+        "reviewer",
+        "review",
+        "verifier",
+        "verify",
+        "consultant",
+    ] {
+        assert_eq!(
+            tool.approval_requirement_for(
+                &json!({"action": "start", "type": role, "prompt": "look around"})
+            ),
+            ApprovalRequirement::Auto,
+            "{role} start should not open an approval modal"
+        );
+    }
+    // The `role` field form and an explicit read_only write authority keep
+    // the demotion.
+    assert_eq!(
+        tool.approval_requirement_for(&json!({"action": "start", "role": "scout", "prompt": "x"})),
+        ApprovalRequirement::Auto
+    );
+    assert_eq!(
+        tool.approval_requirement_for(
+            &json!({"action": "start", "type": "scout", "write_authority": "read_only", "prompt": "x"})
+        ),
+        ApprovalRequirement::Auto
+    );
+}
+
+#[test]
+fn write_capable_or_unproven_starts_keep_the_approval_gate() {
+    // #5186: anything the parser cannot prove read-only keeps the modal.
+    let tmp = tempdir().expect("tempdir");
+    let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 1);
+    let tool = AgentTool::new(manager, stub_runtime());
+
+    for input in [
+        json!({"action": "start", "prompt": "x"}), // defaults to worker
+        json!({"action": "start", "type": "worker", "prompt": "x"}),
+        json!({"action": "start", "type": "builder", "prompt": "x"}),
+        json!({"action": "start", "type": "implementer", "prompt": "x"}),
+        json!({"action": "start", "type": "custom", "prompt": "x"}),
+        json!({"action": "start", "type": "scout", "write_authority": "workspace_write", "prompt": "x"}),
+        json!({"action": "start", "type": "scout", "profile": "release_lead", "prompt": "x"}),
+        json!({"action": "start", "type": "scout", "role": "builder", "prompt": "x"}),
+        json!({"action": "start", "role": "release_lead", "prompt": "x"}), // roster token
+        json!({"action": "start", "type": "bogus", "prompt": "x"}),
+    ] {
+        assert_eq!(
+            tool.approval_requirement_for(&input),
+            ApprovalRequirement::Required,
+            "{input} must keep the approval gate"
+        );
+    }
+    // Non-start actions are untouched: cancel stays gated, status stays free.
+    assert_eq!(
+        tool.approval_requirement_for(&json!({"action": "cancel", "agent_id": "a"})),
+        ApprovalRequirement::Required
+    );
+    assert_eq!(
+        tool.approval_requirement_for(&json!({"action": "status"})),
+        ApprovalRequirement::Auto
+    );
+}
+
+#[tokio::test]
+async fn worker_child_inherits_workspace_write_carve_out_without_parent_auto_approve() {
+    // #5186: a write-posture child that is NOT an explicit write-delegated
+    // role (worker is not in `role_can_delegate_writes`) may still edit
+    // in-workspace, non-sensitive, non-`.git` paths — the child inherits the
+    // #5185 carve-out instead of keying off parent auto-approve.
+    let tmp = tempdir().expect("tempdir");
+    std::fs::create_dir(tmp.path().join(".git")).expect("git marker");
+    let workspace = tmp.path().to_path_buf();
+    let mut runtime = stub_runtime();
+    runtime.context = ToolContext::new(workspace.clone());
+    runtime.context.auto_approve = false;
+    let registry = SubAgentToolRegistry::new(
+        runtime,
+        FleetRole::Worker,
+        None,
+        Arc::new(Mutex::new(TodoList::new())),
+        Arc::new(Mutex::new(PlanState::default())),
+    );
+
+    registry
+        .execute(
+            "agent_test",
+            "File",
+            json!({"action": "write", "path": "carveout.txt", "content": "hi"}),
+        )
+        .await
+        .expect("in-workspace write should take the carve-out");
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("carveout.txt")).expect("written file"),
+        "hi"
+    );
+
+    // Sensitive files, `.git` internals, and out-of-tree paths keep the
+    // delegation error.
+    for input in [
+        json!({"action": "write", "path": ".env", "content": "x"}),
+        json!({"action": "write", "path": ".git/config", "content": "x"}),
+        json!({"action": "write", "path": "../escape.txt", "content": "x"}),
+    ] {
+        let err = registry
+            .execute("agent_test", "File", input.clone())
+            .await
+            .expect_err("excluded targets must stay gated");
+        assert!(
+            err.to_string().contains("is not delegated to"),
+            "{input}: unexpected error {err}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn worker_child_write_carve_out_requires_a_git_work_tree() {
+    // #5186: without a `.git` marker the child keeps the old delegation
+    // error, mirroring the parent-side carve-out.
+    let tmp = tempdir().expect("tempdir");
+    let mut runtime = stub_runtime();
+    runtime.context = ToolContext::new(tmp.path().to_path_buf());
+    runtime.context.auto_approve = false;
+    let registry = SubAgentToolRegistry::new(
+        runtime,
+        FleetRole::Worker,
+        None,
+        Arc::new(Mutex::new(TodoList::new())),
+        Arc::new(Mutex::new(PlanState::default())),
+    );
+
+    let err = registry
+        .execute(
+            "agent_test",
+            "File",
+            json!({"action": "write", "path": "nope.txt", "content": "x"}),
+        )
+        .await
+        .expect_err("non-git workspace keeps the delegation gate");
+    assert!(
+        err.to_string().contains("is not delegated to"),
+        "unexpected error: {err}"
+    );
+}
+
+#[tokio::test]
+async fn builder_child_runs_bounded_verification_but_not_shell_without_parent_auto_approve() {
+    // #5186: the bounded built-in verification surface is delegated to
+    // shell-capable children of non-auto parents; arbitrary shell and
+    // unbounded verification argv stay gated.
+    let tmp = tempdir().expect("tempdir");
+    let mut runtime = stub_runtime();
+    runtime.context = ToolContext::new(tmp.path().to_path_buf());
+    runtime.context.auto_approve = false;
+    let registry = SubAgentToolRegistry::new(
+        runtime,
+        FleetRole::Builder,
+        None,
+        Arc::new(Mutex::new(TodoList::new())),
+        Arc::new(Mutex::new(PlanState::default())),
+    );
+
+    // No Cargo.toml here, so execution itself may fail — what must NOT
+    // appear is the approval-gate error.
+    match registry
+        .execute("agent_test", "Run", json!({"action": "tests"}))
+        .await
+    {
+        Ok(_) => {}
+        Err(err) => assert!(
+            !err.to_string().contains("requires approval"),
+            "bounded verification must pass the approval gate: {err}"
+        ),
+    }
+
+    let shell_err = registry
+        .execute(
+            "agent_test",
+            "Bash",
+            json!({"action": "run", "command": "echo nope"}),
+        )
+        .await
+        .expect_err("arbitrary shell stays gated for children of non-auto parents");
+    assert!(
+        shell_err.to_string().contains(
+            "cannot run inside this sub-agent unless the parent session is auto-approved"
+        ),
+        "unexpected error: {shell_err}"
+    );
+
+    let argv_err = registry
+        .execute(
+            "agent_test",
+            "Run",
+            json!({"action": "tests", "args": "--manifest-path ../outside/Cargo.toml"}),
+        )
+        .await
+        .expect_err("unbounded verification argv stays gated");
+    assert!(
+        argv_err.to_string().contains("requires approval"),
+        "unexpected error: {argv_err}"
+    );
+}
+
 #[tokio::test]
 async fn auto_approved_parent_runs_required_tools_in_subagent() {
     // Baseline: when the parent runtime IS auto-approved, every approval
