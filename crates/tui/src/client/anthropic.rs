@@ -133,6 +133,19 @@ impl DeepSeekClient {
             &model,
         );
         let is_deepseek = self.api_provider == ApiProvider::DeepseekAnthropic;
+        // Model Studio's Anthropic-compatible endpoint documents the portable
+        // `{"type":"enabled","budget_tokens":N}` shape AND `{"type":"disabled"}`
+        // (alibabacloud.com/help/en/model-studio/anthropic-api-messages), so
+        // an explicit "off" can be honored on the wire instead of silently
+        // falling through to the server default (which is thinking-ON for the
+        // qwen3.x families).
+        let is_modelstudio = matches!(
+            self.api_provider,
+            ApiProvider::ModelstudioTokenPlan
+                | ApiProvider::ModelstudioTokenPlanAnthropic
+                | ApiProvider::ModelstudioCodingPlan
+                | ApiProvider::ModelstudioCodingPlanAnthropic
+        );
         // MiniMax's exact M3 route and DeepSeek's Messages dialect both
         // document adaptive support; everything else needs the native host.
         let supports_adaptive =
@@ -144,7 +157,7 @@ impl DeepSeekClient {
         match effort.as_deref() {
             _ if is_minimax_provider && !is_minimax => {}
             Some("off" | "disabled" | "none" | "false")
-                if (is_minimax || is_deepseek) && thinking_capable =>
+                if (is_minimax || is_deepseek || is_modelstudio) && thinking_capable =>
             {
                 body["thinking"] = json!({ "type": "disabled" });
             }
@@ -895,6 +908,29 @@ mod tests {
         DeepSeekClient::new(&config).expect("DeepSeek Messages client constructs")
     }
 
+    fn modelstudio_test_client(base_url: &str) -> DeepSeekClient {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let config = crate::config::Config {
+            provider: Some("modelstudio-token-plan-anthropic".to_string()),
+            providers: Some(crate::config::ProvidersConfig {
+                // All four plan/dialect variants share one key slot
+                // (modelstudio-token-plan); only the base URL is read from the
+                // anthropic entry.
+                modelstudio_token_plan: crate::config::ProviderConfig {
+                    api_key: Some("test-key".to_string()),
+                    ..Default::default()
+                },
+                modelstudio_token_plan_anthropic: crate::config::ProviderConfig {
+                    base_url: Some(base_url.to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        DeepSeekClient::new(&config).expect("Model Studio Messages client constructs")
+    }
+
     #[test]
     fn body_keeps_native_cache_control_on_system_and_tools() {
         let client = test_client();
@@ -1154,6 +1190,48 @@ mod tests {
         let untouched = messages[2]["content"].as_array().expect("user content");
         assert_eq!(untouched.len(), 1, "{body}");
         assert_eq!(untouched[0]["tool_use_id"].as_str(), Some("toolu_ok"));
+    }
+
+    #[test]
+    fn modelstudio_messages_body_requests_thinking_with_budget() {
+        // Model Studio's Anthropic-compatible endpoint documents the portable
+        // {"type":"enabled","budget_tokens":N} shape plus {"type":"disabled"}
+        // (alibabacloud.com/help/en/model-studio/anthropic-api-messages).
+        let client = modelstudio_test_client(
+            "https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic",
+        );
+
+        let mut request = request_with("qwen3.8-max", Some("high"), None, None);
+        request.max_tokens = 64_000;
+        let body = client.build_anthropic_body(&request, true);
+        assert_eq!(
+            body.pointer("/thinking/type").and_then(Value::as_str),
+            Some("enabled"),
+            "{body}"
+        );
+        assert!(
+            body.pointer("/thinking/budget_tokens")
+                .and_then(Value::as_u64)
+                .is_some(),
+            "{body}"
+        );
+        assert!(body.get("output_config").is_none(), "{body}");
+        assert_eq!(
+            body.get("model").and_then(Value::as_str),
+            Some("qwen3.8-max"),
+            "{body}"
+        );
+
+        // An explicit "off" is honored on the wire instead of silently
+        // falling through to the server default (thinking-ON for qwen3.x).
+        let mut request = request_with("qwen3.8-max", Some("off"), None, None);
+        request.max_tokens = 64_000;
+        let body = client.build_anthropic_body(&request, true);
+        assert_eq!(
+            body.pointer("/thinking/type").and_then(Value::as_str),
+            Some("disabled"),
+            "{body}"
+        );
     }
 
     #[test]

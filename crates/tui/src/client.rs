@@ -3081,13 +3081,21 @@ pub(super) fn apply_reasoning_effort(
             // (qwen-max, deepseek-chat, gpt-4o, claude, etc.) accepts the same
             // reasoning dialect (#4188 review: verify against actual behavior).
             ApiProvider::Telecomjs => {}
-            // Model Studio: same reasoning as TelecomJS — the Chat Completions
-            // API does not expose reasoning_effort/thinking controls. Reasoning
-            // is model-specific on the DashScope side and not surfaced here.
+            // Model Studio (DashScope): the OpenAI-compatible Chat Completions
+            // endpoints (Token Plan `compatible-mode/v1`, Coding Plan
+            // `coding-intl.dashscope.aliyuncs.com/v1`) accept the non-standard
+            // top-level `enable_thinking` switch for their hybrid-thinking
+            // catalog (qwen3.x, deepseek-v4, glm-5.x) and stream reasoning as
+            // `delta.reasoning_content`. The Anthropic-dialect variants never
+            // reach this Chat path — the Messages adapter shapes their
+            // `thinking` block instead. Source:
+            // <https://www.alibabacloud.com/help/en/model-studio/deep-thinking>
             ApiProvider::ModelstudioTokenPlan
             | ApiProvider::ModelstudioTokenPlanAnthropic
             | ApiProvider::ModelstudioCodingPlan
-            | ApiProvider::ModelstudioCodingPlanAnthropic => {}
+            | ApiProvider::ModelstudioCodingPlanAnthropic => {
+                body["enable_thinking"] = json!(false);
+            }
             ApiProvider::OpenaiCodex => {
                 // OpenAI Codex uses Responses API — thinking handled differently
             }
@@ -3156,11 +3164,15 @@ pub(super) fn apply_reasoning_effort(
             // TelecomJS: see comment in the "off" branch above — the gateway's
             // Chat Completions API does not support reasoning_effort or thinking.
             ApiProvider::Telecomjs => {}
-            // Model Studio: same reasoning as TelecomJS above.
+            // Model Studio: DashScope's hybrid-thinking switch (see the "off"
+            // branch). The OpenAI dialect has no effort ladder — any non-off
+            // level simply turns thinking on.
             ApiProvider::ModelstudioTokenPlan
             | ApiProvider::ModelstudioTokenPlanAnthropic
             | ApiProvider::ModelstudioCodingPlan
-            | ApiProvider::ModelstudioCodingPlanAnthropic => {}
+            | ApiProvider::ModelstudioCodingPlanAnthropic => {
+                body["enable_thinking"] = json!(true);
+            }
             // OpenRouter/Novita/Together: pass through the actual user-chosen value.
             // OpenRouter's unified scale is none/minimal/low/medium/high/xhigh;
             // DeepSeek models hosted there accept those directly.
@@ -3256,11 +3268,15 @@ pub(super) fn apply_reasoning_effort(
             // TelecomJS: see comment in the "off" branch above — the gateway's
             // Chat Completions API does not support reasoning_effort or thinking.
             ApiProvider::Telecomjs => {}
-            // Model Studio: same reasoning as TelecomJS above.
+            // Model Studio: DashScope's hybrid-thinking switch (see the "off"
+            // branch). The OpenAI dialect has no effort ladder — any non-off
+            // level simply turns thinking on.
             ApiProvider::ModelstudioTokenPlan
             | ApiProvider::ModelstudioTokenPlanAnthropic
             | ApiProvider::ModelstudioCodingPlan
-            | ApiProvider::ModelstudioCodingPlanAnthropic => {}
+            | ApiProvider::ModelstudioCodingPlanAnthropic => {
+                body["enable_thinking"] = json!(true);
+            }
             ApiProvider::Openrouter | ApiProvider::Novita | ApiProvider::Together => {
                 body["reasoning_effort"] = json!("xhigh");
                 body["thinking"] = json!({ "type": "enabled" });
@@ -4214,6 +4230,103 @@ mod tests {
         .await
     }
 
+    fn modelstudio_request_boundary_client(
+        route_base_url: &str,
+        model: &str,
+        transport_base_url: String,
+    ) -> DeepSeekClient {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let mut client = DeepSeekClient::new(&Config {
+            provider: Some("modelstudio-token-plan".to_string()),
+            providers: Some(ProvidersConfig {
+                modelstudio_token_plan: ProviderConfig {
+                    api_key: Some("modelstudio-request-boundary-key".to_string()),
+                    base_url: Some(route_base_url.to_string()),
+                    model: Some(model.to_string()),
+                    ..ProviderConfig::default()
+                },
+                ..ProvidersConfig::default()
+            }),
+            ..Config::default()
+        })
+        .expect("Model Studio request-boundary client");
+        assert_eq!(client.base_url, route_base_url);
+        client.test_chat_transport_base_url = Some(transport_base_url);
+        client
+    }
+
+    async fn capture_modelstudio_chat_request(
+        route_base_url: &str,
+        model: &str,
+        effort: Option<&str>,
+        streaming: bool,
+    ) -> (String, Value) {
+        capture_route_chat_request_body(
+            model,
+            k3_request_fixture(model, effort, streaming),
+            |uri| modelstudio_request_boundary_client(route_base_url, model, uri),
+        )
+        .await
+    }
+
+    async fn assert_modelstudio_request_truth(streaming: bool) {
+        // Token Plan and Coding Plan share the DashScope `enable_thinking`
+        // switch on their OpenAI-compatible Chat Completions endpoints.
+        for base_url in [
+            crate::config::DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL,
+            crate::config::DEFAULT_MODELSTUDIO_CODING_PLAN_BASE_URL,
+        ] {
+            let (off_path, off) = capture_modelstudio_chat_request(
+                base_url,
+                crate::config::DEFAULT_MODELSTUDIO_TOKEN_PLAN_MODEL,
+                Some("off"),
+                streaming,
+            )
+            .await;
+            assert_eq!(off_path, "/v1/chat/completions");
+            assert_eq!(off["enable_thinking"], json!(false), "{base_url}: {off}");
+            assert!(off.get("thinking").is_none(), "{base_url}: {off}");
+            assert!(off.get("reasoning_effort").is_none(), "{base_url}: {off}");
+
+            for effort in ["high", "max"] {
+                let (_, body) = capture_modelstudio_chat_request(
+                    base_url,
+                    crate::config::DEFAULT_MODELSTUDIO_TOKEN_PLAN_MODEL,
+                    Some(effort),
+                    streaming,
+                )
+                .await;
+                assert_eq!(
+                    body["enable_thinking"],
+                    json!(true),
+                    "{base_url} {effort}: {body}"
+                );
+                assert!(
+                    body.get("thinking").is_none(),
+                    "{base_url} {effort}: {body}"
+                );
+                assert!(
+                    body.get("reasoning_effort").is_none(),
+                    "{base_url} {effort}: {body}"
+                );
+            }
+
+            // Unset effort sends no switch — the server default (thinking-ON
+            // for the qwen3.x families) is left alone.
+            let (_, unset) = capture_modelstudio_chat_request(
+                base_url,
+                crate::config::DEFAULT_MODELSTUDIO_TOKEN_PLAN_MODEL,
+                None,
+                streaming,
+            )
+            .await;
+            assert!(
+                unset.get("enable_thinking").is_none(),
+                "{base_url}: {unset}"
+            );
+        }
+    }
+
     async fn assert_zai_request_truth(streaming: bool) {
         for base_url in [
             crate::config::DEFAULT_ZAI_BASE_URL,
@@ -4813,6 +4926,16 @@ mod tests {
     #[tokio::test]
     async fn create_message_stream_request_json_keeps_minimax_token_dialect_exact() {
         assert_minimax_request_truth(true).await;
+    }
+
+    #[tokio::test]
+    async fn create_message_request_json_keeps_modelstudio_enable_thinking_exact() {
+        assert_modelstudio_request_truth(false).await;
+    }
+
+    #[tokio::test]
+    async fn create_message_stream_request_json_keeps_modelstudio_enable_thinking_exact() {
+        assert_modelstudio_request_truth(true).await;
     }
 
     #[tokio::test]
@@ -7133,6 +7256,38 @@ mod tests {
         let mut body = json!({});
         apply_reasoning_effort(&mut body, Some("off"), ApiProvider::Atlascloud);
         assert_eq!(body, json!({ "thinking": { "type": "disabled" } }));
+    }
+
+    #[test]
+    fn reasoning_effort_modelstudio_speaks_dashscope_enable_thinking() {
+        // All four plan/dialect variants share the DashScope hybrid-thinking
+        // switch on the OpenAI-compatible Chat Completions path.
+        for provider in [
+            ApiProvider::ModelstudioTokenPlan,
+            ApiProvider::ModelstudioTokenPlanAnthropic,
+            ApiProvider::ModelstudioCodingPlan,
+            ApiProvider::ModelstudioCodingPlanAnthropic,
+        ] {
+            let mut off = json!({});
+            apply_reasoning_effort(&mut off, Some("off"), provider);
+            assert_eq!(off, json!({ "enable_thinking": false }), "{provider:?}");
+
+            for effort in ["low", "high", "max"] {
+                let mut body = json!({});
+                apply_reasoning_effort(&mut body, Some(effort), provider);
+                assert_eq!(
+                    body,
+                    json!({ "enable_thinking": true }),
+                    "{provider:?} {effort}"
+                );
+            }
+
+            // Unset effort stays silent: the qwen3.x families default to
+            // thinking-ON server-side and the client must not flip that.
+            let mut unset = json!({});
+            apply_reasoning_effort(&mut unset, None, provider);
+            assert_eq!(unset, json!({}), "{provider:?}");
+        }
     }
 
     #[test]

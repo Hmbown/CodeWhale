@@ -2543,6 +2543,26 @@ fn is_reasoning_model_for_stream_on_route(
     if requires_reasoning_content(model) {
         return true;
     }
+
+    // Model Studio's OpenAI-compatible endpoints (Token Plan / Coding Plan)
+    // stream hybrid-model reasoning as `delta.reasoning_content` (DashScope
+    // dialect) whenever thinking is on — and for the qwen3.x families thinking
+    // is on by server default. Surface those deltas as Thinking instead of
+    // inlining them into the answer text. `reasoning_content` is deliberately
+    // NOT replayed back on later turns (the provider is absent from
+    // `provider_accepts_reasoning_content`): DashScope does not require the
+    // reasoning field in request history.
+    if matches!(
+        provider,
+        ApiProvider::ModelstudioTokenPlan
+            | ApiProvider::ModelstudioTokenPlanAnthropic
+            | ApiProvider::ModelstudioCodingPlan
+            | ApiProvider::ModelstudioCodingPlanAnthropic
+    ) && model_supports_reasoning(model)
+    {
+        return true;
+    }
+
     provider_accepts_reasoning_content(provider) && model_supports_reasoning(model)
 }
 
@@ -3870,6 +3890,104 @@ mod stream_decoder_tests {
                 ..
             } if text == "Inspect" || text == "Inspect config"
         )));
+    }
+
+    #[test]
+    fn modelstudio_streams_reasoning_content_as_thinking() {
+        // Recorded-style DashScope OpenAI-compatible frames (shape lifted from
+        // Model Studio's deep-thinking docs): reasoning streams in
+        // `delta.reasoning_content`, the answer in `delta.content`, and a
+        // trailing usage-only chunk closes the stream.
+        let chunks = [
+            r#"{"choices":[{"delta":{"content":null,"role":"assistant","reasoning_content":""},"index":0,"logprobs":null,"finish_reason":null}],"object":"chat.completion.chunk","usage":null,"model":"qwen3.8-max","id":"chatcmpl-ms-1"}"#,
+            r#"{"choices":[{"delta":{"reasoning_content":"Let me think"},"index":0}],"object":"chat.completion.chunk","model":"qwen3.8-max","id":"chatcmpl-ms-1"}"#,
+            r#"{"choices":[{"delta":{"reasoning_content":" about this."},"index":0}],"object":"chat.completion.chunk","model":"qwen3.8-max","id":"chatcmpl-ms-1"}"#,
+            r#"{"choices":[{"delta":{"content":"The answer."},"index":0}],"object":"chat.completion.chunk","model":"qwen3.8-max","id":"chatcmpl-ms-1"}"#,
+            r#"{"choices":[{"finish_reason":"stop","delta":{"content":"","reasoning_content":null},"index":0}],"object":"chat.completion.chunk","model":"qwen3.8-max","id":"chatcmpl-ms-1"}"#,
+            r#"{"choices":[],"object":"chat.completion.chunk","usage":{"prompt_tokens":10,"completion_tokens":30,"total_tokens":40,"completion_tokens_details":{"reasoning_tokens":20}},"model":"qwen3.8-max","id":"chatcmpl-ms-1"}"#,
+        ];
+
+        // Both OpenAI-dialect plans classify their reasoning catalog.
+        for (provider, base_url, model) in [
+            (
+                ApiProvider::ModelstudioTokenPlan,
+                crate::config::DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL,
+                "qwen3.8-max",
+            ),
+            (
+                ApiProvider::ModelstudioCodingPlan,
+                crate::config::DEFAULT_MODELSTUDIO_CODING_PLAN_BASE_URL,
+                "qwen3.7-plus",
+            ),
+        ] {
+            let style = reasoning_stream_style_for_route(provider, base_url, model, None);
+            assert_eq!(style, ReasoningStreamStyle::SeparateField, "{provider:?}");
+
+            let mut content_index = 0u32;
+            let mut text_started = false;
+            let mut thinking_started = false;
+            let mut tool_indices = std::collections::HashMap::new();
+            let mut reasoning_detail_buffers = std::collections::HashMap::new();
+            let mut inline_reasoning_tags = InlineReasoningTagState::default();
+            let mut events = Vec::new();
+            for chunk in chunks {
+                let value: Value = serde_json::from_str(chunk).expect("valid SSE JSON");
+                events.extend(parse_sse_chunk_with_reasoning_style(
+                    &value,
+                    &mut content_index,
+                    &mut text_started,
+                    &mut thinking_started,
+                    &mut tool_indices,
+                    &mut reasoning_detail_buffers,
+                    &mut inline_reasoning_tags,
+                    style,
+                ));
+            }
+
+            let thinking: String = events
+                .iter()
+                .filter_map(|event| match event {
+                    StreamEvent::ContentBlockDelta {
+                        delta: Delta::ThinkingDelta { thinking },
+                        ..
+                    } => Some(thinking.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(thinking, "Let me think about this.", "{provider:?}");
+
+            let text: String = events
+                .iter()
+                .filter_map(|event| match event {
+                    StreamEvent::ContentBlockDelta {
+                        delta: Delta::TextDelta { text },
+                        ..
+                    } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(text, "The answer.", "{provider:?}");
+
+            // The trailing usage chunk still surfaces token accounting.
+            assert!(
+                events.iter().any(|event| matches!(
+                    event,
+                    StreamEvent::MessageDelta { usage: Some(usage), .. }
+                        if usage.output_tokens == 30
+                )),
+                "{provider:?}: {events:?}"
+            );
+        }
+
+        // A non-reasoning model id on the same route keeps the old
+        // pass-through semantics (no fabricated Thinking surface).
+        let style = reasoning_stream_style_for_route(
+            ApiProvider::ModelstudioTokenPlan,
+            crate::config::DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL,
+            "qwen3.8-max-lite-unknown",
+            None,
+        );
+        assert_eq!(style, ReasoningStreamStyle::None);
     }
 
     #[test]
