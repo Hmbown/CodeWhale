@@ -11992,13 +11992,6 @@ struct SubAgentToolRegistry {
     auto_approve: bool,
     /// Workflow-spawned children auto-accept Suggest-level file edits.
     accept_edits: bool,
-    /// Root Operate verification lease: provenance for the work graph
-    /// (`SubAgentWorkLifecycle::register`). Since #5186 the bounded built-in
-    /// verification surface is delegated to every shell-capable child rather
-    /// than keyed off this bit; the bit now only records *why* an Operate
-    /// child was allowed to run it. It never delegates raw shell or
-    /// user-supplied verifier commands.
-    accept_verification: bool,
     /// The role/type of the sub-agent that this registry belongs to. Used to
     /// decide whether `Suggest`-level tools (write/edit/patch) may run inside
     /// the child without the parent runtime being auto-approved (#1828, #1833).
@@ -12102,7 +12095,6 @@ impl SubAgentToolRegistry {
             disallowed_tools: runtime.worker_profile.denied_tools.clone(),
             auto_approve: runtime.context.auto_approve,
             accept_edits: runtime.accept_edits,
-            accept_verification: runtime.accept_verification,
             agent_type,
             runtime_profile: runtime.worker_profile,
             can_spawn_child,

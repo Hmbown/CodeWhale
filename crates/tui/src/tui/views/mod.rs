@@ -6367,7 +6367,9 @@ context_window = 262144
     }
 
     #[test]
-    fn partial_locale_badge_survives_minimum_terminal_layout() {
+    fn complete_locale_shows_no_partial_badge_at_minimum_terminal_layout() {
+        // zh-Hant reached full en.json parity in #5143 and no shipped pack is
+        // partial anymore, so the picker must not render the partial badge.
         let mut view = create_config_view(Locale::En);
         view.focus_key("locale");
         view.start_edit();
@@ -6383,8 +6385,12 @@ context_window = 262144
         view.render(area, &mut buf);
         let dump = buffer_text(&buf, area);
         assert!(
-            dump.contains("zh-Hant (partial)"),
-            "partial-pack badge must remain visible when detail is shed: {dump:?}"
+            dump.contains("zh-Hant"),
+            "zh-Hant choice must render at minimum layout: {dump:?}"
+        );
+        assert!(
+            !dump.contains("zh-Hant (partial)"),
+            "zh-Hant is a complete pack and must not show the partial badge: {dump:?}"
         );
     }
 

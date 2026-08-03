@@ -3507,9 +3507,7 @@ mod tests {
         assert_eq!(settings.sidebar_focus, "tasks");
 
         // Sessions panel (#2934).
-        settings
-            .set("focus", "sessions")
-            .expect("sessions focus");
+        settings.set("focus", "sessions").expect("sessions focus");
         assert_eq!(settings.sidebar_focus, "sessions");
         settings
             .set("focus", "sessions_rail")

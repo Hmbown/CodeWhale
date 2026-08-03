@@ -2580,6 +2580,12 @@ pub(crate) fn select_work_sidebar_tasks(
                     owner_matches_current || task.owner_session_id.is_none()
                 }
                 TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Canceled => {
+                    // A terminal task missing `ended_at` predates the schema
+                    // that always stamps it; never surface it as a live
+                    // receipt, even when it names this session as owner.
+                    if task.ended_at.is_none() {
+                        return false;
+                    }
                     owner_matches_current
                         || (task.owner_session_id.is_none()
                             && task.created_at >= session_started_at
