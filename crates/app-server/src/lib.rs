@@ -851,6 +851,18 @@ impl JsonRpcError {
         }
     }
 
+    /// Server error (-32000..-32099): the named thread does not exist.
+    fn thread_not_found(thread_id: &str) -> Self {
+        Self {
+            code: -32004,
+            message: format!("thread not found: {thread_id}"),
+            data: Some(json!({
+                "error": "thread_not_found",
+                "thread_id": thread_id,
+            })),
+        }
+    }
+
     fn internal(message: impl Into<String>) -> Self {
         Self {
             code: -32603,
@@ -914,6 +926,17 @@ async fn handle_stdio_thread_message<W: AsyncWrite + Unpin>(
         object.insert("thread_id".to_string(), Value::String(parsed.thread_id));
     }
     Ok(result)
+}
+
+/// Resuming or forking a thread the runtime reports as `missing` must fail
+/// with a named not-found error. Recording the null model/workspace of that
+/// response as a stdio hint would clobber any previously cached hint for
+/// the same thread id (#5171).
+fn ensure_thread_found(response: &ThreadResponse) -> std::result::Result<(), JsonRpcError> {
+    if response.status == "missing" {
+        return Err(JsonRpcError::thread_not_found(&response.thread_id));
+    }
+    Ok(())
 }
 
 async fn record_stdio_thread_hint(state: &AppState, response: &ThreadResponse) {
@@ -1575,6 +1598,7 @@ async fn dispatch_stdio_request_with_writer<W: AsyncWrite + Unpin>(
         "thread/resume" => {
             let request = ThreadRequest::Resume(parse_params(params_or_object(params))?);
             let response = handle_thread_request(state, request).await?;
+            ensure_thread_found(&response)?;
             record_stdio_thread_hint(state, &response).await;
             StdioDispatchResult {
                 result: serde_json::to_value(response)
@@ -1585,6 +1609,7 @@ async fn dispatch_stdio_request_with_writer<W: AsyncWrite + Unpin>(
         "thread/fork" => {
             let request = ThreadRequest::Fork(parse_params(params_or_object(params))?);
             let response = handle_thread_request(state, request).await?;
+            ensure_thread_found(&response)?;
             record_stdio_thread_hint(state, &response).await;
             StdioDispatchResult {
                 result: serde_json::to_value(response)
@@ -2668,10 +2693,55 @@ mod tests {
         assert_eq!(cleared.result["data"]["cleared"], true);
     }
 
+    #[tokio::test]
+    async fn stdio_resume_of_missing_thread_fails_without_clobbering_the_hint() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config_path = tmp.path().join("config.toml");
+        fs::write(&config_path, "").expect("write config");
+        let state = build_state(Some(config_path), None).expect("state");
+
+        // A cached hint for a thread the runtime no longer knows: the exact
+        // clobber scenario from #5171.
+        let workspace = tmp.path().join("ws");
+        {
+            let mut hints = state.stdio_thread_hints.lock().await;
+            hints.insert(
+                "ghost-thread".to_string(),
+                RuntimeThreadHint {
+                    model: Some("deepseek-v4-pro".to_string()),
+                    workspace: Some(workspace.clone()),
+                },
+            );
+        }
+
+        let err = dispatch_stdio_request(
+            &state,
+            "thread/resume",
+            json!({ "thread_id": "ghost-thread" }),
+        )
+        .await
+        .expect_err("resuming a missing thread must fail with a named not-found error");
+        assert_eq!(err.code, -32004);
+        assert!(err.message.contains("ghost-thread"), "{}", err.message);
+
+        let fork_err = dispatch_stdio_request(
+            &state,
+            "thread/fork",
+            json!({ "thread_id": "ghost-thread" }),
+        )
+        .await
+        .expect_err("forking a missing thread must fail with a named not-found error");
+        assert_eq!(fork_err.code, -32004);
+
+        let hints = state.stdio_thread_hints.lock().await;
+        let hint = hints.get("ghost-thread").expect("cached hint survives");
+        assert_eq!(hint.model.as_deref(), Some("deepseek-v4-pro"));
+        assert_eq!(hint.workspace.as_deref(), Some(workspace.as_path()));
+    }
+
     fn sse_frame(event: &str, payload: Value) -> String {
         format!("event: {event}\ndata: {payload}\n\n")
     }
-
     /// A runtime whose turn never ends on its own — only an interrupt stops
     /// it. That is the shape of the runaway turn this protects against.
     async fn spawn_uninterruptible_until_asked_runtime() -> (
