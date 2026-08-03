@@ -332,7 +332,7 @@ Execute rather than narrate. Verification still applies — check your work even
 /// Tool calls require confirmation.
 pub const SUGGEST_APPROVAL: &str = r#"##### Approval Policy: Suggest
 
-Read-only operations run silently. Write operations (file edits, patches, shell execution, sub-agent spawns, CSV batches) require user approval before executing.
+Read-only operations run silently. Write operations (file edits, patches, shell execution, sub-agent spawns) require user approval before executing.
 
 When you need approval:
 1. For multi-step changes, use `work_update` when it is present; otherwise state the approach briefly.
@@ -490,7 +490,7 @@ capability. Then stop.
 pub const AGENT_PROMPT: &str = r#"## Mode: agent
 
 Read-only tools (reads, searches, persistent RLM session tools, git inspection) run silently.
-Any write, patch, shell execution, sub-agent start, or CSV batch operation will ask for approval first.
+Any write, patch, shell execution, or sub-agent start will ask for approval first.
 
 Before requesting approval for multi-step writes, lay out your work with `work_update` so the user
 can see what you intend to do and approve with context. Do not create a second
@@ -515,9 +515,9 @@ OUTPUT: VERDICT, EVIDENCE, GAPS, NEXT.
 
 Child model choice is explicit. Use `model_strength: "same"` when the child needs your current
 capability level. Use `model_strength: "faster"` for read-only lookup/search, status, or other
-low-risk tasks that should run on a smaller/faster same-family model — `type: "scout"` already
-defaults to `model_strength: "faster"` for exactly this kind of bounded read-only work, so you only
-need to set it for non-scout children. Use an exact `model` only when you know the
+low-risk tasks that should run on a smaller/faster same-family model. Children inherit the active
+model by default (`model_strength: "same"`), including `type: "scout"`, so select `faster`
+explicitly whenever that tradeoff is appropriate. Use an exact `model` only when you know the
 provider-specific id; it overrides `model_strength`.
 Child thinking is explicit too. Use `thinking: "off"` for fast scout/lookups, `thinking: "high"`
 for ordinary reasoning, `thinking: "max"` for hard design/debug/release/security work, and

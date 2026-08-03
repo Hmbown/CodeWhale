@@ -988,7 +988,7 @@ hãy tiếp tục suy nghĩ và trả lời bằng tiếng Việt.";
 /// static system-prompt prefix (preserves DeepSeek prefix cache across
 /// shell-access toggles).
 pub const SHELL_POLICY_DISABLED: &str = "Shell tools unavailable. For mandatory-use items referencing \
-`exec_shell`, use `code_execution` (Python sandbox). For GitHub triage, use \
+`exec_shell`, use `code_execution` (local Python interpreter). For GitHub triage, use \
 `github_issue_context` / `github_pr_context` as primary route.";
 
 // ── Personality selection ─────────────────────────────────────────────
@@ -1494,6 +1494,16 @@ mod tests {
     /// Discriminator unique to the injected relay block (not present in the
     /// agent prompt's own discussion of the convention).
     const HANDOFF_BLOCK_MARKER: &str = "left a relay artifact at `.codewhale/handoff.md`";
+
+    #[test]
+    fn prompt_tool_contract_copy_matches_runtime_behavior() {
+        assert!(SHELL_POLICY_DISABLED.contains("local Python interpreter"));
+        assert!(!SHELL_POLICY_DISABLED.contains("Python sandbox"));
+        assert!(!SUGGEST_APPROVAL.contains("CSV batch"));
+        assert!(!AGENT_PROMPT.contains("CSV batch"));
+        assert!(AGENT_PROMPT.contains("model_strength: \"same\""));
+        assert!(!AGENT_PROMPT.contains("defaults to `model_strength: \"faster\"`"));
+    }
 
     // Config-directory prompt override resolution (#3638). These exercise the
     // pure file resolver only; the global install path is intentionally not
