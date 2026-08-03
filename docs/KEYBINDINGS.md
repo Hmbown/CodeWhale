@@ -19,15 +19,18 @@ Global key chords are not yet user-configurable — tracked for a future release
 | `Ctrl-T`             | Cycle reasoning effort for the active provider. DeepSeek-style providers cycle off → high → max → off; OpenAI Codex cycles low → medium → high → xhigh → low. |
 | `Ctrl-Shift-T`       | Toggle live transcript overlay (sticky-tail auto-scroll)                       |
 | `Ctrl-R`             | Open the resume-session picker                                 |
-| `Ctrl-L`             | Refresh / clear the screen                                     |
+| `Ctrl-L`             | Compact the conversation context (status line shows progress; no-op while a compaction is already running) |
 | `Ctrl-O`             | Open the reasoning detail for the selected or current turn, regardless of composer contents |
 | `Ctrl-Alt-O`         | Open the whole-turn Turn Inspector, regardless of composer contents |
 | `Alt-V` / `Option-V` (macOS) | Open the details pager for the selected, visible, or most recent tool/sub-agent card; terminals that emit the legacy Option-V glyph are also handled |
 | `Ctrl-Shift-E` / `Cmd-Shift-E` | Toggle the file-tree sidebar                          |
-| `Alt-G`              | Scroll transcript to top when the composer is empty             |
+| `Alt-G` / `Alt-Shift-G` | Scroll transcript to top / bottom when the composer is empty |
 | `Alt-1`-`Alt-8`      | Dispatch Hotbar slots 1-8 when no modal or inline picker is open |
 | `Alt-!` / `Alt-@` / `Alt-#` / `Alt-$` / `Alt-0` | Focus Pinned / Tasks / Agents / Context / Auto sidebar |
 | `Ctrl-Alt-0`         | Hide/show the pinned sidebar                                    |
+| `Alt-L`              | Open the pager for the last message (composer empty)             |
+| `Alt-P` / `Alt-A` / `Alt-Y` | Jump to Plan / Act / Operate mode (alternative to `Tab` cycling) |
+| `Ctrl-X` (Activity sidebar) | Cancel all running background shell jobs                  |
 | `Esc`                | Close topmost modal · cancel slash menu · dismiss toast        |
 
 ## Composer
@@ -41,7 +44,7 @@ Editing the message you're about to send.
 | `Ctrl-Enter` / `Cmd-Enter`  | Steer the current turn; send normally when idle (when supported by the terminal) |
 | `Ctrl-U`                    | Clear the whole draft (recoverable — see `Ctrl-Z`)      |
 | `Ctrl-Z`                    | Restore the cleared draft (only while the composer is empty) |
-| `Ctrl-W`                    | Delete previous word                                    |
+| `Ctrl-W` / `Ctrl-Backspace` / `Alt-Backspace` | Delete previous word        |
 | `Ctrl-A` / `Home`           | Move to start of input / start of line (readline convention) |
 | `Ctrl-E` / `End`            | Move to end of input / end of line                      |
 | `Ctrl-←` / `Alt-←`          | Move backward one word                                  |
@@ -56,7 +59,8 @@ Editing the message you're about to send.
 | `Ctrl-V`                    | Direct clipboard paste in a local or forwarded graphical session |
 | `Ctrl-Y`                    | Yank (paste) from kill buffer                           |
 | `↑` / `↓`                   | Cycle composer history (also selects popup/attachment items) |
-| `Ctrl-P` / `Ctrl-N`         | Cycle composer history (alternative)                     |
+| `Shift-↑` / `Shift-↓`       | Browse conversation history                              |
+| `Ctrl-P` / `Ctrl-N`         | Navigate slash-command menu entries; `Ctrl-P` opens the file picker when the menu is empty |
 | `Ctrl-G` / `Ctrl-S`         | Stash current draft (`/stash pop` restores it); never sends or steers |
 | `Alt-R`                    | Search prompt history (Alt-R to exit)                  |
 | `Tab`                       | Slash-command / `@`-mention completion (popup-aware)    |
@@ -134,9 +138,13 @@ When `[memory] enabled = true`, typing `# foo` and pressing `Enter` appends `foo
 | Chord                | Action                                              |
 |----------------------|-----------------------------------------------------|
 | `↑` / `↓` / `j` / `k`| Scroll one line (v0.8.13+: bare arrows also scroll when composer empty) |
+| `Alt-↑` / `Alt-↓`    | Scroll transcript (alternative)                         |
 | `PgUp` / `PgDn`      | Scroll one page                                    |
 | `Home` / `g`         | Jump to top                                         |
 | `End` / `G`          | Jump to bottom                                     |
+| `Ctrl-Home` / `Ctrl-End` | Jump to top / bottom (also works from the composer)  |
+| `Alt-[` / `Alt-]`    | Jump between tool output blocks                     |
+| `Esc Esc`            | Backtrack to a previous user message (`←`/`→` steps, `Enter` rewinds) |
 | `Esc`                | Return focus to composer                           |
 | Mouse drag           | Select transcript text in Codewhale                |
 | `Ctrl-C`             | Copy an active Codewhale selection                 |
