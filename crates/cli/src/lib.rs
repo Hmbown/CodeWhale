@@ -5490,6 +5490,37 @@ mod tests {
     }
 
     #[test]
+    fn legacy_dual_wire_provider_flag_keeps_named_table_kind() {
+        // The CLI flag must resolve legacy spellings to the table-owning
+        // dialect kind (mirroring TOML serde), never to the collapsed catalog
+        // primary, or the user's own [providers.*] table is orphaned.
+        for alias in [
+            "minimax-anthropic",
+            "minimax_anthropic",
+            "mini-max-anthropic",
+            "mini_max_anthropic",
+        ] {
+            assert_eq!(
+                builtin_provider_arg(alias),
+                Some(ProviderArg::MinimaxAnthropic),
+                "{alias}"
+            );
+        }
+        let cli = parse_ok(&[
+            "codewhale",
+            "--provider",
+            "minimax-anthropic",
+            "exec",
+            "Reply OK",
+        ]);
+        assert_eq!(
+            top_level_provider_override(cli.provider.as_deref(), cli.command.as_ref())
+                .expect("legacy dual-wire provider"),
+            Some(ProviderKind::MinimaxAnthropic)
+        );
+    }
+
+    #[test]
     fn opencode_zen_provider_aliases_parse_as_builtin() {
         for alias in [
             "opencode-zen",

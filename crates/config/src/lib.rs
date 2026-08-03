@@ -826,9 +826,11 @@ fn parse_provider_config_key(key: &str) -> Option<(ProviderKind, ProviderConfigF
     let suffix = key.strip_prefix("providers.")?;
     let (provider_key, field_key) = suffix.split_once('.')?;
     let field = ProviderConfigField::parse(field_key)?;
-    let provider = ProviderKind::ALL
+    // Full registry, not ProviderKind::ALL: legacy dialect/plan kinds keep
+    // their own [providers.*] tables even though they left the catalog.
+    let provider = provider::all_providers()
         .iter()
-        .copied()
+        .map(|p| p.kind())
         .find(|kind| kind.provider().provider_config_key() == provider_key)?;
     Some((provider, field))
 }
@@ -843,9 +845,9 @@ fn parse_custom_provider_config_key(key: &str) -> Option<(&str, &str)> {
 }
 
 fn is_builtin_provider_config_id(provider_id: &str) -> bool {
-    ProviderKind::ALL
+    provider::all_providers()
         .iter()
-        .any(|kind| kind.provider().provider_config_key() == provider_id)
+        .any(|p| p.provider_config_key() == provider_id)
 }
 
 /// Field legs a `[providers.<id>]` custom table accepts through
@@ -2692,7 +2694,7 @@ impl ConfigToml {
         if project.tools.is_some() {
             self.tools = project.tools;
         }
-        for provider in ProviderKind::ALL {
+        for provider in provider::all_providers().iter().map(|p| p.kind()) {
             merge_project_provider_config(
                 self.providers.for_provider_mut(provider),
                 project.providers.for_provider(provider),
@@ -2819,7 +2821,7 @@ impl ConfigToml {
 
         match key {
             "provider" => {
-                if let Some(provider) = ProviderKind::parse(value) {
+                if let Some(provider) = ProviderKind::parse_config_identity(value) {
                     self.provider = provider;
                     self.selected_provider_id = None;
                 } else {
@@ -2953,7 +2955,7 @@ impl ConfigToml {
             );
         }
 
-        for provider in ProviderKind::ALL {
+        for provider in provider::all_providers().iter().map(|p| p.kind()) {
             insert_provider_config_values(
                 &mut out,
                 provider,
@@ -6668,12 +6670,12 @@ impl EnvRuntimeOverrides {
 
     fn load_provider() -> (Option<ProviderKind>, Option<&'static str>) {
         if let Ok(value) = std::env::var("CODEWHALE_PROVIDER") {
-            let parsed = ProviderKind::parse(&value);
+            let parsed = ProviderKind::parse_config_identity(&value);
             return (parsed, parsed.map(|_| "CODEWHALE_PROVIDER"));
         }
 
         if let Ok(value) = std::env::var("DEEPSEEK_PROVIDER") {
-            let parsed = ProviderKind::parse(&value);
+            let parsed = ProviderKind::parse_config_identity(&value);
             return (parsed, parsed.map(|_| "DEEPSEEK_PROVIDER"));
         }
 

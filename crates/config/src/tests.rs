@@ -5266,6 +5266,156 @@ model = "MiniMax-M2.7"
 }
 
 #[test]
+fn parse_config_identity_preserves_legacy_table_kinds() {
+    // Legacy dual-wire spellings name the user's own [providers.*] table;
+    // config-table identity must not collapse them onto the vendor primary
+    // the way catalog `parse` does.
+    assert_eq!(
+        ProviderKind::parse_config_identity("deepseek-anthropic"),
+        Some(ProviderKind::DeepseekAnthropic)
+    );
+    assert_eq!(
+        ProviderKind::parse_config_identity("deepseek_anthropic"),
+        Some(ProviderKind::DeepseekAnthropic)
+    );
+    assert_eq!(
+        ProviderKind::parse_config_identity("minimax-anthropic"),
+        Some(ProviderKind::MinimaxAnthropic)
+    );
+    assert_eq!(
+        ProviderKind::parse_config_identity("MINIMAX-ANTHROPIC"),
+        Some(ProviderKind::MinimaxAnthropic)
+    );
+    // Primary spellings and aliases resolve exactly as catalog `parse`.
+    assert_eq!(
+        ProviderKind::parse_config_identity("deepseek-cn"),
+        Some(ProviderKind::Deepseek)
+    );
+    assert_eq!(
+        ProviderKind::parse_config_identity("minimax"),
+        Some(ProviderKind::Minimax)
+    );
+    assert_eq!(ProviderKind::parse_config_identity("nope"), None);
+}
+
+#[test]
+fn legacy_dual_wire_toml_table_supplies_credentials_and_endpoint() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+    // TOML serde keeps the legacy kind, so the user's own named table is
+    // read for credentials and the Messages endpoint is selected.
+    let config: ConfigToml = toml::from_str(
+        r#"
+provider = "deepseek-anthropic"
+
+[providers.deepseek-anthropic]
+api_key = "sk-legacy-deepseek-table"
+"#,
+    )
+    .expect("legacy deepseek-anthropic config");
+    let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+    assert_eq!(resolved.provider, ProviderKind::DeepseekAnthropic);
+    assert_eq!(
+        resolved.api_key.as_deref(),
+        Some("sk-legacy-deepseek-table")
+    );
+    assert_eq!(
+        resolved.api_key_source,
+        Some(RuntimeApiKeySource::ConfigFile)
+    );
+    assert_eq!(resolved.base_url, DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL);
+}
+
+#[test]
+fn legacy_dual_wire_env_provider_preserves_named_table_credentials() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+    // CODEWHALE_PROVIDER must resolve legacy spellings to the same kind TOML
+    // serde produces; catalog collapse would orphan the user's own table and
+    // drop the configured key.
+    for (slug, kind, table, base_url) in [
+        (
+            "deepseek-anthropic",
+            ProviderKind::DeepseekAnthropic,
+            "deepseek-anthropic",
+            DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL,
+        ),
+        (
+            "minimax-anthropic",
+            ProviderKind::MinimaxAnthropic,
+            "minimax-anthropic",
+            DEFAULT_MINIMAX_ANTHROPIC_BASE_URL,
+        ),
+        (
+            "minimax_anthropic",
+            ProviderKind::MinimaxAnthropic,
+            "minimax-anthropic",
+            DEFAULT_MINIMAX_ANTHROPIC_BASE_URL,
+        ),
+    ] {
+        unsafe {
+            env::set_var("CODEWHALE_PROVIDER", slug);
+        }
+        let config: ConfigToml = toml::from_str(&format!(
+            "[providers.{table}]\napi_key = \"sk-legacy-{table}\"\n"
+        ))
+        .expect("legacy table config");
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, kind, "env slug {slug}");
+        assert_eq!(
+            resolved.api_key.as_deref(),
+            Some(format!("sk-legacy-{table}").as_str()),
+            "env slug {slug} must read the user's own named table"
+        );
+        assert_eq!(
+            resolved.api_key_source,
+            Some(RuntimeApiKeySource::ConfigFile)
+        );
+        assert_eq!(resolved.base_url, base_url, "env slug {slug}");
+        unsafe {
+            env::remove_var("CODEWHALE_PROVIDER");
+        }
+    }
+}
+
+#[test]
+fn config_set_legacy_dual_wire_slug_keeps_named_table_identity() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+    // `config set provider <legacy-slug>` must keep the table-owning kind —
+    // collapsing to the primary would rewrite the config to a provider whose
+    // table the user never configured.
+    let mut config = ConfigToml::default();
+    config
+        .set_value("provider", "minimax-anthropic")
+        .expect("legacy slug provider set");
+    assert_eq!(config.provider, ProviderKind::MinimaxAnthropic);
+
+    // Flat `providers.<legacy>.<field>` keys target the legacy table, not a
+    // synthetic custom provider.
+    config
+        .set_value("providers.minimax_anthropic.api_key", "sk-minimax-legacy")
+        .expect("legacy table api_key set");
+    assert_eq!(
+        config.providers.minimax_anthropic.api_key.as_deref(),
+        Some("sk-minimax-legacy")
+    );
+    assert!(config.providers.extras.is_empty());
+    assert_eq!(
+        config
+            .get_value("providers.minimax_anthropic.api_key")
+            .as_deref(),
+        Some("sk-minimax-legacy")
+    );
+    config
+        .unset_value("providers.minimax_anthropic.api_key")
+        .expect("legacy table api_key unset");
+    assert_eq!(config.providers.minimax_anthropic.api_key, None);
+}
+
+#[test]
 fn sakana_env_overrides_resolve_fugu_route() {
     let _lock = env_lock();
     let _env = EnvGuard::without_deepseek_runtime_overrides();
