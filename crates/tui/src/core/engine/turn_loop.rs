@@ -384,6 +384,7 @@ impl Engine {
 
         let mut consecutive_tool_error_steps = 0u32;
         let mut stuck_guard = StuckGuard::default();
+        let mut no_progress_warning_started_at: Option<Instant> = None;
         // Scoped to this external user turn: counts survive all model/tool
         // steps below, then reset before the next user prompt.
         let mut read_repeat_guard = ReadRepeatGuard::default();
@@ -1473,7 +1474,11 @@ impl Engine {
             if tool_uses.is_empty() {
                 match stuck_guard.observe(StepFingerprint::assistant_no_tool(&current_text_visible))
                 {
-                    Some(StuckSignal::Warn) => {
+                    Some(StuckSignal::Warn { reason }) => {
+                        let started =
+                            no_progress_warning_started_at.get_or_insert_with(Instant::now);
+                        let status = no_progress_status_message(&reason, started.elapsed());
+                        let _ = self.tx_event.send(Event::status(status)).await;
                         self.add_session_message(self.runtime_text_message_with_turn_metadata(
                             STUCK_RUNTIME_NOTICE.to_string(),
                             UserInputProvenance::Runtime,
@@ -1482,10 +1487,14 @@ impl Engine {
                         turn.next_step();
                         continue;
                     }
-                    Some(StuckSignal::Stop) => {
-                        let reason = "stuck loop detected after repeated no-progress messages";
-                        let _ = self.tx_event.send(Event::status(reason)).await;
-                        return (TurnOutcomeStatus::Failed, Some(reason.to_string()));
+                    Some(StuckSignal::Stop { reason }) => {
+                        let elapsed = no_progress_warning_started_at
+                            .get_or_insert_with(Instant::now)
+                            .elapsed();
+                        let status = no_progress_status_message(&reason, elapsed);
+                        crate::logging::warn(&compact_no_progress_diagnostic(&reason, elapsed));
+                        let _ = self.tx_event.send(Event::status(status.clone())).await;
+                        return (TurnOutcomeStatus::Failed, Some(status));
                     }
                     None => {}
                 }
@@ -1542,6 +1551,30 @@ impl Engine {
                         mgr.running_count()
                     };
                     if running > 0 {
+                        if let Some(signal) =
+                            stuck_guard.observe(StepFingerprint::waiting_for_subagents(running))
+                        {
+                            match signal {
+                                StuckSignal::Warn { reason } => {
+                                    let started = no_progress_warning_started_at
+                                        .get_or_insert_with(Instant::now);
+                                    let status =
+                                        no_progress_status_message(&reason, started.elapsed());
+                                    let _ = self.tx_event.send(Event::status(status)).await;
+                                }
+                                StuckSignal::Stop { reason } => {
+                                    let elapsed = no_progress_warning_started_at
+                                        .get_or_insert_with(Instant::now)
+                                        .elapsed();
+                                    let status = no_progress_status_message(&reason, elapsed);
+                                    crate::logging::warn(&compact_no_progress_diagnostic(
+                                        &reason, elapsed,
+                                    ));
+                                    let _ = self.tx_event.send(Event::status(status.clone())).await;
+                                    return (TurnOutcomeStatus::Failed, Some(status));
+                                }
+                            }
+                        }
                         let _ = self
                             .tx_event
                             .send(Event::status(format!(
@@ -3124,12 +3157,14 @@ impl Engine {
                             )),
                         }
                     };
-                if matches!(observed_signal, Some(StuckSignal::Stop)) {
-                    stuck_signal = Some(StuckSignal::Stop);
-                } else if matches!(observed_signal, Some(StuckSignal::Warn))
-                    && stuck_signal.is_none()
-                {
-                    stuck_signal = Some(StuckSignal::Warn);
+                match observed_signal {
+                    Some(stop @ StuckSignal::Stop { .. }) => {
+                        stuck_signal = Some(stop);
+                    }
+                    Some(warn @ StuckSignal::Warn { .. }) if stuck_signal.is_none() => {
+                        stuck_signal = Some(warn);
+                    }
+                    _ => {}
                 }
                 if matches!(outcome.name.as_str(), "create_goal" | "update_goal") {
                     goal_tool_ran = true;
@@ -3273,17 +3308,30 @@ impl Engine {
             }
 
             if let Some(signal) = stuck_signal {
-                if matches!(signal, StuckSignal::Warn) {
-                    self.add_session_message(self.runtime_text_message_with_turn_metadata(
-                        STUCK_RUNTIME_NOTICE.to_string(),
-                        UserInputProvenance::Runtime,
-                    ))
-                    .await;
-                } else {
-                    let reason = "stuck loop detected after repeated tool actions/results";
-                    let _ = self.tx_event.send(Event::status(reason)).await;
-                    return (TurnOutcomeStatus::Failed, Some(reason.to_string()));
+                match signal {
+                    StuckSignal::Warn { reason } => {
+                        let started =
+                            no_progress_warning_started_at.get_or_insert_with(Instant::now);
+                        let status = no_progress_status_message(&reason, started.elapsed());
+                        let _ = self.tx_event.send(Event::status(status)).await;
+                        self.add_session_message(self.runtime_text_message_with_turn_metadata(
+                            STUCK_RUNTIME_NOTICE.to_string(),
+                            UserInputProvenance::Runtime,
+                        ))
+                        .await;
+                    }
+                    StuckSignal::Stop { reason } => {
+                        let elapsed = no_progress_warning_started_at
+                            .get_or_insert_with(Instant::now)
+                            .elapsed();
+                        let status = no_progress_status_message(&reason, elapsed);
+                        crate::logging::warn(&compact_no_progress_diagnostic(&reason, elapsed));
+                        let _ = self.tx_event.send(Event::status(status.clone())).await;
+                        return (TurnOutcomeStatus::Failed, Some(status));
+                    }
                 }
+            } else {
+                no_progress_warning_started_at = None;
             }
 
             if !pending_steers.is_empty() {
@@ -3593,6 +3641,32 @@ fn should_hold_turn_for_subagents(queued_completions: usize, running_children: u
     // background-status message, but deliberately no longer gates the hold.
     let _ = running_children;
     queued_completions > 0
+}
+
+fn no_progress_status_message(reason: &str, elapsed: Duration) -> String {
+    format!(
+        "No progress detected ({reason}; elapsed {}). Recovery: retry the current operation, cancel or reconcile child agents, checkpoint-and-restart, or return to the prompt.",
+        format_no_progress_elapsed(elapsed)
+    )
+}
+
+fn compact_no_progress_diagnostic(reason: &str, elapsed: Duration) -> String {
+    format!(
+        "{{\"event\":\"turn.no_progress\",\"reason\":\"{}\",\"elapsed_seconds\":{}}}",
+        reason.replace('"', "\\\""),
+        elapsed.as_secs()
+    )
+}
+
+fn format_no_progress_elapsed(elapsed: Duration) -> String {
+    let secs = elapsed.as_secs();
+    let minutes = secs / 60;
+    let remainder = secs % 60;
+    if minutes == 0 {
+        format!("{secs}s")
+    } else {
+        format!("{minutes}m {remainder}s")
+    }
 }
 
 fn stream_chunk_timeout_budget(config: &EngineConfig) -> (u64, Duration) {
@@ -4195,6 +4269,23 @@ mod tests {
         assert!(!should_hold_turn_for_subagents(0, 0));
         // Queued completions hold regardless of how many children are running.
         assert!(should_hold_turn_for_subagents(2, 5));
+    }
+
+    #[test]
+    fn no_progress_status_reports_reason_elapsed_and_recovery_paths() {
+        let message = no_progress_status_message(
+            "waiting for 2 sub-agent(s) is repeating without terminal child updates",
+            Duration::from_secs(125),
+        );
+        assert!(message.contains("No progress detected"));
+        assert!(message.contains("2m 5s"), "{message}");
+        assert!(message.contains("retry the current operation"), "{message}");
+        assert!(
+            message.contains("cancel or reconcile child agents"),
+            "{message}"
+        );
+        assert!(message.contains("checkpoint-and-restart"), "{message}");
+        assert!(message.contains("return to the prompt"), "{message}");
     }
 
     #[test]
