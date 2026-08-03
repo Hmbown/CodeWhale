@@ -85,17 +85,9 @@ default_text_model = "deepseek-v4-pro"
 # current tier as a ⚡ chip.
 reasoning_effort = "max"
 
-# Transcript reasoning presentation. `show_thinking` controls visibility;
-# `thinking_default_expanded` changes only the initial fold state. Space still
-# toggles an individual thinking block either way.
-show_thinking = true
-thinking_default_expanded = false
-
-# ─────────────────────────────────────────────────────────────────────────────────
-# Cost Display
-# ─────────────────────────────────────────────────────────────────────────────────
-# Display estimated usage in USD or CNY. Aliases `yuan` and `rmb` normalize to `cny`.
-cost_currency = "usd" # usd | cny
+# NOTE: `show_thinking`, `thinking_default_expanded`, and `cost_currency`
+# live in `~/.codewhale/settings.toml`, not here — `Config` has no such
+# fields and unknown keys are ignored. See crates/tui/src/settings.rs.
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Startup update check
@@ -110,10 +102,9 @@ check_for_updates = true
 # ─────────────────────────────────────────────────────────────────────────────────
 # Hotbar slots (#2061 / #2064)
 # ─────────────────────────────────────────────────────────────────────────────────
-# Optional 1-8 sidebar hotbar bindings. When no [[hotbar]] tables are present,
-# the TUI uses built-in defaults:
-#   1 voice.toggle      2 session.compact   3 mode.plan        4 mode.agent
-#   5 mode.operate      6 palette.open      7 sidebar.toggle   8 trust.toggle
+# Optional 1-8 sidebar hotbar bindings. Since #3807 a missing `hotbar` key
+# renders NO bar — the Hotbar is hidden until you configure [[hotbar]]
+# tables here (or via `/hotbar`). An explicit `hotbar = []` also disables it.
 #
 # Invalid slots are skipped with a warning, duplicate slots use the last entry,
 # and unknown actions are preserved so the UI can show a disabled entry.
@@ -899,17 +890,9 @@ exponential_base = 2.0
 # `[compaction]` table yet; runtime compaction budgets are chosen by the TUI
 # from the active model/context window.
 
-# Append-only Flash seams (layered context). Opt-in; defaults to off.
-# See `crates/tui/src/seam_manager.rs` for the implementation.
-[context]
-enabled = false
-verbatim_window_turns = 16
-# Thresholds are based on the active request input estimate, not lifetime
-# summed API usage.
-l1_threshold = 192000
-l2_threshold = 384000
-l3_threshold = 576000
-seam_model = "deepseek-v4-flash"
+# [context] supports `enabled` (default false) and `project_pack` (#4781).
+# The old seam-manager keys (verbatim_window_turns, l1/l2/l3_threshold,
+# seam_model) are parsed but ignored — seam_manager.rs no longer exists.
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Workshop / Large-Output Routing (#548)
@@ -930,26 +913,6 @@ seam_model = "deepseek-v4-flash"
 # exec_shell  = 2048   # shell output synthesised aggressively
 # grep_files  = 2048
 # web_search  = 8192   # web results can be large; give them more room
-
-# ─────────────────────────────────────────────────────────────────────────────────
-# Capacity Controller (runtime pressure guardrails)
-# ─────────────────────────────────────────────────────────────────────────────────
-[capacity]
-enabled = false
-low_risk_max = 0.50
-medium_risk_max = 0.62
-severe_min_slack = -0.25
-severe_violation_ratio = 0.40
-refresh_cooldown_turns = 6
-replan_cooldown_turns = 5
-max_replay_per_turn = 1
-min_turns_before_guardrail = 4
-profile_window = 8
-deepseek_v3_2_chat_prior = 3.9
-deepseek_v3_2_reasoner_prior = 4.1
-deepseek_v4_pro_prior = 3.5
-deepseek_v4_flash_prior = 4.2
-fallback_default_prior = 3.8
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Harness Profiles (preview schema; runtime consumption follows later)
