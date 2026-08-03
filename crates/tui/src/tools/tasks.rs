@@ -922,7 +922,7 @@ impl ToolSpec for TaskShellWaitTool {
         json!({
             "type": "object",
             "properties": {
-                "task_id": { "type": "string", "description": "Background shell task id returned by task_shell_start or exec_shell." },
+                "task_id": { "type": "string", "description": "Background shell task id returned by task_shell_start or `Bash`." },
                 "wait": { "type": "boolean", "default": false },
                 "timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 600000 },
                 "gate": { "type": "string", "enum": ["fmt", "check", "clippy", "test", "custom"] },

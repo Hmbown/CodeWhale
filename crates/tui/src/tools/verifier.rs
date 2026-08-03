@@ -304,7 +304,7 @@ impl ToolSpec for RunVerifiersTool {
                 "background": {
                     "type": "boolean",
                     "default": false,
-                    "description": "Start verifier gates as background shell jobs and return task_ids immediately. Use for long build/test/lint gates; completion is tracked in task/status state, and exec_shell_wait/task_shell_wait are only for early output, final output, or true dependency barriers."
+                    "description": "Start verifier gates as background shell jobs and return task_ids immediately. Use for long build/test/lint gates; completion is tracked in task/status state, and `Bash` with action 'wait' / task_shell_wait are only for early output, final output, or true dependency barriers."
                 }
             },
             "additionalProperties": false
@@ -1306,8 +1306,12 @@ mod tests {
             .as_str()
             .expect("background description");
 
-        assert!(background_description.contains("exec_shell_wait"));
+        assert!(background_description.contains("Bash"));
         assert!(background_description.contains("task_shell_wait"));
+        assert!(
+            !background_description.contains("exec_shell"),
+            "live descriptions must not teach the retired exec_shell name"
+        );
         assert!(tool.starts_detached_for(&json!({"background": true})));
         assert!(!tool.starts_detached_for(&json!({"profile": "auto"})));
     }
