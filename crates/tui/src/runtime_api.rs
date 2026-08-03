@@ -401,6 +401,7 @@ fn default_runtime_capabilities() -> RuntimeCapabilities {
         fleet_event_replay: true,
         fleet_event_stream: true,
         fleet_local_target: true,
+        memory: true,
     }
 }
 
@@ -785,6 +786,13 @@ pub fn build_router(state: RuntimeApiState) -> Router {
         .route("/v1/providers/{id}/switch", post(switch_provider))
         .route("/v1/config", get(get_config).post(set_config))
         .route("/v1/config/reload", post(reload_config))
+        .route(
+            "/v1/memory",
+            get(list_memory)
+                .post(create_memory_entry)
+                .delete(clear_memory),
+        )
+        .route("/v1/memory/{id}", get(get_memory_entry))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_runtime_token,
@@ -4448,6 +4456,293 @@ async fn reload_config(
         message: "Config reloaded from disk; new turns will resolve the updated provider routes"
             .to_string(),
     }))
+}
+
+// ── Memory inspection and lifecycle endpoints ──
+
+/// Maximum summary length returned per entry. Bounds the API surface so raw
+/// private text cannot exfiltrate through JSON responses.
+const MEMORY_SUMMARY_MAX_CHARS: usize = 300;
+/// Default result cap for `GET /v1/memory`.
+const MEMORY_LIST_DEFAULT_LIMIT: usize = 50;
+/// Hard ceiling — protects against oversized responses.
+const MEMORY_LIST_MAX_LIMIT: usize = 200;
+
+/// Typed, redacted projection of a single native memory entry.
+///
+/// Raw file-system paths are never exposed; `scope` and `workspace_id` (a
+/// SHA-256 digest of the repository origin URL, not a local path) give
+/// managed clients enough provenance to reason about each entry.
+#[derive(Debug, Serialize)]
+struct MemoryEntryRecord {
+    /// SQLite row id. Stable across reindexes unless the source Markdown
+    /// file is cleared and rewritten.
+    id: i64,
+    /// `"global"` or `"workspace"`.
+    scope: &'static str,
+    /// SHA-256 digest of the repository origin URL for workspace-scoped
+    /// entries; `null` for global entries.
+    workspace_id: Option<String>,
+    /// Bounded plain-text summary (max `MEMORY_SUMMARY_MAX_CHARS` chars).
+    /// Truncated with `…` when the source text is longer. Never contains
+    /// raw prompt or turn content.
+    summary: String,
+    /// `true` when the source Markdown file has been modified since the
+    /// entry was last indexed.
+    stale: bool,
+    /// 1-based start line in the source Markdown file.
+    line_start: usize,
+    /// 1-based end line in the source Markdown file.
+    line_end: usize,
+    /// `"active"` or `"stale"` (human-readable alias for `stale`).
+    status: &'static str,
+}
+
+#[derive(Debug, Deserialize)]
+struct ListMemoryQuery {
+    /// Filter by scope: `"global"`, `"workspace"`, or `"all"` (default).
+    scope: Option<String>,
+    /// FTS search query (max 256 chars). When absent all entries for the
+    /// requested scope are returned in insertion order.
+    q: Option<String>,
+    /// Maximum entries to return (default 50, max 200).
+    limit: Option<usize>,
+}
+
+/// Request body for `POST /v1/memory`.
+#[derive(Debug, Deserialize)]
+struct CreateMemoryRequest {
+    /// The memory note text (max 64 KiB after normalisation).
+    text: String,
+    /// `"global"` (default) or `"workspace"`.
+    #[serde(default)]
+    scope: String,
+}
+
+/// Query params for `DELETE /v1/memory`.
+#[derive(Debug, Deserialize)]
+struct ClearMemoryQuery {
+    /// One of `"global"`, `"workspace"`, or `"all"`. Required.
+    scope: String,
+}
+
+/// Build a `NativeMemoryStore` rooted at the same location the TUI uses.
+/// Mirrors `native_store()` in `commands/groups/memory/memory.rs`.
+fn native_store_for_state(state: &RuntimeApiState) -> crate::native_memory::NativeMemoryStore {
+    let memory_path = state.config.read().memory_path();
+    if let Some(store) = crate::native_memory::NativeMemoryStore::from_global_path(&memory_path) {
+        return store;
+    }
+    let root = memory_path
+        .parent()
+        .unwrap_or_else(|| FsPath::new("."))
+        .join("memory");
+    crate::native_memory::NativeMemoryStore::new(root)
+}
+
+/// Derive a scope label from a source path relative to the store root.
+/// Returns `"global"`, `"workspace"`, or `"unknown"`.
+fn scope_label_for_source(source: &FsPath, store_root: &FsPath) -> &'static str {
+    let Ok(rel) = source.strip_prefix(store_root) else {
+        return "unknown";
+    };
+    match rel.components().next().and_then(|c| c.as_os_str().to_str()) {
+        Some("global") => "global",
+        Some("workspace") => "workspace",
+        _ => "unknown",
+    }
+}
+
+/// Extract the workspace_id component from a workspace-scoped source path.
+fn workspace_id_for_source(source: &FsPath, store_root: &FsPath) -> Option<String> {
+    let rel = source.strip_prefix(store_root).ok()?;
+    let mut comps = rel.components();
+    if comps.next()?.as_os_str().to_str()? != "workspace" {
+        return None;
+    }
+    Some(comps.next()?.as_os_str().to_str()?.to_string())
+}
+
+/// Convert a `MemoryHit` into a redacted, bounded `MemoryEntryRecord`.
+fn memory_hit_to_record(
+    hit: crate::native_memory::MemoryHit,
+    store_root: &FsPath,
+) -> MemoryEntryRecord {
+    let scope = scope_label_for_source(&hit.source, store_root);
+    let workspace_id = workspace_id_for_source(&hit.source, store_root);
+    let summary = truncate_text(&hit.text, MEMORY_SUMMARY_MAX_CHARS);
+    let status = if hit.stale { "stale" } else { "active" };
+    MemoryEntryRecord {
+        id: hit.id,
+        scope,
+        workspace_id,
+        summary,
+        stale: hit.stale,
+        line_start: hit.line_start,
+        line_end: hit.line_end,
+        status,
+    }
+}
+
+/// Resolve a scope query parameter into a `MemoryScope` filter and an
+/// optional workspace_id.  `"all"` / absent → `(None, None)`.
+fn resolve_memory_scope(
+    scope_param: &Option<String>,
+    workspace: &FsPath,
+) -> Result<(Option<crate::native_memory::MemoryScope>, Option<String>), ApiError> {
+    match scope_param.as_deref().unwrap_or("all").trim() {
+        "all" | "" => Ok((None, None)),
+        "global" => Ok((Some(crate::native_memory::MemoryScope::Global), None)),
+        "workspace" => {
+            let workspace_id = crate::native_memory::NativeMemoryStore::workspace_id(workspace)
+                .map_err(|e| ApiError::internal(format!("resolve workspace id: {e}")))?;
+            Ok((
+                Some(crate::native_memory::MemoryScope::Workspace),
+                workspace_id,
+            ))
+        }
+        other => Err(ApiError::bad_request(format!(
+            "Invalid scope '{other}': expected one of all, global, workspace"
+        ))),
+    }
+}
+
+/// `GET /v1/memory` — list memory entries with optional scope and FTS
+/// filtering.
+///
+/// Query params:
+/// - `scope` — `"global"`, `"workspace"`, or `"all"` (default)
+/// - `q` — FTS search query (max 256 chars; omit to list all)
+/// - `limit` — max results (default 50, max 200)
+async fn list_memory(
+    State(state): State<RuntimeApiState>,
+    Query(query): Query<ListMemoryQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let limit = match query.limit.unwrap_or(MEMORY_LIST_DEFAULT_LIMIT) {
+        0 => {
+            return Err(ApiError::bad_request("limit must be at least 1"));
+        }
+        n if n > MEMORY_LIST_MAX_LIMIT => {
+            return Err(ApiError::bad_request(format!(
+                "limit must be at most {MEMORY_LIST_MAX_LIMIT}; got {n}"
+            )));
+        }
+        n => n,
+    };
+
+    let store = native_store_for_state(&state);
+    let root = store.root().to_path_buf();
+    let (scope_filter, workspace_id) = resolve_memory_scope(&query.scope, &state.workspace)?;
+
+    let hits = if let Some(ref q) = query.q {
+        let q = q.trim();
+        if q.is_empty() || q.chars().count() > 256 {
+            return Err(ApiError::bad_request("q must be 1–256 characters"));
+        }
+        match scope_filter {
+            None => store.search(q, limit),
+            Some(crate::native_memory::MemoryScope::Global) => store.search(q, limit).map(|h| {
+                h.into_iter()
+                    .filter(|h| scope_label_for_source(&h.source, &root) == "global")
+                    .collect()
+            }),
+            Some(crate::native_memory::MemoryScope::Workspace) => store
+                .search_for_workspace(&state.workspace, q, limit)
+                .map(|h| {
+                    h.into_iter()
+                        .filter(|h| scope_label_for_source(&h.source, &root) == "workspace")
+                        .collect()
+                }),
+        }
+    } else {
+        store.list_all(scope_filter, workspace_id.as_deref(), limit)
+    }
+    .map_err(|e| ApiError::internal(format!("memory list error: {e}")))?;
+
+    let entries: Vec<MemoryEntryRecord> = hits
+        .into_iter()
+        .map(|h| memory_hit_to_record(h, &root))
+        .collect();
+    let total = entries.len();
+    Ok(Json(json!({ "entries": entries, "total": total })))
+}
+
+/// `GET /v1/memory/{id}` — inspect a single memory entry.
+///
+/// The lookup is scoped to global memory plus the current repository's
+/// workspace memory; numeric IDs from a different machine or repository
+/// will not resolve.
+async fn get_memory_entry(
+    State(state): State<RuntimeApiState>,
+    Path(id): Path<i64>,
+) -> Result<Json<Value>, ApiError> {
+    let store = native_store_for_state(&state);
+    let root = store.root().to_path_buf();
+    let hit = store
+        .get_for_workspace(&state.workspace, id)
+        .map_err(|e| ApiError::internal(format!("memory lookup error: {e}")))?
+        .ok_or_else(|| ApiError::not_found(format!("memory entry '{id}' not found")))?;
+    let entry = memory_hit_to_record(hit, &root);
+    Ok(Json(json!({ "entry": entry })))
+}
+
+/// `POST /v1/memory` — append a new memory entry.
+///
+/// The note is treated as user data (lower authority than instructions).
+/// Requires the standard Runtime auth token when auth is configured.
+async fn create_memory_entry(
+    State(state): State<RuntimeApiState>,
+    Json(req): Json<CreateMemoryRequest>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let scope_str = if req.scope.is_empty() {
+        "global"
+    } else {
+        req.scope.as_str()
+    };
+    let scope = match scope_str.trim() {
+        "global" => crate::native_memory::MemoryScope::Global,
+        "workspace" => crate::native_memory::MemoryScope::Workspace,
+        other => {
+            return Err(ApiError::bad_request(format!(
+                "Invalid scope '{other}': expected 'global' or 'workspace'"
+            )));
+        }
+    };
+    let workspace_id = if scope == crate::native_memory::MemoryScope::Workspace {
+        let id = crate::native_memory::NativeMemoryStore::workspace_id(&state.workspace)
+            .map_err(|e| ApiError::internal(format!("resolve workspace id: {e}")))?
+            .ok_or_else(|| {
+                ApiError::bad_request(
+                    "workspace scope requires a git repository with a remote origin",
+                )
+            })?;
+        Some(id)
+    } else {
+        None
+    };
+    let store = native_store_for_state(&state);
+    let root = store.root().to_path_buf();
+    let hit = store
+        .remember(scope, workspace_id.as_deref(), &req.text)
+        .map_err(|e| ApiError::bad_request(format!("memory create error: {e}")))?;
+    let entry = memory_hit_to_record(hit, &root);
+    Ok((StatusCode::CREATED, Json(json!({ "entry": entry }))))
+}
+
+/// `DELETE /v1/memory` — clear all memory entries for the given scope.
+///
+/// The `scope` query parameter is required: `"global"`, `"workspace"`, or
+/// `"all"`.  This is a destructive, non-reversible operation.
+async fn clear_memory(
+    State(state): State<RuntimeApiState>,
+    Query(query): Query<ClearMemoryQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let (scope_filter, workspace_id) = resolve_memory_scope(&Some(query.scope), &state.workspace)?;
+    let store = native_store_for_state(&state);
+    store
+        .delete_all(scope_filter, workspace_id.as_deref())
+        .map_err(|e| ApiError::internal(format!("memory clear error: {e}")))?;
+    Ok(Json(json!({ "cleared": true })))
 }
 
 const MOBILE_HTML: &str = include_str!("runtime_mobile.html");

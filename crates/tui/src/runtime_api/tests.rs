@@ -7414,3 +7414,337 @@ async fn cors_layer_advertises_exact_supported_headers_and_never_an_extra() -> R
     handle.abort();
     Ok(())
 }
+
+// ── Memory API tests ──
+
+#[tokio::test]
+async fn memory_info_capability_is_advertised() -> Result<()> {
+    let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+    let info: serde_json::Value = client
+        .get(format!("http://{addr}/v1/runtime/info"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(
+        info["capabilities"]["memory"], true,
+        "memory capability must be advertised in runtime/info"
+    );
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn memory_list_returns_empty_for_fresh_store() -> Result<()> {
+    let root = std::env::temp_dir().join(format!("cw-memory-list-{}", Uuid::new_v4()));
+    let sessions_dir = root.join("sessions");
+    let _lock = lock_test_env();
+    let home = root.join("home");
+    fs::create_dir_all(&home)?;
+    let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", &home);
+    let Some((addr, _rt, handle)) = spawn_test_server_with_root(root, sessions_dir).await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let body: serde_json::Value = client
+        .get(format!("http://{addr}/v1/memory"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(body["entries"].as_array().map(Vec::len), Some(0));
+    assert_eq!(body["total"], 0);
+
+    // scope=global should also be empty.
+    let global: serde_json::Value = client
+        .get(format!("http://{addr}/v1/memory?scope=global"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(global["total"], 0);
+
+    // Invalid scope returns 400.
+    let bad = client
+        .get(format!("http://{addr}/v1/memory?scope=invalid"))
+        .send()
+        .await?;
+    assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+
+    // limit=0 returns 400.
+    let bad_limit = client
+        .get(format!("http://{addr}/v1/memory?limit=0"))
+        .send()
+        .await?;
+    assert_eq!(bad_limit.status(), StatusCode::BAD_REQUEST);
+
+    // limit above max returns 400.
+    let over_limit = client
+        .get(format!("http://{addr}/v1/memory?limit=201"))
+        .send()
+        .await?;
+    assert_eq!(over_limit.status(), StatusCode::BAD_REQUEST);
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn memory_create_list_and_get_entry() -> Result<()> {
+    let root = std::env::temp_dir().join(format!("cw-memory-create-{}", Uuid::new_v4()));
+    let sessions_dir = root.join("sessions");
+    let _lock = lock_test_env();
+    let home = root.join("home");
+    fs::create_dir_all(&home)?;
+    let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", &home);
+    let Some((addr, _rt, handle)) = spawn_test_server_with_root(root.clone(), sessions_dir).await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    // Create a global memory entry.
+    let create_resp = client
+        .post(format!("http://{addr}/v1/memory"))
+        .json(&json!({ "text": "prefer snake_case for identifiers", "scope": "global" }))
+        .send()
+        .await?;
+    assert_eq!(create_resp.status(), StatusCode::CREATED);
+    let created: serde_json::Value = create_resp.json().await?;
+    assert_eq!(created["entry"]["scope"], "global");
+    assert_eq!(created["entry"]["status"], "active");
+    assert!(created["entry"]["id"].is_number());
+    assert!(
+        created["entry"]["summary"]
+            .as_str()
+            .unwrap_or("")
+            .contains("snake_case"),
+        "summary must include the note text"
+    );
+
+    let entry_id = created["entry"]["id"].as_i64().unwrap();
+
+    // GET /v1/memory lists the entry.
+    let list: serde_json::Value = client
+        .get(format!("http://{addr}/v1/memory?scope=global"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(list["total"], 1);
+    assert_eq!(list["entries"][0]["id"], entry_id);
+    assert_eq!(list["entries"][0]["scope"], "global");
+    // workspace_id must be absent for global entries.
+    assert!(list["entries"][0]["workspace_id"].is_null());
+
+    // GET /v1/memory/{id} returns the entry.
+    let single: serde_json::Value = client
+        .get(format!("http://{addr}/v1/memory/{entry_id}"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(single["entry"]["id"], entry_id);
+    assert_eq!(single["entry"]["scope"], "global");
+    assert!(single["entry"]["stale"].is_boolean());
+
+    // GET /v1/memory/{id} for a missing id returns 404.
+    let missing = client
+        .get(format!("http://{addr}/v1/memory/999999"))
+        .send()
+        .await?;
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn memory_summary_is_redacted_to_max_chars() -> Result<()> {
+    let root = std::env::temp_dir().join(format!("cw-memory-redact-{}", Uuid::new_v4()));
+    let sessions_dir = root.join("sessions");
+    let _lock = lock_test_env();
+    let home = root.join("home");
+    fs::create_dir_all(&home)?;
+    let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", &home);
+    let Some((addr, _rt, handle)) = spawn_test_server_with_root(root.clone(), sessions_dir).await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let long_note = "x".repeat(350);
+    let create_resp = client
+        .post(format!("http://{addr}/v1/memory"))
+        .json(&json!({ "text": long_note, "scope": "global" }))
+        .send()
+        .await?;
+    assert_eq!(create_resp.status(), StatusCode::CREATED);
+    let created: serde_json::Value = create_resp.json().await?;
+    let summary = created["entry"]["summary"].as_str().unwrap_or("");
+    // Summary must be bounded: at most 300 chars + 3 for the "…" suffix.
+    assert!(
+        summary.chars().count() <= 303,
+        "summary must be bounded; got {} chars",
+        summary.chars().count()
+    );
+    assert!(
+        summary.ends_with("…") || summary.chars().count() <= 300,
+        "overlong text must be truncated with an ellipsis"
+    );
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn memory_clear_removes_global_scope() -> Result<()> {
+    let root = std::env::temp_dir().join(format!("cw-memory-clear-{}", Uuid::new_v4()));
+    let sessions_dir = root.join("sessions");
+    let _lock = lock_test_env();
+    let home = root.join("home");
+    fs::create_dir_all(&home)?;
+    let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", &home);
+    let Some((addr, _rt, handle)) = spawn_test_server_with_root(root.clone(), sessions_dir).await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    // Seed two entries.
+    for note in ["first note", "second note"] {
+        client
+            .post(format!("http://{addr}/v1/memory"))
+            .json(&json!({ "text": note, "scope": "global" }))
+            .send()
+            .await?
+            .error_for_status()?;
+    }
+
+    let before: serde_json::Value = client
+        .get(format!("http://{addr}/v1/memory?scope=global"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(
+        before["total"], 2,
+        "seed entries must be present before clear"
+    );
+
+    // Clear global scope.
+    let clear: serde_json::Value = client
+        .delete(format!("http://{addr}/v1/memory?scope=global"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(clear["cleared"], true);
+
+    let after: serde_json::Value = client
+        .get(format!("http://{addr}/v1/memory?scope=global"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(after["total"], 0, "global scope must be empty after clear");
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn memory_create_rejects_empty_text_and_bad_scope() -> Result<()> {
+    let root = std::env::temp_dir().join(format!("cw-memory-invalid-{}", Uuid::new_v4()));
+    let sessions_dir = root.join("sessions");
+    let _lock = lock_test_env();
+    let home = root.join("home");
+    fs::create_dir_all(&home)?;
+    let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", &home);
+    let Some((addr, _rt, handle)) = spawn_test_server_with_root(root.clone(), sessions_dir).await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    // Empty text must be rejected with 400.
+    let empty = client
+        .post(format!("http://{addr}/v1/memory"))
+        .json(&json!({ "text": "", "scope": "global" }))
+        .send()
+        .await?;
+    assert_eq!(empty.status(), StatusCode::BAD_REQUEST);
+
+    // An unknown scope must be rejected with 400.
+    let bad_scope = client
+        .post(format!("http://{addr}/v1/memory"))
+        .json(&json!({ "text": "valid note", "scope": "thread" }))
+        .send()
+        .await?;
+    assert_eq!(bad_scope.status(), StatusCode::BAD_REQUEST);
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn memory_search_query_filters_results() -> Result<()> {
+    let root = std::env::temp_dir().join(format!("cw-memory-search-{}", Uuid::new_v4()));
+    let sessions_dir = root.join("sessions");
+    let _lock = lock_test_env();
+    let home = root.join("home");
+    fs::create_dir_all(&home)?;
+    let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", &home);
+    let Some((addr, _rt, handle)) = spawn_test_server_with_root(root.clone(), sessions_dir).await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    // Seed two entries with distinct text.
+    for note in ["prefer functional style", "always use snake_case"] {
+        client
+            .post(format!("http://{addr}/v1/memory"))
+            .json(&json!({ "text": note, "scope": "global" }))
+            .send()
+            .await?
+            .error_for_status()?;
+    }
+
+    // Searching for "functional" returns only the matching entry.
+    let resp: serde_json::Value = client
+        .get(format!("http://{addr}/v1/memory?q=functional&scope=global"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(resp["total"], 1);
+    let summary = resp["entries"][0]["summary"].as_str().unwrap_or("");
+    assert!(
+        summary.contains("functional"),
+        "search must return the matching entry"
+    );
+
+    // An empty q must be rejected with 400.
+    let empty_q = client
+        .get(format!("http://{addr}/v1/memory?q="))
+        .send()
+        .await?;
+    assert_eq!(empty_q.status(), StatusCode::BAD_REQUEST);
+
+    handle.abort();
+    Ok(())
+}

@@ -270,6 +270,59 @@ impl NativeMemoryStore {
         })
     }
 
+    /// List all entries in the selected scope ordered by insertion. When
+    /// `scope` is `None`, every scope is included. Reindexes before retrieval
+    /// so direct Markdown edits are always visible.
+    pub fn list_all(
+        &self,
+        scope: Option<MemoryScope>,
+        workspace_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<MemoryHit>> {
+        self.with_write_lock(|| {
+            self.reindex_unlocked()?;
+            let conn = self.connection_unlocked()?;
+            let limit = limit.clamp(1, 500) as i64;
+            match scope {
+                None => {
+                    let mut stmt = conn.prepare(
+                        "SELECT e.id,e.text,e.source,e.line_start,e.line_end,
+                                CASE WHEN e.source_mtime != s.mtime THEN 1 ELSE 0 END
+                         FROM memory_entries e
+                         LEFT JOIN memory_sources s ON s.path=e.source
+                         ORDER BY e.id LIMIT ?1",
+                    )?;
+                    let rows = stmt.query_map(params![limit], memory_hit_from_row)?;
+                    rows.collect::<rusqlite::Result<Vec<_>>>()
+                        .map_err(Into::into)
+                }
+                Some(scope_val) => {
+                    let source = match scope_val {
+                        MemoryScope::Global => self.global_path(),
+                        MemoryScope::Workspace => {
+                            self.workspace_path(workspace_id.ok_or_else(|| {
+                                anyhow!("workspace scope requires a workspace id")
+                            })?)?
+                        }
+                    };
+                    let mut stmt = conn.prepare(
+                        "SELECT e.id,e.text,e.source,e.line_start,e.line_end,
+                                CASE WHEN e.source_mtime != s.mtime THEN 1 ELSE 0 END
+                         FROM memory_entries e
+                         LEFT JOIN memory_sources s ON s.path=e.source
+                         WHERE e.source=?1 ORDER BY e.id LIMIT ?2",
+                    )?;
+                    let rows = stmt.query_map(
+                        params![source.to_string_lossy(), limit],
+                        memory_hit_from_row,
+                    )?;
+                    rows.collect::<rusqlite::Result<Vec<_>>>()
+                        .map_err(Into::into)
+                }
+            }
+        })
+    }
+
     pub fn get(&self, id: i64) -> Result<Option<MemoryHit>> {
         self.with_fresh_index(|conn| {
             Ok(conn
