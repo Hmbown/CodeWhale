@@ -5,7 +5,7 @@ use codewhale_config::route::{
 };
 use serde::Serialize;
 
-use crate::client::DeepSeekClient;
+use crate::client::ProviderClient;
 use crate::codex_model_cache::{CodexModelCacheFreshness, model_roster};
 use crate::config::{
     ApiProvider, Config, DEFAULT_NVIDIA_NIM_BASE_URL, KIMI_CODE_K3_CONTEXT_WINDOW_TOKENS,
@@ -74,7 +74,7 @@ pub(crate) struct ResolvedRuntimeRoute {
     pub(crate) config: Box<Config>,
     pub(crate) model: String,
     pub(crate) context_window: ContextWindowResolution,
-    preflighted_client: Option<DeepSeekClient>,
+    preflighted_client: Option<ProviderClient>,
 }
 
 impl std::fmt::Debug for ResolvedRuntimeRoute {
@@ -98,7 +98,7 @@ pub(crate) struct ValidatedRuntimeRoute {
     pub(crate) config: Box<Config>,
     pub(crate) model: String,
     pub(crate) context_window: ContextWindowResolution,
-    pub(crate) client: DeepSeekClient,
+    pub(crate) client: ProviderClient,
 }
 
 impl std::fmt::Debug for ValidatedRuntimeRoute {
@@ -115,7 +115,7 @@ impl ResolvedRuntimeRoute {
     pub(crate) fn preflight(mut self) -> Result<Self, String> {
         if self.preflighted_client.is_none() {
             self.preflighted_client = Some(
-                DeepSeekClient::from_candidate(&self.config, &self.candidate).map_err(|err| {
+                ProviderClient::from_candidate(&self.config, &self.candidate).map_err(|err| {
                     format!(
                         "Failed to configure provider route {} / {}: {err}",
                         self.identity.key, self.model
@@ -130,7 +130,7 @@ impl ResolvedRuntimeRoute {
         let client = match self.preflighted_client.take() {
             Some(client) => client,
             None => {
-                DeepSeekClient::from_candidate(&self.config, &self.candidate).map_err(|err| {
+                ProviderClient::from_candidate(&self.config, &self.candidate).map_err(|err| {
                     format!(
                         "Failed to configure provider route {} / {}: {err}",
                         self.identity.key, self.model
@@ -148,7 +148,7 @@ impl ResolvedRuntimeRoute {
         })
     }
 
-    pub(crate) fn take_preflighted_client(&mut self) -> Option<DeepSeekClient> {
+    pub(crate) fn take_preflighted_client(&mut self) -> Option<ProviderClient> {
         self.preflighted_client.take()
     }
 }

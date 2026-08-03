@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use crate::client::DeepSeekClient;
+use crate::client::ProviderClient;
 use crate::repl::PythonRuntime;
 use crate::rlm::RlmBridge;
 use crate::rlm::session::{
@@ -65,12 +65,12 @@ fn rlm_kernel_error_result(
 pub struct RlmTool {
     name: &'static str,
     forced_action: Option<&'static str>,
-    client: Option<DeepSeekClient>,
+    client: Option<ProviderClient>,
 }
 
 impl RlmTool {
     #[must_use]
-    pub fn new(name: &'static str, client: Option<DeepSeekClient>) -> Self {
+    pub fn new(name: &'static str, client: Option<ProviderClient>) -> Self {
         Self {
             name,
             forced_action: None,
@@ -80,7 +80,7 @@ impl RlmTool {
 
     #[cfg(test)]
     #[must_use]
-    pub fn alias(name: &'static str, action: &'static str, client: Option<DeepSeekClient>) -> Self {
+    pub fn alias(name: &'static str, action: &'static str, client: Option<ProviderClient>) -> Self {
         Self {
             name,
             forced_action: Some(action),

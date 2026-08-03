@@ -1442,7 +1442,7 @@ async fn delayed_chat_client(
     first_delay: Duration,
     response_text: &str,
 ) -> (
-    DeepSeekClient,
+    ProviderClient,
     Arc<AtomicUsize>,
     Arc<std::sync::Mutex<Vec<Value>>>,
 ) {
@@ -1502,7 +1502,7 @@ async fn delayed_chat_client(
         base_url: Some(format!("http://{addr}/v1")),
         ..crate::config::Config::default()
     };
-    let client = DeepSeekClient::new(&config).expect("fake chat client");
+    let client = ProviderClient::new(&config).expect("fake chat client");
     (client, calls, bodies)
 }
 
@@ -1549,7 +1549,7 @@ async fn tool_free_subagent_omits_chat_tools_and_tool_choice() {
 
 async fn transient_header_timeout_then_success_chat_client(
     response_text: &str,
-) -> (DeepSeekClient, Arc<AtomicUsize>) {
+) -> (ProviderClient, Arc<AtomicUsize>) {
     let calls = Arc::new(AtomicUsize::new(0));
     let response_text = response_text.to_string();
     let app = Router::new().route(
@@ -1608,11 +1608,11 @@ async fn transient_header_timeout_then_success_chat_client(
         base_url: Some(format!("http://{addr}/v1")),
         ..crate::config::Config::default()
     };
-    let client = DeepSeekClient::new(&config).expect("fake transient chat client");
+    let client = ProviderClient::new(&config).expect("fake transient chat client");
     (client, calls)
 }
 
-async fn always_rate_limited_chat_client() -> (DeepSeekClient, Arc<AtomicUsize>) {
+async fn always_rate_limited_chat_client() -> (ProviderClient, Arc<AtomicUsize>) {
     let calls = Arc::new(AtomicUsize::new(0));
     let app = Router::new().route(
         "/{*path}",
@@ -1657,11 +1657,11 @@ async fn always_rate_limited_chat_client() -> (DeepSeekClient, Arc<AtomicUsize>)
         }),
         ..crate::config::Config::default()
     };
-    let client = DeepSeekClient::new(&config).expect("fake rate-limited chat client");
+    let client = ProviderClient::new(&config).expect("fake rate-limited chat client");
     (client, calls)
 }
 
-async fn always_invalid_request_chat_client() -> (DeepSeekClient, Arc<AtomicUsize>) {
+async fn always_invalid_request_chat_client() -> (ProviderClient, Arc<AtomicUsize>) {
     let calls = Arc::new(AtomicUsize::new(0));
     let app = Router::new().route(
         "/{*path}",
@@ -1707,7 +1707,7 @@ async fn always_invalid_request_chat_client() -> (DeepSeekClient, Arc<AtomicUsiz
         }),
         ..crate::config::Config::default()
     };
-    let client = DeepSeekClient::new(&config).expect("fake invalid-request chat client");
+    let client = ProviderClient::new(&config).expect("fake invalid-request chat client");
     (client, calls)
 }
 
@@ -9174,8 +9174,8 @@ fn worker_lifecycle_records_direct_operate_approval_without_delegating_authority
 
 /// A minimal stub client. Test helpers below only ever check struct fields
 /// (depth, cancel_token, context); they don't call the network. We need a
-/// *some* `DeepSeekClient` because `SubAgentRuntime.client` isn't
-/// `Option<...>`. `Config::default()` is enough — `DeepSeekClient::new`
+/// *some* `ProviderClient` because `SubAgentRuntime.client` isn't
+/// `Option<...>`. `Config::default()` is enough — `ProviderClient::new`
 /// only validates that an API key field exists, not that the key works.
 fn stub_runtime_for_provider(provider: &str) -> SubAgentRuntime {
     let mut runtime = stub_runtime();
@@ -9183,7 +9183,7 @@ fn stub_runtime_for_provider(provider: &str) -> SubAgentRuntime {
     runtime
 }
 
-fn stub_client_for_provider(provider: &str) -> DeepSeekClient {
+fn stub_client_for_provider(provider: &str) -> ProviderClient {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let mut providers = crate::config::ProvidersConfig::default();
     match provider {
@@ -9229,16 +9229,16 @@ fn stub_client_for_provider(provider: &str) -> DeepSeekClient {
         providers: Some(providers),
         ..crate::config::Config::default()
     };
-    DeepSeekClient::new(&config).expect("stub client should construct")
+    ProviderClient::new(&config).expect("stub client should construct")
 }
 
-fn stub_client() -> DeepSeekClient {
+fn stub_client() -> ProviderClient {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let config = crate::config::Config {
         api_key: Some("test-key".to_string()),
         ..crate::config::Config::default()
     };
-    DeepSeekClient::new(&config).expect("stub client should construct")
+    ProviderClient::new(&config).expect("stub client should construct")
 }
 
 // ---- #4193: interactive-TUI in-process spawn honors a profile's pinned provider ----
@@ -9246,7 +9246,7 @@ fn stub_client() -> DeepSeekClient {
 /// A `Config` with two fully-configured providers, each on a DISTINCT host so a
 /// test can prove a child client actually re-pointed: `deepseek` is the session
 /// route, `zai` is a pinned route. Provider-scoped keys/base URLs are used (root
-/// `api_key` intentionally unset) so `deepseek_api_key`/`deepseek_base_url`
+/// `api_key` intentionally unset) so `active_provider_api_key`/`deepseek_base_url`
 /// resolve each provider independently.
 fn cross_provider_config() -> crate::config::Config {
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -9304,7 +9304,7 @@ fn cross_provider_config() -> crate::config::Config {
 /// exactly as the engine wires it via `with_api_config`.
 fn cross_provider_runtime() -> SubAgentRuntime {
     let config = cross_provider_config();
-    let client = DeepSeekClient::new(&config).expect("session client builds");
+    let client = ProviderClient::new(&config).expect("session client builds");
     let mut runtime = stub_runtime().with_api_config(config);
     runtime.client = client;
     runtime
@@ -9390,7 +9390,7 @@ fn spawn_child_client_targets_custom_profile_provider() {
 fn spawn_child_client_switches_between_exact_named_custom_endpoints() {
     let mut config = cross_provider_config();
     config.provider = Some("custom-a".to_string());
-    let client = DeepSeekClient::new(&config).expect("custom A session client");
+    let client = ProviderClient::new(&config).expect("custom A session client");
     assert_eq!(client.base_url(), "http://127.0.0.1:18181/v1");
     let mut runtime = stub_runtime().with_api_config(config);
     runtime.client = client;
@@ -9410,7 +9410,7 @@ fn spawn_child_client_switches_between_exact_named_custom_endpoints() {
 fn cross_custom_child_rebinds_config_receipts_and_grandchild_route_atomically() {
     let mut config = cross_provider_config();
     config.provider = Some("custom-a".to_string());
-    let client = DeepSeekClient::new(&config).expect("custom A session client");
+    let client = ProviderClient::new(&config).expect("custom A session client");
     let mut runtime = stub_runtime().with_api_config(config);
     runtime.client = client;
 
@@ -9457,7 +9457,7 @@ fn cross_custom_child_rebinds_config_receipts_and_grandchild_route_atomically() 
 fn spawn_child_client_does_not_collapse_case_colliding_custom_pins() {
     let mut config = cross_provider_config();
     config.provider = Some("custom-a".to_string());
-    let client = DeepSeekClient::new(&config).expect("custom A session client");
+    let client = ProviderClient::new(&config).expect("custom A session client");
     let mut runtime = stub_runtime().with_api_config(config);
     runtime.client = client;
 
@@ -9485,7 +9485,7 @@ fn removed_case_colliding_custom_pin_fails_closed() {
         .expect("providers")
         .custom
         .remove("CUSTOM");
-    let client = DeepSeekClient::new(&config).expect("custom A session client");
+    let client = ProviderClient::new(&config).expect("custom A session client");
     let mut runtime = stub_runtime().with_api_config(config);
     runtime.client = client;
 
@@ -9543,7 +9543,7 @@ fn spawn_child_client_fails_closed_when_pinned_provider_unavailable() {
     runtime.api_config = None; // simulate a legacy/untethered runtime
 
     let member = member_pinning_provider("zai", "glm-4.6");
-    // `DeepSeekClient` is not `Debug`, so match instead of `expect_err`.
+    // `ProviderClient` is not `Debug`, so match instead of `expect_err`.
     let err = match child_client_for_member(&runtime, Some(&member)) {
         Ok(_) => panic!("must fail closed when the pinned client cannot be built"),
         Err(err) => err,
@@ -11231,7 +11231,7 @@ async fn token_heavy_chat_client(
     prompt_tokens: u64,
     completion_tokens: u64,
     response_text: &str,
-) -> (DeepSeekClient, Arc<AtomicUsize>) {
+) -> (ProviderClient, Arc<AtomicUsize>) {
     let calls = Arc::new(AtomicUsize::new(0));
     let response_text = response_text.to_string();
     let app = Router::new().route(
@@ -11279,7 +11279,7 @@ async fn token_heavy_chat_client(
         base_url: Some(format!("http://{addr}/v1")),
         ..crate::config::Config::default()
     };
-    let client = DeepSeekClient::new(&config).expect("fake chat client");
+    let client = ProviderClient::new(&config).expect("fake chat client");
     (client, calls)
 }
 

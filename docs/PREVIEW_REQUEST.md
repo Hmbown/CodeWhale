@@ -134,7 +134,7 @@ production path** up to (but not including) the send:
    first, then the Work tail is estimated as its own separately framed list.
    If graph authority cannot be read, the body is unavailable rather than
    rebuilt from a potentially stale legacy projection.
-5. It prepares the request through `DeepSeekClient::prepare_outbound_request`
+5. It prepares the request through `ProviderClient::prepare_outbound_request`
    and describes the result — unless a runtime transform would rewrite it
    first, in which case the body is typed unavailable instead.
 
@@ -182,7 +182,7 @@ be false, and this document does not make one.
 ## Where the numbers come from
 
 **The prepared outbound request.** Every primary model turn reaches the wire
-through `DeepSeekClient::prepare_outbound_request`, which returns a
+through `ProviderClient::prepare_outbound_request`, which returns a
 `PreparedOutboundRequest`: dialect, endpoint identity, canonical wire model,
 the final body, and a reasoning receipt. Production dispatch sends that value;
 the preview describes it. There is no second body builder.

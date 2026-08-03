@@ -20,7 +20,7 @@ use crate::models::{
 use crate::tools::schema_sanitize;
 
 use super::{
-    DeepSeekClient, ERROR_BODY_MAX_BYTES, bounded_error_text, from_api_tool_name,
+    ERROR_BODY_MAX_BYTES, ProviderClient, bounded_error_text, from_api_tool_name,
     system_to_instructions, to_api_tool_name,
 };
 
@@ -112,7 +112,7 @@ pub(super) fn build_responses_body_for_provider(
     body
 }
 
-impl DeepSeekClient {
+impl ProviderClient {
     /// Handle a streaming Responses API request for the OpenAI Codex provider.
     pub(super) async fn handle_responses_stream(
         &self,
@@ -999,7 +999,7 @@ mod tests {
                 crate::test_support::EnvVarGuard::set("OPENAI_CODEX_ACCESS_TOKEN", "test-token");
             let _legacy_codex_token =
                 crate::test_support::EnvVarGuard::remove("CODEX_ACCESS_TOKEN");
-            DeepSeekClient::new(&test_codex_config(&server)).unwrap()
+            ProviderClient::new(&test_codex_config(&server)).unwrap()
         };
         let mut stream = client
             .handle_responses_stream(
@@ -1041,7 +1041,7 @@ mod tests {
                 crate::test_support::EnvVarGuard::set("OPENAI_CODEX_ACCESS_TOKEN", "test-token");
             let _legacy_codex_token =
                 crate::test_support::EnvVarGuard::remove("CODEX_ACCESS_TOKEN");
-            DeepSeekClient::new(&test_codex_config(&server)).unwrap()
+            ProviderClient::new(&test_codex_config(&server)).unwrap()
         };
         let mut stream = client
             .handle_responses_stream(
@@ -1083,7 +1083,7 @@ mod tests {
                 crate::test_support::EnvVarGuard::set("OPENAI_CODEX_ACCESS_TOKEN", "test-token");
             let _legacy_codex_token =
                 crate::test_support::EnvVarGuard::remove("CODEX_ACCESS_TOKEN");
-            DeepSeekClient::new(&test_codex_config(&server)).unwrap()
+            ProviderClient::new(&test_codex_config(&server)).unwrap()
         };
         let mut stream = client
             .handle_responses_stream(
@@ -1128,7 +1128,7 @@ mod tests {
                 crate::test_support::EnvVarGuard::set("OPENAI_CODEX_ACCESS_TOKEN", "test-token");
             let _legacy_codex_token =
                 crate::test_support::EnvVarGuard::remove("CODEX_ACCESS_TOKEN");
-            DeepSeekClient::new(&test_codex_config(&server)).unwrap()
+            ProviderClient::new(&test_codex_config(&server)).unwrap()
         };
         let mut stream = client
             .handle_responses_stream(
@@ -1172,7 +1172,7 @@ mod tests {
                 crate::test_support::EnvVarGuard::set("OPENAI_CODEX_ACCESS_TOKEN", "test-token");
             let _legacy_codex_token =
                 crate::test_support::EnvVarGuard::remove("CODEX_ACCESS_TOKEN");
-            DeepSeekClient::new(&test_codex_config(&server)).unwrap()
+            ProviderClient::new(&test_codex_config(&server)).unwrap()
         };
 
         let err = match client
@@ -1264,7 +1264,7 @@ mod tests {
                 crate::test_support::EnvVarGuard::set("OPENAI_CODEX_ACCESS_TOKEN", "test-token");
             let _legacy_codex_token =
                 crate::test_support::EnvVarGuard::remove("CODEX_ACCESS_TOKEN");
-            DeepSeekClient::new(&test_codex_config(&server)).unwrap()
+            ProviderClient::new(&test_codex_config(&server)).unwrap()
         };
         let mut stream = client
             .handle_responses_stream(
@@ -1312,7 +1312,7 @@ mod tests {
                 crate::test_support::EnvVarGuard::set("OPENAI_CODEX_ACCESS_TOKEN", "test-token");
             let _legacy_codex_token =
                 crate::test_support::EnvVarGuard::remove("CODEX_ACCESS_TOKEN");
-            DeepSeekClient::new(&test_codex_config(&server)).unwrap()
+            ProviderClient::new(&test_codex_config(&server)).unwrap()
         };
         let mut stream = client
             .handle_responses_stream(

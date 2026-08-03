@@ -4857,7 +4857,7 @@ pub(crate) fn reconcile_persisted_workflow_bindings(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::DeepSeekClient;
+    use crate::client::ProviderClient;
     use crate::tools::ToolRegistryBuilder;
     use crate::tools::subagent::{SubAgentRuntime, new_shared_subagent_manager};
     use axum::{Json, Router, routing::post};
@@ -9239,36 +9239,36 @@ FINAL RECEIPT
         assert_eq!(payload["result"]["remaining"], 998);
     }
 
-    fn stub_client() -> DeepSeekClient {
+    fn stub_client() -> ProviderClient {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let config = crate::config::Config {
             api_key: Some("test-key".to_string()),
             ..crate::config::Config::default()
         };
-        DeepSeekClient::new(&config).expect("stub client should construct")
+        ProviderClient::new(&config).expect("stub client should construct")
     }
 
-    async fn fake_chat_client(response_text: &str) -> (DeepSeekClient, Arc<AtomicUsize>) {
+    async fn fake_chat_client(response_text: &str) -> (ProviderClient, Arc<AtomicUsize>) {
         let (client, calls, _) = fake_chat_client_capturing(response_text).await;
         (client, calls)
     }
 
     async fn fake_chat_client_responses(
         response_texts: &[&str],
-    ) -> (DeepSeekClient, Arc<AtomicUsize>) {
+    ) -> (ProviderClient, Arc<AtomicUsize>) {
         let (client, calls, _) = fake_chat_client_capturing_responses(response_texts).await;
         (client, calls)
     }
 
     async fn fake_chat_client_capturing(
         response_text: &str,
-    ) -> (DeepSeekClient, Arc<AtomicUsize>, Arc<Mutex<Vec<Value>>>) {
+    ) -> (ProviderClient, Arc<AtomicUsize>, Arc<Mutex<Vec<Value>>>) {
         fake_chat_client_capturing_responses(&[response_text]).await
     }
 
     async fn fake_chat_client_capturing_responses(
         response_texts: &[&str],
-    ) -> (DeepSeekClient, Arc<AtomicUsize>, Arc<Mutex<Vec<Value>>>) {
+    ) -> (ProviderClient, Arc<AtomicUsize>, Arc<Mutex<Vec<Value>>>) {
         assert!(
             !response_texts.is_empty(),
             "fake chat client needs at least one response"
@@ -9343,7 +9343,7 @@ FINAL RECEIPT
             ..crate::config::Config::default()
         };
         (
-            DeepSeekClient::new(&config).expect("fake chat client"),
+            ProviderClient::new(&config).expect("fake chat client"),
             calls,
             bodies,
         )

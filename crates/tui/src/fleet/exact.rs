@@ -815,7 +815,7 @@ pub(crate) fn preflight_route(
 fn validate_route_client(route: &PreflightedRoute, config: &Config) -> Result<(), String> {
     let mut scoped = config.clone();
     scoped.provider = Some(route.provider_id.clone());
-    crate::client::DeepSeekClient::new(&scoped)
+    crate::client::ProviderClient::new(&scoped)
         .map(|_| ())
         .map_err(|error| {
             format!(
@@ -843,7 +843,7 @@ pub(crate) trait FleetRouterCaller: Send + Sync + std::fmt::Debug {
 /// A Reasoning Router bound to its own exact preflighted route.
 #[derive(Clone)]
 pub(crate) struct LiveFleetRouter {
-    client: crate::client::DeepSeekClient,
+    client: crate::client::ProviderClient,
     captured: CapturedReasoningRouter,
     route: PreflightedRoute,
     /// The Router route's provider kind and base URL, kept so the call's
@@ -905,7 +905,7 @@ impl LiveFleetRouter {
             })?;
         let base_url = scoped.deepseek_base_url();
         let client =
-            crate::client::DeepSeekClient::new(&scoped).map_err(|error| RouterBindError {
+            crate::client::ProviderClient::new(&scoped).map_err(|error| RouterBindError {
                 reason: format!(
                     "reasoning router provider `{}` client could not be built: {error}",
                     route.provider_id

@@ -6613,9 +6613,9 @@ fn run_features_command(config: &Config, command: FeaturesCli) -> Result<()> {
 }
 
 async fn run_models(config: &Config, args: ModelsArgs) -> Result<()> {
-    use crate::client::DeepSeekClient;
+    use crate::client::ProviderClient;
 
-    let client = DeepSeekClient::new(config)?;
+    let client = ProviderClient::new(config)?;
     let mut models = client.list_models().await?;
     models.sort_by(|a, b| a.id.cmp(&b.id));
 
@@ -6645,7 +6645,7 @@ async fn run_models(config: &Config, args: ModelsArgs) -> Result<()> {
 }
 
 async fn run_speech(config: &Config, args: SpeechArgs) -> Result<()> {
-    use crate::client::{DeepSeekClient, SpeechSynthesisRequest};
+    use crate::client::{ProviderClient, SpeechSynthesisRequest};
     use crate::config::ApiProvider;
     use crate::tools::speech::{
         DEFAULT_VOICE, SPEECH_MODEL_EXAMPLES, combine_speech_instructions,
@@ -6730,7 +6730,7 @@ async fn run_speech(config: &Config, args: SpeechArgs) -> Result<()> {
             .join(default_speech_output_name(&format))
     });
 
-    let client = DeepSeekClient::new(config)?;
+    let client = ProviderClient::new(config)?;
     let response = client
         .synthesize_speech(SpeechSynthesisRequest {
             model: model.clone(),
@@ -6838,10 +6838,10 @@ mod speech_cli_tests {
 
 /// Test API connectivity by making a minimal request
 async fn test_api_connectivity(config: &Config) -> Result<()> {
-    use crate::client::DeepSeekClient;
+    use crate::client::ProviderClient;
     use crate::models::{ContentBlock, Message, MessageRequest};
 
-    let client = DeepSeekClient::new(config)?;
+    let client = ProviderClient::new(config)?;
     let model = client.model().to_string();
 
     // Minimal request: single word prompt, 1 max token
@@ -7236,7 +7236,7 @@ fn pick_session_id() -> Result<String> {
 }
 
 async fn run_review(config: &Config, args: ReviewArgs) -> Result<()> {
-    use crate::client::DeepSeekClient;
+    use crate::client::ProviderClient;
 
     let diff = collect_diff(&args)?;
     if diff.trim().is_empty() {
@@ -7263,7 +7263,7 @@ async fn run_review(config: &Config, args: ReviewArgs) -> Result<()> {
 Provide findings ordered by severity with file references, then open questions, then a brief summary."
             .to_string(),
     );
-    let client = DeepSeekClient::new(&execution_config)?;
+    let client = ProviderClient::new(&execution_config)?;
     let request = MessageRequest {
         model: model.clone(),
         messages: vec![Message {
@@ -9074,7 +9074,7 @@ async fn run_interactive_with_notice(
     // own /v1/models endpoint and merges live rows into the provider lake
     // alongside the Models.dev snapshot. Currently active for TelecomJS, whose
     // model list is not covered by the Models.dev catalog.
-    crate::client::DeepSeekClient::spawn_active_provider_catalog_refresh(config);
+    crate::client::ProviderClient::spawn_active_provider_catalog_refresh(config);
 
     // Boot janitors — snapshot prune (7-day default), spillover prune
     // (#422), and managed-session cleanup (v0.8.44) — are best-effort disk
@@ -9333,12 +9333,12 @@ async fn run_one_shot(
     prompt: &str,
     force_configured_route: bool,
 ) -> Result<()> {
-    use crate::client::DeepSeekClient;
+    use crate::client::ProviderClient;
     use crate::models::{ContentBlock, Message, MessageRequest};
 
     let route = resolve_cli_exec_route(config, model, prompt, force_configured_route).await?;
     let execution_config = config_for_cli_route(config, &route);
-    let client = DeepSeekClient::new(&execution_config)?;
+    let client = ProviderClient::new(&execution_config)?;
     let reasoning_effort = route.reasoning_effort.and_then(|effort| {
         cli_reasoning_effort_value_for_prompt(&execution_config, &route.model, effort, prompt)
     });
@@ -9381,13 +9381,13 @@ async fn run_one_shot_json(
     prompt: &str,
     force_configured_route: bool,
 ) -> Result<()> {
-    use crate::client::DeepSeekClient;
+    use crate::client::ProviderClient;
     use crate::models::{ContentBlock, Message, MessageRequest, SystemPrompt};
 
     let route = resolve_cli_exec_route(config, model, prompt, force_configured_route).await?;
     let execution_config = config_for_cli_route(config, &route);
     let provider = execution_config.provider_identity_for(route.provider);
-    let client = DeepSeekClient::new(&execution_config)?;
+    let client = ProviderClient::new(&execution_config)?;
     let model = route.model.clone();
     let reasoning_effort = route.reasoning_effort.and_then(|effort| {
         cli_reasoning_effort_value_for_prompt(&execution_config, &model, effort, prompt)
@@ -9904,7 +9904,7 @@ async fn build_direct_workflow_tool(
 )> {
     use std::sync::Arc;
 
-    use crate::client::DeepSeekClient;
+    use crate::client::ProviderClient;
     use crate::core::authority::shell_policy_for_mode;
     use crate::fleet::roster::FleetRoster;
     use crate::tools::AgentToolSurfaceOptions;
@@ -10007,7 +10007,7 @@ async fn build_direct_workflow_tool(
     surface.speech_output_dir = config.speech_output_dir();
     surface.goal_state = Some(new_shared_goal_state());
 
-    let client = DeepSeekClient::new(config)?;
+    let client = ProviderClient::new(config)?;
     // A FIXED model with `reasoning_effort = auto` (the shape a Fleet worker
     // subprocess launches with: `--model <exact> --reasoning-effort auto`) is
     // still Auto. Deriving the auto flag from `route.auto_model` alone left it
@@ -13362,7 +13362,10 @@ mod terminal_mode_tests {
         assert_eq!(execution.provider.as_deref(), Some("custom"));
         assert_eq!(execution.default_model(), "routed-legacy-model");
         assert_eq!(execution.deepseek_base_url(), "http://127.0.0.1:18183/v1");
-        assert_eq!(execution.deepseek_api_key().unwrap(), "legacy-root-key");
+        assert_eq!(
+            execution.active_provider_api_key().unwrap(),
+            "legacy-root-key"
+        );
         for _ in 0..2 {
             let identity = execution
                 .resolve_provider_identity("custom")
@@ -13370,7 +13373,7 @@ mod terminal_mode_tests {
             assert_eq!(identity.key, "custom");
         }
         let client =
-            crate::client::DeepSeekClient::new(&execution).expect("legacy execution client");
+            crate::client::ProviderClient::new(&execution).expect("legacy execution client");
         assert_eq!(client.base_url(), "http://127.0.0.1:18183/v1");
     }
 
@@ -13710,7 +13713,7 @@ mod terminal_mode_tests {
         assert_eq!(route.provider, crate::config::ApiProvider::Custom);
         assert_eq!(execution.provider_identity_for(route.provider), "custom-a");
         assert_eq!(execution.deepseek_base_url(), "http://127.0.0.1:18181/v1");
-        let client = crate::client::DeepSeekClient::new(&execution).expect("workflow client");
+        let client = crate::client::ProviderClient::new(&execution).expect("workflow client");
         assert_eq!(client.base_url(), "http://127.0.0.1:18181/v1");
     }
 
@@ -16523,7 +16526,7 @@ mod setup_helper_tests {
 
         assert_eq!(resolve_api_key_source(&config), ApiKeySource::EnvDeclared);
         assert_eq!(
-            config.deepseek_api_key().expect("custom key"),
+            config.active_provider_api_key().expect("custom key"),
             "declared-env-key"
         );
     }
@@ -16564,7 +16567,7 @@ mod setup_helper_tests {
         };
 
         assert_eq!(resolve_api_key_source(&config), ApiKeySource::Unknown);
-        assert!(config.deepseek_api_key().is_err());
+        assert!(config.active_provider_api_key().is_err());
     }
 
     #[test]
@@ -16583,7 +16586,7 @@ mod setup_helper_tests {
         };
 
         assert_eq!(resolve_api_key_source(&config), ApiKeySource::Unknown);
-        assert!(config.deepseek_api_key().is_err());
+        assert!(config.active_provider_api_key().is_err());
     }
 
     #[test]
@@ -16603,7 +16606,7 @@ mod setup_helper_tests {
         assert_eq!(resolve_api_key_source(&config), ApiKeySource::NoAuth);
         assert_eq!(doctor_api_key_source_label(ApiKeySource::NoAuth), "none");
         assert_eq!(doctor_auth_scheme(&config), "none");
-        assert_eq!(config.deepseek_api_key().expect("no-auth route"), "");
+        assert_eq!(config.active_provider_api_key().expect("no-auth route"), "");
     }
 
     #[test]
@@ -16670,7 +16673,7 @@ mod setup_helper_tests {
         let source = resolve_api_key_source(&cfg);
 
         assert_eq!(source, ApiKeySource::ExternalAuthDeclared);
-        assert!(cfg.deepseek_api_key().is_err());
+        assert!(cfg.active_provider_api_key().is_err());
     }
 
     #[test]
@@ -16695,7 +16698,7 @@ mod setup_helper_tests {
         let source = resolve_api_key_source(&cfg);
 
         assert_eq!(source, ApiKeySource::ExternalAuthDeclared);
-        assert!(cfg.deepseek_api_key().is_err());
+        assert!(cfg.active_provider_api_key().is_err());
     }
 
     #[test]

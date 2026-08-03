@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose};
 use serde_json::{Value, json};
 
-use crate::client::{DeepSeekClient, SpeechSynthesisRequest};
+use crate::client::{ProviderClient, SpeechSynthesisRequest};
 use crate::config::{ApiProvider, normalize_model_name_for_provider};
 use crate::network_policy::{Decision, host_from_url};
 
@@ -41,7 +41,7 @@ pub(crate) const SPEECH_MODEL_EXAMPLES: &[&str] = &[
 
 pub struct SpeechTool {
     name: &'static str,
-    client: Option<DeepSeekClient>,
+    client: Option<ProviderClient>,
     output_dir: Option<PathBuf>,
 }
 
@@ -49,7 +49,7 @@ impl SpeechTool {
     #[must_use]
     pub fn new(
         name: &'static str,
-        client: Option<DeepSeekClient>,
+        client: Option<ProviderClient>,
         output_dir: Option<PathBuf>,
     ) -> Self {
         Self {

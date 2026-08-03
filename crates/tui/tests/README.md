@@ -25,7 +25,7 @@ Coverage today exercises the trait surface end-to-end:
 
 Full-engine mock coverage remains blocked until `core::engine::Engine` is
 refactored to take `Arc<dyn LlmClient>` instead of a concrete
-`Option<DeepSeekClient>`. The obsolete ignored `engine_full_*` placeholders were
+`Option<ProviderClient>`. The obsolete ignored `engine_full_*` placeholders were
 removed; add real end-to-end tests once that constructor seam exists.
 
 ## `--record` mode for `deepseek eval`

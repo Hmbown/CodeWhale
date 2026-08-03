@@ -4,7 +4,7 @@
 //! Every **primary agent turn** — `LlmClient::create_message` and
 //! `create_message_stream`, in Chat Completions, Anthropic Messages, and
 //! OpenAI Responses alike — reaches the wire through
-//! [`crate::client::DeepSeekClient::prepare_outbound_request`], which returns a
+//! [`crate::client::ProviderClient::prepare_outbound_request`], which returns a
 //! [`PreparedOutboundRequest`]. The transports send it; the preview command
 //! describes it. Because there is exactly one builder, a preview cannot
 //! report a request different from the one a turn would send.
@@ -270,7 +270,7 @@ impl CallerStreamMode {
 
 /// One fully prepared, not-yet-sent outbound request.
 ///
-/// Both `DeepSeekClient::create_message*` and `/preview-request` consume this
+/// Both `ProviderClient::create_message*` and `/preview-request` consume this
 /// value. Adding a field here is how a new wire fact becomes visible to the
 /// preview; there is no second builder to keep in sync.
 #[derive(Debug, Clone)]
@@ -1215,7 +1215,7 @@ mod tests {
 /// the same bytes.
 ///
 /// Each case builds a real client for a production route, prepares a request
-/// through [`DeepSeekClient::prepare_outbound_request`] — the value the
+/// through [`ProviderClient::prepare_outbound_request`] — the value the
 /// transports send and the preview describes — and compares its whole-body
 /// hash against the dialect's own builder run over the identically
 /// pre-processed request. A divergence here means a second body builder has
@@ -1227,7 +1227,7 @@ mod dialect_seam_tests {
     use crate::models::{ContentBlock, Message, MessageRequest, SystemPrompt, Tool};
     use serde_json::json;
 
-    use super::super::DeepSeekClient;
+    use super::super::ProviderClient;
 
     fn tool(name: &str) -> Tool {
         Tool {
@@ -1266,10 +1266,10 @@ mod dialect_seam_tests {
         }
     }
 
-    fn client(provider: &str, configure: impl FnOnce(&mut ProvidersConfig)) -> DeepSeekClient {
+    fn client(provider: &str, configure: impl FnOnce(&mut ProvidersConfig)) -> ProviderClient {
         let mut providers = ProvidersConfig::default();
         configure(&mut providers);
-        DeepSeekClient::new(&Config {
+        ProviderClient::new(&Config {
             provider: Some(provider.to_string()),
             providers: Some(providers),
             ..Config::default()
@@ -1293,7 +1293,7 @@ mod dialect_seam_tests {
     /// The exact pre-processing `prepare_outbound_request` applies before the
     /// dialect builder runs. Reproduced here so the reference body is built
     /// from the same input, not from a differently-sanitized one.
-    fn preprocessed(client: &DeepSeekClient, request: MessageRequest) -> MessageRequest {
+    fn preprocessed(client: &ProviderClient, request: MessageRequest) -> MessageRequest {
         client
             .bind_request_to_protocol(client.prepare_model_bound_request(request))
             .expect("protocol binding succeeds")
@@ -1448,7 +1448,7 @@ mod dialect_seam_tests {
 
     /// Codex resolves its bearer through OAuth, so the test pins a token the
     /// same way the Responses adapter's own tests do.
-    fn codex_client() -> DeepSeekClient {
+    fn codex_client() -> ProviderClient {
         let _env_lock = crate::test_support::lock_test_env();
         let _codex_token =
             crate::test_support::EnvVarGuard::set("OPENAI_CODEX_ACCESS_TOKEN", "test-token");

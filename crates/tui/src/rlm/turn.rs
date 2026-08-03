@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::client::DeepSeekClient;
+use crate::client::ProviderClient;
 use crate::core::events::Event;
 use crate::models::{ContentBlock, Message, MessageRequest, SystemPrompt, Usage};
 use crate::repl::PythonRuntime;
@@ -89,7 +89,7 @@ pub struct RlmTurnResult {
 /// Run a full RLM turn. `prompt` is loaded into the REPL as `context`; it
 /// never enters the root LLM's window.
 pub async fn run_rlm_turn(
-    client: &DeepSeekClient,
+    client: &ProviderClient,
     model: String,
     prompt: String,
     child_model: String,
@@ -111,7 +111,7 @@ pub async fn run_rlm_turn(
 /// Variant that also passes a small `root_prompt` (the user-facing task)
 /// shown to the root LLM each iteration so it remembers its objective.
 pub async fn run_rlm_turn_with_root(
-    client: &DeepSeekClient,
+    client: &ProviderClient,
     model: String,
     prompt: String,
     root_prompt: Option<String>,

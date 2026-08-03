@@ -171,7 +171,7 @@ pub fn route_is_supported_suggestion_provider(provider: ApiProvider) -> bool {
 /// The returned `base_url` is the **resolved route candidate's** endpoint, not
 /// `Config::deepseek_base_url()`. Those two are not the same string: the config
 /// accessor is one input to candidate resolution, and the candidate endpoint is
-/// what `DeepSeekClient::from_candidate` binds the transport to and therefore
+/// what `ProviderClient::from_candidate` binds the transport to and therefore
 /// what `Event::TurnComplete` reports back. Comparing anything else here would
 /// compare a turn's actual endpoint against a differently-canonicalized value
 /// and fail closed on routes that never changed.
@@ -208,7 +208,7 @@ fn resolve_credentials_for_identity(
     {
         return None;
     }
-    let api_key = resolved.config.deepseek_api_key().ok()?;
+    let api_key = resolved.config.active_provider_api_key().ok()?;
     Some(SuggestionRouteCredentials {
         api_key,
         base_url: resolved.candidate.endpoint().base_url.clone(),

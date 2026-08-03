@@ -28,7 +28,7 @@ use tokio_util::sync::CancellationToken;
 use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 
-use crate::client::DeepSeekClient;
+use crate::client::ProviderClient;
 use crate::config::MAX_SUBAGENTS;
 use crate::core::events::{AgentProgressEventMeta, Event};
 use crate::dependencies::{ExternalTool, Git};
@@ -1882,7 +1882,7 @@ impl SubAgentForkContext {
 /// `agent` sessions from the caller's turn token.
 #[derive(Clone)]
 pub struct SubAgentRuntime {
-    pub client: DeepSeekClient,
+    pub client: ProviderClient,
     /// Session `Config` snapshot, used to build a *fresh* LLM client bound to a
     /// different provider when a fleet roster member's profile pins one (#4193,
     /// the interactive-TUI twin of the headless `codewhale exec --provider`
@@ -2008,7 +2008,7 @@ impl SubAgentRuntime {
     /// runtime via `Self::child_runtime` instead.
     #[must_use]
     pub fn new(
-        client: DeepSeekClient,
+        client: ProviderClient,
         model: String,
         context: ToolContext,
         allow_shell: bool,
@@ -2193,7 +2193,7 @@ impl SubAgentRuntime {
     /// `Config` (#4193). Mirrors the proven per-provider client factory used by
     /// per-turn auto-routing (`model_routing`) and the engine's provider switch:
     /// clone the session config, override only its `provider`, and let
-    /// [`DeepSeekClient::new`] re-resolve that provider's base URL + credentials
+    /// [`ProviderClient::new`] re-resolve that provider's base URL + credentials
     /// from config/env. `provider_id` may be a built-in provider id or a
     /// user-named `[providers.<id>] kind="openai-compatible"` custom provider
     /// such as `lm-studio` (#3965).
@@ -2222,7 +2222,7 @@ impl SubAgentRuntime {
         // EPIC #2608: the provider is taken verbatim from the profile pin
         // (built-in id or configured custom id), never inferred from the model
         // id. Overriding only `provider` makes `Config::api_provider`,
-        // `deepseek_base_url`, and `deepseek_api_key` all re-resolve for the
+        // `deepseek_base_url`, and `active_provider_api_key` all re-resolve for the
         // pinned provider.
         provider_config.provider = Some(identity.key.clone());
         Ok((provider_config, identity))
@@ -6933,7 +6933,7 @@ fn provider_pin_matches_session(runtime: &SubAgentRuntime, provider_id: &str) ->
 }
 
 struct ChildProviderBinding {
-    client: DeepSeekClient,
+    client: ProviderClient,
     api_config: Option<std::sync::Arc<crate::config::Config>>,
 }
 
@@ -6956,7 +6956,7 @@ fn child_provider_binding(
                             session_provider.as_str()
                         ))
                     })?;
-            let client = DeepSeekClient::new(&scoped_config).map_err(|err| {
+            let client = ProviderClient::new(&scoped_config).map_err(|err| {
                 ToolError::execution_failed(format!(
                     "fleet profile pins provider '{}' but its client could not be built \
                      ({err}). Configure that provider's credentials/base URL, or drop the \
@@ -6997,7 +6997,7 @@ fn child_provider_binding(
 fn child_client_for_member(
     runtime: &SubAgentRuntime,
     member: Option<&crate::fleet::profile::AgentProfile>,
-) -> Result<DeepSeekClient, ToolError> {
+) -> Result<ProviderClient, ToolError> {
     child_provider_binding(runtime, member).map(|binding| binding.client)
 }
 
@@ -9098,7 +9098,7 @@ async fn run_subagent(
             // The child's own route billing travels on `usage_route`: the
             // client this worker actually ran on froze its provider,
             // identity, endpoint fingerprint, billing surface and billing
-            // mode at construction (`DeepSeekClient::from_parts`), so the
+            // mode at construction (`ProviderClient::from_parts`), so the
             // envelope *is* the child's dispatch receipt. It is deliberately
             // NOT a later ambient `Config` re-read — provider endpoint
             // variables (`MOONSHOT_BASE_URL`, `KIMI_BASE_URL`, …) are merged

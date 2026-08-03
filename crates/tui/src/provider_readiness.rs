@@ -1273,7 +1273,7 @@ mod tests {
             credential_state_for_provider(&missing, ApiProvider::Vllm),
             CredentialState::MissingKey
         );
-        assert!(missing.deepseek_api_key().is_err());
+        assert!(missing.active_provider_api_key().is_err());
 
         let mut configured = missing.clone();
         configured
@@ -1287,7 +1287,9 @@ mod tests {
             CredentialState::Saved
         );
         assert_eq!(
-            configured.deepseek_api_key().expect("configured key"),
+            configured
+                .active_provider_api_key()
+                .expect("configured key"),
             "protected-local-key"
         );
 
@@ -1312,7 +1314,7 @@ mod tests {
             credential_state_for_provider(&named_custom, ApiProvider::Custom),
             CredentialState::MissingKey
         );
-        assert!(named_custom.deepseek_api_key().is_err());
+        assert!(named_custom.active_provider_api_key().is_err());
     }
 
     #[test]
@@ -1527,7 +1529,7 @@ default_text_model = "deepseek-chat"
         let config = crate::config::Config::load(Some(config_path), None).expect("load config");
         assert_eq!(config.default_model(), "anthropic/private-model");
         assert_eq!(
-            config.deepseek_api_key().expect("explicit CLI key"),
+            config.active_provider_api_key().expect("explicit CLI key"),
             "explicit-cli-key"
         );
         assert!(route_is_valid_for_model(

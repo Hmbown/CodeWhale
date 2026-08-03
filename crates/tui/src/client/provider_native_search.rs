@@ -10,13 +10,13 @@ use serde_json::{Value, json};
 
 use crate::config::ApiProvider;
 
-use super::{DeepSeekClient, api_url};
+use super::{ProviderClient, api_url};
 
 const MAX_NATIVE_ANSWER_CHARS: usize = 4_000;
 
 #[derive(Clone)]
 pub(crate) struct ProviderNativeSearchClient {
-    inner: DeepSeekClient,
+    inner: ProviderClient,
 }
 
 #[derive(Clone)]
@@ -42,7 +42,7 @@ pub(crate) struct ProviderNativeSearchResponse {
 
 impl ProviderNativeSearchClient {
     #[must_use]
-    pub(crate) fn new(inner: DeepSeekClient) -> Option<Self> {
+    pub(crate) fn new(inner: ProviderClient) -> Option<Self> {
         matches!(
             inner.api_provider,
             ApiProvider::Openai | ApiProvider::Anthropic | ApiProvider::Xai
@@ -536,7 +536,7 @@ mod tests {
             }),
             ..Config::default()
         };
-        let inner = DeepSeekClient::new(&config).expect("test xAI client");
+        let inner = ProviderClient::new(&config).expect("test xAI client");
         let client = ProviderNativeSearchClient::new(inner).expect("xAI native adapter");
         let cache_identity = client.cache_identity();
         assert!(cache_identity.contains("provider-native://xai/"));
