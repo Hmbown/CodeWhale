@@ -55,6 +55,7 @@ pub mod runtime_mcp;
 pub mod schema_canonicalize;
 pub mod schema_sanitize;
 pub mod search;
+pub mod send_later;
 pub mod shell;
 mod shell_output;
 pub mod skill;
