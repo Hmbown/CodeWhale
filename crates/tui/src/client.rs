@@ -1727,23 +1727,12 @@ impl DeepSeekClient {
                 ))
             }
             WireFormat::Responses => {
-                let body =
-                    responses::build_responses_body_for_provider(&request, self.api_provider);
-                let is_codex = self.api_provider == ApiProvider::OpenaiCodex;
-                let url = if is_codex {
-                    format!("{}{}", self.base_url, responses::CODEX_RESPONSES_PATH)
-                } else {
-                    responses_api_url(&self.base_url, self.api_provider)
-                };
-                let shape = if is_codex {
-                    RouteShape::CodexResponses
-                } else if self.api_provider == ApiProvider::OpencodeZen {
-                    RouteShape::OpencodeZen
-                } else if self.api_provider == ApiProvider::Custom {
-                    RouteShape::CustomCompatible
-                } else {
-                    RouteShape::Standard
-                };
+                let route = responses::responses_route_policy(
+                    self.api_provider,
+                    &request.model,
+                    &self.base_url,
+                );
+                let body = responses::build_responses_body_for_profile(&request, route.profile);
                 let wire_model = body
                     .get("model")
                     .and_then(Value::as_str)
@@ -1751,7 +1740,7 @@ impl DeepSeekClient {
                     .to_string();
                 Ok(PreparedOutboundRequest::new(
                     dialect,
-                    self.endpoint_identity(url, shape),
+                    self.endpoint_identity(route.url, route.shape),
                     wire_model,
                     body,
                     requested_effort,

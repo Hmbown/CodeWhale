@@ -20,12 +20,103 @@ use crate::models::{
 use crate::tools::schema_sanitize;
 
 use super::{
-    DeepSeekClient, ERROR_BODY_MAX_BYTES, bounded_error_text, from_api_tool_name,
+    DeepSeekClient, ERROR_BODY_MAX_BYTES, RouteShape, bounded_error_text, from_api_tool_name,
     system_to_instructions, to_api_tool_name,
 };
 
 /// Base URL path for the Codex Responses endpoint.
 pub(super) const CODEX_RESPONSES_PATH: &str = "/codex/responses";
+
+/// Typed policy profile for Responses-route wire differences.
+///
+/// Keep this list intentionally small: each profile is a concrete contract
+/// backed by deterministic fixtures in
+/// `tests::responses_profile_conformance_request_fixtures`.
+///
+/// To add a new profile:
+/// 1. Add a new enum variant and capability methods below.
+/// 2. Update `for_request` (selection policy) and `responses_route_policy`.
+/// 3. Extend `responses_profile_conformance_request_fixtures` with a new table
+///    row asserting the profile's request-shape contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ResponsesDialectProfile {
+    /// Stateful Responses turns with encrypted reasoning replay (`include`) and
+    /// explicit `store` policy.
+    Standard,
+    /// Stateless Responses turns (DeepSeek V4 Flash) with plain reasoning text.
+    StatelessPlainReasoning,
+}
+
+impl ResponsesDialectProfile {
+    pub(super) fn for_request(provider: ApiProvider, model: &str) -> Self {
+        if matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN)
+            && model.eq_ignore_ascii_case("deepseek-v4-flash")
+        {
+            Self::StatelessPlainReasoning
+        } else {
+            Self::Standard
+        }
+    }
+
+    fn emits_store(self) -> bool {
+        matches!(self, Self::Standard)
+    }
+
+    fn emits_reasoning_summary(self) -> bool {
+        matches!(self, Self::Standard)
+    }
+
+    fn emits_reasoning_include(self) -> bool {
+        matches!(self, Self::Standard)
+    }
+
+    fn supports_sampling_controls(self) -> bool {
+        matches!(self, Self::StatelessPlainReasoning)
+    }
+
+    fn supports_max_output_tokens(self) -> bool {
+        matches!(self, Self::StatelessPlainReasoning)
+    }
+
+    fn replays_plain_reasoning_input(self) -> bool {
+        matches!(self, Self::StatelessPlainReasoning)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct ResponsesRoutePolicy {
+    pub(super) profile: ResponsesDialectProfile,
+    pub(super) url: String,
+    pub(super) shape: RouteShape,
+}
+
+pub(super) fn responses_route_policy(
+    provider: ApiProvider,
+    model: &str,
+    base_url: &str,
+) -> ResponsesRoutePolicy {
+    let profile = ResponsesDialectProfile::for_request(provider, model);
+    let is_codex = provider == ApiProvider::OpenaiCodex;
+    let url = if is_codex {
+        format!("{}{}", base_url, CODEX_RESPONSES_PATH)
+    } else {
+        super::responses_api_url(base_url, provider)
+    };
+    let shape = if is_codex {
+        RouteShape::CodexResponses
+    } else if provider == ApiProvider::OpencodeZen {
+        RouteShape::OpencodeZen
+    } else if provider == ApiProvider::Custom {
+        RouteShape::CustomCompatible
+    } else {
+        RouteShape::Standard
+    };
+    ResponsesRoutePolicy {
+        profile,
+        url,
+        shape,
+    }
+}
 
 /// Build the Responses API request body from a `MessageRequest`.
 #[cfg(test)]
@@ -43,19 +134,26 @@ pub(super) fn build_responses_body_for_provider(
     request: &MessageRequest,
     provider: ApiProvider,
 ) -> Value {
-    let is_deepseek = matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN);
+    let profile = ResponsesDialectProfile::for_request(provider, &request.model);
+    build_responses_body_for_profile(request, profile)
+}
+
+pub(super) fn build_responses_body_for_profile(
+    request: &MessageRequest,
+    profile: ResponsesDialectProfile,
+) -> Value {
     let model = &request.model;
     let mut body = json!({
         "model": model,
         "stream": true,
     });
-    if !is_deepseek {
+    if profile.emits_store() {
         body["store"] = json!(false);
     }
-    if is_deepseek {
-        if request.max_tokens > 0 {
-            body["max_output_tokens"] = json!(request.max_tokens);
-        }
+    if profile.supports_max_output_tokens() && request.max_tokens > 0 {
+        body["max_output_tokens"] = json!(request.max_tokens);
+    }
+    if profile.supports_sampling_controls() {
         if let Some(temperature) = request.temperature {
             body["temperature"] = json!(temperature);
         }
@@ -73,7 +171,8 @@ pub(super) fn build_responses_body_for_provider(
     body["instructions"] = json!(instructions);
 
     // Convert messages to Responses input items.
-    let input = convert_messages_to_responses_input(request, is_deepseek);
+    let input =
+        convert_messages_to_responses_input(request, profile.replays_plain_reasoning_input());
     body["input"] = json!(input);
 
     // Convert tools to Responses function tools.
@@ -91,21 +190,24 @@ pub(super) fn build_responses_body_for_provider(
     // DeepSeek-only values before request construction: "off" becomes
     // "low", and CodeWhale's "auto" falls back to "medium".
     if let Some(raw) = request.reasoning_effort.as_deref()
-        && let Some(effort) = responses_reasoning_effort(raw, is_deepseek)
+        && let Some(effort) = responses_reasoning_effort(
+            raw,
+            profile == ResponsesDialectProfile::StatelessPlainReasoning,
+        )
     {
-        body["reasoning"] = if is_deepseek {
-            json!({ "effort": effort })
-        } else {
+        body["reasoning"] = if profile.emits_reasoning_summary() {
             json!({
                 "effort": effort,
                 "summary": "auto",
             })
+        } else {
+            json!({ "effort": effort })
         };
     }
 
     // OpenAI Codex can replay encrypted reasoning. DeepSeek exposes plain
     // `reasoning_text` and does not support `include`.
-    if !is_deepseek {
+    if profile.emits_reasoning_include() {
         body["include"] = json!(["reasoning.encrypted_content"]);
     }
 
@@ -956,6 +1058,152 @@ mod tests {
             temperature: None,
             top_p: None,
         }
+    }
+
+    fn profile_conformance_request() -> MessageRequest {
+        let mut request = minimal_responses_request();
+        request.model = "deepseek-v4-flash".to_string();
+        request.system = Some("system policy".to_string());
+        request.reasoning_effort = Some("high".to_string());
+        request.temperature = Some(0.3);
+        request.top_p = Some(0.9);
+        request.tools = Some(vec![Tool {
+            tool_type: Some("function".to_string()),
+            name: "write_checklist".to_string(),
+            description: "Write checklist".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "oneOf": [{"required": ["item"]}],
+                "properties": {"item": {"type": "string"}}
+            }),
+            allowed_callers: None,
+            defer_loading: None,
+            input_examples: None,
+            strict: Some(true),
+            cache_control: None,
+        }]);
+        request.messages = vec![
+            Message {
+                role: "assistant".to_string(),
+                content: vec![
+                    ContentBlock::Thinking {
+                        thinking: "assistant reasoning replay".to_string(),
+                        signature: None,
+                    },
+                    ContentBlock::ToolUse {
+                        id: "call_1|fc_1".to_string(),
+                        name: "write_checklist".to_string(),
+                        input: json!({"item": "A"}),
+                        caller: None,
+                    },
+                ],
+            },
+            Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "call_1|fc_1".to_string(),
+                    content: "done".to_string(),
+                    is_error: None,
+                    content_blocks: None,
+                }],
+            },
+        ];
+        request
+    }
+
+    #[test]
+    fn responses_profile_conformance_request_fixtures() {
+        struct Case {
+            profile: ResponsesDialectProfile,
+            expect_store: bool,
+            expect_include: bool,
+            expect_reasoning_summary: bool,
+            expect_plain_reasoning_replay: bool,
+        }
+
+        let cases = [
+            Case {
+                profile: ResponsesDialectProfile::Standard,
+                expect_store: true,
+                expect_include: true,
+                expect_reasoning_summary: true,
+                expect_plain_reasoning_replay: false,
+            },
+            Case {
+                profile: ResponsesDialectProfile::StatelessPlainReasoning,
+                expect_store: false,
+                expect_include: false,
+                expect_reasoning_summary: false,
+                expect_plain_reasoning_replay: true,
+            },
+        ];
+        let request = profile_conformance_request();
+        for case in cases {
+            let body = build_responses_body_for_profile(&request, case.profile);
+            assert_eq!(body["model"], request.model);
+            assert_eq!(body["instructions"], "system policy");
+            assert_eq!(body["parallel_tool_calls"], true);
+            assert_eq!(body["tool_choice"], "auto");
+            assert!(
+                body["tools"].as_array().expect("tools array")[0]
+                    .pointer("/parameters/oneOf")
+                    .is_none(),
+                "sanitized schema should remove oneOf",
+            );
+
+            let has_store = body.get("store").is_some();
+            assert_eq!(has_store, case.expect_store, "{body}");
+            let has_include = body.get("include").is_some();
+            assert_eq!(has_include, case.expect_include, "{body}");
+            let has_summary = body.pointer("/reasoning/summary").is_some();
+            assert_eq!(has_summary, case.expect_reasoning_summary, "{body}");
+
+            let input = body["input"].as_array().expect("input array");
+            assert!(
+                input
+                    .iter()
+                    .any(|item| item["type"] == "function_call_output"),
+                "tool output replay should be preserved",
+            );
+            let has_reasoning_text = input
+                .iter()
+                .any(|item| item.pointer("/content/0/type") == Some(&json!("reasoning_text")));
+            assert_eq!(
+                has_reasoning_text, case.expect_plain_reasoning_replay,
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn responses_route_policy_selects_profile_from_provider_and_model() {
+        let codex = responses_route_policy(
+            ApiProvider::OpenaiCodex,
+            "gpt-5.5",
+            "https://chatgpt.com/backend-api",
+        );
+        assert_eq!(codex.profile, ResponsesDialectProfile::Standard);
+        assert_eq!(codex.shape, RouteShape::CodexResponses);
+        assert_eq!(codex.url, "https://chatgpt.com/backend-api/codex/responses");
+
+        let flash = responses_route_policy(
+            ApiProvider::Deepseek,
+            "deepseek-v4-flash",
+            "https://api.deepseek.com/beta",
+        );
+        assert_eq!(
+            flash.profile,
+            ResponsesDialectProfile::StatelessPlainReasoning
+        );
+        assert_eq!(flash.shape, RouteShape::Standard);
+        assert_eq!(flash.url, "https://api.deepseek.com/responses");
+
+        let deepseek_pro = responses_route_policy(
+            ApiProvider::Deepseek,
+            "deepseek-v4-pro",
+            "https://api.deepseek.com/beta",
+        );
+        assert_eq!(deepseek_pro.profile, ResponsesDialectProfile::Standard);
     }
 
     fn test_codex_config(server: &MockServer) -> Config {
