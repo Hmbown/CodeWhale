@@ -144,11 +144,38 @@ pub fn init_actor(handle: PersistActorHandle) {
     let _ = ACTOR_TX.set(handle);
 }
 
-/// Queue a persistence request through the global handle. No-op (silently
-/// ignored) when the actor hasn't been initialised yet — this can happen in
-/// tests or early startup before the actor is ready.
+/// Queue a persistence request through the global handle. When the request
+/// cannot be queued — actor not initialised yet (tests, early startup) or
+/// already shut down — the drop is logged instead of discarded silently, so
+/// lost session/work-graph state is diagnosable after the fact.
 pub fn persist(request: PersistRequest) {
-    let _ = try_persist(request);
+    let label = request_label(&request);
+    if try_persist(request) {
+        return;
+    }
+    if ACTOR_TX.get().is_some() {
+        tracing::warn!(
+            request = label,
+            "persistence request dropped: actor channel is closed (shutdown already happened)"
+        );
+    } else {
+        tracing::debug!(
+            request = label,
+            "persistence request dropped: actor not initialised yet"
+        );
+    }
+}
+
+fn request_label(request: &PersistRequest) -> &'static str {
+    match request {
+        PersistRequest::SaveCheckpoint { .. } => "SaveCheckpoint",
+        PersistRequest::SessionSnapshot(_) => "SessionSnapshot",
+        PersistRequest::OfflineQueue { .. } => "OfflineQueue",
+        PersistRequest::ClearOfflineQueue => "ClearOfflineQueue",
+        PersistRequest::ClearCheckpoint { .. } => "ClearCheckpoint",
+        PersistRequest::FlushAndReport { .. } => "FlushAndReport",
+        PersistRequest::Shutdown => "Shutdown",
+    }
 }
 
 /// Queue persistence and report whether the actor accepted ownership. Work
