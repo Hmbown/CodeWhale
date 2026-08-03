@@ -7,6 +7,11 @@ use base64::{Engine as _, engine::general_purpose};
 use regex::Regex;
 use std::sync::OnceLock;
 
+/// Shared browser-like user agent for public SERP scraping and image search.
+/// Both `web_search` and `web_run` send this so scrape behavior (including
+/// bot-challenge rates) stays identical between the two surfaces.
+pub(crate) const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
+
 /// One parsed search hit: title, absolute URL, optional snippet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScrapedSearchResult {

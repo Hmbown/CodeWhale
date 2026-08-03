@@ -28,16 +28,18 @@ use std::time::{Duration, Instant};
 use parking_lot::{RwLock, RwLockWriteGuard};
 
 use super::web::contract::{
-    MAX_SEARCH_RESULTS, Recency, SearchQuery, SearchReceipt, SearchResult as NormalizedSearchResult,
+    DEFAULT_SEARCH_RESULTS, DEFAULT_SEARCH_TIMEOUT_MS, MAX_SEARCH_RESULTS, MAX_SEARCH_TIMEOUT_MS,
+    Recency, SearchQuery, SearchReceipt, SearchResult as NormalizedSearchResult,
 };
+use super::web::scrape::BROWSER_USER_AGENT as USER_AGENT;
 use super::web_search::{domain_matches, execute_search};
 
-const DEFAULT_TIMEOUT_MS: u64 = 15_000;
-const DEFAULT_OPEN_TIMEOUT_MS: u64 = 15_000;
+// Search and open share the retrieval-path defaults from `web::contract` and
+// `web::fetch` so `web.run` cannot drift from `web_search` / `fetch_url`.
+const DEFAULT_OPEN_TIMEOUT_MS: u64 = super::web::fetch::DEFAULT_TIMEOUT.as_millis() as u64;
 const MAX_WEB_RUN_SESSIONS: usize = 64;
 const MAX_PAGES_PER_SESSION: usize = 256;
 const WEB_RUN_SESSION_TTL: Duration = Duration::from_secs(30 * 60);
-const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
 
 static WEB_RUN_STATE: OnceLock<WebRunCache> = OnceLock::new();
 
@@ -229,9 +231,9 @@ impl ResponseLength {
 
     fn max_results(self) -> usize {
         match self {
-            Self::Short => 5,
+            Self::Short => DEFAULT_SEARCH_RESULTS,
             Self::Medium => 8,
-            Self::Long => 10,
+            Self::Long => usize::from(MAX_SEARCH_RESULTS),
         }
     }
 
@@ -475,7 +477,8 @@ impl ToolSpec for WebRunTool {
                 ))
                 .unwrap_or(response_length.max_results())
                 .clamp(1, usize::from(MAX_SEARCH_RESULTS));
-                let timeout_ms = optional_u64(search, "timeout_ms", DEFAULT_TIMEOUT_MS).min(60_000);
+                let timeout_ms = optional_u64(search, "timeout_ms", DEFAULT_SEARCH_TIMEOUT_MS)
+                    .min(MAX_SEARCH_TIMEOUT_MS);
 
                 let domains = search
                     .get("domains")
@@ -543,7 +546,8 @@ impl ToolSpec for WebRunTool {
                 ))
                 .unwrap_or(response_length.max_results())
                 .clamp(1, usize::from(MAX_SEARCH_RESULTS));
-                let timeout_ms = optional_u64(image, "timeout_ms", DEFAULT_TIMEOUT_MS).min(60_000);
+                let timeout_ms = optional_u64(image, "timeout_ms", DEFAULT_SEARCH_TIMEOUT_MS)
+                    .min(MAX_SEARCH_TIMEOUT_MS);
 
                 let domains = image
                     .get("domains")
@@ -1094,8 +1098,8 @@ async fn page_from_fetched(
 ) -> Result<WebPage, ToolError> {
     if !(200..300).contains(&payload.status) {
         return Err(ToolError::execution_failed(format!(
-            "Web request failed: HTTP {}",
-            payload.status
+            "Web request to {} failed: HTTP {}",
+            payload.url, payload.status
         )));
     }
     let document = extract_document(
@@ -1722,6 +1726,95 @@ mod tests {
                 .expect("visible degraded warning")
                 .contains("recency")
         );
+    }
+
+    #[tokio::test]
+    async fn search_ref_ids_resolve_to_their_source_urls_for_open() {
+        use crate::config::SearchProvider;
+        use crate::tools::spec::ToolSpec;
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/search"))
+            .and(query_param("q", "citation handoff"))
+            .and(query_param("format", "json"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{
+                    "title": "Handoff target",
+                    "url": "https://docs.example.com/handoff",
+                    "content": "the page a later open command fetches"
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut context = ToolContext::new(tmp.path().to_path_buf());
+        context.search_provider = SearchProvider::Searxng;
+        context.search_base_url = Some(server.uri());
+        context.state_namespace = "handoff-citation-test".to_string();
+
+        let result = WebRunTool
+            .execute(
+                json!({"search_query": [{"q": "citation handoff"}]}),
+                &context,
+            )
+            .await
+            .expect("web.run search should succeed");
+        let value: Value = serde_json::from_str(&result.content).expect("web.run json");
+        let ref_id = value["search_query"][0]["results"][0]["ref_id"]
+            .as_str()
+            .expect("every search result carries a minted ref_id")
+            .to_string();
+
+        // `open` resolves search-result refs through the shared citation
+        // registry; the handoff must preserve the exact source URL.
+        let citation = crate::tools::web::citations::resolve(&context.state_namespace, &ref_id)
+            .expect("search result ref must resolve for a later open");
+        assert_eq!(citation.url, "https://docs.example.com/handoff");
+        assert_eq!(citation.title.as_deref(), Some("Handoff target"));
+        assert!(
+            crate::tools::web::citations::resolve("foreign-session", &ref_id).is_none(),
+            "citation handles must stay session-scoped"
+        );
+    }
+
+    #[tokio::test]
+    async fn open_failure_reports_url_and_status() {
+        let payload = crate::tools::web::fetch::FetchedPayload {
+            url: "https://example.com/missing".to_string(),
+            status: 404,
+            headers: std::collections::BTreeMap::new(),
+            content_type: "text/html".to_string(),
+            bytes: Arc::new(Vec::new()),
+            truncated: false,
+            cache_hit: false,
+            retries: 0,
+            redirects: 0,
+        };
+        let context = ToolContext::new(PathBuf::from("."));
+
+        let error = page_from_fetched(payload, &context)
+            .await
+            .expect_err("non-2xx pages must not be rendered");
+        let message = error.to_string();
+        assert!(
+            message.contains("https://example.com/missing"),
+            "transport failures must name the URL: {message}"
+        );
+        assert!(message.contains("404"), "got `{message}`");
+    }
+
+    #[test]
+    fn response_length_result_counts_are_anchored_to_the_shared_contract() {
+        assert_eq!(ResponseLength::Short.max_results(), DEFAULT_SEARCH_RESULTS);
+        assert_eq!(
+            ResponseLength::Long.max_results(),
+            usize::from(MAX_SEARCH_RESULTS)
+        );
+        assert!(ResponseLength::Medium.max_results() <= usize::from(MAX_SEARCH_RESULTS));
     }
 
     #[test]

@@ -29,11 +29,13 @@ use std::time::{Duration, Instant};
 use super::web::backend::SearchBackendChain;
 use super::web::cache;
 use super::web::contract::{
-    BackendId, BackendSearch, DegradedReason, HonoredQueryCapabilities, MAX_SEARCH_RESULTS,
-    QueryKnob, Recency, SearchQuery, SearchReceipt, SearchResponse, SearchResult,
+    BackendId, BackendSearch, DEFAULT_SEARCH_RESULTS, DEFAULT_SEARCH_TIMEOUT_MS, DegradedReason,
+    HonoredQueryCapabilities, MAX_SEARCH_RESULTS, MAX_SEARCH_TIMEOUT_MS, QueryKnob, Recency,
+    SearchQuery, SearchReceipt, SearchResponse, SearchResult,
 };
 use super::web::scrape::{
-    ScrapedSearchResult, is_duckduckgo_challenge, parse_bing_results as scrape_bing_results,
+    BROWSER_USER_AGENT as USER_AGENT, ScrapedSearchResult, is_duckduckgo_challenge,
+    parse_bing_results as scrape_bing_results,
     parse_duckduckgo_results as scrape_duckduckgo_results,
 };
 
@@ -79,10 +81,6 @@ fn get_bearer_token_re() -> &'static Regex {
             .expect("bearer token regex pattern is valid")
     })
 }
-
-const DEFAULT_MAX_RESULTS: usize = 5;
-const DEFAULT_TIMEOUT_MS: u64 = 15_000;
-const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
 
 #[derive(Debug, Clone, Serialize)]
 struct WebSearchEntry {
@@ -181,7 +179,8 @@ impl ToolSpec for WebSearchTool {
 
     async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
         let query = search_query_from_input(&input)?;
-        let timeout_ms = optional_u64(&input, "timeout_ms", DEFAULT_TIMEOUT_MS).min(60_000);
+        let timeout_ms = optional_u64(&input, "timeout_ms", DEFAULT_SEARCH_TIMEOUT_MS)
+            .min(MAX_SEARCH_TIMEOUT_MS);
         let response = execute_search(query, timeout_ms, context).await?;
         ToolResult::json(&response).map_err(|error| ToolError::execution_failed(error.to_string()))
     }
@@ -807,29 +806,33 @@ fn register_search_citations(response: &mut SearchResponse, context: &ToolContex
     }
 }
 
+/// Reject a misconfigured provider before any cache lookup or network attempt.
+///
+/// Configuration gaps are reported as `InvalidInput` ("not configured", with
+/// the exact config fix) so they stay distinguishable from transport failures
+/// (`ExecutionFailed`) and from successful-but-empty results.
 fn preflight_search_provider(context: &ToolContext) -> Result<(), ToolError> {
     let configured_key = context
         .search_api_key
         .as_deref()
         .is_some_and(|key| !key.trim().is_empty());
     let env_key = |name: &str| std::env::var_os(name).is_some_and(|value| !value.is_empty());
+    let not_configured = |message: &str| Err(ToolError::invalid_input(message));
 
     match context.search_provider {
-        SearchProvider::Tavily if !configured_key => Err(ToolError::execution_failed(
-            "Tavily search requires an API key. Set `[search] api_key = \"tvly-...\"` in config.toml.",
-        )),
-        SearchProvider::Bocha if !configured_key => Err(ToolError::execution_failed(
-            "Bocha search requires an API key. Set `[search] api_key = \"sk-...\"` in config.toml.",
-        )),
-        SearchProvider::Metaso if !configured_key && !env_key("METASO_API_KEY") => {
-            Err(ToolError::execution_failed(
-                "Metaso search requires an API key. Set `METASO_API_KEY` or `[search] api_key` in config.toml.",
-            ))
-        }
+        SearchProvider::Tavily if !configured_key => not_configured(
+            "Tavily search is not configured: it requires an API key. Set `[search] api_key = \"tvly-...\"` in config.toml.",
+        ),
+        SearchProvider::Bocha if !configured_key => not_configured(
+            "Bocha search is not configured: it requires an API key. Set `[search] api_key = \"sk-...\"` in config.toml.",
+        ),
+        SearchProvider::Metaso if !configured_key && !env_key("METASO_API_KEY") => not_configured(
+            "Metaso search is not configured: it requires an API key. Set `METASO_API_KEY` or `[search] api_key` in config.toml.",
+        ),
         SearchProvider::Baidu if !configured_key && !env_key("BAIDU_SEARCH_API_KEY") => {
-            Err(ToolError::execution_failed(
-                "Baidu search requires an API key. Set `BAIDU_SEARCH_API_KEY` or `[search] api_key` in config.toml.",
-            ))
+            not_configured(
+                "Baidu search is not configured: it requires an API key. Set `BAIDU_SEARCH_API_KEY` or `[search] api_key` in config.toml.",
+            )
         }
         SearchProvider::Volcengine
             if !configured_key
@@ -837,14 +840,19 @@ fn preflight_search_provider(context: &ToolContext) -> Result<(), ToolError> {
                 && !env_key("VOLCENGINE_ARK_API_KEY")
                 && !env_key("ARK_API_KEY") =>
         {
-            Err(ToolError::execution_failed(
-                "Volcengine search requires an API key. Set `[search] api_key`, or VOLCENGINE_API_KEY / VOLCENGINE_ARK_API_KEY / ARK_API_KEY env var.",
-            ))
+            not_configured(
+                "Volcengine search is not configured: it requires an API key. Set `[search] api_key`, or VOLCENGINE_API_KEY / VOLCENGINE_ARK_API_KEY / ARK_API_KEY env var.",
+            )
         }
-        SearchProvider::Sofya if !configured_key && !env_key("SOFYA_API_KEY") => {
-            Err(ToolError::execution_failed(
-                "Sofya search requires an API key. Set `[search] api_key = \"ay_live_...\"` in config.toml or the SOFYA_API_KEY env var.",
-            ))
+        SearchProvider::Sofya if !configured_key && !env_key("SOFYA_API_KEY") => not_configured(
+            "Sofya search is not configured: it requires an API key. Set `[search] api_key = \"ay_live_...\"` in config.toml or the SOFYA_API_KEY env var.",
+        ),
+        SearchProvider::Searxng
+            if configured_search_base_url(context.search_base_url.as_deref()).is_none() =>
+        {
+            not_configured(
+                "SearXNG search requires [search] base_url = \"https://your-searxng.example\"; no public instance is used by default.",
+            )
         }
         _ => Ok(()),
     }
@@ -1690,7 +1698,7 @@ fn optional_search_max_results(input: &Value) -> u64 {
     search_query_items(input)
         .filter_map(|item| item.get("max_results").and_then(Value::as_u64))
         .next()
-        .unwrap_or(DEFAULT_MAX_RESULTS as u64)
+        .unwrap_or(DEFAULT_SEARCH_RESULTS as u64)
 }
 
 fn search_query_from_input(input: &Value) -> Result<SearchQuery, ToolError> {
@@ -1699,7 +1707,7 @@ fn search_query_from_input(input: &Value) -> Result<SearchQuery, ToolError> {
         return Err(ToolError::invalid_input("Query cannot be empty"));
     }
     let max_results = usize::try_from(optional_search_max_results(input))
-        .unwrap_or(DEFAULT_MAX_RESULTS)
+        .unwrap_or(DEFAULT_SEARCH_RESULTS)
         .clamp(1, usize::from(MAX_SEARCH_RESULTS));
     let recency = search_option(input, "recency")
         .map(parse_recency)
@@ -2656,11 +2664,40 @@ mod tests {
             .expect_err("searxng requires explicit base_url");
         let msg = err.to_string();
         assert!(
+            matches!(err, crate::tools::spec::ToolError::InvalidInput { .. }),
+            "missing base_url is a configuration gap, not a transport failure: {err:?}"
+        );
+        assert!(
             msg.contains("SearXNG")
                 && msg.contains("base_url")
                 && msg.contains("no public instance"),
             "got `{msg}`"
         );
+    }
+
+    #[tokio::test]
+    async fn missing_provider_key_fails_closed_as_not_configured() {
+        use crate::config::SearchProvider;
+        use crate::tools::spec::{ToolContext, ToolError, ToolSpec};
+
+        for provider in [SearchProvider::Tavily, SearchProvider::Bocha] {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let mut ctx = ToolContext::new(tmp.path().to_path_buf());
+            ctx.search_provider = provider;
+            ctx.search_api_key = None;
+
+            let error = WebSearchTool
+                .execute(json!({"query": "needs configuration"}), &ctx)
+                .await
+                .expect_err("a keyed provider without an API key must fail closed");
+            assert!(
+                matches!(error, ToolError::InvalidInput { .. }),
+                "config gaps must stay distinguishable from transport failures: {error:?}"
+            );
+            let message = error.to_string();
+            assert!(message.contains("is not configured"), "got `{message}`");
+            assert!(message.contains("api_key"), "got `{message}`");
+        }
     }
 
     #[tokio::test]
