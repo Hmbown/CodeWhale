@@ -1520,7 +1520,7 @@ impl Engine {
                             .get_or_insert_with(Instant::now)
                             .elapsed();
                         let status = no_progress_status_message(&reason, elapsed);
-                        crate::logging::warn(&compact_no_progress_diagnostic(&reason, elapsed));
+                        crate::logging::warn(compact_no_progress_diagnostic(&reason, elapsed));
                         let _ = self.tx_event.send(Event::status(status.clone())).await;
                         return (TurnOutcomeStatus::Failed, Some(status));
                     }
@@ -1595,7 +1595,7 @@ impl Engine {
                                         .get_or_insert_with(Instant::now)
                                         .elapsed();
                                     let status = no_progress_status_message(&reason, elapsed);
-                                    crate::logging::warn(&compact_no_progress_diagnostic(
+                                    crate::logging::warn(compact_no_progress_diagnostic(
                                         &reason, elapsed,
                                     ));
                                     let _ = self.tx_event.send(Event::status(status.clone())).await;
@@ -3396,7 +3396,7 @@ impl Engine {
                             .get_or_insert_with(Instant::now)
                             .elapsed();
                         let status = no_progress_status_message(&reason, elapsed);
-                        crate::logging::warn(&compact_no_progress_diagnostic(&reason, elapsed));
+                        crate::logging::warn(compact_no_progress_diagnostic(&reason, elapsed));
                         let _ = self.tx_event.send(Event::status(status.clone())).await;
                         return (TurnOutcomeStatus::Failed, Some(status));
                     }

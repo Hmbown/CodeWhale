@@ -527,12 +527,12 @@ impl AutomationSchedule {
                     .ok_or_else(|| anyhow::anyhow!("CRON schedule exceeded its range"))?;
 
                 for _ in 0..MAX_CRON_SEARCH_MINUTES {
-                    if cron.matches(candidate_naive) {
-                        if let Some(candidate) = resolve_local_datetime(timezone, candidate_naive) {
-                            let candidate = candidate.with_timezone(&Utc);
-                            if candidate > after {
-                                return Ok(candidate);
-                            }
+                    if cron.matches(candidate_naive)
+                        && let Some(candidate) = resolve_local_datetime(timezone, candidate_naive)
+                    {
+                        let candidate = candidate.with_timezone(&Utc);
+                        if candidate > after {
+                            return Ok(candidate);
                         }
                     }
                     candidate_naive = candidate_naive
@@ -1294,7 +1294,7 @@ impl AutomationManager {
         if automation.next_run_at.is_none() {
             automation.status = AutomationStatus::Paused;
         }
-        self.save_automation(&automation)
+        self.save_automation(automation)
     }
 
     /// Snapshot runs still waiting on task-manager state, for reconciliation
@@ -1394,10 +1394,10 @@ impl AutomationManager {
                 .and_then(|raw| serde_json::from_str::<DelayedTriggerRecord>(&raw).ok())
             {
                 Some(record) => {
-                    if let Some(filter) = status_filter {
-                        if record.status != filter {
-                            continue;
-                        }
+                    if let Some(filter) = status_filter
+                        && record.status != filter
+                    {
+                        continue;
                     }
                     out.push(record);
                 }

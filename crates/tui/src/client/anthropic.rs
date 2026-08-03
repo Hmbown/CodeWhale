@@ -523,22 +523,21 @@ fn message_to_anthropic(message: &crate::models::Message) -> Option<Value> {
     if blocks.is_empty() {
         return None;
     }
-    if message.role == crate::models::INTERRUPTED_ASSISTANT_ROLE {
-        if let Some(text) = blocks
+    if message.role == crate::models::INTERRUPTED_ASSISTANT_ROLE
+        && let Some(text) = blocks
             .iter_mut()
             .find(|block| block.get("type").and_then(Value::as_str) == Some("text"))
-        {
-            let existing = text
-                .get("text")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string();
-            text["text"] = json!(format!(
-                "{}{}",
-                crate::models::INTERRUPTED_ASSISTANT_CONTEXT_PREFIX,
-                existing
-            ));
-        }
+    {
+        let existing = text
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        text["text"] = json!(format!(
+            "{}{}",
+            crate::models::INTERRUPTED_ASSISTANT_CONTEXT_PREFIX,
+            existing
+        ));
     }
     Some(json!({
         "role": if message.role == crate::models::INTERRUPTED_ASSISTANT_ROLE {

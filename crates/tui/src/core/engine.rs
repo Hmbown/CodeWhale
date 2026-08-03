@@ -4339,41 +4339,42 @@ impl Engine {
         // makes a short LLM advisory call, and emits `Event::AdvisoryNote`.
         // Any failure is logged and swallowed — it must never affect the
         // parent turn's outcome.
-        if self.config.advisor_config.enabled && matches!(status, TurnOutcomeStatus::Completed) {
-            if let Some(client) = self.deepseek_client.clone() {
-                // Lazily create the shared emission guard on first use.
-                let guard = self
-                    .advisor_emission_guard
-                    .get_or_insert_with(|| {
-                        Arc::new(tokio::sync::Mutex::new(
-                            crate::tools::subagent::EmissionGuard::new(),
-                        ))
-                    })
-                    .clone();
+        if self.config.advisor_config.enabled
+            && matches!(status, TurnOutcomeStatus::Completed)
+            && let Some(client) = self.deepseek_client.clone()
+        {
+            // Lazily create the shared emission guard on first use.
+            let guard = self
+                .advisor_emission_guard
+                .get_or_insert_with(|| {
+                    Arc::new(tokio::sync::Mutex::new(
+                        crate::tools::subagent::EmissionGuard::new(),
+                    ))
+                })
+                .clone();
 
-                let advisor_messages: Vec<crate::models::Message> = self.session.messages.to_vec();
-                let advisor_config = self.config.advisor_config.clone();
-                let advisor_model = self.session.model.clone();
-                let advisor_tx = self.tx_event.clone();
-                let advisor_turn_id = turn.id.clone();
+            let advisor_messages: Vec<crate::models::Message> = self.session.messages.to_vec();
+            let advisor_config = self.config.advisor_config.clone();
+            let advisor_model = self.session.model.clone();
+            let advisor_tx = self.tx_event.clone();
+            let advisor_turn_id = turn.id.clone();
 
-                crate::utils::spawn_supervised(
-                    "advisor-watcher",
-                    std::panic::Location::caller(),
-                    async move {
-                        crate::tools::subagent::run_advisor_for_turn(
-                            advisor_turn_id,
-                            advisor_messages,
-                            advisor_config,
-                            client,
-                            advisor_model,
-                            guard,
-                            advisor_tx,
-                        )
-                        .await;
-                    },
-                );
-            }
+            crate::utils::spawn_supervised(
+                "advisor-watcher",
+                std::panic::Location::caller(),
+                async move {
+                    crate::tools::subagent::run_advisor_for_turn(
+                        advisor_turn_id,
+                        advisor_messages,
+                        advisor_config,
+                        client,
+                        advisor_model,
+                        guard,
+                        advisor_tx,
+                    )
+                    .await;
+                },
+            );
         }
 
         // ── Cross-turn goal continuation ───────────────────────────────────

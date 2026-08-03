@@ -12632,6 +12632,10 @@ async fn per_worker_token_budget_does_not_double_count_scope_accounting() {
 /// Variant of [`spawn_budget_capped_worker`] that attaches the worker to a
 /// shared workflow budget scope before its first model turn (no per-worker
 /// cap), returning the manager, agent id, call counter, and task handle.
+// Test helper: the eight parameters mirror the distinct knobs each test case
+// tunes; grouping them into a struct would add boilerplate at every call site
+// without improving readability.
+#[allow(clippy::too_many_arguments)]
 async fn spawn_scope_budgeted_worker(
     manager: &Arc<RwLock<SubAgentManager>>,
     workspace: &Path,
