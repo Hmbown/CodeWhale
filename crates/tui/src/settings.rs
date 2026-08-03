@@ -322,6 +322,11 @@ pub struct Settings {
     /// Which panel the rail shows: tasks, agents, context, or pinned.
     /// Orthogonal to `work_surface_placement` (rail unification, 0.9.4).
     pub rail_panel: String,
+    /// Runtime-only: whether the loaded settings document explicitly named
+    /// `rail_panel`. The sidebar→rail migration must not override an
+    /// explicit choice that happens to equal the default ("tasks").
+    #[serde(skip)]
+    pub(crate) rail_panel_explicit: bool,
     /// Runtime-only 30 FPS cap for terminals that flicker at high redraw
     /// rates. Separate from accessibility motion and text delivery.
     #[serde(skip)]
@@ -535,6 +540,7 @@ impl Default for Settings {
             work_surface_top_height: 8,
             work_surface_side_width: 30,
             rail_panel: "tasks".to_string(),
+            rail_panel_explicit: false,
             constrained_frame_rate: false,
             bracketed_paste: true,
             paste_burst_detection: true,
@@ -651,7 +657,9 @@ fn migrate_sidebar_settings_to_rail(s: &mut Settings) {
         panel @ ("pinned" | "work" | "plan" | "todos" | "tasks" | "activity" | "live"
         | "running" | "agents" | "subagents" | "sub-agents" | "context" | "session"
         | "auto") => {
-            if s.rail_panel == "tasks" {
+            // `rail_panel == "tasks"` is the default, so only treat it as
+            // unset when the document did not name the key explicitly.
+            if s.rail_panel == "tasks" && !s.rail_panel_explicit {
                 s.rail_panel = match panel {
                     "tasks" | "activity" | "live" | "running" => "tasks",
                     "agents" | "subagents" | "sub-agents" => "agents",
@@ -822,6 +830,10 @@ impl Settings {
             s.auto_compact_explicit = parsed_document
                 .as_ref()
                 .is_some_and(auto_compact_explicitly_configured_in_document);
+            s.rail_panel_explicit = parsed_document
+                .as_ref()
+                .and_then(toml::Value::as_table)
+                .is_some_and(|table| table.contains_key("rail_panel"));
             if parsed_document.as_ref().is_some_and(|document| {
                 document.as_table().is_some_and(|table| {
                     !table.contains_key("auto_compact")
@@ -1209,6 +1221,7 @@ impl Settings {
                     );
                 }
                 self.rail_panel = normalized;
+                self.rail_panel_explicit = true;
             }
             "work_surface_top_height" | "work_top_height" => {
                 self.work_surface_top_height =
@@ -3335,6 +3348,16 @@ mod tests {
         // sessions rail.
         assert!(migrate("sessions").sessions_rail);
         assert!(migrate("sessions_rail").sessions_rail);
+        // An explicit `rail_panel = "tasks"` in the document wins over the
+        // auto→pinned migration even though "tasks" is the default value.
+        let mut explicit = Settings {
+            sidebar_focus: "auto".to_string(),
+            rail_panel: "tasks".to_string(),
+            rail_panel_explicit: true,
+            ..Settings::default()
+        };
+        migrate_sidebar_settings_to_rail(&mut explicit);
+        assert_eq!(explicit.rail_panel, "tasks");
         // Placement panels keep their placement when the rail hides.
         let mut left = Settings {
             sidebar_focus: "hidden".to_string(),
