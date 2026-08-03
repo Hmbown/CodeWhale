@@ -157,6 +157,7 @@ impl ToolSpec for LoadSkillTool {
         };
 
         ensure_reviewed_plugin_skill_is_current(skill, &context.workspace)?;
+        ensure_native_skill_file_present(skill)?;
         let body = format_skill_body(skill);
         let (skill_path, skill_source) = match &skill.source {
             SkillSource::Native => (Some(skill.path.display().to_string()), "native".to_string()),
@@ -179,6 +180,26 @@ impl ToolSpec for LoadSkillTool {
                 .collect::<Vec<String>>(),
         })))
     }
+}
+
+/// A native registry entry whose SKILL.md vanished from disk after discovery
+/// (deleted, or resolved under a wrong home directory) must fail loudly with
+/// the exact path — never silently serve the stale cached body while the user
+/// believes the skill loaded (§2.5).
+fn ensure_native_skill_file_present(skill: &Skill) -> Result<(), ToolError> {
+    if !matches!(skill.source, SkillSource::Native) || skill.path.is_file() {
+        return Ok(());
+    }
+    let message = format!(
+        "Skill `{}` is registered at {} but that file no longer exists on disk, \
+         so the skill did not load. Restore the file, or fix the skills directory it \
+         came from (`skills_dir` in config.toml, `$CODEWHALE_HOME`, or the OS home) — \
+         the path above shows exactly where the runtime looked.",
+        skill.name,
+        skill.path.display()
+    );
+    crate::logging::warn(&message);
+    Err(ToolError::execution_failed(message))
 }
 
 fn ensure_reviewed_plugin_skill_is_current(
@@ -352,6 +373,63 @@ mod tests {
             names,
             vec!["data.json".to_string(), "script.py".to_string()]
         );
+    }
+
+    #[test]
+    fn native_skill_with_vanished_file_fails_loudly_with_the_path() {
+        // §2.5: a registry entry pointing at a SKILL.md that no longer exists
+        // must surface the exact path instead of silently serving the stale
+        // cached body — this is the "delegate skill silently never loads"
+        // symptom class.
+        let tmp = tempdir().unwrap();
+        let missing = tmp.path().join("delegate").join("SKILL.md");
+        let skill = Skill {
+            name: "delegate".to_string(),
+            description: "delegate work".to_string(),
+            localized_descriptions: std::collections::HashMap::new(),
+            invocation: crate::skills::SkillInvocation::ModelAndUser,
+            aliases: Vec::new(),
+            body: "cached body".to_string(),
+            path: missing.clone(),
+            source: SkillSource::Native,
+        };
+        let err = ensure_native_skill_file_present(&skill)
+            .expect_err("a vanished SKILL.md must fail loudly");
+        let message = err.to_string();
+        assert!(
+            message.contains(&missing.display().to_string()),
+            "error names the exact path: {message}"
+        );
+        assert!(
+            message.contains("did not load"),
+            "error says the skill did not load: {message}"
+        );
+
+        // An existing file passes, and plugin skills are untouched (their
+        // content-bound snapshot never consults the mutable path).
+        let present_dir = tempdir().unwrap();
+        let present = present_dir.path().join("SKILL.md");
+        fs::write(&present, "body").unwrap();
+        let mut on_disk = skill.clone();
+        on_disk.path = present;
+        ensure_native_skill_file_present(&on_disk).expect("present file loads");
+        let mut plugin = skill;
+        plugin.source = SkillSource::Plugin {
+            plugin_id: "workspace/1/demo".to_string(),
+            plugin_name: "demo".to_string(),
+            authority: Box::new(crate::plugins::types::PluginAuthority {
+                plugin_id: crate::plugins::types::PluginId("workspace/1/demo".to_string()),
+                plugin_name: "demo".to_string(),
+                workspace: tmp.path().to_path_buf(),
+                state_path: tmp.path().join("state.json"),
+                source_manifest: tmp.path().join("plugin.toml"),
+                staged_manifest: tmp.path().join("staged/plugin.toml"),
+                content_hash: "0".repeat(64),
+                capability_hash: "0".repeat(64),
+                state_generation: 0,
+            }),
+        };
+        ensure_native_skill_file_present(&plugin).expect("plugin snapshot skips the disk check");
     }
 
     #[test]
