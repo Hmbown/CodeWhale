@@ -255,6 +255,19 @@ pub enum Event {
         base_url: Option<String>,
     },
 
+    /// A single model call (turn-step) within the turn completed and the
+    /// provider reported usage for it. Unlike `TurnComplete`, which fires
+    /// once per turn with the cumulative usage, this fires once per model
+    /// request so consumers can attribute tokens (including reasoning and
+    /// cache behavior) to individual steps. It is not emitted when the
+    /// provider never reported usage for the call — absence is honest, and
+    /// fields inside `usage` stay `None` when the provider omits them.
+    TurnUsage {
+        usage: Usage,
+        /// Wall-clock duration of this model call's stream.
+        duration_ms: u64,
+    },
+
     /// Runtime goal state changed inside the engine, usually from model-visible
     /// `create_goal` or `update_goal` tool calls.
     GoalUpdated { snapshot: GoalSnapshot },

@@ -275,9 +275,11 @@ pub fn map_exec_stream_line(line: &str) -> Option<FleetWorkerEventPayload> {
             workflow_run_id: value.get("run_id")?.as_str()?.to_string(),
             event: value.get("event")?.clone(),
         }),
-        // Streaming model output / tool results mean the worker is alive and
-        // making progress; surface a coarse Running heartbeat.
-        "content" | "tool_result" => Some(FleetWorkerEventPayload::Running),
+        // Streaming model output / tool results / per-step usage receipts mean
+        // the worker is alive and making progress; surface a coarse Running
+        // heartbeat. `turn_usage` covers thinking-heavy model calls that
+        // produce no visible content between tool calls.
+        "content" | "tool_result" | "turn_usage" => Some(FleetWorkerEventPayload::Running),
         "done" => Some(FleetWorkerEventPayload::Completed {
             exit_code: Some(0),
             summary: None,

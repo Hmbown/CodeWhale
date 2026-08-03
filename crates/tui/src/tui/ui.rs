@@ -5003,6 +5003,12 @@ async fn run_event_loop(
                                 Some(format!("Sandbox blocked {tool_name}: {denial_reason}"));
                         }
                     }
+                    EngineEvent::TurnUsage { .. } => {
+                        // Per-step usage receipt for stream consumers (exec
+                        // stream-json). The TUI's token surfaces are driven
+                        // by the cumulative `TurnComplete` usage, so there is
+                        // nothing to render per step here.
+                    }
                     EngineEvent::AdvisoryNote { note, .. } => {
                         // Advisor background watcher note. Display as a
                         // concise system message in the transcript so the

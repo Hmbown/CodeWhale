@@ -146,6 +146,21 @@ or ask for the required input before trying again."
     Some(hint)
 }
 
+/// Whether a [`Usage`] carries any provider-reported data. The
+/// chat-completions streaming adapter emits a synthetic `MessageStart` with a
+/// zeroed [`Usage`]; treating that as reported would fabricate zero-valued
+/// per-step usage events for providers that never send usage at all.
+fn usage_has_reported_data(usage: &Usage) -> bool {
+    usage.input_tokens > 0
+        || usage.output_tokens > 0
+        || usage.prompt_cache_hit_tokens.is_some()
+        || usage.prompt_cache_miss_tokens.is_some()
+        || usage.prompt_cache_write_tokens.is_some()
+        || usage.reasoning_tokens.is_some()
+        || usage.reasoning_replay_tokens.is_some()
+        || usage.server_tool_use.is_some()
+}
+
 fn tool_error_category_allows_degradation(category: ErrorCategory) -> bool {
     matches!(
         category,
@@ -869,6 +884,11 @@ impl Engine {
                 output_tokens: 0,
                 ..Usage::default()
             };
+            // Flips when the provider actually reports usage for this call
+            // (MessageStart and/or a usage-carrying delta). Per-step usage
+            // events are only emitted for reported usage — a silent provider
+            // must not surface as fabricated zeros.
+            let mut usage_reported = false;
             let mut current_block_kind: Option<ContentBlockKind> = None;
             // Map block_index → tool_uses position. Required because the
             // OpenAI-compatible streaming parser emits multiple
@@ -1122,6 +1142,10 @@ impl Engine {
 
                 match event {
                     StreamEvent::MessageStart { message } => {
+                        // The chat-completions adapter emits a synthetic
+                        // MessageStart with a zeroed usage; only a usage that
+                        // carries data counts as provider-reported.
+                        usage_reported |= usage_has_reported_data(&message.usage);
                         usage = message.usage;
                     }
                     StreamEvent::ContentBlockStart {
@@ -1363,6 +1387,7 @@ impl Engine {
                         usage: delta_usage, ..
                     } => {
                         if let Some(u) = delta_usage {
+                            usage_reported |= usage_has_reported_data(&u);
                             usage = u;
                         }
                     }
@@ -1460,6 +1485,22 @@ impl Engine {
 
             // Update turn usage
             turn.add_usage(&usage);
+
+            // Per-step usage receipt: one per model call, only when the
+            // provider reported usage for it. This is what lets latency and
+            // convergence analysis attribute input/output/reasoning/cache
+            // tokens to individual steps instead of inferring them from
+            // wall time.
+            if usage_reported {
+                let _ = self
+                    .tx_event
+                    .send(Event::TurnUsage {
+                        usage: usage.clone(),
+                        duration_ms: u64::try_from(stream_start.elapsed().as_millis())
+                            .unwrap_or(u64::MAX),
+                    })
+                    .await;
+            }
 
             // Build content blocks. If this assistant turn produced tool
             // calls, ensure a Thinking block is present even when the model
