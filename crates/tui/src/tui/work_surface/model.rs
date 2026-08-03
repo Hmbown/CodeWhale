@@ -28,6 +28,54 @@ pub enum WorkSurfacePlacement {
     Right,
 }
 
+/// Which panel the rail shows. Orthogonal to placement: the user picks
+/// *where* the rail sits and *what* it shows (rail unification, 0.9.4).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RailPanel {
+    /// Tasks / to-do / workers — the live work projection rendered through
+    /// the row/hitbox machinery in `render.rs`.
+    #[default]
+    Tasks,
+    /// Sub-agents, ported from the legacy sidebar's Agents panel.
+    Agents,
+    /// Workspace / token / cost context, ported from the Context panel.
+    Context,
+    /// Pinned work summary (goal + checklist), ported from the Pinned panel.
+    Pinned,
+}
+
+impl RailPanel {
+    #[must_use]
+    pub fn parse(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "agents" => Self::Agents,
+            "context" => Self::Context,
+            "pinned" => Self::Pinned,
+            _ => Self::Tasks,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_setting(self) -> &'static str {
+        match self {
+            Self::Tasks => "tasks",
+            Self::Agents => "agents",
+            Self::Context => "context",
+            Self::Pinned => "pinned",
+        }
+    }
+
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Tasks => "Tasks",
+            Self::Agents => "Agents",
+            Self::Context => "Context",
+            Self::Pinned => "Pinned",
+        }
+    }
+}
+
 impl WorkSurfacePlacement {
     #[must_use]
     pub fn parse(value: &str) -> Self {
@@ -127,6 +175,8 @@ pub(crate) struct SessionInstanceScope {
 pub struct WorkSurfaceState {
     pub placement: WorkSurfacePlacement,
     pub(super) effective_placement: WorkSurfacePlacement,
+    /// Panel selection — orthogonal to placement.
+    pub panel: RailPanel,
     pub top_height: u16,
     pub side_width: u16,
     pub(super) resizing: bool,
@@ -196,6 +246,7 @@ impl WorkSurfaceState {
         Self {
             placement,
             effective_placement: placement,
+            panel: RailPanel::default(),
             top_height: top_height.clamp(TOP_HEIGHT_MIN, TOP_HEIGHT_MAX),
             side_width: side_width.clamp(SIDE_WIDTH_MIN, SIDE_WIDTH_MAX),
             resizing: false,

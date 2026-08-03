@@ -6,11 +6,12 @@
 mod input;
 mod interaction;
 mod model;
+mod panels;
 mod render;
 
 pub use input::{handle_key, handle_mouse};
 pub(crate) use interaction::agent_details_closed;
-pub use model::{WorkSurfacePlacement, WorkSurfaceState};
+pub use model::{RailPanel, WorkSurfacePlacement, WorkSurfaceState};
 pub use render::{height, render, split_chat};
 
 #[cfg(test)]
@@ -1023,6 +1024,86 @@ mod tests {
             assert_eq!(super::height(&mut app, area.width, area.height), 0);
             assert_eq!(super::split_chat(&mut app, area), (area, None));
         }
+    }
+
+    fn terminal_text(terminal: &Terminal<TestBackend>) -> String {
+        let buf = terminal.backend().buffer();
+        let mut text = String::new();
+        for y in 0..buf.area.height {
+            for x in 0..buf.area.width {
+                text.push_str(buf[(x, y)].symbol());
+            }
+        }
+        text
+    }
+
+    /// Render-level smoke coverage for the ported rail panels — reinstates
+    /// the sidebar render smoke tests removed with the classic shell
+    /// (739616787). Every non-Tasks panel must render its title in every
+    /// placement the rail supports.
+    #[test]
+    fn rail_panels_render_in_all_placements() {
+        for panel in [
+            super::RailPanel::Agents,
+            super::RailPanel::Context,
+            super::RailPanel::Pinned,
+        ] {
+            for placement in [
+                super::WorkSurfacePlacement::Top,
+                super::WorkSurfacePlacement::Left,
+                super::WorkSurfacePlacement::Right,
+            ] {
+                let mut app = app();
+                app.work_surface.placement = placement;
+                app.work_surface.panel = panel;
+                let area = ratatui::layout::Rect::new(0, 0, 100, 24);
+
+                let strip = super::height(&mut app, area.width, area.height);
+                let (_chat, rail) = super::split_chat(&mut app, area);
+                let backend = TestBackend::new(area.width, area.height);
+                let mut terminal = Terminal::new(backend).expect("terminal");
+                terminal
+                    .draw(|frame| {
+                        if strip > 0 {
+                            super::render(
+                                frame,
+                                ratatui::layout::Rect::new(0, 0, area.width, strip),
+                                &mut app,
+                            );
+                        } else if let Some(rail) = rail {
+                            super::render(frame, rail, &mut app);
+                        }
+                    })
+                    .expect("draw");
+                let text = terminal_text(&terminal);
+                assert!(
+                    text.contains(panel.title()),
+                    "{panel:?} in {placement:?} should render its title; got: {text}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn context_panel_renders_session_facts_in_side_rail() {
+        let mut app = app();
+        app.work_surface.placement = super::WorkSurfacePlacement::Right;
+        app.work_surface.panel = super::RailPanel::Context;
+        let area = ratatui::layout::Rect::new(0, 0, 100, 24);
+
+        let strip = super::height(&mut app, area.width, area.height);
+        assert_eq!(strip, 0, "side placements take no top strip");
+        let (_chat, rail) = super::split_chat(&mut app, area);
+        let rail = rail.expect("context panel reserves a side rail");
+
+        let backend = TestBackend::new(area.width, area.height);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal
+            .draw(|frame| super::render(frame, rail, &mut app))
+            .expect("draw");
+        let text = terminal_text(&terminal);
+        assert!(text.contains("Context"), "panel title; got: {text}");
+        assert!(text.contains("lsp:"), "session facts; got: {text}");
     }
 
     #[test]

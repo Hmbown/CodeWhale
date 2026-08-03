@@ -14,7 +14,9 @@ use crate::localization::MessageId;
 use crate::tui::app::{App, SidebarHoverRow, SidebarHoverSection};
 use crate::tui::ui_text::truncate_line_to_width;
 
-use super::model::{WorkHitbox, WorkRow, WorkSurfacePlacement, WorkTone, project_visible};
+use super::model::{
+    RailPanel, WorkHitbox, WorkRow, WorkSurfacePlacement, WorkTone, project_visible,
+};
 
 const SIDE_RAIL_MIN_HOST_WIDTH: u16 = 72;
 const SIDE_RAIL_MIN_CHAT_WIDTH: u16 = 40;
@@ -31,6 +33,20 @@ fn effective_placement(configured: WorkSurfacePlacement, host_width: u16) -> Wor
 /// work lists scroll instead of consuming the transcript.
 pub fn height(app: &mut App, width: u16, terminal_height: u16) -> u16 {
     app.work_surface.effective_placement = effective_placement(app.work_surface.placement, width);
+    // Non-Tasks panels always own a strip once selected: the user asked for
+    // the panel, so an empty panel collapses to a hint line, not a vanished
+    // rail.
+    if app.work_surface.panel != RailPanel::Tasks {
+        if app.work_surface.effective_placement != WorkSurfacePlacement::Top {
+            return 0;
+        }
+        let terminal_cap = terminal_height
+            .saturating_div(2)
+            .clamp(super::model::TOP_HEIGHT_MIN, super::model::TOP_HEIGHT_MAX);
+        let cap = app.work_surface.top_height.min(terminal_cap);
+        // Title row plus three content rows, bounded by the configured cap.
+        return 4.clamp(super::model::TOP_HEIGHT_MIN, cap);
+    }
     let rows = project_visible(app);
     if rows.is_empty() {
         app.work_surface.focused = false;
@@ -73,7 +89,9 @@ pub fn height(app: &mut App, width: u16, terminal_height: u16) -> u16 {
 pub fn split_chat(app: &mut App, area: Rect) -> (Rect, Option<Rect>) {
     let placement = effective_placement(app.work_surface.placement, area.width);
     app.work_surface.effective_placement = placement;
-    if app.work_surface.latest_rows.is_empty() || placement == WorkSurfacePlacement::Top {
+    if placement == WorkSurfacePlacement::Top
+        || (app.work_surface.panel == RailPanel::Tasks && app.work_surface.latest_rows.is_empty())
+    {
         return (area, None);
     }
 
@@ -143,6 +161,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
             ..area
         },
     };
+
+    // Non-Tasks panels render as a titled line list and skip the row
+    // machinery (hitboxes, selection, todo ordinals) entirely.
+    if app.work_surface.panel != RailPanel::Tasks {
+        render_panel(frame, area, body_area, app);
+        return;
+    }
 
     let mut rows = project_visible(app);
     if placement == WorkSurfacePlacement::Top {
@@ -312,6 +337,86 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
         lines: visible.iter().map(|row| row.label.clone()).collect(),
         rows: hover_rows,
     });
+}
+
+/// Render a non-Tasks rail panel (Agents / Context / Pinned) as a titled
+/// line list in the same body area and with the same divider and scrollbar
+/// the Tasks list would use. Row interactivity (hitboxes, selection,
+/// click actions) is Tasks-only for now; panels scroll via the shared
+/// `scroll_offset`.
+fn render_panel(frame: &mut Frame, area: Rect, body_area: Rect, app: &mut App) {
+    let panel = app.work_surface.panel;
+    let placement = app.work_surface.effective_placement;
+
+    Block::default()
+        .style(Style::default().bg(app.ui_theme.surface_bg))
+        .render(area, frame.buffer_mut());
+
+    // Title row.
+    Paragraph::new(Line::from(Span::styled(
+        truncate_line_to_width(panel.title(), usize::from(body_area.width).max(1)),
+        Style::default()
+            .fg(app.ui_theme.accent_primary)
+            .bg(app.ui_theme.surface_bg)
+            .add_modifier(Modifier::BOLD),
+    )))
+    .render(
+        Rect {
+            height: 1,
+            ..body_area
+        },
+        frame.buffer_mut(),
+    );
+
+    let content_area = Rect {
+        y: body_area.y.saturating_add(1),
+        height: body_area.height.saturating_sub(1),
+        ..body_area
+    };
+    let body_height = usize::from(content_area.height);
+    let lines = super::panels::panel_lines(
+        app,
+        panel,
+        usize::from(content_area.width),
+        body_height.max(1),
+    )
+    .unwrap_or_default();
+
+    let max_offset = lines.len().saturating_sub(body_height.max(1));
+    app.work_surface.scroll_offset = app.work_surface.scroll_offset.min(max_offset);
+    let overflow = lines.len() > body_height;
+    let visible: Vec<Line> = lines
+        .iter()
+        .skip(app.work_surface.scroll_offset)
+        .take(body_height)
+        .cloned()
+        .collect();
+    Paragraph::new(visible).render(content_area, frame.buffer_mut());
+
+    render_divider(frame, area, placement, app);
+    if overflow {
+        render_scrollbar(
+            frame,
+            Rect {
+                x: body_area.right().saturating_sub(1),
+                y: content_area.y,
+                width: 1,
+                height: content_area.height,
+            },
+            app.work_surface.scroll_offset,
+            body_height,
+            lines.len(),
+            app,
+        );
+    }
+
+    app.work_surface.last_area = Some(area);
+    app.work_surface.visible_rows = body_height;
+    app.work_surface.total_rows = lines.len();
+    app.work_surface.hitboxes.clear();
+    app.work_surface.selected = None;
+    app.work_surface.opened = None;
+    app.work_surface.hovered = None;
 }
 
 fn todo_ordinals(rows: &[WorkRow]) -> HashMap<String, usize> {

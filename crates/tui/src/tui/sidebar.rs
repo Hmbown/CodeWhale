@@ -175,24 +175,6 @@ struct HotbarPanelSlot {
     state: HotbarSlotState,
 }
 
-fn render_hotbar_panel(f: &mut Frame, area: Rect, app: &mut App, config: &Config) {
-    let slots = hotbar_panel_slots(app, config);
-    let content_width = area.width.saturating_sub(4) as usize;
-    // Title carries the modifier hint (⌥ on macOS, alt+ elsewhere) so users can
-    // see *which* key to hold without it eating the tight 4-char slot cells —
-    // it renders at every sidebar width and costs no slot-row height.
-    let title = format!("Hotbar  {}1-8", super::widgets::key_hint::alt_prefix());
-    render_sidebar_section(
-        f,
-        area,
-        &title,
-        hotbar_panel_lines(&slots, content_width, &app.ui_theme),
-        hotbar_panel_hover_texts(&slots),
-        hotbar_panel_row_actions(),
-        app,
-    );
-}
-
 fn hotbar_panel_row_actions() -> Vec<Option<SidebarRowAction>> {
     (1..=codewhale_config::HOTBAR_SLOT_COUNT)
         .step_by(HOTBAR_ROW_COLUMNS)
@@ -470,7 +452,7 @@ pub(crate) fn active_goal_banner_text(app: &App) -> Option<String> {
     live_goal_objective(app).filter(|objective| !objective.trim().is_empty())
 }
 
-fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
+pub(crate) fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
     fn live_pause_indicator(app: &App) -> Option<String> {
         if app.paused && app.is_loading {
             Some("(Pausing)".to_string())
@@ -552,7 +534,7 @@ fn sidebar_work_summary(app: &mut App) -> SidebarWorkSummary {
     summary
 }
 
-fn work_panel_lines(
+pub(crate) fn work_panel_lines(
     summary: &SidebarWorkSummary,
     content_width: usize,
     max_rows: usize,
@@ -913,53 +895,6 @@ fn work_panel_empty_hint(content_width: usize) -> String {
     truncate_line_to_width("No active work", content_width)
 }
 
-fn render_sidebar_work(f: &mut Frame, area: Rect, app: &mut App) {
-    if area.height < 3 {
-        return;
-    }
-
-    let content_width = area.width.saturating_sub(4) as usize;
-    let usable_rows = area.height.saturating_sub(3) as usize;
-    let summary = sidebar_work_summary(app);
-    let lines = work_panel_lines(
-        &summary,
-        content_width.max(1),
-        usable_rows,
-        app.ui_theme.mode,
-        &app.ui_theme,
-    );
-
-    let full_texts = work_panel_hover_texts(&summary, content_width.max(1), usable_rows);
-    render_sidebar_section(f, area, "To-do", lines, full_texts, Vec::new(), app);
-}
-
-fn render_sidebar_work_compact(f: &mut Frame, area: Rect, app: &mut App) {
-    let summary = sidebar_work_summary(app);
-    let label = if !summary.checklist_items.is_empty() {
-        let count = summary.checklist_items.len();
-        format!(
-            "{count} item{} · {}%",
-            if count == 1 { "" } else { "s" },
-            summary.checklist_completion_pct
-        )
-    } else if summary.goal_objective.is_some() {
-        "goal active".to_string()
-    } else {
-        "Work state updating...".to_string()
-    };
-    let content_width = area.width.saturating_sub(4) as usize;
-    let line = truncate_line_to_width(&label, content_width.max(1));
-    render_sidebar_section(
-        f,
-        area,
-        "To-do",
-        vec![Line::from(line.clone())],
-        vec![label],
-        Vec::new(),
-        app,
-    );
-}
-
 /// Click actions for one background job row pair (#3028).
 ///
 /// Returns `(show, detail)` where `show` opens the job and `detail` cancels
@@ -1000,25 +935,6 @@ fn label_with_stop_target(label: &str, content_width: usize) -> String {
     }
     let base = truncate_line_to_width(label, content_width.saturating_sub(suffix_width));
     format!("{base}{TASK_STOP_TARGET_SUFFIX}")
-}
-
-fn render_sidebar_tasks(f: &mut Frame, area: Rect, app: &mut App) {
-    if area.height < 3 {
-        return;
-    }
-
-    let content_width = area.width.saturating_sub(4) as usize;
-    let usable_rows = area.height.saturating_sub(3) as usize;
-    let row_sets = task_panel_row_sets(app);
-    let (lines, row_actions) =
-        task_panel_rows(app, &row_sets, content_width.max(1), usable_rows.max(1));
-
-    let full_texts = task_panel_hover_texts(app, &row_sets, usable_rows.max(1));
-    // #4147: This panel renders live tools / background jobs, not durable task
-    // state, so the user-facing label is "Activity" to match its contents and
-    // avoid colliding with durable tasks. The internal identifiers keep the
-    // "task_panel"/`SidebarFocus::Tasks` names (guard #4172).
-    render_sidebar_section(f, area, "Activity", lines, full_texts, row_actions, app);
 }
 
 #[derive(Debug, Clone)]
@@ -2142,64 +2058,6 @@ fn duration_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
-fn render_sidebar_subagents(f: &mut Frame, area: Rect, app: &mut App) {
-    if area.height < 3 {
-        return;
-    }
-
-    let content_width = area.width.saturating_sub(4) as usize;
-    let usable_rows = area.height.saturating_sub(3) as usize;
-    let cached_ids: std::collections::HashSet<&str> = app
-        .subagent_cache
-        .iter()
-        .map(|agent| agent.agent_id.as_str())
-        .collect();
-    let progress_only_count = app
-        .agent_progress
-        .keys()
-        .filter(|id| !cached_ids.contains(id.as_str()))
-        .count();
-    let cached_running = app
-        .subagent_cache
-        .iter()
-        .filter(|agent| cached_agent_activity_is_live(app, agent))
-        .count();
-    let role_counts: std::collections::BTreeMap<String, usize> =
-        app.subagent_cache
-            .iter()
-            .fold(std::collections::BTreeMap::new(), |mut acc, agent| {
-                *acc.entry(agent.agent_type.as_str().to_string())
-                    .or_insert(0) += 1;
-                acc
-            });
-    let (fanout_running, fanout_total) = active_fanout_counts(app)
-        .map(|(running, total)| (running, Some(total)))
-        .unwrap_or((0, None));
-    let foreground_rlm_running = foreground_rlm_running(app);
-
-    let summary = SidebarSubagentSummary {
-        cached_total: app.subagent_cache.len(),
-        cached_running,
-        progress_only_count,
-        fanout_total,
-        fanout_running,
-        foreground_rlm_running,
-        role_counts,
-    };
-    let rows = sidebar_agent_rows(app);
-    let (lines, row_actions) = subagent_panel_rows(
-        &summary,
-        &rows,
-        app.ui_locale,
-        content_width,
-        usable_rows.max(1),
-        &app.ui_theme,
-    );
-    let full_texts = subagent_panel_hover_texts(&summary, &rows, usable_rows.max(1));
-
-    render_sidebar_section(f, area, "Agents", lines, full_texts, row_actions, app);
-}
-
 /// Minimal projection of the data the sub-agent sidebar needs. Lifted out
 /// of `render_sidebar_subagents` so the rendering can be snapshot-tested
 /// without a full `App`.
@@ -2234,7 +2092,7 @@ pub struct SidebarAgentRow {
     pub expanded: bool,
 }
 
-fn foreground_rlm_running(app: &App) -> bool {
+pub(crate) fn foreground_rlm_running(app: &App) -> bool {
     app.active_cell.as_ref().is_some_and(|active| {
         active.entries().iter().any(|entry| {
             matches!(
@@ -2446,7 +2304,7 @@ fn sidebar_current_activity_status_text(status: AgentCurrentActivityStatus) -> &
     }
 }
 
-fn cached_agent_activity_is_live(
+pub(crate) fn cached_agent_activity_is_live(
     app: &App,
     agent: &crate::tools::subagent::SubAgentResult,
 ) -> bool {
@@ -2496,10 +2354,10 @@ fn sidebar_current_activity_text(activity: &AgentCurrentActivity) -> String {
     parts.join(" · ")
 }
 
-/// Build sub-agent sidebar lines from summary + per-agent rows. Public
-/// for the snapshot tests in this module.
-#[cfg(test)]
-pub fn subagent_panel_lines(
+/// Build sub-agent sidebar lines from summary + per-agent rows. Used by the
+/// rail's Agents panel (`work_surface::panels`) and the snapshot tests in
+/// this module.
+pub(crate) fn subagent_panel_lines(
     summary: &SidebarSubagentSummary,
     rows: &[SidebarAgentRow],
     locale: Locale,
@@ -2944,14 +2802,12 @@ fn agent_status_marker(
 /// cost, MCP server count, LSP toggle state, cycle count, and memory
 /// file size + mtime. Each section is a compact one-liner so the panel
 /// reads as a dashboard rather than a scrolling list.
-fn render_context_panel(f: &mut Frame, area: Rect, app: &mut App) {
-    if area.height < 3 {
-        return;
-    }
-
+/// Context panel line builder, lifted out of the legacy sidebar's
+/// `render_context_panel` for the unified rail (0.9.4): workspace, token
+/// usage, session cost, MCP, LSP, and memory rows.
+pub(crate) fn context_panel_lines(app: &App, content_width: usize) -> Vec<Line<'static>> {
     let theme = &app.ui_theme;
-    let content_width = area.width.saturating_sub(4) as usize;
-    let mut lines: Vec<Line<'static>> = Vec::with_capacity(usize::from(area.height).max(4));
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(8);
 
     // ── Working set ──────────────────────────────────────────────
     let ws_name = app
@@ -3028,7 +2884,7 @@ fn render_context_panel(f: &mut Frame, area: Rect, app: &mut App) {
         )));
     }
 
-    render_sidebar_section(f, area, "Session", lines, Vec::new(), Vec::new(), app);
+    lines
 }
 
 fn context_panel_cost_line(app: &App) -> String {
@@ -3069,92 +2925,6 @@ fn spans_to_text(spans: &[Span<'_>]) -> String {
         s.push_str(span.content.as_ref());
     }
     s
-}
-
-fn render_sidebar_section(
-    f: &mut Frame,
-    area: Rect,
-    title: &str,
-    lines: Vec<Line<'static>>,
-    full_texts: Vec<String>,
-    row_actions: Vec<Option<SidebarRowAction>>,
-    app: &mut App,
-) {
-    if area.width < 4 || area.height < 3 {
-        // Clear stale cells before bailing out (#400).
-        Block::default()
-            .style(Style::default().bg(app.ui_theme.surface_bg))
-            .render(area, f.buffer_mut());
-        return;
-    }
-
-    let theme = Theme::for_palette_mode(app.ui_theme.mode);
-
-    // Record hover metadata for mouse tooltip support.
-    let padding = theme.section_padding;
-    let content_area = Rect {
-        x: area.x + 1 + padding.left,
-        y: area.y + 1 + padding.top,
-        width: area.width.saturating_sub(2 + padding.left + padding.right),
-        height: area.height.saturating_sub(2 + padding.top + padding.bottom),
-    };
-    let display_texts: Vec<String> = lines
-        .iter()
-        .map(|line| spans_to_text(&line.spans))
-        .collect();
-    let hover_texts: Vec<String> = display_texts
-        .iter()
-        .enumerate()
-        .map(|(idx, display)| {
-            full_texts
-                .get(idx)
-                .filter(|text| !text.trim().is_empty())
-                .cloned()
-                .unwrap_or_else(|| display.clone())
-        })
-        .collect();
-    let rows = sidebar_hover_rows(content_area, &display_texts, &hover_texts, &row_actions);
-    app.sidebar_hover.sections.push(SidebarHoverSection {
-        content_area,
-        lines: hover_texts,
-        rows,
-    });
-    // Truncate the panel title so it always fits within the section width
-    // even after a resize. The title occupies up to 4 chars of border chrome
-    // (two spaces + one space on each side), so the max title length is
-    // area.width.saturating_sub(4) when borders are enabled.
-    let max_title_width = area.width.saturating_sub(4).max(1) as usize;
-    let display_title = truncate_line_to_width(title, max_title_width);
-
-    // Constrain lines to the visible section area so a Paragraph wrap
-    // overflow can't write cells outside the Block bounds (#400). The
-    // border + padding consume 2 rows; budget the rest for content.
-    let visible_content_rows = area
-        .height
-        .saturating_sub(2) // top + bottom border
-        .saturating_sub(theme.section_padding.top + theme.section_padding.bottom)
-        as usize;
-    let lines: Vec<Line<'static>> =
-        if lines.len() > visible_content_rows && visible_content_rows > 0 {
-            lines.into_iter().take(visible_content_rows).collect()
-        } else {
-            lines
-        };
-
-    let section = Paragraph::new(lines).wrap(Wrap { trim: true }).block(
-        Block::default()
-            .title(Line::from(vec![Span::styled(
-                format!(" {display_title} "),
-                Style::default().fg(theme.section_title_color).bold(),
-            )]))
-            .borders(theme.section_borders)
-            .border_type(theme.section_border_type)
-            .border_style(Style::default().fg(theme.section_border_color))
-            .style(Style::default().bg(theme.section_bg))
-            .padding(theme.section_padding),
-    );
-
-    f.render_widget(section, area);
 }
 
 fn sidebar_hover_rows(
