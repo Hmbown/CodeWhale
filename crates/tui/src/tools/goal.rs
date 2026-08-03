@@ -831,10 +831,6 @@ impl ToolSpec for UpdateGoalTool {
                 "advisory": {
                     "type": "string",
                     "description": "Required when status is advisory. Appended separately from the judged completion contract."
-                },
-                "objective": {
-                    "type": "string",
-                    "description": "Reserved for future host-controlled goal edits; ignored by update_goal."
                 }
             },
             "required": ["status"],
@@ -852,6 +848,19 @@ impl ToolSpec for UpdateGoalTool {
 
     async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
         require_root_goal_mutation(context)?;
+        // #5123-class: `objective` used to be accepted and silently ignored
+        // with a success receipt. The objective is immutable after
+        // create_goal; fail fast and name the corrective path.
+        if input
+            .get("objective")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Err(ToolError::invalid_input(
+                "update_goal cannot change the objective — it is immutable after create_goal. \
+                 Mark the current goal complete or blocked, then create_goal with the new objective",
+            ));
+        }
         let status = required_str(&input, "status")?.trim().to_ascii_lowercase();
         let snapshot = {
             let mut state = lock_goal_state(&self.goal_state)?;
@@ -928,6 +937,40 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
+
+    #[tokio::test]
+    async fn update_goal_rejects_objective_knob_instead_of_ignoring_it() {
+        // #5123-class: `objective` used to return a success receipt with no
+        // behavior. It is immutable after create_goal; the knob is gone from
+        // the schema and supplying it fails fast with the corrective path.
+        let state = new_shared_goal_state();
+        let ctx = ToolContext::new(".");
+        let create = CreateGoalTool::new(state.clone());
+        create
+            .execute(json!({"objective": "ship the runtime slice"}), &ctx)
+            .await
+            .expect("create goal");
+
+        let update = UpdateGoalTool::new(state.clone());
+        let schema = update.input_schema();
+        assert!(
+            schema["properties"].get("objective").is_none(),
+            "ignored objective knob must not be advertised: {schema}"
+        );
+
+        let err = update
+            .execute(
+                json!({"status": "blocked", "blocker": "x", "objective": "different goal"}),
+                &ctx,
+            )
+            .await
+            .expect_err("objective must not be silently ignored");
+        let message = format!("{err}");
+        assert!(message.contains("immutable"), "{message}");
+        assert!(message.contains("create_goal"), "{message}");
+        // The rejected call must not have mutated goal state.
+        assert!(state.lock().expect("goal lock").is_active());
+    }
 
     #[tokio::test]
     async fn create_get_and_complete_goal() {
