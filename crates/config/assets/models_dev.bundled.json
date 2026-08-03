@@ -4,9 +4,10 @@
     "schema": "Matches crates/config/src/models_dev.rs ModelsDevCatalog ({ models, providers }).",
     "role": "NOT a competing source of truth. Preferred metadata is the live Models.dev catalog published into ProviderLake (#4187). This asset is used only when live/cache rows are unavailable (offline startup, failed refresh, or empty cache).",
     "source": "Compact offline seed of verified in-repo defaults (context/output from crates/tui/src/models.rs; USD pricing from crates/tui/src/pricing.rs) for providers Codewhale ships with. It is intentionally smaller than a full Models.dev dump; live refresh supersedes these rows on (provider, wire_model_id) identity.",
-    "honesty": "Pricing is intentionally OMITTED where the repo does not publish a trustworthy per-token rate: DeepSeek-native rows (priced via the time-aware DeepSeek table elsewhere, kept UnknownOrStale at the route layer), aggregator-hosted DeepSeek rows (aggregator account terms, not DeepSeek Platform pricing), and Xiaomi MiMo rows (published PAYG rates apply only to sk- pay-as-you-go keys; the catalog cannot distinguish that billing surface from credit/quota Token Plan keys, so MiMo stays unpriced). Absent pricing surfaces as PricingSku::UnknownOrStale, never a fabricated zero.",
+    "honesty": "Pricing is intentionally OMITTED where the repo does not publish a trustworthy per-token rate: DeepSeek-native rows (priced via the time-aware DeepSeek table elsewhere, kept UnknownOrStale at the route layer), aggregator-hosted DeepSeek rows (aggregator account terms, not DeepSeek Platform pricing), Xiaomi MiMo rows (published PAYG rates apply only to sk- pay-as-you-go keys; the catalog cannot distinguish that billing surface from credit/quota Token Plan keys, so MiMo stays unpriced), and Alibaba Model Studio Token/Coding Plan rows (upstream lists zero per-token cost because usage draws on plan quota, not per-token billing; a zero here would read as 'free'). Absent pricing surfaces as PricingSku::UnknownOrStale, never a fabricated zero.",
     "default_rows": "Each provider's `default: true` wire id equals that provider's built-in DEFAULT_*_MODEL so RouteResolver::new() and the descriptor stay in agreement when offline.",
-    "coverage": "15 providers, 45 chat offerings (offline seed only)."
+    "curated": "qwen3.8-max (GA) is curated ahead of upstream Models.dev, which as of 2026-08-03 lists only qwen3.8-max-preview; facts verified against the owner's Token Plan console (2026-08-03): ~1M context, 128K output, image understanding, always-on reasoning. deepseek-v4-flash-0731 keeps the console/in-repo wire id for the row upstream serves as deepseek-v4-flash. Coding Plan rows for qwen3.8-max-preview, deepseek-v4-pro, deepseek-v4-flash-0731, and glm-5.2 are curated from the Token Plan upstream entries (upstream alibaba-coding-plan does not list them yet); the in-repo route layer already offers the same model set on both plans. Upstream provider ids alibaba-token-plan(-cn) / alibaba-coding-plan(-cn) were merged onto the CodeWhale provider ids (live refresh normalizes them via ProviderKind aliases; the -cn regional variants stay upstream-id browse rows until Codewhale ships China endpoints).",
+    "coverage": "20 providers, 78 chat offerings (offline seed only)."
   },
   "models": {
     "deepseek-v4-pro": {
@@ -210,6 +211,502 @@
           "modalities": { "input": ["text"], "output": ["text"] },
           "limit": { "context": 204800, "output": 204800 },
           "cost": { "input": 0.30, "output": 1.20, "cache_read": 0.06, "cache_write": 0.375 }
+        }
+      }
+    },
+    "modelstudio-token-plan": {
+      "id": "modelstudio-token-plan",
+      "name": "Alibaba Cloud Model Studio (Token Plan)",
+      "api": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+      "npm": "@ai-sdk/openai-compatible",
+      "env": ["MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY"],
+      "models": {
+        "qwen3.8-max": {
+          "id": "qwen3.8-max",
+          "name": "Qwen3.8 Max",
+          "family": "qwen",
+          "default": true,
+          "attachment": true,
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "thinking", "values": ["always_on"], "default": "always_on"}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text", "image"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 131072 }
+        },
+        "qwen3.8-max-preview": {
+          "id": "qwen3.8-max-preview",
+          "name": "Qwen3.8 Max Preview",
+          "family": "qwen",
+          "attachment": true,
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "effort", "values": ["low", "medium", "xhigh"]},
+            {"type": "budget_tokens", "min": 0, "max": 262144}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text", "image", "video"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 131072 }
+        },
+        "qwen3.7-plus": {
+          "id": "qwen3.7-plus",
+          "name": "Qwen3.7 Plus",
+          "family": "qwen",
+          "attachment": true,
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "toggle"},
+            {"type": "budget_tokens", "max": 262144}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text", "image", "video"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 65536 }
+        },
+        "qwen3.7-max": {
+          "id": "qwen3.7-max",
+          "name": "Qwen3.7 Max",
+          "family": "qwen",
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "toggle"},
+            {"type": "budget_tokens", "max": 262144}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 131072 }
+        },
+        "qwen3.6-flash": {
+          "id": "qwen3.6-flash",
+          "name": "Qwen3.6 Flash",
+          "family": "qwen3.6",
+          "attachment": true,
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "toggle"},
+            {"type": "budget_tokens", "max": 131072}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text", "image", "video"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 65536 }
+        },
+        "deepseek-v4-pro": {
+          "id": "deepseek-v4-pro",
+          "name": "DeepSeek V4 Pro",
+          "family": "deepseek-thinking",
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "toggle"},
+            {"type": "effort", "values": ["high", "max"]}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 384000 }
+        },
+        "deepseek-v4-flash-0731": {
+          "id": "deepseek-v4-flash-0731",
+          "name": "DeepSeek V4 Flash (0731)",
+          "family": "deepseek-flash",
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "toggle"},
+            {"type": "effort", "values": ["high", "max"]}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 384000 }
+        },
+        "glm-5.2": {
+          "id": "glm-5.2",
+          "name": "GLM-5.2",
+          "family": "glm",
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "effort", "values": ["high", "max"]}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 131072 }
+        }
+      }
+    },
+    "modelstudio-token-plan-anthropic": {
+      "id": "modelstudio-token-plan-anthropic",
+      "name": "Alibaba Cloud Model Studio (Token Plan, Anthropic-compatible)",
+      "api": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic",
+      "npm": "@ai-sdk/anthropic",
+      "env": ["MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY"],
+      "models": {
+        "qwen3.8-max": {
+          "id": "qwen3.8-max",
+          "name": "Qwen3.8 Max",
+          "family": "qwen",
+          "default": true,
+          "attachment": true,
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "thinking", "values": ["always_on"], "default": "always_on"}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text", "image"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 131072 }
+        },
+        "qwen3.8-max-preview": {
+          "id": "qwen3.8-max-preview",
+          "name": "Qwen3.8 Max Preview",
+          "family": "qwen",
+          "attachment": true,
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "effort", "values": ["low", "medium", "xhigh"]},
+            {"type": "budget_tokens", "min": 0, "max": 262144}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text", "image", "video"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 131072 }
+        },
+        "qwen3.7-plus": {
+          "id": "qwen3.7-plus",
+          "name": "Qwen3.7 Plus",
+          "family": "qwen",
+          "attachment": true,
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "toggle"},
+            {"type": "budget_tokens", "max": 262144}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text", "image", "video"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 65536 }
+        },
+        "qwen3.7-max": {
+          "id": "qwen3.7-max",
+          "name": "Qwen3.7 Max",
+          "family": "qwen",
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "toggle"},
+            {"type": "budget_tokens", "max": 262144}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 131072 }
+        },
+        "qwen3.6-flash": {
+          "id": "qwen3.6-flash",
+          "name": "Qwen3.6 Flash",
+          "family": "qwen3.6",
+          "attachment": true,
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "toggle"},
+            {"type": "budget_tokens", "max": 131072}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text", "image", "video"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 65536 }
+        },
+        "deepseek-v4-pro": {
+          "id": "deepseek-v4-pro",
+          "name": "DeepSeek V4 Pro",
+          "family": "deepseek-thinking",
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "toggle"},
+            {"type": "effort", "values": ["high", "max"]}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 384000 }
+        },
+        "deepseek-v4-flash-0731": {
+          "id": "deepseek-v4-flash-0731",
+          "name": "DeepSeek V4 Flash (0731)",
+          "family": "deepseek-flash",
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "toggle"},
+            {"type": "effort", "values": ["high", "max"]}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 384000 }
+        },
+        "glm-5.2": {
+          "id": "glm-5.2",
+          "name": "GLM-5.2",
+          "family": "glm",
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "effort", "values": ["high", "max"]}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 131072 }
+        }
+      }
+    },
+    "modelstudio-coding-plan": {
+      "id": "modelstudio-coding-plan",
+      "name": "Alibaba Cloud Model Studio (Coding Plan)",
+      "api": "https://coding-intl.dashscope.aliyuncs.com/v1",
+      "npm": "@ai-sdk/openai-compatible",
+      "env": ["MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY"],
+      "models": {
+        "qwen3.8-max": {
+          "id": "qwen3.8-max",
+          "name": "Qwen3.8 Max",
+          "family": "qwen",
+          "default": true,
+          "attachment": true,
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "thinking", "values": ["always_on"], "default": "always_on"}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text", "image"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 131072 }
+        },
+        "qwen3.8-max-preview": {
+          "id": "qwen3.8-max-preview",
+          "name": "Qwen3.8 Max Preview",
+          "family": "qwen",
+          "attachment": true,
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "effort", "values": ["low", "medium", "xhigh"]},
+            {"type": "budget_tokens", "min": 0, "max": 262144}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text", "image", "video"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 131072 }
+        },
+        "qwen3.7-plus": {
+          "id": "qwen3.7-plus",
+          "name": "Qwen3.7 Plus",
+          "family": "qwen",
+          "attachment": true,
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "toggle"},
+            {"type": "budget_tokens", "max": 262144}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text", "image", "video"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 64000 }
+        },
+        "qwen3.7-max": {
+          "id": "qwen3.7-max",
+          "name": "Qwen3.7 Max",
+          "family": "qwen",
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "toggle"},
+            {"type": "budget_tokens", "max": 262144}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 65536 }
+        },
+        "qwen3.6-flash": {
+          "id": "qwen3.6-flash",
+          "name": "Qwen3.6 Flash",
+          "family": "qwen3.6",
+          "attachment": true,
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "toggle"},
+            {"type": "budget_tokens", "max": 131072}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text", "image", "video"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 65536 }
+        },
+        "deepseek-v4-pro": {
+          "id": "deepseek-v4-pro",
+          "name": "DeepSeek V4 Pro",
+          "family": "deepseek-thinking",
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "toggle"},
+            {"type": "effort", "values": ["high", "max"]}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 384000 }
+        },
+        "deepseek-v4-flash-0731": {
+          "id": "deepseek-v4-flash-0731",
+          "name": "DeepSeek V4 Flash (0731)",
+          "family": "deepseek-flash",
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "toggle"},
+            {"type": "effort", "values": ["high", "max"]}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 384000 }
+        },
+        "glm-5.2": {
+          "id": "glm-5.2",
+          "name": "GLM-5.2",
+          "family": "glm",
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "effort", "values": ["high", "max"]}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 131072 }
+        }
+      }
+    },
+    "modelstudio-coding-plan-anthropic": {
+      "id": "modelstudio-coding-plan-anthropic",
+      "name": "Alibaba Cloud Model Studio (Coding Plan, Anthropic-compatible)",
+      "api": "https://coding-intl.dashscope.aliyuncs.com/apps/anthropic",
+      "npm": "@ai-sdk/anthropic",
+      "env": ["MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY"],
+      "models": {
+        "qwen3.8-max": {
+          "id": "qwen3.8-max",
+          "name": "Qwen3.8 Max",
+          "family": "qwen",
+          "default": true,
+          "attachment": true,
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "thinking", "values": ["always_on"], "default": "always_on"}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text", "image"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 131072 }
+        },
+        "qwen3.8-max-preview": {
+          "id": "qwen3.8-max-preview",
+          "name": "Qwen3.8 Max Preview",
+          "family": "qwen",
+          "attachment": true,
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "effort", "values": ["low", "medium", "xhigh"]},
+            {"type": "budget_tokens", "min": 0, "max": 262144}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text", "image", "video"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 131072 }
+        },
+        "qwen3.7-plus": {
+          "id": "qwen3.7-plus",
+          "name": "Qwen3.7 Plus",
+          "family": "qwen",
+          "attachment": true,
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "toggle"},
+            {"type": "budget_tokens", "max": 262144}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text", "image", "video"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 64000 }
+        },
+        "qwen3.7-max": {
+          "id": "qwen3.7-max",
+          "name": "Qwen3.7 Max",
+          "family": "qwen",
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "toggle"},
+            {"type": "budget_tokens", "max": 262144}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 65536 }
+        },
+        "qwen3.6-flash": {
+          "id": "qwen3.6-flash",
+          "name": "Qwen3.6 Flash",
+          "family": "qwen3.6",
+          "attachment": true,
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "toggle"},
+            {"type": "budget_tokens", "max": 131072}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text", "image", "video"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 65536 }
+        },
+        "deepseek-v4-pro": {
+          "id": "deepseek-v4-pro",
+          "name": "DeepSeek V4 Pro",
+          "family": "deepseek-thinking",
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "toggle"},
+            {"type": "effort", "values": ["high", "max"]}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 384000 }
+        },
+        "deepseek-v4-flash-0731": {
+          "id": "deepseek-v4-flash-0731",
+          "name": "DeepSeek V4 Flash (0731)",
+          "family": "deepseek-flash",
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "toggle"},
+            {"type": "effort", "values": ["high", "max"]}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 384000 }
+        },
+        "glm-5.2": {
+          "id": "glm-5.2",
+          "name": "GLM-5.2",
+          "family": "glm",
+          "reasoning": true,
+          "reasoning_options": [
+            {"type": "effort", "values": ["high", "max"]}
+          ],
+          "tool_call": true,
+          "structured_output": true,
+          "modalities": {"input": ["text"], "output": ["text"]},
+          "limit": { "context": 1000000, "output": 131072 }
         }
       }
     },
