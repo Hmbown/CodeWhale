@@ -7414,3 +7414,235 @@ async fn cors_layer_advertises_exact_supported_headers_and_never_an_extra() -> R
     handle.abort();
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Goal-loop endpoint tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn thread_goal_crud_and_invalid_transition() -> Result<()> {
+    let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    // Create a thread to associate goals with.
+    let thread: serde_json::Value = client
+        .post(format!("http://{addr}/v1/threads"))
+        .json(&json!({}))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let thread_id = thread["id"].as_str().expect("thread id").to_string();
+
+    // GET before any goal exists → 404.
+    let no_goal = client
+        .get(format!("http://{addr}/v1/threads/{thread_id}/goal"))
+        .send()
+        .await?;
+    assert_eq!(no_goal.status(), 404, "no goal yet");
+
+    // PUT creates the goal (201).
+    let created: serde_json::Value = client
+        .put(format!("http://{addr}/v1/threads/{thread_id}/goal"))
+        .json(&json!({"objective": "write tests", "token_budget": 5000}))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(
+        created["status"].as_str(),
+        Some("active"),
+        "new goal is active"
+    );
+    assert_eq!(
+        created["objective"].as_str(),
+        Some("write tests"),
+        "objective round-trips"
+    );
+    assert_eq!(created["token_budget"], 5000, "budget round-trips");
+
+    // GET after create → 200 with the same fields.
+    let fetched: serde_json::Value = client
+        .get(format!("http://{addr}/v1/threads/{thread_id}/goal"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(fetched["objective"], created["objective"]);
+    assert_eq!(fetched["goal_id"], created["goal_id"]);
+
+    // PUT again (update) → 200.
+    let updated: serde_json::Value = client
+        .put(format!("http://{addr}/v1/threads/{thread_id}/goal"))
+        .json(&json!({"objective": "write even better tests"}))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(
+        updated["objective"].as_str(),
+        Some("write even better tests")
+    );
+    // goal_id is preserved across updates.
+    assert_eq!(updated["goal_id"], created["goal_id"]);
+    // After PUT re-create, status is reset to active.
+    assert_eq!(updated["status"].as_str(), Some("active"));
+
+    // POST /complete → 200 with status = complete.
+    let completed: serde_json::Value = client
+        .post(format!(
+            "http://{addr}/v1/threads/{thread_id}/goal/complete"
+        ))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(completed["status"].as_str(), Some("complete"));
+
+    // POST /complete again on a terminal goal → 409 Conflict.
+    let double_complete = client
+        .post(format!(
+            "http://{addr}/v1/threads/{thread_id}/goal/complete"
+        ))
+        .send()
+        .await?;
+    assert_eq!(
+        double_complete.status(),
+        409,
+        "completing an already-complete goal must be 409"
+    );
+
+    // POST /block on a terminal goal → 409 Conflict.
+    let block_after_complete = client
+        .post(format!("http://{addr}/v1/threads/{thread_id}/goal/block"))
+        .send()
+        .await?;
+    assert_eq!(
+        block_after_complete.status(),
+        409,
+        "blocking a complete goal must be 409"
+    );
+
+    // DELETE → 204.
+    let deleted = client
+        .delete(format!("http://{addr}/v1/threads/{thread_id}/goal"))
+        .send()
+        .await?;
+    assert_eq!(deleted.status(), 204, "delete returns 204");
+
+    // DELETE again → 404.
+    let double_delete = client
+        .delete(format!("http://{addr}/v1/threads/{thread_id}/goal"))
+        .send()
+        .await?;
+    assert_eq!(double_delete.status(), 404, "second delete is 404");
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_goal_block_transition() -> Result<()> {
+    let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let thread: serde_json::Value = client
+        .post(format!("http://{addr}/v1/threads"))
+        .json(&json!({}))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let thread_id = thread["id"].as_str().expect("thread id").to_string();
+
+    // Create an active goal.
+    client
+        .put(format!("http://{addr}/v1/threads/{thread_id}/goal"))
+        .json(&json!({"objective": "block me"}))
+        .send()
+        .await?
+        .error_for_status()?;
+
+    // Block it.
+    let blocked: serde_json::Value = client
+        .post(format!("http://{addr}/v1/threads/{thread_id}/goal/block"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(blocked["status"].as_str(), Some("blocked"));
+
+    // Can still complete from blocked state.
+    let completed: serde_json::Value = client
+        .post(format!(
+            "http://{addr}/v1/threads/{thread_id}/goal/complete"
+        ))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(completed["status"].as_str(), Some("complete"));
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_goal_on_unknown_thread_returns_404() -> Result<()> {
+    let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let resp = client
+        .get(format!("http://{addr}/v1/threads/nonexistent-id/goal"))
+        .send()
+        .await?;
+    assert_eq!(resp.status(), 404);
+
+    let put_resp = client
+        .put(format!("http://{addr}/v1/threads/nonexistent-id/goal"))
+        .json(&json!({"objective": "ghost"}))
+        .send()
+        .await?;
+    assert_eq!(put_resp.status(), 404);
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn runtime_info_advertises_thread_goals_capability() -> Result<()> {
+    let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let info: serde_json::Value = client
+        .get(format!("http://{addr}/v1/runtime/info"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(
+        info["capabilities"]["thread_goals"].as_bool(),
+        Some(true),
+        "runtime info must advertise thread_goals capability"
+    );
+
+    handle.abort();
+    Ok(())
+}

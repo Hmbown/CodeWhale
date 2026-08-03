@@ -792,6 +792,7 @@ pub struct RuntimeThreadStore {
     turns_dir: PathBuf,
     items_dir: PathBuf,
     events_dir: PathBuf,
+    goals_dir: PathBuf,
     state_path: PathBuf,
     event_lock_path: PathBuf,
     /// Serializes load-modify-save operations on thread records. The guard is
@@ -811,16 +812,19 @@ impl RuntimeThreadStore {
         let turns_dir = root.join("turns");
         let items_dir = root.join("items");
         let events_dir = root.join("events");
+        let goals_dir = root.join("goals");
         ensure_runtime_store_dir(&threads_dir)?;
         ensure_runtime_store_dir(&turns_dir)?;
         ensure_runtime_store_dir(&items_dir)?;
         ensure_runtime_store_dir(&events_dir)?;
+        ensure_runtime_store_dir(&goals_dir)?;
         let state_path = root.join("state.json");
         let store = Self {
             threads_dir,
             turns_dir,
             items_dir,
             events_dir,
+            goals_dir,
             state_path,
             event_lock_path: root.join(EVENT_TRANSACTION_LOCK_FILE),
             thread_mutation: Arc::new(parking_lot::Mutex::new(())),
@@ -898,6 +902,41 @@ impl RuntimeThreadStore {
 
     fn events_path(&self, thread_id: &str) -> Result<PathBuf> {
         Self::record_path(&self.events_dir, thread_id, "jsonl", "thread id")
+    }
+
+    fn goal_path(&self, thread_id: &str) -> Result<PathBuf> {
+        Self::record_path(&self.goals_dir, thread_id, "json", "thread id")
+    }
+
+    /// Persist a goal record for a thread. The goal is stored as a JSON file
+    /// in the `goals/` subdirectory; it is independent of the TUI state store
+    /// and requires only that the runtime thread exists.
+    pub fn save_goal(&self, goal: &codewhale_protocol::ThreadGoal) -> Result<()> {
+        write_json_atomic(&self.goal_path(&goal.thread_id)?, goal)
+    }
+
+    /// Load the goal for a thread, returning `None` if no goal has been set.
+    pub fn load_goal(&self, thread_id: &str) -> Result<Option<codewhale_protocol::ThreadGoal>> {
+        let path = self.goal_path(thread_id)?;
+        if !path.exists() {
+            return Ok(None);
+        }
+        let raw = read_store_file(&path)
+            .with_context(|| format!("Failed to read goal {}", path.display()))?;
+        let goal: codewhale_protocol::ThreadGoal = serde_json::from_str(&raw)
+            .with_context(|| format!("Failed to parse goal {}", path.display()))?;
+        Ok(Some(goal))
+    }
+
+    /// Remove the goal for a thread, returning `true` if one existed.
+    pub fn delete_goal(&self, thread_id: &str) -> Result<bool> {
+        let path = self.goal_path(thread_id)?;
+        if !path.exists() {
+            return Ok(false);
+        }
+        fs::remove_file(&path)
+            .with_context(|| format!("Failed to delete goal {}", path.display()))?;
+        Ok(true)
     }
 
     pub fn save_thread(&self, thread: &ThreadRecord) -> Result<()> {
@@ -3049,6 +3088,60 @@ impl RuntimeThreadManager {
     #[must_use]
     pub fn subscribe_events(&self) -> broadcast::Receiver<RuntimeEventRecord> {
         self.event_tx.subscribe()
+    }
+
+    /// Emit a durable `thread_goal_updated` event for the given thread.
+    ///
+    /// Called by the Runtime API goal handlers so SSE subscribers receive
+    /// goal lifecycle changes just like engine-driven updates.
+    pub async fn emit_goal_updated_event(
+        &self,
+        thread_id: &str,
+        goal: codewhale_protocol::ThreadGoal,
+    ) -> Result<RuntimeEventRecord> {
+        let payload = serde_json::json!({
+            "kind": "thread_goal_updated",
+            "goal": serde_json::to_value(&goal)
+                .unwrap_or(serde_json::Value::Null),
+        });
+        self.emit_event(thread_id, None, None, "thread_goal_updated", payload)
+            .await
+    }
+
+    /// Emit a durable `thread_goal_cleared` event for the given thread.
+    pub async fn emit_goal_cleared_event(&self, thread_id: &str) -> Result<RuntimeEventRecord> {
+        let payload = serde_json::json!({
+            "kind": "thread_goal_cleared",
+            "thread_id": thread_id,
+        });
+        self.emit_event(thread_id, None, None, "thread_goal_cleared", payload)
+            .await
+    }
+
+    /// Return the persistent goal for a thread, or `Ok(None)` if none exists.
+    pub async fn get_goal(&self, thread_id: &str) -> Result<Option<codewhale_protocol::ThreadGoal>> {
+        let thread_id = thread_id.to_string();
+        let store = self.store.clone();
+        tokio::task::spawn_blocking(move || store.load_goal(&thread_id))
+            .await
+            .context("goal load task panicked")?
+    }
+
+    /// Persist (create or replace) the goal for a thread.
+    pub async fn save_goal(&self, goal: codewhale_protocol::ThreadGoal) -> Result<()> {
+        let store = self.store.clone();
+        tokio::task::spawn_blocking(move || store.save_goal(&goal))
+            .await
+            .context("goal save task panicked")?
+    }
+
+    /// Remove the goal for a thread. Returns `true` if a goal existed.
+    pub async fn remove_goal(&self, thread_id: &str) -> Result<bool> {
+        let thread_id = thread_id.to_string();
+        let store = self.store.clone();
+        tokio::task::spawn_blocking(move || store.delete_goal(&thread_id))
+            .await
+            .context("goal delete task panicked")?
     }
 
     fn projection_lock(&self, thread_id: &str) -> Arc<Mutex<()>> {

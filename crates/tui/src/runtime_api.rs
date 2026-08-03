@@ -401,6 +401,7 @@ fn default_runtime_capabilities() -> RuntimeCapabilities {
         fleet_event_replay: true,
         fleet_event_stream: true,
         fleet_local_target: true,
+        thread_goals: true,
     }
 }
 
@@ -751,6 +752,12 @@ pub fn build_router(state: RuntimeApiState) -> Router {
         )
         .route("/v1/threads/{id}/compact", post(compact_thread))
         .route("/v1/threads/{id}/events", get(stream_thread_events))
+        .route(
+            "/v1/threads/{id}/goal",
+            get(get_thread_goal).put(upsert_thread_goal).delete(delete_thread_goal),
+        )
+        .route("/v1/threads/{id}/goal/complete", post(complete_thread_goal))
+        .route("/v1/threads/{id}/goal/block", post(block_thread_goal))
         .route("/v1/approvals/{approval_id}", post(decide_approval))
         .route(
             "/v1/user-input/{thread_id}/{input_id}",
@@ -2799,6 +2806,214 @@ async fn compact_thread(
         StatusCode::ACCEPTED,
         Json(StartTurnResponse { thread, turn }),
     ))
+}
+
+// ---------------------------------------------------------------------------
+// Thread goal endpoints
+// ---------------------------------------------------------------------------
+
+/// `GET /v1/threads/{id}/goal` — return the persistent goal for a thread, or
+/// 404 if the thread has no goal.
+async fn get_thread_goal(
+    State(state): State<RuntimeApiState>,
+    Path(id): Path<String>,
+) -> Result<Json<codewhale_protocol::ThreadGoal>, ApiError> {
+    // Verify the thread exists so we can return a clean 404 for unknown threads.
+    state
+        .runtime_threads
+        .get_thread(&id)
+        .await
+        .map_err(map_thread_err)?;
+    let goal = state
+        .runtime_threads
+        .get_goal(&id)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found(format!("thread '{id}' has no goal")))?;
+    Ok(Json(goal))
+}
+
+#[derive(Debug, Deserialize)]
+struct UpsertThreadGoalRequest {
+    objective: String,
+    #[serde(default)]
+    token_budget: Option<i64>,
+}
+
+/// `PUT /v1/threads/{id}/goal` — create or replace the persistent goal for a
+/// thread. Only `Active` goals may be created through this route; lifecycle
+/// transitions (`complete`, `block`) have dedicated action endpoints.
+async fn upsert_thread_goal(
+    State(state): State<RuntimeApiState>,
+    Path(id): Path<String>,
+    Json(req): Json<UpsertThreadGoalRequest>,
+) -> Result<(StatusCode, Json<codewhale_protocol::ThreadGoal>), ApiError> {
+    if req.objective.trim().is_empty() {
+        return Err(ApiError::bad_request("objective must not be blank"));
+    }
+    // Verify the thread exists.
+    state
+        .runtime_threads
+        .get_thread(&id)
+        .await
+        .map_err(map_thread_err)?;
+    let now = chrono::Utc::now().timestamp();
+    let existing = state
+        .runtime_threads
+        .get_goal(&id)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let is_new = existing.is_none();
+    let goal_id = existing
+        .as_ref()
+        .map(|g| g.goal_id.clone())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let created_at = existing.as_ref().map(|g| g.created_at).unwrap_or(now);
+    let goal = codewhale_protocol::ThreadGoal {
+        thread_id: id.clone(),
+        goal_id,
+        objective: req.objective.clone(),
+        status: codewhale_protocol::ThreadGoalStatus::Active,
+        token_budget: req.token_budget,
+        tokens_used: existing.as_ref().map(|g| g.tokens_used).unwrap_or(0),
+        time_used_seconds: existing
+            .as_ref()
+            .map(|g| g.time_used_seconds)
+            .unwrap_or(0),
+        continuation_count: existing
+            .as_ref()
+            .map(|g| g.continuation_count)
+            .unwrap_or(0),
+        created_at,
+        updated_at: now,
+    };
+    state
+        .runtime_threads
+        .save_goal(goal.clone())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let status_code = if is_new {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    // Emit a replayable goal-updated event so SSE subscribers can react.
+    let _ = state
+        .runtime_threads
+        .emit_goal_updated_event(&id, goal.clone())
+        .await;
+    Ok((status_code, Json(goal)))
+}
+
+/// `DELETE /v1/threads/{id}/goal` — remove the persistent goal from a thread.
+/// Returns 204 No Content on success, 404 if there was no goal.
+async fn delete_thread_goal(
+    State(state): State<RuntimeApiState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state
+        .runtime_threads
+        .get_thread(&id)
+        .await
+        .map_err(map_thread_err)?;
+    let deleted = state
+        .runtime_threads
+        .remove_goal(&id)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    if !deleted {
+        return Err(ApiError::not_found(format!("thread '{id}' has no goal")));
+    }
+    let _ = state
+        .runtime_threads
+        .emit_goal_cleared_event(&id)
+        .await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /v1/threads/{id}/goal/complete` — transition the goal to `Complete`.
+/// Only valid from a non-terminal status; returns 409 Conflict if the goal is
+/// already in a terminal state, and 404 if the thread has no goal.
+async fn complete_thread_goal(
+    State(state): State<RuntimeApiState>,
+    Path(id): Path<String>,
+) -> Result<Json<codewhale_protocol::ThreadGoal>, ApiError> {
+    state
+        .runtime_threads
+        .get_thread(&id)
+        .await
+        .map_err(map_thread_err)?;
+    let goal = state
+        .runtime_threads
+        .get_goal(&id)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found(format!("thread '{id}' has no goal")))?;
+    if matches!(goal.status, codewhale_protocol::ThreadGoalStatus::Complete) {
+        return Err(ApiError {
+            status: StatusCode::CONFLICT,
+            message: format!("goal for thread '{id}' is already complete"),
+        });
+    }
+    let now = chrono::Utc::now().timestamp();
+    let updated = codewhale_protocol::ThreadGoal {
+        status: codewhale_protocol::ThreadGoalStatus::Complete,
+        updated_at: now,
+        ..goal
+    };
+    state
+        .runtime_threads
+        .save_goal(updated.clone())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let _ = state
+        .runtime_threads
+        .emit_goal_updated_event(&id, updated.clone())
+        .await;
+    Ok(Json(updated))
+}
+
+/// `POST /v1/threads/{id}/goal/block` — transition the goal to `Blocked`.
+/// Rejects transitions from terminal states (returns 409).
+async fn block_thread_goal(
+    State(state): State<RuntimeApiState>,
+    Path(id): Path<String>,
+) -> Result<Json<codewhale_protocol::ThreadGoal>, ApiError> {
+    state
+        .runtime_threads
+        .get_thread(&id)
+        .await
+        .map_err(map_thread_err)?;
+    let goal = state
+        .runtime_threads
+        .get_goal(&id)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found(format!("thread '{id}' has no goal")))?;
+    if matches!(goal.status, codewhale_protocol::ThreadGoalStatus::Complete) {
+        return Err(ApiError {
+            status: StatusCode::CONFLICT,
+            message: format!(
+                "goal for thread '{id}' is already complete; cannot transition to blocked"
+            ),
+        });
+    }
+    let now = chrono::Utc::now().timestamp();
+    let updated = codewhale_protocol::ThreadGoal {
+        status: codewhale_protocol::ThreadGoalStatus::Blocked,
+        updated_at: now,
+        ..goal
+    };
+    state
+        .runtime_threads
+        .save_goal(updated.clone())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let _ = state
+        .runtime_threads
+        .emit_goal_updated_event(&id, updated.clone())
+        .await;
+    Ok(Json(updated))
 }
 
 async fn list_tasks(
