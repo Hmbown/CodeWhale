@@ -2085,6 +2085,33 @@ fn credential_metadata_store(store: &ConfigStore) -> Result<Option<ConfigStore>>
     ConfigStore::load(Some(global)).map(Some)
 }
 
+/// Resolve the store for credential-adjacent writes: provider selection,
+/// `auth_mode` markers, and the plaintext-free metadata that accompanies a
+/// saved key.
+///
+/// Credentials and their metadata are user-global — a key saved while
+/// working in one repo must be visible from every other repo, and the secret
+/// store already is (#5045). When the ambient config path is a
+/// workspace-scoped document (`<repo>/.codewhale/config.toml`), login and
+/// `auth set` must not bind the provider or write auth markers there: the
+/// binding would be invisible from every other repo and would invite
+/// plaintext keys into a committable repo file (#5198). Returns a store
+/// loaded on the user-global document in that case, or `None` when the
+/// ambient store is already correctly scoped, so key + provider binding +
+/// auth markers share one user-global scope by default.
+fn credential_metadata_store(store: &ConfigStore) -> Result<Option<ConfigStore>> {
+    if !codewhale_config::config_path_is_workspace_scoped(store.path()) {
+        return Ok(None);
+    }
+    let global = codewhale_config::default_config_path()?;
+    eprintln!(
+        "ambient config {} is workspace-scoped; writing credential metadata to the user-global {} instead",
+        codewhale_config::quote_os_path(store.path()),
+        codewhale_config::quote_os_path(&global),
+    );
+    ConfigStore::load(Some(global)).map(Some)
+}
+
 #[cfg(test)]
 fn no_keyring_secrets() -> Secrets {
     Secrets::new(std::sync::Arc::new(
