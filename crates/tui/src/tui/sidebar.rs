@@ -13,28 +13,22 @@ use crate::localization::Locale;
 use crate::tui::app::HuntVerdict;
 
 use ratatui::{
-    Frame,
     layout::Rect,
-    prelude::Widget,
     style::Style,
     text::{Line, Span},
-    widgets::{Block, Paragraph, Wrap},
 };
 
-use crate::deepseek_theme::Theme;
 use crate::palette;
 use crate::tools::subagent::{AgentWorkerStatus, SubAgentStatus, localized_whale_display_names};
 use crate::tools::todo::TodoStatus;
 
 use super::app::{
-    AgentCurrentActivity, AgentCurrentActivityStatus, App, SidebarFocus, SidebarHoverRow,
-    SidebarHoverSection, SidebarRowAction, TaskPanelEntry, TaskPanelEntryKind,
+    AgentCurrentActivity, AgentCurrentActivityStatus, App, SidebarHoverRow, SidebarRowAction,
+    TaskPanelEntry, TaskPanelEntryKind,
 };
 use super::history::{GenericToolCell, HistoryCell, ToolCell, ToolStatus, summarize_tool_output};
 use super::motion::MotionPolicy;
 use super::spinner::{LIVE_MARKER_DELAY_MS, braille_spinner_frame_for_elapsed_ms};
-use super::subagent_routing::active_fanout_counts;
-use super::ui::FILE_TREE_MIN_HOST_WIDTH;
 use super::ui_text::{concise_shell_command_label, truncate_line_to_width};
 
 /// Tolerance for floating-point cost comparison in the sidebar breakdown.
@@ -811,7 +805,7 @@ struct TaskPanelRowSets {
 }
 
 fn task_panel_row_sets(app: &App) -> TaskPanelRowSets {
-    let explicit_tasks_focus = app.sidebar_focus == SidebarFocus::Tasks;
+    let explicit_tasks_focus = app.work_surface.panel == crate::tui::work_surface::RailPanel::Tasks;
     let active = active_tool_rows(app);
     // Auto/Pinned mode deliberately skips live-tool dedup (passes an empty
     // slice), matching the previous per-consumer call sites.
@@ -845,7 +839,7 @@ fn task_panel_rows(
     let theme = &app.ui_theme;
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(max_rows.max(4));
     let mut actions: Vec<Option<SidebarRowAction>> = Vec::with_capacity(max_rows.max(4));
-    let explicit_tasks_focus = app.sidebar_focus == SidebarFocus::Tasks;
+    let explicit_tasks_focus = app.work_surface.panel == crate::tui::work_surface::RailPanel::Tasks;
 
     if explicit_tasks_focus && app.runtime_turn_id.is_some() {
         let status = app
@@ -986,7 +980,7 @@ fn task_panel_rows(
     // Yank hint: surface the keyboard path for copying the focused task/turn ID.
     if lines.len() + 1 < max_rows
         && app.runtime_turn_id.is_some()
-        && app.sidebar_focus == SidebarFocus::Tasks
+        && app.work_surface.panel == crate::tui::work_surface::RailPanel::Tasks
     {
         lines.push(Line::from(Span::styled(
             "y → copy turn id  ·  Y → copy full status",
@@ -1016,7 +1010,7 @@ fn task_panel_rows(
 
 fn task_panel_hover_texts(app: &App, row_sets: &TaskPanelRowSets, max_rows: usize) -> Vec<String> {
     let mut texts = Vec::with_capacity(max_rows.max(4));
-    let explicit_tasks_focus = app.sidebar_focus == SidebarFocus::Tasks;
+    let explicit_tasks_focus = app.work_surface.panel == crate::tui::work_surface::RailPanel::Tasks;
 
     if explicit_tasks_focus && let Some(turn_id) = app.runtime_turn_id.as_ref() {
         let status = app.runtime_turn_status.as_deref().unwrap_or("unknown");
@@ -1094,7 +1088,7 @@ fn task_panel_hover_texts(app: &App, row_sets: &TaskPanelRowSets, max_rows: usiz
 
     if texts.len() + 1 < max_rows
         && app.runtime_turn_id.is_some()
-        && app.sidebar_focus == SidebarFocus::Tasks
+        && app.work_surface.panel == crate::tui::work_surface::RailPanel::Tasks
     {
         texts.push("y -> copy turn id  ·  Y -> copy full status".to_string());
     }
@@ -2854,16 +2848,15 @@ fn agent_stop_action_for_click(action: &SidebarRowAction) -> Option<SidebarRowAc
 mod tests {
     use super::{
         ACTIVE_TOOL_COMPLETED_ROW_TTL, ACTIVE_TOOL_STALE_RUNNING_ROW_TTL, HotbarSlotState,
-        SidebarAgentRow, SidebarFocus, SidebarHoverRow, SidebarHoverSection,
-        SidebarSubagentSummary, SidebarToolRow, SidebarWorkChecklistItem, SidebarWorkSummary,
-        ToolRowOrder, agent_row_hover_text, background_task_spinner_prefix,
-        cached_agent_activity_is_live, context_panel_cost_line, editorial_tool_rows,
-        hotbar_panel_enabled, hotbar_panel_hover_texts, hotbar_panel_lines, hotbar_panel_slots,
-        normalize_activity_text, sidebar_agent_rows, sidebar_hover_rows, sidebar_work_summary,
-        sort_sidebar_agent_rows_as_tree, subagent_output_handle, subagent_panel_hover_texts,
-        subagent_panel_lines, subagent_panel_rows, task_panel_hover_texts, task_panel_lines,
-        task_panel_row_sets, task_panel_rows, work_panel_empty_hint, work_panel_hover_texts,
-        work_panel_lines,
+        SidebarAgentRow, SidebarHoverRow, SidebarSubagentSummary, SidebarToolRow,
+        SidebarWorkChecklistItem, SidebarWorkSummary, ToolRowOrder, agent_row_hover_text,
+        background_task_spinner_prefix, cached_agent_activity_is_live, context_panel_cost_line,
+        editorial_tool_rows, hotbar_panel_enabled, hotbar_panel_hover_texts, hotbar_panel_lines,
+        hotbar_panel_slots, normalize_activity_text, sidebar_agent_rows, sidebar_hover_rows,
+        sidebar_work_summary, sort_sidebar_agent_rows_as_tree, subagent_output_handle,
+        subagent_panel_hover_texts, subagent_panel_lines, subagent_panel_rows,
+        task_panel_hover_texts, task_panel_lines, task_panel_row_sets, task_panel_rows,
+        work_panel_empty_hint, work_panel_hover_texts, work_panel_lines,
     };
     use crate::config::Config;
     use crate::localization::Locale;
@@ -2873,8 +2866,8 @@ mod tests {
     use crate::tui::active_cell::ActiveCell;
     use crate::tui::app::{
         AgentCurrentActivity, AgentCurrentActivityStatus, AgentProgressMeta, App, AppMode,
-        HuntVerdict, SidebarHoverState, SidebarRowAction, TaskPanelEntry, TaskPanelEntryKind,
-        TuiOptions,
+        HuntVerdict, SidebarHoverSection, SidebarHoverState, SidebarRowAction, TaskPanelEntry,
+        TaskPanelEntryKind, TuiOptions,
     };
     use crate::tui::history::{
         ExecCell, ExecSource, GenericToolCell, HistoryCell, ToolCell, ToolStatus,
@@ -3161,7 +3154,7 @@ mod tests {
         // `hotbar_panel_slots_resolve_configured_bindings_and_active_state`.
         let mut app = create_test_app();
         app.mode = AppMode::Agent;
-        app.sidebar_focus = SidebarFocus::Pinned;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Pinned;
 
         assert!(
             !hotbar_panel_enabled(&app, &Config::default()),
@@ -3190,7 +3183,7 @@ mod tests {
     fn hotbar_panel_slots_resolve_configured_bindings_and_active_state() {
         let mut app = create_test_app();
         app.mode = AppMode::Agent;
-        app.sidebar_focus = SidebarFocus::Pinned;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Pinned;
         let config = Config {
             hotbar: Some(
                 codewhale_config::default_hotbar_bindings()
@@ -3285,7 +3278,7 @@ mod tests {
     fn hotbar_panel_lines_keep_two_fixed_rows_and_hover_status() {
         let mut app = create_test_app();
         app.mode = AppMode::Agent;
-        app.sidebar_focus = SidebarFocus::Pinned;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Pinned;
         let config = Config {
             hotbar: Some(
                 codewhale_config::default_hotbar_bindings()
@@ -3799,7 +3792,7 @@ mod tests {
         assert!(!joined.contains("Strategy") && !joined.contains("route "));
 
         let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Tasks;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
         let activity = lines_to_text(&task_panel_lines(&app, 48, 4));
         assert!(
             activity
@@ -3816,7 +3809,7 @@ mod tests {
     #[test]
     fn tasks_panel_renders_active_tool_rows_before_background_empty_state() {
         let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Tasks;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
         let mut active = ActiveCell::new();
         active.push_tool(
             "tool-1",
@@ -3856,7 +3849,7 @@ mod tests {
     #[test]
     fn tasks_panel_renders_recent_completed_tool_rows() {
         let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Tasks;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
         app.history
             .push(HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
                 name: "read_file".to_string(),
@@ -3884,7 +3877,7 @@ mod tests {
     #[test]
     fn tasks_panel_expires_completed_active_tool_rows() {
         let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Tasks;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
         let mut active = ActiveCell::new();
         active.push_tool(
             "tool-1",
@@ -3924,7 +3917,7 @@ mod tests {
     #[test]
     fn tasks_panel_lingers_fresh_completed_active_tool_rows() {
         let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Tasks;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
         let mut active = ActiveCell::new();
         active.push_tool(
             "tool-1",
@@ -3983,7 +3976,7 @@ mod tests {
             files_touched: 0,
         });
 
-        app.sidebar_focus = SidebarFocus::Tasks;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
         let focused = task_panel_row_sets(&app);
         assert!(
             focused.background.is_empty(),
@@ -3991,7 +3984,7 @@ mod tests {
             focused.background
         );
 
-        app.sidebar_focus = SidebarFocus::Auto;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Pinned;
         let auto = task_panel_row_sets(&app);
         assert_eq!(
             auto.background.len(),
@@ -4003,7 +3996,7 @@ mod tests {
     #[test]
     fn task_panel_rows_and_hover_share_one_snapshot() {
         let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Tasks;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
         app.runtime_turn_id = Some("turn_abcdef123456".to_string());
         app.runtime_turn_status = Some("in_progress".to_string());
         app.turn_counter = 3;
@@ -4051,7 +4044,7 @@ mod tests {
     #[test]
     fn tasks_panel_collapses_stale_running_tool_rows() {
         let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Tasks;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
         let mut active = ActiveCell::new();
         for (idx, command) in ["long one", "long two"].into_iter().enumerate() {
             active.push_tool(
@@ -4090,7 +4083,7 @@ mod tests {
     #[test]
     fn tasks_panel_does_not_double_count_running_shell_job_as_live_and_background() {
         let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Tasks;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
         let mut active = ActiveCell::new();
         active.push_tool(
             "shell-1",
@@ -4358,10 +4351,10 @@ mod tests {
     }
 
     #[test]
-    fn tasks_panel_auto_mode_shows_only_live_background_jobs() {
+    fn tasks_panel_non_tasks_mode_shows_only_live_background_jobs() {
         let mut app = create_test_app();
         app.low_motion = false;
-        app.sidebar_focus = SidebarFocus::Auto;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Pinned;
         app.runtime_turn_id = Some("turn_abcdef123456".to_string());
         app.runtime_turn_status = Some("in_progress".to_string());
         let mut active = ActiveCell::new();
@@ -4435,7 +4428,7 @@ mod tests {
     #[test]
     fn tasks_panel_keeps_model_reasoning_in_transcript_only() {
         let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Tasks;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
         app.runtime_turn_id = Some("turn_reasoning".to_string());
         app.runtime_turn_status = Some("in_progress".to_string());
         app.history.push(HistoryCell::Thinking {
@@ -4459,7 +4452,7 @@ mod tests {
     #[test]
     fn task_panel_actions_make_single_background_job_clickable() {
         let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Tasks;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
         app.task_panel.push(TaskPanelEntry {
             id: "shell_only".to_string(),
             status: "running".to_string(),
@@ -4502,7 +4495,7 @@ mod tests {
     #[test]
     fn stale_background_job_row_shows_no_output_warning_and_cancel_hint() {
         let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Tasks;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
         app.task_panel.push(TaskPanelEntry {
             id: "shell_stale".to_string(),
             status: "running".to_string(),
@@ -4548,7 +4541,7 @@ mod tests {
     #[test]
     fn task_panel_actions_route_each_job_to_its_own_id() {
         let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Tasks;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
         app.task_panel.push(TaskPanelEntry {
             id: "shell_aaa".to_string(),
             status: "running".to_string(),
@@ -4632,7 +4625,7 @@ mod tests {
     #[test]
     fn task_panel_finished_job_detail_row_shows_instead_of_cancels() {
         let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Tasks;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
         app.task_panel.push(TaskPanelEntry {
             id: "shell_done".to_string(),
             status: "completed".to_string(),
@@ -4669,7 +4662,7 @@ mod tests {
     #[test]
     fn task_panel_actions_align_with_lines_when_live_tools_present() {
         let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Tasks;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
         app.runtime_turn_id = Some("0196f0a3-aaaa-bbbb-cccc-ddddeeee0000".to_string());
         let mut active = ActiveCell::new();
         active.push_tool(
@@ -5133,7 +5126,7 @@ mod tests {
     #[test]
     fn tasks_panel_collapses_repeated_low_value_recent_tools_after_failures() {
         let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Tasks;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
         for path in ["src/a.rs", "src/b.rs", "src/c.rs"] {
             app.history
                 .push(HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
@@ -5200,7 +5193,7 @@ mod tests {
     #[test]
     fn tasks_panel_collapses_repeated_pending_ci_polls() {
         let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Tasks;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
         for _ in 0..3 {
             app.history.push(HistoryCell::Tool(ToolCell::Exec(ExecCell {
                 command: "cd /tmp/repo && sleep 15 && gh pr checks 1616 --repo Hmbown/CodeWhale"
@@ -5248,7 +5241,7 @@ mod tests {
     #[test]
     fn tasks_panel_failed_shell_rows_point_to_activity_details() {
         let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Tasks;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
         app.history.push(HistoryCell::Tool(ToolCell::Exec(ExecCell {
             command: "cargo test -p codewhale-tui".to_string(),
             status: ToolStatus::Failed,
@@ -5282,7 +5275,7 @@ mod tests {
     #[test]
     fn tasks_panel_keeps_duration_and_status_on_recent_shell_rows() {
         let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Tasks;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
         app.history.push(HistoryCell::Tool(ToolCell::Exec(ExecCell {
             command: "cargo check".to_string(),
             status: ToolStatus::Success,
@@ -5314,7 +5307,7 @@ mod tests {
     #[test]
     fn tasks_panel_uses_plain_names_for_shell_background_helpers() {
         let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Tasks;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
         let mut active = ActiveCell::new();
         active.push_tool(
             "shell-wait",
@@ -5346,7 +5339,7 @@ mod tests {
     #[test]
     fn tasks_panel_collapses_repeated_shell_waits_for_same_job() {
         let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Tasks;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
         let mut active = ActiveCell::new();
         for id in ["shell-wait-1", "shell-wait-2"] {
             active.push_tool(
@@ -5383,7 +5376,7 @@ mod tests {
     #[test]
     fn tasks_panel_collapses_repeated_shell_waits_without_task_marker() {
         let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Tasks;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
         let mut active = ActiveCell::new();
         for (id, summary) in [
             ("shell-wait-1", "Background task running (no new output)."),
@@ -6418,7 +6411,7 @@ mod tests {
     #[test]
     fn tasks_panel_shows_stable_turn_label_not_uuid() {
         let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Tasks;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
         app.runtime_turn_id = Some("0196f0a3-1111-2222-3333-444455556666".to_string());
         app.runtime_turn_status = Some("in_progress".to_string());
         app.turn_counter = 3;
@@ -6443,7 +6436,7 @@ mod tests {
     #[test]
     fn tasks_panel_turn_label_falls_back_before_first_counted_turn() {
         let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Tasks;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
         app.runtime_turn_id = Some("0196f0a3-1111-2222-3333-444455556666".to_string());
         app.runtime_turn_status = Some("in_progress".to_string());
         app.turn_counter = 0;

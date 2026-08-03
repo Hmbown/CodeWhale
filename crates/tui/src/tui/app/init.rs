@@ -241,8 +241,6 @@ impl App {
             .trim()
             .eq_ignore_ascii_case("vim");
         let transcript_spacing = TranscriptSpacing::from_setting(&settings.transcript_spacing);
-        let sidebar_width_percent = settings.sidebar_width_percent;
-        let sidebar_focus = SidebarFocus::from_setting(&settings.sidebar_focus);
         let max_input_history = settings.max_input_history;
         let use_paste_burst_detection = settings.paste_burst_detection;
         // Resolve the named theme from settings; unknown values were already
@@ -714,22 +712,12 @@ impl App {
             voice_send_enabled: false,
             voice_control_enabled: false,
             transcript_spacing,
-            sidebar_width_percent,
-            sidebar_focus,
             sidebar_hover: SidebarHoverState::default(),
             sidebar_hover_tooltip: None,
             cached_work_summary: None,
             model_picker_memory: None,
             provider_picker_memory: None,
             last_mouse_pos: None,
-            sidebar_resizing: false,
-            sidebar_resize_hovered: false,
-            sidebar_resize_anchor_x: 0,
-            sidebar_resize_anchor_width: 0,
-            last_sidebar_area: None,
-            last_sidebar_host_width: None,
-            last_sidebar_handle_area: None,
-            sidebar_resize_total_width: 0,
             context_panel: settings.context_panel,
             sessions_rail: settings.sessions_rail,
             sessions_rail_cache: None,

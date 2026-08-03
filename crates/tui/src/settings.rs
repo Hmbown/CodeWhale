@@ -387,9 +387,14 @@ pub struct Settings {
     /// Default mode: "agent" (Act), "plan", or "operate". Legacy permission
     /// shorthands are accepted for migration but never advertised as modes.
     pub default_mode: String,
-    /// Sidebar width as percentage of terminal width
+    /// Legacy sidebar width as percentage of terminal width. Load-only
+    /// migration shim (0.9.4 rail unification): read by
+    /// `migrate_sidebar_settings_to_rail`, never written back.
+    #[serde(skip_serializing)]
     pub sidebar_width_percent: u16,
-    /// Sidebar focus mode: pinned, auto, tasks, agents, context, hidden
+    /// Legacy sidebar focus mode: pinned, auto, tasks, agents, context,
+    /// hidden. Load-only migration shim, never written back.
+    #[serde(skip_serializing)]
     pub sidebar_focus: String,
     /// Enable the session-context panel (#504). Shows working set, tokens,
     /// cost, MCP/LSP status, cycle count, and memory info.
@@ -1126,12 +1131,6 @@ impl Settings {
             serialized
         };
         atomically_replace_settings_file(path, body.as_bytes())
-    }
-
-    /// Update and persist sidebar width percentage (10-50) — used by the
-    /// drag-to-resize handle in the TUI.
-    pub fn update_sidebar_width(&mut self, percent: u16) {
-        self.sidebar_width_percent = percent.clamp(10, 50);
     }
 
     /// Set a single setting by key

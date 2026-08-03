@@ -1683,35 +1683,6 @@ fn cny_cache_savings_falls_back_to_usd_for_usd_only_models() {
 }
 
 #[test]
-fn sidebar_focus_accepts_pinned_and_maps_legacy_trackers_to_pinned() {
-    assert_eq!(SidebarFocus::from_setting("auto"), SidebarFocus::Auto);
-    assert_eq!(SidebarFocus::from_setting("pinned"), SidebarFocus::Pinned);
-    assert_eq!(SidebarFocus::from_setting("work"), SidebarFocus::Pinned);
-    assert_eq!(SidebarFocus::from_setting("plan"), SidebarFocus::Pinned);
-    assert_eq!(SidebarFocus::from_setting("todos"), SidebarFocus::Pinned);
-    assert_eq!(SidebarFocus::from_setting("tasks"), SidebarFocus::Tasks);
-    assert_eq!(SidebarFocus::from_setting("activity"), SidebarFocus::Tasks);
-    assert_eq!(SidebarFocus::from_setting("live"), SidebarFocus::Tasks);
-    assert_eq!(SidebarFocus::from_setting("running"), SidebarFocus::Tasks);
-    assert_eq!(SidebarFocus::from_setting("agents"), SidebarFocus::Agents);
-    assert_eq!(SidebarFocus::from_setting("context"), SidebarFocus::Context);
-    assert_eq!(SidebarFocus::from_setting("sessions"), SidebarFocus::Sessions);
-    assert_eq!(
-        SidebarFocus::from_setting("sessions_rail"),
-        SidebarFocus::Sessions
-    );
-    assert_eq!(
-        SidebarFocus::from_setting("session_history"),
-        SidebarFocus::Sessions
-    );
-    assert_eq!(SidebarFocus::from_setting("hidden"), SidebarFocus::Hidden);
-    assert_eq!(SidebarFocus::from_setting("off"), SidebarFocus::Hidden);
-    assert_eq!(SidebarFocus::Pinned.as_setting(), "pinned");
-    assert_eq!(SidebarFocus::Hidden.as_setting(), "hidden");
-    assert_eq!(SidebarFocus::Sessions.as_setting(), "sessions");
-}
-
-#[test]
 fn slash_command_classifier_treats_absolute_path_as_message() {
     assert!(looks_like_slash_command_input("/"));
     assert!(looks_like_slash_command_input("/help"));
@@ -2873,12 +2844,15 @@ fn clear_todos_is_atomic_and_invalidates_cached_work_summary() {
 }
 
 #[test]
-fn entering_operate_preserves_user_sidebar_focus() {
+fn entering_operate_preserves_user_rail_panel() {
     let mut app = App::new(test_options(false), &Config::default());
-    app.sidebar_focus = SidebarFocus::Tasks;
+    app.work_surface.panel = crate::tui::work_surface::RailPanel::Agents;
 
     assert!(app.set_mode(AppMode::Operate));
-    assert_eq!(app.sidebar_focus, SidebarFocus::Tasks);
+    assert_eq!(
+        app.work_surface.panel,
+        crate::tui::work_surface::RailPanel::Agents
+    );
 }
 
 #[test]

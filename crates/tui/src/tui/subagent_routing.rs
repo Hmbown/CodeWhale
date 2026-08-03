@@ -9,7 +9,7 @@ use crate::tools::subagent::{
 };
 use crate::tui::app::{
     AgentCurrentActivity, AgentCurrentActivityStatus, AgentProgressMeta, AgentRecentAction, App,
-    AppMode, MAX_AGENT_RECENT_ACTIONS, SidebarFocus, TaskPanelEntry, TaskPanelEntryKind,
+    AppMode, MAX_AGENT_RECENT_ACTIONS, TaskPanelEntry, TaskPanelEntryKind,
     bound_agent_activity_text,
 };
 use crate::tui::history::{HistoryCell, SubAgentCell, summarize_tool_output};
@@ -22,13 +22,6 @@ use crate::tui::workspace_context;
 
 const SUBAGENT_TERMINAL_CARD_TTL: Duration = Duration::from_secs(5 * 60);
 const SUBAGENT_TERMINAL_CARD_MAX_RETAINED: usize = 24;
-
-fn agents_panel_has_content(app: &App) -> bool {
-    !app.subagent_cache.is_empty()
-        || !app.agent_progress.is_empty()
-        || active_fanout_counts(app).is_some()
-        || foreground_rlm_running(app)
-}
 
 fn foreground_rlm_running(app: &App) -> bool {
     use crate::tui::history::{HistoryCell, ToolCell, ToolStatus};
@@ -46,14 +39,11 @@ fn foreground_rlm_running(app: &App) -> bool {
     })
 }
 
-/// True when the Agents sidebar panel is on-screen and already owns fanout summary.
+/// True when the rail's Agents panel is on-screen and already owns fanout
+/// summary, so the footer chip would be redundant.
 pub(super) fn agents_sidebar_surface_visible(app: &App) -> bool {
-    match app.sidebar_focus {
-        SidebarFocus::Hidden => false,
-        SidebarFocus::Agents => true,
-        SidebarFocus::Auto => agents_panel_has_content(app),
-        _ => false,
-    }
+    app.work_surface.panel == crate::tui::work_surface::RailPanel::Agents
+        && app.work_surface.last_area.is_some()
 }
 
 pub(super) fn running_agent_count(app: &App) -> usize {

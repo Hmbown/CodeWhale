@@ -138,10 +138,10 @@ use super::key_actions;
 use super::app::{
     ActiveTurnMetadata, AgentCurrentActivity, AgentCurrentActivityStatus, App, AppAction, AppMode,
     ComposerSubmitAction, ComposerSubmitChord, EffectiveReasoningEffort, HuntVerdict,
-    OnboardingState, PendingProviderSwitch, QueuedMessage, ReasoningEffort, SidebarFocus,
-    StatusToast, StatusToastLevel, SubmitDisposition, TaskPanelEntry, TaskPanelEntryKind,
-    ToolEvidence, TuiOptions, bound_agent_activity_text, is_stop_word,
-    looks_like_slash_command_input, shell_command_from_bang_input,
+    OnboardingState, PendingProviderSwitch, QueuedMessage, ReasoningEffort, StatusToast,
+    StatusToastLevel, SubmitDisposition, TaskPanelEntry, TaskPanelEntryKind, ToolEvidence,
+    TuiOptions, bound_agent_activity_text, is_stop_word, looks_like_slash_command_input,
+    shell_command_from_bang_input,
 };
 use super::approval::{
     ApprovalMode, ApprovalRequest, ApprovalView, ElevationRequest, ElevationView, ReviewDecision,
@@ -13830,15 +13830,6 @@ fn render(f: &mut Frame, app: &mut App, _config: &Config) {
                 app.file_tree_visible = false;
                 work_chat_area
             };
-        app.last_sidebar_host_width = Some(chat_area.width);
-        // The legacy classic-shell sidebar no longer exists: no sidebar area
-        // is ever produced, so clear the interaction state its former mouse
-        // handlers read.
-        app.viewport.last_sidebar_area = None;
-        app.last_sidebar_area = None;
-        app.last_sidebar_handle_area = None;
-        app.sidebar_resizing = false;
-        app.sidebar_resize_hovered = false;
         app.sidebar_hover_tooltip = None;
 
         let chat_widget = ChatWidget::new(app, chat_area).with_ocean_viewport(size);

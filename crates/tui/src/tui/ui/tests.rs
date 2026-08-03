@@ -812,7 +812,7 @@ fn approval_mouse_wheel_reviews_transcript_without_closing_card() {
 }
 
 #[test]
-fn approval_wheel_preserves_sidebar_and_work_surface_ownership() {
+fn approval_wheel_preserves_work_surface_ownership() {
     let mut app = create_test_app();
     app.view_stack.push(ApprovalView::new(ApprovalRequest::new(
         "approval-scroll",
@@ -821,11 +821,10 @@ fn approval_wheel_preserves_sidebar_and_work_surface_ownership() {
         &serde_json::json!({"command": "git status"}),
         "approval-scroll-key",
     )));
-    app.viewport.last_sidebar_area = Some(Rect::new(60, 0, 20, 20));
     app.work_surface.last_area = Some(Rect::new(0, 0, 30, 20));
     app.viewport.last_approval_area = Some(Rect::new(0, 12, 80, 8));
 
-    for (column, row) in [(65, 4), (10, 4)] {
+    for (column, row) in [(10, 4), (20, 4)] {
         let events = handle_mouse_event(
             &mut app,
             MouseEvent {
@@ -1980,12 +1979,7 @@ fn loading_mouse_filter_keeps_hover_and_active_drags() {
     app.viewport.transcript_scrollbar_dragging = true;
     assert!(!should_drop_loading_mouse_motion(&app, drag));
 
-    // Sidebar drag-to-resize must also survive the loading filter (#3063).
     app.viewport.transcript_scrollbar_dragging = false;
-    app.sidebar_resizing = true;
-    assert!(!should_drop_loading_mouse_motion(&app, drag));
-
-    app.sidebar_resizing = false;
     app.work_surface.last_area = Some(Rect::new(0, 0, 80, 3));
     let started = crate::tui::work_surface::handle_mouse(
         &mut app,
@@ -2007,7 +2001,6 @@ fn loading_mouse_filter_keeps_hover_and_active_drags() {
 fn loading_mouse_filter_allows_sidebar_hover_to_clear() {
     let mut app = create_test_app();
     app.is_loading = true;
-    app.viewport.last_sidebar_area = Some(Rect::new(60, 4, 20, 6));
     app.sidebar_hover_tooltip = Some("Stale sidebar tooltip".to_string());
     let moved = MouseEvent {
         kind: MouseEventKind::Moved,
@@ -2027,7 +2020,6 @@ fn loading_mouse_filter_allows_sidebar_hover_to_clear() {
 fn loading_mouse_filter_allows_sidebar_exit_to_clear_highlight() {
     let mut app = create_test_app();
     app.is_loading = true;
-    app.viewport.last_sidebar_area = Some(Rect::new(60, 4, 20, 6));
     app.last_mouse_pos = Some((60, 5));
 
     let exit_left = MouseEvent {
@@ -8785,10 +8777,10 @@ fn hotbar_alt_digit_fires_from_composer_and_sidebar_states() {
     app.input = "   ".to_string();
     assert_eq!(hotbar_slot_from_key(&app, &alt_four), Some(4));
 
-    app.sidebar_focus = SidebarFocus::Hidden;
+    app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Off;
     assert_eq!(hotbar_slot_from_key(&app, &alt_four), Some(4));
 
-    app.sidebar_focus = SidebarFocus::Agents;
+    app.work_surface.panel = crate::tui::work_surface::RailPanel::Agents;
     assert_eq!(hotbar_slot_from_key(&app, &alt_four), Some(4));
 }
 
@@ -9147,7 +9139,8 @@ fn ctrl_x_jobs_prefill_only_catches_running_shell_jobs_in_tasks_sidebar() {
 #[test]
 fn ctrl_x_jobs_prefill_falls_through_outside_tasks_sidebar_shell_jobs() {
     let mut non_shell = create_test_app();
-    non_shell.sidebar_focus = SidebarFocus::Tasks;
+    non_shell.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
+    non_shell.work_surface.last_area = Some(ratatui::layout::Rect::new(0, 0, 100, 3));
     non_shell.input = "draft".to_string();
     non_shell.cursor_position = non_shell.input.len();
     non_shell.task_panel.push(TaskPanelEntry {

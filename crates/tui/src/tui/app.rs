@@ -292,21 +292,6 @@ pub struct TurnCacheRecord {
     pub recorded_at: Instant,
 }
 
-/// Sidebar content focus mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SidebarFocus {
-    Auto,
-    Pinned,
-    Tasks,
-    Agents,
-    Context,
-    /// Dedicated Sessions browser panel (#2934). Renders the persistent
-    /// sessions rail as the sole sidebar content, regardless of whether the
-    /// `sessions_rail` setting is enabled. Focuses session navigation.
-    Sessions,
-    Hidden,
-}
-
 /// Browsing context captured when the `/model` picker is dismissed (#4109).
 /// Plain data so `App` does not depend on the picker's internal view enum.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -478,36 +463,6 @@ impl Default for LspRepairState {
             injected: false,
             repair_attempted: false,
             latest: "unavailable",
-        }
-    }
-}
-
-impl SidebarFocus {
-    #[must_use]
-    pub fn from_setting(value: &str) -> Self {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "pinned" | "visible" | "show" | "on" | "work" | "plan" | "todos" => Self::Pinned,
-            // Persist/compat key remains "tasks"; user-facing panel is Activity (#4147/#4135).
-            "tasks" | "activity" | "live" | "running" => Self::Tasks,
-            "agents" | "subagents" | "sub-agents" => Self::Agents,
-            "context" => Self::Context,
-            "sessions" | "sessions_rail" | "session_history" => Self::Sessions,
-            "hidden" | "hide" | "closed" | "off" | "none" => Self::Hidden,
-            _ => Self::Auto,
-        }
-    }
-
-    #[must_use]
-    #[allow(dead_code)]
-    pub fn as_setting(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Pinned => "pinned",
-            Self::Tasks => "tasks",
-            Self::Agents => "agents",
-            Self::Context => "context",
-            Self::Sessions => "sessions",
-            Self::Hidden => "hidden",
         }
     }
 }
@@ -685,10 +640,6 @@ pub struct ViewportState {
     /// Painted band occupied by the active inline approval. Stored so wheel
     /// routing can prefer the visible card over side surfaces underneath it.
     pub last_approval_area: Option<Rect>,
-    /// Outer rect of the right-hand sidebar (when visible), stored at render
-    /// time so mouse hit-testing can keep scroll events over the sidebar from
-    /// leaking into the transcript viewport.
-    pub last_sidebar_area: Option<Rect>,
     /// WorkflowPanel rect above the composer (#4121), for mouse toggle/cancel.
     pub last_workflow_panel_area: Option<Rect>,
     pub last_workflow_cancel_area: Option<Rect>,
@@ -721,7 +672,6 @@ impl Default for ViewportState {
             last_transcript_area: None,
             last_composer_area: None,
             last_approval_area: None,
-            last_sidebar_area: None,
             last_workflow_panel_area: None,
             last_workflow_cancel_area: None,
             last_transcript_top: 0,
@@ -1391,8 +1341,6 @@ pub struct App {
     /// Toggled by `/voice-control`.
     pub voice_control_enabled: bool,
     pub transcript_spacing: TranscriptSpacing,
-    pub sidebar_width_percent: u16,
-    pub sidebar_focus: SidebarFocus,
     /// Sidebar hover state for mouse tooltip support.
     pub sidebar_hover: SidebarHoverState,
     /// Current hover tooltip text, if any.
@@ -1408,23 +1356,6 @@ pub struct App {
     pub provider_picker_memory: Option<ProviderPickerMemory>,
     /// Last known mouse position for tooltip placement.
     pub last_mouse_pos: Option<(u16, u16)>,
-    /// Whether the user is currently dragging the sidebar resize handle.
-    pub sidebar_resizing: bool,
-    /// Whether the pointer is over the classic sidebar resize handle.
-    pub sidebar_resize_hovered: bool,
-    /// Mouse column at the start of a sidebar-resize drag.
-    pub sidebar_resize_anchor_x: u16,
-    /// Sidebar width in columns at the start of a sidebar-resize drag.
-    pub sidebar_resize_anchor_width: u16,
-    /// Last sidebar area rendered (for mouse hit-testing the resize handle).
-    pub last_sidebar_area: Option<Rect>,
-    /// Last total chat/sidebar width considered for sidebar rendering.
-    pub last_sidebar_host_width: Option<u16>,
-    /// Handle rect painted on the left edge of the sidebar (1 col).
-    pub last_sidebar_handle_area: Option<Rect>,
-    /// Total horizontal space (chat + sidebar) used to compute the percentage
-    /// during sidebar resize drag.
-    pub sidebar_resize_total_width: u16,
     /// Whether the session-context panel is enabled (#504).
     pub context_panel: bool,
     /// Whether the persistent Sessions rail is enabled (#2934). Opt-in.
@@ -4095,13 +4026,6 @@ impl App {
         {
             self.clear_receipt();
         }
-    }
-
-    pub fn set_sidebar_focus(&mut self, focus: SidebarFocus) {
-        if self.sidebar_focus != focus {
-            self.sidebar_focus = focus;
-        }
-        self.needs_redraw = true;
     }
 
     pub fn close_slash_menu(&mut self) {
