@@ -152,7 +152,7 @@ impl ToolSpec for AgentsMessageTool {
     }
 
     fn description(&self) -> &'static str {
-        "Queue a parent message onto a child agent without waking it. The child receives the message on the next followup or natural resume. Use agents/followup when you also need to resume an idle or interrupted child."
+        "Queue a parent message onto a running child without waking it. The message stays queued until a later agents/followup delivers it through the child's live input channel. Use agents/followup directly when you want immediate delivery."
     }
 
     fn input_schema(&self) -> Value {
@@ -257,7 +257,7 @@ impl ToolSpec for AgentsFollowupTool {
     }
 
     fn description(&self) -> &'static str {
-        "Queue a message and attempt to resume an idle or interrupted child. Running children receive the message on their next step; interrupted_continuable children keep a checkpoint and return the continuation_handle — live in-place resume is not automated yet (re-dispatch via agent)."
+        "Queue a message and deliver it live to a still-running child when its input channel is available. Interrupted children are not resumed: the message stays queued and interrupted_continuable children return their continuation_handle for re-dispatch via agent."
     }
 
     fn input_schema(&self) -> Value {
@@ -734,6 +734,24 @@ mod tests {
         // …but the dynamic check still marks inspect as read-only.
         assert!(tool.is_read_only_for(&json!({"action": "inspect"})));
         assert!(!tool.is_read_only_for(&json!({"action": "propose"})));
+    }
+
+    #[test]
+    fn coordination_descriptions_do_not_promise_unimplemented_resume_behavior() {
+        let manager = Arc::new(tokio::sync::RwLock::new(
+            super::super::SubAgentManager::new(std::env::temp_dir(), 1),
+        ));
+        let message = AgentsMessageTool::new(Arc::clone(&manager));
+        let followup = AgentsFollowupTool::new(manager);
+
+        assert!(!message.description().contains("natural resume"));
+        assert!(message.description().contains("stays queued"));
+        assert!(!followup.description().contains("attempt to resume"));
+        assert!(
+            followup
+                .description()
+                .contains("Interrupted children are not resumed")
+        );
     }
 
     async fn manager_with_running_child(
