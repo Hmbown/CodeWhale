@@ -31,7 +31,11 @@ require_literal() {
 # Rust link receives the OHOS target, sysroot, and musl flags as reliably as C,
 # C++, and bindgen invocations do. This is a static, no-SDK contract check; the
 # launcher delegates to the PowerShell compiler wrapper that validates the SDK
-# and preserves Cargo's linker arguments and exit status.
+# and preserves Cargo's linker arguments and exit status. The launcher must
+# also re-quote each argument it forwards: cmd's %* expansion strips the quotes
+# rustc puts around arguments containing spaces, so a spaced SDK path (for
+# example the default "D:\DevEco Studio\..." install) would otherwise arrive at
+# clang with --sysroot split on the space.
 require_literal \
   scripts/ohos-env.ps1 \
   '$linker = [System.IO.Path]::Combine($PSScriptRoot, "ohos", "ohos-clang.cmd")' \
@@ -50,8 +54,12 @@ require_literal \
   "the cmd-to-PowerShell delegation"
 require_literal \
   scripts/ohos/ohos-clang.cmd \
-  '-File "%OHOS_LINKER_SCRIPT%" %*' \
+  '-File "%OHOS_LINKER_SCRIPT%" %ARGS%' \
   "linker argument forwarding"
+require_literal \
+  scripts/ohos/ohos-clang.cmd \
+  'set "ARGS=%ARGS% "%~1""' \
+  "argument re-quoting for space-containing paths"
 require_literal \
   scripts/ohos/ohos-clang.cmd \
   'exit /b %ERRORLEVEL%' \
