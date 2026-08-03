@@ -446,6 +446,9 @@ impl SandboxManager {
 
     /// Return the wrapper this manager is configured and able to apply.
     pub fn configured_sandbox(&self) -> Option<SandboxType> {
+        if self.disabled {
+            return None;
+        }
         get_platform_sandbox_with_bwrap_preference(self.prefer_bwrap)
     }
 
