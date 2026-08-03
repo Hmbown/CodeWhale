@@ -3179,6 +3179,20 @@ impl SubAgentManager {
             },
             bounded: true,
             limit,
+            process_lock_held: {
+                // Retry acquire on each projection so a session that lost the
+                // flock at construction recovers once the previous owner exits.
+                let _ = self.coordination_process_lock_status();
+                self.holds_coordination_process_lock()
+            },
+            process_lock_note: if self.holds_coordination_process_lock() {
+                None
+            } else {
+                match self.coordination_process_lock_status() {
+                    Ok(()) => None,
+                    Err(error) => Some(error),
+                }
+            },
         }
     }
 
@@ -3319,6 +3333,27 @@ impl SubAgentManager {
             }
             Err(error) => Err(error.to_string()),
         }
+    }
+
+    /// Whether this process currently owns the workspace coordination flock.
+    /// Read-only inspection of the in-process slot — does not attempt acquire.
+    #[must_use]
+    pub fn holds_coordination_process_lock(&self) -> bool {
+        if !self.coordination_process_lock_required {
+            // Tests and non-durable managers do not require the flock.
+            return true;
+        }
+        self.coordination_process_lock
+            .lock()
+            .expect("coordination lock slot poisoned")
+            .is_some()
+    }
+
+    /// Probe lock ownership for UI/inspect surfaces. Retries acquire when the
+    /// slot is empty so a session that started without the lock can recover
+    /// after the previous owner exits (#2.6 / #5036).
+    pub fn coordination_process_lock_status(&self) -> Result<(), String> {
+        self.ensure_coordination_process_lock()
     }
 
     #[must_use]
@@ -5469,37 +5504,87 @@ impl SubAgentManager {
             .filter(|agent| {
                 agent.status == SubAgentStatus::Running
                     && !agent.completion_claimed
-                    && agent.task_handle.is_some()
                     && agent.last_activity_at.elapsed() >= timeout
             })
             .map(|agent| agent.id.clone())
             .collect::<Vec<_>>();
         for agent_id in stale_agent_ids {
+            let orphan = self
+                .agents
+                .get(&agent_id)
+                .is_some_and(|agent| agent.task_handle.is_none());
             if let Some(agent) = self.agents.get(&agent_id) {
                 tracing::warn!(
                     target: "subagent",
                     agent_id = %agent.id,
                     timeout_secs = timeout.as_secs(),
+                    orphan,
                     "auto-cancelling stale sub-agent with no manager-visible progress"
                 );
             }
             let Some(mut terminal) = self.agents.get(&agent_id).map(SubAgent::snapshot) else {
                 continue;
             };
-            terminal.status = SubAgentStatus::Cancelled;
-            terminal.result = Some(format!(
-                "Auto-cancelled after {}s without sub-agent progress.",
-                timeout.as_secs()
-            ));
+            // Orphans have no live executor — Interrupted is more honest than
+            // Cancelled (nothing was stopped; the process was already gone).
+            if orphan {
+                terminal.status = SubAgentStatus::Interrupted(
+                    "No live executor; marked terminal locally after heartbeat timeout".to_string(),
+                );
+                terminal.result = Some(format!(
+                    "Marked terminal after {}s with no live task handle (local-only; durable coordination may be owned elsewhere).",
+                    timeout.as_secs()
+                ));
+            } else {
+                terminal.status = SubAgentStatus::Cancelled;
+                terminal.result = Some(format!(
+                    "Auto-cancelled after {}s without sub-agent progress.",
+                    timeout.as_secs()
+                ));
+            }
             terminal.needs_input = None;
             // Cleanup batches stale transitions and persists the final fleet
             // snapshot once below. Spawning one unordered background write
             // per child could let an earlier partial snapshot rename last and
             // resurrect a cancelled worker after restart.
-            if self.finish_terminal_result(&agent_id, terminal, true, false) {
+            // persist_after_commit=true still best-efforts; lock loss only
+            // skips disk — in-memory terminal state always commits.
+            if self.finish_terminal_result(&agent_id, terminal, true, true) {
                 auto_cancelled += 1;
             }
         }
+        // When this process does not own the coordination flock, any Running
+        // agent without a live task handle cannot make durable progress from
+        // here. Terminalize immediately so the UI never shows a ticking
+        // counter on a dead job while we wait for heartbeat timeout (#2.6).
+        if !self.holds_coordination_process_lock() {
+            let orphan_ids = self
+                .agents
+                .values()
+                .filter(|agent| {
+                    agent.status == SubAgentStatus::Running
+                        && !agent.completion_claimed
+                        && agent.task_handle.is_none()
+                })
+                .map(|agent| agent.id.clone())
+                .collect::<Vec<_>>();
+            for agent_id in orphan_ids {
+                let Some(mut terminal) = self.agents.get(&agent_id).map(SubAgent::snapshot) else {
+                    continue;
+                };
+                terminal.status = SubAgentStatus::Interrupted(
+                    "Delegated coordination unavailable in this process".to_string(),
+                );
+                terminal.result = Some(
+                    "Marked terminal locally because this session does not hold the workspace coordination lock and the agent has no live executor.".to_string(),
+                );
+                terminal.needs_input = None;
+                if self.finish_terminal_result(&agent_id, terminal, false, true) {
+                    auto_cancelled += 1;
+                }
+            }
+        }
+
         self.agents.retain(|_, agent| {
             if agent.status == SubAgentStatus::Running {
                 true

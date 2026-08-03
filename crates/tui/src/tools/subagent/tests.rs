@@ -1016,6 +1016,88 @@ fn isolated_worktree_workers_skip_the_coordination_process_lock() {
 }
 
 #[test]
+fn coordination_detail_projection_reports_process_lock_ownership() {
+    let tmp = tempdir().expect("tempdir");
+    let workspace = tmp.path().canonicalize().expect("canonical workspace");
+
+    let holder = SubAgentManager::new(workspace.clone(), 4).require_coordination_process_lock();
+    holder
+        .ensure_coordination_process_lock()
+        .expect("holder owns the lock");
+    let held = holder.coordination_detail_projection(None, 8);
+    assert!(held.process_lock_held, "holder projection must report lock held");
+    assert!(held.process_lock_note.is_none());
+
+    let contender = SubAgentManager::new(workspace, 4).require_coordination_process_lock();
+    // Contender construction may leave the slot empty; projection must say so.
+    let missing = contender.coordination_detail_projection(None, 8);
+    // After projection's re-acquire probe, either held recovered (holder dropped)
+    // or still missing. Holder is still in scope so must be missing.
+    assert!(
+        !missing.process_lock_held,
+        "contender projection must report lock unavailable while holder lives"
+    );
+    let note = missing
+        .process_lock_note
+        .expect("unavailable projection carries a note");
+    assert!(
+        note.contains("another Codewhale process")
+            || note.contains("timed out")
+            || note.contains("lock"),
+        "note names the contention: {note}"
+    );
+}
+
+#[test]
+fn cleanup_terminalizes_running_orphans_without_task_handle_when_lock_missing() {
+    let tmp = tempdir().expect("tempdir");
+    let workspace = tmp.path().canonicalize().expect("canonical workspace");
+
+    let holder = SubAgentManager::new(workspace.clone(), 4).require_coordination_process_lock();
+    holder
+        .ensure_coordination_process_lock()
+        .expect("holder owns the lock");
+
+    let mut contender = SubAgentManager::new(workspace, 4).require_coordination_process_lock();
+    contender
+        .ensure_coordination_process_lock()
+        .expect_err("contender must not own the lock");
+
+    let (input_tx, _input_rx) = mpsc::unbounded_channel();
+    let mut agent = SubAgent::new(
+        "orphan-no-handle".to_string(),
+        FleetRole::Scout,
+        "explore".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        None,
+        None,
+        input_tx,
+        PathBuf::from("."),
+        contender.session_boot_id().to_string(),
+    );
+    // Explicit orphan: Running, no task_handle (SubAgent::new already sets None).
+    assert!(agent.task_handle.is_none());
+    agent.last_activity_at = Instant::now() - Duration::from_secs(10);
+    let agent_id = agent.id.clone();
+    contender.agents.insert(agent_id.clone(), agent);
+
+    let cancelled = contender.cleanup(Duration::from_secs(3600));
+    assert!(
+        cancelled >= 1,
+        "orphan without task handle must terminalize under lock loss"
+    );
+    let snap = contender
+        .get_result(&agent_id)
+        .expect("agent still listed after local terminalization");
+    assert!(
+        matches!(snap.status, SubAgentStatus::Interrupted(_)),
+        "orphan becomes Interrupted locally, not left Running: {:?}",
+        snap.status
+    );
+}
+
+#[test]
 fn neutral_reconciliation_requires_the_nearest_common_planner() {
     let tmp = tempdir().expect("tempdir");
     let mut manager = SubAgentManager::new(tmp.path().to_path_buf(), 8);
