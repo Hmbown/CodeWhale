@@ -320,11 +320,9 @@ pub fn build_headless_context_report(config: &Config, workspace: &Path) -> Promp
     let mut builder = base_source_entries(&model, workspace, Some(&selected_skills_dir));
     let memory_path = config.memory_path();
     let memory_enabled = config.memory_enabled();
-    let moraine_fallback = config.moraine_fallback();
 
-    // TODO(v0.9.4): remove legacy memory push/inject when Moraine recall stable; see #3490, #3495
     if let Some(memory_block) =
-        crate::memory::compose_block(memory_enabled && !moraine_fallback, &memory_path)
+        crate::native_memory::native_prompt_block(memory_enabled, &memory_path, workspace)
     {
         builder.push(SourceEntry::text(
             SourceKind::UserMemory,
@@ -341,11 +339,7 @@ pub fn build_headless_context_report(config: &Config, workspace: &Path) -> Promp
             "User memory",
             Some(memory_path.display().to_string()),
             Some(6),
-            if moraine_fallback && memory_enabled {
-                "disabled by moraine_fallback"
-            } else {
-                "disabled, missing, or empty"
-            },
+            "disabled, missing, or empty",
         ));
     }
 
@@ -573,9 +567,8 @@ fn add_app_runtime_entries(builder: &mut ReportBuilder, app: &App) {
         Some(4),
     ));
 
-    // TODO(v0.9.4): remove legacy memory push/inject when Moraine recall stable; see #3490, #3495
     if let Some(memory_block) =
-        crate::memory::compose_block(app.use_memory && !app.moraine_fallback, &app.memory_path)
+        crate::native_memory::native_prompt_block(app.use_memory, &app.memory_path, &app.workspace)
     {
         builder.push(SourceEntry::text(
             SourceKind::UserMemory,
@@ -592,11 +585,7 @@ fn add_app_runtime_entries(builder: &mut ReportBuilder, app: &App) {
             "User memory",
             Some(app.memory_path.display().to_string()),
             Some(6),
-            if app.moraine_fallback && app.use_memory {
-                "disabled by moraine_fallback"
-            } else {
-                "disabled, missing, or empty"
-            },
+            "disabled, missing, or empty",
         ));
     }
 
@@ -1067,7 +1056,10 @@ mod tests {
     }
 
     #[test]
-    fn app_context_report_omits_legacy_memory_when_moraine_fallback_enabled() {
+    fn app_context_report_omits_legacy_plain_file_memory() {
+        // The legacy single-file memory path (`~/.deepseek/memory.md` and
+        // friends) was deleted for v0.9.4: only the native
+        // `memory/global/MEMORY.md` store injects.
         let tmp = tempdir().expect("tempdir");
         let memory_path = tmp.path().join("memory.md");
         fs::write(&memory_path, "private legacy memory").expect("write memory");
@@ -1075,7 +1067,6 @@ mod tests {
             r#"
             [memory]
             enabled = true
-            moraine_fallback = true
             "#,
         )
         .expect("parse config");
@@ -1093,7 +1084,6 @@ mod tests {
             &config,
         );
 
-        assert!(app.moraine_fallback);
         let report = build_context_report(&app);
         let memory_entry = report
             .entries
@@ -1102,15 +1092,11 @@ mod tests {
             .expect("user memory source entry");
 
         assert_eq!(memory_entry.activation_reason, ActivationReason::Omitted);
-        assert_eq!(
-            memory_entry.truncation_reason.as_deref(),
-            Some("disabled by moraine_fallback")
-        );
         assert!(!context_report_json(&report).contains("private legacy memory"));
     }
 
     #[test]
-    fn headless_context_report_omits_legacy_memory_when_moraine_fallback_enabled() {
+    fn headless_context_report_omits_legacy_plain_file_memory() {
         let tmp = tempdir().expect("tempdir");
         let memory_path = tmp.path().join("memory.md");
         fs::write(&memory_path, "private legacy memory").expect("write memory");
@@ -1118,7 +1104,6 @@ mod tests {
             r#"
             [memory]
             enabled = true
-            moraine_fallback = true
             "#,
         )
         .expect("parse config");
@@ -1132,10 +1117,6 @@ mod tests {
             .expect("user memory source entry");
 
         assert_eq!(memory_entry.activation_reason, ActivationReason::Omitted);
-        assert_eq!(
-            memory_entry.truncation_reason.as_deref(),
-            Some("disabled by moraine_fallback")
-        );
         assert!(!context_report_json(&report).contains("private legacy memory"));
     }
 

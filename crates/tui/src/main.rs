@@ -65,7 +65,6 @@ mod logging;
 mod lsp;
 mod mcp;
 mod mcp_server;
-mod memory;
 mod model_catalog;
 mod model_context;
 mod model_inventory;
@@ -2708,32 +2707,6 @@ fn mcp_template_json() -> Result<String> {
         McpServerConfig {
             command: Some("node".to_string()),
             args: vec!["./path/to/your-mcp-server.js".to_string()],
-            env: std::collections::HashMap::new(),
-            cwd: None,
-            url: None,
-            transport: None,
-            connect_timeout: None,
-            execute_timeout: None,
-            read_timeout: None,
-            disabled: true,
-            enabled: true,
-            required: false,
-            enabled_tools: Vec::new(),
-            disabled_tools: Vec::new(),
-            headers: std::collections::HashMap::new(),
-            env_headers: std::collections::HashMap::new(),
-            bearer_token_env_var: None,
-            scopes: Vec::new(),
-            oauth: None,
-            oauth_resource: None,
-            reviewed_plugin: None,
-        },
-    );
-    cfg.servers.insert(
-        "moraine-mcp".to_string(),
-        McpServerConfig {
-            command: Some("moraine".to_string()),
-            args: vec!["mcp".to_string()],
             env: std::collections::HashMap::new(),
             cwd: None,
             url: None,
@@ -10059,7 +10032,7 @@ async fn build_direct_workflow_tool(
     let mut surface = AgentToolSurfaceOptions::new(shell_policy);
     surface.apply_patch_enabled = features.enabled(Feature::ApplyPatch);
     surface.web_search_enabled = features.enabled(Feature::WebSearch);
-    surface.memory_tool_enabled = config.memory_enabled() && !config.moraine_fallback();
+    surface.memory_tool_enabled = config.memory_enabled();
     surface.vision_config = features
         .enabled(Feature::VisionModel)
         .then(|| config.vision_model_config())
@@ -10667,7 +10640,6 @@ async fn run_exec_agent(
         ),
         prefer_bwrap: execution_config.prefer_bwrap.unwrap_or(false),
         memory_enabled: execution_config.memory_enabled(),
-        moraine_fallback: execution_config.moraine_fallback(),
         memory_path: execution_config.memory_path(),
         speech_output_dir: execution_config.speech_output_dir(),
         vision_config: execution_config.vision_model_config(),

@@ -2572,15 +2572,11 @@ mod tests {
     }
 
     #[test]
-    fn memory_guidance_does_not_claim_moraine_tools_are_always_available() {
-        assert!(!MEMORY_GUIDANCE.contains("You have access to Moraine MCP tools"));
-        assert!(MEMORY_GUIDANCE.contains("When a `moraine-mcp` server is configured"));
-        assert!(MEMORY_GUIDANCE.contains("current tool catalog exposes"));
-        assert!(MEMORY_GUIDANCE.contains("search_sessions"));
-        assert!(
-            !MEMORY_GUIDANCE.contains("searchsessions"),
-            "Moraine search tool spelling must stay consistent"
-        );
+    fn memory_guidance_does_not_reference_scrapped_moraine() {
+        // Moraine was scrapped for v0.9.4 (no in-repo server ever existed);
+        // the native Markdown + SQLite FTS5 memory is the surviving system.
+        assert!(!MEMORY_GUIDANCE.contains("Moraine"));
+        assert!(!MEMORY_GUIDANCE.contains("moraine"));
     }
 
     #[test]

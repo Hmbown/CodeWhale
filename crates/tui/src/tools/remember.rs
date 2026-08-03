@@ -1,10 +1,11 @@
-//! `remember` tool — model-callable bullet-add into the user memory file.
+//! `remember` tool — model-callable capture into the native memory store.
 //!
 //! Lets the model itself notice a durable preference, convention, or fact
-//! worth keeping across sessions and write it to the user's `memory.md`.
-//! The tool is auto-approved and side-effecting only on the user-owned
-//! memory file (`~/.deepseek/memory.md` by default), so it doesn't get
-//! gated behind the same approval flow as shell or arbitrary file writes.
+//! worth keeping across sessions and write it to the native memory store
+//! (Markdown + SQLite FTS5 under `memory/global/MEMORY.md`). The tool is
+//! auto-approved and side-effecting only on the user-owned memory files,
+//! so it doesn't get gated behind the same approval flow as shell or
+//! arbitrary file writes.
 //!
 //! Only registered when `[memory] enabled = true` (or
 //! `DEEPSEEK_MEMORY=on`). When disabled, the tool isn't surfaced to the
@@ -126,13 +127,9 @@ impl ToolSpec for RememberTool {
             })));
         }
 
-        crate::memory::append_entry(path, note).map_err(|err| {
-            ToolError::execution_failed(format!("failed to append to {}: {err}", path.display()))
-        })?;
-
-        Ok(ToolResult::success(format!(
-            "remembered: {}",
-            note.trim_start_matches('#').trim()
+        Err(ToolError::execution_failed(format!(
+            "native memory store not found at {} — expected the              `memory/global/MEMORY.md` layout; the legacy single-file memory              path was removed in v0.9.4",
+            path.display()
         )))
     }
 }
@@ -164,22 +161,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn appends_bullet_to_memory_file() {
+    async fn rejects_legacy_plain_file_memory_path() {
+        // The legacy single-file path (`memory.md`) was removed in v0.9.4;
+        // only the native `memory/global/MEMORY.md` layout is writable.
         let tmp = tempdir().unwrap();
         let path = tmp.path().join("memory.md");
-        let ctx = ctx_with_memory(path.clone());
+        let ctx = ctx_with_memory(path);
 
         let tool = RememberTool;
-        let result = tool
+        let err = tool
             .execute(json!({"note": "use 4 spaces for indentation"}), &ctx)
             .await
-            .expect("ok");
-        assert!(result.success);
-        assert!(result.content.contains("4 spaces"));
-
-        let body = std::fs::read_to_string(&path).expect("read");
-        assert!(body.contains("4 spaces"));
-        assert!(body.starts_with("- ("), "{body}");
+            .unwrap_err();
+        assert!(err.to_string().contains("native memory store"), "{err}");
     }
 
     #[tokio::test]

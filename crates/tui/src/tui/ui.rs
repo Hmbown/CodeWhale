@@ -2107,7 +2107,7 @@ fn is_memory_quick_add(input: &str) -> bool {
 }
 
 fn should_intercept_memory_quick_add(config: &Config, input: &str) -> bool {
-    config.memory_enabled() && !config.moraine_fallback() && is_memory_quick_add(input)
+    config.memory_enabled() && is_memory_quick_add(input)
 }
 
 #[cfg(test)]
@@ -2116,7 +2116,7 @@ mod memory_quick_add_tests {
     use crate::config::Config;
 
     #[test]
-    fn memory_quick_add_interception_respects_moraine_fallback() {
+    fn memory_quick_add_interception_requires_memory_opt_in() {
         let enabled: Config = toml::from_str(
             r#"
             [memory]
@@ -2126,19 +2126,6 @@ mod memory_quick_add_tests {
         .expect("parse enabled memory config");
         assert!(should_intercept_memory_quick_add(
             &enabled,
-            "# remember this"
-        ));
-
-        let moraine: Config = toml::from_str(
-            r#"
-            [memory]
-            enabled = true
-            moraine_fallback = true
-            "#,
-        )
-        .expect("parse moraine memory config");
-        assert!(!should_intercept_memory_quick_add(
-            &moraine,
             "# remember this"
         ));
 
@@ -2154,14 +2141,23 @@ mod memory_quick_add_tests {
     }
 }
 
-/// Persist a `# foo` quick-add to the memory file and surface a status
-/// note to the user. Errors land in the same status channel so a missing
-/// memory directory becomes visible without crashing the composer.
+/// Persist a `# foo` quick-add through the native memory store and surface
+/// a status note to the user. Errors land in the same status channel so a
+/// missing memory directory becomes visible without crashing the composer.
 fn handle_memory_quick_add(app: &mut App, input: &str, config: &Config) {
     let path = config.memory_path();
-    match crate::memory::append_entry(&path, input) {
-        Ok(()) => {
-            app.status_message = Some(format!("memory: appended to {}", path.display()));
+    let note = input.trim_start_matches('#').trim();
+    let result = crate::native_memory::NativeMemoryStore::from_global_path(&path)
+        .ok_or_else(|| format!("{} is not a native memory path", path.display()))
+        .and_then(|store| {
+            store
+                .remember(crate::native_memory::MemoryScope::Global, None, note)
+                .map(|hit| hit.source)
+                .map_err(|err| err.to_string())
+        });
+    match result {
+        Ok(source) => {
+            app.status_message = Some(format!("memory: appended to {}", source.display()));
         }
         Err(err) => {
             app.status_message = Some(format!(
@@ -2435,7 +2431,6 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         ),
         prefer_bwrap: config.prefer_bwrap.unwrap_or(false),
         memory_enabled: config.memory_enabled(),
-        moraine_fallback: config.moraine_fallback(),
         memory_path: config.memory_path(),
         speech_output_dir: config.speech_output_dir(),
         vision_config: config.vision_model_config(),
@@ -2508,10 +2503,10 @@ fn build_app_system_prompt_with_goal(
     goal_objective: Option<&str>,
 ) -> SystemPrompt {
     let instructions = configured_instruction_sources(config);
-    let memory_path = config.memory_path();
-    let user_memory_block = crate::memory::compose_block(
-        config.memory_enabled() && !config.moraine_fallback(),
-        &memory_path,
+    let user_memory_block = crate::native_memory::native_prompt_block(
+        config.memory_enabled(),
+        &config.memory_path(),
+        &app.workspace,
     );
     prompts::system_prompt_for_mode_with_context_skills_and_session(
         &app.workspace,
@@ -7114,7 +7109,6 @@ async fn run_event_loop(
                         // appended to the user memory file and the input
                         // is consumed without firing a turn. Disabled
                         // behaviour falls through to normal turn submit.
-                        // TODO(v0.9.4): remove legacy quick-add when Moraine recall stable; see #3490, #3495
                         if should_intercept_memory_quick_add(config, &input) {
                             handle_memory_quick_add(app, &input, config);
                             continue;

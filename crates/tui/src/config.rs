@@ -1716,7 +1716,6 @@ impl Default for SnapshotsConfig {
 #[serde(rename_all = "lowercase")]
 pub enum MemoryBackend {
     Native,
-    Moraine,
     #[default]
     Off,
 }
@@ -1728,12 +1727,6 @@ pub struct MemoryConfig {
     /// `# foo` typed in the composer to append to that file. Default `false`.
     #[serde(default)]
     pub enabled: Option<bool>,
-    /// When `true`, deprecate the in-repo `memory.rs` push/inject path
-    /// (`<user_memory>` block + `remember` tool + `# foo` quick-add) in
-    /// favor of Moraine pull/recall via its MCP tools. The old path is
-    /// skipped even when `enabled = true`. Default `false`.
-    #[serde(default)]
-    pub moraine_fallback: Option<bool>,
     /// Explicit backend selection for the v0.9.2 memory lifecycle.
     /// `None` preserves the pre-native opt-in behavior for old configs.
     #[serde(default)]
@@ -2380,13 +2373,10 @@ pub struct Config {
     #[serde(default)]
     pub search: Option<SearchConfig>,
 
-    /// User-level memory file (#489). Default behaviour is **opt-in**:
+    /// User-level memory (#489). Default behaviour is **opt-in**:
     /// loading + injection happens only when `[memory] enabled = true` or
-    /// `DEEPSEEK_MEMORY=on` is set.
-    ///
-    /// v0.8.66 deprecates this in favour of Moraine MCP recall. Set
-    /// `[memory] moraine_fallback = true` to skip the legacy push/inject
-    /// path while keeping Moraine's pull/recall tools.
+    /// `DEEPSEEK_MEMORY=on` is set. The surviving store is the native
+    /// Markdown + SQLite FTS5 system (`memory/global/MEMORY.md`).
     #[serde(default)]
     pub memory: Option<MemoryConfig>,
 
@@ -5830,24 +5820,7 @@ impl Config {
             .unwrap_or(false)
     }
 
-    /// Whether the legacy `memory.rs` push/inject path is deprecated in
-    /// favor of Moraine MCP recall. When `true`, the `<user_memory>`
-    /// block is skipped, the `remember` tool is not registered, and
-    /// `# foo` quick-add falls through to normal turn submission, even
-    /// when `memory_enabled()` returns `true`. Default `false`.
-    #[must_use]
-    pub fn moraine_fallback(&self) -> bool {
-        if let Some(backend) = self.memory.as_ref().and_then(|memory| memory.backend) {
-            return backend == MemoryBackend::Moraine;
-        }
-        self.memory
-            .as_ref()
-            .and_then(|m| m.moraine_fallback)
-            .unwrap_or(false)
-    }
-
-    /// Resolve the explicit local-memory backend without silently falling
-    /// back from an unavailable Moraine server to a different owner.
+    /// Resolve the explicit local-memory backend.
     #[must_use]
     pub fn memory_backend(&self) -> MemoryBackend {
         self.memory
@@ -5857,9 +5830,7 @@ impl Config {
                 let Some(memory) = self.memory.as_ref() else {
                     return MemoryBackend::Off;
                 };
-                if memory.moraine_fallback.unwrap_or(false) {
-                    MemoryBackend::Moraine
-                } else if memory.enabled.unwrap_or(false) {
+                if memory.enabled.unwrap_or(false) {
                     MemoryBackend::Native
                 } else {
                     MemoryBackend::Off

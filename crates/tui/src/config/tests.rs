@@ -10917,7 +10917,7 @@ fn validate_still_rejects_unknown_model_on_official_deepseek() {
 }
 
 #[test]
-fn native_memory_backend_owns_explicit_path_and_disables_legacy_fallback() {
+fn native_memory_backend_owns_explicit_path() {
     let tmp = tempfile::tempdir().unwrap();
     let legacy = tmp.path().join("legacy-memory.md");
     let config = Config {
@@ -10930,10 +10930,53 @@ fn native_memory_backend_owns_explicit_path_and_disables_legacy_fallback() {
     };
     assert_eq!(config.memory_backend(), MemoryBackend::Native);
     assert!(config.memory_enabled());
-    assert!(!config.moraine_fallback());
     assert_eq!(
         config.memory_path(),
         tmp.path().join("memory/global/MEMORY.md")
+    );
+}
+
+/// Pins the v0.9.4 memory consolidation: with `[memory] enabled = true`
+/// (no explicit backend), the resolved memory path is always the native
+/// `memory/global/MEMORY.md` layout, so `NativeMemoryStore::from_global_path`
+/// accepts it and the deleted legacy single-file branch can never be taken.
+#[test]
+fn enabled_memory_always_resolves_to_native_store_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config: Config = toml::from_str(
+        r#"
+        [memory]
+        enabled = true
+        "#,
+    )
+    .expect("parse enabled memory config");
+    assert_eq!(config.memory_backend(), MemoryBackend::Native);
+    let path = config.memory_path();
+    assert!(
+        path.ends_with("memory/global/MEMORY.md"),
+        "enabled memory must resolve to the native layout, got {}",
+        path.display()
+    );
+    assert!(
+        crate::native_memory::NativeMemoryStore::from_global_path(&path).is_some(),
+        "native store must accept the resolved memory path"
+    );
+
+    // Even an explicitly configured single-file path is re-rooted into the
+    // native layout under the native backend.
+    let custom = Config {
+        memory_path: Some(tmp.path().join("memory.md").to_string_lossy().into_owned()),
+        memory: Some(MemoryConfig {
+            enabled: Some(true),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let custom_path = custom.memory_path();
+    assert!(
+        crate::native_memory::NativeMemoryStore::from_global_path(&custom_path).is_some(),
+        "custom memory paths are re-rooted into the native layout, got {}",
+        custom_path.display()
     );
 }
 

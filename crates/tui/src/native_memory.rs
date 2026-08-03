@@ -698,6 +698,22 @@ fn remove_tree_contents(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Compose the user-memory prompt block for the native store resolved from a
+/// memory path. Single seam used by the engine, the TUI system-prompt
+/// builder, and the context report so all three describe the same bytes.
+/// Returns `None` when memory is disabled, the path is not a native
+/// `memory/global/MEMORY.md` layout, or there is nothing worth injecting.
+#[must_use]
+pub fn native_prompt_block(enabled: bool, memory_path: &Path, workspace: &Path) -> Option<String> {
+    if !enabled {
+        return None;
+    }
+    NativeMemoryStore::from_global_path(memory_path)?
+        .prompt_block(workspace, 32, 12_000)
+        .ok()
+        .flatten()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
