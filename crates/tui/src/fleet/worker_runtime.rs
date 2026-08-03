@@ -264,6 +264,12 @@ pub fn fleet_task_to_worker_spec_with_profiles(
         resume_from_agent_id: None,
     };
 
+    let max_steps = task_spec
+        .budget
+        .as_ref()
+        .and_then(|b| b.max_tool_calls)
+        .unwrap_or_else(|| WorkerRuntimeProfile::default_max_steps(agent_type.clone()));
+
     Ok(AgentWorkerSpec {
         worker_id: worker_id.to_string(),
         run_id: run_id.to_string(),
@@ -279,11 +285,7 @@ pub fn fleet_task_to_worker_spec_with_profiles(
         fork_context: false,
         tool_profile,
         runtime_profile: runtime_profile.clone(),
-        max_steps: task_spec
-            .budget
-            .as_ref()
-            .and_then(|b| b.max_tool_calls)
-            .unwrap_or(u32::MAX),
+        max_steps,
         spawn_depth: 0,
         max_spawn_depth: runtime_profile.max_spawn_depth,
         launch_manifest: Some(launch_manifest),
@@ -1092,8 +1094,8 @@ pub fn apply_exec_hardening(
     mut spec: AgentWorkerSpec,
     exec: &codewhale_config::FleetExecConfig,
 ) -> AgentWorkerSpec {
-    // Cap max_steps to config max_turns
-    if exec.max_turns > 0 && exec.max_turns != u32::MAX {
+    // Cap max_steps to config max_turns (0 means no cap).
+    if exec.max_turns > 0 {
         spec.max_steps = spec.max_steps.min(exec.max_turns);
     }
     spec.max_spawn_depth = exec

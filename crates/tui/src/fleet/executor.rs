@@ -228,7 +228,7 @@ fn build_worker_exec_command_from_prompt(
         args.push("--disallowed-tools".to_string());
         args.push(exec_config.disallowed_tools.join(","));
     }
-    if exec_config.max_turns > 0 && exec_config.max_turns != u32::MAX {
+    if exec_config.max_turns > 0 {
         args.push("--max-turns".to_string());
         args.push(exec_config.max_turns.to_string());
     }
@@ -1217,10 +1217,28 @@ mod tests {
     }
 
     #[test]
-    fn unbounded_max_turns_is_not_passed() {
-        let exec = FleetExecConfig::default(); // max_turns == u32::MAX
+    fn zero_max_turns_is_not_passed() {
+        // max_turns = 0 means "no cap"; --max-turns should not appear in the command.
+        let exec = FleetExecConfig {
+            max_turns: 0,
+            ..Default::default()
+        };
         let cmd = build_worker_exec_command("codewhale", &task("x"), &exec, None);
         assert!(!cmd.args.join(" ").contains("--max-turns"));
+    }
+
+    #[test]
+    fn default_max_turns_is_passed_as_bounded_flag() {
+        // The default is now FLEET_DEFAULT_MAX_TURNS (500), so --max-turns IS passed
+        // to ensure workers respect the finite budget (#3885).
+        let exec = FleetExecConfig::default();
+        let joined = build_worker_exec_command("codewhale", &task("x"), &exec, None)
+            .args
+            .join(" ");
+        assert!(
+            joined.contains("--max-turns"),
+            "default finite budget should be forwarded to the subprocess: {joined}"
+        );
     }
 
     #[test]

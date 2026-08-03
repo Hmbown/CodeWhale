@@ -714,6 +714,54 @@ fn headless_worker_records_persist_with_subagent_state() {
 }
 
 #[test]
+fn persisted_subagent_state_has_bounded_serialized_size() {
+    // #3885 / item 4: `subagents.v1.json` is transitively bounded but had no
+    // explicit regression assertion. This test verifies the on-disk size stays
+    // within a known budget so memory regressions produce numbers, not reports.
+    let tmp = tempdir().expect("tempdir");
+    let state_path = tmp.path().join("subagents.v1.json");
+    let mut manager =
+        SubAgentManager::new(tmp.path().to_path_buf(), 4).with_state_path(state_path.clone());
+
+    // Register a representative set of completed workers.
+    for i in 0..10 {
+        let worker_id = format!("agent_{i:04}");
+        manager.register_worker(make_worker_spec(&worker_id, tmp.path().to_path_buf()));
+        let mut result = make_snapshot(SubAgentStatus::Completed);
+        result.agent_id = worker_id.clone();
+        result.name = worker_id.clone();
+        result.steps_taken = 5;
+        manager.complete_worker_from_result(&worker_id, &result);
+    }
+
+    manager
+        .persist_state()
+        .expect("persist state")
+        .join()
+        .expect("persist thread");
+
+    let serialized = std::fs::read(&state_path).expect("read persisted state");
+    // 256 records × bounded checkpoints stays well under 64 MiB.
+    // At 10 workers with small payloads this must be a few KB at most.
+    let budget_bytes = 64 * 1024 * 1024usize;
+    assert!(
+        serialized.len() < budget_bytes,
+        "persisted subagents.v1.json is {} bytes, exceeds {} byte budget",
+        serialized.len(),
+        budget_bytes
+    );
+    // Sanity-check: file is valid JSON and contains expected records.
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&serialized).expect("persisted state is valid JSON");
+    let workers = parsed["workers"].as_array().expect("workers array");
+    assert_eq!(
+        workers.len(),
+        10,
+        "all registered workers should be persisted"
+    );
+}
+
+#[test]
 fn coordination_ledger_persists_and_replays_bounded_contracts() {
     let tmp = tempdir().expect("tempdir");
     let state_path = tmp.path().join("subagents.v1.json");

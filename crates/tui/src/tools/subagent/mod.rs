@@ -2855,6 +2855,10 @@ pub struct SubAgentManager {
     queued_mail: HashMap<String, VecDeque<QueuedParentMessage>>,
     /// Test/observability: agent ids that received a live wake via followup.
     woken_agents: HashMap<String, bool>,
+    /// Agent ids whose handle-store entries should be evicted on the next async
+    /// drain. Populated by `cleanup()` when an agent record is retired; drained
+    /// by async callers that hold the `HandleStore` lock (#3885).
+    pending_handle_evictions: Vec<String>,
 }
 
 impl SubAgentManager {
@@ -2889,6 +2893,7 @@ impl SubAgentManager {
             last_cleanup_at: None,
             queued_mail: HashMap::new(),
             woken_agents: HashMap::new(),
+            pending_handle_evictions: Vec::new(),
         }
     }
 
@@ -5670,6 +5675,9 @@ impl SubAgentManager {
         // worker ledger. Keep it while either the agent or worker record is
         // inspectable; once both age out, remove the one deterministic file so
         // long-lived workspaces do not accumulate silent transcript copies.
+        // Also queue handle-store eviction for the same fully-retired agents
+        // (#3885): handles pinned in memory per-agent are freed on the next
+        // async drain by callers that hold the SharedHandleStore lock.
         for agent_id in transcript_candidates {
             if self.agents.contains_key(&agent_id) || self.worker_records.contains_key(&agent_id) {
                 continue;
@@ -5682,6 +5690,7 @@ impl SubAgentManager {
                     "failed to remove expired sub-agent transcript artifact"
                 );
             }
+            self.pending_handle_evictions.push(agent_id);
         }
         if self.agents.len() != before
             || auto_cancelled > 0
@@ -5701,6 +5710,15 @@ impl SubAgentManager {
     pub fn cleanup_due(&self, min_interval: Duration) -> bool {
         self.last_cleanup_at
             .is_none_or(|last| last.elapsed() >= min_interval)
+    }
+
+    /// Drain and return the agent ids queued for handle-store eviction by
+    /// the last `cleanup()` pass (#3885). Callers that hold the
+    /// `SharedHandleStore` lock should call this after `cleanup()` and evict
+    /// each returned id with `store.evict_session("agent:{id}")`.
+    #[must_use]
+    pub fn drain_pending_handle_evictions(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.pending_handle_evictions)
     }
 
     /// Claim terminal delivery if this task is still the running owner.
@@ -7001,16 +7019,24 @@ async fn inspect_agent_from_input(
         parse_optional_bool(input, &["include_archived", "includeArchived"]).unwrap_or(false);
 
     if let Some(agent_ref) = parse_agent_ref(input) {
-        let (snapshot, worker_record) = {
+        let (snapshot, worker_record, evicted_ids) = {
             touch_running_shell_owners(&manager, &context.execution.shell_manager).await;
             let mut manager = manager.write().await;
             manager.cleanup(COMPLETED_AGENT_RETENTION);
+            let evicted_ids = manager.drain_pending_handle_evictions();
             let snapshot = manager
                 .get_result_by_ref(&agent_ref)
                 .map_err(|err| ToolError::invalid_input(err.to_string()))?;
             let worker_record = manager.get_worker_record(&snapshot.agent_id);
-            (snapshot, worker_record)
+            (snapshot, worker_record, evicted_ids)
         };
+        // Evict retired handles outside the manager lock (#3885).
+        if !evicted_ids.is_empty() {
+            let mut store = context.runtime.handle_store.lock().await;
+            for agent_id in &evicted_ids {
+                store.evict_session(&format!("agent:{agent_id}"));
+            }
+        }
 
         // #4097: a running child whose model-visible state hasn't changed
         // since the last peek gets a compact nudge, not another full
@@ -7071,19 +7097,28 @@ async fn inspect_agent_from_input(
         return Ok(tool_result);
     }
 
-    let snapshots = {
+    let (snapshots, evicted_ids) = {
         touch_running_shell_owners(&manager, &context.execution.shell_manager).await;
         let mut manager = manager.write().await;
         manager.cleanup(COMPLETED_AGENT_RETENTION);
-        manager
+        let evicted_ids = manager.drain_pending_handle_evictions();
+        let snapshots = manager
             .list_filtered(include_archived)
             .into_iter()
             .map(|snapshot| {
                 let worker_record = manager.get_worker_record(&snapshot.agent_id);
                 (snapshot, worker_record)
             })
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        (snapshots, evicted_ids)
     };
+    // Evict retired handles outside the manager lock (#3885).
+    if !evicted_ids.is_empty() {
+        let mut store = context.runtime.handle_store.lock().await;
+        for agent_id in &evicted_ids {
+            store.evict_session(&format!("agent:{agent_id}"));
+        }
+    }
 
     // Unscoped status is a supervision poll, and it used to return the full
     // projection for every agent — launch manifest, event ring, and any

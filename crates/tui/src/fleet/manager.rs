@@ -2986,6 +2986,19 @@ mod tests {
         path
     }
 
+    /// Read the process RSS (Resident Set Size) in kilobytes from
+    /// `/proc/self/status`. Returns `None` when the file is unavailable
+    /// (non-Linux) or the `VmRSS` field is missing.
+    #[cfg(target_os = "linux")]
+    fn rss_kb() -> Option<u64> {
+        let status = std::fs::read_to_string("/proc/self/status").ok()?;
+        status
+            .lines()
+            .find(|line| line.starts_with("VmRSS:"))
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|v| v.parse().ok())
+    }
+
     #[cfg(unix)]
     fn fake_codewhale(dir: &TempDir, body: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
@@ -4474,7 +4487,27 @@ esac
         assert_eq!(report.leased, 3);
         assert_eq!(report.queued, 7);
 
+        // #3885 / item 3: baseline RSS before workers run.
+        #[cfg(target_os = "linux")]
+        let rss_baseline_kb = rss_kb();
+
         let status = complete_with_fake_codewhale(&manager, &report.run_id, 3, &fake);
+
+        // #3885 / item 3: RSS after fleet completes — logged so memory
+        // regressions produce numbers, not user reports.
+        #[cfg(target_os = "linux")]
+        {
+            let rss_after_kb = rss_kb();
+            eprintln!(
+                "[fleet-smoke rss] baseline={} kB, after_run={} kB, delta={} kB",
+                rss_baseline_kb.map_or("n/a".to_string(), |v| v.to_string()),
+                rss_after_kb.map_or("n/a".to_string(), |v| v.to_string()),
+                match (rss_baseline_kb, rss_after_kb) {
+                    (Some(b), Some(a)) => (a as i64 - b as i64).to_string(),
+                    _ => "n/a".to_string(),
+                }
+            );
+        }
         assert_eq!(status.completed, 9);
         assert_eq!(status.failed, 1);
         assert_eq!(status.task_failed, 1);
