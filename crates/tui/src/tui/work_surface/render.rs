@@ -22,6 +22,9 @@ const SIDE_RAIL_MIN_HOST_WIDTH: u16 = 72;
 const SIDE_RAIL_MIN_CHAT_WIDTH: u16 = 40;
 
 fn effective_placement(configured: WorkSurfacePlacement, host_width: u16) -> WorkSurfacePlacement {
+    if configured == WorkSurfacePlacement::Off {
+        return WorkSurfacePlacement::Off;
+    }
     if host_width < SIDE_RAIL_MIN_HOST_WIDTH {
         WorkSurfacePlacement::Top
     } else {
@@ -33,6 +36,13 @@ fn effective_placement(configured: WorkSurfacePlacement, host_width: u16) -> Wor
 /// work lists scroll instead of consuming the transcript.
 pub fn height(app: &mut App, width: u16, terminal_height: u16) -> u16 {
     app.work_surface.effective_placement = effective_placement(app.work_surface.placement, width);
+    // Off hides the rail outright: no strip, no side reservation, no stale
+    // interaction state.
+    if app.work_surface.effective_placement == WorkSurfacePlacement::Off {
+        app.work_surface.last_area = None;
+        app.work_surface.hitboxes.clear();
+        return 0;
+    }
     // Non-Tasks panels always own a strip once selected: the user asked for
     // the panel, so an empty panel collapses to a hint line, not a vanished
     // rail.
@@ -90,6 +100,7 @@ pub fn split_chat(app: &mut App, area: Rect) -> (Rect, Option<Rect>) {
     let placement = effective_placement(app.work_surface.placement, area.width);
     app.work_surface.effective_placement = placement;
     if placement == WorkSurfacePlacement::Top
+        || placement == WorkSurfacePlacement::Off
         || (app.work_surface.panel == RailPanel::Tasks && app.work_surface.latest_rows.is_empty())
     {
         return (area, None);
@@ -129,7 +140,7 @@ pub fn split_chat(app: &mut App, area: Rect) -> (Rect, Option<Rect>) {
                 ..area
             }),
         ),
-        WorkSurfacePlacement::Top => (area, None),
+        WorkSurfacePlacement::Top | WorkSurfacePlacement::Off => (area, None),
     }
 }
 
@@ -146,6 +157,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
     }
 
     let placement = app.work_surface.effective_placement;
+    // Off renders no rail; height()/split_chat() never hand us an area for it.
+    if placement == WorkSurfacePlacement::Off {
+        app.work_surface.last_area = None;
+        return;
+    }
     let body_area = match placement {
         WorkSurfacePlacement::Top => Rect {
             height: area.height.saturating_sub(1),
@@ -160,6 +176,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
             width: area.width.saturating_sub(1),
             ..area
         },
+        WorkSurfacePlacement::Off => unreachable!("off placement returned above"),
     };
 
     // Non-Tasks panels render as a titled line list and skip the row
@@ -489,6 +506,7 @@ fn render_divider(frame: &mut Frame, area: Rect, placement: WorkSurfacePlacement
         app.ui_theme.border
     };
     match placement {
+        WorkSurfacePlacement::Off => {}
         WorkSurfacePlacement::Top => {
             let y = area.bottom().saturating_sub(1);
             for x in area.left()..area.right() {

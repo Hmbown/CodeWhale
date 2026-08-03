@@ -19,13 +19,15 @@ use crate::work_graph::{
 };
 
 /// Persisted Ocean work-surface placement. Bottom is deliberately absent: the
-/// composer and phase footer own the shell's lower edge.
+/// composer and phase footer own the shell's lower edge. `Off` hides the rail
+/// outright (rail unification, 0.9.4).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum WorkSurfacePlacement {
     #[default]
     Top,
     Left,
     Right,
+    Off,
 }
 
 /// Which panel the rail shows. Orthogonal to placement: the user picks
@@ -82,6 +84,7 @@ impl WorkSurfacePlacement {
         match value.trim().to_ascii_lowercase().as_str() {
             "left" => Self::Left,
             "right" => Self::Right,
+            "off" => Self::Off,
             _ => Self::Top,
         }
     }
@@ -92,6 +95,7 @@ impl WorkSurfacePlacement {
             Self::Top => "top",
             Self::Left => "left",
             Self::Right => "right",
+            Self::Off => "off",
         }
     }
 }

@@ -1085,6 +1085,26 @@ mod tests {
     }
 
     #[test]
+    fn off_placement_reserves_no_rail_in_any_panel() {
+        for panel in [
+            super::RailPanel::Tasks,
+            super::RailPanel::Agents,
+            super::RailPanel::Context,
+            super::RailPanel::Pinned,
+        ] {
+            let mut app = app();
+            add_todos(&mut app, 2);
+            app.work_surface.placement = super::WorkSurfacePlacement::Off;
+            app.work_surface.panel = panel;
+            let area = ratatui::layout::Rect::new(0, 0, 120, 32);
+
+            assert_eq!(super::height(&mut app, area.width, area.height), 0);
+            assert_eq!(super::split_chat(&mut app, area), (area, None));
+            assert_eq!(app.work_surface.last_area, None);
+        }
+    }
+
+    #[test]
     fn context_panel_renders_session_facts_in_side_rail() {
         let mut app = app();
         app.work_surface.placement = super::WorkSurfacePlacement::Right;
