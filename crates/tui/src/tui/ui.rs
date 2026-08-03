@@ -2542,14 +2542,15 @@ fn build_app_system_prompt_with_goal(
 /// Choose which durable-task summaries should appear in the Work
 /// sidebar's Tasks panel.
 ///
-/// Active tasks (`Queued`/`Running`) are always included. Terminal
-/// tasks (`Completed`/`Failed`/`Canceled`) are session-local receipts: both
-/// their creation and completion must fall within this TUI session. Durable
-/// tasks are stored per user rather than per TUI process, and startup recovery
-/// can stamp an old running record with a fresh `ended_at`. Treating that as a
-/// current receipt makes a new same-workspace instance look failed (#4416).
-/// Shared and older task history remains available explicitly through
-/// `/tasks`; it does not belong on the fresh live-work surface by default.
+/// Tasks stamped with the current session owner stay visible on that session's
+/// live surface. Tasks owned by a different session stay in explicit history
+/// (`/tasks`) instead of appearing as live workspace work. Legacy unowned
+/// records fall back to the v0.9.1 timestamp gate: active tasks remain visible,
+/// while terminal receipts must have both creation and completion times inside
+/// this TUI session. Durable tasks are stored per user rather than per TUI
+/// process, and startup recovery can stamp an old running record with a fresh
+/// `ended_at`. Treating that as a current receipt makes a new same-workspace
+/// instance look failed (#4416).
 ///
 /// A terminal task missing `ended_at` is treated as not current and
 /// dropped: durable tasks always stamp `ended_at` when they reach a
@@ -2558,16 +2559,34 @@ fn build_app_system_prompt_with_goal(
 pub(crate) fn select_work_sidebar_tasks(
     tasks: Vec<TaskSummary>,
     session_started_at: chrono::DateTime<chrono::Utc>,
+    current_session_id: Option<&str>,
 ) -> Vec<TaskSummary> {
     tasks
         .into_iter()
-        .filter(|task| match task.status {
-            TaskStatus::Queued | TaskStatus::Running => true,
-            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Canceled => {
-                task.created_at >= session_started_at
-                    && task
-                        .ended_at
-                        .is_some_and(|ended_at| ended_at >= session_started_at)
+        .filter(|task| {
+            let owner_matches_current = current_session_id
+                .zip(task.owner_session_id.as_deref())
+                .is_some_and(|(current, owner)| current == owner);
+            let owned_by_other_session = current_session_id.is_some()
+                && task
+                    .owner_session_id
+                    .as_deref()
+                    .is_some_and(|owner| Some(owner) != current_session_id);
+            if owned_by_other_session {
+                return false;
+            }
+            match task.status {
+                TaskStatus::Queued | TaskStatus::Running => {
+                    owner_matches_current || task.owner_session_id.is_none()
+                }
+                TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Canceled => {
+                    owner_matches_current
+                        || (task.owner_session_id.is_none()
+                            && task.created_at >= session_started_at
+                            && task
+                                .ended_at
+                                .is_some_and(|ended_at| ended_at >= session_started_at))
+                }
             }
         })
         .collect()
@@ -2620,10 +2639,11 @@ async fn refresh_active_task_panel(app: &mut App, task_manager: &SharedTaskManag
         tracing::warn!(error = %err, "durable task lifecycle checkpoint remains pending");
     }
     let session_started_at = app.session_started_at;
-    let mut entries: Vec<TaskPanelEntry> = select_work_sidebar_tasks(tasks, session_started_at)
-        .into_iter()
-        .map(task_summary_to_panel_entry)
-        .collect();
+    let mut entries: Vec<TaskPanelEntry> =
+        select_work_sidebar_tasks(tasks, session_started_at, app.current_session_id.as_deref())
+            .into_iter()
+            .map(task_summary_to_panel_entry)
+            .collect();
 
     entries.extend(active_rlm_task_entries(app));
 
@@ -12490,6 +12510,7 @@ async fn apply_command_result(
                     allow_shell: Some(app.allow_shell),
                     trust_mode: Some(app.trust_mode),
                     auto_approve: Some(app_auto_approve_enabled(app)),
+                    owner_session_id: app.current_session_id.clone(),
                 };
                 match task_manager.add_task(request).await {
                     Ok(task) => {

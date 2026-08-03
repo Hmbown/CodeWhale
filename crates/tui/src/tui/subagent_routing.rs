@@ -823,13 +823,24 @@ pub(super) fn format_task_list(tasks: &[TaskSummary]) -> String {
     }
 
     let show_verdict = tasks.iter().any(|task| task.hunt_verdict.is_some());
+    let show_session = tasks.iter().any(|task| task.owner_session_id.is_some());
     let mut lines = vec![format!("Tasks ({})", tasks.len())];
     // Build headers with the same format strings as the rows so the ID
     // column (21-char `task_` ids) can never drift out of alignment again.
-    if show_verdict {
+    if show_verdict && show_session {
+        lines.push(format!(
+            "{:<21}  {:<9}  {:<7}  {:<12}  {:>8}  {}",
+            "ID", "Status", "Verdict", "Session", "Time", "Title"
+        ));
+    } else if show_verdict {
         lines.push(format!(
             "{:<21}  {:<9}  {:<7}  {:>8}  {}",
             "ID", "Status", "Verdict", "Time", "Title"
+        ));
+    } else if show_session {
+        lines.push(format!(
+            "{:<21}  {:<9}  {:<12}  {:>8}  {}",
+            "ID", "Status", "Session", "Time", "Title"
         ));
     } else {
         lines.push(format!(
@@ -843,12 +854,37 @@ pub(super) fn format_task_list(tasks: &[TaskSummary]) -> String {
             .duration_ms
             .map(crate::elapsed::format_elapsed_ms)
             .unwrap_or_else(|| "-".to_string());
-        if show_verdict {
+        let owner_session = task.owner_session_id.as_deref().unwrap_or("-");
+        let owner_session = if owner_session.chars().count() > 12 {
+            format!("{}…", owner_session.chars().take(11).collect::<String>())
+        } else {
+            owner_session.to_string()
+        };
+        if show_verdict && show_session {
+            lines.push(format!(
+                "{:<21}  {:<9}  {:<7}  {:<12}  {:>8}  {}",
+                task.id,
+                task_status_label(task.status),
+                hunt_verdict_glyph(task.hunt_verdict.as_deref()),
+                owner_session,
+                duration,
+                task.prompt_summary
+            ));
+        } else if show_verdict {
             lines.push(format!(
                 "{:<21}  {:<9}  {:<7}  {:>8}  {}",
                 task.id,
                 task_status_label(task.status),
                 hunt_verdict_glyph(task.hunt_verdict.as_deref()),
+                duration,
+                task.prompt_summary
+            ));
+        } else if show_session {
+            lines.push(format!(
+                "{:<21}  {:<9}  {:<12}  {:>8}  {}",
+                task.id,
+                task_status_label(task.status),
+                owner_session,
                 duration,
                 task.prompt_summary
             ));
@@ -890,6 +926,9 @@ fn format_task_detail(task: &TaskRecord) -> String {
         "Workspace: {}",
         crate::utils::display_path(&task.workspace)
     ));
+    if let Some(owner_session_id) = task.owner_session_id.as_deref() {
+        lines.push(format!("Owning Session: {owner_session_id}"));
+    }
     if let Some(thread_id) = task.thread_id.as_ref() {
         lines.push(format!("Runtime Thread: {thread_id}"));
     }
@@ -1033,6 +1072,7 @@ mod tests {
             error: None,
             thread_id: None,
             turn_id: None,
+            owner_session_id: None,
         }
     }
 
@@ -1101,6 +1141,20 @@ mod tests {
         assert!(output.contains(&format!("{:<21}  {:<9}  ✓", "task_hunted", "completed")));
         assert!(output.contains(&format!("{:<21}  {:<9}  !", "task_wounded", "completed")));
         assert!(output.contains(&format!("{:<21}  {:<9}  ×", "task_escaped", "failed")));
+    }
+
+    #[test]
+    fn task_list_shows_owner_session_when_present() {
+        let mut task = task_summary("task_owned", TaskStatus::Running, None);
+        task.owner_session_id = Some("session-123456".to_string());
+
+        let output = format_task_list(&[task]);
+
+        assert!(output.contains(&format!(
+            "{:<21}  {:<9}  {:<12}  {:>8}  {}",
+            "ID", "Status", "Session", "Time", "Title"
+        )));
+        assert!(output.contains("session-1234…"), "{output}");
     }
 
     #[test]

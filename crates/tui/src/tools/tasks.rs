@@ -456,6 +456,7 @@ impl TasksTool {
             allow_shell: input.get("allow_shell").and_then(Value::as_bool),
             trust_mode: input.get("trust_mode").and_then(Value::as_bool),
             auto_approve: input.get("auto_approve").and_then(Value::as_bool),
+            owner_session_id: Some(context.state_namespace.clone()),
         };
         let task_id = crate::task_manager::TaskManager::new_task_id();
         if let Some(work) = context.runtime.work.as_ref() {

@@ -1473,6 +1473,7 @@ async fn enqueue_run_task(
         allow_shell: Some(automation.task_allow_shell()),
         trust_mode: Some(automation.task_trust_mode()),
         auto_approve: Some(automation.task_auto_approve()),
+        owner_session_id: None,
     };
 
     match task_manager.add_task(new_task).await {

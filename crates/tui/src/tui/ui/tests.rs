@@ -19972,6 +19972,7 @@ mod work_sidebar_projection_tests {
         status: TaskStatus,
         created_at: chrono::DateTime<Utc>,
         ended_at: Option<chrono::DateTime<Utc>>,
+        owner_session_id: Option<&str>,
     ) -> TaskSummary {
         TaskSummary {
             id: id.to_string(),
@@ -19989,6 +19990,7 @@ mod work_sidebar_projection_tests {
             error: None,
             thread_id: None,
             turn_id: None,
+            owner_session_id: owner_session_id.map(str::to_string),
         }
     }
 
@@ -20002,12 +20004,14 @@ mod work_sidebar_projection_tests {
             TaskStatus::Running,
             session_started_at - Duration::minutes(30),
             None,
+            Some("session-current"),
         );
         let active_queued = sample_task(
             "active_q",
             TaskStatus::Queued,
             session_started_at - Duration::minutes(20),
             None,
+            Some("session-current"),
         );
 
         // Created and completed during the current session — must show.
@@ -20016,6 +20020,7 @@ mod work_sidebar_projection_tests {
             TaskStatus::Completed,
             session_started_at + Duration::seconds(5),
             Some(session_started_at + Duration::seconds(30)),
+            Some("session-current"),
         );
 
         // Completed shortly before the session started — shared history, not
@@ -20025,6 +20030,7 @@ mod work_sidebar_projection_tests {
             TaskStatus::Failed,
             session_started_at - Duration::minutes(20),
             Some(session_started_at - Duration::minutes(15)),
+            Some("session-old"),
         );
 
         // Exact restart regression: a prior-session running record is marked
@@ -20035,6 +20041,7 @@ mod work_sidebar_projection_tests {
             TaskStatus::Failed,
             session_started_at - Duration::minutes(30),
             Some(session_started_at + Duration::seconds(1)),
+            Some("session-old"),
         );
 
         // Stale completed from 6 days ago (the exact scenario in #1913) —
@@ -20044,18 +20051,28 @@ mod work_sidebar_projection_tests {
             TaskStatus::Completed,
             session_started_at - Duration::days(6) - Duration::minutes(1),
             Some(session_started_at - Duration::days(6)),
+            Some("session-old"),
         );
         let stale_canceled = sample_task(
             "stale_cancel",
             TaskStatus::Canceled,
             session_started_at - Duration::days(7) - Duration::minutes(1),
             Some(session_started_at - Duration::days(7)),
+            Some("session-old"),
         );
         let stale_failed = sample_task(
             "stale_fail",
             TaskStatus::Failed,
             session_started_at - Duration::days(3) - Duration::minutes(1),
             Some(session_started_at - Duration::days(3)),
+            Some("session-old"),
+        );
+        let active_sibling = sample_task(
+            "sibling_run",
+            TaskStatus::Running,
+            session_started_at - Duration::minutes(2),
+            None,
+            Some("session-sibling"),
         );
 
         // A terminal task without `ended_at` shouldn't sneak through.
@@ -20063,6 +20080,14 @@ mod work_sidebar_projection_tests {
             "ghost",
             TaskStatus::Completed,
             session_started_at + Duration::seconds(1),
+            None,
+            Some("session-current"),
+        );
+        let legacy_finished = sample_task(
+            "legacy_done",
+            TaskStatus::Completed,
+            session_started_at + Duration::seconds(2),
+            Some(session_started_at + Duration::seconds(3)),
             None,
         );
 
@@ -20075,10 +20100,12 @@ mod work_sidebar_projection_tests {
             stale_completed.clone(),
             stale_canceled.clone(),
             stale_failed.clone(),
+            active_sibling.clone(),
             terminal_no_timestamp.clone(),
+            legacy_finished.clone(),
         ];
 
-        let kept = select_work_sidebar_tasks(tasks, session_started_at);
+        let kept = select_work_sidebar_tasks(tasks, session_started_at, Some("session-current"));
         let kept_ids: Vec<&str> = kept.iter().map(|t| t.id.as_str()).collect();
 
         assert!(
@@ -20102,6 +20129,10 @@ mod work_sidebar_projection_tests {
             !kept_ids.contains(&"recovered_old_run"),
             "startup recovery must not turn an old task into a fresh red row: {kept_ids:?}"
         );
+        assert!(
+            !kept_ids.contains(&"sibling_run"),
+            "active sibling-session task must stay off the new session's live work surface: {kept_ids:?}"
+        );
 
         assert!(
             !kept_ids.contains(&"stale_done"),
@@ -20119,6 +20150,10 @@ mod work_sidebar_projection_tests {
             !kept_ids.contains(&"ghost"),
             "terminal task missing ended_at must be hidden: {kept_ids:?}"
         );
+        assert!(
+            kept_ids.contains(&"legacy_done"),
+            "legacy unowned task still uses timestamp fallback during migration: {kept_ids:?}"
+        );
     }
 
     #[test]
@@ -20131,11 +20166,29 @@ mod work_sidebar_projection_tests {
             TaskStatus::Completed,
             session_started_at,
             Some(session_started_at),
+            None,
         );
 
-        let kept = select_work_sidebar_tasks(vec![at_boundary], session_started_at);
+        let kept = select_work_sidebar_tasks(vec![at_boundary], session_started_at, None);
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].id, "boundary");
+    }
+
+    #[test]
+    fn work_sidebar_keeps_current_session_owned_terminals_after_restore() {
+        let session_started_at = Utc.with_ymd_and_hms(2026, 5, 23, 10, 0, 0).unwrap();
+        let restored = sample_task(
+            "restored_done",
+            TaskStatus::Completed,
+            session_started_at - Duration::days(1),
+            Some(session_started_at - Duration::hours(23)),
+            Some("session-current"),
+        );
+
+        let kept =
+            select_work_sidebar_tasks(vec![restored], session_started_at, Some("session-current"));
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].id, "restored_done");
     }
 
     #[test]
