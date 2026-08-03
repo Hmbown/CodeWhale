@@ -9751,17 +9751,19 @@ pub fn has_api_key_for(config: &Config, provider: ApiProvider) -> bool {
     // path itself writes (an api-key auth mode with no config literal). A
     // configured-but-inactive provider must not render as unconfigured just
     // because the operator switched providers after saving its key (#5033).
-    // The probe stays bounded to explicitly configured providers, and the
-    // non-active case is strictly read-only so rendering the catalog never
-    // migrates a legacy store or opens a write-capable backend.
+    // Shared-slot families (one account, several provider variants — e.g.
+    // Model Studio Token/Coding Plan × OpenAI/Anthropic dialects) honor the
+    // marker written by ANY sibling variant, since the save path stores one
+    // key under the family's canonical slot. The probe stays bounded to
+    // explicitly configured providers, and the non-active case is strictly
+    // read-only so rendering the catalog never migrates a legacy store or
+    // opens a write-capable backend.
     if !config.should_skip_secret_store_for_provider(provider) {
         if provider == config.api_provider() {
             if provider_secret_store_api_key(config, provider).is_some() {
                 return true;
             }
-        } else if config
-            .provider_config_for(provider)
-            .is_some_and(|entry| auth_mode_requires_api_key(entry.auth_mode.as_deref()))
+        } else if secret_slot_save_marker_on_shared_slot(config, provider)
             && provider_secret_store_api_key_with_mode(config, provider, true).is_some()
         {
             return true;
@@ -10408,9 +10410,33 @@ fn provider_secret_store_slot(provider: ApiProvider) -> &'static str {
     match provider {
         // TUI compatibility variants share the canonical CLI provider slots.
         ApiProvider::DeepseekCN => "deepseek",
-        ApiProvider::SiliconflowCn => "siliconflow",
-        _ => provider.as_str(),
+        // Shared-account families (SiliconFlow China, the four Model Studio
+        // variants) collapse onto one slot via ProviderKind::secret_store_slot.
+        _ => provider
+            .kind()
+            .map_or_else(|| provider.as_str(), |kind| kind.secret_store_slot()),
     }
+}
+
+/// Whether the secret-store save marker (`auth_mode = "api_key"` with no
+/// config literal, written by the save path) exists for `provider` or for any
+/// provider sharing its durable credential slot.
+///
+/// One Model Studio account authenticates all four plan/dialect variants, so
+/// saving a key on `modelstudio-token-plan` marks only that variant's config
+/// table; the sibling variants must still treat the family slot as saved.
+fn secret_slot_save_marker_on_shared_slot(config: &Config, provider: ApiProvider) -> bool {
+    let slot = provider_secret_store_slot(provider);
+    ApiProvider::all()
+        .iter()
+        .copied()
+        .chain(std::iter::once(ApiProvider::DeepseekCN))
+        .filter(|candidate| provider_secret_store_slot(*candidate) == slot)
+        .any(|candidate| {
+            config
+                .provider_config_for(candidate)
+                .is_some_and(|entry| auth_mode_requires_api_key(entry.auth_mode.as_deref()))
+        })
 }
 
 /// Read only the durable secret-store layer (no environment fallback).

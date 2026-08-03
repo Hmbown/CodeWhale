@@ -1217,6 +1217,20 @@ pub fn env_for(name: &str) -> Option<String> {
         "telecomjs" | "telecom-js" | "telecom_js" | "telecomjs-cn" | "tokenhub" => {
             &["TELECOMJS_API_KEY"]
         }
+        // One Alibaba Cloud Model Studio account authenticates every plan /
+        // dialect variant; all four names share one env convention.
+        "modelstudio-token-plan"
+        | "modelstudio_token_plan"
+        | "modelstudio-token-plan-anthropic"
+        | "modelstudio_token_plan_anthropic"
+        | "modelstudio-coding-plan"
+        | "modelstudio_coding_plan"
+        | "modelstudio-coding-plan-anthropic"
+        | "modelstudio_coding_plan_anthropic"
+        | "modelstudio"
+        | "dashscope"
+        | "alibaba-token-plan"
+        | "alibaba-coding-plan" => &["MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY"],
         _ => return None,
     };
     for var in candidates {
@@ -1278,6 +1292,8 @@ mod tests {
             "MODEL_API_KEY",
             "XAI_API_KEY",
             "TELECOMJS_API_KEY",
+            "MODELSTUDIO_API_KEY",
+            "DASHSCOPE_API_KEY",
             SECRET_BACKEND_ENV,
             LEGACY_SECRET_BACKEND_ENV,
         ] {
@@ -1841,6 +1857,36 @@ mod tests {
         for alias in ["opencode-go", "opencode_go", "opencodego"] {
             assert_eq!(env_for(alias).as_deref(), Some("go-key"), "{alias}");
         }
+
+        clear_known_envs();
+    }
+
+    #[test]
+    fn modelstudio_variants_share_one_env_convention() {
+        let _guard = env_lock();
+        clear_known_envs();
+        unsafe { std::env::set_var("MODELSTUDIO_API_KEY", "ms-key") };
+
+        for alias in [
+            "modelstudio-token-plan",
+            "modelstudio-token-plan-anthropic",
+            "modelstudio-coding-plan",
+            "modelstudio-coding-plan-anthropic",
+            "modelstudio",
+            "dashscope",
+            "alibaba-token-plan",
+            "alibaba-coding-plan",
+        ] {
+            assert_eq!(env_for(alias).as_deref(), Some("ms-key"), "{alias}");
+        }
+
+        clear_known_envs();
+        unsafe { std::env::set_var("DASHSCOPE_API_KEY", "dashscope-key") };
+        assert_eq!(
+            env_for("modelstudio-token-plan").as_deref(),
+            Some("dashscope-key"),
+            "DASHSCOPE_API_KEY is the fallback for the same account"
+        );
 
         clear_known_envs();
     }

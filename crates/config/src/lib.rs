@@ -2832,7 +2832,7 @@ impl ConfigToml {
                 None => (None, None),
             }
         } else {
-            match secrets.resolve_with_source(provider.as_str()) {
+            match secrets.resolve_with_source(provider.secret_store_slot()) {
                 Some((value, source)) => {
                     let source = match source {
                         SecretSource::Keyring => RuntimeApiKeySource::Keyring,

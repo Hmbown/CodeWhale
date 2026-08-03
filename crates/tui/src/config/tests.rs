@@ -9409,6 +9409,80 @@ fn save_api_key_for_deepseek_cn_uses_root_deepseek_storage() -> Result<()> {
 }
 
 #[test]
+fn modelstudio_variants_share_one_secret_slot_and_key_availability() -> Result<()> {
+    let _lock = lock_test_env();
+    let temp_root = tempfile::tempdir()?;
+    let _guard = EnvGuard::new(temp_root.path());
+    let codewhale_home = temp_root.path().join("codewhale-home");
+    let config_path = codewhale_home.join("config.toml");
+    let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", codewhale_home.as_os_str());
+    let _config_path = EnvVarGuard::set("CODEWHALE_CONFIG_PATH", config_path.as_os_str());
+    let _backend = EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+    let _ms_env = EnvVarGuard::remove("MODELSTUDIO_API_KEY");
+    let _dashscope_env = EnvVarGuard::remove("DASHSCOPE_API_KEY");
+    let _cli_source = EnvVarGuard::remove("DEEPSEEK_API_KEY_SOURCE");
+    let _cli_key = EnvVarGuard::remove("CODEWHALE_CLI_API_KEY");
+
+    let variants = [
+        ApiProvider::ModelstudioTokenPlan,
+        ApiProvider::ModelstudioTokenPlanAnthropic,
+        ApiProvider::ModelstudioCodingPlan,
+        ApiProvider::ModelstudioCodingPlanAnthropic,
+    ];
+    for variant in variants {
+        assert_eq!(
+            provider_secret_store_slot(variant),
+            "modelstudio-token-plan",
+            "{variant:?} must share the family's one credential slot"
+        );
+    }
+
+    // Saving on the Token Plan variant writes the single family slot only.
+    save_api_key_for(ApiProvider::ModelstudioTokenPlan, "ms-family-key")?;
+    let secrets = codewhale_secrets::Secrets::auto_detect();
+    assert_eq!(
+        secrets.get("modelstudio-token-plan")?,
+        Some("ms-family-key".to_string())
+    );
+    assert_eq!(secrets.get("modelstudio-coding-plan")?, None);
+
+    // Every variant — active or not — resolves the family key, so the picker
+    // badge stops showing three bogus "missing key" rows after one save.
+    let inactive_variants = Config::load(Some(config_path.clone()), None)?;
+    for variant in variants {
+        assert_eq!(
+            provider_secret_store_api_key(&inactive_variants, variant).as_deref(),
+            Some("ms-family-key"),
+            "{variant:?} must read the family slot"
+        );
+        assert!(
+            has_api_key_for(&inactive_variants, variant),
+            "{variant:?} key-availability badge must resolve the family key"
+        );
+    }
+
+    // Saving on any sibling variant overwrites the same shared slot.
+    save_api_key_for(
+        ApiProvider::ModelstudioCodingPlanAnthropic,
+        "ms-family-key-v2",
+    )?;
+    assert_eq!(
+        secrets.get("modelstudio-token-plan")?,
+        Some("ms-family-key-v2".to_string())
+    );
+    assert_eq!(secrets.get("modelstudio-coding-plan-anthropic")?, None);
+    let reloaded = Config::load(Some(config_path), None)?;
+    for variant in variants {
+        assert_eq!(
+            provider_secret_store_api_key(&reloaded, variant).as_deref(),
+            Some("ms-family-key-v2"),
+            "{variant:?} must follow the family slot across saves"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn nvidia_nim_reads_facade_provider_table() -> Result<()> {
     let _lock = lock_test_env();
     let nanos = SystemTime::now()

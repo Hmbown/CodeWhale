@@ -269,6 +269,31 @@ impl ProviderKind {
         matches!(self, Self::Siliconflow | Self::SiliconflowCN)
     }
 
+    /// Canonical durable-credential slot in the local secret store.
+    ///
+    /// Most providers own a slot named after their id. Variants authenticated
+    /// by the SAME account share one slot so a single saved key (or logout)
+    /// applies to the whole family:
+    ///
+    /// - `SiliconflowCN` shares `siliconflow` (historical China-endpoint slot,
+    ///   already the TUI/CLI convention).
+    /// - The four Alibaba Cloud Model Studio variants share
+    ///   `modelstudio-token-plan`: one Model Studio account/key authenticates
+    ///   the Token Plan and Coding Plan endpoints in both wire dialects, so
+    ///   per-variant slots produced three bogus "missing key" rows whenever
+    ///   one variant held the key.
+    #[must_use]
+    pub fn secret_store_slot(self) -> &'static str {
+        match self {
+            Self::SiliconflowCN => "siliconflow",
+            Self::ModelstudioTokenPlan
+            | Self::ModelstudioTokenPlanAnthropic
+            | Self::ModelstudioCodingPlan
+            | Self::ModelstudioCodingPlanAnthropic => "modelstudio-token-plan",
+            _ => self.as_str(),
+        }
+    }
+
     /// Return the built-in metadata entry for this provider.
     ///
     /// This is a metadata foundation only; runtime routing still resolves

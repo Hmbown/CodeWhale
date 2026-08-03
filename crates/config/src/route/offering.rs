@@ -235,16 +235,27 @@ pub fn bundled_offerings() -> Vec<ProviderModelOffering> {
     // Alibaba Cloud Model Studio — Token Plan and Coding Plan.
     // All models below are classified as Text Generation / Reasoning on the
     // Model Studio catalog; reasoning and tool-call capabilities are marked
-    // Supported conservatively. Visual Understanding flag is not listed here
-    // because Codewhale's image-input routing for these models is unverified.
-    let ms_capabilities = RouteCapabilities {
-        reasoning: CapabilityState::Supported,
-        native_tool_calls: CapabilityState::Supported,
-        structured_output: CapabilityState::Supported,
-        streaming: CapabilityState::Supported,
-        image_input: CapabilityState::Unknown,
-        ..RouteCapabilities::default()
-    };
+    // Supported conservatively. Image input is per model: the owner's Token
+    // Plan console (verified 2026-08-03) lists Visual Understanding for
+    // qwen3.8-max, qwen3.8-max-preview, qwen3.7-plus, and qwen3.6-flash —
+    // corroborated by upstream Models.dev modalities — while qwen3.7-max,
+    // the DeepSeek rows, and glm-5.2 are text-only on both sources.
+    fn ms_capabilities(model: &str) -> RouteCapabilities {
+        let image_input = match model {
+            "qwen3.8-max" | "qwen3.8-max-preview" | "qwen3.7-plus" | "qwen3.6-flash" => {
+                CapabilityState::Supported
+            }
+            _ => CapabilityState::Unsupported,
+        };
+        RouteCapabilities {
+            reasoning: CapabilityState::Supported,
+            native_tool_calls: CapabilityState::Supported,
+            structured_output: CapabilityState::Supported,
+            streaming: CapabilityState::Supported,
+            image_input,
+            ..RouteCapabilities::default()
+        }
+    }
     for plan_provider_id in &["modelstudio-token-plan", "modelstudio-coding-plan"] {
         let plan = ProviderId::from(*plan_provider_id);
         offerings.extend(
@@ -258,7 +269,7 @@ pub fn bundled_offerings() -> Vec<ProviderModelOffering> {
                     endpoint_key: "chat".to_string(),
                     default_for_provider: i == 0,
                     limits: RouteLimits::default(),
-                    capabilities: ms_capabilities,
+                    capabilities: ms_capabilities(model),
                     pricing: PricingSku::UnknownOrStale,
                 }),
         );
@@ -280,7 +291,7 @@ pub fn bundled_offerings() -> Vec<ProviderModelOffering> {
                     endpoint_key: "messages".to_string(),
                     default_for_provider: i == 0,
                     limits: RouteLimits::default(),
-                    capabilities: ms_capabilities,
+                    capabilities: ms_capabilities(model),
                     pricing: PricingSku::UnknownOrStale,
                 }),
         );
