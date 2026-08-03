@@ -1,6 +1,6 @@
 # Codewhale harness for Verifiers
 
-This local package runs Codewhale v0.9.1 as a Prime Intellect Verifiers v0.2
+This local package runs Codewhale v0.9.4 as a Prime Intellect Verifiers v0.2
 harness. Verifiers owns the task, rubric, model interception, and rollout
 runtime. Codewhale owns the coding-agent loop and its tools.
 

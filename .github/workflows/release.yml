@@ -88,10 +88,14 @@ jobs:
           workspace_version="$(grep -E '^version = "' Cargo.toml | head -n1 | sed -E 's/^version = "([^"]+)".*/\1/')"
           npm_version="$(node -p "require('./npm/codewhale/package.json').version")"
           binary_version="$(node -p "require('./npm/codewhale/package.json').codewhaleBinaryVersion")"
+          sdk_version="$(node -p "require('./npm/runtime-sdk/package.json').version")"
+          vscode_version="$(node -p "require('./extensions/vscode/package.json').version")"
           for pair in \
             "workspace:${workspace_version}" \
             "npm:${npm_version}" \
-            "npm binary:${binary_version}"; do
+            "npm binary:${binary_version}" \
+            "runtime-sdk:${sdk_version}" \
+            "vscode:${vscode_version}"; do
             label="${pair%%:*}"
             actual="${pair#*:}"
             if [[ "${actual}" != "${expected}" ]]; then
