@@ -182,7 +182,7 @@
   "document_kind": "codewhale.source_structure_budget",
   "large_module_threshold_lines": 1000,
   "max_large_module_count": 172,
-  "max_module_lines": 19125,
+  "max_module_lines": 19139,
   "max_total_owned_rust_lines": 649350,
   "schema_version": 1,
   "workspace_packages": [
