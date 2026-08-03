@@ -13,7 +13,6 @@ use super::types::{
 };
 
 const PLUGIN_MANIFEST: &str = "plugin.toml";
-const STATE_FILE: &str = "state.json";
 
 #[derive(Debug, Clone)]
 pub struct DiscoveryConfig {
@@ -22,23 +21,6 @@ pub struct DiscoveryConfig {
     pub workspace_plugins_dir: PathBuf,
     pub builtin_plugin_dirs: Vec<PathBuf>,
     pub state_path: PathBuf,
-}
-
-impl DiscoveryConfig {
-    #[must_use]
-    pub fn for_workspace(workspace: &Path) -> Self {
-        let user_plugins_dir = default_user_plugins_dir();
-        Self {
-            workspace: workspace.to_path_buf(),
-            state_path: user_plugins_dir.join(STATE_FILE),
-            user_plugins_dir,
-            workspace_plugins_dir: default_workspace_plugins_dir(workspace),
-            // No packaged built-in bundle is activated in v0.9.1. The old
-            // source-tree-only rust-toolkit example was misleading because a
-            // distributed binary could not resolve its files.
-            builtin_plugin_dirs: Vec::new(),
-        }
-    }
 }
 
 #[must_use]
@@ -67,11 +49,6 @@ pub fn default_user_plugins_dir() -> PathBuf {
 #[must_use]
 pub fn default_workspace_plugins_dir(workspace: &Path) -> PathBuf {
     workspace.join(".codewhale").join("plugins")
-}
-
-#[must_use]
-pub fn default_state_path() -> PathBuf {
-    default_user_plugins_dir().join(STATE_FILE)
 }
 
 #[cfg(test)]

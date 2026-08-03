@@ -394,30 +394,8 @@ fn version_bump_respects_deleted_existing_skill_while_adding_new_skill() {
     assert_eq!(ver.trim(), BUNDLED_SKILL_VERSION);
 }
 
-// ── uninstall ─────────────────────────────────────────────────────────────
+// ── upgrade ───────────────────────────────────────────────────────────────
 
-#[test]
-fn uninstall_removes_bundled_skills_and_marker() {
-    let tmp = TempDir::new().unwrap();
-    install_system_skills(tmp.path()).unwrap();
-    uninstall_system_skills(tmp.path()).unwrap();
-
-    for skill in BUNDLED_SKILLS {
-        assert!(
-            !skill_file(&tmp, skill.name).exists(),
-            "{} should be removed",
-            skill.name
-        );
-    }
-    assert!(!marker_file(&tmp).exists(), "marker should be removed");
-}
-
-#[test]
-fn uninstall_on_clean_dir_is_a_noop() {
-    let tmp = TempDir::new().unwrap();
-    // Must not panic or error.
-    uninstall_system_skills(tmp.path()).unwrap();
-}
 #[test]
 fn upgrade_from_v4_installs_pack_and_retires_unchanged_v4_best_practices() {
     let tmp = TempDir::new().unwrap();

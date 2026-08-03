@@ -465,7 +465,7 @@ fn skills_directories_returns_existing_dirs_in_precedence_order() {
     std::fs::create_dir_all(workspace.join(".claude").join("skills")).unwrap();
     std::fs::create_dir_all(workspace.join(".cursor").join("skills")).unwrap();
 
-    let dirs = super::skills_directories(workspace);
+    let dirs = super::skills_directories_for_mode(workspace, super::SkillDiscoveryMode::Compatible);
     // We don't assert on the global default position because it's
     // host-dependent (may not exist on the test machine).
     let mut idx = 0;
@@ -1567,16 +1567,18 @@ fn workspace_and_dir_entry_point_shares_the_same_cache() {
         crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.join(".codewhale"));
 
     super::reset_discovery_metrics();
-    let first = super::discover_for_workspace_and_dir_with_mode(
+    let first = super::discover_for_workspace_and_dir_with_mode_and_plugins(
         &workspace,
         &skills_dir,
         super::SkillDiscoveryMode::Compatible,
+        None,
     );
     let walked = discovery_delta_since(super::SkillDiscoveryMetrics::default());
-    let second = super::discover_for_workspace_and_dir_with_mode(
+    let second = super::discover_for_workspace_and_dir_with_mode_and_plugins(
         &workspace,
         &skills_dir,
         super::SkillDiscoveryMode::Compatible,
+        None,
     );
     let rewalked = discovery_delta_since(walked);
 

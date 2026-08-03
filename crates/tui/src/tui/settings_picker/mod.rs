@@ -1,4 +1,4 @@
-//! Shared transactional settings-picker framework.
+//! Shared settings-picker framework.
 //!
 //! # Contract
 //!
@@ -8,7 +8,7 @@
 //! - option catalog + tab/search filtering with stable visible indices
 //! - keyboard navigation (↑/↓/Home/End/digits), disabled rows with reasons
 //! - optional per-item actions
-//! - transactional preview / commit / rollback / explicit cancel
+//! - nav-level preview / commit / cancel lifecycle via [`PickerNavResult`]
 //! - responsive list↔detail layout (side-by-side when wide; stacked or
 //!   list-only narrow fallback per option)
 //!
@@ -19,11 +19,8 @@
 //!
 //! - **Theme**: nav/layout migrated — [`crate::tui::theme_picker`] builds
 //!   options and drives [`SettingsPickerController`] for navigation. Theme
-//!   preview/revert still flows through its existing `ViewAction` path, NOT
-//!   through [`transaction`]; the transactional layer has no production
-//!   consumer yet and is exercised only by the matrix tests below
-//!   (TUI-DOG-017 honesty note — wire it or fold it into the first real
-//!   consumer, likely the TUI-DOG-009 model/provider migration).
+//!   preview/revert flows through its existing `ViewAction` path; hosts map
+//!   [`PickerNavResult`] into their own actions.
 //! - **Model / provider**: leave full migration to the TUI-DOG-009 sibling.
 //!   Call `SettingsPickerController::new(options, original_id)` and map
 //!   [`PickerNavResult`] into existing `ViewAction`s; reuse
@@ -36,7 +33,6 @@
 pub mod controller;
 pub mod layout;
 pub mod option;
-pub mod transaction;
 
 pub use controller::{PickerNavResult, SettingsPickerController};
 pub use layout::SettingsPickerLayout;
@@ -44,8 +40,6 @@ pub use layout::SettingsPickerLayout;
 pub use option::{
     SettingAvailability, SettingItemAction, SettingOption, SettingOptionBuilder, SettingValues,
 };
-#[allow(unused_imports)] // public API for host adapters
-pub use transaction::{TransactionCallbacks, TransactionEvent, TransactionLog};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -116,39 +110,6 @@ pub fn handle_nav_key(
         }
         KeyCode::Char(' ') => controller.request_item_action(),
         _ => PickerNavResult::None,
-    }
-}
-
-/// Apply a nav result to a [`TransactionLog`] using the controller's selection.
-#[allow(dead_code)] // host adapters + matrix tests; theme still drives preview via ViewAction
-pub fn apply_nav_to_log(
-    controller: &SettingsPickerController,
-    log: &mut TransactionLog,
-    result: PickerNavResult,
-) {
-    match result {
-        PickerNavResult::Preview => {
-            if let Some(id) = controller.selected_id() {
-                log.preview(id.to_string());
-            }
-        }
-        PickerNavResult::Commit => {
-            if let Some(id) = controller.selected_id() {
-                log.commit(id.to_string());
-            }
-        }
-        PickerNavResult::Cancel => {
-            log.rollback();
-            log.cancel();
-        }
-        PickerNavResult::ItemAction => {
-            if let Some(option) = controller.selected_option()
-                && let Some(action) = &option.action
-            {
-                log.item_action(option.id.clone(), action.id.clone());
-            }
-        }
-        PickerNavResult::None => {}
     }
 }
 
@@ -322,33 +283,22 @@ mod tests {
     #[test]
     fn matrix_preview_commit_and_revert_sequence() {
         let mut controller = SettingsPickerController::new(sample_options(), "system");
-        let mut log = TransactionLog::default();
 
         let preview = handle_nav_key(
             &mut controller,
             KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
             false,
         );
-        apply_nav_to_log(&controller, &mut log, preview);
-        assert_eq!(
-            log.last(),
-            Some(&TransactionEvent::Preview {
-                id: Cow::Borrowed("terminal")
-            })
-        );
+        assert_eq!(preview, PickerNavResult::Preview);
+        assert_eq!(controller.selected_id(), Some("terminal"));
 
         let commit = handle_nav_key(
             &mut controller,
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
             false,
         );
-        apply_nav_to_log(&controller, &mut log, commit);
-        assert_eq!(
-            log.last(),
-            Some(&TransactionEvent::Commit {
-                id: Cow::Borrowed("terminal")
-            })
-        );
+        assert_eq!(commit, PickerNavResult::Commit);
+        assert_eq!(controller.selected_id(), Some("terminal"));
 
         // Re-open semantics: cancel restores the original id via rollback.
         let mut controller = SettingsPickerController::new(sample_options(), "system");
@@ -358,9 +308,7 @@ mod tests {
             KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
             false,
         );
-        apply_nav_to_log(&controller, &mut log, cancel);
-        assert!(log.events.contains(&TransactionEvent::Rollback));
-        assert!(log.events.contains(&TransactionEvent::Cancel));
+        assert_eq!(cancel, PickerNavResult::Cancel);
         assert_eq!(controller.original_id(), "system");
     }
 
@@ -396,19 +344,17 @@ mod tests {
     fn item_action_fires_on_space() {
         let mut controller = SettingsPickerController::new(sample_options(), "system");
         controller.set_query("dracula");
-        let mut log = TransactionLog::default();
         let result = handle_nav_key(
             &mut controller,
             KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
             false,
         );
-        apply_nav_to_log(&controller, &mut log, result);
+        assert_eq!(result, PickerNavResult::ItemAction);
+        let option = controller.selected_option().expect("dracula selected");
+        assert_eq!(option.id, "dracula");
         assert_eq!(
-            log.last(),
-            Some(&TransactionEvent::ItemAction {
-                option_id: Cow::Borrowed("dracula"),
-                action_id: Cow::Borrowed("swatch"),
-            })
+            option.action.as_ref().map(|action| action.id.as_ref()),
+            Some("swatch")
         );
     }
 }

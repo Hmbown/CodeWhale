@@ -4978,7 +4978,7 @@ fn zai_aliases_resolve_to_canonical_models() {
         normalize_model_for_provider(ProviderKind::Zai, "glm-5-2"),
         DEFAULT_ZAI_MODEL
     );
-    assert_eq!(DEFAULT_ZAI_MODEL, ZAI_GLM_5_2_MODEL);
+    assert_eq!(DEFAULT_ZAI_MODEL, "GLM-5.2");
     assert_eq!(
         normalize_model_for_provider(ProviderKind::Zai, "glm-5-turbo"),
         ZAI_GLM_5_TURBO_MODEL

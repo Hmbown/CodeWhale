@@ -1,6 +1,6 @@
 # Settings picker framework
 
-Shared transactional picker infrastructure for the underwater TUI lives in
+Shared settings-picker infrastructure for the underwater TUI lives in
 `crates/tui/src/tui/settings_picker/`.
 
 ## What it owns
@@ -9,7 +9,7 @@ Shared transactional picker infrastructure for the underwater TUI lives in
   reason, help/detail, optional per-item actions, and narrow-layout preference
 - Tab + search filtering with **stable visible indices**
 - Keyboard nav (↑/↓/Home/End/digits/Tab), Esc cancel, Enter commit
-- Transactional **preview → commit → rollback/cancel** callbacks
+- Nav-level **preview → commit → cancel** lifecycle via `PickerNavResult`
 - Responsive list/detail via `SettingsPickerLayout` (side-by-side when wide;
   stacked or list-only when narrow)
 
@@ -30,7 +30,7 @@ concrete picker so shared contracts do not flatten visual character.
 ```rust
 use crate::tui::settings_picker::{
     SettingOption, SettingsPickerController, SettingsPickerLayout,
-    handle_nav_key, apply_nav_to_log, PickerNavResult,
+    handle_nav_key, PickerNavResult,
 };
 
 let mut controller = SettingsPickerController::new(options, original_id);

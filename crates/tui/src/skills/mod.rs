@@ -24,11 +24,11 @@ pub use roots::{
     CompatibleHarness, SkillRootAccess, SkillRootCatalog, SkillRootDescriptor, SkillRootId,
     SkillRootKind, SkillScope, classify_configured_skills_dir, safe_display_path,
 };
+#[allow(unused_imports)]
+pub use system::is_exact_bundled_skill;
 pub use system::{
     BundledSkillTier, bundled_skill_tier, install_system_skills, is_bundled_skill_name,
 };
-#[allow(unused_imports)]
-pub use system::{bundled_skill_body_sha256, is_exact_bundled_skill};
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -426,7 +426,7 @@ impl SkillRegistry {
                         // normalize to the same command name (e.g. `My Skill/`
                         // and `my_skill/` both slugify to `my-skill`). Keep the
                         // first (matching the cross-root merge in
-                        // `discover_from_directories`) and warn instead of
+                        // `discover_from_directories_with_plugins`) and warn instead of
                         // silently pushing an unreachable duplicate (#3919).
                         let shadowed_by = registry
                             .skills
@@ -891,12 +891,6 @@ fn normalize_skill_name_segment(name: &str) -> String {
 /// need to filter further. Returns an empty vec when nothing is
 /// installed (the system-prompt skills block is then suppressed).
 #[must_use]
-#[allow(dead_code)]
-pub fn skills_directories(workspace: &Path) -> Vec<PathBuf> {
-    skills_directories_for_mode(workspace, SkillDiscoveryMode::Compatible)
-}
-
-#[must_use]
 pub fn skills_directories_for_mode(workspace: &Path, mode: SkillDiscoveryMode) -> Vec<PathBuf> {
     let home = crate::config::effective_home_dir();
     skills_directories_with_home_and_mode(workspace, home.as_deref(), mode)
@@ -917,7 +911,7 @@ pub(crate) use roots::existing_skill_dirs;
 /// Walk every candidate skills directory for a workspace and merge
 /// the discovered skills into a single registry. Name conflicts are
 /// resolved with first-match-wins precedence per
-/// [`skills_directories`].
+/// [`skills_directories_for_mode`].
 ///
 /// Warnings from each scanned directory accumulate so the model
 /// (and the user via `/skill list`) can see why a skill didn't
@@ -949,21 +943,6 @@ pub fn discover_in_workspace_with_mode_and_plugins(
 /// custom configured directory is inserted before global defaults when it is
 /// outside that set so explicit configuration cannot be buried by large global
 /// libraries.
-#[must_use]
-#[allow(dead_code)]
-pub fn discover_for_workspace_and_dir(workspace: &Path, skills_dir: &Path) -> SkillRegistry {
-    discover_for_workspace_and_dir_with_mode(workspace, skills_dir, SkillDiscoveryMode::Compatible)
-}
-
-#[must_use]
-pub fn discover_for_workspace_and_dir_with_mode(
-    workspace: &Path,
-    skills_dir: &Path,
-    mode: SkillDiscoveryMode,
-) -> SkillRegistry {
-    discover_for_workspace_and_dir_with_mode_and_plugins(workspace, skills_dir, mode, None)
-}
-
 #[must_use]
 pub fn discover_for_workspace_and_dir_with_mode_and_plugins(
     workspace: &Path,
@@ -1004,11 +983,6 @@ fn insert_configured_skills_dir(dirs: &mut Vec<PathBuf>, workspace: &Path, skill
         })
         .unwrap_or(dirs.len());
     dirs.insert(insert_at, skills_dir.to_path_buf());
-}
-
-#[allow(dead_code)]
-pub(crate) fn discover_from_directories(dirs: impl IntoIterator<Item = PathBuf>) -> SkillRegistry {
-    discover_from_directories_with_plugins(dirs, None)
 }
 
 pub(crate) fn discover_from_directories_with_plugins(

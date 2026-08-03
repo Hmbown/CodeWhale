@@ -816,18 +816,6 @@ impl ToolRegistryBuilder {
         self.with_tool(Arc::new(ImageAnalyzeTool::new(config)))
     }
 
-    /// Previously registered the OpenAI-style `multi_tool_use.parallel`
-    /// meta-tool. DeepSeek-V4 has native parallel tool calls (multiple
-    /// `tool_calls` entries in one assistant turn) and the meta-tool name
-    /// triggered the model to hallucinate OpenAI-internal XML wrappers
-    /// (`<multi_tool_use.parallel><tool_name>…</tool_name>…`) instead of
-    /// emitting native calls. Kept as a no-op so existing callers compile;
-    /// the engine's compatibility dispatcher still handles legacy emissions.
-    #[must_use]
-    pub fn with_parallel_tool(self) -> Self {
-        self
-    }
-
     /// Include request_user_input tool.
     #[must_use]
     pub fn with_user_input_tool(self) -> Self {
@@ -1003,7 +991,6 @@ impl ToolRegistryBuilder {
             .with_note_tool()
             .with_search_tools()
             .with_user_input_tool()
-            .with_parallel_tool()
             .with_git_tools()
             .with_git_history_tools()
             .with_diagnostics_tool()

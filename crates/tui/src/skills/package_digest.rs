@@ -71,12 +71,6 @@ pub fn compute_package_digest(package_dir: &Path) -> Result<String, PackageDiges
     Ok(hex_digest(hasher.finalize()))
 }
 
-/// Whether the package tree is safe (no symlink / escape / cycle) under limits.
-#[allow(dead_code)] // used by future import/validation paths
-pub fn package_is_path_safe(package_dir: &Path) -> bool {
-    compute_package_digest(package_dir).is_ok()
-}
-
 fn walk(
     dir: &Path,
     package_root: &Path,
