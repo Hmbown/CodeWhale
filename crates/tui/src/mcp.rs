@@ -1632,7 +1632,7 @@ fn is_legacy_sse_transport(config: &McpServerConfig) -> bool {
         .unwrap_or(false)
 }
 
-fn validate_mcp_transport(transport: Option<&str>) -> Result<()> {
+pub fn validate_mcp_transport(transport: Option<&str>) -> Result<()> {
     let Some(transport) = transport else {
         return Ok(());
     };
