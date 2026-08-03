@@ -117,7 +117,7 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
     },
     // --- Editing ---
     KeybindingEntry {
-        chord: "← / →",
+        chord: "← / → / Ctrl+←/→ / Alt+←/→",
         description_id: crate::localization::MessageId::KbMoveCursor,
         section: KeybindingSection::Editing,
     },
@@ -137,7 +137,22 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
         section: KeybindingSection::Editing,
     },
     KeybindingEntry {
-        chord: "Shift+←/→ / Shift+Home/End",
+        chord: "Ctrl+W / Ctrl+Backspace / Alt+Backspace",
+        description_id: crate::localization::MessageId::KbDeleteWord,
+        section: KeybindingSection::Editing,
+    },
+    KeybindingEntry {
+        chord: "Ctrl+Y",
+        description_id: crate::localization::MessageId::KbYank,
+        section: KeybindingSection::Editing,
+    },
+    KeybindingEntry {
+        chord: "Ctrl+Shift+E / Cmd+Shift+E",
+        description_id: crate::localization::MessageId::KbToggleFileTree,
+        section: KeybindingSection::Navigation,
+    },
+    KeybindingEntry {
+        chord: "Shift+←/→ / Shift+Home/End / Ctrl+Shift+←/→ / Alt+Shift+←/→ / Ctrl+Shift+Home/End",
         description_id: crate::localization::MessageId::KbSelectText,
         section: KeybindingSection::Editing,
     },
