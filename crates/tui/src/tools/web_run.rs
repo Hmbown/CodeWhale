@@ -678,7 +678,43 @@ impl ToolSpec for WebRunTool {
             }
         }
 
+        if output.performed_no_op() {
+            // #5123-class: an empty success here reads as "nothing found"
+            // rather than "you called the tool wrong" (e.g. the natural
+            // {"query": …} shape, which matches no op key).
+            let received: Vec<&str> = input
+                .as_object()
+                .map(|object| object.keys().map(String::as_str).collect())
+                .unwrap_or_default();
+            return Err(ToolError::invalid_input(format!(
+                "web.run performed no operation. Pass at least one non-empty op array \
+                 ({}). Received keys: [{}].",
+                WEB_RUN_OP_KEYS.join(", "),
+                received.join(", ")
+            )));
+        }
+
         bounded_web_run_result(&output, context)
+    }
+}
+
+const WEB_RUN_OP_KEYS: [&str; 6] = [
+    "search_query",
+    "image_query",
+    "open",
+    "click",
+    "find",
+    "screenshot",
+];
+
+impl WebRunOutput {
+    fn performed_no_op(&self) -> bool {
+        self.search_query.is_none()
+            && self.image_query.is_none()
+            && self.open.is_none()
+            && self.click.is_none()
+            && self.find.is_none()
+            && self.screenshot.is_none()
     }
 }
 
@@ -2051,5 +2087,30 @@ mod tests {
             format!("{err}").contains("restricted address"),
             "redirect loop must surface the shared guard rejection; got {err}"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn execute_fails_fast_when_no_op_key_matches() {
+        // #5123-class: the natural {"query": …} shape matched no op key and
+        // previously returned an empty SUCCESS ({"warnings":[]}).
+        let _lock = WEB_RUN_TEST_LOCK.lock().await;
+        reset_web_run_state();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let context = ToolContext::new(tmp.path());
+
+        let err = WebRunTool
+            .execute(json!({"query": "rust async runtime"}), &context)
+            .await
+            .expect_err("unmatched op keys must fail, not return empty success");
+        let message = format!("{err}");
+        assert!(message.contains("performed no operation"), "{message}");
+        assert!(message.contains("search_query"), "{message}");
+        assert!(message.contains("query"), "{message}");
+
+        let err = WebRunTool
+            .execute(json!({}), &context)
+            .await
+            .expect_err("empty input must fail fast");
+        assert!(format!("{err}").contains("performed no operation"), "{err}");
     }
 }
