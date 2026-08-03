@@ -265,6 +265,37 @@ impl ProviderKind {
             .map(|p| p.kind())
     }
 
+    /// Parse a provider identifier for **config-table identity** — the kind
+    /// used to look up credentials, model, and base URL in the user's
+    /// `[providers.*]` tables.
+    ///
+    /// [`parse`](Self::parse) is *catalog* identity: legacy dual-wire
+    /// spellings (`deepseek-anthropic`, `minimax-anthropic`, the Model Studio
+    /// plan/dialect kinds) are aliases of the vendor primary and collapse
+    /// onto it so pickers show one row per vendor. That collapse must not
+    /// decide which config table holds the user's credentials: TOML serde
+    /// keeps the legacy kind for `provider = "deepseek-anthropic"`, so env
+    /// (`CODEWHALE_PROVIDER`) and `config set provider` must resolve the same
+    /// way or the user's own named table is orphaned with the key present.
+    ///
+    /// An exact canonical-id or `provider_config_key` match across the full
+    /// registry (including legacy dialect/plan kinds) therefore wins over
+    /// alias collapse; everything else falls back to [`parse`](Self::parse).
+    /// Wire-endpoint selection is unaffected: it keys off the resolved kind's
+    /// `wire` config, not this parse.
+    #[must_use]
+    pub fn parse_config_identity(value: &str) -> Option<Self> {
+        let trimmed = value.trim();
+        provider::all_providers()
+            .iter()
+            .find(|p| {
+                trimmed.eq_ignore_ascii_case(p.id())
+                    || trimmed.eq_ignore_ascii_case(p.provider_config_key())
+            })
+            .map(|p| p.kind())
+            .or_else(|| Self::parse(trimmed))
+    }
+
     #[must_use]
     pub fn is_siliconflow(self) -> bool {
         matches!(self, Self::Siliconflow | Self::SiliconflowCN)
