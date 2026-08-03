@@ -1208,8 +1208,7 @@ async fn mcp_tools_endpoint_is_passive_until_connect_requested() -> Result<()> {
 
 #[tokio::test]
 async fn mcp_server_management_crud() -> Result<()> {
-    let root =
-        std::env::temp_dir().join(format!("codewhale-mcp-mgmt-{}", Uuid::new_v4()));
+    let root = std::env::temp_dir().join(format!("codewhale-mcp-mgmt-{}", Uuid::new_v4()));
     let sessions_dir = root.join("sessions");
     fs::create_dir_all(&root)?;
 
@@ -1330,10 +1329,7 @@ async fn mcp_server_management_crud() -> Result<()> {
     assert_eq!(deleted["ok"], true);
 
     // 9. GET after delete returns 404.
-    let not_found = client
-        .get(format!("{base}/test-stdio"))
-        .send()
-        .await?;
+    let not_found = client.get(format!("{base}/test-stdio")).send().await?;
     assert_eq!(not_found.status(), 404);
 
     handle.abort();
@@ -1342,10 +1338,8 @@ async fn mcp_server_management_crud() -> Result<()> {
 
 #[tokio::test]
 async fn mcp_server_management_create_requires_command_or_url() -> Result<()> {
-    let root = std::env::temp_dir().join(format!(
-        "codewhale-mcp-mgmt-validation-{}",
-        Uuid::new_v4()
-    ));
+    let root =
+        std::env::temp_dir().join(format!("codewhale-mcp-mgmt-validation-{}", Uuid::new_v4()));
     let sessions_dir = root.join("sessions");
     fs::create_dir_all(&root)?;
 
@@ -1378,10 +1372,7 @@ async fn mcp_server_management_create_requires_command_or_url() -> Result<()> {
 
 #[tokio::test]
 async fn mcp_server_management_redacts_credentials() -> Result<()> {
-    let root = std::env::temp_dir().join(format!(
-        "codewhale-mcp-mgmt-redact-{}",
-        Uuid::new_v4()
-    ));
+    let root = std::env::temp_dir().join(format!("codewhale-mcp-mgmt-redact-{}", Uuid::new_v4()));
     let sessions_dir = root.join("sessions");
     fs::create_dir_all(&root)?;
 
@@ -1430,10 +1421,7 @@ async fn mcp_server_management_redacts_credentials() -> Result<()> {
 
 #[tokio::test]
 async fn runtime_info_advertises_mcp_server_management() -> Result<()> {
-    let root = std::env::temp_dir().join(format!(
-        "codewhale-mcp-capability-{}",
-        Uuid::new_v4()
-    ));
+    let root = std::env::temp_dir().join(format!("codewhale-mcp-capability-{}", Uuid::new_v4()));
     let sessions_dir = root.join("sessions");
     let Some((addr, _runtime_threads, handle)) =
         spawn_test_server_with_root(root, sessions_dir).await?
@@ -1451,8 +1439,7 @@ async fn runtime_info_advertises_mcp_server_management() -> Result<()> {
         .await?;
 
     assert_eq!(
-        info["capabilities"]["mcp_server_management"],
-        true,
+        info["capabilities"]["mcp_server_management"], true,
         "runtime/info must advertise mcp_server_management capability"
     );
 

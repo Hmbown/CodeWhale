@@ -878,14 +878,20 @@ pub fn build_router(state: RuntimeApiState) -> Router {
         .route("/v1/tasks/{id}/cancel", post(cancel_task))
         .route("/v1/skills", get(list_skills))
         .route("/v1/skills/{name}", post(set_skill_enabled))
-        .route("/v1/apps/mcp/servers", get(list_mcp_servers).post(create_mcp_server))
+        .route(
+            "/v1/apps/mcp/servers",
+            get(list_mcp_servers).post(create_mcp_server),
+        )
         .route(
             "/v1/apps/mcp/servers/{name}",
             get(get_mcp_server)
                 .patch(update_mcp_server)
                 .delete(delete_mcp_server),
         )
-        .route("/v1/apps/mcp/servers/{name}/enable", post(enable_mcp_server))
+        .route(
+            "/v1/apps/mcp/servers/{name}/enable",
+            post(enable_mcp_server),
+        )
         .route(
             "/v1/apps/mcp/servers/{name}/disable",
             post(disable_mcp_server),
@@ -2481,7 +2487,9 @@ async fn get_mcp_server(
         })
     };
 
-    Ok(Json(McpServerDetail::from_config(&name, server_cfg, connected)))
+    Ok(Json(McpServerDetail::from_config(
+        &name, server_cfg, connected,
+    )))
 }
 
 /// `POST /v1/apps/mcp/servers` — add a new server to the persistent config.
@@ -2581,7 +2589,11 @@ async fn update_mcp_server(
         *pool_slot = None;
     }
 
-    Ok(Json(McpServerDetail::from_config(&name, &updated_cfg, false)))
+    Ok(Json(McpServerDetail::from_config(
+        &name,
+        &updated_cfg,
+        false,
+    )))
 }
 
 /// `DELETE /v1/apps/mcp/servers/{name}` — remove a server from the persistent config.
@@ -2591,15 +2603,14 @@ async fn delete_mcp_server(
 ) -> Result<Json<McpServerActionReceipt>, ApiError> {
     let mcp_config_path = state.config.read().mcp_config_path();
 
-    crate::mcp::remove_server_config(&mcp_config_path, &name)
-        .map_err(|e| {
-            let msg = e.to_string();
-            if msg.contains("not found") {
-                ApiError::not_found(msg)
-            } else {
-                ApiError::internal(msg)
-            }
-        })?;
+    crate::mcp::remove_server_config(&mcp_config_path, &name).map_err(|e| {
+        let msg = e.to_string();
+        if msg.contains("not found") {
+            ApiError::not_found(msg)
+        } else {
+            ApiError::internal(msg)
+        }
+    })?;
 
     // Invalidate the in-memory pool.
     {
