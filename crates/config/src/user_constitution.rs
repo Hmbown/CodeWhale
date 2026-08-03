@@ -561,8 +561,10 @@ impl UserConstitution {
     ///
     /// This is the single ingestion gate for text CodeWhale did not author:
     ///
-    /// - Extracts the first JSON object, so fenced or prose-wrapped output
-    ///   still parses; anything without one is [`Invalid`].
+    /// - Extracts balanced JSON objects in order until one parses, so fenced
+    ///   or prose-wrapped output still parses — including prose that itself
+    ///   contains braces before the real draft. Anything without a parseable
+    ///   object is [`Invalid`], and every drop is logged loudly (#5169).
     /// - Unknown keys are ignored by serde, so a draft cannot smuggle
     ///   runtime-policy fields (`approval_policy`, `sandbox_mode`, …) into the
     ///   persisted file — the schema simply has nowhere to put them.
@@ -576,20 +578,35 @@ impl UserConstitution {
     /// [`Invalid`]: UntrustedDraftParse::Invalid
     #[must_use]
     pub fn from_untrusted_json(raw: &str) -> UntrustedDraftParse {
-        let Some(json) = extract_first_json_object(raw) else {
-            return UntrustedDraftParse::Invalid("no JSON object found in draft".to_string());
-        };
-        match serde_json::from_str::<UserConstitution>(json) {
-            Err(err) => UntrustedDraftParse::Invalid(err.to_string()),
-            Ok(draft) => {
-                let sanitized = draft.sanitized_untrusted().bounded();
-                if sanitized.is_empty() {
-                    UntrustedDraftParse::Empty
-                } else {
-                    UntrustedDraftParse::Drafted(Box::new(sanitized))
+        let mut candidates = 0usize;
+        let mut last_error = String::new();
+        for json in extract_json_objects(raw) {
+            candidates += 1;
+            match serde_json::from_str::<UserConstitution>(json) {
+                Ok(draft) => {
+                    let sanitized = draft.sanitized_untrusted().bounded();
+                    return if sanitized.is_empty() {
+                        UntrustedDraftParse::Empty
+                    } else {
+                        UntrustedDraftParse::Drafted(Box::new(sanitized))
+                    };
                 }
+                Err(err) => last_error = err.to_string(),
             }
         }
+        let reason = if candidates == 0 {
+            "no JSON object found in draft".to_string()
+        } else if candidates == 1 {
+            last_error
+        } else {
+            format!(
+                "{candidates} JSON objects found, none parse as a constitution draft; last error: {last_error}"
+            )
+        };
+        // A dropped draft is a failed model turn the user is otherwise never
+        // told about; drops must log loudly.
+        tracing::warn!("dropping unparseable constitution draft: {reason}");
+        UntrustedDraftParse::Invalid(reason)
     }
 
     /// Sanitize every text field of an untrusted draft. See
@@ -1083,38 +1100,59 @@ pub enum UntrustedDraftParse {
     Invalid(String),
 }
 
-/// Extract the first balanced top-level JSON object from `raw`, tolerating
-/// fences and prose around it. Strings and escapes are respected so braces
-/// inside field values do not end the scan early.
-fn extract_first_json_object(raw: &str) -> Option<&str> {
-    let start = raw.find('{')?;
-    let mut depth = 0usize;
-    let mut in_string = false;
-    let mut escaped = false;
-    for (offset, ch) in raw[start..].char_indices() {
-        if in_string {
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == '"' {
-                in_string = false;
-            }
-            continue;
-        }
-        match ch {
-            '"' => in_string = true,
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(&raw[start..=start + offset]);
+/// Extract every balanced top-level JSON object from `raw` in order of
+/// appearance, tolerating fences and prose around them. Strings and escapes
+/// are respected so braces inside field values do not end the scan early.
+/// An unbalanced `{` is skipped so prose containing braces cannot hide a
+/// later, valid draft object (#5169).
+fn extract_json_objects(raw: &str) -> impl Iterator<Item = &str> {
+    JsonObjectSpans { raw, offset: 0 }
+}
+
+struct JsonObjectSpans<'a> {
+    raw: &'a str,
+    offset: usize,
+}
+
+impl<'a> Iterator for JsonObjectSpans<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<&'a str> {
+        loop {
+            let start = self.offset + self.raw[self.offset..].find('{')?;
+            let mut depth = 0usize;
+            let mut in_string = false;
+            let mut escaped = false;
+            for (rel, ch) in self.raw[start..].char_indices() {
+                if in_string {
+                    if escaped {
+                        escaped = false;
+                    } else if ch == '\\' {
+                        escaped = true;
+                    } else if ch == '"' {
+                        in_string = false;
+                    }
+                    continue;
+                }
+                match ch {
+                    '"' => in_string = true,
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            let end = start + rel + ch.len_utf8();
+                            self.offset = end;
+                            return Some(&self.raw[start..end]);
+                        }
+                    }
+                    _ => {}
                 }
             }
-            _ => {}
+            // No balancing `}` from this `{`: skip it and keep scanning so a
+            // later object can still be found.
+            self.offset = start + 1;
         }
     }
-    None
 }
 
 /// Strip control characters (keeping `\n` and `\t`) and neutralize
@@ -1459,6 +1497,39 @@ mod tests {
             panic!("braces inside strings should not end the object scan");
         };
         assert_eq!(c.notes.as_deref(), Some("a } b"));
+    }
+
+    #[test]
+    fn untrusted_draft_survives_prose_braces_before_the_draft() {
+        // #5169: keying off the first `{` used to drop this draft — the prose
+        // brace pair is not the constitution object.
+        let raw = "Use the {about, notes} shape like this:\n```json\n{\"about\":\"I value concise answers\"}\n```";
+        let UntrustedDraftParse::Drafted(c) = UserConstitution::from_untrusted_json(raw) else {
+            panic!("prose braces must not hide the real draft object");
+        };
+        assert_eq!(c.about.as_deref(), Some("I value concise answers"));
+    }
+
+    #[test]
+    fn untrusted_draft_survives_unbalanced_prose_brace_before_the_draft() {
+        let raw = "I started an example { but here is the draft:\n{\"about\":\"direct edits win\"}";
+        let UntrustedDraftParse::Drafted(c) = UserConstitution::from_untrusted_json(raw) else {
+            panic!("an unbalanced prose brace must not hide the real draft object");
+        };
+        assert_eq!(c.about.as_deref(), Some("direct edits win"));
+    }
+
+    #[test]
+    fn untrusted_draft_drop_names_every_candidate_it_tried() {
+        let UntrustedDraftParse::Invalid(reason) =
+            UserConstitution::from_untrusted_json("{bad} {also bad}")
+        else {
+            panic!("two unparseable objects must be Invalid");
+        };
+        assert!(
+            reason.contains("2 JSON objects found"),
+            "the drop reason must name the tried candidates: {reason}"
+        );
     }
 
     #[test]
