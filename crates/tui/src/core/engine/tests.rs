@@ -7643,25 +7643,29 @@ fn user_shell_turn_outcome_distinguishes_cancel_failure_and_success() {
     );
 }
 
+/// #5191: a user-typed `!` command is pre-approved by provenance — typing it
+/// IS the approval. It must run without the tool-approval modal even in an
+/// Ask/Suggest session, and the audit trail must record the user provenance.
 #[tokio::test]
-async fn run_shell_command_op_requests_approval_and_executes_shell() {
+async fn run_shell_command_op_executes_without_approval_modal() {
+    let _guard = lock_test_env();
+    let tmp = tempdir().expect("tempdir");
+    let audit_path = tmp.path().join("tool-audit.jsonl");
+    let _audit = EnvVarGuard::set("CODEWHALE_TOOL_AUDIT_LOG", &audit_path);
     let (mut engine, handle) = Engine::new(EngineConfig::default(), &Config::default());
     engine.session.allow_shell = false;
     engine.config.allow_shell = false;
-    let handle_for_approval = handle.clone();
 
-    let task = tokio::spawn(async move {
-        engine
-            .handle_run_shell_command(
-                "echo bang-ok".to_string(),
-                AppMode::Agent,
-                true,
-                false,
-                false,
-                crate::tui::approval::ApprovalMode::Suggest,
-            )
-            .await;
-    });
+    engine
+        .handle_run_shell_command(
+            "echo bang-ok".to_string(),
+            AppMode::Agent,
+            true,
+            false,
+            false,
+            crate::tui::approval::ApprovalMode::Suggest,
+        )
+        .await;
 
     let mut saw_started = false;
     let mut saw_approval = false;
@@ -7682,14 +7686,8 @@ async fn run_shell_command_op_requests_approval_and_executes_shell() {
                 assert_eq!(input["command"], json!("echo bang-ok"));
                 assert_eq!(input["source"], json!("user"));
             }
-            Event::ApprovalRequired { id, tool_name, .. } => {
+            Event::ApprovalRequired { .. } => {
                 saw_approval = true;
-                assert!(id.starts_with(USER_SHELL_TOOL_ID_PREFIX));
-                assert_eq!(tool_name, "Bash");
-                handle_for_approval
-                    .approve_tool_call(id)
-                    .await
-                    .expect("approve shell");
             }
             Event::ToolCallComplete { id, name, result } => {
                 saw_complete = true;
@@ -7708,12 +7706,24 @@ async fn run_shell_command_op_requests_approval_and_executes_shell() {
         }
     }
     drop(rx);
-    task.await.expect("shell op task");
 
     assert!(saw_started);
-    assert!(saw_approval);
+    assert!(
+        !saw_approval,
+        "user-typed bang commands must not raise the approval modal (#5191)"
+    );
     assert!(saw_complete);
     assert!(saw_turn_complete);
+
+    let audit = std::fs::read_to_string(&audit_path).expect("audit log written");
+    assert!(
+        audit.contains("tool.user_provenance_preapproved"),
+        "audit trail must record the user-provenance pre-approval: {audit}"
+    );
+    assert!(
+        audit.contains("composer_bang"),
+        "audit row must name the composer-bang source: {audit}"
+    );
 }
 
 #[tokio::test]

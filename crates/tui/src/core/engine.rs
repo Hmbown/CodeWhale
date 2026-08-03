@@ -1433,11 +1433,13 @@ impl Engine {
                 "Tool 'Bash' is disabled by feature flag".to_string(),
             ))
         } else if let Some(spec) = registry.get(&tool_name) {
-            let mut approval_required = spec.approval_requirement_for(&tool_input)
-                != ApprovalRequirement::Auto
-                && !registry.context().auto_approve;
-            let mut approval_description = spec.description().to_string();
-            let mut approval_force_prompt = false;
+            // #5191: the human typed this command — typing it IS the approval.
+            // The tool-approval modal gates model-provenance calls; applying it
+            // to a user-typed `!` command asks the user to re-approve what they
+            // just typed. Typed exec ask-rules still apply as hard Block
+            // denies, and the sandbox/execpolicy layer stays the real safety
+            // boundary. Model-issued shell calls keep the standard approval
+            // path; this branch is strictly composer provenance.
             let ask_rule_decision = exec_shell_ask_rule_decision(
                 &self.config,
                 &tool_name,
@@ -1445,135 +1447,15 @@ impl Engine {
                 &self.session.workspace,
                 self.session.approval_mode,
             );
-            match ask_rule_decision.as_ref() {
-                Some(ToolAskRuleDecision::Allow) => {
-                    approval_required = false;
-                    approval_force_prompt = false;
-                }
-                Some(ToolAskRuleDecision::Prompt(reason)) => {
-                    // YOLO mode (auto_approve) is the explicit "no approvals"
-                    // contract: a typed ask-rule must not pop a modal in YOLO.
-                    // A typed deny rule still blocks hard below.
-                    if !self.session.auto_approve {
-                        approval_required = true;
-                        approval_description = reason.clone();
-                        approval_force_prompt = true;
-                    }
-                }
-                Some(ToolAskRuleDecision::Block(_)) | None => {}
-            }
             if let Some(ToolAskRuleDecision::Block(reason)) = ask_rule_decision {
                 Err(ToolError::permission_denied(reason))
-            } else if approval_required {
+            } else {
                 emit_tool_audit(json!({
-                    "event": "tool.approval_required",
+                    "event": "tool.user_provenance_preapproved",
                     "tool_id": tool_id.clone(),
                     "tool_name": tool_name.clone(),
                     "source": "composer_bang",
                 }));
-                let approval_key =
-                    crate::tools::approval_cache::build_approval_key(&tool_name, &tool_input).0;
-                let approval_grouping_key =
-                    crate::tools::approval_cache::build_approval_grouping_key(
-                        &tool_name,
-                        &tool_input,
-                    )
-                    .0;
-                let _ = self
-                    .tx_event
-                    .send(Event::ApprovalRequired {
-                        id: tool_id.clone(),
-                        tool_name: tool_name.clone(),
-                        input: tool_input.clone(),
-                        description: approval_description,
-                        approval_key,
-                        approval_grouping_key,
-                        intent_summary: None,
-                        approval_force_prompt,
-                    })
-                    .await;
-
-                match self.await_tool_approval(&tool_id).await {
-                    Ok(ApprovalResult::Approved) => {
-                        emit_tool_audit(json!({
-                            "event": "tool.approval_decision",
-                            "tool_id": tool_id.clone(),
-                            "tool_name": tool_name.clone(),
-                            "decision": "approved",
-                            "source": "composer_bang",
-                        }));
-                        let mut result = Self::execute_tool_with_lock(
-                            self.tool_exec_lock.clone(),
-                            spec.supports_parallel(),
-                            false,
-                            self.tx_event.clone(),
-                            Some(self.cancel_token.clone()),
-                            tool_name.clone(),
-                            tool_input.clone(),
-                            self.session.workspace.clone(),
-                            Some(&registry),
-                            None,
-                            None,
-                        )
-                        .await;
-                        if let Ok(tool_result) = result.as_mut() {
-                            stamp_tool_result_approval(
-                                tool_result,
-                                ToolApprovalStamp::ApprovedByUser,
-                            );
-                        }
-                        result
-                    }
-                    Ok(ApprovalResult::Denied) => {
-                        emit_tool_audit(json!({
-                            "event": "tool.approval_decision",
-                            "tool_id": tool_id.clone(),
-                            "tool_name": tool_name.clone(),
-                            "decision": "denied",
-                            "source": "composer_bang",
-                        }));
-                        Err(ToolError::permission_denied(format!(
-                            "Tool '{tool_name}' denied by user"
-                        )))
-                    }
-                    Ok(ApprovalResult::RetryWithPolicy(policy)) => {
-                        emit_tool_audit(json!({
-                            "event": "tool.approval_decision",
-                            "tool_id": tool_id.clone(),
-                            "tool_name": tool_name.clone(),
-                            "decision": "retry_with_policy",
-                            "policy": format!("{policy:?}"),
-                            "source": "composer_bang",
-                        }));
-                        let elevated_context = registry
-                            .context()
-                            .clone()
-                            .with_elevated_sandbox_policy(policy);
-                        let mut result = Self::execute_tool_with_lock(
-                            self.tool_exec_lock.clone(),
-                            spec.supports_parallel(),
-                            false,
-                            self.tx_event.clone(),
-                            Some(self.cancel_token.clone()),
-                            tool_name.clone(),
-                            tool_input.clone(),
-                            self.session.workspace.clone(),
-                            Some(&registry),
-                            None,
-                            Some(elevated_context),
-                        )
-                        .await;
-                        if let Ok(tool_result) = result.as_mut() {
-                            stamp_tool_result_approval(
-                                tool_result,
-                                ToolApprovalStamp::ApprovedWithPolicy,
-                            );
-                        }
-                        result
-                    }
-                    Err(err) => Err(err),
-                }
-            } else {
                 Self::execute_tool_with_lock(
                     self.tool_exec_lock.clone(),
                     spec.supports_parallel(),
