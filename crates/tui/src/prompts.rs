@@ -1546,6 +1546,66 @@ mod tests {
     }
 
     #[test]
+    fn base_prompt_carries_verify_then_stop_completion_contract() {
+        // The completion contract behind "Verify before you claim": prefer the
+        // workspace's own verifier, run it early, stop when green, and end on
+        // an honest blocker instead of wandering. These phrases encode the
+        // contract's semantics, not its prose — a rewording that keeps the
+        // contract should keep these, and one that drops them is a real
+        // behavior change worth failing review for.
+        for phrase in [
+            "run it early",
+            "polishing past green is drift",
+            "name the wall",
+            "An honest blocker is a better ending than endless wandering",
+        ] {
+            assert!(
+                BASE_PROMPT.contains(phrase),
+                "BASE_PROMPT missing completion-contract phrase {phrase:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn yolo_mode_composed_prompt_carries_completion_contract() {
+        // `codewhale exec --auto` runs AppMode::Yolo; the verify-then-stop
+        // contract must survive composition into the prompt that mode ships.
+        let tmp = tempdir().expect("tempdir");
+        let text = system_prompt_flat_text(
+            &system_prompt_for_mode_with_context_skills_session_and_approval(
+                tmp.path(),
+                None,
+                None,
+                None,
+                PromptSessionContext {
+                    user_memory_block: None,
+                    goal_objective: None,
+                    project_context_pack_enabled: false,
+                    locale_tag: "en",
+                    translation_enabled: false,
+                    model_id: "codewhale",
+                    context_window_override: None,
+                    verbosity: None,
+                    skills_scan_codewhale_only: false,
+                    plugin_registry: None,
+                    mode: crate::tui::app::AppMode::Yolo,
+                },
+            ),
+        );
+        for phrase in [
+            "##### Mode: Agent",
+            "### Verify before you claim",
+            "run it early",
+            "An honest blocker is a better ending than endless wandering",
+        ] {
+            assert!(
+                text.contains(phrase),
+                "YOLO-mode composed prompt missing completion-contract phrase {phrase:?}"
+            );
+        }
+    }
+
+    #[test]
     fn constitutional_hierarchy_keeps_user_turn_above_local_law() {
         let heading_at = BASE_PROMPT
             .find("### Whose word wins")
