@@ -1304,7 +1304,10 @@ impl Runtime {
             }
             ThreadRequest::Message { thread_id, input } => {
                 self.thread_manager.touch_message(&thread_id, &input)?;
-                let response_id = format!("{thread_id}:{}", input.len());
+                // Keyed by a fresh uuid, like handle_prompt: keying on
+                // `{thread_id}:{input.len()}` made any two equal-length
+                // messages share a response_id, breaking hook correlation.
+                let response_id = format!("resp-{}", Uuid::new_v4());
                 self.hooks
                     .emit(HookEvent::ResponseStart {
                         response_id: response_id.clone(),
@@ -3332,5 +3335,60 @@ mod tests {
 
         assert_eq!(result["status"], "timeout");
         assert_eq!(result["ok"], false);
+    }
+
+    #[tokio::test]
+    async fn thread_message_response_ids_are_unique_for_equal_length_inputs() {
+        // The Message arm used to key response_id as `{thread_id}:{input.len()}`,
+        // so any two equal-length messages collided and hooks could not tell
+        // their ResponseStart/ResponseEnd pairs apart.
+        let mut runtime = Runtime::new(
+            ConfigToml::default(),
+            ModelRegistry::default(),
+            temp_core_state("response-id-unique"),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(McpManager::default()),
+            ExecPolicyEngine::new(vec![], vec![]),
+            HookDispatcher::default(),
+        );
+        let spawned = runtime
+            .thread_manager
+            .spawn_thread_with_history(
+                "deepseek".to_string(),
+                PathBuf::from("/tmp/codewhale"),
+                InitialHistory::New,
+                true,
+            )
+            .expect("spawn thread");
+        let thread_id = spawned.thread.id.clone();
+
+        let mut response_ids = Vec::new();
+        for input in ["aaaa", "bbbb"] {
+            let response = runtime
+                .handle_thread(ThreadRequest::Message {
+                    thread_id: thread_id.clone(),
+                    input: input.to_string(),
+                })
+                .await
+                .expect("handle message");
+            let response_id = response
+                .events
+                .iter()
+                .find_map(|frame| match frame {
+                    EventFrame::ResponseStart { response_id } => Some(response_id.clone()),
+                    _ => None,
+                })
+                .expect("response start event");
+            response_ids.push(response_id);
+        }
+
+        assert_ne!(
+            response_ids[0], response_ids[1],
+            "equal-length inputs must not share a response_id"
+        );
+        assert!(
+            response_ids.iter().all(|id| id.starts_with("resp-")),
+            "response ids should use the resp-<uuid> shape: {response_ids:?}"
+        );
     }
 }
