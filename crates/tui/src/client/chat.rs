@@ -1939,8 +1939,16 @@ fn build_chat_messages_with_reasoning(
             }
         }
 
-        if role == "assistant" {
-            let content = text_parts.join("\n");
+        if role == "assistant" || role == crate::models::INTERRUPTED_ASSISTANT_ROLE {
+            let content = if role == crate::models::INTERRUPTED_ASSISTANT_ROLE {
+                format!(
+                    "{}{}",
+                    crate::models::INTERRUPTED_ASSISTANT_CONTEXT_PREFIX,
+                    text_parts.join("\n")
+                )
+            } else {
+                text_parts.join("\n")
+            };
             let mut reasoning_content = thinking_parts.join("\n");
             let has_text = !content.trim().is_empty();
             let has_tool_calls = !tool_calls.is_empty();
@@ -2067,7 +2075,7 @@ fn build_chat_messages_with_reasoning(
                     }
                 }
             }
-        } else if role != "assistant" {
+        } else if role != "assistant" && role != crate::models::INTERRUPTED_ASSISTANT_ROLE {
             pending_tool_calls.clear();
         }
     }

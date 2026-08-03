@@ -2821,6 +2821,29 @@ impl Engine {
         self.emit_session_updated().await;
     }
 
+    async fn add_interrupted_assistant_text(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let message = Message {
+            role: crate::models::INTERRUPTED_ASSISTANT_ROLE.to_string(),
+            content: vec![ContentBlock::Text {
+                text: text.to_string(),
+                cache_control: None,
+            }],
+        };
+        let already_committed = self.session.messages.last().is_some_and(|last| {
+            matches!(
+                last.role.as_str(),
+                "assistant" | crate::models::INTERRUPTED_ASSISTANT_ROLE
+            ) && last.content == message.content
+        });
+        if already_committed {
+            return;
+        }
+        self.add_session_message(message).await;
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn turn_metadata_block(
         &self,

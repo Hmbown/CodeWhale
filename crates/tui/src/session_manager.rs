@@ -2305,7 +2305,8 @@ mod tests {
             })
         }));
         assert!(loaded.messages.iter().any(|message| {
-            message.role == "assistant"
+            (message.role == "assistant"
+                || message.role == crate::models::INTERRUPTED_ASSISTANT_ROLE)
                 && message.content.iter().any(|block| {
                     matches!(
                         block,

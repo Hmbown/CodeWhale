@@ -587,7 +587,8 @@ pub fn history_cells_from_message(msg: &Message) -> Vec<HistoryCell> {
                     continue;
                 }
                 // Check if this is an `<archived_context>` block.
-                if msg.role == "assistant"
+                if (msg.role == "assistant"
+                    || msg.role == crate::models::INTERRUPTED_ASSISTANT_ROLE)
                     && let Some(archived) = parse_archived_context(text)
                 {
                     cells.push(archived);

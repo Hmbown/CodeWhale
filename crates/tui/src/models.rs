@@ -100,6 +100,11 @@ pub struct Message {
     pub content: Vec<ContentBlock>,
 }
 
+/// Internal role used for assistant text that was visible before a turn was
+/// interrupted. It is persisted distinctly from a completed answer.
+pub const INTERRUPTED_ASSISTANT_ROLE: &str = "assistant_interrupted";
+pub const INTERRUPTED_ASSISTANT_CONTEXT_PREFIX: &str = "[The following assistant output was interrupted before completion and may be incomplete or wrong]\n";
+
 /// A single content block inside a message.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(tag = "type")]
@@ -737,6 +742,21 @@ pub struct MessageDelta {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn interrupted_assistant_role_round_trips_as_distinct_session_item() {
+        let message = Message {
+            role: INTERRUPTED_ASSISTANT_ROLE.to_string(),
+            content: vec![ContentBlock::Text {
+                text: "partial output".to_string(),
+                cache_control: None,
+            }],
+        };
+        let encoded = serde_json::to_string(&message).expect("message should serialize");
+        let decoded: Message = serde_json::from_str(&encoded).expect("message should deserialize");
+        assert_eq!(decoded, message);
+        assert_ne!(decoded.role, "assistant");
+    }
 
     #[test]
     fn v4_snapshots_preserve_context_window() {

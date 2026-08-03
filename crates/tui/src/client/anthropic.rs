@@ -515,7 +515,7 @@ fn anthropic_tool_choice(tool_choice: &Value) -> Value {
 /// Convert one internal message to the Anthropic wire shape. Returns `None`
 /// when no blocks survive conversion (Anthropic rejects empty content).
 fn message_to_anthropic(message: &crate::models::Message) -> Option<Value> {
-    let blocks: Vec<Value> = message
+    let mut blocks: Vec<Value> = message
         .content
         .iter()
         .filter_map(content_block_to_anthropic)
@@ -523,7 +523,31 @@ fn message_to_anthropic(message: &crate::models::Message) -> Option<Value> {
     if blocks.is_empty() {
         return None;
     }
-    Some(json!({ "role": message.role, "content": blocks }))
+    if message.role == crate::models::INTERRUPTED_ASSISTANT_ROLE {
+        if let Some(text) = blocks
+            .iter_mut()
+            .find(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+        {
+            let existing = text
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            text["text"] = json!(format!(
+                "{}{}",
+                crate::models::INTERRUPTED_ASSISTANT_CONTEXT_PREFIX,
+                existing
+            ));
+        }
+    }
+    Some(json!({
+        "role": if message.role == crate::models::INTERRUPTED_ASSISTANT_ROLE {
+            "assistant"
+        } else {
+            message.role.as_str()
+        },
+        "content": blocks
+    }))
 }
 
 fn content_block_to_anthropic(block: &ContentBlock) -> Option<Value> {

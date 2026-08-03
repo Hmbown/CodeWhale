@@ -1071,7 +1071,9 @@ pub fn latest_assistant_text(messages: &[Message]) -> Option<String> {
     messages
         .iter()
         .rev()
-        .find(|message| message.role == "assistant")
+        .find(|message| {
+            message.role == "assistant" || message.role == crate::models::INTERRUPTED_ASSISTANT_ROLE
+        })
         .and_then(|message| {
             let text = message
                 .content

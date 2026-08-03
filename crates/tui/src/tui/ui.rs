@@ -9258,7 +9258,8 @@ fn replace_matching_assistant_text(
     translated_text: String,
 ) -> bool {
     for message in app.api_messages.iter_mut().rev() {
-        if message.role != "assistant" {
+        if message.role != "assistant" && message.role != crate::models::INTERRUPTED_ASSISTANT_ROLE
+        {
             continue;
         }
         for block in &mut message.content {

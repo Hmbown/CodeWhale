@@ -67,7 +67,8 @@ fn repair_tool_call_pairs_inner(
     let mut call_message_by_id = HashMap::new();
     let mut call_ids_in_order = Vec::new();
     for (message_index, message) in messages.iter().enumerate() {
-        if message.role != "assistant" {
+        if message.role != "assistant" && message.role != crate::models::INTERRUPTED_ASSISTANT_ROLE
+        {
             continue;
         }
         for block in &message.content {
@@ -88,7 +89,8 @@ fn repair_tool_call_pairs_inner(
     let mut latest_assistant_message = None;
 
     for (message_index, message) in messages.iter().enumerate() {
-        if message.role == "assistant" {
+        if message.role == "assistant" || message.role == crate::models::INTERRUPTED_ASSISTANT_ROLE
+        {
             latest_assistant_message = Some(message_index);
         }
         for block in &message.content {
@@ -138,7 +140,9 @@ fn repair_tool_call_pairs_inner(
     let mut seen_result_ordinal = 0usize;
 
     for message in original {
-        let missing_after_message: Vec<_> = if message.role == "assistant" {
+        let missing_after_message: Vec<_> = if message.role == "assistant"
+            || message.role == crate::models::INTERRUPTED_ASSISTANT_ROLE
+        {
             message
                 .content
                 .iter()
