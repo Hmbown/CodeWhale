@@ -34,7 +34,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
-use crate::tui::app::{App, AppMode, SidebarFocus};
+use crate::tui::app::{App, AppMode};
 
 use super::Renderable;
 
@@ -74,9 +74,6 @@ pub struct FooterProps {
     pub mcp: Vec<Span<'static>>,
     /// Permission posture chip (Ask / Auto-Review / Full Access) when visible.
     pub permission: Vec<Span<'static>>,
-    /// Compact nonempty Work indicator when terminal width suppresses the
-    /// sidebar. Empty when Work is visible or explicitly hidden.
-    pub work: Vec<Span<'static>>,
     /// Cumulative model-work chip spans ("worked 3m 12s"). Sums the
     /// elapsed time of completed turns (from `App::cumulative_turn_duration`),
     /// **not** wall-clock since launch — an idle TUI shouldn't claim
@@ -289,7 +286,6 @@ impl FooterProps {
             .map(|s| s.servers.iter().filter(|server| server.connected).count());
         let mcp = footer_mcp_chip(mcp_connected, mcp_configured);
         let permission = footer_permission_chip(app);
-        let work = footer_compact_work_chip(app);
         // #448: cumulative work-time chip. Sums actual turn durations
         // (set on `TurnComplete`) rather than wall-clock uptime — a TUI
         // that's been open and idle for 4 minutes shouldn't claim
@@ -311,7 +307,6 @@ impl FooterProps {
             cache,
             mcp,
             permission,
-            work,
             worked,
             cost,
             balance,
@@ -353,22 +348,6 @@ pub fn footer_permission_chip(app: &App) -> Vec<Span<'static>> {
     ]
 }
 
-fn footer_compact_work_chip(app: &App) -> Vec<Span<'static>> {
-    if app.sidebar_focus == SidebarFocus::Hidden
-        || app
-            .last_sidebar_host_width
-            .is_none_or(|width| width >= crate::tui::ui::FILE_TREE_MIN_HOST_WIDTH)
-    {
-        return Vec::new();
-    }
-    crate::tui::sidebar::compact_work_indicator(app).map_or_else(Vec::new, |label| {
-        vec![Span::styled(
-            label,
-            Style::default().fg(palette::WHALE_INFO),
-        )]
-    })
-}
-
 /// Pure-render footer. Build once per frame, then `render(area, buf)`.
 pub struct FooterWidget {
     props: FooterProps,
@@ -387,7 +366,6 @@ impl FooterWidget {
         // disappear without disturbing the steady mode·model·cost line.
         let parts: Vec<&Vec<Span<'static>>> = [
             &self.props.permission,
-            &self.props.work,
             &self.props.agents,
             &self.props.reasoning_replay,
             &self.props.cache,
@@ -702,9 +680,7 @@ impl Renderable for FooterWidget {
         // long toast/model label to consume the row, then let lower-priority
         // auxiliary chips fill whatever remains.
         let permission_width = span_width(&self.props.permission);
-        let work_width = span_width(&self.props.work);
-        let critical_inner_gap = usize::from(permission_width > 0 && work_width > 0) * 2;
-        let critical_width = permission_width + critical_inner_gap + work_width;
+        let critical_width = permission_width;
         let reserved_gap = usize::from(critical_width > 0) * 2;
         let preview_left_budget = if critical_width > 0 {
             available_width
@@ -1301,55 +1277,6 @@ mod tests {
             super::spans_text(&super::footer_permission_chip(&app)),
             "perm Read Only"
         );
-    }
-
-    #[test]
-    fn width_suppressed_sidebar_falls_back_to_compact_work_chip() {
-        let mut app = make_app();
-        app.mode = AppMode::Operate;
-        app.approval_mode = crate::tui::approval::ApprovalMode::Bypass;
-        app.last_sidebar_host_width = Some(59);
-        {
-            let mut todos = app.todos.try_lock().expect("todos lock");
-            todos.add(
-                "inspect".to_string(),
-                crate::tools::todo::TodoStatus::Completed,
-            );
-            todos.add(
-                "patch".to_string(),
-                crate::tools::todo::TodoStatus::InProgress,
-            );
-        }
-
-        let props = FooterProps::from_app(
-            &app,
-            None,
-            "ready",
-            palette::TEXT_MUTED,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-        );
-        assert_eq!(super::spans_text(&props.work), "To-do 2 · 50%");
-        let line = render_at_width(props, 59);
-        assert!(line.contains("To-do 2 · 50%"), "{line:?}");
-        assert!(line.contains("perm Full Access"), "{line:?}");
-
-        app.sidebar_focus = crate::tui::app::SidebarFocus::Hidden;
-        let hidden = FooterProps::from_app(
-            &app,
-            None,
-            "ready",
-            palette::TEXT_MUTED,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-        );
-        assert!(hidden.work.is_empty());
     }
 
     #[test]

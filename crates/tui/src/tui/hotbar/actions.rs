@@ -985,7 +985,9 @@ impl HotbarAction for AppHotbarAction {
             AppHotbarKind::ReasoningCycle => {
                 app.reasoning_effort != crate::tui::app::ReasoningEffort::Off
             }
-            AppHotbarKind::SidebarToggle => app.sidebar_focus != SidebarFocus::Hidden,
+            AppHotbarKind::SidebarToggle => {
+                app.work_surface.placement != crate::tui::work_surface::WorkSurfacePlacement::Off
+            }
             AppHotbarKind::FileTreeToggle => app.file_tree.is_some(),
             AppHotbarKind::PaletteOpen => false,
             AppHotbarKind::TrustToggle => app.trust_mode,
@@ -1030,13 +1032,17 @@ impl HotbarAction for AppHotbarAction {
                 }
             }
             AppHotbarKind::SidebarToggle => {
-                if app.sidebar_focus == SidebarFocus::Hidden {
-                    app.set_sidebar_focus(SidebarFocus::Pinned);
-                    app.status_message = Some("Sidebar focus: pinned".to_string());
+                if app.work_surface.placement == crate::tui::work_surface::WorkSurfacePlacement::Off
+                {
+                    app.work_surface.placement =
+                        crate::tui::work_surface::WorkSurfacePlacement::Top;
+                    app.status_message = Some("Rail: top placement".to_string());
                 } else {
-                    app.set_sidebar_focus(SidebarFocus::Hidden);
-                    app.status_message = Some("Sidebar hidden".to_string());
+                    app.work_surface.placement =
+                        crate::tui::work_surface::WorkSurfacePlacement::Off;
+                    app.status_message = Some("Rail is off".to_string());
                 }
+                app.needs_redraw = true;
                 Ok(HotbarDispatch::Handled)
             }
             AppHotbarKind::FileTreeToggle => {
@@ -2547,18 +2553,24 @@ mod tests {
         let registry = HotbarActionRegistry::with_builtins();
         let sidebar = registry.get("sidebar.toggle").expect("sidebar action");
         let mut app = test_app();
-        app.sidebar_focus = SidebarFocus::Pinned;
+        app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Top;
 
         assert!(sidebar.is_active(&app));
         assert_eq!(
-            sidebar.dispatch(&mut app).expect("dispatch sidebar hide"),
+            sidebar.dispatch(&mut app).expect("dispatch rail hide"),
             HotbarDispatch::Handled
         );
-        assert_eq!(app.sidebar_focus, SidebarFocus::Hidden);
+        assert_eq!(
+            app.work_surface.placement,
+            crate::tui::work_surface::WorkSurfacePlacement::Off
+        );
         assert!(!sidebar.is_active(&app));
 
-        sidebar.dispatch(&mut app).expect("dispatch sidebar show");
-        assert_eq!(app.sidebar_focus, SidebarFocus::Pinned);
+        sidebar.dispatch(&mut app).expect("dispatch rail show");
+        assert_eq!(
+            app.work_surface.placement,
+            crate::tui::work_surface::WorkSurfacePlacement::Top
+        );
         assert!(sidebar.is_active(&app));
     }
 

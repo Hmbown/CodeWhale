@@ -3254,7 +3254,15 @@ fn should_render_empty_state(app: &App) -> bool {
             .task_panel
             .iter()
             .any(|task| task.kind == crate::tui::app::TaskPanelEntryKind::Background)
-        && crate::tui::sidebar::compact_work_indicator(app).is_none()
+        // Live work suppresses the empty state. On lock contention, treat
+        // the todo store as non-empty rather than flash the empty ocean.
+        && !app
+            .todos
+            .try_lock()
+            .map(|todos| !todos.snapshot().is_empty())
+            .unwrap_or(true)
+        && app.hunt.quarry.is_none()
+        && app.paused_quarry.is_none()
 }
 
 fn build_empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {

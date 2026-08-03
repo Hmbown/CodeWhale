@@ -49,116 +49,6 @@ const TASK_STOP_TARGET_SUFFIX: &str = " [x]";
 const HOTBAR_PANEL_HEIGHT: u16 = 4;
 const HOTBAR_ROW_COLUMNS: usize = 4;
 
-pub(crate) fn sidebar_width_for_chat_area(app: &App, chat_width: u16) -> Option<u16> {
-    if app.sidebar_focus == SidebarFocus::Hidden || chat_width < FILE_TREE_MIN_HOST_WIDTH {
-        return None;
-    }
-
-    let preferred_sidebar =
-        (u32::from(chat_width) * u32::from(app.sidebar_width_percent.clamp(10, 50)) / 100) as u16;
-    // Width-aware floor: the classic 24-column sidebar feels cramped next to
-    // status/status-adjacent info at ultrawide sizes. At 120+ columns a 28
-    // column rail still leaves the transcript most of the room.
-    let sidebar_width = preferred_sidebar
-        .max(28)
-        .max(chat_width / 10)
-        .min(chat_width.saturating_sub(40));
-
-    (sidebar_width >= 20).then_some(sidebar_width)
-}
-
-/// Compute the Auto-mode panel signals. Shared by `render_sidebar_auto` (which
-/// panel boxes to show) and `sidebar_auto_idle` (whether to collapse the whole
-/// sidebar to a full-width transcript). Content-gated: the jobs/tasks panel
-/// appears only when there are real durable tasks or background shell jobs,
-/// never merely because a turn is in flight.
-fn auto_sidebar_state(app: &mut App) -> AutoSidebarState {
-    AutoSidebarState {
-        work_has_content: sidebar_work_summary(app).has_useful_content(),
-        // The jobs/tasks panel appears in Auto mode only for live background
-        // work — running or queued shell jobs, RLM, or durable Fleet tasks.
-        // Completed jobs, per-turn tools, and model reasoning do not reopen
-        // the panel; they remain visible only when Tasks is explicitly focused.
-        tasks_empty: !app.task_panel.iter().any(background_task_is_live),
-        agents_empty: app.subagent_cache.is_empty()
-            && app.agent_progress.is_empty()
-            && active_fanout_counts(app).is_none()
-            && !foreground_rlm_running(app),
-        context_enabled: app.context_panel,
-        sessions_rail_enabled: app.sessions_rail,
-    }
-}
-
-/// Auto-reveal: in Auto focus mode the sidebar collapses to nothing when there
-/// is no active content (no To-do, no live/queued fleet, no background jobs, no
-/// pinned context), so an idle session gets a full-width transcript. Any active
-/// content brings it back; completed agents linger in the cache as a natural
-/// grace before it retracts. Explicit panel focus and Hidden bypass this (the
-/// former should always show, the latter is handled by the width helper).
-pub(crate) fn sidebar_auto_idle(app: &mut App) -> bool {
-    if app.sidebar_focus != SidebarFocus::Auto {
-        return false;
-    }
-    let state = auto_sidebar_state(app);
-    !state.work_has_content
-        && state.tasks_empty
-        && state.agents_empty
-        && !state.context_enabled
-        // An enabled rail is durable content: collapsing it away on idle would
-        // hide the very surface the user turned on to browse between sessions.
-        && !state.sessions_rail_enabled
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AutoSidebarPanel {
-    Work,
-    Tasks,
-    Agents,
-    Context,
-    /// Persistent Sessions rail (#2934). Opt-in via the `sessions_rail`
-    /// setting; unlike the content-gated panels it stays visible while
-    /// enabled, because "there are no sessions yet" is itself the thing a
-    /// browsing surface needs to say.
-    Sessions,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct AutoSidebarState {
-    work_has_content: bool,
-    tasks_empty: bool,
-    agents_empty: bool,
-    context_enabled: bool,
-    sessions_rail_enabled: bool,
-}
-
-fn auto_sidebar_panels(state: AutoSidebarState) -> Vec<AutoSidebarPanel> {
-    let nothing_else_active = state.tasks_empty
-        && state.agents_empty
-        && !state.context_enabled
-        && !state.sessions_rail_enabled;
-    let mut visible = Vec::with_capacity(5);
-
-    if state.work_has_content || nothing_else_active {
-        visible.push(AutoSidebarPanel::Work);
-    }
-    if !state.tasks_empty {
-        visible.push(AutoSidebarPanel::Tasks);
-    }
-    if !state.agents_empty {
-        visible.push(AutoSidebarPanel::Agents);
-    }
-    if state.context_enabled {
-        visible.push(AutoSidebarPanel::Context);
-    }
-    // Last in the stack: the rail is a navigation aid, so live work keeps the
-    // rows above it.
-    if state.sessions_rail_enabled {
-        visible.push(AutoSidebarPanel::Sessions);
-    }
-
-    visible
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HotbarSlotState {
     Empty,
@@ -384,44 +274,6 @@ impl SidebarWorkSummary {
             || !self.checklist_items.is_empty()
             || self.state_updating
     }
-
-    fn compact_indicator(&self) -> Option<String> {
-        if !self.checklist_items.is_empty() {
-            return Some(format!(
-                "To-do {} · {}%",
-                self.checklist_items.len(),
-                self.checklist_completion_pct
-            ));
-        }
-        self.goal_objective
-            .as_ref()
-            .map(|_| "Work goal active".to_string())
-    }
-}
-
-/// Compact Work fallback for surfaces used when the sidebar cannot fit.
-/// Reads the live stores first and only falls back to the last rendered
-/// summary during brief lock contention.
-pub(crate) fn compact_work_indicator(app: &App) -> Option<String> {
-    let todos = app.todos.try_lock().ok().map(|todos| todos.snapshot());
-    if let Some(snapshot) = todos.as_ref().filter(|snapshot| !snapshot.is_empty()) {
-        return Some(format!(
-            "To-do {} · {}%",
-            snapshot.items.len(),
-            snapshot.completion_pct
-        ));
-    }
-
-    if app.hunt.quarry.is_some() || app.paused_quarry.is_some() {
-        return Some("Work goal active".to_string());
-    }
-    if todos.is_none() {
-        return app
-            .cached_work_summary
-            .as_ref()
-            .and_then(SidebarWorkSummary::compact_indicator);
-    }
-    None
 }
 
 /// Objective of the active goal, if any. Paused goals keep showing their
@@ -3001,17 +2853,17 @@ fn agent_stop_action_for_click(action: &SidebarRowAction) -> Option<SidebarRowAc
 #[cfg(test)]
 mod tests {
     use super::{
-        ACTIVE_TOOL_COMPLETED_ROW_TTL, ACTIVE_TOOL_STALE_RUNNING_ROW_TTL, AutoSidebarPanel,
-        AutoSidebarState, HotbarSlotState, SidebarAgentRow, SidebarFocus, SidebarHoverRow,
-        SidebarHoverSection, SidebarSubagentSummary, SidebarToolRow, SidebarWorkChecklistItem,
-        SidebarWorkSummary, ToolRowOrder, agent_row_hover_text, auto_sidebar_panels,
-        background_task_spinner_prefix, cached_agent_activity_is_live, context_panel_cost_line,
-        editorial_tool_rows, hotbar_panel_enabled, hotbar_panel_hover_texts, hotbar_panel_lines,
-        hotbar_panel_slots, normalize_activity_text, sidebar_agent_rows, sidebar_auto_idle,
-        sidebar_hover_rows, sidebar_work_summary, sort_sidebar_agent_rows_as_tree,
-        subagent_output_handle, subagent_panel_hover_texts, subagent_panel_lines,
-        subagent_panel_rows, task_panel_hover_texts, task_panel_lines, task_panel_row_sets,
-        task_panel_rows, work_panel_empty_hint, work_panel_hover_texts, work_panel_lines,
+        ACTIVE_TOOL_COMPLETED_ROW_TTL, ACTIVE_TOOL_STALE_RUNNING_ROW_TTL, HotbarSlotState,
+        SidebarAgentRow, SidebarFocus, SidebarHoverRow, SidebarHoverSection,
+        SidebarSubagentSummary, SidebarToolRow, SidebarWorkChecklistItem, SidebarWorkSummary,
+        ToolRowOrder, agent_row_hover_text, background_task_spinner_prefix,
+        cached_agent_activity_is_live, context_panel_cost_line, editorial_tool_rows,
+        hotbar_panel_enabled, hotbar_panel_hover_texts, hotbar_panel_lines, hotbar_panel_slots,
+        normalize_activity_text, sidebar_agent_rows, sidebar_hover_rows, sidebar_work_summary,
+        sort_sidebar_agent_rows_as_tree, subagent_output_handle, subagent_panel_hover_texts,
+        subagent_panel_lines, subagent_panel_rows, task_panel_hover_texts, task_panel_lines,
+        task_panel_row_sets, task_panel_rows, work_panel_empty_hint, work_panel_hover_texts,
+        work_panel_lines,
     };
     use crate::config::Config;
     use crate::localization::Locale;
@@ -3299,93 +3151,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["grep_files", "cargo test"],
             "success should clear its stale failure and free a visible failure slot"
-        );
-    }
-
-    #[test]
-    fn auto_sidebar_does_not_reserve_empty_work_when_other_panels_are_active() {
-        let panels = auto_sidebar_panels(AutoSidebarState {
-            work_has_content: false,
-            tasks_empty: false,
-            agents_empty: true,
-            context_enabled: false,
-            sessions_rail_enabled: false,
-        });
-
-        assert_eq!(panels, vec![AutoSidebarPanel::Tasks]);
-    }
-
-    #[test]
-    fn auto_sidebar_uses_work_as_single_empty_state() {
-        let panels = auto_sidebar_panels(AutoSidebarState {
-            work_has_content: false,
-            tasks_empty: true,
-            agents_empty: true,
-            context_enabled: false,
-            sessions_rail_enabled: false,
-        });
-
-        assert_eq!(panels, vec![AutoSidebarPanel::Work]);
-    }
-
-    #[test]
-    fn sessions_rail_is_absent_until_the_setting_opts_in() {
-        let without = auto_sidebar_panels(AutoSidebarState {
-            work_has_content: true,
-            tasks_empty: true,
-            agents_empty: true,
-            context_enabled: false,
-            sessions_rail_enabled: false,
-        });
-        assert!(!without.contains(&AutoSidebarPanel::Sessions));
-
-        let with = auto_sidebar_panels(AutoSidebarState {
-            work_has_content: true,
-            tasks_empty: true,
-            agents_empty: true,
-            context_enabled: false,
-            sessions_rail_enabled: true,
-        });
-        assert_eq!(
-            with,
-            vec![AutoSidebarPanel::Work, AutoSidebarPanel::Sessions],
-            "the rail renders last so live work keeps the rows above it"
-        );
-    }
-
-    #[test]
-    fn an_enabled_rail_keeps_the_empty_work_placeholder_from_taking_the_slot() {
-        // With nothing live and the rail on, the rail is the content — the
-        // "one quiet empty state" Work placeholder must not also appear.
-        let panels = auto_sidebar_panels(AutoSidebarState {
-            work_has_content: false,
-            tasks_empty: true,
-            agents_empty: true,
-            context_enabled: false,
-            sessions_rail_enabled: true,
-        });
-
-        assert_eq!(panels, vec![AutoSidebarPanel::Sessions]);
-    }
-
-    #[test]
-    fn an_enabled_rail_prevents_idle_auto_collapse() {
-        let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Auto;
-        // Pin both opt-in panels off: `App::new` reads the developer's real
-        // persisted settings, so the baseline has to be set, not assumed.
-        app.context_panel = false;
-        app.sessions_rail = false;
-
-        assert!(
-            sidebar_auto_idle(&mut app),
-            "an idle session with no rail should still auto-collapse"
-        );
-
-        app.sessions_rail = true;
-        assert!(
-            !sidebar_auto_idle(&mut app),
-            "an enabled rail is durable content and must survive idle collapse"
         );
     }
 

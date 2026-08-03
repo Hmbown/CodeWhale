@@ -6199,12 +6199,13 @@ async fn run_event_loop(
                 continue;
             }
 
-            // y / Y in the Activity sidebar: yank the current turn id (y)
+            // y / Y in the rail's Tasks panel: yank the current turn id (y)
             // or copy full task detail (Y) to the system clipboard.
             // Only active when the composer is empty to avoid stealing
             // keystrokes from typed input (#2000).
             if app.view_stack.is_empty()
-                && app.sidebar_focus == SidebarFocus::Tasks
+                && app.work_surface.panel == crate::tui::work_surface::RailPanel::Tasks
+                && app.work_surface.last_area.is_some()
                 && app.input.is_empty()
                 && !app.runtime_turn_id.as_deref().unwrap_or("").is_empty()
             {
@@ -17428,7 +17429,8 @@ fn request_active_foreground_shell_background(app: &App) -> Result<()> {
 
 pub(crate) fn prefill_jobs_cancel_all_if_tasks_sidebar(app: &mut App) -> bool {
     if !app.view_stack.is_empty()
-        || app.sidebar_focus != SidebarFocus::Tasks
+        || app.work_surface.panel != crate::tui::work_surface::RailPanel::Tasks
+        || app.work_surface.last_area.is_none()
         || !app
             .task_panel
             .iter()
@@ -17822,13 +17824,8 @@ fn should_tick_status_animation(
 }
 
 fn visible_background_task_has_live_motion(app: &App) -> bool {
-    matches!(
-        app.sidebar_focus,
-        SidebarFocus::Auto | SidebarFocus::Pinned | SidebarFocus::Tasks
-    ) && app
-        .last_sidebar_area
-        .or(app.viewport.last_sidebar_area)
-        .is_some()
+    app.work_surface.panel == crate::tui::work_surface::RailPanel::Tasks
+        && app.work_surface.last_area.is_some()
         && app.task_panel.iter().any(|task| task.status == "running")
 }
 
