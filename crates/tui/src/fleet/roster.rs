@@ -12,6 +12,16 @@
 //! Precedence is Workspace > Personal > Config > BuiltIn, merged by id. Loading never
 //! fails the session: an unreadable workspace profile dir degrades to the
 //! built-in + config layers with a log line.
+//!
+//! Two guardrails (#5098):
+//!
+//! - Shadowing is recorded, not silent: when a higher layer displaces a
+//!   lower-precedence file for the same id, the roster keeps a
+//!   [`ShadowedProfile`] receipt (logged at load, badged in the roster view)
+//!   so an edit in the losing layer is visibly ignored rather than dropped.
+//! - Project-scope profiles (`.codewhale/agents/*.toml`) join the roster only
+//!   when project-level config is trusted for the launch; `--no-project-config`
+//!   opts the whole layer out, same as `.codewhale/config.toml` (#485).
 
 #![allow(dead_code)]
 
@@ -57,6 +67,41 @@ impl std::fmt::Display for ProfileOrigin {
 #[derive(Debug, Clone)]
 pub struct FleetRoster {
     members: Vec<AgentProfile>,
+    /// Lower-precedence profiles displaced by a higher layer for the same id
+    /// (#5098). Shadowing is normal precedence, but it must be VISIBLE: a
+    /// personal edit that loses to a stale project copy otherwise changes
+    /// nothing anywhere with no signal why.
+    shadowed: Vec<ShadowedProfile>,
+}
+
+/// A lower-precedence profile displaced by a higher layer for the same id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShadowedProfile {
+    pub id: String,
+    pub shadowed_origin: ProfileOrigin,
+    pub shadowed_source: PathBuf,
+    pub winner_origin: ProfileOrigin,
+    pub winner_source: PathBuf,
+}
+
+/// Process-launch decision: whether project-scope agent profiles
+/// (`.codewhale/agents/*.toml`) may join the dispatch roster (#5098). Set
+/// once from `--no-project-config` at launch so every roster re-read (spawn
+/// refresh, dispatch, views) honors the same trust decision other
+/// project-level config already has (#485). Defaults to enabled, matching
+/// project config itself.
+static PROJECT_AGENT_PROFILES_ENABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(true);
+
+/// Record the launch-time trust decision for project-scope agent profiles.
+pub fn set_project_agent_profiles_enabled(enabled: bool) {
+    PROJECT_AGENT_PROFILES_ENABLED.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether project-scope agent profiles join the roster in this process.
+#[must_use]
+pub fn project_agent_profiles_enabled() -> bool {
+    PROJECT_AGENT_PROFILES_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 impl FleetRoster {
@@ -66,6 +111,7 @@ impl FleetRoster {
     pub fn built_ins_only() -> Self {
         Self {
             members: Self::built_in_members(),
+            shadowed: Vec::new(),
         }
     }
 
@@ -76,7 +122,10 @@ impl FleetRoster {
     /// start and must not pick up built-in or workspace profiles by name.
     #[must_use]
     pub fn from_members(members: Vec<AgentProfile>) -> Self {
-        Self { members }
+        Self {
+            members,
+            shadowed: Vec::new(),
+        }
     }
 
     /// Load and merge the full roster for a workspace.
@@ -88,16 +137,23 @@ impl FleetRoster {
     #[must_use]
     pub fn load(fleet_config: &FleetConfigToml, workspace: &Path) -> Self {
         let personal_dir = personal_agent_profile_dir().ok();
-        Self::load_with_personal_dir(fleet_config, workspace, personal_dir.as_deref())
+        Self::load_with_personal_dir(
+            fleet_config,
+            workspace,
+            personal_dir.as_deref(),
+            project_agent_profiles_enabled(),
+        )
     }
 
     fn load_with_personal_dir(
         fleet_config: &FleetConfigToml,
         workspace: &Path,
         personal_dir: Option<&Path>,
+        include_workspace_profiles: bool,
     ) -> Self {
         let mut built_ins = Self::built_in_members();
         let mut extras: Vec<AgentProfile> = Vec::new();
+        let mut shadowed: Vec<ShadowedProfile> = Vec::new();
 
         for (id, profile) in &fleet_config.profiles {
             let mut profile = profile.clone();
@@ -111,7 +167,10 @@ impl FleetRoster {
                 source: PathBuf::from("config.toml"),
                 origin: ProfileOrigin::Config,
             };
-            merge_member(&mut built_ins, &mut extras, member);
+            record_shadow(
+                merge_member(&mut built_ins, &mut extras, member),
+                &mut shadowed,
+            );
         }
 
         if let Some(personal_dir) = personal_dir {
@@ -123,7 +182,10 @@ impl FleetRoster {
                         );
                     }
                     for member in profiles {
-                        merge_member(&mut built_ins, &mut extras, member);
+                        record_shadow(
+                            merge_member(&mut built_ins, &mut extras, member),
+                            &mut shadowed,
+                        );
                     }
                 }
                 Err(err) => {
@@ -132,22 +194,54 @@ impl FleetRoster {
             }
         }
 
-        match load_workspace_agent_profiles_tolerant(workspace) {
-            Ok((profiles, issues)) => {
-                for issue in issues {
+        // #5098: project-scope profiles join the dispatch roster only when the
+        // launch trusted project-level config (`--no-project-config` opts the
+        // whole layer out, same as `.codewhale/config.toml`).
+        if include_workspace_profiles {
+            match load_workspace_agent_profiles_tolerant(workspace) {
+                Ok((profiles, issues)) => {
+                    for issue in issues {
+                        tracing::warn!(
+                            workspace = %workspace.display(),
+                            "fleet roster: skipping invalid workspace agent profile: {issue}"
+                        );
+                    }
+                    for member in profiles {
+                        record_shadow(
+                            merge_member(&mut built_ins, &mut extras, member),
+                            &mut shadowed,
+                        );
+                    }
+                }
+                Err(err) => {
                     tracing::warn!(
                         workspace = %workspace.display(),
-                        "fleet roster: skipping invalid workspace agent profile: {issue}"
+                        "fleet roster: skipping workspace agent profiles: {err:#}"
                     );
                 }
-                for member in profiles {
-                    merge_member(&mut built_ins, &mut extras, member);
-                }
             }
-            Err(err) => {
+        }
+
+        for shadow in &shadowed {
+            // Overriding a built-in is the intended customization path —
+            // keep it quiet. A file layer (config/personal) losing to another
+            // file layer is the #5098 footgun: the edit changes nothing
+            // anywhere and must be visible.
+            if shadow.shadowed_origin == ProfileOrigin::BuiltIn {
+                tracing::debug!(
+                    "fleet roster: '{}' {} copy at {} overrides the built-in default",
+                    shadow.id,
+                    shadow.winner_origin,
+                    shadow.winner_source.display()
+                );
+            } else {
                 tracing::warn!(
-                    workspace = %workspace.display(),
-                    "fleet roster: skipping workspace agent profiles: {err:#}"
+                    "fleet roster: '{}' {} copy at {} shadows the {} copy at {} (ignored)",
+                    shadow.id,
+                    shadow.winner_origin,
+                    shadow.winner_source.display(),
+                    shadow.shadowed_origin,
+                    shadow.shadowed_source.display()
                 );
             }
         }
@@ -157,7 +251,7 @@ impl FleetRoster {
         extras.sort_by_key(|a| a.id.to_lowercase());
         let mut members = built_ins;
         members.extend(extras);
-        Self { members }
+        Self { members, shadowed }
     }
 
     /// The default party. Built-ins carry no permission grants (permissions
@@ -296,23 +390,60 @@ impl FleetRoster {
             })
             .collect()
     }
+    /// Lower-precedence profiles displaced by higher layers (#5098). Empty
+    /// for `built_ins_only` / `from_members` rosters.
+    #[must_use]
+    pub fn shadowed(&self) -> &[ShadowedProfile] {
+        &self.shadowed
+    }
+
+    /// Shadow records for one member id (trimmed, case-insensitive).
+    pub fn shadowed_for<'a>(&'a self, id: &'a str) -> impl Iterator<Item = &'a ShadowedProfile> {
+        let id = id.trim().to_lowercase();
+        self.shadowed
+            .iter()
+            .filter(move |shadow| shadow.id.trim().eq_ignore_ascii_case(&id))
+    }
+}
+
+/// Fold a displaced layer (if any) into the shadow log.
+fn record_shadow(displaced: Option<ShadowedProfile>, shadowed: &mut Vec<ShadowedProfile>) {
+    if let Some(shadow) = displaced {
+        shadowed.push(shadow);
+    }
 }
 
 /// Overlay `member` onto the roster layers: replace an existing member with
 /// the same id (case-insensitive) in place, otherwise collect it as an extra.
+/// Returns a shadow record when a lower-precedence layer was displaced so the
+/// load can log it and the roster can surface it (#5098).
 fn merge_member(
     built_ins: &mut [AgentProfile],
     extras: &mut Vec<AgentProfile>,
     member: AgentProfile,
-) {
+) -> Option<ShadowedProfile> {
     let matches =
         |existing: &AgentProfile| existing.id.trim().eq_ignore_ascii_case(member.id.trim());
-    if let Some(slot) = built_ins.iter_mut().find(|existing| matches(existing)) {
-        *slot = member;
-    } else if let Some(slot) = extras.iter_mut().find(|existing| matches(existing)) {
-        *slot = member;
-    } else {
-        extras.push(member);
+    let slot = built_ins
+        .iter_mut()
+        .find(|existing| matches(existing))
+        .or_else(|| extras.iter_mut().find(|existing| matches(existing)));
+    match slot {
+        Some(existing) => {
+            let shadow = ShadowedProfile {
+                id: existing.id.clone(),
+                shadowed_origin: existing.origin,
+                shadowed_source: existing.source.clone(),
+                winner_origin: member.origin,
+                winner_source: member.source.clone(),
+            };
+            *existing = member;
+            Some(shadow)
+        }
+        None => {
+            extras.push(member);
+            None
+        }
     }
 }
 
@@ -427,7 +558,7 @@ mod tests {
         ]));
 
         // Isolate from ambient personal agent profiles on developer machines.
-        let roster = FleetRoster::load_with_personal_dir(&config, tmp.path(), None);
+        let roster = FleetRoster::load_with_personal_dir(&config, tmp.path(), None, true);
 
         let ids: Vec<&str> = roster.members().iter().map(|m| m.id.as_str()).collect();
         assert_eq!(
@@ -499,6 +630,7 @@ mod tests {
             &FleetConfigToml::default(),
             &workspace,
             Some(&personal_dir),
+            true,
         );
         let reviewer = personal.get("reviewer").unwrap();
         assert_eq!(reviewer.origin, ProfileOrigin::Personal);
@@ -513,6 +645,7 @@ mod tests {
             &FleetConfigToml::default(),
             &workspace,
             Some(&personal_dir),
+            true,
         );
         let reviewer = project.get("reviewer").unwrap();
         assert_eq!(reviewer.origin, ProfileOrigin::Workspace);
@@ -593,8 +726,12 @@ mod tests {
         );
 
         // Isolate from ambient personal agent profiles on developer machines.
-        let roster =
-            FleetRoster::load_with_personal_dir(&FleetConfigToml::default(), tmp.path(), None);
+        let roster = FleetRoster::load_with_personal_dir(
+            &FleetConfigToml::default(),
+            tmp.path(),
+            None,
+            true,
+        );
 
         let scout = roster.get("scout").expect("valid scout remains visible");
         assert_eq!(scout.origin, ProfileOrigin::Workspace);
@@ -647,5 +784,113 @@ mod tests {
         assert_eq!(ProfileOrigin::Config.to_string(), "config");
         assert_eq!(ProfileOrigin::Personal.to_string(), "personal");
         assert_eq!(ProfileOrigin::Workspace.to_string(), "project");
+    }
+}
+
+#[cfg(test)]
+mod shadow_and_trust_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn write_profile(dir: &Path, filename: &str, contents: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join(filename), contents).unwrap();
+    }
+
+    #[test]
+    fn workspace_shadow_of_personal_file_is_recorded_and_reported() {
+        // #5098: editing the personal builder.toml changed nothing because a
+        // project copy silently shadowed it. The roster must report that the
+        // shadowed personal file exists and is ignored.
+        let tmp = TempDir::new().unwrap();
+        let personal_dir = tmp.path().join("personal");
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        write_profile(
+            &personal_dir,
+            "builder.toml",
+            "id = \"builder\"\nrole_hint = \"builder\"\nmodel = \"deepseek-v4-flash\"\n",
+        );
+        write_profile(
+            &workspace.join(".codewhale").join("agents"),
+            "builder.toml",
+            "id = \"builder\"\nrole_hint = \"builder\"\nmodel = \"deepseek-v4-pro\"\n",
+        );
+
+        let roster = FleetRoster::load_with_personal_dir(
+            &FleetConfigToml::default(),
+            &workspace,
+            Some(&personal_dir),
+            true,
+        );
+
+        let builder = roster.get("builder").expect("builder member");
+        assert_eq!(builder.origin, ProfileOrigin::Workspace);
+        let shadows: Vec<_> = roster.shadowed_for("builder").collect();
+        // The chain is built-in → personal → workspace; both displacements
+        // are recorded, and the file-on-file one names the ignored personal
+        // copy explicitly.
+        assert_eq!(shadows.len(), 2, "full shadow chain: {shadows:?}");
+        let shadow = shadows
+            .iter()
+            .find(|shadow| shadow.shadowed_origin == ProfileOrigin::Personal)
+            .expect("personal file shadow is recorded");
+        assert!(shadow.shadowed_source.ends_with("builder.toml"));
+        assert_eq!(shadow.winner_origin, ProfileOrigin::Workspace);
+        assert!(
+            shadows
+                .iter()
+                .any(|shadow| shadow.shadowed_origin == ProfileOrigin::BuiltIn),
+            "the built-in displacement is recorded too: {shadows:?}"
+        );
+        assert!(
+            roster.shadowed().iter().any(|s| s.id == "builder"),
+            "roster-level shadow log carries the record"
+        );
+    }
+
+    #[test]
+    fn project_scope_profiles_are_skipped_when_the_layer_is_not_trusted() {
+        // #5098: `load_workspace_agent_profiles_tolerant` applied no trust
+        // check — a cloned repo's .codewhale/agents/*.toml silently joined
+        // the dispatch roster. With project config disabled
+        // (`--no-project-config`), the whole layer stays out.
+        let tmp = TempDir::new().unwrap();
+        let workspace = tmp.path().join("workspace");
+        write_profile(
+            &workspace.join(".codewhale").join("agents"),
+            "builder.toml",
+            "id = \"builder\"\nrole_hint = \"builder\"\nmodel = \"gpt-5.6-luna\"\n",
+        );
+
+        let gated = FleetRoster::load_with_personal_dir(
+            &FleetConfigToml::default(),
+            &workspace,
+            None,
+            false,
+        );
+        let builder = gated.get("builder").expect("built-in builder remains");
+        assert_eq!(
+            builder.origin,
+            ProfileOrigin::BuiltIn,
+            "untrusted project profile must not join the roster"
+        );
+        assert_ne!(
+            builder.profile.model.as_deref(),
+            Some("gpt-5.6-luna"),
+            "foreign project pin must not reach dispatch"
+        );
+
+        let trusted = FleetRoster::load_with_personal_dir(
+            &FleetConfigToml::default(),
+            &workspace,
+            None,
+            true,
+        );
+        assert_eq!(
+            trusted.get("builder").expect("builder").origin,
+            ProfileOrigin::Workspace,
+            "trusted project profile wins as before"
+        );
     }
 }

@@ -1392,6 +1392,11 @@ fn main() -> Result<()> {
     // discovery. Plugin discovery therefore runs first, and the loader below
     // admits only built-in provider credential names from a stable file read.
     let cli = Cli::parse();
+    // #5098: project-scope fleet agent profiles (`.codewhale/agents/*.toml`)
+    // join the dispatch roster under the same trust decision as the rest of
+    // project-level config — `--no-project-config` opts the layer out for
+    // every roster read in this process.
+    crate::fleet::roster::set_project_agent_profiles_enabled(!cli.no_project_config);
     let workspace = resolve_workspace(&cli);
     let mut plugin_discovery = None;
     let mut plugin_registry = None;

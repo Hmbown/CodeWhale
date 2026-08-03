@@ -73,6 +73,9 @@ impl OperatorInfo {
 pub struct FleetRosterView {
     operator: OperatorInfo,
     members: Vec<AgentProfile>,
+    /// Shadow records from the roster load (#5098): which lower-precedence
+    /// files the displayed members are ignoring.
+    shadowed: Vec<crate::fleet::roster::ShadowedProfile>,
     /// Selected row: 0 is the pinned operator row, members follow at 1..
     selected: usize,
     detail_scroll: usize,
@@ -105,6 +108,7 @@ impl FleetRosterView {
                 .filter(|m| !m.id.trim().eq_ignore_ascii_case("operator"))
                 .cloned()
                 .collect(),
+            shadowed: roster.shadowed().to_vec(),
             selected: 0,
             detail_scroll: 0,
             locale: Locale::En,
@@ -327,8 +331,25 @@ impl FleetRosterView {
             } else {
                 let member = &self.members[idx - 1];
                 let mark = member_role_mark(member);
+                // #5098: badge rows whose winning layer is ignoring a
+                // lower-precedence file, so a shadowed personal/project edit
+                // is visible from the list, not just the detail pane.
+                let shadow_badge = if self
+                    .shadowed
+                    .iter()
+                    .any(|shadow| shadow.id.trim().eq_ignore_ascii_case(member.id.trim()))
+                {
+                    " ⚠shadows"
+                } else {
+                    ""
+                };
                 (
-                    format!("{pointer}{mark} {}  {}", member.id, member_routing(member)),
+                    format!(
+                        "{pointer}{mark} {}  {}{}",
+                        member.id,
+                        member_routing(member),
+                        shadow_badge
+                    ),
                     Style::default().fg(palette::TEXT_PRIMARY),
                 )
             };
@@ -350,7 +371,11 @@ impl FleetRosterView {
         } else if let Some(member) = self.selected_member() {
             // Session model is the operator route so "fast" loadouts resolve
             // to the fast sibling the runtime will actually launch.
-            member_detail_lines_with_session(member, Some(self.operator.model.as_str()))
+            member_detail_lines_with_session(
+                member,
+                Some(self.operator.model.as_str()),
+                &self.shadowed,
+            )
         } else {
             vec![Line::from(Span::styled(
                 "Roster is empty.",
@@ -477,6 +502,7 @@ fn member_routing_with_session(member: &AgentProfile, session_model: Option<&str
 fn member_detail_lines_with_session(
     member: &AgentProfile,
     session_model: Option<&str>,
+    shadowed: &[crate::fleet::roster::ShadowedProfile],
 ) -> Vec<Line<'static>> {
     let mut lines: Vec<Line> = Vec::new();
 
@@ -495,6 +521,22 @@ fn member_detail_lines_with_session(
             _ => format!("{} · {}", member.origin, member.source.display()),
         },
     );
+    // #5098: every layer this member is displacing, so a shadowed personal or
+    // project file is visible instead of silently dropped from the merge.
+    for shadow in shadowed
+        .iter()
+        .filter(|shadow| shadow.id.trim().eq_ignore_ascii_case(member.id.trim()))
+    {
+        detail_field(
+            &mut lines,
+            "Shadows",
+            format!(
+                "{} copy at {} (ignored)",
+                shadow.shadowed_origin,
+                shadow.shadowed_source.display()
+            ),
+        );
+    }
     detail_field(&mut lines, "Slot", member.profile.slot.as_str().to_string());
     detail_field(&mut lines, "Posture", member_posture(member));
     detail_field(
@@ -591,6 +633,7 @@ mod tests {
         FleetRosterView {
             operator: operator(),
             members,
+            shadowed: Vec::new(),
             selected: 0,
             detail_scroll: 0,
             locale: Locale::En,
@@ -802,7 +845,7 @@ mod tests {
     fn detail_lines_carry_overlay_source_for_project_members() {
         let view = view_with_overrides();
         let reviewer = view.members.iter().find(|m| m.id == "reviewer").unwrap();
-        let text = member_detail_lines_with_session(reviewer, None)
+        let text = member_detail_lines_with_session(reviewer, None, &view.shadowed)
             .iter()
             .map(|line| {
                 line.spans
@@ -852,6 +895,37 @@ mod tests {
         assert_eq!(
             member_routing(extra),
             "route preset fast (resolved at launch)"
+        );
+    }
+
+    #[test]
+    fn detail_pane_reports_shadowed_lower_layers() {
+        // #5098: a member whose winning layer ignores a personal file must
+        // say so in the detail pane — the shadowed edit is no longer dropped
+        // from every surface.
+        let mut view = view_with_overrides();
+        view.shadowed.push(crate::fleet::roster::ShadowedProfile {
+            id: "reviewer".to_string(),
+            shadowed_origin: ProfileOrigin::Personal,
+            shadowed_source: PathBuf::from("/home/op/.codewhale/agents/reviewer.toml"),
+            winner_origin: ProfileOrigin::Workspace,
+            winner_source: PathBuf::from(".codewhale/agents/reviewer.toml"),
+        });
+        let reviewer = view.members.iter().find(|m| m.id == "reviewer").unwrap();
+        let text = member_detail_lines_with_session(reviewer, None, &view.shadowed)
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.clone().into_owned())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("Shadows"), "detail names the shadow: {text}");
+        assert!(
+            text.contains("personal copy at /home/op/.codewhale/agents/reviewer.toml (ignored)"),
+            "detail names the ignored file: {text}"
         );
     }
 

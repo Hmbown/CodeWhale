@@ -775,8 +775,8 @@ fn coordination_event_projection_is_retained_as_typed_app_state() {
         },
         bounded: true,
         limit: 24,
-            process_lock_held: true,
-            process_lock_note: None,
+        process_lock_held: true,
+        process_lock_note: None,
     };
 
     apply_coordination_detail_projection(&mut app, projection.clone());
