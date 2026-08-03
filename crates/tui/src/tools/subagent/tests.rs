@@ -3059,6 +3059,58 @@ fn providerless_spawn_model_gate_rejects_known_foreign_route_before_spawn() {
     );
 }
 
+/// #5099: a role-default or profile model that belongs to a foreign provider
+/// (e.g. deepseek-v4-flash when the session is on xai or moonshot) must fall
+/// back to `ModelRoute::Inherit` rather than rejecting the spawn. Only an
+/// explicit caller-supplied `TaskModel` keeps the hard rejection.
+#[test]
+fn foreign_role_default_model_falls_back_to_inherit_on_non_deepseek_session() {
+    // xai parent session, role-default model is deepseek-v4-flash (foreign).
+    let runtime = stub_runtime_for_provider("xai");
+    let mut selection = SpawnModelSelection {
+        model_route: ModelRoute::Fixed("deepseek-v4-flash".to_string()),
+        source: SpawnRouteSource::RoleDefault,
+    };
+    resolve_fixed_spawn_model_route(&runtime, &mut selection, true)
+        .expect("role default model should not block a non-deepseek spawn");
+    assert_eq!(
+        selection.model_route,
+        ModelRoute::Inherit,
+        "foreign role default must fall back to inherit the xai session route"
+    );
+
+    // moonshot parent, same deepseek model as AgentProfileModel (profile set
+    // model without an explicit provider pin).
+    let runtime = stub_runtime_for_provider("moonshot");
+    let mut selection = SpawnModelSelection {
+        model_route: ModelRoute::Fixed("deepseek-v4-flash".to_string()),
+        source: SpawnRouteSource::AgentProfileModel,
+    };
+    resolve_fixed_spawn_model_route(&runtime, &mut selection, true)
+        .expect("profile model without provider pin should not block a moonshot spawn");
+    assert_eq!(
+        selection.model_route,
+        ModelRoute::Inherit,
+        "foreign profile model (no provider pin) must fall back to inherit the moonshot session route"
+    );
+}
+
+/// #5099: an explicit TaskModel that crosses provider namespaces is still
+/// rejected — the fallback applies only to implicit role/profile defaults.
+#[test]
+fn foreign_task_model_is_still_rejected_on_non_deepseek_session() {
+    let runtime = stub_runtime_for_provider("moonshot");
+    let mut selection = SpawnModelSelection {
+        model_route: ModelRoute::Fixed("deepseek-v4-flash".to_string()),
+        source: SpawnRouteSource::TaskModel,
+    };
+    let err = resolve_fixed_spawn_model_route(&runtime, &mut selection, true)
+        .expect_err("explicit caller-supplied deepseek model must still be rejected on moonshot");
+    let msg = err.to_string();
+    assert!(msg.contains("deepseek-v4-flash"), "names model: {msg}");
+    assert!(msg.contains("moonshot"), "names resolved route: {msg}");
+}
+
 #[test]
 fn test_child_max_spawn_depth_profile_hint_only_narrows() {
     // Profile hint narrows the inherited budget...
@@ -9217,6 +9269,12 @@ fn stub_client_for_provider(provider: &str) -> DeepSeekClient {
         "ollama" => {}
         "sakana" => {
             providers.sakana = crate::config::ProviderConfig {
+                api_key: Some("test-key".to_string()),
+                ..Default::default()
+            };
+        }
+        "xai" => {
+            providers.xai = crate::config::ProviderConfig {
                 api_key: Some("test-key".to_string()),
                 ..Default::default()
             };

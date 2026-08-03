@@ -10448,6 +10448,16 @@ fn resolve_spawn_model_selection(
 /// pins also receive the conservative known-foreign check; explicit provider
 /// pairs keep their deliberate route intent. Inherited/strength routes stay
 /// unchanged.
+///
+/// When no provider is pinned (`providerless = true`) and the configured
+/// model belongs to a foreign provider, the behavior depends on the source:
+/// - `TaskModel` (caller-supplied explicit model): hard-rejects with the
+///   foreign-model error so the caller can pin a provider or switch the model.
+/// - `AgentProfileModel` / `RoleDefault` (profile or settings default that
+///   was never paired with a provider): silently falls back to
+///   `ModelRoute::Inherit` so the child runs on the session route.  The
+///   operator's deepseek default model should never block a builder/scout
+///   spawn from an xai or moonshot parent session (#5099).
 fn resolve_fixed_spawn_model_route(
     runtime: &SubAgentRuntime,
     selection: &mut SpawnModelSelection,
@@ -10465,6 +10475,25 @@ fn resolve_fixed_spawn_model_route(
         return Ok(());
     };
     let provider = runtime.client.api_provider();
+
+    // When the model has no provider pin and belongs to a different provider
+    // than the active session, non-explicit sources (role defaults, profile
+    // defaults) fall back to inheriting the session route instead of failing.
+    // Only a caller-supplied explicit model (TaskModel) is hard-rejected so
+    // that deliberate cross-provider pins still surface a clear error.
+    if providerless
+        && !matches!(selection.source, SpawnRouteSource::TaskModel)
+        && crate::route_runtime::validate_unpinned_model_provider(
+            provider,
+            model,
+            runtime.client.base_url(),
+        )
+        .is_err()
+    {
+        selection.model_route = ModelRoute::Inherit;
+        return Ok(());
+    }
+
     let candidate = if providerless {
         crate::route_runtime::resolve_unpinned_model_candidate(
             provider,
