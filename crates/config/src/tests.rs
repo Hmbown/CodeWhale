@@ -4705,7 +4705,11 @@ fn provider_metadata_defaults_match_runtime_helpers() {
             ProviderKind::Anthropic
             | ProviderKind::DeepseekAnthropic
             | ProviderKind::MinimaxAnthropic
-            | ProviderKind::Openmodel => Some(provider::WireFormat::AnthropicMessages),
+            | ProviderKind::Openmodel
+            | ProviderKind::ModelstudioTokenPlanAnthropic
+            | ProviderKind::ModelstudioCodingPlanAnthropic => {
+                Some(provider::WireFormat::AnthropicMessages)
+            }
             _ => Some(provider::WireFormat::ChatCompletions),
         };
         assert_eq!(provider.wire_policy().fixed(), expected_wire);

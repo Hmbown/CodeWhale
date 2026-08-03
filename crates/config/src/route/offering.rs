@@ -77,6 +77,26 @@ pub struct ProviderModelOffering {
 // Transport snapshot verified against https://opencode.ai/docs/zen on
 // 2026-07-17. Gemini rows are intentionally absent because they use Google's
 // model-specific wire protocol, which CodeWhale does not currently implement.
+/// Token Plan text models (Text Generation / Reasoning, coding scope).
+///
+/// Available on both Token Plan Personal and Team. The same model set is also
+/// available on the Coding Plan; rows are duplicated per provider id below.
+/// Pay-as-you-go workspace-id templating is deferred to a follow-up.
+const MODELSTUDIO_TEXT_MODELS: &[&str] = &[
+    "qwen3.8-max",
+    "qwen3.8-max-preview",
+    "qwen3.7-plus",
+    "qwen3.7-max",
+    "qwen3.6-flash",
+    // DeepSeek models served under Model Studio are scoped to this provider;
+    // they do not collide with first-party DeepSeek routes.
+    "deepseek-v4-pro",
+    "deepseek-v4-flash-0731",
+    // GLM models served under Model Studio are scoped to this provider;
+    // they do not collide with first-party Zhipu / Z.ai routes.
+    "glm-5.2",
+];
+
 pub(crate) const OPENCODE_ZEN_RESPONSES_MODELS: &[&str] = &[
     "gpt-5.6-sol",
     "gpt-5.6-terra",
@@ -211,5 +231,60 @@ pub fn bundled_offerings() -> Vec<ProviderModelOffering> {
             pricing: PricingSku::UnknownOrStale,
         })
     }));
+
+    // Alibaba Cloud Model Studio — Token Plan and Coding Plan.
+    // All models below are classified as Text Generation / Reasoning on the
+    // Model Studio catalog; reasoning and tool-call capabilities are marked
+    // Supported conservatively. Visual Understanding flag is not listed here
+    // because Codewhale's image-input routing for these models is unverified.
+    let ms_capabilities = RouteCapabilities {
+        reasoning: CapabilityState::Supported,
+        native_tool_calls: CapabilityState::Supported,
+        structured_output: CapabilityState::Supported,
+        streaming: CapabilityState::Supported,
+        image_input: CapabilityState::Unknown,
+        ..RouteCapabilities::default()
+    };
+    for plan_provider_id in &["modelstudio-token-plan", "modelstudio-coding-plan"] {
+        let plan = ProviderId::from(*plan_provider_id);
+        offerings.extend(
+            MODELSTUDIO_TEXT_MODELS
+                .iter()
+                .enumerate()
+                .map(|(i, model)| ProviderModelOffering {
+                    provider: plan.clone(),
+                    canonical_model: None,
+                    wire_model_id: WireModelId::from(*model),
+                    endpoint_key: "chat".to_string(),
+                    default_for_provider: i == 0,
+                    limits: RouteLimits::default(),
+                    capabilities: ms_capabilities,
+                    pricing: PricingSku::UnknownOrStale,
+                }),
+        );
+    }
+    // Anthropic-dialect variants use the messages endpoint key.
+    for plan_provider_id in &[
+        "modelstudio-token-plan-anthropic",
+        "modelstudio-coding-plan-anthropic",
+    ] {
+        let plan = ProviderId::from(*plan_provider_id);
+        offerings.extend(
+            MODELSTUDIO_TEXT_MODELS
+                .iter()
+                .enumerate()
+                .map(|(i, model)| ProviderModelOffering {
+                    provider: plan.clone(),
+                    canonical_model: None,
+                    wire_model_id: WireModelId::from(*model),
+                    endpoint_key: "messages".to_string(),
+                    default_for_provider: i == 0,
+                    limits: RouteLimits::default(),
+                    capabilities: ms_capabilities,
+                    pricing: PricingSku::UnknownOrStale,
+                }),
+        );
+    }
+
     offerings
 }

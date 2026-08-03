@@ -378,6 +378,44 @@ pub struct ProvidersToml {
         alias = "tokenhub"
     )]
     pub telecomjs: ProviderConfigToml,
+    /// Alibaba Cloud Model Studio — Token Plan (OpenAI-compatible endpoint).
+    #[serde(
+        default,
+        skip_serializing_if = "ProviderConfigToml::is_empty",
+        alias = "modelstudio-token-plan",
+        alias = "modelstudio_token_plan",
+        alias = "alibaba-token-plan",
+        alias = "dashscope-token-plan"
+    )]
+    pub modelstudio_token_plan: ProviderConfigToml,
+    /// Alibaba Cloud Model Studio — Token Plan Anthropic-compatible endpoint.
+    #[serde(
+        default,
+        skip_serializing_if = "ProviderConfigToml::is_empty",
+        alias = "modelstudio-token-plan-anthropic",
+        alias = "modelstudio_token_plan_anthropic",
+        alias = "alibaba-token-plan-anthropic"
+    )]
+    pub modelstudio_token_plan_anthropic: ProviderConfigToml,
+    /// Alibaba Cloud Model Studio — Coding Plan (OpenAI-compatible endpoint).
+    #[serde(
+        default,
+        skip_serializing_if = "ProviderConfigToml::is_empty",
+        alias = "modelstudio-coding-plan",
+        alias = "modelstudio_coding_plan",
+        alias = "alibaba-coding-plan",
+        alias = "dashscope-coding-plan"
+    )]
+    pub modelstudio_coding_plan: ProviderConfigToml,
+    /// Alibaba Cloud Model Studio — Coding Plan Anthropic-compatible endpoint.
+    #[serde(
+        default,
+        skip_serializing_if = "ProviderConfigToml::is_empty",
+        alias = "modelstudio-coding-plan-anthropic",
+        alias = "modelstudio_coding_plan_anthropic",
+        alias = "alibaba-coding-plan-anthropic"
+    )]
+    pub modelstudio_coding_plan_anthropic: ProviderConfigToml,
     /// Catch-all table for the dynamic OpenAI-compatible custom provider
     /// identity (#1519). Arbitrary `[providers.<name>]` tables are handled by
     /// the tui-side flatten map; this named slot keeps the canonical
@@ -558,6 +596,10 @@ impl ProvidersToml {
             ProviderKind::Meta => &self.meta,
             ProviderKind::Xai => &self.xai,
             ProviderKind::Telecomjs => &self.telecomjs,
+            ProviderKind::ModelstudioTokenPlan => &self.modelstudio_token_plan,
+            ProviderKind::ModelstudioTokenPlanAnthropic => &self.modelstudio_token_plan_anthropic,
+            ProviderKind::ModelstudioCodingPlan => &self.modelstudio_coding_plan,
+            ProviderKind::ModelstudioCodingPlanAnthropic => &self.modelstudio_coding_plan_anthropic,
             ProviderKind::Custom => &self.custom,
         }
     }
@@ -600,6 +642,14 @@ impl ProvidersToml {
             ProviderKind::Meta => &mut self.meta,
             ProviderKind::Xai => &mut self.xai,
             ProviderKind::Telecomjs => &mut self.telecomjs,
+            ProviderKind::ModelstudioTokenPlan => &mut self.modelstudio_token_plan,
+            ProviderKind::ModelstudioTokenPlanAnthropic => {
+                &mut self.modelstudio_token_plan_anthropic
+            }
+            ProviderKind::ModelstudioCodingPlan => &mut self.modelstudio_coding_plan,
+            ProviderKind::ModelstudioCodingPlanAnthropic => {
+                &mut self.modelstudio_coding_plan_anthropic
+            }
             ProviderKind::Custom => &mut self.custom,
         }
     }
@@ -2581,6 +2631,18 @@ impl ConfigToml {
                 ProviderKind::Meta => DEFAULT_META_BASE_URL.to_string(),
                 ProviderKind::Xai => DEFAULT_XAI_BASE_URL.to_string(),
                 ProviderKind::Telecomjs => DEFAULT_TELECOMJS_BASE_URL.to_string(),
+                ProviderKind::ModelstudioTokenPlan => {
+                    DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL.to_string()
+                }
+                ProviderKind::ModelstudioTokenPlanAnthropic => {
+                    MODELSTUDIO_TOKEN_PLAN_ANTHROPIC_BASE_URL.to_string()
+                }
+                ProviderKind::ModelstudioCodingPlan => {
+                    DEFAULT_MODELSTUDIO_CODING_PLAN_BASE_URL.to_string()
+                }
+                ProviderKind::ModelstudioCodingPlanAnthropic => {
+                    MODELSTUDIO_CODING_PLAN_ANTHROPIC_BASE_URL.to_string()
+                }
                 // The custom provider has no built-in endpoint; fall back to its
                 // descriptor placeholder so the lookup is total. Real custom
                 // routes always supply a configured base_url before this point.
@@ -2998,6 +3060,10 @@ fn provider_passes_model_through(provider: ProviderKind) -> bool {
             | ProviderKind::Meta
             | ProviderKind::Xai
             | ProviderKind::Telecomjs
+            | ProviderKind::ModelstudioTokenPlan
+            | ProviderKind::ModelstudioTokenPlanAnthropic
+            | ProviderKind::ModelstudioCodingPlan
+            | ProviderKind::ModelstudioCodingPlanAnthropic
             | ProviderKind::Custom
     )
 }
@@ -3513,6 +3579,10 @@ fn default_model_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Meta => DEFAULT_META_MODEL,
         ProviderKind::Xai => DEFAULT_XAI_MODEL,
         ProviderKind::Telecomjs => DEFAULT_TELECOMJS_MODEL,
+        ProviderKind::ModelstudioTokenPlan
+        | ProviderKind::ModelstudioTokenPlanAnthropic
+        | ProviderKind::ModelstudioCodingPlan
+        | ProviderKind::ModelstudioCodingPlanAnthropic => DEFAULT_MODELSTUDIO_TOKEN_PLAN_MODEL,
         // No built-in default model; the registry placeholder keeps this total.
         ProviderKind::Custom => provider.provider().default_model(),
     }
@@ -3556,6 +3626,10 @@ fn default_base_url_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Meta => DEFAULT_META_BASE_URL,
         ProviderKind::Xai => DEFAULT_XAI_BASE_URL,
         ProviderKind::Telecomjs => DEFAULT_TELECOMJS_BASE_URL,
+        ProviderKind::ModelstudioTokenPlan => DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL,
+        ProviderKind::ModelstudioTokenPlanAnthropic => MODELSTUDIO_TOKEN_PLAN_ANTHROPIC_BASE_URL,
+        ProviderKind::ModelstudioCodingPlan => DEFAULT_MODELSTUDIO_CODING_PLAN_BASE_URL,
+        ProviderKind::ModelstudioCodingPlanAnthropic => MODELSTUDIO_CODING_PLAN_ANTHROPIC_BASE_URL,
         // No built-in default base URL; the registry placeholder keeps this total.
         ProviderKind::Custom => provider.provider().default_base_url(),
     }
@@ -5483,6 +5557,10 @@ struct EnvRuntimeOverrides {
     xai_model: Option<String>,
     telecomjs_base_url: Option<String>,
     telecomjs_model: Option<String>,
+    modelstudio_token_plan_base_url: Option<String>,
+    modelstudio_token_plan_model: Option<String>,
+    modelstudio_coding_plan_base_url: Option<String>,
+    modelstudio_coding_plan_model: Option<String>,
 }
 
 impl EnvRuntimeOverrides {
@@ -5783,6 +5861,18 @@ impl EnvRuntimeOverrides {
             telecomjs_model: std::env::var("TELECOMJS_MODEL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            modelstudio_token_plan_base_url: std::env::var("MODELSTUDIO_TOKEN_PLAN_BASE_URL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            modelstudio_token_plan_model: std::env::var("MODELSTUDIO_TOKEN_PLAN_MODEL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            modelstudio_coding_plan_base_url: std::env::var("MODELSTUDIO_CODING_PLAN_BASE_URL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            modelstudio_coding_plan_model: std::env::var("MODELSTUDIO_CODING_PLAN_MODEL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
         }
     }
 
@@ -5841,6 +5931,12 @@ impl EnvRuntimeOverrides {
             ProviderKind::Meta => self.meta_base_url.clone(),
             ProviderKind::Xai => self.xai_base_url.clone(),
             ProviderKind::Telecomjs => self.telecomjs_base_url.clone(),
+            ProviderKind::ModelstudioTokenPlan | ProviderKind::ModelstudioTokenPlanAnthropic => {
+                self.modelstudio_token_plan_base_url.clone()
+            }
+            ProviderKind::ModelstudioCodingPlan | ProviderKind::ModelstudioCodingPlanAnthropic => {
+                self.modelstudio_coding_plan_base_url.clone()
+            }
             // No dedicated CODEWHALE_CUSTOM_BASE_URL env override: a custom
             // provider's base URL comes from its `[providers.<name>]` table.
             ProviderKind::Custom => None,
@@ -5877,6 +5973,12 @@ impl EnvRuntimeOverrides {
             ProviderKind::Meta => self.meta_model.clone(),
             ProviderKind::Xai => self.xai_model.clone(),
             ProviderKind::Telecomjs => self.telecomjs_model.clone(),
+            ProviderKind::ModelstudioTokenPlan | ProviderKind::ModelstudioTokenPlanAnthropic => {
+                self.modelstudio_token_plan_model.clone()
+            }
+            ProviderKind::ModelstudioCodingPlan | ProviderKind::ModelstudioCodingPlanAnthropic => {
+                self.modelstudio_coding_plan_model.clone()
+            }
             _ => None,
         }?;
 

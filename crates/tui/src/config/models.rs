@@ -208,3 +208,13 @@ pub const XAI_GROK_4_20_0309_NON_REASONING_MODEL: &str = "grok-4.20-0309-non-rea
 pub const DEFAULT_XAI_BASE_URL: &str = "https://api.x.ai/v1";
 pub const DEFAULT_TELECOMJS_MODEL: &str = "deepseek-v4-pro";
 pub const DEFAULT_TELECOMJS_BASE_URL: &str = "https://aigw.telecomjs.com/v1";
+// Alibaba Cloud Model Studio (DashScope) defaults
+pub const DEFAULT_MODELSTUDIO_TOKEN_PLAN_MODEL: &str = "qwen3.8-max";
+pub const DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL: &str =
+    "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1";
+pub const MODELSTUDIO_TOKEN_PLAN_ANTHROPIC_BASE_URL: &str =
+    "https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic";
+pub const DEFAULT_MODELSTUDIO_CODING_PLAN_BASE_URL: &str =
+    "https://coding-intl.dashscope.aliyuncs.com/v1";
+pub const MODELSTUDIO_CODING_PLAN_ANTHROPIC_BASE_URL: &str =
+    "https://coding-intl.dashscope.aliyuncs.com/apps/anthropic";

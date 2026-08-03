@@ -143,6 +143,41 @@ pub enum ProviderKind {
         alias = "tokenhub"
     )]
     Telecomjs,
+    /// Alibaba Cloud Model Studio — Token Plan (OpenAI-compatible Chat Completions).
+    ///
+    /// Token Plan Personal and Team share the same endpoint. Both the OpenAI
+    /// and Anthropic dialects are available; select the Anthropic dialect via
+    /// `modelstudio-token-plan-anthropic`. Pay-as-you-go workspace-id templating
+    /// is out of scope for v1; use a custom provider for that plan.
+    #[serde(
+        alias = "modelstudio-token-plan",
+        alias = "modelstudio_token_plan",
+        alias = "alibaba-token-plan",
+        alias = "dashscope-token-plan"
+    )]
+    ModelstudioTokenPlan,
+    /// Alibaba Cloud Model Studio — Token Plan Anthropic-compatible endpoint.
+    #[serde(
+        alias = "modelstudio-token-plan-anthropic",
+        alias = "modelstudio_token_plan_anthropic",
+        alias = "alibaba-token-plan-anthropic"
+    )]
+    ModelstudioTokenPlanAnthropic,
+    /// Alibaba Cloud Model Studio — Coding Plan (OpenAI-compatible Chat Completions).
+    #[serde(
+        alias = "modelstudio-coding-plan",
+        alias = "modelstudio_coding_plan",
+        alias = "alibaba-coding-plan",
+        alias = "dashscope-coding-plan"
+    )]
+    ModelstudioCodingPlan,
+    /// Alibaba Cloud Model Studio — Coding Plan Anthropic-compatible endpoint.
+    #[serde(
+        alias = "modelstudio-coding-plan-anthropic",
+        alias = "modelstudio_coding_plan_anthropic",
+        alias = "alibaba-coding-plan-anthropic"
+    )]
+    ModelstudioCodingPlanAnthropic,
     /// User-defined OpenAI-compatible endpoint (#1519).
     ///
     /// A single dynamic identity for arbitrary `[providers.<name>]
@@ -154,7 +189,7 @@ pub enum ProviderKind {
 }
 
 impl ProviderKind {
-    pub const ALL: [Self; 37] = [
+    pub const ALL: [Self; 41] = [
         Self::Deepseek,
         Self::DeepseekAnthropic,
         Self::NvidiaNim,
@@ -191,6 +226,10 @@ impl ProviderKind {
         Self::Meta,
         Self::Xai,
         Self::Telecomjs,
+        Self::ModelstudioTokenPlan,
+        Self::ModelstudioTokenPlanAnthropic,
+        Self::ModelstudioCodingPlan,
+        Self::ModelstudioCodingPlanAnthropic,
         Self::Custom,
     ];
 

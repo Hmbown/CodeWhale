@@ -12,21 +12,24 @@ use super::{
     DEFAULT_FIREWORKS_MODEL, DEFAULT_HUGGINGFACE_BASE_URL, DEFAULT_HUGGINGFACE_MODEL,
     DEFAULT_LONGCAT_BASE_URL, DEFAULT_LONGCAT_MODEL, DEFAULT_META_BASE_URL, DEFAULT_META_MODEL,
     DEFAULT_MINIMAX_ANTHROPIC_BASE_URL, DEFAULT_MINIMAX_BASE_URL, DEFAULT_MINIMAX_MODEL,
-    DEFAULT_MOONSHOT_BASE_URL, DEFAULT_MOONSHOT_MODEL, DEFAULT_NOVITA_BASE_URL,
-    DEFAULT_NOVITA_MODEL, DEFAULT_NVIDIA_NIM_BASE_URL, DEFAULT_NVIDIA_NIM_MODEL,
-    DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_BASE_URL,
-    DEFAULT_OPENAI_CODEX_BASE_URL, DEFAULT_OPENAI_CODEX_MODEL, DEFAULT_OPENAI_MODEL,
-    DEFAULT_OPENCODE_GO_BASE_URL, DEFAULT_OPENCODE_GO_MODEL, DEFAULT_OPENCODE_ZEN_BASE_URL,
-    DEFAULT_OPENCODE_ZEN_MODEL, DEFAULT_OPENMODEL_BASE_URL, DEFAULT_OPENMODEL_MODEL,
-    DEFAULT_OPENROUTER_BASE_URL, DEFAULT_OPENROUTER_MODEL, DEFAULT_QIANFAN_BASE_URL,
-    DEFAULT_QIANFAN_MODEL, DEFAULT_SAKANA_BASE_URL, DEFAULT_SAKANA_MODEL, DEFAULT_SGLANG_BASE_URL,
-    DEFAULT_SGLANG_MODEL, DEFAULT_SILICONFLOW_BASE_URL, DEFAULT_SILICONFLOW_CN_BASE_URL,
-    DEFAULT_SILICONFLOW_MODEL, DEFAULT_STEPFUN_BASE_URL, DEFAULT_STEPFUN_MODEL,
-    DEFAULT_TELECOMJS_BASE_URL, DEFAULT_TELECOMJS_MODEL, DEFAULT_TOGETHER_BASE_URL,
-    DEFAULT_TOGETHER_MODEL, DEFAULT_VLLM_BASE_URL, DEFAULT_VLLM_MODEL, DEFAULT_VOLCENGINE_BASE_URL,
-    DEFAULT_VOLCENGINE_MODEL, DEFAULT_WANJIE_ARK_BASE_URL, DEFAULT_WANJIE_ARK_MODEL,
-    DEFAULT_XAI_BASE_URL, DEFAULT_XAI_MODEL, DEFAULT_XIAOMI_MIMO_BASE_URL,
-    DEFAULT_XIAOMI_MIMO_MODEL, DEFAULT_ZAI_BASE_URL, DEFAULT_ZAI_MODEL, ProviderKind,
+    DEFAULT_MODELSTUDIO_CODING_PLAN_BASE_URL, DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL,
+    DEFAULT_MODELSTUDIO_TOKEN_PLAN_MODEL, DEFAULT_MOONSHOT_BASE_URL, DEFAULT_MOONSHOT_MODEL,
+    DEFAULT_NOVITA_BASE_URL, DEFAULT_NOVITA_MODEL, DEFAULT_NVIDIA_NIM_BASE_URL,
+    DEFAULT_NVIDIA_NIM_MODEL, DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MODEL,
+    DEFAULT_OPENAI_BASE_URL, DEFAULT_OPENAI_CODEX_BASE_URL, DEFAULT_OPENAI_CODEX_MODEL,
+    DEFAULT_OPENAI_MODEL, DEFAULT_OPENCODE_GO_BASE_URL, DEFAULT_OPENCODE_GO_MODEL,
+    DEFAULT_OPENCODE_ZEN_BASE_URL, DEFAULT_OPENCODE_ZEN_MODEL, DEFAULT_OPENMODEL_BASE_URL,
+    DEFAULT_OPENMODEL_MODEL, DEFAULT_OPENROUTER_BASE_URL, DEFAULT_OPENROUTER_MODEL,
+    DEFAULT_QIANFAN_BASE_URL, DEFAULT_QIANFAN_MODEL, DEFAULT_SAKANA_BASE_URL, DEFAULT_SAKANA_MODEL,
+    DEFAULT_SGLANG_BASE_URL, DEFAULT_SGLANG_MODEL, DEFAULT_SILICONFLOW_BASE_URL,
+    DEFAULT_SILICONFLOW_CN_BASE_URL, DEFAULT_SILICONFLOW_MODEL, DEFAULT_STEPFUN_BASE_URL,
+    DEFAULT_STEPFUN_MODEL, DEFAULT_TELECOMJS_BASE_URL, DEFAULT_TELECOMJS_MODEL,
+    DEFAULT_TOGETHER_BASE_URL, DEFAULT_TOGETHER_MODEL, DEFAULT_VLLM_BASE_URL, DEFAULT_VLLM_MODEL,
+    DEFAULT_VOLCENGINE_BASE_URL, DEFAULT_VOLCENGINE_MODEL, DEFAULT_WANJIE_ARK_BASE_URL,
+    DEFAULT_WANJIE_ARK_MODEL, DEFAULT_XAI_BASE_URL, DEFAULT_XAI_MODEL,
+    DEFAULT_XIAOMI_MIMO_BASE_URL, DEFAULT_XIAOMI_MIMO_MODEL, DEFAULT_ZAI_BASE_URL,
+    DEFAULT_ZAI_MODEL, MODELSTUDIO_CODING_PLAN_ANTHROPIC_BASE_URL,
+    MODELSTUDIO_TOKEN_PLAN_ANTHROPIC_BASE_URL, ProviderKind,
 };
 
 /// Wire protocol spoken by a provider.
@@ -393,6 +396,15 @@ pub const fn credential_help(kind: ProviderKind) -> CredentialHelp {
             credential_url: Some("https://aigw.telecomjs.com/"),
             docs_url: None,
             guidance: "Create a TelecomJS TokenHub API key, then use the provider's live model catalog to discover the models available to that key.",
+        },
+        ProviderKind::ModelstudioTokenPlan
+        | ProviderKind::ModelstudioTokenPlanAnthropic
+        | ProviderKind::ModelstudioCodingPlan
+        | ProviderKind::ModelstudioCodingPlanAnthropic => CredentialHelp {
+            acquisition: ApiKey,
+            credential_url: Some("https://bailian.console.aliyun.com/"),
+            docs_url: Some("https://www.alibabacloud.com/help/en/model-studio/"),
+            guidance: "Sign in to Alibaba Cloud Model Studio (Bailian console), create or copy an API key, and select the plan endpoint matching your subscription (Token Plan or Coding Plan).",
         },
         ProviderKind::Custom => CredentialHelp {
             acquisition: Configuration,
@@ -1226,6 +1238,190 @@ provider!(
     aliases: ["telecom-js", "telecom_js", "telecomjs-cn", "tokenhub"]
 );
 
+/// Alibaba Cloud Model Studio — Token Plan (OpenAI-compatible Chat Completions).
+///
+/// Token Plan Personal and Team share the same regional endpoint. The default
+/// region is Asia-Pacific (Singapore); official docs list the same URL for
+/// both personal and team plans.
+pub struct ModelstudioTokenPlan;
+
+impl Provider for ModelstudioTokenPlan {
+    fn id(&self) -> &'static str {
+        "modelstudio-token-plan"
+    }
+
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::ModelstudioTokenPlan
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Alibaba Cloud Model Studio (Token Plan)"
+    }
+
+    fn default_base_url(&self) -> &'static str {
+        DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL
+    }
+
+    fn default_model(&self) -> &'static str {
+        DEFAULT_MODELSTUDIO_TOKEN_PLAN_MODEL
+    }
+
+    fn env_vars(&self) -> &'static [&'static str] {
+        &["MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY"]
+    }
+
+    fn provider_config_key(&self) -> &'static str {
+        "modelstudio_token_plan"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[
+            "modelstudio-token-plan",
+            "modelstudio_token_plan",
+            "alibaba-token-plan",
+            "dashscope-token-plan",
+        ]
+    }
+}
+
+/// Alibaba Cloud Model Studio — Token Plan Anthropic-compatible endpoint.
+///
+/// Same API key as `modelstudio-token-plan`; speaks the native Anthropic
+/// Messages wire protocol on the `/apps/anthropic` path.
+pub struct ModelstudioTokenPlanAnthropic;
+
+impl Provider for ModelstudioTokenPlanAnthropic {
+    fn id(&self) -> &'static str {
+        "modelstudio-token-plan-anthropic"
+    }
+
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::ModelstudioTokenPlanAnthropic
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Alibaba Cloud Model Studio (Token Plan, Anthropic-compatible)"
+    }
+
+    fn default_base_url(&self) -> &'static str {
+        MODELSTUDIO_TOKEN_PLAN_ANTHROPIC_BASE_URL
+    }
+
+    fn default_model(&self) -> &'static str {
+        DEFAULT_MODELSTUDIO_TOKEN_PLAN_MODEL
+    }
+
+    fn env_vars(&self) -> &'static [&'static str] {
+        &["MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY"]
+    }
+
+    fn provider_config_key(&self) -> &'static str {
+        "modelstudio_token_plan_anthropic"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[
+            "modelstudio-token-plan-anthropic",
+            "modelstudio_token_plan_anthropic",
+            "alibaba-token-plan-anthropic",
+        ]
+    }
+
+    fn wire_policy(&self) -> WirePolicy {
+        WirePolicy::Fixed(WireFormat::AnthropicMessages)
+    }
+}
+
+/// Alibaba Cloud Model Studio — Coding Plan (OpenAI-compatible Chat Completions).
+pub struct ModelstudioCodingPlan;
+
+impl Provider for ModelstudioCodingPlan {
+    fn id(&self) -> &'static str {
+        "modelstudio-coding-plan"
+    }
+
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::ModelstudioCodingPlan
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Alibaba Cloud Model Studio (Coding Plan)"
+    }
+
+    fn default_base_url(&self) -> &'static str {
+        DEFAULT_MODELSTUDIO_CODING_PLAN_BASE_URL
+    }
+
+    fn default_model(&self) -> &'static str {
+        DEFAULT_MODELSTUDIO_TOKEN_PLAN_MODEL
+    }
+
+    fn env_vars(&self) -> &'static [&'static str] {
+        &["MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY"]
+    }
+
+    fn provider_config_key(&self) -> &'static str {
+        "modelstudio_coding_plan"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[
+            "modelstudio-coding-plan",
+            "modelstudio_coding_plan",
+            "alibaba-coding-plan",
+            "dashscope-coding-plan",
+        ]
+    }
+}
+
+/// Alibaba Cloud Model Studio — Coding Plan Anthropic-compatible endpoint.
+///
+/// Same API key as `modelstudio-coding-plan`; speaks the native Anthropic
+/// Messages wire protocol on the `/apps/anthropic` path.
+pub struct ModelstudioCodingPlanAnthropic;
+
+impl Provider for ModelstudioCodingPlanAnthropic {
+    fn id(&self) -> &'static str {
+        "modelstudio-coding-plan-anthropic"
+    }
+
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::ModelstudioCodingPlanAnthropic
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Alibaba Cloud Model Studio (Coding Plan, Anthropic-compatible)"
+    }
+
+    fn default_base_url(&self) -> &'static str {
+        MODELSTUDIO_CODING_PLAN_ANTHROPIC_BASE_URL
+    }
+
+    fn default_model(&self) -> &'static str {
+        DEFAULT_MODELSTUDIO_TOKEN_PLAN_MODEL
+    }
+
+    fn env_vars(&self) -> &'static [&'static str] {
+        &["MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY"]
+    }
+
+    fn provider_config_key(&self) -> &'static str {
+        "modelstudio_coding_plan_anthropic"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[
+            "modelstudio-coding-plan-anthropic",
+            "modelstudio_coding_plan_anthropic",
+            "alibaba-coding-plan-anthropic",
+        ]
+    }
+
+    fn wire_policy(&self) -> WirePolicy {
+        WirePolicy::Fixed(WireFormat::AnthropicMessages)
+    }
+}
+
 /// User-defined OpenAI-compatible endpoint (#1519).
 ///
 /// A single dynamic provider identity for arbitrary `[providers.<name>]
@@ -1315,9 +1511,15 @@ static OPENCODE_ZEN: OpencodeZen = OpencodeZen;
 static META: Meta = Meta;
 static XAI: Xai = Xai;
 static TELECOMJS: Telecomjs = Telecomjs;
+static MODELSTUDIO_TOKEN_PLAN: ModelstudioTokenPlan = ModelstudioTokenPlan;
+static MODELSTUDIO_TOKEN_PLAN_ANTHROPIC: ModelstudioTokenPlanAnthropic =
+    ModelstudioTokenPlanAnthropic;
+static MODELSTUDIO_CODING_PLAN: ModelstudioCodingPlan = ModelstudioCodingPlan;
+static MODELSTUDIO_CODING_PLAN_ANTHROPIC: ModelstudioCodingPlanAnthropic =
+    ModelstudioCodingPlanAnthropic;
 static CUSTOM: Custom = Custom;
 
-static PROVIDER_REGISTRY: [&dyn Provider; 37] = [
+static PROVIDER_REGISTRY: [&dyn Provider; 41] = [
     &DEEPSEEK,
     &DEEPSEEK_ANTHROPIC,
     &NVIDIA_NIM,
@@ -1354,6 +1556,10 @@ static PROVIDER_REGISTRY: [&dyn Provider; 37] = [
     &META,
     &XAI,
     &TELECOMJS,
+    &MODELSTUDIO_TOKEN_PLAN,
+    &MODELSTUDIO_TOKEN_PLAN_ANTHROPIC,
+    &MODELSTUDIO_CODING_PLAN,
+    &MODELSTUDIO_CODING_PLAN_ANTHROPIC,
     &CUSTOM,
 ];
 
@@ -1790,12 +1996,13 @@ mod tests {
             ProviderKind::Deepseek,
             "DeepSeek must not be hard-coded first in display order"
         );
-        // Anthropic ('Anthropic') sorts before 'DeepSeek' alphabetically, so it
-        // is a stable check that the neutral ordering actually took effect.
+        // Alibaba Cloud Model Studio sorts before 'Anthropic' and 'DeepSeek'
+        // alphabetically, so it is a stable check that the neutral ordering
+        // actually took effect.
         assert_eq!(
             display[0].display_name(),
-            "Anthropic",
-            "alphabetical display order should lead with Anthropic"
+            "Alibaba Cloud Model Studio (Coding Plan)",
+            "alphabetical display order should lead with Alibaba Cloud Model Studio"
         );
     }
 }

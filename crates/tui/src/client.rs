@@ -3025,6 +3025,13 @@ pub(super) fn apply_reasoning_effort(
             // (qwen-max, deepseek-chat, gpt-4o, claude, etc.) accepts the same
             // reasoning dialect (#4188 review: verify against actual behavior).
             ApiProvider::Telecomjs => {}
+            // Model Studio: same reasoning as TelecomJS — the Chat Completions
+            // API does not expose reasoning_effort/thinking controls. Reasoning
+            // is model-specific on the DashScope side and not surfaced here.
+            ApiProvider::ModelstudioTokenPlan
+            | ApiProvider::ModelstudioTokenPlanAnthropic
+            | ApiProvider::ModelstudioCodingPlan
+            | ApiProvider::ModelstudioCodingPlanAnthropic => {}
             ApiProvider::OpenaiCodex => {
                 // OpenAI Codex uses Responses API — thinking handled differently
             }
@@ -3093,6 +3100,11 @@ pub(super) fn apply_reasoning_effort(
             // TelecomJS: see comment in the "off" branch above — the gateway's
             // Chat Completions API does not support reasoning_effort or thinking.
             ApiProvider::Telecomjs => {}
+            // Model Studio: same reasoning as TelecomJS above.
+            ApiProvider::ModelstudioTokenPlan
+            | ApiProvider::ModelstudioTokenPlanAnthropic
+            | ApiProvider::ModelstudioCodingPlan
+            | ApiProvider::ModelstudioCodingPlanAnthropic => {}
             // OpenRouter/Novita/Together: pass through the actual user-chosen value.
             // OpenRouter's unified scale is none/minimal/low/medium/high/xhigh;
             // DeepSeek models hosted there accept those directly.
@@ -3188,6 +3200,11 @@ pub(super) fn apply_reasoning_effort(
             // TelecomJS: see comment in the "off" branch above — the gateway's
             // Chat Completions API does not support reasoning_effort or thinking.
             ApiProvider::Telecomjs => {}
+            // Model Studio: same reasoning as TelecomJS above.
+            ApiProvider::ModelstudioTokenPlan
+            | ApiProvider::ModelstudioTokenPlanAnthropic
+            | ApiProvider::ModelstudioCodingPlan
+            | ApiProvider::ModelstudioCodingPlanAnthropic => {}
             ApiProvider::Openrouter | ApiProvider::Novita | ApiProvider::Together => {
                 body["reasoning_effort"] = json!("xhigh");
                 body["thinking"] = json!({ "type": "enabled" });
