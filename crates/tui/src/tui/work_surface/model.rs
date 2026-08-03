@@ -1076,16 +1076,14 @@ fn agent_rows(app: &App) -> Vec<RankedWorkRow> {
                         )
                     })
                 })
-                .unwrap_or_else(|| {
-                    matches!(
-                        agent.status,
-                        SubAgentStatus::Completed
-                            | SubAgentStatus::Cancelled
-                            | SubAgentStatus::Failed(_)
-                            | SubAgentStatus::Interrupted(_)
-                            | SubAgentStatus::BudgetExhausted
-                    )
-                });
+                .unwrap_or(matches!(
+                    agent.status,
+                    SubAgentStatus::Completed
+                        | SubAgentStatus::Cancelled
+                        | SubAgentStatus::Failed(_)
+                        | SubAgentStatus::Interrupted(_)
+                        | SubAgentStatus::BudgetExhausted
+                ));
             let mut facts = vec![
                 status.to_string(),
                 summarize_assignment(&agent.assignment.objective),

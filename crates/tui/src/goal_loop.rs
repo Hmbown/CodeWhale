@@ -270,7 +270,6 @@ mod tests {
                 tokens_used: 5_000,
                 time_used_seconds: 300,
                 continuations,
-                ..GoalProgress::default()
             };
             let budget = GoalBudget::with_token_budget(1_000_000);
             assert_eq!(

@@ -131,19 +131,20 @@ impl EmissionGuard {
         let now = Instant::now();
 
         // Rate limit: require at least `rate_limit` since last emission.
-        if let Some(last) = self.last_emission {
-            if now.duration_since(last) < config.rate_limit {
-                return false;
-            }
+        if let Some(last) = self.last_emission
+            && now.duration_since(last) < config.rate_limit
+        {
+            return false;
         }
 
         // Dedup: suppress if the note content hash matches the previous note
         // within the dedup window.
         let note_hash = hash_str(note);
-        if let (Some(prev_hash), Some(prev_at)) = (self.last_note_hash, self.last_note_hash_at) {
-            if prev_hash == note_hash && now.duration_since(prev_at) < config.dedup_window {
-                return false;
-            }
+        if let (Some(prev_hash), Some(prev_at)) = (self.last_note_hash, self.last_note_hash_at)
+            && prev_hash == note_hash
+            && now.duration_since(prev_at) < config.dedup_window
+        {
+            return false;
         }
 
         true
@@ -268,11 +269,11 @@ pub async fn run_advisor_for_turn(
         // We don't have the note content yet, so we only check the rate limit
         // here by testing with a placeholder. The dedup check runs after the
         // LLM call, when we have the actual content.
-        if let Some(last) = g.last_emission {
-            if std::time::Instant::now().duration_since(last) < config.rate_limit {
-                debug!(target: "advisor", "rate-limited, skipping advisor run for turn {turn_id}");
-                return;
-            }
+        if let Some(last) = g.last_emission
+            && std::time::Instant::now().duration_since(last) < config.rate_limit
+        {
+            debug!(target: "advisor", "rate-limited, skipping advisor run for turn {turn_id}");
+            return;
         }
     }
 
