@@ -3495,6 +3495,134 @@ fn test_profile_reasoning_inherit_leaves_the_session_tier_alone() {
     assert_eq!(request.thinking, SubAgentThinking::Inherit);
 }
 
+/// Named fleet profiles bind 1:1 to their configured route (#5046). The
+/// dispatching model cannot override `model` or `model_strength` for a named
+/// profile — only 'general' (no named profile) exposes those options.
+#[test]
+fn named_fleet_profile_rejects_model_override() {
+    let roster = FleetRoster::built_ins_only();
+
+    // Named profile (scout) + explicit model → must be rejected.
+    let mut request = parse_spawn_request(&json!({
+        "prompt": "scan for callers",
+        "profile": "scout",
+        "model": "deepseek-v4-flash"
+    }))
+    .expect("parse should succeed before apply");
+    let err = apply_spawn_profile(&mut request, &roster)
+        .expect_err("model override on named profile must fail");
+    let message = err.to_string();
+    assert!(
+        message.contains("fleet profile 'scout'") && message.contains("'model' may not be set"),
+        "error should name the profile and the forbidden field: {message}"
+    );
+    assert!(
+        message.contains("general"),
+        "error should point to 'general' as the escape hatch: {message}"
+    );
+
+    // Named profile (builder) + explicit model_strength → must be rejected.
+    let mut request = parse_spawn_request(&json!({
+        "prompt": "apply the fix",
+        "profile": "builder",
+        "model_strength": "faster",
+        "write_roots": ["."]
+    }))
+    .expect("parse should succeed before apply");
+    let err = apply_spawn_profile(&mut request, &roster)
+        .expect_err("model_strength override on named profile must fail");
+    let message = err.to_string();
+    assert!(
+        message.contains("fleet profile 'builder'")
+            && message.contains("'model_strength' may not be set"),
+        "error should name the profile and the forbidden field: {message}"
+    );
+
+    // Named profile (reviewer) + explicit model_strength → rejected.
+    let mut request = parse_spawn_request(&json!({
+        "prompt": "review the diff",
+        "profile": "reviewer",
+        "model_strength": "same"
+    }))
+    .expect("parse should succeed before apply");
+    let err = apply_spawn_profile(&mut request, &roster)
+        .expect_err("model_strength on reviewer must fail");
+    assert!(err.to_string().contains("fleet profile 'reviewer'"));
+}
+
+/// 'general' is the single escape hatch that accepts model and model_strength.
+/// Dispatching without a named profile (or explicitly to 'general') must allow
+/// model routing options (#5046).
+#[test]
+fn general_profile_allows_model_and_model_strength_options() {
+    let roster = FleetRoster::built_ins_only();
+
+    // Explicit profile=general with model → allowed.
+    let mut request = parse_spawn_request(&json!({
+        "prompt": "do work",
+        "profile": "general",
+        "model": "deepseek-v4-flash",
+        "write_roots": ["."]
+    }))
+    .expect("parse should succeed");
+    apply_spawn_profile(&mut request, &roster)
+        .expect("model override on 'general' profile must be allowed");
+    assert_eq!(request.model.as_deref(), Some("deepseek-v4-flash"));
+
+    // Explicit profile=general with model_strength=faster → allowed.
+    let mut request = parse_spawn_request(&json!({
+        "prompt": "do work",
+        "profile": "general",
+        "model_strength": "faster",
+        "write_roots": ["."]
+    }))
+    .expect("parse should succeed");
+    apply_spawn_profile(&mut request, &roster)
+        .expect("model_strength on 'general' profile must be allowed");
+    assert!(request.model_strength_explicit);
+
+    // No profile at all (default general) with model_strength → model and
+    // strength are allowed at parse time; apply_spawn_profile is not called.
+    let request = parse_spawn_request(&json!({
+        "prompt": "do some work",
+        "model_strength": "faster",
+        "write_roots": ["."]
+    }))
+    .expect("unprofile spawn with model_strength should parse");
+    assert!(request.profile.is_none());
+    assert!(request.model_strength_explicit);
+    assert_eq!(request.model_strength, SubAgentModelStrength::Faster);
+}
+
+/// A custom (non-built-in) fleet profile also binds strictly to its configured
+/// route — the guard is slot-based, not just for built-in named members (#5046).
+#[test]
+fn custom_fleet_profile_also_rejects_model_override() {
+    let mut profile = custom_fleet_profile("builder");
+    profile.model = Some("deepseek-v4-pro".to_string());
+    let roster = fleet_roster_with("my-builder", profile);
+
+    // Custom profile + model → must be rejected.
+    let mut request = parse_spawn_request(&json!({
+        "prompt": "apply the patch",
+        "profile": "my-builder",
+        "model": "deepseek-v4-flash",
+        "write_roots": ["."]
+    }))
+    .expect("parse should succeed");
+    let err = apply_spawn_profile(&mut request, &roster)
+        .expect_err("model override on custom named profile must fail");
+    let message = err.to_string();
+    assert!(
+        message.contains("fleet profile 'my-builder'"),
+        "error must name the custom profile: {message}"
+    );
+    assert!(
+        message.contains("pre-configured route"),
+        "error must explain the route binding: {message}"
+    );
+}
+
 /// A Fleet worker subprocess launches as `--model <exact> --reasoning-effort
 /// auto`. That is a FIXED model with Auto reasoning: the raw `"auto"` sentinel
 /// must resolve, not travel to a provider that has no such tier.
