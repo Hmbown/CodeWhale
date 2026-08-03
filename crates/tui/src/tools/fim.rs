@@ -95,7 +95,6 @@ impl ToolSpec for FimEditTool {
 
     fn capabilities(&self) -> Vec<ToolCapability> {
         vec![
-            ToolCapability::ReadOnly,
             ToolCapability::WritesFiles,
             ToolCapability::RequiresApproval,
         ]
@@ -178,5 +177,20 @@ impl ToolSpec for FimEditTool {
         };
 
         ToolResult::json(&result).map_err(|e| ToolError::execution_failed(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fim_edit_is_write_capable_but_not_read_only() {
+        let tool = FimEditTool::new(None, "fim-model".to_string());
+        let capabilities = tool.capabilities();
+
+        assert!(capabilities.contains(&ToolCapability::WritesFiles));
+        assert!(!capabilities.contains(&ToolCapability::ReadOnly));
+        assert!(!tool.is_read_only());
     }
 }
