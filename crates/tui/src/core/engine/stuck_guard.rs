@@ -259,8 +259,9 @@ impl StuckGuard {
         self.repeated_actions = 0;
         self.repeated_pairs = 0;
         self.no_progress_messages = 0;
-        self.step_history.clear();
-        self.alternation_repeats = 0;
+        // step_history and alternation_repeats deliberately survive: the
+        // alternation detector's A-B-A-B window spans the category switches
+        // an episode reset represents, so clearing here would starve it.
         self.warned = false;
         self.repeats_after_warning = 0;
         self.last_reason = None;
