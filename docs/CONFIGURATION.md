@@ -292,7 +292,7 @@ Supported keys in the project overlay (top-level fields only):
 
 The overlay is intentionally narrow — it covers the fields a repo
 maintainer is most likely to want to standardize across contributors.
-Credential, endpoint, provider-selection, MCP config, hooks, skills, capacity,
+Credential, endpoint, provider-selection, MCP config, hooks, skills,
 retry, hotbar bindings, and `instructions = [...]` settings stay user-global.
 If a repo-local config declares `api_key`, `base_url`, `provider`,
 `mcp_config_path`, `hotbar`, `allow_shell = true`, or `instructions`,
@@ -1393,9 +1393,7 @@ For known context-window models, including 1M-class V4 models, replacement
 compaction is enabled by default unless the user explicitly configures
 `auto_compact = false`. It fires at the active model's compaction threshold and
 replays the generated summary through the stable system prompt on the next
-request. Unknown model ids remain opt-in. The Flash seam manager remains opt-in
-(`[context].enabled = false`), and the capacity controller remains disabled
-unless configured.
+request. Unknown model ids remain opt-in.
 
 ### Command Migration Notes
 
@@ -1690,12 +1688,12 @@ If you are upgrading from older releases:
   enables `# foo` quick-capture in the composer, surfaces the `/memory`
   slash command, and registers the `remember` tool. The same toggle is
   available via `DEEPSEEK_MEMORY=on`.
-- `memory_path` (string, optional): defaults to `~/.codewhale/memory.md`, with
-  legacy `~/.deepseek/memory.md` fallback when the Codewhale path is absent.
-  Used by the user-memory feature when enabled — see
-  [`MEMORY.md`](MEMORY.md) for the full feature surface (`# foo`
-  composer prefix, `/memory` slash command, `remember` tool, opt-in
-  toggle).
+- `memory_path` (string, optional): anchors the native memory store. When
+  memory is enabled the store lives in a `memory/` directory beside this
+  path (`memory/global/MEMORY.md` plus workspace-scoped files and a
+  rebuildable SQLite FTS5 index) — see [`MEMORY.md`](MEMORY.md) for the
+  full feature surface (`# foo` composer prefix, `/memory` slash command,
+  `remember` tool, opt-in toggle).
 - `snapshots.*` (optional): side-git workspace snapshots for file rollback:
   - `[snapshots].enabled` (bool, default `true`)
   - `[snapshots].max_age_days` (int, default `7`)
@@ -1703,40 +1701,21 @@ If you are upgrading from older releases:
     `~/.codewhale/snapshots/<project_hash>/<worktree_hash>/.git`, with legacy
     `~/.deepseek/snapshots/...` fallback when only the legacy state exists, and
     never use the workspace's own `.git` directory
-- `context.*` (optional): append-only Fin seam manager, currently opt-in.
-  Fin is the fast `deepseek-v4-flash` path with thinking off used for
-  coordination work such as routing, summaries, and context maintenance.
-  Thresholds use the active request input estimate, not lifetime summed API
-  usage:
+- `context.*` (optional):
   - `[context].enabled` (bool, default `false`)
-  - `[context].verbatim_window_turns` (int, default `16`)
-  - `[context].l1_threshold` (int, default `192000`)
-  - `[context].l2_threshold` (int, default `384000`)
-  - `[context].l3_threshold` (int, default `576000`)
-  - `[context].seam_model` (string, default `deepseek-v4-flash`)
+  - `[context].project_pack` (bool, default `false`): include a deterministic
+    project context pack (a large pretty-printed directory listing) in the
+    stable prompt prefix (#4781). Useful for weak tool-calling models; the
+    model can rebuild the same information with one `File` call.
+  - The former seam-manager keys (`verbatim_window_turns`, `l1_threshold`,
+    `l2_threshold`, `l3_threshold`, `seam_model`) are **ignored** — parsed
+    for backward compatibility but read nowhere since 2026-07-23.
 - `retry.*` (optional): retry/backoff settings for API requests:
   - `[retry].enabled` (bool, default `true`)
   - `[retry].max_retries` (int, default `3`)
   - `[retry].initial_delay` (float seconds, default `1.0`)
   - `[retry].max_delay` (float seconds, default `60.0`)
   - `[retry].exponential_base` (float, default `2.0`)
-- `capacity.*` (optional): runtime context-capacity controller. This is opt-in
-  because its active interventions can rewrite the live transcript.
-  - `[capacity].enabled` (bool, default `false`)
-  - `[capacity].low_risk_max` (float, default `0.50`)
-  - `[capacity].medium_risk_max` (float, default `0.62`)
-  - `[capacity].severe_min_slack` (float, default `-0.25`)
-  - `[capacity].severe_violation_ratio` (float, default `0.40`)
-  - `[capacity].refresh_cooldown_turns` (int, default `6`)
-  - `[capacity].replan_cooldown_turns` (int, default `5`)
-  - `[capacity].max_replay_per_turn` (int, default `1`)
-  - `[capacity].min_turns_before_guardrail` (int, default `4`)
-  - `[capacity].profile_window` (int, default `8`)
-  - `[capacity].deepseek_v3_2_chat_prior` (float, default `3.9`)
-  - `[capacity].deepseek_v3_2_reasoner_prior` (float, default `4.1`)
-  - `[capacity].deepseek_v4_pro_prior` (float, default `3.5`)
-  - `[capacity].deepseek_v4_flash_prior` (float, default `4.2`)
-  - `[capacity].fallback_default_prior` (float, default `3.8`)
 - `[notifications].method` (string, optional): `auto`, `osc9`, `bel`, or
   `off`. Defaults to `auto`. The TUI fires this on completed (successful)
   turns whose elapsed time meets `threshold_secs`; failed and cancelled
@@ -2049,8 +2028,6 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
 ```
 
 If configured values violate requirements, startup fails with a descriptive error.
-
-See `docs/capacity_controller.md` for formulas, intervention behavior, and telemetry.
 
 ## Notes On `codewhale-tui doctor`
 

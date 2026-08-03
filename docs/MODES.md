@@ -239,7 +239,7 @@ Run `codewhale --help` for the canonical list. Common flags:
 
 ## Branching and Rollback
 
-DeepSeek-TUI has three related but intentionally separate recovery paths:
+Codewhale has three related but intentionally separate recovery paths:
 
 - `codewhale fork <ID>` creates a new saved session from an existing saved
   conversation and records the source session id. This is the safe way to

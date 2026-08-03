@@ -348,11 +348,12 @@ correct binary.
 
 ### Tool Naming
 
-Tools from a self-hosted DeepSeek server follow the standard naming convention:
+Tools from an MCP server follow the standard naming convention:
 
-- `mcp_deepseek_<tool>` (if the server is named `codewhale`)
+- `mcp_<server>_<tool>`
 
-For example, the `shell` tool becomes `mcp_deepseek_shell`.
+For example, the `shell` tool from the default server (named `codewhale`)
+becomes `mcp_codewhale_shell`.
 
 ### MCP Server vs HTTP/SSE API vs ACP
 
