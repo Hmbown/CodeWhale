@@ -228,6 +228,8 @@ pub struct TaskRecord {
     pub thread_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_session_id: Option<String>,
     #[serde(default)]
     pub runtime_event_count: usize,
     /// Monotonic owner-lifecycle sequence used by Work Graph reconciliation.
@@ -272,6 +274,8 @@ pub struct TaskSummary {
     pub thread_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_session_id: Option<String>,
 }
 
 impl From<&TaskRecord> for TaskSummary {
@@ -292,6 +296,7 @@ impl From<&TaskRecord> for TaskSummary {
             error: value.error.clone(),
             thread_id: value.thread_id.clone(),
             turn_id: value.turn_id.clone(),
+            owner_session_id: value.owner_session_id.clone(),
         }
     }
 }
@@ -316,6 +321,7 @@ pub struct NewTaskRequest {
     pub allow_shell: Option<bool>,
     pub trust_mode: Option<bool>,
     pub auto_approve: Option<bool>,
+    pub owner_session_id: Option<String>,
 }
 
 impl NewTaskRequest {
@@ -330,6 +336,7 @@ impl NewTaskRequest {
             allow_shell: None,
             trust_mode: None,
             auto_approve: Some(true),
+            owner_session_id: None,
         }
     }
 }
@@ -936,6 +943,7 @@ impl TaskManager {
             error: None,
             thread_id: None,
             turn_id: None,
+            owner_session_id: req.owner_session_id,
             runtime_event_count: 0,
             lifecycle_seq: 1,
             checklist: TaskChecklistState::default(),
@@ -1993,7 +2001,10 @@ mod tests {
                 .await?;
 
         let task = manager
-            .add_task(NewTaskRequest::from_prompt("test persistence"))
+            .add_task(NewTaskRequest {
+                owner_session_id: Some("session-persist".to_string()),
+                ..NewTaskRequest::from_prompt("test persistence")
+            })
             .await?;
         let finished = wait_for_terminal_state(&manager, &task.id, Duration::from_secs(10)).await?;
         assert_eq!(finished.status, TaskStatus::Completed);
@@ -2013,6 +2024,11 @@ mod tests {
                 .await?;
         let loaded = recovered.get_task(&task.id).await?;
         assert_eq!(loaded.status, TaskStatus::Completed);
+        assert_eq!(
+            loaded.owner_session_id.as_deref(),
+            Some("session-persist"),
+            "session ownership should survive persistence and restart"
+        );
         assert!(!loaded.timeline.is_empty());
         assert_eq!(loaded.checklist.items[0].content, "read fixture");
         Ok(())
@@ -2175,6 +2191,7 @@ mod tests {
             error: None,
             thread_id: Some("thr_stale".to_string()),
             turn_id: Some("turn_stale".to_string()),
+            owner_session_id: Some("session-old".to_string()),
             runtime_event_count: 0,
             lifecycle_seq: 2,
             checklist: TaskChecklistState::default(),
@@ -2402,6 +2419,7 @@ mod tests {
             allow_shell: None,
             trust_mode: None,
             auto_approve: None,
+            owner_session_id: None,
         };
         let task = manager.add_task(req).await?;
 
