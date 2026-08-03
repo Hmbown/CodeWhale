@@ -385,6 +385,7 @@
   "KbCancelBackgroundShellJobs": "Annuler tous les jobs shell en arrière-plan (barre latérale Activity)",
   "KbFuzzyFilePicker": "Ouvrir le sélecteur de fichiers flou (insère @path avec Enter)",
   "KbCompactInspector": "Ouvrir l'inspecteur de contexte de la session compactée",
+  "KbCompactContext": "Compacter le contexte de la conversation",
   "KbLastMessagePager": "Ouvrir le pager du dernier message (quand la saisie est vide)",
   "KbSelectedDetails": "Afficher le détail brut de l'outil ou du message sélectionné ; Ctrl+Alt+O ouvre la vue d'ensemble du tour",
   "KbToolDetailsPager": "Afficher le détail brut de l'élément sélectionné (Alt+V)",

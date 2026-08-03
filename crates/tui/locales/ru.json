@@ -385,6 +385,7 @@
   "KbCancelBackgroundShellJobs": "Отменить все фоновые задания шелла (панель Activity)",
   "KbFuzzyFilePicker": "Открыть нечёткий выбор файлов (Enter вставляет @path)",
   "KbCompactInspector": "Открыть инспектор контекста сжатой сессии",
+  "KbCompactContext": "Сжать контекст разговора",
   "KbLastMessagePager": "Открыть последнее сообщение в пейджере (при пустом вводе)",
   "KbSelectedDetails": "Показать сырые детали выбранного инструмента или сообщения; Ctrl+Alt+O — обзор всего хода",
   "KbToolDetailsPager": "Показать сырые детали выбранного элемента (Alt+V)",

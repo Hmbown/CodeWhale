@@ -316,6 +316,11 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
         description_id: crate::localization::MessageId::KbSessionPicker,
         section: KeybindingSection::Sessions,
     },
+    KeybindingEntry {
+        chord: "Ctrl+L",
+        description_id: crate::localization::MessageId::KbCompactContext,
+        section: KeybindingSection::Sessions,
+    },
     // --- Clipboard ---
     KeybindingEntry {
         // Keep both terminal-client families visible: the TUI may be running
@@ -768,5 +773,209 @@ mod tests {
         ranks.sort_unstable();
         ranks.dedup();
         assert_eq!(ranks.len(), sections.len(), "ranks must be unique");
+    }
+
+    // ------------------------------------------------------------------
+    // docs/KEYBINDINGS.md <-> KEYBINDINGS bidirectional drift gate
+    // ------------------------------------------------------------------
+
+    const KEYBINDINGS_DOC: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/KEYBINDINGS.md"
+    ));
+
+    /// Doc table chords that are deliberately NOT in the help catalog.
+    /// Every entry needs a justification; adding one is a reviewed decision.
+    const DOC_CHORD_ALLOWLIST: &[&str] = &[
+        // Ctrl+Enter / Cmd+Enter: works, but deliberately unadvertised —
+        // several terminals encode it exactly like bare Enter (handler
+        // comment at ui.rs is_forced_submit_key call site; absence pinned by
+        // composer_catalog_assigns_one_stable_role_to_each_chord).
+        "ctrlenter",
+        // Ctrl+click / Cmd+click opens OSC 8 links — terminal-owned.
+        "ctrlclick",
+        // Ctrl+N navigates the slash-command menu; menu-local chords are
+        // documented in the md but intentionally not help-catalog entries.
+        "ctrln",
+    ];
+
+    /// Normalize a chord for comparison: lowercase, macOS aliases folded
+    /// (Option -> Alt, Cmd -> Ctrl), all separators stripped, so `Ctrl-Home`,
+    /// `Ctrl+Home`, and `Ctrl + Home` compare equal.
+    fn normalize_chord(raw: &str) -> String {
+        raw.to_lowercase()
+            .replace("option", "alt")
+            .replace("cmd", "ctrl")
+            .chars()
+            .filter(|c| !matches!(c, '-' | '+' | ' ' | '`'))
+            .collect()
+    }
+
+    /// `Alt+1-8`-style digit family -> one normalized atom per digit.
+    fn expand_digit_family(lowered: &str) -> Option<Vec<String>> {
+        let (head, tail) = lowered.rsplit_once('-')?;
+        let end: u32 = tail.parse().ok()?;
+        let start: u32 = head.chars().next_back()?.to_digit(10)?;
+        let prefix = &head[..head.len() - 1];
+        if !matches!(prefix, "alt+" | "ctrl+" | "shift+") || start > end {
+            return None;
+        }
+        Some(
+            (start..=end)
+                .map(|digit| normalize_chord(&format!("{prefix}{digit}")))
+                .collect(),
+        )
+    }
+
+    /// Expand one chord segment (no ` / ` separators) into normalized atoms.
+    /// Handles suffix families: `Ctrl+Home/End` -> ctrlhome + ctrlend,
+    /// `Ctrl+Shift+←/→` -> ctrlshift← + ctrlshift→.
+    fn segment_atoms(segment: &str, out: &mut Vec<String>) {
+        let lowered = segment
+            .trim()
+            .to_lowercase()
+            .replace("option", "alt")
+            .replace("cmd", "ctrl");
+        if lowered.is_empty() {
+            return;
+        }
+        if let Some(family) = expand_digit_family(&lowered) {
+            out.extend(family);
+            return;
+        }
+        let mut prefix = String::new();
+        let mut rest = lowered.as_str();
+        loop {
+            let mut consumed = false;
+            for modifier in ["ctrl+", "alt+", "shift+", "ctrl-", "alt-", "shift-"] {
+                if let Some(stripped) = rest.strip_prefix(modifier) {
+                    prefix.push_str(&modifier[..modifier.len() - 1]);
+                    prefix.push('+');
+                    rest = stripped;
+                    consumed = true;
+                    break;
+                }
+            }
+            if !consumed {
+                break;
+            }
+        }
+        let parts: Vec<&str> = rest.split('/').collect();
+        if !prefix.is_empty() && parts.len() > 1 && parts.iter().all(|p| !p.is_empty()) {
+            for part in parts {
+                out.push(normalize_chord(&format!("{prefix}{part}")));
+            }
+        } else {
+            out.push(normalize_chord(&lowered));
+        }
+    }
+
+    /// Normalized chord atoms advertised by the help catalog. Qualified
+    /// entries (`/context`, `@path`, `Right click`) are commands or mouse
+    /// gestures, not chords, and are skipped by design.
+    fn catalog_chord_atoms() -> Vec<String> {
+        let mut out = Vec::new();
+        for entry in KEYBINDINGS {
+            let chord = entry.chord.split(" (").next().unwrap_or(entry.chord);
+            for segment in chord.split(" / ") {
+                let segment = segment.trim();
+                if segment.starts_with('/') || segment.starts_with('@') || segment.contains("click")
+                {
+                    continue;
+                }
+                segment_atoms(segment, &mut out);
+            }
+        }
+        out
+    }
+
+    /// Normalized chord atoms from backticked tokens in docs/KEYBINDINGS.md
+    /// table rows. Prose backticks (terminal-local notes) are excluded by
+    /// only reading `| ... |` lines; non-chord tokens (slash commands,
+    /// mentions, mouse drags, single letters) are filtered out.
+    fn doc_table_chord_atoms() -> Vec<String> {
+        const NAMED: &[&str] = &[
+            "tab",
+            "esc",
+            "enter",
+            "backspace",
+            "delete",
+            "home",
+            "end",
+            "pgup",
+            "pgdn",
+            "↑",
+            "↓",
+            "←",
+            "→",
+        ];
+        let mut out = Vec::new();
+        for line in KEYBINDINGS_DOC.lines() {
+            if !line.trim_start().starts_with('|') {
+                continue;
+            }
+            for token in line.split('`').skip(1).step_by(2) {
+                let lowered = token.to_lowercase();
+                if lowered.starts_with('/') || lowered.starts_with('@') || lowered.starts_with('!')
+                {
+                    continue;
+                }
+                let has_modifier = ["ctrl", "alt", "shift", "option", "cmd"]
+                    .iter()
+                    .any(|m| lowered.contains(m));
+                let is_named = NAMED.contains(&lowered.as_str())
+                    || (lowered.len() == 2
+                        && lowered.starts_with('f')
+                        && lowered[1..].parse::<u8>().is_ok());
+                let is_named_combo = lowered.contains(' ')
+                    && lowered.split(' ').all(|part| {
+                        let part = part.trim();
+                        NAMED.contains(&part)
+                            || ["ctrl", "alt", "shift", "option", "cmd"]
+                                .iter()
+                                .any(|m| part.contains(m))
+                    });
+                if has_modifier || is_named || is_named_combo {
+                    segment_atoms(token, &mut out);
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn keybindings_md_and_help_catalog_do_not_drift() {
+        use std::collections::BTreeSet;
+
+        let catalog: BTreeSet<String> = catalog_chord_atoms().into_iter().collect();
+        let doc_atoms: BTreeSet<String> = doc_table_chord_atoms().into_iter().collect();
+        let allowlist: BTreeSet<&str> = DOC_CHORD_ALLOWLIST.iter().copied().collect();
+
+        // Direction 1: every chord a docs table advertises must be in the
+        // help catalog (or an explicitly justified exception).
+        let undocumented: Vec<&String> = doc_atoms
+            .iter()
+            .filter(|atom| !catalog.contains(*atom) && !allowlist.contains(atom.as_str()))
+            .collect();
+        assert!(
+            undocumented.is_empty(),
+            "docs/KEYBINDINGS.md advertises chords missing from the KEYBINDINGS \
+             catalog — add the binding, fix the docs, or justify an allowlist entry: \
+             {undocumented:?}"
+        );
+
+        // Direction 2: every catalog chord must be documented in the md —
+        // either as an expanded table token (doc_atoms) or anywhere in the
+        // normalized prose (e.g. Backspace/Delete in the selection notes).
+        let normalized_doc = normalize_chord(KEYBINDINGS_DOC);
+        let undocumented: Vec<&String> = catalog
+            .iter()
+            .filter(|atom| !doc_atoms.contains(*atom) && !normalized_doc.contains(atom.as_str()))
+            .collect();
+        assert!(
+            undocumented.is_empty(),
+            "KEYBINDINGS catalog advertises chords absent from docs/KEYBINDINGS.md \
+             — document the chord or remove it from the catalog: {undocumented:?}"
+        );
     }
 }

@@ -385,6 +385,7 @@
   "KbCancelBackgroundShellJobs": "सभी चलती बैकग्राउंड शेल जॉब रद्द करें (Activity साइडबार)",
   "KbFuzzyFilePicker": "फ़ज़ी फ़ाइल चयनकर्ता खोलें (Enter पर @path डालता है)",
   "KbCompactInspector": "कॉम्पैक्ट सत्र संदर्भ निरीक्षक खोलें",
+  "KbCompactContext": "वार्तालाप संदर्भ संपीड़ित करें",
   "KbLastMessagePager": "अंतिम संदेश के लिए पेजर खोलें (जब इनपुट खाली हो)",
   "KbSelectedDetails": "चुने टूल या संदेश का कच्चा विवरण दिखाएँ; Ctrl+Alt+O पूरे टर्न का अवलोकन खोलता है",
   "KbToolDetailsPager": "चुने आइटम का कच्चा विवरण दिखाएँ (Alt+V)",

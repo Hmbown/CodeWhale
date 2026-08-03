@@ -402,6 +402,7 @@
   "KbCancelBackgroundShellJobs": "取消所有正在运行的后台 shell 作业（Activity 侧边栏）",
   "KbFuzzyFilePicker": "打开模糊文件选择器（按 Enter 插入 @path）",
   "KbCompactInspector": "打开压缩会话上下文检查器",
+  "KbCompactContext": "压缩对话上下文",
   "KbLastMessagePager": "打开最后一条消息的分页器（输入框为空时）",
   "KbSelectedDetails": "显示所选工具或消息的原始详情；Ctrl+Alt+O 打开整轮概览",
   "KbToolDetailsPager": "显示所选项的原始详情（Alt+V）",

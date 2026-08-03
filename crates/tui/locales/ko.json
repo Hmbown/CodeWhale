@@ -402,6 +402,7 @@
   "KbCancelBackgroundShellJobs": "실행 중인 백그라운드 셸 작업을 모두 취소 (활동 사이드바)",
   "KbFuzzyFilePicker": "퍼지 파일 선택기 열기 (Enter로 @경로 삽입)",
   "KbCompactInspector": "간단한 세션 컨텍스트 인스펙터 열기",
+  "KbCompactContext": "대화 컨텍스트 압축",
   "KbLastMessagePager": "마지막 메시지의 페이저 열기 (입력창이 비어 있을 때)",
   "KbSelectedDetails": "선택한 도구나 메시지의 원본 세부 정보 표시; Ctrl+Alt+O로 전체 턴 개요 열기",
   "KbToolDetailsPager": "선택한 항목의 원본 세부 정보 표시 (Alt+V)",
