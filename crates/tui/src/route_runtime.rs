@@ -116,10 +116,7 @@ impl ResolvedRuntimeRoute {
         if self.preflighted_client.is_none() {
             self.preflighted_client = Some(
                 DeepSeekClient::from_candidate(&self.config, &self.candidate).map_err(|err| {
-                    format!(
-                        "Failed to configure provider route {} / {}: {err}",
-                        self.identity.key, self.model
-                    )
+                    format_provider_route_preflight_error(&self.identity.key, &self.model, &err)
                 })?,
             );
         }
@@ -131,10 +128,7 @@ impl ResolvedRuntimeRoute {
             Some(client) => client,
             None => {
                 DeepSeekClient::from_candidate(&self.config, &self.candidate).map_err(|err| {
-                    format!(
-                        "Failed to configure provider route {} / {}: {err}",
-                        self.identity.key, self.model
-                    )
+                    format_provider_route_preflight_error(&self.identity.key, &self.model, &err)
                 })?
             }
         };
@@ -151,6 +145,70 @@ impl ResolvedRuntimeRoute {
     pub(crate) fn take_preflighted_client(&mut self) -> Option<DeepSeekClient> {
         self.preflighted_client.take()
     }
+}
+
+fn format_provider_route_preflight_error(
+    identity_key: &str,
+    model: &str,
+    err: &anyhow::Error,
+) -> String {
+    let reason = err.to_string().trim().to_string();
+    let mut message = format!(
+        "{}. Failed to configure provider route {} / {}.",
+        reason, identity_key, model
+    );
+    if let Some(next_step) = classify_provider_route_preflight_next_step(identity_key, &reason) {
+        message.push_str(" Next step: ");
+        message.push_str(&next_step);
+    }
+    message
+}
+
+fn classify_provider_route_preflight_next_step(identity_key: &str, reason: &str) -> Option<String> {
+    let lower = reason.to_ascii_lowercase();
+    if lower.contains("api key not found")
+        || lower.contains("access token")
+        || (lower.contains("credential")
+            && (lower.contains("not found")
+                || lower.contains("missing")
+                || lower.contains("unsupported")))
+    {
+        return Some(format!(
+            "Run /auth or /provider setup {identity_key} to configure credentials."
+        ));
+    }
+    if lower.contains("tls certificate")
+        || lower.contains("ssl_cert_file")
+        || lower.contains("certificate verification")
+        || lower.contains("insecure_skip_tls_verify")
+        || lower.contains("base url")
+        || lower.contains("invalid url")
+    {
+        return Some(format!(
+            "Run /provider setup {identity_key} to fix base URL/TLS settings."
+        ));
+    }
+    if lower.contains("provider")
+        && lower.contains("model")
+        && (lower.contains("pin")
+            || lower.contains("mismatch")
+            || lower.contains("unknown")
+            || lower.contains("not found"))
+    {
+        return Some(
+            "Run /models (or open the model picker) and choose a model valid for this provider."
+                .to_string(),
+        );
+    }
+    if lower.contains("fleet") || lower.contains("profile") || lower.contains("partial route") {
+        return Some(
+            "Review Fleet profile provider/model overrides; keep route fields atomic (#5042)."
+                .to_string(),
+        );
+    }
+    Some(format!(
+        "Run /provider setup {identity_key} to review this route configuration."
+    ))
 }
 
 impl ValidatedRuntimeRoute {
@@ -578,6 +636,38 @@ mod tests {
         assert!(
             std::mem::size_of::<ResolvedRuntimeRoute>() < std::mem::size_of::<Config>(),
             "resolved routes must remain smaller than their scoped Config payload"
+        );
+    }
+
+    #[test]
+    fn provider_route_preflight_missing_key_error_surfaces_reason_and_auth_step() {
+        let err = anyhow::anyhow!(
+            "Custom provider 'lm-studio' API key not found. Run 'codewhale auth set --provider custom'."
+        );
+        let formatted = format_provider_route_preflight_error("lm-studio", "local-model", &err);
+
+        assert!(formatted.starts_with("Custom provider 'lm-studio' API key not found."));
+        assert!(formatted.contains("Failed to configure provider route lm-studio / local-model."));
+        assert!(formatted.contains(
+            "Next step: Run /auth or /provider setup lm-studio to configure credentials."
+        ));
+    }
+
+    #[test]
+    fn provider_route_preflight_tls_error_surfaces_route_and_setup_step() {
+        let err = anyhow::anyhow!(
+            "TLS certificate verification cannot be disabled for provider custom; configure SSL_CERT_FILE with a trusted custom CA bundle instead"
+        );
+        let formatted = format_provider_route_preflight_error("lm-studio", "local-model", &err);
+
+        assert!(
+            formatted
+                .starts_with("TLS certificate verification cannot be disabled for provider custom")
+        );
+        assert!(formatted.contains("Failed to configure provider route lm-studio / local-model."));
+        assert!(
+            formatted
+                .contains("Next step: Run /provider setup lm-studio to fix base URL/TLS settings.")
         );
     }
 

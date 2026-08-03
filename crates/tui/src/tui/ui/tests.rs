@@ -6829,7 +6829,81 @@ async fn immediate_submit_custom_provider_preflight_restores_exact_message() {
     assert!(app.status_message.as_deref().is_some_and(|status| {
         status.contains("Failed to configure provider route")
             && status.contains("restored to composer")
+            && status
+                .contains("Next step: Run /provider setup lm-studio to fix base URL/TLS settings.")
     }));
+    let sticky = app
+        .sticky_status
+        .as_ref()
+        .expect("dispatch failure should remain sticky");
+    assert!(
+        sticky
+            .text
+            .contains("TLS certificate verification cannot be disabled for provider custom"),
+        "sticky error should expose the full inner preflight reason: {}",
+        sticky.text
+    );
+    assert!(
+        sticky
+            .text
+            .contains("Failed to configure provider route lm-studio / local-model."),
+        "sticky error should keep provider/model route context: {}",
+        sticky.text
+    );
+}
+
+#[tokio::test]
+async fn immediate_submit_custom_provider_missing_key_preflight_shows_auth_next_step() {
+    let _lock = crate::test_support::lock_test_env();
+    let _missing_key =
+        crate::test_support::EnvVarGuard::remove("CODEWHALE_TEST_MISSING_LM_STUDIO_KEY");
+    let mut config =
+        named_custom_session_config("lm-studio", "http://127.0.0.1:1234/v1", "local-model");
+    let provider = config
+        .providers
+        .as_mut()
+        .expect("providers")
+        .custom
+        .get_mut("lm-studio")
+        .expect("lm-studio");
+    provider.api_key = None;
+    provider.api_key_env = Some("CODEWHALE_TEST_MISSING_LM_STUDIO_KEY".to_string());
+    let mut app = create_test_app();
+    app.set_provider_identity(ApiProvider::Custom, "lm-studio");
+    app.set_model_selection("local-model".to_string());
+    app.input = "preserve 用户 input".to_string();
+    app.cursor_position = app.input.chars().count();
+    let input = app
+        .handle_composer_enter()
+        .expect("non-empty composer should submit");
+    let queued = build_queued_message(&mut app, input);
+    let (_engine, handle) = crate::core::engine::Engine::new(EngineConfig::default(), &config);
+
+    submit_or_steer_message(
+        &mut app,
+        &config,
+        &handle,
+        queued,
+        DispatchRecovery::Immediate,
+    )
+    .await
+    .expect("provider preflight failures must remain inside the TUI");
+
+    assert_eq!(app.input, "preserve 用户 input");
+    assert_eq!(app.cursor_position, app.input.chars().count());
+    assert!(app.api_messages.is_empty());
+    assert!(app.history.is_empty());
+    assert!(app.last_submitted_prompt.is_none());
+    let status = app
+        .status_message
+        .as_deref()
+        .expect("missing-key preflight should set status");
+    assert!(status.contains("Failed to configure provider route lm-studio / local-model."));
+    assert!(
+        status.contains(
+            "Next step: Run /auth or /provider setup lm-studio to configure credentials."
+        )
+    );
 }
 
 #[tokio::test]

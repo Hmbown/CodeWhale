@@ -1650,6 +1650,46 @@ mod tests {
     }
 
     #[test]
+    fn render_truncates_long_toast_without_mutating_source_text() {
+        let app = make_app();
+        let full_text = "Message not sent (TLS certificate verification cannot be disabled for provider custom; configure SSL_CERT_FILE with a trusted custom CA bundle instead. Failed to configure provider route lm-studio / local-model. Next step: Run /provider setup lm-studio to fix base URL/TLS settings.)".to_string();
+        let toast = super::FooterToast {
+            text: full_text.clone(),
+            color: Color::Red,
+        };
+        let props = FooterProps::from_app(
+            &app,
+            Some(toast),
+            "ready",
+            palette::TEXT_MUTED,
+            Vec::<Span<'static>>::new(),
+            Vec::<Span<'static>>::new(),
+            Vec::<Span<'static>>::new(),
+            Vec::<Span<'static>>::new(),
+            Vec::<Span<'static>>::new(),
+        );
+        let widget = FooterWidget::new(props);
+
+        let area = ratatui::layout::Rect::new(0, 0, 56, 1);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        let rendered: String = (0..area.width).map(|x| buf[(x, 0)].symbol()).collect();
+        assert!(
+            rendered.contains("Message not sent"),
+            "toast prefix should remain visible in narrow footer: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("..."),
+            "narrow footer should truncate long toast text: {rendered:?}"
+        );
+        assert!(
+            full_text.contains("Failed to configure provider route lm-studio / local-model."),
+            "full toast text remains available for sticky/detail views"
+        );
+    }
+
+    #[test]
     fn render_clears_stale_cells_across_entire_footer_row() {
         let app = make_app();
         let widget = FooterWidget::new(idle_props_for(&app));
