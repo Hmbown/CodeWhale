@@ -1224,9 +1224,37 @@ impl ToolSpec for McpToolAdapter {
             .call_tool(&self.name, input)
             .await
             .map_err(|e| ToolError::execution_failed(format!("MCP tool failed: {e}")))?;
-        let content = serde_json::to_string(&result).unwrap_or_else(|_| result.to_string());
-        Ok(ToolResult::success(content))
+        Ok(mcp_result_to_tool_result(&result))
     }
+}
+
+/// Map an MCP `tools/call` result to a `ToolResult`. MCP servers signal tool
+/// failure with `isError: true` on an otherwise successful JSON-RPC response;
+/// wrapping that in `ToolResult::success` tells the model a rejected call
+/// worked (#5123-class). Error results keep their text payload verbatim so
+/// the model still sees the server's message.
+fn mcp_result_to_tool_result(result: &Value) -> ToolResult {
+    let content = serde_json::to_string(result).unwrap_or_else(|_| result.to_string());
+    let is_error = result
+        .get("isError")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !is_error {
+        return ToolResult::success(content);
+    }
+    let text = result
+        .get("content")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .filter(|text| !text.is_empty())
+        .unwrap_or(content);
+    ToolResult::error(text)
 }
 
 #[cfg(test)]
@@ -1261,7 +1289,36 @@ mod tests {
         ToolMutationAuthority, ToolResult, ToolSpec, required_str,
     };
 
-    use super::{ToolRegistry, mcp_tool_adapter_for_test};
+    use super::{ToolRegistry, mcp_result_to_tool_result, mcp_tool_adapter_for_test};
+
+    #[test]
+    fn mcp_iserror_result_maps_to_tool_error_preserving_text() {
+        // #5123-class: MCP servers report tool failure via isError on an
+        // otherwise successful response; the model must see a failure, not a
+        // success carrying an error message body.
+        let error_payload = json!({
+            "content": [
+                {"type": "text", "text": "delete failed: permission denied"}
+            ],
+            "isError": true
+        });
+        let result = mcp_result_to_tool_result(&error_payload);
+        assert!(!result.success, "isError must not be reported as success");
+        assert_eq!(result.content, "delete failed: permission denied");
+
+        let ok_payload = json!({
+            "content": [{"type": "text", "text": "wrote 3 rows"}]
+        });
+        let result = mcp_result_to_tool_result(&ok_payload);
+        assert!(result.success);
+        assert!(result.content.contains("wrote 3 rows"));
+
+        // isError without text content falls back to the serialized payload.
+        let bare_error = json!({"isError": true, "content": []});
+        let result = mcp_result_to_tool_result(&bare_error);
+        assert!(!result.success);
+        assert!(result.content.contains("isError"));
+    }
 
     /// A simple test tool for unit testing
     struct TestTool {
