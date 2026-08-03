@@ -28,6 +28,10 @@ const BOOT_TIMEOUT: Duration = Duration::from_secs(15);
 const KEY_TIMEOUT: Duration = Duration::from_secs(5);
 const SKILL_SCAN_TIMEOUT: Duration = Duration::from_secs(15);
 const COMPOSER_READY_TEXT: &str = "Write a task";
+/// Operate-mode composer placeholder, pinned as shipped copy since the
+/// goal-first placeholder rewording (bf0478395): the mode ramp legs below
+/// assert the exact user-visible text, not a substring of it.
+const OPERATE_COMPOSER_TEXT: &str = "Describe the goal — Codewhale keeps working until it's done";
 static QA_PTY_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn qa_pty_test_lock() -> MutexGuard<'static, ()> {
@@ -621,13 +625,11 @@ fn v091_real_pty_visual_matrix_preserves_control_grammar() -> anyhow::Result<()>
 
             h.send(b"\t")?;
             h.wait_for(
-                |frame| {
-                    frame.row(0).contains("operate") && frame.contains("Coordinate parallel tasks")
-                },
+                |frame| frame.row(0).contains("operate") && frame.contains(OPERATE_COMPOSER_TEXT),
                 KEY_TIMEOUT,
             )?;
             let (operate, _) =
-                assert_control_grammar(h.frame(), "operate", "ask", "Coordinate parallel tasks");
+                assert_control_grammar(h.frame(), "operate", "ask", OPERATE_COMPOSER_TEXT);
             write_real_pty_evidence(
                 &format!("agency-operate-{theme}-{cols}x{rows}"),
                 &format!(
@@ -912,11 +914,14 @@ web_search = true
     h.send(keys::key::enter())?;
     h.wait_for_text("Know this workspace", BOOT_TIMEOUT)?;
     h.wait_for_text("Press 1/Y to trust and continue", BOOT_TIMEOUT)?;
-    // Decline through the explicit trust hotkey. Enter's fail-closed behavior
-    // is covered by the deterministic onboarding unit tests; this PTY leg is
-    // the early-init/config compatibility sentinel and should not depend on a
-    // transient status-toast redraw before proving input reaches the process.
-    h.send(keys::key::ch('2'))?;
+    // Decline through the explicit quit hotkey: since bf0478395 the number
+    // keys mirror the footer's reading order (1 trust, 2 continue untrusted,
+    // 3 quit), so 3/N/Esc is the decline-and-exit leg. Enter's fail-closed
+    // behavior is covered by the deterministic onboarding unit tests; this
+    // PTY leg is the early-init/config compatibility sentinel and should not
+    // depend on a transient status-toast redraw before proving input reaches
+    // the process.
+    h.send(keys::key::ch('3'))?;
     assert_eq!(h.wait_for_exit(KEY_TIMEOUT), Some(0));
     Ok(())
 }

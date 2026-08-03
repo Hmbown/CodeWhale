@@ -3698,54 +3698,15 @@ fn custom_provider_dashboard_rows(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::EnvVarGuard;
     use crossterm::event::{KeyEvent, KeyModifiers};
-    use std::env;
-    use std::ffi::OsString;
-    use std::sync::Mutex;
 
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    struct EnvVarGuard {
-        key: &'static str,
-        previous: Option<OsString>,
-    }
-
-    impl EnvVarGuard {
-        fn remove(key: &'static str) -> Self {
-            let previous = env::var_os(key);
-            // SAFETY: provider-picker tests that mutate environment variables
-            // hold ENV_LOCK for the whole guard lifetime, so no sibling test in
-            // this module can concurrently mutate/read this provider key.
-            unsafe {
-                env::remove_var(key);
-            }
-            Self { key, previous }
-        }
-
-        fn set(key: &'static str, value: &str) -> Self {
-            let previous = env::var_os(key);
-            // SAFETY: provider-picker tests that mutate environment variables
-            // hold ENV_LOCK for the whole guard lifetime, so no sibling test in
-            // this module can concurrently mutate/read this provider key.
-            unsafe {
-                env::set_var(key, value);
-            }
-            Self { key, previous }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            // SAFETY: EnvVarGuard is used while ENV_LOCK is held; declaration
-            // order in the test drops the guard before releasing the lock.
-            unsafe {
-                match self.previous.take() {
-                    Some(value) => env::set_var(self.key, value),
-                    None => env::remove_var(self.key),
-                }
-            }
-        }
-    }
+    // Environment-mutating tests in this module hold the process-wide
+    // `lock_test_env()` (via `crate::test_support`), the same barrier every
+    // other module's env tests use. A module-private mutex cannot serialize
+    // against the rest of the suite, so sibling tests raced on shared
+    // provider env vars (EXAMPLE_API_KEY, OPENROUTER_API_KEY, ...) and a panic
+    // while holding it cascaded PoisonError failures into unrelated tests.
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
@@ -4942,7 +4903,7 @@ mod tests {
 
     #[test]
     fn custom_endpoint_cannot_claim_official_xai_oauth_readiness() {
-        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let _lock = crate::test_support::lock_test_env();
         let temp = tempfile::tempdir().expect("isolated oauth home");
         let _xai_key = EnvVarGuard::remove("XAI_API_KEY");
         let missing_grok_auth = temp.path().join("missing.json");
@@ -5047,7 +5008,7 @@ mod tests {
 
     #[test]
     fn provider_picker_lists_configured_custom_provider_readiness() {
-        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let _lock = crate::test_support::lock_test_env();
         let _example_key = EnvVarGuard::remove("EXAMPLE_API_KEY");
         let mut custom = std::collections::HashMap::new();
         custom.insert(
@@ -5143,7 +5104,7 @@ mod tests {
 
     #[test]
     fn provider_picker_marks_custom_provider_ready_when_env_auth_is_set() {
-        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let _lock = crate::test_support::lock_test_env();
         let _example_key = EnvVarGuard::set("EXAMPLE_API_KEY", "sk-test");
         let mut custom = std::collections::HashMap::new();
         custom.insert(
@@ -5316,7 +5277,7 @@ mod tests {
 
     #[test]
     fn provider_dashboard_row_surfaces_openmodel_messages_route() {
-        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let _lock = crate::test_support::lock_test_env();
         let _openmodel_key = EnvVarGuard::remove("OPENMODEL_API_KEY");
         let config = Config::default();
         let row = ProviderDashboardRow::from_config(
@@ -5342,7 +5303,7 @@ mod tests {
 
     #[test]
     fn provider_dashboard_row_marks_missing_api_key_as_needs_key() {
-        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let _lock = crate::test_support::lock_test_env();
         let _openrouter_key = EnvVarGuard::remove("OPENROUTER_API_KEY");
         let config = Config::default();
         let row = ProviderDashboardRow::from_config(
@@ -5617,8 +5578,11 @@ mod tests {
             .map(|row| row.provider)
             .collect::<Vec<_>>();
         // With no configured custom providers, the catalog keeps the Custom
-        // entry so a custom endpoint can still be created from setup.
-        let mut expected = ApiProvider::all().to_vec();
+        // entry so a custom endpoint can still be created from setup. The
+        // canonical universe is the user-facing catalog (one identity per
+        // vendor): dual-wire dialects are `wire` config and plan variants are
+        // `mode`/base_url, not picker rows.
+        let mut expected = ApiProvider::catalog().to_vec();
         listed.sort_by_key(|provider| provider.as_str());
         expected.sort_by_key(|provider| provider.as_str());
         assert_eq!(
@@ -5675,7 +5639,6 @@ mod tests {
         use codewhale_config::provider::CredentialAcquisition;
 
         let _global_env = crate::test_support::lock_test_env();
-        let _module_env = ENV_LOCK.lock().expect("env lock poisoned");
         let home = tempfile::tempdir().expect("isolated provider catalog home");
         let _home = EnvVarGuard::set("HOME", home.path().to_string_lossy().as_ref());
         let _codewhale_home =
@@ -5694,7 +5657,10 @@ mod tests {
             .collect::<Vec<_>>();
         let config = Config::default();
 
-        for provider in ApiProvider::all().iter().copied() {
+        // Every provider the catalog actually lists. Hidden dual-wire/plan
+        // variants share their vendor primary's row and credential metadata,
+        // so `ApiProvider::all()` cannot be driven through the visible list.
+        for provider in ApiProvider::catalog().iter().copied() {
             let mut picker = ProviderPickerView::new_for_onboarding(
                 ApiProvider::Deepseek,
                 Some(provider),
@@ -5803,7 +5769,6 @@ mod tests {
     #[test]
     fn credential_draft_is_masked_and_escape_drops_it_without_persistence() {
         let _global_env = crate::test_support::lock_test_env();
-        let _module_env = ENV_LOCK.lock().expect("env lock poisoned");
         let home = tempfile::tempdir().expect("isolated credential draft home");
         let _home = EnvVarGuard::set("HOME", home.path().to_string_lossy().as_ref());
         let _codewhale_home =

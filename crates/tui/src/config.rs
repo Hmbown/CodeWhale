@@ -153,6 +153,29 @@ impl ApiProvider {
         {
             return Some(Self::DeepseekCN);
         }
+        // Legacy dual-wire slugs keep their own `[providers.<slug>]` tables,
+        // credential slots, and default models even though catalog surfaces
+        // collapse them onto the vendor primary (`ProviderKind::ALL`, and
+        // `catalog_identity` for UI). `ProviderKind::parse` resolves these
+        // spellings as primary aliases, which would orphan the legacy table a
+        // pre-0.9.4 config actually selects: credentials, base_url, and model
+        // pinned under `[providers.deepseek-anthropic]` /
+        // `[providers.minimax-anthropic]` must keep resolving for
+        // `provider = "deepseek-anthropic"` / `"minimax-anthropic"`.
+        if trimmed.eq_ignore_ascii_case("deepseek-anthropic")
+            || trimmed.eq_ignore_ascii_case("deepseek_anthropic")
+            || trimmed.eq_ignore_ascii_case("deepseek-claude")
+            || trimmed.eq_ignore_ascii_case("deepseek_claude")
+        {
+            return Some(Self::DeepseekAnthropic);
+        }
+        if trimmed.eq_ignore_ascii_case("minimax-anthropic")
+            || trimmed.eq_ignore_ascii_case("minimax_anthropic")
+            || trimmed.eq_ignore_ascii_case("mini-max-anthropic")
+            || trimmed.eq_ignore_ascii_case("mini_max_anthropic")
+        {
+            return Some(Self::MinimaxAnthropic);
+        }
         codewhale_config::ProviderKind::parse(value).map(Self::from_kind)
     }
 
