@@ -665,10 +665,19 @@ fn convert_messages_to_responses_input(request: &MessageRequest, is_deepseek: bo
                     }));
                 }
             }
-            "assistant" => {
+            "assistant" | crate::models::INTERRUPTED_ASSISTANT_ROLE => {
                 for block in &msg.content {
                     match block {
                         ContentBlock::Text { text, .. } => {
+                            let text = if msg.role == crate::models::INTERRUPTED_ASSISTANT_ROLE {
+                                format!(
+                                    "{}{}",
+                                    crate::models::INTERRUPTED_ASSISTANT_CONTEXT_PREFIX,
+                                    text
+                                )
+                            } else {
+                                text.clone()
+                            };
                             items.push(json!({
                                 "type": "message",
                                 "role": "assistant",

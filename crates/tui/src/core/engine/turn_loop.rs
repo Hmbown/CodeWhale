@@ -1306,6 +1306,8 @@ impl Engine {
 
             if self.cancel_token.is_cancelled() {
                 let _ = self.tx_event.send(Event::status("Request cancelled")).await;
+                self.add_interrupted_assistant_text(&current_text_visible)
+                    .await;
                 return (TurnOutcomeStatus::Interrupted, None);
             }
 
@@ -1746,6 +1748,8 @@ impl Engine {
                 let _ = self
                     .tx_event
                     .send(Event::status("Request was Paused"))
+                    .await;
+                self.add_interrupted_assistant_text(&current_text_visible)
                     .await;
                 return (TurnOutcomeStatus::Interrupted, None);
             }
