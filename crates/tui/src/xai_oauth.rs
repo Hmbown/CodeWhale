@@ -2421,6 +2421,92 @@ consent_version = 1
         );
     }
 
+    /// End-to-end regression for the v0.9.4 dogfood failure (#5032): starting
+    /// from the exact state the dogfood machine was bricked in — a
+    /// `providers.xai.oauth_credential_generation` pointer whose credential
+    /// file no longer exists — the full device flow (discovery, device-code
+    /// request, token poll, activation) must succeed and replace the stale
+    /// pointer instead of dying with "xAI login was not activated; provider
+    /// configuration is unchanged".
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn device_login_end_to_end_recovers_from_dangling_generation_pointer() {
+        let _guard = crate::test_support::lock_test_env();
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/.well-known/openid-configuration"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "issuer": server.uri(),
+                "device_authorization_endpoint": format!("{}/oauth2/device-advertised", server.uri()),
+                "token_endpoint": format!("{}/oauth2/token-advertised", server.uri())
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/device-advertised"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "device_code": "device-token",
+                "user_code": "CW-TEST",
+                "verification_uri": format!("{}/verify", server.uri()),
+                "expires_in": 60,
+                "interval": 1
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token-advertised"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "e2e-xai-access",
+                "refresh_token": "e2e-xai-refresh",
+                "expires_in": 3600,
+                "token_type": "Bearer"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let dir = TempDir::new().unwrap();
+        let home = dir
+            .path()
+            .canonicalize()
+            .expect("canonical temp root")
+            .join("owned-home");
+        let config_path = dir.path().join("config.toml");
+        // The exact dogfood-machine state: valid-looking generation pointer,
+        // missing credential file.
+        let stale = "xai-auth-39a2f3e766ab47f89490002cd04fe187.json";
+        fs::write(
+            &config_path,
+            format!(
+                "[providers.xai]\nauth_mode = \"oauth\"\noauth_credential_generation = \"{stale}\"\n"
+            ),
+        )
+        .unwrap();
+        let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", &home);
+
+        let pending = tokio::task::block_in_place(|| {
+            device_code_login_with(&server.uri(), GROK_OIDC_CLIENT_ID, DEFAULT_SCOPES, false)
+        })
+        .expect("device login against mock xAI");
+        let mut live = Config::default();
+        let activation = activate_device_login(pending, Some(&config_path), Some(&mut live))
+            .expect("dangling pointer must not brick activation");
+
+        assert!(activation.auth_path.exists());
+        let owned = fs::read_to_string(&activation.auth_path).unwrap();
+        assert!(owned.contains("e2e-xai-access"));
+        assert!(owned.contains("e2e-xai-refresh"));
+        let persisted = fs::read_to_string(&config_path).unwrap();
+        assert!(
+            !persisted.contains(stale),
+            "stale pointer must be replaced: {persisted}"
+        );
+        assert!(persisted.contains(activation.auth_path.file_name().unwrap().to_str().unwrap()));
+        assert!(persisted.contains("auth_mode = \"oauth\""));
+        assert!(credentials_valid(&live), "activated login must be usable");
+    }
+
     #[test]
     fn device_poll_backoff_follows_rfc8628() {
         // authorization_pending keeps the current interval.
