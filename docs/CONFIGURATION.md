@@ -314,8 +314,56 @@ development fallback. `codewhale account keys list|set|remove` manages the
 signed-in account's BYOK vault without displaying secret values. The older
 `codewhale cloud ...` spelling remains a command alias.
 
-Credential lookup uses `config -> keyring -> env` after any explicit CLI
-`--api-key`. Run `codewhale auth status` to inspect the active provider's config
+### Credential read precedence (#5197)
+
+Credential reads are **folder-independent by default**: every layer below is
+user-global or process-scoped, so a key saved in one repo resolves identically
+in every other repo. Repo-local config never carries credential material — the
+project overlay above reads only its allowlisted keys and ignores `api_key`,
+and a credential write aimed at a workspace-scoped config is rescoped to the
+user-global `~/.codewhale/config.toml` (#5045, #5193).
+
+For the active provider, the runtime resolves the API key in this exact order
+(first match wins):
+
+1. **Route-specific auth contract.** Routes whose `auth_mode` disables API
+   keys stop here with no credential. OAuth routes use their explicitly
+   consented token: `openai-codex` reads `OPENAI_CODEX_ACCESS_TOKEN` or the
+   consent-granted Codex CLI login (read-only, never refreshed or rewritten);
+   `[providers.xai] auth_mode = "oauth"` reads Codewhale's own xAI
+   device-login store (or a consent-granted Grok CLI file).
+2. **Explicit CLI key.** `--api-key` forwarded with its source marker wins
+   over every saved slot; for `deepseek`/`deepseek-CN` it also wins over the
+   root `api_key`.
+3. **Config file `api_key`.** The `[providers.<name>] api_key` table slot for
+   the active provider, plus the legacy root `api_key` for
+   `deepseek`/`deepseek-CN` and the literal `provider = "custom"` route.
+   File-owned keys stay bound to their file-owned endpoint: when the
+   environment replaces the route's base URL with a custom host, the saved
+   key is not sent there.
+4. **`api_key_env` binding.** `[providers.<name>] api_key_env = "VAR"` reads
+   the named environment variable. For custom providers an unset or empty
+   binding is a loud error, not a silent fallback (#5104).
+5. **Secret store.** The durable per-provider slot written by
+   `codewhale auth set` (file-backed under `~/.codewhale/secrets/` by
+   default; the OS keyring only when explicitly selected). Skipped for named
+   custom routes, self-hosted providers, custom endpoints other than an
+   explicitly authenticated loopback, and routes whose `auth_mode` needs no
+   key.
+6. **Ambient environment.** The provider's own variable
+   (`DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`, `MOONSHOT_API_KEY`, …).
+   Ambient keys are only ever sent to the provider's official endpoint and
+   are skipped under the same conditions as the secret store.
+7. **Keyless fallback.** Self-hosted providers and loopback endpoints may run
+   with no credential; every other route fails with provider-specific setup
+   guidance.
+
+Legacy compatibility: `~/.deepseek/config.toml` is migrated into
+`~/.codewhale/config.toml` on first launch, `DEEPSEEK_*` environment
+variables remain accepted aliases for the `CODEWHALE_*` forms, and
+`DEEPSEEK_SECRET_BACKEND` is the legacy alias for `CODEWHALE_SECRET_BACKEND`.
+
+Run `codewhale auth status` to inspect the active provider's config
 file, OS keyring backend, environment variable, winning source, and last-four
 label without printing the key itself. The command only probes the active
 provider's keyring entry.
