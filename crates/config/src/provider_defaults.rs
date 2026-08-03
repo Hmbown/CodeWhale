@@ -164,3 +164,15 @@ pub(crate) const DEFAULT_XAI_BASE_URL: &str = "https://api.x.ai/v1";
 // TelecomJS (Jiangsu Telecom TokenHub) defaults
 pub(crate) const DEFAULT_TELECOMJS_MODEL: &str = "deepseek-v4-pro";
 pub(crate) const DEFAULT_TELECOMJS_BASE_URL: &str = "https://aigw.telecomjs.com/v1";
+// Alibaba Cloud Model Studio (DashScope) defaults
+// Token Plan (Personal / Team): shared endpoint, OpenAI + Anthropic dialects
+pub(crate) const DEFAULT_MODELSTUDIO_TOKEN_PLAN_MODEL: &str = "qwen3.8-max";
+pub(crate) const DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL: &str =
+    "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1";
+pub(crate) const MODELSTUDIO_TOKEN_PLAN_ANTHROPIC_BASE_URL: &str =
+    "https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic";
+// Coding Plan: separate endpoint, OpenAI + Anthropic dialects
+pub(crate) const DEFAULT_MODELSTUDIO_CODING_PLAN_BASE_URL: &str =
+    "https://coding-intl.dashscope.aliyuncs.com/v1";
+pub(crate) const MODELSTUDIO_CODING_PLAN_ANTHROPIC_BASE_URL: &str =
+    "https://coding-intl.dashscope.aliyuncs.com/apps/anthropic";

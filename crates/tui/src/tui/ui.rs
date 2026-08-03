@@ -16701,6 +16701,14 @@ fn mirror_saved_api_key_in_config(config: &mut Config, provider: ApiProvider, ap
         ApiProvider::Meta => &mut providers.meta,
         ApiProvider::Xai => &mut providers.xai,
         ApiProvider::Telecomjs => &mut providers.telecomjs,
+        ApiProvider::ModelstudioTokenPlan => &mut providers.modelstudio_token_plan,
+        ApiProvider::ModelstudioTokenPlanAnthropic => {
+            &mut providers.modelstudio_token_plan_anthropic
+        }
+        ApiProvider::ModelstudioCodingPlan => &mut providers.modelstudio_coding_plan,
+        ApiProvider::ModelstudioCodingPlanAnthropic => {
+            &mut providers.modelstudio_coding_plan_anthropic
+        }
     };
     if pin_kimi_code_base_url {
         entry.base_url = Some(crate::config::DEFAULT_KIMI_CODE_BASE_URL.to_string());

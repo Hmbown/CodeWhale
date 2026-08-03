@@ -117,6 +117,10 @@ the listed provider env vars.
 | `meta` | `[providers.meta]` | OpenAI Chat Completions | `META_MODEL_API_KEY`, `MODEL_API_KEY` |
 | `telecomjs` | `[providers.telecomjs]` | OpenAI Chat Completions | `TELECOMJS_API_KEY` |
 | `xai` | `[providers.xai]` | OpenAI Chat Completions | `XAI_API_KEY` |
+| `modelstudio-token-plan` | `[providers.modelstudio_token_plan]` | OpenAI Chat Completions | `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` |
+| `modelstudio-token-plan-anthropic` | `[providers.modelstudio_token_plan_anthropic]` | Anthropic Messages | `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` |
+| `modelstudio-coding-plan` | `[providers.modelstudio_coding_plan]` | OpenAI Chat Completions | `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` |
+| `modelstudio-coding-plan-anthropic` | `[providers.modelstudio_coding_plan_anthropic]` | Anthropic Messages | `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` |
 
 Default base URLs and models for each route are listed in the shipped provider
 table below. The wire protocol values above are derived from
@@ -184,29 +188,55 @@ base_url = "https://gateway.example/v1"
 model = "your-deepseek-compatible-model"
 ```
 
-Alibaba Bailian / Model Studio DashScope exposes Qwen through an
-OpenAI-compatible Chat Completions endpoint. Configure it as an explicit
-`openai` provider route so the API key, base URL, and wire model stay scoped to
-that provider:
+Alibaba Cloud Model Studio (Bailian / DashScope) is a first-class provider as
+of v0.9.4 with two plan profiles: Token Plan (Personal / Team) and Coding Plan.
+Both plans expose an OpenAI-compatible Chat Completions endpoint and an
+Anthropic-compatible Messages endpoint.
+
+**Token Plan** (Personal and Team share the same AP-Southeast endpoint):
 
 ```toml
-provider = "openai"
+provider = "modelstudio-token-plan"
 
-[providers.openai]
-api_key = "YOUR_DASHSCOPE_API_KEY"
-base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-model = "qwen-plus"
-context_window = 1000000
+[providers.modelstudio_token_plan]
+api_key = "YOUR_MODELSTUDIO_API_KEY"
+# base_url defaults to https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1
+model = "qwen3.8-max"   # or qwen3.8-max-preview | qwen3.7-plus | qwen3.7-max |
+                        #    qwen3.6-flash | deepseek-v4-pro | deepseek-v4-flash-0731 | glm-5.2
 ```
 
-The Singapore endpoint above sends chat requests to `/chat/completions`;
-Alibaba also documents regional `compatible-mode/v1` base URLs for Virginia,
-Beijing, Hong Kong, and Frankfurt. Keep the API key and base URL from the same
-region. The `qwen-plus` model ID is preserved as an OpenAI provider-scoped wire
-ID; Codewhale does not infer a switch to OpenRouter, DeepSeek, or another
-provider from the `qwen` prefix. Set `context_window` to the gateway/model's
-real total context window when it differs from Codewhale's static model
-metadata.
+**Coding Plan** (separate international endpoint):
+
+```toml
+provider = "modelstudio-coding-plan"
+
+[providers.modelstudio_coding_plan]
+api_key = "YOUR_MODELSTUDIO_API_KEY"
+# base_url defaults to https://coding-intl.dashscope.aliyuncs.com/v1
+model = "qwen3.8-max"
+```
+
+**Anthropic-compatible dialect** — both plans also expose a native Anthropic
+Messages path. Select it with the `-anthropic` provider suffix:
+
+```toml
+provider = "modelstudio-token-plan-anthropic"
+
+[providers.modelstudio_token_plan_anthropic]
+api_key = "YOUR_MODELSTUDIO_API_KEY"
+# base_url defaults to https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic
+model = "qwen3.8-max"
+```
+
+Create or copy a Model Studio API key from the
+[Bailian console](https://bailian.console.aliyun.com/). The API key is shared
+across all four provider IDs above; only the base URL and wire protocol differ.
+
+DeepSeek (`deepseek-v4-pro`, `deepseek-v4-flash-0731`) and GLM (`glm-5.2`)
+models served by Model Studio are provider-scoped and do not collide with the
+first-party DeepSeek or Zhipu/Z.ai routes. Pay-as-you-go workspace-id
+templating is not yet in the built-in provider; use a custom provider entry for
+that plan until a follow-up adds it.
 
 Private gateways with broken or intercepted certificates should use
 `SSL_CERT_FILE` with a trusted CA bundle. The legacy
@@ -260,6 +290,7 @@ configuration path instead of guessing a vendor page.
 | `meta` | [Meta Model API](https://developer.meta.com/ai/) |
 | `telecomjs` | [TelecomJS TokenHub](https://aigw.telecomjs.com/) |
 | `xai` | [xAI Console](https://console.x.ai/) for an API key, Codewhale-owned device login, or explicitly consented read-only Grok CLI credentials. |
+| `modelstudio-token-plan`, `modelstudio-token-plan-anthropic`, `modelstudio-coding-plan`, `modelstudio-coding-plan-anthropic` | [Alibaba Cloud Model Studio (Bailian console)](https://bailian.console.aliyun.com/) — create or copy a Model Studio API key. |
 | `custom` | Set the named provider's `base_url` and `api_key_env` or `api_key`; no canonical vendor credential page exists. |
 
 For Kimi, the official [quickstart](https://platform.kimi.ai/docs/overview)
@@ -347,6 +378,10 @@ Kimi remains API-key-only; external consent for Kimi is rejected.
 | `meta` | `[providers.meta]` | `META_MODEL_API_KEY`, `MODEL_API_KEY` | `META_MODEL_API_BASE_URL`, `MODEL_API_BASE_URL`; default `https://api.meta.ai/v1` | `muse-spark-1.1` (default) | [Meta Model API](https://developer.meta.com/ai/resources/blog/build-with-muse-spark/) public-preview route using OpenAI-compatible Chat Completions. Muse Spark 1.1 keeps its wire ID, tool support, 1M context, 32K output metadata, and `none` through `xhigh` reasoning effort. `META_MODEL_API_MODEL` and `MODEL_API_MODEL` are accepted. Provider aliases: `meta-ai`, `meta_model_api`, `muse`, `muse-spark`. |
 | `telecomjs` | `[providers.telecomjs]` | `TELECOMJS_API_KEY` | `TELECOMJS_BASE_URL`; default `https://aigw.telecomjs.com/v1` | `deepseek-v4-pro` conservative fallback; authenticated `/models` rows when a key is configured | TelecomJS TokenHub OpenAI-compatible Chat Completions route. Live catalogs are isolated by provider and key fingerprint, stale rows survive transient refresh failures, and unsupported reasoning request fields are omitted. `TELECOMJS_MODEL` is accepted. Provider aliases: `telecom-js`, `telecom_js`, `telecomjs-cn`, `tokenhub`. |
 | `xai` | `[providers.xai]` | `XAI_API_KEY`, Codewhale-owned device OAuth, or explicit read-only Grok CLI consent | `XAI_BASE_URL`; default `https://api.x.ai/v1` | `grok-4.5` (default), `grok-4.3`, `grok-build`, `grok-composer-2.5-fast`, `grok-4.20-0309-reasoning`, `grok-4.20-0309-non-reasoning` | xAI/Grok OpenAI-compatible Chat Completions route. **API-key** (default): Bearer token from console.x.ai via `XAI_API_KEY` / keyring / `api_key`. **OAuth**: `codewhale auth xai-device` uses SSH-friendly device login and Codewhale-owned storage, which may refresh itself. Existing Grok CLI credentials require `codewhale auth external-consent --provider xai --mode read-only`; the granted external file is never refreshed or rewritten. OAuth may return HTTP 403 on some SuperGrok tiers — keep API-key as the reliable fallback. `XAI_MODEL` is accepted. Provider aliases: `x-ai`, `x_ai`, `grok`. |
+| `modelstudio-token-plan` | `[providers.modelstudio_token_plan]` | `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` | `MODELSTUDIO_TOKEN_PLAN_BASE_URL`; default `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` | `qwen3.8-max` (default), `qwen3.8-max-preview`, `qwen3.7-plus`, `qwen3.7-max`, `qwen3.6-flash`, `deepseek-v4-pro`, `deepseek-v4-flash-0731`, `glm-5.2` | Alibaba Cloud Model Studio Token Plan OpenAI-compatible Chat Completions route. Token Plan Personal and Team share this endpoint. All listed models are reasoning-capable text/coding models. DeepSeek and GLM entries are provider-scoped and do not collide with first-party routes. `MODELSTUDIO_TOKEN_PLAN_MODEL` is accepted. Provider aliases: `modelstudio-token-plan`, `alibaba-token-plan`, `dashscope-token-plan`. |
+| `modelstudio-token-plan-anthropic` | `[providers.modelstudio_token_plan_anthropic]` | `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` | default `https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic` | Same model catalog as `modelstudio-token-plan` | Token Plan Anthropic-compatible Messages route (`/apps/anthropic`). Same API key as the OpenAI dialect. Provider aliases: `modelstudio-token-plan-anthropic`, `alibaba-token-plan-anthropic`. |
+| `modelstudio-coding-plan` | `[providers.modelstudio_coding_plan]` | `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` | `MODELSTUDIO_CODING_PLAN_BASE_URL`; default `https://coding-intl.dashscope.aliyuncs.com/v1` | `qwen3.8-max` (default); same catalog as Token Plan | Alibaba Cloud Model Studio Coding Plan OpenAI-compatible Chat Completions route. `MODELSTUDIO_CODING_PLAN_MODEL` is accepted. Provider aliases: `modelstudio-coding-plan`, `alibaba-coding-plan`, `dashscope-coding-plan`. |
+| `modelstudio-coding-plan-anthropic` | `[providers.modelstudio_coding_plan_anthropic]` | `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` | default `https://coding-intl.dashscope.aliyuncs.com/apps/anthropic` | Same model catalog as `modelstudio-coding-plan` | Coding Plan Anthropic-compatible Messages route (`/apps/anthropic`). Provider aliases: `modelstudio-coding-plan-anthropic`, `alibaba-coding-plan-anthropic`. |
 
 ### OpenCode Zen protocol catalog
 
@@ -510,6 +545,7 @@ endpoint when the endpoint supports model listing.
 | `opencode-go` | `deepseek-v4-pro`, `grok-4.5`, `glm-5.2`, `glm-5.1`, `kimi-k3`, `kimi-k2.7-code`, `kimi-k2.6`, `deepseek-v4-flash`, `mimo-v2.5`, `mimo-v2.5-pro` | yes | yes |
 | `meta` | `muse-spark-1.1` | yes | yes |
 | `xai` | `grok-4.5`, `grok-4.3`, `grok-build`, `grok-composer-2.5-fast`, `grok-4.20-0309-reasoning`, `grok-4.20-0309-non-reasoning` | yes | yes for `grok-4.5`, `grok-4.3`, `grok-build`, and `grok-4.20-0309-reasoning` |
+| `modelstudio-token-plan`, `modelstudio-coding-plan` | `qwen3.8-max`, `qwen3.8-max-preview`, `qwen3.7-plus`, `qwen3.7-max`, `qwen3.6-flash`, `deepseek-v4-pro`, `deepseek-v4-flash-0731`, `glm-5.2` | yes | yes |
 
 AtlasCloud keeps the same default model as the config layer and adds
 provider-scoped aliases for the Pro and Flash rows. Other AtlasCloud model IDs

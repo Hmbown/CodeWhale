@@ -311,7 +311,11 @@ fn descriptor_protocol_matches_provider_wire() {
             ProviderKind::DeepseekAnthropic
             | ProviderKind::Anthropic
             | ProviderKind::MinimaxAnthropic
-            | ProviderKind::Openmodel => Some(RequestProtocol::AnthropicMessages),
+            | ProviderKind::Openmodel
+            | ProviderKind::ModelstudioTokenPlanAnthropic
+            | ProviderKind::ModelstudioCodingPlanAnthropic => {
+                Some(RequestProtocol::AnthropicMessages)
+            }
             _ => Some(RequestProtocol::ChatCompletions),
         };
         assert_eq!(

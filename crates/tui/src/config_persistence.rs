@@ -305,6 +305,10 @@ fn provider_base_url_table_key(provider: ApiProvider) -> anyhow::Result<&'static
         ApiProvider::Meta => Ok("meta"),
         ApiProvider::Xai => Ok("xai"),
         ApiProvider::Telecomjs => Ok("telecomjs"),
+        ApiProvider::ModelstudioTokenPlan => Ok("modelstudio_token_plan"),
+        ApiProvider::ModelstudioTokenPlanAnthropic => Ok("modelstudio_token_plan_anthropic"),
+        ApiProvider::ModelstudioCodingPlan => Ok("modelstudio_coding_plan"),
+        ApiProvider::ModelstudioCodingPlanAnthropic => Ok("modelstudio_coding_plan_anthropic"),
         // Custom providers live under a user-chosen `[providers.<name>]` table,
         // not a fixed key. Persisting base_url through this static-key path is
         // out of scope for the #1519 constrained slice; users edit the named

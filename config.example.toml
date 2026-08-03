@@ -21,7 +21,7 @@
 # `api_key` / `base_url` are
 # still read as DeepSeek defaults when `[providers.deepseek]` is absent
 # (backward compatibility).
-provider = "deepseek" # deepseek | deepseek-cn | deepseek-anthropic | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | siliconflow-CN | arcee | moonshot | zai | stepfun | minimax | sglang | vllm | ollama | huggingface | together | qianfan | openai-codex | anthropic | openmodel | deepinfra | sakana | longcat | opencode-go | opencode-zen | meta | xai
+provider = "deepseek" # deepseek | deepseek-cn | deepseek-anthropic | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | siliconflow-CN | arcee | moonshot | zai | stepfun | minimax | sglang | vllm | ollama | huggingface | together | qianfan | openai-codex | anthropic | openmodel | deepinfra | sakana | longcat | opencode-go | opencode-zen | meta | xai | modelstudio-token-plan | modelstudio-coding-plan
 api_key = "YOUR_DEEPSEEK_API_KEY" # must be non-empty
 base_url = "https://api.deepseek.com/beta"
 # provider = "deepseek-cn"                       # legacy alias (official host is still https://api.deepseek.com)
@@ -650,6 +650,45 @@ max_subagents = 10 # optional (1-20)
 # auth_mode = "oauth"                      # or "device_code" / "grok_cli"
 # base_url = "https://api.x.ai/v1"
 # model = "grok-4.5"                       # or grok-4.3, grok-build
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# Alibaba Cloud Model Studio — Token Plan
+# (https://bailian.console.aliyun.com/)
+#
+# Token Plan Personal and Team share the same AP-Southeast (Singapore) endpoint.
+# Available text/coding models: qwen3.8-max, qwen3.8-max-preview, qwen3.7-plus,
+# qwen3.7-max, qwen3.6-flash, deepseek-v4-pro, deepseek-v4-flash-0731, glm-5.2
+#
+# Provider aliases: modelstudio-token-plan, modelstudio_token_plan,
+#                   alibaba-token-plan, dashscope-token-plan
+# Env var aliases: MODELSTUDIO_API_KEY (preferred), DASHSCOPE_API_KEY,
+#                  MODELSTUDIO_TOKEN_PLAN_BASE_URL, MODELSTUDIO_TOKEN_PLAN_MODEL
+[providers.modelstudio_token_plan]
+# api_key = "YOUR_MODELSTUDIO_API_KEY"
+# base_url = "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
+# model = "qwen3.8-max"
+# # Anthropic-compatible dialect (same key, /apps/anthropic path):
+# # provider = "modelstudio-token-plan-anthropic"
+# # base_url = "https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic"
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# Alibaba Cloud Model Studio — Coding Plan
+# (https://bailian.console.aliyun.com/)
+#
+# Coding Plan uses a separate international endpoint (coding-intl.dashscope).
+# Same model catalog as the Token Plan.
+#
+# Provider aliases: modelstudio-coding-plan, modelstudio_coding_plan,
+#                   alibaba-coding-plan, dashscope-coding-plan
+# Env var aliases: MODELSTUDIO_API_KEY (preferred), DASHSCOPE_API_KEY,
+#                  MODELSTUDIO_CODING_PLAN_BASE_URL, MODELSTUDIO_CODING_PLAN_MODEL
+[providers.modelstudio_coding_plan]
+# api_key = "YOUR_MODELSTUDIO_API_KEY"
+# base_url = "https://coding-intl.dashscope.aliyuncs.com/v1"
+# model = "qwen3.8-max"
+# # Anthropic-compatible dialect (same key, /apps/anthropic path):
+# # provider = "modelstudio-coding-plan-anthropic"
+# # base_url = "https://coding-intl.dashscope.aliyuncs.com/apps/anthropic"
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Together AI Provider (https://www.together.ai/)

@@ -78,6 +78,14 @@ pub enum ApiProvider {
     Xai,
     /// Jiangsu Telecom TokenHub — OpenAI-compatible AI gateway.
     Telecomjs,
+    /// Alibaba Cloud Model Studio — Token Plan (OpenAI-compatible Chat Completions).
+    ModelstudioTokenPlan,
+    /// Alibaba Cloud Model Studio — Token Plan Anthropic-compatible endpoint.
+    ModelstudioTokenPlanAnthropic,
+    /// Alibaba Cloud Model Studio — Coding Plan (OpenAI-compatible Chat Completions).
+    ModelstudioCodingPlan,
+    /// Alibaba Cloud Model Studio — Coding Plan Anthropic-compatible endpoint.
+    ModelstudioCodingPlanAnthropic,
     /// User-defined OpenAI-compatible endpoint (#1519).
     ///
     /// Selected when `provider = "<name>"` names a `[providers.<name>]
@@ -241,7 +249,7 @@ impl ApiProvider {
 
     /// `ApiProvider` discriminant → `ProviderKind` lookup.
     /// Index 1 is `None` for the legacy `DeepseekCN` variant.
-    const KIND_LOOKUP: [Option<codewhale_config::ProviderKind>; 38] = [
+    const KIND_LOOKUP: [Option<codewhale_config::ProviderKind>; 42] = [
         Some(codewhale_config::ProviderKind::Deepseek),
         None, // DeepseekCN
         Some(codewhale_config::ProviderKind::DeepseekAnthropic),
@@ -279,11 +287,15 @@ impl ApiProvider {
         Some(codewhale_config::ProviderKind::Meta),
         Some(codewhale_config::ProviderKind::Xai),
         Some(codewhale_config::ProviderKind::Telecomjs),
+        Some(codewhale_config::ProviderKind::ModelstudioTokenPlan),
+        Some(codewhale_config::ProviderKind::ModelstudioTokenPlanAnthropic),
+        Some(codewhale_config::ProviderKind::ModelstudioCodingPlan),
+        Some(codewhale_config::ProviderKind::ModelstudioCodingPlanAnthropic),
         Some(codewhale_config::ProviderKind::Custom),
     ];
 
     /// `ProviderKind` discriminant → `ApiProvider` lookup.
-    const FROM_KIND_LOOKUP: [Self; 37] = [
+    const FROM_KIND_LOOKUP: [Self; 41] = [
         Self::Deepseek,
         Self::DeepseekAnthropic,
         Self::NvidiaNim,
@@ -320,6 +332,10 @@ impl ApiProvider {
         Self::Meta,
         Self::Xai,
         Self::Telecomjs,
+        Self::ModelstudioTokenPlan,
+        Self::ModelstudioTokenPlanAnthropic,
+        Self::ModelstudioCodingPlan,
+        Self::ModelstudioCodingPlanAnthropic,
         Self::Custom,
     ];
 
@@ -1387,6 +1403,19 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
             "Minimax-M2.5",
             "kimi-k2.7-code",
             "Doubao-Seed-2.0-Pro",
+        ],
+        ApiProvider::ModelstudioTokenPlan
+        | ApiProvider::ModelstudioTokenPlanAnthropic
+        | ApiProvider::ModelstudioCodingPlan
+        | ApiProvider::ModelstudioCodingPlanAnthropic => vec![
+            DEFAULT_MODELSTUDIO_TOKEN_PLAN_MODEL,
+            "qwen3.8-max-preview",
+            "qwen3.7-plus",
+            "qwen3.7-max",
+            "qwen3.6-flash",
+            "deepseek-v4-pro",
+            "deepseek-v4-flash-0731",
+            "glm-5.2",
         ],
         // Custom endpoints expose no built-in completion names; the user
         // supplies their own model id (#1519).
@@ -3096,6 +3125,18 @@ pub struct ProvidersConfig {
         alias = "tokenhub"
     )]
     pub telecomjs: ProviderConfig,
+    /// Alibaba Cloud Model Studio — Token Plan (OpenAI-compatible Chat Completions).
+    #[serde(default, alias = "modelstudio-token-plan")]
+    pub modelstudio_token_plan: ProviderConfig,
+    /// Alibaba Cloud Model Studio — Token Plan Anthropic-compatible endpoint.
+    #[serde(default, alias = "modelstudio-token-plan-anthropic")]
+    pub modelstudio_token_plan_anthropic: ProviderConfig,
+    /// Alibaba Cloud Model Studio — Coding Plan (OpenAI-compatible Chat Completions).
+    #[serde(default, alias = "modelstudio-coding-plan")]
+    pub modelstudio_coding_plan: ProviderConfig,
+    /// Alibaba Cloud Model Studio — Coding Plan Anthropic-compatible endpoint.
+    #[serde(default, alias = "modelstudio-coding-plan-anthropic")]
+    pub modelstudio_coding_plan_anthropic: ProviderConfig,
     /// Arbitrary user-named custom providers (#1519).
     ///
     /// Captures every `[providers.<name>]` table whose key is not one of the
@@ -4511,6 +4552,14 @@ impl Config {
             ApiProvider::Meta => &providers.meta,
             ApiProvider::Xai => &providers.xai,
             ApiProvider::Telecomjs => &providers.telecomjs,
+            ApiProvider::ModelstudioTokenPlan => &providers.modelstudio_token_plan,
+            ApiProvider::ModelstudioTokenPlanAnthropic => {
+                &providers.modelstudio_token_plan_anthropic
+            }
+            ApiProvider::ModelstudioCodingPlan => &providers.modelstudio_coding_plan,
+            ApiProvider::ModelstudioCodingPlanAnthropic => {
+                &providers.modelstudio_coding_plan_anthropic
+            }
             // Handled by the name-keyed early return above (#1519).
             ApiProvider::Custom => unreachable!("custom provider resolved by name above"),
         })
@@ -4578,6 +4627,14 @@ impl Config {
             ApiProvider::Meta => &mut providers.meta,
             ApiProvider::Xai => &mut providers.xai,
             ApiProvider::Telecomjs => &mut providers.telecomjs,
+            ApiProvider::ModelstudioTokenPlan => &mut providers.modelstudio_token_plan,
+            ApiProvider::ModelstudioTokenPlanAnthropic => {
+                &mut providers.modelstudio_token_plan_anthropic
+            }
+            ApiProvider::ModelstudioCodingPlan => &mut providers.modelstudio_coding_plan,
+            ApiProvider::ModelstudioCodingPlanAnthropic => {
+                &mut providers.modelstudio_coding_plan_anthropic
+            }
             // Handled by the name-keyed early return above (#1519).
             ApiProvider::Custom => unreachable!("custom provider resolved by name above"),
         }
@@ -4922,6 +4979,10 @@ impl Config {
             ApiProvider::Meta => DEFAULT_META_MODEL,
             ApiProvider::Xai => DEFAULT_XAI_MODEL,
             ApiProvider::Telecomjs => DEFAULT_TELECOMJS_MODEL,
+            ApiProvider::ModelstudioTokenPlan
+            | ApiProvider::ModelstudioTokenPlanAnthropic
+            | ApiProvider::ModelstudioCodingPlan
+            | ApiProvider::ModelstudioCodingPlanAnthropic => DEFAULT_MODELSTUDIO_TOKEN_PLAN_MODEL,
             // Custom endpoints have no built-in default model; pass through the
             // descriptor placeholder when nothing is configured (#1519).
             ApiProvider::Custom => codewhale_config::ProviderKind::Custom
@@ -5027,7 +5088,11 @@ impl Config {
             | ApiProvider::OpencodeZen
             | ApiProvider::Meta
             | ApiProvider::Xai
-            | ApiProvider::Telecomjs => None,
+            | ApiProvider::Telecomjs
+            | ApiProvider::ModelstudioTokenPlan
+            | ApiProvider::ModelstudioTokenPlanAnthropic
+            | ApiProvider::ModelstudioCodingPlan
+            | ApiProvider::ModelstudioCodingPlanAnthropic => None,
             // The legacy root endpoint belongs to the literal `custom`
             // identity only. A named custom child asking about its own table
             // must not inherit it.
@@ -5113,6 +5178,18 @@ impl Config {
                         ApiProvider::Meta => DEFAULT_META_BASE_URL,
                         ApiProvider::Xai => DEFAULT_XAI_BASE_URL,
                         ApiProvider::Telecomjs => DEFAULT_TELECOMJS_BASE_URL,
+                        ApiProvider::ModelstudioTokenPlan => {
+                            DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL
+                        }
+                        ApiProvider::ModelstudioTokenPlanAnthropic => {
+                            MODELSTUDIO_TOKEN_PLAN_ANTHROPIC_BASE_URL
+                        }
+                        ApiProvider::ModelstudioCodingPlan => {
+                            DEFAULT_MODELSTUDIO_CODING_PLAN_BASE_URL
+                        }
+                        ApiProvider::ModelstudioCodingPlanAnthropic => {
+                            MODELSTUDIO_CODING_PLAN_ANTHROPIC_BASE_URL
+                        }
                         // No built-in endpoint; descriptor placeholder keeps the
                         // fallback total. A real custom route configures
                         // `[providers.<name>] base_url` which wins above (#1519).
@@ -6602,6 +6679,12 @@ fn provider_env_base_url_override(provider: ApiProvider) -> Option<String> {
         ApiProvider::Meta => &["META_MODEL_API_BASE_URL", "MODEL_API_BASE_URL"],
         ApiProvider::Xai => &["XAI_BASE_URL"],
         ApiProvider::Telecomjs => &["TELECOMJS_BASE_URL"],
+        ApiProvider::ModelstudioTokenPlan | ApiProvider::ModelstudioTokenPlanAnthropic => {
+            &["MODELSTUDIO_TOKEN_PLAN_BASE_URL"]
+        }
+        ApiProvider::ModelstudioCodingPlan | ApiProvider::ModelstudioCodingPlanAnthropic => {
+            &["MODELSTUDIO_CODING_PLAN_BASE_URL"]
+        }
         ApiProvider::OpencodeGo => &["OPENCODE_GO_BASE_URL"],
         ApiProvider::OpencodeZen => &["OPENCODE_ZEN_BASE_URL"],
         ApiProvider::Deepseek
@@ -6932,6 +7015,34 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
                     .telecomjs
                     .base_url = Some(value);
             }
+            ApiProvider::ModelstudioTokenPlan => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .modelstudio_token_plan
+                    .base_url = Some(value);
+            }
+            ApiProvider::ModelstudioTokenPlanAnthropic => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .modelstudio_token_plan_anthropic
+                    .base_url = Some(value);
+            }
+            ApiProvider::ModelstudioCodingPlan => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .modelstudio_coding_plan
+                    .base_url = Some(value);
+            }
+            ApiProvider::ModelstudioCodingPlanAnthropic => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .modelstudio_coding_plan_anthropic
+                    .base_url = Some(value);
+            }
             // Custom resolves to the named `[providers.<name>]` table; route the
             // override through the exact route while retaining the released
             // root-literal custom storage shape (#1519, #4334).
@@ -7141,6 +7252,48 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
             .telecomjs
             .base_url = Some(value);
     }
+    if matches!(
+        config.api_provider(),
+        ApiProvider::ModelstudioTokenPlan | ApiProvider::ModelstudioTokenPlanAnthropic
+    ) && let Ok(value) = std::env::var("MODELSTUDIO_TOKEN_PLAN_BASE_URL")
+        && !value.trim().is_empty()
+    {
+        let field = if config.api_provider() == ApiProvider::ModelstudioTokenPlanAnthropic {
+            &mut config
+                .providers
+                .get_or_insert_with(ProvidersConfig::default)
+                .modelstudio_token_plan_anthropic
+                .base_url
+        } else {
+            &mut config
+                .providers
+                .get_or_insert_with(ProvidersConfig::default)
+                .modelstudio_token_plan
+                .base_url
+        };
+        *field = Some(value);
+    }
+    if matches!(
+        config.api_provider(),
+        ApiProvider::ModelstudioCodingPlan | ApiProvider::ModelstudioCodingPlanAnthropic
+    ) && let Ok(value) = std::env::var("MODELSTUDIO_CODING_PLAN_BASE_URL")
+        && !value.trim().is_empty()
+    {
+        let field = if config.api_provider() == ApiProvider::ModelstudioCodingPlanAnthropic {
+            &mut config
+                .providers
+                .get_or_insert_with(ProvidersConfig::default)
+                .modelstudio_coding_plan_anthropic
+                .base_url
+        } else {
+            &mut config
+                .providers
+                .get_or_insert_with(ProvidersConfig::default)
+                .modelstudio_coding_plan
+                .base_url
+        };
+        *field = Some(value);
+    }
     if policy.permits_secret_bearing_values()
         && let Ok(value) = std::env::var("CODEWHALE_HTTP_HEADERS")
             .or_else(|_| std::env::var("DEEPSEEK_HTTP_HEADERS"))
@@ -7205,6 +7358,14 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
                 ApiProvider::Meta => &mut providers.meta,
                 ApiProvider::Xai => &mut providers.xai,
                 ApiProvider::Telecomjs => &mut providers.telecomjs,
+                ApiProvider::ModelstudioTokenPlan => &mut providers.modelstudio_token_plan,
+                ApiProvider::ModelstudioTokenPlanAnthropic => {
+                    &mut providers.modelstudio_token_plan_anthropic
+                }
+                ApiProvider::ModelstudioCodingPlan => &mut providers.modelstudio_coding_plan,
+                ApiProvider::ModelstudioCodingPlanAnthropic => {
+                    &mut providers.modelstudio_coding_plan_anthropic
+                }
                 ApiProvider::Custom => providers
                     .custom
                     .entry(custom_key.unwrap_or_else(|| "__custom__".to_string()))
@@ -7399,6 +7560,48 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
             .telecomjs
             .model = Some(value);
     }
+    if matches!(
+        config.api_provider(),
+        ApiProvider::ModelstudioTokenPlan | ApiProvider::ModelstudioTokenPlanAnthropic
+    ) && let Ok(value) = std::env::var("MODELSTUDIO_TOKEN_PLAN_MODEL")
+        && !value.trim().is_empty()
+    {
+        let field = if config.api_provider() == ApiProvider::ModelstudioTokenPlanAnthropic {
+            &mut config
+                .providers
+                .get_or_insert_with(ProvidersConfig::default)
+                .modelstudio_token_plan_anthropic
+                .model
+        } else {
+            &mut config
+                .providers
+                .get_or_insert_with(ProvidersConfig::default)
+                .modelstudio_token_plan
+                .model
+        };
+        *field = Some(value);
+    }
+    if matches!(
+        config.api_provider(),
+        ApiProvider::ModelstudioCodingPlan | ApiProvider::ModelstudioCodingPlanAnthropic
+    ) && let Ok(value) = std::env::var("MODELSTUDIO_CODING_PLAN_MODEL")
+        && !value.trim().is_empty()
+    {
+        let field = if config.api_provider() == ApiProvider::ModelstudioCodingPlanAnthropic {
+            &mut config
+                .providers
+                .get_or_insert_with(ProvidersConfig::default)
+                .modelstudio_coding_plan_anthropic
+                .model
+        } else {
+            &mut config
+                .providers
+                .get_or_insert_with(ProvidersConfig::default)
+                .modelstudio_coding_plan
+                .model
+        };
+        *field = Some(value);
+    }
     if matches!(config.api_provider(), ApiProvider::OpencodeZen)
         && let Ok(value) = std::env::var("OPENCODE_ZEN_MODEL")
         && !value.trim().is_empty()
@@ -7488,6 +7691,14 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
                 ApiProvider::Meta => &mut providers.meta,
                 ApiProvider::Xai => &mut providers.xai,
                 ApiProvider::Telecomjs => &mut providers.telecomjs,
+                ApiProvider::ModelstudioTokenPlan => &mut providers.modelstudio_token_plan,
+                ApiProvider::ModelstudioTokenPlanAnthropic => {
+                    &mut providers.modelstudio_token_plan_anthropic
+                }
+                ApiProvider::ModelstudioCodingPlan => &mut providers.modelstudio_coding_plan,
+                ApiProvider::ModelstudioCodingPlanAnthropic => {
+                    &mut providers.modelstudio_coding_plan_anthropic
+                }
             };
             entry.model = Some(value);
         }
@@ -7779,6 +7990,10 @@ pub(crate) fn provider_passes_model_through(provider: ApiProvider) -> bool {
             | ApiProvider::Meta
             | ApiProvider::Xai
             | ApiProvider::Telecomjs
+            | ApiProvider::ModelstudioTokenPlan
+            | ApiProvider::ModelstudioTokenPlanAnthropic
+            | ApiProvider::ModelstudioCodingPlan
+            | ApiProvider::ModelstudioCodingPlanAnthropic
             // Custom OpenAI-compatible endpoints preserve user-supplied model
             // ids verbatim (#1519); never normalize/rewrite them.
             | ApiProvider::Custom
@@ -8758,6 +8973,22 @@ fn merge_providers(
             meta: merge_provider_config(base.meta, override_cfg.meta),
             xai: merge_provider_config(base.xai, override_cfg.xai),
             telecomjs: merge_provider_config(base.telecomjs, override_cfg.telecomjs),
+            modelstudio_token_plan: merge_provider_config(
+                base.modelstudio_token_plan,
+                override_cfg.modelstudio_token_plan,
+            ),
+            modelstudio_token_plan_anthropic: merge_provider_config(
+                base.modelstudio_token_plan_anthropic,
+                override_cfg.modelstudio_token_plan_anthropic,
+            ),
+            modelstudio_coding_plan: merge_provider_config(
+                base.modelstudio_coding_plan,
+                override_cfg.modelstudio_coding_plan,
+            ),
+            modelstudio_coding_plan_anthropic: merge_provider_config(
+                base.modelstudio_coding_plan_anthropic,
+                override_cfg.modelstudio_coding_plan_anthropic,
+            ),
             custom: merge_custom_providers(base.custom, override_cfg.custom),
         }),
     }
