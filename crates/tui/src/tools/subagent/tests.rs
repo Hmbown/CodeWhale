@@ -12045,6 +12045,153 @@ async fn per_worker_token_budget_does_not_double_count_scope_accounting() {
     );
 }
 
+/// Variant of [`spawn_budget_capped_worker`] that attaches the worker to a
+/// shared workflow budget scope before its first model turn (no per-worker
+/// cap), returning the manager, agent id, call counter, and task handle.
+async fn spawn_scope_budgeted_worker(
+    manager: &Arc<RwLock<SubAgentManager>>,
+    workspace: &Path,
+    agent_id: &str,
+    scope_id: &str,
+    scope_limit: u64,
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    max_steps: u32,
+) -> (Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
+    let agent_id = agent_id.to_string();
+    let (task_input_tx, task_input_rx) = mpsc::unbounded_channel();
+    let agent = SubAgent::new(
+        agent_id.clone(),
+        FleetRole::Worker,
+        "Work within shared budget".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        Some("Budget".to_string()),
+        Some(vec![]),
+        task_input_tx,
+        workspace.to_path_buf(),
+        "boot_scope_budget".to_string(),
+    );
+    {
+        let mut manager = manager.write().await;
+        manager.agents.insert(agent_id.clone(), agent);
+        manager.register_worker(make_worker_spec(&agent_id, workspace.to_path_buf()));
+        manager.attach_shared_budget_scope(&agent_id, scope_id, scope_limit);
+    }
+
+    let (client, calls) =
+        token_heavy_chat_client(prompt_tokens, completion_tokens, "partial answer").await;
+    let mut runtime = stub_runtime();
+    runtime.client = client;
+    runtime.manager = Arc::clone(manager);
+    runtime.context = ToolContext::new(workspace.to_path_buf());
+
+    let task = SubAgentTask {
+        manager_handle: Arc::clone(manager),
+        runtime,
+        agent_id: agent_id.clone(),
+        agent_type: FleetRole::Worker,
+        prompt: "Work within shared budget".to_string(),
+        assignment: make_assignment(),
+        allowed_tools: Some(vec![]),
+        fork_context: false,
+        started_at: Instant::now(),
+        max_steps,
+        token_budget: None,
+        wall_time: DEFAULT_CHILD_WALL_TIME,
+        input_rx: task_input_rx,
+        launch_gate: None,
+    };
+    let task_handle = tokio::spawn(run_subagent_task(task));
+    (calls, task_handle)
+}
+
+#[tokio::test]
+async fn shared_scope_budget_stops_admitted_children_mid_run() {
+    // A workflow run's token_budget must be a collective ceiling for the
+    // children it admitted, not just an admission gate for future spawns:
+    // children that attach while the scope has room used to run uncapped, so
+    // a fan-out could burn many times the budget and still report Completed.
+    let tmp = tempdir().expect("tempdir");
+    let manager = Arc::new(RwLock::new(SubAgentManager::new(
+        tmp.path().to_path_buf(),
+        4,
+    )));
+    let scope_id = "run-budget-ceiling";
+    // Each model turn burns 100 tokens (60 in + 40 out); the run-level budget
+    // leaves room for exactly one full turn across ALL children.
+    let scope_limit = 150;
+
+    // First child: admitted while the scope is empty, burns its 100 and
+    // completes normally.
+    let (calls_a, handle_a) = spawn_scope_budgeted_worker(
+        &manager,
+        tmp.path(),
+        "agent_scope_a",
+        scope_id,
+        scope_limit,
+        60,
+        40,
+        4,
+    )
+    .await;
+    tokio::time::timeout(Duration::from_secs(5), handle_a)
+        .await
+        .expect("first child must terminate")
+        .expect("task should finish");
+    assert_eq!(calls_a.load(Ordering::SeqCst), 1);
+    let status_a = manager
+        .read()
+        .await
+        .get_result("agent_scope_a")
+        .expect("first child registered")
+        .status;
+    assert!(
+        matches!(status_a, SubAgentStatus::Completed),
+        "first child completes inside the shared budget, got {status_a:?}"
+    );
+
+    // Second child: also admitted without a per-worker cap (remaining 50 >=
+    // the spawn reserve). Its first turn pushes the shared scope to 200/150,
+    // so it must stop with BudgetExhausted right after that turn instead of
+    // completing or running on to max_steps.
+    let (calls_b, handle_b) = spawn_scope_budgeted_worker(
+        &manager,
+        tmp.path(),
+        "agent_scope_b",
+        scope_id,
+        scope_limit,
+        60,
+        40,
+        4,
+    )
+    .await;
+    tokio::time::timeout(Duration::from_secs(5), handle_b)
+        .await
+        .expect("second child must terminate")
+        .expect("task should finish");
+    assert_eq!(
+        calls_b.load(Ordering::SeqCst),
+        1,
+        "second child must stop after the turn that crossed the shared budget"
+    );
+    let status_b = manager
+        .read()
+        .await
+        .get_result("agent_scope_b")
+        .expect("second child registered")
+        .status;
+    assert!(
+        matches!(status_b, SubAgentStatus::BudgetExhausted),
+        "second child must hit the shared ceiling, got {status_b:?}"
+    );
+    assert_eq!(
+        manager.read().await.budget_spent_for_scope(scope_id),
+        200,
+        "collective spend is accounted once per child"
+    );
+}
+
 /// Clears the process-wide rate-limit window on drop so a panicking test
 /// body cannot leak a live pause into concurrently running tests.
 struct ClearRateLimitOnDrop;

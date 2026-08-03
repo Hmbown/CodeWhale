@@ -4150,6 +4150,17 @@ impl SubAgentManager {
         self.aggregate_budget_spent(scope_id)
     }
 
+    /// Current `(spent, limit)` for the shared budget scope this worker is
+    /// attached to, if any. `spent` is the live aggregate across every worker
+    /// in the scope, so a caller checking mid-run sees sibling spend as it
+    /// lands, not the snapshot frozen at attach time.
+    pub(crate) fn budget_scope_state(&self, worker_id: &str) -> Option<(u64, u64)> {
+        let record = self.worker_records.get(worker_id)?;
+        let scope_id = record.usage.budget_scope.as_deref()?;
+        let limit = record.usage.token_budget?;
+        Some((self.aggregate_budget_spent(scope_id), limit))
+    }
+
     /// Attach a workflow child to the run-level shared budget pool.
     pub(crate) fn attach_shared_budget_scope(
         &mut self,
@@ -9495,18 +9506,34 @@ async fn run_subagent(
         // local accumulator mirrors the manager's `record.usage.total_tokens`
         // (both derive from `response.usage`), so the scope accounting stays
         // consistent and is never inflated by this check.
+        //
+        // The shared scope is also enforced HERE, mid-run: admission alone
+        // only refuses *future* spawns, so a parallel fan-out whose children
+        // all attached while the scope was nearly full could collectively
+        // burn many times the configured budget and still report Completed.
+        // Checking the live aggregate after each turn caps the overshoot at
+        // the turns already in flight.
         tokens_used = tokens_used.saturating_add(usage_total_tokens(&response.usage));
-        if let Some(budget) = token_budget
-            && tokens_used > budget
-        {
+        let scope_exhausted = {
+            let manager = runtime.manager.read().await;
+            manager
+                .budget_scope_state(&agent_id)
+                .filter(|(spent, limit)| spent > limit)
+        };
+        let budget_exhausted_detail =
+            if let Some(budget) = token_budget.filter(|&budget| tokens_used > budget) {
+                Some(format!("token budget exhausted ({tokens_used}/{budget})"))
+            } else {
+                scope_exhausted.map(|(spent, limit)| {
+                    format!("shared token budget exhausted ({spent}/{limit} spent across the run)")
+                })
+            };
+        if let Some(detail) = budget_exhausted_detail {
             record_agent_progress(
                 runtime,
                 &agent_id,
                 AgentProgressEventMeta::new(AgentWorkerStatus::Failed).with_step(steps),
-                format!(
-                    "{}: token budget exhausted ({tokens_used}/{budget})",
-                    format_step_counter(steps, max_steps)
-                ),
+                format!("{}: {detail}", format_step_counter(steps, max_steps)),
             );
             let status = SubAgentStatus::BudgetExhausted;
             let duration_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
