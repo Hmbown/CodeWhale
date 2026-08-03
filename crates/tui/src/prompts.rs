@@ -3051,6 +3051,23 @@ mod tests {
     }
 
     #[test]
+    fn suggest_overlay_states_proposal_is_not_execution() {
+        // #5146: the overlay must make the propose-vs-execute contract
+        // explicit where the model reads it — emitting a gated write call is
+        // the proposal mechanism, and a call rejected for missing approval
+        // (e.g. an unapproved batch) must be answered with the plan, not a
+        // retry.
+        assert!(
+            SUGGEST_APPROVAL.contains("is the proposal, not the execution"),
+            "Suggest overlay must state the propose-vs-execute contract"
+        );
+        assert!(
+            SUGGEST_APPROVAL.contains("present the change in your plan"),
+            "Suggest overlay must name the correct behavior on rejection"
+        );
+    }
+
+    #[test]
     fn personality_is_folded_into_constitution() {
         // v4 has no separate personality tier. Voice and tone live in
         // the preamble, so both Calm and Playful compose_prompt calls

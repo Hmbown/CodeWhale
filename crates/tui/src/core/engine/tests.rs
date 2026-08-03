@@ -7643,25 +7643,29 @@ fn user_shell_turn_outcome_distinguishes_cancel_failure_and_success() {
     );
 }
 
+/// #5191: a user-typed `!` command is pre-approved by provenance — typing it
+/// IS the approval. It must run without the tool-approval modal even in an
+/// Ask/Suggest session, and the audit trail must record the user provenance.
 #[tokio::test]
-async fn run_shell_command_op_requests_approval_and_executes_shell() {
+async fn run_shell_command_op_executes_without_approval_modal() {
+    let _guard = lock_test_env();
+    let tmp = tempdir().expect("tempdir");
+    let audit_path = tmp.path().join("tool-audit.jsonl");
+    let _audit = EnvVarGuard::set("CODEWHALE_TOOL_AUDIT_LOG", &audit_path);
     let (mut engine, handle) = Engine::new(EngineConfig::default(), &Config::default());
     engine.session.allow_shell = false;
     engine.config.allow_shell = false;
-    let handle_for_approval = handle.clone();
 
-    let task = tokio::spawn(async move {
-        engine
-            .handle_run_shell_command(
-                "echo bang-ok".to_string(),
-                AppMode::Agent,
-                true,
-                false,
-                false,
-                crate::tui::approval::ApprovalMode::Suggest,
-            )
-            .await;
-    });
+    engine
+        .handle_run_shell_command(
+            "echo bang-ok".to_string(),
+            AppMode::Agent,
+            true,
+            false,
+            false,
+            crate::tui::approval::ApprovalMode::Suggest,
+        )
+        .await;
 
     let mut saw_started = false;
     let mut saw_approval = false;
@@ -7682,14 +7686,8 @@ async fn run_shell_command_op_requests_approval_and_executes_shell() {
                 assert_eq!(input["command"], json!("echo bang-ok"));
                 assert_eq!(input["source"], json!("user"));
             }
-            Event::ApprovalRequired { id, tool_name, .. } => {
+            Event::ApprovalRequired { .. } => {
                 saw_approval = true;
-                assert!(id.starts_with(USER_SHELL_TOOL_ID_PREFIX));
-                assert_eq!(tool_name, "Bash");
-                handle_for_approval
-                    .approve_tool_call(id)
-                    .await
-                    .expect("approve shell");
             }
             Event::ToolCallComplete { id, name, result } => {
                 saw_complete = true;
@@ -7708,12 +7706,24 @@ async fn run_shell_command_op_requests_approval_and_executes_shell() {
         }
     }
     drop(rx);
-    task.await.expect("shell op task");
 
     assert!(saw_started);
-    assert!(saw_approval);
+    assert!(
+        !saw_approval,
+        "user-typed bang commands must not raise the approval modal (#5191)"
+    );
     assert!(saw_complete);
     assert!(saw_turn_complete);
+
+    let audit = std::fs::read_to_string(&audit_path).expect("audit log written");
+    assert!(
+        audit.contains("tool.user_provenance_preapproved"),
+        "audit trail must record the user-provenance pre-approval: {audit}"
+    );
+    assert!(
+        audit.contains("composer_bang"),
+        "audit row must name the composer-bang source: {audit}"
+    );
 }
 
 #[tokio::test]
@@ -11913,6 +11923,66 @@ fn turn_metadata_includes_git_workspace_snapshot_in_repo() {
             "turn_meta should include git snapshot: {text}"
         );
     }
+}
+
+/// #5187 (k3-gap F3): the git snapshot line is emitted only when it actually
+/// changes — an unchanged workspace must not re-emit the line (churning the
+/// block's bytes and priming caution), a changed one must re-emit it once.
+#[test]
+fn turn_metadata_git_snapshot_emitted_only_on_change() {
+    use crate::dependencies::ExternalTool;
+
+    if !crate::dependencies::Git::available() {
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+    let init = crate::dependencies::Git::output(&["init", "-q"], root);
+    if init.is_err() || !init.unwrap().status.success() {
+        return;
+    }
+    if crate::tui::workspace_context::collect(root).is_none() {
+        return;
+    }
+
+    let config = EngineConfig {
+        workspace: root.to_path_buf(),
+        ..Default::default()
+    };
+    let (engine, _handle) = Engine::new(config, &Config::default());
+    let meta_of = |msg: Message| -> String {
+        let ContentBlock::Text { text, .. } = msg.content.last().expect("turn metadata block")
+        else {
+            panic!("expected text metadata block");
+        };
+        text.clone()
+    };
+
+    let first = meta_of(engine.user_text_message_with_turn_metadata("first turn".to_string()));
+    assert!(
+        first.contains("Git workspace:"),
+        "first turn must emit the git snapshot: {first}"
+    );
+
+    let second = meta_of(engine.user_text_message_with_turn_metadata("second turn".to_string()));
+    assert!(
+        !second.contains("Git workspace:"),
+        "unchanged git state must not re-emit the snapshot line: {second}"
+    );
+
+    // Dirty the workspace: the snapshot changes, so the line is emitted once.
+    std::fs::write(root.join("turn-meta-gating.txt"), "changed").expect("write file");
+    let third = meta_of(engine.user_text_message_with_turn_metadata("third turn".to_string()));
+    assert!(
+        third.contains("Git workspace:"),
+        "changed git state must re-emit the snapshot line: {third}"
+    );
+
+    let fourth = meta_of(engine.user_text_message_with_turn_metadata("fourth turn".to_string()));
+    assert!(
+        !fourth.contains("Git workspace:"),
+        "the re-emitted snapshot must be cached again: {fourth}"
+    );
 }
 
 #[test]

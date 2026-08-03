@@ -3010,7 +3010,16 @@ impl Engine {
                                     }));
                                     (
                                         Some(Err(ToolError::permission_denied(format!(
-                                            "Tool '{tool_name}' denied by user"
+                                            // #5146: name the correct next
+                                            // behavior, not a bare denial, so
+                                            // a model that emitted the call as
+                                            // its proposal knows to present
+                                            // the change and wait instead of
+                                            // retrying. Keep the `denied by
+                                            // user` marker — error taxonomy
+                                            // and retry classification match
+                                            // on it.
+                                            "Tool '{tool_name}' denied by user — the call was not approved. Do not retry the same call; present what you intended and wait for the user's approval or new instructions."
                                         )))),
                                         None,
                                         None,

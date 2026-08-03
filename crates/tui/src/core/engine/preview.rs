@@ -391,6 +391,15 @@ impl Engine {
         // changes any.
         let mut previewed_working_set = self.session.working_set.clone();
         previewed_working_set.observe_user_message(&hypothetical_content, &self.session.workspace);
+        // #5187: the git-snapshot line is emitted on change only, tracked in a
+        // session cache. Previewing a turn must not advance that cache — the
+        // model never saw the previewed block — so the cache is saved and
+        // restored around the hypothetical build, same as the working set.
+        let previewed_git_snapshot = self
+            .last_turn_meta_git_snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         let hypothetical_user_message = self.user_text_message_from_snapshot(
             hypothetical_content.clone(),
             &model,
@@ -406,6 +415,10 @@ impl Engine {
                 policy_narrowing: input_policy.narrowing.as_ref(),
             },
         );
+        *self
+            .last_turn_meta_git_snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = previewed_git_snapshot;
         // Classification input for the provenance section: the prompt this
         // request actually carries, not the session's current one.
         let system_prompt_text = crate::prefix_cache::system_prompt_text(system_prompt.as_ref());

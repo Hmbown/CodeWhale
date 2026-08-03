@@ -10170,7 +10170,7 @@ fn provider_config_is_explicit(entry: &ProviderConfig) -> bool {
 /// Returns the config file path.
 #[cfg(test)]
 pub fn save_api_key_for(provider: ApiProvider, api_key: &str) -> Result<PathBuf> {
-    save_api_key_for_identity(
+    match save_api_key_for_identity(
         &ProviderIdentity {
             provider,
             key: provider.as_str().to_string(),
@@ -10181,14 +10181,22 @@ pub fn save_api_key_for(provider: ApiProvider, api_key: &str) -> Result<PathBuf>
             ..Config::default()
         },
         api_key,
-    )
+    )? {
+        SavedCredential::KeyringAndConfigFile { path, .. } | SavedCredential::ConfigFile(path) => {
+            Ok(path)
+        }
+    }
 }
 
+/// Save an API key for the given provider identity and return where the
+/// credential actually landed ([`SavedCredential`]) so callers can state the
+/// true destination — the durable secret store plus credential-free config
+/// metadata, or (tests only) the plaintext config file (#5195).
 pub(crate) fn save_api_key_for_identity(
     identity: &ProviderIdentity,
     route_config: &Config,
     api_key: &str,
-) -> Result<PathBuf> {
+) -> Result<SavedCredential> {
     if identity.provider == ApiProvider::Xai {
         return codewhale_config::with_xai_oauth_revocation_transaction(|| {
             save_api_key_for_identity_unlocked(identity, route_config, api_key)
@@ -10201,7 +10209,7 @@ fn save_api_key_for_identity_unlocked(
     identity: &ProviderIdentity,
     route_config: &Config,
     api_key: &str,
-) -> Result<PathBuf> {
+) -> Result<SavedCredential> {
     let provider = identity.provider;
     if provider == ApiProvider::OpenaiCodex {
         anyhow::bail!(
@@ -10212,16 +10220,10 @@ fn save_api_key_for_identity_unlocked(
         && identity.key.trim() == ApiProvider::Custom.as_str()
         && identity.persisted_id().is_none();
     if matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN) {
-        return match save_api_key(api_key)? {
-            SavedCredential::KeyringAndConfigFile { path, .. }
-            | SavedCredential::ConfigFile(path) => Ok(path),
-        };
+        return save_api_key(api_key);
     }
     if is_legacy_literal_custom {
-        return match save_root_api_key_for_secret_slot(api_key, "custom", false)? {
-            SavedCredential::KeyringAndConfigFile { path, .. }
-            | SavedCredential::ConfigFile(path) => Ok(path),
-        };
+        return save_root_api_key_for_secret_slot(api_key, "custom", false);
     }
 
     let api_key = api_key.trim();
@@ -10315,16 +10317,20 @@ fn save_api_key_for_identity_unlocked(
                         return Err(error);
                     }
                     codewhale_config::scrub_plaintext_api_keys_from_config_backup(&config_path)?;
+                    let backend = secrets.backend_name().to_string();
                     log_sensitive_event(
                         "credential.save",
                         json!({
-                            "backend": secrets.backend_name(),
+                            "backend": backend.clone(),
                             "provider": identity.key,
                             "config_path": config_path.display().to_string(),
                             "plaintext_config_fallback": false,
                         }),
                     );
-                    return Ok(config_path);
+                    return Ok(SavedCredential::KeyringAndConfigFile {
+                        backend,
+                        path: config_path,
+                    });
                 }
                 Err(err) => {
                     return Err(plaintext_credential_fallback_refused(
@@ -10386,7 +10392,7 @@ fn save_api_key_for_identity_unlocked(
     );
     codewhale_config::scrub_plaintext_api_keys_from_config_backup(&config_path)?;
 
-    Ok(config_path)
+    Ok(SavedCredential::ConfigFile(config_path))
 }
 
 /// Persist a default model for `provider` via the comment-preserving config

@@ -337,6 +337,7 @@ Read-only operations run silently. File edits and patches whose targets all stay
 When you need approval:
 1. For multi-step changes, use `work_update` when it is present; otherwise state the approach briefly.
 2. The user will see your proposed action and can approve or deny it.
+3. Calling a gated write tool is the proposal, not the execution — the change runs only after approval is granted. If a write call is rejected because approval has not been granted yet (for example, a batch that must be approved first), do not retry the call: present the change in your plan and wait for the approval before calling the write tool again.
 
 Decomposition is your best tool for earning approvals. A clear plan with verifiable steps gets approved faster than an opaque request.
 
