@@ -1,12 +1,12 @@
 ---
 name: skill-installer
-description: Install, update, trust, or inspect DeepSeek skills from GitHub or local skill folders. Use when the user asks for available skills or wants a community skill installed.
+description: Install, update, trust, or inspect Codewhale skills from GitHub or local skill folders. Use when the user asks for available skills or wants a community skill installed.
 ---
 
 # Skill Installer
 
 Use this skill when the user wants to find, install, update, trust, or remove a
-DeepSeek skill.
+Codewhale skill.
 
 ## Commands
 
@@ -24,13 +24,14 @@ DeepSeek skill.
    - Existing local folder with `SKILL.md`
    - GitHub repo or registry entry
    - User request for a new skill scaffold
-2. Prefer DeepSeek's native `/skill` commands over ad hoc copying.
+2. Prefer Codewhale's native `/skill` commands over ad hoc copying.
 3. For GitHub/community skills, inspect the `SKILL.md` before recommending
    trust. Treat scripts and companion files as untrusted until reviewed.
 4. After installing, tell the user to restart the session if the skill does not
    appear immediately in the available-skills list.
 5. If a skill conflicts by name with a workspace skill, explain that workspace
-   skill directories take precedence over global `~/.deepseek/skills`.
+   skill directories take precedence over global `~/.codewhale/skills`, with
+   `~/.deepseek/skills` retained as a legacy fallback.
 
 Do not execute community skill scripts unless the user explicitly asks and the
 skill has been reviewed or trusted.

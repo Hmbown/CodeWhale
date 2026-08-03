@@ -24,9 +24,11 @@ Discovery paths, in precedence order:
 - `<workspace>/.opencode/skills`
 - `<workspace>/.claude/skills`
 - `<workspace>/.cursor/skills`
+- `<workspace>/.codewhale/skills`
 - `~/.agents/skills`
 - `~/.claude/skills`
-- `~/.deepseek/skills`
+- `~/.codewhale/skills`
+- `~/.deepseek/skills` (legacy fallback)
 
 Use skills for model instructions, workflows, and lightweight conventions. Use
 MCP for live external APIs or durable tools. Use hooks for automatic local
@@ -43,7 +45,7 @@ my-skill/
 ```markdown
 ---
 name: my-skill
-description: Use when DeepSeek should follow this specific workflow.
+description: Use when Codewhale should follow this specific workflow.
 ---
 
 # My Skill
