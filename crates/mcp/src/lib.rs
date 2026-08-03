@@ -344,11 +344,20 @@ impl McpManager {
     }
 
     /// Call a tool on a specific server by name.
+    ///
+    /// The server's [`ToolFilter`] is enforced on invocation, not just at
+    /// listing time: a denied (or not-allowed) tool cannot be executed by
+    /// addressing the server directly, whether by bare or qualified name.
     pub fn call_tool(&self, server_name: &str, tool_name: &str, arguments: Value) -> Result<Value> {
         let client = self
             .clients
             .get(server_name)
             .with_context(|| format!("MCP server '{server_name}' not available"))?;
+        if let Some((_, filter)) = self.configs.get(server_name)
+            && !allowed_by_filter(tool_name, filter)
+        {
+            bail!("tool '{tool_name}' on MCP server '{server_name}' is blocked by the tool filter");
+        }
         client.call_tool(tool_name, arguments)
     }
 
@@ -1441,6 +1450,80 @@ mod tests {
         let manager = McpManager::default();
         let err = manager.call_tool("nope", "t", json!({})).unwrap_err();
         assert!(err.to_string().contains("not available"));
+    }
+
+    #[test]
+    fn manager_call_tool_enforces_deny_filter() {
+        // The filter used to be consulted only when listing tools; a denied
+        // tool stayed callable by addressing the server directly.
+        let mut manager = McpManager::default();
+        manager
+            .register_server(
+                make_server_config("s1"),
+                ToolFilter {
+                    allow: vec![],
+                    deny: vec!["secret".to_string()],
+                },
+                Box::new(InMemoryMcpClient::default().with_tool("secret", json!({"ok": true}))),
+            )
+            .unwrap();
+        let err = manager.call_tool("s1", "secret", json!({})).unwrap_err();
+        assert!(
+            err.to_string().contains("blocked by the tool filter"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn manager_call_tool_enforces_allow_filter() {
+        let mut manager = McpManager::default();
+        manager
+            .register_server(
+                make_server_config("s1"),
+                ToolFilter {
+                    allow: vec!["allowed".to_string()],
+                    deny: vec![],
+                },
+                Box::new(
+                    InMemoryMcpClient::default()
+                        .with_tool("allowed", json!({"ok": true}))
+                        .with_tool("other", json!({"ok": false})),
+                ),
+            )
+            .unwrap();
+        let err = manager.call_tool("s1", "other", json!({})).unwrap_err();
+        assert!(
+            err.to_string().contains("blocked by the tool filter"),
+            "unexpected error: {err}"
+        );
+        // The allowed tool still runs.
+        assert_eq!(
+            manager.call_tool("s1", "allowed", json!({})).unwrap(),
+            json!({"ok": true})
+        );
+    }
+
+    #[test]
+    fn denied_tool_cannot_be_called_by_qualified_name() {
+        // Security: `mcp__s1__secret` must be as unreachable as `secret`.
+        let mut manager = McpManager::default();
+        manager
+            .register_server(
+                make_server_config("s1"),
+                ToolFilter {
+                    allow: vec![],
+                    deny: vec!["secret".to_string()],
+                },
+                Box::new(InMemoryMcpClient::default().with_tool("secret", json!({"ok": true}))),
+            )
+            .unwrap();
+        let err = manager
+            .call_qualified_tool("mcp__s1__secret", json!({}))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("blocked by the tool filter"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
