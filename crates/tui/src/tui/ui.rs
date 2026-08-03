@@ -218,9 +218,12 @@ const UI_STATUS_ANIMATION_MS: u64 = crate::tui::spinner::BRAILLE_SPINNER_FRAME_M
 /// may raise this (still bounded); low_motion always freezes the cadence.
 /// Active markers run at 8fps; atmosphere stays subordinate.
 pub(crate) const UI_UNDERWATER_ANIMATION_MS: u64 = 80;
-// At an 80-column terminal the file tree owns 20 columns, leaving a 60-column
-// chat host. Keep a compact 20-column sidebar plus a 40-column transcript.
-pub(crate) const SIDEBAR_VISIBLE_MIN_WIDTH: u16 = 60;
+// Minimum chat-host width at which the file-tree pane renders. At an
+// 80-column terminal the file tree owns 20 columns, leaving a 60-column chat
+// host; below this floor the tree is hidden rather than squeezing the
+// transcript under 40 columns. (Named for the file tree — the legacy sidebar
+// this constant once described no longer gates on it.)
+pub(crate) const FILE_TREE_MIN_HOST_WIDTH: u16 = 60;
 const DEFAULT_TERMINAL_PROBE_TIMEOUT_MS: u64 = 500;
 const TURN_META_PREFIX: &str = "<turn_meta>";
 const SESSION_TITLE_MAX_CHARS: usize = 32;
@@ -382,11 +385,11 @@ pub(crate) fn sidebar_render_state(app: &mut App) -> SidebarRenderState {
     }
 
     if let Some(available_width) = sidebar_host_width_hint(app)
-        && available_width < SIDEBAR_VISIBLE_MIN_WIDTH
+        && available_width < FILE_TREE_MIN_HOST_WIDTH
     {
         return SidebarRenderState::SuppressedByWidth {
             available_width,
-            min_width: SIDEBAR_VISIBLE_MIN_WIDTH,
+            min_width: FILE_TREE_MIN_HOST_WIDTH,
         };
     }
 
@@ -13964,7 +13967,7 @@ fn render(f: &mut Frame, app: &mut App, config: &Config) {
         // When the file-tree pane is visible and the terminal is wide
         // enough, reserve the left ~25% for the file tree.
         let mut chat_area =
-            if app.file_tree.is_some() && work_chat_area.width >= SIDEBAR_VISIBLE_MIN_WIDTH {
+            if app.file_tree.is_some() && work_chat_area.width >= FILE_TREE_MIN_HOST_WIDTH {
                 app.file_tree_visible = true;
                 let split = Layout::default()
                     .direction(Direction::Horizontal)

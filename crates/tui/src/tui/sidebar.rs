@@ -34,7 +34,7 @@ use super::history::{GenericToolCell, HistoryCell, ToolCell, ToolStatus, summari
 use super::motion::MotionPolicy;
 use super::spinner::{LIVE_MARKER_DELAY_MS, braille_spinner_frame_for_elapsed_ms};
 use super::subagent_routing::active_fanout_counts;
-use super::ui::SIDEBAR_VISIBLE_MIN_WIDTH;
+use super::ui::FILE_TREE_MIN_HOST_WIDTH;
 use super::ui_text::{concise_shell_command_label, truncate_line_to_width};
 
 /// Tolerance for floating-point cost comparison in the sidebar breakdown.
@@ -50,7 +50,7 @@ const HOTBAR_PANEL_HEIGHT: u16 = 4;
 const HOTBAR_ROW_COLUMNS: usize = 4;
 
 pub(crate) fn sidebar_width_for_chat_area(app: &App, chat_width: u16) -> Option<u16> {
-    if app.sidebar_focus == SidebarFocus::Hidden || chat_width < SIDEBAR_VISIBLE_MIN_WIDTH {
+    if app.sidebar_focus == SidebarFocus::Hidden || chat_width < FILE_TREE_MIN_HOST_WIDTH {
         return None;
     }
 

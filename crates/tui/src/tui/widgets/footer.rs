@@ -357,7 +357,7 @@ fn footer_compact_work_chip(app: &App) -> Vec<Span<'static>> {
     if app.sidebar_focus == SidebarFocus::Hidden
         || app
             .last_sidebar_host_width
-            .is_none_or(|width| width >= crate::tui::ui::SIDEBAR_VISIBLE_MIN_WIDTH)
+            .is_none_or(|width| width >= crate::tui::ui::FILE_TREE_MIN_HOST_WIDTH)
     {
         return Vec::new();
     }

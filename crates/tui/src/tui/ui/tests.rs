@@ -9209,17 +9209,17 @@ fn sidebar_width_floor_raises_with_chat_width() {
 fn sidebar_width_gate_uses_compact_sixty_column_boundary() {
     let mut app = create_test_app();
     app.sidebar_focus = SidebarFocus::Pinned;
-    app.last_sidebar_host_width = Some(SIDEBAR_VISIBLE_MIN_WIDTH - 1);
+    app.last_sidebar_host_width = Some(FILE_TREE_MIN_HOST_WIDTH - 1);
 
     assert_eq!(
         sidebar_render_state(&mut app),
         SidebarRenderState::SuppressedByWidth {
-            available_width: SIDEBAR_VISIBLE_MIN_WIDTH - 1,
-            min_width: SIDEBAR_VISIBLE_MIN_WIDTH,
+            available_width: FILE_TREE_MIN_HOST_WIDTH - 1,
+            min_width: FILE_TREE_MIN_HOST_WIDTH,
         }
     );
 
-    app.last_sidebar_host_width = Some(SIDEBAR_VISIBLE_MIN_WIDTH);
+    app.last_sidebar_host_width = Some(FILE_TREE_MIN_HOST_WIDTH);
 
     assert_eq!(sidebar_render_state(&mut app), SidebarRenderState::Visible);
 }
