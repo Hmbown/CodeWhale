@@ -3150,7 +3150,9 @@ async fn run_event_loop(
         if done && let Ok(Some(notice)) = version_check.take().unwrap().await {
             // Transient toast for immediate visibility, plus a durable
             // in-transcript notice so the prompt survives the toast TTL and
-            // stays actionable during a busy session (#3961).
+            // stays actionable during a busy session (#3961). The persistent
+            // header chip keeps a quiet affordance after both (#14).
+            app.update_available = Some(notice.chip_label());
             app.push_status_toast(
                 notice.toast_line(),
                 StatusToastLevel::Info,
@@ -13775,7 +13777,8 @@ fn render_classic_header(area: Rect, buf: &mut Buffer, app: &App) {
         &app.status_indicator,
     ))
     .with_running_agents(running_agent_count(app))
-    .with_workflow_status(workflow_chip.as_deref());
+    .with_workflow_status(workflow_chip.as_deref())
+    .with_update_available(app.update_available.as_deref());
     HeaderWidget::new(data).render(area, buf);
 }
 
@@ -18259,6 +18262,13 @@ impl UpdateNotice {
             "v{latest} available - run `codewhale update` and restart",
             latest = self.latest
         )
+    }
+
+    /// Compact header chip label shown once the check has landed. Quiet by
+    /// design: no action verb, no repetition — the toast and transcript
+    /// notice carry the `codewhale update` instructions (#14).
+    fn chip_label(&self) -> String {
+        format!("↑ v{latest}", latest = self.latest)
     }
 
     /// Durable, actionable notice pushed into the transcript so it survives the
