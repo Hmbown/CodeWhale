@@ -907,6 +907,10 @@ impl Settings {
         let term = std::env::var("TERM")
             .unwrap_or_default()
             .to_ascii_lowercase();
+        // Tabby renders through Electron/xterm.js. Its Windows IME bridge
+        // can observe cursor-positioning sequences while a frame is still
+        // being applied, so use the calmer rendering path there.
+        let term_is_tabby = term_program.contains("tabby");
         let term_constrains_frame_rate =
             matches!(term_program.as_str(), "vscode" | "ghostty") || term.contains("ghostty");
         let vte_env_constrains_frame_rate = std::env::var_os("TILIX_ID")
@@ -937,6 +941,14 @@ impl Settings {
         if term_is_termius || in_ssh_session {
             self.low_motion = true;
             self.fancy_animations = false;
+        }
+        if term_is_tabby {
+            self.low_motion = true;
+            self.fancy_animations = false;
+            self.constrained_frame_rate = true;
+            if self.synchronized_output.eq_ignore_ascii_case("auto") {
+                self.synchronized_output = "off".to_string();
+            }
         }
 
         // Multiplexers need a bounded redraw rate, not a different product.
@@ -4340,6 +4352,29 @@ mod tests {
             match prev_ptyxis {
                 Some(v) => std::env::set_var("PTYXIS_VERSION", v),
                 None => std::env::remove_var("PTYXIS_VERSION"),
+            }
+        }
+    }
+
+    #[test]
+    fn tabby_uses_calm_rendering_for_stable_ime_cursor() {
+        let _g = term_program_test_guard();
+        let prev = std::env::var_os("TERM_PROGRAM");
+        // SAFETY: serialised by the guard.
+        unsafe {
+            std::env::set_var("TERM_PROGRAM", "Tabby");
+        }
+        let mut settings = animated_settings();
+        settings.apply_env_overrides();
+        assert!(settings.low_motion);
+        assert!(!settings.fancy_animations);
+        assert!(settings.constrained_frame_rate);
+        assert_eq!(settings.synchronized_output, "off");
+        // SAFETY: cleanup under the guard.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("TERM_PROGRAM", v),
+                None => std::env::remove_var("TERM_PROGRAM"),
             }
         }
     }
