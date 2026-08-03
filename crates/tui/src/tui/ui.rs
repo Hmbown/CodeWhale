@@ -16654,14 +16654,19 @@ async fn apply_provider_picker_setup_confirmed(
     // Persist key first via the existing comment-preserving path, then pin the
     // chosen default model on the same document when the provider uses a
     // `[providers.<name>]` table.
+    let mut save_confirmation = None;
     match save_api_key_for_identity(&identity, config, &api_key) {
-        Ok(path) => {
+        Ok(saved) => {
+            // #5195: name where the key actually landed (secret store backend
+            // + credential-free config metadata) and the scope it is visible
+            // from — credential writes are rescoped to the user-global config,
+            // so the key is available in every folder.
+            let destination = saved.describe();
             if let Err(err) = save_provider_model_for_identity(&identity, config, &model) {
                 app.add_message(HistoryCell::System {
                     content: format!(
-                        "Saved {} API key to {}, but failed to pin model `{model}`: {err}",
+                        "Saved {} API key to {destination} (available in all folders), but failed to pin model `{model}`: {err}",
                         provider.as_str(),
-                        path.display()
                     ),
                 });
             } else if let Some(context_window) = context_window {
@@ -16670,23 +16675,20 @@ async fn apply_provider_picker_setup_confirmed(
                 {
                     app.add_message(HistoryCell::System {
                         content: format!(
-                            "Saved {} API key and model to {}, but failed to save context window: {err}",
+                            "Saved {} API key and model to {destination} (available in all folders), but failed to save context window: {err}",
                             provider.as_str(),
-                            path.display()
                         ),
                     });
                 } else {
-                    app.status_message = Some(format!(
-                        "Saved {} API key, model, and context window to {}",
+                    save_confirmation = Some(format!(
+                        "Saved {} API key, model, and context window to {destination} (available in all folders)",
                         provider.as_str(),
-                        path.display()
                     ));
                 }
             } else {
-                app.status_message = Some(format!(
-                    "Saved {} API key and model to {}",
+                save_confirmation = Some(format!(
+                    "Saved {} API key and model to {destination} (available in all folders)",
                     provider.as_str(),
-                    path.display()
                 ));
             }
             app.api_key_env_only = false;
@@ -16708,7 +16710,14 @@ async fn apply_provider_picker_setup_confirmed(
     if let Some(context_window) = context_window {
         mirror_saved_context_window_in_config(config, provider, context_window);
     }
-    switch_provider(app, engine_handle, config, provider, Some(model)).await
+    let switched = switch_provider(app, engine_handle, config, provider, Some(model)).await;
+    // The switch overwrites the status line with the route summary (the full
+    // summary also lands in the transcript), so the save confirmation is
+    // applied last — it is the answer to the action the user just confirmed.
+    if switched && let Some(confirmation) = save_confirmation {
+        app.status_message = Some(confirmation);
+    }
+    switched
 }
 
 fn mirror_saved_model_in_config(config: &mut Config, provider: ApiProvider, model: String) {
