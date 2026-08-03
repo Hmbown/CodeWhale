@@ -123,13 +123,42 @@ delegation. The default affords at least three nested levels.
 
 The fleet ledger persists the worker's own event stream rather than a separate,
 simulated taxonomy. `codewhale exec --output-format stream-json` emits
-`{"type": "content" | "tool_use" | "tool_result" | "workflow_event" |
-"metadata" | "done" | "error"}` lines, which map onto the fleet ledger's
+`{"type": "content" | "tool_use" | "tool_result" | "sandbox_denied" |
+"workflow_event" | "session_capture" | "turn_usage" | "metadata" | "done" |
+"error"}` lines, which map onto the fleet ledger's
 `FleetWorkerEventPayload` (`RunningTool`, `WorkflowEvent`, `Running`,
 `Completed`, `Failed`, …). `workflow_event` carries the typed
 run/phase/task/gate receipt while a Workflow is in flight and is retained as a
 typed `WorkflowEvent` in the Fleet ledger; the enclosing worker still owns the
 terminal `done` or `error`. One vocabulary, two surfaces.
+
+`turn_usage` is the per-model-call usage receipt, emitted once per model
+request (turn-step) when the provider reported usage for that call:
+
+```json
+{"type": "turn_usage", "schema": "codewhale.exec-stream", "schema_version": 1,
+ "turn": 1, "input_tokens": 1200, "output_tokens": 180,
+ "reasoning_tokens": 90, "prompt_cache_hit_tokens": 900,
+ "prompt_cache_miss_tokens": 300, "prompt_cache_write_tokens": 0,
+ "reasoning_replay_tokens": 40, "duration_ms": 1834}
+```
+
+- `turn` is the 1-based index of the model call within the exec run;
+  `input_tokens`, `output_tokens`, and `duration_ms` are always present.
+- Optional token fields are **omitted** when the provider does not report
+  them — never emitted as null and never backfilled with zeros. Field names
+  mirror the terminal `metadata` receipt: `prompt_cache_hit_tokens` is the
+  provider's cache-read count (Anthropic `cache_read_input_tokens`),
+  `prompt_cache_write_tokens` the cache-creation count
+  (`cache_creation_input_tokens`). `reasoning_tokens` appears only for
+  provider paths that report it (OpenAI-compatible
+  `completion_tokens_details` / Responses `output_tokens_details`; Anthropic
+  does not report a thinking-token count). `reasoning_replay_tokens` is a
+  client-side estimate for DeepSeek V4 interleaved-thinking replays.
+- When a provider reports no usage at all for a call, the whole event is
+  skipped for that call. Latency/convergence analysis should sum
+  `turn_usage` events instead of inferring per-step tokens from wall time;
+  the terminal `metadata` receipt still carries the cumulative totals.
 
 ## Convergence with Claude Code (#2972)
 

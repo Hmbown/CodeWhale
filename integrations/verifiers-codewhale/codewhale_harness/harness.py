@@ -39,6 +39,7 @@ _EVENT_TYPES = {
     "sandbox_denied",
     "workflow_event",
     "session_capture",
+    "turn_usage",
     "metadata",
     "done",
     "error",

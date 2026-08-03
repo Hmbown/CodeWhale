@@ -9617,6 +9617,30 @@ enum ExecStreamEvent {
     },
     #[serde(rename = "session_capture")]
     SessionCapture { content: String },
+    /// Per-model-call usage receipt. Field names mirror the terminal
+    /// `metadata` receipt (`prompt_cache_hit_tokens` is the provider's
+    /// cache-read count, `prompt_cache_write_tokens` the cache-creation
+    /// count). Optional fields are omitted — never emitted as null or zero —
+    /// when the provider does not report them; the whole event is skipped
+    /// for model calls whose provider reported no usage at all.
+    #[serde(rename = "turn_usage")]
+    TurnUsage {
+        /// 1-based index of the model call within this exec run.
+        turn: u32,
+        input_tokens: u32,
+        output_tokens: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reasoning_tokens: Option<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        prompt_cache_hit_tokens: Option<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        prompt_cache_miss_tokens: Option<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        prompt_cache_write_tokens: Option<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reasoning_replay_tokens: Option<u32>,
+        duration_ms: u64,
+    },
     #[serde(rename = "metadata")]
     Metadata { meta: Box<ExecStreamMeta> },
     #[serde(rename = "done")]
@@ -10788,6 +10812,7 @@ async fn run_exec_agent(
     let mut latest_model = effective_model;
     let mut latest_workspace = workspace.clone();
     let mut tool_starts: HashMap<String, (Instant, String)> = HashMap::new();
+    let mut turn_usage_seq: u32 = 0;
 
     let mut stdout = io::stdout();
     let mut ends_with_newline = false;
@@ -11026,6 +11051,22 @@ async fn run_exec_agent(
                     })?;
                 } else if !json_output {
                     eprintln!("error: {}", envelope.message);
+                }
+            }
+            Event::TurnUsage { usage, duration_ms } => {
+                if output_format == ExecOutputFormat::StreamJson {
+                    turn_usage_seq = turn_usage_seq.saturating_add(1);
+                    emit_exec_stream_event(&ExecStreamEvent::TurnUsage {
+                        turn: turn_usage_seq,
+                        input_tokens: usage.input_tokens,
+                        output_tokens: usage.output_tokens,
+                        reasoning_tokens: usage.reasoning_tokens,
+                        prompt_cache_hit_tokens: usage.prompt_cache_hit_tokens,
+                        prompt_cache_miss_tokens: usage.prompt_cache_miss_tokens,
+                        prompt_cache_write_tokens: usage.prompt_cache_write_tokens,
+                        reasoning_replay_tokens: usage.reasoning_replay_tokens,
+                        duration_ms,
+                    })?;
                 }
             }
             Event::TurnComplete {
@@ -14619,6 +14660,149 @@ mod terminal_mode_tests {
         .expect_err("json summary and stream-json must not mix");
 
         assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn exec_stream_turn_usage_event_serializes_reported_fields() {
+        let event = ExecStreamEvent::TurnUsage {
+            turn: 2,
+            input_tokens: 1200,
+            output_tokens: 180,
+            reasoning_tokens: Some(90),
+            prompt_cache_hit_tokens: Some(900),
+            prompt_cache_miss_tokens: Some(300),
+            prompt_cache_write_tokens: Some(0),
+            reasoning_replay_tokens: Some(40),
+            duration_ms: 1834,
+        };
+
+        let value = exec_stream_value(&event).expect("serializes");
+        let json = serde_json::to_string(&value).expect("serializes");
+        assert!(!json.contains('\n'));
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(parsed["type"], "turn_usage");
+        assert_eq!(parsed["schema"], "codewhale.exec-stream");
+        assert_eq!(parsed["schema_version"], 1);
+        assert_eq!(parsed["turn"], 2);
+        assert_eq!(parsed["input_tokens"], 1200);
+        assert_eq!(parsed["output_tokens"], 180);
+        assert_eq!(parsed["reasoning_tokens"], 90);
+        assert_eq!(parsed["prompt_cache_hit_tokens"], 900);
+        assert_eq!(parsed["prompt_cache_miss_tokens"], 300);
+        assert_eq!(parsed["prompt_cache_write_tokens"], 0);
+        assert_eq!(parsed["reasoning_replay_tokens"], 40);
+        assert_eq!(parsed["duration_ms"], 1834);
+    }
+
+    #[test]
+    fn exec_stream_turn_usage_event_omits_unreported_fields() {
+        // Honest absence: optional token fields the provider did not report
+        // are dropped from the object entirely — never emitted as null and
+        // never backfilled with fabricated zeros.
+        let event = ExecStreamEvent::TurnUsage {
+            turn: 1,
+            input_tokens: 11,
+            output_tokens: 3,
+            reasoning_tokens: None,
+            prompt_cache_hit_tokens: None,
+            prompt_cache_miss_tokens: None,
+            prompt_cache_write_tokens: None,
+            reasoning_replay_tokens: None,
+            duration_ms: 250,
+        };
+
+        let value = exec_stream_value(&event).expect("serializes");
+        let parsed = value;
+        assert_eq!(parsed["type"], "turn_usage");
+        assert_eq!(parsed["input_tokens"], 11);
+        assert_eq!(parsed["output_tokens"], 3);
+        assert_eq!(parsed["duration_ms"], 250);
+        let object = parsed.as_object().expect("event object");
+        for absent in [
+            "reasoning_tokens",
+            "prompt_cache_hit_tokens",
+            "prompt_cache_miss_tokens",
+            "prompt_cache_write_tokens",
+            "reasoning_replay_tokens",
+        ] {
+            assert!(!object.contains_key(absent), "{absent} leaked: {parsed}");
+        }
+    }
+
+    #[test]
+    fn exec_stream_pre_existing_event_type_tags_are_unchanged() {
+        // Contract guard for existing stream consumers (bench harness, fleet
+        // ledger): the pre-turn_usage event vocabulary keeps its exact tags.
+        let cases: Vec<(ExecStreamEvent, &str)> = vec![
+            (
+                ExecStreamEvent::Content {
+                    content: "hi".to_string(),
+                },
+                "content",
+            ),
+            (
+                ExecStreamEvent::ToolUse {
+                    name: "read_file".to_string(),
+                    id: "call_1".to_string(),
+                    input: serde_json::json!({}),
+                    started_at: "2026-08-03T00:00:00Z".to_string(),
+                },
+                "tool_use",
+            ),
+            (
+                ExecStreamEvent::ToolResult {
+                    id: "call_1".to_string(),
+                    name: "read_file".to_string(),
+                    output: "ok".to_string(),
+                    status: "success".to_string(),
+                    started_at: "2026-08-03T00:00:00Z".to_string(),
+                    completed_at: "2026-08-03T00:00:01Z".to_string(),
+                    duration_ms: 1,
+                    side_effect_status: "unknown".to_string(),
+                    error_category: None,
+                    truncated: None,
+                    artifact: None,
+                    result_metadata: None,
+                },
+                "tool_result",
+            ),
+            (
+                ExecStreamEvent::SandboxDenied {
+                    tool_id: "call_1".to_string(),
+                    tool_name: "exec_shell".to_string(),
+                    reason: "denied".to_string(),
+                    outcome: "approval_required".to_string(),
+                },
+                "sandbox_denied",
+            ),
+            (
+                ExecStreamEvent::WorkflowEvent {
+                    run_id: "workflow_1".to_string(),
+                    event: serde_json::json!({"type": "task_completed"}),
+                },
+                "workflow_event",
+            ),
+            (
+                ExecStreamEvent::SessionCapture {
+                    content: "x".to_string(),
+                },
+                "session_capture",
+            ),
+            (
+                ExecStreamEvent::Error {
+                    error: "boom".to_string(),
+                },
+                "error",
+            ),
+            (ExecStreamEvent::Done, "done"),
+        ];
+
+        for (event, expected_type) in cases {
+            let value = exec_stream_value(&event).expect("serializes");
+            assert_eq!(value["type"], expected_type, "event tag drifted");
+            assert_eq!(value["schema"], "codewhale.exec-stream");
+            assert_eq!(value["schema_version"], 1);
+        }
     }
 
     #[test]
