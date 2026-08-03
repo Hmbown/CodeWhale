@@ -359,10 +359,9 @@ impl AutomationTool {
             .as_ref()
             .ok_or_else(|| ToolError::not_available("AutomationManager is not attached"))?;
         let manager = manager.lock().await;
-        let status = optional_str(input, "status").map(|value| match value {
-            "paused" => AutomationStatus::Paused,
-            _ => AutomationStatus::Active,
-        });
+        let status = optional_str(input, "status")
+            .map(parse_automation_status)
+            .transpose()?;
         let req = UpdateAutomationRequest {
             name: optional_str(input, "name").map(ToString::to_string),
             prompt: optional_str(input, "prompt").map(ToString::to_string),
@@ -520,6 +519,18 @@ fn optional_bool_value(input: &Value, field: &str) -> Option<bool> {
     input.get(field).and_then(Value::as_bool)
 }
 
+/// Parse an `automation_update` status. #5123-class: unknown statuses used to
+/// coerce to Active — the opposite of pause intent, and run-scheduling.
+fn parse_automation_status(value: &str) -> Result<AutomationStatus, ToolError> {
+    match value {
+        "active" => Ok(AutomationStatus::Active),
+        "paused" => Ok(AutomationStatus::Paused),
+        other => Err(ToolError::invalid_input(format!(
+            "unknown automation status '{other}'; expected 'active' or 'paused'"
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -530,6 +541,25 @@ mod tests {
         let schema = AutomationTool::alias("automation_create", "create").input_schema();
         assert!(schema["properties"]["rrule"].is_object());
         assert_eq!(schema["required"][0], "name");
+    }
+
+    #[test]
+    fn update_status_rejects_unknown_values_instead_of_coercing_to_active() {
+        assert!(matches!(
+            parse_automation_status("active"),
+            Ok(AutomationStatus::Active)
+        ));
+        assert!(matches!(
+            parse_automation_status("paused"),
+            Ok(AutomationStatus::Paused)
+        ));
+        for bad in ["pause", "disabled", "off", "stopped", ""] {
+            let err = parse_automation_status(bad).expect_err("must not coerce");
+            assert!(
+                err.to_string().contains("expected 'active' or 'paused'"),
+                "{err}"
+            );
+        }
     }
 
     #[test]
