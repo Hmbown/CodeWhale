@@ -140,6 +140,28 @@ fn every_provider_kind_resolves_the_auto_selector() {
 }
 
 #[test]
+fn modelstudio_qwen38_max_offering_publishes_1m_context() {
+    use super::RouteLimits;
+
+    let offering = bundled_offerings()
+        .into_iter()
+        .find(|offering| {
+            offering.provider.as_str() == "modelstudio-token-plan"
+                && offering.wire_model_id.as_str() == "qwen3.8-max"
+        })
+        .expect("modelstudio qwen3.8-max offering");
+    assert_eq!(
+        offering.limits,
+        RouteLimits {
+            context_tokens: Some(1_000_000),
+            input_tokens: None,
+            output_tokens: Some(131_072),
+        },
+        "hand-seam limits must not be empty (empty won collisions and fell to 128K)"
+    );
+}
+
+#[test]
 fn modelstudio_image_input_capability_is_per_model() {
     use super::capabilities::CapabilityState;
 
@@ -158,12 +180,8 @@ fn modelstudio_image_input_capability_is_per_model() {
         "deepseek-v4-flash-0731",
         "glm-5.2",
     ];
-    const PROVIDERS: &[&str] = &[
-        "modelstudio-token-plan",
-        "modelstudio-coding-plan",
-        "modelstudio-token-plan-anthropic",
-        "modelstudio-coding-plan-anthropic",
-    ];
+    // Catalog surface is one vendor identity; plan/dialect are config.
+    const PROVIDERS: &[&str] = &["modelstudio-token-plan"];
 
     let offerings = bundled_offerings();
     for provider in PROVIDERS {

@@ -610,6 +610,11 @@ impl Provider for Deepseek {
             "deepseek_china",
             "deepseekcn",
             "deepseek-china",
+            // Dialect is wire=anthropic on this provider, not a second catalog row.
+            "deepseek-anthropic",
+            "deepseek_anthropic",
+            "deepseek-claude",
+            "deepseek_claude",
         ]
     }
 
@@ -619,6 +624,8 @@ impl Provider for Deepseek {
 }
 
 /// Opt-in DeepSeek route that speaks the Anthropic Messages wire protocol.
+///
+/// Legacy kind kept for serde; parse/catalog collapse onto [`Deepseek`].
 pub struct DeepseekAnthropic;
 
 impl Provider for DeepseekAnthropic {
@@ -631,7 +638,8 @@ impl Provider for DeepseekAnthropic {
     }
 
     fn display_name(&self) -> &'static str {
-        "DeepSeek (Anthropic-compatible)"
+        // Legacy dialect kind — catalog surface is "DeepSeek" with wire=anthropic.
+        "DeepSeek"
     }
 
     fn default_base_url(&self) -> &'static str {
@@ -651,7 +659,7 @@ impl Provider for DeepseekAnthropic {
     }
 
     fn aliases(&self) -> &'static [&'static str] {
-        &["deepseek_anthropic", "deepseek-claude", "deepseek_claude"]
+        &[]
     }
 
     fn wire_policy(&self) -> WirePolicy {
@@ -1058,7 +1066,8 @@ provider!(
     DEFAULT_MINIMAX_MODEL,
     ["MINIMAX_API_KEY"],
     "minimax",
-    aliases: ["mini-max", "mini_max"]
+    // Anthropic dialect is wire=anthropic on this provider, not a second row.
+    aliases: ["mini-max", "mini_max", "minimax-anthropic", "minimax_anthropic", "mini-max-anthropic", "mini_max_anthropic"]
 );
 
 /// MiniMax route that speaks the Anthropic Messages wire protocol.
@@ -1074,7 +1083,8 @@ impl Provider for MinimaxAnthropic {
     }
 
     fn display_name(&self) -> &'static str {
-        "MiniMax (Anthropic-compatible)"
+        // Legacy dialect kind — catalog surface is "MiniMax" with wire=anthropic.
+        "MiniMax"
     }
 
     fn default_base_url(&self) -> &'static str {
@@ -1094,11 +1104,7 @@ impl Provider for MinimaxAnthropic {
     }
 
     fn aliases(&self) -> &'static [&'static str] {
-        &[
-            "minimax_anthropic",
-            "mini-max-anthropic",
-            "mini_max_anthropic",
-        ]
+        &[]
     }
 
     fn wire_policy(&self) -> WirePolicy {
@@ -1255,7 +1261,10 @@ impl Provider for ModelstudioTokenPlan {
     }
 
     fn display_name(&self) -> &'static str {
-        "Alibaba Cloud Model Studio (Token Plan)"
+        // One vendor row. Plan (token vs coding) is `mode` / base_url; wire
+        // dialect (OpenAI vs Anthropic Messages) is `wire` — never separate
+        // catalog identities (same product rule as Z.ai / Xiaomi for plans).
+        "Alibaba Cloud Model Studio"
     }
 
     fn default_base_url(&self) -> &'static str {
@@ -1275,19 +1284,36 @@ impl Provider for ModelstudioTokenPlan {
     }
 
     fn aliases(&self) -> &'static [&'static str] {
+        // Plan and dialect aliases collapse onto this primary identity.
+        // Config fields: mode = token-plan|coding-plan, wire = openai|anthropic.
         &[
             "modelstudio-token-plan",
             "modelstudio_token_plan",
+            "modelstudio",
             "alibaba-token-plan",
             "dashscope-token-plan",
+            "alibaba",
+            "dashscope",
+            // Legacy plan/dialect kinds — keep resolving so old configs and
+            // CLI flags do not break; they no longer appear as catalog rows.
+            "modelstudio-coding-plan",
+            "modelstudio_coding_plan",
+            "alibaba-coding-plan",
+            "dashscope-coding-plan",
+            "modelstudio-token-plan-anthropic",
+            "modelstudio_token_plan_anthropic",
+            "alibaba-token-plan-anthropic",
+            "modelstudio-coding-plan-anthropic",
+            "modelstudio_coding_plan_anthropic",
+            "alibaba-coding-plan-anthropic",
         ]
     }
 }
 
-/// Alibaba Cloud Model Studio — Token Plan Anthropic-compatible endpoint.
+/// Legacy Model Studio Anthropic dialect kind.
 ///
-/// Same API key as `modelstudio-token-plan`; speaks the native Anthropic
-/// Messages wire protocol on the `/apps/anthropic` path.
+/// Kept for serde / provider_for_kind only. Catalog surface and parse aliases
+/// collapse onto [`ModelstudioTokenPlan`] with `wire = "anthropic"`.
 pub struct ModelstudioTokenPlanAnthropic;
 
 impl Provider for ModelstudioTokenPlanAnthropic {
@@ -1300,7 +1326,7 @@ impl Provider for ModelstudioTokenPlanAnthropic {
     }
 
     fn display_name(&self) -> &'static str {
-        "Alibaba Cloud Model Studio (Token Plan, Anthropic-compatible)"
+        "Alibaba Cloud Model Studio"
     }
 
     fn default_base_url(&self) -> &'static str {
@@ -1320,11 +1346,8 @@ impl Provider for ModelstudioTokenPlanAnthropic {
     }
 
     fn aliases(&self) -> &'static [&'static str] {
-        &[
-            "modelstudio-token-plan-anthropic",
-            "modelstudio_token_plan_anthropic",
-            "alibaba-token-plan-anthropic",
-        ]
+        // Empty: aliases live on the primary so parse collapses to it.
+        &[]
     }
 
     fn wire_policy(&self) -> WirePolicy {
@@ -1332,7 +1355,9 @@ impl Provider for ModelstudioTokenPlanAnthropic {
     }
 }
 
-/// Alibaba Cloud Model Studio — Coding Plan (OpenAI-compatible Chat Completions).
+/// Legacy Model Studio Coding Plan kind (OpenAI wire).
+///
+/// Catalog/parse collapse onto [`ModelstudioTokenPlan`] with `mode = "coding-plan"`.
 pub struct ModelstudioCodingPlan;
 
 impl Provider for ModelstudioCodingPlan {
@@ -1345,7 +1370,7 @@ impl Provider for ModelstudioCodingPlan {
     }
 
     fn display_name(&self) -> &'static str {
-        "Alibaba Cloud Model Studio (Coding Plan)"
+        "Alibaba Cloud Model Studio"
     }
 
     fn default_base_url(&self) -> &'static str {
@@ -1365,19 +1390,11 @@ impl Provider for ModelstudioCodingPlan {
     }
 
     fn aliases(&self) -> &'static [&'static str] {
-        &[
-            "modelstudio-coding-plan",
-            "modelstudio_coding_plan",
-            "alibaba-coding-plan",
-            "dashscope-coding-plan",
-        ]
+        &[]
     }
 }
 
-/// Alibaba Cloud Model Studio — Coding Plan Anthropic-compatible endpoint.
-///
-/// Same API key as `modelstudio-coding-plan`; speaks the native Anthropic
-/// Messages wire protocol on the `/apps/anthropic` path.
+/// Legacy Model Studio Coding Plan Anthropic dialect kind.
 pub struct ModelstudioCodingPlanAnthropic;
 
 impl Provider for ModelstudioCodingPlanAnthropic {
@@ -1390,7 +1407,7 @@ impl Provider for ModelstudioCodingPlanAnthropic {
     }
 
     fn display_name(&self) -> &'static str {
-        "Alibaba Cloud Model Studio (Coding Plan, Anthropic-compatible)"
+        "Alibaba Cloud Model Studio"
     }
 
     fn default_base_url(&self) -> &'static str {
@@ -1410,11 +1427,7 @@ impl Provider for ModelstudioCodingPlanAnthropic {
     }
 
     fn aliases(&self) -> &'static [&'static str] {
-        &[
-            "modelstudio-coding-plan-anthropic",
-            "modelstudio_coding_plan_anthropic",
-            "alibaba-coding-plan-anthropic",
-        ]
+        &[]
     }
 
     fn wire_policy(&self) -> WirePolicy {
@@ -2001,7 +2014,7 @@ mod tests {
         // actually took effect.
         assert_eq!(
             display[0].display_name(),
-            "Alibaba Cloud Model Studio (Coding Plan)",
+            "Alibaba Cloud Model Studio",
             "alphabetical display order should lead with Alibaba Cloud Model Studio"
         );
     }

@@ -4319,61 +4319,47 @@ fn provider_kind_accepts_legacy_deepseek_cn_aliases() {
 }
 
 #[test]
-fn deepseek_anthropic_route_defaults_to_anthropic_endpoint() {
+fn deepseek_anthropic_aliases_collapse_onto_primary_with_wire_toggle() {
     let _lock = env_lock();
     let _env = EnvGuard::without_deepseek_runtime_overrides();
+    // Dialect is not a catalog identity — aliases resolve to DeepSeek primary.
     for alias in [
         "deepseek-anthropic",
         "deepseek_anthropic",
         "deepseek-claude",
         "deepseek_claude",
     ] {
-        assert_eq!(
-            ProviderKind::parse(alias),
-            Some(ProviderKind::DeepseekAnthropic)
-        );
-
-        let parsed: ConfigToml =
-            toml::from_str(&format!("provider = \"{alias}\"")).expect("deepseek anthropic alias");
-        assert_eq!(parsed.provider, ProviderKind::DeepseekAnthropic);
+        assert_eq!(ProviderKind::parse(alias), Some(ProviderKind::Deepseek));
     }
 
     let provider = provider::resolve_provider("deepseek-anthropic")
-        .expect("deepseek anthropic metadata resolves");
-    assert_eq!(provider.kind(), ProviderKind::DeepseekAnthropic);
-    assert_eq!(provider.provider_config_key(), "deepseek_anthropic");
-    assert_eq!(provider.default_model(), DEFAULT_DEEPSEEK_ANTHROPIC_MODEL);
-    assert_eq!(
-        provider.default_base_url(),
-        DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL
-    );
-    assert_eq!(provider.env_vars(), &["DEEPSEEK_API_KEY"]);
-    assert_eq!(
-        provider.wire_policy().fixed(),
-        Some(provider::WireFormat::AnthropicMessages)
-    );
+        .expect("deepseek anthropic alias resolves to primary");
+    assert_eq!(provider.kind(), ProviderKind::Deepseek);
+    assert_eq!(provider.id(), "deepseek");
 
-    let config = ConfigToml {
+    // wire=anthropic selects the Messages endpoint without a second provider.
+    let config: ConfigToml = toml::from_str(
+        r#"
+provider = "deepseek"
+
+[providers.deepseek]
+wire = "anthropic"
+"#,
+    )
+    .expect("deepseek wire config");
+    let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(resolved.provider, ProviderKind::Deepseek);
+    assert_eq!(resolved.base_url, DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL);
+    // Legacy serde kind still resolves the anthropic endpoint.
+    let legacy = ConfigToml {
         provider: ProviderKind::DeepseekAnthropic,
         ..ConfigToml::default()
     };
-    let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
-
-    assert_eq!(resolved.provider, ProviderKind::DeepseekAnthropic);
-    assert_eq!(resolved.base_url, DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL);
-    assert_eq!(resolved.model, DEFAULT_DEEPSEEK_ANTHROPIC_MODEL);
-
-    unsafe {
-        std::env::set_var(
-            "DEEPSEEK_ANTHROPIC_BASE_URL",
-            "https://gateway.example.test/anthropic",
-        );
-    }
-    let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
-    assert_eq!(resolved.base_url, "https://gateway.example.test/anthropic");
-    unsafe {
-        std::env::remove_var("DEEPSEEK_ANTHROPIC_BASE_URL");
-    }
+    let legacy_resolved = legacy.resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(
+        legacy_resolved.base_url,
+        DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL
+    );
 }
 
 #[test]
@@ -4704,17 +4690,24 @@ fn meta_model_api_scopes_both_documented_key_names_to_official_endpoint() {
 #[test]
 fn provider_metadata_registry_covers_every_provider_kind_once() {
     let providers = provider::all_providers();
-    assert_eq!(providers.len(), ProviderKind::ALL.len());
-
-    for (kind, provider) in ProviderKind::ALL.iter().zip(providers.iter()) {
-        assert_eq!(provider.kind(), *kind);
-        assert_eq!(provider.id(), kind.as_str());
-        assert_eq!(kind.provider().id(), kind.as_str());
-    }
+    // Full registry keeps legacy dialect/plan kinds for provider_for_kind.
+    assert_eq!(providers.len(), 41);
+    // Catalog surface is one identity per vendor (no dual-wire / plan rows).
+    assert_eq!(ProviderKind::ALL.len(), 36);
+    assert!(ProviderKind::ALL.len() < providers.len());
 
     let mut ids = std::collections::BTreeSet::new();
     for provider in providers {
         assert!(ids.insert(provider.id()), "duplicate provider id");
+        assert_eq!(provider.id(), provider.kind().as_str());
+        assert_eq!(provider.kind().provider().id(), provider.id());
+    }
+    // Catalog entries are a subset of the full registry.
+    for kind in ProviderKind::ALL {
+        assert!(
+            providers.iter().any(|p| p.kind() == kind),
+            "catalog kind {kind:?} missing from full registry"
+        );
     }
 }
 
@@ -5246,25 +5239,29 @@ fn minimax_env_model_override_canonicalizes_known_aliases() {
 }
 
 #[test]
-fn minimax_anthropic_env_overrides_use_messages_base_url() {
+fn minimax_wire_anthropic_selects_messages_endpoint() {
     let _lock = env_lock();
     let _env = EnvGuard::without_deepseek_runtime_overrides();
-    unsafe {
-        env::set_var("CODEWHALE_PROVIDER", "minimax-anthropic");
-        env::set_var(
-            "MINIMAX_ANTHROPIC_BASE_URL",
-            "https://messages.minimax.example/anthropic",
-        );
-        env::set_var("MINIMAX_MODEL", "MiniMax-M2.7");
-    }
-
-    let resolved = ConfigToml::default().resolve_runtime_options(&CliRuntimeOverrides::default());
-
-    assert_eq!(resolved.provider, ProviderKind::MinimaxAnthropic);
+    // minimax-anthropic is an alias of MiniMax; dialect is wire config.
     assert_eq!(
-        resolved.base_url,
-        "https://messages.minimax.example/anthropic"
+        ProviderKind::parse("minimax-anthropic"),
+        Some(ProviderKind::Minimax)
     );
+
+    let config: ConfigToml = toml::from_str(
+        r#"
+provider = "minimax"
+
+[providers.minimax]
+wire = "anthropic"
+model = "MiniMax-M2.7"
+"#,
+    )
+    .expect("minimax wire config");
+    let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+    assert_eq!(resolved.provider, ProviderKind::Minimax);
+    assert_eq!(resolved.base_url, DEFAULT_MINIMAX_ANTHROPIC_BASE_URL);
     assert_eq!(resolved.model, "MiniMax-M2.7");
 }
 

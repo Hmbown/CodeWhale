@@ -7927,9 +7927,17 @@ model = "qwen-2.5-7b"
             .iter()
             .map(|provider| provider.kind())
             .collect();
-        assert_eq!(registry_kinds, ProviderKind::ALL);
+        // Full registry keeps legacy dialect/plan kinds; ALL is the catalog surface.
+        assert_eq!(registry_kinds.len(), 41);
+        assert_eq!(ProviderKind::ALL.len(), 36);
+        for kind in ProviderKind::ALL {
+            assert!(
+                registry_kinds.contains(&kind),
+                "catalog kind {kind:?} must remain in the full registry"
+            );
+        }
 
-        for provider in ProviderKind::ALL {
+        for provider in registry_kinds {
             assert_eq!(provider_env_vars(provider), provider.provider().env_vars());
             // Shared-account families collapse onto one durable slot (see
             // ProviderKind::secret_store_slot); everything else uses its own id.

@@ -189,9 +189,14 @@ pub enum ProviderKind {
 }
 
 impl ProviderKind {
-    pub const ALL: [Self; 41] = [
+    /// Catalog / picker surface: one identity per vendor.
+    ///
+    /// Dual-wire dialect kinds (`*Anthropic`) and Model Studio plan variants
+    /// stay on the enum for serde and `provider_for_kind`, but they are not
+    /// first-class catalog rows. Plan is `mode` / base_url; dialect is
+    /// `wire = openai|anthropic` on the primary provider config.
+    pub const ALL: [Self; 36] = [
         Self::Deepseek,
-        Self::DeepseekAnthropic,
         Self::NvidiaNim,
         Self::Openai,
         Self::Atlascloud,
@@ -217,7 +222,6 @@ impl ProviderKind {
         Self::Zai,
         Self::Stepfun,
         Self::Minimax,
-        Self::MinimaxAnthropic,
         Self::Deepinfra,
         Self::Sakana,
         Self::LongCat,
@@ -227,9 +231,6 @@ impl ProviderKind {
         Self::Xai,
         Self::Telecomjs,
         Self::ModelstudioTokenPlan,
-        Self::ModelstudioTokenPlanAnthropic,
-        Self::ModelstudioCodingPlan,
-        Self::ModelstudioCodingPlanAnthropic,
         Self::Custom,
     ];
 

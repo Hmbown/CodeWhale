@@ -137,6 +137,18 @@ pub struct ProviderConfigToml {
     pub context_window: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// Wire dialect preference for dual-protocol vendors (DeepSeek, MiniMax,
+    /// Model Studio): `openai` (Chat Completions, default) or `anthropic`
+    /// (Messages). Not a separate catalog provider — a power-user toggle.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "api_style",
+        alias = "protocol",
+        alias = "wire_format",
+        alias = "dialect"
+    )]
+    pub wire: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -172,6 +184,7 @@ impl ProviderConfigToml {
             && blank(self.model.as_ref())
             && self.context_window.is_none()
             && blank(self.mode.as_ref())
+            && blank(self.wire.as_ref())
             && blank(self.auth_mode.as_ref())
             && self.insecure_skip_tls_verify.is_none()
             && http_headers_are_effectively_empty(&self.http_headers)
@@ -758,6 +771,7 @@ enum ProviderConfigField {
     Model,
     ContextWindow,
     Mode,
+    Wire,
     AuthMode,
     InsecureSkipTlsVerify,
     HttpHeaders,
@@ -772,6 +786,7 @@ impl ProviderConfigField {
             "model" => Self::Model,
             "context_window" | "context_window_tokens" => Self::ContextWindow,
             "mode" => Self::Mode,
+            "wire" | "api_style" | "protocol" | "wire_format" | "dialect" => Self::Wire,
             "auth_mode" => Self::AuthMode,
             "insecure_skip_tls_verify" => Self::InsecureSkipTlsVerify,
             "http_headers" => Self::HttpHeaders,
@@ -787,6 +802,7 @@ impl ProviderConfigField {
             Self::Model => "model",
             Self::ContextWindow => "context_window",
             Self::Mode => "mode",
+            Self::Wire => "wire",
             Self::AuthMode => "auth_mode",
             Self::InsecureSkipTlsVerify => "insecure_skip_tls_verify",
             Self::HttpHeaders => "http_headers",
@@ -823,7 +839,7 @@ fn is_builtin_provider_config_id(provider_id: &str) -> bool {
 
 /// Field legs a `[providers.<id>]` custom table accepts through
 /// `config set`, including the required `kind` marker.
-const CUSTOM_PROVIDER_FIELD_HINT: &str = "api_key, base_url, model, context_window, mode, auth_mode, \
+const CUSTOM_PROVIDER_FIELD_HINT: &str = "api_key, base_url, model, context_window, mode, wire, auth_mode, \
      insecure_skip_tls_verify, http_headers, path_suffix, kind";
 
 fn provider_config_key(provider: ProviderKind, field: ProviderConfigField) -> String {
@@ -844,6 +860,7 @@ fn get_provider_config_value(
         ProviderConfigField::Model => config.model.clone(),
         ProviderConfigField::ContextWindow => config.context_window.map(|value| value.to_string()),
         ProviderConfigField::Mode => config.mode.clone(),
+        ProviderConfigField::Wire => config.wire.clone(),
         ProviderConfigField::AuthMode => config.auth_mode.clone(),
         ProviderConfigField::InsecureSkipTlsVerify => config
             .insecure_skip_tls_verify
@@ -911,6 +928,9 @@ fn set_provider_config_value(
         ProviderConfigField::Mode => {
             config.providers.for_provider_mut(provider).mode = Some(value.to_string());
         }
+        ProviderConfigField::Wire => {
+            config.providers.for_provider_mut(provider).wire = Some(value.to_string());
+        }
         ProviderConfigField::AuthMode => {
             config.providers.for_provider_mut(provider).auth_mode = Some(value.to_string());
         }
@@ -963,6 +983,9 @@ fn unset_provider_config_value(
         }
         ProviderConfigField::Mode => {
             config.providers.for_provider_mut(provider).mode = None;
+        }
+        ProviderConfigField::Wire => {
+            config.providers.for_provider_mut(provider).wire = None;
         }
         ProviderConfigField::AuthMode => {
             config.providers.for_provider_mut(provider).auth_mode = None;
@@ -2255,6 +2278,7 @@ impl ConfigToml {
             | ProviderConfigField::BaseUrl
             | ProviderConfigField::Model
             | ProviderConfigField::Mode
+            | ProviderConfigField::Wire
             | ProviderConfigField::AuthMode
             | ProviderConfigField::PathSuffix => toml::Value::String(value.to_string()),
             ProviderConfigField::ContextWindow => {
@@ -2724,12 +2748,30 @@ impl ConfigToml {
                 classify_config_api_key_value(value) == ConfigApiKeyValueKind::Literal
             }))
             .or(xiaomi_mimo_env_api_key.as_deref());
+        let provider_wire = provider_cfg.wire.as_deref();
         let base_url = if provider == ProviderKind::XiaomiMimo {
             resolve_xiaomi_mimo_base_url(
                 configured_base_url,
                 explicit_api_key_for_endpoint,
                 xiaomi_mimo_mode.as_deref(),
             )
+        } else if is_modelstudio_family(provider) {
+            resolve_modelstudio_base_url(
+                configured_base_url,
+                provider,
+                provider_cfg.mode.as_deref(),
+                provider_wire,
+            )
+        } else if matches!(
+            provider,
+            ProviderKind::Minimax | ProviderKind::MinimaxAnthropic
+        ) {
+            resolve_minimax_base_url(configured_base_url, provider, provider_wire)
+        } else if matches!(
+            provider,
+            ProviderKind::Deepseek | ProviderKind::DeepseekAnthropic
+        ) {
+            resolve_deepseek_base_url(configured_base_url, provider, provider_wire)
         } else {
             configured_base_url.unwrap_or_else(|| match provider {
                 ProviderKind::Deepseek => DEFAULT_DEEPSEEK_BASE_URL.to_string(),
@@ -2777,17 +2819,11 @@ impl ConfigToml {
                 ProviderKind::Meta => DEFAULT_META_BASE_URL.to_string(),
                 ProviderKind::Xai => DEFAULT_XAI_BASE_URL.to_string(),
                 ProviderKind::Telecomjs => DEFAULT_TELECOMJS_BASE_URL.to_string(),
-                ProviderKind::ModelstudioTokenPlan => {
+                ProviderKind::ModelstudioTokenPlan
+                | ProviderKind::ModelstudioTokenPlanAnthropic
+                | ProviderKind::ModelstudioCodingPlan
+                | ProviderKind::ModelstudioCodingPlanAnthropic => {
                     DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL.to_string()
-                }
-                ProviderKind::ModelstudioTokenPlanAnthropic => {
-                    MODELSTUDIO_TOKEN_PLAN_ANTHROPIC_BASE_URL.to_string()
-                }
-                ProviderKind::ModelstudioCodingPlan => {
-                    DEFAULT_MODELSTUDIO_CODING_PLAN_BASE_URL.to_string()
-                }
-                ProviderKind::ModelstudioCodingPlanAnthropic => {
-                    MODELSTUDIO_CODING_PLAN_ANTHROPIC_BASE_URL.to_string()
                 }
                 // The custom provider has no built-in endpoint; fall back to its
                 // descriptor placeholder so the lookup is total. Real custom
@@ -3786,6 +3822,108 @@ fn moonshot_base_url_uses_kimi_code(base_url: &str) -> bool {
     normalized == DEFAULT_KIMI_CODE_BASE_URL
         || normalized == "https://api.kimi.com/coding"
         || normalized.starts_with("https://api.kimi.com/coding/")
+}
+
+/// Dual-wire vendors: dialect is config (`wire`), not a separate ProviderKind.
+fn wire_prefers_anthropic(kind: ProviderKind, wire: Option<&str>) -> bool {
+    if matches!(
+        kind,
+        ProviderKind::DeepseekAnthropic
+            | ProviderKind::MinimaxAnthropic
+            | ProviderKind::ModelstudioTokenPlanAnthropic
+            | ProviderKind::ModelstudioCodingPlanAnthropic
+    ) {
+        return true;
+    }
+    let Some(raw) = wire.map(str::trim).filter(|value| !value.is_empty()) else {
+        return false;
+    };
+    let normalized = raw.to_ascii_lowercase().replace(['_', ' '], "-");
+    matches!(
+        normalized.as_str(),
+        "anthropic"
+            | "anthropic-messages"
+            | "messages"
+            | "claude"
+            | "anthropic-compatible"
+            | "anthropic-compat"
+    )
+}
+
+fn modelstudio_mode_is_coding_plan(kind: ProviderKind, mode: Option<&str>) -> bool {
+    if matches!(
+        kind,
+        ProviderKind::ModelstudioCodingPlan | ProviderKind::ModelstudioCodingPlanAnthropic
+    ) {
+        return true;
+    }
+    let Some(raw) = mode.map(str::trim).filter(|value| !value.is_empty()) else {
+        return false;
+    };
+    let normalized = raw.to_ascii_lowercase().replace(['_', ' '], "-");
+    matches!(
+        normalized.as_str(),
+        "coding-plan" | "coding" | "codingplan" | "dashscope-coding" | "code"
+    )
+}
+
+fn is_modelstudio_family(kind: ProviderKind) -> bool {
+    matches!(
+        kind,
+        ProviderKind::ModelstudioTokenPlan
+            | ProviderKind::ModelstudioTokenPlanAnthropic
+            | ProviderKind::ModelstudioCodingPlan
+            | ProviderKind::ModelstudioCodingPlanAnthropic
+    )
+}
+
+fn resolve_modelstudio_base_url(
+    configured: Option<String>,
+    kind: ProviderKind,
+    mode: Option<&str>,
+    wire: Option<&str>,
+) -> String {
+    if let Some(url) = configured.filter(|value| !value.trim().is_empty()) {
+        return url;
+    }
+    let coding = modelstudio_mode_is_coding_plan(kind, mode);
+    let anthropic = wire_prefers_anthropic(kind, wire);
+    match (coding, anthropic) {
+        (true, true) => MODELSTUDIO_CODING_PLAN_ANTHROPIC_BASE_URL.to_string(),
+        (true, false) => DEFAULT_MODELSTUDIO_CODING_PLAN_BASE_URL.to_string(),
+        (false, true) => MODELSTUDIO_TOKEN_PLAN_ANTHROPIC_BASE_URL.to_string(),
+        (false, false) => DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL.to_string(),
+    }
+}
+
+fn resolve_minimax_base_url(
+    configured: Option<String>,
+    kind: ProviderKind,
+    wire: Option<&str>,
+) -> String {
+    if let Some(url) = configured.filter(|value| !value.trim().is_empty()) {
+        return url;
+    }
+    if wire_prefers_anthropic(kind, wire) {
+        DEFAULT_MINIMAX_ANTHROPIC_BASE_URL.to_string()
+    } else {
+        DEFAULT_MINIMAX_BASE_URL.to_string()
+    }
+}
+
+fn resolve_deepseek_base_url(
+    configured: Option<String>,
+    kind: ProviderKind,
+    wire: Option<&str>,
+) -> String {
+    if let Some(url) = configured.filter(|value| !value.trim().is_empty()) {
+        return url;
+    }
+    if wire_prefers_anthropic(kind, wire) {
+        DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL.to_string()
+    } else {
+        DEFAULT_DEEPSEEK_BASE_URL.to_string()
+    }
 }
 
 fn xiaomi_mimo_base_url_for_mode(mode: &str) -> Option<&'static str> {

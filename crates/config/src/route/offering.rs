@@ -232,14 +232,18 @@ pub fn bundled_offerings() -> Vec<ProviderModelOffering> {
         })
     }));
 
-    // Alibaba Cloud Model Studio — Token Plan and Coding Plan.
-    // All models below are classified as Text Generation / Reasoning on the
-    // Model Studio catalog; reasoning and tool-call capabilities are marked
-    // Supported conservatively. Image input is per model: the owner's Token
-    // Plan console (verified 2026-08-03) lists Visual Understanding for
-    // qwen3.8-max, qwen3.8-max-preview, qwen3.7-plus, and qwen3.6-flash —
-    // corroborated by upstream Models.dev modalities — while qwen3.7-max,
-    // the DeepSeek rows, and glm-5.2 are text-only on both sources.
+    // Alibaba Cloud Model Studio — one vendor identity in the hand seam
+    // (`modelstudio-token-plan`). Plan (token vs coding) and wire dialect
+    // (OpenAI Chat Completions vs Anthropic Messages) are config (`mode` /
+    // `wire`), not separate ProviderKinds — same product shape as Z.ai /
+    // Xiaomi for plans and a power-user toggle for dialect. Legacy provider
+    // ids still get catalog rows so old configs resolve, but the picker
+    // catalog surface only lists the primary id.
+    //
+    // Limits: owner's Token Plan console + curated models_dev rows
+    // (2026-08-03): qwen3.8-max is ~1M context / 128K output, NOT 128K
+    // total. Empty RouteLimits here used to win identity collisions over
+    // the asset catalog and fall through to the 128K legacy default.
     fn ms_capabilities(model: &str) -> RouteCapabilities {
         let image_input = match model {
             "qwen3.8-max" | "qwen3.8-max-preview" | "qwen3.7-plus" | "qwen3.6-flash" => {
@@ -256,46 +260,44 @@ pub fn bundled_offerings() -> Vec<ProviderModelOffering> {
             ..RouteCapabilities::default()
         }
     }
-    for plan_provider_id in &["modelstudio-token-plan", "modelstudio-coding-plan"] {
-        let plan = ProviderId::from(*plan_provider_id);
-        offerings.extend(
-            MODELSTUDIO_TEXT_MODELS
-                .iter()
-                .enumerate()
-                .map(|(i, model)| ProviderModelOffering {
-                    provider: plan.clone(),
-                    canonical_model: None,
-                    wire_model_id: WireModelId::from(*model),
-                    endpoint_key: "chat".to_string(),
-                    default_for_provider: i == 0,
-                    limits: RouteLimits::default(),
-                    capabilities: ms_capabilities(model),
-                    pricing: PricingSku::UnknownOrStale,
-                }),
-        );
+    fn ms_limits(model: &str) -> RouteLimits {
+        // Context/output from models_dev.bundled.json Model Studio rows and
+        // the owner console (verified 2026-08-03). Keep output separate from
+        // context so a 128K generation ceiling is never mistaken for the
+        // window.
+        let (context_tokens, output_tokens) = match model {
+            "qwen3.8-max" | "qwen3.8-max-preview" => (1_000_000, 131_072),
+            "qwen3.7-plus" | "qwen3.7-max" => (1_000_000, 65_536),
+            "qwen3.6-flash" => (1_000_000, 65_536),
+            "deepseek-v4-pro" | "deepseek-v4-flash-0731" => (1_000_000, 384_000),
+            "glm-5.2" => (1_000_000, 131_072),
+            _ => (1_000_000, 131_072),
+        };
+        RouteLimits {
+            context_tokens: Some(context_tokens),
+            input_tokens: None,
+            output_tokens: Some(output_tokens),
+        }
     }
-    // Anthropic-dialect variants use the messages endpoint key.
-    for plan_provider_id in &[
-        "modelstudio-token-plan-anthropic",
-        "modelstudio-coding-plan-anthropic",
-    ] {
-        let plan = ProviderId::from(*plan_provider_id);
-        offerings.extend(
-            MODELSTUDIO_TEXT_MODELS
-                .iter()
-                .enumerate()
-                .map(|(i, model)| ProviderModelOffering {
-                    provider: plan.clone(),
-                    canonical_model: None,
-                    wire_model_id: WireModelId::from(*model),
-                    endpoint_key: "messages".to_string(),
-                    default_for_provider: i == 0,
-                    limits: RouteLimits::default(),
-                    capabilities: ms_capabilities(model),
-                    pricing: PricingSku::UnknownOrStale,
-                }),
-        );
-    }
+    // Primary vendor id only in the hand seam. Coding-plan / anthropic
+    // dialect endpoint selection is owned by config resolution (mode/wire),
+    // which rewrites base_url + request dialect without inventing kinds.
+    let plan = ProviderId::from("modelstudio-token-plan");
+    offerings.extend(
+        MODELSTUDIO_TEXT_MODELS
+            .iter()
+            .enumerate()
+            .map(|(i, model)| ProviderModelOffering {
+                provider: plan.clone(),
+                canonical_model: None,
+                wire_model_id: WireModelId::from(*model),
+                endpoint_key: "chat".to_string(),
+                default_for_provider: i == 0,
+                limits: ms_limits(model),
+                capabilities: ms_capabilities(model),
+                pricing: PricingSku::UnknownOrStale,
+            }),
+    );
 
     offerings
 }

@@ -241,10 +241,43 @@ impl ApiProvider {
         self.credential_help().credential_url
     }
 
-    /// All providers in stable `ProviderKind::ALL` order.
+    /// All providers including legacy dual-wire / plan-variant kinds.
+    ///
+    /// Prefer [`Self::catalog`] for pickers and other user-facing lists.
     #[must_use]
     pub fn all() -> &'static [Self] {
         &Self::FROM_KIND_LOOKUP
+    }
+
+    /// User-facing catalog surface: one identity per vendor.
+    ///
+    /// Matches `ProviderKind::ALL` — dialect is `providers.<id>.wire`, plan is
+    /// `mode` / base_url (Z.ai / Xiaomi shape), not extra ProviderKinds.
+    #[must_use]
+    pub fn catalog() -> &'static [Self] {
+        static CATALOG: std::sync::OnceLock<Vec<ApiProvider>> = std::sync::OnceLock::new();
+        CATALOG
+            .get_or_init(|| {
+                codewhale_config::ProviderKind::ALL
+                    .iter()
+                    .copied()
+                    .map(Self::from_kind)
+                    .collect()
+            })
+            .as_slice()
+    }
+
+    /// Collapse legacy dialect/plan kinds onto the vendor primary for UI.
+    #[must_use]
+    pub fn catalog_identity(self) -> Self {
+        match self {
+            Self::DeepseekAnthropic => Self::Deepseek,
+            Self::MinimaxAnthropic => Self::Minimax,
+            Self::ModelstudioTokenPlanAnthropic
+            | Self::ModelstudioCodingPlan
+            | Self::ModelstudioCodingPlanAnthropic => Self::ModelstudioTokenPlan,
+            other => other,
+        }
     }
 
     /// `ApiProvider` discriminant → `ProviderKind` lookup.
@@ -2929,6 +2962,19 @@ pub struct ProviderConfig {
     )]
     pub context_window: Option<u32>,
     pub mode: Option<String>,
+    /// Dual-wire dialect toggle: `openai` (default) or `anthropic`.
+    /// Not a separate catalog provider — config only (DeepSeek / MiniMax /
+    /// Model Studio).
+    #[serde(
+        default,
+        alias = "apiStyle",
+        alias = "api_style",
+        alias = "protocol",
+        alias = "wire_format",
+        alias = "wireFormat",
+        alias = "dialect"
+    )]
+    pub wire: Option<String>,
     #[serde(alias = "authMode")]
     pub auth_mode: Option<String>,
     /// Validated basename of the active Codewhale-owned xAI OAuth generation.
@@ -5113,20 +5159,35 @@ impl Config {
         let configured_base_url = provider_base
             .or(root_base)
             .or_else(|| provider_env_base_url_override(provider));
+        let entry = self.provider_config_for(provider);
+        let mode = entry.and_then(|e| e.mode.as_deref());
+        let wire = entry.and_then(|e| e.wire.as_deref());
         let base = if provider == ApiProvider::XiaomiMimo {
-            let config_api_key = self
-                .provider_config_for(provider)
-                .and_then(|entry| entry.api_key.as_deref())
-                .filter(|value| {
-                    classify_config_api_key_value(value) == ConfigApiKeyValueKind::Literal
-                });
-            let mode = self
-                .provider_config_for(provider)
-                .and_then(|entry| entry.mode.as_deref());
+            let config_api_key = entry.and_then(|e| e.api_key.as_deref()).filter(|value| {
+                classify_config_api_key_value(value) == ConfigApiKeyValueKind::Literal
+            });
             let env_api_key =
                 xiaomi_mimo_env_api_key_for_runtime(mode, configured_base_url.as_deref());
             let api_key = config_api_key.or(env_api_key.as_deref());
             resolve_xiaomi_mimo_base_url(configured_base_url, api_key, mode)
+        } else if matches!(
+            provider,
+            ApiProvider::ModelstudioTokenPlan
+                | ApiProvider::ModelstudioTokenPlanAnthropic
+                | ApiProvider::ModelstudioCodingPlan
+                | ApiProvider::ModelstudioCodingPlanAnthropic
+        ) {
+            resolve_modelstudio_base_url_for_tui(configured_base_url, provider, mode, wire)
+        } else if matches!(
+            provider,
+            ApiProvider::Minimax | ApiProvider::MinimaxAnthropic
+        ) {
+            resolve_minimax_base_url_for_tui(configured_base_url, provider, wire)
+        } else if matches!(
+            provider,
+            ApiProvider::Deepseek | ApiProvider::DeepseekAnthropic
+        ) {
+            resolve_deepseek_base_url_for_tui(configured_base_url, provider, wire)
         } else {
             configured_base_url
                 .or_else(|| self.route_owned_generic_env_base_url(provider, identity))
@@ -5178,17 +5239,11 @@ impl Config {
                         ApiProvider::Meta => DEFAULT_META_BASE_URL,
                         ApiProvider::Xai => DEFAULT_XAI_BASE_URL,
                         ApiProvider::Telecomjs => DEFAULT_TELECOMJS_BASE_URL,
-                        ApiProvider::ModelstudioTokenPlan => {
+                        ApiProvider::ModelstudioTokenPlan
+                        | ApiProvider::ModelstudioTokenPlanAnthropic
+                        | ApiProvider::ModelstudioCodingPlan
+                        | ApiProvider::ModelstudioCodingPlanAnthropic => {
                             DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL
-                        }
-                        ApiProvider::ModelstudioTokenPlanAnthropic => {
-                            MODELSTUDIO_TOKEN_PLAN_ANTHROPIC_BASE_URL
-                        }
-                        ApiProvider::ModelstudioCodingPlan => {
-                            DEFAULT_MODELSTUDIO_CODING_PLAN_BASE_URL
-                        }
-                        ApiProvider::ModelstudioCodingPlanAnthropic => {
-                            MODELSTUDIO_CODING_PLAN_ANTHROPIC_BASE_URL
                         }
                         // No built-in endpoint; descriptor placeholder keeps the
                         // fallback total. A real custom route configures
@@ -8106,6 +8161,91 @@ fn xiaomi_mimo_env_api_key_for_runtime(
     xiaomi_mimo_env_var(TOKEN_PLAN_ENV_VARS).or_else(|| xiaomi_mimo_env_var(STANDARD_ENV_VARS))
 }
 
+fn wire_config_prefers_anthropic(wire: Option<&str>) -> bool {
+    let Some(raw) = wire.map(str::trim).filter(|value| !value.is_empty()) else {
+        return false;
+    };
+    let normalized = raw.to_ascii_lowercase().replace(['_', ' '], "-");
+    matches!(
+        normalized.as_str(),
+        "anthropic"
+            | "anthropic-messages"
+            | "messages"
+            | "claude"
+            | "anthropic-compatible"
+            | "anthropic-compat"
+    )
+}
+
+fn modelstudio_mode_is_coding_plan(provider: ApiProvider, mode: Option<&str>) -> bool {
+    if matches!(
+        provider,
+        ApiProvider::ModelstudioCodingPlan | ApiProvider::ModelstudioCodingPlanAnthropic
+    ) {
+        return true;
+    }
+    let Some(raw) = mode.map(str::trim).filter(|value| !value.is_empty()) else {
+        return false;
+    };
+    let normalized = raw.to_ascii_lowercase().replace(['_', ' '], "-");
+    matches!(
+        normalized.as_str(),
+        "coding-plan" | "coding" | "codingplan" | "dashscope-coding" | "code"
+    )
+}
+
+fn resolve_modelstudio_base_url_for_tui(
+    configured: Option<String>,
+    provider: ApiProvider,
+    mode: Option<&str>,
+    wire: Option<&str>,
+) -> String {
+    if let Some(url) = configured.filter(|value| !value.trim().is_empty()) {
+        return url;
+    }
+    let coding = modelstudio_mode_is_coding_plan(provider, mode);
+    let anthropic = matches!(
+        provider,
+        ApiProvider::ModelstudioTokenPlanAnthropic | ApiProvider::ModelstudioCodingPlanAnthropic
+    ) || wire_config_prefers_anthropic(wire);
+    match (coding, anthropic) {
+        (true, true) => MODELSTUDIO_CODING_PLAN_ANTHROPIC_BASE_URL.to_string(),
+        (true, false) => DEFAULT_MODELSTUDIO_CODING_PLAN_BASE_URL.to_string(),
+        (false, true) => MODELSTUDIO_TOKEN_PLAN_ANTHROPIC_BASE_URL.to_string(),
+        (false, false) => DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL.to_string(),
+    }
+}
+
+fn resolve_minimax_base_url_for_tui(
+    configured: Option<String>,
+    provider: ApiProvider,
+    wire: Option<&str>,
+) -> String {
+    if let Some(url) = configured.filter(|value| !value.trim().is_empty()) {
+        return url;
+    }
+    if matches!(provider, ApiProvider::MinimaxAnthropic) || wire_config_prefers_anthropic(wire) {
+        DEFAULT_MINIMAX_ANTHROPIC_BASE_URL.to_string()
+    } else {
+        DEFAULT_MINIMAX_BASE_URL.to_string()
+    }
+}
+
+fn resolve_deepseek_base_url_for_tui(
+    configured: Option<String>,
+    provider: ApiProvider,
+    wire: Option<&str>,
+) -> String {
+    if let Some(url) = configured.filter(|value| !value.trim().is_empty()) {
+        return url;
+    }
+    if matches!(provider, ApiProvider::DeepseekAnthropic) || wire_config_prefers_anthropic(wire) {
+        DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL.to_string()
+    } else {
+        DEFAULT_DEEPSEEK_BASE_URL.to_string()
+    }
+}
+
 fn resolve_xiaomi_mimo_base_url(
     configured: Option<String>,
     api_key: Option<&str>,
@@ -8889,6 +9029,7 @@ fn merge_provider_config(base: ProviderConfig, override_cfg: ProviderConfig) -> 
         model: override_cfg.model.or(base.model),
         context_window: override_cfg.context_window.or(base.context_window),
         mode: override_cfg.mode.or(base.mode),
+        wire: override_cfg.wire.or(base.wire),
         auth_mode: override_cfg.auth_mode.or(base.auth_mode),
         oauth_credential_generation: override_cfg
             .oauth_credential_generation

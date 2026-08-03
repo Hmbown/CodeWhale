@@ -350,6 +350,14 @@ fn known_context_window_for_model(model_lower: &str) -> Option<u32> {
         "minimax/minimax-m3" | "minimax-m3" | "qwen/qwen3.6-flash" | "qwen/qwen3.6-plus" => {
             Some(1_000_000)
         }
+        // Alibaba Cloud Model Studio (Token Plan console + curated catalog,
+        // verified 2026-08-03): ~1M context. Never fall through to the 128K
+        // legacy default — that number is the generation ceiling, not the window.
+        "qwen3.8-max"
+        | "qwen3.8-max-preview"
+        | "qwen3.7-plus"
+        | "qwen3.7-max"
+        | "qwen3.6-flash" => Some(1_000_000),
         "nvidia/nemotron-3-ultra-550b-a55b" | "nvidia/nemotron-3-ultra-550b-a55b:free" => {
             Some(1_000_000)
         }
@@ -425,6 +433,9 @@ pub fn max_output_tokens_for_model(model: &str) -> Option<u32> {
         | "qwen/qwen3.6-flash"
         | "qwen/qwen3.6-max-preview"
         | "qwen/qwen3.6-plus" => Some(65_536),
+        // Model Studio: 128K is the generation ceiling, not the context window.
+        "qwen3.8-max" | "qwen3.8-max-preview" => Some(131_072),
+        "qwen3.7-plus" | "qwen3.7-max" | "qwen3.6-flash" => Some(65_536),
         "z-ai/glm-5.1" | "z-ai/glm-5.2" | "z-ai/glm-5-turbo" | "glm-5.1" | "glm-5.2"
         | "glm-5-turbo" => Some(131_072),
         "xiaomi/mimo-v2.5-pro"
@@ -890,6 +901,16 @@ mod tests {
         assert_eq!(context_window_for_model("muse-spark-1.1"), Some(1_000_000));
         assert_eq!(max_output_tokens_for_model("muse-spark-1.1"), Some(32_000));
         assert!(model_supports_reasoning("muse-spark-1.1"));
+    }
+
+    #[test]
+    fn modelstudio_qwen38_max_is_1m_context_not_128k() {
+        // Owner Token Plan console + curated catalog (2026-08-03). The 128K
+        // figure is max output, not the window — never collapse them.
+        for model in ["qwen3.8-max", "qwen3.8-max-preview"] {
+            assert_eq!(context_window_for_model(model), Some(1_000_000), "{model}");
+            assert_eq!(max_output_tokens_for_model(model), Some(131_072), "{model}");
+        }
     }
 
     #[test]

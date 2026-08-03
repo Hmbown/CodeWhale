@@ -1006,7 +1006,7 @@ impl DeepSeekClient {
         Self::from_parts(
             config.deepseek_base_url(),
             config.default_model(),
-            provider_default_wire_format(api_provider),
+            provider_wire_format_for_config(api_provider, Some(config)),
             config,
         )
     }
@@ -1500,6 +1500,46 @@ fn is_auth_dialect_header(header_name: &HeaderName) -> bool {
 }
 
 fn provider_default_wire_format(api_provider: ApiProvider) -> WireFormat {
+    provider_wire_format_for_config(api_provider, None)
+}
+
+/// Resolve the wire dialect for a dual-protocol vendor.
+///
+/// Power-user toggle: `providers.<id>.wire = "openai" | "anthropic"`.
+/// Legacy dialect kinds (`*Anthropic`) still force Messages. Everyone else
+/// keeps the descriptor's fixed policy (or Chat Completions).
+fn provider_wire_format_for_config(
+    api_provider: ApiProvider,
+    config: Option<&crate::config::Config>,
+) -> WireFormat {
+    let catalog = api_provider.catalog_identity();
+    let wire = config
+        .and_then(|cfg| cfg.provider_config_for(catalog))
+        .and_then(|entry| entry.wire.as_deref());
+    let prefers_anthropic = matches!(
+        api_provider,
+        ApiProvider::DeepseekAnthropic
+            | ApiProvider::MinimaxAnthropic
+            | ApiProvider::ModelstudioTokenPlanAnthropic
+            | ApiProvider::ModelstudioCodingPlanAnthropic
+    ) || wire_config_prefers_anthropic(wire);
+
+    if prefers_anthropic
+        && matches!(
+            catalog,
+            ApiProvider::Deepseek
+                | ApiProvider::Minimax
+                | ApiProvider::ModelstudioTokenPlan
+                | ApiProvider::DeepseekAnthropic
+                | ApiProvider::MinimaxAnthropic
+                | ApiProvider::ModelstudioTokenPlanAnthropic
+                | ApiProvider::ModelstudioCodingPlan
+                | ApiProvider::ModelstudioCodingPlanAnthropic
+        )
+    {
+        return WireFormat::AnthropicMessages;
+    }
+
     api_provider
         .kind()
         .and_then(|kind| {
@@ -1514,6 +1554,22 @@ fn provider_default_wire_format(api_provider: ApiProvider) -> WireFormat {
                 WireFormat::ChatCompletions
             }
         })
+}
+
+fn wire_config_prefers_anthropic(wire: Option<&str>) -> bool {
+    let Some(raw) = wire.map(str::trim).filter(|value| !value.is_empty()) else {
+        return false;
+    };
+    let normalized = raw.to_ascii_lowercase().replace(['_', ' '], "-");
+    matches!(
+        normalized.as_str(),
+        "anthropic"
+            | "anthropic-messages"
+            | "messages"
+            | "claude"
+            | "anthropic-compatible"
+            | "anthropic-compat"
+    )
 }
 
 fn api_provider_skips_models_probe(api_provider: ApiProvider) -> bool {

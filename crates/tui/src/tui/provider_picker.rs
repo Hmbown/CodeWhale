@@ -1430,14 +1430,18 @@ impl ProviderPickerView {
         // lost in the list.
         let runtime_status = runtime_status.as_ref();
         let custom_rows = custom_provider_dashboard_rows(active, config, runtime_status);
-        let mut rows: Vec<ProviderDashboardRow> = ApiProvider::all()
+        // Catalog surface = ProviderKind::ALL (one identity per vendor). Dual
+        // dialect / plan-variant kinds stay resolvable but are not separate
+        // rows; plan is mode/base_url and dialect is providers.<id>.wire.
+        let catalog_active = active.catalog_identity();
+        let mut rows: Vec<ProviderDashboardRow> = ApiProvider::catalog()
             .iter()
             .copied()
             .filter(|provider| *provider != ApiProvider::Custom || custom_rows.is_empty())
             .map(|p| {
                 ProviderDashboardRow::from_config_with_runtime_status(
                     p,
-                    active,
+                    catalog_active,
                     config,
                     runtime_status,
                 )
@@ -3869,10 +3873,20 @@ mod tests {
             .map(|row| row.display_name.as_str())
             .collect();
 
-        // Every built-in provider is present, none dropped (#3076 reorders, it
-        // does not filter).
-        assert_eq!(names.len(), ApiProvider::all().len());
+        // Catalog surface: one identity per vendor (not dual-wire / plan kinds).
+        assert_eq!(names.len(), ApiProvider::catalog().len());
         assert!(names.contains(&"DeepSeek"));
+        assert!(names.contains(&"Alibaba Cloud Model Studio"));
+        // Dialect is wire config — no second MiniMax / Model Studio rows.
+        assert_eq!(
+            names
+                .iter()
+                .filter(|name| name.contains("Alibaba Cloud Model Studio"))
+                .count(),
+            1
+        );
+        assert_eq!(names.iter().filter(|name| **name == "MiniMax").count(), 1);
+        assert_eq!(names.iter().filter(|name| **name == "DeepSeek").count(), 1);
 
         // Providers are presented in neutral case-insensitive alphabetical
         // order by display name (#3076), not `ApiProvider::all()` order.
