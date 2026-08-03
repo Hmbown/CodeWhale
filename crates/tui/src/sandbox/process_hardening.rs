@@ -3,8 +3,8 @@
 //! This module applies kernel-level restrictions to the codewhale-tui process
 //! itself. These hardening measures protect the *parent* TUI process and its
 //! descendants from information leaks and privilege-escalation vectors; they
-//! are not a filesystem or network sandbox for child commands. The Landlock
-//! and seccomp source modules are not wired into child execution yet.
+//! are not a filesystem or network sandbox for child commands. The seccomp
+//! source module is not wired into child execution yet.
 //!
 //! # Ordering constraints
 //!

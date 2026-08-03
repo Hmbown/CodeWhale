@@ -19,10 +19,10 @@ run before execution reaches this boundary.
 | No OS wrapper | Windows | Current implementation | `none` |
 | OpenSandbox-compatible service | Any supported host | `sandbox_backend = "opensandbox"` | External execution path |
 
-The repository contains Landlock and seccomp implementation modules, plus a
-future Windows helper contract. They are not wired into child-command launch
-in v0.9.1, so Codewhale does not advertise them as active sandboxes. Detecting
-a Landlock-capable kernel is not enough to claim that a command was restricted.
+The repository contains a seccomp implementation module plus a future Windows
+helper contract. They are not wired into child-command launch, so Codewhale
+does not advertise them as active sandboxes. Source-only sandbox code is not
+evidence that a command was restricted.
 
 ## macOS: Seatbelt
 
@@ -79,7 +79,7 @@ local wrapper entirely.
 
 If the user does not opt in, or `/usr/bin/bwrap` is missing or non-executable,
 Codewhale reports `none` and launches the command without a Linux OS wrapper.
-There is no marker-only Landlock fallback.
+There is no marker-only fallback to a different Linux sandbox.
 
 Install bubblewrap separately when this opt-in fits the workflow:
 
@@ -160,8 +160,8 @@ There is no `CODEWHALE_PREFER_BWRAP` environment override; use the top-level
 the `diagnostics` tool report the locally available wrapper after applying the
 resolved bubblewrap preference. An individual command can still bypass that
 wrapper when its policy does not request sandboxing. On Linux, merely finding
-a Landlock syscall or a bwrap source module does not make
-`sandbox_available` true.
+a sandbox-related syscall or source module does not make `sandbox_available`
+true.
 
 Denial attribution is intentionally conservative:
 

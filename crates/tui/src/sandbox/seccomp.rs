@@ -5,10 +5,9 @@
 //!
 //! Seccomp BPF (Berkeley Packet Filter) is a kernel facility that allows a
 //! process to restrict the system calls it (and its descendants) can make.
-//! The implementation here is intended to apply a seccomp filter on top of
-//! Landlock as a second layer of defense. Once it is wired, the filter can
-//! block entire *classes* of dangerous syscalls like `ptrace`, `mount`, and
-//! `kexec_load`.
+//! Once wired, the implementation can complement a filesystem sandbox by
+//! blocking entire *classes* of dangerous syscalls like `ptrace`, `mount`,
+//! and `kexec_load`.
 //!
 //! # Architecture
 //!

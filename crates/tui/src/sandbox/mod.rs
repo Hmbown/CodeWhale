@@ -10,11 +10,11 @@
 //!
 //! - **macOS**: Uses Seatbelt (`sandbox-exec`) when the runtime probe succeeds
 //! - **Linux**: Uses bubblewrap only when the user opts in and `/usr/bin/bwrap`
-//!   is executable. Landlock and seccomp helpers are not wired into child
-//!   execution yet and therefore are not advertised.
+//!   is executable. The seccomp helper is not wired into child execution and
+//!   therefore is not advertised.
 //! - **OpenHarmony**: No local Linux sandbox is advertised. Bubblewrap,
-//!   Landlock, seccomp, and Linux `prctl` hardening are gated out under
-//!   `target_env = "ohos"`.
+//!   seccomp, and Linux `prctl` hardening are gated out under `target_env =
+//!   "ohos"`.
 //! - **Windows**: No OS sandbox is advertised yet. The planned first helper
 //!   contract is process-tree containment only via a Windows Job Object; it
 //!   must not claim filesystem, network, registry, or AppContainer isolation.
@@ -39,9 +39,6 @@ pub mod process_hardening;
 
 #[cfg(target_os = "macos")]
 pub mod seatbelt;
-
-#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
-pub mod landlock;
 
 #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
 pub mod seccomp;
@@ -343,9 +340,8 @@ pub fn get_platform_sandbox() -> Option<SandboxType> {
 
 /// Detect the sandbox wrapper the configured command path can actually use.
 ///
-/// Linux bubblewrap is deliberately opt-in. A Landlock ABI probe alone does
-/// not make commands sandboxed because Codewhale does not yet launch them
-/// through a Landlock helper.
+/// Linux bubblewrap is deliberately opt-in. Source-only sandbox prototypes do
+/// not make commands sandboxed unless the child launch path applies them.
 pub fn get_platform_sandbox_with_bwrap_preference(prefer_bwrap: bool) -> Option<SandboxType> {
     #[cfg(target_os = "macos")]
     {
@@ -864,7 +860,7 @@ mod tests {
 
     #[test]
     #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
-    fn linux_default_never_claims_marker_only_landlock() {
+    fn linux_default_never_claims_an_unwired_sandbox() {
         assert_eq!(get_platform_sandbox(), None);
         assert_eq!(get_platform_sandbox_with_bwrap_preference(false), None);
     }

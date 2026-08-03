@@ -122,8 +122,8 @@ persistent `terminal/*` PTY tools are not registered on that target. The
 ordinary `exec_shell` tools remain available through their non-PTY process
 implementation.
 
-Linux-only sandbox implementations (bubblewrap, Landlock, seccomp, and `prctl`
-process hardening) are compiled only for
+Linux-only sandbox implementations (bubblewrap, seccomp, and `prctl` process
+hardening) are compiled only for
 `all(target_os = "linux", not(target_env = "ohos"))`. OpenHarmony therefore
 reports no local OS sandbox instead of probing Linux kernel paths or syscalls it
 does not support. External OpenSandbox execution remains separately available

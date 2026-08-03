@@ -173,7 +173,6 @@ drives turns through Chat Completions.
   - `policy.rs` - Sandbox policy configuration
   - `seatbelt.rs` - macOS Seatbelt profile generation
   - `bwrap.rs` - opt-in Linux bubblewrap command wrapper
-  - `landlock.rs` - Linux Landlock detection and future helper contract
   - `seccomp.rs` - dormant Linux seccomp implementation; not wired into commands
   - `windows.rs` - Windows helper contract; not advertised until a Job
     Object process-containment helper exists
@@ -305,8 +304,8 @@ command = "echo 'Running tool: $TOOL_NAME'"
 4. **Cross-platform**: Core works on Linux/macOS/Windows. Sandbox guarantees
    are platform-specific: macOS uses Seatbelt when available; Linux uses an
    installed bubblewrap executable only when explicitly enabled; Windows has
-   no advertised OS command sandbox. Landlock, seccomp, and the Windows helper
-   contract are not wired into command execution.
+   no advertised OS command sandbox. Seccomp and the Windows helper contract
+   are not wired into command execution.
 5. **Minimal dependencies**: Careful dependency selection for build speed
 6. **Local-first runtime API**: HTTP/SSE endpoints are intended for trusted localhost access and are served by the `crates/tui` runtime today
 
