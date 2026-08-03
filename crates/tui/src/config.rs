@@ -9365,7 +9365,7 @@ fn save_root_api_key_for_secret_slot(
 
     let path = credential_config_path().context("Failed to resolve config path for API key.")?;
 
-    if let Some(secrets) = credential_secret_store_for_save() {
+    if let Some(secrets) = credential_secret_store() {
         let prior_secret = secrets.get(secret_slot);
         match prior_secret.as_ref() {
             Ok(prior) => match secrets.set(secret_slot, trimmed) {
@@ -9432,13 +9432,18 @@ fn plaintext_credential_fallback_refused(
     )
 }
 
+/// The durable secret store for credential saves and logout-time deletes.
+///
+/// Under `cfg(test)` the store is only exposed when the test set both an
+/// isolated `CODEWHALE_HOME` and an explicit backend, so unit tests can never
+/// touch the developer's real credential store.
 #[cfg(not(test))]
-fn credential_secret_store_for_save() -> Option<codewhale_secrets::Secrets> {
+fn credential_secret_store() -> Option<codewhale_secrets::Secrets> {
     Some(codewhale_secrets::Secrets::auto_detect())
 }
 
 #[cfg(test)]
-fn credential_secret_store_for_save() -> Option<codewhale_secrets::Secrets> {
+fn credential_secret_store() -> Option<codewhale_secrets::Secrets> {
     let isolated_home = codewhale_paths::codewhale_home_is_explicit();
     let explicit_backend = std::env::var_os("CODEWHALE_SECRET_BACKEND")
         .or_else(|| std::env::var_os("DEEPSEEK_SECRET_BACKEND"))
@@ -9984,7 +9989,7 @@ fn save_api_key_for_identity_unlocked(
             });
 
     if !route_config.should_skip_secret_store_for_provider(provider)
-        && let Some(secrets) = credential_secret_store_for_save()
+        && let Some(secrets) = credential_secret_store()
     {
         let secret_slot = provider_secret_store_slot(provider);
         let prior_secret = secrets.get(secret_slot);
@@ -10488,13 +10493,19 @@ fn missing_provider_api_key_message(provider: ApiProvider) -> Result<String> {
     ))
 }
 
-/// Clear the API key from config-file storage.
+/// Clear every saved API key from config-file storage AND the durable
+/// secret store.
 ///
-/// `/logout` calls this to wipe credentials so the next request can't
+/// The full-wipe logout path (`codewhale-tui --logout`, `auth logout`)
+/// calls this to remove credentials so the next request can't
 /// silently use a stale config key (#343). The function removes the legacy
 /// root `api_key` entry *and* every `api_key` entry nested in a
 /// `[providers.<name>]` table, leaving keys like `api_key_env`, comments,
-/// and formatting untouched.
+/// and formatting untouched, then deletes every provider's secret-store
+/// slot — symmetric with CLI logout (#5159) — so a stored credential cannot
+/// survive logout and reappear through the read chain (#5196). The TUI
+/// `/logout` command stays single-provider and goes through
+/// [`clear_active_provider_api_key`] instead.
 ///
 /// Environment variables (`DEEPSEEK_API_KEY`, etc.) are intentionally
 /// **not** unset — they are managed by the user's shell and outside the
@@ -10513,37 +10524,88 @@ fn clear_api_key_unlocked() -> Result<()> {
     let config_path = credential_config_path()
         .context("Failed to resolve config path while clearing API keys.")?;
 
-    if !config_path.exists() {
-        return Ok(());
+    if config_path.exists() {
+        crate::config_persistence::mutate_config_document(&config_path, |doc| {
+            crate::config_persistence::remove_document_key_recursive(doc.as_table_mut(), "api_key");
+            crate::config_persistence::unset_document_value(
+                doc,
+                &["providers", "xai", "oauth_credential_generation"],
+            )?;
+            crate::config_persistence::unset_document_value(
+                doc,
+                &["providers", "xai", "auth_mode"],
+            )?;
+            crate::config_persistence::unset_document_value(
+                doc,
+                &["providers", "xai", "external_credentials"],
+            )?;
+            Ok(())
+        })
+        .with_context(|| format!("Failed to write config to {}", config_path.display()))?;
+        log_sensitive_event(
+            "credential.clear",
+            json!({
+                "backend": "config_file",
+                "config_path": config_path.display().to_string(),
+                "scope": "root_and_provider_keys",
+            }),
+        );
     }
 
-    crate::config_persistence::mutate_config_document(&config_path, |doc| {
-        crate::config_persistence::remove_document_key_recursive(doc.as_table_mut(), "api_key");
-        crate::config_persistence::unset_document_value(
-            doc,
-            &["providers", "xai", "oauth_credential_generation"],
-        )?;
-        crate::config_persistence::unset_document_value(doc, &["providers", "xai", "auth_mode"])?;
-        crate::config_persistence::unset_document_value(
-            doc,
-            &["providers", "xai", "external_credentials"],
-        )?;
-        Ok(())
-    })
-    .with_context(|| format!("Failed to write config to {}", config_path.display()))?;
-    log_sensitive_event(
-        "credential.clear",
-        json!({
-            "backend": "config_file",
-            "config_path": config_path.display().to_string(),
-            "scope": "root_and_provider_keys",
-        }),
-    );
+    // The config scrub alone leaves the durable secret-store credential
+    // alive, and the read chain prefers the secret store over the file, so a
+    // "cleared" key silently came back on the next launch (#5196). Delete
+    // every provider slot too, symmetric with CLI logout (#5159). This runs
+    // even when the config file is absent: the slot survives independently
+    // of the file.
+    if let Some(secrets) = credential_secret_store() {
+        let failures = clear_all_provider_api_keys_from_secret_store(&secrets);
+        if !failures.is_empty() {
+            anyhow::bail!(
+                "failed to delete stored credentials for: {}",
+                failures.join(", ")
+            );
+        }
+    }
 
     Ok(())
 }
 
-/// Clear only the active provider's API key from the config file.
+/// Delete the credential slot of every provider that has one stored.
+///
+/// Mirrors the CLI logout helper (#5159): each slot is probed first so
+/// backends that error on deleting a missing item stay quiet, slots shared
+/// by several providers (e.g. the historical `siliconflow` slot) are deleted
+/// once, and every deletion failure is returned as a human-readable entry so
+/// the caller can fail loudly instead of claiming a clean logout while
+/// credentials linger in the store (#5196).
+fn clear_all_provider_api_keys_from_secret_store(
+    secrets: &codewhale_secrets::Secrets,
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    let mut cleared_slots = std::collections::HashSet::new();
+    for provider in ApiProvider::all() {
+        let slot = provider_secret_store_slot(*provider);
+        if !cleared_slots.insert(slot) {
+            continue;
+        }
+        let has_value = secrets
+            .get(slot)
+            .ok()
+            .flatten()
+            .is_some_and(|value| !value.trim().is_empty());
+        if !has_value {
+            continue;
+        }
+        if let Err(error) = secrets.delete(slot) {
+            failures.push(format!("{slot}: {error}"));
+        }
+    }
+    failures
+}
+
+/// Clear only the active provider's API key from the config file and delete
+/// that provider's durable secret-store slot (#5196).
 /// Unlike `clear_api_key()` which strips ALL api_key entries, this
 /// removes only the key for the specified provider section (plus the
 /// legacy root `api_key` when the provider is DeepSeek).
@@ -10560,71 +10622,92 @@ fn clear_active_provider_api_key_unlocked(provider: &str) -> Result<()> {
     let config_path = credential_config_path()
         .context("Failed to resolve config path while clearing API keys.")?;
 
-    if !config_path.exists() {
-        return Ok(());
+    if config_path.exists() {
+        // `custom` is both the legacy root-shaped route id and a valid exact
+        // `[providers.custom]` table key. Inspect the persisted shape before the
+        // mutation so logout clears exactly one credential scope.
+        let persisted = fs::read_to_string(&config_path)
+            .with_context(|| format!("Failed to read config from {}", config_path.display()))?;
+        let persisted_config: Config = toml::from_str(&persisted).map_err(|_| {
+            anyhow::anyhow!(
+                "Failed to parse config from {}; file contents were omitted",
+                codewhale_config::quote_os_path(&config_path)
+            )
+        })?;
+        let exact_literal_custom_table = provider == ApiProvider::Custom.as_str()
+            && persisted_config
+                .providers
+                .as_ref()
+                .and_then(|providers| providers.custom_provider_config(provider))
+                .is_some();
+
+        crate::config_persistence::mutate_config_document(&config_path, |doc| {
+            // The root-level api_key is shared by the legacy DeepSeek and released
+            // literal-custom config shapes. Exact named custom ids remain scoped
+            // to their own table.
+            if matches!(
+                provider,
+                value if value == ApiProvider::Deepseek.as_str()
+                    || value == ApiProvider::DeepseekCN.as_str()
+            ) || (provider == ApiProvider::Custom.as_str() && !exact_literal_custom_table)
+            {
+                crate::config_persistence::unset_document_value(doc, &["api_key"])?;
+            }
+            if provider != ApiProvider::Custom.as_str() || exact_literal_custom_table {
+                crate::config_persistence::unset_document_value(
+                    doc,
+                    &["providers", provider, "api_key"],
+                )?;
+            }
+            if provider == ApiProvider::Xai.as_str() {
+                crate::config_persistence::unset_document_value(
+                    doc,
+                    &["providers", "xai", "oauth_credential_generation"],
+                )?;
+                crate::config_persistence::unset_document_value(
+                    doc,
+                    &["providers", "xai", "auth_mode"],
+                )?;
+                crate::config_persistence::unset_document_value(
+                    doc,
+                    &["providers", "xai", "external_credentials"],
+                )?;
+            }
+            Ok(())
+        })
+        .with_context(|| format!("Failed to write config to {}", config_path.display()))?;
+        log_sensitive_event(
+            "credential.clear",
+            json!({
+                "backend": "config_file",
+                "config_path": config_path.display().to_string(),
+                "scope": provider,
+            }),
+        );
     }
 
-    // `custom` is both the legacy root-shaped route id and a valid exact
-    // `[providers.custom]` table key. Inspect the persisted shape before the
-    // mutation so logout clears exactly one credential scope.
-    let persisted = fs::read_to_string(&config_path)
-        .with_context(|| format!("Failed to read config from {}", config_path.display()))?;
-    let persisted_config: Config = toml::from_str(&persisted).map_err(|_| {
-        anyhow::anyhow!(
-            "Failed to parse config from {}; file contents were omitted",
-            codewhale_config::quote_os_path(&config_path)
-        )
-    })?;
-    let exact_literal_custom_table = provider == ApiProvider::Custom.as_str()
-        && persisted_config
-            .providers
-            .as_ref()
-            .and_then(|providers| providers.custom_provider_config(provider))
-            .is_some();
-
-    crate::config_persistence::mutate_config_document(&config_path, |doc| {
-        // The root-level api_key is shared by the legacy DeepSeek and released
-        // literal-custom config shapes. Exact named custom ids remain scoped
-        // to their own table.
-        if matches!(
-            provider,
-            value if value == ApiProvider::Deepseek.as_str()
-                || value == ApiProvider::DeepseekCN.as_str()
-        ) || (provider == ApiProvider::Custom.as_str() && !exact_literal_custom_table)
-        {
-            crate::config_persistence::unset_document_value(doc, &["api_key"])?;
+    // The durable secret-store slot survives a config-file scrub and the
+    // read chain prefers it, so the cleared key would silently come back
+    // (#5196). Delete the provider's slot too — even when the config file
+    // itself is absent. Exact named custom providers have no secret-store
+    // slot, so an unmatched provider string skips this step.
+    if let Some(secrets) = credential_secret_store()
+        && let Some(slot) = ApiProvider::all()
+            .iter()
+            .find(|candidate| candidate.as_str() == provider)
+            .map(|candidate| provider_secret_store_slot(*candidate))
+    {
+        let has_value = secrets
+            .get(slot)
+            .ok()
+            .flatten()
+            .is_some_and(|value| !value.trim().is_empty());
+        if has_value {
+            secrets
+                .delete(slot)
+                .with_context(|| format!("failed to delete stored credential for {slot}"))?;
         }
-        if provider != ApiProvider::Custom.as_str() || exact_literal_custom_table {
-            crate::config_persistence::unset_document_value(
-                doc,
-                &["providers", provider, "api_key"],
-            )?;
-        }
-        if provider == ApiProvider::Xai.as_str() {
-            crate::config_persistence::unset_document_value(
-                doc,
-                &["providers", "xai", "oauth_credential_generation"],
-            )?;
-            crate::config_persistence::unset_document_value(
-                doc,
-                &["providers", "xai", "auth_mode"],
-            )?;
-            crate::config_persistence::unset_document_value(
-                doc,
-                &["providers", "xai", "external_credentials"],
-            )?;
-        }
-        Ok(())
-    })
-    .with_context(|| format!("Failed to write config to {}", config_path.display()))?;
-    log_sensitive_event(
-        "credential.clear",
-        json!({
-            "backend": "config_file",
-            "config_path": config_path.display().to_string(),
-            "scope": provider,
-        }),
-    );
+    }
 
     Ok(())
 }
