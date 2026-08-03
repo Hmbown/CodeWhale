@@ -546,16 +546,17 @@ pub fn sidebar(app: &mut App, arg: Option<&str>) -> CommandResult {
             // Panel label is Activity; "tasks" remains the config/compat key (#4147/#4135).
             "tasks" | "activity" | "live" | "running" => SidebarFocus::Tasks,
             "agents" | "subagents" | "sub-agents" => SidebarFocus::Agents,
-            "context" | "session" => SidebarFocus::Context,
+            "context" => SidebarFocus::Context,
+            "sessions" | "session_history" | "sessions_rail" => SidebarFocus::Sessions,
             _ => {
                 return CommandResult::error(
-                    "Usage: /sidebar [on|off|pinned|auto|activity|tasks|agents|context] [--save]",
+                    "Usage: /sidebar [on|off|pinned|auto|activity|tasks|agents|context|sessions] [--save]",
                 );
             }
         },
         _ => {
             return CommandResult::error(
-                "Usage: /sidebar [on|off|pinned|auto|activity|tasks|agents|context] [--save]",
+                "Usage: /sidebar [on|off|pinned|auto|activity|tasks|agents|context|sessions] [--save]",
             );
         }
     };
