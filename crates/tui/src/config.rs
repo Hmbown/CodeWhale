@@ -5561,6 +5561,30 @@ impl Config {
         // `[providers.<name>] api_key_env = "..."`. This remains safe for a
         // custom endpoint because the binding belongs to that route; ambient
         // provider variables below do not.
+        //
+        // For a custom provider, a binding that names an unset (or empty)
+        // variable is a broken credential contract, not a keyless route: fail
+        // loudly with the route-scoped fix instead of silently degrading to
+        // the self-hosted loopback keyless fallback below (#5104). Without
+        // this, an `api_key_env` route on a loopback host dispatched
+        // unauthenticated while the operator believed credentials were wired,
+        // and the composer-side preflight recovery never saw an error.
+        if provider == ApiProvider::Custom
+            && let Some(env_name) = bound_provider_api_key_env_name(self, provider)
+        {
+            return match std::env::var(&env_name) {
+                Ok(value) if !value.trim().is_empty() => Ok(value),
+                _ => {
+                    let route_name = self.provider.as_deref().unwrap_or("<name>");
+                    Err(anyhow::anyhow!(
+                        "Custom provider '{route_name}' API key not found: the route binds \
+                         api_key_env = \"{env_name}\" but that environment variable is not set. \
+                         Set {env_name} to your key, or remove api_key_env from \
+                         [providers.{route_name}] to run the endpoint without credentials."
+                    ))
+                }
+            };
+        }
         if let Some(value) = provider_config_env_api_key(self, provider) {
             return Ok(value);
         }
@@ -9280,15 +9304,23 @@ fn provider_uses_oauth_credentials(config: &Config, provider: ApiProvider) -> bo
                     .is_some_and(provider_config_uses_xai_oauth)))
 }
 
-fn provider_config_env_api_key(config: &Config, provider: ApiProvider) -> Option<String> {
+/// The environment variable name a provider route explicitly binds via
+/// `[providers.<name>] api_key_env`, when credentials are bound to the active
+/// endpoint. `None` when the route declares no binding.
+fn bound_provider_api_key_env_name(config: &Config, provider: ApiProvider) -> Option<String> {
     if !config.config_credentials_are_bound_to_provider_endpoint(provider) {
         return None;
     }
-    let env_name = config
+    config
         .provider_config_for(provider)
         .and_then(|entry| entry.api_key_env.as_deref())
         .map(str::trim)
-        .filter(|name| !name.is_empty())?;
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+}
+
+fn provider_config_env_api_key(config: &Config, provider: ApiProvider) -> Option<String> {
+    let env_name = bound_provider_api_key_env_name(config, provider)?;
     std::env::var(env_name)
         .ok()
         .filter(|value| !value.trim().is_empty())
