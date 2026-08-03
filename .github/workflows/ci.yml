@@ -104,15 +104,15 @@ jobs:
             # heavy-gated job exercises can never be misclassified as light.
             # Anything unrecognized falls through to the default-heavy `*)`
             # arm (fail-safe default-heavy). Light-classified scripts below
-            # are either never run by CI (v0867-setup-qa.sh) or exercised by
-            # ALWAYS-on jobs/steps that run regardless of `heavy`
-            # (check-versions.sh / check-ohos-deps.sh via Version drift,
-            # check-coauthor-trailers.py via Lint), so no coverage is lost.
+            # are exercised by ALWAYS-on jobs/steps that run regardless of
+            # `heavy` (check-versions.sh / check-ohos-deps.sh via Version
+            # drift, check-coauthor-trailers.py via Lint), so no coverage is
+            # lost.
             case "${path}" in
               scripts/release/npm-wrapper-smoke.js|scripts/mobile-smoke.sh|scripts/check-provider-registry.py)
                 heavy=true
                 ;;
-              docs/*|*.md|.github/PULL_REQUEST_TEMPLATE.md|.github/ISSUE_TEMPLATE/*|.github/scripts/agent-task-metadata.test.sh|.github/workflows/agent-task-labels.yml|.github/workflows/auto-tag.yml|.github/workflows/stale.yml|.github/workflows/triage.yml|scripts/v0867-setup-qa.sh|scripts/release/check-versions.sh|scripts/release/check-ohos-deps.sh|scripts/release/install-dogfood.sh|scripts/release/install-dogfood.test.sh|scripts/release/prepare-release.sh|scripts/release/prepare-release.test.sh|scripts/check-coauthor-trailers.py)
+              docs/*|*.md|.github/PULL_REQUEST_TEMPLATE.md|.github/ISSUE_TEMPLATE/*|.github/scripts/agent-task-metadata.test.sh|.github/workflows/agent-task-labels.yml|.github/workflows/auto-tag.yml|.github/workflows/stale.yml|.github/workflows/triage.yml|scripts/release/check-versions.sh|scripts/release/check-ohos-deps.sh|scripts/release/install-dogfood.sh|scripts/release/install-dogfood.test.sh|scripts/release/prepare-release.sh|scripts/release/prepare-release.test.sh|scripts/check-coauthor-trailers.py)
                 ;;
               *)
                 heavy=true
