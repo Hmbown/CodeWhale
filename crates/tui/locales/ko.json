@@ -1286,6 +1286,7 @@
   "AutomationTrustModeLabel": "신뢰 모드",
   "AutomationAutoApproveLabel": "자동 승인",
   "AutomationRruleLabel": "반복 규칙",
+  "AutomationDeliveryLabel": "전달",
   "AutomationLastLabel": "최근",
   "AutomationRecentRunsLabel": "최근 실행",
   "AutomationNoRuns": "기록된 실행 없음",

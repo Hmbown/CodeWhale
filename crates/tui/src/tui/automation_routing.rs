@@ -190,10 +190,11 @@ fn format_list(locale: Locale, records: &[AutomationRecord]) -> String {
         .iter()
         .map(|record| {
             format!(
-                "{}  [{}]  {}  ({}: {})",
+                "{}  [{}]  {}  ({}; {}: {})",
                 record.id,
                 status_label(locale, record.status),
                 display_text(&record.name),
+                delivery_mode_label(record),
                 tr(locale, MessageId::AutomationNextLabel),
                 timestamp(record.next_run_at)
             )
@@ -283,6 +284,11 @@ fn format_detail(
         field(locale, MessageId::AutomationRruleLabel, &record.rrule),
         field(
             locale,
+            MessageId::AutomationDeliveryLabel,
+            &delivery_mode_label(record),
+        ),
+        field(
+            locale,
             MessageId::AutomationNextLabel,
             &timestamp(record.next_run_at),
         ),
@@ -341,6 +347,12 @@ fn timestamp(value: Option<chrono::DateTime<chrono::Utc>>) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
+/// Delivery mode is a stored enum value, not prose — render it raw like
+/// `mode`/`rrule` rather than translating it. Unset means the default `task`.
+fn delivery_mode_label(record: &AutomationRecord) -> String {
+    format!("{:?}", record.delivery_mode.unwrap_or_default()).to_ascii_lowercase()
+}
+
 fn add_message(app: &mut App, content: String) {
     app.add_message(HistoryCell::System { content });
 }
@@ -351,7 +363,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::automation_manager::{AutomationManager, CreateAutomationRequest};
+    use crate::automation_manager::{
+        AutomationDeliveryMode, AutomationManager, CreateAutomationRequest,
+    };
     use chrono::Utc;
     use tempfile::TempDir;
     use tokio::sync::Mutex;
@@ -369,6 +383,7 @@ mod tests {
             allow_shell: None,
             trust_mode: None,
             auto_approve: None,
+            delivery_mode: None,
             status,
             created_at: now,
             updated_at: now,
@@ -391,6 +406,22 @@ mod tests {
         assert!(text.contains("Automation auto_1 [active]"));
         assert!(text.contains("rrule: FREQ=DAILY"));
         assert!(text.contains("recent runs:"));
+    }
+
+    #[test]
+    fn list_and_detail_surface_delivery_mode() {
+        let mut automation = record(AutomationStatus::Active);
+        automation.delivery_mode = Some(AutomationDeliveryMode::Watcher);
+
+        let list = format_list(Locale::En, std::slice::from_ref(&automation));
+        assert!(list.contains("(watcher; next:"));
+
+        let detail = format_detail(Locale::En, &automation, Some(&[]));
+        assert!(detail.contains("  delivery: watcher"));
+
+        let default_detail =
+            format_detail(Locale::En, &record(AutomationStatus::Active), Some(&[]));
+        assert!(default_detail.contains("  delivery: task"));
     }
 
     #[test]
@@ -469,6 +500,7 @@ mod tests {
                 allow_shell: None,
                 trust_mode: None,
                 auto_approve: None,
+                delivery_mode: None,
                 status: Some(AutomationStatus::Paused),
             })
             .expect("automation");

@@ -1286,6 +1286,7 @@
   "AutomationTrustModeLabel": "trust_mode",
   "AutomationAutoApproveLabel": "auto_approve",
   "AutomationRruleLabel": "rrule",
+  "AutomationDeliveryLabel": "delivery",
   "AutomationLastLabel": "last",
   "AutomationRecentRunsLabel": "recent runs",
   "AutomationNoRuns": "no recorded runs",

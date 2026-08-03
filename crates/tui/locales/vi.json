@@ -1286,6 +1286,7 @@
   "AutomationTrustModeLabel": "chế độ tin cậy",
   "AutomationAutoApproveLabel": "tự động phê duyệt",
   "AutomationRruleLabel": "quy tắc lặp",
+  "AutomationDeliveryLabel": "phân phối",
   "AutomationLastLabel": "lần trước",
   "AutomationRecentRunsLabel": "lần chạy gần đây",
   "AutomationNoRuns": "không có lần chạy nào được ghi lại",

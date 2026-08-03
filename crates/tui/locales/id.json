@@ -1286,6 +1286,7 @@
   "AutomationTrustModeLabel": "mode kepercayaan",
   "AutomationAutoApproveLabel": "persetujuan otomatis",
   "AutomationRruleLabel": "aturan pengulangan",
+  "AutomationDeliveryLabel": "pengiriman",
   "AutomationLastLabel": "terakhir",
   "AutomationRecentRunsLabel": "eksekusi terbaru",
   "AutomationNoRuns": "tidak ada eksekusi tercatat",

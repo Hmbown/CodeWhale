@@ -29,7 +29,10 @@ const DEFAULT_AUTOMATION_MODE: &str = "agent";
 const DEFAULT_AUTOMATION_ALLOW_SHELL: bool = false;
 const DEFAULT_AUTOMATION_TRUST_MODE: bool = false;
 const DEFAULT_AUTOMATION_AUTO_APPROVE: bool = false;
+const DEFAULT_AUTOMATION_DELIVERY_MODE: AutomationDeliveryMode = AutomationDeliveryMode::Task;
+pub const AUTOMATION_WATCHER_NO_REPORT_SENTINEL: &str = "NOTHING_TO_REPORT";
 const MAX_HOURLY_SEARCH_STEPS: usize = 24 * 21;
+const MAX_CRON_SEARCH_MINUTES: usize = 60 * 24 * 366 * 5;
 
 const fn default_automation_schema_version() -> u32 {
     CURRENT_AUTOMATION_SCHEMA_VERSION
@@ -56,6 +59,14 @@ pub enum AutomationRunStatus {
     Canceled,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AutomationDeliveryMode {
+    #[default]
+    Task,
+    Watcher,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AutomationRecord {
     #[serde(default = "default_automation_schema_version")]
@@ -74,6 +85,8 @@ pub struct AutomationRecord {
     pub trust_mode: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_approve: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_mode: Option<AutomationDeliveryMode>,
     pub status: AutomationStatus,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -103,6 +116,11 @@ impl AutomationRecord {
 
     fn task_auto_approve(&self) -> bool {
         self.auto_approve.unwrap_or(DEFAULT_AUTOMATION_AUTO_APPROVE)
+    }
+
+    fn delivery_mode(&self) -> AutomationDeliveryMode {
+        self.delivery_mode
+            .unwrap_or(DEFAULT_AUTOMATION_DELIVERY_MODE)
     }
 }
 
@@ -145,6 +163,8 @@ pub struct CreateAutomationRequest {
     #[serde(default)]
     pub auto_approve: Option<bool>,
     #[serde(default)]
+    pub delivery_mode: Option<AutomationDeliveryMode>,
+    #[serde(default)]
     pub status: Option<AutomationStatus>,
 }
 
@@ -158,6 +178,7 @@ pub struct UpdateAutomationRequest {
     pub allow_shell: Option<bool>,
     pub trust_mode: Option<bool>,
     pub auto_approve: Option<bool>,
+    pub delivery_mode: Option<AutomationDeliveryMode>,
     pub status: Option<AutomationStatus>,
 }
 
@@ -169,6 +190,9 @@ enum AutomationFrequency {
 
 #[derive(Debug, Clone)]
 pub enum AutomationSchedule {
+    Once {
+        at: DateTime<Utc>,
+    },
     Hourly {
         interval_hours: u32,
         byday: Option<Vec<Weekday>>,
@@ -179,6 +203,9 @@ pub enum AutomationSchedule {
         byday: Vec<Weekday>,
         byhour: u32,
         byminute: u32,
+    },
+    Cron {
+        expr: String,
     },
 }
 
@@ -193,13 +220,21 @@ impl AutomationSchedule {
             let Some((k, v)) = item.split_once('=') else {
                 bail!("Invalid RRULE segment '{item}'");
             };
-            parts.insert(k.trim().to_ascii_uppercase(), v.trim().to_ascii_uppercase());
+            parts.insert(k.trim().to_ascii_uppercase(), v.trim().to_string());
         }
 
-        let freq = match parts.get("FREQ").map(String::as_str) {
+        let freq = match parts
+            .get("FREQ")
+            .map(|value| value.trim().to_ascii_uppercase())
+            .as_deref()
+        {
+            Some("ONCE") => return parse_once_schedule(&parts),
             Some("HOURLY") => AutomationFrequency::Hourly,
             Some("WEEKLY") => AutomationFrequency::Weekly,
-            Some(other) => bail!("Unsupported RRULE FREQ '{other}'. Supported: HOURLY and WEEKLY"),
+            Some("CRON") => return parse_cron_schedule(&parts),
+            Some(other) => {
+                bail!("Unsupported RRULE FREQ '{other}'. Supported: ONCE, HOURLY, WEEKLY, and CRON")
+            }
             None => bail!("RRULE must include FREQ"),
         };
 
@@ -228,7 +263,7 @@ impl AutomationSchedule {
                 }
                 let byday = parts
                     .get("BYDAY")
-                    .map(|value| parse_byday(value))
+                    .map(|value| parse_byday(&value.to_ascii_uppercase()))
                     .transpose()?;
                 let anchor_hour = parts
                     .get("BYHOUR")
@@ -264,7 +299,7 @@ impl AutomationSchedule {
                 let byday_raw = parts
                     .get("BYDAY")
                     .ok_or_else(|| anyhow::anyhow!("WEEKLY schedules require BYDAY"))?;
-                let byday = parse_byday(byday_raw)?;
+                let byday = parse_byday(&byday_raw.to_ascii_uppercase())?;
                 if byday.is_empty() {
                     bail!("BYDAY cannot be empty for WEEKLY schedules");
                 }
@@ -311,6 +346,16 @@ impl AutomationSchedule {
     ) -> Result<DateTime<Utc>> {
         let local_after = after.with_timezone(timezone);
         match self {
+            Self::Once { at } => {
+                if *at > after {
+                    Ok(*at)
+                } else {
+                    bail!(
+                        "Once schedule has no future run after {}",
+                        after.to_rfc3339()
+                    )
+                }
+            }
             Self::Hourly {
                 interval_hours,
                 byday,
@@ -404,6 +449,44 @@ impl AutomationSchedule {
                 }
                 bail!("Unable to compute next WEEKLY run");
             }
+            Self::Cron { expr } => {
+                let cron = ParsedCronExpr::parse(expr)?;
+                let mut candidate_naive = local_after
+                    .naive_local()
+                    .with_second(0)
+                    .and_then(|dt| dt.with_nanosecond(0))
+                    .ok_or_else(|| anyhow::anyhow!("Unable to round CRON search start"))?
+                    .checked_add_signed(Duration::minutes(1))
+                    .ok_or_else(|| anyhow::anyhow!("CRON schedule exceeded its range"))?;
+
+                for _ in 0..MAX_CRON_SEARCH_MINUTES {
+                    if cron.matches(candidate_naive) {
+                        if let Some(candidate) = resolve_local_datetime(timezone, candidate_naive) {
+                            let candidate = candidate.with_timezone(&Utc);
+                            if candidate > after {
+                                return Ok(candidate);
+                            }
+                        }
+                    }
+                    candidate_naive = candidate_naive
+                        .checked_add_signed(Duration::minutes(1))
+                        .ok_or_else(|| anyhow::anyhow!("CRON schedule exceeded its range"))?;
+                }
+                bail!("Unable to compute next CRON run within 5 years");
+            }
+        }
+    }
+
+    fn next_after_slot(
+        &self,
+        slot: DateTime<Utc>,
+        anchor_reference: DateTime<Utc>,
+    ) -> Result<Option<DateTime<Utc>>> {
+        match self {
+            Self::Once { .. } => Ok(None),
+            _ => self
+                .next_after_with_anchor(slot, anchor_reference)
+                .map(Some),
         }
     }
 }
@@ -439,6 +522,297 @@ fn parse_byday(value: &str) -> Result<Vec<Weekday>> {
         }
     }
     Ok(days)
+}
+
+fn parse_once_schedule(parts: &BTreeMap<String, String>) -> Result<AutomationSchedule> {
+    for key in parts.keys() {
+        if key != "FREQ" && key != "AT" {
+            bail!("Unsupported RRULE field '{key}' for ONCE. Allowed: FREQ,AT");
+        }
+    }
+    let raw_at = parts
+        .get("AT")
+        .ok_or_else(|| anyhow::anyhow!("ONCE schedules require AT"))?;
+    let at = parse_once_at(raw_at)?;
+    Ok(AutomationSchedule::Once { at })
+}
+
+fn parse_cron_schedule(parts: &BTreeMap<String, String>) -> Result<AutomationSchedule> {
+    for key in parts.keys() {
+        if key != "FREQ" && key != "EXPR" {
+            bail!("Unsupported RRULE field '{key}' for CRON. Allowed: FREQ,EXPR");
+        }
+    }
+    let expr = parts
+        .get("EXPR")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("CRON schedules require EXPR"))?;
+    ParsedCronExpr::parse(&expr)?;
+    Ok(AutomationSchedule::Cron { expr })
+}
+
+fn parse_once_at(raw: &str) -> Result<DateTime<Utc>> {
+    let trimmed = raw.trim();
+    if let Ok(at) = DateTime::parse_from_rfc3339(trimmed) {
+        return Ok(at.with_timezone(&Utc));
+    }
+    for format in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M"] {
+        if let Ok(naive) = NaiveDateTime::parse_from_str(trimmed, format) {
+            return resolve_local_datetime(&Local, naive)
+                .map(|value| value.with_timezone(&Utc))
+                .ok_or_else(|| anyhow::anyhow!("ONCE local time does not exist: {trimmed}"));
+        }
+    }
+    bail!("Failed to parse ONCE AT '{trimmed}'. Use local YYYY-MM-DDTHH:MM[:SS] or RFC3339")
+}
+
+#[derive(Debug, Clone)]
+struct ParsedCronExpr {
+    minute: CronField,
+    hour: CronField,
+    day_of_month: CronField,
+    month: CronField,
+    day_of_week: CronField,
+}
+
+impl ParsedCronExpr {
+    fn parse(expr: &str) -> Result<Self> {
+        let fields: Vec<&str> = expr.split_whitespace().collect();
+        if fields.len() != 5 {
+            bail!(
+                "CRON EXPR must have exactly 5 fields: minute hour day-of-month month day-of-week"
+            );
+        }
+        let parsed = Self {
+            minute: CronField::parse(fields[0], 0, 59, CronNameMap::none(), "minute")?,
+            hour: CronField::parse(fields[1], 0, 23, CronNameMap::none(), "hour")?,
+            day_of_month: CronField::parse(fields[2], 1, 31, CronNameMap::none(), "day-of-month")?,
+            month: CronField::parse(fields[3], 1, 12, CronNameMap::month(), "month")?,
+            day_of_week: CronField::parse(fields[4], 0, 7, CronNameMap::weekday(), "day-of-week")?
+                .normalized_day_of_week(),
+        };
+        parsed.validate_date_space()?;
+        Ok(parsed)
+    }
+
+    fn matches(&self, candidate: NaiveDateTime) -> bool {
+        if !self.minute.contains(candidate.minute())
+            || !self.hour.contains(candidate.hour())
+            || !self.month.contains(candidate.month())
+        {
+            return false;
+        }
+
+        let day_of_month = self.day_of_month.contains(candidate.day());
+        let weekday = self
+            .day_of_week
+            .contains(weekday_to_cron(candidate.weekday()));
+        if self.day_of_month.is_wildcard && self.day_of_week.is_wildcard {
+            true
+        } else if self.day_of_month.is_wildcard {
+            weekday
+        } else if self.day_of_week.is_wildcard {
+            day_of_month
+        } else {
+            day_of_month || weekday
+        }
+    }
+
+    fn validate_date_space(&self) -> Result<()> {
+        if self.day_of_month.is_wildcard {
+            return Ok(());
+        }
+        let months = self.month.values();
+        let days = self.day_of_month.values();
+        let valid = months.iter().copied().any(|month| {
+            let common = days_in_month(2025, month);
+            let leap = days_in_month(2024, month);
+            days.iter().copied().any(|day| day <= common || day <= leap)
+        });
+        if valid {
+            Ok(())
+        } else {
+            bail!("CRON EXPR day-of-month/month combination can never occur")
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CronField {
+    values: Vec<u32>,
+    is_wildcard: bool,
+}
+
+impl CronField {
+    fn parse(raw: &str, min: u32, max: u32, names: CronNameMap, field_name: &str) -> Result<Self> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            bail!("CRON {field_name} field must not be empty");
+        }
+        let mut values = Vec::new();
+        let is_wildcard = trimmed == "*";
+        for part in trimmed.split(',') {
+            let part = part.trim();
+            if part.is_empty() {
+                bail!("CRON {field_name} field contains an empty list item");
+            }
+            let (base, step) = if let Some((base, step)) = part.split_once('/') {
+                let step = step
+                    .trim()
+                    .parse::<u32>()
+                    .with_context(|| format!("Failed to parse CRON {field_name} step"))?;
+                if step == 0 {
+                    bail!("CRON {field_name} step must be >= 1");
+                }
+                (base.trim(), step)
+            } else {
+                (part, 1)
+            };
+
+            let range = if base == "*" {
+                (min, max)
+            } else if let Some((start, end)) = base.split_once('-') {
+                let start = parse_cron_atom(start.trim(), min, max, names, field_name)?;
+                let end = parse_cron_atom(end.trim(), min, max, names, field_name)?;
+                if start > end {
+                    bail!("CRON {field_name} range start must be <= end");
+                }
+                (start, end)
+            } else {
+                let start = parse_cron_atom(base, min, max, names, field_name)?;
+                if part.contains('/') {
+                    (start, max)
+                } else {
+                    (start, start)
+                }
+            };
+
+            let mut current = range.0;
+            while current <= range.1 {
+                if !values.contains(&current) {
+                    values.push(current);
+                }
+                let Some(next) = current.checked_add(step) else {
+                    break;
+                };
+                if next <= current {
+                    break;
+                }
+                current = next;
+            }
+        }
+        values.sort_unstable();
+        Ok(Self {
+            values,
+            is_wildcard,
+        })
+    }
+
+    fn normalized_day_of_week(mut self) -> Self {
+        for value in &mut self.values {
+            if *value == 7 {
+                *value = 0;
+            }
+        }
+        self.values.sort_unstable();
+        self.values.dedup();
+        self
+    }
+
+    fn contains(&self, value: u32) -> bool {
+        self.values.binary_search(&value).is_ok()
+    }
+
+    fn values(&self) -> &[u32] {
+        &self.values
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CronNameMap(&'static [(&'static str, u32)]);
+
+impl CronNameMap {
+    const fn none() -> Self {
+        Self(&[])
+    }
+
+    const fn month() -> Self {
+        Self(&[
+            ("JAN", 1),
+            ("FEB", 2),
+            ("MAR", 3),
+            ("APR", 4),
+            ("MAY", 5),
+            ("JUN", 6),
+            ("JUL", 7),
+            ("AUG", 8),
+            ("SEP", 9),
+            ("OCT", 10),
+            ("NOV", 11),
+            ("DEC", 12),
+        ])
+    }
+
+    const fn weekday() -> Self {
+        Self(&[
+            ("SUN", 0),
+            ("MON", 1),
+            ("TUE", 2),
+            ("WED", 3),
+            ("THU", 4),
+            ("FRI", 5),
+            ("SAT", 6),
+        ])
+    }
+
+    fn lookup(self, token: &str) -> Option<u32> {
+        let needle = token.trim().to_ascii_uppercase();
+        self.0
+            .iter()
+            .find_map(|(name, value)| (*name == needle).then_some(*value))
+    }
+}
+
+fn parse_cron_atom(
+    raw: &str,
+    min: u32,
+    max: u32,
+    names: CronNameMap,
+    field_name: &str,
+) -> Result<u32> {
+    let value = names
+        .lookup(raw)
+        .or_else(|| raw.parse::<u32>().ok())
+        .ok_or_else(|| anyhow::anyhow!("Invalid CRON {field_name} value '{raw}'"))?;
+    if !(min..=max).contains(&value) {
+        bail!("CRON {field_name} value {value} is out of range {min}-{max}");
+    }
+    Ok(value)
+}
+
+fn weekday_to_cron(day: Weekday) -> u32 {
+    match day {
+        Weekday::Sun => 0,
+        Weekday::Mon => 1,
+        Weekday::Tue => 2,
+        Weekday::Wed => 3,
+        Weekday::Thu => 4,
+        Weekday::Fri => 5,
+        Weekday::Sat => 6,
+    }
+}
+
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+            if leap { 29 } else { 28 }
+        }
+        _ => 0,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -518,6 +892,7 @@ impl AutomationManager {
             allow_shell: req.allow_shell,
             trust_mode: req.trust_mode,
             auto_approve: req.auto_approve,
+            delivery_mode: req.delivery_mode,
             status,
             created_at: now,
             updated_at: now,
@@ -619,6 +994,9 @@ impl AutomationManager {
         }
         if let Some(auto_approve) = req.auto_approve {
             existing.auto_approve = Some(auto_approve);
+        }
+        if let Some(delivery_mode) = req.delivery_mode {
+            existing.delivery_mode = Some(delivery_mode);
         }
         if let Some(status) = req.status {
             existing.status = status;
@@ -744,6 +1122,20 @@ impl AutomationManager {
         Ok(())
     }
 
+    fn delete_run(&self, run: &AutomationRunRecord) -> Result<()> {
+        let sortable = self.run_path(run)?;
+        if sortable.exists() {
+            fs::remove_file(&sortable)
+                .with_context(|| format!("Failed to delete run {}", sortable.display()))?;
+        }
+        let legacy = self.legacy_run_path(&run.automation_id, &run.id)?;
+        if legacy.exists() {
+            fs::remove_file(&legacy)
+                .with_context(|| format!("Failed to delete run {}", legacy.display()))?;
+        }
+        Ok(())
+    }
+
     /// Sweep all automations under one lock hold: initialize/advance schedule
     /// bookkeeping and return the (automation, run) pairs that must be
     /// enqueued. `next_run_at` for returned pairs is only advanced after the
@@ -762,7 +1154,17 @@ impl AutomationManager {
             let schedule = AutomationSchedule::parse_rrule(&automation.rrule)?;
             let Some(due_at) = automation.next_run_at else {
                 automation.next_run_at =
-                    Some(schedule.next_after_with_anchor(now, automation.created_at)?);
+                    match schedule.next_after_with_anchor(now, automation.created_at) {
+                        Ok(next) => Some(next),
+                        Err(err)
+                            if matches!(schedule, AutomationSchedule::Once { .. })
+                                && err.to_string().contains("Once schedule has no future run") =>
+                        {
+                            automation.status = AutomationStatus::Paused;
+                            None
+                        }
+                        Err(err) => return Err(err),
+                    };
                 automation.updated_at = now;
                 self.save_automation(&automation)?;
                 continue;
@@ -779,10 +1181,7 @@ impl AutomationManager {
                 .any(|run| run.scheduled_for == due_at);
 
             if existing_for_slot {
-                automation.next_run_at =
-                    Some(schedule.next_after_with_anchor(due_at, automation.created_at)?);
-                automation.updated_at = now;
-                self.save_automation(&automation)?;
+                self.advance_automation_after_slot(&mut automation, &schedule, due_at, now)?;
                 continue;
             }
 
@@ -803,9 +1202,21 @@ impl AutomationManager {
             return Ok(());
         };
         let schedule = AutomationSchedule::parse_rrule(&automation.rrule)?;
+        self.advance_automation_after_slot(&mut automation, &schedule, run.scheduled_for, now)
+    }
+
+    fn advance_automation_after_slot(
+        &self,
+        automation: &mut AutomationRecord,
+        schedule: &AutomationSchedule,
+        slot: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> Result<()> {
         automation.updated_at = now;
-        automation.next_run_at =
-            Some(schedule.next_after_with_anchor(run.scheduled_for, automation.created_at)?);
+        automation.next_run_at = schedule.next_after_slot(slot, automation.created_at)?;
+        if automation.next_run_at.is_none() {
+            automation.status = AutomationStatus::Paused;
+        }
         self.save_automation(&automation)
     }
 
@@ -1042,6 +1453,25 @@ async fn reconcile_run_statuses_shared(
             Err(_) => continue,
         };
 
+        let watcher_noop = {
+            let manager = automations.lock().await;
+            manager
+                .get_automation(&run.automation_id)
+                .ok()
+                .is_some_and(|automation| {
+                    automation.delivery_mode() == AutomationDeliveryMode::Watcher
+                        && task.status == TaskStatus::Completed
+                        && task.result_summary.as_deref().is_some_and(|summary| {
+                            summary.trim() == AUTOMATION_WATCHER_NO_REPORT_SENTINEL
+                        })
+                })
+        };
+        if watcher_noop {
+            let manager = automations.lock().await;
+            manager.delete_run(&run)?;
+            continue;
+        }
+
         if !apply_task_status(&mut run, &task) {
             continue;
         }
@@ -1245,6 +1675,7 @@ mod tests {
     };
 
     struct AutomationNoopExecutor;
+    struct AutomationWatcherNoopExecutor;
 
     /// A deterministic America/New_York-compatible zone for the 2026 DST
     /// boundary tests. Keeping the transition table local avoids mutating the
@@ -1334,6 +1765,22 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl TaskExecutor for AutomationWatcherNoopExecutor {
+        async fn execute(
+            &self,
+            _task: ExecutionTask,
+            _events: mpsc::UnboundedSender<TaskExecutionEvent>,
+            _cancel: CancellationToken,
+        ) -> TaskExecutionResult {
+            TaskExecutionResult {
+                status: TaskStatus::Completed,
+                result_text: Some(AUTOMATION_WATCHER_NO_REPORT_SENTINEL.to_string()),
+                error: None,
+            }
+        }
+    }
+
     fn automation_task_config(root: PathBuf) -> TaskManagerConfig {
         TaskManagerConfig {
             data_dir: root,
@@ -1364,6 +1811,7 @@ mod tests {
             allow_shell,
             trust_mode,
             auto_approve,
+            delivery_mode: None,
             status: AutomationStatus::Active,
             created_at: now,
             updated_at: now,
@@ -1411,6 +1859,14 @@ mod tests {
         record
     }
 
+    fn local_naive_to_utc(naive: NaiveDateTime) -> DateTime<Utc> {
+        Local
+            .from_local_datetime(&naive)
+            .earliest()
+            .expect("valid unambiguous local time")
+            .with_timezone(&Utc)
+    }
+
     #[test]
     fn parses_hourly_rrule() {
         let parsed =
@@ -1425,6 +1881,24 @@ mod tests {
                 assert_eq!(byday.expect("byday").len(), 2);
             }
             _ => panic!("expected hourly"),
+        }
+    }
+
+    #[test]
+    fn parses_once_rrule() {
+        let parsed =
+            AutomationSchedule::parse_rrule("FREQ=ONCE;AT=2026-08-03T14:30").expect("parse");
+        match parsed {
+            AutomationSchedule::Once { at } => {
+                assert_eq!(
+                    at,
+                    local_naive_to_utc(
+                        NaiveDateTime::parse_from_str("2026-08-03T14:30", "%Y-%m-%dT%H:%M")
+                            .expect("naive")
+                    )
+                );
+            }
+            _ => panic!("expected once"),
         }
     }
 
@@ -1668,6 +2142,51 @@ mod tests {
     }
 
     #[test]
+    fn parses_cron_rrule_and_computes_next_minute_slot() {
+        let schedule =
+            AutomationSchedule::parse_rrule("FREQ=CRON;EXPR=*/17 * * * *").expect("parse");
+        let after = Utc
+            .with_ymd_and_hms(2026, 8, 3, 9, 17, 1)
+            .single()
+            .expect("after");
+        let next = schedule
+            .next_after_in_timezone(after, after, &Utc)
+            .expect("next cron run");
+        assert_eq!(
+            next,
+            Utc.with_ymd_and_hms(2026, 8, 3, 9, 34, 0)
+                .single()
+                .expect("next")
+        );
+    }
+
+    #[test]
+    fn cron_weekday_schedule_uses_standard_five_field_local_time() {
+        let schedule =
+            AutomationSchedule::parse_rrule("FREQ=CRON;EXPR=3 9 * * MON-FRI").expect("parse");
+        let after = Utc
+            .with_ymd_and_hms(2026, 8, 7, 9, 4, 0)
+            .single()
+            .expect("after");
+        let next = schedule
+            .next_after_in_timezone(after, after, &Utc)
+            .expect("next weekday cron run");
+        assert_eq!(
+            next,
+            Utc.with_ymd_and_hms(2026, 8, 10, 9, 3, 0)
+                .single()
+                .expect("next")
+        );
+    }
+
+    #[test]
+    fn cron_rejects_impossible_date() {
+        let err = AutomationSchedule::parse_rrule("FREQ=CRON;EXPR=0 9 31 2 *")
+            .expect_err("impossible february date must fail");
+        assert!(err.to_string().contains("can never occur"));
+    }
+
+    #[test]
     fn rejects_invalid_rrule_fields() {
         let err =
             AutomationSchedule::parse_rrule("FREQ=WEEKLY;BYSECOND=5").expect_err("should fail");
@@ -1689,6 +2208,7 @@ mod tests {
                 allow_shell: None,
                 trust_mode: None,
                 auto_approve: None,
+                delivery_mode: None,
                 status: Some(AutomationStatus::Active),
             })
             .expect("create");
@@ -1789,6 +2309,7 @@ mod tests {
         assert!(!record.task_allow_shell());
         assert!(!record.task_trust_mode());
         assert!(!record.task_auto_approve());
+        assert_eq!(record.delivery_mode(), AutomationDeliveryMode::Task);
     }
 
     #[tokio::test]
@@ -1905,6 +2426,47 @@ mod tests {
     }
 
     #[test]
+    fn once_schedule_fires_once_and_auto_completes() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let manager = AutomationManager::open(tempdir.path().to_path_buf()).expect("manager");
+        let due_at = Utc::now() - Duration::minutes(1);
+        let automation = AutomationRecord {
+            rrule: due_at
+                .format("FREQ=ONCE;AT=%Y-%m-%dT%H:%M:%S+00:00")
+                .to_string(),
+            next_run_at: Some(due_at),
+            created_at: due_at - Duration::minutes(5),
+            updated_at: due_at - Duration::minutes(5),
+            ..automation_record_with_settings(None, None, None, None)
+        };
+        manager
+            .save_automation(&automation)
+            .expect("save automation");
+
+        let due = manager
+            .collect_due_runs(Utc::now())
+            .expect("collect due runs");
+        assert_eq!(due.len(), 1);
+        let (_automation, run) = &due[0];
+        assert_eq!(run.scheduled_for, due_at);
+
+        manager
+            .finish_scheduled_run(run, Utc::now())
+            .expect("finish one-shot run");
+        let updated = manager
+            .get_automation(&automation.id)
+            .expect("updated automation");
+        assert_eq!(updated.status, AutomationStatus::Paused);
+        assert_eq!(updated.next_run_at, None);
+        assert!(
+            manager
+                .collect_due_runs(Utc::now() + Duration::hours(1))
+                .expect("later tick")
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn list_runs_merges_legacy_and_sortable_files_newest_first() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let manager = AutomationManager::open(tempdir.path().to_path_buf()).expect("manager");
@@ -1986,6 +2548,7 @@ mod tests {
                 allow_shell: None,
                 trust_mode: None,
                 auto_approve: None,
+                delivery_mode: None,
                 status: Some(AutomationStatus::Active),
             })
             .expect("create");
@@ -2034,6 +2597,46 @@ mod tests {
         assert!(matches!(runs[0].status, AutomationRunStatus::Failed));
         let automation = manager.get_automation(&created.id).expect("automation");
         assert!(automation.last_run_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn watcher_noop_completion_removes_run_row() -> Result<()> {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let task_manager = TaskManager::start_with_executor(
+            automation_task_config(tempdir.path().join("tasks")),
+            std::sync::Arc::new(AutomationWatcherNoopExecutor),
+        )
+        .await?;
+        let mut automation = automation_record_with_settings(None, None, None, None);
+        automation.delivery_mode = Some(AutomationDeliveryMode::Watcher);
+        automation.next_run_at = Some(Utc::now() - Duration::seconds(1));
+        let manager = AutomationManager::open(tempdir.path().join("automations")).expect("manager");
+        manager
+            .save_automation(&automation)
+            .expect("save automation");
+        let shared: SharedAutomationManager = Arc::new(Mutex::new(manager));
+
+        scheduler_tick_shared(&shared, &task_manager).await?;
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        reconcile_run_statuses_shared(&shared, &task_manager).await?;
+
+        let manager = shared.lock().await;
+        assert!(
+            manager.list_runs(&automation.id, None)?.is_empty(),
+            "watcher no-op must not leave a phantom run row"
+        );
+        let updated = manager.get_automation(&automation.id)?;
+        assert!(
+            updated.next_run_at.is_some(),
+            "watcher should keep scheduling"
+        );
+        assert_eq!(
+            updated.last_run_at, None,
+            "no-op checks are not reportable runs"
+        );
+        drop(manager);
+        task_manager.shutdown();
+        Ok(())
     }
 
     #[test]

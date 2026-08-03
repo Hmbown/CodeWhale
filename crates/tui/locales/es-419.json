@@ -1286,6 +1286,7 @@
   "AutomationTrustModeLabel": "modo de confianza",
   "AutomationAutoApproveLabel": "aprobación automática",
   "AutomationRruleLabel": "regla de repetición",
+  "AutomationDeliveryLabel": "entrega",
   "AutomationLastLabel": "última",
   "AutomationRecentRunsLabel": "ejecuciones recientes",
   "AutomationNoRuns": "sin ejecuciones registradas",

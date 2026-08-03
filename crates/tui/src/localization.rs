@@ -1464,6 +1464,7 @@ pub enum MessageId {
     AutomationTrustModeLabel,
     AutomationAutoApproveLabel,
     AutomationRruleLabel,
+    AutomationDeliveryLabel,
     AutomationLastLabel,
     AutomationRecentRunsLabel,
     AutomationNoRuns,
@@ -2766,6 +2767,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::AutomationTrustModeLabel,
     MessageId::AutomationAutoApproveLabel,
     MessageId::AutomationRruleLabel,
+    MessageId::AutomationDeliveryLabel,
     MessageId::AutomationLastLabel,
     MessageId::AutomationRecentRunsLabel,
     MessageId::AutomationNoRuns,
@@ -3249,7 +3251,7 @@ mod tests {
             .keys()
             .filter(|key| key.starts_with("Automation"))
             .collect::<Vec<_>>();
-        assert_eq!(automation_keys.len(), 41);
+        assert_eq!(automation_keys.len(), 42);
 
         for locale in Locale::shipped_complete() {
             let pack = raw_locale_messages(*locale);

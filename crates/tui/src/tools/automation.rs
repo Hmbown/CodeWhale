@@ -10,7 +10,8 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use crate::automation_manager::{
-    AutomationStatus, CreateAutomationRequest, UpdateAutomationRequest, run_now_shared,
+    AUTOMATION_WATCHER_NO_REPORT_SENTINEL, AutomationDeliveryMode, AutomationStatus,
+    CreateAutomationRequest, UpdateAutomationRequest, run_now_shared,
 };
 use crate::tools::spec::{
     ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec,
@@ -107,14 +108,14 @@ impl ToolSpec for AutomationTool {
     fn description(&self) -> &'static str {
         match self.forced_action {
             Some("create") => {
-                "Create a durable scheduled automation. Creation requires approval and recurrence is constrained to supported HOURLY/WEEKLY RRULE forms. Runs enqueue normal durable tasks."
+                "Create a durable scheduled automation. Creation requires approval. Supported schedules: FREQ=ONCE;AT=YYYY-MM-DDTHH:MM[:SS] (local time) or RFC3339, FREQ=HOURLY..., FREQ=WEEKLY..., and FREQ=CRON;EXPR=<standard 5-field local cron>. delivery_mode=watcher is for condition checks: return EXACTLY NOTHING_TO_REPORT when there is no change."
             }
             Some("list") => {
                 "List durable automations with status, next run, and last run timestamps."
             }
             Some("read") => "Read one durable automation plus recent run records.",
             Some("update") => {
-                "Update a durable automation. Requires approval; recurrence remains constrained to supported RRULE forms."
+                "Update a durable automation. Requires approval; schedules support ONCE, HOURLY, WEEKLY, and 5-field CRON forms."
             }
             Some("pause") => "Pause a durable automation. Requires approval.",
             Some("resume") => "Resume a paused durable automation. Requires approval.",
@@ -126,7 +127,7 @@ impl ToolSpec for AutomationTool {
                 "Inspect durable scheduled automations. Actions: \"list\" (status, next run, last run) and \"read\" (one automation plus recent run records)."
             }
             _ => {
-                "Manage durable scheduled automations. Actions: \"create\" (approval; recurrence constrained to supported HOURLY/WEEKLY RRULE forms; runs enqueue normal durable tasks), \"list\", \"read\", \"update\" (approval), \"pause\" (approval), \"resume\" (approval), \"delete\" (approval), \"run\" (approval)."
+                "Manage durable scheduled automations. Actions: \"create\" (approval; schedules support ONCE, HOURLY, WEEKLY, and 5-field CRON forms; watcher mode uses EXACT NOTHING_TO_REPORT for no-change checks), \"list\", \"read\", \"update\" (approval), \"pause\" (approval), \"resume\" (approval), \"delete\" (approval), \"run\" (approval)."
             }
         }
     }
@@ -158,7 +159,7 @@ impl ToolSpec for AutomationTool {
                 "rrule".to_string(),
                 json!({
                     "type": "string",
-                    "description": "Supported: FREQ=HOURLY;INTERVAL=N[;BYDAY=MO,TU][;BYHOUR=9][;BYMINUTE=30] or FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=30. For HOURLY, BYHOUR/BYMINUTE choose the initial local wall-clock anchor and INTERVAL advances from that anchor; BYHOUR is not a daily-only filter. Anchored wall times skip nonexistent clock times and use the first occurrence of ambiguous clock times. (action=create/update)"
+                    "description": "Supported: FREQ=ONCE;AT=2026-08-03T14:30 (local time or RFC3339), FREQ=HOURLY;INTERVAL=N[;BYDAY=MO,TU][;BYHOUR=9][;BYMINUTE=30], FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=30, or FREQ=CRON;EXPR=*/17 * * * *. Cron uses standard 5-field local time. For HOURLY, BYHOUR/BYMINUTE choose the initial local wall-clock anchor and INTERVAL advances from that anchor; BYHOUR is not a daily-only filter. Anchored wall times skip nonexistent clock times and use the first occurrence of ambiguous clock times. (action=create/update)"
                 }),
             );
             properties.insert(
@@ -180,6 +181,15 @@ impl ToolSpec for AutomationTool {
             properties.insert(
                 "auto_approve".to_string(),
                 json!({ "type": "boolean", "default": false, "description": "(action=create/update)" }),
+            );
+            properties.insert(
+                "delivery_mode".to_string(),
+                json!({
+                    "type": "string",
+                    "enum": ["task", "watcher"],
+                    "default": "task",
+                    "description": format!("Delivery mode for scheduled checks. \"task\" creates a normal durable background run. \"watcher\" is for condition-shaped prompts; when there is no change, return EXACTLY {AUTOMATION_WATCHER_NO_REPORT_SENTINEL}. (action=create/update)")
+                }),
             );
             properties.insert(
                 "paused".to_string(),
@@ -290,6 +300,7 @@ impl AutomationTool {
             allow_shell: optional_bool_value(input, "allow_shell"),
             trust_mode: optional_bool_value(input, "trust_mode"),
             auto_approve: optional_bool_value(input, "auto_approve"),
+            delivery_mode: optional_delivery_mode(input)?,
             status: Some(
                 if input
                     .get("paused")
@@ -380,6 +391,7 @@ impl AutomationTool {
             allow_shell: optional_bool_value(input, "allow_shell"),
             trust_mode: optional_bool_value(input, "trust_mode"),
             auto_approve: optional_bool_value(input, "auto_approve"),
+            delivery_mode: optional_delivery_mode(input)?,
             status,
         };
         let automation = manager
@@ -446,13 +458,19 @@ fn legacy_action_schema(action: &str) -> Value {
                 "prompt": { "type": "string" },
                 "rrule": {
                     "type": "string",
-                    "description": "Supported: FREQ=HOURLY;INTERVAL=N[;BYDAY=MO,TU][;BYHOUR=9][;BYMINUTE=30] or FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=30. For HOURLY, BYHOUR/BYMINUTE choose the initial local wall-clock anchor and INTERVAL advances from that anchor; BYHOUR is not a daily-only filter. Anchored wall times skip nonexistent clock times and use the first occurrence of ambiguous clock times."
+                    "description": "Supported: FREQ=ONCE;AT=2026-08-03T14:30 (local time or RFC3339), FREQ=HOURLY;INTERVAL=N[;BYDAY=MO,TU][;BYHOUR=9][;BYMINUTE=30], FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=30, or FREQ=CRON;EXPR=*/17 * * * *. Cron uses standard 5-field local time. For HOURLY, BYHOUR/BYMINUTE choose the initial local wall-clock anchor and INTERVAL advances from that anchor; BYHOUR is not a daily-only filter. Anchored wall times skip nonexistent clock times and use the first occurrence of ambiguous clock times."
                 },
                 "cwds": { "type": "array", "items": { "type": "string" } },
                 "mode": { "type": "string", "description": "Task mode for scheduled runs. Defaults to agent when omitted." },
                 "allow_shell": { "type": "boolean", "default": false },
                 "trust_mode": { "type": "boolean", "default": false },
                 "auto_approve": { "type": "boolean", "default": false },
+                "delivery_mode": {
+                    "type": "string",
+                    "enum": ["task", "watcher"],
+                    "default": "task",
+                    "description": "Delivery mode. watcher prompts must return EXACTLY NOTHING_TO_REPORT when there is no change."
+                },
                 "paused": { "type": "boolean", "default": false }
             },
             "required": ["name", "prompt", "rrule"],
@@ -477,6 +495,7 @@ fn legacy_action_schema(action: &str) -> Value {
                 "allow_shell": { "type": "boolean" },
                 "trust_mode": { "type": "boolean" },
                 "auto_approve": { "type": "boolean" },
+                "delivery_mode": { "type": "string", "enum": ["task", "watcher"] },
                 "status": { "type": "string", "enum": ["active", "paused"] }
             },
             "required": ["automation_id"],
@@ -531,6 +550,17 @@ fn parse_automation_status(value: &str) -> Result<AutomationStatus, ToolError> {
     }
 }
 
+fn optional_delivery_mode(input: &Value) -> Result<Option<AutomationDeliveryMode>, ToolError> {
+    match optional_str(input, "delivery_mode") {
+        None => Ok(None),
+        Some("task") => Ok(Some(AutomationDeliveryMode::Task)),
+        Some("watcher") => Ok(Some(AutomationDeliveryMode::Watcher)),
+        Some(other) => Err(ToolError::invalid_input(format!(
+            "automation: invalid delivery_mode `{other}` (expected task or watcher)"
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -571,6 +601,20 @@ mod tests {
     }
 
     #[test]
+    fn create_schema_exposes_delivery_mode_and_new_schedule_forms() {
+        let schema = AutomationTool::alias("automation_create", "create").input_schema();
+        assert_eq!(
+            schema["properties"]["delivery_mode"]["enum"],
+            json!(["task", "watcher"])
+        );
+        let description = schema["properties"]["rrule"]["description"]
+            .as_str()
+            .expect("rrule description");
+        assert!(description.contains("FREQ=ONCE"));
+        assert!(description.contains("FREQ=CRON"));
+    }
+
+    #[test]
     fn canonical_schema_lists_all_actions_and_union_fields() {
         let schema = AutomationTool::new("automation").input_schema();
         let actions = schema["properties"]["action"]["enum"]
@@ -584,7 +628,14 @@ mod tests {
                 "canonical schema must offer action {action}"
             );
         }
-        for field in ["name", "prompt", "rrule", "automation_id", "limit"] {
+        for field in [
+            "name",
+            "prompt",
+            "rrule",
+            "delivery_mode",
+            "automation_id",
+            "limit",
+        ] {
             assert!(
                 schema["properties"][field].is_object(),
                 "canonical schema must carry union field {field}"

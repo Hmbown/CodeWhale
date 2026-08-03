@@ -1286,6 +1286,7 @@
   "AutomationTrustModeLabel": "信任模式",
   "AutomationAutoApproveLabel": "自动批准",
   "AutomationRruleLabel": "重复规则",
+  "AutomationDeliveryLabel": "投递",
   "AutomationLastLabel": "上次",
   "AutomationRecentRunsLabel": "最近运行",
   "AutomationNoRuns": "没有运行记录",
