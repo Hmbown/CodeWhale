@@ -3350,19 +3350,20 @@ impl SubAgentWorkflowDriver {
         }
 
         let (blocked, handoffs) = {
-            let board = self
+            let mut board = self
                 .gate_board
                 .lock()
                 .map_err(|_| DriverError::Rejected("workflow gate board lock poisoned".into()))?;
             let blocked = board.role_is_blocked(&self.gate_specs, role).cloned();
-            let handoffs = board
-                .artifacts
-                .iter()
-                .filter(|artifact| artifact.to_role.eq_ignore_ascii_case(role))
-                .rev()
-                .take(4)
-                .cloned()
-                .collect::<Vec<_>>();
+            // Handoffs are consumed (removed from the board) as they are
+            // delivered — but only when the role is actually admitted. A
+            // blocked task must leave them in place for the retry after the
+            // gate clears.
+            let handoffs = if blocked.is_none() {
+                board.consume_handoffs_for(role, 4)
+            } else {
+                Vec::new()
+            };
             (blocked, handoffs)
         };
 
@@ -7971,6 +7972,125 @@ reviewer = "reviewer"
     }
 
     #[tokio::test]
+    async fn workflow_handoff_is_delivered_to_exactly_one_task() {
+        // LaneGateBoard.artifacts used to be append-only: every same-role
+        // task re-received up to 4 prior handoff payloads while
+        // HandoffConsumed receipts fired as if they were spent.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+        let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 2);
+        let runtime = SubAgentRuntime::new(
+            stub_client(),
+            "deepseek-v4-flash".to_string(),
+            ctx.clone(),
+            true,
+            None,
+            manager.clone(),
+        );
+        let state = WorkflowWorkspaceState::open(tmp.path());
+        let run_id = "workflow_handoff_once".to_string();
+        let gates = vec![GateSpec {
+            id: "scout-findings".to_string(),
+            role: "scout".to_string(),
+            on: GateOn::RoleComplete,
+            gate: GateKind::Approve,
+            on_fail: codewhale_workflow::GateOnFail::Block,
+            blocks_role: Some("implementer".to_string()),
+            max_retries: 0,
+            artifact_kind: Some("findings".to_string()),
+            require_explicit_verdict: false,
+        }];
+        let spec = WorkflowSpec {
+            id: Some("handoff-once-fixture".to_string()),
+            goal: "handoff delivered once".to_string(),
+            description: None,
+            budget: BudgetSpec::default(),
+            permissions: Default::default(),
+            model_policy: Default::default(),
+            promotion_policy: Default::default(),
+            gates: gates.clone(),
+            nodes: Vec::new(),
+        };
+        state.runs.lock().expect("runs").insert(
+            run_id.clone(),
+            WorkflowRunRecord::new(run_id.clone(), None, None, Some(&spec)),
+        );
+        let driver = SubAgentWorkflowDriver::new(
+            run_id.clone(),
+            manager,
+            runtime,
+            state.clone(),
+            None,
+            WorkflowFleetBinding::None,
+            gates,
+        );
+
+        driver.evaluate_gates_for_completed_role(&RuntimeTaskRecord {
+            agent_id: "scout-agent".to_string(),
+            label: Some("scout".to_string()),
+            role: Some("scout".to_string()),
+            status: IrWorkflowRunStatus::Succeeded,
+            output: Some("findings: exactly once".to_string()),
+            schema_error: None,
+            usage: None,
+        });
+
+        let implementer = TaskRequest {
+            description: "Use the findings.".to_string(),
+            subagent_type: Some("implementer".to_string()),
+            role: Some("implementer".to_string()),
+            profile: None,
+            model: None,
+            model_strength: None,
+            thinking: None,
+            cwd: None,
+            worktree: false,
+            write_authority: Some("workspace_write".to_string()),
+            write_roots: vec!["src".to_string()],
+            exact_files: Vec::new(),
+            coordination_contracts: Vec::new(),
+            dependencies: Vec::new(),
+            acceptance: Vec::new(),
+            allowed_tools: Some(Vec::new()),
+            disallowed_tools: Vec::new(),
+            max_depth: None,
+            token_budget: None,
+            max_steps: None,
+            wall_time_secs: None,
+            response_schema: None,
+            label: Some("fix".to_string()),
+            phase: None,
+        };
+
+        let mut first = implementer.clone();
+        let handoffs = driver
+            .prepare_request_for_gates(&mut first)
+            .expect("passed gate should admit first implementer");
+        assert_eq!(handoffs.len(), 1, "{handoffs:?}");
+        assert!(first.description.contains("exactly once"));
+
+        // A second same-role task must not re-receive the spent handoff.
+        let mut second = TaskRequest {
+            description: "Second implementer task.".to_string(),
+            ..implementer
+        };
+        let handoffs = driver
+            .prepare_request_for_gates(&mut second)
+            .expect("passed gate should admit second implementer");
+        assert!(
+            handoffs.is_empty(),
+            "handoff already consumed must not re-deliver: {handoffs:?}"
+        );
+        assert!(
+            !second
+                .description
+                .contains("Workflow handoff artifacts available"),
+            "{}",
+            second.description
+        );
+    }
+
+    #[tokio::test]
     async fn workflow_gate_evaluation_error_persists_blocked_and_denies_target_role() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let ctx = ToolContext::new(tmp.path().to_path_buf());
@@ -8537,7 +8657,11 @@ reviewer = "reviewer"
             admitted_verifier.description
         );
         let board = driver.gate_board.lock().expect("gate board");
-        assert_eq!(board.artifacts.len(), 1, "{:?}", board.artifacts);
+        assert!(
+            board.artifacts.is_empty(),
+            "the admitted verifier consumed the handoff; spent artifacts leave the board: {:?}",
+            board.artifacts
+        );
         assert!(matches!(
             board.gates.get("review-findings"),
             Some(GateState::Passed)
