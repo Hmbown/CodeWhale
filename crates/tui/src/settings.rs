@@ -641,6 +641,13 @@ fn migrate_sidebar_settings_to_rail(s: &mut Settings) {
                 s.work_surface_placement = "off".to_string();
             }
         }
+        // #5141 let users pin a dedicated sessions panel in the classic
+        // sidebar; on the unified rail the equivalent surface is the
+        // first-class sessions rail, so carry the intent forward by
+        // enabling it.
+        "sessions" | "sessions_rail" | "session_history" => {
+            s.sessions_rail = true;
+        }
         panel @ ("pinned" | "work" | "plan" | "todos" | "tasks" | "activity" | "live"
         | "running" | "agents" | "subagents" | "sub-agents" | "context" | "session"
         | "auto") => {
@@ -3324,6 +3331,10 @@ mod tests {
         // A hidden sidebar becomes rail placement off.
         let hidden = migrate("hidden");
         assert_eq!(hidden.work_surface_placement, "off");
+        // #5141's pinned sessions panel carries forward as the first-class
+        // sessions rail.
+        assert!(migrate("sessions").sessions_rail);
+        assert!(migrate("sessions_rail").sessions_rail);
         // Placement panels keep their placement when the rail hides.
         let mut left = Settings {
             sidebar_focus: "hidden".to_string(),
