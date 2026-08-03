@@ -1154,7 +1154,10 @@ mod tests {
             "{:<21}  {:<9}  {:<12}  {:>8}  {}",
             "ID", "Status", "Session", "Time", "Title"
         )));
-        assert!(output.contains("session-1234…"), "{output}");
+        // Owner ids are truncated to 11 chars + '…' so the rendered value
+        // stays inside the 12-wide Session column and cannot drift the
+        // remaining columns out of alignment.
+        assert!(output.contains("session-123…"), "{output}");
     }
 
     #[test]
