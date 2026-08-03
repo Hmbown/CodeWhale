@@ -8965,11 +8965,31 @@ fn merge_user_workspace_config(
             return;
         }
     };
-    let Ok(raw) = std::fs::read_to_string(path) else {
-        return;
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(error) => {
+            eprintln!(
+                "warning: could not read user config at {}: {error}. \
+                 Ignoring it — `[workspace]`/`[projects]` grants (e.g. `allow_shell`) \
+                 revert to defaults for this session. Fix or remove the file to \
+                 restore them.",
+                path.display()
+            );
+            return;
+        }
     };
-    let Ok(doc) = toml::from_str::<toml::Value>(&raw) else {
-        return;
+    let doc = match toml::from_str::<toml::Value>(&raw) {
+        Ok(doc) => doc,
+        Err(error) => {
+            eprintln!(
+                "warning: could not parse user config at {}: {error}. \
+                 Ignoring it — `[workspace]`/`[projects]` grants (e.g. `allow_shell`) \
+                 revert to defaults for this session. Fix the TOML syntax to \
+                 restore them.",
+                path.display()
+            );
+            return;
+        }
     };
     merge_user_workspace_config_from_doc(config, &doc, workspace);
     if allow_shell_from_env {
