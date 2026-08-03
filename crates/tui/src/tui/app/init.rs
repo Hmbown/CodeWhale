@@ -316,6 +316,8 @@ impl App {
                     Some(configured_route_base_url.clone()),
                     active_context_window_override,
                     None,
+                    None,
+                    None,
                 )
                 .map(|resolution| {
                     (

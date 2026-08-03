@@ -5575,6 +5575,8 @@ mod tests {
             Some(config.deepseek_base_url()),
             None,
             None,
+            None,
+            None,
         )
         .expect("bare k3 on the Kimi Code route must resolve");
         app.set_active_route_resolution(

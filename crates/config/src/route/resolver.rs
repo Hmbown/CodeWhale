@@ -37,7 +37,7 @@ use super::errors::RouteError;
 use super::ids::{LogicalModelRef, ModelId, ProviderId, WireModelId};
 use super::offering::{ProviderModelOffering, RouteLimits, bundled_offerings};
 use crate::catalog::{CatalogOffering, bundled_catalog_offerings};
-use crate::provider::WirePolicy;
+use crate::provider::{ResponsesDialectProfile, WireFormat, WirePolicy};
 use crate::{ProviderKind, opencode_go_chat_model_id, provider_preserves_custom_base_url_model};
 
 /// A request to resolve into an executable route.
@@ -54,6 +54,11 @@ pub struct RouteRequest {
     pub saved_provider_model: Option<WireModelId>,
     /// An explicit base URL override for the endpoint.
     pub base_url_override: Option<String>,
+    /// Explicit wire-format override for routes whose protocol is configured per
+    /// endpoint rather than fixed in built-in metadata.
+    pub wire_format_override: Option<WireFormat>,
+    /// Explicit Responses dialect/profile for a configured Responses route.
+    pub responses_profile_override: Option<ResponsesDialectProfile>,
     /// Sourced limit overrides, applied in order BEFORE the candidate is
     /// constructed and recorded on it as provenance. This is the ONLY channel
     /// for adjusting a route's effective limits: the candidate itself is
@@ -240,20 +245,24 @@ impl RouteResolver {
                 super::capabilities::CapabilityState::Unknown;
         }
 
-        let protocol = descriptor
-            .protocol_for_endpoint(&selected.endpoint_key)
-            .ok_or_else(|| RouteError::UnsupportedModelProtocol {
-                provider: provider_id.clone(),
-                model: selected.wire_model_id.as_str().to_string(),
-                endpoint_key: selected.endpoint_key.clone(),
-            })?;
+        let protocol = descriptor.protocol_for_endpoint(&selected.endpoint_key);
+        let (endpoint_key, protocol, responses_profile) = resolve_route_protocol(
+            &provider_id,
+            provider_kind,
+            selected.wire_model_id.as_str(),
+            &selected.endpoint_key,
+            protocol,
+            req.wire_format_override,
+            req.responses_profile_override,
+        )?;
         let endpoint = ResolvedEndpoint {
             base_url: req
                 .base_url_override
                 .clone()
                 .unwrap_or_else(|| descriptor.default_base_url().to_string()),
-            endpoint_key: selected.endpoint_key,
+            endpoint_key,
             protocol,
+            responses_profile,
         };
 
         // Advisory validation (#1519): a non-loopback `http://` endpoint sends
@@ -264,6 +273,96 @@ impl RouteResolver {
         if endpoint_uses_insecure_http(&endpoint.base_url) {
             messages
                 .push("endpoint uses insecure http:// (credentials sent in plaintext)".to_string());
+        }
+
+        fn resolve_route_protocol(
+            provider_id: &ProviderId,
+            provider_kind: ProviderKind,
+            wire_model: &str,
+            endpoint_key: &str,
+            resolved_protocol: Option<WireFormat>,
+            wire_format_override: Option<WireFormat>,
+            responses_profile_override: Option<ResponsesDialectProfile>,
+        ) -> Result<(String, WireFormat, Option<ResponsesDialectProfile>), RouteError> {
+            if provider_kind == ProviderKind::Custom {
+                if let Some(wire_format) = wire_format_override {
+                    return match wire_format {
+                        WireFormat::ChatCompletions => {
+                            if responses_profile_override.is_some() {
+                                Err(RouteError::InvalidRouteConfiguration {
+                                    provider: provider_id.clone(),
+                                    detail: "Responses profile requires `wire_format = \"responses\"`"
+                                        .to_string(),
+                                })
+                            } else {
+                                Ok((wire_format.endpoint_key().to_string(), wire_format, None))
+                            }
+                        }
+                        WireFormat::Responses => Ok((
+                            wire_format.endpoint_key().to_string(),
+                            wire_format,
+                            Some(responses_profile_override.ok_or_else(|| {
+                                RouteError::InvalidRouteConfiguration {
+                                    provider: provider_id.clone(),
+                                    detail: "custom Responses routes must set `responses_profile`"
+                                        .to_string(),
+                                }
+                            })?),
+                        )),
+                        WireFormat::AnthropicMessages => Err(RouteError::InvalidRouteConfiguration {
+                            provider: provider_id.clone(),
+                            detail: "custom openai-compatible routes only support `chat_completions` or `responses`"
+                                .to_string(),
+                        }),
+                    };
+                }
+                if responses_profile_override.is_some() {
+                    return Err(RouteError::InvalidRouteConfiguration {
+                        provider: provider_id.clone(),
+                        detail: "Responses profile requires `wire_format = \"responses\"`"
+                            .to_string(),
+                    });
+                }
+            }
+
+            let protocol =
+                resolved_protocol.ok_or_else(|| RouteError::UnsupportedModelProtocol {
+                    provider: provider_id.clone(),
+                    model: wire_model.to_string(),
+                    endpoint_key: endpoint_key.to_string(),
+                })?;
+            let responses_profile = match protocol {
+                WireFormat::Responses => {
+                    Some(responses_profile_override.unwrap_or_else(|| {
+                        responses_profile_for_route(provider_kind, endpoint_key)
+                    }))
+                }
+                _ => {
+                    if responses_profile_override.is_some() {
+                        return Err(RouteError::InvalidRouteConfiguration {
+                            provider: provider_id.clone(),
+                            detail: "Responses profile requires a Responses route".to_string(),
+                        });
+                    }
+                    None
+                }
+            };
+            Ok((endpoint_key.to_string(), protocol, responses_profile))
+        }
+
+        fn responses_profile_for_route(
+            provider_kind: ProviderKind,
+            endpoint_key: &str,
+        ) -> ResponsesDialectProfile {
+            if endpoint_key == WireFormat::Responses.endpoint_key() {
+                match provider_kind {
+                    ProviderKind::OpenaiCodex => ResponsesDialectProfile::Codex,
+                    ProviderKind::Deepseek => ResponsesDialectProfile::Deepseek,
+                    _ => ResponsesDialectProfile::Standard,
+                }
+            } else {
+                ResponsesDialectProfile::Standard
+            }
         }
         let validation = ValidationReport { ok: true, messages };
 

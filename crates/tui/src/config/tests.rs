@@ -10138,6 +10138,30 @@ fn custom_provider_kind_only_accepts_openai_compatible() {
 }
 
 #[test]
+fn custom_responses_provider_requires_profile() {
+    let config: Config = toml::from_str(
+        r#"
+provider = "my_thing"
+
+[providers.my_thing]
+kind = "openai-compatible"
+base_url = "https://api.example.com/v1"
+model = "gpt-5.5"
+wire_format = "responses"
+"#,
+    )
+    .expect("config parses");
+    let err = config
+        .validate()
+        .expect_err("missing Responses profile must fail");
+    assert!(
+        err.to_string().contains(
+            "providers.my_thing.wire_format = \"responses\" requires `responses_profile`"
+        )
+    );
+}
+
+#[test]
 fn custom_provider_base_url_and_model_resolve_from_named_table() {
     let mut custom = HashMap::new();
     custom.insert(

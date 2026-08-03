@@ -403,6 +403,25 @@ Custom provider names may be selected with `provider = "<name>"`,
 `--provider <name>`, or an AgentProfile `provider = "<name>"` when the matching
 `[providers.<name>]` table exists.
 
+Custom providers default to Chat Completions. To opt one exact named provider
+into the Responses API, set both an explicit wire format and an allowlisted
+dialect profile:
+
+```toml
+[providers.my_responses_gateway]
+kind = "openai-compatible"
+base_url = "https://gateway.example/v1"
+api_key_env = "GATEWAY_API_KEY"
+model = "gpt-5.5"
+wire_format = "responses"
+responses_profile = "standard"
+```
+
+Supported `responses_profile` values are `standard`, `codex`, and `deepseek`.
+`responses_profile` is required when `wire_format = "responses"` so Codewhale
+can choose the right endpoint path, request fields, and reasoning behavior
+before any network I/O.
+
 StepFun has a first-class provider entry, so keep Coding Plan credentials and
 base URL scoped to `[providers.stepfun]`:
 

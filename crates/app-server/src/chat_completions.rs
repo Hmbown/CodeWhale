@@ -99,6 +99,8 @@ fn resolve_endpoint(
         model_selector: Some(LogicalModelRef::from(selected_model.as_str())),
         saved_provider_model: None,
         base_url_override: Some(base_url.clone()),
+        wire_format_override: None,
+        responses_profile_override: None,
         limit_overrides: Vec::new(),
     })?;
     let model = route.wire_model_id().as_str().to_string();

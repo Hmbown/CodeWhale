@@ -20,7 +20,7 @@ use codewhale_config::catalog::{
     CatalogOffering, CatalogRefreshError, CatalogSnapshot, CatalogSource, CatalogStatus,
     ProviderCatalogCache, ProviderCatalogDelta, base_url_fingerprint, now_unix,
 };
-use codewhale_config::provider::WireFormat;
+use codewhale_config::provider::{ResponsesDialectProfile, WireFormat};
 use codewhale_config::route::{LogicalModelRef, ReadyRouteCandidate, RouteRequest, RouteResolver};
 use codewhale_config::{auth_mode_disables_api_key, is_upstream_auth_header};
 
@@ -47,6 +47,15 @@ pub(super) fn to_api_tool_name(name: &str) -> String {
             out.push_str("-x");
             out.push_str(&format!("{:06X}", ch as u32));
             out.push('-');
+        }
+
+        fn provider_default_responses_profile(
+            api_provider: ApiProvider,
+        ) -> Option<ResponsesDialectProfile> {
+            match api_provider {
+                ApiProvider::OpenaiCodex => Some(ResponsesDialectProfile::Codex),
+                _ => None,
+            }
         }
     }
     out
@@ -210,6 +219,7 @@ pub struct DeepSeekClient {
     test_messages_transport_base_url: Option<String>,
     pub(super) reasoning_stream_style: Option<String>,
     pub(super) stream_idle_timeout: Duration,
+    responses_profile: Option<ResponsesDialectProfile>,
 }
 
 const CONNECTION_FAILURE_THRESHOLD: u32 = 2;
@@ -776,22 +786,15 @@ pub(crate) fn api_url(base_url: &str, path: &str) -> String {
     api_url_with_suffix(base_url, path, None)
 }
 
-fn responses_api_url(base_url: &str, provider: ApiProvider) -> String {
-    let normalized = base_url.trim_end_matches('/').to_ascii_lowercase();
-    let official_deepseek = matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN)
-        && matches!(
-            normalized.as_str(),
-            "https://api.deepseek.com"
-                | "https://api.deepseek.com/v1"
-                | "https://api.deepseek.com/beta"
-                | "https://api.deepseeki.com"
-                | "https://api.deepseeki.com/v1"
-                | "https://api.deepseeki.com/beta"
-        );
-    if official_deepseek {
-        format!("{}/responses", unversioned_base_url(base_url))
-    } else {
-        api_url(base_url, "responses")
+fn responses_api_url(base_url: &str, profile: ResponsesDialectProfile) -> String {
+    match profile {
+        ResponsesDialectProfile::Standard => api_url(base_url, "responses"),
+        ResponsesDialectProfile::Codex => {
+            format!("{}{}", base_url, responses::CODEX_RESPONSES_PATH)
+        }
+        ResponsesDialectProfile::Deepseek => {
+            format!("{}/responses", unversioned_base_url(base_url))
+        }
     }
 }
 
@@ -998,7 +1001,12 @@ impl DeepSeekClient {
         let model_aware = api_provider.metadata().is_some_and(|provider| {
             provider.wire_policy() == codewhale_config::provider::WirePolicy::ModelAware
         });
-        if model_aware {
+        let responses_bound = provider_default_wire_format(api_provider) == WireFormat::Responses
+            || config
+                .provider_config_for(api_provider)
+                .and_then(|provider| provider.wire_format)
+                == Some(WireFormat::Responses);
+        if model_aware || responses_bound {
             let route = crate::route_runtime::resolve_runtime_route(config, api_provider, None)
                 .map_err(anyhow::Error::msg)?;
             return Self::from_candidate(&route.config, &route.candidate);
@@ -1007,6 +1015,7 @@ impl DeepSeekClient {
             config.deepseek_base_url(),
             config.default_model(),
             provider_default_wire_format(api_provider),
+            provider_default_responses_profile(api_provider),
             config,
         )
     }
@@ -1025,6 +1034,7 @@ impl DeepSeekClient {
             candidate.endpoint().base_url.clone(),
             candidate.wire_model_id().as_str().to_string(),
             candidate.protocol(),
+            candidate.endpoint().responses_profile,
             config,
         )
     }
@@ -1038,6 +1048,7 @@ impl DeepSeekClient {
         base_url: String,
         default_model: String,
         wire_format: WireFormat,
+        responses_profile: Option<ResponsesDialectProfile>,
         config: &Config,
     ) -> Result<Self> {
         let api_provider = config.api_provider();
@@ -1157,6 +1168,7 @@ impl DeepSeekClient {
             test_messages_transport_base_url: None,
             reasoning_stream_style,
             stream_idle_timeout,
+            responses_profile,
         })
     }
 
@@ -1250,6 +1262,8 @@ impl DeepSeekClient {
                 model_selector: Some(LogicalModelRef::from(request.model.as_str())),
                 saved_provider_model: None,
                 base_url_override: Some(self.base_url.clone()),
+                wire_format_override: None,
+                responses_profile_override: None,
                 limit_overrides: Vec::new(),
             })
             .map_err(anyhow::Error::msg)?;
@@ -1727,15 +1741,15 @@ impl DeepSeekClient {
                 ))
             }
             WireFormat::Responses => {
-                let body =
-                    responses::build_responses_body_for_provider(&request, self.api_provider);
-                let is_codex = self.api_provider == ApiProvider::OpenaiCodex;
-                let url = if is_codex {
-                    format!("{}{}", self.base_url, responses::CODEX_RESPONSES_PATH)
-                } else {
-                    responses_api_url(&self.base_url, self.api_provider)
-                };
-                let shape = if is_codex {
+                let profile = self.responses_profile.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "{} Responses route is missing its typed dialect profile",
+                        self.api_provider.display_name()
+                    )
+                })?;
+                let body = responses::build_responses_body_for_profile(&request, profile);
+                let url = responses_api_url(&self.base_url, profile);
+                let shape = if profile == ResponsesDialectProfile::Codex {
                     RouteShape::CodexResponses
                 } else if self.api_provider == ApiProvider::OpencodeZen {
                     RouteShape::OpencodeZen

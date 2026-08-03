@@ -9,6 +9,7 @@ use super::{
 };
 use crate::ProviderKind;
 use crate::models_dev::ModelsDevCatalog;
+use crate::provider::{ResponsesDialectProfile, WireFormat};
 
 /// Build a request with only an explicit provider + a model selector string.
 fn req(provider: Option<ProviderKind>, model: Option<&str>) -> RouteRequest {
@@ -17,6 +18,8 @@ fn req(provider: Option<ProviderKind>, model: Option<&str>) -> RouteRequest {
         model_selector: model.map(LogicalModelRef::from),
         saved_provider_model: None,
         base_url_override: None,
+        wire_format_override: None,
+        responses_profile_override: None,
         limit_overrides: Vec::new(),
     }
 }
@@ -719,6 +722,49 @@ fn resolver_explicit_custom_with_base_url_override_passes_model_through_verbatim
     );
     assert!(out.validation().ok);
     assert!(out.validation().messages.is_empty());
+}
+
+#[test]
+fn resolver_custom_responses_route_uses_explicit_profile() {
+    let r = RouteResolver::new();
+    let request = RouteRequest {
+        explicit_provider: Some(ProviderKind::Custom),
+        model_selector: Some(LogicalModelRef::from("vendor/custom-model-v1")),
+        saved_provider_model: None,
+        base_url_override: Some("https://api.example.com/v1".to_string()),
+        wire_format_override: Some(WireFormat::Responses),
+        responses_profile_override: Some(ResponsesDialectProfile::Standard),
+        limit_overrides: Vec::new(),
+    };
+    let out = r
+        .resolve(&request)
+        .expect("custom provider should resolve explicit Responses route");
+    assert_eq!(out.protocol(), crate::route::RequestProtocol::Responses);
+    assert_eq!(out.endpoint().endpoint_key, "responses");
+    assert_eq!(
+        out.endpoint().responses_profile,
+        Some(ResponsesDialectProfile::Standard)
+    );
+}
+
+#[test]
+fn resolver_custom_responses_route_requires_profile() {
+    let r = RouteResolver::new();
+    let err = r
+        .resolve(&RouteRequest {
+            explicit_provider: Some(ProviderKind::Custom),
+            model_selector: Some(LogicalModelRef::from("vendor/custom-model-v1")),
+            saved_provider_model: None,
+            base_url_override: Some("https://api.example.com/v1".to_string()),
+            wire_format_override: Some(WireFormat::Responses),
+            responses_profile_override: None,
+            limit_overrides: Vec::new(),
+        })
+        .expect_err("missing profile must fail before I/O");
+    assert!(
+        err.to_string()
+            .contains("custom Responses routes must set `responses_profile`")
+    );
 }
 
 #[test]

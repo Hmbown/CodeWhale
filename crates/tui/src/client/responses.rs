@@ -10,7 +10,6 @@
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
-use crate::config::ApiProvider;
 use crate::llm_client::StreamEventBox;
 use crate::logging;
 use crate::models::{
@@ -18,6 +17,7 @@ use crate::models::{
     StreamEvent, Tool, Usage,
 };
 use crate::tools::schema_sanitize;
+use codewhale_config::provider::ResponsesDialectProfile;
 
 use super::{
     DeepSeekClient, ERROR_BODY_MAX_BYTES, bounded_error_text, from_api_tool_name,
@@ -30,7 +30,7 @@ pub(super) const CODEX_RESPONSES_PATH: &str = "/codex/responses";
 /// Build the Responses API request body from a `MessageRequest`.
 #[cfg(test)]
 pub(super) fn build_responses_body(request: &MessageRequest) -> Value {
-    build_responses_body_for_provider(request, ApiProvider::OpenaiCodex)
+    build_responses_body_for_profile(request, ResponsesDialectProfile::Codex)
 }
 
 /// Build a provider-aware Responses API request body.
@@ -39,20 +39,19 @@ pub(super) fn build_responses_body(request: &MessageRequest) -> Value {
 /// and exposes plain reasoning text rather than OpenAI encrypted summaries.
 /// Keep those exact-route differences here instead of leaking them into the
 /// provider-neutral message model.
-pub(super) fn build_responses_body_for_provider(
+pub(super) fn build_responses_body_for_profile(
     request: &MessageRequest,
-    provider: ApiProvider,
+    profile: ResponsesDialectProfile,
 ) -> Value {
-    let is_deepseek = matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN);
     let model = &request.model;
     let mut body = json!({
         "model": model,
         "stream": true,
     });
-    if !is_deepseek {
+    if profile != ResponsesDialectProfile::Deepseek {
         body["store"] = json!(false);
     }
-    if is_deepseek {
+    if profile == ResponsesDialectProfile::Deepseek {
         if request.max_tokens > 0 {
             body["max_output_tokens"] = json!(request.max_tokens);
         }
@@ -73,7 +72,7 @@ pub(super) fn build_responses_body_for_provider(
     body["instructions"] = json!(instructions);
 
     // Convert messages to Responses input items.
-    let input = convert_messages_to_responses_input(request, is_deepseek);
+    let input = convert_messages_to_responses_input(request, profile);
     body["input"] = json!(input);
 
     // Convert tools to Responses function tools.
@@ -91,9 +90,9 @@ pub(super) fn build_responses_body_for_provider(
     // DeepSeek-only values before request construction: "off" becomes
     // "low", and CodeWhale's "auto" falls back to "medium".
     if let Some(raw) = request.reasoning_effort.as_deref()
-        && let Some(effort) = responses_reasoning_effort(raw, is_deepseek)
+        && let Some(effort) = responses_reasoning_effort(raw, profile)
     {
-        body["reasoning"] = if is_deepseek {
+        body["reasoning"] = if profile == ResponsesDialectProfile::Deepseek {
             json!({ "effort": effort })
         } else {
             json!({
@@ -105,7 +104,7 @@ pub(super) fn build_responses_body_for_provider(
 
     // OpenAI Codex can replay encrypted reasoning. DeepSeek exposes plain
     // `reasoning_text` and does not support `include`.
-    if !is_deepseek {
+    if profile != ResponsesDialectProfile::Deepseek {
         body["include"] = json!(["reasoning.encrypted_content"]);
     }
 
@@ -588,7 +587,10 @@ impl DeepSeekClient {
 }
 
 /// Convert CodeWhale messages to Responses API input items.
-fn convert_messages_to_responses_input(request: &MessageRequest, is_deepseek: bool) -> Vec<Value> {
+fn convert_messages_to_responses_input(
+    request: &MessageRequest,
+    profile: ResponsesDialectProfile,
+) -> Vec<Value> {
     let mut items = Vec::new();
 
     for msg in &request.messages {
@@ -665,7 +667,7 @@ fn convert_messages_to_responses_input(request: &MessageRequest, is_deepseek: bo
                             }));
                         }
                         ContentBlock::Thinking { thinking, .. } => {
-                            items.push(if is_deepseek {
+                            items.push(if profile == ResponsesDialectProfile::Deepseek {
                                 json!({
                                     "type": "reasoning",
                                     "content": [{
@@ -740,8 +742,8 @@ fn codex_responses_reasoning_effort(raw: &str) -> Option<&'static str> {
     }
 }
 
-fn responses_reasoning_effort(raw: &str, is_deepseek: bool) -> Option<&'static str> {
-    if !is_deepseek {
+fn responses_reasoning_effort(raw: &str, profile: ResponsesDialectProfile) -> Option<&'static str> {
+    if profile != ResponsesDialectProfile::Deepseek {
         return codex_responses_reasoning_effort(raw);
     }
     match raw.trim().to_ascii_lowercase().as_str() {
@@ -1374,7 +1376,7 @@ mod tests {
             },
         );
 
-        let body = build_responses_body_for_provider(&request, ApiProvider::Deepseek);
+        let body = build_responses_body_for_profile(&request, ResponsesDialectProfile::Deepseek);
 
         assert_eq!(body["model"], "deepseek-v4-flash");
         assert_eq!(body["max_output_tokens"], 128);
@@ -1400,11 +1402,26 @@ mod tests {
 
     #[test]
     fn deepseek_responses_reasoning_effort_uses_documented_labels() {
-        assert_eq!(responses_reasoning_effort("low", true), Some("low"));
-        assert_eq!(responses_reasoning_effort("medium", true), Some("high"));
-        assert_eq!(responses_reasoning_effort("high", true), Some("high"));
-        assert_eq!(responses_reasoning_effort("xhigh", true), Some("max"));
-        assert_eq!(responses_reasoning_effort("max", true), Some("max"));
+        assert_eq!(
+            responses_reasoning_effort("low", ResponsesDialectProfile::Deepseek),
+            Some("low")
+        );
+        assert_eq!(
+            responses_reasoning_effort("medium", ResponsesDialectProfile::Deepseek),
+            Some("high")
+        );
+        assert_eq!(
+            responses_reasoning_effort("high", ResponsesDialectProfile::Deepseek),
+            Some("high")
+        );
+        assert_eq!(
+            responses_reasoning_effort("xhigh", ResponsesDialectProfile::Deepseek),
+            Some("max")
+        );
+        assert_eq!(
+            responses_reasoning_effort("max", ResponsesDialectProfile::Deepseek),
+            Some("max")
+        );
     }
 
     #[test]

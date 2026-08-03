@@ -4528,6 +4528,8 @@ model = "gpt-5.5"
             model_selector: Some(crate::route::LogicalModelRef::from("gpt-5.5")),
             saved_provider_model: None,
             base_url_override: None,
+            wire_format_override: None,
+            responses_profile_override: None,
             limit_overrides: Vec::new(),
         })
         .expect("documented Zen model must resolve");

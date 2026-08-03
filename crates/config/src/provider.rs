@@ -41,6 +41,30 @@ pub enum WireFormat {
     AnthropicMessages,
 }
 
+impl WireFormat {
+    /// Stable endpoint key for the wire protocol.
+    #[must_use]
+    pub const fn endpoint_key(self) -> &'static str {
+        match self {
+            Self::ChatCompletions => "chat",
+            Self::Responses => "responses",
+            Self::AnthropicMessages => "messages",
+        }
+    }
+}
+
+/// Allowlisted dialect profile for a Responses-compatible endpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponsesDialectProfile {
+    /// Standard OpenAI-compatible `/v1/responses` behavior.
+    Standard,
+    /// ChatGPT Codex `/codex/responses` behavior.
+    Codex,
+    /// DeepSeek Flash `/responses` behavior.
+    Deepseek,
+}
+
 /// How a user obtains or supplies credentials for a built-in provider.
 ///
 /// Keeping this typed prevents API-key onboarding from accidentally describing

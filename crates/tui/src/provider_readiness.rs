@@ -374,6 +374,8 @@ pub(crate) fn route_is_valid_for_model(
                 .filter(|value| !value.is_empty())
                 .map(str::to_string)
         },
+        wire_format_override: None,
+        responses_profile_override: None,
         limit_overrides: Vec::new(),
     };
     RouteResolver::new()

@@ -315,6 +315,8 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
                 route_base_url,
                 app.active_context_window_override,
                 None,
+                None,
+                None,
             ) {
                 Ok(resolution) => Some(resolution),
                 Err(reason) => return CommandResult::error(reason),

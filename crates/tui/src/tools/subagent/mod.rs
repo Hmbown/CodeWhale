@@ -10478,6 +10478,8 @@ fn resolve_fixed_spawn_model_route(
             None,
             Some(runtime.client.base_url().to_string()),
             None,
+            None,
+            None,
         )
     }
     .map_err(ToolError::invalid_input)?;

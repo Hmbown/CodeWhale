@@ -6,7 +6,6 @@
 use std::fmt;
 
 use super::ids::ProviderId;
-
 /// Why a [`super::resolver::RouteResolver`] could not produce a candidate.
 #[derive(Debug, Clone)]
 pub enum RouteError {
@@ -32,6 +31,13 @@ pub enum RouteError {
         model: String,
         /// Catalog endpoint key, when one was present.
         endpoint_key: String,
+    },
+    /// A caller-selected route/profile combination is unsupported.
+    InvalidRouteConfiguration {
+        /// Provider whose route configuration was rejected.
+        provider: ProviderId,
+        /// Secret-free corrective detail.
+        detail: String,
     },
 }
 
@@ -62,6 +68,13 @@ impl fmt::Display for RouteError {
                 "model {model:?} on provider {} has unsupported or unproven endpoint {endpoint_key:?}",
                 provider.as_str()
             ),
+            Self::InvalidRouteConfiguration { provider, detail } => {
+                write!(
+                    f,
+                    "provider {} route configuration is invalid: {detail}",
+                    provider.as_str()
+                )
+            }
         }
     }
 }

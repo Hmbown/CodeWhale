@@ -1,4 +1,5 @@
 use chrono::{DateTime, Duration, Utc};
+use codewhale_config::provider::{ResponsesDialectProfile, WireFormat};
 use codewhale_config::route::{
     LimitField, LogicalModelRef, OverrideSource, ReadyRouteCandidate, RouteRequest, RouteResolver,
     SourcedLimitOverride, WireModelId,
@@ -174,6 +175,8 @@ pub(crate) fn resolve_route_candidate(
     saved_provider_model: Option<&str>,
     base_url_override: Option<String>,
     context_window_override: Option<u32>,
+    wire_format_override: Option<WireFormat>,
+    responses_profile_override: Option<ResponsesDialectProfile>,
 ) -> Result<ReadyRouteCandidate, String> {
     resolve_route_candidate_with_context_metadata(
         provider,
@@ -181,6 +184,8 @@ pub(crate) fn resolve_route_candidate(
         saved_provider_model,
         base_url_override,
         context_window_override,
+        wire_format_override,
+        responses_profile_override,
         None,
     )
     .map(|resolution| resolution.candidate)
@@ -223,6 +228,8 @@ pub(crate) fn resolve_unpinned_model_candidate(
         None,
         Some(base_url.to_string()),
         None,
+        None,
+        None,
     )
 }
 
@@ -237,6 +244,8 @@ pub(crate) fn resolve_route_candidate_with_context_metadata(
     saved_provider_model: Option<&str>,
     base_url_override: Option<String>,
     context_window_override: Option<u32>,
+    wire_format_override: Option<WireFormat>,
+    responses_profile_override: Option<ResponsesDialectProfile>,
     provider_reported_context: Option<ProviderReportedKimiCodeContext>,
 ) -> Result<RouteCandidateResolution, String> {
     let effective_base_url = base_url_override
@@ -252,6 +261,8 @@ pub(crate) fn resolve_route_candidate_with_context_metadata(
         saved_provider_model: saved_provider_model
             .map(|model| WireModelId::from(model.to_string())),
         base_url_override,
+        wire_format_override,
+        responses_profile_override,
         limit_overrides: Vec::new(),
     };
     // First pass: resolve the route without overrides to learn the effective
@@ -472,6 +483,12 @@ pub(crate) fn resolve_runtime_route_for_identity(
         saved_provider_model,
         Some(route_config.deepseek_base_url()),
         route_config.context_window_for_provider_config(provider),
+        route_config
+            .provider_config_for(provider)
+            .and_then(|config| config.wire_format),
+        route_config
+            .provider_config_for(provider)
+            .and_then(|config| config.responses_profile),
         None,
     )?;
     let candidate = resolution.candidate;
@@ -724,6 +741,8 @@ mod tests {
             base.clone(),
             None,
             None,
+            None,
+            None,
         )
         .expect("Kimi Code route");
         assert_eq!(static_floor.context_window.tokens, 262_144);
@@ -738,6 +757,8 @@ mod tests {
             None,
             base.clone(),
             Some(1_048_576),
+            None,
+            None,
             Some(ProviderReportedKimiCodeContext {
                 context_tokens: 1_048_576,
                 observed_at: Utc::now(),
@@ -755,6 +776,8 @@ mod tests {
             Some("k3"),
             None,
             base.clone(),
+            None,
+            None,
             None,
             Some(ProviderReportedKimiCodeContext {
                 context_tokens: 1_048_576,
@@ -774,6 +797,8 @@ mod tests {
             None,
             base,
             None,
+            None,
+            None,
             Some(ProviderReportedKimiCodeContext {
                 context_tokens: 1_048_576,
                 observed_at: Utc::now() - Duration::hours(25),
@@ -790,6 +815,8 @@ mod tests {
             Some("k3"),
             None,
             Some(crate::config::DEFAULT_MOONSHOT_BASE_URL.to_string()),
+            None,
+            None,
             None,
             Some(ProviderReportedKimiCodeContext {
                 context_tokens: 1_048_576,
@@ -1104,6 +1131,32 @@ mod tests {
         }
     }
 
+    fn custom_responses_config(base_url: &str, model: &str) -> Config {
+        let mut custom = std::collections::HashMap::new();
+        custom.insert(
+            "my_thing".to_string(),
+            ProviderConfig {
+                kind: Some("openai-compatible".to_string()),
+                base_url: Some(base_url.to_string()),
+                model: Some(model.to_string()),
+                wire_format: Some(codewhale_config::provider::WireFormat::Responses),
+                responses_profile: Some(
+                    codewhale_config::provider::ResponsesDialectProfile::Standard,
+                ),
+                api_key_env: Some("EXAMPLE_API_KEY".to_string()),
+                ..Default::default()
+            },
+        );
+        Config {
+            provider: Some("my_thing".to_string()),
+            providers: Some(ProvidersConfig {
+                custom,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn custom_provider_resolves_to_custom_endpoint_and_verbatim_model() {
         use codewhale_config::route::RequestProtocol;
@@ -1159,6 +1212,23 @@ mod tests {
 
         assert_eq!(route.model, "qwen3.7");
         assert_eq!(route.candidate.limits().context_tokens, Some(1_000_000));
+    }
+
+    #[test]
+    fn custom_provider_can_explicitly_select_responses_profile() {
+        let config = custom_responses_config("https://api.example.com/v1", "gpt-5.5");
+        let route = resolve_runtime_route(&config, ApiProvider::Custom, None)
+            .expect("custom Responses route should resolve");
+
+        assert_eq!(
+            route.candidate.protocol(),
+            codewhale_config::route::RequestProtocol::Responses
+        );
+        assert_eq!(route.candidate.endpoint().endpoint_key, "responses");
+        assert_eq!(
+            route.candidate.endpoint().responses_profile,
+            Some(codewhale_config::provider::ResponsesDialectProfile::Standard)
+        );
     }
 
     #[test]

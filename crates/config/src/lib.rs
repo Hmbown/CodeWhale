@@ -146,6 +146,10 @@ pub struct ProviderConfigToml {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path_suffix: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wire_format: Option<provider::WireFormat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub responses_profile: Option<provider::ResponsesDialectProfile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<ProviderAuthSourceToml>,
     /// Explicit consent for reading one exact credential file owned by
     /// another CLI. Absence means disabled and must not trigger discovery.
@@ -176,6 +180,8 @@ impl ProviderConfigToml {
             && self.insecure_skip_tls_verify.is_none()
             && http_headers_are_effectively_empty(&self.http_headers)
             && blank(self.path_suffix.as_ref())
+            && self.wire_format.is_none()
+            && self.responses_profile.is_none()
             && self.auth.is_none()
             && self.external_credentials.is_none()
             && self.oauth_credential_generation.is_none()

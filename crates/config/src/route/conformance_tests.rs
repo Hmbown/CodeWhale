@@ -18,6 +18,8 @@ fn none_request(kind: ProviderKind) -> RouteRequest {
         model_selector: None,
         saved_provider_model: None,
         base_url_override: None,
+        wire_format_override: None,
+        responses_profile_override: None,
         limit_overrides: Vec::new(),
     }
 }

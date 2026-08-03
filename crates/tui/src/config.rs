@@ -2914,6 +2914,10 @@ pub struct ProviderConfig {
     pub http_headers: Option<HashMap<String, String>>,
     #[serde(alias = "pathSuffix")]
     pub path_suffix: Option<String>,
+    #[serde(default, alias = "wireFormat")]
+    pub wire_format: Option<codewhale_config::provider::WireFormat>,
+    #[serde(default, alias = "responsesProfile")]
+    pub responses_profile: Option<codewhale_config::provider::ResponsesDialectProfile>,
     #[serde(alias = "reasoningStyle", alias = "reasoningStreamStyle")]
     pub reasoning_stream_style: Option<String>,
     #[serde(
@@ -2954,6 +2958,24 @@ impl ProviderConfig {
             let normalized = kind.trim().to_ascii_lowercase().replace('_', "-");
             normalized == "openai-compatible"
         })
+    }
+
+    fn validate_custom_wire_format(&self, name: &str) -> Result<()> {
+        use codewhale_config::provider::WireFormat;
+
+        match (self.wire_format, self.responses_profile) {
+            (None | Some(WireFormat::ChatCompletions), None) => Ok(()),
+            (None | Some(WireFormat::ChatCompletions), Some(_)) => anyhow::bail!(
+                "providers.{name}.responses_profile requires `wire_format = \"responses\"`"
+            ),
+            (Some(WireFormat::Responses), Some(_)) => Ok(()),
+            (Some(WireFormat::Responses), None) => anyhow::bail!(
+                "providers.{name}.wire_format = \"responses\" requires `responses_profile`"
+            ),
+            (Some(WireFormat::AnthropicMessages), _) => anyhow::bail!(
+                "providers.{name}.wire_format only supports `chat_completions` or `responses` for openai-compatible custom providers"
+            ),
+        }
     }
 }
 
@@ -3159,6 +3181,7 @@ impl ProvidersConfig {
         }
         for (name, config) in &self.custom {
             validate_provider_context_window(&format!("providers.{name}"), config.context_window)?;
+            config.validate_custom_wire_format(name)?;
         }
         Ok(())
     }
@@ -8652,6 +8675,8 @@ fn merge_provider_config(base: ProviderConfig, override_cfg: ProviderConfig) -> 
             .or(base.insecure_skip_tls_verify),
         http_headers: override_cfg.http_headers.or(base.http_headers),
         path_suffix: override_cfg.path_suffix.or(base.path_suffix),
+        wire_format: override_cfg.wire_format.or(base.wire_format),
+        responses_profile: override_cfg.responses_profile.or(base.responses_profile),
         reasoning_stream_style: override_cfg
             .reasoning_stream_style
             .or(base.reasoning_stream_style),
@@ -9575,6 +9600,8 @@ fn provider_config_is_explicit(entry: &ProviderConfig) -> bool {
                 .any(|(name, value)| !name.trim().is_empty() && !value.trim().is_empty())
         })
         || non_empty(entry.path_suffix.as_ref())
+        || entry.wire_format.is_some()
+        || entry.responses_profile.is_some()
         || non_empty(entry.reasoning_stream_style.as_ref())
         || entry.insecure_skip_tls_verify.is_some()
         || non_empty(entry.kind.as_ref())

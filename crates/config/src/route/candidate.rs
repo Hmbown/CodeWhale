@@ -24,7 +24,7 @@ use super::RequestProtocol;
 use super::capabilities::RouteCapabilities;
 use super::ids::{LogicalModelRef, ModelId, ProviderId, WireModelId};
 use super::offering::RouteLimits;
-use crate::ProviderKind;
+use crate::{ProviderKind, provider::ResponsesDialectProfile};
 
 /// A concrete, resolved endpoint the route will talk to.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,6 +35,9 @@ pub struct ResolvedEndpoint {
     pub endpoint_key: String,
     /// Wire protocol spoken at this endpoint.
     pub protocol: RequestProtocol,
+    /// Typed Responses dialect/profile for this exact endpoint, when applicable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub responses_profile: Option<ResponsesDialectProfile>,
 }
 
 /// The CLASS of auth source resolved for the route.

@@ -625,6 +625,8 @@ impl ProviderDashboardRow {
                 .flatten(),
             config.context_window_for_provider_config(provider),
             None,
+            None,
+            None,
         );
         let (
             base_url,

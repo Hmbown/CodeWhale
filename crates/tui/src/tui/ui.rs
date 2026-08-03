@@ -10862,6 +10862,8 @@ async fn apply_model_picker_choice(
             Some(config.deepseek_base_url()),
             config.context_window_for_provider_config(app.api_provider),
             None,
+            None,
+            None,
         ) {
             Ok(resolution) => {
                 resolved_model = resolution.candidate.wire_model_id().as_str().to_string();
@@ -17035,6 +17037,8 @@ fn resolve_loaded_session_route(app: &mut App, config: &Config) {
         saved_provider_model,
         Some(config.deepseek_base_url()),
         context_override,
+        None,
+        None,
         None,
     ) {
         Ok(resolution) => app.set_active_route_resolution(
