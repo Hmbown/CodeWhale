@@ -1746,6 +1746,21 @@ fn compact_tool_result_for_wire(
         };
     }
 
+    // Content already bounded by the adaptive evidence envelope carries its
+    // own honest footer: the omitted count, the on-disk artifact path, and a
+    // recovery instruction. Truncating it again here would destroy that
+    // recovery contract and falsely report that no session-owned artifact
+    // was recorded, so pass it through untouched.
+    if content.contains(crate::tools::truncate::SPILLOVER_RECOVERY_HINT) {
+        return WireToolResult {
+            content: content.to_string(),
+            original_chars,
+            sent_chars: original_chars,
+            truncated: false,
+            deduplicated: false,
+        };
+    }
+
     let head = first_chars(content, TOOL_RESULT_HEAD_CHARS);
     let tail = last_chars(content, TOOL_RESULT_TAIL_CHARS);
     let kept = head.chars().count() + tail.chars().count();

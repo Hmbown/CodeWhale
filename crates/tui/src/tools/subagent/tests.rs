@@ -12846,12 +12846,16 @@ fn subagent_tool_results_spill_to_disk_and_stay_bounded_inline() {
         );
 
         let path = spilled.expect("multi-MB output must spill");
-        // Model-visible content is a bounded, ordinary preview. Internal
-        // storage paths and retrieval machinery stay out of the transcript.
-        assert!(inline.len() <= 4 * 1024);
-        assert!(inline.contains(crate::tools::truncate::SPILLOVER_PREVIEW_HINT));
+        // Model-visible content is a bounded, honest preview: the footer
+        // names the on-disk artifact path and how to read the omitted range
+        // back. Retrieval machinery stays out of the transcript.
+        assert!(inline.len() <= 21 * 1024);
+        assert!(!inline.contains(crate::tools::truncate::SPILLOVER_PREVIEW_HINT));
+        assert!(inline.contains("of output omitted"));
+        assert!(inline.contains("full output at"));
+        assert!(inline.contains(crate::tools::truncate::SPILLOVER_RECOVERY_HINT));
         assert!(inline.contains("\n…\n"));
-        assert!(!inline.contains(&path.display().to_string()));
+        assert!(inline.contains(&path.display().to_string()));
         assert!(!inline.contains("Exact evidence retained"));
         assert!(!inline.contains("retrieve_tool_result"));
         // Full output remains recoverable from disk.
@@ -12881,8 +12885,9 @@ fn subagent_tool_results_spill_to_disk_and_stay_bounded_inline() {
             format!("Error: {raw}"),
         );
         assert!(spilled.is_some());
-        assert!(bounded_err.len() <= 4 * 1024);
-        assert!(bounded_err.contains(crate::tools::truncate::SPILLOVER_PREVIEW_HINT));
+        assert!(bounded_err.len() <= 21 * 1024);
+        assert!(bounded_err.contains("of output omitted"));
+        assert!(bounded_err.contains(crate::tools::truncate::SPILLOVER_RECOVERY_HINT));
         assert!(!bounded_err.contains("Exact evidence retained"));
         assert!(!bounded_err.contains("retrieve_tool_result"));
     });

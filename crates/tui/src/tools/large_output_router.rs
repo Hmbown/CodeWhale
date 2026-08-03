@@ -17,7 +17,13 @@ use crate::tools::spec::ToolResult;
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 /// Default token threshold separating hybrid from handle-only evidence.
-pub const DEFAULT_LARGE_OUTPUT_THRESHOLD_TOKENS: usize = 4_096;
+///
+/// 32K tokens (≈96 KiB of text at the 3 chars/token estimate) keeps ordinary
+/// tool results — file reads, test runs, build logs up to a few thousand
+/// lines — fully inline. Only genuinely large outputs spill to evidence
+/// artifacts, where the model-facing preview names the artifact path and how
+/// to recover the omitted range.
+pub const DEFAULT_LARGE_OUTPUT_THRESHOLD_TOKENS: usize = 32_768;
 
 /// Approximate characters-per-token ratio used for the heuristic estimate.
 /// We intentionally choose a conservative value (3 chars/token) so we err
@@ -346,10 +352,15 @@ mod tests {
     }
 
     #[test]
+    fn default_threshold_is_32k_tokens() {
+        assert_eq!(DEFAULT_LARGE_OUTPUT_THRESHOLD_TOKENS, 32_768);
+    }
+
+    #[test]
     fn synthesise_above_threshold() {
         let router = LargeOutputRouter::default();
-        // DEFAULT threshold = 4096 tokens; 3 chars/token → 4096*3 = 12288 chars
-        let big = "a".repeat(13_000);
+        // DEFAULT threshold = 32768 tokens; 3 chars/token → 32768*3 = 98304 chars
+        let big = "a".repeat(100_000);
         let result = make_result(&big);
         assert!(matches!(
             router.route("read_file", &result, false),
@@ -360,7 +371,7 @@ mod tests {
     #[test]
     fn raw_bypass_skips_routing() {
         let router = LargeOutputRouter::default();
-        let big = "a".repeat(13_000);
+        let big = "a".repeat(100_000);
         let result = make_result(&big);
         // raw=true → always pass through regardless of size
         assert_eq!(
@@ -372,7 +383,7 @@ mod tests {
     #[test]
     fn adaptive_evidence_cannot_bypass_context_bound_with_raw_flag() {
         let router = LargeOutputRouter::default();
-        let big = make_result(&"a".repeat(13_000));
+        let big = make_result(&"a".repeat(100_000));
         let (routing, _, _) = router.evidence_routing("exec_shell", &big, true);
         assert_eq!(routing, EvidenceRouting::HandleOnly);
     }

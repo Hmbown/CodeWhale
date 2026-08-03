@@ -11545,6 +11545,28 @@ fn v4_keeps_large_file_reads_but_compacts_noisy_shell_output() {
 }
 
 #[test]
+fn evidence_bounded_preview_is_not_recompacted() {
+    // The adaptive evidence envelope already produced an honest bounded
+    // preview (head + footer with the recovery path + tail). The context
+    // compactor must pass it through untouched, even beyond the 12K hard
+    // limit — re-compacting would strip the recovery contract.
+    let content = format!(
+        "{}\n\n… 19.0 KiB of output omitted (123 lines) — full output at /tmp/art_call.txt; read it back with the read_file tool or with sed line ranges\n\n…\n{}",
+        "h".repeat(32 * 1024),
+        "t".repeat(8 * 1024)
+    );
+    let output = ToolResult::success(content.clone()).with_metadata(json!({
+        "evidence_available": true,
+        "truncated": true,
+        "spillover_path": "/tmp/art_call.txt"
+    }));
+
+    let context = compact_tool_result_for_context("deepseek-v3.2-128k", "Bash", &output);
+    assert_eq!(context, content);
+    assert!(context.contains("full output at /tmp/art_call.txt"));
+}
+
+#[test]
 fn codex_tool_retention_uses_oauth_route_window_not_api_model_window() {
     let content = "route-effective context\n".repeat(900);
     let output = ToolResult::success(content.clone());

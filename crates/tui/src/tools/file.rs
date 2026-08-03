@@ -185,7 +185,9 @@ impl ToolSpec for ReadFileTool {
 
             let total_lines = contents.lines().count();
             if total_lines <= SMALL_FILE_LINES {
-                return Ok(ToolResult::success(contents));
+                return Ok(ToolResult::success(contents).with_metadata(json!({
+                    "evidence_routing": "inline"
+                })));
             }
 
             // Small in bytes but too many lines: render the default window
@@ -259,7 +261,9 @@ impl ToolSpec for ReadFileTool {
                  [NO CONTENT] start_line {start_line} is beyond total_lines {total_lines}.\n\
                  </file>"
             );
-            return Ok(ToolResult::success(output));
+            return Ok(ToolResult::success(output).with_metadata(json!({
+                "evidence_routing": "inline"
+            })));
         }
 
         Ok(render_line_window(
@@ -392,7 +396,12 @@ fn render_line_window(
     }
     output.push_str("</file>");
 
-    ToolResult::success(output)
+    // The file tool self-bounds at 16 KiB and carries its own continuation
+    // contract (`next_start_line`), so the large-output spillover envelope
+    // must never re-wrap a read result with a second, weaker truncation.
+    ToolResult::success(output).with_metadata(json!({
+        "evidence_routing": "inline"
+    }))
 }
 
 fn read_image_via_ocr(path: &Path, requested_path: &str) -> Result<ToolResult, ToolError> {

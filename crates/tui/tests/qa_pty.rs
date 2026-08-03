@@ -2793,8 +2793,15 @@ fn spawn_tool_lifecycle_screen_fixture(
     let listener = TcpListener::bind("127.0.0.1:0")?;
     listener.set_nonblocking(true)?;
     let address = listener.local_addr()?;
+    // The Bash adapter self-bounds each stream to ~30 KB, so a single stream
+    // would fit inside the hybrid 32 KiB + 8 KiB preview budget under the
+    // 32_768-token evidence threshold. Fill stdout AND stderr (~60 KB
+    // combined) so the envelope still omits a middle range; the sentinel
+    // rides stderr at filler line 100 — inside the shell tool's own 22 KB
+    // head bound (so the artifact retains it) but beyond the preview's
+    // 32 KiB head (so the model receipt omits it).
     let shell_command = format!(
-        "printf 'PTY-TOOL-START\\n'; while [ ! -f {release_signal} ]; do sleep 0.05; done; i=0; while [ \"$i\" -lt 2800 ]; do if [ \"$i\" -eq 120 ]; then printf 'PTY-EVIDENCE-DEEP-SENTINEL\\n'; fi; printf 'PTY-EVIDENCE-%04d-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n' \"$i\"; i=$((i + 1)); done; printf 'PTY-TOOL-END\\n'"
+        "printf 'PTY-TOOL-START\\n'; while [ ! -f {release_signal} ]; do sleep 0.05; done; i=0; while [ \"$i\" -lt 2800 ]; do printf 'PTY-EVIDENCE-%04d-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n' \"$i\"; i=$((i + 1)); done; {{ j=0; while [ \"$j\" -lt 2800 ]; do if [ \"$j\" -eq 100 ]; then printf 'PTY-EVIDENCE-DEEP-SENTINEL\\n'; fi; printf 'PTY-EVIDENCE-ERR-%04d-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n' \"$j\"; j=$((j + 1)); done; }} >&2; printf 'PTY-TOOL-END\\n'"
     );
     let replies = [
         pty_tool_call_sse(
@@ -2901,22 +2908,25 @@ fn spawn_tool_lifecycle_screen_fixture(
                             .and_then(|message| message.get("content"))
                             .and_then(serde_json::Value::as_str)
                             .unwrap_or_default();
-                        if !bash_result.contains(
-                            "of output omitted — view full output in the tool details view",
-                        ) || bash_result.contains("Exact evidence retained")
-                            || bash_result.contains("art_call_bash_pty")
+                        // Honest bounded-preview contract: the footer states
+                        // the omission and names the on-disk artifact path so
+                        // the model can read the omitted range back; the deep
+                        // sentinel stays out of the inline receipt.
+                        if !bash_result.contains("of output omitted")
+                            || !bash_result.contains("full output at")
+                            || !bash_result.contains("art_call_bash_pty.txt")
+                            || bash_result.contains("Exact evidence retained")
                             || bash_result.contains("retrieve_tool_result")
                             || bash_result.contains("PTY-EVIDENCE-DEEP-SENTINEL")
-                            || bash_result.contains("/artifacts/")
                         {
                             contract_errors.push(format!(
-                                    "final request violated the bounded plain Bash preview contract (preview={}, legacy_receipt={}, handle={}, retrieval_tool={}, deep_sentinel={}, artifact_path={})",
-                                    bash_result.contains("of output omitted — view full output in the tool details view"),
+                                    "final request violated the honest bounded Bash preview contract (omission={}, path_footer={}, artifact_path={}, legacy_receipt={}, retrieval_tool={}, deep_sentinel={})",
+                                    bash_result.contains("of output omitted"),
+                                    bash_result.contains("full output at"),
+                                    bash_result.contains("art_call_bash_pty.txt"),
                                     bash_result.contains("Exact evidence retained"),
-                                    bash_result.contains("art_call_bash_pty"),
                                     bash_result.contains("retrieve_tool_result"),
                                     bash_result.contains("PTY-EVIDENCE-DEEP-SENTINEL"),
-                                    bash_result.contains("/artifacts/"),
                                 ));
                         }
                     }

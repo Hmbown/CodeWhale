@@ -124,13 +124,22 @@ impl ToolRegistry {
 
         if let Some(router) = ctx.large_output_router.as_ref() {
             use crate::tools::large_output_router::{
-                LargeOutputRouter, RouteDecision, classic_output_routing_enabled,
+                EvidenceRouting, LargeOutputRouter, RouteDecision, classic_output_routing_enabled,
             };
             if !classic_output_routing_enabled() {
-                let (routing, estimated_tokens, threshold) =
+                let (estimated_routing, estimated_tokens, threshold) =
                     router.evidence_routing(name, &result, raw_bypass);
                 let metadata = result.metadata.get_or_insert_with(|| serde_json::json!({}));
                 if let Some(object) = metadata.as_object_mut() {
+                    // A tool that self-bounds its output behind its own
+                    // recovery contract (e.g. read_file's `next_start_line`
+                    // paging) declares its routing itself; the size estimate
+                    // must not override that and double-wrap the result.
+                    let routing = object
+                        .get("evidence_routing")
+                        .cloned()
+                        .and_then(|value| serde_json::from_value::<EvidenceRouting>(value).ok())
+                        .unwrap_or(estimated_routing);
                     object.insert(
                         "evidence_routing".to_string(),
                         serde_json::to_value(routing)
