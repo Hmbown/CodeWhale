@@ -330,8 +330,9 @@ mod tests {
         );
         assert!(!planned.auto_controls_reasoning);
         assert_eq!(planned.selected_reasoning_effort, None);
-        // DeepSeek collapses low to high, but only after the concrete route is
-        // known; the App keeps the unresolved preference as Low.
-        assert_eq!(planned.effective_reasoning_effort.as_deref(), Some("high"));
+        // First-party DeepSeek routes carry low as the real wire tier
+        // (`reasoning_effort` low/high/max are documented); the App keeps the
+        // unresolved preference as Low either way.
+        assert_eq!(planned.effective_reasoning_effort.as_deref(), Some("low"));
     }
 }

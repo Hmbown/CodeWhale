@@ -2153,3 +2153,164 @@ async fn default_cwd_uses_context_workspace_not_shell_manager_default() {
         result.content
     );
 }
+
+// ── Kill-path overshoot regression tests (FINISH-0.9.4 #52 multiplier 2) ─────
+//
+// The foreground Bash kill path must return at ~timeout + a small bounded
+// grace, even when the command ignores SIGTERM or a descendant escapes the
+// process group while holding the output pipe open. Before the fix, an
+// escaped descendant wedged the blocking reader-thread join inside kill()
+// until the descendant exited on its own (observed: ~180s past a 120s
+// timeout in the wild).
+
+#[cfg(unix)]
+const SHELL_SIGTERM_HELPER_ENV: &str = "CODEWHALE_SHELL_SIGTERM_HELPER";
+#[cfg(unix)]
+const SHELL_ESCAPE_HELPER_ENV: &str = "CODEWHALE_SHELL_ESCAPE_HELPER";
+#[cfg(unix)]
+const SHELL_ESCAPED_GRANDCHILD_ENV: &str = "CODEWHALE_SHELL_ESCAPED_GRANDCHILD";
+
+/// Helper role: ignore SIGTERM and idle. Runs as the shell's direct child
+/// (same process group), so only the SIGKILL escalation can stop it.
+#[cfg(unix)]
+#[test]
+fn shell_sigterm_ignoring_helper_process() {
+    if std::env::var(SHELL_SIGTERM_HELPER_ENV).ok().as_deref() != Some("1") {
+        return;
+    }
+    unsafe {
+        libc::signal(libc::SIGTERM, libc::SIG_IGN);
+    }
+    let pid_file = PathBuf::from(
+        std::env::var(SHELL_DESCENDANT_PID_FILE_ENV).expect("sigterm helper pid file"),
+    );
+    std::fs::write(pid_file, std::process::id().to_string()).expect("write sigterm helper pid");
+    loop {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Helper role: spawn a grandchild in its OWN process group (escaping the
+/// shell's group) that inherits the output pipe, then exit immediately. The
+/// wrapper shell keeps running (`sleep` after `&`), so the job stays Running
+/// while the escaped grandchild holds the reader thread's pipe open.
+#[cfg(unix)]
+// The grandchild deliberately outlives this helper and is never wait()ed on —
+// escaping reaping is exactly what the regression exercises; the test reaps
+// it directly via SIGKILL at the end.
+#[allow(clippy::zombie_processes)]
+#[test]
+fn shell_group_escape_helper_process() {
+    if std::env::var(SHELL_ESCAPE_HELPER_ENV).ok().as_deref() != Some("1") {
+        return;
+    }
+    let test_binary = std::env::current_exe().expect("current test binary");
+    let pid_file = std::env::var(SHELL_DESCENDANT_PID_FILE_ENV).expect("escape pid file");
+    let mut cmd = Command::new(test_binary);
+    cmd.arg("--exact")
+        .arg("tools::shell::tests::shell_escaped_grandchild_helper_process")
+        .arg("--nocapture")
+        .env(SHELL_ESCAPED_GRANDCHILD_ENV, "1")
+        .env(SHELL_DESCENDANT_PID_FILE_ENV, pid_file);
+    // A distinct process group is enough to escape `kill(-wrapper_pgid)`;
+    // stdout/stderr are inherited, so the grandchild keeps the pipe open.
+    #[cfg(unix)]
+    cmd.process_group(0);
+    let _child = cmd.spawn().expect("spawn escaped grandchild");
+}
+
+/// Helper role: the escaped grandchild — ignores SIGTERM, reports its pid,
+/// then idles (holding the inherited output pipe open the whole time).
+#[cfg(unix)]
+#[test]
+fn shell_escaped_grandchild_helper_process() {
+    if std::env::var(SHELL_ESCAPED_GRANDCHILD_ENV).ok().as_deref() != Some("1") {
+        return;
+    }
+    unsafe {
+        libc::signal(libc::SIGTERM, libc::SIG_IGN);
+    }
+    let pid_file =
+        PathBuf::from(std::env::var(SHELL_DESCENDANT_PID_FILE_ENV).expect("grandchild pid file"));
+    std::fs::write(pid_file, std::process::id().to_string()).expect("write grandchild pid");
+    std::thread::sleep(Duration::from_secs(30));
+}
+
+/// Required regression: a foreground command that ignores SIGTERM must be
+/// dead and the tool must have returned within timeout + a small grace
+/// (2s timeout, assert wall < 10s).
+#[cfg(unix)]
+#[tokio::test]
+async fn foreground_timeout_kills_sigterm_ignoring_command_within_grace() {
+    let tmp = tempdir().expect("tempdir");
+    let pid_file = tmp.path().join("sigterm-helper.pid");
+    let test_binary = std::env::current_exe().expect("current test binary");
+    let command = format!(
+        "{SHELL_SIGTERM_HELPER_ENV}=1 {SHELL_DESCENDANT_PID_FILE_ENV}={} exec {} --exact {} --nocapture",
+        shell_words::quote(&pid_file.display().to_string()),
+        shell_words::quote(&test_binary.display().to_string()),
+        shell_words::quote("tools::shell::tests::shell_sigterm_ignoring_helper_process"),
+    );
+    let ctx = ToolContext::new(tmp.path());
+
+    let started = Instant::now();
+    let result = BashTool::new("Bash")
+        .execute(json!({"command": command, "timeout_ms": 2_000}), &ctx)
+        .await
+        .expect("execute");
+    let wall = started.elapsed();
+
+    assert!(!result.success);
+    let meta = result.metadata.expect("metadata");
+    assert_eq!(meta.get("status").and_then(Value::as_str), Some("TimedOut"));
+    assert!(
+        wall < Duration::from_secs(10),
+        "kill path overshot the 2s timeout: wall {wall:?}"
+    );
+    let helper_pid = wait_for_shell_pid_file(&pid_file);
+    assert!(
+        wait_for_shell_pid_exit(helper_pid),
+        "SIGTERM-ignoring helper {helper_pid} survived the timeout kill"
+    );
+}
+
+/// Regression for the ~180s kill-path overshoot: a descendant that escaped
+/// the process group keeps the output pipe open after the group is killed.
+/// kill() must still return within a bounded grace instead of blocking on
+/// the reader-thread join until the descendant exits on its own.
+#[cfg(unix)]
+#[tokio::test]
+async fn kill_returns_promptly_when_escaped_descendant_holds_pipe_open() {
+    let tmp = tempdir().expect("tempdir");
+    let pid_file = tmp.path().join("escaped-grandchild.pid");
+    let test_binary = std::env::current_exe().expect("current test binary");
+    let command = format!(
+        "{SHELL_ESCAPE_HELPER_ENV}=1 {SHELL_DESCENDANT_PID_FILE_ENV}={} {} --exact {} --nocapture & sleep 60",
+        shell_words::quote(&pid_file.display().to_string()),
+        shell_words::quote(&test_binary.display().to_string()),
+        shell_words::quote("tools::shell::tests::shell_group_escape_helper_process"),
+    );
+    let mut manager = ShellManager::new(tmp.path().to_path_buf());
+    let started_bg = manager
+        .execute(&command, None, 600_000, true)
+        .expect("start wrapper");
+    let task_id = started_bg.task_id.expect("task id");
+    let grandchild = wait_for_shell_pid_file(&pid_file);
+
+    let started = Instant::now();
+    let killed = manager.kill(&task_id).expect("kill");
+    let wall = started.elapsed();
+
+    assert_eq!(killed.status, ShellStatus::Killed);
+    assert!(
+        wall < Duration::from_secs(10),
+        "kill blocked {wall:?} on a reader wedged by an escaped descendant"
+    );
+
+    // Cleanup: the escaped grandchild is out of reach of the group kill by
+    // construction; reap it directly so the test does not leak a sleeper.
+    unsafe {
+        libc::kill(grandchild, libc::SIGKILL);
+    }
+    assert!(wait_for_shell_pid_exit(grandchild));
+}

@@ -266,10 +266,12 @@ impl ReasoningEffort {
     /// the request. Both K3 routes are always-thinking, so `off` becomes the
     /// lowest supported tier. The Kimi Code membership route otherwise keeps
     /// its low/high/max mapping; direct Moonshot K3 additionally maps `medium`
-    /// to `high`. Generic Moonshot and every other non-Codex route retain the
-    /// historic high coercion. This intentionally does not change
-    /// [`Self::normalize_for_provider`], whose generic wire semantics are used
-    /// by older callers that do not yet have a route receipt.
+    /// to `high`. First-party DeepSeek routes keep `low` (the wire documents
+    /// low/high/max) while rounding `medium` up to `high`. Generic Moonshot
+    /// and every other non-Codex route retain the historic high coercion.
+    /// This intentionally does not change [`Self::normalize_for_provider`],
+    /// whose generic wire semantics are used by older callers that do not yet
+    /// have a route receipt.
     #[must_use]
     pub fn normalize_for_route(
         self,
@@ -293,6 +295,17 @@ impl ReasoningEffort {
         }
         if provider == ApiProvider::OpenaiCodex {
             return normalized;
+        }
+        // First-party DeepSeek routes document `reasoning_effort` low/high/max
+        // on the wire (no medium), so `low` is a real, cheaper tier there and
+        // must reach the wire as low; `medium` rounds up to high because the
+        // dialect has no such value (#52).
+        if matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN) {
+            return match normalized {
+                Self::Low => Self::Low,
+                Self::Medium => Self::High,
+                other => other,
+            };
         }
         match normalized {
             Self::Low | Self::Medium => Self::High,

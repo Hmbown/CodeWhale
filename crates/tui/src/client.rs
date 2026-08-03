@@ -3149,10 +3149,30 @@ pub(super) fn apply_reasoning_effort(
             ApiProvider::Xai => {}
         },
         "low" | "minimal" | "medium" | "mid" | "high" | "" => match provider {
-            // DeepSeek compatibility: low/medium both map to high
-            ApiProvider::Deepseek
-            | ApiProvider::DeepseekCN
-            | ApiProvider::Siliconflow
+            // DeepSeek first-party Chat Completions: the wire documents
+            // exactly three `reasoning_effort` values — `low`, `high`, `max`
+            // (https://api-docs.deepseek.com/api/create-chat-completion) —
+            // plus the `thinking` on/off toggle. There is no `medium` on the
+            // wire, so the honest ladder is:
+            //   low/minimal → "low"  (a real cheaper tier; it used to be
+            //                         collapsed onto high, so no tier below
+            //                         high existed — FINISH-0.9.4 #52)
+            //   medium/mid  → "high" (nearest documented tier; the wire has
+            //                         no medium and the server default in
+            //                         thinking mode is also high)
+            //   high/""     → "high"
+            ApiProvider::Deepseek | ApiProvider::DeepseekCN => {
+                let value = match normalized.as_str() {
+                    "low" | "minimal" => "low",
+                    _ => "high",
+                };
+                body["reasoning_effort"] = json!(value);
+                body["thinking"] = json!({ "type": "enabled" });
+            }
+            // DeepSeek-compatible hosted routes: low/medium both map to high.
+            // Their own wire contracts are not verified here, so the historic
+            // collapse stays rather than inventing unsupported wire values.
+            ApiProvider::Siliconflow
             | ApiProvider::SiliconflowCn
             | ApiProvider::Sglang
             | ApiProvider::Volcengine
@@ -7214,6 +7234,131 @@ mod tests {
         );
         assert!(body.get("reasoning_effort").is_none());
         assert!(body.get("extra_body").is_none());
+    }
+
+    /// First-party DeepSeek routes document `reasoning_effort` low/high/max on
+    /// the wire (no medium): low is a real cheaper tier, medium rounds up to
+    /// high (#52). Hosted DeepSeek-compatible routes keep the historic
+    /// low/medium → high collapse because their own wire contracts are not
+    /// verified here.
+    #[test]
+    fn reasoning_effort_deepseek_maps_the_documented_wire_ladder() {
+        let mut body = json!({});
+        apply_reasoning_effort(&mut body, Some("low"), ApiProvider::Deepseek);
+        assert_eq!(
+            body,
+            json!({ "reasoning_effort": "low", "thinking": { "type": "enabled" } })
+        );
+
+        let mut body = json!({});
+        apply_reasoning_effort(&mut body, Some("medium"), ApiProvider::Deepseek);
+        assert_eq!(
+            body,
+            json!({ "reasoning_effort": "high", "thinking": { "type": "enabled" } })
+        );
+
+        for provider in [ApiProvider::Deepseek, ApiProvider::DeepseekCN] {
+            let mut body = json!({});
+            apply_reasoning_effort(&mut body, Some("high"), provider);
+            assert_eq!(
+                body,
+                json!({ "reasoning_effort": "high", "thinking": { "type": "enabled" } }),
+                "provider {provider:?}"
+            );
+        }
+
+        for provider in [ApiProvider::Siliconflow, ApiProvider::Deepinfra] {
+            let mut body = json!({});
+            apply_reasoning_effort(&mut body, Some("low"), provider);
+            assert_eq!(
+                body,
+                json!({ "reasoning_effort": "high", "thinking": { "type": "enabled" } }),
+                "hosted route {provider:?} keeps the collapse"
+            );
+        }
+    }
+
+    async fn capture_deepseek_chat_body_for_effort(effort: Option<&str>) -> Value {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "chatcmpl-deepseek-effort-ladder",
+                "object": "chat.completion",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let request = MessageRequest {
+            model: "deepseek-v4-pro".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "effort ladder capture".to_string(),
+                    cache_control: None,
+                }],
+            }],
+            max_tokens: 64,
+            system: None,
+            tools: None,
+            tool_choice: None,
+            metadata: None,
+            thinking: None,
+            reasoning_effort: effort.map(str::to_string),
+            stream: Some(false),
+            temperature: None,
+            top_p: None,
+        };
+        let client = deepseek_request_boundary_client(
+            crate::config::DEFAULT_DEEPSEEK_BASE_URL,
+            server.uri(),
+        );
+        client
+            .create_message(request)
+            .await
+            .expect("non-streaming request succeeds");
+
+        let requests = server.received_requests().await.expect("recorded request");
+        assert_eq!(requests.len(), 1);
+        serde_json::from_slice(&requests[0].body).expect("captured request JSON")
+    }
+
+    /// Request-body capture per effort level on the first-party DeepSeek chat
+    /// route: the wire must carry the documented low/high/max ladder and the
+    /// thinking toggle, never an invented value (#52).
+    #[tokio::test]
+    async fn deepseek_chat_wire_body_tracks_the_documented_effort_ladder() {
+        for (effort, expected_effort, expected_thinking) in [
+            (Some("low"), Some("low"), Some("enabled")),
+            (Some("medium"), Some("high"), Some("enabled")),
+            (Some("high"), Some("high"), Some("enabled")),
+            (Some("max"), Some("max"), Some("enabled")),
+            (Some("off"), None, Some("disabled")),
+            (None, None, None),
+        ] {
+            let body = capture_deepseek_chat_body_for_effort(effort).await;
+            assert_eq!(
+                body.get("reasoning_effort").and_then(Value::as_str),
+                expected_effort,
+                "reasoning_effort on the wire for {effort:?}: {body}"
+            );
+            assert_eq!(
+                body.pointer("/thinking/type").and_then(Value::as_str),
+                expected_thinking,
+                "thinking on the wire for {effort:?}: {body}"
+            );
+        }
     }
 
     #[test]

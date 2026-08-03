@@ -273,23 +273,75 @@ enum ShellChild {
 }
 
 #[cfg(unix)]
+fn signal_child_process_group(child: &Child, signal: libc::c_int) -> std::io::Result<()> {
+    let pgid = child.id() as libc::pid_t;
+    if pgid <= 0 {
+        return Ok(());
+    }
+
+    let result = unsafe { libc::kill(-pgid, signal) };
+    if result == 0 {
+        Ok(())
+    } else {
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::ESRCH) {
+            // The group is already gone (or never formed); nothing to signal.
+            Ok(())
+        } else {
+            Err(err)
+        }
+    }
+}
+
+#[cfg(unix)]
 fn kill_child_process_group(child: &mut Child) -> std::io::Result<()> {
     let pgid = child.id() as libc::pid_t;
     if pgid <= 0 {
         return child.kill();
     }
 
-    let result = unsafe { libc::kill(-pgid, libc::SIGKILL) };
-    if result == 0 {
-        Ok(())
-    } else {
-        let err = std::io::Error::last_os_error();
-        if err.raw_os_error() == Some(libc::ESRCH) {
-            Ok(())
-        } else {
-            child.kill()
+    signal_child_process_group(child, libc::SIGKILL).or_else(|_| child.kill())
+}
+
+/// Bounded wait for the direct child to exit. Returns true once the child was
+/// reaped (or the wait errored), false when the grace elapsed first. Unlike
+/// `Child::wait`, this can never wedge the caller behind a child stuck in
+/// uninterruptible sleep.
+#[cfg(unix)]
+fn wait_child_bounded(child: &mut Child, grace: Duration) -> bool {
+    let deadline = Instant::now() + grace;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => return true,
+            Ok(None) => {}
         }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+/// Terminate a shell's whole process group with a bounded SIGTERM → SIGKILL
+/// escalation (#52). The previous kill path SIGKILLed only the direct child
+/// and then joined output-reader threads with no timeout, so the tool
+/// returned whenever the command's descendants felt like exiting — observed
+/// as a 120s foreground timeout returning after 300s. Every step here is
+/// bounded: the tool returns at ~timeout + grace.
+#[cfg(unix)]
+fn terminate_child_process_group(child: &mut Child) -> std::io::Result<()> {
+    // Cooperative stop first so shells and their children can run traps and
+    // clean up; bounded so a SIGTERM-ignoring command cannot stall the caller.
+    let _ = signal_child_process_group(child, libc::SIGTERM);
+    if wait_child_bounded(child, KILL_TERM_GRACE) {
+        // The leader exited on SIGTERM; descendants may linger, so SIGKILL
+        // the rest of the group (ESRCH when it is already empty).
+        kill_child_process_group(child)?;
+        return Ok(());
+    }
+    kill_child_process_group(child)?;
+    let _ = wait_child_bounded(child, KILL_REAP_GRACE);
+    Ok(())
 }
 
 /// Configure parent-death signaling so shell-spawned children are reaped when
@@ -497,10 +549,15 @@ fn terminate_unregistered_process(child: &mut Child, job: Option<&WindowsJob>) {
 #[cfg(not(windows))]
 fn terminate_unregistered_process(child: &mut Child) {
     #[cfg(unix)]
-    let _ = kill_child_process_group(child);
+    {
+        let _ = kill_child_process_group(child);
+        let _ = wait_child_bounded(child, KILL_REAP_GRACE);
+    }
     #[cfg(not(unix))]
-    let _ = child.kill();
-    let _ = child.wait();
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -549,14 +606,6 @@ impl ShellChild {
             ShellChild::Pty(child) => child
                 .try_wait()
                 .map(|status| status.map(ShellExitStatus::from_pty)),
-        }
-    }
-
-    fn wait(&mut self) -> std::io::Result<ShellExitStatus> {
-        match self {
-            ShellChild::Process(child) => child.wait().map(ShellExitStatus::from_std),
-            #[cfg(not(target_env = "ohos"))]
-            ShellChild::Pty(child) => child.wait().map(ShellExitStatus::from_pty),
         }
     }
 
@@ -619,6 +668,22 @@ fn spawn_reader_thread<R: Read + Send + 'static>(
 
 const SYNC_READER_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 const STALE_NO_OUTPUT_AFTER: Duration = Duration::from_secs(60);
+
+/// Grace between SIGTERM and SIGKILL on the shell kill path (timeout,
+/// cancel, drop). Bounded so a SIGTERM-ignoring command is force-killed
+/// instead of stalling the tool (#52).
+#[cfg(unix)]
+const KILL_TERM_GRACE: Duration = Duration::from_millis(500);
+/// Bounded reap wait after SIGKILL; a child stuck in uninterruptible sleep
+/// must not wedge the caller behind an unbounded `wait`.
+#[cfg(unix)]
+const KILL_REAP_GRACE: Duration = Duration::from_millis(1_000);
+/// Bounded join for output-reader threads after the process group is killed.
+/// A descendant that escaped the group (its own session/process group) keeps
+/// its inherited pipe write-end open, so the reader cannot see EOF until that
+/// descendant exits on its own — an unbounded join held the shell-manager
+/// lock for minutes and overshot the tool timeout (#52).
+const READER_JOIN_GRACE: Duration = Duration::from_millis(2_000);
 
 fn spawn_sync_reader_thread<R: Read + Send + 'static>(
     mut reader: R,
@@ -850,8 +915,11 @@ impl BackgroundShell {
         // Kill the whole process group before joining reader threads.
         // When the shell spawned persistent background jobs (e.g. `nohup curl`),
         // those subprocesses keep the pipe write-ends open after the shell exits.
-        // Without this kill, handle.join() blocks indefinitely, freezing the UI
-        // event loop that calls list_jobs() → poll() → collect_output().
+        // Without this kill, the reader join would block until the descendant
+        // exits, freezing the UI event loop that calls list_jobs() → poll() →
+        // collect_output(). The joins themselves are additionally bounded
+        // (READER_JOIN_GRACE) because a descendant in its own session/process
+        // group escapes even the group kill (#52).
         #[cfg(unix)]
         if let Some(child) = self.child.as_mut() {
             match child {
@@ -974,7 +1042,14 @@ impl BackgroundShell {
                             .context("Failed to kill process tree")?;
                         let _ = proc.wait();
                     }
-                    #[cfg(not(windows))]
+                    #[cfg(all(not(windows), unix))]
+                    {
+                        // Bounded SIGTERM → SIGKILL escalation against the
+                        // whole process group; returns within ~grace even if
+                        // the command ignores SIGTERM (#52).
+                        terminate_child_process_group(proc).context("Failed to kill process")?;
+                    }
+                    #[cfg(all(not(windows), not(unix)))]
                     {
                         proc.kill().context("Failed to kill process")?;
                         let _ = proc.wait();
@@ -1128,7 +1203,20 @@ fn finish_background_reader(handle: std::thread::JoinHandle<()>, status: &ShellS
     #[cfg(not(windows))]
     let _ = status;
 
-    let _ = handle.join();
+    // Bounded join (#52): after the process group is killed the reader
+    // normally sees EOF immediately, but a descendant that escaped the group
+    // (its own session/process group) keeps its inherited pipe write-end
+    // open, so the reader stays blocked until that descendant exits on its
+    // own. Joining unboundedly froze the foreground shell — and, through the
+    // shell-manager lock, every other shell — for minutes. On timeout the
+    // join is handed to a helper thread and we return; the reader thread
+    // still finishes on its own once the pipe finally closes.
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = handle.join();
+        let _ = done_tx.send(());
+    });
+    let _ = done_rx.recv_timeout(READER_JOIN_GRACE);
 }
 
 impl Drop for BackgroundShell {
@@ -1146,9 +1234,24 @@ impl Drop for BackgroundShell {
                     let _ = child.kill();
                 }
             }
-            #[cfg(not(windows))]
-            let _ = child.kill();
-            let _ = child.wait();
+            #[cfg(all(not(windows), unix))]
+            {
+                let _ = child.kill();
+                match child {
+                    ShellChild::Process(proc) => {
+                        let _ = wait_child_bounded(proc, KILL_REAP_GRACE);
+                    }
+                    #[cfg(not(target_env = "ohos"))]
+                    ShellChild::Pty(child) => {
+                        let _ = child.wait();
+                    }
+                }
+            }
+            #[cfg(all(not(windows), not(unix)))]
+            {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
         }
     }
 }

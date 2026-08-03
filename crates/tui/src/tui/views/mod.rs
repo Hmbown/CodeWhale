@@ -2974,7 +2974,7 @@ fn config_hint_for_key(key: &str) -> &'static str {
             "DeepSeek-only legacy fallback; other providers use their provider-scoped model above"
         }
         "reasoning_effort" => {
-            "DeepSeek: auto/off/high/max; Codex: low/medium/high/xhigh; default clears saved value"
+            "DeepSeek: auto/off/low/high/max (medium rounds up to high — the wire has no medium); Codex: low/medium/high/xhigh; default clears saved value"
         }
         "mcp_config_path" => "path to mcp.json",
         "fleet.exec.max_spawn_depth" => {
