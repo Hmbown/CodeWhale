@@ -123,8 +123,17 @@ impl PagerView {
     }
 
     pub fn from_text(title: impl Into<String>, text: &str, width: u16) -> Self {
+        // Pager bodies frequently carry tool output or worker transcripts
+        // (e.g. the sub-agent chat pager re-reads the raw JSONL artifact from
+        // disk). Any CSI/OSC bytes in that content are emitted verbatim by
+        // the terminal backend, which can re-enable mouse tracking or leave
+        // the user's shell executing fragments after the TUI exits. Strip
+        // every escape sequence and stray control byte at this chokepoint so
+        // no pager surface can inject terminal state.
+        let mut sanitized = String::with_capacity(text.len());
+        crate::tui::osc8::strip_ansi_into(text, &mut sanitized);
         let mut lines = Vec::new();
-        for raw in text.lines() {
+        for raw in sanitized.lines() {
             for wrapped in wrap_text(raw, width.max(1) as usize) {
                 lines.push(Line::from(Span::raw(wrapped)));
             }
@@ -951,6 +960,65 @@ mod tests {
     fn from_text_keeps_one_display_row_per_blank_source_line() {
         let pager = PagerView::from_text("T", "first\n\nthird", 80);
         assert_eq!(pager.body_text(), "first\n\nthird");
+    }
+
+    #[test]
+    fn from_text_strips_csi_mouse_and_osc_sequences() {
+        // A worker transcript can carry captured terminal bytes (a child TUI's
+        // mouse-tracking handshake, SGR color, OSC hyperlinks). Rendering them
+        // raw emits the escapes to the user's terminal, which re-enables mouse
+        // reporting after exit and leaves the shell executing fragments.
+        let hostile = "── assistant ──\n\
+                       enabling \u{1b}[?1003h\u{1b}[?1006h mouse tracking\n\
+                       click bytes \u{1b}[<65;72;17M\u{1b}[<35;131;42M arrived\n\
+                       \u{1b}[31mred text\u{1b}[0m and an \u{1b}]8;;https://example.com\u{7}OSC link\u{1b}]8;;\u{1b}\\\n\
+                       trailing stray \u{1b}\u{7}bytes\u{1b}c done";
+        let pager = PagerView::from_text("Agent transcript", hostile, 200);
+        let body = pager.body_text();
+        assert!(
+            !body.contains('\u{1b}'),
+            "no ESC byte may survive into the pager body: {body:?}"
+        );
+        assert!(
+            !body.contains('\u{7}'),
+            "no BEL byte may survive into the pager body: {body:?}"
+        );
+        for fragment in ["?1003h", "?1006h", "<65;72;17M", "<35;131;42M", "]8;;"] {
+            assert!(
+                !body.contains(fragment),
+                "escape fragment {fragment:?} must be stripped, not painted: {body:?}"
+            );
+        }
+        assert!(body.contains("red text"), "visible text survives: {body:?}");
+        assert!(body.contains("OSC link"), "link label survives: {body:?}");
+        assert!(body.contains("done"), "trailing text survives: {body:?}");
+    }
+
+    #[test]
+    fn from_text_sanitizes_jsonl_transcript_shaped_content() {
+        // Regression for the sub-agent transcript pager corrupting the parent
+        // terminal: content shaped like the raw artifact lines, with embedded
+        // mouse/CSI sequences inside a tool result, must render inert.
+        let transcript_like = concat!(
+            "── assistant ──\n",
+            "I'll run the build now.\n",
+            "← tool result (call-1)\n",
+            // JSON-escaped text is literal backslash-u bytes — inert, kept as-is.
+            "{\"line\":\"\\u{1b}[<0;9;4Mprogress done\"}\n",
+            // Raw event bytes are the dangerous form and must be stripped.
+            "raw \u{1b}[<0;10;5M event bytes\u{1b}[2K after\n",
+        );
+        let pager = PagerView::from_text("Agent transcript", transcript_like, 200);
+        let body = pager.body_text();
+        assert!(!body.contains('\u{1b}'), "inert body required: {body:?}");
+        assert!(
+            !body.contains("<0;10;5M"),
+            "mouse event fragment must not render: {body:?}"
+        );
+        assert!(
+            body.contains("progress") && body.contains("after"),
+            "readable content survives: {body:?}"
+        );
     }
 
     #[test]
