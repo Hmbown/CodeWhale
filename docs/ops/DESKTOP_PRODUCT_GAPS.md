@@ -8,6 +8,16 @@ runtime or one of its public client contracts. A feature that already exists in
 the runtime but is absent from the managed desktop belongs in the desktop
 product backlog, not here.
 
+> **Cross-repo scope note for auditors.** Desktop, hosted-web/PWA, mobile,
+> and control-plane capabilities live in the private managed-product tree
+> (`cwc`), not this repository. Before declaring any such capability absent
+> from Codewhale, check both layers, with `cwc/docs/CURRENT.md` as ground
+> truth (its `AGENTS.md` precedence rule: CURRENT wins; `cwc/docs/ARCHITECTURE.md`
+> is M0-era and stale). Also re-check this ledger's "Last reconciled" commit
+> against current `main` before citing it: rows here can lag the runtime by
+> hours — e.g., Fleet HTTP creation/replay below was closed by `f7d95ea66`
+> the day after the 2026-07-31 reconcile.
+
 ## Status vocabulary
 
 - **BASE GAP** — Codewhale does not expose the capability a native client needs.

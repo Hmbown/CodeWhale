@@ -12102,6 +12102,7 @@ impl SubAgentToolRegistry {
             disallowed_tools: runtime.worker_profile.denied_tools.clone(),
             auto_approve: runtime.context.auto_approve,
             accept_edits: runtime.accept_edits,
+            accept_verification: runtime.accept_verification,
             agent_type,
             runtime_profile: runtime.worker_profile,
             can_spawn_child,
