@@ -9001,6 +9001,7 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         // replace the instruction array. Project-scope config is filtered in
         // main.rs and cannot set instruction paths.
         instructions: override_cfg.instructions.or(base.instructions),
+        stop_words: override_cfg.stop_words.or(base.stop_words),
         allow_shell: override_cfg.allow_shell.or(base.allow_shell),
         prompt_suggestion: override_cfg.prompt_suggestion.or(base.prompt_suggestion),
         yolo: override_cfg.yolo.or(base.yolo),

@@ -7369,6 +7369,7 @@ async fn live_steer_crosses_message_submit_transform_exactly_once() {
 
     attempt_steer_with_queue_fallback(
         &mut app,
+        &Config::default(),
         &engine.handle,
         QueuedMessage::new("original steer".to_string(), None),
         DispatchRecovery::Immediate,
@@ -7403,6 +7404,7 @@ async fn denied_steer_restores_queued_draft_and_keeps_active_turn() {
 
     attempt_steer_with_queue_fallback(
         &mut app,
+        &Config::default(),
         &engine.handle,
         message.clone(),
         DispatchRecovery::Draft,
@@ -12297,7 +12299,7 @@ async fn steer_user_message_records_prompt_for_cancel_restore() {
         None,
     );
 
-    steer_user_message(&mut app, &engine.handle, queued)
+    steer_user_message(&mut app, &Config::default(), &engine.handle, queued)
         .await
         .expect("steer user message");
 
@@ -12344,6 +12346,7 @@ async fn steer_user_message_backgrounds_foreground_shell_before_dispatch() {
 
     steer_user_message(
         &mut app,
+        &Config::default(),
         &engine.handle,
         QueuedMessage::new("use the partial results".to_string(), None),
     )
@@ -12546,6 +12549,7 @@ async fn steer_failure_queues_message_and_surfaces_toast() {
 
     attempt_steer_with_queue_fallback(
         &mut app,
+        &Config::default(),
         &engine.handle,
         queued,
         DispatchRecovery::Immediate,
@@ -16914,6 +16918,7 @@ async fn steer_send_keeps_local_scroll_context() {
 
     steer_user_message(
         &mut app,
+        &Config::default(),
         &engine.handle,
         QueuedMessage::new("steer into the current turn".to_string(), None),
     )

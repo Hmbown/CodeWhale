@@ -1604,6 +1604,7 @@ async fn fire_due_triggers_shared(
             allow_shell: Some(false),
             trust_mode: Some(false),
             auto_approve: Some(false),
+            owner_session_id: None,
         };
 
         match task_manager.add_task(new_task).await {
