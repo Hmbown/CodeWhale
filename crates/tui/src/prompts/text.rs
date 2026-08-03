@@ -332,7 +332,7 @@ Execute rather than narrate. Verification still applies — check your work even
 /// Tool calls require confirmation.
 pub const SUGGEST_APPROVAL: &str = r#"##### Approval Policy: Suggest
 
-Read-only operations run silently. File edits and patches whose targets all stay inside this workspace also run without approval, because version control keeps them reviewable — but only when they steer clear of `.git` internals, runtime state (`.codewhale`), and sensitive files (`.env`, credentials, key material). Every other write requires user approval before executing: paths outside the workspace, those excluded paths, shell execution, sub-agent spawns, CSV batches.
+Read-only operations run silently. File edits and patches whose targets all stay inside this workspace also run without approval, because version control keeps them reviewable — but only when they steer clear of `.git` internals, runtime state (`.codewhale`), and sensitive files (`.env`, credentials, key material). Spawning a read-only sub-agent role (scout, planner, reviewer, verifier, consultant) runs without approval too; the child's own gates keep it read-only. Every other write requires user approval before executing: paths outside the workspace, those excluded paths, shell execution, write-capable sub-agent spawns, CSV batches.
 
 When you need approval:
 1. For multi-step changes, use `work_update` when it is present; otherwise state the approach briefly.

@@ -6534,6 +6534,46 @@ fn parse_agent_ref(input: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
+/// #5186: whether an `agent action=start` call asks for exactly a canonical
+/// read-only Fleet role and nothing that could widen it. Those spawns run
+/// without an approval modal in the default posture because the child's own
+/// posture gates (`role_posture_permits`, `SubAgentToolRegistry`) enforce
+/// read-only behavior from the inside.
+///
+/// Anything this parser cannot prove read-only stays gated: no role token
+/// (defaults to `worker`), an unparseable or roster role, a `profile`
+/// reference, a conflicting type/role pair, or an explicit write authority.
+fn start_requests_read_only_role(input: &Value) -> bool {
+    if optional_input_str(input, &["profile", "fleet_profile", "roster_profile"]).is_some() {
+        return false;
+    }
+    let type_input = optional_input_str(input, &["type", "agent_type", "agent_name"]);
+    let role_input = optional_input_str(input, &["role", "agent_role"]);
+    let parsed_type = type_input.and_then(FleetRole::from_str);
+    let parsed_role = role_input.and_then(FleetRole::from_str);
+    let role = match (parsed_type, parsed_role) {
+        (Some(from_type), Some(from_role)) if from_type == from_role => from_type,
+        // A second token that does not parse as a canonical role may be a
+        // roster id resolved later — fail closed like `profile`.
+        (Some(from_type), None) if role_input.is_none() => from_type,
+        (None, Some(from_role)) if type_input.is_none() => from_role,
+        _ => return false,
+    };
+    if optional_input_str(input, &["write_authority", "writeAuthority"])
+        .is_some_and(|authority| !authority.trim().eq_ignore_ascii_case("read_only"))
+    {
+        return false;
+    }
+    matches!(
+        role,
+        FleetRole::Scout
+            | FleetRole::Planner
+            | FleetRole::Reviewer
+            | FleetRole::Verifier
+            | FleetRole::Consultant
+    )
+}
+
 #[async_trait]
 impl ToolSpec for AgentTool {
     fn name(&self) -> &'static str {
@@ -6718,9 +6758,15 @@ impl ToolSpec for AgentTool {
 
     /// #3801: status and peek are read-only queries — no approval needed.
     /// #4097: wait passively observes children — also read-only.
+    /// #5186: starting an explicitly read-only role no longer modals in the
+    /// default posture; the child's own posture gates keep it read-only from
+    /// the inside. Write-capable spawns keep their gate.
     fn approval_requirement_for(&self, input: &Value) -> ApprovalRequirement {
         match parse_agent_tool_action(input) {
             Ok(AgentToolAction::Status | AgentToolAction::Peek | AgentToolAction::Wait) => {
+                ApprovalRequirement::Auto
+            }
+            Ok(AgentToolAction::Start) if start_requests_read_only_role(input) => {
                 ApprovalRequirement::Auto
             }
             _ => ApprovalRequirement::Required,
@@ -11580,10 +11626,11 @@ fn routine_agent_progress_can_preserve_event_headroom(status: AgentWorkerStatus)
 /// - **Full inheritance** (`allowed_tools = None`): the child sees the same
 ///   tool surface as the parent's Agent mode, except legacy sub-agent lifecycle
 ///   tools are removed. The single `agent` launcher remains visible only while
-///   the configured depth budget allows another child. Approval-gated tools are
-///   callable only when the parent runtime is auto-approved or, for explicit
-///   write-capable roles (`implementer`, `custom`), when the tool's approval
-///   requirement is `Suggest`.
+///   the configured depth budget allows another child. Approval-gated tools
+///   are callable when the parent runtime is auto-approved; otherwise a
+///   `Suggest`-level call needs a write-capable role (`implementer`, `custom`)
+///   or the in-workspace write carve-out (#5186), and a `Required`-level call
+///   must be the bounded built-in verification surface.
 /// - **Explicit narrow** (`allowed_tools = Some(list)`): legacy / Custom
 ///   path. The registry still builds the full surface, but only the listed
 ///   tool names are visible to the model and callable.
@@ -11679,8 +11726,11 @@ struct SubAgentToolRegistry {
     auto_approve: bool,
     /// Workflow-spawned children auto-accept Suggest-level file edits.
     accept_edits: bool,
-    /// Root Operate workers may run only the built-in verifier surfaces after
-    /// their parent-approved `agent` start. This never delegates raw shell or
+    /// Root Operate verification lease: provenance for the work graph
+    /// (`SubAgentWorkLifecycle::register`). Since #5186 the bounded built-in
+    /// verification surface is delegated to every shell-capable child rather
+    /// than keyed off this bit; the bit now only records *why* an Operate
+    /// child was allowed to run it. It never delegates raw shell or
     /// user-supplied verifier commands.
     accept_verification: bool,
     /// The role/type of the sub-agent that this registry belongs to. Used to
@@ -11807,6 +11857,24 @@ impl SubAgentToolRegistry {
     /// regardless of role (#1828, #1833).
     fn role_can_delegate_writes(agent_type: &FleetRole) -> bool {
         matches!(agent_type, FleetRole::Builder | FleetRole::Custom)
+    }
+
+    /// #5186: the child-side half of the in-workspace write carve-out
+    /// (#5185). A child whose posture permits writes at all
+    /// (`permissions.write`) may run a `Suggest`-tier write call without
+    /// parent auto-approve when every target path qualifies under the same
+    /// rule the parent session uses: inside the workspace git work tree,
+    /// off `.git` internals, runtime state, and sensitive files. Read-only
+    /// roles never reach this (their posture already bounced the call), and
+    /// out-of-tree or sensitive targets keep the delegation error.
+    fn workspace_write_carve_out_permits(&self, name: &str, input: &Value) -> bool {
+        if !self.runtime_profile.permissions.write {
+            return false;
+        }
+        crate::core::authority::paths_within_workspace_write_carve_out(
+            &self.registry.context().workspace,
+            &raw_mutation_target_paths(name, input),
+        )
     }
 
     /// Whether a `Required`-level call is the delegated built-in verification
@@ -12149,9 +12217,13 @@ impl SubAgentToolRegistry {
                     // without parent auto-approve (#1828, #1833). Workflow-spawned
                     // children also accept Suggest edits for any write-capable
                     // posture (including general). Read-only roles still bounce.
+                    // #5186: children also inherit the session's in-workspace
+                    // write carve-out (#5185) — a write-capable-posture child
+                    // may edit in-workspace, non-sensitive, non-`.git` paths
+                    // without the parent being auto-approved.
                     let may_write = self.runtime_profile.permissions.write
                         && (self.accept_edits || Self::role_can_delegate_writes(&self.agent_type));
-                    if !may_write {
+                    if !may_write && !self.workspace_write_carve_out_permits(name, &input) {
                         return Err(anyhow!(
                             "Tool {name} requires approval and is not delegated to {role} sub-agents; rerun the parent with auto approval or pick a write-capable role",
                             role = self.agent_type.as_str()
@@ -12159,9 +12231,14 @@ impl SubAgentToolRegistry {
                     }
                 }
                 ApprovalRequirement::Required => {
-                    if !(self.accept_verification
-                        && Self::is_delegated_builtin_verification(name, &input))
-                    {
+                    // #5186: the bounded built-in verification surface (the
+                    // fixed workspace-root command or a pure test selection,
+                    // per the one classifier the execution envelope also
+                    // reads) is delegated to any child whose posture reached
+                    // this branch — shell-capable by construction — instead
+                    // of keying everything off parent auto-approve. Arbitrary
+                    // shell and every other Required tool stay gated.
+                    if !Self::is_delegated_builtin_verification(name, &input) {
                         return Err(anyhow!(
                             "Tool {name} requires approval and cannot run inside this sub-agent unless the parent session is auto-approved"
                         ));
@@ -12415,6 +12492,30 @@ fn is_internal_coordination_state_tool(name: &str) -> bool {
             | "todo_update"
             | "todo_write"
     )
+}
+
+/// Raw target paths of a write-capable call, before claim normalization:
+/// the patch preflight's touched files for `apply_patch`/`File.patch`, else
+/// the `path`/`output_path` field. Feeds the child write carve-out (#5186);
+/// claim enforcement keeps using the normalized [`mutation_paths`].
+fn raw_mutation_target_paths(name: &str, input: &Value) -> Vec<String> {
+    if name == "apply_patch"
+        || (name == "File" && input.get("action").and_then(Value::as_str) == Some("patch"))
+    {
+        let mut patch_input = input.clone();
+        if let Some(object) = patch_input.as_object_mut() {
+            object.remove("action");
+        }
+        return crate::tools::apply_patch::preflight_apply_patch(&patch_input)
+            .map(|preflight| preflight.touched_files)
+            .unwrap_or_default();
+    }
+    input
+        .get("path")
+        .or_else(|| input.get("output_path"))
+        .and_then(Value::as_str)
+        .map(|path| vec![path.to_string()])
+        .unwrap_or_default()
 }
 
 fn mutation_paths(name: &str, input: &Value) -> Result<Vec<String>> {
