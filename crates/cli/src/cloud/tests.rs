@@ -798,3 +798,72 @@ fn fake_store_is_profile_safe() {
     store.delete("missing").unwrap();
     assert_eq!(store.get("unrelated").unwrap().as_deref(), Some("keep-me"));
 }
+
+#[test]
+fn account_login_timeout_fails_the_command() {
+    // §2.3 / #5033 class: a timed-out device login printed the timeout yet the
+    // process exited 0. Pin the contract at the run_with seam — the command
+    // must return Err so run_cli maps it to ExitCode::FAILURE. Verified live
+    // against a stub server: `error: Codewhale account login timed out` now
+    // exits 1.
+    let (temp, config) = test_config();
+    let _keep_temp = temp;
+    let (secrets, _) = test_secrets();
+    // Device start succeeds once; every token poll stays pending forever.
+    struct PendingLogin;
+    impl CloudTransport for PendingLogin {
+        fn execute(&self, request: CloudRequest) -> Result<CloudResponse> {
+            if request.path == "/api/cli/device/start" {
+                return Ok(response(
+                    200,
+                    json!({
+                        "deviceCode": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                        "userCode": "ABCD-EFGH-JKLM",
+                        "verificationUri": "https://app.codewhale.net/cli/authorize",
+                        "verificationUriComplete": "https://app.codewhale.net/cli/authorize?user_code=ABCD-EFGH-JKLM",
+                        "expiresIn": 600,
+                        "interval": 1
+                    }),
+                ));
+            }
+            Ok(response(202, json!({ "status": "authorization_pending" })))
+        }
+    }
+    let pending = PendingLogin;
+    let mut output = Vec::new();
+    let mut key_reader = |_| bail!("key reader should not be called");
+    let mut opener = |_| true;
+    // A real (short) sleep keeps the pending loop from busy-spinning while
+    // still reaching the 1s client timeout quickly.
+    let mut sleeper = |duration: std::time::Duration| {
+        std::thread::sleep(duration.min(std::time::Duration::from_millis(50)))
+    };
+    let result = run_with(
+        command(&[
+            "codewhale",
+            "cloud",
+            "login",
+            "--no-open",
+            "--timeout-seconds",
+            "1",
+        ]),
+        "default",
+        "https://api.codewhale.net",
+        &config,
+        &secrets,
+        &secrets,
+        &pending,
+        &mut output,
+        &mut key_reader,
+        &mut opener,
+        &mut sleeper,
+    );
+    let err = match result {
+        Ok(()) => panic!("a timed-out login must return Err so the exit code is non-zero"),
+        Err(err) => err,
+    };
+    assert!(
+        err.to_string().contains("login timed out"),
+        "timeout error text: {err}"
+    );
+}
