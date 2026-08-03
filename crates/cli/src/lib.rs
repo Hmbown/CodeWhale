@@ -1981,12 +1981,14 @@ fn run_login_command_with_secrets(
     secrets: &Secrets,
 ) -> Result<()> {
     let provider: ProviderKind = args.provider.unwrap_or(ProviderArg::Deepseek).into();
-    store.config.provider = provider;
-
     let api_key = match args.api_key {
         Some(v) => v,
         None => read_api_key_from_stdin()?,
     };
+    let mut credential_store = credential_metadata_store(store)?;
+    let store = credential_store.as_mut().unwrap_or(store);
+    store.config.provider = provider;
+
     let secret_store_saved = persist_provider_api_key(store, secrets, provider, &api_key)?;
     let destination = if secret_store_saved {
         secrets.backend_name().to_string()
@@ -2056,6 +2058,33 @@ fn provider_slot(provider: ProviderKind) -> &'static str {
         ProviderKind::SiliconflowCN => "siliconflow",
         _ => provider.provider().id(),
     }
+}
+
+/// Resolve the store for credential-adjacent writes: provider selection,
+/// `auth_mode` markers, and the plaintext-free metadata that accompanies a
+/// saved key.
+///
+/// Credentials and their metadata are user-global — a key saved while
+/// working in one repo must be visible from every other repo, and the secret
+/// store already is (#5045). When the ambient config path is a
+/// workspace-scoped document (`<repo>/.codewhale/config.toml`), login and
+/// `auth set` must not bind the provider or write auth markers there: the
+/// binding would be invisible from every other repo and would invite
+/// plaintext keys into a committable repo file (#5198). Returns a store
+/// loaded on the user-global document in that case, or `None` when the
+/// ambient store is already correctly scoped, so key + provider binding +
+/// auth markers share one user-global scope by default.
+fn credential_metadata_store(store: &ConfigStore) -> Result<Option<ConfigStore>> {
+    if !codewhale_config::config_path_is_workspace_scoped(store.path()) {
+        return Ok(None);
+    }
+    let global = codewhale_config::default_config_path()?;
+    eprintln!(
+        "ambient config {} is workspace-scoped; writing credential metadata to the user-global {} instead",
+        codewhale_config::quote_os_path(store.path()),
+        codewhale_config::quote_os_path(&global),
+    );
+    ConfigStore::load(Some(global)).map(Some)
 }
 
 #[cfg(test)]
@@ -3424,6 +3453,8 @@ fn run_auth_command_with_secrets_and_runtime(
                 (None, true) => read_api_key_from_stdin()?,
                 (None, false) => prompt_api_key(slot)?,
             };
+            let mut credential_store = credential_metadata_store(store)?;
+            let store = credential_store.as_mut().unwrap_or(store);
             let secret_store_saved = persist_provider_api_key(store, secrets, provider, &api_key)?;
             // Don't print the key. Don't echo length.
             if secret_store_saved {
@@ -5930,6 +5961,114 @@ model = "qwen-2.5-7b"
         assert_eq!(
             secrets.get("deepseek").expect("read secret").as_deref(),
             Some("sk-test")
+        );
+    }
+
+    /// #5198: with CODEWHALE_CONFIG_PATH pointing at a workspace-scoped
+    /// `<repo>/.codewhale/config.toml`, login must write the provider binding
+    /// and auth markers to the user-global document, never the repo file.
+    #[test]
+    fn login_with_repo_scoped_ambient_config_writes_user_global_metadata() {
+        let _lock = env_lock();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(repo.join(".git")).expect("git marker");
+        let repo_config_dir = repo.join(".codewhale");
+        std::fs::create_dir_all(&repo_config_dir).expect("repo config dir");
+        let repo_config = repo_config_dir.join("config.toml");
+        std::fs::write(&repo_config, "approval_policy = \"never\"\n").expect("repo config");
+
+        let codewhale_home = dir.path().join("codewhale-home");
+        let _home = ScopedEnvVar::set("CODEWHALE_HOME", &codewhale_home.to_string_lossy());
+        let _config = ScopedEnvVar::set("CODEWHALE_CONFIG_PATH", &repo_config.to_string_lossy());
+        let _legacy_config = ScopedEnvVar::remove("DEEPSEEK_CONFIG_PATH");
+        let _backend = ScopedEnvVar::set("CODEWHALE_SECRET_BACKEND", "file");
+        let mut store = ConfigStore::load(None).expect("ambient store should load");
+        let secrets = Secrets::auto_detect();
+
+        run_login_command_with_secrets(
+            &mut store,
+            LoginArgs {
+                provider: Some(ProviderArg::Deepseek),
+                api_key: Some("sk-repo-scoped".to_string()),
+            },
+            &secrets,
+        )
+        .expect("login should persist credential");
+
+        assert_eq!(
+            secrets.get("deepseek").expect("read secret").as_deref(),
+            Some("sk-repo-scoped")
+        );
+        let global_config = codewhale_home.join("config.toml");
+        let global = std::fs::read_to_string(&global_config).expect("user-global config");
+        assert!(
+            global.contains("auth_mode = \"api_key\""),
+            "user-global config must carry the auth marker: {global}"
+        );
+        assert!(
+            global.contains("provider = \"deepseek\""),
+            "user-global config must carry the provider binding: {global}"
+        );
+        assert!(!global.contains("sk-repo-scoped"), "{global}");
+        let repo_after = std::fs::read_to_string(&repo_config).expect("repo config");
+        assert_eq!(
+            repo_after, "approval_policy = \"never\"\n",
+            "workspace config must stay untouched by credential metadata: {repo_after}"
+        );
+    }
+
+    /// #5198: `auth set` shares the login resolver — provider auth markers go
+    /// user-global even when the ambient config is workspace-scoped.
+    #[test]
+    fn auth_set_with_repo_scoped_ambient_config_writes_user_global_metadata() {
+        let _lock = env_lock();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(repo.join(".git")).expect("git marker");
+        let repo_config_dir = repo.join(".codewhale");
+        std::fs::create_dir_all(&repo_config_dir).expect("repo config dir");
+        let repo_config = repo_config_dir.join("config.toml");
+        std::fs::write(&repo_config, "approval_policy = \"never\"\n").expect("repo config");
+
+        let codewhale_home = dir.path().join("codewhale-home");
+        let _home = ScopedEnvVar::set("CODEWHALE_HOME", &codewhale_home.to_string_lossy());
+        let _config = ScopedEnvVar::set("CODEWHALE_CONFIG_PATH", &repo_config.to_string_lossy());
+        let _legacy_config = ScopedEnvVar::remove("DEEPSEEK_CONFIG_PATH");
+        let _backend = ScopedEnvVar::set("CODEWHALE_SECRET_BACKEND", "file");
+        let mut store = ConfigStore::load(None).expect("ambient store should load");
+        let secrets = Secrets::auto_detect();
+
+        run_auth_command_with_secrets(
+            &mut store,
+            AuthCommand::Set {
+                provider: ProviderArg::Openrouter,
+                api_key: Some("sk-or-repo-scoped".to_string()),
+                api_key_stdin: false,
+            },
+            &secrets,
+        )
+        .expect("auth set should persist credential");
+
+        assert_eq!(
+            secrets.get("openrouter").expect("read secret").as_deref(),
+            Some("sk-or-repo-scoped")
+        );
+        let global = std::fs::read_to_string(codewhale_home.join("config.toml"))
+            .expect("user-global config");
+        assert!(
+            global.contains("auth_mode = \"api_key\""),
+            "user-global config must carry the auth markers: {global}"
+        );
+        assert!(
+            global.contains("openrouter"),
+            "user-global config must name the provider table: {global}"
+        );
+        assert!(!global.contains("sk-or-repo-scoped"), "{global}");
+        let repo_after = std::fs::read_to_string(&repo_config).expect("repo config");
+        assert_eq!(
+            repo_after, "approval_policy = \"never\"\n",
+            "workspace config must stay untouched by credential metadata: {repo_after}"
         );
     }
 
