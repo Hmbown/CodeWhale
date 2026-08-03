@@ -355,7 +355,22 @@ impl StateStore {
     fn init_schema(conn: &Connection) -> Result<()> {
         let mut user_version: u32 = conn.query_row("PRAGMA user_version;", [], |row| row.get(0))?;
         if user_version == 0 {
-            conn.execute_batch(
+            // Guard each ALTER: a database restored with a v0 header (or
+            // stamped by a racing process that crashed before setting
+            // user_version) can already carry these columns, and an
+            // unguarded ADD COLUMN aborts the whole open with
+            // "duplicate column name".
+            let add_parent_entry_id = if column_exists(conn, "messages", "parent_entry_id")? {
+                ""
+            } else {
+                "ALTER TABLE messages ADD COLUMN parent_entry_id INTEGER NULL;"
+            };
+            let add_current_leaf_id = if column_exists(conn, "threads", "current_leaf_id")? {
+                ""
+            } else {
+                "ALTER TABLE threads ADD COLUMN current_leaf_id INTEGER NULL;"
+            };
+            conn.execute_batch(&format!(
                 r#"
                 BEGIN;
                 CREATE TABLE IF NOT EXISTS threads (
@@ -428,7 +443,7 @@ impl StateStore {
                 CREATE INDEX IF NOT EXISTS idx_jobs_updated_at ON jobs(updated_at DESC);
 
                 -- Add parent_entry_id column, and set to last message before current message
-                ALTER TABLE messages ADD COLUMN parent_entry_id INTEGER NULL;
+                {add_parent_entry_id}
                 UPDATE messages
                     SET parent_entry_id = (
                         SELECT m2.id
@@ -444,10 +459,10 @@ impl StateStore {
                         ORDER BY m2.created_at DESC, m2.id DESC
                         LIMIT 1
                     );
-                CREATE INDEX idx_messages_parent_entry_id ON messages(parent_entry_id);
+                CREATE INDEX IF NOT EXISTS idx_messages_parent_entry_id ON messages(parent_entry_id);
 
                 -- Add current_leaf_id column, and set to last message in thread
-                ALTER TABLE threads ADD COLUMN current_leaf_id INTEGER NULL;
+                {add_current_leaf_id}
                 UPDATE threads
                     SET current_leaf_id = (
                         SELECT m.id
@@ -459,8 +474,8 @@ impl StateStore {
 
                 PRAGMA user_version = 1;
                 COMMIT;
-                "#,
-            )
+                "#
+            ))
             .context("failed to initialize thread schema")?;
             user_version = 1;
         }
@@ -594,16 +609,26 @@ impl StateStore {
             user_version = 3;
         }
         if user_version < 4 {
-            conn.execute_batch(
+            // Same restore/race guard as the v0 block: the column may
+            // already exist even though the header predates version 4.
+            let add_continuation_count = if column_exists(
+                conn,
+                "thread_goals",
+                "continuation_count",
+            )? {
+                ""
+            } else {
+                "ALTER TABLE thread_goals\n                    ADD COLUMN continuation_count INTEGER NOT NULL DEFAULT 0;"
+            };
+            conn.execute_batch(&format!(
                 r#"
                 BEGIN;
-                ALTER TABLE thread_goals
-                    ADD COLUMN continuation_count INTEGER NOT NULL DEFAULT 0;
+                {add_continuation_count}
 
                 PRAGMA user_version = 4;
                 COMMIT;
-                "#,
-            )
+                "#
+            ))
             .context("failed to initialize thread goal continuation schema")?;
         }
         Ok(())
@@ -1837,6 +1862,23 @@ fn bool_to_i64(value: bool) -> i64 {
     if value { 1 } else { 0 }
 }
 
+/// Whether `table` currently has a column named `column`.
+///
+/// Used to guard `ALTER TABLE ... ADD COLUMN` migrations so they are
+/// idempotent. Both identifiers are compile-time literals at every call
+/// site, never user input. A missing table reports `false`, matching the
+/// fresh-database case where the migration must still run.
+fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let names = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for name in names {
+        if name? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn i64_to_bool(value: i64) -> bool {
     value != 0
 }
@@ -2302,6 +2344,38 @@ mod tests {
         let store = StateStore::open(Some(db_path)).expect("reopen for verify");
         let listed = store.list_jobs(Some(2)).expect("list jobs");
         assert_eq!(listed.len(), 2, "both writers should persist their jobs");
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn migration_runs_cleanly_when_schema_predates_user_version_header() {
+        // Simulate a restore (or a racing process that crashed before
+        // stamping user_version): the on-disk schema is fully migrated but
+        // the header still says 0. The v0 block used to re-run unconditional
+        // ADD COLUMN statements and abort the open with
+        // "duplicate column name".
+        let dir = temp_state_dir("migration-v0-idempotent");
+        let db_path = dir.join("state.db");
+        drop(StateStore::open(Some(db_path.clone())).expect("initial open"));
+        {
+            let conn = Connection::open(&db_path).expect("raw connection");
+            conn.pragma_update(None, "user_version", 0)
+                .expect("reset user_version");
+        }
+
+        let store = StateStore::open(Some(db_path.clone())).expect("reopen with v0 header");
+        store
+            .upsert_thread(&test_thread("thread-migrated"))
+            .expect("write after guarded migration");
+
+        // Reopening again (now stamped at the current version) still works.
+        drop(store);
+        let store = StateStore::open(Some(db_path)).expect("third open");
+        let persisted = store
+            .get_thread("thread-migrated")
+            .expect("read after reopen");
+        assert!(persisted.is_some());
 
         let _ = fs::remove_dir_all(dir);
     }
