@@ -238,7 +238,7 @@
   "CmdLogoutDescription": "API キーを消去してセットアップに戻る",
   "CmdMcpDescription": "MCP サーバを開く・管理する",
   "CmdPluginDescription": "信頼済みプラグインバンドルを確認・管理します。従来の実行可能ツールは別に扱われます",
-  "CmdPluginBundleUsage": "使い方: /plugin [list|show <name>|validate [name]|trust <name> [review-token]|enable <name>|disable <name>|revoke <name>|reload|tools [name]]",
+  "CmdPluginBundleUsage": "使い方: /plugin [list|show <name>|validate [name]|install <spec>|update <name>|uninstall <name>|trust <name> [review-token]|enable <name>|disable <name>|revoke <name>|reload|tools [name]]",
   "CmdPluginBundleNoneFound": "Codewhale プラグインバンドルは見つかりませんでした。",
   "CmdPluginBundleListHeader": "プラグインバンドル ({count}):",
   "CmdPluginLegacyListHeader": "従来の実行可能プラグインツール ({count}) — {dir}:",

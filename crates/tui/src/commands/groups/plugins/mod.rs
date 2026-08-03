@@ -33,7 +33,7 @@ impl CommandGroup for PluginsCommands {
 pub(in crate::commands) const PLUGINS_INFO: CommandInfo = CommandInfo {
     name: "plugin",
     aliases: &["plugins"],
-    usage: "/plugin [list|show|validate|trust|enable|disable|revoke|reload|tools]",
+    usage: "/plugin [list|show|validate|install|update|uninstall|trust|enable|disable|revoke|reload|tools]",
     description_id: MessageId::CmdPluginDescription,
 };
 
@@ -60,6 +60,13 @@ fn plugins(app: &mut App, arg: Option<&str>) -> CommandResult {
         ["show", selector] => show_bundle(app, selector),
         ["validate"] => validate_bundles(app, None),
         ["validate", selector] => validate_bundles(app, Some(selector)),
+        ["install"] => CommandResult::error(tr(app.ui_locale, MessageId::CmdPluginBundleUsage)),
+        ["install", rest @ ..] => install_bundle(app, &rest.join(" ")),
+        ["update"] | ["uninstall"] => {
+            CommandResult::error(tr(app.ui_locale, MessageId::CmdPluginBundleUsage))
+        }
+        ["update", selector] => update_bundle(app, selector),
+        ["uninstall", selector] => uninstall_bundle(app, selector),
         ["trust", selector] => review_bundle(app, selector),
         ["trust", selector, token] => mutate_bundle(app, selector, Mutation::Trust(token)),
         ["enable", selector] => mutate_bundle(app, selector, Mutation::Enable),
@@ -213,6 +220,203 @@ fn validate_bundles(app: &App, selector: Option<&str>) -> CommandResult {
         output.push_str(if clean { "valid" } else { "invalid" });
     }
     CommandResult::message(output)
+}
+
+// ─── /plugin install | update | uninstall (#5182) ──────────────────────────
+//
+// The fetch/place on-ramp. All writes go through `plugins::mutation`; after a
+// successful install or update the command rediscovers and drops the user
+// into the existing trust review (`review_bundle`) — installed or replaced
+// bits are always disabled and untrusted until the hash-bound trust flow runs.
+
+fn install_bundle(app: &mut App, spec: &str) -> CommandResult {
+    use crate::plugins::mutation::{
+        PluginMutationContext, PluginMutationOutcome, PluginMutationRequest,
+    };
+
+    let source = match crate::plugins::install::PluginInstallSource::parse(spec) {
+        Ok(source) => source,
+        Err(error) => {
+            return CommandResult::error(format!(
+                "Invalid plugin install source `{spec}`: {error:#}\n\
+                 Expected a local path, github:owner/repo, or an HTTPS tarball URL."
+            ));
+        }
+    };
+    let network = plugin_network_policy();
+    let registry = std::sync::Arc::make_mut(&mut app.plugin_registry);
+    let outcome = run_async(async move {
+        let ctx = PluginMutationContext {
+            network: &network,
+            max_size: crate::plugins::install::DEFAULT_MAX_SIZE_BYTES,
+        };
+        crate::plugins::mutation::execute(PluginMutationRequest::Install { source }, &ctx, registry)
+            .await
+    });
+
+    match outcome {
+        Ok(receipt) => match receipt.outcome {
+            PluginMutationOutcome::Installed => {
+                let name = receipt.name.clone();
+                let path = receipt
+                    .path
+                    .as_deref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_default();
+                app.plugin_registry = app.plugin_registry.rediscover_for_workspace(&app.workspace);
+                app.refresh_skill_cache();
+                let mut output = format!(
+                    "Installed plugin '{name}' to {path}.\n\
+                     It is disabled and untrusted. Review its requested authority below, then trust and enable it.\n"
+                );
+                if let Some(review) = review_bundle(app, &name).message {
+                    output.push('\n');
+                    output.push_str(&review);
+                }
+                CommandResult::with_message_and_action(output, AppAction::PluginRegistryChanged)
+            }
+            PluginMutationOutcome::NeedsApproval(host) => {
+                CommandResult::error(needs_approval_message(&host))
+            }
+            PluginMutationOutcome::NetworkDenied(host) => {
+                CommandResult::error(network_denied_message(&host))
+            }
+            other => CommandResult::error(format!("Unexpected install outcome: {other:?}")),
+        },
+        Err(error) => action_error(app, &format!("Plugin install failed: {error:#}")),
+    }
+}
+
+fn update_bundle(app: &mut App, selector: &str) -> CommandResult {
+    use crate::plugins::mutation::{
+        PluginMutationContext, PluginMutationOutcome, PluginMutationRequest,
+    };
+
+    let network = plugin_network_policy();
+    let selector_owned = selector.to_string();
+    let registry = std::sync::Arc::make_mut(&mut app.plugin_registry);
+    let outcome = run_async(async move {
+        let ctx = PluginMutationContext {
+            network: &network,
+            max_size: crate::plugins::install::DEFAULT_MAX_SIZE_BYTES,
+        };
+        crate::plugins::mutation::execute(
+            PluginMutationRequest::Update {
+                selector: selector_owned,
+            },
+            &ctx,
+            registry,
+        )
+        .await
+    });
+
+    match outcome {
+        Ok(receipt) => match receipt.outcome {
+            PluginMutationOutcome::Updated => {
+                let name = receipt.name.clone();
+                app.plugin_registry = app.plugin_registry.rediscover_for_workspace(&app.workspace);
+                app.refresh_skill_cache();
+                let mut output = format!(
+                    "Updated plugin '{name}'. Its content changed, so the previous trust receipt no \
+                     longer matches — review and trust it again before enabling.\n"
+                );
+                if let Some(review) = review_bundle(app, &name).message {
+                    output.push('\n');
+                    output.push_str(&review);
+                }
+                CommandResult::with_message_and_action(output, AppAction::PluginRegistryChanged)
+            }
+            PluginMutationOutcome::NoChange => {
+                CommandResult::message(format!("Plugin '{}' is already up to date.", receipt.name))
+            }
+            PluginMutationOutcome::NeedsApproval(host) => {
+                CommandResult::error(needs_approval_message(&host))
+            }
+            PluginMutationOutcome::NetworkDenied(host) => {
+                CommandResult::error(network_denied_message(&host))
+            }
+            other => CommandResult::error(format!("Unexpected update outcome: {other:?}")),
+        },
+        Err(error) => action_error(app, &format!("Plugin update failed: {error:#}")),
+    }
+}
+
+fn uninstall_bundle(app: &mut App, selector: &str) -> CommandResult {
+    use crate::plugins::mutation::{
+        PluginMutationContext, PluginMutationOutcome, PluginMutationRequest,
+    };
+
+    let network = plugin_network_policy();
+    let selector_owned = selector.to_string();
+    let registry = std::sync::Arc::make_mut(&mut app.plugin_registry);
+    let outcome = run_async(async move {
+        let ctx = PluginMutationContext {
+            network: &network,
+            max_size: crate::plugins::install::DEFAULT_MAX_SIZE_BYTES,
+        };
+        crate::plugins::mutation::execute(
+            PluginMutationRequest::Uninstall {
+                selector: selector_owned,
+            },
+            &ctx,
+            registry,
+        )
+        .await
+    });
+
+    match outcome {
+        Ok(receipt) => {
+            debug_assert!(matches!(
+                receipt.outcome,
+                PluginMutationOutcome::Uninstalled
+            ));
+            app.plugin_registry = app.plugin_registry.rediscover_for_workspace(&app.workspace);
+            app.refresh_skill_cache();
+            app.active_skill = None;
+            app.active_skill_provenance = None;
+            CommandResult::with_message_and_action(
+                format!("Uninstalled plugin '{}'.", receipt.name),
+                AppAction::PluginRegistryChanged,
+            )
+        }
+        Err(error) => action_error(app, &format!("Plugin uninstall failed: {error:#}")),
+    }
+}
+
+/// Read the active network policy for plugin downloads. Mirrors the skill
+/// installer's on-demand `Config::load` (`App` carries no `Config` field);
+/// a parse failure falls back to the prompt-default policy so the download
+/// stays gated rather than crashing.
+fn plugin_network_policy() -> crate::network_policy::NetworkPolicy {
+    crate::config::Config::load(None, None)
+        .unwrap_or_default()
+        .network
+        .map(|policy| policy.into_runtime())
+        .unwrap_or_default()
+}
+
+fn run_async<F, T>(future: F) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    // Same bridge as the skill commands: the TUI thread is part of the
+    // multi-threaded runtime, so `block_in_place` + `block_on` brings the
+    // sync slash-command handler back into the async ecosystem.
+    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(future))
+}
+
+fn needs_approval_message(host: &str) -> String {
+    format!(
+        "Network policy requires approval for {host}.\n\
+         Add it to your allow list with `/network allow {host}` (or set [network].default = \"allow\" in ~/.codewhale/config.toml), then retry."
+    )
+}
+
+fn network_denied_message(host: &str) -> String {
+    format!(
+        "Network policy denied access to {host}.\n\
+         Remove the deny entry from ~/.codewhale/config.toml under [network] or contact your administrator."
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -951,5 +1155,94 @@ network_hosts = ["example.invalid"]
         let message = result.message.unwrap();
         assert!(message.contains("Say hello"));
         assert!(message.contains("required"));
+    }
+
+    #[test]
+    fn install_update_uninstall_verbs_validate_arguments() {
+        let _lock = crate::test_support::lock_test_env();
+        let root = TempDir::new().unwrap();
+        let _home =
+            crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", root.path().join("home"));
+        let (mut app, _temp) = create_test_app(root.path());
+        for arg in ["install", "update", "uninstall"] {
+            let result = plugins(&mut app, Some(arg));
+            assert!(result.is_error, "bare `{arg}` must print usage");
+        }
+        let invalid = plugins(&mut app, Some("install github:"));
+        assert!(invalid.is_error);
+        assert!(
+            invalid
+                .message
+                .unwrap()
+                .contains("Invalid plugin install source"),
+            "invalid specs must be rejected before any network or disk access"
+        );
+    }
+
+    #[test]
+    fn install_update_uninstall_verbs_drive_the_guided_trust_flow() {
+        let _lock = crate::test_support::lock_test_env();
+        let root = TempDir::new().unwrap();
+        let codewhale_home = root.path().join("home");
+        let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", &codewhale_home);
+
+        let source = root.path().join("source/installed-demo");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(
+            source.join("plugin.toml"),
+            "schema_version = 1\n[plugin]\nname = \"installed-demo\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+
+        let (mut app, _temp) = create_test_app(root.path());
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let installed = plugins(&mut app, Some(&format!("install {}", source.display())));
+            assert!(!installed.is_error, "{:?}", installed.message);
+            let message = installed.message.unwrap();
+            assert!(message.contains("disabled and untrusted"), "{message}");
+            let confirmation = message
+                .lines()
+                .find(|line| line.starts_with("/plugin trust installed-demo "))
+                .expect("install must route into the trust review")
+                .to_string();
+            let plugin = app.plugin_registry.get("installed-demo").unwrap();
+            assert!(!plugin.enabled && !plugin.trusted());
+            assert!(
+                codewhale_home
+                    .join("plugins/installed-demo/.installed-from")
+                    .exists()
+            );
+
+            // Local-path installs cannot be updated from the network.
+            let update = plugins(&mut app, Some("update installed-demo"));
+            assert!(update.is_error);
+            assert!(update.message.unwrap().contains("local path"));
+
+            let arg = confirmation.trim_start_matches("/plugin ").to_string();
+            assert!(!plugins(&mut app, Some(&arg)).is_error);
+            assert!(!plugins(&mut app, Some("enable installed-demo")).is_error);
+            assert!(app.plugin_registry.is_active("installed-demo"));
+
+            // Uninstall requires disabled, then removes bits and prunes state.
+            let refused = plugins(&mut app, Some("uninstall installed-demo"));
+            assert!(refused.is_error);
+            assert!(codewhale_home.join("plugins/installed-demo").exists());
+            assert!(!plugins(&mut app, Some("disable installed-demo")).is_error);
+            let removed = plugins(&mut app, Some("uninstall installed-demo"));
+            assert!(!removed.is_error, "{:?}", removed.message);
+            assert!(!codewhale_home.join("plugins/installed-demo").exists());
+            assert!(app.plugin_registry.get("installed-demo").is_none());
+            let raw = fs::read_to_string(codewhale_home.join("plugins/state.json")).unwrap();
+            let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            assert!(
+                parsed["plugins"].as_object().unwrap().is_empty(),
+                "uninstall must prune the state entry: {raw}"
+            );
+        });
     }
 }

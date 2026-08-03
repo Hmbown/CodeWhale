@@ -238,7 +238,7 @@
   "CmdLogoutDescription": "清除 API 密钥并返回设置",
   "CmdMcpDescription": "打开或管理 MCP 服务器",
   "CmdPluginDescription": "检查和管理受信任的插件包；旧版可执行工具保持独立",
-  "CmdPluginBundleUsage": "用法：/plugin [list|show <name>|validate [name]|trust <name> [review-token]|enable <name>|disable <name>|revoke <name>|reload|tools [name]]",
+  "CmdPluginBundleUsage": "用法：/plugin [list|show <name>|validate [name]|install <spec>|update <name>|uninstall <name>|trust <name> [review-token]|enable <name>|disable <name>|revoke <name>|reload|tools [name]]",
   "CmdPluginBundleNoneFound": "未发现 Codewhale 插件包。",
   "CmdPluginBundleListHeader": "插件包（{count}）：",
   "CmdPluginLegacyListHeader": "{dir} 中的旧版可执行插件工具（{count}）：",

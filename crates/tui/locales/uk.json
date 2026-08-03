@@ -235,7 +235,7 @@
   "CmdLogoutDescription": "Очистити ключ API та повернутися до налаштування",
   "CmdMcpDescription": "Відкрити або керувати серверами MCP",
   "CmdPluginDescription": "Переглянути й керувати довіреними наборами плагінів; застарілі виконувані інструменти лишаються окремо",
-  "CmdPluginBundleUsage": "Використання: /plugin [list|show <name>|validate [name]|trust <name> [review-token]|enable <name>|disable <name>|revoke <name>|reload|tools [name]]",
+  "CmdPluginBundleUsage": "Використання: /plugin [list|show <name>|validate [name]|install <spec>|update <name>|uninstall <name>|trust <name> [review-token]|enable <name>|disable <name>|revoke <name>|reload|tools [name]]",
   "CmdPluginBundleNoneFound": "Наборів плагінів Codewhale не знайдено.",
   "CmdPluginBundleListHeader": "Набори плагінів ({count}):",
   "CmdPluginLegacyListHeader": "Застарілі виконувані інструменти-плагіни ({count}) в {dir}:",

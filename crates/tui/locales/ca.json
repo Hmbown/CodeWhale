@@ -235,7 +235,7 @@
   "CmdLogoutDescription": "Esborra la clau d'API i torna a la configuració",
   "CmdMcpDescription": "Obre o gestiona servidors MCP",
   "CmdPluginDescription": "Inspecciona i gestiona paquets de plugins confiables; les eines executables heretades es mantenen separades",
-  "CmdPluginBundleUsage": "Ús: /plugin [list|show <name>|validate [name]|trust <name> [review-token]|enable <name>|disable <name>|revoke <name>|reload|tools [name]]",
+  "CmdPluginBundleUsage": "Ús: /plugin [list|show <name>|validate [name]|install <spec>|update <name>|uninstall <name>|trust <name> [review-token]|enable <name>|disable <name>|revoke <name>|reload|tools [name]]",
   "CmdPluginBundleNoneFound": "No s'ha trobat cap paquet de plugins de Codewhale.",
   "CmdPluginBundleListHeader": "Paquets de plugins ({count}):",
   "CmdPluginLegacyListHeader": "Eines de plugin executables heretades ({count}) a {dir}:",

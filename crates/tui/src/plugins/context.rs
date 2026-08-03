@@ -121,6 +121,14 @@ impl PluginDiscoveryContext {
     pub fn host_environment(&self) -> Arc<HostEnvironment> {
         Arc::clone(&self.host_environment)
     }
+
+    /// The pre-dotenv user plugins root (`~/.codewhale/plugins`). Exposed for
+    /// the install on-ramp (#5182), which must fetch into exactly the root
+    /// this context discovers from.
+    #[must_use]
+    pub fn user_plugins_dir(&self) -> &Path {
+        &self.user_plugins_dir
+    }
 }
 
 #[cfg(test)]
