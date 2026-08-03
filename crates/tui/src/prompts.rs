@@ -1910,7 +1910,12 @@ mod tests {
     #[test]
     fn tool_descriptions_carry_edit_and_shell_guidance() {
         let write = WriteFileTool.description();
-        assert!(write.contains("instead of heredocs") && write.contains("exec_shell"));
+        assert!(
+            write.contains("instead of heredocs")
+                && write.contains("`Bash`")
+                && !write.contains("exec_shell"),
+            "write guidance must name the live Bash tool and never the retired exec_shell name"
+        );
 
         let edit = EditFileTool.description();
         assert!(edit.contains("read_file"));
