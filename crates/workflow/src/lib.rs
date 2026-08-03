@@ -20,6 +20,7 @@ pub mod fleet_preflight;
 pub mod fleet_reasoning;
 pub mod fleet_snapshot;
 mod gates;
+pub mod janitor;
 mod js_authoring;
 mod model_policy;
 mod named_fleet;
@@ -65,6 +66,10 @@ pub use fleet_snapshot::{
 pub use gates::{
     GateError, GateKind, GateOn, GateOnFail, GateOutcome, GateSpec, GateState, GateStatusLine,
     HandoffArtifact, LaneGateBoard, stopship_gate_pipeline,
+};
+pub use janitor::{
+    Janitor, JanitorLimits, JanitorReport, MemoEntry, MemoStore, OverlayEntry, OverlayStore,
+    TraceStore, demote_stale_candidates,
 };
 pub use js_authoring::{
     JavascriptWorkflowError, JavascriptWorkflowResult, compile_javascript_workflow,
