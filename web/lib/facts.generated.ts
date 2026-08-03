@@ -27,7 +27,7 @@ export interface RepoFacts {
 }
 
 export const FACTS: RepoFacts = {
-  "generatedAt": "2026-08-03T02:24:09.129Z",
+  "generatedAt": "2026-08-03T15:53:51.256Z",
   "sourceRevision": null,
   "sourceCommittedAt": null,
   "version": "0.9.4",
@@ -236,11 +236,31 @@ export const FACTS: RepoFacts = {
       "id": "telecomjs",
       "label": "TelecomJS TokenHub",
       "env": "TELECOMJS_API_KEY"
+    },
+    {
+      "id": "modelstudio-token-plan",
+      "label": "Model Studio Token Plan",
+      "env": "MODELSTUDIO_API_KEY"
+    },
+    {
+      "id": "modelstudio-token-plan-anthropic",
+      "label": "Model Studio Token Plan (Anthropic-compatible)",
+      "env": "MODELSTUDIO_API_KEY"
+    },
+    {
+      "id": "modelstudio-coding-plan",
+      "label": "Model Studio Coding Plan",
+      "env": "MODELSTUDIO_API_KEY"
+    },
+    {
+      "id": "modelstudio-coding-plan-anthropic",
+      "label": "Model Studio Coding Plan (Anthropic-compatible)",
+      "env": "MODELSTUDIO_API_KEY"
     }
   ],
   "defaultModel": "deepseek-v4-pro",
   "nodeEngines": ">=18",
-  "toolCount": 67,
+  "toolCount": 68,
   "license": "MIT",
   "latestPublishedRelease": {
     "tag": "v0.9.3",
