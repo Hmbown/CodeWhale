@@ -338,6 +338,47 @@ mod tests {
         assert!(!label.contains("0s"));
     }
 
+    #[test]
+    fn active_subagent_status_label_names_fleet_role_not_raw_id() {
+        // #36: when the running agent is known, the strip leads with its
+        // fleet role ("builder: …") — never the raw agent id.
+        use crate::tools::subagent::{
+            FleetRole, SubAgentAssignment, SubAgentResult, SubAgentStatus,
+        };
+        let mut app = create_test_app();
+        app.subagent_cache.push(SubAgentResult {
+            name: "agent_e0b2dcf1".to_string(),
+            agent_id: "agent_e0b2dcf1".to_string(),
+            context_mode: "fresh".to_string(),
+            fork_context: false,
+            workspace: None,
+            git_branch: None,
+            agent_type: FleetRole::Builder,
+            assignment: SubAgentAssignment {
+                objective: "Wire the release lane".to_string(),
+                role: Some("builder".to_string()),
+            },
+            model: "test-model".to_string(),
+            nickname: None,
+            status: SubAgentStatus::Running,
+            worker_status: None,
+            runtime_permissions: None,
+            parent_run_id: None,
+            spawn_depth: 1,
+            result: None,
+            steps_taken: 1,
+            checkpoint: None,
+            needs_input: None,
+            duration_ms: 50,
+            from_prior_session: false,
+        });
+
+        let label = active_subagent_status_label(&app).expect("active agent label");
+
+        assert_eq!(label, "agents 1/1 running · builder: Wire the release lane");
+        assert!(!label.contains("agent_e0b2dcf1"), "{label}");
+    }
+
     fn create_test_app() -> App {
         let options = TuiOptions {
             ..crate::test_support::test_tui_options(PathBuf::from("."))
@@ -514,7 +555,22 @@ pub(crate) fn active_subagent_status_label(app: &App) -> Option<String> {
         .subagent_cache
         .iter()
         .find(|agent| matches!(agent.status, SubAgentStatus::Running))
-        .map(|agent| summarize_tool_output(&agent.assignment.objective))
+        .map(|agent| {
+            let summary = summarize_tool_output(&agent.assignment.objective);
+            // #36: the role is the signal, the id is noise — name the fleet
+            // role before the objective so the strip reads "builder: …".
+            let role = agent
+                .assignment
+                .role
+                .as_deref()
+                .filter(|role| !role.trim().is_empty())
+                .unwrap_or_else(|| agent.agent_type.as_str());
+            if summary.is_empty() {
+                role.to_string()
+            } else {
+                format!("{role}: {summary}")
+            }
+        })
         .filter(|summary| !summary.is_empty())
         .or_else(|| {
             app.agent_progress
@@ -835,21 +891,8 @@ pub(crate) fn footer_git_branch_spans(app: &App) -> Vec<Span<'static>> {
 /// goal hunts, and names the paused state so a stalled goal is never silent.
 fn footer_goal_spans(app: &App) -> Vec<Span<'static>> {
     let theme = &app.ui_theme;
-    let (objective, paused) = match (&app.hunt.quarry, &app.paused_quarry) {
-        (Some(objective), _) => {
-            if matches!(
-                app.hunt.verdict,
-                crate::tui::app::HuntVerdict::Hunted | crate::tui::app::HuntVerdict::Escaped
-            ) {
-                return Vec::new();
-            }
-            (
-                objective.clone(),
-                app.hunt.verdict == crate::tui::app::HuntVerdict::Wounded,
-            )
-        }
-        (None, Some(objective)) => (objective.clone(), true),
-        (None, None) => return Vec::new(),
+    let Some((objective, paused)) = active_goal_chip_state(app) else {
+        return Vec::new();
     };
     let mut label = objective.trim().replace(['\n', '\r'], " ");
     if label.chars().count() > 32 {
@@ -873,6 +916,34 @@ fn footer_goal_spans(app: &App) -> Vec<Span<'static>> {
         ));
     }
     spans
+}
+
+/// Objective + paused flag for the live goal, or `None` when no goal should
+/// render (unset, or terminal Hunted/Escaped). Shared by the classic footer
+/// chip and the ocean topbar chip so every shell surfaces the same state
+/// (#39: the ocean shell has no sidebar, so without a topbar chip a goal set
+/// via `create_goal` was invisible there).
+pub(crate) fn active_goal_chip_state(app: &App) -> Option<(String, bool)> {
+    let (objective, paused) = match (&app.hunt.quarry, &app.paused_quarry) {
+        (Some(objective), _) => {
+            if matches!(
+                app.hunt.verdict,
+                crate::tui::app::HuntVerdict::Hunted | crate::tui::app::HuntVerdict::Escaped
+            ) {
+                return None;
+            }
+            (
+                objective.clone(),
+                app.hunt.verdict == crate::tui::app::HuntVerdict::Wounded,
+            )
+        }
+        (None, Some(objective)) => (objective.clone(), true),
+        (None, None) => return None,
+    };
+    if objective.trim().is_empty() {
+        return None;
+    }
+    Some((objective, paused))
 }
 
 fn footer_shell_spans(app: &App) -> Vec<Span<'static>> {

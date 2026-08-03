@@ -680,7 +680,8 @@ mod tests {
             .iter()
             .find(|row| row.id.0 == "worker:agent_worker")
             .expect("agent work row");
-        assert_eq!(row.label, "Sub-agent Blue Whale · worker");
+        // #36: number + fleet role + short name — never the raw agent id.
+        assert_eq!(row.label, "1 worker · Blue Whale");
         assert!(row.detail.contains("Wire settled file activity"));
         assert!(row.detail.contains("using File.apply_patch"));
         assert!(row.detail.contains("step 2"));
@@ -691,6 +692,174 @@ mod tests {
                 agent_id: "agent_worker".to_string(),
             })
         );
+    }
+
+    fn cached_worker(
+        id: &str,
+        role: &str,
+        nickname: Option<&str>,
+        parent_run_id: Option<&str>,
+        status: SubAgentStatus,
+    ) -> SubAgentResult {
+        SubAgentResult {
+            // `name` is the raw session id in production snapshots — the
+            // strip must never render it (#36).
+            name: id.to_string(),
+            agent_id: id.to_string(),
+            context_mode: "fresh".to_string(),
+            fork_context: false,
+            workspace: None,
+            git_branch: None,
+            agent_type: FleetRole::Builder,
+            assignment: SubAgentAssignment {
+                objective: format!("objective for {id}"),
+                role: Some(role.to_string()),
+            },
+            model: "test-model".to_string(),
+            nickname: nickname.map(str::to_string),
+            status,
+            worker_status: None,
+            runtime_permissions: None,
+            parent_run_id: parent_run_id.map(str::to_string),
+            spawn_depth: u32::from(parent_run_id.is_some()) + 1,
+            result: None,
+            steps_taken: 1,
+            checkpoint: None,
+            needs_input: None,
+            duration_ms: 50,
+            from_prior_session: false,
+        }
+    }
+
+    #[test]
+    fn agent_rows_number_by_fleet_role_and_never_leak_raw_ids() {
+        // #36: the strip shows sequential number + fleet role; the raw agent
+        // id hash is noise and must never render as the "name". Flat fan-outs
+        // carry no nesting chrome.
+        let mut app = app();
+        app.current_session_id = Some(SESSION.to_string());
+        app.subagent_cache.push(cached_worker(
+            "agent_e0b2dcf1",
+            "builder",
+            None,
+            None,
+            SubAgentStatus::Running,
+        ));
+        app.subagent_cache.push(cached_worker(
+            "agent_99aa77bb",
+            "scout",
+            None,
+            None,
+            SubAgentStatus::Running,
+        ));
+
+        let rows = super::model::project(&mut app);
+        let first = rows
+            .iter()
+            .find(|row| row.id.0 == "worker:agent_e0b2dcf1")
+            .expect("first agent row");
+        let second = rows
+            .iter()
+            .find(|row| row.id.0 == "worker:agent_99aa77bb")
+            .expect("second agent row");
+        assert_eq!(first.label, "1 builder");
+        assert_eq!(second.label, "2 scout");
+        assert!(first.detail.starts_with("running"), "{}", first.detail);
+        for row in rows.iter().filter(|row| row.id.0.starts_with("worker:")) {
+            assert!(!row.label.contains("agent_e0b2dcf1"), "{}", row.label);
+            assert!(!row.label.contains("agent_99aa77bb"), "{}", row.label);
+            assert!(
+                !row.label.contains('↳'),
+                "flat fan-out must not show nesting chrome: {}",
+                row.label
+            );
+        }
+    }
+
+    #[test]
+    fn agent_rows_order_and_indent_nested_spawns_under_their_parent() {
+        // #36: nesting is visible only when actually present — the child
+        // renders directly under its parent with a `↳` indent.
+        let mut app = app();
+        app.current_session_id = Some(SESSION.to_string());
+        app.subagent_cache.push(cached_worker(
+            "agent_child",
+            "scout",
+            None,
+            Some("agent_parent"),
+            SubAgentStatus::Running,
+        ));
+        app.subagent_cache.push(cached_worker(
+            "agent_parent",
+            "builder",
+            None,
+            None,
+            SubAgentStatus::Running,
+        ));
+
+        let rows = super::model::project(&mut app);
+        let worker_labels = rows
+            .iter()
+            .filter(|row| row.id.0.starts_with("worker:"))
+            .map(|row| row.label.as_str())
+            .collect::<Vec<_>>();
+        let parent_pos = worker_labels
+            .iter()
+            .position(|label| *label == "1 builder")
+            .expect("parent row label");
+        let child_pos = worker_labels
+            .iter()
+            .position(|label| *label == "↳ 2 scout")
+            .expect("indented child row label");
+        assert!(
+            child_pos == parent_pos + 1,
+            "child must render directly under its parent: {worker_labels:?}"
+        );
+    }
+
+    #[test]
+    fn agent_rows_completed_agents_render_quietly_without_spawn_metadata() {
+        // #36: quiet completion — a finished agent keeps status + objective;
+        // in-flight metadata (tool, step counters, file tallies) must not
+        // linger as a receipt dump.
+        let mut app = app();
+        app.current_session_id = Some(SESSION.to_string());
+        app.subagent_cache.push(cached_worker(
+            "agent_done",
+            "builder",
+            None,
+            None,
+            SubAgentStatus::Completed,
+        ));
+        app.agent_progress_meta.insert(
+            "agent_done".to_string(),
+            crate::tui::app::AgentProgressMeta {
+                current_activity: Some(AgentCurrentActivity::bounded(
+                    AgentCurrentActivityStatus::Done,
+                    Some("apply_patch finished".to_string()),
+                    Some("File.apply_patch".to_string()),
+                    Some(7),
+                )),
+                current_tool: Some("apply_patch".to_string()),
+                files_touched: 4,
+                ..crate::tui::app::AgentProgressMeta::default()
+            },
+        );
+
+        let rows = super::model::project(&mut app);
+        let row = rows
+            .iter()
+            .find(|row| row.id.0 == "worker:agent_done")
+            .expect("completed agent row");
+        assert!(row.detail.contains("completed"), "{}", row.detail);
+        assert!(
+            row.detail.contains("objective for agent_done"),
+            "{}",
+            row.detail
+        );
+        assert!(!row.detail.contains("using "), "{}", row.detail);
+        assert!(!row.detail.contains("step 7"), "{}", row.detail);
+        assert!(!row.detail.contains("files changed"), "{}", row.detail);
     }
 
     #[test]

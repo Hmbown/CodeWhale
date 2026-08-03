@@ -914,6 +914,110 @@ fn is_transient_failed_operation(node: &WorkNode) -> bool {
         && node.state == NodeState::Failed
 }
 
+/// One worker row before display ordering: the rendered row plus the parent
+/// link and fleet identity the strip uses to number, order, and indent
+/// nested spawns (#36).
+struct AgentRowSeed {
+    agent_id: String,
+    parent_run_id: Option<String>,
+    role: String,
+    name: Option<String>,
+    ranked: RankedWorkRow,
+}
+
+/// Indent marker for a nested spawn: nothing at the top level (no permanent
+/// chrome for the common flat fan-out), `↳` once nesting is actually
+/// present, with two extra spaces per additional level (#36).
+fn agent_nesting_indent(depth: usize) -> String {
+    match depth {
+        0 => String::new(),
+        level => format!("{}↳ ", "  ".repeat(level.saturating_sub(1))),
+    }
+}
+
+/// Compose the condensed strip label: sequential number + fleet role, plus a
+/// short name only when a real one exists (nickname or stable label). Raw
+/// agent-id hashes are never a name — when no name is known the label simply
+/// omits it rather than fabricating one (#36).
+fn agent_strip_label(indent: &str, number: usize, role: &str, name: Option<&str>) -> String {
+    let base = match name {
+        Some(name) => format!("{number} {role} · {name}"),
+        None => format!("{number} {role}"),
+    };
+    format!("{indent}{base}")
+}
+
+/// Order worker rows so nested spawns sit directly under their parent, then
+/// stamp each label with its display depth and a sequential number. Rows
+/// whose parent is not visible (e.g. the parent finished and left the cache)
+/// stay at the top level — honest flat rendering beats a dangling indent.
+fn order_agent_seeds(seeds: Vec<AgentRowSeed>) -> Vec<RankedWorkRow> {
+    let known_ids: HashSet<&str> = seeds.iter().map(|seed| seed.agent_id.as_str()).collect();
+    let mut children: std::collections::HashMap<&str, Vec<usize>> =
+        std::collections::HashMap::new();
+    let mut roots = Vec::new();
+    for (idx, seed) in seeds.iter().enumerate() {
+        if let Some(parent) = seed.parent_run_id.as_deref()
+            && known_ids.contains(parent)
+        {
+            children.entry(parent).or_default().push(idx);
+            continue;
+        }
+        roots.push(idx);
+    }
+
+    fn push_tree(
+        idx: usize,
+        depth: usize,
+        seeds: &[AgentRowSeed],
+        children: &std::collections::HashMap<&str, Vec<usize>>,
+        seen: &mut HashSet<usize>,
+        order: &mut Vec<(usize, usize)>,
+    ) {
+        if !seen.insert(idx) {
+            return;
+        }
+        order.push((idx, depth));
+        if let Some(child_indices) = children.get(seeds[idx].agent_id.as_str()) {
+            for child_idx in child_indices {
+                push_tree(*child_idx, depth + 1, seeds, children, seen, order);
+            }
+        }
+    }
+
+    let mut order = Vec::with_capacity(seeds.len());
+    let mut seen = HashSet::new();
+    for idx in roots {
+        push_tree(idx, 0, &seeds, &children, &mut seen, &mut order);
+    }
+    // Cycle/orphan backstop: emit anything the walk missed at the top level.
+    for idx in 0..seeds.len() {
+        push_tree(idx, 0, &seeds, &children, &mut seen, &mut order);
+    }
+
+    let mut slots: Vec<Option<AgentRowSeed>> = seeds.into_iter().map(Some).collect();
+    order
+        .into_iter()
+        .enumerate()
+        .map(|(position, (idx, depth))| {
+            let seed = slots[idx].take().expect("each row emitted exactly once");
+            let mut ranked = seed.ranked;
+            let indent = agent_nesting_indent(depth.min(3));
+            ranked.row.label = agent_strip_label(
+                &indent,
+                position.saturating_add(1),
+                &seed.role,
+                seed.name.as_deref(),
+            );
+            // `ordered_rows` re-sorts within status buckets by `order`; stamp
+            // the tree position so a child sorts directly under its parent
+            // whenever they share a bucket.
+            ranked.order = position;
+            ranked
+        })
+        .collect()
+}
+
 fn agent_rows(app: &App) -> Vec<RankedWorkRow> {
     let cached_ids = app
         .subagent_cache
@@ -921,7 +1025,7 @@ fn agent_rows(app: &App) -> Vec<RankedWorkRow> {
         .filter(|agent| !agent.from_prior_session)
         .map(|agent| agent.agent_id.as_str())
         .collect::<HashSet<_>>();
-    let mut rows = app
+    let mut seeds = app
         .subagent_cache
         .iter()
         .filter(|agent| !agent.from_prior_session)
@@ -942,48 +1046,97 @@ fn agent_rows(app: &App) -> Vec<RankedWorkRow> {
                 .role
                 .as_deref()
                 .filter(|role| !role.trim().is_empty())
-                .unwrap_or_else(|| agent.agent_type.as_str());
-            let name = app
-                .agent_label_map
-                .get(&agent.agent_id)
-                .cloned()
-                .or_else(|| agent.nickname.clone())
-                .unwrap_or_else(|| agent.name.clone());
+                .unwrap_or_else(|| agent.agent_type.as_str())
+                .to_string();
+            // A name is a nickname or stable label — never `agent.name`,
+            // which is the raw session id hash (#36).
+            let name = agent
+                .nickname
+                .clone()
+                .filter(|name| !name.trim().is_empty() && name != &agent.agent_id)
+                .or_else(|| app.agent_label_map.get(&agent.agent_id).cloned());
+            let terminal = current_activity
+                .map(|activity| {
+                    matches!(
+                        activity.status,
+                        AgentCurrentActivityStatus::Done
+                            | AgentCurrentActivityStatus::Canceled
+                            | AgentCurrentActivityStatus::Failed
+                            | AgentCurrentActivityStatus::Interrupted
+                    )
+                })
+                .or_else(|| {
+                    agent.worker_status.map(|worker_status| {
+                        matches!(
+                            worker_status,
+                            AgentWorkerStatus::Completed
+                                | AgentWorkerStatus::Cancelled
+                                | AgentWorkerStatus::Failed
+                                | AgentWorkerStatus::Interrupted
+                        )
+                    })
+                })
+                .unwrap_or_else(|| {
+                    matches!(
+                        agent.status,
+                        SubAgentStatus::Completed
+                            | SubAgentStatus::Cancelled
+                            | SubAgentStatus::Failed(_)
+                            | SubAgentStatus::Interrupted(_)
+                            | SubAgentStatus::BudgetExhausted
+                    )
+                });
             let mut facts = vec![
                 status.to_string(),
                 summarize_assignment(&agent.assignment.objective),
             ];
-            if let Some(detail) = current_activity.and_then(|activity| activity.detail.as_deref()) {
-                facts.push(detail.to_string());
+            // Quiet completion (#36): a finished agent keeps its one-line
+            // status and objective; in-flight metadata (current tool, step
+            // counters, file tallies) is working state, not a receipt, and
+            // must not linger as a spawn-metadata dump after the run ends.
+            if !terminal {
+                if let Some(detail) =
+                    current_activity.and_then(|activity| activity.detail.as_deref())
+                {
+                    facts.push(detail.to_string());
+                }
+                if let Some(tool) =
+                    current_activity.and_then(|activity| activity.current_tool.as_deref())
+                {
+                    facts.push(format!("using {tool}"));
+                }
+                if let Some(step) = current_activity.and_then(|activity| activity.step) {
+                    facts.push(format!("step {step}"));
+                }
+                if let Some(files) = meta
+                    .map(|meta| meta.files_touched)
+                    .filter(|count| *count > 0)
+                {
+                    facts.push(format!("{files} files changed"));
+                }
             }
-            if let Some(tool) =
-                current_activity.and_then(|activity| activity.current_tool.as_deref())
-            {
-                facts.push(format!("using {tool}"));
-            }
-            if let Some(step) = current_activity.and_then(|activity| activity.step) {
-                facts.push(format!("step {step}"));
-            }
-            if let Some(files) = meta
-                .map(|meta| meta.files_touched)
-                .filter(|count| *count > 0)
-            {
-                facts.push(format!("{files} files changed"));
-            }
-            RankedWorkRow {
-                bucket,
-                order,
-                is_plan_step: false,
-                row: WorkRow {
-                    id: WorkRowId(format!("worker:{}", agent.agent_id)),
-                    mark: agent_mark(bucket),
-                    label: format!("Sub-agent {name} · {role}"),
-                    detail: facts.join(" · "),
-                    tone: bucket_tone(bucket),
-                    selectable: true,
-                    primary_action: Some(SidebarRowAction::OpenAgentDetail {
-                        agent_id: agent.agent_id.clone(),
-                    }),
+            AgentRowSeed {
+                agent_id: agent.agent_id.clone(),
+                parent_run_id: agent.parent_run_id.clone(),
+                role,
+                name,
+                ranked: RankedWorkRow {
+                    bucket,
+                    order,
+                    is_plan_step: false,
+                    row: WorkRow {
+                        id: WorkRowId(format!("worker:{}", agent.agent_id)),
+                        mark: agent_mark(bucket),
+                        // Stamped by `order_agent_seeds` once the display
+                        // order (and therefore the number) is known.
+                        label: String::new(),
+                        detail: facts.join(" · "),
+                        tone: bucket_tone(bucket),
+                        selectable: true,
+                        primary_action: Some(SidebarRowAction::OpenAgentDetail {
+                            agent_id: agent.agent_id.clone(),
+                        }),
+                    },
                 },
             }
         })
@@ -995,7 +1148,7 @@ fn agent_rows(app: &App) -> Vec<RankedWorkRow> {
         .filter(|(id, _)| !cached_ids.contains(id.as_str()))
         .collect::<Vec<_>>();
     progress_only.sort_by_key(|(id, _)| (*id).clone());
-    rows.extend(
+    seeds.extend(
         progress_only
             .into_iter()
             .enumerate()
@@ -1008,11 +1161,7 @@ fn agent_rows(app: &App) -> Vec<RankedWorkRow> {
                 let bucket = current_activity
                     .map(|activity| current_activity_status_bucket(activity.status))
                     .unwrap_or(WorkBucket::Active);
-                let name = app
-                    .agent_label_map
-                    .get(id)
-                    .cloned()
-                    .unwrap_or_else(|| id.clone());
+                let name = app.agent_label_map.get(id).cloned();
                 let mut facts = vec![status.to_string()];
                 if let Some(detail) =
                     current_activity.and_then(|activity| activity.detail.as_deref())
@@ -1033,25 +1182,33 @@ fn agent_rows(app: &App) -> Vec<RankedWorkRow> {
                 {
                     facts.push(format!("{files} files changed"));
                 }
-                RankedWorkRow {
-                    bucket,
-                    order: 5_000usize.saturating_add(order),
-                    is_plan_step: false,
-                    row: WorkRow {
-                        id: WorkRowId(format!("worker:{id}")),
-                        mark: agent_mark(bucket),
-                        label: format!("Sub-agent {name}"),
-                        detail: facts.join(" · "),
-                        tone: bucket_tone(bucket),
-                        selectable: true,
-                        primary_action: Some(SidebarRowAction::OpenAgentDetail {
-                            agent_id: id.clone(),
-                        }),
+                AgentRowSeed {
+                    agent_id: id.clone(),
+                    parent_run_id: meta.and_then(|meta| meta.parent_run_id.clone()),
+                    // Role is unknown until the manager snapshot arrives;
+                    // "agent" is the honest fallback, not a fabrication.
+                    role: "agent".to_string(),
+                    name,
+                    ranked: RankedWorkRow {
+                        bucket,
+                        order: 5_000usize.saturating_add(order),
+                        is_plan_step: false,
+                        row: WorkRow {
+                            id: WorkRowId(format!("worker:{id}")),
+                            mark: agent_mark(bucket),
+                            label: String::new(),
+                            detail: facts.join(" · "),
+                            tone: bucket_tone(bucket),
+                            selectable: true,
+                            primary_action: Some(SidebarRowAction::OpenAgentDetail {
+                                agent_id: id.clone(),
+                            }),
+                        },
                     },
                 }
             }),
     );
-    rows
+    order_agent_seeds(seeds)
 }
 
 fn summarize_assignment(value: &str) -> String {

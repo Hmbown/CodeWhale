@@ -946,6 +946,36 @@ pub fn render_header(area: Rect, buf: &mut Buffer, app: &App) {
         permission_label(app),
         Style::default().fg(permission_color),
     ));
+    // Active-goal chip (#39): the ocean shell has no sidebar, so the topbar
+    // is the only always-on surface where a goal set via `create_goal` can
+    // live. Objective truncated to a fixed budget; terminal goals render
+    // nothing. The cramped-layout rebuild below keeps the chip in `suffix`.
+    let goal_chip =
+        crate::tui::footer_ui::active_goal_chip_state(app).map(|(objective, paused)| {
+            let budget = if paused { 22 } else { 26 };
+            let flat = objective.trim().replace(['\n', '\r'], " ");
+            let text = if paused {
+                format!("goal paused {}", truncate_to_width(&flat, budget))
+            } else {
+                format!("goal {}", truncate_to_width(&flat, budget))
+            };
+            let color = if paused {
+                app.ui_theme.warning
+            } else {
+                app.ui_theme.status_working
+            };
+            (text, color)
+        });
+    if let Some((text, color)) = &goal_chip {
+        left.push(Span::styled(
+            " · ",
+            Style::default().fg(app.ui_theme.text_dim),
+        ));
+        left.push(Span::styled(
+            text.clone(),
+            Style::default().fg(*color).add_modifier(Modifier::BOLD),
+        ));
+    }
 
     let context_meter = (tier != ShellTier::Compact)
         .then(|| crate::tui::ui::context_usage_snapshot(app))
@@ -1082,7 +1112,7 @@ pub fn render_header(area: Rect, buf: &mut Buffer, app: &App) {
         } else {
             effort_label.clone()
         };
-        let suffix = vec![
+        let mut suffix = vec![
             Span::styled(" · ", Style::default().fg(app.ui_theme.text_dim)),
             Span::styled(mode, Style::default().fg(mode_color)),
             Span::styled(" · ", Style::default().fg(app.ui_theme.text_dim)),
@@ -1090,7 +1120,28 @@ pub fn render_header(area: Rect, buf: &mut Buffer, app: &App) {
             Span::styled(" · ", Style::default().fg(app.ui_theme.text_dim)),
             Span::styled(permission, Style::default().fg(permission_color)),
         ];
+        // The goal chip survives cramped layouts too — it is operator state,
+        // not decoration. The route label yields its budget first (down to
+        // nothing, as it always has); below that the goal itself truncates,
+        // and when even a minimal chip cannot fit it drops rather than
+        // clipping mid-word (#39).
         let indicator_width = status_indicator.map_or(0, |indicator| 1 + indicator.width());
+        let base_fixed = 4usize
+            .saturating_add(indicator_width)
+            .saturating_add(span_width(&suffix));
+        if let Some((text, color)) = &goal_chip {
+            let goal_room = left_budget.saturating_sub(base_fixed).saturating_sub(3);
+            if goal_room >= 8 {
+                suffix.push(Span::styled(
+                    " · ",
+                    Style::default().fg(app.ui_theme.text_dim),
+                ));
+                suffix.push(Span::styled(
+                    truncate_to_width(text, goal_room),
+                    Style::default().fg(*color).add_modifier(Modifier::BOLD),
+                ));
+            }
+        }
         let fixed_width = 4usize
             .saturating_add(indicator_width)
             .saturating_add(span_width(&suffix));
@@ -1555,6 +1606,64 @@ mod tests {
         assert!(
             header.contains(" · h · Full Access"),
             "effective effort missing: {header:?}"
+        );
+    }
+
+    #[test]
+    fn ocean_header_renders_active_goal_and_hides_it_when_unset_or_terminal() {
+        // #39: the ocean shell has no sidebar, so the topbar is the surface
+        // that must show a goal the moment `create_goal` sets it.
+        let mut app = test_app();
+        let idle = header_text(&app, 120);
+        assert!(
+            !idle.contains("goal"),
+            "no goal chip without an active goal: {idle:?}"
+        );
+
+        app.hunt.quarry = Some("Ship the v0.9.4 release train".to_string());
+        let hunting = header_text(&app, 120);
+        assert!(
+            hunting.contains("goal Ship the v0.9.4"),
+            "active goal missing from ocean topbar: {hunting:?}"
+        );
+
+        app.hunt.verdict = crate::tui::app::HuntVerdict::Hunted;
+        let done = header_text(&app, 120);
+        assert!(
+            !done.contains("goal"),
+            "terminal goal must not linger in the topbar: {done:?}"
+        );
+    }
+
+    #[test]
+    fn ocean_header_names_a_paused_goal() {
+        let mut app = test_app();
+        app.paused_quarry = Some("Audit the fleet roster".to_string());
+        let header = header_text(&app, 120);
+        assert!(
+            header.contains("goal paused Audit the"),
+            "paused goal must say so: {header:?}"
+        );
+    }
+
+    #[test]
+    fn ocean_header_keeps_goal_chip_in_cramped_layouts() {
+        let mut app = test_app();
+        app.model = "provider/model-with-a-deliberately-long-route-name".to_string();
+        app.hunt.quarry = Some("Ship it".to_string());
+        // Width pressure forces the cramped rebuild: the route yields first
+        // and the goal chip survives whole.
+        let header = header_text(&app, 80);
+        assert!(
+            header.contains("goal Ship it"),
+            "goal chip must survive width pressure: {header:?}"
+        );
+        // When even a minimal chip cannot fit alongside mode, effort, and
+        // permission, it drops cleanly instead of clipping mid-word.
+        let narrow = header_text(&app, 48);
+        assert!(
+            !narrow.contains("goal"),
+            "unsupportable goal chip must drop, not clip: {narrow:?}"
         );
     }
 
