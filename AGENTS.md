@@ -58,9 +58,13 @@ These are actively imported and have been repeatedly misflagged as dead code;
 deleting them broke the build. Verify consumers with `rg` before believing any
 dead-code audit:
 
-`tui/src/memory.rs`, `tui/src/context_budget.rs`, `tui/src/model_registry.rs`,
+`tui/src/context_budget.rs`, `tui/src/model_registry.rs`,
 `tui/src/prompt_zones.rs`, `tui/src/tools/remember.rs`, and the entire
 `config/src/route/` directory.
+
+(`tui/src/memory.rs` was deliberately deleted in v0.9.4 — the native memory
+store in `tui/src/native_memory.rs` is the surviving system; `tools/remember.rs`
+is its capture path and stays.)
 
 ## Surfaces that exist today
 

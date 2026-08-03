@@ -667,7 +667,6 @@ impl App {
             skills_scan_codewhale_only,
             memory_path,
             use_memory,
-            moraine_fallback: config.moraine_fallback(),
             use_alt_screen,
             use_mouse_capture,
             use_bracketed_paste,

@@ -5713,7 +5713,6 @@ impl RuntimeThreadManager {
                 ),
                 prefer_bwrap: cfg.prefer_bwrap.unwrap_or(false),
                 memory_enabled: cfg.memory_enabled(),
-                moraine_fallback: cfg.moraine_fallback(),
                 memory_path: cfg.memory_path(),
                 speech_output_dir: cfg.speech_output_dir(),
                 vision_config: cfg.vision_model_config(),

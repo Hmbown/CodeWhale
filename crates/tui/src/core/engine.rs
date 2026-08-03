@@ -319,11 +319,6 @@ pub struct EngineConfig {
     /// engine reads `memory_path` on each prompt assembly and prepends a
     /// `<user_memory>` block to the system prompt.
     pub memory_enabled: bool,
-    /// When `true`, the legacy `memory.rs` push/inject path is deprecated
-    /// in favour of Moraine MCP recall. `compose_block` returns `None`
-    /// regardless of `memory_enabled`, the `remember` tool is not
-    /// registered, and `# foo` quick-add falls through.
-    pub moraine_fallback: bool,
     /// Path to the user memory file (#489). Always populated; only
     /// consulted when `memory_enabled` is `true`.
     pub memory_path: PathBuf,
@@ -446,7 +441,6 @@ impl Default for EngineConfig {
             subagent_model_overrides: HashMap::new(),
             fleet_roster: std::sync::Arc::new(crate::fleet::roster::FleetRoster::built_ins_only()),
             memory_enabled: false,
-            moraine_fallback: false,
             memory_path: PathBuf::from("./memory.md"),
             speech_output_dir: None,
             vision_config: None,
@@ -1163,19 +1157,11 @@ impl Engine {
         // Set up stable system prompt with project context (default to agent mode).
         // Per-turn working-set metadata is injected into the latest user
         // message at request time so file churn does not rewrite this prefix.
-        let user_memory_block = if let Some(store) =
-            crate::native_memory::NativeMemoryStore::from_global_path(&config.memory_path)
-        {
-            store
-                .prompt_block(&config.workspace, 32, 12_000)
-                .ok()
-                .flatten()
-        } else {
-            crate::memory::compose_block(
-                config.memory_enabled && !config.moraine_fallback,
-                &config.memory_path,
-            )
-        };
+        let user_memory_block = crate::native_memory::native_prompt_block(
+            config.memory_enabled,
+            &config.memory_path,
+            &config.workspace,
+        );
         let prompt_goal_objective =
             goal_objective_for_prompt(config.goal_objective.as_deref(), &config.goal_state);
         let system_prompt =
@@ -5120,19 +5106,11 @@ impl Engine {
         &self,
         context: &NextTurnPromptContext,
     ) -> Option<SystemPrompt> {
-        let user_memory_block = if let Some(store) =
-            crate::native_memory::NativeMemoryStore::from_global_path(&self.config.memory_path)
-        {
-            store
-                .prompt_block(&self.config.workspace, 32, 12_000)
-                .ok()
-                .flatten()
-        } else {
-            crate::memory::compose_block(
-                self.config.memory_enabled && !self.config.moraine_fallback,
-                &self.config.memory_path,
-            )
-        };
+        let user_memory_block = crate::native_memory::native_prompt_block(
+            self.config.memory_enabled,
+            &self.config.memory_path,
+            &self.config.workspace,
+        );
         let base = prompts::system_prompt_for_mode_with_context_skills_session_and_approval(
             &self.config.workspace,
             None,
