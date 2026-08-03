@@ -7414,3 +7414,294 @@ async fn cors_layer_advertises_exact_supported_headers_and_never_an_extra() -> R
     handle.abort();
     Ok(())
 }
+
+#[test]
+fn fleet_receipt_json_pass_result_has_no_failure_fields() {
+    use codewhale_protocol::fleet::{FleetReceipt, FleetRunId, FleetTaskResult};
+    let receipt = FleetReceipt {
+        run_id: FleetRunId::from("run-1"),
+        task_id: "task-a".to_string(),
+        worker_id: "worker-1".to_string(),
+        attempt: Some(1),
+        terminal_seq: Some(42),
+        completed_at: "2025-01-01T00:00:00Z".to_string(),
+        result: FleetTaskResult::Pass,
+        failure_kind: None,
+        artifacts: Vec::new(),
+        score: None,
+        resolved_route: None,
+        effective_permissions: None,
+    };
+    let value = fleet_receipt_json(&receipt);
+    assert_eq!(value["run_id"], "run-1");
+    assert_eq!(value["task_id"], "task-a");
+    assert_eq!(value["worker_id"], "worker-1");
+    assert_eq!(value["attempt"], 1);
+    assert_eq!(value["terminal_seq"], 42);
+    assert_eq!(value["result"], "pass");
+    assert!(value["failure_kind"].is_null());
+    assert!(value["failure_class"].is_null());
+    assert_eq!(value["retry_eligible"], false);
+    assert_eq!(value["evidence_available"], false);
+    assert!(value["score"].is_null());
+}
+
+#[test]
+fn fleet_receipt_json_verifier_failure_is_not_retry_eligible() {
+    use codewhale_protocol::fleet::{
+        FleetReceipt, FleetRunId, FleetTaskFailureKind, FleetTaskResult,
+    };
+    let receipt = FleetReceipt {
+        run_id: FleetRunId::from("run-v"),
+        task_id: "task-v".to_string(),
+        worker_id: "worker-v".to_string(),
+        attempt: Some(1),
+        terminal_seq: None,
+        completed_at: "2025-01-01T00:00:00Z".to_string(),
+        result: FleetTaskResult::Fail,
+        failure_kind: Some(FleetTaskFailureKind::Verifier),
+        artifacts: Vec::new(),
+        score: None,
+        resolved_route: None,
+        effective_permissions: None,
+    };
+    let value = fleet_receipt_json(&receipt);
+    assert_eq!(value["result"], "fail");
+    assert_eq!(value["failure_kind"], "verifier");
+    assert_eq!(value["retry_eligible"], false);
+    assert!(
+        value["failure_class"]
+            .as_str()
+            .is_some_and(|s| s.contains("Verifier")),
+        "failure_class should describe a verifier rejection"
+    );
+}
+
+#[test]
+fn fleet_receipt_json_transport_failure_is_retry_eligible() {
+    use codewhale_protocol::fleet::{
+        FleetReceipt, FleetRunId, FleetTaskFailureKind, FleetTaskResult,
+    };
+    let receipt = FleetReceipt {
+        run_id: FleetRunId::from("run-t"),
+        task_id: "task-t".to_string(),
+        worker_id: "worker-t".to_string(),
+        attempt: Some(1),
+        terminal_seq: None,
+        completed_at: "2025-01-01T00:00:00Z".to_string(),
+        result: FleetTaskResult::Fail,
+        failure_kind: Some(FleetTaskFailureKind::Transport),
+        artifacts: Vec::new(),
+        score: None,
+        resolved_route: None,
+        effective_permissions: None,
+    };
+    let value = fleet_receipt_json(&receipt);
+    assert_eq!(value["failure_kind"], "transport");
+    assert_eq!(value["retry_eligible"], true);
+}
+
+#[test]
+fn fleet_receipt_json_receipt_artifact_sets_evidence_available() {
+    use codewhale_protocol::fleet::{
+        FleetArtifactKind, FleetArtifactRef, FleetReceipt, FleetRunId, FleetScore, FleetTaskResult,
+    };
+    use std::path::PathBuf;
+    let receipt = FleetReceipt {
+        run_id: FleetRunId::from("run-e"),
+        task_id: "task-e".to_string(),
+        worker_id: "worker-e".to_string(),
+        attempt: Some(1),
+        terminal_seq: None,
+        completed_at: "2025-01-01T00:00:00Z".to_string(),
+        result: FleetTaskResult::Pass,
+        failure_kind: None,
+        artifacts: vec![FleetArtifactRef {
+            kind: FleetArtifactKind::Receipt,
+            path: PathBuf::from(".codewhale/fleet/run-e/task-e/worker-e/receipt.json"),
+            checksum: Some("sha256:abc123".to_string()),
+            mime_type: Some("application/json".to_string()),
+            size_bytes: Some(512),
+        }],
+        score: Some(FleetScore {
+            value: 1.0,
+            max: Some(1.0),
+            notes: Some("all checks pass".to_string()),
+        }),
+        resolved_route: None,
+        effective_permissions: None,
+    };
+    let value = fleet_receipt_json(&receipt);
+    assert_eq!(value["evidence_available"], true);
+    assert_eq!(value["score"]["value"], 1.0);
+    assert_eq!(value["score"]["max"], 1.0);
+    assert_eq!(value["score"]["notes"], "all checks pass");
+    assert_eq!(value["artifacts"][0]["kind"], "receipt");
+}
+
+#[tokio::test]
+async fn fleet_receipt_api_list_and_get_round_trip() -> Result<()> {
+    use crate::fleet::ledger::FleetLedger;
+    use crate::fleet::task_spec::FleetTaskVerificationInput;
+    use crate::fleet::task_spec::{
+        FleetTaskSpecDocument, FleetTaskVerification, prepare_verification_receipt,
+    };
+    use codewhale_protocol::fleet::{FleetScore, FleetTaskResult};
+
+    let root = std::env::temp_dir().join(format!("codewhale-receipt-api-{}", Uuid::new_v4()));
+    let workspace = root.join("workspace");
+    fs::create_dir_all(&workspace)?;
+
+    let task = codewhale_protocol::fleet::FleetTaskSpec {
+        id: "task-receipt".to_string(),
+        name: "Receipt Task".to_string(),
+        description: None,
+        objective: Some("Test receipt API".to_string()),
+        instructions: "run tests".to_string(),
+        worker: Some(codewhale_protocol::fleet::FleetTaskWorkerProfile {
+            agent_profile: None,
+            role: Some("reviewer".to_string()),
+            loadout: None,
+            model_class: None,
+            model: None,
+            tool_profile: Some("read-only".to_string()),
+            tools: Vec::new(),
+            capabilities: Vec::new(),
+        }),
+        workspace: None,
+        input_files: Vec::new(),
+        context: Vec::new(),
+        budget: None,
+        tags: Vec::new(),
+        expected_artifacts: Vec::new(),
+        scorer: None,
+        retry_policy: None,
+        alert_policy: None,
+        timeout_seconds: None,
+        metadata: std::collections::BTreeMap::new(),
+    };
+    let manager = crate::fleet::manager::FleetManager::open(&workspace)?
+        .with_session_model(crate::config::DEFAULT_TEXT_MODEL);
+    let report = manager.create_run(
+        FleetTaskSpecDocument {
+            name: Some("receipt-api-smoke".to_string()),
+            labels: std::collections::BTreeMap::new(),
+            security_policy: None,
+            workers: Vec::new(),
+            tasks: vec![task],
+        },
+        1,
+    )?;
+    let run_id = report.run_id.clone();
+
+    // Directly record a synthetic receipt so we don't need a live worker.
+    let ledger = FleetLedger::open(&workspace)?;
+    let verification_input = FleetTaskVerificationInput {
+        run_id: run_id.clone(),
+        task_id: "task-receipt".to_string(),
+        worker_id: "worker-1".to_string(),
+        attempt: 1,
+        exit_code: Some(0),
+        artifacts: Vec::new(),
+        resolved_route: None,
+        effective_permissions: None,
+    };
+    let receipt = prepare_verification_receipt(
+        &workspace,
+        &verification_input,
+        FleetTaskVerification {
+            result: FleetTaskResult::Pass,
+            failure_kind: None,
+            score: FleetScore {
+                value: 1.0,
+                max: Some(1.0),
+                notes: Some("exit_code=0".to_string()),
+            },
+            evidence: vec!["exit_code=0".to_string()],
+        },
+    )?;
+    ledger.record_receipt(receipt)?;
+
+    let sessions_dir = root.join("sessions");
+    let Some((addr, _runtime_threads, handle)) =
+        spawn_test_server_with_root_token_mobile_workspace(
+            root.clone(),
+            sessions_dir,
+            None,
+            false,
+            workspace,
+        )
+        .await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    // List receipts for the run.
+    let list: serde_json::Value = client
+        .get(format!("http://{addr}/v1/fleet/runs/{}/receipts", run_id.0))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(list["run_id"], run_id.0.as_str());
+    assert_eq!(list["receipts"].as_array().map(|a| a.len()), Some(1));
+    let receipt_entry = &list["receipts"][0];
+    assert_eq!(receipt_entry["task_id"], "task-receipt");
+    assert_eq!(receipt_entry["result"], "pass");
+    assert_eq!(receipt_entry["retry_eligible"], false);
+    assert_eq!(receipt_entry["evidence_available"], true);
+
+    // Get specific receipt by task_id.
+    let detail: serde_json::Value = client
+        .get(format!(
+            "http://{addr}/v1/fleet/runs/{}/receipts/task-receipt",
+            run_id.0
+        ))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(detail["run_id"], run_id.0.as_str());
+    assert_eq!(detail["task_id"], "task-receipt");
+    assert_eq!(detail["worker_id"], "worker-1");
+    assert_eq!(detail["attempt"], 1);
+    assert_eq!(detail["result"], "pass");
+    assert!(detail["failure_kind"].is_null());
+    assert_eq!(detail["evidence_available"], true);
+
+    // Inspect evidence content.
+    let evidence: serde_json::Value = client
+        .get(format!(
+            "http://{addr}/v1/fleet/runs/{}/receipts/task-receipt/evidence",
+            run_id.0
+        ))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(evidence["run_id"], run_id.0.as_str());
+    assert_eq!(evidence["task_id"], "task-receipt");
+    assert_eq!(evidence["truncated"], false);
+    assert!(
+        evidence["content"].is_object(),
+        "evidence content should parse as JSON object"
+    );
+    assert_eq!(evidence["content"]["task_id"], "task-receipt");
+
+    // Missing task returns 404.
+    let missing = client
+        .get(format!(
+            "http://{addr}/v1/fleet/runs/{}/receipts/no-such-task",
+            run_id.0
+        ))
+        .send()
+        .await?;
+    assert_eq!(missing.status(), 404);
+
+    handle.abort();
+    Ok(())
+}
