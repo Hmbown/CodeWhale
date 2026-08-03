@@ -3046,6 +3046,7 @@ impl Engine {
                                         plan.supports_parallel,
                                         plan.interactive,
                                         self.tx_event.clone(),
+                                        Some(self.cancel_token.clone()),
                                         tool_name.clone(),
                                         tool_input.clone(),
                                         self.session.workspace.clone(),

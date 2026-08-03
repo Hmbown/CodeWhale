@@ -13450,6 +13450,7 @@ async fn code_execution_runs_through_common_executor_after_approval_gate() {
         false,
         false,
         tx_event,
+        None,
         CODE_EXECUTION_TOOL_NAME.to_string(),
         json!({"code":"print('common executor code exec')"}),
         tmp.path().to_path_buf(),

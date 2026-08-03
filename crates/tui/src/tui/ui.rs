@@ -144,8 +144,8 @@ use super::app::{
     ComposerSubmitAction, ComposerSubmitChord, EffectiveReasoningEffort, HuntVerdict,
     OnboardingState, PendingProviderSwitch, QueuedMessage, ReasoningEffort, SidebarFocus,
     StatusToast, StatusToastLevel, SubmitDisposition, TaskPanelEntry, TaskPanelEntryKind,
-    ToolEvidence, TuiOptions, bound_agent_activity_text, looks_like_slash_command_input,
-    shell_command_from_bang_input,
+    ToolEvidence, TuiOptions, bound_agent_activity_text, is_stop_word,
+    looks_like_slash_command_input, shell_command_from_bang_input,
 };
 use super::approval::{
     ApprovalMode, ApprovalRequest, ApprovalView, ElevationRequest, ElevationView, ReviewDecision,
@@ -9408,7 +9408,7 @@ async fn send_taken_queued_message_now(
         return Ok(());
     }
     if app.is_loading {
-        match steer_user_message(app, engine_handle, message.clone()).await {
+        match steer_user_message(app, config, engine_handle, message.clone()).await {
             Ok(true) => app.push_status_toast(
                 "Sent queued follow-up into current turn",
                 StatusToastLevel::Info,
@@ -9936,6 +9936,15 @@ async fn dispatch_user_message_with_recovery(
     mut message: QueuedMessage,
     recovery: DispatchRecovery,
 ) -> Result<()> {
+    let stop_words = config.stop_words();
+    if is_stop_word(&message.display, &stop_words).is_some() {
+        engine_handle.cancel();
+        app.stopped_turn = true;
+        app.status_message = Some("Turn stopped. Tool calls blocked for this turn.".to_string());
+        return Ok(());
+    }
+    app.stopped_turn = false;
+
     // #1364: run mutable `message_submit` hooks before dispatch. Hooks see the
     // user's display text and may replace or block it before file mentions,
     // skill wrapping, history, and model input are resolved.
@@ -13250,9 +13259,18 @@ fn strip_queue_command_prefix(input: &str) -> Option<&str> {
 
 async fn steer_user_message(
     app: &mut App,
+    config: &Config,
     engine_handle: &EngineHandle,
     mut message: QueuedMessage,
 ) -> Result<bool> {
+    let stop_words = config.stop_words();
+    if is_stop_word(&message.display, &stop_words).is_some() {
+        engine_handle.cancel();
+        app.stopped_turn = true;
+        app.status_message = Some("Turn stopped. Tool calls blocked for this turn.".to_string());
+        return Ok(false);
+    }
+    app.stopped_turn = false;
     // Same-turn steering is an engine-bound external-user path just like a
     // fresh dispatch. Run the mutable gate exactly once on the blocking pool
     // before pause state, history, references, or engine input are touched.
@@ -13384,11 +13402,12 @@ fn restore_steer_paused_state(app: &mut App, snapshot: &SteerPausedSnapshot) {
 
 async fn attempt_steer_with_queue_fallback(
     app: &mut App,
+    config: &Config,
     engine_handle: &EngineHandle,
     message: QueuedMessage,
     recovery: DispatchRecovery,
 ) {
-    match steer_user_message(app, engine_handle, message.clone()).await {
+    match steer_user_message(app, config, engine_handle, message.clone()).await {
         Ok(true) => {
             app.push_status_toast(
                 "Steering into current turn",
@@ -13500,7 +13519,7 @@ async fn dispatch_composer_message(
             Ok(())
         }
         SubmitDisposition::Steer => {
-            attempt_steer_with_queue_fallback(app, engine_handle, message, recovery).await;
+            attempt_steer_with_queue_fallback(app, config, engine_handle, message, recovery).await;
             Ok(())
         }
         SubmitDisposition::QueueFollowUp => queue_follow_up(app, message).await,

@@ -676,6 +676,7 @@ impl App {
             auto_compact,
             auto_compact_user_configured,
             auto_compact_threshold_percent,
+            stopped_turn: false,
             calm_mode,
             low_motion,
             constrained_frame_rate,

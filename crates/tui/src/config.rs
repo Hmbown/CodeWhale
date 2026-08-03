@@ -37,6 +37,13 @@ pub(crate) use codewhale_config::{ConfigApiKeyValueKind, classify_config_api_key
 pub const DEFAULT_ZAI_PROVIDER_MAX_CONCURRENCY: usize = 3;
 pub const MAX_PROVIDER_REQUEST_CONCURRENCY: usize = 64;
 
+pub fn default_stop_words() -> Vec<String> {
+    ["stop", "wait", "pause"]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApiProvider {
@@ -2375,6 +2382,9 @@ impl UpdateConfig {
 /// Resolved CLI configuration, including defaults and environment overrides.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Config {
+    /// Single-token inputs that cancel the active turn before dispatch.
+    #[serde(default)]
+    pub stop_words: Option<Vec<String>>,
     pub provider: Option<String>,
     #[serde(alias = "apiKey")]
     pub api_key: Option<String>,
@@ -3493,6 +3503,11 @@ pub(crate) fn approval_policy_baseline_from_permission_posture(
 // === Config Loading ===
 
 impl Config {
+    #[must_use]
+    pub fn stop_words(&self) -> Vec<String> {
+        self.stop_words.clone().unwrap_or_else(default_stop_words)
+    }
+
     /// Structural external-credential status for user-facing inventory. This
     /// resolves only environment/config strings and performs no filesystem or
     /// network access.

@@ -1737,6 +1737,17 @@ fn bang_shell_prefix_rejects_empty_command() {
 }
 
 #[test]
+fn stop_word_matching_requires_one_token() {
+    let words = vec!["stop".to_string(), "wait".to_string(), "pause".to_string()];
+    assert_eq!(is_stop_word("STOP", &words).as_deref(), Some("stop"));
+    assert_eq!(is_stop_word("+ stop", &words).as_deref(), Some("stop"));
+    assert_eq!(is_stop_word("!wait", &words).as_deref(), Some("wait"));
+    assert_eq!(is_stop_word("pause.", &words).as_deref(), Some("pause"));
+    assert!(is_stop_word("please stop", &words).is_none());
+    assert!(is_stop_word("don't stop", &words).is_none());
+}
+
+#[test]
 fn submit_input_records_absolute_slash_path_as_message_history() {
     let mut app = App::new(test_options(false), &Config::default());
     let input = "/usr/lib/x86_64-linux-gnu/ 是标准路径吗？";

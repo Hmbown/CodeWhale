@@ -293,6 +293,7 @@ impl Engine {
             let shell_permits = shell_permits.clone();
             let workspace = self.session.workspace.clone();
             let context_override = context_override.clone();
+            let cancel_token = self.cancel_token.clone();
             tasks.push(async move {
                 let _shell_permit = if tool_name == "exec_shell" {
                     shell_permits.acquire_owned().await.ok()
@@ -304,6 +305,7 @@ impl Engine {
                     true,
                     false,
                     tx_event,
+                    Some(cancel_token),
                     tool_name.clone(),
                     tool_input.clone(),
                     workspace,
@@ -356,6 +358,7 @@ impl Engine {
         supports_parallel: bool,
         interactive: bool,
         tx_event: mpsc::Sender<Event>,
+        cancel_token: Option<CancellationToken>,
         tool_name: String,
         tool_input: serde_json::Value,
         workspace: PathBuf,
@@ -363,6 +366,14 @@ impl Engine {
         mcp_pool: Option<Arc<AsyncMutex<McpPool>>>,
         context_override: Option<crate::tools::ToolContext>,
     ) -> Result<ToolResult, ToolError> {
+        if cancel_token
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            return Err(ToolError::permission_denied(
+                "Turn stopped by user. Tool call blocked.",
+            ));
+        }
         // This guard starts before lock acquisition, so contention as well as
         // registry/MCP/interpreter execution remains visibly live.
         let _heartbeat = ToolHeartbeatGuard::start(tx_event.clone(), TOOL_HEARTBEAT_INTERVAL);
@@ -404,6 +415,15 @@ impl Engine {
         // closes (parent terminal scrollback hijacking the TUI after a
         // cancelled interactive tool).
         let _terminal = InteractiveTerminalGuard::engage(tx_event, interactive).await;
+
+        if cancel_token
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            return Err(ToolError::permission_denied(
+                "Turn stopped by user. Tool call blocked.",
+            ));
+        }
 
         let tool_authority = context_override
             .as_ref()

@@ -191,7 +191,25 @@ pub(crate) fn shell_command_from_bang_input(input: &str) -> Result<Option<&str>,
     if command.is_empty() {
         return Err("Usage: ! <shell command>");
     }
+
     Ok(Some(command))
+}
+
+pub(crate) fn is_stop_word(input: &str, stop_words: &[String]) -> Option<String> {
+    let trimmed = input.trim();
+    let after_prefix = trimmed
+        .strip_prefix('+')
+        .or_else(|| trimmed.strip_prefix('!'))
+        .map_or(trimmed, str::trim_start);
+    let word = after_prefix.trim_end_matches(|c: char| c.is_ascii_punctuation());
+    if word.is_empty() || word.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let lower = word.to_ascii_lowercase();
+    stop_words
+        .iter()
+        .find(|stop_word| stop_word.to_ascii_lowercase() == lower)
+        .cloned()
 }
 
 fn initial_onboarding_state(
@@ -1284,6 +1302,7 @@ pub struct App {
     pub auto_compact: bool,
     pub auto_compact_user_configured: bool,
     pub auto_compact_threshold_percent: f64,
+    pub stopped_turn: bool,
     pub calm_mode: bool,
     pub low_motion: bool,
     pub constrained_frame_rate: bool,
