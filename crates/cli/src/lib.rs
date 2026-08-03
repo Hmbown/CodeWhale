@@ -2053,11 +2053,9 @@ fn run_logout_command_with_secrets_unlocked(
 
 /// Map [`ProviderKind`] to the canonical provider credential slot.
 fn provider_slot(provider: ProviderKind) -> &'static str {
-    match provider {
-        // Keep the historical shared credential slot for the China endpoint.
-        ProviderKind::SiliconflowCN => "siliconflow",
-        _ => provider.provider().id(),
-    }
+    // Shared-account families (SiliconFlow China, the four Model Studio
+    // variants) collapse onto one slot; see ProviderKind::secret_store_slot.
+    provider.secret_store_slot()
 }
 
 /// Resolve the store for credential-adjacent writes: provider selection,
@@ -7933,10 +7931,29 @@ model = "qwen-2.5-7b"
 
         for provider in ProviderKind::ALL {
             assert_eq!(provider_env_vars(provider), provider.provider().env_vars());
+            // Shared-account families collapse onto one durable slot (see
+            // ProviderKind::secret_store_slot); everything else uses its own id.
+            assert_eq!(
+                provider_slot(provider),
+                provider.secret_store_slot(),
+                "{provider:?} slot must match ProviderKind::secret_store_slot"
+            );
             if provider == ProviderKind::SiliconflowCN {
                 assert_eq!(
                     provider_slot(provider),
                     provider_slot(ProviderKind::Siliconflow)
+                );
+            } else if matches!(
+                provider,
+                ProviderKind::ModelstudioTokenPlan
+                    | ProviderKind::ModelstudioTokenPlanAnthropic
+                    | ProviderKind::ModelstudioCodingPlan
+                    | ProviderKind::ModelstudioCodingPlanAnthropic
+            ) {
+                assert_eq!(
+                    provider_slot(provider),
+                    "modelstudio-token-plan",
+                    "{provider:?} must share the Model Studio family slot"
                 );
             } else {
                 assert_eq!(provider_slot(provider), provider.provider().id());

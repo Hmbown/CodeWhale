@@ -5352,6 +5352,50 @@ mod tests {
     }
 
     #[test]
+    fn modelstudio_family_key_marks_all_variants_configured() {
+        let _guard = crate::test_support::lock_test_env();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let _home = crate::test_support::EnvVarGuard::set("HOME", tmp.path());
+        let _userprofile = crate::test_support::EnvVarGuard::set("USERPROFILE", tmp.path());
+        let _codewhale_home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", tmp.path());
+        let _backend = crate::test_support::EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+        let _ms_key = crate::test_support::EnvVarGuard::remove("MODELSTUDIO_API_KEY");
+        let _dashscope_key = crate::test_support::EnvVarGuard::remove("DASHSCOPE_API_KEY");
+        let _cli_source = crate::test_support::EnvVarGuard::remove("DEEPSEEK_API_KEY_SOURCE");
+        let _cli_key = crate::test_support::EnvVarGuard::remove("CODEWHALE_CLI_API_KEY");
+
+        // One saved key on the Token Plan variant, marked by the save path.
+        codewhale_secrets::Secrets::auto_detect()
+            .set("modelstudio-token-plan", "ms-family-key")
+            .expect("seed family slot");
+        let config = Config {
+            provider: Some("deepseek".to_string()),
+            providers: Some(crate::config::ProvidersConfig {
+                modelstudio_token_plan: crate::config::ProviderConfig {
+                    auth_mode: Some("api_key".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Config::default()
+        };
+
+        for variant in [
+            ApiProvider::ModelstudioTokenPlan,
+            ApiProvider::ModelstudioTokenPlanAnthropic,
+            ApiProvider::ModelstudioCodingPlan,
+            ApiProvider::ModelstudioCodingPlanAnthropic,
+        ] {
+            let row = ProviderDashboardRow::from_config(variant, ApiProvider::Deepseek, &config);
+            assert_eq!(
+                row.auth_status,
+                ProviderAuthStatus::Configured,
+                "{variant:?} must resolve the family's one saved key"
+            );
+        }
+    }
+
+    #[test]
     fn provider_dashboard_row_marks_route_resolver_errors_as_invalid() {
         let config = Config {
             api_key: Some("deepseek-key".to_string()),

@@ -5650,6 +5650,45 @@ fn moonshot_api_key_mode_can_use_secret_store_by_default() {
 }
 
 #[test]
+fn modelstudio_variants_resolve_one_shared_secret_store_slot() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+    let store = Arc::new(RecordingSecretsStore::with_value("secret-store-key"));
+    let secrets = Secrets::new(store.clone());
+
+    // One Alibaba Cloud Model Studio account authenticates every plan/dialect
+    // variant, so all four resolve the family's single canonical slot.
+    for provider in [
+        ProviderKind::ModelstudioTokenPlan,
+        ProviderKind::ModelstudioTokenPlanAnthropic,
+        ProviderKind::ModelstudioCodingPlan,
+        ProviderKind::ModelstudioCodingPlanAnthropic,
+    ] {
+        let config = ConfigToml {
+            provider,
+            ..ConfigToml::default()
+        };
+
+        let resolved =
+            config.resolve_runtime_options_with_secrets(&CliRuntimeOverrides::default(), &secrets);
+
+        assert_eq!(resolved.provider, provider);
+        assert_eq!(resolved.api_key.as_deref(), Some("secret-store-key"));
+        assert_eq!(resolved.api_key_source, Some(RuntimeApiKeySource::Keyring));
+    }
+
+    assert_eq!(
+        store.gets.lock().unwrap().as_slice(),
+        [
+            "modelstudio-token-plan",
+            "modelstudio-token-plan",
+            "modelstudio-token-plan",
+            "modelstudio-token-plan"
+        ]
+    );
+}
+
+#[test]
 fn loopback_custom_deepseek_base_url_does_not_probe_secret_store_by_default() {
     let _lock = env_lock();
     let _env = EnvGuard::without_deepseek_runtime_overrides();
