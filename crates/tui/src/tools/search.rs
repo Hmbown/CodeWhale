@@ -53,7 +53,7 @@ impl ToolSpec for GrepFilesTool {
     }
 
     fn description(&self) -> &'static str {
-        "Search for a regex pattern in workspace files. Use this instead of `grep -r`, `rg`, or `find ... -exec grep` in `exec_shell` — pure-Rust, faster, and respects `.gitignore`. Returns matching lines with context (default: 2 lines before/after each match)."
+        "Search for a regex pattern in workspace files. Use this instead of `grep -r`, `rg`, or `find ... -exec grep` in `exec_shell` — pure-Rust, faster, and skips common non-code directories (node_modules, .git, target, ...) by default. Returns matching lines with context (default: 2 lines before/after each match)."
     }
 
     fn input_schema(&self) -> Value {
@@ -667,6 +667,14 @@ mod tests {
     use crate::tools::spec::{ApprovalRequirement, ToolContext, ToolSpec};
 
     use super::{GrepFilesTool, matches_glob};
+
+    #[test]
+    fn grep_description_matches_default_exclusion_behavior() {
+        let description = GrepFilesTool.description();
+
+        assert!(description.contains("skips common non-code directories"));
+        assert!(!description.contains("respects `.gitignore`"));
+    }
 
     #[test]
     fn test_matches_glob_star() {
