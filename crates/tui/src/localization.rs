@@ -87,14 +87,13 @@ impl Locale {
         ]
     }
 
-    /// Complete UI packs held to `en.json` parity. `zh-Hant` is intentionally
-    /// excluded — it remains selectable but falls back to English for missing
-    /// keys until the pack catches up (#4057).
+    /// Complete UI packs held to `en.json` parity.
     pub fn shipped_complete() -> &'static [Self] {
         &[
             Self::En,
             Self::Ja,
             Self::ZhHans,
+            Self::ZhHant,
             Self::PtBr,
             Self::Es419,
             Self::Vi,
@@ -111,7 +110,7 @@ impl Locale {
 
     #[must_use]
     pub fn is_partial_pack(self) -> bool {
-        matches!(self, Self::ZhHant)
+        false
     }
 }
 
@@ -3078,8 +3077,8 @@ mod tests {
     fn partial_pack_status_tracks_the_shipped_locale_registry() {
         assert!(!configured_locale_is_partial_pack("auto"));
         assert!(!configured_locale_is_partial_pack("system"));
-        assert!(configured_locale_is_partial_pack("zh-Hant"));
-        assert!(configured_locale_is_partial_pack("zh_TW.UTF-8"));
+        assert!(!configured_locale_is_partial_pack("zh-Hant"));
+        assert!(!configured_locale_is_partial_pack("zh_TW.UTF-8"));
         assert!(!configured_locale_is_partial_pack("vi"));
         assert!(!configured_locale_is_partial_pack("ko"));
 
@@ -3467,10 +3466,14 @@ mod tests {
     }
 
     #[test]
-    fn zh_hant_is_scoped_as_partial_pack() {
+    fn zh_hant_has_reached_en_parity_and_is_complete() {
         assert!(
-            Locale::ZhHant.is_partial_pack(),
-            "zh-Hant must be marked partial until it reaches en.json parity"
+            !Locale::ZhHant.is_partial_pack(),
+            "zh-Hant is now a complete pack and must not be marked partial"
+        );
+        assert!(
+            Locale::shipped_complete().contains(&Locale::ZhHant),
+            "zh-Hant must be included in shipped_complete now that it has full en.json parity"
         );
         let en_keys = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
             locale_json_source(Locale::En),
@@ -3480,13 +3483,10 @@ mod tests {
             locale_json_source(Locale::ZhHant),
         )
         .expect("zh-Hant locale json");
-        assert!(
-            zh_hant_keys.len() < en_keys.len(),
-            "partial zh-Hant should not claim full parity"
-        );
-        assert!(
-            !Locale::shipped_complete().contains(&Locale::ZhHant),
-            "parity gates must exclude partial zh-Hant"
+        assert_eq!(
+            zh_hant_keys.len(),
+            en_keys.len(),
+            "zh-Hant must have the same number of keys as en.json"
         );
     }
 
