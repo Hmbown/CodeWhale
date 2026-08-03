@@ -319,6 +319,10 @@ fn snapshot_with_label(workspace: &Path, label: &str, cap_bytes: u64) -> Option<
     }
 }
 
+// The stderr print is deliberate: headless/CLI stderr is the user surface for
+// this once-per-workspace warning, matching the pre-TUI notices in
+// runtime_log.rs.
+#[allow(clippy::print_stderr)]
 fn maybe_notify_snapshots_disabled_once(workspace: &Path, error: &std::io::Error) {
     let message = error.to_string();
     if !(message.contains("workspace too large for snapshots")
