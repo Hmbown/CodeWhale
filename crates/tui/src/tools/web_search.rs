@@ -1891,11 +1891,12 @@ fn duckduckgo_allows_bing_fallback(base_url: Option<&str>) -> bool {
 mod tests {
     use super::{
         ERROR_BODY_PREVIEW_BYTES, ScrapeEndpoints, WebSearchTool, baidu_search_payload,
-        bocha_error_message, duckduckgo_search_url, extract_search_query, finalize_search_response,
-        optional_search_max_results, parse_baidu_results, parse_bocha_results,
-        parse_metaso_results, parse_searxng_results, parse_sofya_results, parse_tavily_results,
-        parse_volcengine_results, register_search_citations, run_scrape_search_with_endpoints,
-        sanitize_error_body, searxng_search_url, truncate_error_body, volcengine_extract_text,
+        bocha_error_message, domain_matches, duckduckgo_search_url, extract_search_query,
+        finalize_search_response, optional_search_max_results, parse_baidu_results,
+        parse_bocha_results, parse_metaso_results, parse_searxng_results, parse_sofya_results,
+        parse_tavily_results, parse_volcengine_results, register_search_citations, rerank,
+        run_scrape_search_with_endpoints, sanitize_error_body, searxng_search_url,
+        truncate_error_body, volcengine_extract_text,
     };
     use crate::tools::web::contract::{
         BackendId, BackendSearch, CapabilityState, DegradedReason, QueryCapabilities, QueryKnob,
@@ -3362,5 +3363,370 @@ mod tests {
                 && msg.contains("tavily"),
             "got `{msg}`"
         );
+    }
+
+    // ── Offline deterministic corpus ─────────────────────────────────────────
+    // These tests exercise ranking, deduplication, domain filtering, truncation,
+    // and citation metadata without any network calls.
+
+    #[test]
+    fn rerank_assigns_sequential_ranks_starting_at_one() {
+        // Simulates the post-dedup path: ranks may be non-contiguous after a
+        // result is dropped; rerank must restore a clean 1..N sequence.
+        let mut results = vec![
+            SearchResult::new(
+                5,
+                "C".to_string(),
+                "https://c.example.com/".to_string(),
+                None,
+                None,
+            ),
+            SearchResult::new(
+                3,
+                "A".to_string(),
+                "https://a.example.com/".to_string(),
+                None,
+                None,
+            ),
+            SearchResult::new(
+                1,
+                "B".to_string(),
+                "https://b.example.com/".to_string(),
+                None,
+                None,
+            ),
+        ];
+        rerank(&mut results);
+        assert_eq!(results[0].rank, 1);
+        assert_eq!(results[1].rank, 2);
+        assert_eq!(results[2].rank, 3);
+    }
+
+    #[test]
+    fn rerank_on_empty_slice_is_a_no_op() {
+        let mut results: Vec<SearchResult> = Vec::new();
+        rerank(&mut results); // must not panic
+    }
+
+    #[test]
+    fn register_search_citations_deduplicates_results_with_same_canonical_url() {
+        // Two result URLs that differ only by fragment normalize to the same
+        // canonical URL and receive the same ref_id. The second occurrence must
+        // be removed and ranks re-assigned contiguously.
+        let namespace = "dedup-test-session-fragments";
+        let query = SearchQuery::new("deduplicate".to_string(), 5, None, Vec::new(), None);
+        let raw = BackendSearch {
+            backend: BackendId::DuckDuckGo,
+            source: "duckduckgo".to_string(),
+            backend_detail: None,
+            results: vec![
+                SearchResult::new(
+                    1,
+                    "First occurrence".to_string(),
+                    "https://dedup.example.com/page#section-a".to_string(),
+                    Some("first snippet".to_string()),
+                    None,
+                ),
+                SearchResult::new(
+                    2,
+                    "Unique result".to_string(),
+                    "https://other.dedup.example.com/different".to_string(),
+                    None,
+                    None,
+                ),
+                SearchResult::new(
+                    3,
+                    "Duplicate of first".to_string(),
+                    "https://dedup.example.com/page#section-b".to_string(),
+                    Some("duplicate snippet".to_string()),
+                    None,
+                ),
+            ],
+            degraded: Vec::new(),
+            note: None,
+        };
+        let mut response =
+            finalize_search_response(query, QueryCapabilities::count_only(), raw, Instant::now());
+        let context = crate::tools::spec::ToolContext::new(std::path::PathBuf::from("."))
+            .with_state_namespace(namespace);
+
+        register_search_citations(&mut response, &context);
+
+        assert_eq!(
+            response.count, 2,
+            "duplicate canonical URL must reduce the result count"
+        );
+        assert_eq!(response.results.len(), 2);
+        // After deduplication, ranks must be re-assigned contiguously.
+        assert_eq!(response.results[0].rank, 1);
+        assert_eq!(response.results[1].rank, 2);
+        // First occurrence survives with its canonical (fragment-stripped) URL.
+        assert_eq!(response.results[0].url, "https://dedup.example.com/page");
+        // The unique URL survives untouched.
+        assert_eq!(
+            response.results[1].url,
+            "https://other.dedup.example.com/different"
+        );
+        // The two surviving results must carry distinct ref_ids.
+        assert_ne!(
+            response.results[0].ref_id, response.results[1].ref_id,
+            "surviving results must have distinct ref_ids"
+        );
+        // Updated count and message must reflect the deduplicated set.
+        assert!(response.message.contains('2'), "{}", response.message);
+    }
+
+    #[test]
+    fn register_search_citations_preserves_title_url_and_ref_id_metadata() {
+        // Verifies that after citation registration, every result has a
+        // non-empty web_-prefixed ref_id, the normalized URL, and the
+        // original title; and that the ref_id is resolvable in the session.
+        let namespace = "citation-metadata-test-session";
+        let query = SearchQuery::new("docs".to_string(), 5, None, Vec::new(), None);
+        let raw = BackendSearch {
+            backend: BackendId::DuckDuckGo,
+            source: "duckduckgo".to_string(),
+            backend_detail: None,
+            results: vec![SearchResult::new(
+                1,
+                "Official Docs".to_string(),
+                "https://docs.citation-meta.example.com/reference".to_string(),
+                Some("Comprehensive reference documentation.".to_string()),
+                None,
+            )],
+            degraded: Vec::new(),
+            note: None,
+        };
+        let mut response =
+            finalize_search_response(query, QueryCapabilities::count_only(), raw, Instant::now());
+        let context = crate::tools::spec::ToolContext::new(std::path::PathBuf::from("."))
+            .with_state_namespace(namespace);
+
+        register_search_citations(&mut response, &context);
+
+        assert_eq!(response.count, 1);
+        let result = &response.results[0];
+        // ref_id must be populated with the canonical prefix.
+        assert!(
+            result.ref_id.starts_with("web_"),
+            "ref_id must use web_ prefix; got `{}`",
+            result.ref_id
+        );
+        assert_eq!(result.title, "Official Docs");
+        assert_eq!(
+            result.url,
+            "https://docs.citation-meta.example.com/reference"
+        );
+        assert_eq!(result.rank, 1);
+        // The citation must be resolvable in the session that minted it.
+        let citation =
+            crate::tools::web::citations::resolve(namespace, &result.ref_id)
+                .expect("citation must be registered and resolvable in its session");
+        assert_eq!(citation.ref_id, result.ref_id);
+        assert_eq!(citation.url, result.url);
+        assert_eq!(citation.title.as_deref(), Some("Official Docs"));
+        assert!(
+            !citation.retrieved_at.is_empty(),
+            "retrieved_at must be set to the retrieval timestamp"
+        );
+        // Must not be resolvable in a foreign session.
+        assert!(
+            crate::tools::web::citations::resolve("other-session", &result.ref_id).is_none(),
+            "citation must not leak to foreign sessions"
+        );
+    }
+
+    #[test]
+    fn finalize_search_response_truncates_to_max_results_and_reranks() {
+        // Backends may return more than max_results; finalize must clip and
+        // reassign contiguous ranks so no gap appears in the model-visible output.
+        let query = SearchQuery::new("truncate me".to_string(), 2, None, Vec::new(), None);
+        let raw = BackendSearch {
+            backend: BackendId::DuckDuckGo,
+            source: "duckduckgo".to_string(),
+            backend_detail: None,
+            results: vec![
+                SearchResult::new(
+                    1,
+                    "A".to_string(),
+                    "https://a.trunc.example.com/".to_string(),
+                    None,
+                    None,
+                ),
+                SearchResult::new(
+                    2,
+                    "B".to_string(),
+                    "https://b.trunc.example.com/".to_string(),
+                    None,
+                    None,
+                ),
+                SearchResult::new(
+                    3,
+                    "C".to_string(),
+                    "https://c.trunc.example.com/".to_string(),
+                    None,
+                    None,
+                ),
+            ],
+            degraded: Vec::new(),
+            note: None,
+        };
+
+        let response =
+            finalize_search_response(query, QueryCapabilities::count_only(), raw, Instant::now());
+
+        assert_eq!(response.count, 2, "must be truncated to max_results");
+        assert_eq!(response.results.len(), 2);
+        assert_eq!(response.results[0].rank, 1);
+        assert_eq!(response.results[1].rank, 2);
+        assert_eq!(response.results[0].title, "A");
+        assert_eq!(response.results[1].title, "B");
+        assert!(response.message.contains('2'), "{}", response.message);
+    }
+
+    #[test]
+    fn domain_matches_handles_subdomains_www_prefix_and_empty_list() {
+        // Empty domain list: every URL passes (no filtering requested).
+        assert!(
+            domain_matches("https://any.example.com/page", &[]),
+            "empty domain list must accept all URLs"
+        );
+        // Exact host match.
+        assert!(domain_matches(
+            "https://example.com/page",
+            &["example.com".to_string()]
+        ));
+        // Subdomain match: docs.example.com is a subdomain of example.com.
+        assert!(domain_matches(
+            "https://docs.example.com/page",
+            &["example.com".to_string()]
+        ));
+        // www-prefixed URL matches bare domain.
+        assert!(domain_matches(
+            "https://www.example.com/page",
+            &["example.com".to_string()]
+        ));
+        // www-prefixed domain filter matches bare URL.
+        assert!(domain_matches(
+            "https://example.com/page",
+            &["www.example.com".to_string()]
+        ));
+        // Completely different domain must not match.
+        assert!(!domain_matches(
+            "https://other.com/page",
+            &["example.com".to_string()]
+        ));
+        // A domain that shares a suffix but is not a subdomain must not match
+        // (prevents "notexample.com" matching filter "example.com").
+        assert!(!domain_matches(
+            "https://notexample.com/page",
+            &["example.com".to_string()]
+        ));
+    }
+
+    #[test]
+    fn finalize_search_response_domain_post_filter_reranks_survivors() {
+        // When domain filtering is applied post-search, results that do not
+        // match must be removed and the survivors re-ranked from 1.
+        let query = SearchQuery::new(
+            "domain filter".to_string(),
+            5,
+            None,
+            vec!["keep.example.com".to_string()],
+            None,
+        );
+        let raw = BackendSearch {
+            backend: BackendId::DuckDuckGo,
+            source: "duckduckgo".to_string(),
+            backend_detail: None,
+            results: vec![
+                SearchResult::new(
+                    1,
+                    "Drop this".to_string(),
+                    "https://other.example.com/page".to_string(),
+                    None,
+                    None,
+                ),
+                SearchResult::new(
+                    2,
+                    "Keep this".to_string(),
+                    "https://keep.example.com/page".to_string(),
+                    None,
+                    None,
+                ),
+                SearchResult::new(
+                    3,
+                    "Also drop".to_string(),
+                    "https://unrelated.example.com/page".to_string(),
+                    None,
+                    None,
+                ),
+            ],
+            degraded: Vec::new(),
+            note: None,
+        };
+
+        let response =
+            finalize_search_response(query, QueryCapabilities::count_only(), raw, Instant::now());
+
+        assert_eq!(response.count, 1, "only the matching domain must survive");
+        assert_eq!(response.results[0].rank, 1, "survivor must be re-ranked to 1");
+        assert_eq!(response.results[0].title, "Keep this");
+        // The receipt must record post-filtering as a degraded reason.
+        assert!(
+            response.receipt.degraded.iter().any(|reason| matches!(
+                reason,
+                DegradedReason::PostFiltered {
+                    knob: QueryKnob::Domains
+                }
+            )),
+            "post-filtered degraded reason must be present"
+        );
+    }
+
+    #[test]
+    fn fallback_receipt_carries_full_backend_chain_history() {
+        // Verifies that the machine-readable degraded vec records every hop in
+        // the fallback chain so callers can audit exactly what happened.
+        let receipt = crate::tools::web::contract::SearchReceipt {
+            backend: BackendId::Bing,
+            backend_detail: None,
+            requested: SearchQuery::new(
+                "fallback chain".to_string(),
+                5,
+                None,
+                Vec::new(),
+                None,
+            ),
+            capabilities: QueryCapabilities::count_only(),
+            honored: crate::tools::web::contract::HonoredQueryCapabilities {
+                max_results: true,
+                ..Default::default()
+            },
+            degraded: vec![
+                DegradedReason::ChallengeDetected {
+                    backend: BackendId::DuckDuckGo,
+                },
+                DegradedReason::ScrapeFallback {
+                    from: BackendId::DuckDuckGo,
+                    to: BackendId::Bing,
+                },
+            ],
+            latency_ms: 42,
+            cache_hit: false,
+        };
+
+        let value = serde_json::to_value(&receipt).expect("receipt must serialize");
+        assert_eq!(value["backend"], "bing");
+        assert_eq!(value["degraded"].as_array().unwrap().len(), 2);
+        assert_eq!(value["degraded"][0]["kind"], "challenge_detected");
+        assert_eq!(value["degraded"][0]["backend"], "duckduckgo");
+        assert_eq!(value["degraded"][1]["kind"], "scrape_fallback");
+        assert_eq!(value["degraded"][1]["from"], "duckduckgo");
+        assert_eq!(value["degraded"][1]["to"], "bing");
+
+        let warning = receipt.warning().expect("degraded receipt must produce a warning");
+        assert!(warning.contains("bot challenge"), "{warning}");
+        assert!(warning.contains("used bing fallback"), "{warning}");
     }
 }
