@@ -2163,12 +2163,18 @@ async fn exhausted_goal_pauses_before_invalid_route_resolution() {
 
 #[tokio::test]
 async fn continuation_circuit_breaker_pauses_with_run_limit_reason() {
+    // #5052: the backstop is configurable ([goal] max_continuations) and set
+    // deliberately past the retired hardcoded cap of 10 to prove an operate
+    // goal is no longer stopped there — only the configured backstop halts a
+    // pathological loop that never emits a terminal signal.
+    let backstop = 12u32;
     let config = Config::default();
     let (engine, handle) = Engine::new(
         EngineConfig {
             snapshots_enabled: false,
             terminal_chrome_enabled: false,
             goal_objective: Some("stop a runaway continuation loop".to_string()),
+            goal_max_continuations: backstop,
             ..EngineConfig::default()
         },
         &config,
@@ -2176,7 +2182,7 @@ async fn continuation_circuit_breaker_pauses_with_run_limit_reason() {
     let goal_state = engine.config.goal_state.clone();
     {
         let mut goal = goal_state.lock().expect("goal lock");
-        for _ in 0..crate::goal_loop::MAX_GOAL_CONTINUATIONS {
+        for _ in 0..backstop {
             goal.record_continuation();
         }
     }
@@ -2209,10 +2215,8 @@ async fn continuation_circuit_breaker_pauses_with_run_limit_reason() {
                 saw_pause = true;
             }
             Event::Status { message } if message.contains("automatic continuations") => {
-                assert!(
-                    message.contains(&crate::goal_loop::MAX_GOAL_CONTINUATIONS.to_string()),
-                    "{message}"
-                );
+                assert!(message.contains(&backstop.to_string()), "{message}");
+                assert!(message.contains("[goal] max_continuations"), "{message}");
                 saw_reason = true;
             }
             _ => {}
@@ -2221,6 +2225,64 @@ async fn continuation_circuit_breaker_pauses_with_run_limit_reason() {
 
     handle.send(Op::Shutdown).await.expect("shutdown engine");
     run_task.await.expect("engine task");
+}
+
+#[tokio::test]
+async fn goal_continues_past_legacy_ten_pass_cap_when_budget_remains() {
+    // #5052 regression: 10 automatic continuations used to be a terminal stop.
+    // With the default backstop and budget remaining, the loop must keep
+    // dispatching toward the completion gate.
+    let config = Config::default();
+    let (engine, _handle) = Engine::new(
+        EngineConfig {
+            snapshots_enabled: false,
+            terminal_chrome_enabled: false,
+            goal_objective: Some("run to the completion gate, not a pass count".to_string()),
+            goal_token_budget: Some(1_000_000),
+            ..EngineConfig::default()
+        },
+        &config,
+    );
+    {
+        let mut goal = engine.config.goal_state.lock().expect("goal lock");
+        for _ in 0..10 {
+            goal.record_continuation();
+        }
+    }
+
+    match engine.goal_continuation_if_active() {
+        GoalContinuationAction::Dispatch { snapshot, .. } => {
+            assert_eq!(snapshot.continuation_count, 11);
+        }
+        other => panic!("goal must continue past 10 passes, got {other:?}"),
+    }
+
+    // A backstop of 0 means unlimited-with-budget-stops: even a pathological
+    // pass count keeps continuing while budget remains.
+    let (engine, _handle) = Engine::new(
+        EngineConfig {
+            snapshots_enabled: false,
+            terminal_chrome_enabled: false,
+            goal_objective: Some("unlimited backstop".to_string()),
+            goal_token_budget: Some(1_000_000),
+            goal_max_continuations: 0,
+            ..EngineConfig::default()
+        },
+        &config,
+    );
+    {
+        let mut goal = engine.config.goal_state.lock().expect("goal lock");
+        for _ in 0..500 {
+            goal.record_continuation();
+        }
+    }
+    assert!(
+        matches!(
+            engine.goal_continuation_if_active(),
+            GoalContinuationAction::Dispatch { .. }
+        ),
+        "backstop 0 must not stop an in-budget goal"
+    );
 }
 
 #[tokio::test]

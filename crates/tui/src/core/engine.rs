@@ -328,6 +328,11 @@ pub struct EngineConfig {
     pub goal_objective: Option<String>,
     pub goal_token_budget: Option<u32>,
     pub goal_status: GoalStatus,
+    /// Safety backstop on automatic goal continuation passes (#5052).
+    /// Resolved from `[goal] max_continuations` in config.toml; `0` disables
+    /// the backstop so only completion/blocked or token/time budget
+    /// exhaustion stop an operate-mode goal run.
+    pub goal_max_continuations: u32,
     /// Tool restriction from custom slash command frontmatter.
     /// `None` means the current turn may use the normal tool set.
     pub allowed_tools: Option<Vec<String>>,
@@ -448,6 +453,7 @@ impl Default for EngineConfig {
             goal_objective: None,
             goal_token_budget: None,
             goal_status: GoalStatus::Active,
+            goal_max_continuations: crate::goal_loop::DEFAULT_MAX_GOAL_CONTINUATIONS,
             allowed_tools: None,
             disallowed_tools: None,
             max_tool_calls: None,
@@ -741,6 +747,7 @@ fn claim_subagent_completion(
         .then_some(completion)
 }
 
+#[derive(Debug)]
 enum GoalContinuationAction {
     Inactive,
     Dispatch {
@@ -3163,9 +3170,11 @@ impl Engine {
     /// Returns a continuation to dispatch, an explicit terminal budget stop,
     /// or `Inactive` when no follow-up turn belongs in the queue.
     ///
-    /// There is no continuation cap — a goal runs until the model self-reports
-    /// done/blocked, the user pauses or clears, or an optional token/time
-    /// budget is exhausted. The loop is "until done," not "until N turns."
+    /// A goal runs until the model self-reports done/blocked, the user pauses
+    /// or clears, or an optional token/time budget is exhausted. The loop is
+    /// "until done," not "until N turns" (#5052); a configurable safety
+    /// backstop (`[goal] max_continuations`, `0` = unlimited) still halts a
+    /// pathological loop that never emits a terminal signal.
     fn goal_continuation_if_active(&self) -> GoalContinuationAction {
         let mut state = match self.config.goal_state.lock() {
             Ok(state) => state,
@@ -3198,6 +3207,7 @@ impl Engine {
             crate::goal_loop::GoalBudget {
                 token_budget: snapshot.token_budget.map(u64::from),
                 time_budget_seconds: None,
+                max_continuations: self.config.goal_max_continuations,
             },
         );
 
@@ -3237,8 +3247,8 @@ impl Engine {
                     ),
                     crate::goal_loop::StopReason::ContinuationLimit => (
                         format!(
-                            "Goal paused after {} automatic continuations without a terminal result; inspect progress, then resume if useful.",
-                            crate::goal_loop::MAX_GOAL_CONTINUATIONS,
+                            "Goal paused after {} automatic continuations without a terminal result (safety backstop; raise or disable via [goal] max_continuations); inspect progress, then resume if useful.",
+                            self.config.goal_max_continuations,
                         ),
                         GoalPauseReason::Backoff,
                     ),

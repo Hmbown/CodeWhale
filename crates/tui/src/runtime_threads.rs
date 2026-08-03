@@ -5720,6 +5720,7 @@ impl RuntimeThreadManager {
                 goal_objective: None,
                 goal_token_budget: None,
                 goal_status: crate::tools::goal::GoalStatus::Active,
+                goal_max_continuations: cfg.goal_max_continuations(),
                 allowed_tools: None,
                 disallowed_tools: None,
                 max_tool_calls: None,

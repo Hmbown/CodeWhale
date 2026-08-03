@@ -3489,10 +3489,12 @@ impl Engine {
         }
 
         // Route the continuation decision through the goal-loop decision core.
-        // There is no run-level cap — a goal runs until complete/blocked,
-        // paused, or an optional token/time budget is exhausted. The per-turn
-        // guard (`per_turn_max`) only bounds how many continuation passes
-        // happen *within* a single turn before yielding back to the engine.
+        // A goal runs until complete/blocked, paused, or an optional
+        // token/time budget is exhausted (#5052); the configurable run-level
+        // backstop (`[goal] max_continuations`) only halts a pathological
+        // loop. The per-turn guard (`per_turn_max`) only bounds how many
+        // continuation passes happen *within* a single turn before yielding
+        // back to the engine.
         let decision = crate::goal_loop::decide_continuation(
             crate::goal_loop::GoalRunStatus::Active,
             crate::goal_loop::GoalProgress {
@@ -3503,6 +3505,7 @@ impl Engine {
             crate::goal_loop::GoalBudget {
                 token_budget: snapshot.token_budget.map(u64::from),
                 time_budget_seconds: None,
+                max_continuations: self.config.goal_max_continuations,
             },
         );
         if let crate::goal_loop::ContinuationDecision::Stop(reason) = decision {

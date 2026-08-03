@@ -1901,6 +1901,20 @@ pub struct ToolsConfig {
     pub overrides: Option<HashMap<String, ToolOverride>>,
 }
 
+/// Persistent-goal loop controls (`[goal]` table in config.toml, #5052).
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
+pub struct GoalConfig {
+    /// Safety backstop on automatic goal continuation passes. The completion
+    /// gate and token/time budgets are the real terminal stops; this only
+    /// halts a pathological loop that never emits a terminal signal.
+    ///
+    /// `None` uses the built-in default
+    /// ([`crate::goal_loop::DEFAULT_MAX_GOAL_CONTINUATIONS`]); `0` disables
+    /// the backstop entirely so only budget/terminal stops end the run.
+    #[serde(default)]
+    pub max_continuations: Option<u32>,
+}
+
 /// One configurable footer item.
 ///
 /// Order in the user's `Vec<StatusItem>` is preserved: items in the left
@@ -2496,6 +2510,12 @@ pub struct Config {
     /// requires a trusted `base_url`.
     #[serde(default)]
     pub search: Option<SearchConfig>,
+
+    /// Persistent-goal loop controls (#5052). When absent, the continuation
+    /// backstop falls back to
+    /// [`crate::goal_loop::DEFAULT_MAX_GOAL_CONTINUATIONS`].
+    #[serde(default)]
+    pub goal: Option<GoalConfig>,
 
     /// User-level memory (#489). Default behaviour is **opt-in**:
     /// loading + injection happens only when `[memory] enabled = true` or
@@ -6045,6 +6065,18 @@ impl Config {
             .unwrap_or(false)
     }
 
+    /// Effective safety backstop on automatic goal continuation passes
+    /// (#5052). `[goal] max_continuations` overrides the built-in default;
+    /// `0` disables the backstop so only completion/blocked or token/time
+    /// budget exhaustion stop an operate-mode goal run.
+    #[must_use]
+    pub fn goal_max_continuations(&self) -> u32 {
+        self.goal
+            .as_ref()
+            .and_then(|goal| goal.max_continuations)
+            .unwrap_or(crate::goal_loop::DEFAULT_MAX_GOAL_CONTINUATIONS)
+    }
+
     /// Resolve the explicit local-memory backend.
     #[must_use]
     pub fn memory_backend(&self) -> MemoryBackend {
@@ -8981,6 +9013,7 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         skills: merge_skills_config(base.skills, override_cfg.skills),
         snapshots: override_cfg.snapshots.or(base.snapshots),
         search: override_cfg.search.or(base.search),
+        goal: override_cfg.goal.or(base.goal),
         memory: override_cfg.memory.or(base.memory),
         speech: override_cfg.speech.or(base.speech),
         auto: override_cfg.auto.or(base.auto),

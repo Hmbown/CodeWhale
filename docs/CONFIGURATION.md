@@ -1806,6 +1806,26 @@ Notes:
 - See [`MEMORY.md`](MEMORY.md) for examples and the full `/memory`
   command surface.
 
+### Goal loop (`[goal]`)
+
+Operate-mode goals run to their completion gate: the only terminal stops are a
+verified completion, a blocked report, or an exhausted configured token budget
+(#5052). The decision core also accepts an optional time budget, but the TUI
+does not currently configure or expose one. A configurable safety backstop
+still halts a pathological loop that never emits a terminal signal:
+
+```toml
+[goal]
+# Safety backstop on automatic goal continuation passes.
+# Default: 100. Set 0 to disable the backstop entirely so only
+# completion/blocked or budget exhaustion stop the run.
+max_continuations = 100
+```
+
+When the backstop fires, the goal pauses with a status message naming
+`[goal] max_continuations` and a warning is logged; resume the goal after
+inspecting progress, or raise/disable the backstop.
+
 ### Notifications
 
 The TUI can emit a desktop notification (OSC 9 escape or plain BEL) when a turn **completes successfully** and took longer than a threshold, so you can tab away while a long task runs. Failed or cancelled turns are intentionally silent — the notification is a "your task is ready" cue, not a generic ping. Configuration lives under `[notifications]`:
