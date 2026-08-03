@@ -11,7 +11,7 @@
 //! single-file operation.
 
 use crate::models::{SystemBlock, SystemPrompt};
-use crate::project_context::{ProjectContext, load_project_context_with_parents};
+use crate::project_context::load_project_context_with_parents;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
@@ -387,13 +387,13 @@ fn user_constitution_disabled_by_setup_state() -> bool {
 // prompt text in `text.rs` directly; the test suite below guards content
 // and ordering invariants (constitution structure and binding gates #4032,
 // byte-stable prefix ordering, prefix privacy #4632).
-pub use text::{
-    AGENT_MODE, BASE_PROMPT, CALM_PERSONALITY, COMPACT_TEMPLATE, CORE_EXECUTION_PROFILE_PROMPT,
-    GOAL_CONTINUATION_PROMPT, LANGUAGE_PROMPT, MEMORY_GUIDANCE, OPERATE_MODE, OUTPUT_PROMPT,
-    PLAN_MODE, PLAYFUL_PERSONALITY,
-};
 #[cfg(test)]
-use text::{AGENT_PROMPT, AUTO_APPROVAL, NEVER_APPROVAL, SUGGEST_APPROVAL, YOLO_MODE};
+use text::CALM_PERSONALITY;
+pub use text::{
+    AGENT_MODE, BASE_PROMPT, COMPACT_TEMPLATE, CORE_EXECUTION_PROFILE_PROMPT,
+    GOAL_CONTINUATION_PROMPT, LANGUAGE_PROMPT, MEMORY_GUIDANCE, OPERATE_MODE, OUTPUT_PROMPT,
+    PLAN_MODE,
+};
 
 // ── Embedder prompt overrides ──
 // Let an embedder replace these compile-time prompt constants at startup,
@@ -442,106 +442,6 @@ pub type StaticPromptComposer = dyn Fn(&StaticPromptCtx<'_>) -> String + Send + 
 /// engine.
 pub fn set_base_prompt_override(s: String) -> Result<(), String> {
     set_prompt_override(&BASE_PROMPT_OVERRIDE, s)
-}
-
-/// Replace the Simplified-Chinese locale preamble (`## 语言要求`).
-pub fn set_locale_preamble_zh_hans_override(s: String) -> Result<(), String> {
-    set_prompt_override(&LOCALE_PREAMBLE_ZH_HANS_OVERRIDE, s)
-}
-
-/// Replace the Japanese locale preamble.
-pub fn set_locale_preamble_ja_override(s: String) -> Result<(), String> {
-    set_prompt_override(&LOCALE_PREAMBLE_JA_OVERRIDE, s)
-}
-
-/// Replace the Brazilian-Portuguese locale preamble.
-pub fn set_locale_preamble_pt_br_override(s: String) -> Result<(), String> {
-    set_prompt_override(&LOCALE_PREAMBLE_PT_BR_OVERRIDE, s)
-}
-
-/// Replace the Vietnamese locale preamble.
-pub fn set_locale_preamble_vi_override(s: String) -> Result<(), String> {
-    set_prompt_override(&LOCALE_PREAMBLE_VI_OVERRIDE, s)
-}
-
-/// Replace the Simplified-Chinese locale closer (`## 语言再次提醒`).
-pub fn set_locale_closer_zh_hans_override(s: String) -> Result<(), String> {
-    set_prompt_override(&LOCALE_CLOSER_ZH_HANS_OVERRIDE, s)
-}
-
-/// Replace the Japanese locale closer.
-pub fn set_locale_closer_ja_override(s: String) -> Result<(), String> {
-    set_prompt_override(&LOCALE_CLOSER_JA_OVERRIDE, s)
-}
-
-/// Replace the Brazilian-Portuguese locale closer.
-pub fn set_locale_closer_pt_br_override(s: String) -> Result<(), String> {
-    set_prompt_override(&LOCALE_CLOSER_PT_BR_OVERRIDE, s)
-}
-
-/// Replace the Vietnamese locale closer.
-pub fn set_locale_closer_vi_override(s: String) -> Result<(), String> {
-    set_prompt_override(&LOCALE_CLOSER_VI_OVERRIDE, s)
-}
-
-/// Replace the trailing `## Authority Recap` block.
-///
-/// The recap must not restate or reorder ranks — precedence lives only in
-/// `BASE_PROMPT` § Whose word wins (#4777). Reject overrides that introduce
-/// numbered ranks or claim a different ordering.
-pub fn set_authority_recap_override(s: String) -> Result<(), String> {
-    validate_authority_recap_override(&s)?;
-    set_prompt_override(&AUTHORITY_RECAP_OVERRIDE, s)
-}
-
-fn validate_authority_recap_override(s: &str) -> Result<(), String> {
-    // Retired rank vocabulary and any restated ordering both re-introduce a
-    // second authority ladder; refuse them. Precedence lives only in
-    // BASE_PROMPT § Whose word wins (#4777).
-    let lower = s.to_ascii_lowercase();
-    for forbidden in [
-        "tier ",
-        "statute",
-        "regulation",
-        "local law",
-        "article ",
-        "outrank",
-        "whose word wins", // override may *point* at the section only via the default; custom text that re-embeds the ladder is refused below
-    ] {
-        // Allow the default pointer phrase "consult ### Whose word wins".
-        if forbidden == "whose word wins" {
-            continue;
-        }
-        if lower.contains(forbidden) {
-            return Err(format!(
-                "authority recap override must not restate ranks (found {forbidden:?}); \
-                 precedence is only in BASE_PROMPT § Whose word wins"
-            ));
-        }
-    }
-    // A custom numbered 1..5 ladder is the classic reorder footgun.
-    let has_numbered_ladder = (1..=5).all(|n| {
-        lower.contains(&format!("\n{n}."))
-            || lower.contains(&format!("\n{n})"))
-            || lower.contains(&format!(" {n}. "))
-    });
-    if has_numbered_ladder {
-        return Err(
-            "authority recap override must not restate a numbered authority ladder; \
-             precedence is only in BASE_PROMPT § Whose word wins"
-                .to_string(),
-        );
-    }
-    Ok(())
-}
-
-/// Replace the byte-stable base/personality prompt segment for subsequent
-/// prompt composition. First call wins; later calls return the rejected
-/// composer so embedders can preserve ownership.
-pub fn set_static_prompt_composer_override(
-    f: Box<StaticPromptComposer>,
-) -> Result<(), Box<StaticPromptComposer>> {
-    set_static_prompt_composer(&STATIC_PROMPT_COMPOSER, f)
 }
 
 // ── Config-directory prompt overrides (issue #3638) ──
@@ -675,13 +575,6 @@ pub fn load_prompt_overrides_from_config_home() {
 
 fn set_prompt_override(cell: &std::sync::OnceLock<String>, s: String) -> Result<(), String> {
     cell.set(s)
-}
-
-fn set_static_prompt_composer(
-    cell: &std::sync::OnceLock<Box<StaticPromptComposer>>,
-    f: Box<StaticPromptComposer>,
-) -> Result<(), Box<StaticPromptComposer>> {
-    cell.set(f)
 }
 
 fn effective_prompt_override<'a>(
@@ -983,46 +876,15 @@ dự án có là tiếng Anh, quá trình suy nghĩ của bạn cũng không đ�
 tích lũy trong ngữ cảnh. Trừ khi người dùng yêu cầu rõ ràng việc chuyển đổi (ví dụ \"think in English\"), \
 hãy tiếp tục suy nghĩ và trả lời bằng tiếng Việt.";
 
-/// Shell policy guidance for `allow_shell=false`. Referenced from the
-/// Runtime Policy Reference so the model can adapt without mutating the
-/// static system-prompt prefix (preserves DeepSeek prefix cache across
-/// shell-access toggles).
-pub const SHELL_POLICY_DISABLED: &str = "Shell tools unavailable. For mandatory-use items referencing \
-`exec_shell`, use `code_execution` (Python sandbox). For GitHub triage, use \
-`github_issue_context` / `github_pr_context` as primary route.";
-
 // ── Personality selection ─────────────────────────────────────────────
 
-/// Which personality overlay to apply.
+/// Which personality overlay to apply. Tone is folded into the constitutional
+/// preamble, so this is a compile-time marker carried through the static-prompt
+/// composer context rather than a separate overlay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Personality {
-    /// Cool, spatial, reserved — the default.
+    /// Cool, spatial, reserved — the default and only shipped personality.
     Calm,
-    /// Warm, energetic, playful — alternative for fun mode.
-    Playful,
-}
-
-impl Personality {
-    /// Resolve from the `calm_mode` settings flag.
-    /// When `calm_mode` is true → Calm; when false → Playful (future).
-    /// For now, always returns Calm — Playful is wired but opt-in.
-    #[must_use]
-    pub fn from_settings(calm_mode: bool) -> Self {
-        if calm_mode {
-            Self::Calm
-        } else {
-            // Future: when playful mode is exposed in settings, return Playful here.
-            // For now, calm is the only default.
-            Self::Calm
-        }
-    }
-
-    fn prompt(self) -> &'static str {
-        match self {
-            Self::Calm => CALM_PERSONALITY,
-            Self::Playful => PLAYFUL_PERSONALITY,
-        }
-    }
 }
 
 // ── Composition ───────────────────────────────────────────────────────
@@ -1049,10 +911,6 @@ Codewhale's constitution governs your behavior. Ground truth underlies the
 whole list: the user may override a fact, but no one may invent one. When
 guidance conflicts, consult ### Whose word wins — that is the only place
 precedence is stated.";
-
-pub fn compose_prompt(personality: Personality) -> String {
-    compose_prompt_with_approval_model_and_shell(personality, "codewhale")
-}
 
 pub(crate) fn compose_prompt_with_approval_model_and_shell(
     personality: Personality,
@@ -1418,23 +1276,6 @@ fn render_route_fragment(session_context: &PromptSessionContext<'_>) -> String {
     )
 }
 
-/// Assemble a cache-stable constitution prefix with a typed WorldState layer.
-///
-/// This is the Codex-parity assembly point: constitution stays byte-stable for
-/// prefix caching; volatile concerns live in `WorldState` fragments with
-/// markers, caps, and `render_diff` retain-unchanged behavior. Callers that
-/// still need a flat string can use `WorldStateSnapshot::render_text`.
-pub fn system_prompt_with_world_state(
-    constitution: impl Into<String>,
-    world_state: crate::model_context::WorldState,
-) -> SystemPrompt {
-    let snapshot = crate::model_context::WorldStateSnapshot {
-        constitution: constitution.into(),
-        world_state,
-    };
-    SystemPrompt::Blocks(snapshot.to_system_blocks())
-}
-
 /// Build a WorldState from the common volatile session facts.
 ///
 /// Does not load constitution — callers keep that as the stable base.
@@ -1466,16 +1307,6 @@ pub fn world_state_from_session_facts(
         state = state.with_token_budget(body);
     }
     state
-}
-
-/// Build a system prompt with explicit project context
-pub fn build_system_prompt(base: &str, project_context: Option<&ProjectContext>) -> SystemPrompt {
-    let full_prompt =
-        match project_context.and_then(super::project_context::ProjectContext::as_system_block) {
-            Some(project_block) => format!("{}\n\n{}", base.trim(), project_block),
-            None => base.trim().to_string(),
-        };
-    SystemPrompt::Text(full_prompt)
 }
 
 #[cfg(test)]
@@ -1592,42 +1423,16 @@ mod tests {
     }
 
     #[test]
-    fn static_prompt_composer_storage_returns_rejected_composer() {
-        let cell = std::sync::OnceLock::new();
-        let first: Box<StaticPromptComposer> =
-            Box::new(|ctx| format!("first:{}", ctx.default_layers.len()));
-        let second: Box<StaticPromptComposer> =
-            Box::new(|ctx| format!("second:{}", ctx.default_layers.len()));
-
-        assert!(set_static_prompt_composer(&cell, first).is_ok());
-        let rejected = set_static_prompt_composer(&cell, second)
-            .expect_err("second composer should be rejected");
-        let ctx = StaticPromptCtx {
-            model_id: "deepseek-v4-pro",
-            personality: Personality::Calm,
-            default_layers: "fallback",
-        };
-
-        assert_eq!(rejected(&ctx), "second:8");
-        assert_eq!(
-            cell.get().expect("first composer retained")(&ctx),
-            "first:8"
-        );
-    }
-
-    #[test]
     fn static_prompt_composer_unset_keeps_default_layers_byte_identical() {
-        for personality in [Personality::Calm, Personality::Playful] {
-            let default_layers = compose_default_static_layers(personality, "deepseek-v4-flash");
-            let composed = apply_static_prompt_composer(
-                None,
-                personality,
-                "deepseek-v4-flash",
-                &default_layers,
-            );
+        let default_layers = compose_default_static_layers(Personality::Calm, "deepseek-v4-flash");
+        let composed = apply_static_prompt_composer(
+            None,
+            Personality::Calm,
+            "deepseek-v4-flash",
+            &default_layers,
+        );
 
-            assert_byte_identical("unset static prompt composer", &default_layers, &composed);
-        }
+        assert_byte_identical("unset static prompt composer", &default_layers, &composed);
     }
 
     #[test]
@@ -2036,7 +1841,7 @@ mod tests {
         // 0.9.0 has no personality tier. Voice and tone live in the
         // compact constitution rather than a separate section, so
         // personality remains folded in by omission.
-        let prompt = compose_prompt(Personality::Calm);
+        let prompt = compose_prompt_with_approval_model_and_shell(Personality::Calm, "codewhale");
         assert!(
             !prompt.contains("Personality: Calm — Tier 8"),
             "Personality tier should not appear as a separate section"
@@ -2677,14 +2482,9 @@ mod tests {
         // Composed overlays must describe behavior, never their own rank.
         let overlays = [
             ("CALM_PERSONALITY", CALM_PERSONALITY),
-            ("PLAYFUL_PERSONALITY", PLAYFUL_PERSONALITY),
             ("AGENT_MODE", AGENT_MODE),
             ("PLAN_MODE", PLAN_MODE),
-            ("YOLO_MODE", YOLO_MODE),
             ("OPERATE_MODE", OPERATE_MODE),
-            ("AUTO_APPROVAL", AUTO_APPROVAL),
-            ("SUGGEST_APPROVAL", SUGGEST_APPROVAL),
-            ("NEVER_APPROVAL", NEVER_APPROVAL),
             ("COMPACT_TEMPLATE", COMPACT_TEMPLATE),
             ("MEMORY_GUIDANCE", MEMORY_GUIDANCE),
             ("LANGUAGE_PROMPT", LANGUAGE_PROMPT),
@@ -2828,7 +2628,7 @@ mod tests {
 
     #[test]
     fn compose_prompt_includes_all_layers() {
-        let prompt = compose_prompt(Personality::Calm);
+        let prompt = compose_prompt_with_approval_model_and_shell(Personality::Calm, "codewhale");
         // Base layer — balanced Constitution; procedural recipes stay out.
         assert!(prompt.contains("## Codewhale"));
         assert!(prompt.contains("### Whose word wins"));
@@ -2922,7 +2722,7 @@ mod tests {
 
     #[test]
     fn compose_prompt_deterministic_order() {
-        let prompt = compose_prompt(Personality::Calm);
+        let prompt = compose_prompt_with_approval_model_and_shell(Personality::Calm, "codewhale");
         let base_pos = prompt.find("## Codewhale").unwrap();
         let article_pos = prompt.find("### Ground truth").unwrap();
 
@@ -2933,7 +2733,7 @@ mod tests {
     fn base_prompt_is_mode_agnostic() {
         // Mode and approval text are no longer inlined into compose_prompt —
         // they travel as request-time runtime metadata.
-        let prompt = compose_prompt(Personality::Calm);
+        let prompt = compose_prompt_with_approval_model_and_shell(Personality::Calm, "codewhale");
         assert!(!prompt.contains("Mode: Agent"));
         assert!(!prompt.contains("Mode: YOLO"));
         assert!(!prompt.contains("Mode: Plan"));
@@ -2972,11 +2772,11 @@ mod tests {
 
     #[test]
     fn mode_prompts_remain_small_deltas_not_base_policy_copies() {
-        for (name, prompt) in [
-            ("agent", AGENT_MODE),
-            ("plan", PLAN_MODE),
-            ("yolo", YOLO_MODE),
-        ] {
+        assert!(
+            PLAN_MODE.contains("All writes, patches, shell commands"),
+            "Plan may summarize the user-facing mode delta"
+        );
+        for (name, prompt) in [("agent", AGENT_MODE), ("plan", PLAN_MODE)] {
             // Measure semantic size on LF so Windows autocrlf checkouts do not
             // inflate char/3 token estimates via extra `\r` bytes.
             let normalized = prompt.replace("\r\n", "\n").replace('\r', "\n");
@@ -3013,37 +2813,8 @@ mod tests {
     }
 
     #[test]
-    fn mode_prompts_do_not_inline_full_approval_policy_overlays() {
-        for (name, mode_prompt) in [
-            ("agent", AGENT_MODE),
-            ("plan", PLAN_MODE),
-            ("yolo", YOLO_MODE),
-        ] {
-            for (approval_name, approval_prompt) in [
-                ("auto", AUTO_APPROVAL),
-                ("suggest", SUGGEST_APPROVAL),
-                ("never", NEVER_APPROVAL),
-            ] {
-                assert!(
-                    !mode_prompt.contains(approval_prompt.trim()),
-                    "{name} mode prompt must not inline the full {approval_name} approval overlay"
-                );
-            }
-        }
-
-        assert!(
-            PLAN_MODE.contains("All writes, patches, shell commands"),
-            "Plan may summarize the user-facing mode delta"
-        );
-        assert!(
-            NEVER_APPROVAL.contains("The write-block is a runtime setting"),
-            "the approval overlay keeps the policy authority explanation without rank vocabulary"
-        );
-    }
-
-    #[test]
     fn approval_policy_no_longer_inlined_in_base_prompt() {
-        let prompt = compose_prompt(Personality::Calm);
+        let prompt = compose_prompt_with_approval_model_and_shell(Personality::Calm, "codewhale");
         assert!(!prompt.contains("Mode: Agent"));
         assert!(!prompt.contains("Approval Policy:"));
         // The compact Constitutional preamble is still present.
@@ -3070,14 +2841,9 @@ mod tests {
     #[test]
     fn personality_is_folded_into_constitution() {
         // v4 has no separate personality tier. Voice and tone live in
-        // the preamble, so both Calm and Playful compose_prompt calls
-        // produce identical output (no personality overlay is appended).
-        let calm = compose_prompt(Personality::Calm);
-        let playful = compose_prompt(Personality::Playful);
-        assert_eq!(
-            calm, playful,
-            "personality enum is a no-op — both produce identical output"
-        );
+        // the preamble, so composition appends no personality overlay.
+        let calm = compose_prompt_with_approval_model_and_shell(Personality::Calm, "codewhale");
+        assert!(!calm.contains("## Personality:"));
         assert!(calm.contains("Take the work seriously. Don't take"));
         assert!(calm.contains("You are Codewhale"));
     }
@@ -3166,7 +2932,7 @@ mod tests {
 
     #[test]
     fn agent_mode_tool_guidance_avoids_defensive_tool_suppression() {
-        let prompt = compose_prompt(Personality::Calm);
+        let prompt = compose_prompt_with_approval_model_and_shell(Personality::Calm, "codewhale");
         assert!(!prompt.contains("Tool Selection Guide"));
         for tool in ["`File`", "`Git`", "`Run`", "`Bash`"] {
             assert!(!AGENT_MODE.contains(tool));
@@ -3189,7 +2955,7 @@ mod tests {
     /// reinforcement lives in its own static segment plus locale bookends.
     #[test]
     fn language_segment_present_outside_reduced_constitution() {
-        let prompt = compose_prompt(Personality::Calm);
+        let prompt = compose_prompt_with_approval_model_and_shell(Personality::Calm, "codewhale");
         assert!(
             !BASE_PROMPT.contains("## Language"),
             "0.9.0 constitution.md should stay reduced; language belongs in its own segment"
@@ -3217,7 +2983,7 @@ mod tests {
 
     #[test]
     fn output_formatting_segment_present_outside_reduced_constitution() {
-        let prompt = compose_prompt(Personality::Calm);
+        let prompt = compose_prompt_with_approval_model_and_shell(Personality::Calm, "codewhale");
         assert!(
             !BASE_PROMPT.contains("## Output Formatting"),
             "0.9.0 constitution.md should stay reduced; output formatting belongs in its own segment"
@@ -3278,7 +3044,7 @@ mod tests {
 
     #[test]
     fn english_base_prompt_avoids_native_script_language_priming() {
-        let prompt = compose_prompt(Personality::Calm);
+        let prompt = compose_prompt_with_approval_model_and_shell(Personality::Calm, "codewhale");
         assert!(
             !contains_cjk(&prompt),
             "English base prompt should keep native-script reinforcement in locale bookends only"
@@ -3325,7 +3091,7 @@ mod tests {
     /// by project law/instructions sitting above memory/handoffs.
     #[test]
     fn project_instructions_outrank_memory_in_whose_word_wins() {
-        let prompt = compose_prompt(Personality::Calm);
+        let prompt = compose_prompt_with_approval_model_and_shell(Personality::Calm, "codewhale");
         let project_at = prompt
             .find("3. Project law and instructions")
             .expect("Whose word wins must rank project instructions");
@@ -3341,7 +3107,7 @@ mod tests {
 
     #[test]
     fn workspace_orientation_guidance_present() {
-        let prompt = compose_prompt(Personality::Calm);
+        let prompt = compose_prompt_with_approval_model_and_shell(Personality::Calm, "codewhale");
         assert!(prompt.contains("Project law and instructions"));
         assert!(
             prompt.contains("the nearest in\nscope winning over the broader")
@@ -3450,17 +3216,11 @@ mod tests {
 
     #[test]
     fn preamble_carries_tone_and_ownership_guidance() {
-        let prompt = compose_prompt(Personality::Calm);
+        let prompt = compose_prompt_with_approval_model_and_shell(Personality::Calm, "codewhale");
         assert!(prompt.contains("The A is already yours"));
         assert!(prompt.contains("Your competence is a settled fact"));
         assert!(prompt.contains("Take the work seriously. Don't take"));
         assert!(prompt.contains("Let the work speak"));
-    }
-
-    #[test]
-    fn legacy_constants_still_available() {
-        // Verify the legacy .txt constant still compiles and contains expected content
-        assert!(AGENT_PROMPT.lines().next().is_some());
     }
 
     // ── Cache-prefix stability harness (#263 step 2) ───────────────────────
@@ -3477,15 +3237,9 @@ mod tests {
         // Suspect #4 from #263: mode prompt churn within a single mode.
         // Two calls with identical (mode, personality) inputs must produce
         // identical bytes — anything else is a cache buster.
-        for personality in [Personality::Calm, Personality::Playful] {
-            let a = compose_prompt(personality);
-            let b = compose_prompt(personality);
-            assert_byte_identical(
-                &format!("compose_prompt(personality={personality:?})"),
-                &a,
-                &b,
-            );
-        }
+        let a = compose_prompt_with_approval_model_and_shell(Personality::Calm, "codewhale");
+        let b = compose_prompt_with_approval_model_and_shell(Personality::Calm, "codewhale");
+        assert_byte_identical("compose_prompt(Personality::Calm)", &a, &b);
     }
 
     #[test]
@@ -3835,7 +3589,7 @@ mod tests {
     /// guidance travels via the constitution preamble instead.
     #[test]
     fn default_prompt_does_not_include_calm_personality_overlay() {
-        let prompt = compose_prompt(Personality::Calm);
+        let prompt = compose_prompt_with_approval_model_and_shell(Personality::Calm, "codewhale");
         let calm_text = CALM_PERSONALITY;
         let first_calm_line = calm_text.lines().find(|l| !l.is_empty()).unwrap_or("");
         assert!(
@@ -3977,7 +3731,7 @@ mod tests {
     #[test]
     fn default_prompt_stays_under_2953_static_baseline() {
         const ISSUE_2953_BASELINE_CHARS: usize = 30_461;
-        let prompt = compose_prompt(Personality::Calm);
+        let prompt = compose_prompt_with_approval_model_and_shell(Personality::Calm, "codewhale");
 
         assert!(
             prompt.chars().count() < ISSUE_2953_BASELINE_CHARS,
