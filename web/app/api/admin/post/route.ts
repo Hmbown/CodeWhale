@@ -93,7 +93,37 @@ export async function POST(req: Request) {
     const commentBody = editedBody ?? (lang === "zh" ? draft.bodyZh : draft.bodyEn);
 
     if (draft.type === "digest") {
-      return NextResponse.json({ ok: true, action: "digest-skipped", note: "Digest pages are not posted as comments" });
+      const digestBody = commentBody;
+      const firstLine = digestBody.split("\n")[0].replace(/^#+\s*/, "").trim();
+      const title = firstLine || `Weekly Digest ${draft.id}`;
+
+      const digestRepo = env.GITHUB_REPO ?? "Hmbown/CodeWhale";
+      const issuesUrl = `https://api.github.com/repos/${digestRepo}/issues`;
+
+      const digestRes = await fetch(issuesUrl, {
+        method: "POST",
+        headers: {
+          Accept: "application/vnd.github+json",
+          Authorization: `token ${env.MAINTAINER_GITHUB_PAT}`,
+          "X-GitHub-Api-Version": "2022-11-28",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ title, body: digestBody, labels: ["digest"] }),
+      });
+
+      if (!digestRes.ok) {
+        const text = await digestRes.text();
+        return NextResponse.json({ error: `GitHub ${digestRes.status}: ${text}` }, { status: 502 });
+      }
+
+      const issue = await digestRes.json() as { number: number; html_url: string };
+
+      draft.posted = true;
+      draft.targetNumber = issue.number;
+      draft.targetUrl = issue.html_url;
+      await env.CURATED_KV?.put(draftKey, JSON.stringify(draft), { expirationTtl: 60 * 60 * 24 * 7 });
+
+      return NextResponse.json({ ok: true, action: "posted", number: issue.number, url: issue.html_url });
     }
 
     if (!draft.targetNumber) {
