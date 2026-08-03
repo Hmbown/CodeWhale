@@ -994,6 +994,25 @@ pub fn render_header(area: Rect, buf: &mut Buffer, app: &App) {
             Style::default().fg(*color).add_modifier(Modifier::BOLD),
         ));
     }
+    // Update-available chip (#14): a quiet, persistent affordance set once by
+    // the startup version check. Gets the workflow chip's treatment: last in
+    // the left cluster, the route label yields its budget first, and the chip
+    // drops cleanly when even a minimal chip cannot fit — never a modal,
+    // never mid-chip clipping.
+    let update_chip = app
+        .update_available
+        .as_ref()
+        .map(|label| (label.clone(), app.ui_theme.warning));
+    if let Some((text, color)) = &update_chip {
+        left.push(Span::styled(
+            " · ",
+            Style::default().fg(app.ui_theme.text_dim),
+        ));
+        left.push(Span::styled(
+            text.clone(),
+            Style::default().fg(*color).add_modifier(Modifier::BOLD),
+        ));
+    }
 
     let context_meter = (tier != ShellTier::Compact)
         .then(|| crate::tui::ui::context_usage_snapshot(app))
@@ -1179,6 +1198,27 @@ pub fn render_header(area: Rect, buf: &mut Buffer, app: &App) {
                 ));
                 suffix.push(Span::styled(
                     truncate_to_width(text, workflow_room),
+                    Style::default().fg(*color).add_modifier(Modifier::BOLD),
+                ));
+            }
+        }
+        // The update chip (#14) gets the same treatment, last in line: it is
+        // useful, but it yields to every piece of operator state ahead of it.
+        if let Some((text, color)) = &update_chip {
+            let update_room = left_budget
+                .saturating_sub(
+                    4usize
+                        .saturating_add(indicator_width)
+                        .saturating_add(span_width(&suffix)),
+                )
+                .saturating_sub(3);
+            if update_room >= 8 {
+                suffix.push(Span::styled(
+                    " · ",
+                    Style::default().fg(app.ui_theme.text_dim),
+                ));
+                suffix.push(Span::styled(
+                    truncate_to_width(text, update_room),
                     Style::default().fg(*color).add_modifier(Modifier::BOLD),
                 ));
             }
@@ -1593,6 +1633,40 @@ mod tests {
                 "permission must survive at width {width}: {header:?}",
             );
         }
+    }
+
+    #[test]
+    fn underwater_header_shows_update_chip_only_when_update_available() {
+        // The startup version check sets the label once; the chip then rides
+        // the right-hand chrome until the session ends (#14).
+        let mut app = test_app();
+        app.update_available = Some("↑ v0.9.5".to_string());
+        for width in [96, 130] {
+            let header = header_text(&app, width);
+            assert!(
+                header.contains("↑ v0.9.5"),
+                "update chip missing at width {width}: {header:?}"
+            );
+        }
+        // Under width pressure the chip yields cleanly — never clipped
+        // mid-chip, never evicting the mode/permission posture.
+        let narrow = header_text(&app, 60);
+        assert!(
+            !narrow.contains('↑'),
+            "update chip must drop when the line has no room: {narrow:?}"
+        );
+        assert!(
+            narrow.to_ascii_lowercase().contains("ask"),
+            "permission must survive at width 60: {narrow:?}"
+        );
+
+        // Up to date (or the check never ran): silent.
+        let app = test_app();
+        let header = header_text(&app, 130);
+        assert!(
+            !header.contains('↑'),
+            "no update chip without an available update: {header:?}"
+        );
     }
 
     #[test]

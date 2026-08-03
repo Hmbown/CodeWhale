@@ -141,6 +141,28 @@ impl UserInputView {
         self.current_question().multi_select
     }
 
+    /// Number of content lines the render path emits for the current state.
+    /// Drives the content-sized popup height so the dialog hugs what it
+    /// shows instead of claiming a fixed share of the screen.
+    fn content_line_count(&self) -> usize {
+        let question = self.current_question();
+        // "Action required" banner, header line, blank, question, blank.
+        let mut count = 5;
+        count += question.options.len() * 2;
+        if self.offers_other() {
+            count += 2;
+        }
+        if self.is_multi_select() {
+            count += 2;
+        }
+        if self.mode == InputMode::OtherInput {
+            count += 2;
+        }
+        // Trailing blank line + controls hint.
+        count += 2;
+        count
+    }
+
     fn toggle_pending(&mut self, index: usize) {
         if let Some(pos) = self.multi_pending.iter().position(|i| *i == index) {
             self.multi_pending.remove(pos);
@@ -491,19 +513,39 @@ impl ModalView for UserInputView {
             .wrap(Wrap { trim: true })
             .block(modal_block(&header));
 
-        let popup_area = compact_popup_rect(area);
+        let popup_area = compact_popup_rect(area, self.content_line_count());
         render_modal_chrome(area, popup_area, buf);
         paragraph.render(popup_area, buf);
     }
+
+    fn occupied_region(&self, area: Rect) -> Rect {
+        // The dialog only occupies its compact centered card; blanking the
+        // whole frame (the default) hid the live conversation the user is
+        // being asked about (v0.9.4, FINISH-0.9.4 #13). Cover the card plus
+        // the one-cell drop shadow `render_modal_surface` draws at +1/+1.
+        let popup = compact_popup_rect(area, self.content_line_count());
+        Rect {
+            x: popup.x,
+            y: popup.y,
+            width: (popup.width.saturating_add(1)).min(area.right().saturating_sub(popup.x)),
+            height: (popup.height.saturating_add(1)).min(area.bottom().saturating_sub(popup.y)),
+        }
+    }
 }
 
-/// Compact centered overlay: bounded width (max 110 columns) and height
-/// (max 22 rows / 60% of the screen) so the live conversation stays visible
+/// Compact centered overlay: bounded width (max 110 columns) and a height
+/// sized to the content (border + padding around `content_lines`, never more
+/// than 22 rows or 60% of the screen) so the live conversation stays visible
 /// behind the modal instead of being covered edge-to-edge.
-fn compact_popup_rect(r: Rect) -> Rect {
+fn compact_popup_rect(r: Rect, content_lines: usize) -> Rect {
     let width = r.width.min(110);
-    let height = (r.height.saturating_mul(60) / 100)
+    // Border (2 rows) + uniform padding (2 rows) around the content lines.
+    let desired = u16::try_from(content_lines)
+        .unwrap_or(u16::MAX)
+        .saturating_add(4);
+    let height = desired
         .clamp(6, 22)
+        .min((r.height.saturating_mul(60) / 100).clamp(6, 22))
         .min(r.height);
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
@@ -736,6 +778,71 @@ mod tests {
         view.selected = 0;
         let _ = view.handle_selecting_key(KeyEvent::from(KeyCode::Char(' ')));
         assert!(view.multi_pending.is_empty(), "Space toggles option 0 out");
+    }
+
+    #[test]
+    fn user_input_modal_popup_is_centered_and_sized_to_content() {
+        let area = Rect::new(0, 0, 120, 40);
+        let view = sample_view();
+        let content = view.content_line_count();
+        let popup = compact_popup_rect(area, content);
+
+        // Height hugs the content (border + padding = 4 chrome rows), well
+        // under the 22-row / 60% cap for a 40-row screen.
+        assert_eq!(popup.height, u16::try_from(content).unwrap() + 4);
+        assert!(popup.height < area.height / 2);
+        assert_eq!(popup.width, 110);
+        // Centered: breathing room above and below.
+        assert!(popup.y > 0);
+        assert!(popup.y + popup.height < area.height);
+
+        // Long content is still bounded by the 22-row cap.
+        let capped = compact_popup_rect(area, 100);
+        assert_eq!(capped.height, 22);
+    }
+
+    #[test]
+    fn user_input_modal_occupied_region_matches_painted_card_plus_shadow() {
+        let area = Rect::new(0, 0, 120, 40);
+        let view = sample_view();
+        let popup = compact_popup_rect(area, view.content_line_count());
+        let occupied = view.occupied_region(area);
+
+        assert_eq!(occupied.x, popup.x);
+        assert_eq!(occupied.y, popup.y);
+        assert_eq!(occupied.width, popup.width + 1);
+        assert_eq!(occupied.height, popup.height + 1);
+        assert!(area.right() >= occupied.right());
+        assert!(area.bottom() >= occupied.bottom());
+    }
+
+    #[test]
+    fn user_input_modal_leaves_surrounding_frame_visible() {
+        use crate::tui::views::ViewStack;
+
+        let area = Rect::new(0, 0, 120, 40);
+        let mut buf = Buffer::empty(area);
+        // Pre-fill the frame as if the live transcript had painted it.
+        for y in 0..area.height {
+            for x in 0..area.width {
+                buf[(x, y)].set_symbol("·");
+            }
+        }
+
+        let mut stack = ViewStack::default();
+        stack.push(sample_view());
+        stack.render(area, &mut buf);
+
+        // Cells outside the compact card survive untouched: the conversation
+        // stays visible around the dialog (FINISH-0.9.4 #13).
+        assert_eq!(buf[(0, 0)].symbol(), "·");
+        assert_eq!(buf[(119, 0)].symbol(), "·");
+        assert_eq!(buf[(0, 39)].symbol(), "·");
+        assert_eq!(buf[(119, 39)].symbol(), "·");
+        assert_eq!(buf[(60, 0)].symbol(), "·");
+        assert_eq!(buf[(60, 39)].symbol(), "·");
+        // The card itself is blanked + repainted by the modal surface.
+        assert_ne!(buf[(60, 20)].symbol(), "·");
     }
 
     #[test]

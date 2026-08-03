@@ -10651,6 +10651,10 @@ fn update_notice_block_is_persistent_and_actionable() {
         "includes restart guidance: {block:?}"
     );
 
+    // The persistent header chip is quiet: version only, no action verb —
+    // the toast and this block carry the instructions (#14).
+    assert_eq!(notice.chip_label(), "↑ v0.8.47");
+
     // A current release produces no notice at all (no toast, no transcript spam).
     let current = complete_release_json("v0.8.46");
     assert!(version_hint_from_release_json(&current, "0.8.46").is_none());

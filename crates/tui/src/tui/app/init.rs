@@ -619,6 +619,7 @@ impl App {
                 .or(tui_prefs_warning)
                 .or(theme_warning),
             status_toasts: VecDeque::new(),
+            update_available: None,
             sticky_status: None,
             last_status_message_seen: None,
             model,

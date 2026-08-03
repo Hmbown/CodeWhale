@@ -214,10 +214,11 @@ const TOOL_HANG_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(600);
 // braille pattern reads as continuous motion instead of teleport-frames.
 const UI_STATUS_ANIMATION_MS: u64 = crate::tui::spinner::BRAILLE_SPINNER_FRAME_MS;
 /// Ambient fish, the idle-mark caustic, and the completion wake use a modest
-/// ~12.5fps clock by default. On measured high-Hz displays the adaptive probe
-/// may raise this (still bounded); low_motion always freezes the cadence.
-/// Active markers run at 8fps; atmosphere stays subordinate.
-pub(crate) const UI_UNDERWATER_ANIMATION_MS: u64 = 80;
+/// ~8fps clock by default (calmed from ~12.5fps for v0.9.4). On measured
+/// high-Hz displays the adaptive probe may raise this (still bounded);
+/// low_motion always freezes the cadence.
+/// Active markers run at 5fps; atmosphere stays subordinate.
+pub(crate) const UI_UNDERWATER_ANIMATION_MS: u64 = 120;
 // At an 80-column terminal the file tree owns 20 columns, leaving a 60-column
 // chat host. Keep a compact 20-column sidebar plus a 40-column transcript.
 pub(crate) const SIDEBAR_VISIBLE_MIN_WIDTH: u16 = 60;
@@ -3149,7 +3150,9 @@ async fn run_event_loop(
         if done && let Ok(Some(notice)) = version_check.take().unwrap().await {
             // Transient toast for immediate visibility, plus a durable
             // in-transcript notice so the prompt survives the toast TTL and
-            // stays actionable during a busy session (#3961).
+            // stays actionable during a busy session (#3961). The persistent
+            // header chip keeps a quiet affordance after both (#14).
+            app.update_available = Some(notice.chip_label());
             app.push_status_toast(
                 notice.toast_line(),
                 StatusToastLevel::Info,
@@ -13780,7 +13783,8 @@ fn render_classic_header(area: Rect, buf: &mut Buffer, app: &App) {
         &app.status_indicator,
     ))
     .with_running_agents(running_agent_count(app))
-    .with_workflow_status(workflow_chip.as_deref());
+    .with_workflow_status(workflow_chip.as_deref())
+    .with_update_available(app.update_available.as_deref());
     HeaderWidget::new(data).render(area, buf);
 }
 
@@ -17966,7 +17970,7 @@ fn status_animation_interval_ms(app: &App) -> u64 {
     if app.effective_low_motion_for_status() {
         crate::tui::display_refresh::adaptive_animation_interval_ms(true)
     } else {
-        // Keep the braille marker on its fixed 8 Hz table for width stability;
+        // Keep the braille marker on its fixed 5 Hz table for width stability;
         // only atmosphere uses the measured display cadence.
         UI_STATUS_ANIMATION_MS
     }
@@ -17977,7 +17981,7 @@ fn underwater_animation_interval_ms(app: &App) -> u64 {
         crate::tui::display_refresh::adaptive_animation_interval_ms(true)
     } else {
         // Measured display Hz can raise atmosphere cadence on high-Hz
-        // panels; missing probe falls back to the historical ~12.5 fps.
+        // panels; missing probe falls back to the ~8 fps floor.
         crate::tui::display_refresh::adaptive_animation_interval_ms(false)
             .min(UI_UNDERWATER_ANIMATION_MS)
     }
@@ -18273,6 +18277,13 @@ impl UpdateNotice {
             "v{latest} available - run `codewhale update` and restart",
             latest = self.latest
         )
+    }
+
+    /// Compact header chip label shown once the check has landed. Quiet by
+    /// design: no action verb, no repetition — the toast and transcript
+    /// notice carry the `codewhale update` instructions (#14).
+    fn chip_label(&self) -> String {
+        format!("↑ v{latest}", latest = self.latest)
     }
 
     /// Durable, actionable notice pushed into the transcript so it survives the

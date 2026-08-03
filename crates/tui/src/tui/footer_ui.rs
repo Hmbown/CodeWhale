@@ -295,7 +295,9 @@ pub(crate) fn footer_working_strip_active(app: &App) -> bool {
 }
 
 pub(crate) fn footer_working_label_frame(now_ms: u64, animate: bool) -> u64 {
-    if animate { now_ms / 400 } else { 0 }
+    // ~1.7 Hz dot pulse (calmed from 2.5 Hz for v0.9.4): slow enough that the
+    // footer reads as a steady "working" signal rather than a restless ticker.
+    if animate { now_ms / 600 } else { 0 }
 }
 
 #[cfg(test)]
@@ -311,9 +313,9 @@ mod tests {
     #[test]
     fn footer_working_label_frame_is_static_without_fancy_animations() {
         assert_eq!(footer_working_label_frame(0, false), 0);
-        assert_eq!(footer_working_label_frame(399, false), 0);
-        assert_eq!(footer_working_label_frame(1_600, false), 0);
-        assert_eq!(footer_working_label_frame(1_600, true), 4);
+        assert_eq!(footer_working_label_frame(599, false), 0);
+        assert_eq!(footer_working_label_frame(1_800, false), 0);
+        assert_eq!(footer_working_label_frame(1_800, true), 3);
     }
 
     #[test]

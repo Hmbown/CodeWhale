@@ -102,6 +102,10 @@ pub struct HeaderData<'a> {
     /// hides the chip. Persistent workflow status lives here in the top bar
     /// rather than pinned above the composer (#5040).
     pub workflow_status: Option<&'a str>,
+    /// Compact update-available label (e.g. `↑ v0.9.5`). `None` hides the
+    /// chip — the normal state when the startup check found nothing newer or
+    /// never ran. Set once per session; never a modal, never repeated (#14).
+    pub update_label: Option<&'a str>,
 }
 
 impl<'a> HeaderData<'a> {
@@ -128,7 +132,15 @@ impl<'a> HeaderData<'a> {
             status_indicator_frame: Some("cw"),
             running_agents: 0,
             workflow_status: None,
+            update_label: None,
         }
+    }
+
+    /// Attach a compact update-available chip (#14). `None` hides it.
+    #[must_use]
+    pub fn with_update_available(mut self, label: Option<&'a str>) -> Self {
+        self.update_label = label;
+        self
     }
 
     /// Attach a compact workflow-run status chip (#5040). `None` hides it.
@@ -596,6 +608,20 @@ impl<'a> HeaderWidget<'a> {
                     .add_modifier(Modifier::BOLD),
             ));
         }
+        // Update-available chip (#14): last in the left cascade — useful, but
+        // the first chip to yield when the row runs out of room.
+        if let Some(update) = self.data.update_label
+            && !update.is_empty()
+            && Self::span_width(&spans) + 3 + update.width() <= max_width
+        {
+            spans.push(Span::styled(" · ", Style::default().fg(palette::TEXT_DIM)));
+            spans.push(Span::styled(
+                update.to_string(),
+                Style::default()
+                    .fg(palette::STATUS_WARNING)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
         spans
     }
 
@@ -887,6 +913,42 @@ mod tests {
         assert!(
             !hidden.contains("wf "),
             "no workflow chip without status, got: {hidden}"
+        );
+    }
+
+    #[test]
+    fn header_shows_update_chip_only_when_update_available() {
+        let rendered = render_header(
+            HeaderData::new(
+                AppMode::Agent,
+                "deepseek-ai/deepseek-v4-flash",
+                "codewhale-tui",
+                false,
+                palette::WHALE_BG,
+            )
+            .with_update_available(Some("↑ v0.9.5")),
+            96,
+        );
+        assert!(
+            rendered.contains("↑ v0.9.5"),
+            "expected update chip in header, got: {rendered}"
+        );
+
+        // Silent by default: no chip when the check found nothing newer or
+        // never ran (#14).
+        let hidden = render_header(
+            HeaderData::new(
+                AppMode::Agent,
+                "deepseek-ai/deepseek-v4-flash",
+                "codewhale-tui",
+                false,
+                palette::WHALE_BG,
+            ),
+            96,
+        );
+        assert!(
+            !hidden.contains('↑'),
+            "no update chip without an available update, got: {hidden}"
         );
     }
 
