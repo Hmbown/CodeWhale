@@ -65,6 +65,7 @@ use coord::{
     DecisionStatus, PersistedWriteClaim, ReconciliationReceipt, WriteScopeClaim,
 };
 
+pub mod advisor;
 pub mod coord;
 pub mod mailbox;
 mod naming;
@@ -74,6 +75,11 @@ use worktree::{SubAgentWorktreeRequest, prepare_child_workspace};
 #[cfg(test)]
 use worktree::{create_isolated_worktree, git_repo_root};
 
+#[allow(unused_imports)] // re-exported for hosts / tests; registration uses concrete types
+pub use advisor::{
+    AdvisorConfig, EmissionGuard, ToolCallPair, build_advisor_prompt, extract_tool_call_pairs,
+    run_advisor_for_turn,
+};
 #[allow(unused_imports)] // re-exported for hosts / tests; registration uses concrete types
 pub use coord::{
     AgentsCoordinateTool, AgentsFollowupTool, AgentsInterruptTool, AgentsListTool,

@@ -10690,6 +10690,11 @@ async fn run_exec_agent(
         workspace_follow_symlinks: settings.workspace_follow_symlinks,
         exec_policy_engine: execution_config.exec_policy_engine.clone(),
         terminal_chrome_enabled: false,
+        advisor_config: execution_config
+            .advisor
+            .as_ref()
+            .map(crate::tools::subagent::AdvisorConfig::from_toml)
+            .unwrap_or_else(crate::tools::subagent::AdvisorConfig::disabled),
     };
 
     let engine_handle = spawn_engine(engine_config, &execution_config);

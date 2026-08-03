@@ -2449,6 +2449,11 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         workspace_follow_symlinks: app.workspace_follow_symlinks,
         exec_policy_engine: config.exec_policy_engine.clone(),
         terminal_chrome_enabled: true,
+        advisor_config: config
+            .advisor
+            .as_ref()
+            .map(crate::tools::subagent::AdvisorConfig::from_toml)
+            .unwrap_or_else(crate::tools::subagent::AdvisorConfig::disabled),
     }
 }
 
@@ -4970,6 +4975,16 @@ async fn run_event_loop(
                             }
                             app.status_message =
                                 Some(format!("Sandbox blocked {tool_name}: {denial_reason}"));
+                        }
+                    }
+                    EngineEvent::AdvisoryNote { note, .. } => {
+                        // Advisor background watcher note. Display as a
+                        // concise system message in the transcript so the
+                        // user can see it without it blocking the parent turn.
+                        if note.trim() != "ok" {
+                            app.add_message(HistoryCell::System {
+                                content: format!("⚑ Advisor: {note}"),
+                            });
                         }
                     }
                 }
@@ -12183,6 +12198,9 @@ async fn apply_command_result(
                         heartbeat_timeout_secs,
                     })
                     .await;
+            }
+            AppAction::SetAdvisorEnabled { enabled } => {
+                let _ = engine_handle.send(Op::SetAdvisorEnabled { enabled }).await;
             }
             AppAction::OpenConfigEditor(mode) => match mode {
                 ConfigUiMode::Native => {

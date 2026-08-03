@@ -830,6 +830,32 @@ max_subagents = 10 # optional (1-20)
 # verdict_policy = "hunt"
 
 # ─────────────────────────────────────────────────────────────────────────────────
+# Advisor / Watcher (#3982)
+# ─────────────────────────────────────────────────────────────────────────────────
+# Optional background watcher that fires after each turn that contains tool
+# calls. It reads a bounded slice of recent tool interactions, makes a concise
+# LLM advisory call, and emits a brief note into the status area.
+#
+# Off by default.  Enable with `[advisor] enabled = true` or toggle per-session
+# with `/advisor on` / `/advisor off`.
+#
+# Options:
+#   enabled            — master switch (default: false)
+#   max_tool_pairs     — number of recent tool call/result pairs to read
+#                        (default: 8, max: 32)
+#   rate_limit_secs    — minimum seconds between successive advisor notes
+#                        (default: 60)
+#   dedup_window_secs  — notes with identical text within this window are
+#                        suppressed (default: 300)
+#   system_prompt      — override the default advisor system prompt
+#
+# [advisor]
+# enabled = false
+# max_tool_pairs = 8
+# rate_limit_secs = 60
+# dedup_window_secs = 300
+
+# ─────────────────────────────────────────────────────────────────────────────────
 # Skills (#140)
 # ─────────────────────────────────────────────────────────────────────────────────
 # Settings for the `/skill install <spec>` community-skill installer.

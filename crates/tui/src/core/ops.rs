@@ -294,6 +294,12 @@ pub enum Op {
     #[allow(dead_code)]
     EditLastTurn { new_message: String },
 
+    /// Enable or disable the background advisor watcher for this session.
+    /// When enabled, a fire-and-forget background task runs after each turn
+    /// that contained tool calls and emits an `Event::AdvisoryNote` with
+    /// concise observations. (#3982)
+    SetAdvisorEnabled { enabled: bool },
+
     /// Shutdown the engine
     Shutdown,
 }

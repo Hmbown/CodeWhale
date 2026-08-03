@@ -967,6 +967,10 @@ pub enum AppAction {
         api_timeout_secs: u64,
         heartbeat_timeout_secs: u64,
     },
+    /// Enable or disable the background advisor watcher for this session (#3982).
+    SetAdvisorEnabled {
+        enabled: bool,
+    },
     /// Open the live transcript overlay through a terminal-safe command path.
     OpenLiveTranscript,
     /// Open the whole-turn inspector (Ctrl+Alt+O, /turn inspect).

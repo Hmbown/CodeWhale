@@ -318,6 +318,7 @@
   "CmdHotbarDescription": "Abrir configuração da Hotbar",
   "CmdSetupDescription": "Abrir configuração com constituição primeiro",
   "CmdSubagentsDescription": "Atalho de compatibilidade para o status do Fleet",
+  "CmdAdvisorDescription": "Toggle background advisor watcher on/off for this session",
   "CmdSystemDescription": "Exibir o prompt de sistema atual",
   "CmdTaskDescription": "Gerenciar tarefas em segundo plano",
   "CmdTokensDescription": "Exibir o uso de tokens da sessão",

@@ -5738,6 +5738,11 @@ impl RuntimeThreadManager {
                 workspace_follow_symlinks: settings.workspace_follow_symlinks,
                 exec_policy_engine: cfg.exec_policy_engine.clone(),
                 terminal_chrome_enabled: false,
+                advisor_config: cfg
+                    .advisor
+                    .as_ref()
+                    .map(crate::tools::subagent::AdvisorConfig::from_toml)
+                    .unwrap_or_else(crate::tools::subagent::AdvisorConfig::disabled),
             };
 
             let engine = spawn_engine_with_authoritative_route_config(

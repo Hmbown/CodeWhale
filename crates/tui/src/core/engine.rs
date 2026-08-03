@@ -401,6 +401,9 @@ pub struct EngineConfig {
     /// Interactive TUI sessions enable this; headless and machine-readable
     /// hosts disable it so stdout remains protocol-clean.
     pub terminal_chrome_enabled: bool,
+    /// Resolved advisor watcher configuration (#3982). Off by default.
+    /// Updated live by `Op::SetAdvisorEnabled`.
+    pub advisor_config: crate::tools::subagent::AdvisorConfig,
 }
 
 impl Default for EngineConfig {
@@ -479,6 +482,7 @@ impl Default for EngineConfig {
             workspace_follow_symlinks: false,
             exec_policy_engine: codewhale_execpolicy::ExecPolicyEngine::new(Vec::new(), Vec::new()),
             terminal_chrome_enabled: true,
+            advisor_config: crate::tools::subagent::AdvisorConfig::disabled(),
         }
     }
 }
@@ -657,6 +661,10 @@ pub struct Engine {
     token_estimate_cache: TokenEstimateCache,
     /// Shared pause flag set by the TUI and read before tool execution.
     shared_paused: Arc<StdMutex<bool>>,
+    /// Rate-limit + dedup guard for the background advisor watcher (#3982).
+    /// `None` until the first turn completes with the advisor enabled, then
+    /// held for the session lifetime so state persists across turns.
+    advisor_emission_guard: Option<Arc<tokio::sync::Mutex<crate::tools::subagent::EmissionGuard>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1305,6 +1313,7 @@ impl Engine {
             last_policy_narrowing: None,
             token_estimate_cache: TokenEstimateCache::new(),
             shared_paused: shared_paused.clone(),
+            advisor_emission_guard: None,
         };
         let handle = EngineHandle {
             tx_op,
@@ -2668,6 +2677,17 @@ impl Engine {
                             UserInputProvenance::ExternalUser,
                         )
                         .await;
+                    }
+                    Op::SetAdvisorEnabled { enabled } => {
+                        self.config.advisor_config.enabled = enabled;
+                        let state = if enabled { "enabled" } else { "disabled" };
+                        let _ = self
+                            .tx_event
+                            .send(Event::status(format!(
+                                "Advisor watcher {state}. Notes will appear after turns with tool calls."
+                            )))
+                            .await;
+                        tracing::info!(target: "advisor", "advisor watcher {state}");
                     }
                     Op::Shutdown => {
                         break;
@@ -4311,6 +4331,49 @@ impl Engine {
                     Some(&post_sid),
                 );
             });
+        }
+
+        // ── Background advisor watcher (#3982) ────────────────────────────
+        // Fire-and-forget: TurnComplete is already emitted. The advisor
+        // reads a bounded snapshot of session messages (immutable clone),
+        // makes a short LLM advisory call, and emits `Event::AdvisoryNote`.
+        // Any failure is logged and swallowed — it must never affect the
+        // parent turn's outcome.
+        if self.config.advisor_config.enabled && matches!(status, TurnOutcomeStatus::Completed) {
+            if let Some(client) = self.deepseek_client.clone() {
+                // Lazily create the shared emission guard on first use.
+                let guard = self
+                    .advisor_emission_guard
+                    .get_or_insert_with(|| {
+                        Arc::new(tokio::sync::Mutex::new(
+                            crate::tools::subagent::EmissionGuard::new(),
+                        ))
+                    })
+                    .clone();
+
+                let advisor_messages: Vec<crate::models::Message> = self.session.messages.to_vec();
+                let advisor_config = self.config.advisor_config.clone();
+                let advisor_model = self.session.model.clone();
+                let advisor_tx = self.tx_event.clone();
+                let advisor_turn_id = turn.id.clone();
+
+                crate::utils::spawn_supervised(
+                    "advisor-watcher",
+                    std::panic::Location::caller(),
+                    async move {
+                        crate::tools::subagent::run_advisor_for_turn(
+                            advisor_turn_id,
+                            advisor_messages,
+                            advisor_config,
+                            client,
+                            advisor_model,
+                            guard,
+                            advisor_tx,
+                        )
+                        .await;
+                    },
+                );
+            }
         }
 
         // ── Cross-turn goal continuation ───────────────────────────────────

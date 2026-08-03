@@ -314,6 +314,7 @@
   "CmdHotbarDescription": "Hotbar-Setup öffnen",
   "CmdSetupDescription": "Setup mit Verfassung zuerst öffnen",
   "CmdSubagentsDescription": "Kompatibilitäts-Kurzbefehl für Fleet-Status",
+  "CmdAdvisorDescription": "Toggle background advisor watcher on/off for this session",
   "CmdSystemDescription": "Aktuellen Systemprompt anzeigen",
   "CmdTaskDescription": "Hintergrundaufgaben verwalten",
   "CmdTokensDescription": "Token-Verbrauch der Sitzung anzeigen",

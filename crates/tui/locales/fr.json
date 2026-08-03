@@ -314,6 +314,7 @@
   "CmdHotbarDescription": "Ouvrir la configuration Hotbar",
   "CmdSetupDescription": "Ouvrir la configuration axée constitution",
   "CmdSubagentsDescription": "Raccourci de compatibilité pour le statut Fleet",
+  "CmdAdvisorDescription": "Toggle background advisor watcher on/off for this session",
   "CmdSystemDescription": "Afficher le prompt système actuel",
   "CmdTaskDescription": "Gérer les tâches en arrière-plan",
   "CmdTokensDescription": "Afficher l'usage de tokens de la session",

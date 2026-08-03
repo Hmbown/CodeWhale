@@ -2501,6 +2501,11 @@ pub struct Config {
     #[serde(default)]
     pub verifier: Option<codewhale_config::VerifierConfigToml>,
 
+    /// Background advisor watcher (#3982). When absent, the advisor is off
+    /// by default. Enable with `[advisor] enabled = true` or `/advisor on`.
+    #[serde(default)]
+    pub advisor: Option<codewhale_config::AdvisorConfigToml>,
+
     /// Community skill installer settings (#140). When absent, installer
     /// commands fall back to the bundled defaults
     /// ([`crate::skills::install::DEFAULT_REGISTRY_URL`] +
@@ -9025,6 +9030,7 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         notifications: override_cfg.notifications.or(base.notifications),
         network: override_cfg.network.or(base.network),
         verifier: override_cfg.verifier.or(base.verifier),
+        advisor: override_cfg.advisor.or(base.advisor),
         skills: merge_skills_config(base.skills, override_cfg.skills),
         snapshots: override_cfg.snapshots.or(base.snapshots),
         search: override_cfg.search.or(base.search),

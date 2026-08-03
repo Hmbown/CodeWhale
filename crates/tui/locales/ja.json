@@ -318,6 +318,7 @@
   "CmdHotbarDescription": "Hotbar設定を開く",
   "CmdSetupDescription": "憲法ファーストのセットアップを開く",
   "CmdSubagentsDescription": "Fleet ステータスへの互換ショートカット",
+  "CmdAdvisorDescription": "Toggle background advisor watcher on/off for this session",
   "CmdSystemDescription": "現在のシステムプロンプトを表示",
   "CmdTaskDescription": "バックグラウンドタスクを管理",
   "CmdTokensDescription": "セッションのトークン使用量を表示",

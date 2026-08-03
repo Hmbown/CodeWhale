@@ -2336,6 +2336,63 @@ impl Default for VerifierConfigToml {
     }
 }
 
+/// On-disk schema for `[advisor]` (#3982).
+///
+/// Advisor mode is **off by default**. When enabled, the engine spawns a
+/// short-lived background reviewer after each turn that contained tool calls.
+/// The reviewer reads a bounded slice of recent tool calls, makes a concise
+/// LLM advisory call, and emits the note as an `AdvisoryNote` event without
+/// blocking the parent turn.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdvisorConfigToml {
+    /// Master on/off switch. `false` by default — no background reviewer is
+    /// spawned until the user opts in via `[advisor] enabled = true` or
+    /// `/advisor on`.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Maximum number of recent tool-call/result pairs to include in each
+    /// advisory review. Keeps the reviewer's context window bounded regardless
+    /// of turn length. Defaults to 10; clamped to 1–50.
+    #[serde(default = "advisor_default_max_tool_calls")]
+    pub max_tool_calls: u32,
+    /// Minimum wall-clock seconds between two consecutive advisor emissions.
+    /// Prevents noise on rapid multi-turn sequences. Defaults to 60 seconds;
+    /// clamped to 5–3600.
+    #[serde(default = "advisor_default_rate_limit_secs")]
+    pub rate_limit_secs: u64,
+    /// Deduplication window in seconds. An advisory note whose content hash
+    /// matches the previous note within this window is silently dropped.
+    /// Defaults to 300 seconds (5 minutes).
+    #[serde(default = "advisor_default_dedup_window_secs")]
+    pub dedup_window_secs: u64,
+    /// Optional model override for the advisor LLM call. When absent, the
+    /// advisor reuses the session's current model.
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+fn advisor_default_max_tool_calls() -> u32 {
+    10
+}
+fn advisor_default_rate_limit_secs() -> u64 {
+    60
+}
+fn advisor_default_dedup_window_secs() -> u64 {
+    300
+}
+
+impl Default for AdvisorConfigToml {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_tool_calls: advisor_default_max_tool_calls(),
+            rate_limit_secs: advisor_default_rate_limit_secs(),
+            dedup_window_secs: advisor_default_dedup_window_secs(),
+            model: None,
+        }
+    }
+}
+
 /// On-disk schema for the `[network]` table (#135). See `config.example.toml`
 /// for documentation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
