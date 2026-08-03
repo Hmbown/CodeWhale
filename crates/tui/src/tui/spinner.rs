@@ -11,7 +11,7 @@
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// Braille bubble frames used for running tools and background jobs. Dots fill
-/// upward, then release. Eight distinct states at eight hertz keep the motion
+/// upward, then release. Eight distinct states at five hertz keep the motion
 /// continuous without turning the one-cell marker into a high-frequency
 /// spinner.
 pub(crate) const BRAILLE_SPINNER_FRAMES: [&str; 8] = ["⠀", "⢀", "⣀", "⣄", "⣤", "⣦", "⣶", "⣿"];
@@ -23,10 +23,12 @@ pub(crate) const LIVE_MARKER_DELAY_MS: u64 = 400;
 pub(crate) const LIVE_STATIC_MARKER: &str = "›";
 pub(crate) const BRAILLE_SPINNER_STILL_FRAME: &str = "⣤";
 
-/// Eight stepped states per second. This is deliberately slower than the
-/// underwater field's ~12fps caustic cadence: the marker communicates active
-/// work, while the field stays subordinate atmosphere.
-pub(crate) const BRAILLE_SPINNER_FRAME_MS: u64 = 125;
+/// Five stepped states per second. This is deliberately slower than the
+/// underwater field's ~8fps caustic cadence: the marker communicates active
+/// work, while the field stays subordinate atmosphere. Calmed from 8 Hz
+/// (125 ms) for v0.9.4 — at 5 Hz the fill still reads as continuous motion
+/// without the restless flicker the faster table produced.
+pub(crate) const BRAILLE_SPINNER_FRAME_MS: u64 = 200;
 
 #[must_use]
 pub(crate) fn braille_spinner_frame_for_elapsed_ms(
@@ -111,8 +113,8 @@ mod tests {
     }
 
     #[test]
-    fn active_marker_uses_a_stable_eight_hertz_wall_clock() {
-        assert_eq!(BRAILLE_SPINNER_FRAME_MS, 125);
+    fn active_marker_uses_a_stable_five_hertz_wall_clock() {
+        assert_eq!(BRAILLE_SPINNER_FRAME_MS, 200);
         for (index, frame) in BRAILLE_SPINNER_FRAMES.iter().enumerate() {
             assert_eq!(
                 braille_spinner_frame_for_elapsed_ms(
