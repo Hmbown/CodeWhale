@@ -78,7 +78,6 @@ tracing-subscriber.workspace = true
 tower-http.workspace = true
 wait-timeout = "0.2"
 webbrowser = "1.0"
-multimap = "0.10.0"
 shlex = "1.3.0"
 tiny_http = "0.12"
 globset = "0.4"
@@ -116,7 +115,6 @@ arboard = "3.4"
 
 [target.'cfg(not(target_env = "ohos"))'.dependencies]
 portable-pty = "0.9"
-starlark = "0.13.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.3"

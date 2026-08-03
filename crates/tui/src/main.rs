@@ -339,8 +339,6 @@ enum Commands {
         #[command(subcommand)]
         command: McpCommand,
     },
-    /// Execpolicy tooling
-    Execpolicy(ExecpolicyCommand),
     /// Inspect feature flags
     Features(FeaturesCli),
     /// Run a command inside the sandbox
@@ -1280,18 +1278,6 @@ enum McpCommand {
 }
 
 #[derive(Args, Debug, Clone)]
-struct ExecpolicyCommand {
-    #[command(subcommand)]
-    command: ExecpolicySubcommand,
-}
-
-#[derive(Subcommand, Debug, Clone)]
-enum ExecpolicySubcommand {
-    /// Check execpolicy files against a command
-    Check(execpolicy::ExecPolicyCheckCommand),
-}
-
-#[derive(Args, Debug, Clone)]
 struct FeaturesCli {
     #[command(subcommand)]
     command: FeaturesSubcommand,
@@ -1730,15 +1716,6 @@ async fn run_async_main(
                 let config = load_config_from_cli(&cli)?;
                 let workspace = resolve_workspace(&cli);
                 run_mcp_command(&config, &workspace, command, plugin_registry.as_ref()).await
-            }
-            Commands::Execpolicy(command) => {
-                let config = load_config_from_cli(&cli)?;
-                if !config.features().enabled(Feature::ExecPolicy) {
-                    bail!(
-                        "The `exec_policy` feature is disabled. Enable it in [features] or via profile."
-                    );
-                }
-                run_execpolicy_command(command)
             }
             Commands::Features(command) => {
                 let config = load_config_from_cli(&cli)?;
@@ -6656,12 +6633,6 @@ fn doctor_timeout_recovery_lines(config: &Config) -> Vec<String> {
             .to_string(),
     );
     lines
-}
-
-fn run_execpolicy_command(command: ExecpolicyCommand) -> Result<()> {
-    match command.command {
-        ExecpolicySubcommand::Check(cmd) => cmd.run(),
-    }
 }
 
 fn run_features_command(config: &Config, command: FeaturesCli) -> Result<()> {
