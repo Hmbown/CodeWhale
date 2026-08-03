@@ -851,7 +851,8 @@ fn tool_use_key(name: &str, input: &serde_json::Value) -> String {
 }
 
 fn tool_args_preview(input: &serde_json::Value) -> String {
-    let raw = serde_json::to_string(input).unwrap_or_else(|_| input.to_string());
+    let redacted = codewhale_config::persistence::redact_json_secrets(input);
+    let raw = serde_json::to_string(&redacted).unwrap_or_else(|_| redacted.to_string());
     truncate_chars(&raw, 120).to_string()
 }
 
@@ -1381,6 +1382,13 @@ pub async fn compact_messages(
     let workflow_context = extract_workflow_context(&to_summarize, workspace);
     drop(to_summarize);
 
+    // Deterministic continuation block over the FULL transcript (#5043):
+    // intent, decisions, evidence, and in-flight tool state must survive
+    // compaction even when the model summary is generic or lossy, and the
+    // system-prompt-adjacent working contract (the first user request) must
+    // never be dropped merely because its message index was summarized.
+    let continuation = build_continuation_block(messages, &plan.pinned_indices);
+
     let anchors_section = anchor_summary_section(workspace);
     let project_instructions = project_instructions_section(workspace);
     let live_reminder = config
@@ -1398,6 +1406,7 @@ pub async fn compact_messages(
              ## 📋 Conversation Summary (Auto-Generated)\n\n\
              {summary}\n\n\
              ---\n\n\
+             {continuation}\
              ## 🔍 Workflow Context\n\n\
              {workflow_context}\n\n\
              ---\n\n\
@@ -1405,7 +1414,7 @@ pub async fn compact_messages(
              {project_instructions}\
              ## 💡 What to Do Next\n\n\
              You have just resumed from a context compaction. The conversation above was summarized to save space. \
-             Review the summary, live state, and project instructions, then continue the same task. \
+             Review the summary, continuation contract, live state, and project instructions, then continue the same task. \
              {language_contract} \
              Prefer exact paths and commands from the summary over re-discovery. \
              If you need more details about the summarized portion, ask the user to clarify.\n\n\
@@ -1987,6 +1996,260 @@ fn build_formatted_summary_request(
     }
 }
 
+/// Bounds for the deterministic continuation block (#5043).
+const CONTINUATION_MAX_ITEMS: usize = 8;
+const CONTINUATION_ITEM_MAX_CHARS: usize = 240;
+const CONTINUATION_CONTRACT_MAX_CHARS: usize = 2_000;
+const CONTINUATION_MAX_INFLIGHT_TOOLS: usize = 6;
+
+/// Assistant-prose markers that indicate an accepted decision or chosen
+/// approach worth carrying across compaction verbatim.
+const CONTINUATION_DECISION_MARKERS: &[&str] = &[
+    "decision:",
+    "decided",
+    "we will",
+    "i will",
+    "i'll",
+    "chose",
+    "choosing",
+    "instead of",
+    "agreed",
+    "approach:",
+    "plan:",
+    "going with",
+];
+
+/// Tool-result markers that indicate verification evidence (test outcomes,
+/// failures, exit codes) the successor must not lose.
+const CONTINUATION_EVIDENCE_MARKERS: &[&str] = &[
+    "passed",
+    "failed",
+    "error",
+    "exit code",
+    "warning:",
+    "assertion",
+    "test result",
+];
+
+fn continuation_line(text: &str) -> String {
+    let redacted = codewhale_config::persistence::redact_secrets(text);
+    let flattened = redacted.trim().replace('\n', " ");
+    truncate_chars(&flattened, CONTINUATION_ITEM_MAX_CHARS).to_string()
+}
+
+fn quote_verbatim(text: &str, max_chars: usize) -> String {
+    let redacted = codewhale_config::persistence::redact_secrets(text);
+    truncate_chars(redacted.trim(), max_chars)
+        .lines()
+        .map(|line| format!("> {line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn user_text_of(msg: &Message) -> Option<String> {
+    if msg.role != "user" {
+        return None;
+    }
+    let text = msg
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_string())
+}
+
+/// Build the deterministic continuation block from the transcript itself.
+///
+/// Compaction must preserve accepted decisions, verification evidence, and
+/// in-flight tool state that are at risk of leaving the retained transcript,
+/// even when the summary model returns a generic or lossy result (#5043).
+/// Content already present in the pinned tail is not duplicated here. The
+/// working contract remains a deliberate exception: the first user request
+/// is always retained after credential redaction.
+fn build_continuation_block(messages: &[Message], pinned_indices: &BTreeSet<usize>) -> String {
+    let mut first_user: Option<String> = None;
+    let mut last_user: Option<(usize, String)> = None;
+    for (index, msg) in messages.iter().enumerate() {
+        let Some(text) = user_text_of(msg) else {
+            continue;
+        };
+        if first_user.is_none() {
+            first_user = Some(text.clone());
+        }
+        last_user = Some((index, text));
+    }
+
+    // Decisions: assistant prose lines that record a choice or approach.
+    let mut decisions: Vec<String> = Vec::new();
+    let mut seen_decisions: HashSet<String> = HashSet::new();
+    for (_, msg) in messages
+        .iter()
+        .enumerate()
+        .filter(|(index, msg)| !pinned_indices.contains(index) && msg.role == "assistant")
+    {
+        for block in &msg.content {
+            let ContentBlock::Text { text, .. } = block else {
+                continue;
+            };
+            for line in text.lines() {
+                let lower = line.to_lowercase();
+                if !CONTINUATION_DECISION_MARKERS
+                    .iter()
+                    .any(|marker| lower.contains(marker))
+                {
+                    continue;
+                }
+                let entry = continuation_line(line);
+                if !entry.is_empty() && seen_decisions.insert(entry.clone()) {
+                    decisions.push(entry);
+                }
+            }
+        }
+    }
+    // Keep the most recent at-risk decisions when over budget. Pinned-tail
+    // decisions were excluded above, so these do not compete with duplicate
+    // content that already survives compaction verbatim.
+    if decisions.len() > CONTINUATION_MAX_ITEMS {
+        decisions.drain(0..decisions.len() - CONTINUATION_MAX_ITEMS);
+    }
+
+    // Evidence: tool-result lines carrying verification outcomes, attributed
+    // to the tool that produced them.
+    let tool_uses = collect_tool_uses(messages);
+    let mut evidence: Vec<String> = Vec::new();
+    let mut seen_evidence: HashSet<String> = HashSet::new();
+    // Resolution is a transcript-wide fact even when the result itself is
+    // pinned and therefore excluded from the duplicated evidence section.
+    let resolved_tool_ids: HashSet<&str> = messages
+        .iter()
+        .flat_map(|msg| msg.content.iter())
+        .filter_map(|block| match block {
+            ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    for (_, msg) in messages
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !pinned_indices.contains(index))
+    {
+        for block in &msg.content {
+            let ContentBlock::ToolResult {
+                tool_use_id,
+                content,
+                ..
+            } = block
+            else {
+                continue;
+            };
+            let tool_name = tool_uses
+                .get(tool_use_id)
+                .map_or("tool", |info| info.name.as_str());
+            for line in content.lines() {
+                let lower = line.to_lowercase();
+                if !CONTINUATION_EVIDENCE_MARKERS
+                    .iter()
+                    .any(|marker| lower.contains(marker))
+                {
+                    continue;
+                }
+                let entry = format!("[{tool_name}] {}", continuation_line(line));
+                if seen_evidence.insert(entry.clone()) {
+                    evidence.push(entry);
+                }
+            }
+        }
+    }
+    if evidence.len() > CONTINUATION_MAX_ITEMS {
+        evidence.drain(0..evidence.len() - CONTINUATION_MAX_ITEMS);
+    }
+
+    // In-flight tool state: dispatched calls with no recorded result. These
+    // are exactly the calls `enforce_tool_call_pairs` must drop from the
+    // retained messages, so this block is their only surviving record.
+    let mut in_flight: Vec<String> = Vec::new();
+    for (_, msg) in messages
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !pinned_indices.contains(index))
+    {
+        for block in &msg.content {
+            let ContentBlock::ToolUse {
+                id, name, input, ..
+            } = block
+            else {
+                continue;
+            };
+            if resolved_tool_ids.contains(id.as_str()) {
+                continue;
+            }
+            in_flight.push(format!(
+                "{name} {} — dispatched, no result recorded; re-run if its outcome matters",
+                tool_args_preview(input)
+            ));
+        }
+    }
+    if in_flight.len() > CONTINUATION_MAX_INFLIGHT_TOOLS {
+        in_flight.drain(0..in_flight.len() - CONTINUATION_MAX_INFLIGHT_TOOLS);
+    }
+
+    let mut body = String::new();
+    if let Some(contract) = first_user.as_deref() {
+        let _ = write!(
+            body,
+            "### Working contract (first user request, credential-redacted quote)\n\n{}\n\n",
+            quote_verbatim(contract, CONTINUATION_CONTRACT_MAX_CHARS)
+        );
+    }
+    if let Some((index, intent)) = last_user.as_ref()
+        && !pinned_indices.contains(index)
+        && first_user.as_deref() != Some(intent.as_str())
+    {
+        let _ = write!(
+            body,
+            "### Active intent (most recent user request, credential-redacted quote)\n\n{}\n\n",
+            quote_verbatim(intent, CONTINUATION_CONTRACT_MAX_CHARS)
+        );
+    }
+    if !decisions.is_empty() {
+        body.push_str("### Decisions already made\n\n");
+        for decision in &decisions {
+            let _ = writeln!(body, "- {decision}");
+        }
+        body.push('\n');
+    }
+    if !evidence.is_empty() {
+        body.push_str("### Evidence and verification\n\n");
+        for item in &evidence {
+            let _ = writeln!(body, "- {item}");
+        }
+        body.push('\n');
+    }
+    if !in_flight.is_empty() {
+        body.push_str("### In-flight tool state\n\n");
+        for item in &in_flight {
+            let _ = writeln!(body, "- {item}");
+        }
+        body.push('\n');
+    }
+
+    if body.is_empty() {
+        return String::new();
+    }
+
+    format!(
+        "## 🧭 Continuation Contract (deterministic)\n\n\
+         Extracted directly from the transcript by the runtime — not by the summary model. \
+         If the auto-generated summary disagrees with this block, trust this block.\n\n\
+         {body}---\n\n"
+    )
+}
+
 /// Extract workflow context from messages (files touched, tasks, etc.)
 fn extract_workflow_context(messages: &[Message], workspace: Option<&Path>) -> String {
     let mut files_touched: Vec<String> = Vec::new();
@@ -2465,6 +2728,323 @@ mod tests {
         assert!(section.contains("<project_instructions source=\"AGENTS.md\">"));
         assert!(section.contains("Never force-push main."));
         assert!(project_instructions_section(None).is_empty());
+    }
+
+    #[test]
+    fn continuation_block_retains_intent_decisions_evidence_and_inflight_tools() {
+        let messages = vec![
+            msg(
+                "user",
+                "Ship the flaky auth fix; releases are blocked until login tests pass",
+            ),
+            msg(
+                "assistant",
+                "Decision: we will pin the mock clock instead of sleeping, because the sleep \
+                 race caused the flake.",
+            ),
+            tool_use("t1", "Bash", json!({"command": "cargo test -p auth"})),
+            tool_result(
+                "t1",
+                "test auth::login_expiry ... FAILED\nerror: 1 test failed",
+            ),
+            msg("user", "Now make the fix and re-run only the login tests"),
+            tool_use("t2", "Bash", json!({"command": "cargo test -p auth login"})),
+        ];
+
+        let block = build_continuation_block(&messages, &BTreeSet::new());
+
+        // Intent: both the original working contract and the latest ask survive
+        // after the credential-redaction boundary.
+        assert!(block.contains("Working contract (first user request, credential-redacted quote)"));
+        assert!(block.contains("releases are blocked until login tests pass"));
+        assert!(
+            block.contains("Active intent (most recent user request, credential-redacted quote)")
+        );
+        assert!(block.contains("re-run only the login tests"));
+        // Decisions: the accepted approach and its rationale are carried forward.
+        assert!(block.contains("Decisions already made"));
+        assert!(block.contains("pin the mock clock instead of sleeping"));
+        // Evidence: verification outcomes stay attributed to the producing tool.
+        assert!(block.contains("Evidence and verification"));
+        assert!(block.contains("[Bash] test auth::login_expiry ... FAILED"));
+        // Tool continuity: the unresolved dispatch is recorded, the resolved one is not.
+        assert!(block.contains("In-flight tool state"));
+        assert!(block.contains("cargo test -p auth login"));
+        assert!(!block.contains("t1 — dispatched"));
+    }
+
+    #[test]
+    fn continuation_block_is_empty_for_empty_transcript() {
+        assert!(build_continuation_block(&[], &BTreeSet::new()).is_empty());
+        // Tool-result-only user messages carry no user text; nothing to quote.
+        assert!(
+            build_continuation_block(&[tool_result("tX", "plain output")], &BTreeSet::new())
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn continuation_block_redacts_secrets_from_every_extracted_surface() {
+        let messages = vec![
+            msg(
+                "user",
+                "Ship the auth fix\nOPENAI_API_KEY=sk-user-secret-value",
+            ),
+            msg(
+                "assistant",
+                "Decision: use token=sk-decision-secret-value for the smoke test",
+            ),
+            tool_result("t1", "error: provider rejected sk-evidence-secret-value"),
+            tool_use(
+                "t2",
+                "Bash",
+                json!({"api_key": "sk-tool-secret-value", "command": "cargo test -p auth"}),
+            ),
+        ];
+
+        let block = build_continuation_block(&messages, &BTreeSet::new());
+
+        for secret in [
+            "sk-user-secret-value",
+            "sk-decision-secret-value",
+            "sk-evidence-secret-value",
+            "sk-tool-secret-value",
+        ] {
+            assert!(
+                !block.contains(secret),
+                "continuation block leaked {secret}"
+            );
+        }
+        assert!(block.contains(codewhale_config::persistence::REDACTED));
+        assert!(block.contains("Ship the auth fix"));
+        assert!(
+            block.contains(r#""command":"cargo test -p auth""#),
+            "redacting a sibling must not discard the command: {block}"
+        );
+    }
+
+    #[test]
+    fn tool_args_preview_redacts_sensitive_first_without_dropping_siblings() {
+        let input: serde_json::Value = serde_json::from_str(
+            r#"{"api_key":"sk-tool-secret-value","command":"cargo test -p auth"}"#,
+        )
+        .unwrap();
+
+        let preview: serde_json::Value = serde_json::from_str(&tool_args_preview(&input)).unwrap();
+
+        assert_eq!(preview["api_key"], codewhale_config::persistence::REDACTED);
+        assert_eq!(preview["command"], "cargo test -p auth");
+    }
+
+    #[test]
+    fn tool_args_preview_redacts_sensitive_later_without_touching_earlier_fields() {
+        let input: serde_json::Value =
+            serde_json::from_str(r#"{"command":"cargo test","api_key":"plain-secret-value"}"#)
+                .unwrap();
+
+        let preview: serde_json::Value = serde_json::from_str(&tool_args_preview(&input)).unwrap();
+
+        assert_eq!(preview["command"], "cargo test");
+        assert_eq!(preview["api_key"], codewhale_config::persistence::REDACTED);
+    }
+
+    #[test]
+    fn tool_args_preview_redacts_nested_sensitive_values_recursively() {
+        let input: serde_json::Value = serde_json::from_str(
+            r#"{"meta":{"token":"nested-secret","keep":"yes"},"steps":[{"password":"pw","name":"a"}]}"#,
+        )
+        .unwrap();
+
+        let preview: serde_json::Value = serde_json::from_str(&tool_args_preview(&input)).unwrap();
+
+        assert_eq!(
+            preview["meta"]["token"],
+            codewhale_config::persistence::REDACTED
+        );
+        assert_eq!(preview["meta"]["keep"], "yes");
+        assert_eq!(
+            preview["steps"][0]["password"],
+            codewhale_config::persistence::REDACTED
+        );
+        assert_eq!(preview["steps"][0]["name"], "a");
+    }
+
+    #[test]
+    fn tool_args_preview_redacts_complete_multi_word_secret_value() {
+        let input: serde_json::Value =
+            serde_json::from_str(r#"{"command":"run this","password":"hunter two words"}"#)
+                .unwrap();
+
+        let serialized = tool_args_preview(&input);
+        let preview: serde_json::Value = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(preview["command"], "run this");
+        assert_eq!(preview["password"], codewhale_config::persistence::REDACTED);
+        assert!(!serialized.contains("hunter"));
+        assert!(!serialized.contains("two words"));
+    }
+
+    #[test]
+    fn continuation_block_excludes_content_that_already_survives_in_pinned_messages() {
+        let messages = vec![
+            msg("user", "Keep the release blocked until verification passes"),
+            msg("assistant", "Decision: run the exact auth regression first"),
+            tool_result("t1", "test result: 4 passed; 0 failed"),
+            tool_use("t2", "Bash", json!({"command": "cargo test auth"})),
+            tool_use(
+                "t3",
+                "Bash",
+                json!({"command": "cargo test already resolved"}),
+            ),
+            msg("assistant", "Decision: pinned tail decision"),
+            tool_result("t3", "test result: pinned evidence"),
+            tool_use("t4", "Bash", json!({"command": "pinned command"})),
+            msg("user", "Now rerun the final package check"),
+        ];
+        let pinned = BTreeSet::from([5, 6, 7, 8]);
+
+        let block = build_continuation_block(&messages, &pinned);
+
+        assert!(block.contains("Keep the release blocked"), "{block}");
+        assert!(block.contains("run the exact auth regression"), "{block}");
+        assert!(block.contains("4 passed; 0 failed"), "{block}");
+        assert!(block.contains("cargo test auth"), "{block}");
+        assert!(!block.contains("cargo test already resolved"), "{block}");
+        assert!(!block.contains("pinned tail decision"), "{block}");
+        assert!(!block.contains("pinned evidence"), "{block}");
+        assert!(!block.contains("pinned command"), "{block}");
+        assert!(
+            !block.contains("Now rerun the final package check"),
+            "pinned active intent must not be duplicated: {block}"
+        );
+    }
+
+    struct FixedSummaryClient;
+
+    const FIXED_SUMMARY: &str = "1. Primary request and intent — migrate the session store. \
+        2. Key technical concepts — sqlite. 7. Pending tasks — finish the fixed clock. \
+        8. Current work — rerunning the session tests.";
+
+    #[async_trait::async_trait]
+    impl crate::core::model_client::ModelClient for FixedSummaryClient {
+        fn provider_name(&self) -> &str {
+            "test"
+        }
+
+        fn model(&self) -> &str {
+            "test-model"
+        }
+
+        async fn create_message(
+            &self,
+            _request: MessageRequest,
+        ) -> anyhow::Result<crate::models::MessageResponse> {
+            Ok(crate::models::MessageResponse {
+                id: "summary-fixture".to_string(),
+                r#type: "message".to_string(),
+                role: "assistant".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: FIXED_SUMMARY.to_string(),
+                    cache_control: None,
+                }],
+                model: "test-model".to_string(),
+                stop_reason: None,
+                stop_sequence: None,
+                container: None,
+                usage: crate::models::Usage::default(),
+            })
+        }
+
+        async fn create_message_stream(
+            &self,
+            _request: MessageRequest,
+        ) -> anyhow::Result<crate::llm_client::StreamEventBox> {
+            anyhow::bail!("streaming is unused by compaction")
+        }
+
+        async fn health_check(&self) -> anyhow::Result<bool> {
+            Ok(true)
+        }
+    }
+
+    /// Regression for #5043: compacting a synthetic session with an active
+    /// task, decisions, and tool results must emit a continuation block that
+    /// retains the intent, decision, and evidence markers — and the working
+    /// contract must survive verbatim even though its message was summarized.
+    #[tokio::test]
+    async fn compaction_summary_carries_continuation_block_forward() {
+        let messages = vec![
+            msg(
+                "user",
+                "Objective: migrate the session store to sqlite without breaking existing logins",
+            ),
+            msg(
+                "assistant",
+                "Decision: we will keep the login table schema and add a sessions table, \
+                 instead of rewriting auth.",
+            ),
+            tool_use(
+                "t1",
+                "Bash",
+                json!({"command": "cargo test -p session-store"}),
+            ),
+            tool_result("t1", "test session_store::roundtrip ... ok\nexit code 0"),
+            msg(
+                "assistant",
+                "The flake comes from time-based expiry; adding a fixed clock.",
+            ),
+            msg("user", "Sounds good, do it"),
+            msg("assistant", "Working on the fixed clock now."),
+            msg("user", "Status?"),
+            msg("assistant", "Nearly done, rerunning the suite."),
+            tool_use(
+                "t2",
+                "Bash",
+                json!({"command": "cargo test -p session-store roundtrip"}),
+            ),
+        ];
+
+        // Prove the working contract is genuinely in the summarized set, not
+        // saved by a pin: the guarantee must come from the continuation block.
+        let plan = plan_compaction(&messages, None, KEEP_RECENT_MESSAGES, None, None);
+        assert!(plan.summarize_indices.contains(&0));
+
+        let config = CompactionConfig {
+            model: "test-model".to_string(),
+            cache_summary: false,
+            ..Default::default()
+        };
+        let (retained, summary_prompt, _) =
+            compact_messages(&FixedSummaryClient, &messages, &config, None, None, None)
+                .await
+                .unwrap();
+
+        let Some(SystemPrompt::Blocks(blocks)) = summary_prompt else {
+            panic!("compaction must produce a summary system block");
+        };
+        let text = &blocks[0].text;
+
+        // The model summary and the deterministic continuation block coexist.
+        assert!(text.contains("Conversation Summary"));
+        assert!(text.contains(FIXED_SUMMARY));
+        assert!(text.contains("Continuation Contract (deterministic)"));
+        // Intent: working contract verbatim despite being summarized away.
+        assert!(text.contains(
+            "Objective: migrate the session store to sqlite without breaking existing logins"
+        ));
+        // Decision marker.
+        assert!(text.contains("keep the login table schema"));
+        // Evidence marker, attributed to the tool.
+        assert!(text.contains("[Bash] exit code 0"));
+        // In-flight tool continuity: the unresolved dispatch is recorded even
+        // though enforce_tool_call_pairs drops the orphaned call message.
+        assert!(text.contains("In-flight tool state"));
+        assert!(text.contains("cargo test -p session-store roundtrip"));
+        assert!(!retained.iter().any(|m| {
+            m.content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::ToolUse { id, .. } if id == "t2"))
+        }));
     }
 
     #[test]
