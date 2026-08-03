@@ -364,6 +364,67 @@ fn headless_worker_record_tracks_lifecycle_without_tui_projection() {
 }
 
 #[test]
+fn completing_worker_releases_persisted_write_claim() {
+    let tmp = tempdir().expect("tempdir");
+    let mut manager = SubAgentManager::new(tmp.path().to_path_buf(), 4);
+    manager
+        .register_worker_with_coordination(make_write_worker_spec(
+            "agent_write_claim_done",
+            tmp.path().to_path_buf(),
+            "src",
+        ))
+        .expect("register write-capable worker");
+    assert_eq!(manager.coordination.write_claims.len(), 1);
+
+    let mut result = make_snapshot(SubAgentStatus::Completed);
+    result.agent_id = "agent_write_claim_done".to_string();
+    result.name = "agent_write_claim_done".to_string();
+    manager.complete_worker_from_result("agent_write_claim_done", &result);
+
+    assert!(
+        manager.coordination.write_claims.is_empty(),
+        "terminal workers must release persisted write claims promptly"
+    );
+}
+
+#[test]
+fn load_state_prunes_inactive_write_claims_from_restarted_workers() {
+    let tmp = tempdir().expect("tempdir");
+    let workspace = tmp.path().to_path_buf();
+    let state_path = default_state_path(tmp.path()).expect("default state path");
+    let mut manager =
+        SubAgentManager::new(workspace.clone(), 4).with_state_path(state_path.clone());
+    manager
+        .register_worker_with_coordination(make_write_worker_spec(
+            "agent_restarted_writer",
+            workspace.clone(),
+            "src",
+        ))
+        .expect("register write-capable worker");
+    manager
+        .persist_state_synchronously()
+        .expect("persist write claim state");
+
+    let mut persisted: Value =
+        serde_json::from_str(&std::fs::read_to_string(&state_path).expect("read persisted state"))
+            .expect("parse persisted state");
+    persisted["workers"][0]["status"] =
+        serde_json::to_value(AgentWorkerStatus::Interrupted).expect("serialize interrupted status");
+    std::fs::write(
+        &state_path,
+        serde_json::to_string_pretty(&persisted).expect("serialize interrupted state"),
+    )
+    .expect("rewrite interrupted state");
+
+    let mut reloaded = SubAgentManager::new(workspace, 4).with_state_path(state_path);
+    reloaded.load_state().expect("reload interrupted state");
+    assert!(
+        reloaded.coordination.write_claims.is_empty(),
+        "restart recovery must evict inactive write claims"
+    );
+}
+
+#[test]
 fn worker_record_usage_accumulates_provider_tokens() {
     let tmp = tempdir().expect("tempdir");
     let mut manager = SubAgentManager::new(tmp.path().to_path_buf(), 4);
@@ -6901,6 +6962,38 @@ fn create_isolated_worktree_creates_branch_checkout_outside_parent_repo() {
 }
 
 #[test]
+fn cleanup_isolated_worktree_removes_created_branch_and_checkout() {
+    let repo = init_subagent_git_repo();
+    let worktree_home = tempdir().expect("worktree home");
+    let request = SubAgentWorktreeRequest {
+        branch: Some("codex/agent-cleanup-test".to_string()),
+        path: Some(worktree_home.path().join("isolated")),
+        base_ref: None,
+    };
+
+    let path = create_isolated_worktree(
+        repo.path(),
+        &request,
+        Some("cleanup-test"),
+        &FleetRole::Builder,
+    )
+    .expect("worktree should be created");
+    cleanup_isolated_worktree(&path).expect("cleanup should remove worktree and branch");
+
+    assert!(!path.exists(), "worktree path should be removed");
+    let branch = Command::new("git")
+        .args(["branch", "--list", "codex/agent-cleanup-test"])
+        .current_dir(repo.path())
+        .output()
+        .expect("git branch --list");
+    assert!(branch.status.success(), "git branch --list failed");
+    assert!(
+        String::from_utf8_lossy(&branch.stdout).trim().is_empty(),
+        "cleanup must delete only the branch it created"
+    );
+}
+
+#[test]
 fn create_isolated_worktree_rejects_invalid_branch_as_input() {
     let repo = init_subagent_git_repo();
     let worktree_home = tempdir().expect("worktree home");
@@ -12129,6 +12222,99 @@ fn coordination_process_lock_rejects_second_process() {
         "holder failed:\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn coordination_process_lock_can_be_skipped_for_leaf_processes() {
+    const ROLE_ENV: &str = "CODEWHALE_TEST_OPTIONAL_COORDINATION_LOCK_ROLE";
+    const WORKSPACE_ENV: &str = "CODEWHALE_TEST_OPTIONAL_COORDINATION_LOCK_WORKSPACE";
+    const TEST_NAME: &str =
+        "tools::subagent::tests::coordination_process_lock_can_be_skipped_for_leaf_processes";
+
+    if let Some(role) = std::env::var_os(ROLE_ENV) {
+        let workspace = PathBuf::from(std::env::var_os(WORKSPACE_ENV).expect("workspace env"));
+        let manager = new_shared_subagent_manager_with_timeout_and_coordination(
+            workspace.clone(),
+            1,
+            1,
+            Duration::from_secs(30),
+            1,
+            None,
+            false,
+        );
+        manager
+            .try_read()
+            .unwrap()
+            .ensure_coordination_process_lock()
+            .expect("leaf worker should not require delegated coordination lock");
+        std::fs::write(workspace.join(format!("{role}.ready")), b"ready").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !workspace.join("leaf.release").exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(workspace.join("leaf.release").exists(), "release timeout");
+        return;
+    }
+
+    let dir = tempdir().expect("tempdir");
+    let workspace = dir.path().canonicalize().expect("canonical workspace");
+    let test_binary = std::env::current_exe().expect("test binary");
+    let mut first = std::process::Command::new(&test_binary)
+        .arg("--exact")
+        .arg(TEST_NAME)
+        .arg("--nocapture")
+        .env(ROLE_ENV, "first")
+        .env(WORKSPACE_ENV, &workspace)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn first leaf worker");
+    let mut second = std::process::Command::new(&test_binary)
+        .arg("--exact")
+        .arg(TEST_NAME)
+        .arg("--nocapture")
+        .env(ROLE_ENV, "second")
+        .env(WORKSPACE_ENV, &workspace)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn second leaf worker");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !(workspace.join("first.ready").exists() && workspace.join("second.ready").exists())
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if !(workspace.join("first.ready").exists() && workspace.join("second.ready").exists()) {
+        let _ = first.kill();
+        let _ = second.kill();
+        let first_output = first.wait_with_output().expect("first output");
+        let second_output = second.wait_with_output().expect("second output");
+        panic!(
+            "leaf workers did not become ready concurrently:\nfirst stdout:\n{}\nfirst stderr:\n{}\nsecond stdout:\n{}\nsecond stderr:\n{}",
+            String::from_utf8_lossy(&first_output.stdout),
+            String::from_utf8_lossy(&first_output.stderr),
+            String::from_utf8_lossy(&second_output.stdout),
+            String::from_utf8_lossy(&second_output.stderr)
+        );
+    }
+
+    std::fs::write(workspace.join("leaf.release"), b"release").unwrap();
+    let first_output = first.wait_with_output().expect("first output");
+    let second_output = second.wait_with_output().expect("second output");
+    assert!(
+        first_output.status.success(),
+        "first leaf worker failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&first_output.stdout),
+        String::from_utf8_lossy(&first_output.stderr)
+    );
+    assert!(
+        second_output.status.success(),
+        "second leaf worker failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&second_output.stdout),
+        String::from_utf8_lossy(&second_output.stderr)
     );
 }
 

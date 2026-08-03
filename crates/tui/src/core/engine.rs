@@ -61,7 +61,8 @@ use crate::tools::subagent::{
     FleetRole, Mailbox, MailboxMessage, SharedSubAgentManager, SubAgentCompletion,
     SubAgentForkContext, SubAgentManager, SubAgentResult, SubAgentRuntime, SubAgentStatus,
     SubAgentThinking, agent_worker_owner_snapshot, ensure_subagent_model_for_provider,
-    new_shared_subagent_manager_with_timeout, resolve_subagent_assignment_route,
+    new_shared_subagent_manager_with_timeout,
+    new_shared_subagent_manager_with_timeout_and_coordination, resolve_subagent_assignment_route,
 };
 use crate::tools::todo::{SharedTodoList, new_shared_todo_list};
 use crate::tools::user_input::{UserInputRequest, UserInputResponse};
@@ -1212,13 +1213,14 @@ impl Engine {
             crate::prefix_cache::PrefixStabilityManager::new_unpinned()
         });
 
-        let subagent_manager = new_shared_subagent_manager_with_timeout(
+        let subagent_manager = new_shared_subagent_manager_with_timeout_and_coordination(
             config.workspace.clone(),
             config.max_subagents,
             config.max_admitted_subagents,
             config.subagent_heartbeat_timeout,
             config.launch_concurrency,
             config.subagent_token_budget,
+            config.subagents_enabled && config.max_spawn_depth > 0,
         );
         let shell_manager = config
             .runtime_services

@@ -9909,7 +9909,9 @@ async fn build_direct_workflow_tool(
     use crate::fleet::roster::FleetRoster;
     use crate::tools::AgentToolSurfaceOptions;
     use crate::tools::goal::new_shared_goal_state;
-    use crate::tools::subagent::{SubAgentRuntime, new_shared_subagent_manager_with_timeout};
+    use crate::tools::subagent::{
+        SubAgentRuntime, new_shared_subagent_manager_with_timeout_and_coordination,
+    };
     use crate::tools::todo::new_shared_todo_list;
     use crate::tui::app::AppMode;
 
@@ -9981,7 +9983,7 @@ async fn build_direct_workflow_tool(
     }
 
     let max_subagents = config.max_subagents_for_provider(provider);
-    let manager = new_shared_subagent_manager_with_timeout(
+    let manager = new_shared_subagent_manager_with_timeout_and_coordination(
         workspace.to_path_buf(),
         max_subagents,
         config
@@ -9990,6 +9992,7 @@ async fn build_direct_workflow_tool(
         Duration::from_secs(config.subagent_heartbeat_timeout_secs_for_provider(provider)),
         config.launch_concurrency_for_provider(provider),
         config.subagent_token_budget_for_provider(provider),
+        config.subagent_max_spawn_depth_for_provider(provider) > 0,
     );
     let roster = Arc::new(FleetRoster::load(&config.fleet_config(), workspace));
     let mut role_models = roster.model_overrides();

@@ -70,9 +70,9 @@ pub mod mailbox;
 mod naming;
 mod worktree;
 
-use worktree::{SubAgentWorktreeRequest, prepare_child_workspace};
+use worktree::{PendingIsolatedWorktreeCleanup, SubAgentWorktreeRequest, prepare_child_workspace};
 #[cfg(test)]
-use worktree::{create_isolated_worktree, git_repo_root};
+use worktree::{cleanup_isolated_worktree, create_isolated_worktree, git_repo_root};
 
 #[allow(unused_imports)] // re-exported for hosts / tests; registration uses concrete types
 pub use coord::{
@@ -3152,6 +3152,7 @@ impl SubAgentManager {
                 claim.claim.roots, claim.claim.exact_files
             ));
         }
+        self.prune_inactive_coordination_claims();
         Ok(())
     }
 
@@ -3615,6 +3616,13 @@ impl SubAgentManager {
         );
         self.worker_records.insert(worker_id, record);
         self.prune_worker_records();
+    }
+
+    fn prune_inactive_coordination_claims(&mut self) {
+        let active_owners = self.active_coordination_owners();
+        self.coordination
+            .write_claims
+            .retain(|record| active_owners.contains(&record.claim.owner));
     }
 
     /// Validate a Fleet/headless worker's persisted launch claim before its
@@ -4166,6 +4174,7 @@ impl SubAgentManager {
             }
         }
         self.record_worker_event(worker_id, status, message, Some(result.steps_taken), None);
+        self.prune_inactive_coordination_claims();
     }
 
     pub fn cancel_agent(&mut self, agent_ref: &str) -> Result<SubAgentResult> {
@@ -5361,6 +5370,7 @@ impl SubAgentManager {
             let anchor_ms = record.completed_at_ms.unwrap_or(record.updated_at_ms);
             now_ms.saturating_sub(anchor_ms) < max_age_ms
         });
+        self.prune_inactive_coordination_claims();
         // The transcript artifact follows the same retention lifecycle as the
         // worker ledger. Keep it while either the agent or worker record is
         // inspectable; once both age out, remove the one deterministic file so
@@ -6187,6 +6197,27 @@ pub fn new_shared_subagent_manager_with_timeout(
     launch_concurrency: usize,
     default_token_budget: Option<u64>,
 ) -> SharedSubAgentManager {
+    new_shared_subagent_manager_with_timeout_and_coordination(
+        workspace,
+        max_agents,
+        max_admitted_agents,
+        running_heartbeat_timeout,
+        launch_concurrency,
+        default_token_budget,
+        true,
+    )
+}
+
+#[must_use]
+pub fn new_shared_subagent_manager_with_timeout_and_coordination(
+    workspace: PathBuf,
+    max_agents: usize,
+    max_admitted_agents: usize,
+    running_heartbeat_timeout: Duration,
+    launch_concurrency: usize,
+    default_token_budget: Option<u64>,
+    require_coordination_process_lock: bool,
+) -> SharedSubAgentManager {
     let max_agents = max_agents.clamp(1, MAX_SUBAGENTS);
     let state_path = match default_state_path(&workspace) {
         Ok(path) => Some(path),
@@ -6203,8 +6234,12 @@ pub fn new_shared_subagent_manager_with_timeout(
     if let Some(state_path) = state_path {
         manager = manager.with_state_path(state_path);
     }
-    manager = manager.require_coordination_process_lock();
-    if let Err(error) = manager.ensure_coordination_process_lock() {
+    if require_coordination_process_lock {
+        manager = manager.require_coordination_process_lock();
+    }
+    if require_coordination_process_lock
+        && let Err(error) = manager.ensure_coordination_process_lock()
+    {
         tracing::warn!(target: "subagent", %error, "delegated coordination unavailable in this process");
     } else if let Err(err) = manager.load_state() {
         // Routed through tracing instead of stderr — see comment in
@@ -7058,6 +7093,12 @@ async fn spawn_subagent_from_input(
         spawn_request.session_name.as_deref(),
         &spawn_request.agent_type,
     )?;
+    let mut pending_worktree_cleanup = PendingIsolatedWorktreeCleanup::new(
+        spawn_request
+            .worktree
+            .as_ref()
+            .and_then(|_| child_workspace.clone()),
+    );
 
     child_runtime.max_spawn_depth = child_max_spawn_depth_for_spawn(
         child_runtime.max_spawn_depth,
@@ -7261,6 +7302,7 @@ async fn spawn_subagent_from_input(
     if let Some((lease_key, _)) = resident_lease.as_ref() {
         commit_resident_lease(lease_key, &result.agent_id);
     }
+    pending_worktree_cleanup.disarm();
 
     Ok((result, spawn_metadata))
 }

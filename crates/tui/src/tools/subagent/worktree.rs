@@ -122,6 +122,62 @@ pub(super) fn create_isolated_worktree(
     })
 }
 
+pub(super) fn cleanup_isolated_worktree(worktree_path: &Path) -> Result<(), ToolError> {
+    let worktree_path = worktree_path
+        .canonicalize()
+        .unwrap_or_else(|_| worktree_path.to_path_buf());
+    let repo_root = git_repo_root(&worktree_path)?;
+    let branch = current_worktree_branch(&worktree_path);
+    run_git_checked(
+        &repo_root,
+        &[
+            "worktree".to_string(),
+            "remove".to_string(),
+            "--force".to_string(),
+            worktree_path.display().to_string(),
+        ],
+        "remove sub-agent worktree",
+    )?;
+    if let Some(branch) = branch.filter(|branch| branch != "HEAD") {
+        run_git_checked(
+            &repo_root,
+            &["branch".to_string(), "-D".to_string(), branch],
+            "delete sub-agent worktree branch",
+        )?;
+    }
+    Ok(())
+}
+
+pub(super) struct PendingIsolatedWorktreeCleanup {
+    worktree_path: Option<PathBuf>,
+}
+
+impl PendingIsolatedWorktreeCleanup {
+    pub(super) fn new(worktree_path: Option<PathBuf>) -> Self {
+        Self { worktree_path }
+    }
+
+    pub(super) fn disarm(&mut self) {
+        self.worktree_path = None;
+    }
+}
+
+impl Drop for PendingIsolatedWorktreeCleanup {
+    fn drop(&mut self) {
+        let Some(worktree_path) = self.worktree_path.take() else {
+            return;
+        };
+        if let Err(err) = cleanup_isolated_worktree(&worktree_path) {
+            tracing::warn!(
+                target: "subagent",
+                worktree = %worktree_path.display(),
+                ?err,
+                "failed to clean up isolated sub-agent worktree"
+            );
+        }
+    }
+}
+
 pub(super) fn git_repo_root(workspace: &Path) -> Result<PathBuf, ToolError> {
     const MAX_PARENT_LEVELS: usize = 4;
     let start = workspace
@@ -202,6 +258,15 @@ fn try_git_toplevel(path: &Path) -> Option<PathBuf> {
     } else {
         Some(PathBuf::from(root))
     }
+}
+
+fn current_worktree_branch(path: &Path) -> Option<String> {
+    let output = Git::output(&["rev-parse", "--abbrev-ref", "HEAD"], path).ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!branch.is_empty()).then_some(branch)
 }
 
 fn validate_git_branch_name(repo_root: &Path, branch: &str) -> Result<(), ToolError> {
