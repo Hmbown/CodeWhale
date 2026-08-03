@@ -318,6 +318,7 @@
   "CmdHotbarDescription": "打开 Hotbar 设置",
   "CmdSetupDescription": "打开以宪章为核心的设置",
   "CmdSubagentsDescription": "Fleet 状态的兼容快捷方式",
+  "CmdAdvisorDescription": "Toggle background advisor watcher on/off for this session",
   "CmdSystemDescription": "显示当前系统提示词",
   "CmdTaskDescription": "管理后台任务",
   "CmdTokensDescription": "显示本次会话的 token 用量",

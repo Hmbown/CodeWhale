@@ -314,6 +314,7 @@
   "CmdHotbarDescription": "Obre la configuració de Hotbar",
   "CmdSetupDescription": "Obre el Setup amb la constitució primer",
   "CmdSubagentsDescription": "Drecera de compatibilitat per a l'estat de Fleet",
+  "CmdAdvisorDescription": "Toggle background advisor watcher on/off for this session",
   "CmdSystemDescription": "Mostra el prompt de sistema actual",
   "CmdTaskDescription": "Gestiona les tasques en segon pla",
   "CmdTokensDescription": "Mostra l'ús de tokens de la sessió",

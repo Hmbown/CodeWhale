@@ -318,6 +318,7 @@
   "CmdHotbarDescription": "Open Hotbar setup",
   "CmdSetupDescription": "Open constitution-first setup",
   "CmdSubagentsDescription": "Compatibility shortcut for Fleet status",
+  "CmdAdvisorDescription": "Toggle background advisor watcher on/off for this session",
   "CmdSystemDescription": "Show current system prompt",
   "CmdTaskDescription": "Manage background tasks",
   "CmdTokensDescription": "Show token usage for session",

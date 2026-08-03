@@ -314,6 +314,7 @@
   "CmdHotbarDescription": "Открыть настройку Hotbar",
   "CmdSetupDescription": "Открыть настройку, начиная с конституции",
   "CmdSubagentsDescription": "Совместимый ярлык для статуса Fleet",
+  "CmdAdvisorDescription": "Toggle background advisor watcher on/off for this session",
   "CmdSystemDescription": "Показать текущий системный промпт",
   "CmdTaskDescription": "Управление фоновыми задачами",
   "CmdTokensDescription": "Показать использование токенов за сессию",

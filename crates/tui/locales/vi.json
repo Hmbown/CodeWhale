@@ -318,6 +318,7 @@
   "CmdHotbarDescription": "Mở thiết lập Hotbar",
   "CmdSetupDescription": "Mở thiết lập ưu tiên hiến pháp",
   "CmdSubagentsDescription": "Phím tắt tương thích cho trạng thái Fleet",
+  "CmdAdvisorDescription": "Toggle background advisor watcher on/off for this session",
   "CmdSystemDescription": "Hiển thị prompt hệ thống hiện tại",
   "CmdTaskDescription": "Quản lý các nhiệm vụ chạy ngầm",
   "CmdTokensDescription": "Hiển thị lượng token đã sử dụng cho phiên",

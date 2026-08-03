@@ -314,6 +314,7 @@
   "CmdHotbarDescription": "Buka penyiapan Hotbar",
   "CmdSetupDescription": "Buka penyiapan konstitusi-dulu",
   "CmdSubagentsDescription": "Pintasan kompatibilitas untuk status Fleet",
+  "CmdAdvisorDescription": "Toggle background advisor watcher on/off for this session",
   "CmdSystemDescription": "Tampilkan prompt sistem saat ini",
   "CmdTaskDescription": "Kelola tugas latar belakang",
   "CmdTokensDescription": "Tampilkan penggunaan token sesi",

@@ -3,6 +3,7 @@
 
 #[cfg(all(test, feature = "long-running-tests"))]
 mod acceptance;
+mod advisor;
 mod agent;
 mod anchor;
 mod clear;
@@ -53,6 +54,10 @@ impl CommandGroup for CoreCommands {
             Box::new(FunctionCommand::new(
                 anchor::AnchorCmd::info(),
                 anchor::AnchorCmd::execute,
+            )),
+            Box::new(FunctionCommand::new(
+                advisor::AdvisorCmd::info(),
+                advisor::AdvisorCmd::execute,
             )),
             Box::new(FunctionCommand::new(
                 help::HelpCmd::info(),

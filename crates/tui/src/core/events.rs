@@ -459,6 +459,22 @@ pub enum Event {
         injected: bool,
     },
 
+    /// Advisory note emitted by the background advisor watcher (#3982).
+    ///
+    /// Fired fire-and-forget after `TurnComplete` when the advisor is enabled
+    /// and the completed turn contained at least one tool call. The note is
+    /// a concise LLM-generated summary of concerns observed in the bounded
+    /// tool-call slice; it never blocks or fails the parent turn.
+    AdvisoryNote {
+        /// The turn whose tool calls were reviewed.
+        turn_id: String,
+        /// Concise advisory text (one to three sentences). May be suppressed
+        /// by the emission guard's rate-limit or dedup window.
+        note: String,
+        /// Number of tool-call pairs that were included in the review slice.
+        tool_call_count: u32,
+    },
+
     // === Prefix-Cache Stability Events ===
     /// The prefix (system prompt + tool specs) changed between turns,
     /// which invalidates DeepSeek's KV prefix cache. Carries diagnostics

@@ -314,6 +314,7 @@
   "CmdHotbarDescription": "Hotbar सेटअप खोलें",
   "CmdSetupDescription": "संविधान-प्रथम सेटअप खोलें",
   "CmdSubagentsDescription": "Fleet स्थिति के लिए संगतता शॉर्टकट",
+  "CmdAdvisorDescription": "Toggle background advisor watcher on/off for this session",
   "CmdSystemDescription": "वर्तमान सिस्टम प्रॉम्प्ट दिखाएँ",
   "CmdTaskDescription": "बैकग्राउंड कार्य प्रबंधित करें",
   "CmdTokensDescription": "सत्र का टोकन उपयोग दिखाएँ",
