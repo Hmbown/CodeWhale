@@ -7238,6 +7238,7 @@ async fn spawn_subagent_from_input(
     mut runtime: SubAgentRuntime,
 ) -> Result<(SubAgentResult, WorkflowTaskSpawnMetadata), ToolError> {
     apply_session_spawn_defaults(&mut runtime);
+    refresh_spawn_route_sources(&mut runtime);
     let mut spawn_request = parse_spawn_request(&input)?;
     let profile_member = apply_spawn_profile(&mut spawn_request, &runtime.fleet_roster)?;
     // Profile-backed requests cannot be classified safely until the roster
@@ -10492,6 +10493,27 @@ fn validate_roster_token(value: &str, field: &str) -> Result<String, ToolError> 
 /// and the child's capability posture is governed by the member's
 /// `FleetRole` via `WorkerRuntimeProfile::for_role` — applying the block
 /// here could only widen that posture.
+/// Re-read the fleet roster — and the role-model defaults derived from it —
+/// from disk at spawn time (#5099). The runtime's roster and `role_models`
+/// are launch-time snapshots (built once in main.rs), so a mid-session
+/// `agents/*.toml` edit was invisible: spawns kept supplying the launch-time
+/// model id — a value that may exist nowhere on current disk — straight into
+/// the unpinned-provider guard. Personal and project profile files are
+/// re-read here; explicit `[subagents]` config overrides keep winning on top.
+/// Without the session `Config` (tests, legacy runtimes) the launch-time
+/// snapshot is the only source available and is kept.
+fn refresh_spawn_route_sources(runtime: &mut SubAgentRuntime) {
+    let Some(config) = runtime.api_config.as_deref() else {
+        return;
+    };
+    let roster =
+        crate::fleet::roster::FleetRoster::load(&config.fleet_config(), &runtime.context.workspace);
+    let mut role_models = roster.model_overrides();
+    role_models.extend(config.subagent_model_overrides());
+    runtime.role_models = role_models;
+    runtime.fleet_roster = std::sync::Arc::new(roster);
+}
+
 fn apply_spawn_profile(
     request: &mut SpawnRequest,
     roster: &crate::fleet::roster::FleetRoster,
@@ -10735,6 +10757,13 @@ fn resolve_spawn_model_selection(
 /// pins also receive the conservative known-foreign check; explicit provider
 /// pairs keep their deliberate route intent. Inherited/strength routes stay
 /// unchanged.
+///
+/// #5099: the known-foreign check distinguishes who asked for the model. An
+/// explicit `task.model` is the caller's deliberate pin and still fails with
+/// the pin-vs-inherit error. A provider-less DEFAULT the session never chose
+/// (fleet profile model or role/type default) must not hard-fail the spawn —
+/// the child inherits the session route instead of colliding with a foreign
+/// provider's bare model id, and the downgrade is logged.
 fn resolve_fixed_spawn_model_route(
     runtime: &SubAgentRuntime,
     selection: &mut SpawnModelSelection,
@@ -10752,6 +10781,27 @@ fn resolve_fixed_spawn_model_route(
         return Ok(());
     };
     let provider = runtime.client.api_provider();
+    if providerless
+        && let Err(reason) = crate::route_runtime::validate_unpinned_model_provider(
+            provider,
+            model,
+            runtime.client.base_url(),
+        )
+    {
+        if matches!(selection.source, SpawnRouteSource::TaskModel) {
+            return Err(ToolError::invalid_input(reason));
+        }
+        tracing::warn!(
+            model = %model,
+            source = selection.source.as_str(),
+            session_provider = %provider.as_str(),
+            "provider-less spawn default is foreign to the session route; \
+             the child inherits the session route instead ({reason})"
+        );
+        selection.model_route = ModelRoute::Inherit;
+        selection.source = SpawnRouteSource::RunModel;
+        return Ok(());
+    }
     let candidate = if providerless {
         crate::route_runtime::resolve_unpinned_model_candidate(
             provider,

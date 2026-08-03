@@ -3115,6 +3115,110 @@ fn providerless_spawn_model_gate_rejects_known_foreign_route_before_spawn() {
 }
 
 #[test]
+fn providerless_foreign_spawn_default_inherits_session_route() {
+    // #5099 / checklist §2.2: a moonshot parent spawning a default child whose
+    // role default — or unpinned fleet profile model — is a provider-less
+    // deepseek id must inherit the session route instead of hard-failing the
+    // spawn on a model the session never chose.
+    let runtime = stub_runtime_for_provider("moonshot");
+    for source in [
+        SpawnRouteSource::RoleDefault,
+        SpawnRouteSource::AgentProfileModel,
+    ] {
+        let mut selection = SpawnModelSelection {
+            model_route: ModelRoute::Fixed("deepseek-v4-flash".to_string()),
+            source,
+        };
+        resolve_fixed_spawn_model_route(&runtime, &mut selection, true)
+            .expect("provider-less foreign default must not fail the spawn");
+        assert_eq!(
+            selection.model_route,
+            ModelRoute::Inherit,
+            "default from {source:?} downgrades to the session route"
+        );
+        assert_eq!(
+            selection.source,
+            SpawnRouteSource::RunModel,
+            "receipt provenance reflects the inherit for {source:?}"
+        );
+    }
+
+    // An explicit caller `task.model` pin keeps the pin-vs-inherit error; the
+    // guard is only bypassed for defaults the session did not choose.
+    let mut explicit = SpawnModelSelection {
+        model_route: ModelRoute::Fixed("deepseek-v4-flash".to_string()),
+        source: SpawnRouteSource::TaskModel,
+    };
+    let err = resolve_fixed_spawn_model_route(&runtime, &mut explicit, true)
+        .expect_err("explicit task.model keeps the known-foreign guard");
+    let message = err.to_string();
+    assert!(
+        message.contains("inherit the session route"),
+        "error names the exact fix: {message}"
+    );
+
+    // A same-provider default still resolves to the exact wire id.
+    let deepseek = stub_runtime();
+    let mut owned = SpawnModelSelection {
+        model_route: ModelRoute::Fixed("deepseek-v4-flash".to_string()),
+        source: SpawnRouteSource::RoleDefault,
+    };
+    resolve_fixed_spawn_model_route(&deepseek, &mut owned, true)
+        .expect("same-provider default resolves normally");
+    assert!(
+        matches!(owned.model_route, ModelRoute::Fixed(_)),
+        "owned default stays fixed: {:?}",
+        owned.model_route
+    );
+}
+
+#[test]
+fn spawn_route_sources_refresh_reads_current_disk() {
+    // #5099 second defect: the launch-time roster/role_models snapshot kept
+    // supplying a model id that existed nowhere on current disk after a
+    // mid-session profile edit. The spawn path must re-read.
+    let _env_lock = crate::test_support::lock_test_env();
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _codewhale_home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.path());
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let agents = workspace.path().join(".codewhale").join("agents");
+    std::fs::create_dir_all(&agents).expect("agents dir");
+    std::fs::write(
+        agents.join("builder.toml"),
+        "id = \"builder\"\nrole_hint = \"builder\"\nmodel = \"fresh-disk-model\"\n",
+    )
+    .expect("write workspace profile");
+
+    let mut runtime = stub_runtime();
+    runtime.context = ToolContext::new(workspace.path().to_path_buf());
+    // Simulate the launch-time snapshot: a stale pin nowhere on disk.
+    runtime
+        .role_models
+        .insert("builder".to_string(), "stale-launch-model".to_string());
+
+    refresh_spawn_route_sources(&mut runtime);
+
+    let member = runtime
+        .fleet_roster
+        .get("builder")
+        .expect("workspace profile joins the fresh roster");
+    assert_eq!(
+        member.profile.model.as_deref(),
+        Some("fresh-disk-model"),
+        "roster re-reads current disk"
+    );
+    assert_eq!(
+        member.origin,
+        crate::fleet::profile::ProfileOrigin::Workspace
+    );
+    assert_eq!(
+        runtime.role_models.get("builder").map(String::as_str),
+        Some("fresh-disk-model"),
+        "role defaults re-read current disk"
+    );
+}
+
+#[test]
 fn test_child_max_spawn_depth_profile_hint_only_narrows() {
     // Profile hint narrows the inherited budget...
     assert_eq!(child_max_spawn_depth_for_spawn(3, 1, None, Some(1)), 2);
