@@ -251,6 +251,35 @@ impl McpManager {
             .map(String::as_str)
     }
 
+    /// Resolve a sanitized tool segment from a qualified name back to the
+    /// server's original tool name.
+    ///
+    /// `qualify_tool_name` folds `-`, `.`, and case into `_`, so the segment
+    /// carried by `mcp__server__segment` is not necessarily the name the
+    /// server expects. A literal match wins outright; otherwise, when exactly
+    /// one listed tool sanitizes to the segment, its original name is used.
+    /// When the lookup is impossible or ambiguous the segment is passed
+    /// through unchanged, preserving behavior for clients whose `list_tools`
+    /// does not enumerate every callable tool.
+    fn resolve_original_tool_name(&self, server_name: &str, tool_segment: &str) -> String {
+        let Some(client) = self.clients.get(server_name) else {
+            return tool_segment.to_string();
+        };
+        let Ok(tools) = client.list_tools() else {
+            return tool_segment.to_string();
+        };
+        if tools.iter().any(|tool| tool.tool_name == tool_segment) {
+            return tool_segment.to_string();
+        }
+        let mut matches = tools
+            .iter()
+            .filter(|tool| sanitize_component(&tool.tool_name) == tool_segment);
+        match (matches.next(), matches.next()) {
+            (Some(tool), None) => tool.tool_name.clone(),
+            _ => tool_segment.to_string(),
+        }
+    }
+
     /// Start all registered servers, emitting status updates via the callback.
     ///
     /// Returns a summary of which servers are ready, failed, or cancelled.
@@ -375,10 +404,17 @@ impl McpManager {
         // below on a *call* failure would re-execute the same tool, and for a
         // file write, a commit, or a paid API call that second invocation is a
         // second real side effect. Only a failed *lookup* falls through.
+        //
+        // The parsed tool segment is the *sanitized* name (qualify_tool_name
+        // folds `-`, `.`, and case into `_`), so resolve it back to the
+        // server's original tool name before dispatching — otherwise tools
+        // like `my-tool` are un-callable through their advertised qualified
+        // name `mcp__server__my_tool`.
         if let Ok((server_name, tool_name)) = &parsed
             && self.clients.contains_key(server_name)
         {
-            return self.call_tool(server_name, tool_name, arguments);
+            let resolved = self.resolve_original_tool_name(server_name, tool_name);
+            return self.call_tool(server_name, &resolved, arguments);
         }
 
         // No exact registration: resolve by scanning qualified names. Collect
@@ -1540,6 +1576,36 @@ mod tests {
             .call_qualified_tool("mcp__my_server__my_tool", json!({}))
             .unwrap();
         assert_eq!(result["ok"], true);
+    }
+
+    #[test]
+    fn manager_call_qualified_tool_resolves_sanitized_segment_to_original_name() {
+        // `qualify_tool_name` folds `-`/`.`/case into `_`, so the qualified
+        // name advertised for `my-tool` is `mcp__s1__my_tool`. The exact-match
+        // fast path used to dispatch that sanitized segment verbatim, and the
+        // server (which only knows `my-tool`) rejected the call.
+        let mut manager = McpManager::default();
+        manager
+            .register_server(
+                make_server_config("s1"),
+                ToolFilter::default(),
+                Box::new(
+                    InMemoryMcpClient::default()
+                        .with_tool("my-tool", json!({"via": "hyphen"}))
+                        .with_tool("other.thing", json!({"via": "dot"})),
+                ),
+            )
+            .unwrap();
+
+        let hyphen = manager
+            .call_qualified_tool("mcp__s1__my_tool", json!({}))
+            .unwrap();
+        assert_eq!(hyphen, json!({"via": "hyphen"}));
+
+        let dot = manager
+            .call_qualified_tool("mcp__s1__other_thing", json!({}))
+            .unwrap();
+        assert_eq!(dot, json!({"via": "dot"}));
     }
 
     #[test]
