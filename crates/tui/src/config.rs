@@ -5558,6 +5558,7 @@ impl Config {
             && let Some(configured) = self.api_key.as_ref()
             && classify_config_api_key_value(configured) == ConfigApiKeyValueKind::Literal
         {
+            warn_on_config_api_key_shadowing(self, provider, "the root api_key");
             return Ok(configured.clone());
         }
 
@@ -5623,6 +5624,11 @@ impl Config {
                 })
             && classify_config_api_key_value(&configured) == ConfigApiKeyValueKind::Literal
         {
+            let config_source = match provider_config_table_name(provider) {
+                Ok(table) => format!("`{table}` api_key"),
+                Err(_) => "the provider config-table api_key".to_string(),
+            };
+            warn_on_config_api_key_shadowing(self, provider, &config_source);
             return Ok(configured);
         }
         if provider == ApiProvider::Custom
@@ -5631,6 +5637,7 @@ impl Config {
             && let Some(configured) = self.api_key.as_ref()
             && classify_config_api_key_value(configured) == ConfigApiKeyValueKind::Literal
         {
+            warn_on_config_api_key_shadowing(self, provider, "the root api_key");
             return Ok(configured.clone());
         }
 
@@ -10450,6 +10457,58 @@ fn provider_secret_store_api_key_with_mode(
         .ok()
         .flatten()
         .filter(|value| !value.trim().is_empty())
+}
+
+/// The shadowing warning for a config-file `api_key` that wins over a live
+/// secret-store credential, if both exist (#5194).
+///
+/// The config file intentionally outranks the secret store in the read
+/// chain, but a shadowed slot is invisible: the user rotates the key with
+/// `codewhale auth set` and nothing changes, because the stale plaintext
+/// copy still wins. Mirror the fleet-roster shadowing rule (#5098):
+/// precedence is normal, but it must be VISIBLE. The message names both
+/// sources, which one won, and the command that resolves the shadow.
+/// Split from [`warn_on_config_api_key_shadowing`] so the decision is
+/// testable without capturing tracing output.
+fn config_api_key_shadow_warning(
+    config: &Config,
+    provider: ApiProvider,
+    config_source: &str,
+) -> Option<String> {
+    if config.should_skip_secret_store_for_provider(provider) {
+        return None;
+    }
+    provider_secret_store_api_key_with_mode(config, provider, true).map(|_| {
+        let slot = provider_secret_store_slot(provider);
+        let id = provider.as_str();
+        format!(
+            "both {config_source} in the config file and secret-store slot \"{slot}\" \
+             hold a credential for provider {id}; the config-file key won. Run \
+             `codewhale auth set --provider {id}` to move the key into the secret store \
+             and strip the plaintext copy, or remove the config-file api_key."
+        )
+    })
+}
+
+/// Emit the #5194 shadowing warning at most once per provider slot per
+/// process: credential resolution runs on every request, and a repeating
+/// warning is noise, not signal.
+fn warn_on_config_api_key_shadowing(config: &Config, provider: ApiProvider, config_source: &str) {
+    let Some(message) = config_api_key_shadow_warning(config, provider, config_source) else {
+        return;
+    };
+    static WARNED_SLOTS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashSet<&'static str>>,
+    > = std::sync::OnceLock::new();
+    let mut warned = WARNED_SLOTS
+        .get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !warned.insert(provider_secret_store_slot(provider)) {
+        return;
+    }
+    drop(warned);
+    tracing::warn!("{message}");
 }
 
 /// The model this launch was explicitly asked for, if any.

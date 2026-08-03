@@ -2855,6 +2855,80 @@ fn single_provider_logout_clears_secret_store_slot() -> Result<()> {
     Ok(())
 }
 
+/// #5194: when both a config-file api_key and the provider's secret-store
+/// slot hold a credential, the shadowing warning names both sources, says
+/// which won, and hands over the resolve command.
+#[test]
+fn config_api_key_shadow_warning_names_sources_winner_and_resolution() -> Result<()> {
+    let _lock = lock_test_env();
+    let temp_root = tempfile::tempdir()?;
+    let _guard = EnvGuard::new(temp_root.path());
+    let codewhale_home = temp_root.path().join("codewhale-home");
+    let config_path = codewhale_home.join("config.toml");
+    let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", codewhale_home.as_os_str());
+    let _config_path = EnvVarGuard::set("CODEWHALE_CONFIG_PATH", config_path.as_os_str());
+    let _backend = EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+    codewhale_secrets::Secrets::auto_detect().set("openrouter", "store-key")?;
+
+    let mut config = Config::default();
+    config
+        .provider_config_for_mut(ApiProvider::Openrouter)
+        .api_key = Some("plaintext-config-key".to_string());
+
+    let warning = config_api_key_shadow_warning(
+        &config,
+        ApiProvider::Openrouter,
+        "`providers.openrouter` api_key",
+    )
+    .expect("a live secret-store slot shadowed by a config key must warn");
+    assert!(
+        warning.contains("`providers.openrouter` api_key"),
+        "warning must name the config-file source: {warning}"
+    );
+    assert!(
+        warning.contains("secret-store slot \"openrouter\""),
+        "warning must name the secret-store source: {warning}"
+    );
+    assert!(
+        warning.contains("the config-file key won"),
+        "warning must say which source won: {warning}"
+    );
+    assert!(
+        warning.contains("codewhale auth set --provider openrouter"),
+        "warning must name the resolve command: {warning}"
+    );
+    Ok(())
+}
+
+/// #5194: no secret-store credential, no shadow, no warning.
+#[test]
+fn config_api_key_shadow_warning_stays_quiet_without_a_store_slot() -> Result<()> {
+    let _lock = lock_test_env();
+    let temp_root = tempfile::tempdir()?;
+    let _guard = EnvGuard::new(temp_root.path());
+    let codewhale_home = temp_root.path().join("codewhale-home");
+    let config_path = codewhale_home.join("config.toml");
+    let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", codewhale_home.as_os_str());
+    let _config_path = EnvVarGuard::set("CODEWHALE_CONFIG_PATH", config_path.as_os_str());
+    let _backend = EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+
+    let mut config = Config::default();
+    config
+        .provider_config_for_mut(ApiProvider::Openrouter)
+        .api_key = Some("plaintext-config-key".to_string());
+
+    assert_eq!(
+        config_api_key_shadow_warning(
+            &config,
+            ApiProvider::Openrouter,
+            "`providers.openrouter` api_key"
+        ),
+        None,
+        "a config key with no secret-store slot behind it is not a shadow"
+    );
+    Ok(())
+}
+
 #[test]
 fn whitespace_codewhale_home_never_opens_ambient_file_secret_store() -> Result<()> {
     let _lock = lock_test_env();
