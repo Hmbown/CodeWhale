@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -638,11 +638,32 @@ impl ThreadManager {
         self.running_threads
             .insert(thread.id.clone(), thread.clone());
         if let Some(history) = params.history.as_ref() {
+            // A read→resume flow hands back items that are already on the
+            // persisted chain; appending them again would double the
+            // conversation on every resume, compounding. Dedup by content
+            // fingerprint (the item's JSON, matching what append_message
+            // stores as content) against the persisted chain and against
+            // items already appended in this loop.
+            let mut seen: HashSet<String> = self
+                .store
+                .list_messages(&thread.id, None)?
+                .into_iter()
+                .map(|message| {
+                    message
+                        .item
+                        .as_ref()
+                        .map_or(message.content.clone(), |item| item.to_string())
+                })
+                .collect();
             for item in history {
+                let fingerprint = item.to_string();
+                if !seen.insert(fingerprint.clone()) {
+                    continue;
+                }
                 self.store.append_message(
                     &thread.id,
                     "history",
-                    &item.to_string(),
+                    &fingerprint,
                     Some(item.clone()),
                 )?;
             }
@@ -3102,6 +3123,86 @@ mod tests {
             .expect("resume unarchived thread")
             .expect("thread in cache");
         assert_eq!(restored.thread.status, ThreadStatus::Idle);
+    }
+
+    #[test]
+    fn resume_with_history_does_not_reappend_persisted_messages() {
+        // A read→resume flow hands the thread's own history back to
+        // `thread/resume`; appending it verbatim doubled the conversation on
+        // every resume, compounding.
+        let store = temp_core_state("resume-history-dedup");
+        let mut manager = ThreadManager::new(store);
+        let history = vec![
+            json!({"type": "user_message", "message": "hello"}),
+            json!({"type": "assistant_message", "message": "hi there"}),
+        ];
+        let spawned = manager
+            .spawn_thread_with_history(
+                "deepseek".to_string(),
+                PathBuf::from("/tmp/codewhale"),
+                InitialHistory::Forked(history.clone()),
+                true,
+            )
+            .expect("spawn thread");
+        let thread_id = spawned.thread.id.clone();
+        let message_count = |manager: &ThreadManager| {
+            manager
+                .state_store()
+                .list_messages(&thread_id, None)
+                .expect("list messages")
+                .len()
+        };
+        assert_eq!(message_count(&manager), 2);
+
+        let resume_params = ThreadResumeParams {
+            thread_id: thread_id.clone(),
+            history: Some(history.clone()),
+            path: None,
+            model: None,
+            model_provider: None,
+            cwd: None,
+            approval_policy: None,
+            sandbox: None,
+            config: None,
+            base_instructions: None,
+            developer_instructions: None,
+            personality: None,
+            persist_extended_history: false,
+        };
+
+        // Resuming twice with the same history must be idempotent.
+        for _ in 0..2 {
+            manager
+                .resume_thread_with_history(
+                    &resume_params,
+                    Path::new("/tmp/codewhale"),
+                    "deepseek".to_string(),
+                )
+                .expect("resume thread")
+                .expect("thread found");
+        }
+        assert_eq!(
+            message_count(&manager),
+            2,
+            "resume re-appended messages already on the persisted chain"
+        );
+
+        // A genuinely new history item is still appended, exactly once.
+        let mut extended = history.clone();
+        extended.push(json!({"type": "user_message", "message": "something new"}));
+        let resume_params = ThreadResumeParams {
+            history: Some(extended),
+            ..resume_params
+        };
+        manager
+            .resume_thread_with_history(
+                &resume_params,
+                Path::new("/tmp/codewhale"),
+                "deepseek".to_string(),
+            )
+            .expect("resume thread")
+            .expect("thread found");
+        assert_eq!(message_count(&manager), 3);
     }
 
     #[tokio::test]
