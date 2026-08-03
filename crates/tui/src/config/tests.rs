@@ -10430,6 +10430,44 @@ fn notifications_event_sound_defaults_when_table_absent() {
 }
 
 #[test]
+fn notifications_parse_quiet_and_event_categories() {
+    let config: Config = toml::from_str(
+        r#"
+        [notifications]
+        quiet = true
+
+        [notifications.events]
+        approval-needed = false
+        model-notify = false
+        "#,
+    )
+    .expect("quiet + events config should parse");
+
+    let notifications = config.notifications_config();
+    assert!(notifications.quiet);
+    let events = notifications.events;
+    assert!(!events.approval_needed);
+    assert!(!events.model_notify);
+    // Unlisted categories keep their enabled default.
+    assert!(events.turn_complete);
+    assert!(events.subagent_terminal);
+    assert!(events.input_needed);
+    assert!(events.elevation_needed);
+}
+
+#[test]
+fn notifications_quiet_and_events_default_off_and_all_enabled() {
+    let config: Config = toml::from_str("[notifications]\nmethod = \"auto\"\n")
+        .expect("bare notifications table should parse");
+
+    let notifications = config.notifications_config();
+    assert!(!notifications.quiet);
+    assert_eq!(notifications.events, NotificationEventsConfig::default());
+    assert!(notifications.events.turn_complete);
+    assert!(notifications.events.model_notify);
+}
+
+#[test]
 fn huggingface_short_custom_env_url_does_not_inherit_ambient_key() -> Result<()> {
     let _lock = lock_test_env();
     let nanos = SystemTime::now()

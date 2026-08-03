@@ -1735,6 +1735,17 @@ If you are upgrading from older releases:
   `[notifications].sound_file` on Windows.
 - `[notifications].sound_file` (path, optional): path to a custom WAV file
   used when `completion_sound = "file"`.
+- `[notifications].quiet` (bool, optional): defaults to `false`. Quiet
+  mode — suppresses every desktop notification (all categories, all
+  delivery methods) and the paired `event_sound` cues, without changing
+  `method` or the per-category switches. The turn-completion chime
+  (`completion_sound`) is governed separately.
+- `[notifications.events]` (table, optional): per-category
+  desktop-notification switches; every key defaults to `true`. Keys:
+  `turn-complete`, `subagent-terminal`, `approval-needed`,
+  `input-needed`, `elevation-needed`, `model-notify`. A disabled
+  category is suppressed on every delivery mechanism (OSC 9, Kitty,
+  Ghostty, BEL, macOS Notification Center).
 - `[notifications.event_sound]` (table, optional): opt-in, deterministic
   per-event sound cues. Keys: `enabled` (bool, default `false`), `events`
   (array of kebab-case event names, default `["turn-complete",
@@ -1806,7 +1817,26 @@ threshold_secs  = 30      # only notify when the turn took >= this many seconds
 include_summary = false   # include elapsed time + cost in the notification body
 completion_sound = "beep" # off | beep | bell | file
 sound_file = "E:\\google\\downloads\\notify.wav" # for completion_sound = "file"
+quiet = false             # true suppresses every desktop notification
+
+[notifications.events]    # per-category switches; all default to true
+turn-complete     = true  # an agent turn finished
+subagent-terminal = true  # a sub-agent reached a terminal status
+approval-needed   = true  # a tool call is blocked on your approval
+input-needed      = true  # the agent asked a question and is blocked
+elevation-needed  = true  # the sandbox denied a tool and needs a decision
+model-notify      = true  # the model called the `notify` tool
 ```
+
+`quiet = true` is the one-flag "stop interrupting me" switch: it silences
+every category on every delivery mechanism while leaving the rest of your
+notification configuration intact, so flipping it back restores your exact
+previous policy. `[notifications.events]` disables single categories the
+same way — a disabled category is suppressed at the emission path, so it
+cannot leak through one specific protocol. A suppressed notification also
+suppresses its paired `[notifications.event_sound]` cue (no orphaned bells
+for events you turned off); the turn-completion chime (`completion_sound`)
+is governed separately.
 
 Method semantics:
 
@@ -1868,7 +1898,7 @@ per-event disclosure policy rather than from whatever text was on hand:
 | Turn complete | status line (+ elapsed/cost when `include_summary`), preview of the assistant's reply | — |
 | Sub-agent finished | status line, agent id, preview of the child's summary line | — |
 | Approval needed | the tool name | the tool description, the command, the arguments |
-| Input needed | "please respond in the terminal" | the question |
+| Input needed | "Answer the question in the terminal to continue" | the question |
 | Sandbox elevation needed | the tool name and the denial reason | the command |
 | `notify` tool | model-supplied title and body | — |
 

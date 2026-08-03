@@ -36,16 +36,14 @@ impl ToolSpec for NotifyTool {
     }
 
     fn description(&self) -> &'static str {
-        "Fire a single desktop notification (OSC 9 / terminal bell). Use \
-         sparingly — only when a long-running task completes, when a turn \
-         was waiting on a remote operation that just finished, or when \
-         the user genuinely needs to come back to the terminal. Pass a \
-         short `title` and an optional `body`. Do NOT use this for \
-         routine progress updates, conversational acknowledgements, or \
-         confirmation that the model is alive — that's noise. The user \
-         can disable notifications entirely via \
-         `[notifications].method = \"off\"` in `~/.deepseek/config.toml`; \
-         when disabled this tool is a silent no-op."
+        "Send a desktop notification only when the user must act: a long task \
+         completed, a blocking error needs a decision, or progress cannot \
+         continue without an answer. Never notify for routine progress, \
+         acknowledgements, or liveness. Pass a short `title` and optional \
+         `body`. Users can silence everything with \
+         `[notifications].method = \"off\"` or `[notifications].quiet = true`, \
+         or this category with `[notifications.events].model-notify = false`; \
+         disabled notifications are silent no-ops."
     }
 
     fn input_schema(&self) -> Value {

@@ -15,6 +15,11 @@
 //! redaction-aware value — rather than a free-form `String` (#4834). See
 //! [`crate::tui::notification_payload`] for the per-kind disclosure
 //! policy.
+//!
+//! Delivery is governed by one [`NotificationGate`] (#5041):
+//! `[notifications].quiet` silences everything and
+//! `[notifications.events]` disables individual categories, enforced at
+//! the emission path so no protocol can leak a suppressed event.
 
 #[cfg(target_os = "windows")]
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
@@ -28,6 +33,7 @@ use std::sync::atomic::{AtomicU8, AtomicU64};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
+use super::notification_payload::NotificationKind;
 pub use super::notification_payload::NotificationPayload;
 
 #[cfg(target_os = "windows")]
@@ -195,23 +201,158 @@ fn build_escape(method: Method, in_tmux: bool, msg: &str) -> Vec<u8> {
     }
 }
 
-/// Emit a notification to `sink` if the elapsed time meets or exceeds
-/// `threshold`, and `method` is not `Off`.
+// ── Notification gate (#5041) ────────────────────────────────────────
+//
+// One policy switchboard between "an event happened" and "the user's
+// desktop is interrupted". `[notifications].quiet` silences every
+// category; `[notifications.events]` disables individual categories. The
+// gate is installed from config by [`settings`] and consulted by
+// [`notify_done`] ahead of every delivery mechanism, so a disabled
+// category can never leak through one specific protocol.
+
+/// Which notification categories may reach the user's desktop.
 ///
-/// This variant takes a `W: Write` sink for testability.
+/// The category set mirrors [`NotificationKind`] one-to-one. Default:
+/// everything enabled, quiet off — matching the pre-#5041 behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotificationGate {
+    /// Suppress every category when `true` (`[notifications].quiet`).
+    pub quiet: bool,
+    pub turn_complete: bool,
+    pub subagent_terminal: bool,
+    pub approval_needed: bool,
+    pub input_needed: bool,
+    pub elevation_needed: bool,
+    pub model_notify: bool,
+}
+
+impl Default for NotificationGate {
+    fn default() -> Self {
+        Self {
+            quiet: false,
+            turn_complete: true,
+            subagent_terminal: true,
+            approval_needed: true,
+            input_needed: true,
+            elevation_needed: true,
+            model_notify: true,
+        }
+    }
+}
+
+impl NotificationGate {
+    /// Project the `[notifications]` config block onto a gate.
+    #[must_use]
+    pub fn from_config(notif: &crate::config::NotificationsConfig) -> Self {
+        Self {
+            quiet: notif.quiet,
+            turn_complete: notif.events.turn_complete,
+            subagent_terminal: notif.events.subagent_terminal,
+            approval_needed: notif.events.approval_needed,
+            input_needed: notif.events.input_needed,
+            elevation_needed: notif.events.elevation_needed,
+            model_notify: notif.events.model_notify,
+        }
+    }
+
+    /// Whether an event of `kind` may be delivered under this gate.
+    #[must_use]
+    pub fn allows(self, kind: NotificationKind) -> bool {
+        if self.quiet {
+            return false;
+        }
+        match kind {
+            NotificationKind::TurnComplete => self.turn_complete,
+            NotificationKind::SubagentTerminal => self.subagent_terminal,
+            NotificationKind::ApprovalNeeded => self.approval_needed,
+            NotificationKind::InputNeeded => self.input_needed,
+            NotificationKind::ElevationNeeded => self.elevation_needed,
+            NotificationKind::ModelNotify => self.model_notify,
+        }
+    }
+
+    const QUIET_BIT: u8 = 1 << 0;
+    const TURN_COMPLETE_BIT: u8 = 1 << 1;
+    const SUBAGENT_TERMINAL_BIT: u8 = 1 << 2;
+    const APPROVAL_NEEDED_BIT: u8 = 1 << 3;
+    const INPUT_NEEDED_BIT: u8 = 1 << 4;
+    const ELEVATION_NEEDED_BIT: u8 = 1 << 5;
+    const MODEL_NOTIFY_BIT: u8 = 1 << 6;
+
+    const fn to_bits(self) -> u8 {
+        (self.quiet as u8 * Self::QUIET_BIT)
+            | (self.turn_complete as u8 * Self::TURN_COMPLETE_BIT)
+            | (self.subagent_terminal as u8 * Self::SUBAGENT_TERMINAL_BIT)
+            | (self.approval_needed as u8 * Self::APPROVAL_NEEDED_BIT)
+            | (self.input_needed as u8 * Self::INPUT_NEEDED_BIT)
+            | (self.elevation_needed as u8 * Self::ELEVATION_NEEDED_BIT)
+            | (self.model_notify as u8 * Self::MODEL_NOTIFY_BIT)
+    }
+
+    const fn from_bits(bits: u8) -> Self {
+        Self {
+            quiet: bits & Self::QUIET_BIT != 0,
+            turn_complete: bits & Self::TURN_COMPLETE_BIT != 0,
+            subagent_terminal: bits & Self::SUBAGENT_TERMINAL_BIT != 0,
+            approval_needed: bits & Self::APPROVAL_NEEDED_BIT != 0,
+            input_needed: bits & Self::INPUT_NEEDED_BIT != 0,
+            elevation_needed: bits & Self::ELEVATION_NEEDED_BIT != 0,
+            model_notify: bits & Self::MODEL_NOTIFY_BIT != 0,
+        }
+    }
+}
+
+/// Everything on, quiet off — the pre-#5041 behavior, and the effective
+/// policy until the first [`settings`] call installs the configured gate.
+const GATE_DEFAULT_BITS: u8 = 0b0111_1110;
+
+/// Process-wide gate, packed to one byte so reads on the emission path are
+/// a single atomic load (same pattern as `COMPLETION_SOUND_MODE`).
+static NOTIFICATION_GATE: AtomicU8 = AtomicU8::new(GATE_DEFAULT_BITS);
+
+/// Install `gate` as the process-wide notification policy.
+pub fn install_notification_gate(gate: NotificationGate) {
+    NOTIFICATION_GATE.store(gate.to_bits(), Ordering::SeqCst);
+}
+
+/// The currently installed process-wide notification gate.
+#[must_use]
+pub fn current_notification_gate() -> NotificationGate {
+    NotificationGate::from_bits(NOTIFICATION_GATE.load(Ordering::SeqCst))
+}
+
+/// Emit a notification to `sink` if the elapsed time meets or exceeds
+/// `threshold`, `method` is not `Off`, and `gate` allows the payload's
+/// category.
+///
+/// This variant takes a `W: Write` sink and an explicit gate for
+/// testability; production callers go through [`notify_done`], which
+/// loads the installed process-wide gate.
 pub fn notify_done_to<W: Write>(
     method: Method,
     in_tmux: bool,
     payload: &NotificationPayload,
     threshold: Duration,
     elapsed: Duration,
+    gate: NotificationGate,
     sink: &mut W,
 ) {
     if elapsed < threshold {
         return;
     }
+    if method == Method::Off {
+        return;
+    }
+    if !gate.allows(payload.kind()) {
+        tracing::debug!(
+            kind = ?payload.kind(),
+            quiet = gate.quiet,
+            "notification suppressed by [notifications] gate"
+        );
+        return;
+    }
     let effective = match method {
-        Method::Off => return,
+        Method::Off => unreachable!("Method::Off returned before gate evaluation"),
         Method::Auto => resolve_method(),
         other => other,
     };
@@ -280,6 +421,7 @@ pub fn notify_done(
         payload,
         threshold,
         elapsed,
+        current_notification_gate(),
         &mut io::stdout(),
     );
 }
@@ -775,6 +917,9 @@ use crate::tui::app::App;
 /// `Off`).
 pub fn settings(config: &crate::config::Config) -> Option<(Method, Duration, bool)> {
     let notif = config.notifications_config();
+    // Install the category/quiet gate (#5041) so `notify_done` honors
+    // `[notifications].quiet` and `[notifications.events]`.
+    install_notification_gate(NotificationGate::from_config(&notif));
     // Initialize completion sound mode from config.
     set_completion_sound(notif.completion_sound, notif.sound_file);
     // Initialize the opt-in event-sound policy (#4817) from the sibling
@@ -870,6 +1015,35 @@ pub fn subagent_terminal_payload(
     let preview = result_line.and_then(text_summary);
 
     NotificationPayload::subagent_terminal(&headline, id).with_preview(preview.as_deref())
+}
+
+/// Action-first approval banner (#5041): leads with the decision the user
+/// must make and names the tool it concerns. The tool *description* — the
+/// pending command — intentionally stays in the terminal (#4834).
+#[must_use]
+pub fn approval_needed_payload(tool_name: &str) -> NotificationPayload {
+    NotificationPayload::approval_needed(
+        &format!("Approve or deny '{tool_name}' to continue"),
+        tool_name,
+    )
+}
+
+/// Action-first blocked-on-input banner (#5041): says what to do and
+/// where. The question text itself never leaves the terminal (#4834).
+#[must_use]
+pub fn input_needed_payload() -> NotificationPayload {
+    NotificationPayload::input_needed("Answer the question in the terminal to continue")
+}
+
+/// Action-first sandbox-elevation banner (#5041): leads with the decision
+/// and names the blocked tool; the denial reason rides in the body.
+#[must_use]
+pub fn elevation_needed_payload(tool_name: &str, denial_reason: &str) -> NotificationPayload {
+    NotificationPayload::elevation_needed(
+        &format!("Allow or deny elevated access for '{tool_name}'"),
+        tool_name,
+        denial_reason,
+    )
 }
 
 fn completion_status(
@@ -990,6 +1164,20 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    struct NotificationGateRestore(NotificationGate);
+
+    impl NotificationGateRestore {
+        fn capture() -> Self {
+            Self(current_notification_gate())
+        }
+    }
+
+    impl Drop for NotificationGateRestore {
+        fn drop(&mut self) {
+            install_notification_gate(self.0);
+        }
+    }
+
     /// Escape-protocol tests care about the bytes, not the composition
     /// policy, so they go through the least-privileged constructor.
     fn capture(
@@ -1006,9 +1194,156 @@ mod tests {
             &NotificationPayload::input_needed(msg),
             Duration::from_secs(threshold_secs),
             Duration::from_secs(elapsed_secs),
+            NotificationGate::default(),
             &mut buf,
         );
         buf
+    }
+
+    /// Emit `payload` through OSC 9 under an explicit `gate`, returning the
+    /// bytes. The gate is passed by value, so these tests never touch the
+    /// process-wide gate and cannot race the other capture tests.
+    fn capture_gated(payload: &NotificationPayload, gate: NotificationGate) -> Vec<u8> {
+        let mut buf = Vec::new();
+        notify_done_to(
+            Method::Osc9,
+            false,
+            payload,
+            Duration::ZERO,
+            Duration::from_secs(1),
+            gate,
+            &mut buf,
+        );
+        buf
+    }
+
+    #[test]
+    fn gate_defaults_allow_every_kind() {
+        let gate = NotificationGate::default();
+        for kind in [
+            NotificationKind::TurnComplete,
+            NotificationKind::SubagentTerminal,
+            NotificationKind::ApprovalNeeded,
+            NotificationKind::InputNeeded,
+            NotificationKind::ElevationNeeded,
+            NotificationKind::ModelNotify,
+        ] {
+            assert!(gate.allows(kind), "default gate must allow {kind:?}");
+        }
+    }
+
+    #[test]
+    fn quiet_gate_suppresses_every_kind() {
+        let gate = NotificationGate {
+            quiet: true,
+            ..NotificationGate::default()
+        };
+        for kind in [
+            NotificationKind::TurnComplete,
+            NotificationKind::SubagentTerminal,
+            NotificationKind::ApprovalNeeded,
+            NotificationKind::InputNeeded,
+            NotificationKind::ElevationNeeded,
+            NotificationKind::ModelNotify,
+        ] {
+            assert!(!gate.allows(kind), "quiet gate must suppress {kind:?}");
+        }
+    }
+
+    #[test]
+    fn disabled_category_suppresses_only_that_kind() {
+        let gate = NotificationGate {
+            approval_needed: false,
+            ..NotificationGate::default()
+        };
+        assert!(!gate.allows(NotificationKind::ApprovalNeeded));
+        assert!(gate.allows(NotificationKind::TurnComplete));
+        assert!(gate.allows(NotificationKind::InputNeeded));
+        assert!(gate.allows(NotificationKind::ModelNotify));
+    }
+
+    #[test]
+    fn gate_bits_roundtrip_and_default_constant_agree() {
+        assert_eq!(NotificationGate::default().to_bits(), GATE_DEFAULT_BITS);
+        let odd = NotificationGate {
+            quiet: true,
+            turn_complete: false,
+            subagent_terminal: true,
+            approval_needed: false,
+            input_needed: true,
+            elevation_needed: false,
+            model_notify: true,
+        };
+        assert_eq!(NotificationGate::from_bits(odd.to_bits()), odd);
+    }
+
+    /// The gate acts on the emission path itself: a suppressed category
+    /// produces zero bytes on every protocol entry point, not just a
+    /// filtered list somewhere upstream.
+    #[test]
+    fn gated_emission_produces_no_bytes() {
+        let payload = approval_needed_payload("bash");
+
+        let quiet = NotificationGate {
+            quiet: true,
+            ..NotificationGate::default()
+        };
+        assert!(capture_gated(&payload, quiet).is_empty());
+
+        let no_approvals = NotificationGate {
+            approval_needed: false,
+            ..NotificationGate::default()
+        };
+        assert!(capture_gated(&payload, no_approvals).is_empty());
+
+        let out = capture_gated(&payload, NotificationGate::default());
+        assert!(!out.is_empty(), "enabled category must still emit");
+    }
+
+    /// `settings()` is the single place config reaches the emission path;
+    /// it must install the configured gate for `notify_done` to load.
+    #[test]
+    fn settings_installs_gate_from_config() {
+        let _lock = env_lock();
+        let _gate_restore = NotificationGateRestore::capture();
+        let config: crate::config::Config = toml::from_str(
+            r#"
+            [notifications]
+            quiet = true
+
+            [notifications.events]
+            approval-needed = false
+            "#,
+        )
+        .expect("gated notifications config should parse");
+
+        let _ = settings(&config);
+
+        let gate = current_notification_gate();
+        assert!(gate.quiet);
+        assert!(!gate.approval_needed);
+        assert!(gate.turn_complete);
+    }
+
+    /// #5041 copy contract: interactive banners lead with the action and
+    /// name the subject, instead of a bare "Approval needed".
+    #[test]
+    fn interactive_banners_are_action_first_and_name_the_subject() {
+        let approval = approval_needed_payload("bash");
+        assert_eq!(approval.headline(), "Approve or deny 'bash' to continue");
+
+        let input = input_needed_payload();
+        assert_eq!(
+            input.headline(),
+            "Answer the question in the terminal to continue"
+        );
+
+        let elevation = elevation_needed_payload("bash", "network blocked");
+        assert_eq!(
+            elevation.headline(),
+            "Allow or deny elevated access for 'bash'"
+        );
+        assert!(elevation.body().contains("network blocked"));
     }
 
     #[test]

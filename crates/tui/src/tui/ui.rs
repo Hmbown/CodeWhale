@@ -4823,10 +4823,10 @@ async fn run_event_loop(
                                     // pending command. It stays in the
                                     // terminal, where the user can read it
                                     // in context; the banner names only the
-                                    // tool.
+                                    // tool. Copy is centralized (#5041) so
+                                    // the action-first phrasing is tested.
                                     let payload =
-                                        crate::tui::notifications::NotificationPayload::approval_needed(
-                                            "Approval needed",
+                                        crate::tui::notifications::approval_needed_payload(
                                             &tool_name,
                                         );
                                     crate::tui::notifications::notify_done(
@@ -4888,10 +4888,7 @@ async fn run_event_loop(
                                 crate::tui::notifications::settings(config)
                             {
                                 let in_tmux = std::env::var("TMUX").is_ok_and(|v| !v.is_empty());
-                                let payload =
-                                    crate::tui::notifications::NotificationPayload::input_needed(
-                                        "Action required: please respond in the terminal",
-                                    );
+                                let payload = crate::tui::notifications::input_needed_payload();
                                 crate::tui::notifications::notify_done(
                                     method,
                                     in_tmux,
@@ -4957,12 +4954,10 @@ async fn run_event_loop(
                                 crate::tui::notifications::settings(config)
                             {
                                 let in_tmux = std::env::var("TMUX").is_ok_and(|v| !v.is_empty());
-                                let payload =
-                                    crate::tui::notifications::NotificationPayload::elevation_needed(
-                                        "Sandbox blocked a tool",
-                                        &tool_name,
-                                        &denial_reason,
-                                    );
+                                let payload = crate::tui::notifications::elevation_needed_payload(
+                                    &tool_name,
+                                    &denial_reason,
+                                );
                                 crate::tui::notifications::notify_done(
                                     method,
                                     in_tmux,

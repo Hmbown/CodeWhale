@@ -1684,6 +1684,68 @@ pub struct NotificationsConfig {
     /// Disabled by default; see `tui::sound_policy` for the decision rules.
     #[serde(default)]
     pub event_sound: EventSoundConfig,
+
+    /// Quiet mode: suppress every desktop notification (all categories, all
+    /// delivery methods) and the paired `[notifications.event_sound]` cues,
+    /// without editing `method` or the per-category switches under
+    /// `[notifications.events]`. The turn-completion chime
+    /// (`completion_sound`) is governed separately. Default: `false`.
+    #[serde(default)]
+    pub quiet: bool,
+
+    /// Per-category desktop-notification switches
+    /// (`[notifications.events]`). Every category defaults to enabled; set
+    /// one to `false` to silence that event kind without touching the rest.
+    #[serde(default)]
+    pub events: NotificationEventsConfig,
+}
+
+fn default_notification_event_enabled() -> bool {
+    true
+}
+
+/// Per-category desktop-notification switches (`[notifications.events]`).
+///
+/// Categories mirror the closed set of notification kinds in
+/// `tui::notification_payload::NotificationKind`. Each defaults to `true`;
+/// a disabled category is suppressed across every delivery mechanism
+/// (OSC 9, Kitty OSC 99, Ghostty OSC 777, BEL, macOS Notification Center).
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct NotificationEventsConfig {
+    /// An agent turn finished successfully. Default: `true`.
+    #[serde(default = "default_notification_event_enabled")]
+    pub turn_complete: bool,
+    /// A sub-agent reached a terminal status. Default: `true`.
+    #[serde(default = "default_notification_event_enabled")]
+    pub subagent_terminal: bool,
+    /// A tool call is blocked waiting for approval. Default: `true`.
+    #[serde(default = "default_notification_event_enabled")]
+    pub approval_needed: bool,
+    /// The agent asked a question and is blocked on the answer.
+    /// Default: `true`.
+    #[serde(default = "default_notification_event_enabled")]
+    pub input_needed: bool,
+    /// The sandbox denied an operation and the user must decide.
+    /// Default: `true`.
+    #[serde(default = "default_notification_event_enabled")]
+    pub elevation_needed: bool,
+    /// The model called the `notify` tool. Default: `true`.
+    #[serde(default = "default_notification_event_enabled")]
+    pub model_notify: bool,
+}
+
+impl Default for NotificationEventsConfig {
+    fn default() -> Self {
+        Self {
+            turn_complete: true,
+            subagent_terminal: true,
+            approval_needed: true,
+            input_needed: true,
+            elevation_needed: true,
+            model_notify: true,
+        }
+    }
 }
 
 fn default_event_sound_events() -> Vec<String> {
