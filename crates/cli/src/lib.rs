@@ -2019,7 +2019,6 @@ fn run_logout_command_with_secrets_unlocked(
     secrets: &Secrets,
 ) -> Result<()> {
     let original_config = store.config.clone();
-    let active_provider = store.config.provider;
     store.config.api_key = None;
     for provider in ProviderKind::ALL {
         clear_provider_api_key_from_config(store, provider);
@@ -2037,8 +2036,16 @@ fn run_logout_command_with_secrets_unlocked(
         store.config = original_config;
         return Err(error);
     }
-    clear_provider_api_key_from_keyring(secrets, active_provider);
-    println!("logged out");
+    let keyring_failures = clear_all_provider_api_keys_from_keyring(secrets);
+    if keyring_failures.is_empty() {
+        println!("logged out");
+    } else {
+        eprintln!(
+            "failed to delete stored credentials for: {}",
+            keyring_failures.join(", ")
+        );
+        println!("logged out (some stored credentials could not be deleted)");
+    }
     Ok(())
 }
 
@@ -2305,6 +2312,30 @@ fn provider_keyring_set(secrets: &Secrets, provider: ProviderKind) -> bool {
 
 fn clear_provider_api_key_from_keyring(secrets: &Secrets, provider: ProviderKind) {
     let _ = secrets.delete(provider_slot(provider));
+}
+
+/// Delete the keyring credential of every provider that has one stored.
+///
+/// Returns a human-readable entry per slot whose deletion failed, so the
+/// caller can report the failure instead of claiming a clean logout while
+/// credentials linger in the keyring. Slots shared by several providers
+/// (e.g. the historical `siliconflow` slot) are deleted once.
+fn clear_all_provider_api_keys_from_keyring(secrets: &Secrets) -> Vec<String> {
+    let mut failures = Vec::new();
+    let mut cleared_slots = std::collections::HashSet::new();
+    for provider in ProviderKind::ALL {
+        let slot = provider_slot(provider);
+        if !cleared_slots.insert(slot) {
+            continue;
+        }
+        if !provider_keyring_set(secrets, provider) {
+            continue;
+        }
+        if let Err(error) = secrets.delete(slot) {
+            failures.push(format!("{slot}: {error}"));
+        }
+    }
+    failures
 }
 
 fn external_consent(
@@ -7548,6 +7579,43 @@ model = "qwen-2.5-7b"
         assert!(!credentials.join(generation).exists());
         assert!(!credentials.join("xai-auth.json").exists());
         assert!(credentials.join("other-provider.json").exists());
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn logout_clears_keyring_credentials_for_all_providers() {
+        // Logout used to delete the keyring secret only for the *active*
+        // provider, leaving credentials stored under other providers
+        // behind while printing "logged out".
+        let _lock = env_lock();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let home = dir
+            .path()
+            .canonicalize()
+            .expect("canonical temp root")
+            .join("codewhale-home");
+        let _home = ScopedEnvVar::set("CODEWHALE_HOME", &home.to_string_lossy());
+        let path = home.join("config.toml");
+        let mut store = ConfigStore::load(Some(path.clone())).expect("store should load");
+        store.config.provider = ProviderKind::Deepseek;
+
+        let secrets = no_keyring_secrets();
+        secrets
+            .set(provider_slot(ProviderKind::Deepseek), "sk-deepseek")
+            .expect("seed deepseek key");
+        secrets
+            .set(provider_slot(ProviderKind::Fireworks), "fw-stale")
+            .expect("seed fireworks key");
+
+        run_logout_command_with_secrets(&mut store, &secrets).expect("logout should succeed");
+
+        for provider in [ProviderKind::Deepseek, ProviderKind::Fireworks] {
+            assert!(
+                provider_keyring_api_key(&secrets, provider).is_none(),
+                "keyring credential for {provider:?} survived logout"
+            );
+        }
 
         let _ = std::fs::remove_file(path);
     }
