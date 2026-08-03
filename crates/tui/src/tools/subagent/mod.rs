@@ -5848,6 +5848,12 @@ pub struct SubAgentSessionProjection {
     pub timed_out_with_checkpoint: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker_record: Option<AgentWorkerRecord>,
+    /// Fleet roster profile that was resolved for this dispatch, if any.
+    /// Populated on `action=start` receipts; absent for status/peek projections.
+    /// Lets the dispatching model confirm which configured profile each worker
+    /// resolved to before launch (#5046).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fleet_profile: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -6002,6 +6008,7 @@ async fn subagent_session_projection(
         timed_out,
         timed_out_with_checkpoint: timed_out && continuable,
         worker_record,
+        fleet_profile: None,
     }
 }
 
@@ -6683,16 +6690,16 @@ impl ToolSpec for AgentTool {
                 },
                 "profile": {
                     "type": "string",
-                    "description": "Optional Fleet roster member to run this child as (e.g. reviewer, scout, builder, verifier, synthesizer, manager, or a custom member from project .codewhale/agents/, personal $CODEWHALE_HOME/agents/, or [fleet.profiles] config). The member supplies role posture, model routing, instruction overlay, and delegation bounds; explicit type/model/model_strength/max_depth here override the member's defaults. See /fleet."
+                    "description": "Optional Fleet roster member to run this child as (e.g. reviewer, scout, builder, verifier, synthesizer, manager, or a custom member from project .codewhale/agents/, personal $CODEWHALE_HOME/agents/, or [fleet.profiles] config). The member supplies role posture, model routing, instruction overlay, and delegation bounds. Named profiles bind 1:1 to their configured route — 'model' and 'model_strength' are not accepted when a named profile is set. Only 'general' (no profile) permits model and model_strength options. See /fleet."
                 },
                 "model_strength": {
                     "type": "string",
                     "enum": ["same", "faster"],
-                    "description": "Optional child model strength. Children inherit the active model by default. Choose faster explicitly for read-only lookup/search, status, or other low-risk tasks that can use the configured fast sibling. The run receipt is authoritative for the resolved route; no hidden auto-downgrade happens."
+                    "description": "Optional child model strength — general dispatch only (no named profile). Children inherit the active model by default. Choose faster explicitly for read-only lookup/search, status, or other low-risk tasks that can use the configured fast sibling. Not accepted when a named fleet profile is set; named agents use their configured route. The run receipt is authoritative for the resolved route; no hidden auto-downgrade happens."
                 },
                 "model": {
                     "type": "string",
-                    "description": "Optional exact provider model id for the child. Overrides model_strength. Prefer model_strength unless you know the provider-specific id."
+                    "description": "Optional exact provider model id for the child — general dispatch only (no named profile). Overrides model_strength. Not accepted when a named fleet profile is set; named agents use their configured route. Prefer model_strength unless you know the provider-specific id."
                 },
                 "thinking": {
                     "type": "string",
@@ -6878,13 +6885,17 @@ impl ToolSpec for AgentTool {
             .get("verbose")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        let (snapshot, _) =
+        let (snapshot, spawn_metadata) =
             spawn_subagent_from_input(input, self.manager.clone(), self.runtime.clone()).await?;
         let worker_record = {
             let manager = self.manager.read().await;
             manager.get_worker_record(&snapshot.agent_id)
         };
-        let projection = subagent_session_projection(snapshot, false, context, worker_record).await;
+        let mut projection =
+            subagent_session_projection(snapshot, false, context, worker_record).await;
+        // Populate the resolved fleet profile in the spawn receipt so the
+        // dispatching model can confirm which configured profile was used (#5046).
+        projection.fleet_profile = spawn_metadata.resolved_profile;
         let mut value = serde_json::to_value(&projection)
             .map_err(|e| ToolError::execution_failed(e.to_string()))?;
         compact_spawn_receipt(&mut value, verbose);
@@ -10785,6 +10796,35 @@ fn apply_spawn_profile(
             request.agent_type.as_str()
         )));
     }
+
+    // Named fleet profiles bind 1:1 to their configured route (#5046).
+    // The dispatching model cannot vary the model or model_strength for a named
+    // profile — only 'general' exposes those options. This prevents the model
+    // from composing invalid states (e.g. cloning the operator's model five
+    // times, or binding the wrong wire protocol for a profile's model).
+    let is_general_slot = matches!(member.profile.slot, codewhale_config::FleetSlot::General);
+    if !is_general_slot {
+        if request.model.is_some() {
+            return Err(ToolError::invalid_input(format!(
+                "fleet profile '{}' binds a pre-configured route; 'model' may not be set for \
+                 named fleet roles. Named agents use exactly their configured model, route, and \
+                 posture — the dispatching model cannot override them. Remove 'model', or dispatch \
+                 without a profile to use 'general' (the only role with model options).",
+                member.id
+            )));
+        }
+        if request.model_strength_explicit {
+            return Err(ToolError::invalid_input(format!(
+                "fleet profile '{}' binds a pre-configured route; 'model_strength' may not be \
+                 set for named fleet roles. Named agents use exactly their configured model, \
+                 route, and posture — the dispatching model cannot override them. Remove \
+                 'model_strength', or dispatch without a profile to use 'general' (the only role \
+                 with model options).",
+                member.id
+            )));
+        }
+    }
+
     request.agent_type = member_type;
     // Record the canonical profile id after role→profile resolution.
     request.profile = Some(member.id.clone());
