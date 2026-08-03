@@ -325,6 +325,13 @@ impl HookDispatcher {
         self.sinks.push(sink);
     }
 
+    /// Number of registered sinks. Exposed so transport setup can assert
+    /// exactly which sinks were wired (e.g. no stdout sink in stdio mode).
+    #[must_use]
+    pub fn sink_count(&self) -> usize {
+        self.sinks.len()
+    }
+
     /// Broadcast an event to every registered sink.
     ///
     /// Errors from individual sinks are silently discarded so that one failing

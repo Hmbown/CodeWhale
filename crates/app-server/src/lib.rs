@@ -297,7 +297,7 @@ fn app_router(state: AppState, cors_origins: &[String]) -> Router {
 }
 
 pub async fn run_stdio(config_path: Option<PathBuf>) -> Result<()> {
-    let state = build_state(config_path, None)?;
+    let state = build_state_with_transport(config_path, None, AppTransport::Stdio)?;
     let reader = BufReader::new(tokio::io::stdin()).lines();
     let writer = tokio::io::BufWriter::new(tokio::io::stdout());
     run_stdio_loop(&state, reader, writer).await
@@ -615,6 +615,14 @@ fn app_response_status(response: &AppResponse) -> StatusCode {
 }
 
 fn build_state(config_path: Option<PathBuf>, auth_token: Option<String>) -> Result<AppState> {
+    build_state_with_transport(config_path, auth_token, AppTransport::Http)
+}
+
+fn build_state_with_transport(
+    config_path: Option<PathBuf>,
+    auth_token: Option<String>,
+    transport: AppTransport,
+) -> Result<AppState> {
     let has_explicit_config_path = config_path.is_some();
     let store = ConfigStore::load(config_path)?;
     let config_path = has_explicit_config_path.then(|| store.path().to_path_buf());
@@ -628,7 +636,12 @@ fn build_state(config_path: Option<PathBuf>, auth_token: Option<String>) -> Resu
     let state_store = StateStore::open(state_db_path)?;
 
     let mut hooks = HookDispatcher::default();
-    hooks.add_sink(Arc::new(StdoutHookSink));
+    // Stdio carries JSON-RPC on stdout: printing raw hook events there
+    // corrupts the protocol stream (#5165). HTTP mode keeps the stdout
+    // sink for local development visibility.
+    if transport == AppTransport::Http {
+        hooks.add_sink(Arc::new(StdoutHookSink));
+    }
     let hook_log_path = config_path
         .as_ref()
         .and_then(|p| p.parent().map(|parent| parent.join("events.jsonl")))
@@ -2013,6 +2026,27 @@ mod tests {
                     .expect("canonical config")
                     .as_path()
             )
+        );
+    }
+
+    #[tokio::test]
+    async fn stdio_transport_never_registers_the_stdout_hook_sink() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config_path = tmp.path().join("config.toml");
+        fs::write(&config_path, "api_key = \"sk-deepseek-secret\"\n").expect("write config");
+
+        let http_state =
+            build_state_with_transport(Some(config_path.clone()), None, AppTransport::Http)
+                .expect("http state");
+        let stdio_state = build_state_with_transport(Some(config_path), None, AppTransport::Stdio)
+            .expect("stdio state");
+
+        let http_sinks = http_state.runtime.read().await.hooks.sink_count();
+        let stdio_sinks = stdio_state.runtime.read().await.hooks.sink_count();
+        assert_eq!(
+            http_sinks,
+            stdio_sinks + 1,
+            "HTTP mode keeps StdoutHookSink + JsonlHookSink; stdio must drop the stdout sink (#5165)"
         );
     }
 
