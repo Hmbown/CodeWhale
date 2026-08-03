@@ -25,10 +25,11 @@ pub(crate) fn summary(locale: Locale, projection: &CoordinationDetailProjection)
 
 #[must_use]
 pub(crate) fn needs_attention(projection: &CoordinationDetailProjection) -> bool {
-    projection
-        .decisions
-        .iter()
-        .any(|decision| decision.status == DecisionStatus::Proposed)
+    !projection.process_lock_held
+        || projection
+            .decisions
+            .iter()
+            .any(|decision| decision.status == DecisionStatus::Proposed)
         || projection
             .reconciliations
             .iter()
@@ -57,6 +58,13 @@ pub(crate) fn format(locale: Locale, projection: &CoordinationDetailProjection) 
         tr(locale, MessageId::CoordinationPerSectionLimit)
             .replace("{limit}", &projection.limit.to_string())
     );
+    if !projection.process_lock_held {
+        let note = projection
+            .process_lock_note
+            .as_deref()
+            .unwrap_or("another Codewhale process owns this workspace lock");
+        let _ = writeln!(out, "Coordination lock: unavailable — {note}");
+    }
 
     section(
         &mut out,
@@ -344,6 +352,8 @@ mod tests {
             },
             bounded: true,
             limit: 24,
+            process_lock_held: true,
+            process_lock_note: None,
         }
     }
 

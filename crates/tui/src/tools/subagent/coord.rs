@@ -1553,6 +1553,20 @@ pub struct CoordinationDetailProjection {
     pub metrics: CoordinationDetailMetrics,
     pub bounded: bool,
     pub limit: usize,
+    /// Whether this process currently holds the workspace coordination flock.
+    /// When false, durable ledger writes are skipped and the UI must say so —
+    /// a counter must never tick on a turn the engine has already settled.
+    #[serde(default = "default_process_lock_held")]
+    pub process_lock_held: bool,
+    /// Human-readable reason when [`Self::process_lock_held`] is false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_lock_note: Option<String>,
+}
+
+fn default_process_lock_held() -> bool {
+    // Legacy projections (tests, older sessions) assume the lock is held so
+    // they do not spuriously light the unavailable banner.
+    true
 }
 
 /// Durable, bounded coordination state owned by `SubAgentManager`.

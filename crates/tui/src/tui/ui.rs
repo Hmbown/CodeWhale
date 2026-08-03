@@ -7539,6 +7539,30 @@ fn apply_coordination_detail_projection(
     app: &mut App,
     projection: crate::tools::subagent::CoordinationDetailProjection,
 ) {
+    // §2.6: when this process does not own the workspace coordination flock,
+    // say so on the sticky status strip. A silent "running (543s)" row on a
+    // settled turn is a lie; surface the lock loss the same way we surface
+    // other session hazards.
+    if !projection.process_lock_held {
+        let note = projection
+            .process_lock_note
+            .as_deref()
+            .unwrap_or("another Codewhale process owns delegated coordination for this workspace");
+        let message = format!(
+            "Delegated coordination unavailable — {note}. Job rows still settle locally; durable fleet state is owned elsewhere."
+        );
+        let already = app
+            .sticky_status
+            .as_ref()
+            .is_some_and(|toast| toast.text.contains("Delegated coordination unavailable"));
+        if !already {
+            app.set_sticky_status(
+                message,
+                crate::tui::app::StatusToastLevel::Warning,
+                Some(30_000),
+            );
+        }
+    }
     app.coordination_detail = Some(projection);
 }
 

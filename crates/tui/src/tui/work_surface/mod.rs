@@ -255,6 +255,8 @@ mod tests {
             },
             bounded: true,
             limit: 24,
+            process_lock_held: true,
+            process_lock_note: None,
         });
 
         let rows = super::model::project(&mut app);
@@ -327,6 +329,8 @@ mod tests {
             },
             bounded: true,
             limit: 24,
+            process_lock_held: true,
+            process_lock_note: None,
         });
 
         let rows = super::model::project(&mut app);
@@ -365,6 +369,8 @@ mod tests {
             },
             bounded: true,
             limit: 24,
+            process_lock_held: true,
+            process_lock_note: None,
         });
 
         let rows = super::model::project(&mut app);
@@ -417,6 +423,8 @@ mod tests {
             },
             bounded: true,
             limit: 24,
+            process_lock_held: true,
+            process_lock_note: None,
         });
 
         let rows = super::model::project(&mut app);
