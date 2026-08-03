@@ -10759,7 +10759,6 @@ fn context_usage_cache_tracks_append_and_compaction_lengths() {
     app.api_messages.truncate(1);
     context_usage_snapshot(&app).expect("context usage should be available");
     assert_eq!(app.context_token_cache.borrow().message_tokens.len(), 1);
-
 }
 
 #[test]
