@@ -1207,6 +1207,260 @@ async fn mcp_tools_endpoint_is_passive_until_connect_requested() -> Result<()> {
 }
 
 #[tokio::test]
+async fn mcp_server_management_crud() -> Result<()> {
+    let root =
+        std::env::temp_dir().join(format!("codewhale-mcp-mgmt-{}", Uuid::new_v4()));
+    let sessions_dir = root.join("sessions");
+    fs::create_dir_all(&root)?;
+
+    let Some((addr, _runtime_threads, handle)) =
+        spawn_test_server_with_root(root.clone(), sessions_dir).await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+    let base = format!("http://{addr}/v1/apps/mcp/servers");
+
+    // 1. Create a new server.
+    let created: serde_json::Value = client
+        .post(&base)
+        .json(&serde_json::json!({
+            "name": "test-stdio",
+            "command": "echo",
+            "args": ["hello"],
+        }))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(created["name"], "test-stdio");
+    assert_eq!(created["enabled"], true);
+    assert_eq!(created["command"], "echo");
+
+    // 2. GET the server back — config should be on disk.
+    let fetched: serde_json::Value = client
+        .get(format!("{base}/test-stdio"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(fetched["name"], "test-stdio");
+    assert_eq!(fetched["command"], "echo");
+
+    // 3. Duplicate create returns 409 Conflict.
+    let conflict = client
+        .post(&base)
+        .json(&serde_json::json!({
+            "name": "test-stdio",
+            "command": "echo",
+        }))
+        .send()
+        .await?;
+    assert_eq!(conflict.status(), 409);
+
+    // 4. PATCH (update) the server.
+    let updated: serde_json::Value = client
+        .patch(format!("{base}/test-stdio"))
+        .json(&serde_json::json!({
+            "args": ["updated"],
+            "required": true,
+        }))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(updated["required"], true);
+    assert_eq!(updated["args"][0], "updated");
+
+    // 5. Disable the server.
+    let disabled: serde_json::Value = client
+        .post(format!("{base}/test-stdio/disable"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(disabled["action"], "disabled");
+    assert_eq!(disabled["ok"], true);
+
+    // Verify disabled state via GET.
+    let after_disable: serde_json::Value = client
+        .get(format!("{base}/test-stdio"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(after_disable["enabled"], false);
+
+    // 6. Re-enable the server.
+    let enabled: serde_json::Value = client
+        .post(format!("{base}/test-stdio/enable"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(enabled["action"], "enabled");
+    assert_eq!(enabled["ok"], true);
+
+    // 7. Reconnect (schedules a reconnect — no live pool present so always succeeds).
+    let reconnected: serde_json::Value = client
+        .post(format!("{base}/test-stdio/reconnect"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(reconnected["action"], "reconnect_scheduled");
+    assert_eq!(reconnected["ok"], true);
+
+    // 8. Delete the server.
+    let deleted: serde_json::Value = client
+        .delete(format!("{base}/test-stdio"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(deleted["action"], "deleted");
+    assert_eq!(deleted["ok"], true);
+
+    // 9. GET after delete returns 404.
+    let not_found = client
+        .get(format!("{base}/test-stdio"))
+        .send()
+        .await?;
+    assert_eq!(not_found.status(), 404);
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_server_management_create_requires_command_or_url() -> Result<()> {
+    let root = std::env::temp_dir().join(format!(
+        "codewhale-mcp-mgmt-validation-{}",
+        Uuid::new_v4()
+    ));
+    let sessions_dir = root.join("sessions");
+    fs::create_dir_all(&root)?;
+
+    let Some((addr, _runtime_threads, handle)) =
+        spawn_test_server_with_root(root.clone(), sessions_dir).await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    // Missing both command and url → 400.
+    let resp = client
+        .post(format!("http://{addr}/v1/apps/mcp/servers"))
+        .json(&serde_json::json!({ "name": "bad-server" }))
+        .send()
+        .await?;
+    assert_eq!(resp.status(), 400);
+
+    // Missing name → 400.
+    let resp = client
+        .post(format!("http://{addr}/v1/apps/mcp/servers"))
+        .json(&serde_json::json!({ "command": "echo" }))
+        .send()
+        .await?;
+    assert_eq!(resp.status(), 400);
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_server_management_redacts_credentials() -> Result<()> {
+    let root = std::env::temp_dir().join(format!(
+        "codewhale-mcp-mgmt-redact-{}",
+        Uuid::new_v4()
+    ));
+    let sessions_dir = root.join("sessions");
+    fs::create_dir_all(&root)?;
+
+    let Some((addr, _runtime_threads, handle)) =
+        spawn_test_server_with_root(root.clone(), sessions_dir).await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+    let base = format!("http://{addr}/v1/apps/mcp/servers");
+
+    // Create a server with sensitive fields.
+    let created: serde_json::Value = client
+        .post(&base)
+        .json(&serde_json::json!({
+            "name": "secret-server",
+            "url": "https://example.com/mcp",
+            "env_headers": { "Authorization": "MY_SECRET_ENV_VAR" },
+            "bearer_token_env_var": "MY_BEARER_ENV",
+        }))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+
+    // The response must NOT contain the actual header value or env variable value.
+    assert!(
+        !created.to_string().contains("MY_SECRET_ENV_VAR_VALUE"),
+        "credential values must be redacted from API responses"
+    );
+    // env_header_keys should list the header name (not the env-var value).
+    assert_eq!(
+        created["env_header_keys"]
+            .as_array()
+            .map(|a| a.iter().any(|v| v.as_str() == Some("Authorization"))),
+        Some(true),
+        "env_header_keys should list header names"
+    );
+    // has_bearer_token_env_var should be true, not the env var name.
+    assert_eq!(created["has_bearer_token_env_var"], true);
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn runtime_info_advertises_mcp_server_management() -> Result<()> {
+    let root = std::env::temp_dir().join(format!(
+        "codewhale-mcp-capability-{}",
+        Uuid::new_v4()
+    ));
+    let sessions_dir = root.join("sessions");
+    let Some((addr, _runtime_threads, handle)) =
+        spawn_test_server_with_root(root, sessions_dir).await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let info: serde_json::Value = client
+        .get(format!("http://{addr}/v1/runtime/info"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+
+    assert_eq!(
+        info["capabilities"]["mcp_server_management"],
+        true,
+        "runtime/info must advertise mcp_server_management capability"
+    );
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
 async fn runtime_token_guard_protects_v1_routes() -> Result<()> {
     let root = std::env::temp_dir().join(format!("deepseek-runtime-api-{}", Uuid::new_v4()));
     let sessions_dir = root.join("sessions");
