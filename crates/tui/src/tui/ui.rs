@@ -46,9 +46,7 @@ use tracing;
 use windows::Win32::System::Console::{GetConsoleMode, GetStdHandle, SetConsoleMode};
 
 use crate::audit::log_sensitive_event;
-use crate::automation_manager::{
-    AutomationManager, AutomationSchedulerConfig, AutomationStatus, spawn_scheduler,
-};
+use crate::automation_manager::{AutomationManager, AutomationSchedulerConfig, spawn_scheduler};
 use crate::client::{
     CacheWarmupKey, DeepSeekClient, PromptInspection, build_cache_warmup_request,
     inspect_prompt_for_request,
@@ -2697,7 +2695,6 @@ async fn refresh_active_task_panel(app: &mut App, task_manager: &SharedTaskManag
         );
     changed || tip_shown
 }
-
 
 fn newly_completed_id<'a>(
     previously_active_ids: HashSet<&'a str>,
