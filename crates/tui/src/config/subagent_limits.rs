@@ -20,17 +20,20 @@ pub const MAX_SUBAGENTS: usize = 128;
 /// opt into large bounded populations without unbounded queue growth.
 pub const MAX_SUBAGENT_ADMISSION: usize = 1024;
 /// Default per-step DeepSeek API timeout for sub-agent requests, in seconds.
-/// Matches the legacy hardcoded value so existing configs keep their old
-/// behavior when `[subagents] api_timeout_secs` is unset (#1806, #1808).
-pub const DEFAULT_SUBAGENT_API_TIMEOUT_SECS: u64 = 120;
+/// Raised from the legacy 120s: a live-but-slow reasoning call routinely
+/// outlasts two minutes, and a timed-out attempt is now retried with backoff
+/// before the step interrupts, so the default should only trip on genuinely
+/// stuck calls (FINISH-0.9.4 entry #40). Applies when `[subagents]
+/// api_timeout_secs` is unset (#1806, #1808).
+pub const DEFAULT_SUBAGENT_API_TIMEOUT_SECS: u64 = 600;
 /// Minimum accepted `[subagents] api_timeout_secs`. Anything lower (including
 /// `0`, which would otherwise produce an immediate timeout footgun) clamps
 /// up to this value before the runtime sees it.
 pub const MIN_SUBAGENT_API_TIMEOUT_SECS: u64 = 1;
-/// Maximum accepted `[subagents] api_timeout_secs` (30 minutes). The cap
+/// Maximum accepted `[subagents] api_timeout_secs` (60 minutes). The cap
 /// keeps a misconfigured per-step timeout from masking real model/network
 /// hangs forever.
-pub const MAX_SUBAGENT_API_TIMEOUT_SECS: u64 = 1800;
+pub const MAX_SUBAGENT_API_TIMEOUT_SECS: u64 = 3600;
 /// Default wall-clock interval without manager-visible sub-agent progress
 /// before a running child can be auto-cancelled to release its slot (#2614).
 pub const DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT_SECS: u64 = 300;

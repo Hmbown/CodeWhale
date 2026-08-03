@@ -362,7 +362,7 @@ pub struct EngineConfig {
     /// Optional DuckDuckGo-compatible HTML endpoint override.
     pub search_base_url: Option<String>,
     /// Per-step DeepSeek API timeout for sub-agent `create_message` requests.
-    /// Resolved from `[subagents] api_timeout_secs` (clamped to 1..=1800)
+    /// Resolved from `[subagents] api_timeout_secs` (clamped to 1..=3600)
     /// once at engine construction, then threaded onto every
     /// `SubAgentRuntime` the engine builds (#1806, #1808).
     pub subagent_api_timeout: Duration,

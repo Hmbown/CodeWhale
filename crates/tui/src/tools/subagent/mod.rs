@@ -270,12 +270,30 @@ const SUBAGENT_RESPONSE_MAX_TOKENS: u32 = 16_384;
 const MAX_CONSECUTIVE_TRUNCATED_SUBAGENT_RESPONSES: u32 = 5;
 const SUBAGENT_TRANSIENT_PROVIDER_MAX_RETRIES: u32 = 2;
 const SUBAGENT_TRANSIENT_PROVIDER_INITIAL_BACKOFF: Duration = Duration::from_millis(250);
+/// Per-step API-call timeout retry budget. A `create_message` call that
+/// exceeds `step_api_timeout` is re-issued up to this many times (with
+/// exponential backoff) before the step is interrupted with a preserved
+/// checkpoint. Dogfooding showed a single 120s stall wiping out every child
+/// in a fan-out one by one even though the provider call was live-but-slow,
+/// so a timeout now gets the same retry dignity as a transient provider
+/// error (kimi-code comparison, FINISH-0.9.4 entry #40).
+const SUBAGENT_API_TIMEOUT_MAX_RETRIES: u32 = 5;
+/// Initial backoff for a timed-out per-step API call; doubles per retry and
+/// is capped at [`SUBAGENT_API_TIMEOUT_MAX_BACKOFF`].
+const SUBAGENT_API_TIMEOUT_INITIAL_BACKOFF: Duration = Duration::from_secs(1);
+/// Cap for the per-step API-call timeout backoff.
+const SUBAGENT_API_TIMEOUT_MAX_BACKOFF: Duration = Duration::from_secs(30);
+/// Jitter applied to the timeout backoff (0.2 = ±20%) so a fan-out of
+/// children that all time out together does not re-fire in lockstep.
+const SUBAGENT_API_TIMEOUT_BACKOFF_JITTER_FACTOR: f64 = 0.2;
 /// Per-step LLM API call timeout. Each `create_message` request must complete
-/// within this window or the step is treated as timed out. Prevents a single
-/// stuck API call from blocking the sub-agent indefinitely.
+/// within this window or the attempt is treated as timed out (and retried up
+/// to [`SUBAGENT_API_TIMEOUT_MAX_RETRIES`] times before interrupting the
+/// step). Prevents a single stuck API call from blocking the sub-agent
+/// indefinitely.
 /// Legacy fallback for the per-step DeepSeek API timeout. The active timeout
 /// now travels on `SubAgentRuntime::step_api_timeout` so users can override
-/// it via `[subagents] api_timeout_secs` in `~/.deepseek/config.toml`. The
+/// it via `[subagents] api_timeout_secs` in `~/.codewhale/config.toml`. The
 /// constant only exists for tests/stub runtimes that need a hard-coded
 /// default; production runtimes set the field explicitly (#1806, #1808).
 const DEFAULT_STEP_API_TIMEOUT: Duration =
@@ -2082,11 +2100,16 @@ pub struct SubAgentRuntime {
     /// The parent's MCP pool if available.
     pub mcp_pool: Option<std::sync::Arc<tokio::sync::Mutex<crate::mcp::McpPool>>>,
     /// Per-step DeepSeek API timeout for the child's `create_message` call.
-    /// Resolved from `[subagents] api_timeout_secs` (clamped to 1..=1800) at
+    /// Resolved from `[subagents] api_timeout_secs` (clamped to 1..=3600) at
     /// engine construction so a slow but legitimate model turn does not
     /// false-timeout the child mid-thinking. `child_runtime()` and
     /// `background_runtime()` preserve the parent's value (#1806, #1808).
     pub step_api_timeout: Duration,
+    /// Initial backoff between timed-out `create_message` retries. Defaults
+    /// to [`SUBAGENT_API_TIMEOUT_INITIAL_BACKOFF`]; tests shrink it so the
+    /// timeout-retry path runs in milliseconds. `child_runtime()` preserves
+    /// the parent's value.
+    pub(crate) api_timeout_retry_base_backoff: Duration,
     /// Wall-clock budget for a single tool execution within a sub-agent step.
     /// Defaults to `DEFAULT_TOOL_TIMEOUT`; the engine may override it so a long
     /// but legitimate tool run is not killed mid-flight. `child_runtime()`
@@ -2158,6 +2181,7 @@ impl SubAgentRuntime {
             fork_context: None,
             mcp_pool: None,
             step_api_timeout: DEFAULT_STEP_API_TIMEOUT,
+            api_timeout_retry_base_backoff: SUBAGENT_API_TIMEOUT_INITIAL_BACKOFF,
             tool_timeout: DEFAULT_TOOL_TIMEOUT,
             speech_output_dir: None,
             todos: crate::tools::todo::new_shared_todo_list(),
@@ -2210,10 +2234,19 @@ impl SubAgentRuntime {
     /// Override the per-step DeepSeek API timeout (default
     /// `DEFAULT_STEP_API_TIMEOUT`). Called by the engine after reading
     /// `[subagents] api_timeout_secs`. Tests may use this to fail fast
-    /// without waiting the legacy 120 seconds (#1806, #1808).
+    /// without waiting the default 600 seconds (#1806, #1808).
     #[must_use]
     pub fn with_step_api_timeout(mut self, timeout: Duration) -> Self {
         self.step_api_timeout = timeout;
+        self
+    }
+
+    /// Shrink the timeout-retry backoff so tests covering the retry path do
+    /// not wait out the production 1s..=30s backoff sequence.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_api_timeout_retry_base_backoff(mut self, backoff: Duration) -> Self {
+        self.api_timeout_retry_base_backoff = backoff;
         self
     }
 
@@ -2428,6 +2461,7 @@ impl SubAgentRuntime {
             fork_context: self.fork_context.clone(),
             mcp_pool: self.mcp_pool.clone(),
             step_api_timeout: self.step_api_timeout,
+            api_timeout_retry_base_backoff: self.api_timeout_retry_base_backoff,
             tool_timeout: self.tool_timeout,
             speech_output_dir: self.speech_output_dir.clone(),
             // #4810: every spawned agent owns its todo list. Cloning the
@@ -8814,6 +8848,32 @@ fn subagent_transient_provider_retry_delay(retry_number: u32) -> Duration {
     SUBAGENT_TRANSIENT_PROVIDER_INITIAL_BACKOFF.saturating_mul(multiplier.min(4))
 }
 
+/// Deterministic exponential backoff for a timed-out per-step API call
+/// (`retry_number` is 1-based): `initial_backoff`, ×2, ×4, …, capped at
+/// [`SUBAGENT_API_TIMEOUT_MAX_BACKOFF`].
+fn subagent_api_timeout_retry_base_delay(retry_number: u32, initial_backoff: Duration) -> Duration {
+    let multiplier = 1u32
+        .checked_shl(retry_number.saturating_sub(1))
+        .unwrap_or(u32::MAX);
+    initial_backoff
+        .saturating_mul(multiplier)
+        .min(SUBAGENT_API_TIMEOUT_MAX_BACKOFF)
+}
+
+/// Timeout retry backoff with ±20% jitter (UUID v4 entropy, the same idiom
+/// as `llm_client::RetryConfig::delay_for_attempt`) so a fan-out of children
+/// whose calls all time out together does not re-fire in lockstep.
+fn subagent_api_timeout_retry_delay(retry_number: u32, initial_backoff: Duration) -> Duration {
+    let base = subagent_api_timeout_retry_base_delay(retry_number, initial_backoff);
+    let bytes = *Uuid::new_v4().as_bytes();
+    let sample = u16::from_le_bytes([bytes[0], bytes[1]]);
+    let random_factor = f64::from(sample) / f64::from(u16::MAX); // 0.0 to 1.0
+    let jitter = base.as_secs_f64()
+        * SUBAGENT_API_TIMEOUT_BACKOFF_JITTER_FACTOR
+        * (2.0 * random_factor - 1.0); // -20% to +20%
+    Duration::from_secs_f64((base.as_secs_f64() + jitter).max(0.0))
+}
+
 #[derive(Debug, Clone, Copy)]
 struct RetryableSubAgentProviderFailure {
     label: &'static str,
@@ -8898,6 +8958,7 @@ async fn request_subagent_model_response_with_retries(
     SubAgentApiRequestFailure,
 > {
     let mut transient_failures = 0u32;
+    let mut timeout_failures = 0u32;
 
     loop {
         // Billing time is the immutable wire-dispatch boundary, not worker
@@ -8948,13 +9009,39 @@ async fn request_subagent_model_response_with_retries(
                 tokio::time::sleep(delay).await;
             }
             Err(_) => {
-                return Err(SubAgentApiRequestFailure::Interrupted {
-                    reason: format!(
-                        "API call timed out after {}ms; checkpoint preserved for continuation",
-                        runtime.step_api_timeout.as_millis()
+                // A wall-clock timeout is usually a live-but-slow provider
+                // call, not a dead one: retry with backoff like the transient
+                // path before giving up the step (FINISH-0.9.4 entry #40).
+                if timeout_failures >= SUBAGENT_API_TIMEOUT_MAX_RETRIES {
+                    let attempts = timeout_failures.saturating_add(1);
+                    return Err(SubAgentApiRequestFailure::Interrupted {
+                        reason: format!(
+                            "API call timed out after {}ms on {attempts} API attempt(s); checkpoint preserved for continuation",
+                            runtime.step_api_timeout.as_millis()
+                        ),
+                        checkpoint_reason: "api_timeout",
+                    });
+                }
+
+                timeout_failures = timeout_failures.saturating_add(1);
+                let delay = subagent_api_timeout_retry_delay(
+                    timeout_failures,
+                    runtime.api_timeout_retry_base_backoff,
+                );
+                record_agent_progress(
+                    runtime,
+                    agent_id,
+                    AgentProgressEventMeta::new(AgentWorkerStatus::ModelWait).with_step(steps),
+                    format!(
+                        "{}: API call timed out after {}ms; retrying API request {}/{} in {}ms",
+                        format_step_counter(steps, max_steps),
+                        runtime.step_api_timeout.as_millis(),
+                        timeout_failures,
+                        SUBAGENT_API_TIMEOUT_MAX_RETRIES,
+                        delay.as_millis(),
                     ),
-                    checkpoint_reason: "api_timeout",
-                });
+                );
+                tokio::time::sleep(delay).await;
             }
         }
     }
