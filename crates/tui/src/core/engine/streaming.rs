@@ -104,6 +104,30 @@ pub(super) fn should_resume_after_sleep(
     sleep_detected && retry_attempts < MAX_STREAM_RETRIES && !cancelled
 }
 
+/// Decide whether a failed stream should be re-issued after a mid-stream
+/// network drop in a headless host (`exec` / stream-json / app-server), even
+/// though content already streamed.
+///
+/// This extends the #2990 sleep-resume contract to ordinary transport drops
+/// for hosts with no operator watching: the partial assistant fragment has
+/// not been committed to the conversation and no tool call from the
+/// incomplete response has executed, so discarding the fragment and
+/// re-issuing the identical request cannot duplicate side effects. The
+/// double-billing risk that blocks post-content retries in the interactive
+/// TUI (#103) is accepted here because the alternative is a dead turn that
+/// forfeits the entire headless run — the exact tradeoff #2990 already makes
+/// for sleep-resume. Interactive sessions keep the #103 surface-the-warning
+/// behavior: the user saw the partial deltas, and replaying would render the
+/// same prefix twice.
+pub(super) fn should_resume_after_network_drop(
+    headless_host: bool,
+    network_class_error: bool,
+    retry_attempts: u32,
+    cancelled: bool,
+) -> bool {
+    headless_host && network_class_error && retry_attempts < MAX_STREAM_RETRIES && !cancelled
+}
+
 /// Convert low-level reqwest/hyper stream read errors into an operator-facing
 /// message. The raw provider error remains attached, but the lead sentence
 /// explains why Codewhale may retry before any output and why it must surface

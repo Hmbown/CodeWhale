@@ -9638,6 +9638,38 @@ fn emit_exec_stream_event(event: &ExecStreamEvent) -> Result<()> {
     Ok(())
 }
 
+/// Process exit code `codewhale exec` uses when a turn ends on a retryable
+/// infrastructure failure (provider/transport) rather than a genuine task
+/// failure. 75 is `EX_TEMPFAIL` from sysexits.h — "temporary failure; the
+/// invocation is expected to succeed on retry" — so bench harnesses and
+/// supervisors can distinguish retryable infra exits from genuine task
+/// failures (exit 1) without parsing the stream-json metadata.
+const EXEC_EXIT_RETRYABLE_INFRA: i32 = 75; // EX_TEMPFAIL
+
+/// Map a terminal exec error category to the process exit code.
+///
+/// `network` / `timeout` mean the provider connection dropped or stalled
+/// after every in-session retry budget was exhausted: the task itself
+/// neither passed nor failed, and re-running the same command is safe.
+/// `rate_limit` is deliberately NOT mapped to the retryable code — the same
+/// category also covers quota exhaustion, which a blind retry would hammer.
+fn exec_failure_exit_code(error_category: Option<&str>) -> i32 {
+    match error_category {
+        Some("network" | "timeout") => EXEC_EXIT_RETRYABLE_INFRA,
+        _ => 1,
+    }
+}
+
+/// Should a mid-turn engine error event force the final exec summary into
+/// failure? Only non-recoverable envelopes do. Recoverable warnings (stream
+/// stall notices, transient retry noise) are emitted on the stream for
+/// visibility, but the terminal `TurnComplete` event carries the
+/// authoritative turn outcome — a warning must never fail a run whose turn
+/// later completes.
+fn exec_error_event_is_fatal(envelope: &crate::error_taxonomy::ErrorEnvelope) -> bool {
+    !envelope.recoverable
+}
+
 fn exec_stream_value(event: &ExecStreamEvent) -> Result<serde_json::Value> {
     let mut value = serde_json::to_value(event)?;
     if let Some(object) = value.as_object_mut() {
@@ -11017,9 +11049,18 @@ async fn run_exec_agent(
                 envelope,
                 recoverable: _,
             } => {
-                last_error_category = Some(envelope.category);
-                summary.error_category = Some(envelope.category.to_string());
-                summary.error = Some(envelope.message.clone());
+                // Only a non-recoverable envelope may force the run summary
+                // into failure. Recoverable warnings (stream-stall notices,
+                // transient retry noise) are still streamed for visibility,
+                // but the terminal TurnComplete event carries the
+                // authoritative turn outcome — letting a warning set
+                // `summary.error` here would exit an otherwise-successful
+                // `exec` run non-zero.
+                if exec_error_event_is_fatal(&envelope) {
+                    last_error_category = Some(envelope.category);
+                    summary.error_category = Some(envelope.category.to_string());
+                    summary.error = Some(envelope.message.clone());
+                }
                 if output_format == ExecOutputFormat::StreamJson {
                     emit_exec_stream_event(&ExecStreamEvent::Error {
                         error: envelope.message,
@@ -11183,6 +11224,17 @@ async fn run_exec_agent(
     if let Some(error) = summary.error.as_ref()
         && !error.trim().is_empty()
     {
+        // Distinguish retryable infrastructure failures (provider/transport,
+        // after all in-session retries are exhausted) from genuine task
+        // failures so supervisors and bench harnesses can tell them apart at
+        // the process level without parsing the stream. Genuine failures
+        // keep the historical `bail!` → exit 1 path.
+        let exit_code = exec_failure_exit_code(summary.error_category.as_deref());
+        if exit_code != 1 {
+            eprintln!("Error: exec turn failed: {error}");
+            let _ = io::stdout().flush();
+            std::process::exit(exit_code);
+        }
         bail!("exec turn failed: {error}");
     }
 
@@ -11255,6 +11307,49 @@ mod serve_bind_host_tests {
                 mobile_rebound_to_lan: false,
             }
         );
+    }
+}
+
+#[cfg(test)]
+mod exec_exit_semantics_tests {
+    use super::*;
+
+    #[test]
+    fn retryable_infra_categories_exit_with_ex_tempfail() {
+        // Provider/transport failures after all in-session retries: the task
+        // neither passed nor failed, and the harness may safely retry.
+        assert_eq!(exec_failure_exit_code(Some("network")), 75);
+        assert_eq!(exec_failure_exit_code(Some("timeout")), 75);
+        assert_eq!(EXEC_EXIT_RETRYABLE_INFRA, 75, "EX_TEMPFAIL from sysexits.h");
+    }
+
+    #[test]
+    fn genuine_failures_keep_exit_1() {
+        // Task-side failures and unknown categories keep the historical
+        // exit-1 contract — no masking, no forced zero exits.
+        assert_eq!(exec_failure_exit_code(Some("tool")), 1);
+        assert_eq!(exec_failure_exit_code(Some("authentication")), 1);
+        assert_eq!(exec_failure_exit_code(Some("invalid_input")), 1);
+        assert_eq!(exec_failure_exit_code(None), 1);
+        // rate_limit is deliberately exit 1: the same category also covers
+        // quota exhaustion, which a blind harness retry would hammer.
+        assert_eq!(exec_failure_exit_code(Some("rate_limit")), 1);
+    }
+
+    #[test]
+    fn recoverable_error_events_do_not_fail_the_run_summary() {
+        // A recoverable warning (e.g. a stream-stall notice mid-turn) must
+        // not force the exec summary into failure; the terminal TurnComplete
+        // carries the authoritative outcome.
+        let warning = crate::error_taxonomy::ErrorEnvelope::network(
+            "Stream stalled: no data received for 120s, closing stream",
+        );
+        assert!(
+            !exec_error_event_is_fatal(&warning),
+            "recoverable envelopes must not poison the exec summary"
+        );
+        let fatal = crate::error_taxonomy::ErrorEnvelope::fatal("engine exploded");
+        assert!(exec_error_event_is_fatal(&fatal));
     }
 }
 

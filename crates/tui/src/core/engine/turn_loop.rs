@@ -431,9 +431,10 @@ impl Engine {
         let mut goal_continuations_this_turn = 0u32;
         // Outer stream-retry counter: when the chunked-transfer connection
         // dies mid-stream and either nothing useful was streamed (#103
-        // Phase 3) or the host slept mid-turn (#2990), we silently re-issue
-        // the SAME request up to MAX_STREAM_RETRIES times before surfacing
-        // the failure to the user.
+        // Phase 3), the host slept mid-turn (#2990), or a headless host hit
+        // a mid-stream network drop (v0.9.4 Terminal-Bench P0), we silently
+        // re-issue the SAME request up to MAX_STREAM_RETRIES times before
+        // surfacing the failure to the user.
         let mut stream_retry_attempts: u32 = 0;
 
         loop {
@@ -904,6 +905,12 @@ impl Engine {
             let mut last_progress_mono = Instant::now();
             let mut last_progress_wall = std::time::SystemTime::now();
             let mut sleep_resume_pending = false;
+            // Headless mid-stream network-drop resume (Terminal-Bench P0,
+            // v0.9.4): set when a network-class stream error arrives after
+            // partial content in a headless host; the post-loop block then
+            // discards the fragment and re-issues the request instead of
+            // forfeiting the whole exec session.
+            let mut headless_stream_resume_pending = false;
             let mut stream_content_bytes: usize = 0;
             let (chunk_timeout_secs, chunk_timeout) = stream_chunk_timeout_budget(&self.config);
             let max_duration = Duration::from_secs(STREAM_MAX_DURATION_SECS);
@@ -1058,6 +1065,46 @@ impl Engine {
                                     break;
                                 }
                             }
+                        }
+                        // Headless hosts (exec / stream-json): a mid-stream
+                        // network drop must not forfeit the whole session the
+                        // way it does interactively. No operator is watching
+                        // the partial deltas, the fragment was never committed
+                        // to the conversation, and no tool from the incomplete
+                        // response has executed, so break out and let the
+                        // post-loop block re-issue the request (bounded by
+                        // MAX_STREAM_RETRIES), exactly like the #2990
+                        // sleep-resume. Do NOT emit an error event here: the
+                        // exec host forwards every error event onto the
+                        // stream-json error channel, and a successful retry
+                        // would leave that terminal-looking event on the
+                        // stream even though the turn recovered. When the
+                        // budget is already exhausted this check is false
+                        // and the normal surface-the-error path below runs,
+                        // so the final failure is still reported.
+                        let network_class_error = matches!(
+                            crate::error_taxonomy::classify_error_message(&message),
+                            ErrorCategory::Network | ErrorCategory::Timeout
+                        );
+                        if should_resume_after_network_drop(
+                            !self.config.terminal_chrome_enabled,
+                            network_class_error,
+                            stream_retry_attempts,
+                            self.cancel_token.is_cancelled(),
+                        ) {
+                            crate::logging::warn(format!(
+                                "Headless stream resume: network drop after partial content; scheduling request retry: {message}"
+                            ));
+                            // Keep the real error as the prospective turn
+                            // outcome; the post-loop retry clears it, and if
+                            // the turn still fails the last attempt surfaces
+                            // it through the normal path below.
+                            turn_error.get_or_insert(stream_read_error_user_message(
+                                &message,
+                                any_content_received,
+                            ));
+                            headless_stream_resume_pending = true;
+                            break;
                         }
                         let user_message =
                             stream_read_error_user_message(&message, any_content_received);
@@ -1346,12 +1393,16 @@ impl Engine {
             // nothing actionable — if any tool call landed or text was
             // streamed, ship the partial state to the rest of the turn
             // pipeline so we don't double-bill the user by re-running it.
+            // The post-content exceptions to that rule are the #2990
+            // sleep-resume and the headless network-drop resume: both
+            // discard the uncommitted fragment because no operator is
+            // watching and no tool from the incomplete response has run.
             let stream_died_with_nothing = stream_errors > 0
                 && tool_uses.is_empty()
                 && current_text_visible.trim().is_empty()
                 && current_thinking.trim().is_empty()
                 && !pending_message_complete;
-            if stream_died_with_nothing || sleep_resume_pending {
+            if stream_died_with_nothing || sleep_resume_pending || headless_stream_resume_pending {
                 if stream_retry_attempts < MAX_STREAM_RETRIES {
                     stream_retry_attempts = stream_retry_attempts.saturating_add(1);
                     if sleep_resume_pending {
@@ -1371,6 +1422,16 @@ impl Engine {
                             let index = last_text_index.unwrap_or(0);
                             let _ = self.tx_event.send(Event::MessageComplete { index }).await;
                         }
+                    } else if headless_stream_resume_pending {
+                        crate::logging::warn(format!(
+                            "Resuming headless turn after mid-stream network drop (attempt {stream_retry_attempts}/{MAX_STREAM_RETRIES}); discarding partial output and retrying request"
+                        ));
+                        let _ = self
+                            .tx_event
+                            .send(Event::status(format!(
+                                "Connection interrupted; retrying ({stream_retry_attempts}/{MAX_STREAM_RETRIES})"
+                            )))
+                            .await;
                     } else {
                         crate::logging::warn(format!(
                             "Stream died with no content (attempt {stream_retry_attempts}/{MAX_STREAM_RETRIES}); retrying request"

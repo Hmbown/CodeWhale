@@ -223,7 +223,7 @@ See `MCP.md`.
 Run `codewhale --help` for the canonical list. Common flags:
 
 - `-p, --prompt <TEXT>`: one-shot prompt mode (prints and exits)
-- `codewhale exec --auto --output-format stream-json <PROMPT>`: run the tool-backed non-interactive agent and emit one JSON object per line for harnesses and backend wrappers
+- `codewhale exec --auto --output-format stream-json <PROMPT>`: run the tool-backed non-interactive agent and emit one JSON object per line for harnesses and backend wrappers. Exit codes: `0` on success, `1` for genuine task/agent failures, `75` (`EX_TEMPFAIL`) when the turn ended on a retryable infrastructure failure (provider/transport `network`/`timeout` after all in-session retries) so harnesses can tell a retryable infra exit apart from a task failure; the terminal stream `metadata` event's `error_category` carries the same classification
 - `codewhale exec --resume <ID|PREFIX> <PROMPT>` / `--session-id <ID|PREFIX>`: continue a saved session non-interactively
 - `codewhale exec --continue <PROMPT>`: continue the most recent saved session for this workspace non-interactively
 - `codewhale fork <ID|PREFIX>` / `codewhale fork --last`: copy a saved session into a new sibling session; forked sessions retain additive parent-session metadata and show that lineage in session listings
