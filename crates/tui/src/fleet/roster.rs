@@ -547,6 +547,9 @@ mod tests {
 
     #[test]
     fn config_member_overrides_built_in_and_extras_sort_alphabetically() {
+        let _env_lock = crate::test_support::lock_test_env();
+        let home = TempDir::new().unwrap();
+        let _codewhale_home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.path());
         let tmp = TempDir::new().unwrap();
         let config = config_with_profiles(BTreeMap::from([
             (
@@ -713,6 +716,9 @@ mod tests {
 
     #[test]
     fn invalid_legacy_profile_does_not_hide_valid_scout_neighbor() {
+        let _env_lock = crate::test_support::lock_test_env();
+        let home = TempDir::new().unwrap();
+        let _codewhale_home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.path());
         let tmp = TempDir::new().unwrap();
         write_workspace_profile(
             tmp.path(),
