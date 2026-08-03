@@ -14179,6 +14179,289 @@ fn sleep_resume_respects_budget_and_cancellation() {
     );
 }
 
+// === headless mid-stream network-drop resume (v0.9.4 Terminal-Bench P0) ======
+//
+// Terminal-Bench 2.1 on the 0.9.4 bundle forfeited tasks when the DeepSeek
+// stream dropped mid-response ("error decoding response body" after partial
+// content): the #103 policy surfaced the warning and failed the turn, and
+// `codewhale exec` exited 1. In a headless host no operator watches the
+// partial deltas and the fragment is never committed, so the turn loop now
+// re-issues the request instead (bounded by MAX_STREAM_RETRIES), exactly
+// like the #2990 sleep-resume.
+
+#[test]
+fn network_drop_resume_only_fires_for_headless_hosts() {
+    assert!(
+        super::should_resume_after_network_drop(true, true, 0, false),
+        "headless host + network-class drop with budget must resume"
+    );
+    assert!(
+        !super::should_resume_after_network_drop(false, true, 0, false),
+        "interactive sessions keep the #103 surface-the-warning policy: \
+         the user saw the partial deltas and replay would render them twice"
+    );
+}
+
+#[test]
+fn network_drop_resume_requires_network_class_error() {
+    assert!(
+        !super::should_resume_after_network_drop(true, false, 0, false),
+        "non-network failures (model/parse/auth) must never be replayed"
+    );
+}
+
+#[test]
+fn network_drop_resume_respects_budget_and_cancellation() {
+    assert!(
+        super::should_resume_after_network_drop(true, true, super::MAX_STREAM_RETRIES - 1, false),
+        "one short of the budget should still resume"
+    );
+    assert!(
+        !super::should_resume_after_network_drop(true, true, super::MAX_STREAM_RETRIES, false),
+        "budget exhausted → surface the failure instead of looping"
+    );
+    assert!(
+        !super::should_resume_after_network_drop(true, true, 0, true),
+        "cancelled turn must not be resumed behind the operator's back"
+    );
+}
+
+/// Model client whose first `failures` streams emit partial content and then
+/// die with the network-class read error reqwest reports for a dropped
+/// chunked-transfer body; later streams complete a normal text turn.
+/// Exercises the headless mid-stream network-drop resume through the real
+/// turn loop.
+struct FlakyNetworkDropModelClient {
+    calls: std::sync::atomic::AtomicUsize,
+    failures: usize,
+}
+
+#[async_trait::async_trait]
+impl crate::core::model_client::ModelClient for FlakyNetworkDropModelClient {
+    fn provider_name(&self) -> &str {
+        "flaky-network"
+    }
+
+    fn model(&self) -> &str {
+        "local-model"
+    }
+
+    async fn create_message(
+        &self,
+        _request: crate::models::MessageRequest,
+    ) -> anyhow::Result<crate::models::MessageResponse> {
+        anyhow::bail!("flaky-network regression uses the streaming model boundary")
+    }
+
+    async fn create_message_stream(
+        &self,
+        _request: crate::models::MessageRequest,
+    ) -> anyhow::Result<crate::llm_client::StreamEventBox> {
+        use crate::llm_client::mock::canned;
+        let call = self
+            .calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            .saturating_add(1);
+        if call <= self.failures {
+            // Partial content first — this flips `any_content_received` so
+            // the #103 transparent retry cannot fire — then the transport
+            // dies the way the 0.9.4 Terminal-Bench crashes did.
+            let events: Vec<anyhow::Result<crate::models::StreamEvent>> = vec![
+                Ok(canned::message_start("flaky_msg")),
+                Ok(canned::text_block_start(0)),
+                Ok(canned::text_delta(
+                    0,
+                    "partial answer that must be discarded",
+                )),
+                Err(anyhow::anyhow!(
+                    "Stream read error: error decoding response body"
+                )),
+            ];
+            return Ok(Box::pin(futures_util::stream::iter(events)));
+        }
+        let events = canned::simple_text_turn("recovered after retry")
+            .into_iter()
+            .map(Ok);
+        Ok(Box::pin(futures_util::stream::iter(events)))
+    }
+
+    async fn health_check(&self) -> anyhow::Result<bool> {
+        Ok(true)
+    }
+}
+
+/// Drive one headless (`terminal_chrome_enabled = false`, the exec /
+/// stream-json posture) turn against the flaky client and collect every
+/// event through the terminal TurnComplete.
+async fn run_headless_turn_with_flaky_network(
+    failures: usize,
+) -> (std::sync::Arc<FlakyNetworkDropModelClient>, Vec<Event>) {
+    let model = std::sync::Arc::new(FlakyNetworkDropModelClient {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        failures,
+    });
+    let client: crate::core::model_client::SharedModelClient = model.clone();
+    let config = Config::default();
+    let engine_config = EngineConfig {
+        max_steps: 1,
+        snapshots_enabled: false,
+        subagents_enabled: false,
+        terminal_chrome_enabled: false,
+        ..EngineConfig::default()
+    };
+    let (engine, handle) = Engine::new_with_model_client(engine_config, &config, client);
+    let run_task = tokio::spawn(engine.run());
+
+    handle
+        .send(Op::SendMessage {
+            content: "solve the task".to_string(),
+            mode: AppMode::Agent,
+            route: resolved_route_for_test(&config, crate::config::DEFAULT_TEXT_MODEL),
+            compaction: Box::new(CompactionConfig::default()),
+            goal_objective: None,
+            goal_token_budget: None,
+            goal_status: crate::tools::goal::GoalStatus::Active,
+            reasoning_effort: None,
+            reasoning_effort_auto: false,
+            auto_model: false,
+            allow_shell: false,
+            trust_mode: false,
+            auto_approve: false,
+            approval_mode: crate::tui::approval::ApprovalMode::Suggest,
+            translation_enabled: false,
+            allowed_tools: None,
+            dynamic_tools: Vec::new(),
+            hook_executor: None,
+            verbosity: None,
+            provenance: UserInputProvenance::ExternalUser,
+        })
+        .await
+        .expect("send flaky-network turn");
+
+    let mut events = Vec::new();
+    loop {
+        let event = tokio::time::timeout(model_turn_event_timeout(), async {
+            handle.rx_event.write().await.recv().await
+        })
+        .await
+        .expect("flaky-network event timeout")
+        .expect("flaky-network event");
+        let terminal = matches!(event, Event::TurnComplete { .. });
+        events.push(event);
+        if terminal {
+            break;
+        }
+    }
+    handle.send(Op::Shutdown).await.expect("shutdown engine");
+    run_task.await.expect("engine task");
+    (model, events)
+}
+
+#[tokio::test]
+async fn headless_turn_retries_mid_stream_network_drop_and_recovers() {
+    let (model, events) = run_headless_turn_with_flaky_network(1).await;
+
+    assert_eq!(
+        model.calls.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "the dropped stream must be re-issued exactly once"
+    );
+    let (status, error) = events
+        .iter()
+        .find_map(|event| match event {
+            Event::TurnComplete { status, error, .. } => Some((status, error)),
+            _ => None,
+        })
+        .expect("terminal TurnComplete");
+    assert_eq!(
+        *status,
+        TurnOutcomeStatus::Completed,
+        "a recovered retry must complete the turn: {error:?}"
+    );
+    assert!(error.is_none(), "recovered turn must not report an error");
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            Event::Status { message } if message.contains("Connection interrupted; retrying (1/")
+        )),
+        "the retry must be announced on the status channel: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::Error { .. })),
+        "a transient drop that the retry recovers must not surface an error event: {events:?}"
+    );
+    // The discarded fragment from the dropped attempt must never reach the
+    // transcript — only the retried turn's content is committed.
+    let transcript_text = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::SessionUpdated { messages, .. } => Some(messages),
+            _ => None,
+        })
+        .flatten()
+        .flat_map(|message| message.content.iter())
+        .filter_map(|block| match block {
+            ContentBlock::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        transcript_text.contains("recovered after retry"),
+        "retried content must be committed: {transcript_text}"
+    );
+    assert!(
+        !transcript_text.contains("partial answer that must be discarded"),
+        "the dropped attempt's fragment must be discarded, not committed: {transcript_text}"
+    );
+}
+
+#[tokio::test]
+async fn headless_turn_fails_with_real_error_after_network_drop_budget_exhausted() {
+    let (model, events) =
+        run_headless_turn_with_flaky_network(1 + super::MAX_STREAM_RETRIES as usize).await;
+
+    assert_eq!(
+        model.calls.load(std::sync::atomic::Ordering::SeqCst),
+        1 + super::MAX_STREAM_RETRIES as usize,
+        "initial attempt plus the bounded resume budget, then the turn fails"
+    );
+    let (status, error) = events
+        .iter()
+        .find_map(|event| match event {
+            Event::TurnComplete { status, error, .. } => Some((status, error)),
+            _ => None,
+        })
+        .expect("terminal TurnComplete");
+    assert_eq!(*status, TurnOutcomeStatus::Failed);
+    let error = error
+        .as_deref()
+        .expect("exhausted network-drop retries must report the real error");
+    assert!(
+        error.contains("Provider stream connection dropped"),
+        "the surfaced error must name the network drop: {error}"
+    );
+    assert!(
+        error.contains("error decoding response body"),
+        "the underlying provider error must stay attached: {error}"
+    );
+    assert_eq!(
+        crate::error_taxonomy::classify_error_message(error),
+        crate::error_taxonomy::ErrorCategory::Network,
+        "the terminal failure must classify as retryable infra (network)"
+    );
+    let error_events = events
+        .iter()
+        .filter(|event| matches!(event, Event::Error { .. }))
+        .count();
+    assert_eq!(
+        error_events, 1,
+        "only the final, budget-exhausted attempt may emit an error event: {events:?}"
+    );
+}
+
 #[test]
 fn stream_retry_threshold_relaxed_to_five() {
     // Case 1+4 from issue #103: the consecutive-error threshold for marking

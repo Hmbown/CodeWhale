@@ -11,12 +11,18 @@
       "Lane": "one running Workflow instance",
       "Runtime": "where and how a Lane executes"
     },
-    "sources": ["Cargo.toml", "LICENSE", "README.md", "npm/codewhale/package.json", "docs/FLEET.md"]
+    "sources": [
+      "Cargo.toml",
+      "LICENSE",
+      "README.md",
+      "npm/codewhale/package.json",
+      "docs/FLEET.md"
+    ]
   },
   "sourceCandidate": {
     "version": "0.9.4",
-    "providerCount": 36,
-    "toolCount": 67,
+    "providerCount": 40,
+    "toolCount": 68,
     "sandboxBackends": [
       "seatbelt (macOS, when available)",
       "bubblewrap (Linux, opt-in when installed)"
@@ -33,11 +39,17 @@
     "version": "0.9.3",
     "publishedAt": "2026-07-31T15:04:14Z",
     "url": "https://github.com/Hmbown/CodeWhale/releases/tag/v0.9.3",
-    "sources": ["web/data/latest-published-release.json"]
+    "sources": [
+      "web/data/latest-published-release.json"
+    ]
   },
   "install": {
     "recommended": "npm install -g codewhale",
-    "binaries": ["codewhale", "codew", "codewhale-tui"],
+    "binaries": [
+      "codewhale",
+      "codew",
+      "codewhale-tui"
+    ],
     "channels": {
       "npm": "published releases only",
       "cargo": "published crates only",
@@ -50,27 +62,89 @@
       "requiresMatchingPublishedAssets": true,
       "sourceBuild": true
     },
-    "sources": ["README.md", "npm/codewhale/package.json", "npm/codewhale/README.md", "npm/codewhale/scripts/artifacts.js", "docs/INSTALL.md", "docs/CNB_MIRROR.md"]
+    "sources": [
+      "README.md",
+      "npm/codewhale/package.json",
+      "npm/codewhale/README.md",
+      "npm/codewhale/scripts/artifacts.js",
+      "docs/INSTALL.md",
+      "docs/CNB_MIRROR.md"
+    ]
   },
   "control": {
-    "modes": ["Plan", "Act", "Operate"],
-    "permissionPostures": ["Ask", "Auto-Review", "Full Access"],
+    "modes": [
+      "Plan",
+      "Act",
+      "Operate"
+    ],
+    "permissionPostures": [
+      "Ask",
+      "Auto-Review",
+      "Full Access"
+    ],
     "shortcuts": {
-      "mode": { "chord": "Tab", "when": "composer idle" },
-      "permissionPosture": { "chord": "Shift+Tab", "when": "composer idle" }
+      "mode": {
+        "chord": "Tab",
+        "when": "composer idle"
+      },
+      "permissionPosture": {
+        "chord": "Shift+Tab",
+        "when": "composer idle"
+      }
     },
-    "sources": ["docs/MODES.md", "docs/KEYBINDINGS.md", "crates/tui/src/settings.rs"]
+    "sources": [
+      "docs/MODES.md",
+      "docs/KEYBINDINGS.md",
+      "crates/tui/src/settings.rs"
+    ]
   },
   "toolSurface": {
-    "defaultActive": ["Bash", "File", "Git", "Run", "agent", "remember", "tasks", "update_plan", "work_update", "tool_search"],
+    "defaultActive": [
+      "Bash",
+      "File",
+      "Git",
+      "Run",
+      "agent",
+      "remember",
+      "tasks",
+      "update_plan",
+      "work_update",
+      "tool_search"
+    ],
     "actions": {
-      "Bash": ["run", "wait", "interact", "cancel"],
-      "File": ["read", "list", "search_name", "search_content", "write", "edit", "patch"],
-      "Git": ["status", "diff", "log", "show", "blame"],
-      "Run": ["tests", "verifiers"]
+      "Bash": [
+        "run",
+        "wait",
+        "interact",
+        "cancel"
+      ],
+      "File": [
+        "read",
+        "list",
+        "search_name",
+        "search_content",
+        "write",
+        "edit",
+        "patch"
+      ],
+      "Git": [
+        "status",
+        "diff",
+        "log",
+        "show",
+        "blame"
+      ],
+      "Run": [
+        "tests",
+        "verifiers"
+      ]
     },
     "deferred": {
-      "Web": ["search", "fetch", "wait"]
+      "Web": [
+        "search",
+        "fetch",
+        "wait"
+      ]
     },
     "compatibility": {
       "legacyAliases": "replay-only",
@@ -91,7 +165,14 @@
     ]
   },
   "surfaces": {
-    "availableInSourceCandidate": ["TUI", "codewhale exec", "Web client", "Runtime API", "MCP", "Fleet"],
+    "availableInSourceCandidate": [
+      "TUI",
+      "codewhale exec",
+      "Web client",
+      "Runtime API",
+      "MCP",
+      "Fleet"
+    ],
     "sources": [
       "docs/GUIDE.md",
       "docs/WEB.md",
@@ -122,9 +203,20 @@
     ]
   },
   "platforms": {
-    "prebuilt": ["Linux x64", "Linux arm64", "macOS x64", "macOS arm64", "Windows x64", "Windows arm64"],
-    "preview": ["Android/Termux arm64"],
-    "sources": ["docs/INSTALL.md"]
+    "prebuilt": [
+      "Linux x64",
+      "Linux arm64",
+      "macOS x64",
+      "macOS arm64",
+      "Windows x64",
+      "Windows arm64"
+    ],
+    "preview": [
+      "Android/Termux arm64"
+    ],
+    "sources": [
+      "docs/INSTALL.md"
+    ]
   },
   "repository": {
     "canonical": "https://github.com/Hmbown/CodeWhale",
@@ -132,8 +224,18 @@
       "https://cnb.cool/codewhale.net/codewhale",
       "https://npmmirror.com/package/codewhale"
     ],
-    "creditSources": ["CHANGELOG.md", "docs/CONTRIBUTORS.md", "web/lib/release-credits.ts"],
-    "requiredCandidateCredits": ["@SparkofSpike", "@XhesicaFrost", "@aboimpinto", "@DracheTek", "@MuRongMoQing"]
+    "creditSources": [
+      "CHANGELOG.md",
+      "docs/CONTRIBUTORS.md",
+      "web/lib/release-credits.ts"
+    ],
+    "requiredCandidateCredits": [
+      "@SparkofSpike",
+      "@XhesicaFrost",
+      "@aboimpinto",
+      "@DracheTek",
+      "@MuRongMoQing"
+    ]
   },
   "screenshot": {
     "readme": "assets/screenshot.png",
@@ -143,6 +245,8 @@
     "terminal": "unrecorded",
     "theme": "Blue Stage dark",
     "capture": "current Codewhale session; exact binary identity was not recorded, so this image makes no published-release or exact-candidate claim",
-    "sources": ["crates/tui"]
+    "sources": [
+      "crates/tui"
+    ]
   }
 }
