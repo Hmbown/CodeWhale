@@ -1646,6 +1646,64 @@ async fn delayed_chat_client(
     (client, calls, bodies)
 }
 
+/// Like [`delayed_chat_client`] but delays *every* attempt, so the per-step
+/// API timeout fires on the first call and on every retry — the shape needed
+/// to drive the timeout-retry budget to exhaustion.
+async fn always_delayed_chat_client(
+    delay: Duration,
+    response_text: &str,
+) -> (DeepSeekClient, Arc<AtomicUsize>) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let response_text = response_text.to_string();
+    let app = Router::new().route(
+        "/{*path}",
+        post({
+            let calls = Arc::clone(&calls);
+            move |Json(_body): Json<Value>| {
+                let calls = Arc::clone(&calls);
+                let response_text = response_text.clone();
+                async move {
+                    let attempt = calls.fetch_add(1, Ordering::SeqCst) + 1;
+                    tokio::time::sleep(delay).await;
+                    Json(json!({
+                        "id": format!("chatcmpl-test-{attempt}"),
+                        "model": "deepseek-v4-flash",
+                        "choices": [{
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": response_text
+                            },
+                            "finish_reason": "stop"
+                        }],
+                        "usage": {
+                            "prompt_tokens": 1,
+                            "completion_tokens": 1,
+                            "total_tokens": 2
+                        }
+                    }))
+                }
+            }
+        }),
+    );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fake always-slow chat server");
+    let addr = listener.local_addr().expect("fake chat server addr");
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let config = crate::config::Config {
+        api_key: Some("test-key".to_string()),
+        base_url: Some(format!("http://{addr}/v1")),
+        ..crate::config::Config::default()
+    };
+    let client = DeepSeekClient::new(&config).expect("fake always-slow chat client");
+    (client, calls)
+}
+
 #[tokio::test]
 async fn tool_free_subagent_omits_chat_tools_and_tool_choice() {
     let tmp = tempdir().expect("tempdir");
@@ -5630,9 +5688,15 @@ async fn api_timeout_preserves_checkpoint_and_returns_needs_input_without_parkin
         manager.register_worker(make_worker_spec(&agent_id, tmp.path().to_path_buf()));
     }
 
-    let (client, calls, _bodies) =
-        delayed_chat_client(Duration::from_millis(80), "resumed answer").await;
-    let mut runtime = stub_runtime().with_step_api_timeout(Duration::from_millis(50));
+    // Every attempt outlasts the 50ms step timeout, so the timeout-retry
+    // budget (SUBAGENT_API_TIMEOUT_MAX_RETRIES) is driven to exhaustion
+    // before the step interrupts. The backoff base is shrunk to 1ms so the
+    // test does not wait out the production backoff sequence.
+    let (client, calls) =
+        always_delayed_chat_client(Duration::from_millis(150), "resumed answer").await;
+    let mut runtime = stub_runtime()
+        .with_step_api_timeout(Duration::from_millis(50))
+        .with_api_timeout_retry_base_backoff(Duration::from_millis(1));
     runtime.client = client;
     runtime.manager = Arc::clone(&manager);
     runtime.context = ToolContext::new(tmp.path());
@@ -5698,8 +5762,9 @@ async fn api_timeout_preserves_checkpoint_and_returns_needs_input_without_parkin
         .expect("sub-agent task should finish");
     assert_eq!(
         calls.load(Ordering::SeqCst),
-        1,
-        "needs-input interruption must not park for continuation or issue a second API request"
+        SUBAGENT_API_TIMEOUT_MAX_RETRIES.saturating_add(1) as usize,
+        "needs-input interruption must not park for continuation; the API call \
+         is retried up to the timeout-retry budget, then stops"
     );
 
     let interrupted = {
@@ -5713,6 +5778,7 @@ async fn api_timeout_preserves_checkpoint_and_returns_needs_input_without_parkin
         .checkpoint
         .as_ref()
         .expect("timeout should preserve checkpoint");
+    assert_eq!(checkpoint.reason, "api_timeout");
     assert!(checkpoint.continuable);
     assert_eq!(checkpoint.steps_taken, 1);
     assert!(
@@ -5764,9 +5830,122 @@ async fn api_timeout_preserves_checkpoint_and_returns_needs_input_without_parkin
     );
     assert_eq!(
         calls.load(Ordering::SeqCst),
-        1,
+        SUBAGENT_API_TIMEOUT_MAX_RETRIES.saturating_add(1) as usize,
         "projection inspection must not respawn the child implicitly"
     );
+}
+
+#[tokio::test]
+async fn subagent_retries_api_timeout_before_succeeding() {
+    let tmp = tempdir().expect("tempdir");
+    let manager = Arc::new(RwLock::new(SubAgentManager::new(
+        tmp.path().to_path_buf(),
+        2,
+    )));
+    let agent_id = "agent_api_timeout_retry".to_string();
+    let (task_input_tx, task_input_rx) = mpsc::unbounded_channel();
+    let agent = SubAgent::new(
+        agent_id.clone(),
+        FleetRole::Worker,
+        "Inspect API timeout recovery".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        Some("Blue".to_string()),
+        Some(vec![]),
+        task_input_tx,
+        tmp.path().to_path_buf(),
+        "boot_test".to_string(),
+    );
+    {
+        let mut manager = manager.write().await;
+        manager.agents.insert(agent_id.clone(), agent);
+        manager.register_worker(make_worker_spec(&agent_id, tmp.path().to_path_buf()));
+    }
+
+    // Only the first attempt outlasts the 50ms step timeout; the retry
+    // answers immediately, so a single timed-out attempt must be retried
+    // exactly once and then complete.
+    let (client, calls, _bodies) =
+        delayed_chat_client(Duration::from_millis(150), "recovered answer").await;
+    let mut runtime = stub_runtime()
+        .with_step_api_timeout(Duration::from_millis(50))
+        .with_api_timeout_retry_base_backoff(Duration::from_millis(1));
+    runtime.client = client;
+    runtime.manager = Arc::clone(&manager);
+    runtime.context = ToolContext::new(tmp.path());
+
+    let task = SubAgentTask {
+        manager_handle: Arc::clone(&manager),
+        runtime,
+        agent_id: agent_id.clone(),
+        agent_type: FleetRole::Worker,
+        prompt: "Inspect API timeout recovery".to_string(),
+        assignment: make_assignment(),
+        allowed_tools: Some(vec![]),
+        fork_context: false,
+        started_at: Instant::now(),
+        max_steps: 3,
+        token_budget: None,
+        wall_time: DEFAULT_CHILD_WALL_TIME,
+        input_rx: task_input_rx,
+        launch_gate: None,
+    };
+
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::spawn(run_subagent_task(task)),
+    )
+    .await
+    .expect("sub-agent task should finish")
+    .expect("sub-agent join should succeed");
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "one timed-out API attempt should be retried exactly once"
+    );
+    let snapshot = {
+        let manager = manager.read().await;
+        manager
+            .get_result(&agent_id)
+            .expect("agent should stay registered")
+    };
+    assert_eq!(snapshot.status, SubAgentStatus::Completed);
+    assert_eq!(snapshot.result.as_deref(), Some("recovered answer"));
+}
+
+#[test]
+fn api_timeout_retry_backoff_doubles_and_caps() {
+    let base = SUBAGENT_API_TIMEOUT_INITIAL_BACKOFF;
+    let expected = [1, 2, 4, 8, 16, 30, 30];
+    for (index, expected_secs) in expected.iter().enumerate() {
+        let retry_number = (index as u32).saturating_add(1);
+        assert_eq!(
+            subagent_api_timeout_retry_base_delay(retry_number, base),
+            Duration::from_secs(*expected_secs),
+            "retry {retry_number} backoff"
+        );
+    }
+}
+
+#[test]
+fn api_timeout_retry_delay_stays_within_jitter_bounds() {
+    let base = SUBAGENT_API_TIMEOUT_INITIAL_BACKOFF;
+    for retry_number in 1..=SUBAGENT_API_TIMEOUT_MAX_RETRIES {
+        let deterministic = subagent_api_timeout_retry_base_delay(retry_number, base);
+        let lower =
+            deterministic.as_secs_f64() * (1.0 - SUBAGENT_API_TIMEOUT_BACKOFF_JITTER_FACTOR);
+        let upper =
+            deterministic.as_secs_f64() * (1.0 + SUBAGENT_API_TIMEOUT_BACKOFF_JITTER_FACTOR);
+        for _ in 0..32 {
+            let sample = subagent_api_timeout_retry_delay(retry_number, base).as_secs_f64();
+            assert!(
+                (lower..=upper).contains(&sample),
+                "retry {retry_number} delay {sample}s outside ±20% of {}s",
+                deterministic.as_secs_f64()
+            );
+        }
+    }
 }
 
 #[test]
@@ -8299,13 +8478,18 @@ async fn child_work_tail_never_leaks_across_siblings_or_to_the_parent() {
 #[test]
 fn child_and_background_runtimes_preserve_step_api_timeout() {
     let timeout = Duration::from_secs(7);
-    let parent = stub_runtime().with_step_api_timeout(timeout);
+    let backoff = Duration::from_millis(3);
+    let parent = stub_runtime()
+        .with_step_api_timeout(timeout)
+        .with_api_timeout_retry_base_backoff(backoff);
 
     let child = parent.child_runtime();
     assert_eq!(child.step_api_timeout, timeout);
+    assert_eq!(child.api_timeout_retry_base_backoff, backoff);
 
     let background = parent.background_runtime();
     assert_eq!(background.step_api_timeout, timeout);
+    assert_eq!(background.api_timeout_retry_base_backoff, backoff);
 }
 
 #[tokio::test]
@@ -9516,6 +9700,7 @@ fn stub_runtime() -> SubAgentRuntime {
         parent_mode: crate::tui::app::AppMode::Agent,
         mcp_pool: None,
         step_api_timeout: DEFAULT_STEP_API_TIMEOUT,
+        api_timeout_retry_base_backoff: SUBAGENT_API_TIMEOUT_INITIAL_BACKOFF,
         tool_timeout: DEFAULT_TOOL_TIMEOUT,
         speech_output_dir: None,
         todos: crate::tools::todo::new_shared_todo_list(),
@@ -11222,15 +11407,19 @@ fn child_completion_runtime_message_preserves_agent_and_provenance_guidance() {
 }
 
 #[test]
-fn subagent_runtime_default_step_api_timeout_is_legacy_120s() {
-    // The legacy hardcoded constant is now the default field value so existing
-    // call sites and tests that construct a runtime without explicit timeout
-    // wiring keep their old behavior (#1806, #1808).
+fn subagent_runtime_default_step_api_timeout_matches_config_default() {
+    // The runtime default is derived from the config default so call sites
+    // and tests that construct a runtime without explicit timeout wiring get
+    // the configured behavior (#1806, #1808).
     let runtime = stub_runtime();
     assert_eq!(runtime.step_api_timeout, DEFAULT_STEP_API_TIMEOUT);
     assert_eq!(
         DEFAULT_STEP_API_TIMEOUT,
         std::time::Duration::from_secs(crate::config::DEFAULT_SUBAGENT_API_TIMEOUT_SECS)
+    );
+    assert_eq!(
+        DEFAULT_STEP_API_TIMEOUT,
+        std::time::Duration::from_secs(600)
     );
 }
 

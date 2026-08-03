@@ -1599,7 +1599,9 @@ If you are upgrading from older releases:
   aggregate token ceiling for each root `agent` run and its descendants; unset
   or `0` preserves unlimited legacy behavior. `[subagents] api_timeout_secs`
   controls the per-step API timeout for sub-agent model calls and is clamped to
-  `1..=1800`, with `0` or unset preserving the legacy 120 second default.
+  `1..=3600`, with `0` or unset preserving the 600 second default; a timed-out
+  attempt is retried with exponential backoff (up to 5 retries) before the
+  step interrupts with a preserved checkpoint.
   `[subagents] heartbeat_timeout_secs` controls stale running agent cleanup,
   defaults to `300`, and is clamped to `30..=3600` while staying above the
   resolved API timeout. `[subagents.providers.<provider>]` accepts the same

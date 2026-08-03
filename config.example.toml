@@ -311,7 +311,7 @@ max_subagents = 10 # optional (1-20)
 # Optional sub-agent tuning. max_concurrent overrides top-level max_subagents.
 # [subagents]
 # max_concurrent = 10
-# api_timeout_secs = 120 # per-step API timeout, clamped to 1..=1800
+# api_timeout_secs = 600 # per-step API timeout, clamped to 1..=3600
 #
 # How many levels of nested sub-agents the `agent` tool may spawn:
 #   max_depth = 0   # opt out completely — the agent never spawns sub-agents

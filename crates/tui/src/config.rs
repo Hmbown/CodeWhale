@@ -2172,9 +2172,9 @@ pub struct SubagentsConfig {
     /// Per-step DeepSeek API timeout for sub-agent requests, in seconds. The
     /// timeout wraps `client.create_message` so a stuck single step cannot
     /// pin the parent's parent-completion wakeup channel indefinitely.
-    /// Defaults to `DEFAULT_SUBAGENT_API_TIMEOUT_SECS` (120) and is clamped
+    /// Defaults to `DEFAULT_SUBAGENT_API_TIMEOUT_SECS` (600) and is clamped
     /// to `MIN_SUBAGENT_API_TIMEOUT_SECS..=MAX_SUBAGENT_API_TIMEOUT_SECS`
-    /// (1..=1800). Zero or unset uses the legacy 120s default (#1806, #1808).
+    /// (1..=3600). Zero or unset uses the 600s default (#1806, #1808).
     #[serde(default)]
     pub api_timeout_secs: Option<u64>,
     /// Wall-clock timeout for a running sub-agent that stops making
@@ -6222,10 +6222,9 @@ impl Config {
     ///
     /// Reads `[subagents] api_timeout_secs` and clamps to
     /// `[MIN_SUBAGENT_API_TIMEOUT_SECS, MAX_SUBAGENT_API_TIMEOUT_SECS]`
-    /// (1..=1800). `None` or `0` resolve to the legacy
-    /// `DEFAULT_SUBAGENT_API_TIMEOUT_SECS` (120) so existing configs keep
-    /// their old behavior; explicit `1` is honored, useful only in fast
-    /// fail-fast tests, not production (#1806, #1808).
+    /// (1..=3600). `None` or `0` resolve to
+    /// `DEFAULT_SUBAGENT_API_TIMEOUT_SECS` (600); explicit `1` is honored,
+    /// useful only in fast fail-fast tests, not production (#1806, #1808).
     #[must_use]
     pub fn subagent_api_timeout_secs(&self) -> u64 {
         resolve_subagent_api_timeout_secs(

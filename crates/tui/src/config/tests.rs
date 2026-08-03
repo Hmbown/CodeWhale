@@ -2302,6 +2302,7 @@ fn subagent_api_timeout_defaults_and_clamps() {
         Config::default().subagent_api_timeout_secs(),
         DEFAULT_SUBAGENT_API_TIMEOUT_SECS
     );
+    assert_eq!(DEFAULT_SUBAGENT_API_TIMEOUT_SECS, 600);
 
     let zero = Config {
         subagents: Some(SubagentsConfig {
@@ -2324,6 +2325,24 @@ fn subagent_api_timeout_defaults_and_clamps() {
     };
     assert_eq!(explicit_min.subagent_api_timeout_secs(), 1);
 
+    let explicit_max = Config {
+        subagents: Some(SubagentsConfig {
+            api_timeout_secs: Some(3600),
+            ..SubagentsConfig::default()
+        }),
+        ..Config::default()
+    };
+    assert_eq!(explicit_max.subagent_api_timeout_secs(), 3600);
+
+    let beyond_max = Config {
+        subagents: Some(SubagentsConfig {
+            api_timeout_secs: Some(3601),
+            ..SubagentsConfig::default()
+        }),
+        ..Config::default()
+    };
+    assert_eq!(beyond_max.subagent_api_timeout_secs(), 3600);
+
     let high = Config {
         subagents: Some(SubagentsConfig {
             api_timeout_secs: Some(MAX_SUBAGENT_API_TIMEOUT_SECS + 60),
@@ -2339,9 +2358,13 @@ fn subagent_api_timeout_defaults_and_clamps() {
 
 #[test]
 fn subagent_heartbeat_timeout_defaults_clamps_and_respects_api_timeout() {
+    // With the 600s default API timeout, the heartbeat floor (api + 30s)
+    // lifts the resolved default above the raw 300s constant.
+    let resolved_default =
+        DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT_SECS.max(DEFAULT_SUBAGENT_API_TIMEOUT_SECS + 30);
     assert_eq!(
         Config::default().subagent_heartbeat_timeout_secs(),
-        DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT_SECS
+        resolved_default
     );
 
     let zero = Config {
@@ -2351,10 +2374,7 @@ fn subagent_heartbeat_timeout_defaults_clamps_and_respects_api_timeout() {
         }),
         ..Config::default()
     };
-    assert_eq!(
-        zero.subagent_heartbeat_timeout_secs(),
-        DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT_SECS
-    );
+    assert_eq!(zero.subagent_heartbeat_timeout_secs(), resolved_default);
 
     let low = Config {
         subagents: Some(SubagentsConfig {

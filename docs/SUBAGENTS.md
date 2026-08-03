@@ -432,25 +432,29 @@ spawn rather than silently falling back to the parent provider.
 
 Each sub-agent step wraps its DeepSeek `create_message` call in a
 per-step timeout so a single stuck request can't pin the parent's
-completion wakeup channel indefinitely. The default is `120` seconds,
-which matches the legacy hardcoded value. Long-thinking children that
-legitimately exceed that, for example heavy plan or review work behind
-`agent`, can extend the timeout in `~/.codewhale/config.toml`:
+completion wakeup channel indefinitely. The default is `600` seconds.
+A timed-out attempt is retried with exponential backoff (up to 5
+retries) before the step interrupts with a preserved checkpoint.
+Long-thinking children that legitimately exceed that, for example
+heavy plan or review work behind `agent`, can extend the timeout in
+`~/.codewhale/config.toml`:
 
 ```toml
 [subagents]
-api_timeout_secs = 900  # 15 minutes; clamped to 1..=1800
+api_timeout_secs = 900  # 15 minutes; clamped to 1..=3600
 ```
 
-Values are clamped to `1..=1800`. `0` and `unset` keep the legacy
-`120` second default, so existing installs see no behavior change.
+Values are clamped to `1..=3600`. `0` and `unset` keep the `600`
+second default.
 
 ## Stale-agent heartbeat (#2614)
 
 Running agents also track manager-visible progress. If a child stops emitting
 progress for the heartbeat window, the manager auto-cancels it, releases its
 sub-agent slot, and keeps the cancelled record inspectable through the returned
-transcript handle and persisted worker record. The default is 5 minutes:
+transcript handle and persisted worker record. The default is 5 minutes
+(resolved to at least 30 seconds above `api_timeout_secs`, so 630 seconds
+with the 600-second default API timeout):
 
 ```toml
 [subagents]
