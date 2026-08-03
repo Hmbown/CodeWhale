@@ -19,12 +19,8 @@ use super::model::{WorkHitbox, WorkRow, WorkSurfacePlacement, WorkTone, project_
 const SIDE_RAIL_MIN_HOST_WIDTH: u16 = 72;
 const SIDE_RAIL_MIN_CHAT_WIDTH: u16 = 40;
 
-fn effective_placement(
-    configured: WorkSurfacePlacement,
-    host_width: u16,
-    classic_shell: bool,
-) -> WorkSurfacePlacement {
-    if classic_shell || host_width < SIDE_RAIL_MIN_HOST_WIDTH {
+fn effective_placement(configured: WorkSurfacePlacement, host_width: u16) -> WorkSurfacePlacement {
+    if host_width < SIDE_RAIL_MIN_HOST_WIDTH {
         WorkSurfacePlacement::Top
     } else {
         configured
@@ -33,9 +29,8 @@ fn effective_placement(
 
 /// Responsive work-surface height. The component owns a bounded window; long
 /// work lists scroll instead of consuming the transcript.
-pub fn height(app: &mut App, width: u16, terminal_height: u16, classic_shell: bool) -> u16 {
-    app.work_surface.effective_placement =
-        effective_placement(app.work_surface.placement, width, classic_shell);
+pub fn height(app: &mut App, width: u16, terminal_height: u16) -> u16 {
+    app.work_surface.effective_placement = effective_placement(app.work_surface.placement, width);
     let rows = project_visible(app);
     if rows.is_empty() {
         app.work_surface.focused = false;
@@ -75,9 +70,8 @@ pub fn height(app: &mut App, width: u16, terminal_height: u16, classic_shell: bo
 
 /// Split the transcript slot for a side rail. Top placement consumes its own
 /// vertical row before this point, so it returns the chat area unchanged.
-/// Classic always resolves to Top and therefore preserves its existing layout.
-pub fn split_chat(app: &mut App, area: Rect, classic_shell: bool) -> (Rect, Option<Rect>) {
-    let placement = effective_placement(app.work_surface.placement, area.width, classic_shell);
+pub fn split_chat(app: &mut App, area: Rect) -> (Rect, Option<Rect>) {
+    let placement = effective_placement(app.work_surface.placement, area.width);
     app.work_surface.effective_placement = placement;
     if app.work_surface.latest_rows.is_empty() || placement == WorkSurfacePlacement::Top {
         return (area, None);

@@ -23,6 +23,7 @@ use crate::tui::history::{
 };
 use crate::tui::hotbar::actions::{HotbarActionCategory, HotbarDispatch};
 use crate::tui::provider_picker::ProviderPickerView;
+use crate::tui::sidebar::sidebar_width_for_chat_area;
 use crate::tui::ui_text::truncate_line_to_width;
 use crate::tui::views::{HelpView, ModalView, ViewAction};
 use crate::working_set::Workspace;
@@ -20517,23 +20518,6 @@ fn translation_placeholder_keeps_a_calm_refresh_without_repainting_still_mode() 
     assert!(!should_tick_status_animation(
         &app, false, false, false, true
     ));
-}
-
-#[test]
-fn classic_header_indicator_animates_only_in_full_motion() {
-    let mut app = create_test_app();
-    app.turn_started_at = Some(Instant::now());
-
-    app.low_motion = false;
-    app.fancy_animations = true;
-    assert!(classic_header_indicator_started_at(&app).is_some());
-
-    app.low_motion = true;
-    assert!(classic_header_indicator_started_at(&app).is_none());
-
-    app.low_motion = false;
-    app.fancy_animations = false;
-    assert!(classic_header_indicator_started_at(&app).is_none());
 }
 
 #[test]

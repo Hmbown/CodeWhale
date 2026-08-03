@@ -503,25 +503,25 @@ mod tests {
         let mut two_steps = app();
         two_steps.work_surface.top_height = 8;
         add_todos(&mut two_steps, 2);
-        assert_eq!(super::height(&mut two_steps, 100, 40, false), 4);
+        assert_eq!(super::height(&mut two_steps, 100, 40), 4);
 
         // Ten steps: content wants 12 lines, the default 8-line cap wins.
         let mut ten_steps = app();
         ten_steps.work_surface.top_height = 8;
         add_todos(&mut ten_steps, 10);
-        assert_eq!(super::height(&mut ten_steps, 100, 40, false), 8);
+        assert_eq!(super::height(&mut ten_steps, 100, 40), 8);
 
         // Short terminal: the half-terminal cap beats both content and the
         // configured cap.
         let mut short_terminal = app();
         short_terminal.work_surface.top_height = 8;
         add_todos(&mut short_terminal, 10);
-        assert_eq!(super::height(&mut short_terminal, 100, 12, false), 6);
+        assert_eq!(super::height(&mut short_terminal, 100, 12), 6);
 
         // Nothing to show: no strip at all.
         let mut empty = app();
         empty.work_surface.top_height = 8;
-        assert_eq!(super::height(&mut empty, 100, 40, false), 0);
+        assert_eq!(super::height(&mut empty, 100, 40), 0);
     }
 
     #[test]
@@ -994,7 +994,7 @@ mod tests {
         let rows = super::model::project(&mut app);
 
         assert!(rows.is_empty());
-        assert_eq!(super::height(&mut app, 120, 32, false), 0);
+        assert_eq!(super::height(&mut app, 120, 32), 0);
     }
 
     #[test]
@@ -1020,8 +1020,8 @@ mod tests {
             app.work_surface.placement = placement;
             let area = ratatui::layout::Rect::new(0, 0, 120, 32);
 
-            assert_eq!(super::height(&mut app, area.width, area.height, false), 0);
-            assert_eq!(super::split_chat(&mut app, area, false), (area, None));
+            assert_eq!(super::height(&mut app, area.width, area.height), 0);
+            assert_eq!(super::split_chat(&mut app, area), (area, None));
         }
     }
 
@@ -1587,9 +1587,9 @@ mod tests {
             let mut app = app();
             add_todos(&mut app, 2);
             app.work_surface.placement = placement;
-            assert_eq!(super::height(&mut app, 100, 24, false), 0);
+            assert_eq!(super::height(&mut app, 100, 24), 0);
             let area = ratatui::layout::Rect::new(0, 0, 100, 12);
-            let (chat, rail) = super::split_chat(&mut app, area, false);
+            let (chat, rail) = super::split_chat(&mut app, area);
             let rail = rail.expect("side rail");
             assert_eq!(chat.x, expected_chat_x);
             assert_eq!(rail.x, expected_rail_x);
@@ -1708,12 +1708,12 @@ mod tests {
         let graph = operation_graph(NodeState::Failed);
         restore_graph(&mut operation_app, &graph);
 
-        assert_eq!(super::height(&mut operation_app, 100, 24, false), 0);
+        assert_eq!(super::height(&mut operation_app, 100, 24), 0);
         assert!(operation_app.work_surface.latest_rows.is_empty());
 
         let mut todo_app = app();
         add_todos(&mut todo_app, 2);
-        assert!(super::height(&mut todo_app, 100, 24, false) > 0);
+        assert!(super::height(&mut todo_app, 100, 24) > 0);
         assert!(
             todo_app
                 .work_surface

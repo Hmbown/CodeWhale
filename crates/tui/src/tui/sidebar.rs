@@ -9,14 +9,14 @@ use std::fmt::Write;
 use std::time::{Duration, Instant};
 
 use crate::config::Config;
-use crate::localization::{Locale, MessageId, tr};
+use crate::localization::Locale;
 use crate::tui::app::HuntVerdict;
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     prelude::Widget,
-    style::{Modifier, Style},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, Paragraph, Wrap},
 };
@@ -28,7 +28,7 @@ use crate::tools::todo::TodoStatus;
 
 use super::app::{
     AgentCurrentActivity, AgentCurrentActivityStatus, App, SidebarFocus, SidebarHoverRow,
-    SidebarHoverSection, SidebarHoverState, SidebarRowAction, TaskPanelEntry, TaskPanelEntryKind,
+    SidebarHoverSection, SidebarRowAction, TaskPanelEntry, TaskPanelEntryKind,
 };
 use super::history::{GenericToolCell, HistoryCell, ToolCell, ToolStatus, summarize_tool_output};
 use super::motion::MotionPolicy;
@@ -65,308 +65,6 @@ pub(crate) fn sidebar_width_for_chat_area(app: &App, chat_width: u16) -> Option<
         .min(chat_width.saturating_sub(40));
 
     (sidebar_width >= 20).then_some(sidebar_width)
-}
-
-pub fn render_sidebar(f: &mut Frame, area: Rect, app: &mut App, config: &Config) {
-    // Clear hover state at the start of each render
-    app.sidebar_hover = SidebarHoverState::default();
-    if area.width < 20 || area.height < 3 {
-        // Paint a styled block over the area so stale cells from a previous
-        // (wider) frame don't persist as bleed-through artifacts (#400).
-        Block::default()
-            .style(Style::default().bg(app.ui_theme.surface_bg))
-            .render(area, f.buffer_mut());
-        return;
-    }
-
-    if app.sidebar_focus == SidebarFocus::Hidden {
-        Block::default()
-            .style(Style::default().bg(app.ui_theme.surface_bg))
-            .render(area, f.buffer_mut());
-        return;
-    }
-
-    let work_has_content = sidebar_work_summary(app).has_useful_content();
-    // At compact heights the durable Work state outranks optional Hotbar
-    // chrome. The Hotbar returns automatically after the terminal grows.
-    let hotbar_enabled = hotbar_panel_enabled(app, config)
-        && !is_hotbar_disabled(config)
-        && !(work_has_content && area.height < 12);
-    let (main_area, hotbar_area) = split_sidebar_hotbar_area(area, hotbar_enabled);
-    let (main_area, goal_banner_area) = split_sidebar_goal_banner_area(main_area, app);
-    let fixed_focus = matches!(
-        app.sidebar_focus,
-        SidebarFocus::Tasks | SidebarFocus::Agents | SidebarFocus::Context | SidebarFocus::Sessions
-    );
-    if fixed_focus && work_has_content {
-        if main_area.height < 7 {
-            render_sidebar_work_compact(f, main_area, app);
-        } else {
-            let sections = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Min(3), Constraint::Length(4)])
-                .split(main_area);
-            match app.sidebar_focus {
-                SidebarFocus::Tasks => render_sidebar_tasks(f, sections[0], app),
-                SidebarFocus::Agents => render_sidebar_subagents(f, sections[0], app),
-                SidebarFocus::Context => render_context_panel(f, sections[0], app),
-                SidebarFocus::Sessions => render_sidebar_sessions(f, sections[0], app),
-                _ => unreachable!("fixed focus was checked above"),
-            }
-            render_sidebar_work_compact(f, sections[1], app);
-        }
-    } else {
-        match app.sidebar_focus {
-            SidebarFocus::Auto => render_sidebar_auto(f, main_area, app),
-            SidebarFocus::Pinned => render_sidebar_pinned(f, main_area, app),
-            SidebarFocus::Tasks => render_sidebar_tasks(f, main_area, app),
-            SidebarFocus::Agents => render_sidebar_subagents(f, main_area, app),
-            SidebarFocus::Context => render_context_panel(f, main_area, app),
-            SidebarFocus::Sessions => render_sidebar_sessions(f, main_area, app),
-            SidebarFocus::Hidden => unreachable!("hidden sidebar returned before render dispatch"),
-        }
-    }
-    if let Some(goal_banner_area) = goal_banner_area {
-        render_sidebar_goal_banner(f, goal_banner_area, app);
-    }
-    if let Some(hotbar_area) = hotbar_area {
-        render_hotbar_panel(f, hotbar_area, app, config);
-    }
-}
-
-fn split_sidebar_hotbar_area(area: Rect, show_hotbar: bool) -> (Rect, Option<Rect>) {
-    // Hide the Hotbar entirely when the user disabled it (`hotbar = []`) or when
-    // the sidebar is too short to fit it; give the main panel the full area.
-    if !show_hotbar || area.height < HOTBAR_PANEL_HEIGHT.saturating_add(3) {
-        return (area, None);
-    }
-
-    let sections = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(HOTBAR_PANEL_HEIGHT)])
-        .split(area);
-    (sections[0], Some(sections[1]))
-}
-
-/// Carve the active-goal banner off the top of the sidebar when a goal is
-/// live. The banner is one compact row so status/status-adjacent info below
-/// keeps its real estate; it disappears on complete via
-/// [`active_goal_banner_text`].
-fn split_sidebar_goal_banner_area(area: Rect, app: &App) -> (Rect, Option<Rect>) {
-    if active_goal_banner_text(app).is_none() || area.height < 4 {
-        return (area, None);
-    }
-    let sections = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(2), Constraint::Min(0)])
-        .split(area);
-    (sections[1], Some(sections[0]))
-}
-
-/// Render the active goal objective at the very top of the sidebar. Calm and
-/// truncation-safe: a single muted "Goal" label plus the objective, clipped
-/// to the available width.
-fn render_sidebar_goal_banner(f: &mut Frame, area: Rect, app: &App) {
-    let Some(objective) = active_goal_banner_text(app) else {
-        return;
-    };
-    let theme = &app.ui_theme;
-    let content_width = usize::from(area.width.saturating_sub(2).max(1));
-    let label = format!(
-        "{} {}",
-        crate::tui::glyphs::ATTENTION,
-        truncate_line_to_width(&objective, content_width)
-    );
-    let line = Line::from(Span::styled(
-        label,
-        Style::default()
-            .fg(theme.warning)
-            .add_modifier(ratatui::style::Modifier::BOLD),
-    ));
-    let block = Block::default()
-        .style(Style::default().bg(theme.surface_bg))
-        .borders(ratatui::widgets::Borders::BOTTOM)
-        .border_style(Style::default().fg(theme.border));
-    Paragraph::new(line)
-        .block(block)
-        .render(area, f.buffer_mut());
-}
-
-/// The Hotbar is "disabled" when the user persisted an explicit empty
-/// `hotbar = []`. Since #3807 a missing `hotbar` key (`None`) also renders no
-/// panel — the Hotbar is hidden until the user opts in — but it resolves to
-/// zero bindings via [`hotbar_panel_enabled`] rather than the explicit-disabled
-/// state, which keeps `/hotbar on` (write default bindings) and `/hotbar off`
-/// (write `[]`) distinct on disk.
-fn is_hotbar_disabled(config: &Config) -> bool {
-    config.hotbar.as_deref().is_some_and(<[_]>::is_empty)
-}
-
-/// Build the Auto-mode panel stack. Empty panels collapse to zero height so
-/// non-empty ones get the full sidebar real estate. To-do appears when it has
-/// useful content, or as the one quiet empty state when nothing else is active.
-fn render_sidebar_auto(f: &mut Frame, area: Rect, app: &mut App) {
-    let visible = auto_sidebar_panels(auto_sidebar_state(app));
-    render_sidebar_panel_stack(f, area, app, &visible);
-}
-
-/// Build the pinned panel stack. This uses the same content-sensitive panels
-/// as Auto, but it never participates in idle auto-collapse.
-fn render_sidebar_pinned(f: &mut Frame, area: Rect, app: &mut App) {
-    let visible = auto_sidebar_panels(auto_sidebar_state(app));
-    render_sidebar_panel_stack(f, area, app, &visible);
-}
-
-fn render_sidebar_panel_stack(
-    f: &mut Frame,
-    area: Rect,
-    app: &mut App,
-    visible: &[AutoSidebarPanel],
-) {
-    let constraints: Vec<Constraint> = match visible.len() {
-        1 => vec![Constraint::Min(0)],
-        2 => vec![Constraint::Percentage(50), Constraint::Min(0)],
-        3 => vec![
-            Constraint::Percentage(34),
-            Constraint::Percentage(33),
-            Constraint::Min(0),
-        ],
-        4 => vec![
-            // Work is first whenever present. Give it a hard compact floor so
-            // Context cannot starve a live To-do after a resize.
-            Constraint::Length(5),
-            Constraint::Percentage(30),
-            Constraint::Percentage(30),
-            Constraint::Min(3),
-        ],
-        _ => vec![
-            Constraint::Percentage(20),
-            Constraint::Percentage(20),
-            Constraint::Percentage(20),
-            Constraint::Percentage(20),
-            Constraint::Min(6),
-        ],
-    };
-
-    let sections = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(constraints)
-        .split(area);
-
-    for (panel, rect) in visible.iter().zip(sections.iter()) {
-        match panel {
-            AutoSidebarPanel::Work => render_sidebar_work(f, *rect, app),
-            AutoSidebarPanel::Tasks => render_sidebar_tasks(f, *rect, app),
-            AutoSidebarPanel::Agents => render_sidebar_subagents(f, *rect, app),
-            AutoSidebarPanel::Context => render_context_panel(f, *rect, app),
-            AutoSidebarPanel::Sessions => render_sidebar_sessions(f, *rect, app),
-        }
-    }
-}
-
-/// Render the persistent Sessions rail (#2934).
-///
-/// Rows are projected from cached metadata (see
-/// [`crate::tui::sessions_rail`]); this function never reads a session file.
-/// Each row dispatches `/sessions open <id>`, which opens the existing picker
-/// preselected on that session — the rail navigates, the picker owns resume.
-fn render_sidebar_sessions(f: &mut Frame, area: Rect, app: &mut App) {
-    let max_rows = crate::tui::sessions_rail::rows_for_height(area.height);
-    refresh_sessions_rail_cache(app, max_rows);
-
-    let width = usize::from(area.width.saturating_sub(4)).max(1);
-    let locale = app.ui_locale;
-    let Some(cache) = app.sessions_rail_cache.as_ref() else {
-        return;
-    };
-
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    let mut full_texts: Vec<String> = Vec::new();
-    let mut actions: Vec<Option<SidebarRowAction>> = Vec::new();
-
-    if let Some(error) = cache.error() {
-        lines.push(Line::from(Span::styled(
-            truncate_line_to_width(
-                &tr(locale, MessageId::SessionsRailUnavailable).replace("{error}", error),
-                width,
-            ),
-            Style::default().fg(app.ui_theme.text_dim),
-        )));
-        full_texts.push(error.to_string());
-        actions.push(None);
-    } else if cache.rows().is_empty() {
-        lines.push(Line::from(Span::styled(
-            truncate_line_to_width(&tr(locale, MessageId::SessionsRailEmpty), width),
-            Style::default().fg(app.ui_theme.text_dim),
-        )));
-        full_texts.push(tr(locale, MessageId::SessionsRailEmpty).into_owned());
-        actions.push(None);
-    } else {
-        for row in cache.rows() {
-            let age = crate::tui::session_picker::format_relative_time(&row.updated_at, locale);
-            // The current session is marked with a glyph rather than colour
-            // alone so the distinction survives monochrome terminals and
-            // colour-vision differences.
-            let marker = if row.is_current { "▸ " } else { "  " };
-            let text = format!("{marker}{} · {age}", row.title);
-            let style = if row.is_current {
-                Style::default()
-                    .fg(app.ui_theme.text_body)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(app.ui_theme.text_body)
-            };
-            lines.push(Line::from(Span::styled(
-                truncate_line_to_width(&text, width),
-                style,
-            )));
-            full_texts.push(text);
-            actions.push(Some(SidebarRowAction::Command(
-                crate::tui::sessions_rail::row_command(&row.id),
-            )));
-        }
-    }
-
-    let shown = cache.rows().len();
-    let total = cache.total_in_scope();
-    let footer = if total > shown {
-        tr(locale, MessageId::SessionsRailShowingCount)
-            .replace("{shown}", &shown.to_string())
-            .replace("{total}", &total.to_string())
-    } else {
-        tr(locale, MessageId::SessionsRailBrowseAll).into_owned()
-    };
-    lines.push(Line::from(Span::styled(
-        truncate_line_to_width(&footer, width),
-        Style::default().fg(app.ui_theme.text_dim),
-    )));
-    full_texts.push(footer);
-    actions.push(Some(SidebarRowAction::Command(
-        crate::tui::sessions_rail::browse_all_command().to_string(),
-    )));
-
-    let title = tr(locale, MessageId::SessionsRailTitle).into_owned();
-    render_sidebar_section(f, area, &title, lines, full_texts, actions, app);
-}
-
-/// Refresh the rail cache when it is missing, stale, or computed for a
-/// different workspace/active session.
-fn refresh_sessions_rail_cache(app: &mut App, max_rows: usize) {
-    let now = std::time::Instant::now();
-    let workspace = app.workspace.clone();
-    let current = app.current_session_id.clone();
-    let fresh = app
-        .sessions_rail_cache
-        .as_ref()
-        .is_some_and(|cache| cache.is_fresh(&workspace, current.as_deref(), max_rows, now));
-    if fresh {
-        return;
-    }
-    app.sessions_rail_cache = Some(crate::tui::sessions_rail::load_rail_cache(
-        &workspace,
-        current.as_deref(),
-        max_rows,
-    ));
 }
 
 /// Compute the Auto-mode panel signals. Shared by `render_sidebar_auto` (which
@@ -3535,12 +3233,11 @@ mod tests {
     use super::{
         ACTIVE_TOOL_COMPLETED_ROW_TTL, ACTIVE_TOOL_STALE_RUNNING_ROW_TTL, AutoSidebarPanel,
         AutoSidebarState, HotbarSlotState, SidebarAgentRow, SidebarFocus, SidebarHoverRow,
-        SidebarHoverSection, SidebarHoverState, SidebarSubagentSummary, SidebarToolRow,
-        SidebarWorkChecklistItem, SidebarWorkSummary, ToolRowOrder, agent_row_hover_text,
-        auto_sidebar_panels, background_task_spinner_prefix, cached_agent_activity_is_live,
-        context_panel_cost_line, editorial_tool_rows, hotbar_panel_enabled,
-        hotbar_panel_hover_texts, hotbar_panel_lines, hotbar_panel_slots, is_hotbar_disabled,
-        normalize_activity_text, render_sidebar, sidebar_agent_rows, sidebar_auto_idle,
+        SidebarHoverSection, SidebarSubagentSummary, SidebarToolRow, SidebarWorkChecklistItem,
+        SidebarWorkSummary, ToolRowOrder, agent_row_hover_text, auto_sidebar_panels,
+        background_task_spinner_prefix, cached_agent_activity_is_live, context_panel_cost_line,
+        editorial_tool_rows, hotbar_panel_enabled, hotbar_panel_hover_texts, hotbar_panel_lines,
+        hotbar_panel_slots, normalize_activity_text, sidebar_agent_rows, sidebar_auto_idle,
         sidebar_hover_rows, sidebar_work_summary, sort_sidebar_agent_rows_as_tree,
         subagent_output_handle, subagent_panel_hover_texts, subagent_panel_lines,
         subagent_panel_rows, task_panel_hover_texts, task_panel_lines, task_panel_row_sets,
@@ -3554,7 +3251,8 @@ mod tests {
     use crate::tui::active_cell::ActiveCell;
     use crate::tui::app::{
         AgentCurrentActivity, AgentCurrentActivityStatus, AgentProgressMeta, App, AppMode,
-        HuntVerdict, SidebarRowAction, TaskPanelEntry, TaskPanelEntryKind, TuiOptions,
+        HuntVerdict, SidebarHoverState, SidebarRowAction, TaskPanelEntry, TaskPanelEntryKind,
+        TuiOptions,
     };
     use crate::tui::history::{
         ExecCell, ExecSource, GenericToolCell, HistoryCell, ToolCell, ToolStatus,
@@ -3922,30 +3620,6 @@ mod tests {
     }
 
     #[test]
-    fn is_hotbar_disabled_only_for_an_explicit_empty_array() {
-        // A missing `hotbar` key means "use defaults" — NOT disabled.
-        assert!(!is_hotbar_disabled(&Config::default()));
-
-        // An explicit `hotbar = []` is the disabled state.
-        let disabled = Config {
-            hotbar: Some(Vec::new()),
-            ..Config::default()
-        };
-        assert!(is_hotbar_disabled(&disabled));
-
-        // Real bindings are never disabled.
-        let active = Config {
-            hotbar: Some(vec![codewhale_config::HotbarBindingToml {
-                slot: 1,
-                action: "mode.plan".to_string(),
-                label: None,
-            }]),
-            ..Config::default()
-        };
-        assert!(!is_hotbar_disabled(&active));
-    }
-
-    #[test]
     fn hotbar_panel_hidden_for_fresh_default_config() {
         // #3807: a fresh config has no `hotbar` key, so the panel is hidden
         // until the user opts in. Slot resolution + active state are covered by
@@ -4115,221 +3789,6 @@ mod tests {
         assert!(
             hover[0].contains(&slot_4_chord) && hover[0].contains("Slot 4: agent active"),
             "row hover text should expose active status: {hover:?}"
-        );
-    }
-
-    #[test]
-    fn sidebar_hotbar_render_smoke_omits_panel_when_empty_config() {
-        let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Pinned;
-        app.mode = AppMode::Agent;
-        let config = Config {
-            hotbar: Some(Vec::new()),
-            ..Config::default()
-        };
-
-        let backend = TestBackend::new(44, 12);
-        let mut terminal = Terminal::new(backend).expect("terminal");
-        terminal
-            .draw(|frame| render_sidebar(frame, frame.area(), &mut app, &config))
-            .expect("draw sidebar");
-        let rendered = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-
-        assert!(
-            !rendered.contains("Hotbar"),
-            "empty hotbar config should not render hotbar panel: {rendered:?}"
-        );
-    }
-
-    #[test]
-    fn sidebar_hotbar_render_smoke_paints_default_slots() {
-        let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Pinned;
-        app.mode = AppMode::Agent;
-        // #3807: the panel is hidden on a fresh config, so opt in explicitly
-        // with the default bindings to smoke-test the rendered panel.
-        let config = Config {
-            hotbar: Some(codewhale_config::default_hotbar_bindings_toml()),
-            ..Config::default()
-        };
-
-        let backend = TestBackend::new(44, 12);
-        let mut terminal = Terminal::new(backend).expect("terminal");
-        terminal
-            .draw(|frame| render_sidebar(frame, frame.area(), &mut app, &config))
-            .expect("draw sidebar");
-        let rendered = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-
-        assert!(
-            rendered.contains("Hotbar"),
-            "hotbar panel title missing: {rendered:?}"
-        );
-        let hotbar_range = format!("{}1-8", crate::tui::widgets::key_hint::alt_prefix());
-        assert!(
-            rendered.contains(&hotbar_range),
-            "hotbar panel title should expose the accelerator: {rendered:?}"
-        );
-        assert!(
-            rendered.contains("Alt1"),
-            "slot 1 default binding should render: {rendered:?}"
-        );
-        assert!(
-            rendered.contains("Alt4"),
-            "active agent-mode slot should render distinctly: {rendered:?}"
-        );
-    }
-
-    #[test]
-    fn nonempty_todo_remains_visible_across_release_sizes_and_focuses() {
-        // These sidebar widths are the actual splits produced by 120, 100,
-        // and 80-column terminals (the compact 80-column case is 20 wide).
-        for (sidebar_width, height) in [(33, 32), (28, 30), (20, 24)] {
-            for focus in [
-                SidebarFocus::Auto,
-                SidebarFocus::Pinned,
-                SidebarFocus::Tasks,
-                SidebarFocus::Agents,
-                SidebarFocus::Context,
-            ] {
-                let mut app = create_test_app();
-                app.sidebar_focus = focus;
-                {
-                    let mut todos = app.todos.try_lock().expect("todos lock");
-                    todos.add("inspect".to_string(), TodoStatus::Completed);
-                    todos.add("patch".to_string(), TodoStatus::InProgress);
-                }
-                let config = Config {
-                    hotbar: Some(Vec::new()),
-                    ..Config::default()
-                };
-                let backend = TestBackend::new(sidebar_width, height);
-                let mut terminal = Terminal::new(backend).expect("terminal");
-                terminal
-                    .draw(|frame| render_sidebar(frame, frame.area(), &mut app, &config))
-                    .expect("draw sidebar");
-                let rendered = terminal
-                    .backend()
-                    .buffer()
-                    .content()
-                    .iter()
-                    .map(|cell| cell.symbol())
-                    .collect::<String>();
-
-                assert!(
-                    rendered.contains("To-do"),
-                    "To-do title missing at {sidebar_width}x{height} in {focus:?}: {rendered:?}"
-                );
-                assert!(
-                    rendered.contains("patch") || rendered.contains("2 items"),
-                    "neither full nor compact To-do state rendered at {sidebar_width}x{height} in {focus:?}: {rendered:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn hidden_is_the_only_focus_that_suppresses_nonempty_todo() {
-        let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Hidden;
-        app.todos
-            .try_lock()
-            .expect("todos lock")
-            .add("hidden explicitly".to_string(), TodoStatus::InProgress);
-        let backend = TestBackend::new(20, 24);
-        let mut terminal = Terminal::new(backend).expect("terminal");
-        terminal
-            .draw(|frame| render_sidebar(frame, frame.area(), &mut app, &Config::default()))
-            .expect("draw sidebar");
-        let rendered = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(!rendered.contains("To-do"));
-    }
-
-    #[test]
-    fn compact_metadata_only_plan_does_not_create_progress_surface() {
-        let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Agents;
-        app.plan_state
-            .try_lock()
-            .expect("plan lock")
-            .update(crate::tools::plan::UpdatePlanArgs {
-                objective: Some("metadata-only release plan".to_string()),
-                ..crate::tools::plan::UpdatePlanArgs::default()
-            });
-        let backend = TestBackend::new(20, 8);
-        let mut terminal = Terminal::new(backend).expect("terminal");
-        terminal
-            .draw(|frame| render_sidebar(frame, frame.area(), &mut app, &Config::default()))
-            .expect("draw sidebar");
-        let rendered = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(!rendered.contains("plan active"), "{rendered:?}");
-        assert!(
-            !rendered.contains("metadata-only release plan"),
-            "{rendered:?}"
-        );
-        assert!(!rendered.contains("0/0"), "{rendered:?}");
-    }
-
-    #[test]
-    fn pinned_sidebar_renders_agents_section_when_subagents_are_active() {
-        let mut app = create_test_app();
-        app.ui_locale = Locale::En;
-        app.sidebar_focus = SidebarFocus::Pinned;
-        app.subagent_cache
-            .push(cached_agent("agent-active-1", Some("critic")));
-        app.agent_progress.insert(
-            "agent-active-1".to_string(),
-            "checking sidebar visibility".to_string(),
-        );
-
-        let backend = TestBackend::new(72, 18);
-        let mut terminal = Terminal::new(backend).expect("terminal");
-        let config = Config::default();
-        terminal
-            .draw(|frame| render_sidebar(frame, frame.area(), &mut app, &config))
-            .expect("draw sidebar");
-        let rendered = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-
-        assert!(
-            rendered.contains("Agents"),
-            "pinned sidebar must surface active sub-agents: {rendered:?}"
-        );
-        assert!(
-            rendered.contains("critic") || rendered.contains("Agent 1"),
-            "pinned sidebar should render the child agent label: {rendered:?}"
-        );
-        assert!(
-            !rendered.contains("checking sidebar visibility"),
-            "collapsed agent rows should not render noisy progress: {rendered:?}"
         );
     }
 
@@ -7590,54 +7049,6 @@ mod tests {
             .find(|agent| agent.agent_id == "agent_waiting")
             .expect("waiting agent");
         assert!(cached_agent_activity_is_live(&app, waiting));
-    }
-
-    #[test]
-    fn structured_agent_details_fit_the_80x24_sidebar_budget() {
-        let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Agents;
-        let mut waiting = cached_agent("agent_waiting", Some("Wait"));
-        waiting.status =
-            crate::tools::subagent::SubAgentStatus::Interrupted("approval required".to_string());
-        waiting.worker_status = Some(crate::tools::subagent::AgentWorkerStatus::WaitingForUser);
-        app.subagent_cache.push(waiting);
-        app.agent_progress_meta.insert(
-            "agent_waiting".to_string(),
-            AgentProgressMeta {
-                current_activity: Some(AgentCurrentActivity::bounded(
-                    AgentCurrentActivityStatus::Waiting,
-                    Some("approval required".to_string()),
-                    None,
-                    Some(2),
-                )),
-                ..AgentProgressMeta::default()
-            },
-        );
-        app.expanded_sidebar_agents
-            .insert("agent_waiting".to_string());
-        let config = Config {
-            hotbar: Some(Vec::new()),
-            ..Config::default()
-        };
-
-        // At an 80-column terminal the standard split grants the sidebar 20
-        // columns, so render that exact 20x24 Agent Details budget directly.
-        let backend = TestBackend::new(20, 24);
-        let mut terminal = Terminal::new(backend).expect("terminal");
-        terminal
-            .draw(|frame| render_sidebar(frame, frame.area(), &mut app, &config))
-            .expect("draw sidebar");
-        let rendered = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-
-        assert!(rendered.contains("Agents"), "{rendered:?}");
-        assert!(rendered.contains("Wait"), "{rendered:?}");
-        assert!(rendered.contains("waiting"), "{rendered:?}");
     }
 
     #[test]
