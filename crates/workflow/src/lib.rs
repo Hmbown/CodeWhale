@@ -23,6 +23,7 @@ mod gates;
 mod js_authoring;
 mod model_policy;
 mod named_fleet;
+pub mod overlay;
 pub mod reasoning_router;
 mod redaction;
 mod replay;
@@ -75,6 +76,10 @@ pub use named_fleet::{
     FleetDocument, FleetSchema, FleetSearchRoot, NamedFleet, NamedFleetError,
     STOPSHIP_REQUIRED_ROLES, exact_schema_revision, load_named_fleet, load_named_fleet_file,
     parse_named_fleet,
+};
+pub use overlay::{
+    OverlayEntry, OverlayEntryKind, OverlayError, OverlayRunDiff, OverlaySignal,
+    validate_overlay_entry,
 };
 pub use reasoning_router::{
     CapturedReasoningRouter, FleetRouterRef, LEGACY_INLINE_ROUTER_ORIGIN, QualifiedRouterId,

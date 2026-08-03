@@ -11,6 +11,7 @@ description = "Lane registry and Runtime backends for Codewhale workflow instanc
 anyhow.workspace = true
 chrono.workspace = true
 codewhale-config = { path = "../config", version = "0.9.4" }
+codewhale-workflow = { path = "../workflow", version = "0.9.4" }
 fd-lock = "4.0.4"
 serde.workspace = true
 serde_json.workspace = true

@@ -990,6 +990,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "codewhale-config",
+ "codewhale-workflow",
  "fd-lock",
  "serde",
  "serde_json",

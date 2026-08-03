@@ -7,6 +7,7 @@
 //! under `$CODEWHALE_HOME/lanes/logs/<lane-id>.ndjson`.
 
 pub mod control;
+pub mod overlay;
 mod registry;
 mod runtime;
 mod worktree;
@@ -18,6 +19,7 @@ pub use control::{
     Retryability, RunListPage, RunRouteDto, RunSummaryDto, RunUsageDto, TargetKind,
     UnavailableReason, UnknownReason,
 };
+pub use overlay::{OverlayStore, overlay_root};
 pub use registry::{
     LaneRecord, LaneRegistry, LaneStatus, TerminalTransition, lane_registry_root, lanes_dir,
 };
