@@ -3305,6 +3305,55 @@ async fn tool_call_budget_admits_exactly_the_cap_and_rejects_the_ninth() {
     }
 }
 
+/// #5170: a call stopped by an admission gate never executes, so its
+/// debited budget slot is refunded — the cap counts admitted calls only.
+/// With a cap of 1, a blocked first proposal must leave room for the
+/// second proposal to run.
+#[tokio::test]
+async fn tool_call_budget_refunds_calls_blocked_by_admission_gates() {
+    use crate::llm_client::mock::{MockLlmClient, canned};
+
+    let workspace = tempdir().expect("tempdir");
+    fs::write(workspace.path().join("fixture.txt"), "fixture\n").expect("write fixture");
+    let mock = std::sync::Arc::new(MockLlmClient::new(vec![
+        tool_batch_turn(&[
+            (
+                "call-blocked",
+                "definitely_not_a_tool",
+                r#"{"path":"fixture.txt"}"#,
+            ),
+            ("call-admitted", "read_file", r#"{"path":"fixture.txt"}"#),
+        ]),
+        canned::simple_text_turn("done"),
+    ]));
+
+    let (status, error, completions) =
+        run_budgeted_read_turn(workspace.path(), Some(1), mock.clone()).await;
+    assert_eq!(status, TurnOutcomeStatus::Completed, "{error:?}");
+    assert_eq!(
+        completions.len(),
+        2,
+        "every proposed call reports a completion"
+    );
+
+    let blocked = completions[0]
+        .1
+        .as_ref()
+        .expect_err("the unknown tool must be blocked by the missing-tool gate");
+    assert!(
+        blocked.to_string().contains("definitely_not_a_tool"),
+        "{blocked}"
+    );
+    let admitted = completions[1]
+        .1
+        .as_ref()
+        .expect("a gate-blocked call refunds its slot, so the second call still fits the cap of 1");
+    assert!(
+        admitted.content.contains("fixture"),
+        "the admitted call must return its file contents: {admitted:?}"
+    );
+}
+
 /// #4415 AC(b): a 4-call parallel batch proposed with 2 calls remaining is
 /// truncated to the first 2 calls in proposal order; the excess 2 are
 /// rejected with the same typed reason, and the batch is counted in full.
