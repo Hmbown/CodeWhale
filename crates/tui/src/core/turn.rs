@@ -313,9 +313,39 @@ fn snapshot_with_label(workspace: &Path, label: &str, cap_bytes: u64) -> Option<
         }
         Err(e) => {
             tracing::warn!(target: "snapshot", "snapshot repo init failed: {e}");
+            maybe_notify_snapshots_disabled_once(workspace, &e);
             None
         }
     }
+}
+
+fn maybe_notify_snapshots_disabled_once(workspace: &Path, error: &std::io::Error) {
+    let message = error.to_string();
+    if !(message.contains("workspace too large for snapshots")
+        || message.contains("workspace snapshots are disabled"))
+    {
+        return;
+    }
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static NOTIFIED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let key = workspace.to_string_lossy().into_owned();
+    let set = NOTIFIED.get_or_init(|| Mutex::new(HashSet::new()));
+    let Ok(mut guard) = set.lock() else {
+        return;
+    };
+    if !guard.insert(key) {
+        return;
+    }
+    // One prominent notice per workspace process lifetime — silent disable is
+    // the §2.7 failure mode. Opt-in remains `[snapshots] max_workspace_gb`
+    // (raise the cap or set 0 to disable the size gate).
+    eprintln!(
+        "warning: workspace snapshots/undo are OFF for {}
+  {message}
+  raise `[snapshots] max_workspace_gb` in config.toml (or set it to 0 to disable the cap) to opt in.",
+        workspace.display()
+    );
 }
 
 #[cfg(test)]

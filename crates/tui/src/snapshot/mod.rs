@@ -32,6 +32,13 @@
 //! the disk is full, or the workspace is on a read-only filesystem, the
 //! turn proceeds and the engine logs a warning. The snapshot is a
 //! safety net, not a correctness gate.
+//!
+//! Workspaces over the configured size cap (`[snapshots] max_workspace_gb`,
+//! default 2 GB of non-excluded content) skip snapshot init entirely. That
+//! disable is intentionally loud: the operator is told once that undo is off
+//! for the workspace, with the opt-in knobs (raise the cap, or set
+//! `max_workspace_gb = 0` to disable the size gate). Scoped snapshot roots are
+//! not yet a first-class config; the practical opt-in today is the cap override.
 
 pub mod paths;
 pub mod prune;
