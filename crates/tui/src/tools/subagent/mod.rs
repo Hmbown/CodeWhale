@@ -3188,10 +3188,7 @@ impl SubAgentManager {
             process_lock_note: if self.holds_coordination_process_lock() {
                 None
             } else {
-                match self.coordination_process_lock_status() {
-                    Ok(()) => None,
-                    Err(error) => Some(error),
-                }
+                self.coordination_process_lock_status().err()
             },
         }
     }
