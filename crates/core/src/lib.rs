@@ -855,6 +855,10 @@ impl ThreadManager {
     }
 
     fn persist_thread(&self, thread: &Thread, rollout_path: Option<PathBuf>) -> Result<()> {
+        // This update payload carries no per-thread policy, so preserve any
+        // policy already stored for the thread rather than erasing it with
+        // NULLs on every persist/resume.
+        let existing = self.store.get_thread(&thread.id)?;
         self.store.upsert_thread(&ThreadMetadata {
             id: thread.id.clone(),
             rollout_path,
@@ -869,8 +873,12 @@ impl ThreadManager {
             cli_version: thread.cli_version.clone(),
             source: to_persisted_source(&thread.source),
             name: thread.name.clone(),
-            sandbox_policy: None,
-            approval_mode: None,
+            sandbox_policy: existing
+                .as_ref()
+                .and_then(|metadata| metadata.sandbox_policy.clone()),
+            approval_mode: existing
+                .as_ref()
+                .and_then(|metadata| metadata.approval_mode.clone()),
             archived: matches!(thread.status, ThreadStatus::Archived),
             archived_at: None,
             git_sha: None,
@@ -3203,6 +3211,53 @@ mod tests {
             .expect("resume thread")
             .expect("thread found");
         assert_eq!(message_count(&manager), 3);
+    }
+
+    #[test]
+    fn persist_thread_preserves_stored_policy() {
+        // persist_thread's update payload carries no per-thread policy;
+        // writing NULLs unconditionally erased any policy stored earlier
+        // (e.g. on every resume).
+        let store = temp_core_state("persist-policy");
+        let mut metadata = test_thread_metadata("thread-policy");
+        metadata.sandbox_policy = Some("workspace-write".to_string());
+        metadata.approval_mode = Some("on-request".to_string());
+        store.upsert_thread(&metadata).expect("seed thread");
+
+        // A fresh manager has an empty running-thread cache, so resume goes
+        // through the persisted path, which calls persist_thread.
+        let mut manager = ThreadManager::new(store);
+        let resume_params = ThreadResumeParams {
+            thread_id: "thread-policy".to_string(),
+            history: None,
+            path: None,
+            model: None,
+            model_provider: None,
+            cwd: None,
+            approval_policy: None,
+            sandbox: None,
+            config: None,
+            base_instructions: None,
+            developer_instructions: None,
+            personality: None,
+            persist_extended_history: false,
+        };
+        manager
+            .resume_thread_with_history(
+                &resume_params,
+                Path::new("/tmp/codewhale"),
+                "deepseek".to_string(),
+            )
+            .expect("resume thread")
+            .expect("thread found");
+
+        let persisted = manager
+            .state_store()
+            .get_thread("thread-policy")
+            .expect("read thread")
+            .expect("thread persisted");
+        assert_eq!(persisted.sandbox_policy.as_deref(), Some("workspace-write"));
+        assert_eq!(persisted.approval_mode.as_deref(), Some("on-request"));
     }
 
     #[tokio::test]
