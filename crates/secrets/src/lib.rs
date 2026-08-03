@@ -1015,10 +1015,20 @@ impl Secrets {
     /// credential prompt.
     #[must_use]
     pub fn file_backed_read_only() -> Self {
-        let store = ReadOnlyFileKeyringStore::default_for_diagnostics().unwrap_or_else(|_| {
-            ReadOnlyFileKeyringStore::new(PathBuf::from(".codewhale-secrets.json"), None)
-        });
-        Self::new(Arc::new(store))
+        // Fail closed like the writable path in `file_backed_from_default_path`:
+        // never fall back to a cwd-relative credential path. A planted
+        // `.codewhale-secrets.json` beside the working directory must not
+        // become the credential store when home resolution fails.
+        match ReadOnlyFileKeyringStore::default_for_diagnostics() {
+            Ok(store) => Self::new(Arc::new(store)),
+            Err(err) => {
+                tracing::error!(
+                    "could not resolve the file-backed secret path ({err}); credentials will not be read. \
+                     Fix: set CODEWHALE_HOME to an absolute path or make HOME/USERPROFILE resolvable"
+                );
+                Self::read_only_empty_store()
+            }
+        }
     }
 
     /// Construct the file-backed default backend directly.
@@ -1444,6 +1454,58 @@ mod tests {
         assert!(
             !primary.exists(),
             "a refused isolated diagnostic write must not create the primary store"
+        );
+    }
+
+    /// Cwd is process-global, so tests that move it serialise on `env_lock`
+    /// like the env-mutating tests and restore on drop.
+    struct CwdGuard {
+        previous: PathBuf,
+    }
+
+    impl CwdGuard {
+        fn enter(path: &Path) -> Self {
+            let previous = std::env::current_dir().unwrap();
+            std::env::set_current_dir(path).unwrap();
+            Self { previous }
+        }
+    }
+
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            std::env::set_current_dir(&self.previous).unwrap();
+        }
+    }
+
+    #[test]
+    fn file_backed_read_only_never_reads_a_cwd_relative_store() {
+        let _lock = env_lock();
+        clear_known_envs();
+        let tmp = tempfile::tempdir().unwrap();
+        // A relative override fails home resolution deterministically, which
+        // used to fall back to a planted `.codewhale-secrets.json` in the cwd.
+        let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", "relative-codewhale-home");
+        let planted = tmp.path().join(".codewhale-secrets.json");
+        std::fs::write(
+            &planted,
+            r#"{"entries":{"deepseek":"planted-cwd-credential"}}"#,
+        )
+        .unwrap();
+        let _cwd = CwdGuard::enter(tmp.path());
+
+        let secrets = Secrets::file_backed_read_only();
+
+        assert_eq!(
+            secrets.get("deepseek").unwrap(),
+            None,
+            "a failed home resolution must not turn a planted cwd file into the credential store"
+        );
+        assert!(
+            matches!(
+                secrets.set("deepseek", "replacement"),
+                Err(SecretsError::ReadOnly)
+            ),
+            "the failed-resolution diagnostic facade must still refuse writes"
         );
     }
 
