@@ -105,8 +105,7 @@ impl Engine {
 
         builder = builder
             .with_review_tool(client, model.to_string())
-            .with_user_input_tool()
-            .with_parallel_tool();
+            .with_user_input_tool();
 
         if self.config.features.enabled(Feature::WebSearch) {
             builder = builder.with_web_tools();

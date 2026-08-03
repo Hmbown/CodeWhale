@@ -184,7 +184,6 @@ pub fn build_entries_with_plugins(
         .with_web_tools()
         .with_git_tools()
         .with_user_input_tool()
-        .with_parallel_tool()
         .with_patch_tools()
         .with_note_tool()
         .with_diagnostics_tool()
