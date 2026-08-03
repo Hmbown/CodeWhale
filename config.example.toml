@@ -1302,6 +1302,12 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # persist_completed_activity = true
 # # Persist completed activity across process restarts via the run journal.
 # persist_completed_across_restarts = true
+# # Safety backstop for the operate-mode goal loop: maximum automatic
+# # cross-turn continuation passes before the goal pauses for inspection.
+# # Default u32::MAX (4294967295) = effectively unlimited; token/time budgets
+# # are the real resource limits in operate mode. Lower this for tighter
+# # runaway-cost protection, e.g. goal_continuation_cap = 50.
+# goal_continuation_cap = 4294967295
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Agent Fleet trust, security, and role registry (#3165, #3167)

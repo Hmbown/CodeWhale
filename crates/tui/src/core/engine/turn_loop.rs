@@ -3360,6 +3360,7 @@ impl Engine {
             crate::goal_loop::GoalBudget {
                 token_budget: snapshot.token_budget.map(u64::from),
                 time_budget_seconds: None,
+                max_continuations: self.config.goal_continuation_cap,
             },
         );
         if let crate::goal_loop::ContinuationDecision::Stop(reason) = decision {

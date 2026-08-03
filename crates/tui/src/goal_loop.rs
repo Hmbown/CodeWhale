@@ -16,10 +16,13 @@
 //! an unbounded goal from silently spending forever when the model never emits
 //! a terminal signal; explicit token/time budgets still take precedence.
 
-/// Maximum automatic cross-turn continuation passes for one goal.
+/// Fallback continuation circuit-breaker used when no explicit cap is
+/// configured via [`GoalBudget::max_continuations`].
 ///
 /// This matches the conservative run-cap used by the peer goal lifecycle while
-/// avoiding its much larger classifier/strategist subsystem.
+/// avoiding its much larger classifier/strategist subsystem. In operate mode,
+/// `[workflow] goal_continuation_cap` overrides this so that token/time budgets
+/// become the primary resource limits instead of a fixed count.
 pub const MAX_GOAL_CONTINUATIONS: u32 = 10;
 
 /// Terminal or active state of a persistent goal.
@@ -63,21 +66,31 @@ pub struct GoalProgress {
 }
 
 /// The optional token/time bounds on a goal run. `None` fields mean unbounded
-/// for that resource; the fixed continuation circuit breaker still applies.
+/// for that resource; the continuation circuit breaker applies unless
+/// `max_continuations` overrides it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GoalBudget {
     pub token_budget: Option<u64>,
     pub time_budget_seconds: Option<u64>,
+    /// Configurable continuation safety backstop.
+    ///
+    /// `None` falls back to [`MAX_GOAL_CONTINUATIONS`] (the conservative
+    /// default). Set to `u32::MAX` for an effectively unlimited run where
+    /// token/time budgets are the real resource limits (operate-mode default).
+    /// Operators can lower this to any finite value.
+    pub max_continuations: Option<u32>,
 }
 
 impl GoalBudget {
-    /// No token or time cap. Terminal status, user control, and the fixed
-    /// continuation circuit breaker still stop the run.
+    /// No token, time, or explicit continuation cap. Terminal status, user
+    /// control, and the fallback [`MAX_GOAL_CONTINUATIONS`] circuit breaker
+    /// still stop the run.
     #[allow(dead_code)]
     pub const fn unbounded() -> Self {
         Self {
             token_budget: None,
             time_budget_seconds: None,
+            max_continuations: None,
         }
     }
 
@@ -88,6 +101,7 @@ impl GoalBudget {
         Self {
             token_budget: Some(token_budget),
             time_budget_seconds: None,
+            max_continuations: None,
         }
     }
 }
@@ -106,7 +120,11 @@ pub enum ContinuationDecision {
 /// Precedence (most authoritative first):
 /// 1. A terminal model status (Completed / Blocked) ends the run.
 /// 2. An optional token or time budget, if exhausted, ends the run.
-/// 3. The continuation circuit breaker stops a runaway loop.
+/// 3. The continuation circuit breaker stops a runaway loop: uses
+///    `budget.max_continuations` when set, otherwise falls back to
+///    [`MAX_GOAL_CONTINUATIONS`]. In operate mode, `max_continuations`
+///    should be set high (e.g. `u32::MAX`) so that token/time budgets are
+///    the real resource limits.
 /// 4. Otherwise continue.
 #[must_use]
 pub fn decide_continuation(
@@ -134,7 +152,8 @@ pub fn decide_continuation(
     // 3. Runaway-cost backstop. This deliberately uses the already-durable
     // continuation counter instead of adding verifier fingerprints or another
     // orchestration subsystem.
-    if progress.continuations >= MAX_GOAL_CONTINUATIONS {
+    let cap = budget.max_continuations.unwrap_or(MAX_GOAL_CONTINUATIONS);
+    if progress.continuations >= cap {
         return ContinuationDecision::Stop(StopReason::ContinuationLimit);
     }
 
@@ -199,6 +218,7 @@ mod tests {
         let budget = GoalBudget {
             token_budget: Some(1000),
             time_budget_seconds: Some(600),
+            max_continuations: None,
         };
         assert_eq!(
             decide_continuation(GoalRunStatus::Active, progress, budget),
@@ -254,6 +274,7 @@ mod tests {
         let budget = GoalBudget {
             token_budget: None,
             time_budget_seconds: Some(600),
+            max_continuations: None,
         };
         assert_eq!(
             decide_continuation(GoalRunStatus::Active, progress, budget),
@@ -268,10 +289,88 @@ mod tests {
         let budget = GoalBudget {
             token_budget: Some(1_000_000),
             time_budget_seconds: Some(86_400),
+            max_continuations: None,
         };
         assert_eq!(
             decide_continuation(GoalRunStatus::Completed, progress, budget),
             ContinuationDecision::Stop(StopReason::Completed)
+        );
+    }
+
+    #[test]
+    fn custom_continuation_cap_stops_at_configured_limit() {
+        // A cap of 50 should stop when continuations reach 50.
+        let progress = GoalProgress {
+            continuations: 50,
+            ..GoalProgress::default()
+        };
+        let budget = GoalBudget {
+            token_budget: None,
+            time_budget_seconds: None,
+            max_continuations: Some(50),
+        };
+        assert_eq!(
+            decide_continuation(GoalRunStatus::Active, progress, budget),
+            ContinuationDecision::Stop(StopReason::ContinuationLimit)
+        );
+    }
+
+    #[test]
+    fn custom_continuation_cap_continues_below_limit() {
+        // At 49 continuations with a cap of 50, the run should continue.
+        let progress = GoalProgress {
+            continuations: 49,
+            ..GoalProgress::default()
+        };
+        let budget = GoalBudget {
+            token_budget: None,
+            time_budget_seconds: None,
+            max_continuations: Some(50),
+        };
+        assert_eq!(
+            decide_continuation(GoalRunStatus::Active, progress, budget),
+            ContinuationDecision::Continue
+        );
+    }
+
+    #[test]
+    fn max_u32_cap_lets_token_budget_be_the_real_limit() {
+        // Operate-mode default: max_continuations = u32::MAX means the
+        // continuation counter is never the stopping condition; only
+        // token/time budgets (or terminal status) stop the run.
+        let progress = GoalProgress {
+            continuations: 1000,
+            tokens_used: 1000,
+            ..GoalProgress::default()
+        };
+        let budget = GoalBudget {
+            token_budget: Some(1000),
+            time_budget_seconds: None,
+            max_continuations: Some(u32::MAX),
+        };
+        // Token budget is the stop here, not the continuation counter.
+        assert_eq!(
+            decide_continuation(GoalRunStatus::Active, progress, budget),
+            ContinuationDecision::Stop(StopReason::TokenBudget)
+        );
+    }
+
+    #[test]
+    fn max_u32_cap_continues_past_old_default() {
+        // With max_continuations = u32::MAX and no budget, a run at 100
+        // continuations (far above the old 10 cap) should still continue.
+        let progress = GoalProgress {
+            continuations: 100,
+            ..GoalProgress::default()
+        };
+        let budget = GoalBudget {
+            token_budget: None,
+            time_budget_seconds: None,
+            max_continuations: Some(u32::MAX),
+        };
+        assert_eq!(
+            decide_continuation(GoalRunStatus::Active, progress, budget),
+            ContinuationDecision::Continue
         );
     }
 }

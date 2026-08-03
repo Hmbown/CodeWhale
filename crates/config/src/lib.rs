@@ -1835,6 +1835,17 @@ pub struct WorkflowConfigToml {
     /// durable run journal.
     #[serde(default = "default_workflow_persist_completed_across_restarts")]
     pub persist_completed_across_restarts: bool,
+    /// Safety backstop for the operate-mode goal loop: the maximum number of
+    /// automatic cross-turn continuation passes before the loop pauses and
+    /// asks the operator to inspect and resume.
+    ///
+    /// The default (`u32::MAX`) is effectively unlimited — token/time budgets
+    /// are the real resource limits for operate-mode goals. Lower this for
+    /// tighter run-away cost protection. Note that this does NOT apply to the
+    /// completion gate: the loop still stops immediately when the model
+    /// self-reports Completed or Blocked regardless of this cap.
+    #[serde(default = "default_workflow_goal_continuation_cap")]
+    pub goal_continuation_cap: u32,
 }
 
 fn default_workflow_automatic() -> bool {
@@ -1882,6 +1893,13 @@ fn default_workflow_persist_completed_across_restarts() -> bool {
     true
 }
 
+fn default_workflow_goal_continuation_cap() -> u32 {
+    // Effectively unlimited: token/time budgets are the real resource limits
+    // for operate-mode goals. Operators can lower this for tighter cost
+    // protection.
+    u32::MAX
+}
+
 impl Default for WorkflowConfigToml {
     fn default() -> Self {
         Self {
@@ -1897,6 +1915,7 @@ impl Default for WorkflowConfigToml {
                 default_workflow_max_parallel_writes_without_worktree(),
             persist_completed_activity: default_workflow_persist_completed_activity(),
             persist_completed_across_restarts: default_workflow_persist_completed_across_restarts(),
+            goal_continuation_cap: default_workflow_goal_continuation_cap(),
         }
     }
 }

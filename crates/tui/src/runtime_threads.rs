@@ -5721,6 +5721,7 @@ impl RuntimeThreadManager {
                 goal_objective: None,
                 goal_token_budget: None,
                 goal_status: crate::tools::goal::GoalStatus::Active,
+                goal_continuation_cap: Some(cfg.workflow_config().goal_continuation_cap),
                 allowed_tools: None,
                 disallowed_tools: None,
                 max_tool_calls: None,

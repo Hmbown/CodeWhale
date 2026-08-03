@@ -333,6 +333,12 @@ pub struct EngineConfig {
     pub goal_objective: Option<String>,
     pub goal_token_budget: Option<u32>,
     pub goal_status: GoalStatus,
+    /// Configurable safety backstop for the operate-mode goal continuation
+    /// loop. `None` means the engine falls back to [`crate::goal_loop::MAX_GOAL_CONTINUATIONS`].
+    /// Production engines set this from `[workflow] goal_continuation_cap`
+    /// (default `u32::MAX` — effectively unlimited, so token/time budgets
+    /// become the real resource limits as intended for operate mode).
+    pub goal_continuation_cap: Option<u32>,
     /// Tool restriction from custom slash command frontmatter.
     /// `None` means the current turn may use the normal tool set.
     pub allowed_tools: Option<Vec<String>>,
@@ -454,6 +460,7 @@ impl Default for EngineConfig {
             goal_objective: None,
             goal_token_budget: None,
             goal_status: GoalStatus::Active,
+            goal_continuation_cap: None,
             allowed_tools: None,
             disallowed_tools: None,
             max_tool_calls: None,
@@ -3125,6 +3132,7 @@ impl Engine {
             crate::goal_loop::GoalBudget {
                 token_budget: snapshot.token_budget.map(u64::from),
                 time_budget_seconds: None,
+                max_continuations: self.config.goal_continuation_cap,
             },
         );
 
@@ -3165,7 +3173,7 @@ impl Engine {
                     crate::goal_loop::StopReason::ContinuationLimit => (
                         format!(
                             "Goal paused after {} automatic continuations without a terminal result; inspect progress, then resume if useful.",
-                            crate::goal_loop::MAX_GOAL_CONTINUATIONS,
+                            self.config.goal_continuation_cap.unwrap_or(crate::goal_loop::MAX_GOAL_CONTINUATIONS),
                         ),
                         GoalPauseReason::Backoff,
                     ),
