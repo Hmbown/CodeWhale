@@ -1286,6 +1286,7 @@
   "AutomationTrustModeLabel": "विश्वास ढंग",
   "AutomationAutoApproveLabel": "स्वचालित स्वीकृति",
   "AutomationRruleLabel": "पुनरावृत्ति नियम",
+  "AutomationDeliveryLabel": "डिलीवरी",
   "AutomationLastLabel": "पिछला",
   "AutomationRecentRunsLabel": "हाल के निष्पादन",
   "AutomationNoRuns": "कोई निष्पादन दर्ज नहीं",

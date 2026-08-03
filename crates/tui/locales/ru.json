@@ -1286,6 +1286,7 @@
   "AutomationTrustModeLabel": "режим доверия",
   "AutomationAutoApproveLabel": "автоматическое одобрение",
   "AutomationRruleLabel": "правило повторения",
+  "AutomationDeliveryLabel": "доставка",
   "AutomationLastLabel": "последняя",
   "AutomationRecentRunsLabel": "недавние запуски",
   "AutomationNoRuns": "нет записанных запусков",

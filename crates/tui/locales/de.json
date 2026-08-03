@@ -1286,6 +1286,7 @@
   "AutomationTrustModeLabel": "Vertrauensmodus",
   "AutomationAutoApproveLabel": "automatisch genehmigen",
   "AutomationRruleLabel": "Wiederholungsregel",
+  "AutomationDeliveryLabel": "Zustellung",
   "AutomationLastLabel": "letzte",
   "AutomationRecentRunsLabel": "letzte Ausführungen",
   "AutomationNoRuns": "keine aufgezeichneten Ausführungen",
