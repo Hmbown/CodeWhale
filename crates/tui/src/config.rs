@@ -6448,7 +6448,7 @@ mod paths;
 use paths::{
     canonicalize_or_keep, codewhale_home_dir, default_config_path, default_managed_config_path,
     default_mcp_config_path, default_memory_path, default_notes_path, default_requirements_path,
-    default_skills_dir, env_config_path, expand_pathbuf, try_default_config_path,
+    default_skills_dir, env_config_path, expand_pathbuf, home_config_path, try_default_config_path,
     workspace_config_key,
 };
 pub(crate) use paths::{effective_home_dir, expand_path};
@@ -9311,6 +9311,33 @@ impl SavedCredential {
     }
 }
 
+/// Resolve the config document for CREDENTIAL writes: api_key values,
+/// `auth_mode` markers, and oauth/external-credential pointers.
+///
+/// Credentials are user-global — a key saved while working in one repo must be
+/// visible from every other repo (#5045, #5193). The ambient
+/// `CODEWHALE_CONFIG_PATH`/`DEEPSEEK_CONFIG_PATH` override can point at a
+/// workspace-scoped document (`<repo>/.codewhale/config.toml`, plaintext and
+/// easy to commit by accident), so credential writes that would land there are
+/// rescoped to the user-global config instead. Non-credential settings keep
+/// the ambient scoping, and callers that pass an explicit config path never
+/// consult this resolver; a per-workspace destination stays possible only as
+/// that kind of explicit opt-in.
+fn credential_config_path() -> anyhow::Result<PathBuf> {
+    let resolved = try_default_config_path()?;
+    if !codewhale_config::config_path_is_workspace_scoped(&resolved) {
+        return Ok(resolved);
+    }
+    let global = home_config_path()
+        .context("Failed to resolve user-global config path: home directory not found.")?;
+    tracing::info!(
+        ambient = %resolved.display(),
+        global = %global.display(),
+        "rescoping credential write from workspace config to user-global config"
+    );
+    Ok(global)
+}
+
 /// Save the active provider's API key.
 ///
 /// The selected durable secret backend is attempted first. On success the
@@ -9336,7 +9363,7 @@ fn save_root_api_key_for_secret_slot(
         anyhow::bail!("Refusing to save an empty API key.");
     }
 
-    let path = try_default_config_path().context("Failed to resolve config path for API key.")?;
+    let path = credential_config_path().context("Failed to resolve config path for API key.")?;
 
     if let Some(secrets) = credential_secret_store_for_save() {
         let prior_secret = secrets.get(secret_slot);
@@ -9455,7 +9482,7 @@ fn save_root_api_key_metadata_without_plaintext(
 /// Write the `api_key` slot directly to `config.toml`.
 fn save_api_key_to_config_file(api_key: &str) -> Result<PathBuf> {
     let config_path =
-        try_default_config_path().context("Failed to resolve config path for API key.")?;
+        credential_config_path().context("Failed to resolve config path for API key.")?;
 
     ensure_parent_dir(&config_path)?;
 
@@ -9930,7 +9957,7 @@ fn save_api_key_for_identity_unlocked(
     anyhow::ensure!(!api_key.is_empty(), "Refusing to save an empty API key.");
 
     let config_path =
-        try_default_config_path().context("Failed to resolve config path for provider API key.")?;
+        credential_config_path().context("Failed to resolve config path for provider API key.")?;
     ensure_parent_dir(&config_path)?;
 
     let key_inside = if provider == ApiProvider::Custom {
@@ -10237,7 +10264,7 @@ pub(crate) fn persist_external_credential_consent_for_at(
     )?;
     let config_path = match config_path {
         Some(path) => path.to_path_buf(),
-        None => try_default_config_path()
+        None => credential_config_path()
             .context("Failed to resolve config path for external credential consent.")?,
     };
     ensure_parent_dir(&config_path)?;
@@ -10307,7 +10334,7 @@ pub(crate) fn revoke_external_credential_consent_for_at(
     );
     let config_path = match config_path {
         Some(path) => path.to_path_buf(),
-        None => try_default_config_path()
+        None => credential_config_path()
             .context("Failed to resolve config path for external credential consent.")?,
     };
     ensure_parent_dir(&config_path)?;
@@ -10481,8 +10508,9 @@ pub fn clear_api_key() -> Result<()> {
 fn clear_api_key_unlocked() -> Result<()> {
     // Strip api_key entries from config.toml, including provider-scoped
     // nested entries. Clearing a config file must not trigger platform
-    // credential prompts.
-    let config_path = try_default_config_path()
+    // credential prompts. Clears target the same user-global document that
+    // credential saves write, so logout removes what login stored (#5045).
+    let config_path = credential_config_path()
         .context("Failed to resolve config path while clearing API keys.")?;
 
     if !config_path.exists() {
@@ -10529,7 +10557,7 @@ pub fn clear_active_provider_api_key(provider: &str) -> Result<()> {
 }
 
 fn clear_active_provider_api_key_unlocked(provider: &str) -> Result<()> {
-    let config_path = try_default_config_path()
+    let config_path = credential_config_path()
         .context("Failed to resolve config path while clearing API keys.")?;
 
     if !config_path.exists() {
@@ -10641,9 +10669,18 @@ mod credential_scope_tests {
         let saved = save_api_key("workspace-rescope-test-key")?;
 
         let global_config = user_home.join("config.toml");
+        // Compare canonicalized paths: the resolved config path runs through
+        // `normalize_config_file_path`, which canonicalizes the parent, so on
+        // macOS the lexical `/var/folders/…` tempdir and its canonical
+        // `/private/var/folders/…` form are the same file. A lexical compare
+        // both false-fails and false-passes on that symlink.
+        let saved_path = match saved {
+            SavedCredential::ConfigFile(path) => path,
+            other => panic!("expected a config-file save, got {}", other.describe()),
+        };
         assert_eq!(
-            saved,
-            SavedCredential::ConfigFile(global_config.clone()),
+            canonicalize_or_keep(&saved_path),
+            canonicalize_or_keep(&global_config),
             "credential save must surface the user-global destination"
         );
         let global = fs::read_to_string(&global_config)?;
@@ -10686,9 +10723,10 @@ mod credential_scope_tests {
 
         let path = save_api_key_for(ApiProvider::Openrouter, "workspace-rescope-openrouter-key")?;
 
+        // Canonicalized comparison: see the root-key test above.
         assert_eq!(
-            path,
-            user_home.join("config.toml"),
+            canonicalize_or_keep(&path),
+            canonicalize_or_keep(&user_home.join("config.toml")),
             "provider save must report the user-global destination"
         );
         let global = fs::read_to_string(&path)?;
