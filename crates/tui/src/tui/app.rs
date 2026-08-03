@@ -1425,10 +1425,6 @@ pub struct App {
     /// Total horizontal space (chat + sidebar) used to compute the percentage
     /// during sidebar resize drag.
     pub sidebar_resize_total_width: u16,
-    /// Sidebar width changed during this drag and needs persistence.
-    pub sidebar_width_dirty: bool,
-    /// Sidebar focus/hidden state changed and needs persistence.
-    pub sidebar_focus_dirty: bool,
     /// Whether the session-context panel is enabled (#504).
     pub context_panel: bool,
     /// Whether the persistent Sessions rail is enabled (#2934). Opt-in.
@@ -4104,7 +4100,6 @@ impl App {
     pub fn set_sidebar_focus(&mut self, focus: SidebarFocus) {
         if self.sidebar_focus != focus {
             self.sidebar_focus = focus;
-            self.sidebar_focus_dirty = true;
         }
         self.needs_redraw = true;
     }

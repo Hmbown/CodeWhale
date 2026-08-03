@@ -9083,20 +9083,6 @@ fn ctrl_alt_0_restores_top_rail_when_already_off() {
 }
 
 #[test]
-fn sidebar_focus_dirty_persists_saved_focus() {
-    let _guard = ConfigPathEnvGuard::new();
-    let mut app = create_test_app();
-    app.sidebar_focus = SidebarFocus::Hidden;
-    app.sidebar_focus_dirty = true;
-
-    persist_sidebar_settings_if_dirty(&mut app);
-
-    assert!(!app.sidebar_focus_dirty);
-    let settings = crate::settings::Settings::load().expect("load settings");
-    assert_eq!(settings.sidebar_focus, "hidden");
-}
-
-#[test]
 fn rail_command_reports_off_without_claiming_visibility() {
     // Replaces the old sidebar_render_state tests: the render-state machine
     // is gone with the classic sidebar, and the /rail status readout is the
@@ -20037,8 +20023,8 @@ fn status_animation_ticks_for_a_visible_background_task() {
     let mut app = create_test_app();
     app.low_motion = false;
     app.fancy_animations = true;
-    app.sidebar_focus = SidebarFocus::Tasks;
-    app.last_sidebar_area = Some(Rect::new(80, 0, 20, 20));
+    app.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
+    app.work_surface.last_area = Some(Rect::new(80, 0, 20, 20));
     app.task_panel.push(TaskPanelEntry {
         id: "shell_smooth".to_string(),
         status: "running".to_string(),
@@ -20059,7 +20045,7 @@ fn status_animation_ticks_for_a_visible_background_task() {
         &app, false, false, false, false
     ));
 
-    app.last_sidebar_area = None;
+    app.work_surface.last_area = None;
     assert!(!visible_background_task_has_live_motion(&app));
     assert!(!should_tick_status_animation(
         &app, false, false, false, false

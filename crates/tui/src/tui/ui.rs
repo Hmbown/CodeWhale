@@ -5688,7 +5688,6 @@ async fn run_event_loop(
                         }
                     }
                 }
-                persist_sidebar_settings_if_dirty(app);
                 continue;
             }
 
@@ -6353,7 +6352,6 @@ async fn run_event_loop(
                 {
                     return Ok(());
                 }
-                persist_sidebar_settings_if_dirty(app);
                 continue;
             }
 
@@ -7754,29 +7752,6 @@ fn rail_panel_shortcut(app: &mut App, panel: crate::tui::work_surface::RailPanel
 
 fn apply_alt_4_shortcut(app: &mut App, _modifiers: KeyModifiers) {
     rail_panel_shortcut(app, crate::tui::work_surface::RailPanel::Pinned);
-}
-
-fn persist_sidebar_settings_if_dirty(app: &mut App) {
-    if !app.sidebar_width_dirty && !app.sidebar_focus_dirty {
-        return;
-    }
-
-    let width_dirty = app.sidebar_width_dirty;
-    let focus_dirty = app.sidebar_focus_dirty;
-    app.sidebar_width_dirty = false;
-    app.sidebar_focus_dirty = false;
-
-    let width_percent = app.sidebar_width_percent;
-    let focus_setting = app.sidebar_focus.as_setting();
-    let _ = Settings::transact(|settings| {
-        if width_dirty {
-            settings.update_sidebar_width(width_percent);
-        }
-        if focus_dirty {
-            let _ = settings.set("sidebar_focus", focus_setting);
-        }
-        Ok(())
-    });
 }
 
 fn apply_alt_0_shortcut(app: &mut App, modifiers: KeyModifiers) {

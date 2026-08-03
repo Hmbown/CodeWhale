@@ -730,8 +730,6 @@ impl App {
             last_sidebar_host_width: None,
             last_sidebar_handle_area: None,
             sidebar_resize_total_width: 0,
-            sidebar_width_dirty: false,
-            sidebar_focus_dirty: false,
             context_panel: settings.context_panel,
             sessions_rail: settings.sessions_rail,
             sessions_rail_cache: None,
