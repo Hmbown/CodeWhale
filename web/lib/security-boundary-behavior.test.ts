@@ -178,4 +178,51 @@ describe("public security boundaries", () => {
     expect(securityMocks.agentChat).not.toHaveBeenCalled();
     expect(prKv.values.has("draft:pr-review:84")).toBe(true);
   });
+
+  it("posts bodyZh when lang=zh and no editedBody is supplied", async () => {
+    const draft = {
+      id: "42",
+      type: "triage",
+      targetNumber: 42,
+      bodyEn: "English body",
+      bodyZh: "中文正文",
+      generatedAt: "2026-01-01T00:00:00.000Z",
+      posted: false,
+    };
+    const kv = new FakeKv();
+    kv.values.set("draft:triage:42", JSON.stringify(draft));
+
+    const capturedBodies: string[] = [];
+    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = inputUrl(input);
+      if (url.includes("/issues/42/comments")) {
+        const reqBody = JSON.parse((init?.body as string) ?? "{}");
+        capturedBodies.push(reqBody.body);
+        return new Response(JSON.stringify({ id: 1 }), { status: 201, headers: { "content-type": "application/json" } });
+      }
+      throw new Error(`unexpected URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", mockFetch);
+
+    securityMocks.getAgentEnv.mockResolvedValue({
+      CURATED_KV: kv,
+      MAINTAINER_TOKEN: "configured",
+      MAINTAINER_GITHUB_PAT: "ghp_test",
+      GITHUB_REPO: "Hmbown/CodeWhale",
+    });
+
+    const response = await adminPost(new Request("https://codewhale.net/api/admin/post", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        cookie: "mt_sid=test-session",
+        origin: "https://codewhale.net",
+      },
+      body: JSON.stringify({ action: "post", draftKey: "draft:triage:42", lang: "zh" }),
+    }));
+
+    await expect(response.json()).resolves.toMatchObject({ ok: true });
+    expect(capturedBodies).toHaveLength(1);
+    expect(capturedBodies[0]).toBe("中文正文");
+  });
 });

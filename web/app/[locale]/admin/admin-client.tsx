@@ -50,7 +50,7 @@ export function AdminClient({ drafts, posted, isZh, typeLabels }: Props) {
   const startEdit = (draft: AgentDraft) => {
     const key = draftStorageKey(draft);
     setEditing(key);
-    setEditBody(draft.bodyEn);
+    setEditBody(isZh ? draft.bodyZh : draft.bodyEn);
   };
 
   return (
@@ -160,7 +160,7 @@ export function AdminClient({ drafts, posted, isZh, typeLabels }: Props) {
                   )}
                   <span className="ml-auto pill pill-jade text-[0.6rem]">{isZh ? "已发布" : "posted"}</span>
                 </div>
-                <p className="text-xs text-ink-mute line-clamp-2">{draft.bodyEn.slice(0, 120)}…</p>
+                <p className="text-xs text-ink-mute line-clamp-2">{(isZh ? draft.bodyZh : draft.bodyEn).slice(0, 120)}…</p>
               </div>
             );
           })}
