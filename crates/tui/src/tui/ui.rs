@@ -6573,24 +6573,21 @@ async fn run_event_loop(
                     if key.modifiers.contains(KeyModifiers::ALT)
                         && key_shortcuts::has_control_like_modifier(key.modifiers) =>
                 {
-                    app.set_sidebar_focus(SidebarFocus::Pinned);
-                    app.status_message = Some("Sidebar focus: pinned".to_string());
+                    rail_panel_shortcut(app, crate::tui::work_surface::RailPanel::Tasks);
                     continue;
                 }
                 KeyCode::Char('2')
                     if key.modifiers.contains(KeyModifiers::ALT)
                         && key_shortcuts::has_control_like_modifier(key.modifiers) =>
                 {
-                    app.set_sidebar_focus(SidebarFocus::Tasks);
-                    app.status_message = Some("Sidebar focus: activity".to_string());
+                    rail_panel_shortcut(app, crate::tui::work_surface::RailPanel::Agents);
                     continue;
                 }
                 KeyCode::Char('3')
                     if key.modifiers.contains(KeyModifiers::ALT)
                         && key_shortcuts::has_control_like_modifier(key.modifiers) =>
                 {
-                    app.set_sidebar_focus(SidebarFocus::Agents);
-                    app.status_message = Some("Sidebar focus: agents".to_string());
+                    rail_panel_shortcut(app, crate::tui::work_surface::RailPanel::Context);
                     continue;
                 }
                 KeyCode::Char('4')
@@ -6600,15 +6597,7 @@ async fn run_event_loop(
                     apply_alt_4_shortcut(app, key.modifiers);
                     continue;
                 }
-                KeyCode::Char('5')
-                    if key.modifiers.contains(KeyModifiers::ALT)
-                        && key_shortcuts::has_control_like_modifier(key.modifiers) =>
-                {
-                    app.set_sidebar_focus(SidebarFocus::Sessions);
-                    app.status_message = Some("Sidebar focus: sessions".to_string());
-                    continue;
-                }
-                // Sidebar focus via Alt+! / Alt+@ / Alt+# / Alt+$ / Alt+%)
+                // Rail panel selection via Alt+! / Alt+@ / Alt+# / Alt+$ / Alt+%
                 // AltGr on European keyboards emits Ctrl+Alt on Windows, so
                 // exclude Ctrl to avoid swallowing AltGr-typed characters
                 // like @ (AltGr+0 on French AZERTY) and # (AltGr+3). This
@@ -6618,51 +6607,34 @@ async fn run_event_loop(
                     if key.modifiers.contains(KeyModifiers::ALT)
                         && !key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
-                    app.set_sidebar_focus(SidebarFocus::Pinned);
-                    app.status_message = Some("Sidebar focus: pinned".to_string());
+                    rail_panel_shortcut(app, crate::tui::work_surface::RailPanel::Tasks);
                     continue;
                 }
                 KeyCode::Char('@')
                     if key.modifiers.contains(KeyModifiers::ALT)
                         && !key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
-                    app.set_sidebar_focus(SidebarFocus::Tasks);
-                    app.status_message = Some("Sidebar focus: activity".to_string());
+                    rail_panel_shortcut(app, crate::tui::work_surface::RailPanel::Agents);
                     continue;
                 }
                 KeyCode::Char('#')
                     if key.modifiers.contains(KeyModifiers::ALT)
                         && !key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
-                    app.set_sidebar_focus(SidebarFocus::Agents);
-                    app.status_message = Some("Sidebar focus: agents".to_string());
+                    rail_panel_shortcut(app, crate::tui::work_surface::RailPanel::Context);
                     continue;
                 }
                 KeyCode::Char('$') | KeyCode::Char('%')
                     if key.modifiers.contains(KeyModifiers::ALT)
                         && !key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
-                    app.set_sidebar_focus(SidebarFocus::Context);
-                    app.status_message = Some("Sidebar focus: context".to_string());
+                    rail_panel_shortcut(app, crate::tui::work_surface::RailPanel::Pinned);
                     continue;
                 }
-                KeyCode::Char('^')
+                KeyCode::Char('0')
                     if key.modifiers.contains(KeyModifiers::ALT)
-                        && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+                        && key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
-                    app.set_sidebar_focus(SidebarFocus::Sessions);
-                    app.status_message = Some("Sidebar focus: sessions".to_string());
-                    continue;
-                }
-                KeyCode::Char(')')
-                    if key.modifiers.contains(KeyModifiers::ALT)
-                        && !key.modifiers.contains(KeyModifiers::CONTROL) =>
-                {
-                    app.set_sidebar_focus(SidebarFocus::Auto);
-                    app.status_message = Some("Sidebar focus: auto".to_string());
-                    continue;
-                }
-                KeyCode::Char('0') if key.modifiers.contains(KeyModifiers::ALT) => {
                     apply_alt_0_shortcut(app, key.modifiers);
                     continue;
                 }
@@ -7766,9 +7738,21 @@ fn dispatch_hotbar_slot(
     action.dispatch(app).map(Some)
 }
 
+/// Select a rail panel from a keyboard shortcut and say what happened.
+/// When the rail is off the panel change is real but invisible, so the
+/// status names that instead of implying something rendered.
+fn rail_panel_shortcut(app: &mut App, panel: crate::tui::work_surface::RailPanel) {
+    app.work_surface.panel = panel;
+    app.needs_redraw = true;
+    let mut message = format!("Rail panel: {}", panel.as_setting());
+    if app.work_surface.placement == crate::tui::work_surface::WorkSurfacePlacement::Off {
+        message.push_str(" (rail is off — /rail top to show)");
+    }
+    app.status_message = Some(message);
+}
+
 fn apply_alt_4_shortcut(app: &mut App, _modifiers: KeyModifiers) {
-    app.set_sidebar_focus(SidebarFocus::Agents);
-    app.status_message = Some("Sidebar focus: agents".to_string());
+    rail_panel_shortcut(app, crate::tui::work_surface::RailPanel::Pinned);
 }
 
 fn persist_sidebar_settings_if_dirty(app: &mut App) {
@@ -7795,17 +7779,18 @@ fn persist_sidebar_settings_if_dirty(app: &mut App) {
 }
 
 fn apply_alt_0_shortcut(app: &mut App, modifiers: KeyModifiers) {
+    // Ctrl+Alt+0 toggles the rail off and back to the default top
+    // placement. Plain Alt+0 is unbound: it used to select the retired
+    // auto-collapse mode.
     if modifiers.contains(KeyModifiers::CONTROL) {
-        if app.sidebar_focus == SidebarFocus::Hidden {
-            app.set_sidebar_focus(SidebarFocus::Pinned);
-            app.status_message = Some("Sidebar focus: pinned".to_string());
+        if app.work_surface.placement == crate::tui::work_surface::WorkSurfacePlacement::Off {
+            app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Top;
+            app.status_message = Some("Rail: top placement".to_string());
         } else {
-            app.set_sidebar_focus(SidebarFocus::Hidden);
-            app.status_message = Some("Sidebar hidden".to_string());
+            app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Off;
+            app.status_message = Some("Rail is off".to_string());
         }
-    } else {
-        app.set_sidebar_focus(SidebarFocus::Auto);
-        app.status_message = Some("Sidebar focus: auto".to_string());
+        app.needs_redraw = true;
     }
 }
 

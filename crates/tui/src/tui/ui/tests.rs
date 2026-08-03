@@ -8821,16 +8821,18 @@ fn spans_text(spans: &[Span<'_>]) -> String {
 }
 
 #[test]
-fn ctrl_alt_4_focuses_agents_sidebar_without_switching_modes() {
+fn ctrl_alt_4_selects_pinned_rail_panel_without_switching_modes() {
     let mut app = create_test_app();
     app.mode = AppMode::Agent;
-    app.sidebar_focus = SidebarFocus::Auto;
 
     apply_alt_4_shortcut(&mut app, KeyModifiers::ALT | KeyModifiers::CONTROL);
 
     assert_eq!(app.mode, AppMode::Agent);
-    assert_eq!(app.sidebar_focus, SidebarFocus::Agents);
-    assert_eq!(app.status_message.as_deref(), Some("Sidebar focus: agents"));
+    assert_eq!(
+        app.work_surface.panel,
+        crate::tui::work_surface::RailPanel::Pinned
+    );
+    assert_eq!(app.status_message.as_deref(), Some("Rail panel: pinned"));
 }
 
 #[test]
@@ -9117,37 +9119,47 @@ fn hotbar_bound_reasoning_action_updates_auto_model_preference() {
 }
 
 #[test]
-fn alt_0_restores_auto_sidebar_focus() {
+fn alt_0_without_ctrl_is_unbound_after_auto_mode_retired() {
     let mut app = create_test_app();
-    app.sidebar_focus = SidebarFocus::Hidden;
+    app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Left;
 
     apply_alt_0_shortcut(&mut app, KeyModifiers::ALT);
 
-    assert_eq!(app.sidebar_focus, SidebarFocus::Auto);
-    assert_eq!(app.status_message.as_deref(), Some("Sidebar focus: auto"));
+    // Auto-collapse was dropped with the legacy sidebar; plain Alt+0 must
+    // not mutate placement or claim anything about the rail.
+    assert_eq!(
+        app.work_surface.placement,
+        crate::tui::work_surface::WorkSurfacePlacement::Left
+    );
+    assert!(app.status_message.is_none());
 }
 
 #[test]
-fn ctrl_alt_0_hides_sidebar() {
+fn ctrl_alt_0_turns_rail_off() {
     let mut app = create_test_app();
-    app.sidebar_focus = SidebarFocus::Tasks;
+    app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Top;
 
     apply_alt_0_shortcut(&mut app, KeyModifiers::ALT | KeyModifiers::CONTROL);
 
-    assert_eq!(app.sidebar_focus, SidebarFocus::Hidden);
-    assert!(app.sidebar_focus_dirty);
-    assert_eq!(app.status_message.as_deref(), Some("Sidebar hidden"));
+    assert_eq!(
+        app.work_surface.placement,
+        crate::tui::work_surface::WorkSurfacePlacement::Off
+    );
+    assert_eq!(app.status_message.as_deref(), Some("Rail is off"));
 }
 
 #[test]
-fn ctrl_alt_0_restores_pinned_sidebar_when_already_hidden() {
+fn ctrl_alt_0_restores_top_rail_when_already_off() {
     let mut app = create_test_app();
-    app.sidebar_focus = SidebarFocus::Hidden;
+    app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Off;
 
     apply_alt_0_shortcut(&mut app, KeyModifiers::ALT | KeyModifiers::CONTROL);
 
-    assert_eq!(app.sidebar_focus, SidebarFocus::Pinned);
-    assert_eq!(app.status_message.as_deref(), Some("Sidebar focus: pinned"));
+    assert_eq!(
+        app.work_surface.placement,
+        crate::tui::work_surface::WorkSurfacePlacement::Top
+    );
+    assert_eq!(app.status_message.as_deref(), Some("Rail: top placement"));
 }
 
 #[test]
