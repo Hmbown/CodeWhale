@@ -1585,3 +1585,34 @@ fn workspace_and_dir_entry_point_shares_the_same_cache() {
     assert_eq!(first.len(), second.len());
     assert!(second.get("configured").is_some());
 }
+
+#[test]
+fn global_skill_roots_come_from_the_os_home_only() {
+    // §2.5: global skill roots resolve under the OS user's home (or an
+    // explicit `$CODEWHALE_HOME`), never an account/GitHub handle. A wrong
+    // home once produced `Failed to read /Users/<handle>/.codewhale/skills/
+    // delegate/SKILL.md`; pin the source so every global root is provably
+    // under the faked OS home.
+    let _env_lock = crate::test_support::lock_test_env();
+    let tmpdir = TempDir::new().unwrap();
+    let home = tmpdir.path().join("os-home");
+    let workspace = tmpdir.path().join("workspace");
+    std::fs::create_dir_all(home.join(".codewhale").join("skills")).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let _home = crate::test_support::EnvVarGuard::set("HOME", &home);
+    let _userprofile = crate::test_support::EnvVarGuard::set("USERPROFILE", &home);
+    let _codewhale_home = crate::test_support::EnvVarGuard::remove("CODEWHALE_HOME");
+
+    let dirs =
+        super::skills_directories_for_mode(&workspace, super::SkillDiscoveryMode::Compatible);
+
+    assert!(
+        dirs.iter().any(|dir| dir.starts_with(&home)),
+        "expected at least one global root under the OS home: {dirs:?}"
+    );
+    assert!(
+        dirs.iter()
+            .all(|dir| dir.starts_with(&home) || dir.starts_with(&workspace)),
+        "every runtime root is under the OS home or the workspace: {dirs:?}"
+    );
+}
