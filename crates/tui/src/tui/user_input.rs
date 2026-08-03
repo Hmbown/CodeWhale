@@ -226,8 +226,11 @@ impl UserInputView {
     /// Resolve a digit/Enter activation for the currently highlighted row.
     ///
     /// - "Other" row → enter free-text input mode.
-    /// - multi-select option → toggle into the pending set (Enter confirms on
-    ///   the dedicated "Confirm" step; here it just toggles, like Space).
+    /// - multi-select option → add to the pending set (never remove — that is
+    ///   Space's job) and move focus to the Confirm row, so the single-select
+    ///   muscle memory of Enter-then-Enter submits the highlighted option
+    ///   instead of toggling it back out and submitting an empty set.
+    /// - multi-select Confirm row → submit the pending set.
     /// - single-select option → submit immediately (legacy behavior).
     fn activate_or_confirm_selection(&mut self) -> ViewAction {
         if self.is_other_selected() {
@@ -253,8 +256,15 @@ impl UserInputView {
                     .collect();
                 return self.advance_question(answers);
             }
-            // Enter/Space on a real option toggles it into the pending set.
-            self.toggle_pending(self.selected);
+            // Enter on a real option selects it and moves to Confirm. It
+            // never toggles out: double-Enter must submit the highlighted
+            // option, matching single-select on the same view.
+            if !self.multi_pending.contains(&self.selected) {
+                self.multi_pending.push(self.selected);
+            }
+            if let Some(confirm) = self.confirm_index() {
+                self.selected = confirm;
+            }
             return ViewAction::None;
         }
         // Single-select: submit immediately.
@@ -451,7 +461,7 @@ impl ModalView for UserInputView {
                     Span::styled(" toggle", Style::default().fg(palette::TEXT_MUTED)),
                     Span::raw("  "),
                     Span::styled("Enter", Style::default().fg(palette::WHALE_INFO).bold()),
-                    Span::styled(" toggle/confirm", Style::default().fg(palette::TEXT_MUTED)),
+                    Span::styled(" select/confirm", Style::default().fg(palette::TEXT_MUTED)),
                     Span::raw("  "),
                     Span::styled("Esc", Style::default().fg(palette::WHALE_INFO).bold()),
                     Span::styled(" cancel", Style::default().fg(palette::TEXT_MUTED)),
@@ -668,6 +678,64 @@ mod tests {
                 if tool_id == "tool-1" && response.answers.first().is_some_and(|a| a.value == "Ship it")),
             "Enter on confirm submits the toggled options"
         );
+    }
+
+    #[test]
+    fn user_input_modal_double_enter_never_submits_empty_multi_select() {
+        // Enter on a multi-select option used to toggle it into the pending
+        // set, so a second Enter (single-select muscle memory) toggled it
+        // back out — and Confirm then submitted an empty answer set.
+        let mut view = sample_view();
+        view.request.questions[0].multi_select = true;
+        view.selected = 0;
+
+        // First Enter: option 0 joins the pending set, focus moves to Confirm.
+        let action = view.handle_selecting_key(KeyEvent::from(KeyCode::Enter));
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(
+            view.multi_pending,
+            vec![0],
+            "Enter selects the highlighted option"
+        );
+        assert!(
+            view.is_confirm_selected(),
+            "focus moves to the Confirm row after Enter"
+        );
+
+        // Second Enter submits exactly that option — never an empty set.
+        let action = view.handle_selecting_key(KeyEvent::from(KeyCode::Enter));
+        assert!(
+            matches!(action, ViewAction::EmitAndClose(ViewEvent::UserInputSubmitted { tool_id, response })
+                if tool_id == "tool-1"
+                    && response.answers.len() == 1
+                    && response.answers[0].value == "Ship it"),
+            "double-Enter must submit the highlighted option, not an empty set"
+        );
+    }
+
+    #[test]
+    fn user_input_modal_enter_never_deselects_multi_select_option() {
+        // Deselecting remains Space's job: Enter on an already-toggled option
+        // keeps it in the pending set.
+        let mut view = sample_view();
+        view.request.questions[0].multi_select = true;
+        view.selected = 0;
+
+        let _ = view.handle_selecting_key(KeyEvent::from(KeyCode::Char(' ')));
+        assert_eq!(view.multi_pending, vec![0], "Space toggles option 0 in");
+
+        let action = view.handle_selecting_key(KeyEvent::from(KeyCode::Enter));
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(
+            view.multi_pending,
+            vec![0],
+            "Enter must not toggle the option back out"
+        );
+
+        // Space still toggles both ways.
+        view.selected = 0;
+        let _ = view.handle_selecting_key(KeyEvent::from(KeyCode::Char(' ')));
+        assert!(view.multi_pending.is_empty(), "Space toggles option 0 out");
     }
 
     #[test]
