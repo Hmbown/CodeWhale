@@ -3081,9 +3081,9 @@ pub(super) fn apply_reasoning_effort(
             // (qwen-max, deepseek-chat, gpt-4o, claude, etc.) accepts the same
             // reasoning dialect (#4188 review: verify against actual behavior).
             ApiProvider::Telecomjs => {}
-            // Model Studio: same reasoning as TelecomJS — the Chat Completions
-            // API does not expose reasoning_effort/thinking controls. Reasoning
-            // is model-specific on the DashScope side and not surfaced here.
+            // Model Studio controls are route- and model-specific. The Chat
+            // Completions builder applies its documented top-level fields only
+            // after it has verified an Alibaba first-party route.
             ApiProvider::ModelstudioTokenPlan
             | ApiProvider::ModelstudioTokenPlanAnthropic
             | ApiProvider::ModelstudioCodingPlan
@@ -3156,7 +3156,7 @@ pub(super) fn apply_reasoning_effort(
             // TelecomJS: see comment in the "off" branch above — the gateway's
             // Chat Completions API does not support reasoning_effort or thinking.
             ApiProvider::Telecomjs => {}
-            // Model Studio: same reasoning as TelecomJS above.
+            // See the route-specific Model Studio shaper in client::chat.
             ApiProvider::ModelstudioTokenPlan
             | ApiProvider::ModelstudioTokenPlanAnthropic
             | ApiProvider::ModelstudioCodingPlan
@@ -3256,7 +3256,7 @@ pub(super) fn apply_reasoning_effort(
             // TelecomJS: see comment in the "off" branch above — the gateway's
             // Chat Completions API does not support reasoning_effort or thinking.
             ApiProvider::Telecomjs => {}
-            // Model Studio: same reasoning as TelecomJS above.
+            // See the route-specific Model Studio shaper in client::chat.
             ApiProvider::ModelstudioTokenPlan
             | ApiProvider::ModelstudioTokenPlanAnthropic
             | ApiProvider::ModelstudioCodingPlan
