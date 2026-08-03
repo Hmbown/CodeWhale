@@ -1688,7 +1688,7 @@ fn render_picker_model_hint(
         if provider == Some(ApiProvider::OpenaiCodex) {
             parts.push(format!(
                 "{} ctx · ChatGPT route",
-                format_picker_context_window(context_window)
+                format_picker_context_window(u64::from(context_window))
             ));
         } else if provider == Some(ApiProvider::Moonshot)
             && id.trim().eq_ignore_ascii_case("k3")
@@ -1700,18 +1700,21 @@ fn render_picker_model_hint(
             // `context_window` setting when the plan includes 1M.
             parts.push(format!(
                 "{} ctx (plan floor; raise via context_window)",
-                format_picker_context_window(context_window)
+                format_picker_context_window(u64::from(context_window))
             ));
         } else {
             parts.push(format!(
                 "{} ctx",
-                format_picker_context_window(context_window)
+                format_picker_context_window(u64::from(context_window))
             ));
         }
     }
 
     if let Some(max_output) = metadata.max_output {
-        parts.push(format!("{} out", format_picker_context_window(max_output)));
+        parts.push(format!(
+            "{} out",
+            format_picker_context_window(u64::from(max_output))
+        ));
     }
 
     match metadata.tool_calls {
@@ -1755,7 +1758,7 @@ fn render_picker_model_hint(
     }
 }
 
-fn format_picker_context_window(tokens: u32) -> String {
+pub(crate) fn format_picker_context_window(tokens: u64) -> String {
     if tokens >= 1_000_000 {
         if tokens.is_multiple_of(1_000_000) {
             format!("{}M", tokens / 1_000_000)

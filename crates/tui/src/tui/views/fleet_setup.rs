@@ -559,13 +559,23 @@ impl FleetSetupView {
                 || readiness.label().into_owned(),
                 |detail| format!("{}: {detail}", readiness.label()),
             );
+            // Capability badges from the existing catalog/registry owners
+            // (#5038): shown in the word-wrapped detail pane so the picker
+            // list stays narrow-terminal friendly. Unknown models honestly
+            // omit the sentence instead of blocking selection.
+            let capability_note = crate::fleet::capability_badges::resolve_route_capability_badges(
+                Some(provider),
+                model,
+            )
+            .map(|badges| format!(" Capabilities: {}.", badges.summary()))
+            .unwrap_or_default();
             model_choices.push(Choice {
                 label: Cow::Owned(model.clone()),
                 summary: Cow::Owned(format!(
                     "Pin this model ({provider_label}) · {readiness_summary}"
                 )),
                 description: Cow::Owned(format!(
-                    "Route this worker to {model} on {provider_label} instead of inheriting the session route."
+                    "Route this worker to {model} on {provider_label} instead of inheriting the session route.{capability_note}"
                 )),
             });
             // Canonical provider id (not the display label above) — this is
@@ -1665,6 +1675,54 @@ mod tests {
             panic!("sample draft should parse");
         };
         draft
+    }
+
+    /// #5038: the Model step's detail pane carries capability badges for
+    /// known catalog models and honestly omits them for unknown models, so
+    /// stale/absent data never blocks selection.
+    #[test]
+    fn model_step_detail_shows_capability_badges_for_known_models_only() {
+        let mut snap = snapshot();
+        snap.available_models.push((
+            "deepseek".to_string(),
+            "totally-made-up-model-xyz".to_string(),
+            crate::provider_readiness::ResolvedProviderReadiness::SavedUnchecked,
+        ));
+        let view = FleetSetupView::from_snapshot(snap);
+
+        let known = view
+            .model_choices
+            .iter()
+            .find(|choice| choice.label == "deepseek-v4-pro")
+            .expect("known catalog model row");
+        assert!(
+            known.description.contains("Capabilities:"),
+            "{}",
+            known.description
+        );
+        assert!(
+            known.description.contains("1M ctx"),
+            "{}",
+            known.description
+        );
+        assert!(
+            known.description.contains("catalog"),
+            "catalog-backed rows must name catalog provenance: {}",
+            known.description
+        );
+
+        let unknown = view.model_choices.last().expect("appended unknown row");
+        assert_eq!(unknown.label, "totally-made-up-model-xyz");
+        assert!(
+            !unknown.description.contains("Capabilities:"),
+            "{}",
+            unknown.description
+        );
+        // The unknown row stays selectable; absence of data is not a block.
+        assert_eq!(
+            view.model_row_states.last(),
+            Some(&FleetModelRowState::Ready)
+        );
     }
 
     #[test]

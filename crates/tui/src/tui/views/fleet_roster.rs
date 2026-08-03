@@ -43,6 +43,9 @@ use crate::worker_profile::{ShellPolicy, WorkerRuntimeProfile};
 #[derive(Debug, Clone)]
 struct OperatorInfo {
     provider: String,
+    /// Exact canonical route key, kept separate from the display label so
+    /// capability lookup can use provider-scoped catalog facts.
+    provider_id: String,
     model: String,
     reasoning: String,
 }
@@ -57,13 +60,32 @@ impl OperatorInfo {
         } else {
             app.model.clone()
         };
-        let provider = if app.api_provider == crate::config::ApiProvider::Custom {
-            app.provider_identity_for_persistence().to_string()
+        let route_provider = if app.auto_model {
+            app.last_effective_provider.unwrap_or(app.api_provider)
         } else {
-            app.api_provider.display_name().to_string()
+            app.api_provider
+        };
+        let provider_id = if app.auto_model {
+            app.last_effective_provider_identity
+                .clone()
+                .unwrap_or_else(|| {
+                    if route_provider == crate::config::ApiProvider::Custom {
+                        app.provider_identity_for_persistence().to_string()
+                    } else {
+                        route_provider.as_str().to_string()
+                    }
+                })
+        } else {
+            app.provider_identity_for_persistence().to_string()
+        };
+        let provider = if route_provider == crate::config::ApiProvider::Custom {
+            provider_id.clone()
+        } else {
+            route_provider.display_name().to_string()
         };
         Self {
             provider,
+            provider_id,
             model,
             reasoning: app.reasoning_effort_display_label(),
         }
@@ -439,6 +461,15 @@ fn operator_detail_lines(operator: &OperatorInfo) -> Vec<Line<'static>> {
     detail_field(&mut lines, "Posture", "full session authority".to_string());
     detail_field(&mut lines, "Provider", operator.provider.clone());
     detail_field(&mut lines, "Model", operator.model.clone());
+    // Session-route capability badges (#5038). Use the exact route key rather
+    // than the display label so built-in routes get provider-scoped catalog
+    // facts; custom routes still fall back conservatively to registry facts.
+    if let Some(badges) = crate::fleet::capability_badges::resolve_route_capability_badges(
+        Some(&operator.provider_id),
+        &operator.model,
+    ) {
+        detail_field(&mut lines, "Capabilities", badges.summary());
+    }
     detail_field(&mut lines, "Reasoning", operator.reasoning.clone());
     detail_field(
         &mut lines,
@@ -545,6 +576,22 @@ fn member_detail_lines_with_session(
         member_routing_with_session(member, session_model),
     );
 
+    // Capability badges for a pinned model, from the shared Fleet resolver
+    // (#5038). Unknown models omit the field rather than fabricating facts.
+    if let Some(model) = member
+        .profile
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        && let Some(badges) = crate::fleet::capability_badges::resolve_route_capability_badges(
+            member.profile.provider.as_deref(),
+            model,
+        )
+    {
+        detail_field(&mut lines, "Capabilities", badges.summary());
+    }
+
     let delegation = &member.profile.delegation;
     if delegation.max_spawn_depth.is_some() || delegation.max_concurrency.is_some() {
         let mut bounds: Vec<String> = Vec::new();
@@ -605,6 +652,7 @@ mod tests {
     fn operator() -> OperatorInfo {
         OperatorInfo {
             provider: "DeepSeek".to_string(),
+            provider_id: "deepseek".to_string(),
             model: "deepseek-v4-pro".to_string(),
             reasoning: "Auto".to_string(),
         }
@@ -840,6 +888,8 @@ mod tests {
         pinned.profile.model = Some("glm-5.2".to_string());
         assert_eq!(member_routing(&pinned), "model glm-5.2 (pinned)");
     }
+
+    include!("fleet_roster_capability_tests.rs");
 
     #[test]
     fn detail_lines_carry_overlay_source_for_project_members() {
