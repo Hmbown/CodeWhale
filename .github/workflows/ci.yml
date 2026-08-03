@@ -177,6 +177,29 @@ jobs:
           node .github/scripts/release-workflows.test.js
           node --test scripts/release/assemble-release-assets.test.js
           node --test scripts/release/ensure-release-assets-absent.test.js
+      - name: Run runtime web client tests
+        # crates/tui/tests/runtime_web_client.test.mjs exercises the embedded
+        # web client's event/snapshot state machine; it ran nowhere before.
+        run: node --test crates/tui/tests/runtime_web_client.test.mjs
+
+  integrations:
+    name: Integrations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Run chat-bridge suites
+        # All four bridges + bridge-core ship dependency-free node --test
+        # suites that no workflow ran. weixin has no lockfile by design
+        # (zero deps); npm test works without npm ci everywhere here.
+        run: |
+          set -euo pipefail
+          for bridge in bridge-core feishu-bridge telegram-bridge wecom-bridge weixin-bridge; do
+            echo "== ${bridge}"
+            (cd "integrations/${bridge}" && npm test)
+          done
 
   lint:
     name: Lint
