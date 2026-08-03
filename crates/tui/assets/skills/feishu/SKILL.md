@@ -35,8 +35,8 @@ Use this skill when the user asks for Feishu, Lark, or "飞书" integration work
    configured.
 4. For MCP, build or configure a server that exposes narrow tools such as
    `send_message`, `read_doc`, `append_sheet_row`, or `query_bitable`.
-5. Register the MCP server with `deepseek mcp add`, then run
-   `deepseek mcp validate` and `deepseek mcp tools`.
+5. Register the MCP server with `codewhale mcp add`, then run
+   `codewhale mcp validate` and `codewhale mcp tools`.
 6. Verify with a dry run, sandbox document, or read-back call before sending
    externally visible messages.
 

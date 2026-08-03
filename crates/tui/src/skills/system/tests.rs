@@ -33,6 +33,24 @@ fn fresh_install_creates_bundled_skills_and_marker() {
     assert_eq!(ver.trim(), BUNDLED_SKILL_VERSION);
 }
 
+#[test]
+fn bundled_integration_skills_use_current_codewhale_commands_and_paths() {
+    for (name, body) in [("mcp-builder", MCP_BUILDER_BODY), ("feishu", FEISHU_BODY)] {
+        assert!(
+            body.contains("codewhale mcp"),
+            "{name} must use the current CLI"
+        );
+        assert!(
+            !body.contains("deepseek mcp"),
+            "{name} must not recommend the retired CLI name"
+        );
+    }
+    assert!(SKILL_CREATOR_BODY.contains("<workspace>/.codewhale/skills"));
+    assert!(SKILL_CREATOR_BODY.contains("~/.codewhale/skills"));
+    assert!(SKILL_INSTALLER_BODY.contains("~/.codewhale/skills"));
+    assert!(PDF_BODY.contains("built-in `read_file` tool"));
+}
+
 /// #4227 (requested by @JayBeest): the contributor sync/gate/digest skill
 /// ships in generation 8, and its two load-bearing refusals — never move a
 /// contributor's HEAD, never touch a dirty tree — must survive any later

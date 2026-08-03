@@ -13,7 +13,7 @@ Use this skill for any task where a PDF is the primary input or output.
    watermark, redact, fill forms, encrypt/decrypt, or create.
 2. Preserve originals. Write outputs with explicit names.
 3. Use the most reliable available tool:
-   - DeepSeek's file reader for basic text extraction from PDFs
+   - the built-in `read_file` tool for basic text extraction from PDFs
    - `pdftotext`, `pdfinfo`, `qpdf`, or `mutool` when installed
    - Python libraries such as `pypdf`, `pdfplumber`, `PyMuPDF`, or
      `reportlab` when available
