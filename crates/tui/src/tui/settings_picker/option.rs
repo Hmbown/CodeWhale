@@ -1,9 +1,10 @@
-//! Declarative setting-option contract shared by transactional pickers.
+//! Declarative setting-option contract shared by settings pickers.
 //!
 //! Every picker row declares current/default/effective values, availability,
-//! help/detail copy, and optional per-row actions. Preview/commit/rollback
-//! live on [`super::TransactionCallbacks`], not on the option itself, so a
-//! single option list can drive live preview without mutating commit policy.
+//! help/detail copy, and optional per-row actions. The option list is pure
+//! data: hosts map [`super::PickerNavResult`] into their own preview/commit
+//! actions, so a single option list can drive live preview without mutating
+//! commit policy.
 
 use std::borrow::Cow;
 
