@@ -4929,6 +4929,197 @@ pub fn resolve_config_path(explicit: Option<PathBuf>) -> Result<PathBuf> {
     default_config_path()
 }
 
+/// Whether `path` names a workspace-scoped config document —
+/// `<repo>/.codewhale/config.toml` (or the legacy `.deepseek` layout) inside a
+/// checkout — rather than a user-global config file.
+///
+/// Credential writes (api_key values, `auth_mode` markers, oauth/external
+/// credential pointers) must never target such a document: a key saved while
+/// working in one repo would be invisible from every other repo, and the repo
+/// file stores it in plaintext where it is easy to commit by accident (#5045,
+/// #5193).
+///
+/// A path is classified workspace-scoped only when its parent directory is a
+/// `.codewhale`/`.deepseek` app dir outside the user's home AND the document
+/// belongs to a workspace: it is relative (resolves against the process cwd),
+/// its base directory contains the process cwd, or its base directory is a
+/// checkout (has a `.git` entry). An explicit `$CODEWHALE_HOME` config is
+/// user-global wherever that home points, even when the directory itself
+/// happens to be named `.codewhale`; other custom locations (for example
+/// `CODEWHALE_CONFIG_PATH=~/team.toml` or an isolated test directory) stay
+/// honored as deliberate user-scoped choices.
+#[must_use]
+pub fn config_path_is_workspace_scoped(path: &Path) -> bool {
+    config_path_is_workspace_scoped_with_context(
+        path,
+        codewhale_paths::codewhale_home_override()
+            .ok()
+            .flatten()
+            .as_deref(),
+        codewhale_paths::user_home().as_deref(),
+        std::env::current_dir().ok().as_deref(),
+    )
+}
+
+/// Environment-free core of [`config_path_is_workspace_scoped`], split out so
+/// scope classification is testable without mutating process-global state.
+fn config_path_is_workspace_scoped_with_context(
+    path: &Path,
+    explicit_codewhale_home: Option<&Path>,
+    user_home: Option<&Path>,
+    current_dir: Option<&Path>,
+) -> bool {
+    if let Some(home) = explicit_codewhale_home
+        && same_lexical_or_canonical_path(path, &home.join(CONFIG_FILE_NAME))
+    {
+        return false;
+    }
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    let parent_is_app_dir = parent
+        .file_name()
+        .and_then(OsStr::to_str)
+        .is_some_and(|name| name == CODEWHALE_APP_DIR || name == LEGACY_APP_DIR);
+    if !parent_is_app_dir {
+        return false;
+    }
+    let Some(base) = parent.parent() else {
+        return true;
+    };
+    if let Some(home) = user_home
+        && same_lexical_or_canonical_path(base, home)
+    {
+        return false;
+    }
+    if path.is_relative() {
+        // Resolves against the process cwd: repo-scoped by construction.
+        return true;
+    }
+    // The document belongs to the workspace the process is sitting in…
+    if let Some(cwd) = current_dir
+        && canonicalize_or_keep(cwd).starts_with(canonicalize_or_keep(base))
+    {
+        return true;
+    }
+    // …or to some other checkout (a `.git` entry beside the app dir).
+    base.join(".git").exists()
+}
+
+/// Lexical equality first, canonical equality as a fallback so an existing
+/// path still matches through symlinked parents (e.g. `/tmp` on macOS).
+fn same_lexical_or_canonical_path(a: &Path, b: &Path) -> bool {
+    a == b || canonicalize_or_keep(a) == canonicalize_or_keep(b)
+}
+
+fn canonicalize_or_keep(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+#[cfg(test)]
+mod credential_scope_tests {
+    use super::config_path_is_workspace_scoped_with_context;
+    use std::path::Path;
+
+    #[test]
+    fn config_inside_current_workspace_is_workspace_scoped() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let repo = temp.path().join("repo");
+        let cwd = repo.join("nested/dir");
+        for app_dir in [".codewhale", ".deepseek"] {
+            let config = repo.join(app_dir).join("config.toml");
+            assert!(
+                config_path_is_workspace_scoped_with_context(
+                    &config,
+                    None,
+                    Some(Path::new("/home/user")),
+                    Some(&cwd),
+                ),
+                "{} should be workspace-scoped when cwd sits inside the repo",
+                config.display()
+            );
+        }
+    }
+
+    #[test]
+    fn relative_app_dir_config_is_workspace_scoped() {
+        assert!(config_path_is_workspace_scoped_with_context(
+            Path::new(".codewhale/config.toml"),
+            None,
+            Some(Path::new("/home/user")),
+            Some(Path::new("/somewhere/else")),
+        ));
+    }
+
+    #[test]
+    fn checkout_config_outside_cwd_is_workspace_scoped_via_git_marker() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let repo = temp.path().join("repo");
+        std::fs::create_dir_all(repo.join(".git")).expect("git marker");
+        std::fs::create_dir_all(repo.join(".codewhale")).expect("app dir");
+        assert!(config_path_is_workspace_scoped_with_context(
+            &repo.join(".codewhale/config.toml"),
+            None,
+            Some(Path::new("/home/user")),
+            Some(Path::new("/somewhere/else")),
+        ));
+    }
+
+    #[test]
+    fn user_global_and_custom_locations_are_not_workspace_scoped() {
+        let home = Path::new("/home/user");
+        let elsewhere = Some(Path::new("/somewhere/else"));
+        for global_config in [
+            "/home/user/.codewhale/config.toml",
+            "/home/user/.deepseek/config.toml",
+            "/home/user/team-config.toml",
+            "/etc/codewhale/config.toml",
+        ] {
+            assert!(
+                !config_path_is_workspace_scoped_with_context(
+                    Path::new(global_config),
+                    None,
+                    Some(home),
+                    elsewhere,
+                ),
+                "{global_config} should stay user-global"
+            );
+        }
+        // An isolated app-dir-shaped location with no workspace relationship
+        // (no cwd ancestry, no checkout marker) stays honored: test harnesses
+        // and deliberate overrides point there.
+        let temp = tempfile::tempdir().expect("tempdir");
+        assert!(!config_path_is_workspace_scoped_with_context(
+            &temp.path().join(".codewhale/config.toml"),
+            None,
+            Some(home),
+            elsewhere,
+        ));
+    }
+
+    #[test]
+    fn explicit_codewhale_home_config_is_user_global_even_when_dir_is_app_named() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let repo = temp.path().join("repo");
+        let explicit = repo.join(".codewhale");
+        // Even with cwd inside the repo, the explicit CODEWHALE_HOME config is
+        // the user-global scope by definition.
+        assert!(!config_path_is_workspace_scoped_with_context(
+            &explicit.join("config.toml"),
+            Some(&explicit),
+            Some(Path::new("/home/user")),
+            Some(&repo),
+        ));
+        // A different repo-scoped document is still workspace-scoped.
+        assert!(config_path_is_workspace_scoped_with_context(
+            &repo.join("other/.codewhale/config.toml"),
+            Some(&explicit),
+            Some(Path::new("/home/user")),
+            Some(&repo.join("other")),
+        ));
+    }
+}
+
 #[must_use]
 pub fn permissions_path_for_config_path(config_path: &Path) -> PathBuf {
     config_sibling_path_unchecked(config_path, OsStr::new(PERMISSIONS_FILE_NAME))

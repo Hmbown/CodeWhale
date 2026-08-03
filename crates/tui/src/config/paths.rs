@@ -48,6 +48,39 @@ pub(crate) fn codewhale_home_dir() -> Result<Option<PathBuf>, codewhale_paths::P
     codewhale_paths::codewhale_home_override()
 }
 
+/// The user-global config document: `$CODEWHALE_HOME/config.toml` when an
+/// explicit home is set, otherwise `~/.codewhale/config.toml` (falling back to
+/// the legacy `~/.deepseek/config.toml` only when that file already exists).
+///
+/// Credential writes are rerouted here when the ambient config path resolves
+/// to a workspace-scoped document (#5045, #5193); non-credential settings keep
+/// the ambient scoping.
+pub(crate) fn home_config_path() -> Option<PathBuf> {
+    match codewhale_home_dir() {
+        Ok(Some(home)) => return Some(home.join(codewhale_config::CONFIG_FILE_NAME)),
+        Ok(None) => {}
+        Err(error) => {
+            tracing::error!(
+                error = %error,
+                "invalid Codewhale home override; refusing to substitute a different config path"
+            );
+            return None;
+        }
+    }
+
+    effective_home_dir().map(|home| {
+        let primary = home.join(".codewhale").join("config.toml");
+        if primary.exists() {
+            return primary;
+        }
+        let legacy = home.join(".deepseek").join("config.toml");
+        if legacy.exists() {
+            return legacy;
+        }
+        primary
+    })
+}
+
 pub(crate) fn workspace_config_key(workspace: &Path) -> String {
     canonicalize_or_keep(workspace)
         .to_string_lossy()
