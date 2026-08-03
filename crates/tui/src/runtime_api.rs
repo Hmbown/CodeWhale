@@ -714,6 +714,18 @@ pub fn build_router(state: RuntimeApiState) -> Router {
             get(replay_fleet_events),
         )
         .route("/v1/fleet/runs/{run_id}/stop", post(stop_fleet_run))
+        .route(
+            "/v1/fleet/runs/{run_id}/receipts",
+            get(list_fleet_run_receipts),
+        )
+        .route(
+            "/v1/fleet/runs/{run_id}/receipts/{task_id}",
+            get(get_fleet_run_receipt),
+        )
+        .route(
+            "/v1/fleet/runs/{run_id}/receipts/{task_id}/evidence",
+            get(inspect_fleet_run_receipt_evidence),
+        )
         .route("/v1/fleet/workers/{worker_id}", get(get_fleet_worker))
         .route(
             "/v1/fleet/workers/{worker_id}/interrupt",
@@ -1701,6 +1713,117 @@ async fn stop_fleet_run(
     })))
 }
 
+/// Maximum bytes read from a receipt evidence file for the inspection endpoint.
+const MAX_RECEIPT_EVIDENCE_READ_BYTES: u64 = 65_536;
+
+async fn list_fleet_run_receipts(
+    State(state): State<RuntimeApiState>,
+    Path(run_id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let manager = open_fleet_manager(&state)?;
+    let ledger_state = manager
+        .rebuild_state()
+        .map_err(|err| ApiError::internal(format!("Failed to rebuild fleet state: {err}")))?;
+    if !ledger_state.runs.contains_key(&run_id) {
+        return Err(ApiError::not_found(format!(
+            "fleet run '{run_id}' not found"
+        )));
+    }
+    let run_id_parsed = FleetRunId::from(run_id.clone());
+    let receipts: Vec<Value> = ledger_state
+        .receipts
+        .values()
+        .filter(|r| r.run_id == run_id_parsed)
+        .map(fleet_receipt_json)
+        .collect();
+    Ok(Json(json!({
+        "run_id": run_id,
+        "receipts": receipts,
+    })))
+}
+
+async fn get_fleet_run_receipt(
+    State(state): State<RuntimeApiState>,
+    Path((run_id, task_id)): Path<(String, String)>,
+) -> Result<Json<Value>, ApiError> {
+    let manager = open_fleet_manager(&state)?;
+    let ledger_state = manager
+        .rebuild_state()
+        .map_err(|err| ApiError::internal(format!("Failed to rebuild fleet state: {err}")))?;
+    let key = format!("{run_id}:{task_id}");
+    let receipt = ledger_state
+        .receipts
+        .get(&key)
+        .ok_or_else(|| {
+            ApiError::not_found(format!(
+                "no receipt found for run '{run_id}' task '{task_id}'"
+            ))
+        })?;
+    Ok(Json(fleet_receipt_json(receipt)))
+}
+
+async fn inspect_fleet_run_receipt_evidence(
+    State(state): State<RuntimeApiState>,
+    Path((run_id, task_id)): Path<(String, String)>,
+) -> Result<Json<Value>, ApiError> {
+    let manager = open_fleet_manager(&state)?;
+    let ledger_state = manager
+        .rebuild_state()
+        .map_err(|err| ApiError::internal(format!("Failed to rebuild fleet state: {err}")))?;
+    let key = format!("{run_id}:{task_id}");
+    let receipt = ledger_state
+        .receipts
+        .get(&key)
+        .ok_or_else(|| {
+            ApiError::not_found(format!(
+                "no receipt found for run '{run_id}' task '{task_id}'"
+            ))
+        })?;
+    // Locate the most recent Receipt-kind artifact.
+    let receipt_artifact = receipt
+        .artifacts
+        .iter()
+        .rfind(|a| a.kind == FleetArtifactKind::Receipt)
+        .ok_or_else(|| {
+            ApiError::not_found(format!(
+                "no verifier evidence file for run '{run_id}' task '{task_id}'"
+            ))
+        })?;
+    let abs_path = state.workspace.join(&receipt_artifact.path);
+    let metadata = std::fs::metadata(&abs_path).map_err(|err| {
+        ApiError::not_found(format!(
+            "evidence file not readable for run '{run_id}' task '{task_id}': {err}"
+        ))
+    })?;
+    let size_bytes = metadata.len();
+    let truncated = size_bytes > MAX_RECEIPT_EVIDENCE_READ_BYTES;
+    let raw = {
+        use std::io::Read;
+        let file = std::fs::File::open(&abs_path).map_err(|err| {
+            ApiError::internal(format!("Failed to open evidence file: {err}"))
+        })?;
+        let mut buf = Vec::new();
+        file.take(MAX_RECEIPT_EVIDENCE_READ_BYTES)
+            .read_to_end(&mut buf)
+            .map_err(|err| ApiError::internal(format!("Failed to read evidence file: {err}")))?;
+        buf
+    };
+    // Parse as JSON if possible; fall back to a raw string representation.
+    let content: Value = serde_json::from_slice(&raw).unwrap_or_else(|_| {
+        Value::String(String::from_utf8_lossy(&raw).into_owned())
+    });
+    Ok(Json(json!({
+        "run_id": run_id,
+        "task_id": task_id,
+        "path": receipt_artifact.path,
+        "checksum": receipt_artifact.checksum,
+        "size_bytes": size_bytes,
+        "truncated": truncated,
+        "content": content,
+    })))
+}
+
+
 fn open_fleet_manager(state: &RuntimeApiState) -> Result<FleetManager, ApiError> {
     let (exec_config, fleet_config, session_model, route_config) = {
         let config = state.config.read();
@@ -1851,6 +1974,64 @@ fn fleet_artifact_json(artifact: &codewhale_protocol::fleet::FleetArtifactRef) -
         "size_bytes": artifact.size_bytes,
     })
 }
+
+fn fleet_receipt_json(receipt: &codewhale_protocol::fleet::FleetReceipt) -> Value {
+    use codewhale_protocol::fleet::{FleetTaskFailureKind, FleetTaskResult};
+
+    let result_label = match receipt.result {
+        FleetTaskResult::Pass => "pass",
+        FleetTaskResult::Partial => "partial",
+        FleetTaskResult::Fail => "fail",
+        FleetTaskResult::Skip => "skip",
+        FleetTaskResult::Timeout => "timeout",
+    };
+    let (failure_kind_label, failure_class, retry_eligible) =
+        match receipt.failure_kind.as_ref() {
+            Some(FleetTaskFailureKind::Transport) => (
+                Some("transport"),
+                Some("Infrastructure or network failure during task transport"),
+                true,
+            ),
+            Some(FleetTaskFailureKind::Task) => (
+                Some("task"),
+                Some("Task logic exited unsuccessfully"),
+                false,
+            ),
+            Some(FleetTaskFailureKind::Verifier) => (
+                Some("verifier"),
+                Some("Verifier rejected the task output; manual review or code change required"),
+                false,
+            ),
+            None => (None, None, false),
+        };
+    let evidence_available = receipt
+        .artifacts
+        .iter()
+        .any(|a| a.kind == FleetArtifactKind::Receipt);
+    let score_json = receipt.score.as_ref().map(|s| {
+        json!({
+            "value": s.value,
+            "max": s.max,
+            "notes": s.notes,
+        })
+    });
+    json!({
+        "run_id": receipt.run_id.0.clone(),
+        "task_id": receipt.task_id.clone(),
+        "worker_id": receipt.worker_id.clone(),
+        "attempt": receipt.attempt,
+        "terminal_seq": receipt.terminal_seq,
+        "completed_at": receipt.completed_at.clone(),
+        "result": result_label,
+        "failure_kind": failure_kind_label,
+        "failure_class": failure_class,
+        "retry_eligible": retry_eligible,
+        "score": score_json,
+        "artifacts": receipt.artifacts.iter().map(fleet_artifact_json).collect::<Vec<_>>(),
+        "evidence_available": evidence_available,
+    })
+}
+
 
 fn fleet_event_json(event: &codewhale_protocol::fleet::FleetWorkerEvent) -> Value {
     json!({
