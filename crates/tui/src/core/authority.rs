@@ -4,10 +4,11 @@
 //! in one place so prompt metadata, tool catalogs, and runtime gates cannot
 //! drift independently.
 
-use std::path::Path;
+use std::ffi::OsStr;
+use std::path::{Component, Path, PathBuf};
 
 use crate::sandbox::SandboxPolicy;
-use crate::tools::spec::ApprovalRequirement;
+use crate::tools::spec::{ApprovalRequirement, normalize_path};
 use crate::tui::app::AppMode;
 use crate::tui::approval::ApprovalMode;
 use crate::worker_profile::ShellPolicy;
@@ -444,6 +445,158 @@ pub(crate) fn resolve_tool_permission(
     }
 }
 
+/// Whether the session posture is the one the in-workspace write carve-out
+/// (#5185) relaxes: the default Ask posture (`Suggest` approvals, no
+/// auto-approve) in an Agent-family mode.
+///
+/// Every other posture keeps its exact prior meaning: Full Access already
+/// runs these calls, `Never` still denies them, Auto-Review still fails
+/// unresolved holds closed, and Plan is read-only by mode.
+#[must_use]
+pub(crate) fn write_carve_out_posture(
+    mode: AppMode,
+    approval_mode: ApprovalMode,
+    auto_approve: bool,
+) -> bool {
+    !auto_approve
+        && matches!(mode, AppMode::Agent | AppMode::Auto | AppMode::Operate)
+        && approval_mode == ApprovalMode::Suggest
+}
+
+/// Whether every target path of a file-write call qualifies for the
+/// in-workspace write carve-out (#5185): the workspace is a git work tree,
+/// each path resolves inside it, and none touches `.git` internals, runtime
+/// state, or a sensitive file.
+///
+/// The git work-tree marker is deliberate (the same shape as kimi-code's
+/// `git-cwd-write-approve` policy): the carve-out exists because
+/// version-controlled edits stay reviewable and recoverable, so a workspace
+/// without git keeps the modal.
+#[must_use]
+pub(crate) fn paths_within_workspace_write_carve_out(workspace: &Path, paths: &[String]) -> bool {
+    if paths.is_empty() {
+        return false;
+    }
+    // `.git` may be a directory (normal checkout) or a file (worktree or
+    // submodule); either marks a git work tree.
+    if workspace.join(".git").symlink_metadata().is_err() {
+        return false;
+    }
+    let Ok(workspace_canonical) = workspace.canonicalize() else {
+        return false;
+    };
+    paths
+        .iter()
+        .all(|raw| carve_out_target_allowed(workspace, &workspace_canonical, raw))
+}
+
+fn carve_out_target_allowed(workspace: &Path, workspace_canonical: &Path, raw: &str) -> bool {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return false;
+    }
+    let raw_path = Path::new(raw);
+    let candidate = if raw_path.is_absolute() {
+        raw_path.to_path_buf()
+    } else {
+        workspace.join(raw_path)
+    };
+    // Lexical containment first: `..` escapes and absolute out-of-tree paths
+    // fail here without touching the filesystem.
+    let lexical = normalize_path(&candidate);
+    let workspace_lexical = normalize_path(workspace);
+    let workspace_canonical_lexical = normalize_path(workspace_canonical);
+    let Ok(relative) = lexical
+        .strip_prefix(&workspace_lexical)
+        .or_else(|_| lexical.strip_prefix(&workspace_canonical_lexical))
+    else {
+        return false;
+    };
+    if !carve_out_relative_path_allowed(relative) {
+        return false;
+    }
+    // Then symlink reality: resolve the deepest existing ancestor and
+    // require the real path to stay inside the real workspace and off the
+    // same exclusions (a symlink hop into `.git` or out of the tree fails).
+    let Some(resolved) = resolve_deepest_existing(&candidate) else {
+        return false;
+    };
+    let Ok(resolved_relative) = resolved.strip_prefix(workspace_canonical) else {
+        return false;
+    };
+    carve_out_relative_path_allowed(resolved_relative)
+}
+
+/// Canonicalize the deepest existing ancestor of `candidate` and re-append
+/// the not-yet-existing tail, so write targets that do not exist yet still
+/// get a real-path check.
+fn resolve_deepest_existing(candidate: &Path) -> Option<PathBuf> {
+    let mut ancestor = candidate;
+    let mut suffix: Vec<&OsStr> = Vec::new();
+    loop {
+        if let Ok(canonical) = ancestor.canonicalize() {
+            let mut resolved = canonical;
+            for part in suffix.iter().rev() {
+                resolved.push(part);
+            }
+            return Some(resolved);
+        }
+        suffix.push(ancestor.file_name()?);
+        ancestor = ancestor.parent()?;
+    }
+}
+
+fn carve_out_relative_path_allowed(relative: &Path) -> bool {
+    relative.components().all(|component| {
+        let Component::Normal(part) = component else {
+            return true;
+        };
+        !is_carve_out_excluded_name(&part.to_string_lossy().to_ascii_lowercase())
+    })
+}
+
+/// Names the carve-out never auto-allows, matched per path component:
+/// `.git` internals, runtime/project state, credential-bearing directories
+/// and files, and key material.
+fn is_carve_out_excluded_name(name: &str) -> bool {
+    if name == ".git" {
+        return true;
+    }
+    // Runtime/project state and credential-bearing directories. `.codewhale`
+    // holds session state plus MCP/hook configuration — editing it changes
+    // what runs, so it keeps the modal.
+    if matches!(
+        name,
+        ".codewhale" | ".ssh" | ".aws" | ".gnupg" | ".kube" | ".docker"
+    ) {
+        return true;
+    }
+    // Environment files and well-known credential stores.
+    if name.starts_with(".env")
+        || name == ".netrc"
+        || name == ".npmrc"
+        || name == ".pypirc"
+        || name == ".git-credentials"
+        || name == "credentials"
+        || name.starts_with("credentials.")
+    {
+        return true;
+    }
+    // SSH private (and public) key material.
+    if name.starts_with("id_rsa")
+        || name.starts_with("id_dsa")
+        || name.starts_with("id_ecdsa")
+        || name.starts_with("id_ed25519")
+    {
+        return true;
+    }
+    // Key/certificate containers by extension.
+    matches!(
+        Path::new(name).extension().and_then(|ext| ext.to_str()),
+        Some("pem" | "key" | "p12" | "pfx" | "jks" | "keystore")
+    )
+}
+
 /// Disposition for an approval request that reached the UI (#4412).
 ///
 /// The engine emits `ApprovalRequired` whenever its resolver answer was
@@ -509,6 +662,137 @@ mod tests {
 
     fn authority(mode: AppMode, auto_approve: bool, approval_mode: ApprovalMode) -> TurnAuthority {
         TurnAuthority::from_effective_fields(mode, true, false, auto_approve, approval_mode)
+    }
+
+    #[test]
+    fn write_carve_out_posture_is_exactly_the_default_ask_posture() {
+        assert!(write_carve_out_posture(
+            AppMode::Agent,
+            ApprovalMode::Suggest,
+            false
+        ));
+        assert!(write_carve_out_posture(
+            AppMode::Operate,
+            ApprovalMode::Suggest,
+            false
+        ));
+        // Full Access already runs these calls; the carve-out must not be
+        // what allows them.
+        assert!(!write_carve_out_posture(
+            AppMode::Agent,
+            ApprovalMode::Bypass,
+            true
+        ));
+        assert!(!write_carve_out_posture(
+            AppMode::Yolo,
+            ApprovalMode::Bypass,
+            true
+        ));
+        // Never still denies; Auto-Review still fails unresolved holds closed;
+        // Plan is read-only by mode.
+        assert!(!write_carve_out_posture(
+            AppMode::Agent,
+            ApprovalMode::Never,
+            false
+        ));
+        assert!(!write_carve_out_posture(
+            AppMode::Agent,
+            ApprovalMode::Auto,
+            false
+        ));
+        assert!(!write_carve_out_posture(
+            AppMode::Plan,
+            ApprovalMode::Suggest,
+            false
+        ));
+    }
+
+    fn carve_out_workspace() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(tmp.path().join(".git")).expect("git marker");
+        std::fs::create_dir_all(tmp.path().join("src")).expect("src dir");
+        std::fs::write(tmp.path().join("src/main.rs"), "fn main() {}\n").expect("source file");
+        tmp
+    }
+
+    #[test]
+    fn carve_out_allows_in_workspace_write_targets() {
+        let tmp = carve_out_workspace();
+        let workspace = tmp.path();
+        for paths in [
+            vec!["src/main.rs".to_string()],
+            vec!["src/new_file.rs".to_string()],
+            vec!["deeply/nested/not-yet-created.rs".to_string()],
+            vec!["./src/main.rs".to_string()],
+            vec![workspace.join("src/main.rs").to_string_lossy().into_owned()],
+            vec!["src/main.rs".to_string(), "src/other.rs".to_string()],
+        ] {
+            assert!(
+                paths_within_workspace_write_carve_out(workspace, &paths),
+                "{paths:?} should qualify"
+            );
+        }
+    }
+
+    #[test]
+    fn carve_out_rejects_out_of_tree_sensitive_and_git_paths() {
+        let tmp = carve_out_workspace();
+        let workspace = tmp.path();
+        for paths in [
+            vec!["../outside.rs".to_string()],
+            vec!["src/../../outside.rs".to_string()],
+            vec!["/etc/passwd".to_string()],
+            vec![".git/config".to_string()],
+            vec!["nested/.git/hooks/pre-commit".to_string()],
+            vec![".env".to_string()],
+            vec!["config/.env.production".to_string()],
+            vec![".ssh/config".to_string()],
+            vec!["deploy/id_rsa".to_string()],
+            vec!["certs/server.pem".to_string()],
+            vec![".codewhale/mcp.json".to_string()],
+            vec!["aws/credentials".to_string()],
+            // One bad target poisons the whole call.
+            vec!["src/main.rs".to_string(), ".env".to_string()],
+        ] {
+            assert!(
+                !paths_within_workspace_write_carve_out(workspace, &paths),
+                "{paths:?} must keep the modal"
+            );
+        }
+    }
+
+    #[test]
+    fn carve_out_requires_a_git_work_tree() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        assert!(!paths_within_workspace_write_carve_out(
+            tmp.path(),
+            &["src/main.rs".to_string()]
+        ));
+    }
+
+    #[test]
+    fn carve_out_rejects_empty_target_list() {
+        let tmp = carve_out_workspace();
+        assert!(!paths_within_workspace_write_carve_out(tmp.path(), &[]));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn carve_out_rejects_symlink_escapes() {
+        let tmp = carve_out_workspace();
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("link")).expect("symlink");
+        assert!(!paths_within_workspace_write_carve_out(
+            tmp.path(),
+            &["link/evil.rs".to_string()]
+        ));
+        // A symlink that stays inside the workspace is fine.
+        std::os::unix::fs::symlink(tmp.path().join("src"), tmp.path().join("src-link"))
+            .expect("inner symlink");
+        assert!(paths_within_workspace_write_carve_out(
+            tmp.path(),
+            &["src-link/main.rs".to_string()]
+        ));
     }
 
     #[test]

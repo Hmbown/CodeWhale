@@ -5,6 +5,7 @@ use super::streaming::{TOOL_CALL_END_MARKERS, TOOL_CALL_MARKER_PAIRS};
 use super::turn_loop::{
     registered_tool_approval_required, registered_tool_blocked_in_full_access,
     registered_tool_forces_prompt, tool_error_degradation_runtime_hint,
+    workspace_write_carve_out_applies,
 };
 use crate::config::ApiProvider;
 use crate::models::{SystemBlock, Usage};
@@ -4723,6 +4724,105 @@ fn generic_required_tools_keep_auto_approve_behavior() {
         "exec_shell",
         ApprovalRequirement::Required,
         false
+    ));
+}
+
+#[test]
+fn workspace_write_carve_out_covers_the_default_ask_posture_only() {
+    // #5185: an in-workspace edit under the default posture does not prompt;
+    // out-of-tree, sensitive, and `.git` targets keep the modal; shell and
+    // non-write tools never qualify.
+    let tmp = tempdir().expect("tempdir");
+    std::fs::create_dir(tmp.path().join(".git")).expect("git marker");
+    let workspace = tmp.path();
+    let ask = (
+        crate::tui::app::AppMode::Agent,
+        crate::tui::approval::ApprovalMode::Suggest,
+        false,
+    );
+    let carve_out = |tool: &str, input: &serde_json::Value| {
+        workspace_write_carve_out_applies(
+            ask.0,
+            ask.1,
+            ask.2,
+            workspace,
+            tool,
+            input,
+            ApprovalRequirement::Suggest,
+        )
+    };
+
+    // In-workspace edits and patches qualify, in legacy and canonical form.
+    assert!(carve_out("write_file", &json!({"path": "src/main.rs"})));
+    assert!(carve_out("edit_file", &json!({"path": "src/main.rs"})));
+    assert!(carve_out(
+        "File",
+        &json!({"action": "edit", "path": "src/main.rs"})
+    ));
+    assert!(carve_out(
+        "apply_patch",
+        &json!({"replace": [{"path": "src/main.rs", "content": "fn main() {}"}]})
+    ));
+
+    // Out-of-tree, sensitive, and `.git` targets keep the modal.
+    assert!(!carve_out("write_file", &json!({"path": "../outside.rs"})));
+    assert!(!carve_out("write_file", &json!({"path": "/etc/hostname"})));
+    assert!(!carve_out("write_file", &json!({"path": ".env"})));
+    assert!(!carve_out("write_file", &json!({"path": ".git/config"})));
+
+    // Shell, destructive commands, and read tools never qualify here.
+    assert!(!carve_out("exec_shell", &json!({"command": "rm -rf /"})));
+    assert!(!carve_out(
+        "File",
+        &json!({"action": "read", "path": "src/main.rs"})
+    ));
+
+    // Full Access, Auto-Review, Never, and Plan are untouched by the carve-out.
+    for (mode, approval_mode, auto_approve) in [
+        (
+            crate::tui::app::AppMode::Agent,
+            crate::tui::approval::ApprovalMode::Bypass,
+            true,
+        ),
+        (
+            crate::tui::app::AppMode::Agent,
+            crate::tui::approval::ApprovalMode::Auto,
+            false,
+        ),
+        (
+            crate::tui::app::AppMode::Agent,
+            crate::tui::approval::ApprovalMode::Never,
+            false,
+        ),
+        (
+            crate::tui::app::AppMode::Plan,
+            crate::tui::approval::ApprovalMode::Suggest,
+            false,
+        ),
+    ] {
+        assert!(
+            !workspace_write_carve_out_applies(
+                mode,
+                approval_mode,
+                auto_approve,
+                workspace,
+                "write_file",
+                &json!({"path": "src/main.rs"}),
+                ApprovalRequirement::Suggest,
+            ),
+            "{mode:?}/{approval_mode:?} must not take the carve-out"
+        );
+    }
+
+    // Only `Suggest`-tier calls qualify; `Required` keeps its gate.
+    assert!(!workspace_write_carve_out_applies(
+        ask.0,
+        ask.1,
+        ask.2,
+        workspace,
+        "write_file",
+        &json!({"path": "src/main.rs"}),
+        ApprovalRequirement::Required,
     ));
 }
 

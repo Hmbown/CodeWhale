@@ -1111,7 +1111,7 @@ pub async fn lsp_diagnostics_for_paths(context: &ToolContext, paths: &[PathBuf])
     render_blocks(&blocks)
 }
 
-fn normalize_path(path: &Path) -> PathBuf {
+pub(crate) fn normalize_path(path: &Path) -> PathBuf {
     let mut prefix: Option<std::ffi::OsString> = None;
     let mut is_root = false;
     let mut stack: Vec<std::ffi::OsString> = Vec::new();
