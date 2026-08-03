@@ -18,6 +18,7 @@ use std::sync::{Arc, RwLock};
 use codewhale_config::catalog::{CatalogOffering, CatalogSnapshot, bundled_catalog_offerings};
 
 use crate::codex_model_cache;
+use crate::codex_model_cache::CodexModelCacheFreshness;
 use crate::config::{
     ApiProvider, Config, model_completion_names_for_provider, opencode_go_chat_model_id,
     provider_is_configured_for_active,
@@ -316,6 +317,40 @@ fn catalog_models_from_offerings<'a>(
         push_unique_model(&mut models, &row.wire_model_id);
     }
     models
+}
+
+fn authoritative_catalog_models_for_provider(provider: ApiProvider) -> Option<Vec<String>> {
+    if provider == ApiProvider::OpenaiCodex {
+        let roster = codex_model_cache::model_roster();
+        return (roster.freshness == CodexModelCacheFreshness::Fresh).then(|| roster.model_ids());
+    }
+
+    let models = catalog_models_from_offerings(
+        merged_snapshot().offerings_for_provider(catalog_provider_id(provider)),
+    );
+    (!models.is_empty()).then_some(models)
+}
+
+#[must_use]
+pub(crate) fn authoritative_models_for_provider(provider: ApiProvider) -> Option<Vec<String>> {
+    authoritative_catalog_models_for_provider(provider)
+}
+
+#[must_use]
+pub(crate) fn authoritative_default_model_for_provider(provider: ApiProvider) -> Option<String> {
+    if provider == ApiProvider::OpenaiCodex {
+        return authoritative_catalog_models_for_provider(provider)
+            .and_then(|models| models.into_iter().next());
+    }
+
+    let snapshot = merged_snapshot();
+    let mut defaults: Vec<_> = snapshot
+        .offerings_for_provider(catalog_provider_id(provider))
+        .into_iter()
+        .filter(|row| row.default_for_provider)
+        .collect();
+    defaults.sort_by(|left, right| left.wire_model_id.cmp(&right.wire_model_id));
+    defaults.first().map(|row| row.wire_model_id.clone())
 }
 
 /// Catalog-backed model ids for one provider (#4188).

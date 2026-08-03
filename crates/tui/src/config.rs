@@ -4784,37 +4784,8 @@ impl Config {
     #[must_use]
     pub fn default_model(&self) -> String {
         let provider = self.api_provider();
-        if let Some(model) =
-            self.provider_config_string_with_runtime_fallback(provider, |entry| entry.model.clone())
-        {
-            let model = model.trim();
-            if provider_passes_model_through(provider)
-                || self.active_provider_preserves_custom_base_url_model()
-            {
-                return model.to_string();
-            }
-            if let Some(normalized) = normalize_model_for_provider(provider, model) {
-                return normalized;
-            }
-            // An explicit provider-scoped model that is not a recognized
-            // DeepSeek alias is a deliberate custom choice for a non-DeepSeek
-            // provider (e.g. `MiniMax-M2.7` on an OpenAI-compatible endpoint).
-            // It must pass through verbatim rather than fall back to a
-            // DeepSeek/provider default (issue #1714).
-            if !matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN)
-                && !model.is_empty()
-            {
-                return model.to_string();
-            }
-        }
-        // The Codex Responses backend only serves its own model family, and a
-        // global `default_text_model` is constrained to DeepSeek IDs or "auto"
-        // by validation — so it can never name a Codex-compatible model. Fall
-        // back to the Codex default here instead of letting a DeepSeek default
-        // leak through and be rejected by the backend. An explicit
-        // `[providers.openai_codex] model` is honored by the block above.
-        if provider == ApiProvider::OpenaiCodex {
-            return DEFAULT_OPENAI_CODEX_MODEL.to_string();
+        if let Some(model) = self.resolved_configured_model_for_provider(provider) {
+            return model;
         }
 
         let moonshot_config = (provider == ApiProvider::Moonshot)
@@ -4835,43 +4806,16 @@ impl Config {
         {
             return "auto".to_string();
         }
-        if provider == ApiProvider::XiaomiMimo
-            && let Some(model) = self.default_text_model.as_deref()
-            && let Some(canonical) = canonical_xiaomi_mimo_model_id(model)
-        {
-            return canonical.to_string();
-        }
-        if provider == ApiProvider::XiaomiMimo {
-            return DEFAULT_XIAOMI_MIMO_MODEL.to_string();
-        }
-        // A root DeepSeek-family default must not leak onto a vendor-locked
-        // official endpoint that can never serve it (the provider then
-        // rejects every request, e.g. `deepseek-v4-pro` on api.x.ai). Custom
-        // base URLs keep full pass-through: a compatible proxy may
-        // legitimately serve any model id.
-        let foreign_root_default = |model: &str| {
-            !self.active_provider_preserves_custom_base_url_model()
-                && matches!(
-                    provider,
-                    ApiProvider::Xai | ApiProvider::Openai | ApiProvider::Moonshot
-                )
-                && normalize_model_name(model).is_some()
-        };
         if let Some(model) = self.default_text_model.as_deref()
-            && (provider_passes_model_through(provider)
-                || self.active_provider_preserves_custom_base_url_model())
-            && !foreign_root_default(model)
+            && let Some(preserved) = self.preserved_model_for_provider(provider, model)
         {
-            return model.trim().to_string();
+            return preserved;
         }
-        if let Some(model) = self.default_text_model.as_deref()
-            && !root_deepseek_model_is_foreign_to_direct_provider(provider, model)
-            && let Some(normalized) = normalize_model_name_for_provider(provider, model)
-            // A wire-slug translation (e.g. the Moonshot map) resolves the
-            // foreign default to a native model; an identity result does not.
-            && (!foreign_root_default(model) || !normalized.eq_ignore_ascii_case(model.trim()))
+
+        if let Some(model) =
+            crate::provider_lake::authoritative_default_model_for_provider(provider)
         {
-            return normalized;
+            return model;
         }
 
         match provider {
@@ -5181,6 +5125,41 @@ impl Config {
 
     fn active_provider_preserves_custom_base_url_model(&self) -> bool {
         self.provider_uses_custom_endpoint(self.api_provider())
+    }
+
+    fn provider_model_is_authoritatively_known(&self, provider: ApiProvider, model: &str) -> bool {
+        crate::provider_lake::authoritative_models_for_provider(provider).is_none_or(|models| {
+            models
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(model.trim()))
+        })
+    }
+
+    pub(crate) fn preserved_model_for_provider(
+        &self,
+        provider: ApiProvider,
+        model: &str,
+    ) -> Option<String> {
+        let trimmed = model.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        if self.provider_uses_custom_endpoint(provider) {
+            return Some(trimmed.to_string());
+        }
+
+        let candidate =
+            normalize_model_for_provider(provider, trimmed).unwrap_or_else(|| trimmed.to_string());
+        self.provider_model_is_authoritatively_known(provider, &candidate)
+            .then_some(candidate)
+    }
+
+    pub(crate) fn resolved_configured_model_for_provider(
+        &self,
+        provider: ApiProvider,
+    ) -> Option<String> {
+        self.provider_config_string_with_runtime_fallback(provider, |entry| entry.model.clone())
+            .and_then(|model| self.preserved_model_for_provider(provider, &model))
     }
 
     /// Whether `provider`'s effective endpoint is a custom host rather than its

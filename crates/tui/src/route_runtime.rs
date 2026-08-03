@@ -469,7 +469,7 @@ pub(crate) fn resolve_runtime_route_for_identity(
     let resolution = resolve_route_candidate_with_context_metadata(
         provider,
         model_selector,
-        saved_provider_model,
+        saved_provider_model.as_deref(),
         Some(route_config.deepseek_base_url()),
         route_config.context_window_for_provider_config(provider),
         None,
@@ -520,13 +520,11 @@ fn prepared_route_config(
     route_config
 }
 
-fn configured_model_for_route(config: &Config, provider: ApiProvider) -> Option<&str> {
+fn configured_model_for_route(config: &Config, provider: ApiProvider) -> Option<String> {
     if provider == ApiProvider::Custom && config.uses_legacy_literal_custom_route() {
-        return config.default_text_model.as_deref();
+        return config.default_text_model.clone();
     }
-    config
-        .provider_config_for(provider)
-        .and_then(|provider| provider.model.as_deref())
+    config.resolved_configured_model_for_provider(provider)
 }
 
 fn set_model_for_route(config: &mut Config, provider: ApiProvider, model: &str) {
@@ -611,6 +609,113 @@ mod tests {
             ),
             128_000
         );
+    }
+
+    #[test]
+    fn resolve_runtime_route_for_identity_drops_invalid_saved_models_per_provider() {
+        let _lock = crate::test_support::lock_test_env();
+        let codex_home = tempfile::tempdir().expect("Codex home");
+        let _home = crate::test_support::EnvVarGuard::set("CODEX_HOME", codex_home.path());
+        std::fs::write(
+            codex_home.path().join("models_cache.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "fetched_at": chrono::Utc::now(),
+                "models": [{
+                    "slug": "gpt-roster-primary",
+                    "priority": 1,
+                    "context_window": 128000
+                }]
+            }))
+            .expect("serialize cache"),
+        )
+        .expect("write cache");
+
+        let openai_default =
+            crate::provider_lake::authoritative_default_model_for_provider(ApiProvider::Openai)
+                .expect("OpenAI bundled catalog default");
+        let openai_valid =
+            crate::provider_lake::authoritative_models_for_provider(ApiProvider::Openai)
+                .expect("OpenAI bundled catalog")
+                .into_iter()
+                .find(|model| !model.eq_ignore_ascii_case(&openai_default))
+                .unwrap_or_else(|| openai_default.clone());
+
+        let cases = [
+            (
+                "openai-invalid-saved-model",
+                ApiProvider::Openai,
+                Config {
+                    provider: Some("openai".to_string()),
+                    providers: Some(ProvidersConfig {
+                        openai: ProviderConfig {
+                            model: Some("grok-4.5".to_string()),
+                            ..ProviderConfig::default()
+                        },
+                        ..ProvidersConfig::default()
+                    }),
+                    ..Config::default()
+                },
+                openai_default.as_str(),
+            ),
+            (
+                "openai-valid-saved-model",
+                ApiProvider::Openai,
+                Config {
+                    provider: Some("openai".to_string()),
+                    providers: Some(ProvidersConfig {
+                        openai: ProviderConfig {
+                            model: Some(openai_valid.clone()),
+                            ..ProviderConfig::default()
+                        },
+                        ..ProvidersConfig::default()
+                    }),
+                    ..Config::default()
+                },
+                openai_valid.as_str(),
+            ),
+            (
+                "codex-invalid-saved-model-falls-back-to-fresh-roster-default",
+                ApiProvider::OpenaiCodex,
+                Config {
+                    provider: Some("openai-codex".to_string()),
+                    providers: Some(ProvidersConfig {
+                        openai_codex: ProviderConfig {
+                            model: Some("gpt-saved-unconfirmed".to_string()),
+                            ..ProviderConfig::default()
+                        },
+                        ..ProvidersConfig::default()
+                    }),
+                    ..Config::default()
+                },
+                "gpt-roster-primary",
+            ),
+            (
+                "vllm-no-catalog-keeps-saved-model",
+                ApiProvider::Vllm,
+                Config {
+                    provider: Some("vllm".to_string()),
+                    providers: Some(ProvidersConfig {
+                        vllm: ProviderConfig {
+                            model: Some("my-local-model".to_string()),
+                            ..ProviderConfig::default()
+                        },
+                        ..ProvidersConfig::default()
+                    }),
+                    ..Config::default()
+                },
+                "my-local-model",
+            ),
+        ];
+
+        for (name, provider, config, expected) in cases {
+            let identity = config
+                .active_provider_identity(provider)
+                .expect("provider identity");
+            let route = resolve_runtime_route_for_identity(&config, &identity, None)
+                .expect("resolve route");
+            assert_eq!(route.model, expected, "{name}");
+            assert_eq!(route.candidate.wire_model_id().as_str(), expected, "{name}");
+        }
     }
 
     #[test]

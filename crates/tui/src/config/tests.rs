@@ -6467,6 +6467,125 @@ fn openai_codex_default_model_falls_back_to_codex_model() {
 }
 
 #[test]
+fn provider_defaults_drop_invalid_cross_provider_models_when_catalogs_are_authoritative() {
+    let _lock = lock_test_env();
+    let openai_default =
+        crate::provider_lake::authoritative_default_model_for_provider(ApiProvider::Openai)
+            .expect("OpenAI bundled catalog default");
+    let openai_valid = crate::provider_lake::authoritative_models_for_provider(ApiProvider::Openai)
+        .expect("OpenAI bundled catalog")
+        .into_iter()
+        .find(|model| !model.eq_ignore_ascii_case(&openai_default))
+        .unwrap_or_else(|| openai_default.clone());
+    let zai_default =
+        crate::provider_lake::authoritative_default_model_for_provider(ApiProvider::Zai)
+            .expect("Z.ai bundled catalog default");
+
+    let cases = [
+        (
+            "openai-provider-model-falls-back",
+            Config {
+                provider: Some("openai".to_string()),
+                providers: Some(ProvidersConfig {
+                    openai: ProviderConfig {
+                        model: Some("grok-4.5".to_string()),
+                        ..ProviderConfig::default()
+                    },
+                    ..ProvidersConfig::default()
+                }),
+                ..Default::default()
+            },
+            openai_default.as_str(),
+        ),
+        (
+            "openai-valid-provider-model-stays",
+            Config {
+                provider: Some("openai".to_string()),
+                providers: Some(ProvidersConfig {
+                    openai: ProviderConfig {
+                        model: Some(openai_valid.clone()),
+                        ..ProviderConfig::default()
+                    },
+                    ..ProvidersConfig::default()
+                }),
+                ..Default::default()
+            },
+            openai_valid.as_str(),
+        ),
+        (
+            "zai-root-model-falls-back",
+            Config {
+                provider: Some("zai".to_string()),
+                default_text_model: Some("gpt-5.5".to_string()),
+                ..Default::default()
+            },
+            zai_default.as_str(),
+        ),
+        (
+            "vllm-no-catalog-preserves-explicit-model",
+            Config {
+                provider: Some("vllm".to_string()),
+                providers: Some(ProvidersConfig {
+                    vllm: ProviderConfig {
+                        model: Some("my-local-model".to_string()),
+                        ..ProviderConfig::default()
+                    },
+                    ..ProvidersConfig::default()
+                }),
+                ..Default::default()
+            },
+            "my-local-model",
+        ),
+    ];
+
+    for (name, config, expected) in cases {
+        assert_eq!(config.default_model(), expected, "{name}");
+    }
+}
+
+#[test]
+fn openai_codex_default_model_prefers_fresh_roster_and_falls_back_when_unavailable() {
+    let _lock = lock_test_env();
+    let codex_home = tempfile::tempdir().expect("Codex home");
+    let _codex_home = crate::test_support::EnvVarGuard::set("CODEX_HOME", codex_home.path());
+
+    std::fs::write(
+        codex_home.path().join("models_cache.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "fetched_at": chrono::Utc::now(),
+            "models": [
+                {"slug": "gpt-roster-primary", "priority": 1},
+                {"slug": "gpt-roster-secondary", "priority": 2}
+            ]
+        }))
+        .expect("serialize cache"),
+    )
+    .expect("write cache");
+
+    let fresh = Config {
+        provider: Some("openai-codex".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(fresh.default_model(), "gpt-roster-primary");
+
+    std::fs::write(
+        codex_home.path().join("models_cache.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "fetched_at": chrono::Utc::now() - chrono::Duration::hours(25),
+            "models": [{"slug": "gpt-stale-primary", "priority": 1}]
+        }))
+        .expect("serialize stale cache"),
+    )
+    .expect("write stale cache");
+
+    let stale = Config {
+        provider: Some("openai-codex".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(stale.default_model(), DEFAULT_OPENAI_CODEX_MODEL);
+}
+
+#[test]
 fn direct_provider_ignores_foreign_deepseek_root_default_model() {
     let _lock = lock_test_env();
 
