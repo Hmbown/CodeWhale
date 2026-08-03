@@ -4,7 +4,7 @@
 #[test]
 fn detail_shows_capability_badges_for_pinned_models_only() {
     fn detail_text(member: &AgentProfile) -> String {
-        member_detail_lines_with_session(member, None)
+        member_detail_lines_with_session(member, None, &[])
             .iter()
             .map(|line| {
                 line.spans
