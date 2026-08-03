@@ -2402,7 +2402,13 @@ async fn run_fleet_command(workspace: &Path, config: &Config, args: FleetArgs) -
             let contents = std::fs::read_to_string(&path)
                 .with_context(|| format!("reading fleet log {}", path.display()))?;
             let preview: String = contents.chars().take(16 * 1024).collect();
-            print!("{preview}");
+            // Worker logs can contain captured terminal bytes (a child TUI's
+            // mouse-tracking handshake, SGR, OSC). Printing them raw would
+            // re-arm mouse reporting in the caller's shell and leave it
+            // executing escape fragments after this command exits.
+            let mut safe_preview = String::with_capacity(preview.len());
+            crate::tui::osc8::strip_ansi_into(&preview, &mut safe_preview);
+            print!("{safe_preview}");
             if contents.chars().count() > preview.chars().count() {
                 println!("\n[truncated]");
             } else if !preview.ends_with('\n') {
