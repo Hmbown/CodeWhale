@@ -1301,11 +1301,12 @@ impl Settings {
                     // Persist as "tasks"; user-facing panel label is Activity (#4147/#4135).
                     "tasks" | "activity" | "live" | "running" => "tasks",
                     "agents" | "subagents" | "sub-agents" => "agents",
-                    "context" | "session" => "context",
+                    "context" => "context",
+                    "sessions" | "sessions_rail" | "session_history" => "sessions",
                     "hidden" | "hide" | "closed" | "off" | "none" => "hidden",
                     _ => {
                         anyhow::bail!(
-                            "Failed to update setting: invalid sidebar focus '{value}'. Expected: pinned, auto, activity (tasks), agents, context, hidden."
+                            "Failed to update setting: invalid sidebar focus '{value}'. Expected: pinned, auto, activity (tasks), agents, context, sessions, hidden."
                         )
                     }
                 };
@@ -2633,7 +2634,8 @@ fn normalize_sidebar_focus(value: &str) -> &str {
         "pinned" | "visible" | "show" | "on" | "work" | "plan" | "todos" => "pinned",
         "tasks" | "activity" | "live" | "running" => "tasks",
         "agents" | "subagents" | "sub-agents" => "agents",
-        "context" | "session" => "context",
+        "context" => "context",
+        "sessions" | "sessions_rail" | "session_history" => "sessions",
         "hidden" | "hide" | "closed" | "off" | "none" => "hidden",
         _ => "auto",
     }
@@ -3503,6 +3505,16 @@ mod tests {
         assert_eq!(settings.sidebar_focus, "tasks");
         settings.set("focus", "live").expect("live alias");
         assert_eq!(settings.sidebar_focus, "tasks");
+
+        // Sessions panel (#2934).
+        settings
+            .set("focus", "sessions")
+            .expect("sessions focus");
+        assert_eq!(settings.sidebar_focus, "sessions");
+        settings
+            .set("focus", "sessions_rail")
+            .expect("sessions_rail alias");
+        assert_eq!(settings.sidebar_focus, "sessions");
 
         let err = settings
             .set("sidebar_focus", "classic")

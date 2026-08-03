@@ -6626,6 +6626,14 @@ async fn run_event_loop(
                     apply_alt_4_shortcut(app, key.modifiers);
                     continue;
                 }
+                KeyCode::Char('5')
+                    if key.modifiers.contains(KeyModifiers::ALT)
+                        && key_shortcuts::has_control_like_modifier(key.modifiers) =>
+                {
+                    app.set_sidebar_focus(SidebarFocus::Sessions);
+                    app.status_message = Some("Sidebar focus: sessions".to_string());
+                    continue;
+                }
                 // Sidebar focus via Alt+! / Alt+@ / Alt+# / Alt+$ / Alt+%)
                 // AltGr on European keyboards emits Ctrl+Alt on Windows, so
                 // exclude Ctrl to avoid swallowing AltGr-typed characters
@@ -6662,6 +6670,14 @@ async fn run_event_loop(
                 {
                     app.set_sidebar_focus(SidebarFocus::Context);
                     app.status_message = Some("Sidebar focus: context".to_string());
+                    continue;
+                }
+                KeyCode::Char('^')
+                    if key.modifiers.contains(KeyModifiers::ALT)
+                        && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
+                    app.set_sidebar_focus(SidebarFocus::Sessions);
+                    app.status_message = Some("Sidebar focus: sessions".to_string());
                     continue;
                 }
                 KeyCode::Char(')')

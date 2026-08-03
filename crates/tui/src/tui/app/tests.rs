@@ -1695,10 +1695,20 @@ fn sidebar_focus_accepts_pinned_and_maps_legacy_trackers_to_pinned() {
     assert_eq!(SidebarFocus::from_setting("running"), SidebarFocus::Tasks);
     assert_eq!(SidebarFocus::from_setting("agents"), SidebarFocus::Agents);
     assert_eq!(SidebarFocus::from_setting("context"), SidebarFocus::Context);
+    assert_eq!(SidebarFocus::from_setting("sessions"), SidebarFocus::Sessions);
+    assert_eq!(
+        SidebarFocus::from_setting("sessions_rail"),
+        SidebarFocus::Sessions
+    );
+    assert_eq!(
+        SidebarFocus::from_setting("session_history"),
+        SidebarFocus::Sessions
+    );
     assert_eq!(SidebarFocus::from_setting("hidden"), SidebarFocus::Hidden);
     assert_eq!(SidebarFocus::from_setting("off"), SidebarFocus::Hidden);
     assert_eq!(SidebarFocus::Pinned.as_setting(), "pinned");
     assert_eq!(SidebarFocus::Hidden.as_setting(), "hidden");
+    assert_eq!(SidebarFocus::Sessions.as_setting(), "sessions");
 }
 
 #[test]

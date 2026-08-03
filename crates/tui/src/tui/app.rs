@@ -300,6 +300,10 @@ pub enum SidebarFocus {
     Tasks,
     Agents,
     Context,
+    /// Dedicated Sessions browser panel (#2934). Renders the persistent
+    /// sessions rail as the sole sidebar content, regardless of whether the
+    /// `sessions_rail` setting is enabled. Focuses session navigation.
+    Sessions,
     Hidden,
 }
 
@@ -486,7 +490,8 @@ impl SidebarFocus {
             // Persist/compat key remains "tasks"; user-facing panel is Activity (#4147/#4135).
             "tasks" | "activity" | "live" | "running" => Self::Tasks,
             "agents" | "subagents" | "sub-agents" => Self::Agents,
-            "context" | "session" => Self::Context,
+            "context" => Self::Context,
+            "sessions" | "sessions_rail" | "session_history" => Self::Sessions,
             "hidden" | "hide" | "closed" | "off" | "none" => Self::Hidden,
             _ => Self::Auto,
         }
@@ -501,6 +506,7 @@ impl SidebarFocus {
             Self::Tasks => "tasks",
             Self::Agents => "agents",
             Self::Context => "context",
+            Self::Sessions => "sessions",
             Self::Hidden => "hidden",
         }
     }

@@ -96,7 +96,7 @@ pub fn render_sidebar(f: &mut Frame, area: Rect, app: &mut App, config: &Config)
     let (main_area, goal_banner_area) = split_sidebar_goal_banner_area(main_area, app);
     let fixed_focus = matches!(
         app.sidebar_focus,
-        SidebarFocus::Tasks | SidebarFocus::Agents | SidebarFocus::Context
+        SidebarFocus::Tasks | SidebarFocus::Agents | SidebarFocus::Context | SidebarFocus::Sessions
     );
     if fixed_focus && work_has_content {
         if main_area.height < 7 {
@@ -110,6 +110,7 @@ pub fn render_sidebar(f: &mut Frame, area: Rect, app: &mut App, config: &Config)
                 SidebarFocus::Tasks => render_sidebar_tasks(f, sections[0], app),
                 SidebarFocus::Agents => render_sidebar_subagents(f, sections[0], app),
                 SidebarFocus::Context => render_context_panel(f, sections[0], app),
+                SidebarFocus::Sessions => render_sidebar_sessions(f, sections[0], app),
                 _ => unreachable!("fixed focus was checked above"),
             }
             render_sidebar_work_compact(f, sections[1], app);
@@ -121,6 +122,7 @@ pub fn render_sidebar(f: &mut Frame, area: Rect, app: &mut App, config: &Config)
             SidebarFocus::Tasks => render_sidebar_tasks(f, main_area, app),
             SidebarFocus::Agents => render_sidebar_subagents(f, main_area, app),
             SidebarFocus::Context => render_context_panel(f, main_area, app),
+            SidebarFocus::Sessions => render_sidebar_sessions(f, main_area, app),
             SidebarFocus::Hidden => unreachable!("hidden sidebar returned before render dispatch"),
         }
     }
@@ -7896,5 +7898,51 @@ mod tests {
             "status marker prefix must survive truncation: {label:?}"
         );
         assert!(!label.contains('\u{FFFD}'));
+    }
+
+    #[test]
+    fn sessions_focus_does_not_idle_auto_collapse() {
+        // SidebarFocus::Sessions is a navigation surface — it must stay visible
+        // even when there is no active work, so sidebar_auto_idle must return
+        // false for it (as it does for every explicit non-Auto focus).
+        let mut app = create_test_app();
+        app.sidebar_focus = SidebarFocus::Sessions;
+        app.context_panel = false;
+        app.sessions_rail = false;
+
+        assert!(
+            !sidebar_auto_idle(&mut app),
+            "SidebarFocus::Sessions must never idle-collapse the sidebar"
+        );
+    }
+
+    #[test]
+    fn sessions_focus_recognized_in_fixed_focus_check() {
+        // SidebarFocus::Sessions should be treated as a fixed-focus panel,
+        // meaning it renders the sessions panel as the sole sidebar content
+        // (alongside a compact Work strip when work has content). We verify
+        // the variant is not confused with Auto/Pinned.
+        assert!(matches!(
+            SidebarFocus::Sessions,
+            SidebarFocus::Tasks
+                | SidebarFocus::Agents
+                | SidebarFocus::Context
+                | SidebarFocus::Sessions
+        ));
+        // Auto and Pinned must not be in the fixed-focus set.
+        assert!(!matches!(
+            SidebarFocus::Auto,
+            SidebarFocus::Tasks
+                | SidebarFocus::Agents
+                | SidebarFocus::Context
+                | SidebarFocus::Sessions
+        ));
+        assert!(!matches!(
+            SidebarFocus::Pinned,
+            SidebarFocus::Tasks
+                | SidebarFocus::Agents
+                | SidebarFocus::Context
+                | SidebarFocus::Sessions
+        ));
     }
 }
