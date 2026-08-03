@@ -319,6 +319,14 @@ pub struct Settings {
     pub work_surface_top_height: u16,
     /// Remembered total width (content plus divider) for side Work placement.
     pub work_surface_side_width: u16,
+    /// Which panel the rail shows: tasks, agents, context, or pinned.
+    /// Orthogonal to `work_surface_placement` (rail unification, 0.9.4).
+    pub rail_panel: String,
+    /// Runtime-only: whether the loaded settings document explicitly named
+    /// `rail_panel`. The sidebar→rail migration must not override an
+    /// explicit choice that happens to equal the default ("tasks").
+    #[serde(skip)]
+    pub(crate) rail_panel_explicit: bool,
     /// Runtime-only 30 FPS cap for terminals that flicker at high redraw
     /// rates. Separate from accessibility motion and text delivery.
     #[serde(skip)]
@@ -384,13 +392,15 @@ pub struct Settings {
     /// Default mode: "agent" (Act), "plan", or "operate". Legacy permission
     /// shorthands are accepted for migration but never advertised as modes.
     pub default_mode: String,
-    /// Sidebar width as percentage of terminal width
+    /// Legacy sidebar width as percentage of terminal width. Load-only
+    /// migration shim (0.9.4 rail unification): read by
+    /// `migrate_sidebar_settings_to_rail`, never written back.
+    #[serde(skip_serializing)]
     pub sidebar_width_percent: u16,
-    /// Sidebar focus mode: pinned, auto, tasks, agents, context, hidden
+    /// Legacy sidebar focus mode: pinned, auto, tasks, agents, context,
+    /// hidden. Load-only migration shim, never written back.
+    #[serde(skip_serializing)]
     pub sidebar_focus: String,
-    /// Migration marker for users who explicitly opt into idle auto-collapse.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub sidebar_auto_collapse_opt_in: bool,
     /// Enable the session-context panel (#504). Shows working set, tokens,
     /// cost, MCP/LSP status, cycle count, and memory info.
     pub context_panel: bool,
@@ -529,6 +539,8 @@ impl Default for Settings {
             // only grows to this many lines (user request, 2026-07-23).
             work_surface_top_height: 8,
             work_surface_side_width: 30,
+            rail_panel: "tasks".to_string(),
+            rail_panel_explicit: false,
             constrained_frame_rate: false,
             bracketed_paste: true,
             paste_burst_detection: true,
@@ -553,7 +565,6 @@ impl Default for Settings {
             default_mode: "agent".to_string(),
             sidebar_width_percent: 28,
             sidebar_focus: "auto".to_string(),
-            sidebar_auto_collapse_opt_in: true,
             context_panel: false,
             sessions_rail: false,
             session_auto_resume: false,
@@ -608,7 +619,61 @@ fn normalize_work_surface_placement(value: &str) -> &'static str {
     match value.trim().to_ascii_lowercase().as_str() {
         "left" => "left",
         "right" => "right",
+        "off" => "off",
         _ => "top",
+    }
+}
+
+fn normalize_rail_panel(value: &str) -> &'static str {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "agents" => "agents",
+        "context" => "context",
+        "pinned" => "pinned",
+        _ => "tasks",
+    }
+}
+
+/// Rail unification (0.9.4): carry the classic sidebar's settings forward
+/// instead of stranding them. `sidebar_focus` picks the rail panel —
+/// pinned/tasks/agents/context map onto the same-named panels, auto folds
+/// into the always-on pinned work panel, and hidden turns the rail off.
+/// `sidebar_width_percent` maps onto the absolute side width at a
+/// 120-column reference. Auto-collapse itself is deliberately dropped: the
+/// rail hides via placement off. Explicit new keys win over migrated ones.
+fn migrate_sidebar_settings_to_rail(s: &mut Settings) {
+    match s.sidebar_focus.trim().to_ascii_lowercase().as_str() {
+        "hidden" | "hide" | "closed" | "off" | "none" => {
+            if s.work_surface_placement == "top" {
+                s.work_surface_placement = "off".to_string();
+            }
+        }
+        // #5141 let users pin a dedicated sessions panel in the classic
+        // sidebar; on the unified rail the equivalent surface is the
+        // first-class sessions rail, so carry the intent forward by
+        // enabling it.
+        "sessions" | "sessions_rail" | "session_history" => {
+            s.sessions_rail = true;
+        }
+        panel @ ("pinned" | "work" | "plan" | "todos" | "tasks" | "activity" | "live"
+        | "running" | "agents" | "subagents" | "sub-agents" | "context" | "session"
+        | "auto") => {
+            // `rail_panel == "tasks"` is the default, so only treat it as
+            // unset when the document did not name the key explicitly.
+            if s.rail_panel == "tasks" && !s.rail_panel_explicit {
+                s.rail_panel = match panel {
+                    "tasks" | "activity" | "live" | "running" => "tasks",
+                    "agents" | "subagents" | "sub-agents" => "agents",
+                    "context" | "session" => "context",
+                    _ => "pinned",
+                }
+                .to_string();
+            }
+        }
+        _ => {}
+    }
+    if s.sidebar_width_percent != 28 {
+        let cols = (u32::from(s.sidebar_width_percent) * 120 / 100) as u16;
+        s.work_surface_side_width = cols.clamp(26, 80);
     }
 }
 
@@ -765,6 +830,10 @@ impl Settings {
             s.auto_compact_explicit = parsed_document
                 .as_ref()
                 .is_some_and(auto_compact_explicitly_configured_in_document);
+            s.rail_panel_explicit = parsed_document
+                .as_ref()
+                .and_then(toml::Value::as_table)
+                .is_some_and(|table| table.contains_key("rail_panel"));
             if parsed_document.as_ref().is_some_and(|document| {
                 document.as_table().is_some_and(|table| {
                     !table.contains_key("auto_compact")
@@ -789,18 +858,14 @@ impl Settings {
             s.transcript_spacing = normalize_transcript_spacing(&s.transcript_spacing).to_string();
             s.tool_collapse_mode = normalize_tool_collapse_mode(&s.tool_collapse_mode).to_string();
             s.sidebar_focus = normalize_sidebar_focus(&s.sidebar_focus).to_string();
-            if s.sidebar_focus == "auto" && !s.sidebar_auto_collapse_opt_in {
-                // v0.8.62 wrote the surprising auto-collapse default into many
-                // full settings files. Treat unmarked saved "auto" as that
-                // legacy default so upgraded users get the sidebar back, while
-                // `/sidebar auto --save` and `/set sidebar_focus auto` below
-                // preserve an explicit opt-in from this release onward (#3328).
-                s.sidebar_focus = "pinned".to_string();
-            }
+            // Rail unification (0.9.4) migration: the classic sidebar is
+            // gone, so its settings carry forward instead of stranding.
+            migrate_sidebar_settings_to_rail(&mut s);
             s.status_indicator = normalize_status_indicator(&s.status_indicator).to_string();
             s.ocean_treatment = normalize_ocean_treatment(&s.ocean_treatment).to_string();
             s.work_surface_placement =
                 normalize_work_surface_placement(&s.work_surface_placement).to_string();
+            s.rail_panel = normalize_rail_panel(&s.rail_panel).to_string();
             s.work_surface_top_height = s.work_surface_top_height.clamp(2, 16);
             s.work_surface_side_width = s.work_surface_side_width.clamp(26, 80);
             s.inline_diffs = normalize_inline_diffs(&s.inline_diffs).to_string();
@@ -1087,12 +1152,6 @@ impl Settings {
         atomically_replace_settings_file(path, body.as_bytes())
     }
 
-    /// Update and persist sidebar width percentage (10-50) — used by the
-    /// drag-to-resize handle in the TUI.
-    pub fn update_sidebar_width(&mut self, percent: u16) {
-        self.sidebar_width_percent = percent.clamp(10, 50);
-    }
-
     /// Set a single setting by key
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
         match key {
@@ -1144,12 +1203,25 @@ impl Settings {
             }
             "work_surface_placement" | "work_surface" | "work_rail" => {
                 let normalized = value.trim().to_ascii_lowercase();
-                if !matches!(normalized.as_str(), "top" | "left" | "right") {
+                if !matches!(normalized.as_str(), "top" | "left" | "right" | "off") {
                     anyhow::bail!(
-                        "Failed to update setting: invalid work surface placement '{value}'. Expected: top, left, or right."
+                        "Failed to update setting: invalid work surface placement '{value}'. Expected: top, left, right, or off."
                     );
                 }
                 self.work_surface_placement = normalized;
+            }
+            "rail_panel" | "rail" => {
+                let normalized = value.trim().to_ascii_lowercase();
+                if !matches!(
+                    normalized.as_str(),
+                    "tasks" | "agents" | "context" | "pinned"
+                ) {
+                    anyhow::bail!(
+                        "Failed to update setting: invalid rail panel '{value}'. Expected: tasks, agents, context, or pinned."
+                    );
+                }
+                self.rail_panel = normalized;
+                self.rail_panel_explicit = true;
             }
             "work_surface_top_height" | "work_top_height" => {
                 self.work_surface_top_height =
@@ -1279,40 +1351,6 @@ impl Settings {
                     ),
                 };
             }
-            "sidebar_width" | "sidebar" => {
-                let width: u16 = value
-                    .parse()
-                    .map_err(|_| {
-                        anyhow::anyhow!(
-                            "Failed to update setting: invalid width '{value}'. Expected a number between 10-50."
-                        )
-                    })?;
-                if !(10..=50).contains(&width) {
-                    anyhow::bail!(
-                        "Failed to update setting: width must be between 10 and 50 percent."
-                    );
-                }
-                self.sidebar_width_percent = width;
-            }
-            "sidebar_focus" | "focus" => {
-                let normalized = match value.trim().to_ascii_lowercase().as_str() {
-                    "auto" => "auto",
-                    "pinned" | "visible" | "show" | "on" | "work" | "plan" | "todos" => "pinned",
-                    // Persist as "tasks"; user-facing panel label is Activity (#4147/#4135).
-                    "tasks" | "activity" | "live" | "running" => "tasks",
-                    "agents" | "subagents" | "sub-agents" => "agents",
-                    "context" => "context",
-                    "sessions" | "sessions_rail" | "session_history" => "sessions",
-                    "hidden" | "hide" | "closed" | "off" | "none" => "hidden",
-                    _ => {
-                        anyhow::bail!(
-                            "Failed to update setting: invalid sidebar focus '{value}'. Expected: pinned, auto, activity (tasks), agents, context, sessions, hidden."
-                        )
-                    }
-                };
-                self.sidebar_focus = normalized.to_string();
-                self.sidebar_auto_collapse_opt_in = normalized == "auto";
-            }
             "context_panel" | "context" | "session_panel" => {
                 self.context_panel = parse_bool(value)?;
             }
@@ -1440,6 +1478,7 @@ impl Settings {
             "  work_side_width:    {}",
             self.work_surface_side_width
         ));
+        lines.push(format!("  rail_panel:         {}", self.rail_panel));
         lines.push(format!("  bracketed_paste:    {}", self.bracketed_paste));
         lines.push(format!(
             "  paste_burst_detect: {}",
@@ -1480,11 +1519,6 @@ impl Settings {
         ));
         lines.push(format!("  default_mode:       {}", self.default_mode));
         lines.push(format!("  launch_screen:      {}", self.launch_screen));
-        lines.push(format!(
-            "  sidebar_width:      {}%",
-            self.sidebar_width_percent
-        ));
-        lines.push(format!("  sidebar_focus:      {}", self.sidebar_focus));
         lines.push(format!("  context_panel:      {}", self.context_panel));
         lines.push(format!("  cost_currency:      {}", self.cost_currency));
         lines.push(format!("  max_history:        {}", self.max_input_history));
@@ -1580,6 +1614,10 @@ impl Settings {
                 "Resizable To-do/Sub-agent side bar width: 26-80 columns",
             ),
             (
+                "rail_panel",
+                "Which panel the rail shows: tasks/agents/context/pinned",
+            ),
+            (
                 "bracketed_paste",
                 "Terminal bracketed-paste mode: on/off (rare to disable)",
             ),
@@ -1661,11 +1699,6 @@ impl Settings {
             (
                 "default_mode",
                 "Default mode: act (agent), plan, or operate",
-            ),
-            ("sidebar_width", "Sidebar width percentage: 10-50"),
-            (
-                "sidebar_focus",
-                "Sidebar focus: auto, work, activity (tasks), agents, context, hidden",
             ),
             (
                 "context_panel",
@@ -2961,11 +2994,11 @@ mod tests {
     }
 
     #[test]
-    fn work_surface_placement_persists_only_top_left_or_right() {
+    fn work_surface_placement_persists_top_left_right_and_off() {
         let mut settings = Settings::default();
         assert_eq!(settings.work_surface_placement, "top");
 
-        for placement in ["left", "right", "top"] {
+        for placement in ["left", "right", "top", "off"] {
             settings
                 .set("work_surface_placement", placement)
                 .expect("valid placement");
@@ -2978,8 +3011,31 @@ mod tests {
         let err = settings
             .set("work_surface_placement", "bottom")
             .expect_err("bottom is owned by composer/footer");
-        assert!(err.to_string().contains("top, left, or right"));
-        assert_eq!(settings.work_surface_placement, "top");
+        assert!(err.to_string().contains("top, left, right, or off"));
+        assert_eq!(settings.work_surface_placement, "off");
+    }
+
+    #[test]
+    fn rail_panel_persists_tasks_agents_context_and_pinned() {
+        let mut settings = Settings::default();
+        assert_eq!(settings.rail_panel, "tasks");
+
+        for panel in ["agents", "context", "pinned", "tasks"] {
+            settings.set("rail_panel", panel).expect("valid panel");
+            assert_eq!(settings.rail_panel, panel);
+            let body = toml::to_string(&settings).expect("serialize settings");
+            let restored: Settings = toml::from_str(&body).expect("restore settings");
+            assert_eq!(restored.rail_panel, panel);
+        }
+
+        let err = settings
+            .set("rail_panel", "auto")
+            .expect_err("auto-collapse was dropped with the legacy sidebar");
+        assert!(
+            err.to_string()
+                .contains("tasks, agents, context, or pinned")
+        );
+        assert_eq!(settings.rail_panel, "tasks");
     }
 
     #[test]
@@ -3264,25 +3320,76 @@ mod tests {
     }
 
     #[test]
-    fn default_settings_keep_the_water_field_open_until_inspection_is_needed() {
-        let settings = Settings::default();
-        assert_eq!(settings.sidebar_focus, "auto");
-        assert!(settings.sidebar_auto_collapse_opt_in);
+    fn legacy_sidebar_focus_migrates_to_rail_panel_and_placement() {
+        let migrate = |focus: &str| {
+            let mut settings = Settings {
+                sidebar_focus: focus.to_string(),
+                ..Settings::default()
+            };
+            migrate_sidebar_settings_to_rail(&mut settings);
+            settings
+        };
+
+        assert_eq!(migrate("agents").rail_panel, "agents");
+        assert_eq!(migrate("subagents").rail_panel, "agents");
+        assert_eq!(migrate("context").rail_panel, "context");
+        assert_eq!(migrate("session").rail_panel, "context");
+        assert_eq!(migrate("tasks").rail_panel, "tasks");
+        assert_eq!(migrate("activity").rail_panel, "tasks");
+        assert_eq!(migrate("pinned").rail_panel, "pinned");
+        assert_eq!(migrate("work").rail_panel, "pinned");
+        // Auto-collapse is dropped: auto folds into the always-on pinned
+        // work panel rather than a mode that hides itself.
+        assert_eq!(migrate("auto").rail_panel, "pinned");
+        // A hidden sidebar becomes rail placement off.
+        let hidden = migrate("hidden");
+        assert_eq!(hidden.work_surface_placement, "off");
+        // #5141's pinned sessions panel carries forward as the first-class
+        // sessions rail.
+        assert!(migrate("sessions").sessions_rail);
+        assert!(migrate("sessions_rail").sessions_rail);
+        // An explicit `rail_panel = "tasks"` in the document wins over the
+        // auto→pinned migration even though "tasks" is the default value.
+        let mut explicit = Settings {
+            sidebar_focus: "auto".to_string(),
+            rail_panel: "tasks".to_string(),
+            rail_panel_explicit: true,
+            ..Settings::default()
+        };
+        migrate_sidebar_settings_to_rail(&mut explicit);
+        assert_eq!(explicit.rail_panel, "tasks");
+        // Placement panels keep their placement when the rail hides.
+        let mut left = Settings {
+            sidebar_focus: "hidden".to_string(),
+            work_surface_placement: "left".to_string(),
+            ..Settings::default()
+        };
+        migrate_sidebar_settings_to_rail(&mut left);
+        assert_eq!(left.work_surface_placement, "left");
     }
 
     #[test]
-    fn sidebar_auto_opt_in_marker_is_serialized_only_when_enabled() {
-        let default_body = toml::to_string_pretty(&Settings::default()).expect("serialize");
-        assert!(default_body.contains("sidebar_auto_collapse_opt_in = true"));
+    fn legacy_sidebar_width_maps_to_side_columns_and_new_keys_win() {
+        let mut settings = Settings {
+            sidebar_width_percent: 40,
+            ..Settings::default()
+        };
+        migrate_sidebar_settings_to_rail(&mut settings);
+        assert_eq!(settings.work_surface_side_width, 48);
 
+        // The default percent leaves the default side width alone.
         let mut settings = Settings::default();
-        settings
-            .set("sidebar_focus", "auto")
-            .expect("enable auto collapse");
+        migrate_sidebar_settings_to_rail(&mut settings);
+        assert_eq!(settings.work_surface_side_width, 30);
 
-        let auto_body = toml::to_string_pretty(&settings).expect("serialize");
-        assert!(auto_body.contains("sidebar_focus = \"auto\""));
-        assert!(auto_body.contains("sidebar_auto_collapse_opt_in = true"));
+        // An explicit rail panel wins over the migrated sidebar focus.
+        let mut settings = Settings {
+            sidebar_focus: "context".to_string(),
+            rail_panel: "agents".to_string(),
+            ..Settings::default()
+        };
+        migrate_sidebar_settings_to_rail(&mut settings);
+        assert_eq!(settings.rail_panel, "agents");
     }
 
     #[test]
@@ -3460,68 +3567,6 @@ mod tests {
             .set("cost_currency", "eur")
             .expect_err("unsupported currency");
         assert!(err.to_string().contains("invalid cost currency"));
-    }
-
-    #[test]
-    fn sidebar_focus_accepts_pinned_values_and_legacy_aliases() {
-        let mut settings = Settings::default();
-
-        settings.set("sidebar_focus", "pinned").expect("set pinned");
-        assert_eq!(settings.sidebar_focus, "pinned");
-
-        settings.set("sidebar_focus", "work").expect("set work");
-        assert_eq!(settings.sidebar_focus, "pinned");
-
-        settings.set("focus", "plan").expect("legacy plan alias");
-        assert_eq!(settings.sidebar_focus, "pinned");
-
-        settings.set("focus", "todos").expect("legacy todos alias");
-        assert_eq!(settings.sidebar_focus, "pinned");
-
-        settings.set("focus", "context").expect("context focus");
-        assert_eq!(settings.sidebar_focus, "context");
-
-        settings.set("focus", "hidden").expect("hidden focus");
-        assert_eq!(settings.sidebar_focus, "hidden");
-
-        settings.set("focus", "off").expect("off alias");
-        assert_eq!(settings.sidebar_focus, "hidden");
-        assert!(!settings.sidebar_auto_collapse_opt_in);
-
-        settings.set("focus", "auto").expect("auto focus");
-        assert_eq!(settings.sidebar_focus, "auto");
-        assert!(settings.sidebar_auto_collapse_opt_in);
-
-        settings
-            .set("focus", "visible")
-            .expect("pinned alias clears auto marker");
-        assert_eq!(settings.sidebar_focus, "pinned");
-        assert!(!settings.sidebar_auto_collapse_opt_in);
-
-        // Activity is the user-facing panel name; config key remains "tasks" (#4135).
-        settings
-            .set("focus", "activity")
-            .expect("activity alias for Activity panel");
-        assert_eq!(settings.sidebar_focus, "tasks");
-        settings.set("focus", "live").expect("live alias");
-        assert_eq!(settings.sidebar_focus, "tasks");
-
-        // Sessions panel (#2934).
-        settings.set("focus", "sessions").expect("sessions focus");
-        assert_eq!(settings.sidebar_focus, "sessions");
-        settings
-            .set("focus", "sessions_rail")
-            .expect("sessions_rail alias");
-        assert_eq!(settings.sidebar_focus, "sessions");
-
-        let err = settings
-            .set("sidebar_focus", "classic")
-            .expect_err("classic is not a supported public focus");
-        assert!(err.to_string().contains("invalid sidebar focus"));
-        assert!(
-            err.to_string().contains("activity (tasks)"),
-            "error should teach the Activity alias: {err}"
-        );
     }
 
     #[test]
@@ -4758,7 +4803,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_load_migrates_legacy_saved_auto_sidebar_focus_to_pinned() {
+    fn settings_load_migrates_legacy_saved_auto_sidebar_focus_to_rail() {
         let _g = config_path_test_guard();
         let tmp = tempfile::tempdir().expect("tempdir");
         let settings_path = tmp.path().join("settings.toml");
@@ -4768,27 +4813,24 @@ mod tests {
 
         let loaded = Settings::load().expect("load settings");
 
-        assert_eq!(loaded.sidebar_focus, "pinned");
-        assert!(!loaded.sidebar_auto_collapse_opt_in);
+        // Auto-collapse is dropped: saved auto folds into the always-on
+        // pinned rail panel.
+        assert_eq!(loaded.rail_panel, "pinned");
+        assert_eq!(loaded.work_surface_placement, "top");
     }
 
     #[test]
-    fn settings_load_preserves_explicit_auto_sidebar_opt_in() {
+    fn settings_load_migrates_hidden_sidebar_to_rail_off() {
         let _g = config_path_test_guard();
         let tmp = tempfile::tempdir().expect("tempdir");
         let settings_path = tmp.path().join("settings.toml");
-        std::fs::write(
-            &settings_path,
-            "sidebar_focus = \"auto\"\nsidebar_auto_collapse_opt_in = true\n",
-        )
-        .expect("settings");
+        std::fs::write(&settings_path, "sidebar_focus = \"hidden\"\n").expect("settings");
         let _config_override =
             EnvVarRestore::set("DEEPSEEK_CONFIG_PATH", tmp.path().join("config.toml"));
 
         let loaded = Settings::load().expect("load settings");
 
-        assert_eq!(loaded.sidebar_focus, "auto");
-        assert!(loaded.sidebar_auto_collapse_opt_in);
+        assert_eq!(loaded.work_surface_placement, "off");
     }
 
     #[test]

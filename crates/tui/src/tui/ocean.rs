@@ -23,10 +23,6 @@ pub enum OceanTreatment {
     Ombre,
     /// Plain theme surface with the same state grammar and ambient life.
     Flat,
-    /// Legacy full-chrome compatibility shell. Persisted settings normalize
-    /// unknown values to ombre, so this is reachable only through explicit
-    /// internal selection (tests and future compatibility wiring).
-    Classic,
 }
 
 impl OceanTreatment {
@@ -35,9 +31,9 @@ impl OceanTreatment {
         let value = value.trim();
         if value.eq_ignore_ascii_case("flat") {
             Self::Flat
-        } else if value.eq_ignore_ascii_case("classic") {
-            Self::Classic
         } else {
+            // Migration shim: the legacy "classic" shell was removed in 0.9.4;
+            // persisted settings carrying it load as the default ombre.
             Self::Ombre
         }
     }
@@ -50,19 +46,6 @@ impl OceanTreatment {
     #[must_use]
     pub fn is_flat(self) -> bool {
         self == Self::Flat
-    }
-
-    #[must_use]
-    pub fn is_classic(self) -> bool {
-        self == Self::Classic
-    }
-
-    /// Every underwater treatment keeps idle ambient life; only the legacy
-    /// classic shell stays still. Flat means a plain surface, not a lifeless
-    /// ocean, and Terminal-owned backgrounds still carry foreground life.
-    #[must_use]
-    pub fn supports_ambient_life(self) -> bool {
-        !self.is_classic()
     }
 }
 

@@ -19,13 +19,63 @@ use crate::work_graph::{
 };
 
 /// Persisted Ocean work-surface placement. Bottom is deliberately absent: the
-/// composer and phase footer own the shell's lower edge.
+/// composer and phase footer own the shell's lower edge. `Off` hides the rail
+/// outright (rail unification, 0.9.4).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum WorkSurfacePlacement {
     #[default]
     Top,
     Left,
     Right,
+    Off,
+}
+
+/// Which panel the rail shows. Orthogonal to placement: the user picks
+/// *where* the rail sits and *what* it shows (rail unification, 0.9.4).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RailPanel {
+    /// Tasks / to-do / workers — the live work projection rendered through
+    /// the row/hitbox machinery in `render.rs`.
+    #[default]
+    Tasks,
+    /// Sub-agents, ported from the legacy sidebar's Agents panel.
+    Agents,
+    /// Workspace / token / cost context, ported from the Context panel.
+    Context,
+    /// Pinned work summary (goal + checklist), ported from the Pinned panel.
+    Pinned,
+}
+
+impl RailPanel {
+    #[must_use]
+    pub fn parse(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "agents" => Self::Agents,
+            "context" => Self::Context,
+            "pinned" => Self::Pinned,
+            _ => Self::Tasks,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_setting(self) -> &'static str {
+        match self {
+            Self::Tasks => "tasks",
+            Self::Agents => "agents",
+            Self::Context => "context",
+            Self::Pinned => "pinned",
+        }
+    }
+
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Tasks => "Tasks",
+            Self::Agents => "Agents",
+            Self::Context => "Context",
+            Self::Pinned => "Pinned",
+        }
+    }
 }
 
 impl WorkSurfacePlacement {
@@ -34,6 +84,7 @@ impl WorkSurfacePlacement {
         match value.trim().to_ascii_lowercase().as_str() {
             "left" => Self::Left,
             "right" => Self::Right,
+            "off" => Self::Off,
             _ => Self::Top,
         }
     }
@@ -44,6 +95,7 @@ impl WorkSurfacePlacement {
             Self::Top => "top",
             Self::Left => "left",
             Self::Right => "right",
+            Self::Off => "off",
         }
     }
 }
@@ -127,6 +179,8 @@ pub(crate) struct SessionInstanceScope {
 pub struct WorkSurfaceState {
     pub placement: WorkSurfacePlacement,
     pub(super) effective_placement: WorkSurfacePlacement,
+    /// Panel selection — orthogonal to placement.
+    pub panel: RailPanel,
     pub top_height: u16,
     pub side_width: u16,
     pub(super) resizing: bool,
@@ -186,6 +240,13 @@ impl WorkSurfaceState {
         self.resizing
     }
 
+    /// The placement actually rendered this frame (after the narrow-terminal
+    /// fallback), for truthful status readouts.
+    #[must_use]
+    pub fn effective_placement(&self) -> WorkSurfacePlacement {
+        self.effective_placement
+    }
+
     #[must_use]
     pub fn with_placement(placement: WorkSurfacePlacement) -> Self {
         Self::with_layout(placement, 3, 30)
@@ -196,6 +257,7 @@ impl WorkSurfaceState {
         Self {
             placement,
             effective_placement: placement,
+            panel: RailPanel::default(),
             top_height: top_height.clamp(TOP_HEIGHT_MIN, TOP_HEIGHT_MAX),
             side_width: side_width.clamp(SIDE_WIDTH_MIN, SIDE_WIDTH_MAX),
             resizing: false,

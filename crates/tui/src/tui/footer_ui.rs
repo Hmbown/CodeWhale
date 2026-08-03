@@ -385,10 +385,11 @@ mod tests {
         let options = TuiOptions {
             ..crate::test_support::test_tui_options(PathBuf::from("."))
         };
-        // Pin sidebar so dogfood machines with Agents-visible settings.toml
-        // do not hide the footer agents chip this test asserts.
+        // Pin the rail panel so dogfood machines whose settings.toml migrates
+        // a legacy Agents sidebar focus do not hide the footer agents chip
+        // this test asserts.
         let mut app = App::new(options, &Config::default());
-        app.sidebar_focus = crate::tui::app::SidebarFocus::Hidden;
+        app.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
         app
     }
 

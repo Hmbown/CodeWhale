@@ -16,7 +16,7 @@ pub use footer::{
     FooterProps, FooterToast, FooterWidget, footer_agents_chip, footer_shell_label_chip,
     footer_working_label,
 };
-pub use header::{HeaderData, HeaderWidget, header_status_indicator_frame};
+pub use header::header_status_indicator_frame;
 pub use renderable::Renderable;
 
 use std::borrow::Cow;
@@ -111,10 +111,7 @@ impl ChatWidget {
             .is_ombre()
             .then(|| crate::tui::ocean::OceanRamp::for_theme(&app.ui_theme))
             .flatten();
-        let ambient_inks = app
-            .ocean_treatment
-            .supports_ambient_life()
-            .then(|| crate::tui::ocean::ambient_inks(&app.ui_theme));
+        let ambient_inks = Some(crate::tui::ocean::ambient_inks(&app.ui_theme));
         let completion_elapsed_ms = (!app.low_motion && app.fancy_animations)
             .then_some(())
             .and(app.ocean_completion_started_at)
@@ -541,16 +538,8 @@ impl ChatWidget {
         // rows upward, producing repeated thousand-cell repaints and the
         // visible "slab" motion recorded in live QA. Empty-state centering is
         // handled separately; active work starts at the top and appends in
-        // place until scrolling is genuinely necessary. The old anchoring is
-        // retained only inside the explicitly selected classic treatment.
-        if app.ocean_treatment.is_classic() && app.viewport.transcript_scroll.is_at_tail() {
-            let padding_top = visible_lines.saturating_sub(lines.len());
-            app.viewport.last_transcript_padding_top = padding_top;
-            pad_lines_to_bottom(&mut lines, visible_lines);
-            line_links.splice(0..0, std::iter::repeat_n(Vec::new(), padding_top));
-        } else {
-            app.viewport.last_transcript_padding_top = 0;
-        }
+        // place until scrolling is genuinely necessary.
+        app.viewport.last_transcript_padding_top = 0;
 
         let scrollbar = (total_lines > visible_lines && content_area.width > 1).then_some(
             TranscriptScrollbar {
@@ -1313,14 +1302,6 @@ impl Renderable for ComposerWidget<'_> {
                     Style::default().fg(palette::TEXT_MUTED),
                 )));
             }
-            // Top-right corner: editor state plus transient turn receipts.
-            // Receipts are lifecycle chrome, not transcript content; they
-            // should appear briefly without displacing conversation rows.
-            if self.app.ocean_treatment.is_classic()
-                && let Some(chrome) = composer_top_right_chrome(self.app, area.width)
-            {
-                top_border = top_border.title_top(chrome.right_aligned());
-            }
             top_border.render(area, buf);
 
             let mut bottom_border = Block::default()
@@ -1332,15 +1313,10 @@ impl Renderable for ComposerWidget<'_> {
             }
             bottom_border.render(area, buf);
         } else if area.height >= 2 {
-            let mut block = Block::default()
+            let block = Block::default()
                 .borders(Borders::TOP)
                 .border_style(Style::default().fg(self.app.ui_theme.border))
                 .style(background);
-            if self.app.ocean_treatment.is_classic()
-                && let Some(chrome) = composer_top_right_chrome(self.app, area.width)
-            {
-                block = block.title_top(chrome.right_aligned());
-            }
             block.render(area, buf);
         } else {
             Block::default().style(background).render(area, buf);
@@ -3258,82 +3234,6 @@ fn vim_mode_style(mode: VimMode) -> Style {
     Style::default().fg(color).bold()
 }
 
-fn composer_top_right_chrome(app: &App, area_width: u16) -> Option<Line<'static>> {
-    let receipt = app.active_receipt_text();
-    let session_title = app.session_title.as_deref();
-    if !app.composer.vim_enabled && receipt.is_none() && session_title.is_none() {
-        return None;
-    }
-
-    // Leave room for the left title and both borders. On narrow panes, skip
-    // extra chrome rather than letting status text collide with "Composer".
-    let max_width = usize::from(area_width.saturating_sub(18));
-    if max_width < 4 {
-        return None;
-    }
-
-    let receipt_style = Style::default()
-        .fg(palette::STATUS_SUCCESS)
-        .add_modifier(Modifier::DIM);
-    if let Some(receipt) = receipt {
-        let receipt_text = receipt.trim();
-        if app.composer.vim_enabled {
-            let vim_label = app.composer.vim_mode.label_localized(app.ui_locale);
-            let vim_width = UnicodeWidthStr::width(&*vim_label);
-            let sep_width = UnicodeWidthStr::width(" · ");
-            if vim_width + sep_width + 4 <= max_width {
-                let receipt_width = max_width.saturating_sub(vim_width + sep_width);
-                return Some(Line::from(vec![
-                    Span::styled(vim_label.to_string(), vim_mode_style(app.composer.vim_mode)),
-                    Span::styled(" · ", Style::default().fg(palette::TEXT_MUTED)),
-                    Span::styled(
-                        truncate_display_width(receipt_text, receipt_width),
-                        receipt_style,
-                    ),
-                ]));
-            }
-        }
-
-        return Some(Line::from(Span::styled(
-            truncate_display_width(receipt_text, max_width),
-            receipt_style,
-        )));
-    }
-
-    let mut spans: Vec<Span> = Vec::new();
-    if app.composer.vim_enabled {
-        spans.push(Span::styled(
-            truncate_display_width(
-                &app.composer.vim_mode.label_localized(app.ui_locale),
-                max_width,
-            ),
-            vim_mode_style(app.composer.vim_mode),
-        ));
-    }
-    if let Some(title) = session_title {
-        let used: usize = spans
-            .iter()
-            .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
-            .sum();
-        let sep = if spans.is_empty() { 0 } else { 2 };
-        let remaining = max_width.saturating_sub(used + sep);
-        if remaining >= 4 {
-            if !spans.is_empty() {
-                spans.push(Span::raw("  "));
-            }
-            spans.push(Span::styled(
-                truncate_display_width(title, remaining),
-                Style::default().fg(palette::TEXT_MUTED),
-            ));
-        }
-    }
-    if spans.is_empty() {
-        None
-    } else {
-        Some(Line::from(spans))
-    }
-}
-
 fn should_render_empty_state(app: &App) -> bool {
     let active_is_empty = app
         .active_cell
@@ -3349,7 +3249,15 @@ fn should_render_empty_state(app: &App) -> bool {
             .task_panel
             .iter()
             .any(|task| task.kind == crate::tui::app::TaskPanelEntryKind::Background)
-        && crate::tui::sidebar::compact_work_indicator(app).is_none()
+        // Live work suppresses the empty state. On lock contention, treat
+        // the todo store as non-empty rather than flash the empty ocean.
+        && !app
+            .todos
+            .try_lock()
+            .map(|todos| !todos.snapshot().is_empty())
+            .unwrap_or(true)
+        && app.hunt.quarry.is_none()
+        && app.paused_quarry.is_none()
 }
 
 fn build_empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
@@ -5767,9 +5675,11 @@ mod tests {
     }
 
     #[test]
-    fn composer_border_renders_session_title() {
+    fn composer_border_omits_session_title_chrome() {
+        // The top-right composer chrome (session title / receipts / vim mode)
+        // was classic-shell-only; with the classic shell removed the composer
+        // border never carries it. Session identity lives in the header.
         let mut app = create_test_app();
-        app.ocean_treatment = crate::tui::ocean::OceanTreatment::Classic;
         app.composer_density = ComposerDensity::Comfortable;
         app.session_title = Some("my-session".to_string());
         let slash_menu_entries = Vec::<SlashMenuEntry>::new();
@@ -5787,13 +5697,12 @@ mod tests {
         let rendered = buffer_text(&buf, area);
 
         assert!(!rendered.contains("Composer"));
-        assert!(rendered.contains("my-session"));
+        assert!(!rendered.contains("my-session"));
     }
 
     #[test]
-    fn composer_border_renders_active_turn_receipt() {
+    fn composer_border_omits_active_turn_receipt_chrome() {
         let mut app = create_test_app();
-        app.ocean_treatment = crate::tui::ocean::OceanTreatment::Classic;
         app.composer_density = ComposerDensity::Comfortable;
         app.set_receipt_text("✓ turn completed · 2 tool(s) used");
         let slash_menu_entries = Vec::<SlashMenuEntry>::new();
@@ -5811,8 +5720,8 @@ mod tests {
         let rendered = buffer_text(&buf, area);
 
         assert!(!rendered.contains("Composer"));
-        assert!(rendered.contains("turn completed"));
-        assert!(rendered.contains("tool(s) used"));
+        assert!(!rendered.contains("turn completed"));
+        assert!(!rendered.contains("tool(s) used"));
     }
 
     #[test]

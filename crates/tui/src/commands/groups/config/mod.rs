@@ -21,7 +21,7 @@ impl CommandGroup for ConfigCommands {
             Box::new(FunctionCommand::new(&CONFIG_INFO, run_config)),
             Box::new(FunctionCommand::new(&PERMISSIONS_INFO, run_permissions)),
             Box::new(FunctionCommand::new(&AUTH_INFO, run_auth)),
-            Box::new(FunctionCommand::new(&SIDEBAR_INFO, run_sidebar)),
+            Box::new(FunctionCommand::new(&RAIL_INFO, run_rail)),
             Box::new(FunctionCommand::new(&SETTINGS_INFO, run_settings)),
             Box::new(FunctionCommand::new(&STATUS_INFO, run_status)),
             Box::new(FunctionCommand::new(&STATUSLINE_INFO, run_statusline)),
@@ -54,10 +54,11 @@ static AUTH_INFO: CommandInfo = CommandInfo {
     usage: "/auth xai-device",
     description_id: MessageId::CmdAuthDescription,
 };
-static SIDEBAR_INFO: CommandInfo = CommandInfo {
-    name: "sidebar",
-    aliases: &[],
-    usage: "/sidebar [on|off|auto|work|activity|tasks|agents|context] [--save]",
+static RAIL_INFO: CommandInfo = CommandInfo {
+    name: "rail",
+    // /sidebar is the name users already know; it now drives the one rail.
+    aliases: &["sidebar"],
+    usage: "/rail [top|left|right|off|tasks|agents|context|pinned] [--save]",
     description_id: MessageId::CmdSidebarDescription,
 };
 static SETTINGS_INFO: CommandInfo = CommandInfo {
@@ -121,8 +122,8 @@ fn run_permissions(app: &mut App, arg: Option<&str>) -> CommandResult {
 fn run_auth(app: &mut App, arg: Option<&str>) -> CommandResult {
     run_registered(app, "auth", arg)
 }
-fn run_sidebar(app: &mut App, arg: Option<&str>) -> CommandResult {
-    run_registered(app, "sidebar", arg)
+fn run_rail(app: &mut App, arg: Option<&str>) -> CommandResult {
+    run_registered(app, "rail", arg)
 }
 fn run_settings(app: &mut App, arg: Option<&str>) -> CommandResult {
     run_registered(app, "settings", arg)
@@ -164,7 +165,7 @@ pub(in crate::commands) fn dispatch(
             }
             _ => CommandResult::error("Usage: /auth xai-device"),
         },
-        "sidebar" => config::sidebar(app, arg),
+        "rail" | "sidebar" => config::sidebar(app, arg),
         "settings" => config::settings_command(app, arg),
         "status" => status::status(app),
         "statusline" => config::status_line(app),

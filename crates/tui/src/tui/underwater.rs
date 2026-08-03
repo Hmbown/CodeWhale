@@ -1288,7 +1288,6 @@ pub(crate) fn empty_state_mark_visible(area: Rect) -> bool {
 #[must_use]
 pub(crate) fn decorative_shell_motion_enabled(app: &App) -> bool {
     app.motion_policy().allows_decorative()
-        && app.ocean_treatment.supports_ambient_life()
         && !app.attention_hold_active()
         && app.onboarding == OnboardingState::None
         && !app.launch.visible
@@ -2414,8 +2413,8 @@ mod tests {
         assert!(!idle_mark_animation_enabled(&app));
 
         app.fancy_animations = true;
-        app.ocean_treatment = crate::tui::ocean::OceanTreatment::Classic;
-        assert!(!idle_mark_animation_enabled(&app));
+        app.ocean_treatment = crate::tui::ocean::OceanTreatment::Flat;
+        assert!(idle_mark_animation_enabled(&app));
 
         app.ocean_treatment = crate::tui::ocean::OceanTreatment::Ombre;
         app.launch.visible = true;

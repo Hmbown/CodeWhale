@@ -6,11 +6,12 @@
 mod input;
 mod interaction;
 mod model;
+mod panels;
 mod render;
 
 pub use input::{handle_key, handle_mouse};
 pub(crate) use interaction::agent_details_closed;
-pub use model::{WorkSurfacePlacement, WorkSurfaceState};
+pub use model::{RailPanel, WorkSurfacePlacement, WorkSurfaceState};
 pub use render::{height, render, split_chat};
 
 #[cfg(test)]
@@ -51,6 +52,11 @@ mod tests {
         };
         let mut app = App::new(options, &Config::default());
         app.ui_locale = crate::localization::Locale::En;
+        // Dogfood guard: App::new reads the developer's real settings.toml,
+        // and the 0.9.4 migration maps a legacy sidebar_focus onto the rail
+        // panel. These tests exercise the Tasks panel's row machinery, so
+        // pin it rather than depend on the host file.
+        app.work_surface.panel = super::RailPanel::Tasks;
         app
     }
 
@@ -503,25 +509,25 @@ mod tests {
         let mut two_steps = app();
         two_steps.work_surface.top_height = 8;
         add_todos(&mut two_steps, 2);
-        assert_eq!(super::height(&mut two_steps, 100, 40, false), 4);
+        assert_eq!(super::height(&mut two_steps, 100, 40), 4);
 
         // Ten steps: content wants 12 lines, the default 8-line cap wins.
         let mut ten_steps = app();
         ten_steps.work_surface.top_height = 8;
         add_todos(&mut ten_steps, 10);
-        assert_eq!(super::height(&mut ten_steps, 100, 40, false), 8);
+        assert_eq!(super::height(&mut ten_steps, 100, 40), 8);
 
         // Short terminal: the half-terminal cap beats both content and the
         // configured cap.
         let mut short_terminal = app();
         short_terminal.work_surface.top_height = 8;
         add_todos(&mut short_terminal, 10);
-        assert_eq!(super::height(&mut short_terminal, 100, 12, false), 6);
+        assert_eq!(super::height(&mut short_terminal, 100, 12), 6);
 
         // Nothing to show: no strip at all.
         let mut empty = app();
         empty.work_surface.top_height = 8;
-        assert_eq!(super::height(&mut empty, 100, 40, false), 0);
+        assert_eq!(super::height(&mut empty, 100, 40), 0);
     }
 
     #[test]
@@ -994,7 +1000,7 @@ mod tests {
         let rows = super::model::project(&mut app);
 
         assert!(rows.is_empty());
-        assert_eq!(super::height(&mut app, 120, 32, false), 0);
+        assert_eq!(super::height(&mut app, 120, 32), 0);
     }
 
     #[test]
@@ -1020,9 +1026,109 @@ mod tests {
             app.work_surface.placement = placement;
             let area = ratatui::layout::Rect::new(0, 0, 120, 32);
 
-            assert_eq!(super::height(&mut app, area.width, area.height, false), 0);
-            assert_eq!(super::split_chat(&mut app, area, false), (area, None));
+            assert_eq!(super::height(&mut app, area.width, area.height), 0);
+            assert_eq!(super::split_chat(&mut app, area), (area, None));
         }
+    }
+
+    fn terminal_text(terminal: &Terminal<TestBackend>) -> String {
+        let buf = terminal.backend().buffer();
+        let mut text = String::new();
+        for y in 0..buf.area.height {
+            for x in 0..buf.area.width {
+                text.push_str(buf[(x, y)].symbol());
+            }
+        }
+        text
+    }
+
+    /// Render-level smoke coverage for the ported rail panels — reinstates
+    /// the sidebar render smoke tests removed with the classic shell
+    /// (739616787). Every non-Tasks panel must render its title in every
+    /// placement the rail supports.
+    #[test]
+    fn rail_panels_render_in_all_placements() {
+        for panel in [
+            super::RailPanel::Agents,
+            super::RailPanel::Context,
+            super::RailPanel::Pinned,
+        ] {
+            for placement in [
+                super::WorkSurfacePlacement::Top,
+                super::WorkSurfacePlacement::Left,
+                super::WorkSurfacePlacement::Right,
+            ] {
+                let mut app = app();
+                app.work_surface.placement = placement;
+                app.work_surface.panel = panel;
+                let area = ratatui::layout::Rect::new(0, 0, 100, 24);
+
+                let strip = super::height(&mut app, area.width, area.height);
+                let (_chat, rail) = super::split_chat(&mut app, area);
+                let backend = TestBackend::new(area.width, area.height);
+                let mut terminal = Terminal::new(backend).expect("terminal");
+                terminal
+                    .draw(|frame| {
+                        if strip > 0 {
+                            super::render(
+                                frame,
+                                ratatui::layout::Rect::new(0, 0, area.width, strip),
+                                &mut app,
+                            );
+                        } else if let Some(rail) = rail {
+                            super::render(frame, rail, &mut app);
+                        }
+                    })
+                    .expect("draw");
+                let text = terminal_text(&terminal);
+                assert!(
+                    text.contains(panel.title()),
+                    "{panel:?} in {placement:?} should render its title; got: {text}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn off_placement_reserves_no_rail_in_any_panel() {
+        for panel in [
+            super::RailPanel::Tasks,
+            super::RailPanel::Agents,
+            super::RailPanel::Context,
+            super::RailPanel::Pinned,
+        ] {
+            let mut app = app();
+            add_todos(&mut app, 2);
+            app.work_surface.placement = super::WorkSurfacePlacement::Off;
+            app.work_surface.panel = panel;
+            let area = ratatui::layout::Rect::new(0, 0, 120, 32);
+
+            assert_eq!(super::height(&mut app, area.width, area.height), 0);
+            assert_eq!(super::split_chat(&mut app, area), (area, None));
+            assert_eq!(app.work_surface.last_area, None);
+        }
+    }
+
+    #[test]
+    fn context_panel_renders_session_facts_in_side_rail() {
+        let mut app = app();
+        app.work_surface.placement = super::WorkSurfacePlacement::Right;
+        app.work_surface.panel = super::RailPanel::Context;
+        let area = ratatui::layout::Rect::new(0, 0, 100, 24);
+
+        let strip = super::height(&mut app, area.width, area.height);
+        assert_eq!(strip, 0, "side placements take no top strip");
+        let (_chat, rail) = super::split_chat(&mut app, area);
+        let rail = rail.expect("context panel reserves a side rail");
+
+        let backend = TestBackend::new(area.width, area.height);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal
+            .draw(|frame| super::render(frame, rail, &mut app))
+            .expect("draw");
+        let text = terminal_text(&terminal);
+        assert!(text.contains("Context"), "panel title; got: {text}");
+        assert!(text.contains("lsp:"), "session facts; got: {text}");
     }
 
     #[test]
@@ -1587,9 +1693,9 @@ mod tests {
             let mut app = app();
             add_todos(&mut app, 2);
             app.work_surface.placement = placement;
-            assert_eq!(super::height(&mut app, 100, 24, false), 0);
+            assert_eq!(super::height(&mut app, 100, 24), 0);
             let area = ratatui::layout::Rect::new(0, 0, 100, 12);
-            let (chat, rail) = super::split_chat(&mut app, area, false);
+            let (chat, rail) = super::split_chat(&mut app, area);
             let rail = rail.expect("side rail");
             assert_eq!(chat.x, expected_chat_x);
             assert_eq!(rail.x, expected_rail_x);
@@ -1708,12 +1814,12 @@ mod tests {
         let graph = operation_graph(NodeState::Failed);
         restore_graph(&mut operation_app, &graph);
 
-        assert_eq!(super::height(&mut operation_app, 100, 24, false), 0);
+        assert_eq!(super::height(&mut operation_app, 100, 24), 0);
         assert!(operation_app.work_surface.latest_rows.is_empty());
 
         let mut todo_app = app();
         add_todos(&mut todo_app, 2);
-        assert!(super::height(&mut todo_app, 100, 24, false) > 0);
+        assert!(super::height(&mut todo_app, 100, 24) > 0);
         assert!(
             todo_app
                 .work_surface

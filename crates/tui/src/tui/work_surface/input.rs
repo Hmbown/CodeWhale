@@ -90,6 +90,7 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent) -> MouseOutcome {
     };
     let placement = app.work_surface.effective_placement;
     let on_divider = match placement {
+        WorkSurfacePlacement::Off => false,
         WorkSurfacePlacement::Top => {
             mouse.row == area.bottom().saturating_sub(1)
                 && mouse.column >= area.x
@@ -126,6 +127,7 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent) -> MouseOutcome {
             app.work_surface.resize_anchor_size = match placement {
                 WorkSurfacePlacement::Top => area.height,
                 WorkSurfacePlacement::Left | WorkSurfacePlacement::Right => area.width,
+                WorkSurfacePlacement::Off => area.width,
             };
             app.needs_redraw = true;
             return MouseOutcome {
@@ -157,6 +159,7 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent) -> MouseOutcome {
                         .clamp(i32::from(SIDE_WIDTH_MIN), i32::from(SIDE_WIDTH_MAX))
                         as u16;
                 }
+                WorkSurfacePlacement::Off => {}
             }
             app.needs_redraw = true;
             return MouseOutcome {

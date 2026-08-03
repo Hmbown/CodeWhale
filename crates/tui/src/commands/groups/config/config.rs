@@ -19,11 +19,9 @@ use crate::config_ui::{ConfigUiMode, parse_mode};
 use crate::localization::{MessageId, resolve_locale};
 use crate::settings::Settings;
 use crate::tui::app::{
-    App, AppAction, AppMode, OnboardingState, ReasoningEffort, SettingSelection, SidebarFocus,
-    VimMode,
+    App, AppAction, AppMode, OnboardingState, ReasoningEffort, SettingSelection, VimMode,
 };
 use crate::tui::approval::ApprovalMode;
-use crate::tui::ui::{SidebarRenderState, sidebar_render_state};
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
@@ -368,11 +366,10 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
         }
         "mode" | "default_mode" => Some(app.mode.as_setting().to_string()),
         "max_history" | "history" => Some(app.max_input_history.to_string()),
-        "sidebar_width" | "sidebar" => Some(app.sidebar_width_percent.to_string()),
-        "sidebar_focus" | "focus" => Some(app.sidebar_focus.as_setting().to_string()),
         "work_surface_placement" | "work_surface" | "work_rail" => {
             Some(app.work_surface.placement.as_setting().to_string())
         }
+        "rail_panel" | "rail" => Some(app.work_surface.panel.as_setting().to_string()),
         "work_surface_top_height" | "work_top_height" => {
             Some(app.work_surface.top_height.to_string())
         }
@@ -517,12 +514,15 @@ pub fn verbose(app: &mut App, arg: Option<&str>) -> CommandResult {
     })
 }
 
-/// Toggle or focus the right sidebar.
+/// Place the work rail or pick its panel.
 ///
-/// Bare `/sidebar` toggles between hidden and pinned. Explicit values mirror
-/// `sidebar_focus` so users have a discoverable copy-friendly path that does
-/// not depend on terminal-specific key translations.
+/// `/rail top|left|right|off` sets placement; `/rail tasks|agents|context|
+/// pinned` picks the panel. The two are orthogonal: where the rail sits and
+/// what it shows. `/sidebar` remains registered as the alias users know.
+/// Bare `/rail` reports the rail's *actual* rendered state — never a claim
+/// about a surface that cannot render.
 pub fn sidebar(app: &mut App, arg: Option<&str>) -> CommandResult {
+    const USAGE: &str = "Usage: /rail [top|left|right|off|tasks|agents|context|pinned] [--save]";
     let raw = arg.map(str::trim).unwrap_or("");
     let mut tokens = raw.split_whitespace().collect::<Vec<_>>();
     let persist = matches!(tokens.last(), Some(&"--save" | &"-s"));
@@ -530,65 +530,100 @@ pub fn sidebar(app: &mut App, arg: Option<&str>) -> CommandResult {
         tokens.pop();
     }
 
-    let target = match tokens.as_slice() {
-        [] | ["toggle"] => {
-            if app.sidebar_focus == SidebarFocus::Hidden {
-                SidebarFocus::Pinned
-            } else {
-                SidebarFocus::Hidden
+    match tokens.as_slice() {
+        [] => return CommandResult::message(rail_status_message(app)),
+        [value] => {
+            let value = value.to_ascii_lowercase();
+            // Legacy focus words map onto the closest rail concept so muscle
+            // memory keeps working: "on" restores the default top rail,
+            // "off" hides it, panel names select panels.
+            let placement = match value.as_str() {
+                "top" | "on" | "show" | "visible" => {
+                    Some(crate::tui::work_surface::WorkSurfacePlacement::Top)
+                }
+                "left" => Some(crate::tui::work_surface::WorkSurfacePlacement::Left),
+                "right" => Some(crate::tui::work_surface::WorkSurfacePlacement::Right),
+                "off" | "hide" | "hidden" | "closed" | "none" => {
+                    Some(crate::tui::work_surface::WorkSurfacePlacement::Off)
+                }
+                _ => None,
+            };
+            let panel = match value.as_str() {
+                "tasks" | "activity" | "live" | "running" => {
+                    Some(crate::tui::work_surface::RailPanel::Tasks)
+                }
+                "agents" | "subagents" | "sub-agents" => {
+                    Some(crate::tui::work_surface::RailPanel::Agents)
+                }
+                "context" | "session" => Some(crate::tui::work_surface::RailPanel::Context),
+                "pinned" | "work" | "plan" | "todos" => {
+                    Some(crate::tui::work_surface::RailPanel::Pinned)
+                }
+                _ => None,
+            };
+            match (placement, panel) {
+                (Some(placement), None) => {
+                    app.work_surface.placement = placement;
+                    app.work_surface.focused = false;
+                    if persist {
+                        let result = set_config_value(
+                            app,
+                            "work_surface_placement",
+                            placement.as_setting(),
+                            true,
+                        );
+                        if result.is_error {
+                            return result;
+                        }
+                    }
+                }
+                (None, Some(panel)) => {
+                    app.work_surface.panel = panel;
+                    if persist {
+                        let result = set_config_value(app, "rail_panel", panel.as_setting(), true);
+                        if result.is_error {
+                            return result;
+                        }
+                    }
+                }
+                _ => return CommandResult::error(USAGE),
             }
         }
-        [value] => match value.to_ascii_lowercase().as_str() {
-            "on" | "show" | "visible" | "pinned" => SidebarFocus::Pinned,
-            "off" | "hide" | "hidden" | "closed" | "none" => SidebarFocus::Hidden,
-            "auto" => SidebarFocus::Auto,
-            "work" | "plan" | "todos" => SidebarFocus::Pinned,
-            // Panel label is Activity; "tasks" remains the config/compat key (#4147/#4135).
-            "tasks" | "activity" | "live" | "running" => SidebarFocus::Tasks,
-            "agents" | "subagents" | "sub-agents" => SidebarFocus::Agents,
-            "context" => SidebarFocus::Context,
-            "sessions" | "session_history" | "sessions_rail" => SidebarFocus::Sessions,
-            _ => {
-                return CommandResult::error(
-                    "Usage: /sidebar [on|off|pinned|auto|activity|tasks|agents|context|sessions] [--save]",
-                );
-            }
-        },
-        _ => {
-            return CommandResult::error(
-                "Usage: /sidebar [on|off|pinned|auto|activity|tasks|agents|context|sessions] [--save]",
-            );
-        }
-    };
-
-    if persist {
-        let result = set_config_value(app, "sidebar_focus", target.as_setting(), true);
-        if result.is_error {
-            return result;
-        }
-    } else {
-        app.set_sidebar_focus(target);
+        _ => return CommandResult::error(USAGE),
     }
 
     app.needs_redraw = true;
-    let message = sidebar_status_message(app);
-    CommandResult::message(message)
+    CommandResult::message(rail_status_message(app))
 }
 
-fn sidebar_status_message(app: &mut App) -> String {
-    match sidebar_render_state(app) {
-        SidebarRenderState::Hidden => "Sidebar is hidden".to_string(),
-        SidebarRenderState::SuppressedByWidth {
-            available_width,
-            min_width,
-        } => format!(
-            "Sidebar is on, but hidden because the terminal is too narrow ({available_width} cols; needs at least {min_width})"
-        ),
-        SidebarRenderState::AutoCollapsed => {
-            "Sidebar auto mode is on, but currently collapsed while idle".to_string()
-        }
-        SidebarRenderState::Visible => "Sidebar is visible".to_string(),
+/// Truthful rail readout: the placement and panel that actually render, with
+/// the narrow-terminal fallback and an empty-Tasks collapse spelled out.
+/// Never claims a panel is visible when no rail area was produced.
+fn rail_status_message(app: &App) -> String {
+    use crate::tui::work_surface::{RailPanel, WorkSurfacePlacement};
+
+    let placement = app.work_surface.placement;
+    if placement == WorkSurfacePlacement::Off {
+        return "Rail is off — no panel renders (/rail top|left|right to show it)".to_string();
     }
+    let panel = app.work_surface.panel;
+    let mut message = format!(
+        "Rail: {} placement, {} panel",
+        placement.as_setting(),
+        panel.title()
+    );
+    let effective = app.work_surface.effective_placement();
+    if effective != placement && effective == WorkSurfacePlacement::Top {
+        message.push_str(" — side rails need a wider terminal, showing top for now");
+    }
+    if app.work_surface.last_area.is_none() {
+        if panel == RailPanel::Tasks {
+            message.push_str(" (currently hidden — no work to show)");
+        } else {
+            message.push_str(" (renders next frame)");
+        }
+    }
+    message
 }
 
 fn resolve_provider_url_value(provider: ApiProvider, value: &str) -> Result<String, String> {
@@ -1853,6 +1888,11 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
             app.work_surface.last_area = None;
             app.needs_redraw = true;
         }
+        "rail_panel" | "rail" => {
+            app.work_surface.panel =
+                crate::tui::work_surface::RailPanel::parse(&settings.rail_panel);
+            app.needs_redraw = true;
+        }
         "work_surface_top_height" | "work_top_height" => {
             app.work_surface.top_height = settings.work_surface_top_height;
             app.needs_redraw = true;
@@ -2056,13 +2096,6 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
             app.invalidate_route_receipts_for_reasoning_change();
             app.update_model_compaction_budget();
             action = Some(AppAction::UpdateCompaction(app.compaction_config()));
-        }
-        "sidebar_width" | "sidebar" => {
-            app.sidebar_width_percent = settings.sidebar_width_percent;
-            app.mark_history_updated();
-        }
-        "sidebar_focus" | "focus" => {
-            app.set_sidebar_focus(SidebarFocus::from_setting(&settings.sidebar_focus));
         }
         "context_panel" | "context" | "session_panel" => {
             app.context_panel = settings.context_panel;
@@ -2644,7 +2677,7 @@ mod tests {
                 "{key} mutates the active route and must be locked mid-turn"
             );
         }
-        for key in ["default_mode", "theme", "calm_mode", "sidebar_width"] {
+        for key in ["default_mode", "theme", "calm_mode", "rail_panel"] {
             assert!(
                 live_route_setting_subject(key).is_none(),
                 "{key} does not mutate the active route and must stay settable"
@@ -2752,62 +2785,70 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_config_command_restores_pinned_sidebar_by_default() {
+    fn rail_command_on_restores_default_top_placement() {
         let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Hidden;
-        app.last_sidebar_host_width = Some(120);
+        app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Off;
 
         let result = sidebar(&mut app, Some("on"));
 
         assert!(!result.is_error);
-        assert_eq!(app.sidebar_focus, SidebarFocus::Pinned);
-        assert_eq!(result.message.as_deref(), Some("Sidebar is visible"));
+        assert_eq!(
+            app.work_surface.placement,
+            crate::tui::work_surface::WorkSurfacePlacement::Top
+        );
+        let message = result.message.unwrap_or_default();
+        assert!(message.contains("top placement"), "got: {message}");
     }
 
     #[test]
-    fn sidebar_config_command_reports_width_suppression() {
+    fn rail_command_reports_narrow_terminal_top_fallback() {
         let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Hidden;
-        app.last_sidebar_host_width = Some(59);
+        app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Left;
+        // A 60-column host is below the side-rail floor, so the effective
+        // placement falls back to top; the status must say so rather than
+        // claim a left rail renders.
+        let _ = crate::tui::work_surface::height(&mut app, 60, 24);
 
-        let result = sidebar(&mut app, Some("on"));
+        let result = sidebar(&mut app, None);
 
         assert!(!result.is_error);
-        assert_eq!(app.sidebar_focus, SidebarFocus::Pinned);
+        let message = result.message.unwrap_or_default();
+        assert!(message.contains("left placement"), "got: {message}");
+        assert!(message.contains("showing top for now"), "got: {message}");
+    }
+
+    #[test]
+    fn rail_command_off_never_claims_visibility() {
+        let mut app = create_test_app();
+
+        let result = sidebar(&mut app, Some("off"));
+
+        assert!(!result.is_error);
         assert_eq!(
-            result.message.as_deref(),
-            Some(
-                "Sidebar is on, but hidden because the terminal is too narrow (59 cols; needs at least 60)"
-            )
+            app.work_surface.placement,
+            crate::tui::work_surface::WorkSurfacePlacement::Off
+        );
+        let message = result.message.unwrap_or_default();
+        assert!(message.contains("Rail is off"), "got: {message}");
+        assert!(
+            !message.contains("Sidebar is visible"),
+            "the readout must never claim a dead surface renders: {message}"
         );
     }
 
     #[test]
-    fn sidebar_config_command_is_visible_at_minimum_width() {
+    fn rail_command_rejects_retired_auto_mode() {
         let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Hidden;
-        app.last_sidebar_host_width = Some(60);
-
-        let result = sidebar(&mut app, Some("on"));
-
-        assert!(!result.is_error);
-        assert_eq!(app.sidebar_focus, SidebarFocus::Pinned);
-        assert_eq!(result.message.as_deref(), Some("Sidebar is visible"));
-    }
-
-    #[test]
-    fn sidebar_config_command_reports_auto_idle_collapse() {
-        let mut app = create_test_app();
-        app.sidebar_focus = SidebarFocus::Hidden;
-        app.last_sidebar_host_width = Some(120);
 
         let result = sidebar(&mut app, Some("auto"));
 
-        assert!(!result.is_error);
-        assert_eq!(app.sidebar_focus, SidebarFocus::Auto);
-        assert_eq!(
-            result.message.as_deref(),
-            Some("Sidebar auto mode is on, but currently collapsed while idle")
+        assert!(result.is_error);
+        assert!(
+            result
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Usage: /rail")
         );
     }
 

@@ -35,7 +35,6 @@ use crossterm::{
 };
 use ratatui::{
     Frame, Terminal,
-    buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect, Size},
     prelude::Widget,
     style::Style,
@@ -93,9 +92,7 @@ use crate::tui::context_inspector::ContextInspectorView;
 use crate::tui::event_broker::EventBroker;
 use crate::tui::file_mention::ContextReference;
 use crate::tui::file_picker_relevance;
-use crate::tui::footer_ui::{
-    friendly_subagent_progress, is_noisy_subagent_progress, render_footer,
-};
+use crate::tui::footer_ui::{friendly_subagent_progress, is_noisy_subagent_progress};
 use crate::tui::format_helpers;
 use crate::tui::hotbar::actions::HotbarDispatch;
 use crate::tui::key_shortcuts;
@@ -107,7 +104,6 @@ use crate::tui::onboarding;
 use crate::tui::pager::PagerView;
 use crate::tui::persistence_actor::{self, PersistRequest};
 use crate::tui::scrolling::TranscriptScroll;
-use crate::tui::sidebar::sidebar_width_for_chat_area;
 use crate::turn_route_plan::{PlannedTurnRoute, TurnRoutePlanRequest, plan_turn_route};
 use crate::work_graph::task_owner_snapshot;
 // SelectionAutoscroll unused
@@ -142,10 +138,10 @@ use super::key_actions;
 use super::app::{
     ActiveTurnMetadata, AgentCurrentActivity, AgentCurrentActivityStatus, App, AppAction, AppMode,
     ComposerSubmitAction, ComposerSubmitChord, EffectiveReasoningEffort, HuntVerdict,
-    OnboardingState, PendingProviderSwitch, QueuedMessage, ReasoningEffort, SidebarFocus,
-    StatusToast, StatusToastLevel, SubmitDisposition, TaskPanelEntry, TaskPanelEntryKind,
-    ToolEvidence, TuiOptions, bound_agent_activity_text, is_stop_word,
-    looks_like_slash_command_input, shell_command_from_bang_input,
+    OnboardingState, PendingProviderSwitch, QueuedMessage, ReasoningEffort, StatusToast,
+    StatusToastLevel, SubmitDisposition, TaskPanelEntry, TaskPanelEntryKind, ToolEvidence,
+    TuiOptions, bound_agent_activity_text, is_stop_word, looks_like_slash_command_input,
+    shell_command_from_bang_input,
 };
 use super::approval::{
     ApprovalMode, ApprovalRequest, ApprovalView, ElevationRequest, ElevationView, ReviewDecision,
@@ -159,7 +155,7 @@ use super::slash_menu::{
 };
 use super::views::{ConfigView, ContextMenuAction, HelpView, ModalKind, ViewEvent};
 use super::widgets::pending_input_preview::{ContextPreviewItem, PendingInputPreview};
-use super::widgets::{ChatWidget, ComposerWidget, HeaderData, HeaderWidget, Renderable};
+use super::widgets::{ChatWidget, ComposerWidget, Renderable};
 
 // Activity Detail / raw-detail / pager-text helpers extracted into `activity_detail`
 // (issue #4103). Re-export the cross-module entry points so existing
@@ -214,14 +210,16 @@ const TOOL_HANG_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(600);
 // braille pattern reads as continuous motion instead of teleport-frames.
 const UI_STATUS_ANIMATION_MS: u64 = crate::tui::spinner::BRAILLE_SPINNER_FRAME_MS;
 /// Ambient fish, the idle-mark caustic, and the completion wake use a modest
-/// ~8fps clock by default (calmed from ~12.5fps for v0.9.4). On measured
-/// high-Hz displays the adaptive probe may raise this (still bounded);
-/// low_motion always freezes the cadence.
-/// Active markers run at 5fps; atmosphere stays subordinate.
-pub(crate) const UI_UNDERWATER_ANIMATION_MS: u64 = 120;
-// At an 80-column terminal the file tree owns 20 columns, leaving a 60-column
-// chat host. Keep a compact 20-column sidebar plus a 40-column transcript.
-pub(crate) const SIDEBAR_VISIBLE_MIN_WIDTH: u16 = 60;
+/// ~12.5fps clock by default. On measured high-Hz displays the adaptive probe
+/// may raise this (still bounded); low_motion always freezes the cadence.
+/// Active markers run at 8fps; atmosphere stays subordinate.
+pub(crate) const UI_UNDERWATER_ANIMATION_MS: u64 = 80;
+// Minimum chat-host width at which the file-tree pane renders. At an
+// 80-column terminal the file tree owns 20 columns, leaving a 60-column chat
+// host; below this floor the tree is hidden rather than squeezing the
+// transcript under 40 columns. (Named for the file tree — the legacy sidebar
+// this constant once described no longer gates on it.)
+pub(crate) const FILE_TREE_MIN_HOST_WIDTH: u16 = 60;
 const DEFAULT_TERMINAL_PROBE_TIMEOUT_MS: u64 = 500;
 const TURN_META_PREFIX: &str = "<turn_meta>";
 const SESSION_TITLE_MAX_CHARS: usize = 32;
@@ -364,51 +362,6 @@ fn should_suppress_user_input_prompt(app: &App) -> bool {
         app.approval_mode
     };
     !crate::core::authority::permission_posture_allows_questions(effective_posture)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SidebarRenderState {
-    Hidden,
-    SuppressedByWidth {
-        available_width: u16,
-        min_width: u16,
-    },
-    AutoCollapsed,
-    Visible,
-}
-
-pub(crate) fn sidebar_render_state(app: &mut App) -> SidebarRenderState {
-    if app.sidebar_focus == SidebarFocus::Hidden {
-        return SidebarRenderState::Hidden;
-    }
-
-    if let Some(available_width) = sidebar_host_width_hint(app)
-        && available_width < SIDEBAR_VISIBLE_MIN_WIDTH
-    {
-        return SidebarRenderState::SuppressedByWidth {
-            available_width,
-            min_width: SIDEBAR_VISIBLE_MIN_WIDTH,
-        };
-    }
-
-    if crate::tui::sidebar::sidebar_auto_idle(app) {
-        return SidebarRenderState::AutoCollapsed;
-    }
-
-    SidebarRenderState::Visible
-}
-
-fn sidebar_host_width_hint(app: &App) -> Option<u16> {
-    app.last_sidebar_host_width.or_else(|| {
-        let transcript_width = app.viewport.last_transcript_area.map(|area| area.width)?;
-        let sidebar_width = app
-            .viewport
-            .last_sidebar_area
-            .or(app.last_sidebar_area)
-            .map(|area| area.width)
-            .unwrap_or(0);
-        Some(transcript_width.saturating_add(sidebar_width))
-    })
 }
 
 type AppTerminal = Terminal<ColorCompatBackend<Stdout>>;
@@ -5749,7 +5702,6 @@ async fn run_event_loop(
                         }
                     }
                 }
-                persist_sidebar_settings_if_dirty(app);
                 continue;
             }
 
@@ -6260,12 +6212,13 @@ async fn run_event_loop(
                 continue;
             }
 
-            // y / Y in the Activity sidebar: yank the current turn id (y)
+            // y / Y in the rail's Tasks panel: yank the current turn id (y)
             // or copy full task detail (Y) to the system clipboard.
             // Only active when the composer is empty to avoid stealing
             // keystrokes from typed input (#2000).
             if app.view_stack.is_empty()
-                && app.sidebar_focus == SidebarFocus::Tasks
+                && app.work_surface.panel == crate::tui::work_surface::RailPanel::Tasks
+                && app.work_surface.last_area.is_some()
                 && app.input.is_empty()
                 && !app.runtime_turn_id.as_deref().unwrap_or("").is_empty()
             {
@@ -6413,7 +6366,6 @@ async fn run_event_loop(
                 {
                     return Ok(());
                 }
-                persist_sidebar_settings_if_dirty(app);
                 continue;
             }
 
@@ -6634,24 +6586,21 @@ async fn run_event_loop(
                     if key.modifiers.contains(KeyModifiers::ALT)
                         && key_shortcuts::has_control_like_modifier(key.modifiers) =>
                 {
-                    app.set_sidebar_focus(SidebarFocus::Pinned);
-                    app.status_message = Some("Sidebar focus: pinned".to_string());
+                    rail_panel_shortcut(app, crate::tui::work_surface::RailPanel::Tasks);
                     continue;
                 }
                 KeyCode::Char('2')
                     if key.modifiers.contains(KeyModifiers::ALT)
                         && key_shortcuts::has_control_like_modifier(key.modifiers) =>
                 {
-                    app.set_sidebar_focus(SidebarFocus::Tasks);
-                    app.status_message = Some("Sidebar focus: activity".to_string());
+                    rail_panel_shortcut(app, crate::tui::work_surface::RailPanel::Agents);
                     continue;
                 }
                 KeyCode::Char('3')
                     if key.modifiers.contains(KeyModifiers::ALT)
                         && key_shortcuts::has_control_like_modifier(key.modifiers) =>
                 {
-                    app.set_sidebar_focus(SidebarFocus::Agents);
-                    app.status_message = Some("Sidebar focus: agents".to_string());
+                    rail_panel_shortcut(app, crate::tui::work_surface::RailPanel::Context);
                     continue;
                 }
                 KeyCode::Char('4')
@@ -6661,15 +6610,7 @@ async fn run_event_loop(
                     apply_alt_4_shortcut(app, key.modifiers);
                     continue;
                 }
-                KeyCode::Char('5')
-                    if key.modifiers.contains(KeyModifiers::ALT)
-                        && key_shortcuts::has_control_like_modifier(key.modifiers) =>
-                {
-                    app.set_sidebar_focus(SidebarFocus::Sessions);
-                    app.status_message = Some("Sidebar focus: sessions".to_string());
-                    continue;
-                }
-                // Sidebar focus via Alt+! / Alt+@ / Alt+# / Alt+$ / Alt+%)
+                // Rail panel selection via Alt+! / Alt+@ / Alt+# / Alt+$ / Alt+%
                 // AltGr on European keyboards emits Ctrl+Alt on Windows, so
                 // exclude Ctrl to avoid swallowing AltGr-typed characters
                 // like @ (AltGr+0 on French AZERTY) and # (AltGr+3). This
@@ -6679,51 +6620,34 @@ async fn run_event_loop(
                     if key.modifiers.contains(KeyModifiers::ALT)
                         && !key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
-                    app.set_sidebar_focus(SidebarFocus::Pinned);
-                    app.status_message = Some("Sidebar focus: pinned".to_string());
+                    rail_panel_shortcut(app, crate::tui::work_surface::RailPanel::Tasks);
                     continue;
                 }
                 KeyCode::Char('@')
                     if key.modifiers.contains(KeyModifiers::ALT)
                         && !key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
-                    app.set_sidebar_focus(SidebarFocus::Tasks);
-                    app.status_message = Some("Sidebar focus: activity".to_string());
+                    rail_panel_shortcut(app, crate::tui::work_surface::RailPanel::Agents);
                     continue;
                 }
                 KeyCode::Char('#')
                     if key.modifiers.contains(KeyModifiers::ALT)
                         && !key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
-                    app.set_sidebar_focus(SidebarFocus::Agents);
-                    app.status_message = Some("Sidebar focus: agents".to_string());
+                    rail_panel_shortcut(app, crate::tui::work_surface::RailPanel::Context);
                     continue;
                 }
                 KeyCode::Char('$') | KeyCode::Char('%')
                     if key.modifiers.contains(KeyModifiers::ALT)
                         && !key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
-                    app.set_sidebar_focus(SidebarFocus::Context);
-                    app.status_message = Some("Sidebar focus: context".to_string());
+                    rail_panel_shortcut(app, crate::tui::work_surface::RailPanel::Pinned);
                     continue;
                 }
-                KeyCode::Char('^')
+                KeyCode::Char('0')
                     if key.modifiers.contains(KeyModifiers::ALT)
-                        && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+                        && key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
-                    app.set_sidebar_focus(SidebarFocus::Sessions);
-                    app.status_message = Some("Sidebar focus: sessions".to_string());
-                    continue;
-                }
-                KeyCode::Char(')')
-                    if key.modifiers.contains(KeyModifiers::ALT)
-                        && !key.modifiers.contains(KeyModifiers::CONTROL) =>
-                {
-                    app.set_sidebar_focus(SidebarFocus::Auto);
-                    app.status_message = Some("Sidebar focus: auto".to_string());
-                    continue;
-                }
-                KeyCode::Char('0') if key.modifiers.contains(KeyModifiers::ALT) => {
                     apply_alt_0_shortcut(app, key.modifiers);
                     continue;
                 }
@@ -7827,46 +7751,36 @@ fn dispatch_hotbar_slot(
     action.dispatch(app).map(Some)
 }
 
-fn apply_alt_4_shortcut(app: &mut App, _modifiers: KeyModifiers) {
-    app.set_sidebar_focus(SidebarFocus::Agents);
-    app.status_message = Some("Sidebar focus: agents".to_string());
+/// Select a rail panel from a keyboard shortcut and say what happened.
+/// When the rail is off the panel change is real but invisible, so the
+/// status names that instead of implying something rendered.
+fn rail_panel_shortcut(app: &mut App, panel: crate::tui::work_surface::RailPanel) {
+    app.work_surface.panel = panel;
+    app.needs_redraw = true;
+    let mut message = format!("Rail panel: {}", panel.as_setting());
+    if app.work_surface.placement == crate::tui::work_surface::WorkSurfacePlacement::Off {
+        message.push_str(" (rail is off — /rail top to show)");
+    }
+    app.status_message = Some(message);
 }
 
-fn persist_sidebar_settings_if_dirty(app: &mut App) {
-    if !app.sidebar_width_dirty && !app.sidebar_focus_dirty {
-        return;
-    }
-
-    let width_dirty = app.sidebar_width_dirty;
-    let focus_dirty = app.sidebar_focus_dirty;
-    app.sidebar_width_dirty = false;
-    app.sidebar_focus_dirty = false;
-
-    let width_percent = app.sidebar_width_percent;
-    let focus_setting = app.sidebar_focus.as_setting();
-    let _ = Settings::transact(|settings| {
-        if width_dirty {
-            settings.update_sidebar_width(width_percent);
-        }
-        if focus_dirty {
-            let _ = settings.set("sidebar_focus", focus_setting);
-        }
-        Ok(())
-    });
+fn apply_alt_4_shortcut(app: &mut App, _modifiers: KeyModifiers) {
+    rail_panel_shortcut(app, crate::tui::work_surface::RailPanel::Pinned);
 }
 
 fn apply_alt_0_shortcut(app: &mut App, modifiers: KeyModifiers) {
+    // Ctrl+Alt+0 toggles the rail off and back to the default top
+    // placement. Plain Alt+0 is unbound: it used to select the retired
+    // auto-collapse mode.
     if modifiers.contains(KeyModifiers::CONTROL) {
-        if app.sidebar_focus == SidebarFocus::Hidden {
-            app.set_sidebar_focus(SidebarFocus::Pinned);
-            app.status_message = Some("Sidebar focus: pinned".to_string());
+        if app.work_surface.placement == crate::tui::work_surface::WorkSurfacePlacement::Off {
+            app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Top;
+            app.status_message = Some("Rail: top placement".to_string());
         } else {
-            app.set_sidebar_focus(SidebarFocus::Hidden);
-            app.status_message = Some("Sidebar hidden".to_string());
+            app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Off;
+            app.status_message = Some("Rail is off".to_string());
         }
-    } else {
-        app.set_sidebar_focus(SidebarFocus::Auto);
-        app.status_message = Some("Sidebar focus: auto".to_string());
+        app.needs_redraw = true;
     }
 }
 
@@ -13731,66 +13645,8 @@ fn build_pending_input_preview(app: &App) -> PendingInputPreview {
     preview
 }
 
-fn classic_header_indicator_started_at(app: &App) -> Option<Instant> {
-    app.motion_policy()
-        .allows_status_spin()
-        .then_some(app.turn_started_at)
-        .flatten()
-}
-
-fn render_classic_header(area: Rect, buf: &mut Buffer, app: &App) {
-    let context_usage = context_usage_snapshot(app);
-    let context_window = context_usage.as_ref().map(|(_, max, _)| *max).or_else(|| {
-        Some(crate::route_budget::route_context_window_tokens(
-            app.api_provider,
-            app.effective_model_for_budget(),
-            app.active_route_limits,
-        ))
-    });
-    let prompt_tokens = context_usage
-        .as_ref()
-        .and_then(|(used, _, _)| u32::try_from(*used).ok());
-    let workspace = app
-        .workspace
-        .file_name()
-        .and_then(|value| value.to_str())
-        .filter(|value| !value.is_empty())
-        .unwrap_or("workspace");
-    let model = app.model_display_label();
-    let effort = app.reasoning_effort_display_label();
-    let started_at = classic_header_indicator_started_at(app);
-    let workflow_chip = app
-        .workflow_panel
-        .as_ref()
-        .map(super::widgets::workflow_panel::WorkflowPanel::top_bar_chip);
-    let data = HeaderData::new(
-        app.mode,
-        &model,
-        workspace,
-        app.is_loading,
-        app.ui_theme.header_bg,
-    )
-    .with_usage(
-        app.session.total_conversation_tokens,
-        context_window,
-        app.session.session_cost,
-        prompt_tokens,
-    )
-    .with_reasoning_effort(Some(&effort))
-    .with_provider(None)
-    .with_status_indicator(crate::tui::widgets::header_status_indicator_frame(
-        started_at,
-        &app.status_indicator,
-    ))
-    .with_running_agents(running_agent_count(app))
-    .with_workflow_status(workflow_chip.as_deref())
-    .with_update_available(app.update_available.as_deref());
-    HeaderWidget::new(data).render(area, buf);
-}
-
-fn render(f: &mut Frame, app: &mut App, config: &Config) {
+fn render(f: &mut Frame, app: &mut App, _config: &Config) {
     let size = f.area();
-    let classic_shell = app.ocean_treatment.is_classic();
     // Keep the view stack's focus-context texture prototype (#4823) in step
     // with the parsed setting each frame: a plain enum/theme copy, no
     // allocation. `Off` leaves the render byte-identical to before.
@@ -13832,11 +13688,7 @@ fn render(f: &mut Frame, app: &mut App, config: &Config) {
         return;
     }
 
-    let header_height = if classic_shell || size.height < 16 {
-        1
-    } else {
-        2
-    };
+    let header_height = if size.height < 16 { 1 } else { 2 };
     let footer_height = crate::tui::phase_strip::height();
     let slash_menu_entries = visible_slash_menu_entries(app, SLASH_MENU_LIMIT);
     let mention_menu_limit = app.mention_menu_limit;
@@ -13845,8 +13697,7 @@ fn render(f: &mut Frame, app: &mut App, config: &Config) {
     if !mention_menu_entries.is_empty() && app.mention_menu_selected >= mention_menu_entries.len() {
         app.mention_menu_selected = mention_menu_entries.len().saturating_sub(1);
     }
-    let top_work_strip_height =
-        super::work_surface::height(app, size.width, size.height, classic_shell);
+    let top_work_strip_height = super::work_surface::height(app, size.width, size.height);
 
     // Defensive two-pass layout: pin the header to the absolute top row,
     // then split the remaining body area for chat / preview / composer /
@@ -13909,11 +13760,10 @@ fn render(f: &mut Frame, app: &mut App, config: &Config) {
 
     // Ocean live phases put the phase strip above the composer so activity
     // stays attached to the transcript and the prompt is the final bottom
-    // object. Idle/typing keep a quiet phase under the prompt. Classic keeps
-    // the legacy composer-then-footer stack.
+    // object. Idle/typing keep a quiet phase under the prompt.
     let phase = crate::tui::underwater::ShellPhase::from_app(app);
-    let phase_above = !classic_shell
-        && crate::tui::phase_strip::PhaseStripPlacement::for_phase(phase).is_above_composer();
+    let phase_above =
+        crate::tui::phase_strip::PhaseStripPlacement::for_phase(phase).is_above_composer();
     let (composer_slot, footer_slot, tail_constraints) = if phase_above {
         (
             5,
@@ -13947,8 +13797,7 @@ fn render(f: &mut Frame, app: &mut App, config: &Config) {
         ])
         .split(body_area);
 
-    let (work_chat_area, side_work_area) =
-        super::work_surface::split_chat(app, body_chunks[1], classic_shell);
+    let (work_chat_area, side_work_area) = super::work_surface::split_chat(app, body_chunks[1]);
 
     if top_work_strip_height > 0 {
         super::work_surface::render(f, body_chunks[0], app);
@@ -13956,11 +13805,7 @@ fn render(f: &mut Frame, app: &mut App, config: &Config) {
         super::work_surface::render(f, work_area, app);
     }
 
-    if classic_shell {
-        render_classic_header(header_area, f.buffer_mut(), app);
-    } else {
-        crate::tui::underwater::render_header(header_area, f.buffer_mut(), app);
-    }
+    crate::tui::underwater::render_header(header_area, f.buffer_mut(), app);
 
     // Render the transcript and optional file-tree sidecar. The underwater
     // default deliberately has no legacy right sidebar: Tasks and To-do own
@@ -13979,8 +13824,8 @@ fn render(f: &mut Frame, app: &mut App, config: &Config) {
 
         // When the file-tree pane is visible and the terminal is wide
         // enough, reserve the left ~25% for the file tree.
-        let mut chat_area =
-            if app.file_tree.is_some() && work_chat_area.width >= SIDEBAR_VISIBLE_MIN_WIDTH {
+        let chat_area =
+            if app.file_tree.is_some() && work_chat_area.width >= FILE_TREE_MIN_HOST_WIDTH {
                 app.file_tree_visible = true;
                 let split = Layout::default()
                     .direction(Direction::Horizontal)
@@ -13999,61 +13844,12 @@ fn render(f: &mut Frame, app: &mut App, config: &Config) {
                 app.file_tree_visible = false;
                 work_chat_area
             };
-        app.last_sidebar_host_width = Some(chat_area.width);
-        let sidebar_area = if classic_shell
-            && !crate::tui::sidebar::sidebar_auto_idle(app)
-            && let Some(sidebar_width) = sidebar_width_for_chat_area(app, chat_area.width)
-        {
-            app.sidebar_resize_total_width = chat_area.width;
-            let split = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Min(1), Constraint::Length(sidebar_width)])
-                .split(chat_area);
-            chat_area = split[0];
-            Some(split[1])
-        } else {
-            None
-        };
-        app.viewport.last_sidebar_area = sidebar_area;
-        if sidebar_area.is_none() {
-            app.last_sidebar_area = None;
-            app.last_sidebar_handle_area = None;
-            app.sidebar_resizing = false;
-            app.sidebar_resize_hovered = false;
-            app.sidebar_hover_tooltip = None;
-        }
+        app.sidebar_hover_tooltip = None;
 
         let chat_widget = ChatWidget::new(app, chat_area).with_ocean_viewport(size);
         shell_ocean = chat_widget.ocean_column();
         let buf = f.buffer_mut();
         chat_widget.render(chat_area, buf);
-
-        // The rejected shell remains available only as an explicitly selected
-        // compatibility treatment. It is never composed into the underwater
-        // default path.
-        if let Some(sidebar_area) = sidebar_area {
-            app.last_sidebar_area = Some(sidebar_area);
-            super::sidebar::render_sidebar(f, sidebar_area, app, config);
-            let handle_area = Rect {
-                x: sidebar_area.x,
-                y: sidebar_area.y,
-                width: 1,
-                height: sidebar_area.height,
-            };
-            app.last_sidebar_handle_area = Some(handle_area);
-            let handle_active = app.sidebar_resizing || app.sidebar_resize_hovered;
-            let handle_symbol = if handle_active { "┃\n" } else { "│\n" };
-            let handle_color = if handle_active {
-                app.ui_theme.accent_primary
-            } else {
-                palette::TEXT_MUTED
-            };
-            let handle = ratatui::widgets::Paragraph::new(
-                handle_symbol.repeat(usize::from(handle_area.height)),
-            )
-            .style(Style::default().fg(handle_color));
-            f.render_widget(handle, handle_area);
-        }
     }
 
     // Workflow panel between chat and pending-input preview (#4121).
@@ -14158,11 +13954,7 @@ fn render(f: &mut Frame, app: &mut App, config: &Config) {
         f.set_cursor_position(cursor_pos);
     }
 
-    if classic_shell {
-        render_footer(f, body_chunks[footer_slot], app);
-    } else {
-        crate::tui::underwater::render_footer(body_chunks[footer_slot], f.buffer_mut(), app);
-    }
+    crate::tui::underwater::render_footer(body_chunks[footer_slot], f.buffer_mut(), app);
 
     // The underwater shell is one water column, not a stack of independently
     // shaded panels. Continue the transcript's absolute-row ramp through each
@@ -14191,19 +13983,6 @@ fn render(f: &mut Frame, app: &mut App, config: &Config) {
             app.ui_theme.footer_bg,
         );
     }
-    // Toast stack overlay (#439): when multiple status toasts are queued,
-    // surface the older ones as a 1-2 line strip above the footer so a
-    // burst of events isn't collapsed to a single visible message.
-    if classic_shell {
-        render_toast_stack_overlay(
-            f,
-            size,
-            body_chunks[composer_slot],
-            body_chunks[footer_slot],
-            app,
-        );
-    }
-
     // Decision card overlay (v0.8.43 truth-surface). When a decision card is
     // active, render it centered on top of the transcript.
     if let Some(ref card) = app.decision_card {
@@ -17588,64 +17367,6 @@ pub(crate) fn status_color(level: StatusToastLevel) -> ratatui::style::Color {
     }
 }
 
-/// Maximum stacked toasts rendered above the footer (#439). The footer line
-/// itself stays the most-recent; this overlay surfaces up to two older
-/// queued toasts so a burst of status events isn't dropped silently.
-const TOAST_STACK_MAX_VISIBLE: usize = 3;
-
-/// Render up to `TOAST_STACK_MAX_VISIBLE - 1` *additional* toasts as an
-/// overlay just above the footer when multiple are active. The most recent
-/// toast continues to render in the footer line itself; this strip is for
-/// the older entries the user would otherwise miss when statuses arrive in
-/// bursts.
-fn render_toast_stack_overlay(
-    f: &mut Frame,
-    full_area: Rect,
-    composer_area: Rect,
-    footer_area: Rect,
-    app: &mut App,
-) {
-    let toasts = app.active_status_toasts(TOAST_STACK_MAX_VISIBLE);
-    if toasts.len() < 2 || footer_area.y == 0 {
-        return;
-    }
-    // Drop the most recent (rendered inline by the footer), keep the rest.
-    let extra = toasts.len() - 1;
-    let stack_height = extra.min(TOAST_STACK_MAX_VISIBLE - 1) as u16;
-    // Toast stack can only use space between composer and footer.
-    // Composer occupies rows [composer_area.y, composer_area.y + composer_area.height).
-    // Toast must start at or after row (composer_area.y + composer_area.height).
-    let composer_end = composer_area.y + composer_area.height;
-    let max_above = footer_area.y.saturating_sub(composer_end);
-    if stack_height == 0 || max_above == 0 {
-        return;
-    }
-    let height = stack_height.min(max_above);
-    let stack_area = Rect {
-        x: full_area.x,
-        y: footer_area.y.saturating_sub(height),
-        width: full_area.width,
-        height,
-    };
-    // Iterate oldest-first so the freshest *non-inline* toast is closest to
-    // the footer (visually nearest the most-recent message in the line below).
-    let visible = &toasts[..extra];
-    for (i, toast) in visible.iter().take(height as usize).enumerate() {
-        let row_y = stack_area.y + i as u16;
-        let row = Rect {
-            x: stack_area.x,
-            y: row_y,
-            width: stack_area.width,
-            height: 1,
-        };
-        let style = ratatui::style::Style::default()
-            .fg(status_color(toast.level))
-            .add_modifier(ratatui::style::Modifier::DIM);
-        let line = ratatui::text::Line::styled(format!(" {} ", toast.text), style);
-        f.render_widget(ratatui::widgets::Paragraph::new(line), row);
-    }
-}
-
 pub(crate) fn request_foreground_shell_background(app: &mut App) {
     if !app.is_loading {
         app.status_message = Some("No foreground shell wait to move to /jobs".to_string());
@@ -17697,7 +17418,8 @@ fn request_active_foreground_shell_background(app: &App) -> Result<()> {
 
 pub(crate) fn prefill_jobs_cancel_all_if_tasks_sidebar(app: &mut App) -> bool {
     if !app.view_stack.is_empty()
-        || app.sidebar_focus != SidebarFocus::Tasks
+        || app.work_surface.panel != crate::tui::work_surface::RailPanel::Tasks
+        || app.work_surface.last_area.is_none()
         || !app
             .task_panel
             .iter()
@@ -18091,13 +17813,8 @@ fn should_tick_status_animation(
 }
 
 fn visible_background_task_has_live_motion(app: &App) -> bool {
-    matches!(
-        app.sidebar_focus,
-        SidebarFocus::Auto | SidebarFocus::Pinned | SidebarFocus::Tasks
-    ) && app
-        .last_sidebar_area
-        .or(app.viewport.last_sidebar_area)
-        .is_some()
+    app.work_surface.panel == crate::tui::work_surface::RailPanel::Tasks
+        && app.work_surface.last_area.is_some()
         && app.task_panel.iter().any(|task| task.status == "running")
 }
 

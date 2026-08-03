@@ -812,7 +812,7 @@ fn approval_mouse_wheel_reviews_transcript_without_closing_card() {
 }
 
 #[test]
-fn approval_wheel_preserves_sidebar_and_work_surface_ownership() {
+fn approval_wheel_preserves_work_surface_ownership() {
     let mut app = create_test_app();
     app.view_stack.push(ApprovalView::new(ApprovalRequest::new(
         "approval-scroll",
@@ -821,11 +821,10 @@ fn approval_wheel_preserves_sidebar_and_work_surface_ownership() {
         &serde_json::json!({"command": "git status"}),
         "approval-scroll-key",
     )));
-    app.viewport.last_sidebar_area = Some(Rect::new(60, 0, 20, 20));
     app.work_surface.last_area = Some(Rect::new(0, 0, 30, 20));
     app.viewport.last_approval_area = Some(Rect::new(0, 12, 80, 8));
 
-    for (column, row) in [(65, 4), (10, 4)] {
+    for (column, row) in [(10, 4), (20, 4)] {
         let events = handle_mouse_event(
             &mut app,
             MouseEvent {
@@ -1980,12 +1979,7 @@ fn loading_mouse_filter_keeps_hover_and_active_drags() {
     app.viewport.transcript_scrollbar_dragging = true;
     assert!(!should_drop_loading_mouse_motion(&app, drag));
 
-    // Sidebar drag-to-resize must also survive the loading filter (#3063).
     app.viewport.transcript_scrollbar_dragging = false;
-    app.sidebar_resizing = true;
-    assert!(!should_drop_loading_mouse_motion(&app, drag));
-
-    app.sidebar_resizing = false;
     app.work_surface.last_area = Some(Rect::new(0, 0, 80, 3));
     let started = crate::tui::work_surface::handle_mouse(
         &mut app,
@@ -2004,89 +1998,9 @@ fn loading_mouse_filter_keeps_hover_and_active_drags() {
 }
 
 #[test]
-fn loading_mouse_filter_allows_sidebar_resize_down_drag_up() {
-    let mut app = create_test_app();
-    app.is_loading = true;
-    setup_resize_handle(&mut app, 80, 33, 120);
-
-    let down = MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column: 80,
-        row: 5,
-        modifiers: KeyModifiers::NONE,
-    };
-    assert!(!should_drop_loading_mouse_motion(&app, down));
-    handle_mouse_event(&mut app, down);
-    assert!(app.sidebar_resizing, "down on handle starts resize");
-
-    let drag = MouseEvent {
-        kind: MouseEventKind::Drag(MouseButton::Left),
-        column: 76,
-        row: 5,
-        modifiers: KeyModifiers::NONE,
-    };
-    assert!(
-        !should_drop_loading_mouse_motion(&app, drag),
-        "resize drag must not be dropped while loading"
-    );
-    handle_mouse_event(&mut app, drag);
-    let expected = ((37u32 * 100) / 120) as u16;
-    assert_eq!(app.sidebar_width_percent, expected);
-
-    let up = MouseEvent {
-        kind: MouseEventKind::Up(MouseButton::Left),
-        column: 76,
-        row: 5,
-        modifiers: KeyModifiers::NONE,
-    };
-    assert!(!should_drop_loading_mouse_motion(&app, up));
-    handle_mouse_event(&mut app, up);
-    assert!(!app.sidebar_resizing);
-    assert!(app.sidebar_width_dirty);
-}
-
-#[test]
-fn loading_mouse_filter_allows_sidebar_hover_popovers() {
-    let mut app = create_test_app();
-    app.is_loading = true;
-    app.viewport.last_sidebar_area = Some(Rect::new(60, 4, 20, 6));
-    app.sidebar_hover.sections.push(SidebarHoverSection {
-        content_area: Rect::new(60, 4, 20, 6),
-        lines: vec!["Visible row".to_string()],
-        rows: vec![SidebarHoverRow {
-            row_y: 5,
-            display_text: "Truncated".to_string(),
-            full_text: "Full sidebar task label".to_string(),
-            detail: Some("Detailed context".to_string()),
-            is_truncated: true,
-            click_action: None,
-            stop_action: None,
-            stop_zone_start_col: None,
-            stop_zone_end_col: None,
-        }],
-    });
-    let moved = MouseEvent {
-        kind: MouseEventKind::Moved,
-        column: 65,
-        row: 5,
-        modifiers: KeyModifiers::NONE,
-    };
-
-    assert!(!should_drop_loading_mouse_motion(&app, moved));
-    handle_mouse_event(&mut app, moved);
-
-    assert_eq!(
-        app.sidebar_hover_tooltip.as_deref(),
-        Some("Full sidebar task label\nDetailed context")
-    );
-    assert_eq!(app.last_mouse_pos, Some((65, 5)));
-}
-
-#[test]
 fn loading_mouse_filter_allows_sidebar_hover_to_clear() {
     let mut app = create_test_app();
     app.is_loading = true;
-    app.viewport.last_sidebar_area = Some(Rect::new(60, 4, 20, 6));
     app.sidebar_hover_tooltip = Some("Stale sidebar tooltip".to_string());
     let moved = MouseEvent {
         kind: MouseEventKind::Moved,
@@ -2106,7 +2020,6 @@ fn loading_mouse_filter_allows_sidebar_hover_to_clear() {
 fn loading_mouse_filter_allows_sidebar_exit_to_clear_highlight() {
     let mut app = create_test_app();
     app.is_loading = true;
-    app.viewport.last_sidebar_area = Some(Rect::new(60, 4, 20, 6));
     app.last_mouse_pos = Some((60, 5));
 
     let exit_left = MouseEvent {
@@ -8869,16 +8782,18 @@ fn spans_text(spans: &[Span<'_>]) -> String {
 }
 
 #[test]
-fn ctrl_alt_4_focuses_agents_sidebar_without_switching_modes() {
+fn ctrl_alt_4_selects_pinned_rail_panel_without_switching_modes() {
     let mut app = create_test_app();
     app.mode = AppMode::Agent;
-    app.sidebar_focus = SidebarFocus::Auto;
 
     apply_alt_4_shortcut(&mut app, KeyModifiers::ALT | KeyModifiers::CONTROL);
 
     assert_eq!(app.mode, AppMode::Agent);
-    assert_eq!(app.sidebar_focus, SidebarFocus::Agents);
-    assert_eq!(app.status_message.as_deref(), Some("Sidebar focus: agents"));
+    assert_eq!(
+        app.work_surface.panel,
+        crate::tui::work_surface::RailPanel::Pinned
+    );
+    assert_eq!(app.status_message.as_deref(), Some("Rail panel: pinned"));
 }
 
 #[test]
@@ -8911,10 +8826,10 @@ fn hotbar_alt_digit_fires_from_composer_and_sidebar_states() {
     app.input = "   ".to_string();
     assert_eq!(hotbar_slot_from_key(&app, &alt_four), Some(4));
 
-    app.sidebar_focus = SidebarFocus::Hidden;
+    app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Off;
     assert_eq!(hotbar_slot_from_key(&app, &alt_four), Some(4));
 
-    app.sidebar_focus = SidebarFocus::Agents;
+    app.work_surface.panel = crate::tui::work_surface::RailPanel::Agents;
     assert_eq!(hotbar_slot_from_key(&app, &alt_four), Some(4));
 }
 
@@ -9165,203 +9080,67 @@ fn hotbar_bound_reasoning_action_updates_auto_model_preference() {
 }
 
 #[test]
-fn alt_0_restores_auto_sidebar_focus() {
+fn alt_0_without_ctrl_is_unbound_after_auto_mode_retired() {
     let mut app = create_test_app();
-    app.sidebar_focus = SidebarFocus::Hidden;
+    app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Left;
 
     apply_alt_0_shortcut(&mut app, KeyModifiers::ALT);
 
-    assert_eq!(app.sidebar_focus, SidebarFocus::Auto);
-    assert_eq!(app.status_message.as_deref(), Some("Sidebar focus: auto"));
+    // Auto-collapse was dropped with the legacy sidebar; plain Alt+0 must
+    // not mutate placement or claim anything about the rail.
+    assert_eq!(
+        app.work_surface.placement,
+        crate::tui::work_surface::WorkSurfacePlacement::Left
+    );
+    assert!(app.status_message.is_none());
 }
 
 #[test]
-fn ctrl_alt_0_hides_sidebar() {
+fn ctrl_alt_0_turns_rail_off() {
     let mut app = create_test_app();
-    app.sidebar_focus = SidebarFocus::Tasks;
+    app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Top;
 
     apply_alt_0_shortcut(&mut app, KeyModifiers::ALT | KeyModifiers::CONTROL);
 
-    assert_eq!(app.sidebar_focus, SidebarFocus::Hidden);
-    assert!(app.sidebar_focus_dirty);
-    assert_eq!(app.status_message.as_deref(), Some("Sidebar hidden"));
+    assert_eq!(
+        app.work_surface.placement,
+        crate::tui::work_surface::WorkSurfacePlacement::Off
+    );
+    assert_eq!(app.status_message.as_deref(), Some("Rail is off"));
 }
 
 #[test]
-fn ctrl_alt_0_restores_pinned_sidebar_when_already_hidden() {
+fn ctrl_alt_0_restores_top_rail_when_already_off() {
     let mut app = create_test_app();
-    app.sidebar_focus = SidebarFocus::Hidden;
+    app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Off;
 
     apply_alt_0_shortcut(&mut app, KeyModifiers::ALT | KeyModifiers::CONTROL);
 
-    assert_eq!(app.sidebar_focus, SidebarFocus::Pinned);
-    assert_eq!(app.status_message.as_deref(), Some("Sidebar focus: pinned"));
-}
-
-#[test]
-fn sidebar_focus_dirty_persists_saved_focus() {
-    let _guard = ConfigPathEnvGuard::new();
-    let mut app = create_test_app();
-    app.sidebar_focus = SidebarFocus::Hidden;
-    app.sidebar_focus_dirty = true;
-
-    persist_sidebar_settings_if_dirty(&mut app);
-
-    assert!(!app.sidebar_focus_dirty);
-    let settings = crate::settings::Settings::load().expect("load settings");
-    assert_eq!(settings.sidebar_focus, "hidden");
-}
-
-#[test]
-fn hidden_sidebar_focus_suppresses_sidebar_split_even_when_wide() {
-    let mut app = create_test_app();
-    app.sidebar_width_percent = 28;
-
-    app.sidebar_focus = SidebarFocus::Pinned;
-    assert_eq!(sidebar_width_for_chat_area(&app, 120), Some(33));
-
-    app.sidebar_focus = SidebarFocus::Hidden;
-    assert_eq!(sidebar_width_for_chat_area(&app, 120), None);
-}
-
-#[test]
-fn compact_sidebar_split_survives_eighty_column_file_tree_host() {
-    let mut app = create_test_app();
-    app.sidebar_focus = SidebarFocus::Pinned;
-
-    // 80-column body -> 20-column file tree + 60-column chat host.
-    assert_eq!(sidebar_width_for_chat_area(&app, 60), Some(20));
-    assert_eq!(sidebar_width_for_chat_area(&app, 59), None);
-}
-
-#[test]
-fn sidebar_width_floor_raises_with_chat_width() {
-    // The classic 24-column floor leaves status/status-adjacent info cramped
-    // at ultrawide sizes. The floor is now width-aware: at least 28 columns,
-    // scaling to 10% of the chat host on very wide terminals.
-    let mut app = create_test_app();
-    app.sidebar_focus = SidebarFocus::Pinned;
-    app.sidebar_width_percent = 10;
-
-    // Minimum percent at ordinary width: 12 preferred -> 28 floor.
-    assert_eq!(sidebar_width_for_chat_area(&app, 120), Some(28));
-    // Ultrawide: 10% floor grows past the 28-column constant.
-    assert_eq!(sidebar_width_for_chat_area(&app, 320), Some(32));
-    // The chat host still caps the rail (chat_width - 40).
-    assert_eq!(sidebar_width_for_chat_area(&app, 80), Some(28));
-    // Above the floor the configured percent still rules.
-    app.sidebar_width_percent = 50;
-    assert_eq!(sidebar_width_for_chat_area(&app, 200), Some(100));
-}
-
-#[test]
-fn sidebar_width_gate_uses_compact_sixty_column_boundary() {
-    let mut app = create_test_app();
-    app.sidebar_focus = SidebarFocus::Pinned;
-    app.last_sidebar_host_width = Some(SIDEBAR_VISIBLE_MIN_WIDTH - 1);
-
     assert_eq!(
-        sidebar_render_state(&mut app),
-        SidebarRenderState::SuppressedByWidth {
-            available_width: SIDEBAR_VISIBLE_MIN_WIDTH - 1,
-            min_width: SIDEBAR_VISIBLE_MIN_WIDTH,
-        }
+        app.work_surface.placement,
+        crate::tui::work_surface::WorkSurfacePlacement::Top
     );
-
-    app.last_sidebar_host_width = Some(SIDEBAR_VISIBLE_MIN_WIDTH);
-
-    assert_eq!(sidebar_render_state(&mut app), SidebarRenderState::Visible);
+    assert_eq!(app.status_message.as_deref(), Some("Rail: top placement"));
 }
 
 #[test]
-fn pinned_sidebar_is_visible_when_idle_and_wide() {
+fn rail_command_reports_off_without_claiming_visibility() {
+    // Replaces the old sidebar_render_state tests: the render-state machine
+    // is gone with the classic sidebar, and the /rail status readout is the
+    // contract that replaces it. It must never claim a surface that cannot
+    // render is visible.
     let mut app = create_test_app();
-    app.sidebar_focus = SidebarFocus::Pinned;
-    app.last_sidebar_host_width = Some(120);
-
-    assert_eq!(sidebar_render_state(&mut app), SidebarRenderState::Visible);
-}
-
-#[test]
-fn auto_sidebar_status_reports_idle_collapse_when_wide() {
-    let mut app = create_test_app();
-    app.sidebar_focus = SidebarFocus::Auto;
-    app.last_sidebar_host_width = Some(120);
-
+    let result = crate::commands::execute("/rail off", &mut app);
+    assert!(!result.is_error);
     assert_eq!(
-        sidebar_render_state(&mut app),
-        SidebarRenderState::AutoCollapsed
+        app.work_surface.placement,
+        crate::tui::work_surface::WorkSurfacePlacement::Off
     );
-}
-
-#[test]
-fn sidebar_auto_idle_collapses_when_nothing_active() {
-    let mut app = create_test_app();
-    app.sidebar_focus = SidebarFocus::Auto;
-    // A fresh session has no To-do, no fleet, no background jobs, no context.
-    assert!(crate::tui::sidebar::sidebar_auto_idle(&mut app));
-}
-
-#[test]
-fn sidebar_auto_idle_false_when_fleet_active() {
-    let mut app = create_test_app();
-    app.sidebar_focus = SidebarFocus::Auto;
-    app.agent_progress
-        .insert("agent_1".to_string(), "running".to_string());
-    assert!(!crate::tui::sidebar::sidebar_auto_idle(&mut app));
-}
-
-#[test]
-fn sidebar_auto_idle_false_for_explicit_focus() {
-    let mut app = create_test_app();
-    // An explicit panel pin is never auto-collapsed.
-    app.sidebar_focus = SidebarFocus::Agents;
-    assert!(!crate::tui::sidebar::sidebar_auto_idle(&mut app));
-}
-
-#[test]
-fn jobs_panel_ignores_completed_history_but_shows_for_real_jobs() {
-    let mut app = create_test_app();
-    app.sidebar_focus = SidebarFocus::Auto;
-
-    // Completed background history must not reopen the auto Tasks panel.
-    app.task_panel.push(crate::tui::app::TaskPanelEntry {
-        id: "shell_1".to_string(),
-        status: "completed".to_string(),
-        prompt_summary: "shell: cargo fmt".to_string(),
-        duration_ms: Some(10),
-        kind: crate::tui::app::TaskPanelEntryKind::Background,
-        stale: false,
-        elapsed_since_output_ms: None,
-        owner_agent_id: None,
-        owner_agent_name: None,
-        current_tool: None,
-        role: None,
-        files_touched: 0,
-    });
+    let message = result.message.unwrap_or_default();
+    assert!(message.contains("Rail is off"), "got: {message}");
     assert!(
-        crate::tui::sidebar::sidebar_auto_idle(&mut app),
-        "completed background jobs must not reopen the auto jobs panel"
-    );
-
-    // A live background job (Background + running/queued) does surface it.
-    app.task_panel.push(crate::tui::app::TaskPanelEntry {
-        id: "shell_2".to_string(),
-        status: "running".to_string(),
-        prompt_summary: "shell: cargo test".to_string(),
-        duration_ms: Some(10),
-        kind: crate::tui::app::TaskPanelEntryKind::Background,
-        stale: false,
-        elapsed_since_output_ms: None,
-        owner_agent_id: None,
-        owner_agent_name: None,
-        current_tool: None,
-        role: None,
-        files_touched: 0,
-    });
-    assert!(
-        !crate::tui::sidebar::sidebar_auto_idle(&mut app),
-        "a live background job must surface the jobs panel"
+        !message.contains("Sidebar is visible"),
+        "no control may claim the dead sidebar renders: {message}"
     );
 }
 
@@ -9378,7 +9157,8 @@ fn background_receipt_tip_only_detects_a_visible_active_to_completed_transition(
 #[test]
 fn ctrl_x_jobs_prefill_only_catches_running_shell_jobs_in_tasks_sidebar() {
     let mut app = create_test_app();
-    app.sidebar_focus = SidebarFocus::Tasks;
+    app.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
+    app.work_surface.last_area = Some(ratatui::layout::Rect::new(0, 0, 100, 3));
     app.input = "draft".to_string();
     app.cursor_position = app.input.len();
     app.task_panel.push(TaskPanelEntry {
@@ -9408,7 +9188,8 @@ fn ctrl_x_jobs_prefill_only_catches_running_shell_jobs_in_tasks_sidebar() {
 #[test]
 fn ctrl_x_jobs_prefill_falls_through_outside_tasks_sidebar_shell_jobs() {
     let mut non_shell = create_test_app();
-    non_shell.sidebar_focus = SidebarFocus::Tasks;
+    non_shell.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
+    non_shell.work_surface.last_area = Some(ratatui::layout::Rect::new(0, 0, 100, 3));
     non_shell.input = "draft".to_string();
     non_shell.cursor_position = non_shell.input.len();
     non_shell.task_panel.push(TaskPanelEntry {
@@ -9430,7 +9211,8 @@ fn ctrl_x_jobs_prefill_falls_through_outside_tasks_sidebar_shell_jobs() {
     assert_eq!(non_shell.input, "draft");
 
     let mut other_sidebar = create_test_app();
-    other_sidebar.sidebar_focus = SidebarFocus::Agents;
+    other_sidebar.work_surface.panel = crate::tui::work_surface::RailPanel::Agents;
+    other_sidebar.work_surface.last_area = Some(ratatui::layout::Rect::new(0, 0, 100, 3));
     other_sidebar.input = "draft".to_string();
     other_sidebar.cursor_position = other_sidebar.input.len();
     other_sidebar.task_panel.push(TaskPanelEntry {
@@ -9452,208 +9234,6 @@ fn ctrl_x_jobs_prefill_falls_through_outside_tasks_sidebar_shell_jobs() {
         &mut other_sidebar
     ));
     assert_eq!(other_sidebar.input, "draft");
-}
-
-// ── Sidebar resize-handle mouse tests ──────────────────────────────
-
-fn setup_resize_handle(app: &mut App, handle_x: u16, sidebar_width: u16, total_width: u16) {
-    let y = 2;
-    let h = 10;
-    app.last_sidebar_handle_area = Some(Rect {
-        x: handle_x,
-        y,
-        width: 1,
-        height: h,
-    });
-    app.last_sidebar_area = Some(Rect {
-        x: handle_x,
-        y,
-        width: sidebar_width,
-        height: h,
-    });
-    app.sidebar_resize_total_width = total_width;
-    app.sidebar_width_percent = 28;
-}
-
-#[test]
-fn sidebar_resize_down_on_handle_starts_resizing() {
-    let mut app = create_test_app();
-    setup_resize_handle(&mut app, 80, 33, 120);
-
-    handle_mouse_event(
-        &mut app,
-        MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: 80,
-            row: 5,
-            modifiers: KeyModifiers::NONE,
-        },
-    );
-
-    assert!(
-        app.sidebar_resizing,
-        "should start resizing on handle click"
-    );
-    assert_eq!(app.sidebar_resize_anchor_x, 80);
-    assert_eq!(app.sidebar_resize_anchor_width, 33);
-}
-
-#[test]
-fn sidebar_resize_handle_tracks_hover_for_visible_feedback() {
-    let mut app = create_test_app();
-    setup_resize_handle(&mut app, 80, 33, 120);
-
-    handle_mouse_event(
-        &mut app,
-        MouseEvent {
-            kind: MouseEventKind::Moved,
-            column: 80,
-            row: 5,
-            modifiers: KeyModifiers::NONE,
-        },
-    );
-    assert!(app.sidebar_resize_hovered);
-
-    handle_mouse_event(
-        &mut app,
-        MouseEvent {
-            kind: MouseEventKind::Moved,
-            column: 79,
-            row: 5,
-            modifiers: KeyModifiers::NONE,
-        },
-    );
-    assert!(!app.sidebar_resize_hovered);
-}
-
-#[test]
-fn sidebar_resize_down_outside_handle_does_not_start_resizing() {
-    let mut app = create_test_app();
-    setup_resize_handle(&mut app, 80, 33, 120);
-
-    handle_mouse_event(
-        &mut app,
-        MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: 79, // one column left of handle
-            row: 5,
-            modifiers: KeyModifiers::NONE,
-        },
-    );
-
-    assert!(
-        !app.sidebar_resizing,
-        "should not resize on non-handle click"
-    );
-}
-
-#[test]
-fn sidebar_resize_drag_adjusts_width_percent() {
-    let mut app = create_test_app();
-    setup_resize_handle(&mut app, 80, 33, 120);
-    // 33 / 120 * 100 ≈ 27.5 → initial percent = 28 (the setup defaults to 28)
-    app.sidebar_width_percent = 28;
-    app.sidebar_resizing = true;
-    app.sidebar_resize_anchor_x = 80;
-    app.sidebar_resize_anchor_width = 33;
-
-    // Drag left by 4 cols (making sidebar wider): 33 + 4 = 37 → 37/120*100 ≈ 30
-    handle_mouse_event(
-        &mut app,
-        MouseEvent {
-            kind: MouseEventKind::Drag(MouseButton::Left),
-            column: 76,
-            row: 5,
-            modifiers: KeyModifiers::NONE,
-        },
-    );
-
-    let expected = ((37u32 * 100) / 120) as u16; // ~30
-    assert_eq!(app.sidebar_width_percent, expected);
-}
-
-#[test]
-fn sidebar_resize_drag_clamps_to_10_50_range() {
-    let mut app = create_test_app();
-    setup_resize_handle(&mut app, 80, 33, 120);
-    app.sidebar_resizing = true;
-    app.sidebar_resize_anchor_x = 80;
-    app.sidebar_resize_anchor_width = 33;
-
-    // Drag far right → sidebar should shrink but not below 10%
-    handle_mouse_event(
-        &mut app,
-        MouseEvent {
-            kind: MouseEventKind::Drag(MouseButton::Left),
-            column: 200,
-            row: 5,
-            modifiers: KeyModifiers::NONE,
-        },
-    );
-    assert!(app.sidebar_width_percent >= 10);
-
-    // Drag far left → sidebar should grow but not above 50%
-    handle_mouse_event(
-        &mut app,
-        MouseEvent {
-            kind: MouseEventKind::Drag(MouseButton::Left),
-            column: 0,
-            row: 5,
-            modifiers: KeyModifiers::NONE,
-        },
-    );
-    assert!(app.sidebar_width_percent <= 50);
-}
-
-#[test]
-fn sidebar_resize_up_ends_resizing_and_marks_dirty() {
-    let mut app = create_test_app();
-    setup_resize_handle(&mut app, 80, 33, 120);
-    app.sidebar_resizing = true;
-    app.sidebar_resize_anchor_x = 80;
-    app.sidebar_resize_anchor_width = 33;
-
-    handle_mouse_event(
-        &mut app,
-        MouseEvent {
-            kind: MouseEventKind::Up(MouseButton::Left),
-            column: 76,
-            row: 5,
-            modifiers: KeyModifiers::NONE,
-        },
-    );
-
-    assert!(!app.sidebar_resizing, "should stop resizing on mouse up");
-    assert!(
-        app.sidebar_width_dirty,
-        "should mark width dirty for persistence"
-    );
-}
-
-#[test]
-fn sidebar_resize_up_outside_handle_still_ends_resizing() {
-    let mut app = create_test_app();
-    setup_resize_handle(&mut app, 80, 33, 120);
-    app.sidebar_resizing = true;
-    app.sidebar_resize_anchor_x = 80;
-    app.sidebar_resize_anchor_width = 33;
-
-    // Release far away from the handle and the sidebar entirely.
-    handle_mouse_event(
-        &mut app,
-        MouseEvent {
-            kind: MouseEventKind::Up(MouseButton::Left),
-            column: 5,
-            row: 20,
-            modifiers: KeyModifiers::NONE,
-        },
-    );
-
-    assert!(
-        !app.sidebar_resizing,
-        "mouse up must clear resize state even outside the handle"
-    );
-    assert!(app.sidebar_width_dirty);
 }
 
 fn make_subagent(
@@ -20489,8 +20069,8 @@ fn status_animation_ticks_for_a_visible_background_task() {
     let mut app = create_test_app();
     app.low_motion = false;
     app.fancy_animations = true;
-    app.sidebar_focus = SidebarFocus::Tasks;
-    app.last_sidebar_area = Some(Rect::new(80, 0, 20, 20));
+    app.work_surface.panel = crate::tui::work_surface::RailPanel::Tasks;
+    app.work_surface.last_area = Some(Rect::new(80, 0, 20, 20));
     app.task_panel.push(TaskPanelEntry {
         id: "shell_smooth".to_string(),
         status: "running".to_string(),
@@ -20511,7 +20091,7 @@ fn status_animation_ticks_for_a_visible_background_task() {
         &app, false, false, false, false
     ));
 
-    app.last_sidebar_area = None;
+    app.work_surface.last_area = None;
     assert!(!visible_background_task_has_live_motion(&app));
     assert!(!should_tick_status_animation(
         &app, false, false, false, false
@@ -20570,23 +20150,6 @@ fn translation_placeholder_keeps_a_calm_refresh_without_repainting_still_mode() 
     assert!(!should_tick_status_animation(
         &app, false, false, false, true
     ));
-}
-
-#[test]
-fn classic_header_indicator_animates_only_in_full_motion() {
-    let mut app = create_test_app();
-    app.turn_started_at = Some(Instant::now());
-
-    app.low_motion = false;
-    app.fancy_animations = true;
-    assert!(classic_header_indicator_started_at(&app).is_some());
-
-    app.low_motion = true;
-    assert!(classic_header_indicator_started_at(&app).is_none());
-
-    app.low_motion = false;
-    app.fancy_animations = false;
-    assert!(classic_header_indicator_started_at(&app).is_none());
 }
 
 #[test]
