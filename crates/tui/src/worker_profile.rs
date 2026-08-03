@@ -343,6 +343,11 @@ pub struct ChildLaunchManifest {
     pub resume_identity: Option<String>,
     #[serde(default)]
     pub generation: u32,
+    /// Agent id this child was resumed from via `resume_from`, if any.
+    /// Carries provenance across continuation chains so receipts can trace
+    /// the lineage without inspecting the transcript.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_from_agent_id: Option<String>,
 }
 
 #[cfg(test)]

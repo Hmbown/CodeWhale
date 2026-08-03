@@ -261,6 +261,7 @@ pub fn fleet_task_to_worker_spec_with_profiles(
             .and_then(|budget| budget.max_tokens),
         resume_identity: Some(session_name.clone()),
         generation: 1,
+        resume_from_agent_id: None,
     };
 
     Ok(AgentWorkerSpec {

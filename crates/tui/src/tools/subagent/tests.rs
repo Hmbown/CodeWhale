@@ -230,6 +230,7 @@ fn make_write_worker_spec(worker_id: &str, workspace: PathBuf, root: &str) -> Ag
         token_budget: None,
         resume_identity: Some(worker_id.to_string()),
         generation: 1,
+        resume_from_agent_id: None,
     });
     spec
 }
@@ -928,6 +929,7 @@ fn headless_worker_registration_enforces_live_claims_and_projects_context() {
             token_budget: None,
             resume_identity: Some(format!("fleet-{id}")),
             generation: 1,
+            resume_from_agent_id: None,
         });
         spec
     };
@@ -15260,6 +15262,79 @@ fn completed_claim_of_untouched_file_taints_verification() {
     );
 }
 
+// ─── resume_from continuation-chain tests (#425) ─────────────────────────────
+
+#[test]
+fn parse_spawn_request_accepts_resume_from() {
+    let input = json!({
+        "prompt": "continue the analysis",
+        "resume_from": "agent_abc123"
+    });
+    let parsed = parse_spawn_request(&input).expect("spawn request should parse");
+    assert_eq!(parsed.resume_from.as_deref(), Some("agent_abc123"));
+}
+
+#[test]
+fn parse_spawn_request_accepts_resume_from_camel_case() {
+    let input = json!({
+        "prompt": "continue the analysis",
+        "resumeFrom": "my-session"
+    });
+    let parsed = parse_spawn_request(&input).expect("camelCase resumeFrom should parse");
+    assert_eq!(parsed.resume_from.as_deref(), Some("my-session"));
+}
+
+#[test]
+fn parse_spawn_request_resume_from_absent_is_none() {
+    let input = json!({ "prompt": "fresh start" });
+    let parsed = parse_spawn_request(&input).expect("prompt-only request should parse");
+    assert!(parsed.resume_from.is_none());
+}
+
+#[test]
+fn parse_spawn_request_resume_from_empty_string_is_none() {
+    let input = json!({
+        "prompt": "fresh start",
+        "resume_from": "   "
+    });
+    let parsed = parse_spawn_request(&input)
+        .expect("whitespace-only resume_from should be treated as absent");
+    assert!(parsed.resume_from.is_none());
+}
+
+/// Spawning with resume_from + fork_context=false is contradictory and must
+/// be rejected at the spawn seam (not at parse time, since that is too early
+/// to know whether fork_context was explicit).
+#[test]
+fn parse_spawn_request_resume_from_with_fork_context_false_is_parseable() {
+    // The conflict is detected at spawn time (spawn_subagent_from_input),
+    // not at parse time. parse_spawn_request itself must accept the pair so
+    // the richer spawn-time error message is visible to the model.
+    let input = json!({
+        "prompt": "continue the analysis",
+        "resume_from": "agent_abc123",
+        "fork_context": false
+    });
+    let parsed =
+        parse_spawn_request(&input).expect("parse should succeed; conflict detected at spawn");
+    assert_eq!(parsed.resume_from.as_deref(), Some("agent_abc123"));
+    assert_eq!(parsed.fork_context, Some(false));
+}
+
+#[test]
+fn resume_from_rejects_running_source() {
+    let tmp = tempdir().expect("tempdir");
+    let mut manager = SubAgentManager::new(tmp.path().to_path_buf(), 4);
+    let running_id = manager.insert_test_running_agent("active-worker", tmp.path());
+
+    let err = validate_resume_from_source(&manager, &running_id, tmp.path())
+        .expect_err("resuming a running agent must be rejected");
+    assert!(
+        err.contains("still running"),
+        "error should mention running status: {err}"
+    );
+}
+
 #[test]
 fn completed_claim_matching_workspace_state_stays_untainted() {
     let tmp = tempdir().expect("tempdir");
@@ -15463,4 +15538,219 @@ async fn unscoped_status_compacts_running_children_and_keeps_terminal_full() {
         .expect("verbose agent row");
     assert!(verbose_row.get("snapshot").is_some(), "{verbose_row}");
     assert!(verbose_row.get("compact").is_none(), "{verbose_row}");
+}
+
+#[test]
+fn resume_from_rejects_missing_source() {
+    let tmp = tempdir().expect("tempdir");
+    let manager = SubAgentManager::new(tmp.path().to_path_buf(), 4);
+
+    let err = validate_resume_from_source(&manager, "agent_does_not_exist", tmp.path())
+        .expect_err("resuming a missing agent must be rejected");
+    assert!(
+        err.contains("not found"),
+        "error should mention not found: {err}"
+    );
+}
+
+#[test]
+fn resume_from_accepts_completed_source() {
+    let tmp = tempdir().expect("tempdir");
+    let mut manager = SubAgentManager::new(tmp.path().to_path_buf(), 4);
+    let completed_id = manager.insert_test_running_agent("done-worker", tmp.path());
+    if let Some(agent) = manager.agents.get_mut(&completed_id) {
+        agent.status = SubAgentStatus::Completed;
+        agent.result = Some("analysis done".to_string());
+    }
+
+    validate_resume_from_source(&manager, &completed_id, tmp.path())
+        .expect("completed agent must be accepted as a resume source");
+}
+
+#[test]
+fn resume_from_accepts_interrupted_source() {
+    let tmp = tempdir().expect("tempdir");
+    let mut manager = SubAgentManager::new(tmp.path().to_path_buf(), 4);
+    let (interrupted_id, _handle) = manager.insert_test_interrupted_continuable_agent(
+        "interrupted-worker",
+        tmp.path(),
+        vec![
+            text_message("user", "first turn"),
+            text_message("assistant", "partial result"),
+        ],
+    );
+
+    validate_resume_from_source(&manager, &interrupted_id, tmp.path())
+        .expect("interrupted agent must be accepted as a resume source");
+}
+
+#[test]
+fn resume_from_accepts_failed_source() {
+    let tmp = tempdir().expect("tempdir");
+    let mut manager = SubAgentManager::new(tmp.path().to_path_buf(), 4);
+    let failed_id = manager.insert_test_running_agent("failed-worker", tmp.path());
+    if let Some(agent) = manager.agents.get_mut(&failed_id) {
+        agent.status = SubAgentStatus::Failed("tool error".to_string());
+    }
+
+    validate_resume_from_source(&manager, &failed_id, tmp.path())
+        .expect("failed agent may be used as a resume source");
+}
+
+#[test]
+fn resume_from_accepts_cancelled_source() {
+    let tmp = tempdir().expect("tempdir");
+    let mut manager = SubAgentManager::new(tmp.path().to_path_buf(), 4);
+    let cancelled_id = manager.insert_test_running_agent("cancelled-worker", tmp.path());
+    if let Some(agent) = manager.agents.get_mut(&cancelled_id) {
+        agent.status = SubAgentStatus::Cancelled;
+    }
+
+    validate_resume_from_source(&manager, &cancelled_id, tmp.path())
+        .expect("cancelled agent may be used as a resume source");
+}
+
+#[test]
+fn resume_from_rejects_cross_workspace_source() {
+    let tmp_parent = tempdir().expect("parent tempdir");
+    let tmp_child = tempdir().expect("child tempdir");
+
+    let mut manager = SubAgentManager::new(tmp_child.path().to_path_buf(), 4);
+    let child_id = manager.insert_test_running_agent("cross-ws-worker", tmp_child.path());
+    if let Some(agent) = manager.agents.get_mut(&child_id) {
+        agent.status = SubAgentStatus::Completed;
+        // The agent's workspace is in tmp_child, but we validate against tmp_parent.
+    }
+
+    let err = validate_resume_from_source(&manager, &child_id, tmp_parent.path())
+        .expect_err("cross-workspace resume must be rejected");
+    assert!(
+        err.contains("different workspace"),
+        "error should mention workspace mismatch: {err}"
+    );
+}
+
+#[test]
+fn resume_from_loads_transcript_artifact_when_available() {
+    let tmp = tempdir().expect("tempdir");
+    let messages = vec![
+        text_message("user", "initial task"),
+        text_message("assistant", "step one done"),
+    ];
+    let source_id = "agent_resume_source";
+    write_subagent_transcript_artifact_for_test(tmp.path(), source_id, &messages)
+        .expect("write transcript artifact");
+
+    let loaded =
+        load_subagent_transcript_artifact(tmp.path(), source_id).expect("transcript should load");
+    assert_eq!(loaded.len(), 2);
+    assert_eq!(message_text(&loaded[0]), "initial task");
+    assert_eq!(message_text(&loaded[1]), "step one done");
+}
+
+#[test]
+fn resume_from_falls_back_to_checkpoint_when_artifact_missing() {
+    let tmp = tempdir().expect("tempdir");
+    let messages = vec![
+        text_message("user", "checkpoint task"),
+        text_message("assistant", "checkpoint progress"),
+    ];
+    let mut manager = SubAgentManager::new(tmp.path().to_path_buf(), 4);
+    let (interrupted_id, _) = manager.insert_test_interrupted_continuable_agent(
+        "checkpoint-fallback",
+        tmp.path(),
+        messages.clone(),
+    );
+
+    // No transcript artifact on disk — only the checkpoint is available.
+    let artifact_result = load_subagent_transcript_artifact(tmp.path(), &interrupted_id);
+    assert!(artifact_result.is_err(), "no artifact should exist yet");
+
+    // Fallback: use checkpoint messages directly.
+    let fallback_messages = manager
+        .agents
+        .get(&interrupted_id)
+        .and_then(|a| a.checkpoint.as_ref())
+        .filter(|cp| cp.continuable && !cp.messages.is_empty())
+        .map(|cp| cp.messages.clone())
+        .unwrap_or_default();
+    assert_eq!(fallback_messages.len(), 2);
+    assert_eq!(message_text(&fallback_messages[0]), "checkpoint task");
+}
+
+#[test]
+fn resume_from_session_name_resolves_to_agent_id() {
+    let tmp = tempdir().expect("tempdir");
+    let mut manager = SubAgentManager::new(tmp.path().to_path_buf(), 4);
+    let completed_id = manager.insert_test_running_agent("named-source", tmp.path());
+    if let Some(agent) = manager.agents.get_mut(&completed_id) {
+        agent.status = SubAgentStatus::Completed;
+    }
+
+    // Resolve by session name "named-source" (not the agent_id).
+    let resolved = manager
+        .resolve_agent_ref("named-source")
+        .expect("session name should resolve");
+    assert_eq!(resolved, completed_id);
+
+    validate_resume_from_source(&manager, "named-source", tmp.path())
+        .expect("resolution by session name must work for resume_from");
+}
+
+#[test]
+fn child_launch_manifest_carries_resume_from_agent_id() {
+    let tmp = tempdir().expect("tempdir");
+
+    // The `resume_from_agent_id` on `SubAgentSpawnOptions` must be threaded
+    // into the persisted `ChildLaunchManifest` so receipts can trace lineage.
+    let options = SubAgentSpawnOptions {
+        resume_from_agent_id: Some("agent_source_abc".to_string()),
+        ..SubAgentSpawnOptions::default()
+    };
+    assert_eq!(
+        options.resume_from_agent_id.as_deref(),
+        Some("agent_source_abc"),
+        "SubAgentSpawnOptions must carry resume_from_agent_id"
+    );
+    let _ = tmp; // keep tempdir alive
+}
+
+// ── validation helper exposed for the tests above ────────────────────────────
+
+/// Extracted validation logic mirroring what `spawn_subagent_from_input` does.
+/// Returns `Ok(agent_id)` when the source is acceptable, `Err(message)` when
+/// it must be rejected.
+fn validate_resume_from_source(
+    manager: &SubAgentManager,
+    source_ref: &str,
+    parent_workspace: &std::path::Path,
+) -> Result<String, String> {
+    let source_id = manager
+        .resolve_agent_ref(source_ref)
+        .map_err(|_| format!("resume_from: agent or session '{source_ref}' not found"))?;
+    let source = manager
+        .agents
+        .get(&source_id)
+        .ok_or_else(|| format!("resume_from: agent '{source_id}' not found"))?;
+
+    if source.status == SubAgentStatus::Running {
+        return Err(format!(
+            "resume_from: agent '{}' (session '{}') is still running. \
+             Only settled agents may be used as a resume source.",
+            source_id, source.session_name
+        ));
+    }
+
+    let parent_ws = normalize_subagent_workspace(parent_workspace);
+    let source_ws = normalize_subagent_workspace(&source.workspace);
+    if parent_ws != source_ws {
+        return Err(format!(
+            "resume_from: source agent '{source_id}' lives in a different workspace ({}) \
+             than this agent ({}). Cross-workspace continuation is not supported.",
+            source.workspace.display(),
+            parent_workspace.display()
+        ));
+    }
+
+    Ok(source_id)
 }

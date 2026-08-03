@@ -1485,6 +1485,9 @@ pub(crate) struct SubAgentSpawnOptions {
     pub write_claim: Option<WriteScopeClaim>,
     pub isolated_worktree: bool,
     pub expected_artifact: Option<String>,
+    /// Source agent id this child continues, stamped into the ChildLaunchManifest
+    /// for receipt traceability.
+    pub resume_from_agent_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1538,6 +1541,8 @@ pub(crate) struct WorkflowTaskSpawnMetadata {
     pub workflow_task_label: Option<String>,
     /// 0-based admission order among children of this workflow run.
     pub workflow_child_index: Option<u32>,
+    /// Source agent this child was continued from via `resume_from`, if any.
+    pub resume_from_agent_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1709,6 +1714,13 @@ struct SpawnRequest {
     write_roots: Vec<String>,
     exact_files: Vec<String>,
     coordination_contracts: Vec<String>,
+    /// Optional settled child agent id or session name whose transcript this
+    /// child should continue. When set, the source agent's messages are loaded
+    /// and injected as the initial context (fork_context=true), preserving
+    /// transcript lineage across role/profile transitions (explore → implement
+    /// → verify). The source must be settled (not running), in the same
+    /// workspace, and reachable by the spawning agent.
+    resume_from: Option<String>,
 }
 
 /// Declared child write authority for a (deliberate) spawn.
@@ -5229,6 +5241,7 @@ impl SubAgentManager {
                 token_budget: options.token_budget,
                 resume_identity: Some(agent.session_name.clone()),
                 generation: 1,
+                resume_from_agent_id: options.resume_from_agent_id.clone(),
             }),
         };
         agent.work_lifecycle =
@@ -6780,6 +6793,10 @@ impl ToolSpec for AgentTool {
                 "deliberate": {
                     "type": "boolean",
                     "description": "When true, require type (or profile), workspace_policy, expected_artifact, and write_authority."
+                },
+                "resume_from": {
+                    "type": "string",
+                    "description": "Settled child agent_id or session name to continue. The source must not be running. Its full transcript is loaded and prepended as the new child's context (fork_context=true), continuing the transcript lineage under a new role or profile (e.g. explore → implementer → verifier). Mutually exclusive with fork_context=false. Cross-workspace or missing sources are rejected with a clear error."
                 }
             },
             "required": []
@@ -7621,7 +7638,7 @@ async fn spawn_subagent_from_input(
         .as_ref()
         .map(|member| member.id.clone())
         .or_else(|| spawn_request.profile.clone());
-    let spawn_metadata = WorkflowTaskSpawnMetadata {
+    let mut spawn_metadata = WorkflowTaskSpawnMetadata {
         resolved_provider: child_runtime
             .api_config
             .as_ref()
@@ -7643,6 +7660,7 @@ async fn spawn_subagent_from_input(
         workflow_phase_id: None,
         workflow_task_label: None,
         workflow_child_index: None,
+        resume_from_agent_id: None,
     };
 
     // #4647: a child receives only its explicit objective/dependencies/
@@ -7650,6 +7668,80 @@ async fn spawn_subagent_from_input(
     // a parent transcript is still available, but only through an explicit
     // `fork_context: true` request.
     let fork_context = spawn_request.fork_context.unwrap_or(false);
+
+    // resolve_resume_from: look up the source agent, validate it is settled
+    // and lives in the same workspace, then load its transcript so the new
+    // child inherits the full lineage (issue #425).
+    let (fork_context, resume_from_agent_id) =
+        if let Some(ref source_ref) = spawn_request.resume_from {
+            // Validate: fork_context=false is incompatible with resume_from.
+            if spawn_request.fork_context == Some(false) {
+                return Err(ToolError::invalid_input(
+                    "resume_from requires fork_context to be true or unset; \
+                 explicit fork_context=false conflicts with transcript continuation."
+                        .to_string(),
+                ));
+            }
+            let (source_agent_id, source_workspace, checkpoint_messages) = {
+                let manager_read = manager.read().await;
+                let source_id = manager_read.resolve_agent_ref(source_ref).map_err(|_| {
+                    ToolError::invalid_input(format!(
+                        "resume_from: agent or session '{source_ref}' not found. \
+                     Use agent action=status to list available agents."
+                    ))
+                })?;
+                let source = manager_read.agents.get(&source_id).ok_or_else(|| {
+                    ToolError::invalid_input(format!("resume_from: agent '{source_id}' not found"))
+                })?;
+                if source.status == SubAgentStatus::Running {
+                    return Err(ToolError::invalid_input(format!(
+                        "resume_from: agent '{source_id}' (session '{}') is still running. \
+                     Only settled agents (completed, interrupted, failed, cancelled) \
+                     may be used as a resume source. Use action=wait to block until \
+                     it settles, or action=interrupt to stop it.",
+                        source.session_name
+                    )));
+                }
+                // Capture checkpoint messages now while holding the read lock; used
+                // as a fallback when the transcript artifact is unavailable.
+                let checkpoint_messages = source
+                    .checkpoint
+                    .as_ref()
+                    .filter(|cp| cp.continuable && !cp.messages.is_empty())
+                    .map(|cp| cp.messages.clone())
+                    .unwrap_or_default();
+                (source_id, source.workspace.clone(), checkpoint_messages)
+            };
+            // Cross-workspace resume is rejected: transcript artifact paths are
+            // workspace-relative so a different workspace cannot serve them.
+            let parent_workspace = normalize_subagent_workspace(&runtime.context.workspace);
+            let source_workspace_normalized = normalize_subagent_workspace(&source_workspace);
+            if parent_workspace != source_workspace_normalized {
+                return Err(ToolError::invalid_input(format!(
+                    "resume_from: source agent '{source_agent_id}' lives in a different \
+                 workspace ({}) than this agent ({}). Cross-workspace continuation \
+                 is not supported.",
+                    source_workspace.display(),
+                    runtime.context.workspace.display()
+                )));
+            }
+            // Load the full transcript from the on-disk artifact. Fall back to the
+            // checkpoint messages for legacy records that predate transcript
+            // artifacts or for agents whose artifacts were cleaned up.
+            let messages = load_subagent_transcript_artifact(&source_workspace, &source_agent_id)
+                .unwrap_or(checkpoint_messages);
+            let resume_ctx = SubAgentForkContext {
+                messages,
+                structured_state_block: None,
+                work_source: None,
+            };
+            child_runtime.fork_context = Some(resume_ctx);
+            spawn_metadata.resume_from_agent_id = Some(source_agent_id.clone());
+            (true, Some(source_agent_id))
+        } else {
+            (fork_context, None)
+        };
+
     let resident_lease = resident_context
         .as_ref()
         .map(|resident| (resident.lease_key.clone(), resident.display_path.clone()));
@@ -7677,6 +7769,7 @@ async fn spawn_subagent_from_input(
             write_claim,
             isolated_worktree: spawn_request.worktree.is_some(),
             expected_artifact: spawn_request.expected_artifact.clone(),
+            resume_from_agent_id: resume_from_agent_id.clone(),
         },
     );
     let result = match result {
@@ -10475,6 +10568,10 @@ fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
     let write_roots = parse_coordination_paths(input, "write_roots")?;
     let exact_files = parse_coordination_paths(input, "exact_files")?;
     let coordination_contracts = parse_bounded_strings(input, "coordination_contracts", 16)?;
+    let resume_from = optional_input_str(input, &["resume_from", "resumeFrom"])
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
     let prompt_only_general = agent_type == FleetRole::Worker
         && !agent_type_explicit
         && profile.is_none()
@@ -10511,6 +10608,7 @@ fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
         write_roots,
         exact_files,
         coordination_contracts,
+        resume_from,
     };
     // A roster profile may resolve the parse-time General placeholder to a
     // read-only scout/reviewer or to a write-capable manager/builder. Defer
