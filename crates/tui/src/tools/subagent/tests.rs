@@ -1025,7 +1025,10 @@ fn coordination_detail_projection_reports_process_lock_ownership() {
         .ensure_coordination_process_lock()
         .expect("holder owns the lock");
     let held = holder.coordination_detail_projection(None, 8);
-    assert!(held.process_lock_held, "holder projection must report lock held");
+    assert!(
+        held.process_lock_held,
+        "holder projection must report lock held"
+    );
     assert!(held.process_lock_note.is_none());
 
     let contender = SubAgentManager::new(workspace, 4).require_coordination_process_lock();
