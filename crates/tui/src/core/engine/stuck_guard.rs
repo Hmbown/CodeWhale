@@ -4,11 +4,11 @@ use std::collections::VecDeque;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-const REPEAT_WARN_THRESHOLD: usize = 3;
-const ALTERNATION_WARN_THRESHOLD: usize = 1;
-const NO_PROGRESS_WARN_THRESHOLD: usize = 4;
-const REPEATS_AFTER_WARN_TO_STOP: usize = 2;
-const ALTERNATION_HISTORY: usize = 4;
+const DEFAULT_REPEAT_WARN_THRESHOLD: usize = 3;
+const DEFAULT_ALTERNATION_WARN_THRESHOLD: usize = 1;
+const DEFAULT_NO_PROGRESS_WARN_THRESHOLD: usize = 4;
+const DEFAULT_REPEATS_AFTER_WARN_TO_STOP: usize = 2;
+const DEFAULT_ALTERNATION_HISTORY: usize = 4;
 
 /// A compact, semantic description of one completed model step.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,6 +20,9 @@ pub(super) enum StepFingerprint {
     },
     AssistantNoTool {
         text_hash: u64,
+    },
+    WaitingForSubagents {
+        running: usize,
     },
 }
 
@@ -41,41 +44,104 @@ impl StepFingerprint {
             text_hash: normalized_text_hash(text),
         }
     }
+
+    pub(super) fn waiting_for_subagents(running: usize) -> Self {
+        Self::WaitingForSubagents { running }
+    }
+
+    fn short_label(&self) -> String {
+        match self {
+            Self::Tool { name, .. } => format!("tool `{name}`"),
+            Self::AssistantNoTool { .. } => "model wait response".to_string(),
+            Self::WaitingForSubagents { running } => {
+                format!("waiting for {running} running sub-agent(s)")
+            }
+        }
+    }
 }
 
 /// Signal emitted by [`StuckGuard::observe`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum StuckSignal {
-    Warn,
-    Stop,
+    Warn { reason: String },
+    Stop { reason: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct StuckGuardConfig {
+    pub repeat_warn_threshold: usize,
+    pub alternation_warn_threshold: usize,
+    pub no_progress_warn_threshold: usize,
+    pub repeats_after_warn_to_stop: usize,
+    pub alternation_history: usize,
+}
+
+impl Default for StuckGuardConfig {
+    fn default() -> Self {
+        Self {
+            repeat_warn_threshold: DEFAULT_REPEAT_WARN_THRESHOLD,
+            alternation_warn_threshold: DEFAULT_ALTERNATION_WARN_THRESHOLD,
+            no_progress_warn_threshold: DEFAULT_NO_PROGRESS_WARN_THRESHOLD,
+            repeats_after_warn_to_stop: DEFAULT_REPEATS_AFTER_WARN_TO_STOP,
+            alternation_history: DEFAULT_ALTERNATION_HISTORY,
+        }
+    }
 }
 
 /// Per-turn detector. A change in the fingerprint resets the active episode,
 /// so legitimate repeated tool names with different arguments are progress.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(super) struct StuckGuard {
+    config: StuckGuardConfig,
     last_step: Option<StepFingerprint>,
     last_tool_action: Option<(String, u64)>,
     repeated_actions: usize,
     repeated_pairs: usize,
     no_progress_messages: usize,
-    tool_history: VecDeque<StepFingerprint>,
+    step_history: VecDeque<StepFingerprint>,
     alternation_repeats: usize,
     warned: bool,
     repeats_after_warning: usize,
+    last_reason: Option<String>,
+}
+
+impl Default for StuckGuard {
+    fn default() -> Self {
+        Self::new(StuckGuardConfig::default())
+    }
 }
 
 impl StuckGuard {
-    pub(super) fn observe(&mut self, step: StepFingerprint) -> Option<StuckSignal> {
-        match step {
-            StepFingerprint::AssistantNoTool { .. } => self.observe_assistant(step),
-            StepFingerprint::Tool { .. } => self.observe_tool(step),
+    pub(super) fn new(config: StuckGuardConfig) -> Self {
+        Self {
+            config,
+            last_step: None,
+            last_tool_action: None,
+            repeated_actions: 0,
+            repeated_pairs: 0,
+            no_progress_messages: 0,
+            step_history: VecDeque::with_capacity(config.alternation_history),
+            alternation_repeats: 0,
+            warned: false,
+            repeats_after_warning: 0,
+            last_reason: None,
         }
     }
 
+    pub(super) fn observe(&mut self, step: StepFingerprint) -> Option<StuckSignal> {
+        let signal = match &step {
+            StepFingerprint::AssistantNoTool { .. } => self.observe_assistant(step.clone()),
+            StepFingerprint::WaitingForSubagents { .. } => self.observe_waiting(step.clone()),
+            StepFingerprint::Tool { .. } => self.observe_tool(step.clone()),
+        };
+        self.step_history.push_back(step);
+        while self.step_history.len() > self.config.alternation_history {
+            self.step_history.pop_front();
+        }
+        signal.or_else(|| self.observe_alternation_cycle())
+    }
+
     fn observe_assistant(&mut self, step: StepFingerprint) -> Option<StuckSignal> {
-        self.tool_history.clear();
-        self.alternation_repeats = 0;
         if self.last_step.as_ref() == Some(&step) {
             self.no_progress_messages = self.no_progress_messages.saturating_add(1);
         } else {
@@ -83,10 +149,33 @@ impl StuckGuard {
             self.last_step = Some(step);
             self.no_progress_messages = 1;
         }
-        if self.no_progress_messages >= NO_PROGRESS_WARN_THRESHOLD {
-            return self.signal_for_repeat();
+        if self.no_progress_messages >= self.config.no_progress_warn_threshold {
+            return self.signal_for_repeat(
+                "model repeated an equivalent wait response without tool/model progress"
+                    .to_string(),
+            );
         }
         None
+    }
+
+    fn observe_waiting(&mut self, step: StepFingerprint) -> Option<StuckSignal> {
+        if self.last_step.as_ref() == Some(&step) {
+            self.no_progress_messages = self.no_progress_messages.saturating_add(1);
+        } else {
+            self.reset_episode();
+            self.last_step = Some(step.clone());
+            self.no_progress_messages = 1;
+        }
+        if self.no_progress_messages < self.config.no_progress_warn_threshold {
+            return None;
+        }
+        let reason = match step {
+            StepFingerprint::WaitingForSubagents { running } => format!(
+                "waiting for {running} sub-agent(s) is repeating without terminal child updates"
+            ),
+            _ => "waiting for sub-agents is repeating without terminal child updates".to_string(),
+        };
+        self.signal_for_repeat(reason)
     }
 
     fn observe_tool(&mut self, step: StepFingerprint) -> Option<StuckSignal> {
@@ -97,10 +186,14 @@ impl StuckGuard {
                 arguments_hash,
                 ..
             } => (name.clone(), *arguments_hash),
-            StepFingerprint::AssistantNoTool { .. } => unreachable!(),
+            StepFingerprint::AssistantNoTool { .. }
+            | StepFingerprint::WaitingForSubagents { .. } => {
+                unreachable!()
+            }
         };
         let same_action = self.last_tool_action.as_ref() == Some(&action);
         let same_pair = self.last_step.as_ref() == Some(&step);
+        let tool_name_for_reason = action.0.clone();
         if same_action {
             self.repeated_actions = self.repeated_actions.saturating_add(1);
         } else {
@@ -113,39 +206,51 @@ impl StuckGuard {
             1
         };
         self.last_step = Some(step.clone());
-
-        self.tool_history.push_back(step);
-        while self.tool_history.len() > ALTERNATION_HISTORY {
-            self.tool_history.pop_front();
+        if self.repeated_actions >= self.config.repeat_warn_threshold {
+            return self.signal_for_repeat(format!(
+                "repeating equivalent tool retry cycle for `{tool_name_for_reason}` without progress"
+            ));
         }
-        if self.tool_history.len() == ALTERNATION_HISTORY {
-            let history: Vec<_> = self.tool_history.iter().collect();
-            if history[0] == history[2] && history[1] == history[3] && history[0] != history[1] {
-                self.alternation_repeats = self.alternation_repeats.saturating_add(1);
-            } else if !same_action {
-                self.alternation_repeats = 0;
-                self.warned = false;
-                self.repeats_after_warning = 0;
-            }
-        }
-
-        if self.repeated_actions >= REPEAT_WARN_THRESHOLD
-            || self.repeated_pairs >= REPEAT_WARN_THRESHOLD
-            || self.alternation_repeats >= ALTERNATION_WARN_THRESHOLD
-        {
-            return self.signal_for_repeat();
+        if self.repeated_pairs >= self.config.repeat_warn_threshold {
+            return self.signal_for_repeat(format!(
+                "repeating equivalent `{}` tool result without progress",
+                step.short_label()
+            ));
         }
         None
     }
 
-    fn signal_for_repeat(&mut self) -> Option<StuckSignal> {
-        if !self.warned {
+    fn observe_alternation_cycle(&mut self) -> Option<StuckSignal> {
+        let needed = self.config.alternation_history;
+        if needed < 4 || self.step_history.len() < needed {
+            return None;
+        }
+        let history: Vec<_> = self.step_history.iter().rev().take(4).collect();
+        if history[0] != history[2] || history[1] != history[3] || history[0] == history[1] {
+            return None;
+        }
+        self.alternation_repeats = self.alternation_repeats.saturating_add(1);
+        if self.alternation_repeats < self.config.alternation_warn_threshold {
+            return None;
+        }
+        self.signal_for_repeat(format!(
+            "equivalent retry cycle detected: {} ↔ {}",
+            history[0].short_label(),
+            history[1].short_label()
+        ))
+    }
+
+    fn signal_for_repeat(&mut self, reason: String) -> Option<StuckSignal> {
+        let reason_changed = self.last_reason.as_ref() != Some(&reason);
+        if !self.warned || reason_changed {
             self.warned = true;
             self.repeats_after_warning = 0;
-            Some(StuckSignal::Warn)
+            self.last_reason = Some(reason.clone());
+            Some(StuckSignal::Warn { reason })
         } else {
             self.repeats_after_warning = self.repeats_after_warning.saturating_add(1);
-            (self.repeats_after_warning >= REPEATS_AFTER_WARN_TO_STOP).then_some(StuckSignal::Stop)
+            (self.repeats_after_warning >= self.config.repeats_after_warn_to_stop)
+                .then_some(StuckSignal::Stop { reason })
         }
     }
 
@@ -154,10 +259,11 @@ impl StuckGuard {
         self.repeated_actions = 0;
         self.repeated_pairs = 0;
         self.no_progress_messages = 0;
-        self.tool_history.clear();
+        self.step_history.clear();
         self.alternation_repeats = 0;
         self.warned = false;
         self.repeats_after_warning = 0;
+        self.last_reason = None;
     }
 }
 
@@ -214,10 +320,19 @@ mod tests {
         let mut guard = StuckGuard::default();
         assert_eq!(guard.observe(step.clone()), None);
         assert_eq!(guard.observe(step.clone()), None);
-        assert_eq!(guard.observe(step.clone()), Some(StuckSignal::Warn));
+        assert!(matches!(
+            guard.observe(step.clone()),
+            Some(StuckSignal::Warn { .. })
+        ));
         assert_eq!(guard.observe(step.clone()), None);
-        assert_eq!(guard.observe(step.clone()), Some(StuckSignal::Stop));
-        assert_eq!(guard.observe(step), Some(StuckSignal::Stop));
+        assert!(matches!(
+            guard.observe(step.clone()),
+            Some(StuckSignal::Stop { .. })
+        ));
+        assert!(matches!(
+            guard.observe(step),
+            Some(StuckSignal::Stop { .. })
+        ));
     }
 
     #[test]
@@ -226,7 +341,10 @@ mod tests {
         let mut guard = StuckGuard::default();
         assert_eq!(guard.observe(step.clone()), None);
         assert_eq!(guard.observe(step.clone()), None);
-        assert_eq!(guard.observe(step), Some(StuckSignal::Warn));
+        assert!(matches!(
+            guard.observe(step),
+            Some(StuckSignal::Warn { .. })
+        ));
     }
 
     #[test]
@@ -243,7 +361,10 @@ mod tests {
         );
         assert_eq!(
             guard.observe(failed_tool("exec_shell", args, "no such file")),
-            Some(StuckSignal::Warn)
+            Some(StuckSignal::Warn {
+                reason: "repeating equivalent tool retry cycle for `exec_shell` without progress"
+                    .to_string()
+            })
         );
     }
 
@@ -255,9 +376,15 @@ mod tests {
         assert_eq!(guard.observe(a.clone()), None);
         assert_eq!(guard.observe(b.clone()), None);
         assert_eq!(guard.observe(a.clone()), None);
-        assert_eq!(guard.observe(b.clone()), Some(StuckSignal::Warn));
+        assert!(matches!(
+            guard.observe(b.clone()),
+            Some(StuckSignal::Warn { .. })
+        ));
         assert_eq!(guard.observe(a.clone()), None);
-        assert_eq!(guard.observe(b.clone()), Some(StuckSignal::Stop));
+        assert!(matches!(
+            guard.observe(b.clone()),
+            Some(StuckSignal::Stop { .. })
+        ));
     }
 
     #[test]
@@ -267,7 +394,45 @@ mod tests {
         assert_eq!(guard.observe(step.clone()), None);
         assert_eq!(guard.observe(step.clone()), None);
         assert_eq!(guard.observe(step.clone()), None);
-        assert_eq!(guard.observe(step.clone()), Some(StuckSignal::Warn));
+        assert!(matches!(
+            guard.observe(step.clone()),
+            Some(StuckSignal::Warn { .. })
+        ));
+    }
+
+    #[test]
+    fn repeated_waiting_for_same_child_state_is_detected() {
+        let step = StepFingerprint::waiting_for_subagents(2);
+        let mut guard = StuckGuard::default();
+        assert_eq!(guard.observe(step.clone()), None);
+        assert_eq!(guard.observe(step.clone()), None);
+        assert_eq!(guard.observe(step.clone()), None);
+        assert!(matches!(
+            guard.observe(step.clone()),
+            Some(StuckSignal::Warn { reason })
+            if reason.contains("waiting for 2 sub-agent(s)")
+        ));
+    }
+
+    #[test]
+    fn alternating_model_wait_and_tool_retry_cycle_is_detected() {
+        let wait = StepFingerprint::assistant_no_tool("waiting for tool output");
+        let retry = failed_tool("web_search", json!({"query": "same"}), "timeout");
+        let mut guard = StuckGuard::new(StuckGuardConfig {
+            repeat_warn_threshold: 99,
+            alternation_warn_threshold: 1,
+            no_progress_warn_threshold: 99,
+            repeats_after_warn_to_stop: 2,
+            alternation_history: 4,
+        });
+        assert_eq!(guard.observe(wait.clone()), None);
+        assert_eq!(guard.observe(retry.clone()), None);
+        assert_eq!(guard.observe(wait.clone()), None);
+        assert!(matches!(
+            guard.observe(retry),
+            Some(StuckSignal::Warn { reason })
+            if reason.contains("equivalent retry cycle detected")
+        ));
     }
 
     #[test]
