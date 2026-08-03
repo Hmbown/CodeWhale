@@ -7414,3 +7414,433 @@ async fn cors_layer_advertises_exact_supported_headers_and_never_an_extra() -> R
     handle.abort();
     Ok(())
 }
+
+// ─── Skill lifecycle API tests ──────────────────────────────────────────────
+
+/// Create a minimal skill package under `root_dir/.codewhale/skills/<name>`.
+/// Returns the skill dir path plus a digest that can be used in requests.
+fn create_managed_skill(root_dir: &std::path::Path, name: &str) -> Result<(PathBuf, String)> {
+    let skill_dir = root_dir.join(".codewhale").join("skills").join(name);
+    fs::create_dir_all(&skill_dir)?;
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        format!("---\nname: {name}\ndescription: test skill\n---\nbody\n"),
+    )?;
+    // Write an `.installed-from` marker so the mutation module considers it
+    // managed (and therefore eligible for update/remove/trust).
+    let digest = crate::skills::audit::compute_package_digest(&skill_dir).expect("package digest");
+    crate::skills::install::write_installed_from_v2(
+        &skill_dir,
+        &format!("github:test/{name}"),
+        None,
+        "sha256:test",
+        &digest,
+        name,
+    )?;
+    Ok((skill_dir, digest))
+}
+
+#[tokio::test]
+async fn skill_lifecycle_uninstall_removes_installed_skill() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("runtime");
+    let workspace = tmp.path().to_path_buf();
+    let sessions_dir = root.join("sessions");
+    fs::create_dir_all(&root)?;
+
+    create_managed_skill(&workspace, "hello")?;
+
+    let Some((addr, _runtime_threads, handle)) =
+        spawn_test_server_with_root_token_mobile_workspace(
+            root,
+            sessions_dir,
+            None,
+            false,
+            workspace,
+        )
+        .await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    // Confirm skill is visible.
+    let list: serde_json::Value = client
+        .get(format!("http://{addr}/v1/skills"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert!(
+        list["skills"]
+            .as_array()
+            .is_some_and(|s| s.iter().any(|sk| sk["name"] == "hello")),
+        "hello skill must appear in GET /v1/skills before uninstall"
+    );
+
+    // Uninstall it.
+    let resp = client
+        .delete(format!("http://{addr}/v1/skills/hello"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<serde_json::Value>()
+        .await?;
+    assert_eq!(resp["outcome"], "removed");
+    assert_eq!(resp["name"], "hello");
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn skill_lifecycle_uninstall_404s_for_unknown_skill() -> Result<()> {
+    let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let resp = client
+        .delete(format!("http://{addr}/v1/skills/no-such-skill"))
+        .send()
+        .await?;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn skill_lifecycle_uninstall_rejects_invalid_scope() -> Result<()> {
+    let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let resp = client
+        .delete(format!("http://{addr}/v1/skills/hello?scope=badscope"))
+        .send()
+        .await?;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn skill_lifecycle_trust_marks_installed_skill() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("runtime");
+    let workspace = tmp.path().to_path_buf();
+    let sessions_dir = root.join("sessions");
+    fs::create_dir_all(&root)?;
+
+    create_managed_skill(&workspace, "trustme")?;
+
+    let Some((addr, _runtime_threads, handle)) =
+        spawn_test_server_with_root_token_mobile_workspace(
+            root,
+            sessions_dir,
+            None,
+            false,
+            workspace,
+        )
+        .await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let resp = client
+        .post(format!("http://{addr}/v1/skills/trustme/trust"))
+        .json(&json!({}))
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<serde_json::Value>()
+        .await?;
+    assert_eq!(resp["outcome"], "trusted");
+    assert_eq!(resp["name"], "trustme");
+    // The trust note must be present and must carry the advisory wording.
+    let trust_note = resp["trust_note"].as_str().expect("trust_note");
+    assert!(
+        trust_note.contains("advisory") && trust_note.contains("digest-bound"),
+        "trust_note must preserve advisory and digest-bound wording"
+    );
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn skill_lifecycle_trust_404s_for_unknown_skill() -> Result<()> {
+    let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let resp = client
+        .post(format!("http://{addr}/v1/skills/no-such/trust"))
+        .json(&json!({}))
+        .send()
+        .await?;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn skill_lifecycle_trust_rejects_invalid_scope() -> Result<()> {
+    let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let resp = client
+        .post(format!("http://{addr}/v1/skills/hello/trust"))
+        .json(&json!({ "scope": "invalid" }))
+        .send()
+        .await?;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn skill_lifecycle_trust_rejects_digest_drift() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("runtime");
+    let workspace = tmp.path().to_path_buf();
+    let sessions_dir = root.join("sessions");
+    fs::create_dir_all(&root)?;
+
+    create_managed_skill(&workspace, "drifted")?;
+
+    let Some((addr, _runtime_threads, handle)) =
+        spawn_test_server_with_root_token_mobile_workspace(
+            root,
+            sessions_dir,
+            None,
+            false,
+            workspace,
+        )
+        .await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    // Pass a deliberately wrong digest to confirm drift detection.
+    let resp = client
+        .post(format!("http://{addr}/v1/skills/drifted/trust"))
+        .json(&json!({ "expected_digest": "sha256:definitely_wrong_digest" }))
+        .send()
+        .await?;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn skill_lifecycle_audit_returns_receipt_for_installed_skill() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("runtime");
+    let workspace = tmp.path().to_path_buf();
+    let sessions_dir = root.join("sessions");
+    fs::create_dir_all(&root)?;
+
+    create_managed_skill(&workspace, "auditable")?;
+
+    let Some((addr, _runtime_threads, handle)) =
+        spawn_test_server_with_root_token_mobile_workspace(
+            root,
+            sessions_dir,
+            None,
+            false,
+            workspace,
+        )
+        .await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let resp: serde_json::Value = client
+        .get(format!("http://{addr}/v1/skills/auditable/audit"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(resp["ambiguous"], false);
+    let skills = resp["skills"].as_array().expect("skills array");
+    assert_eq!(skills.len(), 1);
+    let entry = &skills[0];
+    assert_eq!(entry["name"], "auditable");
+    assert_eq!(entry["source_kind"], "codewhale_managed");
+    // Digest must be known for a properly written managed skill.
+    assert_eq!(entry["digest"]["state"], "known");
+    assert!(
+        entry["digest"]["value"].as_str().is_some(),
+        "digest.value must be present when state=known"
+    );
+    // Trust state: untrusted because we haven't run trust.
+    assert_eq!(entry["trust"], "untrusted");
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn skill_lifecycle_audit_404s_for_unknown_skill() -> Result<()> {
+    let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let resp = client
+        .get(format!("http://{addr}/v1/skills/no-such-skill/audit"))
+        .send()
+        .await?;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn skill_lifecycle_audit_rejects_invalid_scope() -> Result<()> {
+    let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let resp = client
+        .get(format!("http://{addr}/v1/skills/hello/audit?scope=nope"))
+        .send()
+        .await?;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn skill_lifecycle_install_rejects_empty_source() -> Result<()> {
+    let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let resp = client
+        .post(format!("http://{addr}/v1/skills/install"))
+        .json(&json!({ "source": "  " }))
+        .send()
+        .await?;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn skill_lifecycle_install_rejects_invalid_scope() -> Result<()> {
+    let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let resp = client
+        .post(format!("http://{addr}/v1/skills/install"))
+        .json(&json!({ "source": "github:owner/repo", "scope": "badscope" }))
+        .send()
+        .await?;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn skill_lifecycle_update_rejects_invalid_scope() -> Result<()> {
+    let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let resp = client
+        .post(format!("http://{addr}/v1/skills/hello/update"))
+        .json(&json!({ "scope": "wrong" }))
+        .send()
+        .await?;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn skill_lifecycle_endpoints_require_auth_when_token_is_set() -> Result<()> {
+    let root = std::env::temp_dir().join(format!("codewhale-skill-auth-{}", Uuid::new_v4()));
+    let sessions_dir = root.join("sessions");
+    let token = "skill-lifecycle-test-token".to_string();
+    let Some((addr, _runtime_threads, handle)) =
+        spawn_test_server_with_root_and_token(root, sessions_dir, Some(token)).await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    // All skill lifecycle endpoints must require auth.
+    for (method, path) in &[
+        ("GET", "/v1/skills/any/audit"),
+        ("POST", "/v1/skills/install"),
+        ("POST", "/v1/skills/any/update"),
+        ("DELETE", "/v1/skills/any"),
+        ("POST", "/v1/skills/any/trust"),
+    ] {
+        let resp = client
+            .request(
+                reqwest::Method::from_bytes(method.as_bytes()).unwrap(),
+                format!("http://{addr}{path}"),
+            )
+            .json(&json!({}))
+            .send()
+            .await?;
+        assert_eq!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED,
+            "{method} {path} must require auth"
+        );
+    }
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn skill_lifecycle_runtime_info_advertises_skill_lifecycle_capability() -> Result<()> {
+    let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let info: serde_json::Value = client
+        .get(format!("http://{addr}/v1/runtime/info"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(
+        info["capabilities"]["skill_lifecycle"], true,
+        "runtime/info must advertise skill_lifecycle capability"
+    );
+
+    handle.abort();
+    Ok(())
+}

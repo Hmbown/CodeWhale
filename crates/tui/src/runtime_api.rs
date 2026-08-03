@@ -331,6 +331,101 @@ struct SetSkillEnabledResponse {
     enabled: bool,
 }
 
+// ─── Skill lifecycle request/response types ────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct InstallSkillRequest {
+    /// Remote source spec: `github:owner/repo`, `https://…`, or a registry name.
+    source: String,
+    /// `"project"` or `"global"` (default: `"global"`).
+    #[serde(default)]
+    scope: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateSkillRequest {
+    /// `"project"`, `"global"`, or `null` (auto-detect).
+    #[serde(default)]
+    scope: Option<String>,
+    /// Digest the caller observed before requesting the update. The mutation
+    /// will fail if the on-disk digest has changed since.
+    #[serde(default)]
+    expected_digest: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UninstallSkillQuery {
+    /// `"project"`, `"global"`, or `null` (auto-detect).
+    #[serde(default)]
+    scope: Option<String>,
+    /// Digest the caller observed. The mutation will fail if it has drifted.
+    #[serde(default)]
+    expected_digest: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TrustSkillRequest {
+    /// `"project"`, `"global"`, or `null` (auto-detect).
+    #[serde(default)]
+    scope: Option<String>,
+    /// Digest the caller reviewed. The mutation will fail if it has drifted.
+    #[serde(default)]
+    expected_digest: Option<String>,
+}
+
+/// Scope query parameter used by the audit endpoint.
+#[derive(Debug, Deserialize, Default)]
+struct SkillScopeQuery {
+    /// `"project"` or `"global"` to restrict to one root.
+    scope: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SkillMutationReceiptResponse {
+    /// Skill name as recorded by the mutation.
+    name: String,
+    /// Human-readable action performed: `"installed"`, `"updated"`, `"removed"`,
+    /// `"trusted"`, `"no_change"`, etc.
+    outcome: &'static str,
+    /// Resolved install scope: `"project"` or `"global"`.
+    scope: String,
+    /// Display path of the skill package (may be redacted for plugin snapshots).
+    safe_target_path: String,
+    /// Trust advisory note, present only for `"trusted"` outcomes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    trust_note: Option<&'static str>,
+}
+
+/// Read-only audit receipt for a single installed skill.
+#[derive(Debug, Serialize)]
+struct SkillAuditEntry {
+    name: String,
+    safe_display_path: String,
+    source_kind: String,
+    scope: String,
+    digest: SkillAuditDigest,
+    trust: String,
+    integrity: String,
+    available_actions: Vec<String>,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SkillAuditDigest {
+    state: String,
+    /// Hex digest value; absent when the digest is unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    value: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SkillAuditResponse {
+    /// `true` when multiple owned copies with the same name exist. The
+    /// caller should re-request with an explicit `scope` parameter.
+    ambiguous: bool,
+    skills: Vec<SkillAuditEntry>,
+}
+
 #[derive(Debug, Deserialize)]
 struct DecideApprovalBody {
     decision: String,
@@ -401,6 +496,7 @@ fn default_runtime_capabilities() -> RuntimeCapabilities {
         fleet_event_replay: true,
         fleet_event_stream: true,
         fleet_local_target: true,
+        skill_lifecycle: true,
     }
 }
 
@@ -760,7 +856,14 @@ pub fn build_router(state: RuntimeApiState) -> Router {
         .route("/v1/tasks/{id}", get(get_task))
         .route("/v1/tasks/{id}/cancel", post(cancel_task))
         .route("/v1/skills", get(list_skills))
-        .route("/v1/skills/{name}", post(set_skill_enabled))
+        .route("/v1/skills/install", post(install_skill_api))
+        .route(
+            "/v1/skills/{name}",
+            post(set_skill_enabled).delete(uninstall_skill_api),
+        )
+        .route("/v1/skills/{name}/update", post(update_skill_api))
+        .route("/v1/skills/{name}/trust", post(trust_skill_api))
+        .route("/v1/skills/{name}/audit", get(audit_skill_api))
         .route("/v1/apps/mcp/servers", get(list_mcp_servers))
         .route("/v1/apps/mcp/tools", get(list_mcp_tools))
         .route(
@@ -2065,6 +2168,417 @@ async fn set_skill_enabled(
     Ok(Json(SetSkillEnabledResponse {
         name,
         enabled: req.enabled,
+    }))
+}
+
+// ─── Skill lifecycle helpers ────────────────────────────────────────────────
+
+/// Build a [`crate::skills::mutation::MutationContext`] from the current
+/// server state. Reads the network policy and installer settings directly
+/// from the config already held in `state`.
+fn mutation_context_settings(
+    state: &RuntimeApiState,
+) -> (
+    crate::network_policy::NetworkPolicy,
+    u64,
+    String,
+    Option<PathBuf>,
+) {
+    use crate::skills::install::{DEFAULT_MAX_SIZE_BYTES, DEFAULT_REGISTRY_URL};
+    let config = state.config.read();
+    let network = config
+        .network
+        .clone()
+        .map(|p| p.into_runtime())
+        .unwrap_or_default();
+    let skills_cfg = config.skills.as_ref();
+    let max_size = skills_cfg
+        .and_then(|s| s.max_install_size_bytes)
+        .unwrap_or(DEFAULT_MAX_SIZE_BYTES);
+    let registry_url = skills_cfg
+        .and_then(|s| s.registry_url.clone())
+        .unwrap_or_else(|| DEFAULT_REGISTRY_URL.to_string());
+    let configured_skills_dir = config.skills_dir.as_ref().map(PathBuf::from);
+    (network, max_size, registry_url, configured_skills_dir)
+}
+
+fn parse_api_scope(
+    scope: Option<&str>,
+) -> Result<Option<crate::skills::mutation::SkillTargetScope>, ApiError> {
+    match scope {
+        None => Ok(None),
+        Some("project") => Ok(Some(crate::skills::mutation::SkillTargetScope::Project)),
+        Some("global") => Ok(Some(crate::skills::mutation::SkillTargetScope::Global)),
+        Some(other) => Err(ApiError::bad_request(format!(
+            "invalid scope '{other}'; expected \"project\" or \"global\""
+        ))),
+    }
+}
+
+fn receipt_to_response(
+    receipt: &crate::skills::mutation::SkillMutationReceipt,
+) -> SkillMutationReceiptResponse {
+    use crate::skills::mutation::SkillMutationOutcome;
+    use crate::skills::roots::SkillScope;
+
+    const TRUST_NOTE: &str = "The .trusted marker is advisory and digest-bound; \
+         it records your review intent but does not sandbox or auto-authorize scripts.";
+
+    let outcome: &'static str = match &receipt.outcome {
+        SkillMutationOutcome::Installed => "installed",
+        SkillMutationOutcome::Updated => "updated",
+        SkillMutationOutcome::NoChange => "no_change",
+        SkillMutationOutcome::Removed => "removed",
+        SkillMutationOutcome::Trusted => "trusted",
+        SkillMutationOutcome::Imported => "imported",
+        SkillMutationOutcome::AlreadyPresent => "already_present",
+        // NeedsApproval / NetworkDenied are returned as ApiError::forbidden
+        // before reaching this conversion; they should not appear here.
+        SkillMutationOutcome::NeedsApproval(_) => "needs_approval",
+        SkillMutationOutcome::NetworkDenied(_) => "network_denied",
+    };
+    let scope = match receipt.scope {
+        SkillScope::Project => "project".to_string(),
+        SkillScope::Global => "global".to_string(),
+        SkillScope::Logical => "logical".to_string(),
+    };
+    let trust_note = if receipt.outcome == SkillMutationOutcome::Trusted {
+        Some(TRUST_NOTE)
+    } else {
+        None
+    };
+    SkillMutationReceiptResponse {
+        name: receipt.name.clone(),
+        outcome,
+        scope,
+        safe_target_path: receipt.safe_target_path.clone(),
+        trust_note,
+    }
+}
+
+fn outcome_is_policy_error(outcome: &crate::skills::mutation::SkillMutationOutcome) -> bool {
+    matches!(
+        outcome,
+        crate::skills::mutation::SkillMutationOutcome::NeedsApproval(_)
+            | crate::skills::mutation::SkillMutationOutcome::NetworkDenied(_)
+    )
+}
+
+fn policy_error_message(outcome: &crate::skills::mutation::SkillMutationOutcome) -> String {
+    match outcome {
+        crate::skills::mutation::SkillMutationOutcome::NeedsApproval(host) => format!(
+            "network access to '{host}' requires explicit approval; \
+             approve the host in your network policy before installing this skill"
+        ),
+        crate::skills::mutation::SkillMutationOutcome::NetworkDenied(host) => {
+            format!("network access to '{host}' was denied by the active network policy")
+        }
+        _ => "operation denied by policy".to_string(),
+    }
+}
+
+// ─── POST /v1/skills/install ────────────────────────────────────────────────
+
+async fn install_skill_api(
+    State(state): State<RuntimeApiState>,
+    Json(req): Json<InstallSkillRequest>,
+) -> Result<(StatusCode, Json<SkillMutationReceiptResponse>), ApiError> {
+    use crate::skills::install::InstallSource;
+    use crate::skills::mutation::{MutationContext, SkillMutationRequest, SkillTargetScope};
+
+    let source = InstallSource::parse(&req.source)
+        .map_err(|err| ApiError::bad_request(format!("invalid install source: {err}")))?;
+    let target = parse_api_scope(req.scope.as_deref())?.unwrap_or(SkillTargetScope::Global);
+
+    let (network, max_size, registry_url, configured_skills_dir) =
+        mutation_context_settings(&state);
+    let home = crate::config::effective_home_dir();
+    let workspace = state.workspace.clone();
+
+    let receipt = crate::skills::mutation::execute(
+        SkillMutationRequest::InstallRemote { source, target },
+        &MutationContext {
+            workspace: &workspace,
+            home: home.as_deref(),
+            configured_skills_dir: configured_skills_dir.as_deref(),
+            network: &network,
+            max_size,
+            registry_url: &registry_url,
+        },
+    )
+    .await
+    .map_err(|err| ApiError::bad_request(format!("install failed: {err:#}")))?;
+
+    if outcome_is_policy_error(&receipt.outcome) {
+        return Err(ApiError::forbidden(policy_error_message(&receipt.outcome)));
+    }
+
+    let status = if receipt.outcome == crate::skills::mutation::SkillMutationOutcome::Installed {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((status, Json(receipt_to_response(&receipt))))
+}
+
+// ─── POST /v1/skills/{name}/update ─────────────────────────────────────────
+
+async fn update_skill_api(
+    State(state): State<RuntimeApiState>,
+    Path(name): Path<String>,
+    Json(req): Json<UpdateSkillRequest>,
+) -> Result<Json<SkillMutationReceiptResponse>, ApiError> {
+    use crate::skills::mutation::{MutationContext, SkillMutationRequest};
+
+    let scope = parse_api_scope(req.scope.as_deref())?;
+    let (network, max_size, registry_url, configured_skills_dir) =
+        mutation_context_settings(&state);
+    let home = crate::config::effective_home_dir();
+    let workspace = state.workspace.clone();
+
+    let receipt = crate::skills::mutation::execute(
+        SkillMutationRequest::UpdateByName {
+            name: name.clone(),
+            scope,
+            expected_digest: req.expected_digest,
+        },
+        &MutationContext {
+            workspace: &workspace,
+            home: home.as_deref(),
+            configured_skills_dir: configured_skills_dir.as_deref(),
+            network: &network,
+            max_size,
+            registry_url: &registry_url,
+        },
+    )
+    .await
+    .map_err(|err| {
+        let msg = err.to_string();
+        if msg.contains("not found") {
+            ApiError::not_found(format!("update failed: {err:#}"))
+        } else if msg.contains("digest") {
+            ApiError::bad_request(format!("update failed: {err:#}"))
+        } else {
+            ApiError::bad_request(format!("update failed: {err:#}"))
+        }
+    })?;
+
+    if outcome_is_policy_error(&receipt.outcome) {
+        return Err(ApiError::forbidden(policy_error_message(&receipt.outcome)));
+    }
+
+    Ok(Json(receipt_to_response(&receipt)))
+}
+
+// ─── DELETE /v1/skills/{name} (uninstall) ──────────────────────────────────
+
+async fn uninstall_skill_api(
+    State(state): State<RuntimeApiState>,
+    Path(name): Path<String>,
+    Query(query): Query<UninstallSkillQuery>,
+) -> Result<Json<SkillMutationReceiptResponse>, ApiError> {
+    use crate::skills::mutation::{MutationContext, SkillMutationRequest};
+
+    let scope = parse_api_scope(query.scope.as_deref())?;
+    let (network, max_size, registry_url, configured_skills_dir) =
+        mutation_context_settings(&state);
+    let home = crate::config::effective_home_dir();
+
+    let receipt = crate::skills::mutation::execute_sync(
+        SkillMutationRequest::RemoveByName {
+            name: name.clone(),
+            scope,
+            expected_digest: query.expected_digest,
+        },
+        &MutationContext {
+            workspace: &state.workspace,
+            home: home.as_deref(),
+            configured_skills_dir: configured_skills_dir.as_deref(),
+            network: &network,
+            max_size,
+            registry_url: &registry_url,
+        },
+    )
+    .map_err(|err| {
+        let msg = err.to_string();
+        if msg.contains("not found") {
+            ApiError::not_found(format!("uninstall failed: {err:#}"))
+        } else {
+            ApiError::bad_request(format!("uninstall failed: {err:#}"))
+        }
+    })?;
+
+    Ok(Json(receipt_to_response(&receipt)))
+}
+
+// ─── POST /v1/skills/{name}/trust ──────────────────────────────────────────
+
+async fn trust_skill_api(
+    State(state): State<RuntimeApiState>,
+    Path(name): Path<String>,
+    Json(req): Json<TrustSkillRequest>,
+) -> Result<Json<SkillMutationReceiptResponse>, ApiError> {
+    use crate::skills::mutation::{MutationContext, SkillMutationRequest};
+
+    let scope = parse_api_scope(req.scope.as_deref())?;
+    let (network, max_size, registry_url, configured_skills_dir) =
+        mutation_context_settings(&state);
+    let home = crate::config::effective_home_dir();
+
+    let receipt = crate::skills::mutation::execute_sync(
+        SkillMutationRequest::TrustByName {
+            name: name.clone(),
+            scope,
+            expected_digest: req.expected_digest,
+        },
+        &MutationContext {
+            workspace: &state.workspace,
+            home: home.as_deref(),
+            configured_skills_dir: configured_skills_dir.as_deref(),
+            network: &network,
+            max_size,
+            registry_url: &registry_url,
+        },
+    )
+    .map_err(|err| {
+        let msg = err.to_string();
+        if msg.contains("not found") {
+            ApiError::not_found(format!("trust failed: {err:#}"))
+        } else {
+            ApiError::bad_request(format!("trust failed: {err:#}"))
+        }
+    })?;
+
+    Ok(Json(receipt_to_response(&receipt)))
+}
+
+// ─── GET /v1/skills/{name}/audit ───────────────────────────────────────────
+
+async fn audit_skill_api(
+    State(state): State<RuntimeApiState>,
+    Path(name): Path<String>,
+    Query(query): Query<SkillScopeQuery>,
+) -> Result<Json<SkillAuditResponse>, ApiError> {
+    use crate::skills::audit::{
+        AuditedSkill, DigestState, IntegrityState, SkillActionKind, SkillAuditMode,
+        SkillAuditWarning, SkillSourceKind, TrustState, scan_with_configured,
+    };
+    use crate::skills::roots::SkillRootKind;
+
+    let scope_filter = parse_api_scope(query.scope.as_deref())?;
+    let home = crate::config::effective_home_dir();
+    let configured_skills_dir = {
+        let config = state.config.read();
+        config.skills_dir.as_ref().map(PathBuf::from)
+    };
+    let canonical = crate::skills::normalize_skill_name_for_lookup(&name);
+
+    let snap = scan_with_configured(
+        &state.workspace,
+        home.as_deref(),
+        configured_skills_dir.as_deref(),
+        SkillAuditMode::Compatible,
+        None,
+    );
+
+    let mut matches: Vec<&AuditedSkill> = snap
+        .skills
+        .iter()
+        .filter(|s| s.id.canonical_name == canonical)
+        .collect();
+
+    if let Some(scope) = scope_filter {
+        let want = match scope {
+            crate::skills::mutation::SkillTargetScope::Project => SkillRootKind::CodeWhaleProject,
+            crate::skills::mutation::SkillTargetScope::Global => SkillRootKind::CodeWhaleGlobal,
+        };
+        matches.retain(|s| s.root.kind == want);
+    }
+
+    if matches.is_empty() {
+        return Err(ApiError::not_found(format!(
+            "skill '{name}' not found in any audited root"
+        )));
+    }
+
+    let ambiguous = matches.len() > 1;
+    let entries = matches
+        .into_iter()
+        .map(|skill| {
+            let source_kind = match skill.source_kind {
+                SkillSourceKind::CodeWhaleManaged => "codewhale_managed",
+                SkillSourceKind::CodeWhaleManual => "codewhale_manual",
+                SkillSourceKind::CompatibleExternal => "compatible_external",
+                SkillSourceKind::BuiltIn => "built_in",
+                SkillSourceKind::ReviewedPluginSnapshot => "reviewed_plugin_snapshot",
+                SkillSourceKind::RegistryCache => "registry_cache",
+            };
+            let scope_str = match skill.root.kind {
+                SkillRootKind::CodeWhaleProject => "project",
+                SkillRootKind::CodeWhaleGlobal => "global",
+                _ => "other",
+            };
+            let digest = match &skill.digest {
+                DigestState::Known(v) => SkillAuditDigest {
+                    state: "known".to_string(),
+                    value: Some(v.clone()),
+                },
+                DigestState::Unknown(reason) => SkillAuditDigest {
+                    state: format!("unknown:{reason:?}").to_ascii_lowercase(),
+                    value: None,
+                },
+            };
+            let trust = match &skill.trust {
+                TrustState::TrustedForDigest(_) => "trusted_for_digest",
+                TrustState::TrustStale => "trust_stale",
+                TrustState::LegacyAdvisory => "legacy_advisory",
+                TrustState::Untrusted => "untrusted",
+                TrustState::NotApplicable => "not_applicable",
+                TrustState::Unknown => "unknown",
+            };
+            let integrity = match &skill.integrity {
+                IntegrityState::Healthy => "healthy",
+                IntegrityState::LocalContentDrift => "local_content_drift",
+                IntegrityState::BrokenManagedInstall => "broken_managed_install",
+                IntegrityState::LegacyMetadataUnknown => "legacy_metadata_unknown",
+                IntegrityState::Unknown => "unknown",
+            };
+            let available_actions = skill
+                .available_actions
+                .iter()
+                .map(|a| match a {
+                    SkillActionKind::Install => "install",
+                    SkillActionKind::Import => "import",
+                    SkillActionKind::Update => "update",
+                    SkillActionKind::Remove => "remove",
+                    SkillActionKind::Trust => "trust",
+                })
+                .map(str::to_string)
+                .collect();
+            let warnings = skill
+                .warnings
+                .iter()
+                .map(|w| match w {
+                    SkillAuditWarning::Message(m) => m.clone(),
+                })
+                .collect();
+            SkillAuditEntry {
+                name: skill.name.clone(),
+                safe_display_path: skill.safe_display_path.clone(),
+                source_kind: source_kind.to_string(),
+                scope: scope_str.to_string(),
+                digest,
+                trust: trust.to_string(),
+                integrity: integrity.to_string(),
+                available_actions,
+                warnings,
+            }
+        })
+        .collect();
+
+    Ok(Json(SkillAuditResponse {
+        ambiguous,
+        skills: entries,
     }))
 }
 
@@ -4575,6 +5089,13 @@ impl ApiError {
     fn internal(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: message.into(),
+        }
+    }
+
+    fn forbidden(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
             message: message.into(),
         }
     }
