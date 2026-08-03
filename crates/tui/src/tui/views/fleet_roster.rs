@@ -78,6 +78,9 @@ pub struct FleetRosterView {
     detail_scroll: usize,
     /// UI locale captured from the app at construction (#4057 wave 2).
     locale: Locale,
+    /// The full roster, retained to query shadowed layers for the detail pane
+    /// and list-row badges.
+    roster: FleetRoster,
 }
 
 impl FleetRosterView {
@@ -92,22 +95,24 @@ impl FleetRosterView {
     }
 
     fn from_parts(operator: OperatorInfo, roster: FleetRoster) -> Self {
-        Self {
-            operator,
+        let members = roster
+            .members()
+            .iter()
             // The operator is pinned as its own row 0 (the live session route),
             // so exclude the built-in "operator" profile from the dispatchable
             // member list to avoid rendering it twice (#dogfood 0.8.67). The
             // engine's FleetRoster is untouched, so role/dispatch semantics are
             // unchanged; only this view drops the duplicate.
-            members: roster
-                .members()
-                .iter()
-                .filter(|m| !m.id.trim().eq_ignore_ascii_case("operator"))
-                .cloned()
-                .collect(),
+            .filter(|m| !m.id.trim().eq_ignore_ascii_case("operator"))
+            .cloned()
+            .collect();
+        Self {
+            operator,
+            members,
             selected: 0,
             detail_scroll: 0,
             locale: Locale::En,
+            roster,
         }
     }
 
@@ -327,8 +332,17 @@ impl FleetRosterView {
             } else {
                 let member = &self.members[idx - 1];
                 let mark = member_role_mark(member);
+                // Badge members that shadow a lower-priority layer so the user
+                // can see at a glance that another profile file for this id
+                // exists but is being ignored.
+                let shadow_badge =
+                    if self.roster.is_shadowing(&member.id) { " !" } else { "" };
                 (
-                    format!("{pointer}{mark} {}  {}", member.id, member_routing(member)),
+                    format!(
+                        "{pointer}{mark} {}{shadow_badge}  {}",
+                        member.id,
+                        member_routing(member)
+                    ),
                     Style::default().fg(palette::TEXT_PRIMARY),
                 )
             };
@@ -350,7 +364,8 @@ impl FleetRosterView {
         } else if let Some(member) = self.selected_member() {
             // Session model is the operator route so "fast" loadouts resolve
             // to the fast sibling the runtime will actually launch.
-            member_detail_lines_with_session(member, Some(self.operator.model.as_str()))
+            let shadowed = self.roster.shadowed_layers_for(&member.id);
+            member_detail_lines_with_session(member, Some(self.operator.model.as_str()), shadowed)
         } else {
             vec![Line::from(Span::styled(
                 "Roster is empty.",
@@ -477,6 +492,7 @@ fn member_routing_with_session(member: &AgentProfile, session_model: Option<&str
 fn member_detail_lines_with_session(
     member: &AgentProfile,
     session_model: Option<&str>,
+    shadowed: &[AgentProfile],
 ) -> Vec<Line<'static>> {
     let mut lines: Vec<Line> = Vec::new();
 
@@ -542,6 +558,33 @@ fn member_detail_lines_with_session(
         detail_field(&mut lines, "Description", description.to_string());
     }
 
+    // When lower-priority layers were displaced by this member, list them so
+    // the user can see what is being shadowed and from where.
+    if !shadowed.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "Shadowed layers (ignored)",
+            Style::default().fg(palette::WHALE_INFO).bold(),
+        )));
+        for s in shadowed {
+            let origin_str = match s.origin {
+                ProfileOrigin::BuiltIn => "built-in (default party)".to_string(),
+                _ => format!("{} · {}", s.origin, s.source.display()),
+            };
+            let routing_str = member_routing(s);
+            lines.push(Line::from(Span::styled(
+                format!("  {origin_str}  [{routing_str}]"),
+                Style::default().fg(palette::TEXT_MUTED),
+            )));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "Edit the winning layer's file to change this member, or delete the \
+             project-scope file to let the personal copy apply.",
+            Style::default().fg(palette::TEXT_MUTED),
+        )));
+        lines.push(Line::from(""));
+    }
+
     lines
 }
 
@@ -594,6 +637,7 @@ mod tests {
             selected: 0,
             detail_scroll: 0,
             locale: Locale::En,
+            roster: FleetRoster::built_ins_only(),
         }
     }
 
@@ -800,7 +844,7 @@ mod tests {
     fn detail_lines_carry_overlay_source_for_project_members() {
         let view = view_with_overrides();
         let reviewer = view.members.iter().find(|m| m.id == "reviewer").unwrap();
-        let text = member_detail_lines_with_session(reviewer, None)
+        let text = member_detail_lines_with_session(reviewer, None, &[])
             .iter()
             .map(|line| {
                 line.spans
@@ -914,5 +958,133 @@ mod tests {
         );
         let text = rows.join("\n");
         assert!(text.contains("▸ · general"), "{text}");
+    }
+
+    #[test]
+    fn shadowed_member_gets_badge_in_list_row() {
+        // Build a roster where workspace reviewer overrides the built-in.
+        // We only need workspace + built-in layers (no personal dir needed)
+        // to get a shadowed reviewer; the built-in gets displaced.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let agents_dir = tmp.path().join(".codewhale/agents");
+        std::fs::create_dir_all(&agents_dir).unwrap();
+        std::fs::write(
+            agents_dir.join("reviewer.toml"),
+            "id = \"reviewer\"\nrole_hint = \"reviewer\"\nmodel = \"glm-5.2\"\n",
+        )
+        .unwrap();
+
+        let roster = crate::fleet::roster::FleetRoster::load(
+            &codewhale_config::FleetConfigToml::default(),
+            tmp.path(),
+        );
+        assert!(
+            roster.is_shadowing("reviewer"),
+            "workspace reviewer must shadow the built-in"
+        );
+
+        let mut v = FleetRosterView::from_parts(operator(), roster);
+        // Navigate to the reviewer row.
+        loop {
+            if let Some(m) = v.selected_member() {
+                if m.id == "reviewer" {
+                    break;
+                }
+            }
+            v.handle_key(KeyEvent::new(
+                KeyCode::Down,
+                crossterm::event::KeyModifiers::NONE,
+            ));
+            if v.selected == 0 {
+                panic!("reviewer not found in roster");
+            }
+        }
+        let selected = v.selected;
+
+        let roster2 = crate::fleet::roster::FleetRoster::load(
+            &codewhale_config::FleetConfigToml::default(),
+            tmp.path(),
+        );
+        let rows = render_through_stack(
+            move || {
+                let mut v2 = FleetRosterView::from_parts(operator(), roster2.clone());
+                v2.selected = selected;
+                v2
+            },
+            120,
+            32,
+        );
+        let text = rows.join("\n");
+        // The shadowing badge must appear next to the reviewer row.
+        assert!(
+            text.contains("reviewer !"),
+            "shadowing badge must appear: {text}"
+        );
+        // The detail pane must show the shadowed layers section.
+        assert!(
+            text.contains("Shadowed layers"),
+            "detail pane must show shadowed layers section: {text}"
+        );
+    }
+
+    #[test]
+    fn detail_lines_list_shadowed_layers_with_source() {
+        use crate::fleet::profile::AgentProfile;
+        use codewhale_config::{FleetDelegationHints, FleetLoadout, FleetProfile, FleetProfilePermissions, FleetRole, FleetSlot};
+        use std::path::PathBuf;
+
+        let shadowed_personal = AgentProfile {
+            id: "reviewer".to_string(),
+            display_name: None,
+            description: None,
+            profile: FleetProfile {
+                slot: FleetSlot::Reviewer,
+                role: FleetRole {
+                    name: "reviewer".to_string(),
+                    description: None,
+                    instructions: None,
+                },
+                loadout: FleetLoadout::Inherit,
+                model: Some("deepseek-v4-flash".to_string()),
+                provider: None,
+                reasoning_effort: None,
+                permissions: FleetProfilePermissions::default(),
+                delegation: FleetDelegationHints::default(),
+            },
+            source: PathBuf::from("/home/user/.codewhale/agents/reviewer.toml"),
+            origin: ProfileOrigin::Personal,
+        };
+
+        let winner = AgentProfile {
+            id: "reviewer".to_string(),
+            display_name: None,
+            description: None,
+            profile: FleetProfile {
+                slot: FleetSlot::Reviewer,
+                role: FleetRole {
+                    name: "reviewer".to_string(),
+                    description: None,
+                    instructions: None,
+                },
+                loadout: FleetLoadout::Inherit,
+                model: Some("glm-5.2".to_string()),
+                provider: None,
+                reasoning_effort: None,
+                permissions: FleetProfilePermissions::default(),
+                delegation: FleetDelegationHints::default(),
+            },
+            source: PathBuf::from(".codewhale/agents/reviewer.toml"),
+            origin: ProfileOrigin::Workspace,
+        };
+
+        let lines = member_detail_lines_with_session(&winner, None, &[shadowed_personal]);
+        let text = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.clone().into_owned()))
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(text.contains("Shadowed layers"), "{text}");
+        assert!(text.contains("personal"), "{text}");
+        assert!(text.contains("deepseek-v4-flash"), "{text}");
     }
 }

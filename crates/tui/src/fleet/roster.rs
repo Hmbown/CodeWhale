@@ -1,15 +1,20 @@
 //! Fleet roster — the persistent, inspectable party of named agent roles.
 //!
-//! The roster merges four layers into one config-backed lineup shared by
-//! model-spawned sub-agents and fleet dispatch (#fleet-roster cutover
+//! The roster merges three active layers into one config-backed lineup shared
+//! by model-spawned sub-agents and fleet dispatch (#fleet-roster cutover
 //! (v0.8.67)):
 //!
 //! - built-in members (the default party, always available),
-//! - `[fleet.profiles]` entries from config.toml,
 //! - personal `$CODEWHALE_HOME/agents/*.toml` profile files,
 //! - workspace `.codewhale/agents/*.toml` profile files.
 //!
-//! Precedence is Workspace > Personal > Config > BuiltIn, merged by id. Loading never
+//! A fourth legacy layer — `[fleet.profiles]` entries from config.toml — is
+//! **deprecated** (v0.8.68+).  It is still loaded for backward compatibility
+//! but emits a warning at startup.  Migrate entries to personal agent files.
+//!
+//! Precedence is Workspace > Personal > Config > BuiltIn, merged by id.
+//! When a higher-priority layer wins, the lower-priority copy is retained
+//! as a *shadowed layer* so the UI can surface the conflict.  Loading never
 //! fails the session: an unreadable workspace profile dir degrades to the
 //! built-in + config layers with a log line.
 
@@ -54,9 +59,18 @@ impl std::fmt::Display for ProfileOrigin {
 
 /// The merged fleet roster. Think RPG saved party / K8s runconfig: a stable,
 /// named lineup of agent roles the session can inspect and dispatch against.
+///
+/// When multiple layers define the same member id, the highest-priority layer
+/// wins and the lower-priority copies are retained as *shadowed layers* so the
+/// UI and `doctor` can surface the conflict.
 #[derive(Debug, Clone)]
 pub struct FleetRoster {
     members: Vec<AgentProfile>,
+    /// Lower-priority profiles that were displaced when a higher-priority layer
+    /// supplied the same member id.  Keyed by lowercased member id; the vec is
+    /// ordered from highest-priority-loser to lowest (i.e. the element that
+    /// lost most recently comes first).
+    shadows: HashMap<String, Vec<AgentProfile>>,
 }
 
 impl FleetRoster {
@@ -66,6 +80,7 @@ impl FleetRoster {
     pub fn built_ins_only() -> Self {
         Self {
             members: Self::built_in_members(),
+            shadows: HashMap::new(),
         }
     }
 
@@ -76,15 +91,23 @@ impl FleetRoster {
     /// start and must not pick up built-in or workspace profiles by name.
     #[must_use]
     pub fn from_members(members: Vec<AgentProfile>) -> Self {
-        Self { members }
+        Self {
+            members,
+            shadows: HashMap::new(),
+        }
     }
 
     /// Load and merge the full roster for a workspace.
     ///
-    /// Config members come from `[fleet.profiles]` (id = map key). Personal
-    /// members come from `$CODEWHALE_HOME/agents/*.toml`, and workspace members
-    /// come from `.codewhale/agents/*.toml`. A load failure is logged and
-    /// skipped so one broken profile layer cannot take down the session.
+    /// Personal members come from `$CODEWHALE_HOME/agents/*.toml` and workspace
+    /// members come from `.codewhale/agents/*.toml`.  Config-level members from
+    /// `[fleet.profiles]` are still accepted for backward compatibility but a
+    /// deprecation warning is emitted when any are present; migrate them to
+    /// personal agent files.  A load failure is logged and skipped so one broken
+    /// profile layer cannot take down the session.
+    ///
+    /// Members that are overridden by a higher-priority layer are retained as
+    /// *shadowed layers* (see [`FleetRoster::shadowed_layers_for`]).
     #[must_use]
     pub fn load(fleet_config: &FleetConfigToml, workspace: &Path) -> Self {
         let personal_dir = personal_agent_profile_dir().ok();
@@ -98,6 +121,7 @@ impl FleetRoster {
     ) -> Self {
         let mut built_ins = Self::built_in_members();
         let mut extras: Vec<AgentProfile> = Vec::new();
+        let mut shadows: HashMap<String, Vec<AgentProfile>> = HashMap::new();
 
         for (id, profile) in &fleet_config.profiles {
             let mut profile = profile.clone();
@@ -111,7 +135,14 @@ impl FleetRoster {
                 source: PathBuf::from("config.toml"),
                 origin: ProfileOrigin::Config,
             };
-            merge_member(&mut built_ins, &mut extras, member);
+            merge_member(&mut built_ins, &mut extras, &mut shadows, member);
+        }
+        if !fleet_config.profiles.is_empty() {
+            tracing::warn!(
+                count = fleet_config.profiles.len(),
+                "fleet roster: [fleet.profiles] in config.toml is deprecated (v0.8.68+); \
+                 migrate entries to personal agent files in $CODEWHALE_HOME/agents/"
+            );
         }
 
         if let Some(personal_dir) = personal_dir {
@@ -123,7 +154,7 @@ impl FleetRoster {
                         );
                     }
                     for member in profiles {
-                        merge_member(&mut built_ins, &mut extras, member);
+                        merge_member(&mut built_ins, &mut extras, &mut shadows, member);
                     }
                 }
                 Err(err) => {
@@ -141,7 +172,7 @@ impl FleetRoster {
                     );
                 }
                 for member in profiles {
-                    merge_member(&mut built_ins, &mut extras, member);
+                    merge_member(&mut built_ins, &mut extras, &mut shadows, member);
                 }
             }
             Err(err) => {
@@ -157,7 +188,14 @@ impl FleetRoster {
         extras.sort_by_key(|a| a.id.to_lowercase());
         let mut members = built_ins;
         members.extend(extras);
-        Self { members }
+        // Reverse each shadow vec so the highest-priority loser (the profile
+        // that was most recently displaced) comes first.  That is the entry the
+        // user is most likely to want to know about (e.g. the personal copy
+        // they just edited that is being masked by a project override).
+        for vec in shadows.values_mut() {
+            vec.reverse();
+        }
+        Self { members, shadows }
     }
 
     /// The default party. Built-ins carry no permission grants (permissions
@@ -283,6 +321,25 @@ impl FleetRoster {
         &self.members
     }
 
+    /// Returns the lower-priority profiles that were displaced when a
+    /// higher-priority layer supplied the same member id.
+    ///
+    /// The returned slice is ordered from highest-priority-loser to lowest
+    /// (i.e. the profile that lost most recently comes first).  An empty slice
+    /// means no shadowing exists for this id.
+    #[must_use]
+    pub fn shadowed_layers_for(&self, id: &str) -> &[AgentProfile] {
+        let key = id.trim().to_lowercase();
+        self.shadows.get(&key).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// Returns `true` if the member with `id` (case-insensitive) shadows at
+    /// least one lower-priority layer.
+    #[must_use]
+    pub fn is_shadowing(&self, id: &str) -> bool {
+        !self.shadowed_layers_for(id).is_empty()
+    }
+
     /// Per-member explicit model pins, keyed by lowercased member id.
     /// Feeds the sub-agent `role_models` lookup; explicit `[subagents]`
     /// overrides are merged on top by the engine and win.
@@ -300,17 +357,23 @@ impl FleetRoster {
 
 /// Overlay `member` onto the roster layers: replace an existing member with
 /// the same id (case-insensitive) in place, otherwise collect it as an extra.
+/// When a replacement occurs the displaced profile is pushed into `shadows` so
+/// callers can surface the conflict.
 fn merge_member(
     built_ins: &mut [AgentProfile],
     extras: &mut Vec<AgentProfile>,
+    shadows: &mut HashMap<String, Vec<AgentProfile>>,
     member: AgentProfile,
 ) {
     let matches =
         |existing: &AgentProfile| existing.id.trim().eq_ignore_ascii_case(member.id.trim());
+    let id_key = member.id.trim().to_lowercase();
     if let Some(slot) = built_ins.iter_mut().find(|existing| matches(existing)) {
-        *slot = member;
+        let displaced = std::mem::replace(slot, member);
+        shadows.entry(id_key).or_default().push(displaced);
     } else if let Some(slot) = extras.iter_mut().find(|existing| matches(existing)) {
-        *slot = member;
+        let displaced = std::mem::replace(slot, member);
+        shadows.entry(id_key).or_default().push(displaced);
     } else {
         extras.push(member);
     }
@@ -644,5 +707,79 @@ mod tests {
         assert_eq!(ProfileOrigin::Config.to_string(), "config");
         assert_eq!(ProfileOrigin::Personal.to_string(), "personal");
         assert_eq!(ProfileOrigin::Workspace.to_string(), "project");
+    }
+
+    // ── Shadowing tests ──────────────────────────────────────────────────────
+
+    #[test]
+    fn workspace_shadows_built_in_for_same_id() {
+        let tmp = TempDir::new().unwrap();
+        write_workspace_profile(
+            tmp.path(),
+            "reviewer.toml",
+            "id = \"reviewer\"\nrole_hint = \"reviewer\"\nmodel = \"glm-5.2\"\n",
+        );
+        let roster = FleetRoster::load(&FleetConfigToml::default(), tmp.path());
+
+        // The workspace layer overrides the built-in reviewer; the displaced
+        // built-in must be captured as a shadowed layer.
+        assert!(roster.is_shadowing("reviewer"), "workspace layer must shadow built-in");
+        let shadowed = roster.shadowed_layers_for("reviewer");
+        assert_eq!(shadowed.len(), 1);
+        assert_eq!(shadowed[0].origin, ProfileOrigin::BuiltIn);
+    }
+
+    #[test]
+    fn workspace_shadows_personal_and_built_in() {
+        let tmp = TempDir::new().unwrap();
+        let personal_dir = tmp.path().join("personal");
+        std::fs::create_dir_all(&personal_dir).unwrap();
+        std::fs::write(
+            personal_dir.join("reviewer.toml"),
+            "id = \"reviewer\"\nrole_hint = \"reviewer\"\nmodel = \"deepseek-v4-flash\"\n",
+        )
+        .unwrap();
+        let workspace = tmp.path().join("ws");
+        std::fs::create_dir_all(&workspace).unwrap();
+        write_workspace_profile(
+            &workspace,
+            "reviewer.toml",
+            "id = \"reviewer\"\nrole_hint = \"reviewer\"\nmodel = \"glm-5.2\"\n",
+        );
+        let roster =
+            FleetRoster::load_with_personal_dir(&FleetConfigToml::default(), &workspace, Some(&personal_dir));
+
+        // Workspace wins; personal and built-in are both shadowed.
+        let winner = roster.get("reviewer").unwrap();
+        assert_eq!(winner.origin, ProfileOrigin::Workspace);
+        assert_eq!(winner.profile.model.as_deref(), Some("glm-5.2"));
+
+        let shadowed = roster.shadowed_layers_for("reviewer");
+        assert_eq!(
+            shadowed.len(),
+            2,
+            "personal and built-in must both be recorded as shadowed"
+        );
+        // Highest-priority loser (personal) comes first.
+        assert_eq!(shadowed[0].origin, ProfileOrigin::Personal);
+        assert_eq!(shadowed[1].origin, ProfileOrigin::BuiltIn);
+
+        assert!(roster.is_shadowing("reviewer"));
+        assert!(!roster.is_shadowing("scout"), "uncontested member must not shadow");
+    }
+
+    #[test]
+    fn is_shadowing_is_false_for_unknown_id() {
+        let roster = FleetRoster::built_ins_only();
+        assert!(!roster.is_shadowing("nonexistent"));
+        assert_eq!(roster.shadowed_layers_for("nonexistent"), &[]);
+    }
+
+    #[test]
+    fn built_ins_only_has_no_shadows() {
+        let roster = FleetRoster::built_ins_only();
+        for m in roster.members() {
+            assert!(!roster.is_shadowing(&m.id), "{} must not shadow in built-ins-only roster", m.id);
+        }
     }
 }
