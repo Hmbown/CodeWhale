@@ -13605,6 +13605,7 @@ fn render_classic_header(area: Rect, buf: &mut Buffer, app: &App) {
     let model = app.model_display_label();
     let effort = app.reasoning_effort_display_label();
     let started_at = classic_header_indicator_started_at(app);
+    let workflow_status = workflow_header_status(app, usize::from(area.width / 2));
     let data = HeaderData::new(
         app.mode,
         &model,
@@ -13624,7 +13625,11 @@ fn render_classic_header(area: Rect, buf: &mut Buffer, app: &App) {
         started_at,
         &app.status_indicator,
     ))
-    .with_running_agents(running_agent_count(app));
+    .with_running_agents(running_agent_count(app))
+    .with_workflow_status(
+        workflow_status.as_ref().map(|(label, _)| label.clone()),
+        workflow_status.as_ref().map(|(_, color)| *color),
+    );
     HeaderWidget::new(data).render(area, buf);
 }
 
@@ -13723,13 +13728,6 @@ fn render(f: &mut Frame, app: &mut App, config: &Config) {
     let pending_preview = build_pending_input_preview(app);
     let desired_preview_height = pending_preview.desired_height(size.width);
 
-    // WorkflowPanel unified activity surface (#4121). Collapsed to one row
-    // while finished, expanded while running; zero height when no panel.
-    let desired_workflow_panel_height = app
-        .workflow_panel
-        .as_ref()
-        .map(|panel| panel.desired_height(size.width))
-        .unwrap_or(0);
     let auxiliary_budget = body_height.saturating_sub(
         top_work_strip_height
             .saturating_add(MIN_CHAT_HEIGHT)
@@ -13741,8 +13739,6 @@ fn render(f: &mut Frame, app: &mut App, config: &Config) {
     // up to three compact rows at the release floor.
     let preview_cap = if size.height >= 20 { 4 } else { 3 };
     let preview_height = desired_preview_height.min(auxiliary_budget.min(preview_cap));
-    let workflow_panel_height =
-        desired_workflow_panel_height.min(auxiliary_budget.saturating_sub(preview_height));
 
     // Ocean live phases put the phase strip above the composer so activity
     // stays attached to the transcript and the prompt is the final bottom
@@ -13753,8 +13749,8 @@ fn render(f: &mut Frame, app: &mut App, config: &Config) {
         && crate::tui::phase_strip::PhaseStripPlacement::for_phase(phase).is_above_composer();
     let (composer_slot, footer_slot, tail_constraints) = if phase_above {
         (
-            5,
             4,
+            3,
             [
                 Constraint::Length(footer_height),
                 Constraint::Length(composer_height),
@@ -13762,8 +13758,8 @@ fn render(f: &mut Frame, app: &mut App, config: &Config) {
         )
     } else {
         (
+            3,
             4,
-            5,
             [
                 Constraint::Length(composer_height),
                 Constraint::Length(footer_height),
@@ -13777,7 +13773,6 @@ fn render(f: &mut Frame, app: &mut App, config: &Config) {
         .constraints([
             Constraint::Length(top_work_strip_height), // Tasks + To-do above transcript
             Constraint::Min(1),                        // Chat area
-            Constraint::Length(workflow_panel_height), // Workflow panel (#4121)
             Constraint::Length(preview_height),        // Pending input preview (0 if empty)
             tail_constraints[0],
             tail_constraints[1],
@@ -13893,30 +13888,13 @@ fn render(f: &mut Frame, app: &mut App, config: &Config) {
         }
     }
 
-    // Workflow panel between chat and pending-input preview (#4121).
-    if workflow_panel_height > 0 {
-        if let Some(panel) = app.workflow_panel.as_ref() {
-            let area = body_chunks[2];
-            app.viewport.last_workflow_panel_area = Some(area);
-            app.viewport.last_workflow_cancel_area =
-                panel.cancel_hint_span(area.width).map(|(start, end)| Rect {
-                    x: area.x.saturating_add(start),
-                    y: area.y,
-                    width: end.saturating_sub(start),
-                    height: 1,
-                });
-            let buf = f.buffer_mut();
-            panel.render(area, buf);
-        }
-    } else {
-        app.viewport.last_workflow_panel_area = None;
-        app.viewport.last_workflow_cancel_area = None;
-    }
+    app.viewport.last_workflow_panel_area = None;
+    app.viewport.last_workflow_cancel_area = None;
 
     // Render pending-input preview (queued/steered messages, if any).
     if preview_height > 0 {
         let buf = f.buffer_mut();
-        pending_preview.render(body_chunks[3], buf);
+        pending_preview.render(body_chunks[2], buf);
     }
 
     // Render composer
@@ -17668,6 +17646,39 @@ pub(crate) fn context_usage_snapshot(app: &App) -> Option<(i64, u32, f64)> {
         app.active_route_limits,
     );
     context_usage_snapshot_for_window(app, max)
+}
+
+pub(crate) fn workflow_header_status(
+    app: &App,
+    width: usize,
+) -> Option<(String, ratatui::style::Color)> {
+    let panel = app.workflow_panel.as_ref()?;
+    let running_count = workflow_tool_run_count(app);
+    let run_count = if running_count > 1 { running_count } else { 1 };
+    let label = panel.top_status_text(width, run_count);
+    (!label.trim().is_empty()).then(|| (label, panel.top_status_color()))
+}
+
+fn workflow_tool_run_count(app: &App) -> usize {
+    fn is_running_workflow(cell: &HistoryCell) -> bool {
+        matches!(
+            cell,
+            HistoryCell::Tool(ToolCell::Generic(tool))
+                if tool.name == "workflow" && tool.status == ToolStatus::Running
+        )
+    }
+
+    app.history
+        .iter()
+        .filter(|cell| is_running_workflow(cell))
+        .count()
+        + app.active_cell.as_ref().map_or(0, |active| {
+            active
+                .entries()
+                .iter()
+                .filter(|cell| is_running_workflow(cell))
+                .count()
+        })
 }
 
 fn context_usage_snapshot_for_window(app: &App, max: u32) -> Option<(i64, u32, f64)> {

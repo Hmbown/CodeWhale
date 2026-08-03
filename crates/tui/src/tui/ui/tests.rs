@@ -969,6 +969,40 @@ fn workflow_panel_uses_non_text_keys_for_controls() {
     );
 }
 
+#[test]
+fn workflow_status_does_not_reserve_persistent_composer_space() {
+    let config = crate::config::Config::default();
+
+    let mut baseline = create_test_app();
+    baseline.onboarding = OnboardingState::None;
+    baseline.onboarding_workspace_trust_gate = false;
+    let mut baseline_terminal =
+        Terminal::new(TestBackend::new(100, 24)).expect("baseline workflow terminal");
+    baseline_terminal
+        .draw(|frame| render(frame, &mut baseline, &config))
+        .expect("render baseline workflow layout");
+    let baseline_composer = baseline
+        .viewport
+        .last_composer_area
+        .expect("baseline composer area");
+
+    let mut app = create_test_app();
+    app.onboarding = OnboardingState::None;
+    app.onboarding_workspace_trust_gate = false;
+    app.workflow_panel = Some(crate::tui::widgets::workflow_panel::WorkflowPanel::new(
+        "workflow_layout",
+        "layout check",
+        0,
+    ));
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).expect("workflow terminal");
+    terminal
+        .draw(|frame| render(frame, &mut app, &config))
+        .expect("render workflow layout");
+
+    assert_eq!(app.viewport.last_composer_area, Some(baseline_composer));
+    assert!(app.viewport.last_workflow_panel_area.is_none());
+}
+
 struct ConfigPathEnvGuard {
     _tmp: TempDir,
     previous: Option<OsString>,

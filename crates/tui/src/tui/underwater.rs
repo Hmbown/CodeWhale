@@ -903,6 +903,7 @@ pub fn render_header(area: Rect, buf: &mut Buffer, app: &App) {
         &app.status_indicator,
     )
     .filter(|indicator| *indicator != "cw");
+    let workflow_status = crate::tui::ui::workflow_header_status(app, usize::from(area.width / 2));
     let mut left = vec![
         Span::styled(
             "cw",
@@ -946,6 +947,16 @@ pub fn render_header(area: Rect, buf: &mut Buffer, app: &App) {
         permission_label(app),
         Style::default().fg(permission_color),
     ));
+    if let Some((label, color)) = workflow_status.as_ref() {
+        left.push(Span::styled(
+            " · ",
+            Style::default().fg(app.ui_theme.text_dim),
+        ));
+        left.push(Span::styled(
+            label.clone(),
+            Style::default().fg(*color).add_modifier(Modifier::BOLD),
+        ));
+    }
 
     let context_meter = (tier != ShellTier::Compact)
         .then(|| crate::tui::ui::context_usage_snapshot(app))
@@ -997,12 +1008,17 @@ pub fn render_header(area: Rect, buf: &mut Buffer, app: &App) {
     } else {
         effort_label.clone()
     };
+    let workflow_minimum = workflow_status
+        .as_ref()
+        .map(|(label, _)| 3 + label.width().min(18))
+        .unwrap_or(0);
     let indicator_width = status_indicator.map_or(0, |indicator| 1 + indicator.width());
     let minimum_left_width = 4usize
         .saturating_add(indicator_width)
         .saturating_add(3 + mode_label(app.ui_locale, app.mode).width())
         .saturating_add(3 + minimum_effort.width())
-        .saturating_add(3 + permission_label(app).width());
+        .saturating_add(3 + permission_label(app).width())
+        .saturating_add(workflow_minimum);
     let available = usize::from(area.width);
     // The optional token breakdown is the only elidable element: it is added
     // between the git label and the context meter when the terminal is wide
@@ -1091,10 +1107,23 @@ pub fn render_header(area: Rect, buf: &mut Buffer, app: &App) {
             Span::styled(permission, Style::default().fg(permission_color)),
         ];
         let indicator_width = status_indicator.map_or(0, |indicator| 1 + indicator.width());
+        let workflow_reserved = workflow_status
+            .as_ref()
+            .map(|(label, _)| 3 + label.width().min(18))
+            .unwrap_or(0);
         let fixed_width = 4usize
             .saturating_add(indicator_width)
-            .saturating_add(span_width(&suffix));
+            .saturating_add(span_width(&suffix))
+            .saturating_add(workflow_reserved);
         let route_budget = left_budget.saturating_sub(fixed_width);
+        let workflow_budget = left_budget
+            .saturating_sub(
+                4usize
+                    .saturating_add(indicator_width)
+                    .saturating_add(span_width(&suffix)),
+            )
+            .saturating_sub(route_budget)
+            .saturating_sub(3);
         left = vec![Span::styled(
             "cw",
             Style::default()
@@ -1116,6 +1145,18 @@ pub fn render_header(area: Rect, buf: &mut Buffer, app: &App) {
             Style::default().fg(app.ui_theme.text_muted),
         ));
         left.extend(suffix);
+        if let Some((label, color)) = workflow_status.as_ref()
+            && workflow_budget >= 8
+        {
+            left.push(Span::styled(
+                " · ",
+                Style::default().fg(app.ui_theme.text_dim),
+            ));
+            left.push(Span::styled(
+                truncate_to_width(label, workflow_budget),
+                Style::default().fg(*color).add_modifier(Modifier::BOLD),
+            ));
+        }
     }
     let left_width = span_width(&left);
     let gap = available.saturating_sub(left_width + right_width);
@@ -1667,6 +1708,61 @@ mod tests {
             "{header:?}"
         );
         assert!(!header.contains("Custom ·"), "{header:?}");
+    }
+
+    #[test]
+    fn header_shows_running_workflow_status() {
+        let mut app = test_app();
+        let mut panel =
+            crate::tui::widgets::workflow_panel::WorkflowPanel::new("workflow_abc", "audit", 1_000);
+        panel.apply_event(
+            crate::tui::widgets::workflow_panel::WorkflowPanelEvent::PhaseStarted {
+                title: "Analyze".to_string(),
+                at_ms: 1_100,
+            },
+        );
+        app.workflow_panel = Some(panel);
+
+        let header = header_text(&app, 100);
+
+        assert!(header.contains("workflow"), "{header:?}");
+        assert!(header.contains("running"), "{header:?}");
+        assert!(header.contains("audit"), "{header:?}");
+    }
+
+    #[test]
+    fn header_keeps_completed_workflow_status_without_bottom_panel_space() {
+        let mut app = test_app();
+        let mut panel =
+            crate::tui::widgets::workflow_panel::WorkflowPanel::new("workflow_abc", "ship", 1_000);
+        panel.apply_event(
+            crate::tui::widgets::workflow_panel::WorkflowPanelEvent::RunCompleted {
+                status: crate::tui::widgets::workflow_panel::WorkflowPanelLifecycle::Failed,
+                error: Some("boom".to_string()),
+                at_ms: 1_500,
+            },
+        );
+        app.workflow_panel = Some(panel);
+
+        let header = header_text(&app, 100);
+
+        assert!(header.contains("workflow"), "{header:?}");
+        assert!(header.contains("failed"), "{header:?}");
+        assert!(header.contains("ship"), "{header:?}");
+    }
+
+    #[test]
+    fn narrow_header_truncates_route_before_workflow_status() {
+        let mut app = test_app();
+        app.model = "provider/model-with-a-deliberately-long-route-name".to_string();
+        let panel =
+            crate::tui::widgets::workflow_panel::WorkflowPanel::new("workflow_abc", "audit", 1_000);
+        app.workflow_panel = Some(panel);
+
+        let header = header_text(&app, 54);
+
+        assert!(header.contains("workflow"), "{header:?}");
+        assert!(header.contains("audit"), "{header:?}");
     }
 
     /// The footer consumes the toast system, not the legacy status sink: an

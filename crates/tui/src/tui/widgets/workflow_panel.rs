@@ -920,6 +920,52 @@ impl WorkflowPanel {
         self.compact_summary_text(width)
     }
 
+    /// Compact top-status summary for the header chrome. Shows the selected
+    /// run label/phase plus progress and failure counts without reserving
+    /// persistent composer space.
+    #[must_use]
+    pub fn top_status_text(&self, width: usize, run_count: usize) -> String {
+        if width == 0 {
+            return String::new();
+        }
+        let (done, total) = self.done_total();
+        let (failed, cancelled) = self.failure_cancel_counts();
+        let selected_phase = self
+            .phases
+            .get(self.selected_phase)
+            .map(|phase| short_label(phase.title.trim(), 18))
+            .filter(|phase| !phase.is_empty());
+        let mut parts = Vec::with_capacity(8);
+        if run_count > 1 {
+            parts.push(format!("workflow {run_count} runs"));
+        } else {
+            parts.push("workflow".to_string());
+        }
+        parts.push(self.lifecycle.label().to_string());
+        if !self.label.trim().is_empty() {
+            parts.push(short_label(self.label.trim(), 24));
+        }
+        if let Some(phase) = selected_phase {
+            parts.push(phase);
+        }
+        if total > 0 {
+            parts.push(format!("{done}/{total}"));
+        }
+        if failed > 0 {
+            parts.push(format!("{failed} fail"));
+        }
+        if cancelled > 0 && self.lifecycle != WorkflowPanelLifecycle::Cancelled {
+            parts.push(format!("{cancelled} cancel"));
+        }
+        parts.push(self.elapsed_label());
+        truncate_line_to_width(&parts.join(" · "), width.max(1))
+    }
+
+    #[must_use]
+    pub fn top_status_color(&self) -> ratatui::style::Color {
+        self.lifecycle.color()
+    }
+
     /// Expanded history-card body lines (phase/child summaries, links,
     /// result, failures). Empty when the card should stay compact.
     #[must_use]
@@ -2504,6 +2550,53 @@ mod tests {
             at_ms: 1_200,
         });
         panel
+    }
+
+    #[test]
+    fn top_status_text_reports_running_workflow_progress() {
+        let panel = started_panel();
+        let status = panel.top_status_text(120, 1);
+        assert!(status.contains("workflow"), "{status}");
+        assert!(status.contains("running"), "{status}");
+        assert!(status.contains("ship v0.8.68"), "{status}");
+        assert!(status.contains("Analyze"), "{status}");
+        assert!(status.contains("0/1"), "{status}");
+    }
+
+    #[test]
+    fn top_status_text_reports_failures_and_multiple_runs() {
+        let mut panel = started_panel();
+        panel.apply_event(WorkflowPanelEvent::TaskCompleted {
+            task_id: "t1".to_string(),
+            status: WorkflowRowStatus::Failed,
+            error: Some("boom".to_string()),
+            at_ms: 1_500,
+        });
+        panel.apply_event(WorkflowPanelEvent::RunCompleted {
+            status: WorkflowPanelLifecycle::Failed,
+            error: Some("boom".to_string()),
+            at_ms: 1_600,
+        });
+        let status = panel.top_status_text(120, 3);
+        assert!(status.contains("workflow 3 runs"), "{status}");
+        assert!(status.contains("failed"), "{status}");
+        assert!(status.contains("1/1"), "{status}");
+        assert!(status.contains("1 fail"), "{status}");
+    }
+
+    #[test]
+    fn top_status_text_omits_run_count_for_single_run() {
+        let panel = started_panel();
+        let status = panel.top_status_text(120, 1);
+        assert!(!status.contains("1 runs"), "{status}");
+    }
+
+    #[test]
+    fn top_status_text_truncates_narrow_widths() {
+        let panel = started_panel();
+        let status = panel.top_status_text(18, 2);
+        assert!(status.width() <= 18, "{status}");
+        assert!(!status.is_empty());
     }
 
     #[test]

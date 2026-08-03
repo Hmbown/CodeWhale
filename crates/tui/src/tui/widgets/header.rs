@@ -98,6 +98,9 @@ pub struct HeaderData<'a> {
     /// Live sub-agent count for the header chrome. `0` hides the chip.
     /// Drill-in is the Agents sidebar / SubAgents modal — not a transcript shelf.
     pub running_agents: usize,
+    /// Optional compact workflow status surfaced in the top status bar.
+    pub workflow_status_label: Option<String>,
+    pub workflow_status_color: Option<Color>,
 }
 
 impl<'a> HeaderData<'a> {
@@ -123,6 +126,8 @@ impl<'a> HeaderData<'a> {
             provider_label: None,
             status_indicator_frame: Some("cw"),
             running_agents: 0,
+            workflow_status_label: None,
+            workflow_status_color: None,
         }
     }
 
@@ -130,6 +135,13 @@ impl<'a> HeaderData<'a> {
     #[must_use]
     pub fn with_running_agents(mut self, count: usize) -> Self {
         self.running_agents = count;
+        self
+    }
+
+    #[must_use]
+    pub fn with_workflow_status(mut self, label: Option<String>, color: Option<Color>) -> Self {
+        self.workflow_status_label = label;
+        self.workflow_status_color = color;
         self
     }
 
@@ -510,11 +522,27 @@ impl<'a> HeaderWidget<'a> {
         let full_effort_width = 3 + effort.width();
         let compact_effort = Self::compact_effort_label(effort);
         let compact_effort_width = 3 + compact_effort.width();
+        let workflow = self
+            .data
+            .workflow_status_label
+            .as_deref()
+            .map(str::trim)
+            .filter(|label| !label.is_empty())
+            .unwrap_or("");
+        let workflow_color = self
+            .data
+            .workflow_status_color
+            .unwrap_or(palette::WHALE_INFO);
+        let workflow_reserve = if workflow.is_empty() {
+            0
+        } else {
+            3 + workflow.width().min(20)
+        };
         let effort = if effort.is_empty() {
             String::new()
-        } else if used + mode_width + full_effort_width <= max_width {
+        } else if used + mode_width + full_effort_width + workflow_reserve <= max_width {
             effort.to_string()
-        } else if used + mode_width + compact_effort_width <= max_width {
+        } else if used + mode_width + compact_effort_width + workflow_reserve <= max_width {
             compact_effort.to_string()
         } else {
             String::new()
@@ -547,6 +575,18 @@ impl<'a> HeaderWidget<'a> {
                 effort.to_string(),
                 Style::default().fg(palette::WHALE_INFO),
             ));
+        }
+        if !workflow.is_empty() {
+            let budget = max_width.saturating_sub(Self::span_width(&spans) + 3);
+            if budget >= 8 {
+                spans.push(Span::styled(" · ", Style::default().fg(palette::TEXT_DIM)));
+                spans.push(Span::styled(
+                    Self::truncate_to_width(workflow, budget),
+                    Style::default()
+                        .fg(workflow_color)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
         }
         // Sub-agent count: high-signal when workers are live; sits after
         // route/mode so the left zone still names "where am I" first.
@@ -1097,6 +1137,46 @@ mod tests {
             80,
         );
         assert!(!empty.contains("agent"), "{empty:?}");
+    }
+
+    #[test]
+    fn header_shows_workflow_status_when_present() {
+        let rendered = render_left(
+            HeaderData::new(AppMode::Agent, "glm-5.1", "CW", true, palette::WHALE_BG)
+                .with_status_indicator(Some("cw"))
+                .with_workflow_status(Some("workflow running · audit · 1/3".to_string()), None),
+            80,
+        );
+        assert!(rendered.contains("workflow running"), "{rendered:?}");
+    }
+
+    #[test]
+    fn header_omits_workflow_status_when_absent() {
+        let rendered = render_left(
+            HeaderData::new(AppMode::Agent, "glm-5.1", "CW", true, palette::WHALE_BG)
+                .with_status_indicator(Some("cw")),
+            80,
+        );
+        assert!(!rendered.contains("workflow"), "{rendered:?}");
+    }
+
+    #[test]
+    fn narrow_header_keeps_workflow_status_visible() {
+        let rendered = render_left(
+            HeaderData::new(
+                AppMode::Agent,
+                "a-very-long-model-route-that-must-truncate",
+                "CW",
+                true,
+                palette::WHALE_BG,
+            )
+            .with_status_indicator(Some("cw"))
+            .with_reasoning_effort(Some("low→high"))
+            .with_workflow_status(Some("workflow running · audit · 1/3".to_string()), None),
+            34,
+        );
+        assert!(rendered.contains("workflow"), "{rendered:?}");
+        assert!(rendered.width() <= 34, "{rendered:?}");
     }
 
     #[test]
