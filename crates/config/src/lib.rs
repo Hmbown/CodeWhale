@@ -806,6 +806,26 @@ fn parse_provider_config_key(key: &str) -> Option<(ProviderKind, ProviderConfigF
     Some((provider, field))
 }
 
+/// Split a `providers.<id>.<field>` key without resolving the provider. Used
+/// for custom providers, whose ids live in `[providers.<id>]` tables inside
+/// `ProvidersToml::extras` rather than in [`ProviderKind::ALL`].
+fn parse_custom_provider_config_key(key: &str) -> Option<(&str, &str)> {
+    let suffix = key.strip_prefix("providers.")?;
+    let (provider_id, field_key) = suffix.split_once('.')?;
+    (!provider_id.is_empty()).then_some((provider_id, field_key))
+}
+
+fn is_builtin_provider_config_id(provider_id: &str) -> bool {
+    ProviderKind::ALL
+        .iter()
+        .any(|kind| kind.provider().provider_config_key() == provider_id)
+}
+
+/// Field legs a `[providers.<id>]` custom table accepts through
+/// `config set`, including the required `kind` marker.
+const CUSTOM_PROVIDER_FIELD_HINT: &str = "api_key, base_url, model, context_window, mode, auth_mode, \
+     insecure_skip_tls_verify, http_headers, path_suffix, kind";
+
 fn provider_config_key(provider: ProviderKind, field: ProviderConfigField) -> String {
     format!(
         "providers.{}.{}",
@@ -2180,6 +2200,111 @@ impl ConfigToml {
             .ok()
     }
 
+    /// Mutable access to a custom provider's `[providers.<id>]` table,
+    /// creating it on the first `config set providers.<id>.<field>`.
+    fn custom_provider_table_mut(&mut self, provider_id: &str) -> Result<&mut toml::value::Table> {
+        let entry = self
+            .providers
+            .extras
+            .entry(provider_id.to_string())
+            .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
+        entry.as_table_mut().with_context(|| {
+            format!("custom provider '{provider_id}' must be a [providers.{provider_id}] table")
+        })
+    }
+
+    /// Write one leg of a custom provider table. Named custom providers are
+    /// not in [`ProviderKind::ALL`], so without this path
+    /// `config set providers.<custom>.<field>` fell through to a literal
+    /// top-level extras key and silently never took effect (#5167).
+    fn set_custom_provider_value(
+        &mut self,
+        provider_id: &str,
+        field_key: &str,
+        value: &str,
+    ) -> Result<()> {
+        if is_builtin_provider_config_id(provider_id) {
+            bail!(
+                "unknown field '{field_key}' for built-in provider '{provider_id}': \
+                 expected one of api_key, base_url, model, context_window, mode, auth_mode, \
+                 insecure_skip_tls_verify, http_headers, path_suffix"
+            );
+        }
+        if field_key == "kind" {
+            let compatible =
+                value.trim().to_ascii_lowercase().replace('_', "-") == "openai-compatible";
+            if !compatible {
+                bail!(
+                    "custom provider '{provider_id}' must set [providers.{provider_id}].kind = \"openai-compatible\""
+                );
+            }
+            self.custom_provider_table_mut(provider_id)?.insert(
+                "kind".to_string(),
+                toml::Value::String(value.trim().to_string()),
+            );
+            return Ok(());
+        }
+        let Some(field) = ProviderConfigField::parse(field_key) else {
+            bail!(
+                "unknown field '{field_key}' for custom provider '{provider_id}': \
+                 expected one of {CUSTOM_PROVIDER_FIELD_HINT}"
+            );
+        };
+        let toml_value = match field {
+            ProviderConfigField::ApiKey
+            | ProviderConfigField::BaseUrl
+            | ProviderConfigField::Model
+            | ProviderConfigField::Mode
+            | ProviderConfigField::AuthMode
+            | ProviderConfigField::PathSuffix => toml::Value::String(value.to_string()),
+            ProviderConfigField::ContextWindow => {
+                toml::Value::Integer(i64::from(parse_context_window(value)?))
+            }
+            ProviderConfigField::InsecureSkipTlsVerify => toml::Value::Boolean(parse_bool(value)?),
+            ProviderConfigField::HttpHeaders => toml::Value::Table(
+                parse_http_headers(value)?
+                    .into_iter()
+                    .map(|(name, header)| (name, toml::Value::String(header)))
+                    .collect(),
+            ),
+        };
+        self.custom_provider_table_mut(provider_id)?
+            .insert(field.key().to_string(), toml_value);
+        Ok(())
+    }
+
+    fn get_custom_provider_value_with(
+        &self,
+        provider_id: &str,
+        field_key: &str,
+        render: fn(&ProviderConfigToml, ProviderConfigField) -> Option<String>,
+    ) -> Option<String> {
+        let table = self.providers.extras.get(provider_id)?.as_table()?;
+        if field_key == "kind" {
+            return table.get("kind")?.as_str().map(str::to_string);
+        }
+        let field = ProviderConfigField::parse(field_key)?;
+        let config: ProviderConfigToml = toml::Value::Table(table.clone()).try_into().ok()?;
+        render(&config, field)
+    }
+
+    fn unset_custom_provider_value(&mut self, provider_id: &str, field_key: &str) {
+        let Some(table) = self
+            .providers
+            .extras
+            .get_mut(provider_id)
+            .and_then(toml::Value::as_table_mut)
+        else {
+            return;
+        };
+        let leg = if field_key == "kind" {
+            "kind"
+        } else {
+            ProviderConfigField::parse(field_key).map_or(field_key, |field| field.key())
+        };
+        table.remove(leg);
+    }
+
     fn bind_persisted_provider_id(&mut self, provider_id: &str) -> Result<()> {
         self.selected_provider_id = None;
         if self.provider != ProviderKind::Custom || provider_id == ProviderKind::Custom.as_str() {
@@ -2241,6 +2366,13 @@ impl ConfigToml {
         if let Some((provider, field)) = parse_provider_config_key(key) {
             return get_provider_config_value(self.providers.for_provider(provider), field);
         }
+        if let Some((provider_id, field_key)) = parse_custom_provider_config_key(key) {
+            return self.get_custom_provider_value_with(
+                provider_id,
+                field_key,
+                get_provider_config_value,
+            );
+        }
 
         match key {
             "provider" => Some(self.provider_id().to_string()),
@@ -2286,6 +2418,13 @@ impl ConfigToml {
     pub fn get_display_value(&self, key: &str) -> Option<String> {
         if let Some((provider, field)) = parse_provider_config_key(key) {
             return get_provider_config_display_value(self.providers.for_provider(provider), field);
+        }
+        if let Some((provider_id, field_key)) = parse_custom_provider_config_key(key) {
+            return self.get_custom_provider_value_with(
+                provider_id,
+                field_key,
+                get_provider_config_display_value,
+            );
         }
 
         if key == "http_headers" {
@@ -2334,6 +2473,9 @@ impl ConfigToml {
     pub fn set_value(&mut self, key: &str, value: &str) -> Result<()> {
         if let Some((provider, field)) = parse_provider_config_key(key) {
             return set_provider_config_value(self, provider, field, value);
+        }
+        if let Some((provider_id, field_key)) = parse_custom_provider_config_key(key) {
+            return self.set_custom_provider_value(provider_id, field_key, value);
         }
 
         match key {
@@ -2384,6 +2526,10 @@ impl ConfigToml {
     pub fn unset_value(&mut self, key: &str) -> Result<()> {
         if let Some((provider, field)) = parse_provider_config_key(key) {
             unset_provider_config_value(self, provider, field);
+            return Ok(());
+        }
+        if let Some((provider_id, field_key)) = parse_custom_provider_config_key(key) {
+            self.unset_custom_provider_value(provider_id, field_key);
             return Ok(());
         }
 

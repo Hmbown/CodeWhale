@@ -2291,6 +2291,112 @@ fn moonshot_provider_config_values_round_trip() -> Result<()> {
 }
 
 #[test]
+fn custom_provider_config_set_get_unset_round_trip() -> Result<()> {
+    let mut config = ConfigToml::default();
+
+    // The owner flow from #5174: build an Alibaba Model Studio custom
+    // provider entirely through `config set providers.<id>.<field>`.
+    config.set_value("providers.alibaba_studio.kind", "openai-compatible")?;
+    config.set_value(
+        "providers.alibaba_studio.base_url",
+        "https://coding.dashscope.aliyuncs.com/v1",
+    )?;
+    config.set_value("providers.alibaba_studio.model", "qwen3-coder-plus")?;
+    config.set_value("providers.alibaba_studio.api_key", "sk-studio-secret")?;
+    config.set_value("providers.alibaba_studio.context_window", "256000")?;
+
+    assert_eq!(
+        config.get_value("providers.alibaba_studio.kind").as_deref(),
+        Some("openai-compatible")
+    );
+    assert_eq!(
+        config
+            .get_value("providers.alibaba_studio.base_url")
+            .as_deref(),
+        Some("https://coding.dashscope.aliyuncs.com/v1")
+    );
+    assert_eq!(
+        config
+            .get_value("providers.alibaba_studio.model")
+            .as_deref(),
+        Some("qwen3-coder-plus")
+    );
+    assert_eq!(
+        config
+            .get_value("providers.alibaba_studio.context_window")
+            .as_deref(),
+        Some("256000")
+    );
+    assert_eq!(
+        config
+            .get_display_value("providers.alibaba_studio.api_key")
+            .as_deref(),
+        Some("********")
+    );
+
+    // The set must land in a real `[providers.alibaba_studio]` table, never
+    // in a literal top-level extras key (#5167).
+    let serialized = toml::to_string(&config)?;
+    assert!(
+        serialized.contains("[providers.alibaba_studio]"),
+        "custom provider legs must serialize as a providers table, got:\n{serialized}"
+    );
+    assert!(
+        config
+            .extras
+            .keys()
+            .all(|key| !key.starts_with("providers.")),
+        "no literal 'providers.*' extras key may round-trip: {:?}",
+        config.extras.keys().collect::<Vec<_>>()
+    );
+
+    // The table must satisfy the runtime binding contract for named custom
+    // providers.
+    config.set_value("provider", "alibaba_studio")?;
+    assert_eq!(config.provider_id(), "alibaba_studio");
+
+    config.unset_value("providers.alibaba_studio.api_key")?;
+    assert_eq!(config.get_value("providers.alibaba_studio.api_key"), None);
+    assert_eq!(
+        config
+            .get_value("providers.alibaba_studio.model")
+            .as_deref(),
+        Some("qwen3-coder-plus")
+    );
+    Ok(())
+}
+
+#[test]
+fn custom_provider_set_rejects_unknown_field_with_corrective_error() {
+    let mut config = ConfigToml::default();
+
+    let err = config
+        .set_value("providers.alibaba_studio.bogus", "x")
+        .expect_err("unknown custom provider fields must not fall into extras");
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("bogus") && message.contains("base_url"),
+        "error must name the bad leg and the valid shape, got: {message}"
+    );
+    assert!(config.providers.extras.is_empty());
+}
+
+#[test]
+fn builtin_provider_set_rejects_unknown_field_with_corrective_error() {
+    let mut config = ConfigToml::default();
+
+    let err = config
+        .set_value("providers.deepseek.bogus", "x")
+        .expect_err("unknown built-in provider fields must not fall into extras");
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("bogus") && message.contains("deepseek"),
+        "error must name the bad leg and provider, got: {message}"
+    );
+    assert!(config.providers.extras.is_empty());
+}
+
+#[test]
 fn siliconflow_cn_provider_config_values_round_trip() -> Result<()> {
     let mut config = ConfigToml::default();
 
