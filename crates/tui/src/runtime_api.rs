@@ -1751,14 +1751,11 @@ async fn get_fleet_run_receipt(
         .rebuild_state()
         .map_err(|err| ApiError::internal(format!("Failed to rebuild fleet state: {err}")))?;
     let key = format!("{run_id}:{task_id}");
-    let receipt = ledger_state
-        .receipts
-        .get(&key)
-        .ok_or_else(|| {
-            ApiError::not_found(format!(
-                "no receipt found for run '{run_id}' task '{task_id}'"
-            ))
-        })?;
+    let receipt = ledger_state.receipts.get(&key).ok_or_else(|| {
+        ApiError::not_found(format!(
+            "no receipt found for run '{run_id}' task '{task_id}'"
+        ))
+    })?;
     Ok(Json(fleet_receipt_json(receipt)))
 }
 
@@ -1771,14 +1768,11 @@ async fn inspect_fleet_run_receipt_evidence(
         .rebuild_state()
         .map_err(|err| ApiError::internal(format!("Failed to rebuild fleet state: {err}")))?;
     let key = format!("{run_id}:{task_id}");
-    let receipt = ledger_state
-        .receipts
-        .get(&key)
-        .ok_or_else(|| {
-            ApiError::not_found(format!(
-                "no receipt found for run '{run_id}' task '{task_id}'"
-            ))
-        })?;
+    let receipt = ledger_state.receipts.get(&key).ok_or_else(|| {
+        ApiError::not_found(format!(
+            "no receipt found for run '{run_id}' task '{task_id}'"
+        ))
+    })?;
     // Locate the most recent Receipt-kind artifact.
     let receipt_artifact = receipt
         .artifacts
@@ -1799,9 +1793,8 @@ async fn inspect_fleet_run_receipt_evidence(
     let truncated = size_bytes > MAX_RECEIPT_EVIDENCE_READ_BYTES;
     let raw = {
         use std::io::Read;
-        let file = std::fs::File::open(&abs_path).map_err(|err| {
-            ApiError::internal(format!("Failed to open evidence file: {err}"))
-        })?;
+        let file = std::fs::File::open(&abs_path)
+            .map_err(|err| ApiError::internal(format!("Failed to open evidence file: {err}")))?;
         let mut buf = Vec::new();
         file.take(MAX_RECEIPT_EVIDENCE_READ_BYTES)
             .read_to_end(&mut buf)
@@ -1809,9 +1802,8 @@ async fn inspect_fleet_run_receipt_evidence(
         buf
     };
     // Parse as JSON if possible; fall back to a raw string representation.
-    let content: Value = serde_json::from_slice(&raw).unwrap_or_else(|_| {
-        Value::String(String::from_utf8_lossy(&raw).into_owned())
-    });
+    let content: Value = serde_json::from_slice(&raw)
+        .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&raw).into_owned()));
     Ok(Json(json!({
         "run_id": run_id,
         "task_id": task_id,
@@ -1822,7 +1814,6 @@ async fn inspect_fleet_run_receipt_evidence(
         "content": content,
     })))
 }
-
 
 fn open_fleet_manager(state: &RuntimeApiState) -> Result<FleetManager, ApiError> {
     let (exec_config, fleet_config, session_model, route_config) = {
@@ -1985,25 +1976,24 @@ fn fleet_receipt_json(receipt: &codewhale_protocol::fleet::FleetReceipt) -> Valu
         FleetTaskResult::Skip => "skip",
         FleetTaskResult::Timeout => "timeout",
     };
-    let (failure_kind_label, failure_class, retry_eligible) =
-        match receipt.failure_kind.as_ref() {
-            Some(FleetTaskFailureKind::Transport) => (
-                Some("transport"),
-                Some("Infrastructure or network failure during task transport"),
-                true,
-            ),
-            Some(FleetTaskFailureKind::Task) => (
-                Some("task"),
-                Some("Task logic exited unsuccessfully"),
-                false,
-            ),
-            Some(FleetTaskFailureKind::Verifier) => (
-                Some("verifier"),
-                Some("Verifier rejected the task output; manual review or code change required"),
-                false,
-            ),
-            None => (None, None, false),
-        };
+    let (failure_kind_label, failure_class, retry_eligible) = match receipt.failure_kind.as_ref() {
+        Some(FleetTaskFailureKind::Transport) => (
+            Some("transport"),
+            Some("Infrastructure or network failure during task transport"),
+            true,
+        ),
+        Some(FleetTaskFailureKind::Task) => (
+            Some("task"),
+            Some("Task logic exited unsuccessfully"),
+            false,
+        ),
+        Some(FleetTaskFailureKind::Verifier) => (
+            Some("verifier"),
+            Some("Verifier rejected the task output; manual review or code change required"),
+            false,
+        ),
+        None => (None, None, false),
+    };
     let evidence_available = receipt
         .artifacts
         .iter()
@@ -2031,7 +2021,6 @@ fn fleet_receipt_json(receipt: &codewhale_protocol::fleet::FleetReceipt) -> Valu
         "evidence_available": evidence_available,
     })
 }
-
 
 fn fleet_event_json(event: &codewhale_protocol::fleet::FleetWorkerEvent) -> Value {
     json!({

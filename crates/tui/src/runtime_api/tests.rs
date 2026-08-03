@@ -7542,14 +7542,13 @@ fn fleet_receipt_json_receipt_artifact_sets_evidence_available() {
 #[tokio::test]
 async fn fleet_receipt_api_list_and_get_round_trip() -> Result<()> {
     use crate::fleet::ledger::FleetLedger;
+    use crate::fleet::task_spec::FleetTaskVerificationInput;
     use crate::fleet::task_spec::{
         FleetTaskSpecDocument, FleetTaskVerification, prepare_verification_receipt,
     };
-    use crate::fleet::task_spec::FleetTaskVerificationInput;
     use codewhale_protocol::fleet::{FleetScore, FleetTaskResult};
 
-    let root =
-        std::env::temp_dir().join(format!("codewhale-receipt-api-{}", Uuid::new_v4()));
+    let root = std::env::temp_dir().join(format!("codewhale-receipt-api-{}", Uuid::new_v4()));
     let workspace = root.join("workspace");
     fs::create_dir_all(&workspace)?;
 
@@ -7640,10 +7639,7 @@ async fn fleet_receipt_api_list_and_get_round_trip() -> Result<()> {
 
     // List receipts for the run.
     let list: serde_json::Value = client
-        .get(format!(
-            "http://{addr}/v1/fleet/runs/{}/receipts",
-            run_id.0
-        ))
+        .get(format!("http://{addr}/v1/fleet/runs/{}/receipts", run_id.0))
         .send()
         .await?
         .error_for_status()?
