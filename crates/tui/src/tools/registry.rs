@@ -743,11 +743,13 @@ impl ToolRegistryBuilder {
     pub fn with_runtime_task_tools(self) -> Self {
         use super::automation::AutomationTool;
         use super::github::GithubTool;
+        use super::send_later::SendLaterTool;
         use super::tasks::TasksTool;
 
         self.with_tool(Arc::new(TasksTool::new("tasks")))
             .with_tool(Arc::new(GithubTool::new("github")))
             .with_tool(Arc::new(AutomationTool::new("automation")))
+            .with_tool(Arc::new(SendLaterTool::new("send_later")))
     }
 
     /// Include shell-related task tools (`task_shell_start`, `task_shell_wait`).
@@ -766,17 +768,20 @@ impl ToolRegistryBuilder {
     /// inspection tools. Plan mode uses this surface so it can observe state
     /// without starting work, changing remotes, or mutating automation config.
     ///
-    /// The model sees the same canonical `tasks` / `github` / `automation`
-    /// tools as the full surface, restricted to their read-only actions.
+    /// The model sees the same canonical `tasks` / `github` / `automation` /
+    /// `send_later` tools as the full surface, restricted to their read-only
+    /// actions.
     #[must_use]
     pub fn with_runtime_read_only_task_tools(self) -> Self {
         use super::automation::AutomationTool;
         use super::github::GithubTool;
+        use super::send_later::SendLaterTool;
         use super::tasks::TasksTool;
 
         self.with_tool(Arc::new(TasksTool::read_only("tasks")))
             .with_tool(Arc::new(GithubTool::read_only("github")))
             .with_tool(Arc::new(AutomationTool::read_only("automation")))
+            .with_tool(Arc::new(SendLaterTool::read_only("send_later")))
     }
 
     /// Include web search and fetch tools.
@@ -2441,8 +2446,8 @@ mod tests {
             .into_iter()
             .map(|tool| tool.name)
             .collect();
-        assert_eq!(api_names.len(), 3);
-        for canonical in ["tasks", "github", "automation"] {
+        assert_eq!(api_names.len(), 4);
+        for canonical in ["tasks", "github", "automation", "send_later"] {
             assert!(
                 api_names.iter().any(|n| n == canonical),
                 "{canonical} should be model-visible on the read-only surface"

@@ -25,6 +25,7 @@ use crate::utils::spawn_supervised;
 
 const CURRENT_AUTOMATION_SCHEMA_VERSION: u32 = 1;
 const CURRENT_RUN_SCHEMA_VERSION: u32 = 1;
+const CURRENT_TRIGGER_SCHEMA_VERSION: u32 = 1;
 const DEFAULT_AUTOMATION_MODE: &str = "agent";
 const DEFAULT_AUTOMATION_ALLOW_SHELL: bool = false;
 const DEFAULT_AUTOMATION_TRUST_MODE: bool = false;
@@ -41,6 +42,72 @@ const fn default_automation_schema_version() -> u32 {
 const fn default_run_schema_version() -> u32 {
     CURRENT_RUN_SCHEMA_VERSION
 }
+
+const fn default_trigger_schema_version() -> u32 {
+    CURRENT_TRIGGER_SCHEMA_VERSION
+}
+
+// ── Delayed-trigger types ──────────────────────────────────────────────────
+
+/// Status of a one-shot delayed trigger.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DelayedTriggerStatus {
+    /// Waiting to fire.
+    Pending,
+    /// The trigger was fired and a task was enqueued.
+    Fired,
+    /// The trigger was explicitly canceled before it fired.
+    Canceled,
+    /// The trigger fired but failed to enqueue a task.
+    Failed,
+}
+
+/// A durable one-shot delayed continuation record.
+///
+/// Stored under `~/.codewhale/automations/triggers/{trigger_id}.json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DelayedTriggerRecord {
+    #[serde(default = "default_trigger_schema_version")]
+    pub schema_version: u32,
+    pub trigger_id: String,
+    /// Absolute UTC time at which the trigger should fire.
+    pub fire_at: DateTime<Utc>,
+    /// The message that will be submitted as a new task when the trigger fires.
+    pub message: String,
+    /// Working directory for the task that fires when the trigger trips.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<PathBuf>,
+    pub status: DelayedTriggerStatus,
+    pub created_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fired_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Optional lineage: the trigger id that scheduled this one (for re-arm chains).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_trigger_id: Option<String>,
+}
+
+/// Input for creating a new delayed trigger.
+#[derive(Debug, Clone)]
+pub struct CreateDelayedTriggerRequest {
+    /// Absolute fire time.  Callers must resolve `delay_minutes` → `fire_at`
+    /// before calling this function.
+    pub fire_at: DateTime<Utc>,
+    /// Message to submit as a new task when the trigger fires.
+    pub message: String,
+    /// Optional workspace directory for the fired task.
+    pub workspace: Option<PathBuf>,
+    /// Optional parent trigger id for re-arm lineage tracking.
+    pub parent_trigger_id: Option<String>,
+}
+
+// ── End delayed-trigger types ──────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -819,19 +886,24 @@ fn days_in_month(year: i32, month: u32) -> u32 {
 pub struct AutomationManager {
     automations_dir: PathBuf,
     runs_dir: PathBuf,
+    triggers_dir: PathBuf,
 }
 
 impl AutomationManager {
     pub fn open(root: PathBuf) -> Result<Self> {
         let automations_dir = root.join("automations");
         let runs_dir = root.join("runs");
+        let triggers_dir = root.join("triggers");
         fs::create_dir_all(&automations_dir)
             .with_context(|| format!("Failed to create {}", automations_dir.display()))?;
         fs::create_dir_all(&runs_dir)
             .with_context(|| format!("Failed to create {}", runs_dir.display()))?;
+        fs::create_dir_all(&triggers_dir)
+            .with_context(|| format!("Failed to create {}", triggers_dir.display()))?;
         Ok(Self {
             automations_dir,
             runs_dir,
+            triggers_dir,
         })
     }
 
@@ -847,6 +919,11 @@ impl AutomationManager {
     fn runs_dir_for(&self, automation_id: &str) -> Result<PathBuf> {
         ensure_safe_storage_id("automation id", automation_id)?;
         Ok(self.runs_dir.join(automation_id))
+    }
+
+    fn trigger_path(&self, trigger_id: &str) -> Result<PathBuf> {
+        ensure_safe_storage_id("trigger id", trigger_id)?;
+        Ok(self.triggers_dir.join(format!("{trigger_id}.json")))
     }
 
     /// Current run file name: `{sortable-created-at}-{run_id}.json`. The
@@ -1237,6 +1314,124 @@ impl AutomationManager {
         }
         Ok(pending)
     }
+
+    // ── Delayed-trigger storage methods ──────────────────────────────────
+
+    /// Persist a new delayed trigger and return the record.
+    pub fn create_trigger(&self, req: CreateDelayedTriggerRequest) -> Result<DelayedTriggerRecord> {
+        let now = Utc::now();
+        if req.fire_at <= now {
+            bail!(
+                "fire_at must be in the future (got {}, now is {})",
+                req.fire_at.to_rfc3339(),
+                now.to_rfc3339()
+            );
+        }
+        if req.message.trim().is_empty() {
+            bail!("Trigger message must not be empty");
+        }
+        let record = DelayedTriggerRecord {
+            schema_version: CURRENT_TRIGGER_SCHEMA_VERSION,
+            trigger_id: format!("trig_{}", Uuid::new_v4().simple()),
+            fire_at: req.fire_at,
+            message: req.message.trim().to_string(),
+            workspace: req.workspace,
+            status: DelayedTriggerStatus::Pending,
+            created_at: now,
+            fired_at: None,
+            task_id: None,
+            thread_id: None,
+            error: None,
+            parent_trigger_id: req.parent_trigger_id,
+        };
+        self.save_trigger(&record)?;
+        Ok(record)
+    }
+
+    /// Load a trigger by id.
+    pub fn get_trigger(&self, trigger_id: &str) -> Result<DelayedTriggerRecord> {
+        let path = self.trigger_path(trigger_id)?;
+        let raw = fs::read_to_string(&path)
+            .with_context(|| format!("Trigger '{trigger_id}' not found"))?;
+        let record: DelayedTriggerRecord = serde_json::from_str(&raw)
+            .with_context(|| format!("Failed to parse trigger '{trigger_id}'"))?;
+        if record.schema_version > CURRENT_TRIGGER_SCHEMA_VERSION {
+            bail!(
+                "Trigger schema v{} is newer than supported v{}",
+                record.schema_version,
+                CURRENT_TRIGGER_SCHEMA_VERSION
+            );
+        }
+        Ok(record)
+    }
+
+    /// Atomically persist a trigger record.
+    pub fn save_trigger(&self, record: &DelayedTriggerRecord) -> Result<()> {
+        let path = self.trigger_path(&record.trigger_id)?;
+        write_json_atomic(&path, record)
+    }
+
+    /// List triggers, newest first.  Pass `status_filter` to restrict results.
+    pub fn list_triggers(
+        &self,
+        status_filter: Option<DelayedTriggerStatus>,
+        limit: Option<usize>,
+    ) -> Result<Vec<DelayedTriggerRecord>> {
+        let mut out = Vec::new();
+        if !self.triggers_dir.exists() {
+            return Ok(out);
+        }
+        for entry in fs::read_dir(&self.triggers_dir)
+            .with_context(|| format!("Failed to read {}", self.triggers_dir.display()))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().is_none_or(|ext| ext != "json") {
+                continue;
+            }
+            match fs::read_to_string(&path)
+                .ok()
+                .and_then(|raw| serde_json::from_str::<DelayedTriggerRecord>(&raw).ok())
+            {
+                Some(record) => {
+                    if let Some(filter) = status_filter {
+                        if record.status != filter {
+                            continue;
+                        }
+                    }
+                    out.push(record);
+                }
+                None => {
+                    tracing::warn!("Skipping unreadable trigger file {}", path.display());
+                }
+            }
+        }
+        out.sort_by_key(|r| std::cmp::Reverse(r.created_at));
+        if let Some(limit) = limit {
+            out.truncate(limit);
+        }
+        Ok(out)
+    }
+
+    /// Cancel a pending trigger.  Returns the updated record.
+    pub fn cancel_trigger(&self, trigger_id: &str) -> Result<DelayedTriggerRecord> {
+        let mut record = self.get_trigger(trigger_id)?;
+        if !matches!(record.status, DelayedTriggerStatus::Pending) {
+            bail!(
+                "Trigger '{trigger_id}' cannot be canceled (status: {:?})",
+                record.status
+            );
+        }
+        record.status = DelayedTriggerStatus::Canceled;
+        self.save_trigger(&record)?;
+        Ok(record)
+    }
+
+    /// Return all pending triggers whose `fire_at` is at or before `now`.
+    pub fn collect_due_triggers(&self, now: DateTime<Utc>) -> Result<Vec<DelayedTriggerRecord>> {
+        let pending = self.list_triggers(Some(DelayedTriggerStatus::Pending), None)?;
+        Ok(pending.into_iter().filter(|t| t.fire_at <= now).collect())
+    }
 }
 
 fn new_run_record(
@@ -1377,6 +1572,57 @@ async fn scheduler_tick_shared(
         // Phase 3: reacquire to persist the run and advance the slot.
         let manager = automations.lock().await;
         manager.finish_scheduled_run(&run, now)?;
+    }
+
+    Ok(())
+}
+
+/// Enqueue a fired delayed trigger as a durable task and persist the updated
+/// trigger record.  The manager mutex is never held across the task-manager
+/// await.
+async fn fire_due_triggers_shared(
+    automations: &SharedAutomationManager,
+    task_manager: &SharedTaskManager,
+) -> Result<()> {
+    let now = Utc::now();
+
+    // Phase 1: collect due triggers under the lock.
+    let due_triggers = {
+        let manager = automations.lock().await;
+        manager.collect_due_triggers(now)?
+    };
+
+    for mut trigger in due_triggers {
+        // Phase 2: enqueue without holding the lock.
+        let workspace = trigger.workspace.clone();
+        let new_task = NewTaskRequest {
+            prompt: trigger.message.clone(),
+            model: None,
+            workspace,
+            mode: Some("agent".to_string()),
+            allow_shell: Some(false),
+            trust_mode: Some(false),
+            auto_approve: Some(false),
+        };
+
+        match task_manager.add_task(new_task).await {
+            Ok(task) => {
+                trigger.status = DelayedTriggerStatus::Fired;
+                trigger.fired_at = Some(Utc::now());
+                trigger.task_id = Some(task.id.clone());
+                trigger.thread_id = task.thread_id.clone();
+                trigger.error = None;
+            }
+            Err(err) => {
+                trigger.status = DelayedTriggerStatus::Failed;
+                trigger.fired_at = Some(Utc::now());
+                trigger.error = Some(format!("Failed to enqueue task: {err}"));
+            }
+        }
+
+        // Phase 3: persist the outcome under the lock.
+        let manager = automations.lock().await;
+        manager.save_trigger(&trigger)?;
     }
 
     Ok(())
@@ -1651,6 +1897,9 @@ pub fn spawn_scheduler(
                 }
                 if let Err(err) = reconcile_run_statuses_shared(&automations, &task_manager).await {
                     tracing::warn!("automation reconcile failed: {err}");
+                }
+                if let Err(err) = fire_due_triggers_shared(&automations, &task_manager).await {
+                    tracing::warn!("delayed trigger tick failed: {err}");
                 }
 
                 tokio::select! {
