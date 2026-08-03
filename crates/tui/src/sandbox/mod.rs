@@ -397,12 +397,23 @@ pub struct SandboxManager {
     /// When true and bwrap is executable on Linux, route commands through
     /// bubblewrap (#2184).
     prefer_bwrap: bool,
+
+    /// Disable all command sandbox wrappers for local development.
+    disabled: bool,
 }
 
 impl SandboxManager {
     /// Create a new `SandboxManager`.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Create a manager that never applies an OS sandbox wrapper.
+    pub fn without_sandbox() -> Self {
+        Self {
+            disabled: true,
+            ..Self::default()
+        }
     }
 
     /// Create a new `SandboxManager` with bwrap preference (#2184).
@@ -440,6 +451,10 @@ impl SandboxManager {
 
     /// Select the appropriate sandbox type for the given policy.
     pub fn select_sandbox(&self, policy: &SandboxPolicy) -> SandboxType {
+        if self.disabled {
+            return SandboxType::None;
+        }
+
         // If the policy doesn't want sandboxing, return None
         if !policy.should_sandbox() {
             return SandboxType::None;
@@ -780,6 +795,19 @@ mod tests {
             network_access: true,
         });
         assert_eq!(external, SandboxType::None);
+    }
+
+    #[test]
+    fn no_sandbox_manager_never_selects_a_wrapper() {
+        let manager = SandboxManager::without_sandbox();
+        assert_eq!(
+            manager.select_sandbox(&SandboxPolicy::WorkspaceWrite {
+                writable_roots: Vec::new(),
+                network_access: false,
+                exclude_tmpdir: false,
+            }),
+            SandboxType::None
+        );
     }
 
     #[test]

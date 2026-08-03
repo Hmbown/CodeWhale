@@ -259,6 +259,10 @@ struct Cli {
     /// Skip loading project-level config from $WORKSPACE/.codewhale/config.toml
     #[arg(long = "no-project-config")]
     no_project_config: bool,
+
+    /// Disable CodeWhale's process and command sandboxing. Development-only escape hatch.
+    #[arg(long)]
+    no_sandbox: bool,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -1355,10 +1359,22 @@ fn main() -> Result<()> {
     configure_windows_console_utf8();
     install_rustls_crypto_provider();
 
+    let cli = Cli::parse();
+    if cli.no_sandbox {
+        // Shell managers are created deeper in the runtime, so carry the
+        // explicit startup choice to them without making it user-configurable
+        // through the normal environment allowlist.
+        unsafe { std::env::set_var("CODEWHALE_NO_SANDBOX", "1") };
+    }
+
     // ── Process hardening (#2183) ─────────────────────────────────────────
     // MUST run before Tokio is booted and before any threads are spawned.
     // See crates/tui/src/sandbox/process_hardening.rs for ordering rationale.
-    crate::sandbox::process_hardening::apply_process_hardening();
+    if !cli.no_sandbox {
+        crate::sandbox::process_hardening::apply_process_hardening();
+    } else {
+        eprintln!("warning: --no-sandbox disables CodeWhale process and command sandboxing");
+    }
 
     // Set up process panic hook before anything else — writes crash dumps
     // to ~/.deepseek/crashes/ even if the panic happens before tokio is up,
@@ -1406,7 +1422,6 @@ fn main() -> Result<()> {
     // configuration, MCP, trust, sandbox, executable lookup, or plugin
     // discovery. Plugin discovery therefore runs first, and the loader below
     // admits only built-in provider credential names from a stable file read.
-    let cli = Cli::parse();
     let workspace = resolve_workspace(&cli);
     let mut plugin_discovery = None;
     let mut plugin_registry = None;

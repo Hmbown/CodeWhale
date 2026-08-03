@@ -1181,11 +1181,17 @@ impl std::fmt::Debug for ShellManager {
 impl ShellManager {
     /// Create a new `ShellManager` with default (no sandbox) policy.
     pub fn new(workspace: PathBuf) -> Self {
+        let sandbox_manager = if std::env::var("CODEWHALE_NO_SANDBOX").ok().as_deref() == Some("1")
+        {
+            SandboxManager::without_sandbox()
+        } else {
+            SandboxManager::new()
+        };
         Self {
             processes: HashMap::new(),
             stale_jobs: HashMap::new(),
             default_workspace: workspace,
-            sandbox_manager: SandboxManager::new(),
+            sandbox_manager,
             sandbox_policy: ExecutionSandboxPolicy::default(),
             foreground_background_requested: false,
         }

@@ -193,6 +193,9 @@ struct Cli {
     approval_policy: Option<String>,
     #[arg(long)]
     sandbox_mode: Option<String>,
+    /// Disable CodeWhale's process and command sandboxing. Development-only escape hatch.
+    #[arg(long)]
+    no_sandbox: bool,
     #[arg(long)]
     api_key: Option<String>,
     #[arg(long)]
@@ -4429,6 +4432,10 @@ fn build_tui_command_with_paths(
     if cli.no_project_config {
         cmd.arg("--no-project-config");
     }
+    if cli.no_sandbox {
+        cmd.arg("--no-sandbox");
+        cmd.env("CODEWHALE_NO_SANDBOX", "1");
+    }
     cmd.args(passthrough);
 
     let uses_raw_tui_provider = cli
@@ -7874,6 +7881,12 @@ model = "qwen-2.5-7b"
             }
             other => panic!("expected exec subcommand, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_no_sandbox_before_subcommand() {
+        let cli = parse_ok(&["codewhale", "--no-sandbox", "exec", "list the files"]);
+        assert!(cli.no_sandbox);
     }
 
     #[test]
