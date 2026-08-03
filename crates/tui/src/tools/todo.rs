@@ -40,8 +40,10 @@ impl TodoStatus {
     pub fn from_str(value: &str) -> Option<Self> {
         match value.trim().to_lowercase().as_str() {
             "pending" => Some(TodoStatus::Pending),
-            "in_progress" | "inprogress" => Some(TodoStatus::InProgress),
-            "completed" | "done" => Some(TodoStatus::Completed),
+            "in_progress" | "inprogress" | "in-progress" | "in progress" => {
+                Some(TodoStatus::InProgress)
+            }
+            "completed" | "complete" | "done" => Some(TodoStatus::Completed),
             "cancelled" | "canceled" => Some(TodoStatus::Cancelled),
             _ => None,
         }
@@ -318,12 +320,17 @@ impl ToolSpec for TodoWriteTool {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| ToolError::invalid_input("Todo item missing 'content'"))?;
 
-            let status_str = item
-                .get("status")
-                .and_then(|v| v.as_str())
-                .unwrap_or("pending");
-
-            let status = TodoStatus::from_str(status_str).unwrap_or(TodoStatus::Pending);
+            let status = match item.get("status").and_then(|v| v.as_str()) {
+                Some(raw) => TodoStatus::from_str(raw).ok_or_else(|| {
+                    // #5123-class: unknown statuses used to silently coerce to
+                    // pending on the canonical progress surface.
+                    ToolError::invalid_input(format!(
+                        "unknown todo status '{raw}'; expected pending, in_progress, \
+                         completed, or cancelled"
+                    ))
+                })?,
+                None => TodoStatus::Pending,
+            };
 
             list.add(content.to_string(), status);
         }
@@ -524,6 +531,34 @@ mod tests {
             TodoList::from_snapshot(&multiple_active).unwrap_err(),
             "Only one To-do item may be in progress"
         );
+    }
+
+    #[tokio::test]
+    async fn work_update_rejects_unknown_status_instead_of_coercing_to_pending() {
+        // #5123-class: statuses like "blocked" / "in-progress" used to be
+        // recorded as pending with a success receipt on the canonical
+        // progress surface.
+        let tool = TodoWriteTool::work_update(new_shared_todo_list());
+        let context = ToolContext::new(std::env::temp_dir());
+        let err = tool
+            .execute(
+                json!({"todos": [{ "content": "x", "status": "blocked" }]}),
+                &context,
+            )
+            .await
+            .expect_err("unknown status must fail fast");
+        assert!(format!("{err}").contains("unknown todo status"), "{err}");
+
+        // Common near-misses resolve via the synonym table.
+        assert_eq!(
+            TodoStatus::from_str("complete"),
+            Some(TodoStatus::Completed)
+        );
+        assert_eq!(
+            TodoStatus::from_str("in-progress"),
+            Some(TodoStatus::InProgress)
+        );
+        assert_eq!(TodoStatus::from_str("blocked"), None);
     }
 
     #[tokio::test]
