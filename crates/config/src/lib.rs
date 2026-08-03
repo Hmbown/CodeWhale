@@ -755,6 +755,17 @@ pub struct ConfigToml {
     /// workers inherit conservative Sandbox defaults.
     #[serde(default)]
     pub fleet: Option<FleetConfigToml>,
+    /// Multiple named operator-scoped Fleet configurations (#5039).
+    ///
+    /// Each key is a unique fleet name; the associated value is a
+    /// [`NamedFleetConfigToml`] that carries the operator identity and its
+    /// own trust/role/profile/exec policy. The existing `[fleet]` table is the
+    /// backward-compatible default and is always accessible without a name.
+    ///
+    /// Use [`ConfigToml::resolve_fleet`] to select a fleet by name,
+    /// [`ConfigToml::resolve_fleet_for_operator`] to select by operator identity.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fleets: BTreeMap<String, NamedFleetConfigToml>,
     /// Workflow automatic-launch, approval, isolation, and activity
     /// persistence knobs (#4128 / Section 2.11). When absent, consumers use
     /// [`WorkflowConfigToml::default`].
@@ -1100,6 +1111,82 @@ impl ConfigToml {
     pub fn resolve_hotbar_bindings(&self, known_action_ids: &[&str]) -> HotbarConfigResolution {
         resolve_hotbar_bindings(self.hotbar.as_deref(), known_action_ids)
     }
+
+    /// Resolve a named Fleet configuration by fleet name (#5039).
+    ///
+    /// # Precedence
+    ///
+    /// 1. If `name` matches a key in `[fleets.*]`, returns that fleet.
+    /// 2. Returns [`FleetResolutionError::UnknownFleet`] with the list of
+    ///    available fleet names so the user can correct the reference.
+    ///
+    /// To access the global default fleet use `config.fleet` directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FleetResolutionError::UnknownFleet`] if `name` is not defined.
+    pub fn resolve_fleet(&self, name: &str) -> Result<&NamedFleetConfigToml, FleetResolutionError> {
+        self.fleets
+            .get(name)
+            .ok_or_else(|| FleetResolutionError::UnknownFleet {
+                name: name.to_string(),
+                available: self.fleets.keys().cloned().collect(),
+            })
+    }
+
+    /// Resolve the unique Fleet owned by `operator` (#5039).
+    ///
+    /// # Precedence
+    ///
+    /// 1. Collects every `[fleets.*]` entry whose `operator` field matches
+    ///    (case-sensitive).
+    /// 2. If exactly one fleet matches, returns it.
+    /// 3. If zero match, returns [`FleetResolutionError::UnknownOperator`] with
+    ///    the list of operators that do own a fleet.
+    /// 4. If more than one match, returns [`FleetResolutionError::AmbiguousOperator`]
+    ///    with the fleet names so the caller can request a specific one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FleetResolutionError::UnknownOperator`] or
+    /// [`FleetResolutionError::AmbiguousOperator`] on failure.
+    pub fn resolve_fleet_for_operator(
+        &self,
+        operator: &str,
+    ) -> Result<(&str, &NamedFleetConfigToml), FleetResolutionError> {
+        let matches: Vec<(&str, &NamedFleetConfigToml)> = self
+            .fleets
+            .iter()
+            .filter(|(_, fleet)| fleet.operator == operator)
+            .map(|(name, fleet)| (name.as_str(), fleet))
+            .collect();
+
+        match matches.len() {
+            0 => {
+                let mut available: Vec<String> = self
+                    .fleets
+                    .values()
+                    .map(|f| f.operator.clone())
+                    .filter(|op| !op.is_empty())
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
+                available.sort();
+                Err(FleetResolutionError::UnknownOperator {
+                    operator: operator.to_string(),
+                    available,
+                })
+            }
+            1 => Ok(matches.into_iter().next().unwrap()),
+            _ => Err(FleetResolutionError::AmbiguousOperator {
+                operator: operator.to_string(),
+                fleet_names: matches
+                    .iter()
+                    .map(|(name, _)| (*name).to_string())
+                    .collect(),
+            }),
+        }
+    }
 }
 
 /// Ordered primary-plus-fallback provider list for future provider routing.
@@ -1410,6 +1497,91 @@ impl Default for SnapshotsToml {
         }
     }
 }
+
+/// Error returned when a named Fleet or operator cannot be resolved (#5039).
+///
+/// Every variant carries a self-contained, human-readable `guidance` string so
+/// callers can surface actionable help without inspecting error details.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FleetResolutionError {
+    /// The requested fleet name is not defined under `[fleets.<name>]`.
+    UnknownFleet {
+        /// The fleet name that was requested.
+        name: String,
+        /// Names of all fleets currently defined.
+        available: Vec<String>,
+    },
+    /// The requested operator has no fleets under `[fleets.*]`.
+    UnknownOperator {
+        /// The operator name that was requested.
+        operator: String,
+        /// All operators that currently own at least one fleet.
+        available: Vec<String>,
+    },
+    /// The operator owns more than one fleet and no fleet name was given.
+    AmbiguousOperator {
+        /// The operator with multiple fleets.
+        operator: String,
+        /// All fleet names owned by that operator.
+        fleet_names: Vec<String>,
+    },
+}
+
+impl std::fmt::Display for FleetResolutionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownFleet { name, available } => {
+                write!(f, "fleet `{name}` is not defined")?;
+                if available.is_empty() {
+                    write!(
+                        f,
+                        ". No named fleets are configured. Add `[fleets.{name}]` to your \
+                         config.toml or use the default `[fleet]` table."
+                    )
+                } else {
+                    write!(
+                        f,
+                        ". Available named fleets: {}. Check your config.toml `[fleets.*]` \
+                         tables.",
+                        available.join(", ")
+                    )
+                }
+            }
+            Self::UnknownOperator {
+                operator,
+                available,
+            } => {
+                write!(f, "no fleet is owned by operator `{operator}`")?;
+                if available.is_empty() {
+                    write!(
+                        f,
+                        ". No named fleets define an operator. Add \
+                         `operator = \"{operator}\"` inside a `[fleets.<name>]` table."
+                    )
+                } else {
+                    write!(
+                        f,
+                        ". Operators with configured fleets: {}.",
+                        available.join(", ")
+                    )
+                }
+            }
+            Self::AmbiguousOperator {
+                operator,
+                fleet_names,
+            } => {
+                write!(
+                    f,
+                    "operator `{operator}` owns multiple fleets ({}); specify a fleet name \
+                     explicitly.",
+                    fleet_names.join(", ")
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for FleetResolutionError {}
 
 /// On-disk schema for the `[fleet]` table (#3165). See `config.example.toml`
 /// and `docs/FLEET.md` for documentation.
@@ -1876,6 +2048,86 @@ impl FleetConfigToml {
             .get(name)
             .cloned()
             .or_else(|| built_in_role_presets().get(name).cloned())
+    }
+}
+
+/// On-disk schema for a single named Fleet entry under `[fleets.<name>]` (#5039).
+///
+/// A named Fleet is a superset of [`FleetConfigToml`]: it carries a mandatory
+/// `operator` identity and independently configured trust, roles, profiles, and
+/// exec policy. Multiple named Fleets may coexist; each is uniquely addressed by
+/// its TOML key. The existing `[fleet]` table remains the backward-compatible
+/// default and is always accessible without a name.
+///
+/// # TOML example
+///
+/// ```toml
+/// [fleets.alice-team]
+/// operator = "alice"
+/// default_trust_level = "local"
+/// max_trust_level = "operator"
+///
+/// [fleets.alice-team.exec]
+/// max_turns = 200
+///
+/// [fleets.alice-team.profiles.fast-verifier]
+/// slot = "verifier"
+/// loadout = "fast"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NamedFleetConfigToml {
+    /// The operator/leader identity for this Fleet.
+    ///
+    /// Used to scope fleet selection: `config.resolve_fleet_for_operator("alice")`
+    /// returns the fleet whose `operator` field matches. Must be non-empty.
+    pub operator: String,
+    /// Default trust level for fleet workers (`"sandbox"`, `"local"`,
+    /// `"remote-verified"`, or `"operator"`). Defaults to `"sandbox"`.
+    #[serde(default = "default_fleet_trust_level_str")]
+    pub default_trust_level: String,
+    /// Require identity verification for remote (SSH) workers before
+    /// granting them `remote-verified` trust. Defaults to `true`.
+    #[serde(default = "default_fleet_require_identity")]
+    pub require_identity_verification: bool,
+    /// Maximum trust level any worker may have. Defaults to `"operator"`.
+    #[serde(default = "default_fleet_max_trust_level_str")]
+    pub max_trust_level: String,
+    /// User-defined and built-in role presets for this fleet.
+    #[serde(default)]
+    pub roles: BTreeMap<String, FleetRolePreset>,
+    /// Fleet profile vocabulary for this fleet.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub profiles: BTreeMap<String, FleetProfile>,
+    /// Headless worker execution constraints for this fleet.
+    #[serde(default)]
+    pub exec: FleetExecConfig,
+}
+
+impl NamedFleetConfigToml {
+    /// Resolve a role preset by name. Checks user-defined roles first,
+    /// then falls back to built-in role defaults.
+    #[must_use]
+    pub fn resolve_role(&self, name: &str) -> Option<FleetRolePreset> {
+        self.roles
+            .get(name)
+            .cloned()
+            .or_else(|| built_in_role_presets().get(name).cloned())
+    }
+
+    /// Borrow this named Fleet's settings as a `FleetConfigToml` view.
+    ///
+    /// Useful when callers need a unified type regardless of whether the fleet
+    /// was selected by name or the legacy `[fleet]` default was used.
+    #[must_use]
+    pub fn as_fleet_config(&self) -> FleetConfigToml {
+        FleetConfigToml {
+            default_trust_level: self.default_trust_level.clone(),
+            require_identity_verification: self.require_identity_verification,
+            max_trust_level: self.max_trust_level.clone(),
+            roles: self.roles.clone(),
+            profiles: self.profiles.clone(),
+            exec: self.exec.clone(),
+        }
     }
 }
 

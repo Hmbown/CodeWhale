@@ -7392,3 +7392,350 @@ fn test_verbosity_resolution() {
         std::env::remove_var("DEEPSEEK_VERBOSITY");
     }
 }
+
+// ─── Named operator-scoped Fleet configurations (#5039) ──────────────────────
+
+#[test]
+fn named_fleet_legacy_only_config_loads_unchanged() {
+    // A config with only the legacy [fleet] table and no [fleets.*] tables.
+    let config: ConfigToml = toml::from_str(
+        r#"
+[fleet.exec]
+max_spawn_depth = 2
+"#,
+    )
+    .expect("legacy fleet config should parse");
+
+    assert_eq!(config.fleet.expect("legacy fleet").exec.max_spawn_depth, 2);
+    assert!(
+        config.fleets.is_empty(),
+        "no named fleets should be present"
+    );
+}
+
+#[test]
+fn named_fleet_parses_operator_and_trust() {
+    let config: ConfigToml = toml::from_str(
+        r#"
+[fleets.alice-team]
+operator = "alice"
+default_trust_level = "local"
+max_trust_level = "operator"
+"#,
+    )
+    .expect("named fleet config should parse");
+
+    let fleet = config.fleets.get("alice-team").expect("alice-team fleet");
+    assert_eq!(fleet.operator, "alice");
+    assert_eq!(fleet.default_trust_level, "local");
+    assert_eq!(fleet.max_trust_level, "operator");
+}
+
+#[test]
+fn named_fleet_defaults_apply_when_fields_absent() {
+    let config: ConfigToml = toml::from_str(
+        r#"
+[fleets.minimal]
+operator = "bob"
+"#,
+    )
+    .expect("minimal named fleet should parse");
+
+    let fleet = config.fleets.get("minimal").expect("minimal fleet");
+    assert_eq!(fleet.operator, "bob");
+    assert_eq!(fleet.default_trust_level, "sandbox");
+    assert!(fleet.require_identity_verification);
+    assert_eq!(fleet.max_trust_level, "operator");
+    assert!(fleet.roles.is_empty());
+    assert!(fleet.profiles.is_empty());
+}
+
+#[test]
+fn named_fleet_mixed_legacy_and_named_both_load() {
+    // Users may have the global [fleet] default AND named [fleets.*] tables.
+    let config: ConfigToml = toml::from_str(
+        r#"
+[fleet]
+default_trust_level = "sandbox"
+
+[fleets.team-a]
+operator = "alice"
+default_trust_level = "local"
+
+[fleets.team-b]
+operator = "bob"
+default_trust_level = "remote-verified"
+"#,
+    )
+    .expect("mixed fleet config should parse");
+
+    assert_eq!(
+        config
+            .fleet
+            .as_ref()
+            .expect("legacy fleet")
+            .default_trust_level,
+        "sandbox"
+    );
+    assert_eq!(config.fleets.len(), 2);
+    assert_eq!(config.fleets["team-a"].default_trust_level, "local");
+    assert_eq!(
+        config.fleets["team-b"].default_trust_level,
+        "remote-verified"
+    );
+}
+
+#[test]
+fn named_fleet_multiple_configs_independent_profiles() {
+    let config: ConfigToml = toml::from_str(
+        r#"
+[fleets.fleet-one]
+operator = "alice"
+
+[fleets.fleet-one.profiles.fast-verifier]
+slot = "verifier"
+loadout = "fast"
+
+[fleets.fleet-two]
+operator = "bob"
+
+[fleets.fleet-two.profiles.slow-reviewer]
+slot = "reviewer"
+loadout = "inherit"
+"#,
+    )
+    .expect("multiple named fleets with profiles should parse");
+
+    let fleet_one = config.fleets.get("fleet-one").expect("fleet-one");
+    assert_eq!(fleet_one.operator, "alice");
+    assert_eq!(
+        fleet_one
+            .profiles
+            .get("fast-verifier")
+            .expect("fast-verifier profile")
+            .slot,
+        FleetSlot::Verifier
+    );
+
+    let fleet_two = config.fleets.get("fleet-two").expect("fleet-two");
+    assert_eq!(fleet_two.operator, "bob");
+    assert_eq!(
+        fleet_two
+            .profiles
+            .get("slow-reviewer")
+            .expect("slow-reviewer profile")
+            .slot,
+        FleetSlot::Reviewer
+    );
+}
+
+#[test]
+fn resolve_fleet_returns_named_fleet() {
+    let config: ConfigToml = toml::from_str(
+        r#"
+[fleets.my-fleet]
+operator = "alice"
+default_trust_level = "local"
+"#,
+    )
+    .expect("fleet config");
+
+    let fleet = config.resolve_fleet("my-fleet").expect("resolve my-fleet");
+    assert_eq!(fleet.operator, "alice");
+    assert_eq!(fleet.default_trust_level, "local");
+}
+
+#[test]
+fn resolve_fleet_unknown_name_gives_actionable_error() {
+    let config: ConfigToml = toml::from_str(
+        r#"
+[fleets.real-fleet]
+operator = "alice"
+"#,
+    )
+    .expect("fleet config");
+
+    let err = config
+        .resolve_fleet("ghost-fleet")
+        .expect_err("unknown fleet");
+    match err {
+        FleetResolutionError::UnknownFleet { name, available } => {
+            assert_eq!(name, "ghost-fleet");
+            assert_eq!(available, vec!["real-fleet".to_string()]);
+        }
+        other => panic!("expected UnknownFleet, got {other}"),
+    }
+}
+
+#[test]
+fn resolve_fleet_unknown_with_no_fleets_configured() {
+    let config: ConfigToml = ConfigToml::default();
+
+    let err = config.resolve_fleet("anything").expect_err("no fleets");
+    match err {
+        FleetResolutionError::UnknownFleet { name, available } => {
+            assert_eq!(name, "anything");
+            assert!(available.is_empty());
+        }
+        other => panic!("expected UnknownFleet, got {other}"),
+    }
+}
+
+#[test]
+fn resolve_fleet_for_operator_returns_single_match() {
+    let config: ConfigToml = toml::from_str(
+        r#"
+[fleets.alice-team]
+operator = "alice"
+default_trust_level = "local"
+"#,
+    )
+    .expect("fleet config");
+
+    let (name, fleet) = config
+        .resolve_fleet_for_operator("alice")
+        .expect("resolve alice");
+    assert_eq!(name, "alice-team");
+    assert_eq!(fleet.operator, "alice");
+}
+
+#[test]
+fn resolve_fleet_for_operator_unknown_gives_actionable_error() {
+    let config: ConfigToml = toml::from_str(
+        r#"
+[fleets.alice-team]
+operator = "alice"
+"#,
+    )
+    .expect("fleet config");
+
+    let err = config
+        .resolve_fleet_for_operator("charlie")
+        .expect_err("unknown operator");
+    match err {
+        FleetResolutionError::UnknownOperator {
+            operator,
+            available,
+        } => {
+            assert_eq!(operator, "charlie");
+            assert_eq!(available, vec!["alice".to_string()]);
+        }
+        other => panic!("expected UnknownOperator, got {other}"),
+    }
+}
+
+#[test]
+fn resolve_fleet_for_operator_ambiguous_gives_actionable_error() {
+    let config: ConfigToml = toml::from_str(
+        r#"
+[fleets.fleet-a]
+operator = "alice"
+
+[fleets.fleet-b]
+operator = "alice"
+"#,
+    )
+    .expect("fleet config");
+
+    let err = config
+        .resolve_fleet_for_operator("alice")
+        .expect_err("ambiguous operator");
+    match err {
+        FleetResolutionError::AmbiguousOperator {
+            operator,
+            mut fleet_names,
+        } => {
+            assert_eq!(operator, "alice");
+            fleet_names.sort();
+            assert_eq!(fleet_names, vec!["fleet-a", "fleet-b"]);
+        }
+        other => panic!("expected AmbiguousOperator, got {other}"),
+    }
+}
+
+#[test]
+fn named_fleet_error_messages_are_actionable() {
+    // Verify Display output is human-readable and contains key hints.
+    let no_fleets_err = FleetResolutionError::UnknownFleet {
+        name: "x".to_string(),
+        available: vec![],
+    };
+    let msg = no_fleets_err.to_string();
+    assert!(msg.contains("x"), "should contain fleet name");
+    assert!(msg.contains("config.toml"), "should mention config.toml");
+
+    let with_candidates_err = FleetResolutionError::UnknownFleet {
+        name: "x".to_string(),
+        available: vec!["fleet-one".to_string(), "fleet-two".to_string()],
+    };
+    let msg = with_candidates_err.to_string();
+    assert!(msg.contains("fleet-one"), "should list available fleets");
+    assert!(msg.contains("fleet-two"), "should list available fleets");
+
+    let unknown_op_err = FleetResolutionError::UnknownOperator {
+        operator: "nobody".to_string(),
+        available: vec!["alice".to_string()],
+    };
+    let msg = unknown_op_err.to_string();
+    assert!(msg.contains("nobody"), "should contain operator name");
+    assert!(msg.contains("alice"), "should list known operators");
+
+    let ambiguous_err = FleetResolutionError::AmbiguousOperator {
+        operator: "alice".to_string(),
+        fleet_names: vec!["fleet-a".to_string(), "fleet-b".to_string()],
+    };
+    let msg = ambiguous_err.to_string();
+    assert!(msg.contains("alice"), "should contain operator");
+    assert!(msg.contains("fleet-a"), "should list fleet names");
+    assert!(msg.contains("fleet-b"), "should list fleet names");
+    assert!(
+        msg.contains("explicitly"),
+        "should prompt user to be explicit"
+    );
+}
+
+#[test]
+fn named_fleet_as_fleet_config_view_matches_fields() {
+    let config: ConfigToml = toml::from_str(
+        r#"
+[fleets.team]
+operator = "alice"
+default_trust_level = "local"
+max_trust_level = "operator"
+require_identity_verification = false
+
+[fleets.team.exec]
+max_turns = 100
+"#,
+    )
+    .expect("fleet config");
+
+    let named = config.fleets.get("team").expect("team fleet");
+    let view = named.as_fleet_config();
+    assert_eq!(view.default_trust_level, "local");
+    assert_eq!(view.max_trust_level, "operator");
+    assert!(!view.require_identity_verification);
+    assert_eq!(view.exec.max_turns, 100);
+}
+
+#[test]
+fn named_fleet_serializes_and_round_trips() {
+    let config: ConfigToml = toml::from_str(
+        r#"
+[fleets.my-fleet]
+operator = "alice"
+default_trust_level = "local"
+
+[fleets.my-fleet.exec]
+max_spawn_depth = 1
+"#,
+    )
+    .expect("fleet config");
+
+    let fleet = config.fleets.get("my-fleet").expect("my-fleet");
+    let serialized = toml::to_string_pretty(fleet).expect("serializes");
+    let round_tripped: NamedFleetConfigToml = toml::from_str(&serialized).expect("round trips");
+    assert_eq!(round_tripped.operator, "alice");
+    assert_eq!(round_tripped.default_trust_level, "local");
+    assert_eq!(round_tripped.exec.max_spawn_depth, 1);
+}

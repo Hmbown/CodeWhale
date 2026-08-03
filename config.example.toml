@@ -1364,6 +1364,53 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # instructions = "Review diffs for correctness, regressions, and missing tests."
 
 # ─────────────────────────────────────────────────────────────────────────────────
+# Named operator-scoped Fleet configurations (#5039)
+#
+# Multiple named Fleets may coexist alongside the default [fleet] table.
+# Each [fleets.<name>] entry must include an `operator` field and may configure
+# its own trust levels, roles, profiles, and exec policy independently.
+#
+# Selection precedence (most specific wins):
+#   1. Explicit fleet name  — config.resolve_fleet("name")
+#   2. Operator lookup      — config.resolve_fleet_for_operator("alice")
+#   3. Global default       — config.fleet  (the [fleet] table)
+#
+# Unknown fleet/operator references fail with an actionable error listing
+# what IS configured, rather than silently falling back.
+# ─────────────────────────────────────────────────────────────────────────────────
+#
+# [fleets.alice-team]
+# # Required: the operator/leader identity for this fleet.
+# operator = "alice"
+# # These fields are identical to [fleet] and use the same defaults.
+# default_trust_level = "local"
+# require_identity_verification = true
+# max_trust_level = "operator"
+#
+# [fleets.alice-team.exec]
+# max_turns = 200
+# max_spawn_depth = 2
+# append_system_prompt = "Always ask before modifying configuration files."
+#
+# [fleets.alice-team.profiles.ci-linter]
+# slot = "verifier"
+# loadout = "fast"
+# model = "deepseek-v4-pro"
+#
+# [fleets.alice-team.profiles.ci-linter.role]
+# name = "CI Linter"
+# description = "Runs linters and formatters for alice-team"
+# instructions = "Run cargo fmt --check and cargo clippy; never apply fixes."
+#
+# [fleets.bob-team]
+# operator = "bob"
+# default_trust_level = "sandbox"
+#
+# [fleets.bob-team.profiles.implementer]
+# slot = "implementer"
+# loadout = "inherit"
+
+# ─────────────────────────────────────────────────────────────────────────────────
 # Requirements (admin constraints) example file
 # ─────────────────────────────────────────────────────────────────────────────────
 # allowed_approval_policies = ["on-request", "untrusted", "never"]
