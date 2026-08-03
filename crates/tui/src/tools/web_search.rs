@@ -3519,9 +3519,8 @@ mod tests {
         );
         assert_eq!(result.rank, 1);
         // The citation must be resolvable in the session that minted it.
-        let citation =
-            crate::tools::web::citations::resolve(namespace, &result.ref_id)
-                .expect("citation must be registered and resolvable in its session");
+        let citation = crate::tools::web::citations::resolve(namespace, &result.ref_id)
+            .expect("citation must be registered and resolvable in its session");
         assert_eq!(citation.ref_id, result.ref_id);
         assert_eq!(citation.url, result.url);
         assert_eq!(citation.title.as_deref(), Some("Official Docs"));
@@ -3670,7 +3669,10 @@ mod tests {
             finalize_search_response(query, QueryCapabilities::count_only(), raw, Instant::now());
 
         assert_eq!(response.count, 1, "only the matching domain must survive");
-        assert_eq!(response.results[0].rank, 1, "survivor must be re-ranked to 1");
+        assert_eq!(
+            response.results[0].rank, 1,
+            "survivor must be re-ranked to 1"
+        );
         assert_eq!(response.results[0].title, "Keep this");
         // The receipt must record post-filtering as a degraded reason.
         assert!(
@@ -3691,13 +3693,7 @@ mod tests {
         let receipt = crate::tools::web::contract::SearchReceipt {
             backend: BackendId::Bing,
             backend_detail: None,
-            requested: SearchQuery::new(
-                "fallback chain".to_string(),
-                5,
-                None,
-                Vec::new(),
-                None,
-            ),
+            requested: SearchQuery::new("fallback chain".to_string(), 5, None, Vec::new(), None),
             capabilities: QueryCapabilities::count_only(),
             honored: crate::tools::web::contract::HonoredQueryCapabilities {
                 max_results: true,
@@ -3725,7 +3721,9 @@ mod tests {
         assert_eq!(value["degraded"][1]["from"], "duckduckgo");
         assert_eq!(value["degraded"][1]["to"], "bing");
 
-        let warning = receipt.warning().expect("degraded receipt must produce a warning");
+        let warning = receipt
+            .warning()
+            .expect("degraded receipt must produce a warning");
         assert!(warning.contains("bot challenge"), "{warning}");
         assert!(warning.contains("used bing fallback"), "{warning}");
     }
