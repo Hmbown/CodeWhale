@@ -645,7 +645,7 @@ impl ExecPolicyEngine {
 }
 
 /// Split a shell command into its top-level segments on the chaining/pipe
-/// operators (`&&`, `||`, `;`, `|`, and newlines). Deny rules must match a
+/// operators (`&&`, `||`, `;`, `|`, `&`, and newlines). Deny rules must match a
 /// target command in ANY segment, not just when it leads the command — a
 /// leading benign command (`ls && npm publish`) must not shield a denied
 /// suffix. Over-splitting is safe here: it only makes deny matching stricter.
@@ -653,7 +653,7 @@ fn command_segments(command: &str) -> Vec<String> {
     command
         .replace("&&", "\n")
         .replace("||", "\n")
-        .replace(['|', ';'], "\n")
+        .replace(['&', '|', ';'], "\n")
         .lines()
         .map(str::trim)
         .filter(|segment| !segment.is_empty())
@@ -687,6 +687,8 @@ fn command_is_chained(command: &str) -> bool {
 fn denied_prefix_matches(rule: &str, command: &str) -> bool {
     let rule_tokens: Vec<String> = normalize_command(rule)
         .split_whitespace()
+        .map(sanitize_shell_wrappers)
+        .filter(|token| !token.is_empty())
         .map(ToOwned::to_owned)
         .collect();
     if rule_tokens.is_empty() {
@@ -694,6 +696,8 @@ fn denied_prefix_matches(rule: &str, command: &str) -> bool {
     }
     let command_tokens: Vec<String> = normalize_command(command)
         .split_whitespace()
+        .map(sanitize_shell_wrappers)
+        .filter(|token| !token.is_empty())
         .map(ToOwned::to_owned)
         .collect();
 
@@ -748,6 +752,15 @@ fn is_env_assignment(token: &str) -> bool {
         }
         None => false,
     }
+}
+
+fn sanitize_shell_wrappers(token: &str) -> &str {
+    let mut token = token;
+    while let Some(rest) = token.strip_prefix("$(") {
+        token = rest;
+    }
+    token = token.trim_start_matches(['(', '{']);
+    token.trim_end_matches([')', '}', ';'])
 }
 
 fn normalize_command(value: &str) -> String {
@@ -1036,6 +1049,30 @@ mod tests {
             assert!(
                 !decision.allow,
                 "denied prefix bypassed by {command:?}: {decision:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn denied_prefix_blocks_single_ampersands_and_shell_wrappers() {
+        let engine = ExecPolicyEngine::new(vec![], vec!["rm -rf /".to_string()]);
+        for command in [
+            "ls & rm -rf /",
+            "(rm -rf /)",
+            "{ rm -rf /; }",
+            "$(rm -rf /)",
+        ] {
+            let decision = engine.check(ctx(command, AskForApproval::Never)).unwrap();
+            assert!(
+                !decision.allow,
+                "denied prefix bypassed by {command:?}: {decision:?}"
+            );
+            assert!(
+                matches!(
+                    decision.requirement,
+                    ExecApprovalRequirement::Forbidden { .. }
+                ),
+                "{command}"
             );
         }
     }
