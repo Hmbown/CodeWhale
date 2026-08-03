@@ -2350,10 +2350,13 @@ pub fn lsp_command(app: &mut App, arg: Option<&str>) -> CommandResult {
     }
 }
 
-/// Logout - clear all saved API keys and return to onboarding.
-/// This is NOT provider-scoped — it clears keys for every saved provider.
-/// For single-provider key replacement, use
-/// `codewhale auth clear --provider <id>` and
+/// Logout - clear the active provider's saved API key and return to
+/// onboarding. The on-disk scrub targets the user-global config document
+/// (#5193) and the provider's durable secret-store slot is deleted too, so
+/// the cleared key cannot reappear through the read chain (#5196). Exact
+/// named custom providers clear only their own table (cae14f4b9). For a
+/// full every-provider wipe, use `codewhale auth logout`; for single-provider
+/// key replacement, use `codewhale auth clear --provider <id>` and
 /// `codewhale auth set --provider <id>`.
 pub fn logout(app: &mut App) -> CommandResult {
     let provider_name = app.provider_identity_for_persistence().to_string();

@@ -2770,6 +2770,91 @@ fn save_deepseek_key_uses_isolated_file_store_without_plaintext_config() -> Resu
     Ok(())
 }
 
+/// #5196: logout must remove the durable credential, not just the config
+/// file entry. After save + `clear_api_key()`, the whole read chain —
+/// secret-store slot first, config file second — must find nothing.
+#[test]
+fn full_logout_clears_secret_store_slot_and_config_document() -> Result<()> {
+    let _lock = lock_test_env();
+    let temp_root = tempfile::tempdir()?;
+    // Canonicalize: the xAI credential walker opens each path component with
+    // O_NOFOLLOW, so the lexical `/var` symlink in macOS tempdirs fails.
+    let temp_root = temp_root.path().canonicalize()?;
+    let _guard = EnvGuard::new(&temp_root);
+    let codewhale_home = temp_root.join("codewhale-home");
+    let config_path = codewhale_home.join("config.toml");
+    let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", codewhale_home.as_os_str());
+    let _config_path = EnvVarGuard::set("CODEWHALE_CONFIG_PATH", config_path.as_os_str());
+    let _backend = EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+
+    let saved = save_api_key("logout-credential")?;
+    assert!(matches!(
+        saved,
+        SavedCredential::KeyringAndConfigFile { .. }
+    ));
+    assert_eq!(
+        codewhale_secrets::Secrets::auto_detect().get("deepseek")?,
+        Some("logout-credential".to_string())
+    );
+
+    clear_api_key()?;
+
+    assert_eq!(
+        codewhale_secrets::Secrets::auto_detect().get("deepseek")?,
+        None,
+        "logout must delete the durable secret-store slot"
+    );
+    assert_eq!(
+        provider_secret_store_api_key(&Config::default(), ApiProvider::Deepseek),
+        None,
+        "the read chain must not find a cleared credential"
+    );
+    let config = fs::read_to_string(&config_path)?;
+    assert!(!config.contains("logout-credential"), "{config}");
+    assert!(
+        !config
+            .lines()
+            .any(|line| line.trim_start().starts_with("api_key =")),
+        "{config}"
+    );
+    Ok(())
+}
+
+/// #5196: the single-provider clear used by TUI `/logout` must delete that
+/// provider's secret-store slot as well as its config-file entry.
+#[test]
+fn single_provider_logout_clears_secret_store_slot() -> Result<()> {
+    let _lock = lock_test_env();
+    let temp_root = tempfile::tempdir()?;
+    let temp_root = temp_root.path().canonicalize()?;
+    let _guard = EnvGuard::new(&temp_root);
+    let codewhale_home = temp_root.join("codewhale-home");
+    let config_path = codewhale_home.join("config.toml");
+    let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", codewhale_home.as_os_str());
+    let _config_path = EnvVarGuard::set("CODEWHALE_CONFIG_PATH", config_path.as_os_str());
+    let _backend = EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+
+    save_api_key_for(ApiProvider::Openrouter, "openrouter-logout-credential")?;
+    assert_eq!(
+        codewhale_secrets::Secrets::auto_detect().get("openrouter")?,
+        Some("openrouter-logout-credential".to_string())
+    );
+
+    clear_active_provider_api_key("openrouter")?;
+
+    assert_eq!(
+        codewhale_secrets::Secrets::auto_detect().get("openrouter")?,
+        None,
+        "single-provider logout must delete the durable secret-store slot"
+    );
+    assert_eq!(
+        provider_secret_store_api_key(&Config::default(), ApiProvider::Openrouter),
+        None,
+        "the read chain must not find a cleared credential"
+    );
+    Ok(())
+}
+
 #[test]
 fn whitespace_codewhale_home_never_opens_ambient_file_secret_store() -> Result<()> {
     let _lock = lock_test_env();
