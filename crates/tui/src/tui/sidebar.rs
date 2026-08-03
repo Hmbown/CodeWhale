@@ -4,11 +4,9 @@
 //! the chat transcript when the available width allows it. Each section
 //! reads from `App` snapshots; mutation lives in the main app loop.
 
-use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::time::{Duration, Instant};
 
-use crate::config::Config;
 use crate::localization::Locale;
 use crate::tui::app::HuntVerdict;
 
