@@ -24,8 +24,8 @@
 //!   path (`turn_loop.rs`) so any successful tool result over
 //!   [`SPILLOVER_THRESHOLD_BYTES`] spills to disk and the model
 //!   receives a bounded plain preview: a [`SPILLOVER_HEAD_BYTES`] head,
-//!   a short retained tail, and an ordinary footer pointing at the
-//!   tool details view.
+//!   a short retained tail, and an honest footer naming the on-disk
+//!   path of the full output plus a one-line recovery instruction.
 //! * Boot prune in `main.rs` deletes files older than
 //!   [`SPILLOVER_MAX_AGE`].
 //!
@@ -330,39 +330,72 @@ pub const SPILLOVER_HEAD_BYTES: usize = 32 * 1024;
 /// test failures are not systematically hidden by truncation.
 pub const SPILLOVER_TAIL_BYTES: usize = 8 * 1024;
 
-fn retained_tail(content: &str, max_bytes: usize) -> &str {
-    let floor = content.len().saturating_sub(max_bytes);
-    let start = (floor..=content.len())
-        .find(|&index| content.is_char_boundary(index))
-        .unwrap_or(content.len());
-    &content[start..]
-}
+/// Inline head/tail budgets for the adaptive evidence bands. Hybrid results
+/// keep a generous 32 KiB head + 8 KiB tail so mid-size outputs stay mostly
+/// readable; handle-only results keep a 16 KiB head + 4 KiB tail. The head
+/// and tail windows never overlap ([`head_tail_windows`]).
+const HYBRID_HEAD_BYTES: usize = 32 * 1024;
+const HYBRID_TAIL_BYTES: usize = 8 * 1024;
+const HANDLE_ONLY_HEAD_BYTES: usize = 16 * 1024;
+const HANDLE_ONLY_TAIL_BYTES: usize = 4 * 1024;
 
-/// Phrase shared by the model-facing preview footer and the TUI expand
-/// affordance, so both surfaces agree on where the full output lives.
-/// The phrase itself is deliberately ordinary: no handles, paths, or
-/// retrieval references.
+/// Phrase used only by the TUI expand affordance and the UI-side detection of
+/// historical truncated previews. Never emitted into model-facing content:
+/// the model cannot open the tool details view, so the model-facing footer
+/// carries the artifact path and a recovery instruction instead.
 pub const SPILLOVER_PREVIEW_HINT: &str = "view full output in the tool details view";
 
-/// Ordinary footer for a truncated tool result. The full output is retained
-/// internally; this text only tells the model the preview is bounded and
-/// where the complete output can be seen (the tool details view).
-fn spillover_preview_footer(omitted_bytes: usize) -> String {
+/// One-line recovery instruction in the model-facing truncation footer. Also
+/// used by the TUI to recognise current-format truncated previews.
+pub const SPILLOVER_RECOVERY_HINT: &str =
+    "read it back with the read_file tool or with sed line ranges";
+
+/// Model-facing footer for a truncated tool result. Names how much was
+/// omitted (bytes and lines), where the complete output lives on disk, and
+/// how the model can read the omitted range back.
+fn spillover_preview_footer(
+    omitted_bytes: usize,
+    omitted_lines: usize,
+    recovery_path: &str,
+) -> String {
     format!(
-        "… {} of output omitted — {SPILLOVER_PREVIEW_HINT}",
+        "… {} of output omitted ({omitted_lines} lines) — full output at {recovery_path}; {SPILLOVER_RECOVERY_HINT}",
         crate::artifacts::format_byte_size(omitted_bytes.try_into().unwrap_or(u64::MAX))
     )
 }
 
+/// Split `content` into a head of at most `head_bytes` and a tail of at most
+/// `tail_bytes` that never overlap: the tail window always starts at or after
+/// the head window ends, so no byte of the output appears twice and the
+/// omitted count is exact.
+fn head_tail_windows(content: &str, head_bytes: usize, tail_bytes: usize) -> (&str, &str) {
+    let head_end = (0..=head_bytes.min(content.len()))
+        .rev()
+        .find(|&index| content.is_char_boundary(index))
+        .unwrap_or(0);
+    let tail_floor = content.len().saturating_sub(tail_bytes).max(head_end);
+    let tail_start = (tail_floor..=content.len())
+        .find(|&index| content.is_char_boundary(index))
+        .unwrap_or(content.len());
+    (&content[..head_end], &content[tail_start..])
+}
+
 /// Build the model-facing preview for a truncated tool result: the head, an
-/// ordinary footer naming how much was omitted and where the full output can
-/// be seen, and a short retained tail. The full output is still retained
-/// internally; this is only the conversation-facing shape.
-fn truncated_preview(head: &str, tail: &str, original_len: usize) -> String {
-    let omitted = original_len.saturating_sub(head.len() + tail.len());
+/// honest footer naming how much was omitted and where the full output can be
+/// read back, and a short retained tail. When the head and tail windows cover
+/// the whole output (nothing was actually omitted), the content is returned
+/// unchanged — the preview never claims a truncation that did not happen.
+fn truncated_preview(head: &str, tail: &str, original: &str, recovery_path: &str) -> String {
+    let omitted = original.len().saturating_sub(head.len() + tail.len());
+    if omitted == 0 {
+        return original.to_string();
+    }
+    let omitted_lines = original[head.len()..original.len() - tail.len()]
+        .lines()
+        .count();
     format!(
         "{head}\n\n{}\n\n…\n{tail}",
-        spillover_preview_footer(omitted)
+        spillover_preview_footer(omitted, omitted_lines, recovery_path)
     )
 }
 
@@ -370,9 +403,9 @@ fn truncated_preview(head: &str, tail: &str, original_len: usize) -> String {
 /// content exceeds [`SPILLOVER_THRESHOLD_BYTES`], writes the full
 /// content to a sibling file under `~/.codewhale/tool_outputs/`,
 /// replaces `result.content` with a [`SPILLOVER_HEAD_BYTES`] head
-/// plus an ordinary preview footer pointing at the tool details
-/// view, and stamps `metadata.spillover_path` so the UI can render
-/// its expand annotation.
+/// plus a footer naming the spillover path and how to read the
+/// omitted range back, and stamps `metadata.spillover_path` so the
+/// UI can render its expand annotation.
 ///
 /// Returns the spillover path on success, `None` if no spillover
 /// happened (content small enough, error result, write failure).
@@ -392,7 +425,8 @@ pub fn apply_spillover(result: &mut ToolResult, tool_id: &str) -> Option<PathBuf
 /// Apply adaptive routing and publish session-scoped exact evidence.
 ///
 /// The default path writes one immutable payload under the origin session and
-/// replaces non-inline content with a calm, bounded receipt. The legacy dual
+/// replaces non-inline content with a bounded preview whose footer names the
+/// artifact path and how to read the omitted range back. The legacy dual
 /// spillover behavior is reachable only through the classic rollback switch.
 pub fn apply_spillover_with_artifact(
     result: &mut ToolResult,
@@ -451,8 +485,12 @@ fn apply_spillover_inner(
             return None;
         }
     };
-    let (head, path) = outcome;
-    let tail = retained_tail(&original_content, SPILLOVER_TAIL_BYTES);
+    let (_head, path) = outcome;
+    let (head, tail) = head_tail_windows(
+        &original_content,
+        SPILLOVER_HEAD_BYTES,
+        SPILLOVER_TAIL_BYTES,
+    );
     let digest = crate::hashing::sha256_hex(original_content.as_bytes());
     let path_str = path.display().to_string();
 
@@ -490,7 +528,12 @@ fn apply_spillover_inner(
                     relative_path.clone(),
                     &original_content,
                 );
-                result.content = truncated_preview(&head, tail, original_content.len());
+                result.content = truncated_preview(
+                    head,
+                    tail,
+                    &original_content,
+                    &absolute_path.display().to_string(),
+                );
                 artifact_path = Some((absolute_path, relative_path, record));
             }
             Err(err) => {
@@ -505,7 +548,7 @@ fn apply_spillover_inner(
     }
 
     if artifact_path.is_none() {
-        result.content = truncated_preview(&head, tail, original_content.len());
+        result.content = truncated_preview(head, tail, &original_content, &path_str);
     }
 
     let metadata = result.metadata.get_or_insert_with(|| serde_json::json!({}));
@@ -658,6 +701,22 @@ fn apply_adaptive_evidence_inner(
     }
 
     let original = result.content.clone();
+    let (head_bytes, tail_bytes) = if routing == EvidenceRouting::Hybrid {
+        (HYBRID_HEAD_BYTES, HYBRID_TAIL_BYTES)
+    } else {
+        (HANDLE_ONLY_HEAD_BYTES, HANDLE_ONLY_TAIL_BYTES)
+    };
+    let (head, tail) = head_tail_windows(&original, head_bytes, tail_bytes);
+    let omitted = original.len().saturating_sub(head.len() + tail.len());
+    if omitted == 0 {
+        // The whole output fits inside the preview budget: there is nothing
+        // to recover, so publishing an artifact and claiming a truncation
+        // would both be dishonest. Pass the content through unchanged.
+        return None;
+    }
+    let head_len = head.len();
+    let tail_len = tail.len();
+
     let artifact_id = crate::artifacts::artifact_id_for_tool_call(tool_id);
     let relative_path = crate::artifacts::session_artifact_relative_path(&artifact_id);
     let digest = crate::hashing::sha256_hex(original.as_bytes());
@@ -736,22 +795,7 @@ fn apply_adaptive_evidence_inner(
         relative_path.clone(),
         &original,
     );
-    let head_limit = if routing == EvidenceRouting::Hybrid {
-        8 * 1024
-    } else {
-        2 * 1024
-    };
-    let tail_limit = if routing == EvidenceRouting::Hybrid {
-        2 * 1024
-    } else {
-        512
-    };
-    let head_end = (0..=head_limit.min(original.len()))
-        .rev()
-        .find(|index| original.is_char_boundary(*index))
-        .unwrap_or(0);
-    let tail = retained_tail(&original, tail_limit);
-    result.content = truncated_preview(&original[..head_end], tail, original.len());
+    result.content = truncated_preview(head, tail, &original, &absolute_path.display().to_string());
     let metadata = result.metadata.get_or_insert_with(|| serde_json::json!({}));
     if let Some(object) = metadata.as_object_mut() {
         object.insert(
@@ -772,8 +816,8 @@ fn apply_adaptive_evidence_inner(
         object.insert("evidence_available".into(), true.into());
         object.insert("truncated".into(), true.into());
         object.insert("original_byte_count".into(), artifact.size_bytes.into());
-        object.insert("retained_head_bytes".into(), head_end.into());
-        object.insert("retained_tail_bytes".into(), tail.len().into());
+        object.insert("retained_head_bytes".into(), head_len.into());
+        object.insert("retained_tail_bytes".into(), tail_len.into());
         object.insert(
             "artifact_preview".into(),
             original.chars().take(200).collect::<String>().into(),
@@ -1092,18 +1136,22 @@ mod tests {
             let mut result = ToolResult::success(big.clone());
             let path = apply_spillover(&mut result, "call-big").expect("should spill");
 
-            // Inline content shrunk to head + plain preview footer.
+            // Inline content shrunk to head + honest preview footer.
             assert!(result.content.len() < big.len());
             assert!(
-                result.content.contains(SPILLOVER_PREVIEW_HINT),
+                !result.content.contains(SPILLOVER_PREVIEW_HINT),
+                "the tool-details phrase is a UI affordance, not model-facing"
+            );
+            assert!(
+                result.content.contains("of output omitted"),
                 "footer missing: {}",
                 &result.content[result.content.len().saturating_sub(200)..]
             );
-            assert!(
-                result
-                    .content
-                    .contains("of output omitted — view full output in the tool details view")
-            );
+            // The footer tells the model where the full output lives and how
+            // to read the omitted range back.
+            assert!(result.content.contains("full output at"));
+            assert!(result.content.contains(&path.display().to_string()));
+            assert!(result.content.contains(SPILLOVER_RECOVERY_HINT));
             assert!(!result.content.contains("retrieve_tool_result"));
 
             // Full bytes are on disk at the returned path.
@@ -1156,13 +1204,19 @@ mod tests {
                     .exists(),
                 "adaptive evidence stores one exact origin-session copy"
             );
-            // The model sees a plain preview with an ordinary footer — no
-            // artifact handle, no retrieval reference.
-            assert!(result.content.contains(SPILLOVER_PREVIEW_HINT));
+            // The model sees a bounded preview with an honest footer: the
+            // artifact path and a recovery instruction, no retrieval handle.
+            assert!(!result.content.contains(SPILLOVER_PREVIEW_HINT));
             assert!(result.content.contains("\n…\n"));
+            assert!(result.content.contains("of output omitted"));
+            assert!(result.content.contains("full output at"));
+            assert!(result.content.contains(SPILLOVER_RECOVERY_HINT));
+            assert!(
+                result.content.contains("art_call-big.txt"),
+                "footer must name the artifact path so the model can recover the output"
+            );
             assert!(!result.content.contains("Exact evidence retained"));
             assert!(!result.content.contains("retrieve_tool_result"));
-            assert!(!result.content.contains("artifacts/art_call-big.txt"));
             assert!(
                 session_artifact
                     .with_file_name("art_call-big.evidence.json")
@@ -1189,8 +1243,8 @@ mod tests {
                 Some("session-123")
             );
             assert_eq!(metadata["original_byte_count"], big.len());
-            assert!(metadata["retained_head_bytes"].as_u64().unwrap_or(0) <= 2 * 1024);
-            assert!(metadata["retained_tail_bytes"].as_u64().unwrap_or(0) <= 512);
+            assert!(metadata["retained_head_bytes"].as_u64().unwrap_or(0) <= 16 * 1024);
+            assert!(metadata["retained_tail_bytes"].as_u64().unwrap_or(0) <= 4 * 1024);
         });
     }
 
@@ -1200,13 +1254,15 @@ mod tests {
         let tmp = tempdir().unwrap();
         with_test_home(tmp.path(), || {
             let sentinel = "DEEP_RAW_SENTINEL";
+            // Payloads must exceed the 32_768-token (≈96 KiB) handle-only
+            // threshold so adaptive routing actually spills them.
             let success_raw = format!(
                 "{}{}{}",
-                "head\n".repeat(2_000),
+                "head\n".repeat(30_000),
                 sentinel,
-                "tail\n".repeat(2_000)
+                "tail\n".repeat(30_000)
             );
-            let failure_raw = format!("{}{}", "failure\n".repeat(3_000), "FAILURE_END");
+            let failure_raw = format!("{}{}", "failure\n".repeat(30_000), "FAILURE_END");
             let mut success = ToolResult::success(success_raw.clone());
             let mut failure = ToolResult::error(failure_raw.clone());
 
@@ -1235,7 +1291,8 @@ mod tests {
                 failure_raw.as_bytes()
             );
             assert!(!success.content.contains(sentinel));
-            assert!(success.content.len() < 4 * 1024);
+            // Handle-only preview: 16 KiB head + 4 KiB tail + footer.
+            assert!(success.content.len() < 21 * 1024);
             let success_meta = success.metadata.as_ref().unwrap();
             let failure_meta = failure.metadata.as_ref().unwrap();
             assert_ne!(
@@ -1403,6 +1460,104 @@ mod tests {
                     .and_then(serde_json::Value::as_str),
                 Some(path.display().to_string().as_str())
             );
+        });
+    }
+
+    // ── Honest-truncation regressions (v0.9.4) ─────────────────────────────
+
+    #[test]
+    fn truncated_preview_returns_content_unchanged_when_nothing_omitted() {
+        let original = "line one\nline two\nline three\n";
+        let preview = truncated_preview(original, "", original, "/tmp/artifact.txt");
+        assert_eq!(preview, original);
+        assert!(
+            !preview.contains("of output omitted"),
+            "must never claim a truncation that did not happen"
+        );
+    }
+
+    #[test]
+    fn head_tail_windows_never_overlap() {
+        // Content smaller than head + tail budgets: the tail window shrinks
+        // so it starts exactly where the head ends — no byte appears twice.
+        let content = "x".repeat(10_000);
+        let (head, tail) = head_tail_windows(&content, 8 * 1024, 4 * 1024);
+        assert_eq!(head.len(), 8 * 1024);
+        assert_eq!(tail.len(), 10_000 - 8 * 1024);
+        assert!(head.len() + tail.len() <= content.len());
+
+        // Content larger than both budgets: full windows, exact omission.
+        let big = "y".repeat(100_000);
+        let (head, tail) = head_tail_windows(&big, 32 * 1024, 8 * 1024);
+        assert_eq!(head.len(), 32 * 1024);
+        assert_eq!(tail.len(), 8 * 1024);
+
+        // UTF-8 codepoints are never split at either window edge.
+        let emoji = "🐳".repeat(5_000); // 20_000 bytes, 4 per codepoint
+        let (head, tail) = head_tail_windows(&emoji, 8 * 1024 + 1, 4 * 1024 + 2);
+        assert!(emoji.is_char_boundary(head.len()));
+        assert!(emoji.is_char_boundary(emoji.len() - tail.len()));
+        assert!(head.len() + tail.len() <= emoji.len());
+    }
+
+    #[test]
+    fn adaptive_evidence_passes_through_when_preview_budget_covers_output() {
+        let _g = setup();
+        let tmp = tempdir().unwrap();
+        with_test_home(tmp.path(), || {
+            // 30_000 bytes → 10_000 estimated tokens → Hybrid band under the
+            // 32_768-token default, but the 32 KiB + 8 KiB preview budget
+            // covers the whole output, so nothing is actually omitted.
+            let raw = "mid\n".repeat(7_500);
+            assert_eq!(raw.len(), 30_000);
+            let mut result = ToolResult::success(raw.clone());
+            let path = apply_spillover_with_artifact(
+                &mut result,
+                "call-covered",
+                "exec_shell",
+                "session-covered",
+            );
+            assert!(path.is_none(), "no artifact when nothing is omitted");
+            assert_eq!(result.content, raw);
+            assert!(!result.content.contains("of output omitted"));
+            assert!(
+                !tmp.path()
+                    .join(".codewhale/sessions/session-covered/artifacts/art_call-covered.txt")
+                    .exists()
+            );
+        });
+    }
+
+    #[test]
+    fn adaptive_evidence_footer_names_artifact_path_and_recovery() {
+        let _g = setup();
+        let tmp = tempdir().unwrap();
+        with_test_home(tmp.path(), || {
+            // 120_000 bytes → 40_000 estimated tokens → handle-only band.
+            let raw = "entry\n".repeat(20_000);
+            assert_eq!(raw.len(), 120_000);
+            let mut result = ToolResult::success(raw);
+            let path = apply_spillover_with_artifact(
+                &mut result,
+                "call-honest",
+                "exec_shell",
+                "session-honest",
+            )
+            .expect("should spill");
+
+            // Footer: omitted size + line count, artifact path, recovery line.
+            assert!(result.content.contains("of output omitted ("));
+            assert!(result.content.contains(" lines)"));
+            assert!(result.content.contains("full output at"));
+            assert!(result.content.contains(&path.display().to_string()));
+            assert!(result.content.contains(SPILLOVER_RECOVERY_HINT));
+            assert!(!result.content.contains(SPILLOVER_PREVIEW_HINT));
+
+            // Head and tail do not overlap: 16 KiB + 4 KiB handle-only
+            // windows over a 120_000-byte output.
+            let metadata = result.metadata.expect("metadata stamped");
+            assert_eq!(metadata["retained_head_bytes"], 16 * 1024);
+            assert_eq!(metadata["retained_tail_bytes"], 4 * 1024);
         });
     }
 }

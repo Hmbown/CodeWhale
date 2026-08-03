@@ -57,16 +57,24 @@ async fn headless_bash_success_and_failure_are_distinct_bounded_exact_evidence()
         (&failure_receipt, FAILURE_SENTINEL),
     ] {
         assert!(
-            receipt.contains("of output omitted — view full output in the tool details view"),
-            "model-facing truncation must use the plain preview footer"
+            receipt.contains("of output omitted"),
+            "model-facing truncation must state how much was omitted"
+        );
+        assert!(
+            receipt.contains("full output at"),
+            "model-facing truncation must name the recovery path"
+        );
+        assert!(
+            receipt.contains("/artifacts/"),
+            "the footer deliberately names the on-disk artifact so the model can read the omitted range back"
         );
         assert!(!receipt.contains("retrieve_tool_result"));
         assert!(!receipt.contains("[Exact evidence retained"));
         assert!(!receipt.contains(sentinel));
-        assert!(!receipt.contains("/artifacts/"));
         assert!(
-            receipt.len() <= 3_200,
-            "bounded preview must stay within the receipt budget"
+            receipt.len() <= 42_000,
+            "bounded preview must stay within the hybrid 32 KiB head + 8 KiB tail receipt budget, got {} bytes",
+            receipt.len()
         );
     }
     assert_ne!(success_receipt, failure_receipt);
@@ -256,22 +264,27 @@ fn bash_tool_sse(call_id: &str, success: bool) -> String {
     ].join("")
 }
 
-/// Shell fixture that emits enough bytes to force exact-evidence routing: one
-/// sentinel line buried at iteration 120 of ~2,800 filler lines. The probe
-/// executes through the platform shell — bash on Unix, `cmd /C` on Windows
+/// Shell fixture that emits enough bytes to force exact-evidence routing under
+/// the 32_768-token default threshold. The Bash adapter self-bounds each
+/// stream to ~30 KB, so a single stream would now fit inside the hybrid
+/// 32 KiB + 8 KiB preview budget; the probe therefore fills stdout AND stderr
+/// (~60 KB combined) so the envelope still omits a middle range. The sentinel
+/// rides stderr at filler line 100: deep enough to survive the shell tool's
+/// own 22 KB head bound (so the artifact retains it) yet beyond the preview's
+/// 32 KiB head (so the model receipt omits it). The probe executes through
+/// the platform shell — bash on Unix, `cmd /C` on Windows
 /// (#1691) — so each platform needs native syntax to exercise the same
 /// routing path.
 #[cfg(not(windows))]
 fn probe_command(sentinel: &str, prefix: &str, success: bool) -> String {
     let trailer = if success { "" } else { "; exit 7" };
-    let body = format!(
-        "i=0; while [ \"$i\" -lt 2800 ]; do if [ \"$i\" -eq 120 ]; then printf '%s\\n' '{sentinel}'; fi; printf '{prefix}-%04d-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n' \"$i\"; i=$((i + 1)); done{trailer}"
+    let stdout_loop = format!(
+        "i=0; while [ \"$i\" -lt 2800 ]; do printf '{prefix}-%04d-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n' \"$i\"; i=$((i + 1)); done"
     );
-    if success {
-        body
-    } else {
-        format!("{{ {body}; }} >&2")
-    }
+    let stderr_loop = format!(
+        "j=0; while [ \"$j\" -lt 2800 ]; do if [ \"$j\" -eq 100 ]; then printf '%s\\n' '{sentinel}'; fi; printf '{prefix}-ERR-%04d-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n' \"$j\"; j=$((j + 1)); done"
+    );
+    format!("{stdout_loop}; {{ {stderr_loop}; }} >&2{trailer}")
 }
 
 /// PowerShell syntax: on Windows the shell dispatcher prefers `pwsh.exe`,
@@ -283,26 +296,18 @@ fn probe_command(sentinel: &str, prefix: &str, success: bool) -> String {
 /// stderr handle and exiting 7 after the loop.
 #[cfg(windows)]
 fn probe_command(sentinel: &str, prefix: &str, success: bool) -> String {
-    let emit = |text: &str| {
-        if success {
-            format!("Write-Output {text}")
-        } else {
-            format!("[Console]::Error.WriteLine({text})")
-        }
-    };
-    let line = format!(
+    let stdout_line = format!(
         "'{prefix}-{{0}}-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'"
     );
-    let body = format!(
-        "0..2799 | ForEach-Object {{ if ($_ -eq 120) {{ {} }} else {{ {} }} }}",
-        emit(&format!("'{sentinel}'")),
-        emit(&format!("({line} -f $_)"))
+    let stderr_line = format!(
+        "'{prefix}-ERR-{{0}}-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'"
     );
-    if success {
-        body
-    } else {
-        format!("{body}; exit 7")
-    }
+    let stdout_loop = format!("0..2799 | ForEach-Object {{ Write-Output ({stdout_line} -f $_) }}");
+    let stderr_loop = format!(
+        "0..2799 | ForEach-Object {{ if ($_ -eq 100) {{ [Console]::Error.WriteLine('{sentinel}') }}; [Console]::Error.WriteLine(({stderr_line} -f $_)) }}"
+    );
+    let trailer = if success { "" } else { "; exit 7" };
+    format!("{stdout_loop}; {stderr_loop}{trailer}")
 }
 
 fn final_sse() -> String {

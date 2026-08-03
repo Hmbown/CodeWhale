@@ -432,6 +432,20 @@ pub(crate) fn compact_tool_result_for_route(
         return String::new();
     }
 
+    // A result already bounded by the adaptive evidence envelope is an
+    // honest, context-sized preview whose footer names the artifact path and
+    // a recovery instruction. Re-compacting it would strip that recovery
+    // contract and double-truncate the output, so pass it through unchanged.
+    if output
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("evidence_available"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        return raw.to_string();
+    }
+
     if let Some(summary) = compact_subagent_tool_result_for_context(tool_name, raw) {
         return summary;
     }
