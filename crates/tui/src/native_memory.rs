@@ -427,7 +427,7 @@ impl NativeMemoryStore {
             .read(true)
             .write(true)
             .open(&lock_path)?;
-        let mut lock = fd_lock::RwLock::new(lock_file);
+        let lock = fd_lock::RwLock::new(lock_file);
         let _guard = lock
             .read()
             .with_context(|| format!("read-lock native memory at {}", self.root.display()))?;
