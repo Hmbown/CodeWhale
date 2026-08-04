@@ -44,6 +44,22 @@
   --stage-soft: #b6c0d4;
   --stage-muted: #93a0b8;
 
+  /* Blue Stage field, verbatim from crates/tui/src/palette/tokens.rs. These
+     back the single water column below the waterline: one gradient sampled by
+     absolute page position across four DOM bands, exactly as the TUI samples
+     one column across header / transcript / phase / composer. No widget
+     restarts its own gradient. */
+  --stage-field-top: #0e1729; /* WHALE_PANEL — surface */
+  --stage-field-mid: #08111c; /* WHALE_CHROME — the authored 42% break */
+  --stage-field-deep: #03070d; /* WHALE_BG — deep field, and the footer seabed */
+  --stage-ambient: #264866;
+  --stage-composer: #162238; /* WHALE_COMPOSER — the raised input plate */
+  --stage-elevated: #182742; /* WHALE_ELEVATED */
+  --stage-line: #263e5c; /* WHALE_BORDER — blue at 25% on stage */
+  --stage-hint: #8491aa;
+  --stage-dim: #697791;
+  --violet: #ad88ff; /* WHALE_MODE_OPERATE — 1px rules only, never text */
+
   /* Hairline + code surfaces routed through vars so the docs dark theme can
      lighten hairlines and raise the code panel without touching every rule. */
   --hairline: rgba(20, 35, 70, 0.14);
@@ -186,6 +202,14 @@ html[lang="zh"] h3 {
 /* Indigo variant for the few routes that need a stronger section marker. */
 .seal-indigo {
   background: var(--indigo);
+}
+
+/* Below the waterline the seal inverts. An ink block on the field reads as a
+   hole punched in the water; ivory-on-deep reads as the last editorial device
+   before the seabed. */
+.ocean-column .seal {
+  background: var(--stage-text);
+  color: var(--ocean-deep);
 }
 
 /* ---------- pills / status ---------- */
@@ -1463,56 +1487,57 @@ body:has(.product-home) .site-github-link {
   line-height: 1.75;
 }
 
+/* Workflow is paper. It is four numbered editorial steps that happen to quote
+   a receipt; making the whole band ocean is what stopped the receipt reading
+   as evidence. The receipt below stays an ocean plate ON paper. */
 .product-workflow {
   position: relative;
   overflow: hidden;
   padding-block: clamp(4rem, 8vw, 7rem);
-  background:
-    radial-gradient(circle at 78% 8%, rgba(49, 95, 216, 0.18), transparent 30rem),
-    var(--ocean-deep);
+  border-bottom: 1px solid var(--hairline);
+  background: var(--paper);
 }
 
-.product-workflow h2,
-.product-surfaces h2 {
+.product-workflow h2 {
   max-width: 54rem;
-  color: var(--stage-text);
-  font-size: clamp(2rem, 4.5vw, 4rem);
+  color: var(--ink);
+  font-size: clamp(1.8rem, 3.3vw, 3rem);
 }
 
 .product-workflow-steps {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   margin-top: clamp(2.5rem, 5vw, 4.5rem);
-  border-top: 1px solid rgba(106, 174, 242, 0.36);
+  border-top: 1px solid var(--hairline);
 }
 
 .product-workflow-steps li {
   position: relative;
   min-height: 12rem;
   padding: 1.35rem 1.5rem 1.5rem 0;
-  border-bottom: 1px solid rgba(106, 174, 242, 0.2);
+  border-bottom: 1px solid var(--hairline);
 }
 
 .product-workflow-steps li + li {
   padding-left: 1.5rem;
-  border-left: 1px solid rgba(106, 174, 242, 0.2);
+  border-left: 1px solid var(--hairline);
 }
 
 .product-workflow-steps li > span {
-  color: var(--action-on-dark);
+  color: var(--indigo);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
   font-size: 0.68rem;
 }
 
 .product-workflow-steps h3 {
   margin-top: 2.5rem;
-  color: var(--stage-text);
+  color: var(--ink);
   font-size: 1.12rem;
 }
 
 .product-workflow-steps p {
   margin-top: 0.65rem;
-  color: rgb(var(--c-stage-soft) / 0.7);
+  color: var(--ink-soft);
   font-size: 0.84rem;
   line-height: 1.65;
 }
@@ -1523,8 +1548,8 @@ body:has(.product-home) .site-github-link {
   max-width: 58rem;
   margin-top: 2.5rem;
   padding: 1.35rem 1.5rem;
-  border: 1px solid rgba(106, 174, 242, 0.36);
-  background: rgba(14, 23, 41, 0.72);
+  border: 1px solid var(--stage-line);
+  background: var(--stage-field-top);
   color: var(--stage-soft);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
   font-size: clamp(0.68rem, 1.2vw, 0.8rem);
@@ -1533,7 +1558,7 @@ body:has(.product-home) .site-github-link {
 
 .product-receipt span:first-child {
   padding-bottom: 0.65rem;
-  border-bottom: 1px solid rgba(182, 192, 212, 0.18);
+  border-bottom: 1px solid var(--stage-line);
   color: var(--stage-text);
 }
 
@@ -1736,10 +1761,11 @@ body:has(.product-home) .site-github-link {
   color: var(--indigo-deep);
 }
 
+/* Last band above the waterline. It ends with no rule: a hairline here would be
+   an editorial rule trespassing into water. The transition is the transition. */
 .product-boundaries {
   padding-block: clamp(4rem, 8vw, 7rem);
-  border-bottom: 1px solid var(--hairline);
-  background: #fff;
+  background: var(--paper);
 }
 
 .product-boundaries-grid {
@@ -1784,16 +1810,76 @@ body:has(.product-home) .site-github-link {
   font-size: 0.88rem;
 }
 
+/* ---------- the waterline ---------- */
+/*                                                                            */
+/*  Paper is the editorial voice ABOUT the machine. Ocean is the machine       */
+/*  speaking in its own voice. The page dives exactly once, between            */
+/*  Boundaries and Surfaces — where it stops describing and starts handing     */
+/*  over — and never comes back up.                                           */
+/*                                                                            */
+/*  One column, one gradient, sampled by absolute page position across the     */
+/*  three bands it wraps. The footer's --ocean-deep is the same value as the   */
+/*  column's deep stop, so the seabed continues without a seam and            */
+/*  `.site-footer` needs no change. There is no rule at the waterline.         */
+/* -------------------------------------------------------------------------- */
+.ocean-column {
+  position: relative;
+  isolation: isolate;
+  background:
+    radial-gradient(120% 60% at 50% 0%, rgba(38, 72, 102, 0.35), transparent),
+    linear-gradient(
+      180deg,
+      var(--stage-field-top) 0%,
+      var(--stage-field-mid) 42%,
+      var(--stage-field-deep) 100%
+    );
+}
+
+/* Bands inside the column carry no field of their own. */
+.ocean-column > section {
+  position: relative;
+  background: transparent;
+}
+
+/* One line weight below the waterline. The ink hairline is invisible on the
+   field, and the three ad-hoc action-blue alphas it replaced were three
+   different answers to a question the product settled once. */
+.ocean-column .hairline,
+.ocean-column .hairline-t,
+.ocean-column .hairline-b,
+.ocean-column .hairline-l {
+  border-color: var(--stage-line);
+}
+
+/* Below the waterline, hierarchy comes the TUI way — colour weight and ` · `
+   chains, not scale. A 4rem high-contrast serif on deep field was the loudest
+   object on the page and the least like either product. */
+.ocean-column h2 {
+  max-width: 54rem;
+  color: var(--stage-text);
+  font-size: clamp(1.6rem, 2.6vw, 2.4rem);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.12;
+}
+
+/* Tight tracking flatters Fraunces and collides Han; Noto Serif SC also wants
+   the extra leading at this optical size. Extend the existing zh overrides
+   rather than routing around them. */
+html[lang="zh"] .ocean-column h2,
+html[lang="ja"] .ocean-column h2,
+html[lang="ko"] .ocean-column h2 {
+  letter-spacing: 0;
+  line-height: 1.5;
+}
+
 .product-surfaces {
   padding-block: clamp(4rem, 8vw, 7rem);
-  background:
-    radial-gradient(circle at 90% 0%, rgba(79, 209, 197, 0.1), transparent 28rem),
-    var(--ocean-deep);
 }
 
 .product-surface-list {
   margin-top: 2.5rem;
-  border-top: 1px solid rgba(106, 174, 242, 0.28);
+  border-top: 1px solid var(--stage-line);
 }
 
 .product-surface-list > div {
@@ -1801,7 +1887,7 @@ body:has(.product-home) .site-github-link {
   grid-template-columns: minmax(13rem, 0.7fr) minmax(0, 1.3fr);
   gap: 2rem;
   padding: 1.2rem 0;
-  border-bottom: 1px solid rgba(106, 174, 242, 0.22);
+  border-bottom: 1px solid var(--stage-line);
 }
 
 .product-surface-list strong {
@@ -1823,8 +1909,7 @@ body:has(.product-home) .site-github-link {
 
 .product-install-band {
   padding-block: clamp(3rem, 6vw, 5rem);
-  background: var(--indigo-deep);
-  color: #fff;
+  color: var(--stage-text);
 }
 
 .product-install-grid {
@@ -1834,19 +1919,14 @@ body:has(.product-home) .site-github-link {
   align-items: start;
 }
 
-.product-install-band h2 {
-  color: #fff;
-  font-size: clamp(2.2rem, 4.5vw, 4rem);
-}
-
 .product-install-band pre.code-block {
   margin: 0;
-  border-color: rgba(255, 255, 255, 0.3);
+  border-color: var(--stage-line);
 }
 
 .product-install-band p {
   margin-top: 1rem;
-  color: rgba(255, 255, 255, 0.72);
+  color: var(--stage-hint);
   font-size: 0.78rem;
   line-height: 1.7;
 }
@@ -1855,17 +1935,13 @@ body:has(.product-home) .site-github-link {
   display: inline-block;
   margin-top: 1.2rem;
   padding-bottom: 0.2rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.5);
-  color: #fff;
+  border-bottom: 1px solid var(--stage-line);
+  color: var(--action-on-dark);
   font-size: 0.82rem;
 }
 
 .product-community {
   padding-block: clamp(3.5rem, 7vw, 6rem);
-  border-bottom: 1px solid var(--hairline);
-  background:
-    radial-gradient(circle at 12% 50%, rgba(246, 196, 83, 0.14), transparent 20rem),
-    var(--paper);
 }
 
 .product-community-grid {
@@ -1885,19 +1961,18 @@ body:has(.product-home) .site-github-link {
   max-width: 100%;
 }
 
-.product-community h2 {
-  font-size: clamp(2.4rem, 5vw, 4.8rem);
-}
-
+/* The editorial full stop stays, in Ice rather than Signal Gold. Gold's budget
+   on this page is three marks — the whale, the composer's upper hairline, the
+   receipt's `report` line — and a decorative period is not one of them. */
 .product-community h2::after {
   content: ".";
-  color: var(--signal-gold);
+  color: var(--ocean-current);
 }
 
 .product-community p {
   max-width: 42rem;
   margin-top: 1rem;
-  color: var(--ink-soft);
+  color: var(--stage-soft);
   font-size: 1rem;
   line-height: 1.75;
 }
@@ -1907,13 +1982,17 @@ body:has(.product-home) .site-github-link {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1rem;
   padding-top: 1.25rem;
-  border-top: 1px solid var(--paper-edge);
+  border-top: 1px solid var(--stage-line);
 }
 
 .product-community nav a {
-  color: var(--indigo-deep);
+  color: var(--ocean-current);
   font-size: 0.82rem;
   font-weight: 600;
+}
+
+.product-community nav a:hover {
+  color: var(--stage-text);
 }
 
 .product-home a:focus-visible {

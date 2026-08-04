@@ -260,65 +260,73 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
         </div>
       </section>
 
-      {/* Surfaces */}
-      <section className="product-surfaces paper-surfaces">
-        <div className="product-container">
-          <div className="flex items-baseline gap-4 mb-6 hairline-b pb-4">
-            <Seal char={d.sealSurfaces} size="sm" />
-            <h2 className="font-display">{d.surfacesHeading}</h2>
+      {/*
+        THE WATERLINE. Everything below here is one water column: a single
+        gradient on the wrapper, sampled by absolute page position across the
+        three bands inside it, continuing into the footer's identical deep
+        stop as the seabed. The bands themselves carry no field of their own.
+      */}
+      <div className="ocean-column">
+        {/* Surfaces */}
+        <section className="product-surfaces paper-surfaces">
+          <div className="product-container">
+            <div className="flex items-baseline gap-4 mb-6 hairline-b pb-4">
+              <Seal char={d.sealSurfaces} size="sm" />
+              <h2 className="font-display">{d.surfacesHeading}</h2>
+            </div>
+            <div className="product-surface-list">
+              {d.surfaces.map(([name, description]) => (
+                <div key={name}>
+                  <strong>{name}</strong>
+                  <span>{description}</span>
+                </div>
+              ))}
+            </div>
+            <Link href={`/${locale}/runtime`}>{d.runtimeLink}</Link>
           </div>
-          <div className="product-surface-list">
-            {d.surfaces.map(([name, description]) => (
-              <div key={name}>
-                <strong>{name}</strong>
-                <span>{description}</span>
-              </div>
-            ))}
-          </div>
-          <Link href={`/${locale}/runtime`}>{d.runtimeLink}</Link>
-        </div>
-      </section>
+        </section>
 
-      {/* Install band */}
-      <section className="product-install-band paper-install-band">
-        <div className="product-container product-install-grid">
-          <h2 className="font-display">{d.installBandHeading}</h2>
-          <div>
-            <InstallCodeBlock
-              cmd="npm install -g codewhale"
-              copyLabel={d.copy}
-              copiedLabel={d.copied}
-            />
-            <p>
-              Cargo · {d.binaries} · Docker · Nix · Windows · Android / Termux · {d.chinaMirrors}
-            </p>
-            <Link href={`/${locale}/install`}>{d.installGuideLink}</Link>
+        {/* Install band */}
+        <section className="product-install-band paper-install-band">
+          <div className="product-container product-install-grid">
+            <h2 className="font-display">{d.installBandHeading}</h2>
+            <div>
+              <InstallCodeBlock
+                cmd="npm install -g codewhale"
+                copyLabel={d.copy}
+                copiedLabel={d.copied}
+              />
+              <p>
+                Cargo · {d.binaries} · Docker · Nix · Windows · Android / Termux · {d.chinaMirrors}
+              </p>
+              <Link href={`/${locale}/install`}>{d.installGuideLink}</Link>
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
 
-      {/* Community */}
-      <section className="product-community paper-community">
-        <div className="product-container product-community-grid">
-          <div className="product-community-illustration" aria-hidden="true">
-            <Seal char={d.sealCommunity} size="lg" />
+        {/* Community */}
+        <section className="product-community paper-community">
+          <div className="product-container product-community-grid">
+            <div className="product-community-illustration" aria-hidden="true">
+              <Seal char={d.sealCommunity} size="lg" />
+            </div>
+            <div>
+              <h2 className="font-display">{d.communityHeading}</h2>
+              <p>{d.communityBody}</p>
+            </div>
+            <nav aria-label={d.communityLinksAria}>
+              <a href={REPO_URL}>GitHub</a>
+              <a href={REPO_ISSUES_URL}>Issues</a>
+              <Link href={`/${locale}/contribute`}>{d.contribute}</Link>
+              {publishedRelease ? (
+                <a href={publishedRelease.url}>{publishedRelease.tag}</a>
+              ) : (
+                <a href={REPO_RELEASES_URL}>Releases</a>
+              )}
+            </nav>
           </div>
-          <div>
-            <h2 className="font-display">{d.communityHeading}</h2>
-            <p>{d.communityBody}</p>
-          </div>
-          <nav aria-label={d.communityLinksAria}>
-            <a href={REPO_URL}>GitHub</a>
-            <a href={REPO_ISSUES_URL}>Issues</a>
-            <Link href={`/${locale}/contribute`}>{d.contribute}</Link>
-            {publishedRelease ? (
-              <a href={publishedRelease.url}>{publishedRelease.tag}</a>
-            ) : (
-              <a href={REPO_RELEASES_URL}>Releases</a>
-            )}
-          </nav>
-        </div>
-      </section>
+        </section>
+      </div>
     </div>
   );
 }
