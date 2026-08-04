@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Alibaba Model Studio reasoning controls are now route- and model-scoped
+  instead of provider-wide (#5203, harvested from #5233 by
+  [@Inference1](https://github.com/Inference1)). Codewhale sends
+  `enable_thinking` / `preserve_thinking` / `reasoning_effort` only when the
+  configured `base_url` is a verified Alibaba Chat Completions host, so
+  pointing a `modelstudio-*` provider ID at a custom gateway no longer injects
+  DashScope's dialect into it. `qwen3.8-max` and `qwen3.8-max-preview` are
+  thinking-only and no longer receive an `enable_thinking: false` they cannot
+  honor; `preserve_thinking` is sent for the models documented to accept it, so
+  their reasoning trace survives into the next turn; and `deepseek-v4*` /
+  `glm-5.x` map the reasoning tier onto the documented `high` / `max` ladder.
+
 ### Added
 
 - Registered `GLM-5.3` (direct Z.ai) and `z-ai/glm-5.3` (OpenRouter) as

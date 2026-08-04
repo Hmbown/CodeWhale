@@ -651,7 +651,7 @@ in the changelog. Restoring them with thanks — every one shipped real code.
 - **[MoriTang](https://github.com/MoriTang)** — account balance status-bar item, with a request timeout, reused HTTP client, stale-balance-on-failure handling, and DeepSeek-gated display
 - **[mars-base](https://github.com/mars-base)** — session title shown in the composer border and `gh` discovery across common install paths (#836)
 - **[Giggitycountless](https://github.com/Giggitycountless)** — auto-add `.deepseek/` to `.gitignore`, gitignore-check robustness, and `/clear` resetting the Todos panel
-- **[Inference1](https://github.com/Inference1)** — vLLM provider support and README pricing/structure clarity (#737, #776)
+- **[Inference1](https://github.com/Inference1)** — vLLM provider support, README pricing/structure clarity, and the Model Studio reasoning route guard: a fail-closed host check so Alibaba's `enable_thinking` never reaches a custom gateway, plus catching that Codewhale was sending a disable switch to the always-thinking `qwen3.8-max` (#737, #776, #5233)
 - **[membphis](https://github.com/membphis)** — bordered Markdown table rendering and Shift+Enter newline in the composer (#801)
 - **[JasonOA888](https://github.com/JasonOA888)** — `web_run` network-policy enforcement and refusing to snapshot `$HOME` (#798, #800)
 - **[tuohai666](https://github.com/tuohai666)** — recursive skills-directory reading plus hook-dispatch and approval-branch test coverage (#811)
