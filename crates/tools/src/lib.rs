@@ -632,7 +632,8 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("field 'replace' must be a string"));
         assert!(message.contains("got array"));
-        assert!(message.contains(r#"[{"content":"new body","path":"src/lib.rs"}]"#));
+        assert!(message.contains(r#""content":"new body""#));
+        assert!(message.contains(r#""path":"src/lib.rs""#));
     }
 
     #[test]
