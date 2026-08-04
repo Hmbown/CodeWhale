@@ -9,38 +9,43 @@ authorization header, or full provider reasoning trace is committed here.
 On 2026-08-04, a real Alibaba Cloud Model Studio **Token Plan Lite** request
 using `qwen3.8-max` completed in the local CodeWhale TUI. The model's
 `reasoning_content` rendered in the dedicated Thinking cell, and the final
-answer remained a separate assistant message. The screenshots below are from
-that completed validation.
+answer remained a separate assistant message.
 
-![Direct local Terminal verification: completed Thinking cell and final answer](modelstudio-token-plan-thinking-live-terminal-5203.png)
+The evidence below replaces the earlier synthetic/replay material with three
+artifacts from that validation: a 32.9-second local Terminal recording, the
+Model Studio subscription page, and the Model Studio usage details for the
+same validation window. None contains an API key.
 
-![Captured full terminal frame from the same validation flow](modelstudio-token-plan-thinking-5203.png)
+## Live streaming recording
 
-The first image is the direct local Terminal view. The second is a full-frame
-capture that keeps the selected model, Thinking block, final answer, and
-completed status in one image. Timings differ because these are separate
-successful runs; timing is informational, not an acceptance criterion.
+[Download the local Terminal recording (MP4, 32.9 seconds)](modelstudio-token-plan-live-streaming-5203.mp4)
 
-## Streaming proof
+The recording identifies the active provider as **Alibaba Cloud Model Studio**
+and the model as **qwen3.8-max**. It begins in a dedicated `reasoning` state
+with a separate `… reasoning hidden` marker, transitions to the `working`
+response phase, streams the Redis cache-invalidation response, and ends with a
+completed state. This is a direct macOS Terminal capture, not a GIF or a
+synthetic replay.
 
-This GIF is a **post-processed replay** of five consecutive visible states
-from the raw local PTY/TUI capture of the same Token Plan Lite run. It is not
-a fresh screenshot of a user's macOS Terminal.app window. The header
-identifies `qwen3.8-max`; the middle frames show `reasoning live` and append
-the `reasoning_content` text in pieces; the final answer appears only after
-the Thinking phase becomes `reasoning done`. Use the two PNGs above as the
-direct Terminal screenshot evidence, and this GIF to make the incremental
-rendering sequence easier to inspect. The raw terminal-control capture remains
-local and is intentionally not committed; it is not needed to run the code and
-does not contain a credential in this evidence record.
+## Model Studio account-side evidence
 
-![Recorded Token Plan Lite streaming stages](modelstudio-token-plan-streaming-5203.gif)
+![Token Plan Lite subscription and quota consumption](modelstudio-token-plan-lite-subscription-5203.png)
+
+The subscription page shows that the Token Plan Lite subscription was active
+and that the five-hour quota had recorded consumption after the validation.
+
+![Token Plan usage details for the validation window](modelstudio-token-plan-lite-usage-5203.png)
+
+The usage-details page records **17.6K total tokens** in the 14:00–15:00
+window: **14.2K uncached input tokens** and **3.4K output tokens**. This is
+provider-side corroboration that the live validation reached Model Studio; it
+does not expose request contents or credentials.
 
 ## Endpoint and wire-contract matrix
 
 | Route | OpenAI-compatible Base URL | Evidence in this change | Result |
 | --- | --- | --- | --- |
-| Token Plan | `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` | Live Token Plan Lite TUI run + screenshot | Thinking displayed |
+| Token Plan | `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` | Live Token Plan Lite TUI recording + account-side usage evidence | Thinking displayed |
 | Workspace-scoped Model Studio | `https://{workspace}.{region}.maas.aliyuncs.com/compatible-mode/v1` | Route regression test | Accepted only for the documented host/path shape |
 | Coding Plan | `https://coding-intl.dashscope.aliyuncs.com/v1` | Route regression test | Primary `modelstudio-token-plan` identity plus `mode = "coding-plan"` receives the same reasoning contract |
 | Anthropic Messages | `https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic` | Not changed by this PR | Separate Messages adapter; no claim of Chat-Completions coverage |
