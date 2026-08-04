@@ -380,11 +380,33 @@ impl FleetRoster {
     /// Per-member explicit model pins, keyed by lowercased member id.
     /// Feeds the sub-agent `role_models` lookup; explicit `[subagents]`
     /// overrides are merged on top by the engine and win.
+    ///
+    /// Members that ALSO pin a provider are deliberately excluded. This map is
+    /// provider-less by construction: the sub-agent role/type lookup
+    /// (`configured_model_for_role_or_type`) applies whatever it finds against
+    /// the *session* provider's client, so exporting a provider-pinned model
+    /// here strips the only thing that made the id routable. A profile pinning
+    /// `provider = "deepseek"` + `model = "deepseek-v4-flash"` then leaks that
+    /// bare id onto an unrelated session route — and on a pass-through
+    /// provider (Alibaba Model Studio, whose Token Plan actually serves
+    /// `deepseek-v4-flash-0731`) nothing downstream rejects it, so the child
+    /// dies on the provider's own denial instead of inheriting the parent's
+    /// working model. Provider-pinned profiles keep their full route through
+    /// the profile spawn path (`child_provider_binding`), which builds a client
+    /// for the pinned provider and carries the model with it.
     #[must_use]
     pub fn model_overrides(&self) -> HashMap<String, String> {
         self.members
             .iter()
             .filter_map(|member| {
+                if member
+                    .profile
+                    .provider
+                    .as_deref()
+                    .is_some_and(|provider| !provider.trim().is_empty())
+                {
+                    return None;
+                }
                 let model = member.profile.model.as_deref()?.trim();
                 (!model.is_empty()).then(|| (member.id.to_lowercase(), model.to_string()))
             })
@@ -774,6 +796,51 @@ mod tests {
             HashMap::from([("reviewer".to_string(), "deepseek-v4-pro".to_string())]),
             "only members with explicit models are pinned, keyed lowercased"
         );
+    }
+
+    /// A profile that pins BOTH a provider and a model must not contribute to
+    /// the provider-less `role_models` map. That map is applied against the
+    /// session provider's client, so exporting `deepseek-v4-flash` from a
+    /// `provider = "deepseek"` scout profile sent a bare DeepSeek id onto an
+    /// Alibaba Model Studio session (a pass-through provider, so nothing
+    /// downstream rejected it) and the scout died on the provider's denial —
+    /// the Model Studio Token Plan roster serves `deepseek-v4-flash-0731`, not
+    /// `deepseek-v4-flash`. Provider-pinned profiles keep their model via the
+    /// profile spawn path, which builds a client for the pinned provider.
+    #[test]
+    fn model_overrides_skip_provider_pinned_profiles() {
+        let _env_lock = crate::test_support::lock_test_env();
+        let home = TempDir::new().unwrap();
+        let _codewhale_home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.path());
+        let tmp = TempDir::new().unwrap();
+
+        let mut pinned = config_profile("scout", Some("deepseek-v4-flash"));
+        pinned.provider = Some("deepseek".to_string());
+        let mut blank_provider = config_profile("builder", Some("deepseek-v4-pro"));
+        blank_provider.provider = Some("   ".to_string());
+
+        let config = config_with_profiles(BTreeMap::from([
+            ("scout".to_string(), pinned),
+            ("builder".to_string(), blank_provider),
+        ]));
+
+        let roster = FleetRoster::load(&config, tmp.path());
+        let overrides = roster.model_overrides();
+
+        assert!(
+            !overrides.contains_key("scout"),
+            "a provider-pinned profile must not leak its model into the \
+             provider-less role_models map: {overrides:?}"
+        );
+        assert_eq!(
+            overrides.get("builder").map(String::as_str),
+            Some("deepseek-v4-pro"),
+            "a blank provider pin is still provider-less: {overrides:?}"
+        );
+        // The pin itself survives on the member for the profile spawn path.
+        let scout = roster.get("scout").expect("scout member");
+        assert_eq!(scout.profile.provider.as_deref(), Some("deepseek"));
+        assert_eq!(scout.profile.model.as_deref(), Some("deepseek-v4-flash"));
     }
 
     #[test]
