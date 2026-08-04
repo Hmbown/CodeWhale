@@ -995,6 +995,7 @@ version = "0.9.4"
 dependencies = [
  "anyhow",
  "chrono",
+ "codewhale-build-support",
  "codewhale-config",
  "codewhale-paths",
  "codewhale-release",

@@ -21,6 +21,9 @@ tempfile.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 
+[build-dependencies]
+codewhale-build-support = { path = "../build-support", version = "0.9.4" }
+
 [dev-dependencies]
 # Used as an *assertion*, never as a filter: every string leaf of a serialized
 # batch is run through `redact_for_disclosure` and must come back unredacted.

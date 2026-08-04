@@ -406,9 +406,21 @@ fn panic_site_reduces_dependency_frames() {
 
 #[test]
 fn git_sha_is_null_without_release_env() {
-    // No build script has emitted `CODEWHALE_RELEASE_BUILD_SHA` for this crate,
-    // and no locally built binary ever will.
-    assert_eq!(envelope::release_build_sha(), None);
+    // The build script emits `CODEWHALE_RELEASE_BUILD_SHA` only when
+    // `DEEPSEEK_BUILD_SHA` or `GITHUB_SHA` was in the build environment, so on
+    // a developer machine this is `None` and on release CI it is twelve hex
+    // characters. Both are asserted, because the test has to pass in both
+    // places and neither shape may ever be a path, a version, or a full sha.
+    // The rule that produces it lives in `codewhale-build-support` and is
+    // tested there against an injected environment; what is asserted here is
+    // that whatever reaches the payload is `null` or twelve lowercase hex
+    // characters, and never a path, a version, or a full sha.
+    if let Some(sha) = envelope::release_build_sha() {
+        assert!(
+            is_short_sha(&sha),
+            "release sha has the wrong shape: {sha:?}"
+        );
+    }
     assert_eq!(
         envelope::short_hex_sha("ABCDEF0123456789abcdef0123456789abcdef01"),
         Some("abcdef012345".to_string())

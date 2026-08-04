@@ -1,7 +1,15 @@
-//! Shared build-script helpers for the `codewhale-cli` and `codewhale-tui`
-//! build scripts: rerun-condition declarations and the embedded
-//! `DEEPSEEK_BUILD_VERSION` metadata. Only call these functions from a build
-//! script — they emit `cargo:` directives on stdout.
+//! Shared build-script helpers for the `codewhale-cli`, `codewhale-tui`, and
+//! `codewhale-telemetry` build scripts: rerun-condition declarations, the
+//! embedded `DEEPSEEK_BUILD_VERSION` metadata, and the release-only build sha.
+//! Only call these functions from a build script — they emit `cargo:`
+//! directives on stdout.
+//!
+//! Two different shas live here and they are not interchangeable.
+//! `DEEPSEEK_BUILD_VERSION`/`CODEWHALE_BUILD_COMMIT` describe *this checkout*
+//! and fall back to local `git rev-parse`, which is right for a `--version`
+//! string a developer reads about their own build.
+//! `CODEWHALE_RELEASE_BUILD_SHA` describes a *published* binary and has no
+//! fallback at all, because it leaves the machine.
 
 use std::{
     path::{Path, PathBuf},
@@ -35,6 +43,57 @@ pub fn emit_build_version(manifest_dir: &Path, package_version: &str) {
     if let Some(commit) = commit {
         println!("cargo:rustc-env=CODEWHALE_BUILD_COMMIT={commit}");
     }
+}
+
+/// Declare the rerun conditions for [`emit_release_build_sha`] alone: the two
+/// release-CI SHA variables, and nothing about the local checkout.
+///
+/// Deliberately not [`declare_rerun_conditions`]: watching `.git/HEAD` would
+/// make the build script rerun on every local commit, for a value that is
+/// `None` on every local build by design.
+pub fn declare_release_sha_rerun() {
+    println!("cargo:rerun-if-env-changed=DEEPSEEK_BUILD_SHA");
+    println!("cargo:rerun-if-env-changed=GITHUB_SHA");
+}
+
+/// Emit `cargo:rustc-env=CODEWHALE_RELEASE_BUILD_SHA=...` — the first 12 hex
+/// characters of the build sha — **only** when the build environment supplied
+/// one.
+///
+/// This is provenance for a *published* binary, and it is the only sha a
+/// telemetry payload may carry. There is deliberately no fallback to the local
+/// checkout:
+///
+/// - [`build_commit`] falls back to `git_commit`, so `CODEWHALE_BUILD_COMMIT`
+///   is the builder's own private `HEAD` on every local build. A maintainer
+///   running the release build this repo's own guidance prescribes would ship
+///   the sha of an unpublished tree.
+/// - The "was this a published release" gate proposed earlier cannot be built:
+///   `codewhale_release::latest_release_tag_{async,blocking}` are **network
+///   calls** to `api.github.com` that return *tag names*, not shas, so the only
+///   available comparison is version-vs-version — and a private tree at the
+///   same version compares equal.
+///
+/// Build-time provenance is deterministic, network-free, and verifiable from
+/// the repository. Absent the release environment the value is simply absent,
+/// and `option_env!` in the consuming crate yields `None`.
+pub fn emit_release_build_sha() {
+    if let Some(sha) = release_build_sha(|name| std::env::var(name).ok()) {
+        println!("cargo:rustc-env=CODEWHALE_RELEASE_BUILD_SHA={sha}");
+    }
+}
+
+/// The decision behind [`emit_release_build_sha`], with the environment
+/// injected so it can be tested without mutating the process.
+///
+/// `DEEPSEEK_BUILD_SHA` wins over `GITHUB_SHA`; both must be a full 40-hex sha
+/// to be believed, and the result is the first 12 characters.
+#[must_use]
+pub fn release_build_sha(read_env: impl Fn(&str) -> Option<String>) -> Option<String> {
+    read_env("DEEPSEEK_BUILD_SHA")
+        .and_then(full_sha)
+        .or_else(|| read_env("GITHUB_SHA").and_then(full_sha))
+        .and_then(short_sha)
 }
 
 /// Tell Cargo to invalidate the cached build script output when `HEAD`
@@ -179,7 +238,7 @@ fn short_sha(value: String) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{full_sha, git_common_dir, parse_symbolic_ref, short_sha};
+    use super::{full_sha, git_common_dir, parse_symbolic_ref, release_build_sha, short_sha};
     use std::{
         fs,
         time::{SystemTime, UNIX_EPOCH},
@@ -215,6 +274,45 @@ mod tests {
         assert_eq!(
             short_sha("abcdef0123456789abcdef0123456789abcdef01".to_string()),
             Some("abcdef012345".to_string())
+        );
+    }
+
+    #[test]
+    fn the_release_build_sha_is_absent_for_every_local_build() {
+        // No release environment: nothing is emitted, so `option_env!` in the
+        // consuming crate is `None` and a telemetry payload carries `git_sha:
+        // null`. This is the property that keeps a maintainer's private HEAD
+        // out of a shipped binary.
+        assert_eq!(release_build_sha(|_| None), None);
+    }
+
+    #[test]
+    fn the_release_build_sha_comes_only_from_a_release_environment() {
+        let ci = "abcdef0123456789abcdef0123456789abcdef01";
+        assert_eq!(
+            release_build_sha(|name| (name == "GITHUB_SHA").then(|| ci.to_string())),
+            Some("abcdef012345".to_string())
+        );
+        // The Codewhale variable wins over the GitHub one.
+        assert_eq!(
+            release_build_sha(|name| match name {
+                "DEEPSEEK_BUILD_SHA" => Some("f".repeat(40)),
+                "GITHUB_SHA" => Some(ci.to_string()),
+                _ => None,
+            }),
+            Some("f".repeat(12))
+        );
+        // A value that is not a full sha is not believed, and does not fall
+        // through to the local checkout.
+        assert_eq!(
+            release_build_sha(|name| (name == "DEEPSEEK_BUILD_SHA").then(|| "abc123".to_string())),
+            None
+        );
+        // `CODEWHALE_BUILD_COMMIT` is a different value with a different rule
+        // and is never a source here.
+        assert_eq!(
+            release_build_sha(|name| (name == "CODEWHALE_BUILD_COMMIT").then(|| ci.to_string())),
+            None
         );
     }
 
