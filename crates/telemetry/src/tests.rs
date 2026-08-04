@@ -1421,3 +1421,77 @@ fn an_install_or_upgrade_is_reported_once_per_version() {
         "expected state.json in {entries:?}"
     );
 }
+
+#[test]
+fn the_notice_promises_exactly_what_the_schema_collects() {
+    use crate::notice;
+
+    let body = notice::NOTICE_BODY;
+
+    // Everything the envelope carries has to be described. `install_id` is
+    // "a random ID stored on this machine"; the rest are named directly.
+    for claim in [
+        "which version you run",
+        "OS and CPU family",
+        "which features you used",
+        "how long sessions ran",
+        "how they ended",
+        "random ID stored on this machine",
+        "every 90 days",
+    ] {
+        assert!(
+            body.contains(claim),
+            "the notice does not describe: {claim}"
+        );
+    }
+
+    // And every red line has to be stated as *not collected*, not as
+    // anonymized or sampled — two promises this client does not make.
+    for red_line in [
+        "prompts",
+        "code",
+        "file names",
+        "paths",
+        "repo or branch names",
+        "model output",
+        "model names",
+        "credentials",
+    ] {
+        assert!(
+            body.contains(red_line),
+            "the notice does not disclaim: {red_line}"
+        );
+    }
+    assert!(body.contains("Not sampled, not hashed"));
+    assert!(!body.to_ascii_lowercase().contains("anonymized"));
+
+    // The two documented ways out, both of which are real.
+    assert!(body.contains("codewhale config set telemetry false"));
+    assert!(body.contains("CODEWHALE_TELEMETRY=0"));
+    assert!(body.contains("docs/TELEMETRY.md"));
+}
+
+#[test]
+fn only_an_affirmative_answer_is_an_answer() {
+    use crate::notice::answer_is_yes;
+
+    assert!(answer_is_yes("y"));
+    assert!(answer_is_yes("Y\n"));
+    assert!(answer_is_yes(" yes \n"));
+    // Enter, EOF, a typo, and a stray keystroke all decline. The default is
+    // the safe direction and it is reachable without aiming.
+    assert!(!answer_is_yes(""));
+    assert!(!answer_is_yes("\n"));
+    assert!(!answer_is_yes("n"));
+    assert!(!answer_is_yes("ye"));
+    assert!(!answer_is_yes("1"));
+    assert!(!answer_is_yes("true"));
+}
+
+#[test]
+fn the_notice_prompt_capitalises_the_declining_default() {
+    // `[y/N]`, not `[Y/n]` and not `[y/n]`. The shape of the prompt is the
+    // first thing a user reads about which way Enter goes.
+    assert!(crate::notice::NOTICE_PROMPT.contains("[y/N]"));
+    assert!(!crate::notice::NOTICE_PROMPT.contains("[Y/n]"));
+}

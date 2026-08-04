@@ -131,6 +131,7 @@ mod skills;
 mod snapshot;
 mod startup_trace;
 mod task_manager;
+mod telemetry_notice;
 #[cfg(test)]
 mod test_support;
 mod tls;
@@ -1664,6 +1665,17 @@ async fn run_async_main_inner(
     // other write path — stop being a no-op. Nothing before this line can
     // record anything, which is precisely how a disabled user's panic writes
     // nothing and creates no directory.
+    // The notice runs before arming, and only on the interactive surface: it
+    // is the one surface that owns a terminal it can ask on, and asking before
+    // `arm_telemetry` is what lets a user who says yes be counted from this
+    // session rather than the next one.
+    //
+    // Every path that does not render and answer it leaves the decision unset,
+    // and unset means nothing is ever collected. `--skip-onboarding` and a
+    // non-TTY stdin both take that path, on purpose.
+    if telemetry_surface(command.as_ref()) == codewhale_telemetry::Surface::Tui {
+        crate::telemetry_notice::prompt_if_due(cli.skip_onboarding, cli.config.clone());
+    }
     arm_telemetry(&cli, command.as_ref());
     let outcome = run_async_main_dispatch(cli, command, plugin_discovery, plugin_registry).await;
     finish_telemetry(&outcome).await;

@@ -40,6 +40,7 @@ pub mod counters;
 pub mod decision;
 pub mod envelope;
 pub mod event;
+pub mod notice;
 
 #[cfg(test)]
 mod tests;
