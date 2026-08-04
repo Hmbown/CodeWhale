@@ -636,7 +636,10 @@ fn normalize_rail_panel(value: &str) -> &'static str {
 /// Rail unification (0.9.4): carry the classic sidebar's settings forward
 /// instead of stranding them. `sidebar_focus` picks the rail panel —
 /// pinned/tasks/agents/context map onto the same-named panels, auto folds
-/// into the always-on pinned work panel, and hidden turns the rail off.
+/// into the auto-fitting Tasks panel (it is the shipped default for
+/// `sidebar_focus`, and "show work when there is work" is what Tasks does;
+/// folding it into the always-on Pinned strip inverted that intent for every
+/// upgrading user), and hidden turns the rail off.
 /// `sidebar_width_percent` maps onto the absolute side width at a
 /// 120-column reference. Auto-collapse itself is deliberately dropped: the
 /// rail hides via placement off. Explicit new keys win over migrated ones.
@@ -661,7 +664,15 @@ fn migrate_sidebar_settings_to_rail(s: &mut Settings) {
             // unset when the document did not name the key explicitly.
             if s.rail_panel == "tasks" && !s.rail_panel_explicit {
                 s.rail_panel = match panel {
-                    "tasks" | "activity" | "live" | "running" => "tasks",
+                    // `auto` is the shipped *default* for `sidebar_focus`, so
+                    // this arm runs for anyone who has a settings.toml at all
+                    // — even one that only sets `theme`. Auto-collapse meant
+                    // "show work when there is work", which is exactly the
+                    // Tasks panel (it auto-fits, and an empty projection
+                    // reserves no rows). Folding it into the always-on Pinned
+                    // strip inverted the intent and made a 4-row band the
+                    // effective default for every upgrading user.
+                    "tasks" | "activity" | "live" | "running" | "auto" => "tasks",
                     "agents" | "subagents" | "sub-agents" => "agents",
                     "context" | "session" => "context",
                     _ => "pinned",
@@ -3338,9 +3349,11 @@ mod tests {
         assert_eq!(migrate("activity").rail_panel, "tasks");
         assert_eq!(migrate("pinned").rail_panel, "pinned");
         assert_eq!(migrate("work").rail_panel, "pinned");
-        // Auto-collapse is dropped: auto folds into the always-on pinned
-        // work panel rather than a mode that hides itself.
-        assert_eq!(migrate("auto").rail_panel, "pinned");
+        // `auto` is the shipped default for `sidebar_focus`, so this arm is
+        // the effective default for every upgrading user — it must land on
+        // the panel that hides itself when there is nothing to show, not on
+        // the always-on pinned strip.
+        assert_eq!(migrate("auto").rail_panel, "tasks");
         // A hidden sidebar becomes rail placement off.
         let hidden = migrate("hidden");
         assert_eq!(hidden.work_surface_placement, "off");
@@ -4813,9 +4826,9 @@ mod tests {
 
         let loaded = Settings::load().expect("load settings");
 
-        // Auto-collapse is dropped: saved auto folds into the always-on
-        // pinned rail panel.
-        assert_eq!(loaded.rail_panel, "pinned");
+        // A settings.toml that only names `sidebar_focus = "auto"` — the
+        // shipped default — must not silently earn an always-on rail strip.
+        assert_eq!(loaded.rail_panel, "tasks");
         assert_eq!(loaded.work_surface_placement, "top");
     }
 

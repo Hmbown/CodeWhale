@@ -1278,11 +1278,27 @@ pub fn render_footer(area: Rect, buf: &mut Buffer, app: &mut App) {
     crate::tui::phase_strip::render(area, buf, app);
 }
 
+/// The transcript rows the idle brand mark needs before it will draw at all.
+///
+/// This is [`ShellTier::for_area`]'s `Compact` floor, named so the *layout*
+/// can honour it before the frame is split. Anything that reserves rows above
+/// the transcript must subtract against this constant rather than guess, or
+/// the reservation and the render gate drift and the mark is evicted by
+/// chrome that was sized without knowing the mark existed.
+pub(crate) const AMBIENT_MIN_CHAT_HEIGHT: u16 = 16;
+/// Companion column floor, same reasoning as [`AMBIENT_MIN_CHAT_HEIGHT`].
+pub(crate) const AMBIENT_MIN_CHAT_WIDTH: u16 = 60;
+
 /// Build the post-launch idle composition. It is deliberately not a command
 /// dashboard: one brand mark, one context line, and one quiet Fleet setup path.
+///
+/// Expressed in terms of the ambient floor constants so the layout rule that
+/// reserves the rows and the gate that spends them cannot disagree. (The old
+/// spelling also tested `height >= 14 && width >= 28`, which was dead: the
+/// tier check already demands 16 rows and 60 columns.)
 #[must_use]
 pub(crate) fn empty_state_mark_visible(area: Rect) -> bool {
-    ShellTier::for_area(area) != ShellTier::Compact && area.height >= 14 && area.width >= 28
+    area.height >= AMBIENT_MIN_CHAT_HEIGHT && area.width >= AMBIENT_MIN_CHAT_WIDTH
 }
 
 #[must_use]

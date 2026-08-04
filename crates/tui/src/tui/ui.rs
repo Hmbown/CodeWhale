@@ -13645,6 +13645,77 @@ fn build_pending_input_preview(app: &App) -> PendingInputPreview {
     preview
 }
 
+/// Rows the transcript can spare for the work rail this frame.
+///
+/// Everything above the transcript is decoration relative to the transcript
+/// itself, so the rail is paid out of what is *left over* after the fixed
+/// chrome and the transcript's own floor — not out of a fraction of the
+/// terminal, which at 24 rows would hand the rail half the screen.
+///
+/// That floor moves. While the shell is fully idle the transcript is showing
+/// the ocean, and the ocean does not draw at all below
+/// [`AMBIENT_MIN_CHAT_HEIGHT`](crate::tui::underwater::AMBIENT_MIN_CHAT_HEIGHT)
+/// rows — so on a 24-row terminal an always-on panel strip does not shrink
+/// the water, it deletes it. Once there is real work on screen the floor
+/// drops back to [`MIN_CHAT_HEIGHT`] and the rail gets its rows. Decorative
+/// water yields to work; work never yields to decoration.
+///
+/// `idle_empty` alone is not enough to charge that floor. It is an
+/// app-state predicate — it knows the session is quiet, not that the terminal
+/// can draw. [`empty_state_mark_visible`](crate::tui::underwater::empty_state_mark_visible)
+/// also demands
+/// [`AMBIENT_MIN_CHAT_WIDTH`](crate::tui::underwater::AMBIENT_MIN_CHAT_WIDTH)
+/// columns, so on a narrow terminal charging the ambient floor would reserve
+/// 16 rows for a mark that cannot render at any height and make the strip
+/// yield for nothing.
+///
+/// The row half of that gate is deliberately *not* mirrored here. It would be
+/// a step down in terminal height — below the floor the rail would take the
+/// rows, at the floor it would hand them back — and a strip that vanishes as
+/// the terminal grows is the resize flicker this budget exists to avoid. The
+/// column gate has no such problem: width and height move independently.
+///
+/// The composer is charged at a fixed floor rather than its measured height:
+/// the real `composer_height` is itself computed from the strip height, and
+/// feeding it back in here would close a loop that oscillates across a
+/// resize instead of settling.
+pub(crate) fn rail_row_budget(
+    app: &App,
+    terminal_width: u16,
+    terminal_height: u16,
+    idle_empty: bool,
+) -> u16 {
+    let ambient_mark_can_draw =
+        idle_empty && terminal_width >= crate::tui::underwater::AMBIENT_MIN_CHAT_WIDTH;
+    let chat_floor = if ambient_mark_can_draw {
+        crate::tui::underwater::AMBIENT_MIN_CHAT_HEIGHT
+    } else {
+        MIN_CHAT_HEIGHT
+    };
+    let composer_floor = MIN_COMPOSER_HEIGHT.saturating_add(u16::from(app.composer_border));
+    terminal_height
+        .saturating_sub(header_height_for(terminal_height))
+        .saturating_sub(crate::tui::phase_strip::height())
+        .saturating_sub(composer_floor)
+        .saturating_sub(chat_floor)
+}
+
+/// The header collapses to a single row on short terminals. Shared so the
+/// rail budget charges the same chrome the layout actually reserves.
+fn header_height_for(terminal_height: u16) -> u16 {
+    if terminal_height < 16 { 1 } else { 2 }
+}
+
+/// Column-axis twin of [`rail_row_budget`]: the columns a side rail must
+/// leave the transcript.
+fn rail_min_chat_width(idle_empty: bool) -> u16 {
+    if idle_empty {
+        crate::tui::underwater::AMBIENT_MIN_CHAT_WIDTH
+    } else {
+        0
+    }
+}
+
 fn render(f: &mut Frame, app: &mut App, _config: &Config) {
     let size = f.area();
     // Keep the view stack's focus-context texture prototype (#4823) in step
@@ -13688,7 +13759,7 @@ fn render(f: &mut Frame, app: &mut App, _config: &Config) {
         return;
     }
 
-    let header_height = if size.height < 16 { 1 } else { 2 };
+    let header_height = header_height_for(size.height);
     let footer_height = crate::tui::phase_strip::height();
     let slash_menu_entries = visible_slash_menu_entries(app, SLASH_MENU_LIMIT);
     let mention_menu_limit = app.mention_menu_limit;
@@ -13697,7 +13768,14 @@ fn render(f: &mut Frame, app: &mut App, _config: &Config) {
     if !mention_menu_entries.is_empty() && app.mention_menu_selected >= mention_menu_entries.len() {
         app.mention_menu_selected = mention_menu_entries.len().saturating_sub(1);
     }
-    let top_work_strip_height = super::work_surface::height(app, size.width, size.height);
+    // Evaluate the fully-idle predicate exactly once per frame. It decides
+    // both how many rows the rail may reserve (here) and whether the idle
+    // ocean draws its brand mark (in ChatWidget); calling it twice would let
+    // the reservation and the render disagree inside a single frame.
+    let idle_empty = super::widgets::should_render_empty_state(app);
+    let rail_budget = rail_row_budget(app, size.width, size.height, idle_empty);
+    let top_work_strip_height =
+        super::work_surface::height(app, size.width, size.height, rail_budget);
 
     // Defensive two-pass layout: pin the header to the absolute top row,
     // then split the remaining body area for chat / preview / composer /
@@ -13797,7 +13875,8 @@ fn render(f: &mut Frame, app: &mut App, _config: &Config) {
         ])
         .split(body_area);
 
-    let (work_chat_area, side_work_area) = super::work_surface::split_chat(app, body_chunks[1]);
+    let (work_chat_area, side_work_area) =
+        super::work_surface::split_chat(app, body_chunks[1], rail_min_chat_width(idle_empty));
 
     if top_work_strip_height > 0 {
         super::work_surface::render(f, body_chunks[0], app);
