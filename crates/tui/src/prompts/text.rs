@@ -403,6 +403,11 @@ coherent change, verify it, and inspect the diff. Preserve unrelated work.
 Report changed files, checks, unresolved risks, and pending work. Never infer
 permission from urgency; approval, sandbox, network, and publication authority
 remain independent.
+
+Calling a gated write tool is the proposal, not the execution — the change runs
+only after approval is granted. If a write call is rejected because approval
+has not been granted yet, do not retry it: present the change in your plan and
+wait for approval before calling the write tool again.
 "#;
 /// Sub-agent final-message output contract — injected into every sub-agent
 /// brief by the runner in `tools/subagent/mod.rs` so the parent's parser can

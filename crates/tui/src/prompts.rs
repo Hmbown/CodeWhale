@@ -2882,19 +2882,16 @@ mod tests {
     }
 
     #[test]
-    fn suggest_overlay_states_proposal_is_not_execution() {
-        // #5146: the overlay must make the propose-vs-execute contract
-        // explicit where the model reads it — emitting a gated write call is
-        // the proposal mechanism, and a call rejected for missing approval
-        // (e.g. an unapproved batch) must be answered with the plan, not a
-        // retry.
+    fn execution_contract_states_proposal_is_not_execution() {
+        // #5146: the live execution layer must make the propose-vs-execute
+        // contract explicit after the legacy approval overlay was removed.
         assert!(
-            SUGGEST_APPROVAL.contains("is the proposal, not the execution"),
-            "Suggest overlay must state the propose-vs-execute contract"
+            CORE_EXECUTION_PROFILE_PROMPT.contains("is the proposal, not the execution"),
+            "Execution profile must state the propose-vs-execute contract"
         );
         assert!(
-            SUGGEST_APPROVAL.contains("present the change in your plan"),
-            "Suggest overlay must name the correct behavior on rejection"
+            CORE_EXECUTION_PROFILE_PROMPT.contains("present the change in your plan"),
+            "Execution profile must name the correct behavior on rejection"
         );
     }
 

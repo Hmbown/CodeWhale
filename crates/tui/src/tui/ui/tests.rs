@@ -15253,7 +15253,7 @@ fn apply_loaded_session_restores_concrete_model_mode() {
     assert!(!app.auto_model);
     assert_eq!(app.model, "deepseek-v4-flash");
     assert_eq!(app.model_selection_for_persistence(), "deepseek-v4-flash");
-    assert_eq!(app.reasoning_effort, ReasoningEffort::High);
+    assert_eq!(app.reasoning_effort, ReasoningEffort::Low);
     assert_eq!(app.reasoning_effort_preference, Some(ReasoningEffort::Low));
 }
 

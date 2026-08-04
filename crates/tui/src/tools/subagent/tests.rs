@@ -2552,8 +2552,8 @@ fn direct_consultant_aliases_apply_role_reasoning_default_after_inheritance() {
     );
     assert_eq!(
         route.reasoning_effort.as_deref(),
-        Some("high"),
-        "the DeepSeek route capability normalization remains the effective ceiling"
+        Some("low"),
+        "first-party DeepSeek keeps an explicit low child effort"
     );
 }
 
@@ -5250,7 +5250,7 @@ fn subagent_auto_reasoning_resolves_to_distinct_v4_tiers() {
             "quick lookup",
         )
         .reasoning_effort,
-        Some("high".to_string())
+        Some("low".to_string())
     );
     assert_eq!(
         fallback_subagent_assignment_route(

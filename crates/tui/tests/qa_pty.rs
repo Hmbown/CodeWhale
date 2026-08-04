@@ -1511,11 +1511,7 @@ fn work_and_permission_are_visible_at_release_terminal_sizes() -> anyhow::Result
             "restored mode missing at {cols}x{rows}:\n{dump}"
         );
         let header = frame.row(0);
-        let effort_receipt = if cols >= 60 {
-            " · low→high "
-        } else {
-            " · h "
-        };
+        let effort_receipt = if cols >= 60 { " · low " } else { " · l " };
         assert!(
             header.contains(effort_receipt),
             "effective effort missing at {cols}x{rows}: {header:?}\n{dump}"

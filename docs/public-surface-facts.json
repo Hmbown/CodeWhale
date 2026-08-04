@@ -22,7 +22,7 @@
   "sourceCandidate": {
     "version": "0.9.4",
     "providerCount": 40,
-    "toolCount": 68,
+    "toolCount": 67,
     "sandboxBackends": [
       "seatbelt (macOS, when available)",
       "bubblewrap (Linux, opt-in when installed)"
@@ -233,6 +233,7 @@
       "@SparkofSpike",
       "@XhesicaFrost",
       "@aboimpinto",
+      "@shenjackyuanjie",
       "@DracheTek",
       "@MuRongMoQing"
     ]

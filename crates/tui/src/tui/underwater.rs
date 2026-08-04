@@ -1601,8 +1601,8 @@ mod tests {
         // filesystem scope). Route detail — already the first thing this header
         // truncates under pressure — is what yields the space.
         //
-        // The Wide tier re-adds the version stamp to the baseline, so 110
-        // columns drops back to no chip: version and context outrank it.
+        // The Wide tier re-adds the version stamp to the baseline, but the
+        // route detail yields before the complete optional chip.
         for (width, should_show_tokens, should_show_context) in [
             (40, false, false),
             (60, false, true),
@@ -1718,7 +1718,7 @@ mod tests {
             "permission posture missing: {header:?}"
         );
         assert!(
-            header.contains(" · h · Full Access"),
+            header.contains(" · l · Full Access"),
             "effective effort missing: {header:?}"
         );
     }
@@ -1907,7 +1907,16 @@ mod tests {
 
         let header = header_text(&app, 80);
 
-        assert!(header.contains("low→high"), "effort missing: {header:?}");
+        // First-party DeepSeek maps low -> low (8c5370a56: the wire documents
+        // [low, high, max] and has no medium), so requested and effective agree
+        // and the header renders the tier alone. Assert the absence of the
+        // arrow too: bare `contains("low")` would also pass on the old
+        // `low→high` rendering, which is the regression this pins against.
+        assert!(header.contains("low"), "effort missing: {header:?}");
+        assert!(
+            !header.contains("low→"),
+            "requested and effective agree on first-party DeepSeek; no arrow expected: {header:?}"
+        );
         assert!(
             header.to_ascii_lowercase().contains("operate"),
             "mode missing: {header:?}"
