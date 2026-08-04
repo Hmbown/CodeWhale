@@ -153,6 +153,13 @@ def provider_kind_ids(config_rs: str) -> dict[str, str]:
         ("Openmodel", "openmodel"),
         ("MinimaxAnthropic", "minimax-anthropic"),
         ("OpencodeZen", "opencode-zen"),
+        # Alibaba Model Studio ships four plan/dialect identities, each with a
+        # hand-written impl Provider for the same reason as the rows above:
+        # the wire policy is not fixed, so provider!() cannot express them.
+        ("ModelstudioTokenPlan", "modelstudio-token-plan"),
+        ("ModelstudioTokenPlanAnthropic", "modelstudio-token-plan-anthropic"),
+        ("ModelstudioCodingPlan", "modelstudio-coding-plan"),
+        ("ModelstudioCodingPlanAnthropic", "modelstudio-coding-plan-anthropic"),
     ]:
         match = re.search(
             rf'impl\s+Provider\s+for\s+{variant_name}.*?fn\s+id.*?\"({id_literal})\"',
