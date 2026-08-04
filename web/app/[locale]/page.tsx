@@ -108,17 +108,29 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
               </div>
             </div>
 
+            {/*
+              The TUI header grammar: a `cw` chip and a dot chain. Each fact is
+              its own translated unit — the separators are CSS punctuation, so
+              nothing is concatenated around a token and no locale inherits an
+              English joining word. `cw` is the binary's own name, code-owned
+              exactly like `Codewhale`.
+            */}
             <p
-              className="product-facts paper-facts"
+              className="product-facts paper-facts dotline"
               data-source-state={sourceIsPublished ? "published release" : "source candidate"}
               data-source-state-label={sourceIsPublished ? d.publishedRelease : d.figcaptionSourceCandidate}
             >
-              {publishedRelease
-                ? fill(d.latestRelease, { tag: publishedRelease.tag })
-                : d.releaseUnavailable}{" "}
-              <span>·</span>{" "}
-              {`${sourceIsPublished ? d.currentSource : d.sourceCandidate} v${sourceVersion}: `}
-              {providerRoutes} <span>·</span> {facts.license ?? "MIT"}
+              <span className="dotline-chip">cw</span>
+              <span>
+                {publishedRelease
+                  ? fill(d.latestRelease, { tag: publishedRelease.tag })
+                  : d.releaseUnavailable}
+              </span>
+              <span>
+                {`${sourceIsPublished ? d.currentSource : d.sourceCandidate} v${sourceVersion}`}
+              </span>
+              <span>{providerRoutes}</span>
+              <span>{facts.license ?? "MIT"}</span>
             </p>
           </div>
 

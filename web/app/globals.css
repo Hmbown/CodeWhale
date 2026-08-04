@@ -135,7 +135,10 @@ main, header, footer, nav { position: relative; z-index: 1; }
   text-transform: none;
 }
 
-.dotline > * + *::before {
+/* The separator hangs off the END of the preceding item, not the start of the
+   next one. When a long chain wraps, a line ending in `·` reads as
+   continuation; a line beginning with one reads as a bullet list. */
+.dotline > *:not(:last-child)::after {
   content: "·";
   margin-inline: 0.5em;
   color: var(--stage-dim);
@@ -1377,17 +1380,28 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   color: var(--ink-mute);
 }
 
+/* The hero status line is the TUI header, typeset on paper: a `cw` chip and
+   then a dot chain of the facts the binary would report about itself. Spacing
+   comes from `.dotline`; the separators are CSS punctuation. */
 .product-facts,
 .paper-facts {
   margin-top: 1.1rem;
-  font-family: var(--font-mono), "JetBrains Mono", monospace;
+  /* !important because this <p> is also `.product-hero-copy > p`, which sets
+     the lede's clamp at higher specificity. The status line is not a lede. */
   font-size: 0.72rem !important;
   color: var(--ink-mute);
   line-height: 1.55;
 }
 
-.product-facts span {
-  padding-inline: 0.35rem;
+.paper-facts .dotline-chip {
+  padding: 0.08rem 0.36rem;
+  border-radius: 3px;
+  background: var(--paper-deep);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.paper-facts > *:not(:last-child)::after {
   color: var(--ink-mute);
 }
 
