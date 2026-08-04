@@ -28,6 +28,7 @@ pub use provider_kind::ProviderKind;
 pub use setup_state::{
     ConstitutionAuthoring, ConstitutionChoice, ConstitutionSource, ConstitutionValidity,
     InheritedConfigFacts, RuntimePostureSource, SetupState, SetupStep, StepEntry, StepStatus,
+    TELEMETRY_NOTICE_VERSION,
 };
 pub use user_constitution::{
     APPROX_BYTES_PER_TOKEN, AutonomyPreference, CacheProjection, ClauseOrigin, ClauseStatus,
@@ -706,6 +707,19 @@ pub struct ConfigToml {
     pub verbosity: Option<String>,
     pub log_level: Option<String>,
     pub telemetry: Option<bool>,
+    /// Where telemetry batches are sent, when telemetry is enabled at all.
+    ///
+    /// Unset by default, and unset is not a placeholder for a built-in URL:
+    /// with no endpoint configured nothing is ever sent over a network.
+    ///
+    /// Kept as a scalar sibling of `telemetry` rather than folded into a
+    /// `[telemetry]` table. `telemetry` is already a scalar and every section
+    /// table is declared after it, so a table of that name would be a hard
+    /// `toml::from_str` failure — and one whose cause `ConfigStore::load`
+    /// deliberately hides, leaving the user with an unloadable config and no
+    /// explanation. It would also be a `ValueAfterTable` serialization hazard
+    /// against the scalars that follow.
+    pub telemetry_endpoint: Option<String>,
     pub approval_policy: Option<String>,
     pub sandbox_mode: Option<String>,
     /// Native tool catalog controls shared with `codewhale-tui`.
@@ -2730,6 +2744,7 @@ impl ConfigToml {
             "verbosity" => self.verbosity.clone(),
             "log_level" => self.log_level.clone(),
             "telemetry" => self.telemetry.map(|v| v.to_string()),
+            "telemetry_endpoint" => self.telemetry_endpoint.clone(),
             "approval_policy" => self.approval_policy.clone(),
             "sandbox_mode" => self.sandbox_mode.clone(),
             "tools.always_load" => self.tools.as_ref().map(|tools| tools.always_load.join(",")),
@@ -2849,6 +2864,10 @@ impl ConfigToml {
             "telemetry" => {
                 self.telemetry = Some(parse_bool(value)?);
             }
+            // Scheme rules (HTTPS, or loopback HTTP) are enforced where a
+            // batch would actually be sent, not here: a user must be able to
+            // stage a value before the machinery that reads it exists.
+            "telemetry_endpoint" => self.telemetry_endpoint = Some(value.to_string()),
             "approval_policy" => self.approval_policy = Some(value.to_string()),
             "sandbox_mode" => self.sandbox_mode = Some(value.to_string()),
             "hook_sinks.unix_socket_path" => {
@@ -2889,6 +2908,7 @@ impl ConfigToml {
             "verbosity" => self.verbosity = None,
             "log_level" => self.log_level = None,
             "telemetry" => self.telemetry = None,
+            "telemetry_endpoint" => self.telemetry_endpoint = None,
             "approval_policy" => self.approval_policy = None,
             "sandbox_mode" => self.sandbox_mode = None,
             "hook_sinks.unix_socket_path" => {
@@ -2937,6 +2957,9 @@ impl ConfigToml {
         }
         if let Some(v) = self.telemetry {
             out.insert("telemetry".to_string(), v.to_string());
+        }
+        if let Some(v) = self.telemetry_endpoint.as_ref() {
+            out.insert("telemetry_endpoint".to_string(), v.clone());
         }
         if let Some(v) = self.approval_policy.as_ref() {
             out.insert("approval_policy".to_string(), v.clone());

@@ -2624,6 +2624,7 @@ fn project_merge_denies_credentials_endpoints_and_provider_selection() {
         default_text_model: Some("deepseek-v4-pro".to_string()),
         auth_mode: Some("oauth".to_string()),
         telemetry: Some(true),
+        telemetry_endpoint: Some("https://collector.evil.example/ingest".to_string()),
         ..ConfigToml::default()
     };
     project.providers.openrouter.api_key = Some("attacker-openrouter-key".to_string());
@@ -2641,6 +2642,11 @@ fn project_merge_denies_credentials_endpoints_and_provider_selection() {
     assert_eq!(base.base_url.as_deref(), Some("https://api.deepseek.com"));
     assert_eq!(base.auth_mode, None);
     assert_eq!(base.telemetry, None);
+    // A repo-local `.codewhale/config.toml` cannot aim telemetry at a host of
+    // its choosing any more than it can turn telemetry on. Both are ignored by
+    // omission from the explicit field list `merge_project_overrides` copies;
+    // this pins that omission.
+    assert_eq!(base.telemetry_endpoint, None);
     assert_eq!(
         base.providers.openrouter.api_key.as_deref(),
         Some("user-openrouter-key")
@@ -8051,4 +8057,177 @@ fn telemetry_explicit_off_distinguishes_an_answer_from_the_default() {
     let resolved = ConfigToml::default().resolve_runtime_options(&cli);
     assert!(!resolved.telemetry);
     assert!(resolved.telemetry_explicit_off);
+}
+
+#[test]
+fn telemetry_endpoint_round_trips_through_all_four_verbs() {
+    let mut config = ConfigToml::default();
+    assert_eq!(config.get_value("telemetry_endpoint"), None);
+    assert!(!config.list_values().contains_key("telemetry_endpoint"));
+
+    config
+        .set_value("telemetry_endpoint", "https://collector.example/ingest")
+        .expect("set telemetry_endpoint");
+    assert_eq!(
+        config.get_value("telemetry_endpoint").as_deref(),
+        Some("https://collector.example/ingest")
+    );
+    assert_eq!(
+        config
+            .list_values()
+            .get("telemetry_endpoint")
+            .map(String::as_str),
+        Some("https://collector.example/ingest")
+    );
+
+    // Scheme rules belong at send time, not at set time: staging a value the
+    // client will later refuse must still be possible.
+    config
+        .set_value("telemetry_endpoint", "http://collector.example/ingest")
+        .expect("staging an http endpoint is not a set-time error");
+    assert_eq!(
+        config.get_value("telemetry_endpoint").as_deref(),
+        Some("http://collector.example/ingest")
+    );
+
+    config
+        .unset_value("telemetry_endpoint")
+        .expect("unset telemetry_endpoint");
+    assert_eq!(config.get_value("telemetry_endpoint"), None);
+    assert!(!config.list_values().contains_key("telemetry_endpoint"));
+
+    // The key must land as a typed field, never in `extras` — an extras key
+    // would serialize after the section tables and break the file.
+    assert!(!config.extras.contains_key("telemetry_endpoint"));
+}
+
+#[test]
+fn telemetry_endpoint_stays_a_scalar_sibling_of_telemetry() {
+    // `telemetry` is a root scalar and every section table is declared after
+    // it, so the endpoint must serialize as a scalar too. A `[telemetry]`
+    // table would be a hard parse failure on load, and a scalar emitted after
+    // a table is a TOML `ValueAfterTable` error on save.
+    let config = ConfigToml {
+        telemetry: Some(true),
+        telemetry_endpoint: Some("https://collector.example/ingest".to_string()),
+        ..ConfigToml::default()
+    };
+    let rendered = toml::to_string_pretty(&config).expect("serialize config");
+    assert!(
+        rendered.contains("telemetry_endpoint = \"https://collector.example/ingest\""),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("[telemetry]"), "{rendered}");
+
+    let endpoint_at = rendered
+        .find("telemetry_endpoint =")
+        .expect("endpoint present");
+    if let Some(first_table_at) = rendered.find("\n[") {
+        assert!(
+            endpoint_at < first_table_at,
+            "telemetry_endpoint must precede every section table:\n{rendered}"
+        );
+    }
+
+    let round_tripped: ConfigToml = toml::from_str(&rendered).expect("round trips");
+    assert_eq!(
+        round_tripped.telemetry_endpoint.as_deref(),
+        Some("https://collector.example/ingest")
+    );
+    assert_eq!(round_tripped.telemetry, Some(true));
+}
+
+#[test]
+fn a_telemetry_table_is_a_hard_load_failure_and_stays_unbuildable() {
+    // Documents *why* the endpoint is a sibling scalar rather than
+    // `[telemetry] endpoint = …`: `telemetry` is already `Option<bool>`, so a
+    // table of that name cannot deserialize at all.
+    let err = toml::from_str::<ConfigToml>("[telemetry]\nenabled = true\n")
+        .expect_err("a [telemetry] table must not deserialize");
+    let _ = err;
+}
+
+#[test]
+fn telemetry_notice_is_owed_until_it_is_answered_out_loud() {
+    let mut state = SetupState::default();
+
+    // A fresh record owes the notice, and "owed" is not an answer either way.
+    assert!(state.needs_telemetry_notice(TELEMETRY_NOTICE_VERSION));
+    assert!(!state.telemetry_accepted(TELEMETRY_NOTICE_VERSION));
+    assert!(!state.telemetry_declined(TELEMETRY_NOTICE_VERSION));
+
+    state.record_telemetry_notice(TELEMETRY_NOTICE_VERSION, false);
+    assert!(!state.needs_telemetry_notice(TELEMETRY_NOTICE_VERSION));
+    assert!(!state.telemetry_accepted(TELEMETRY_NOTICE_VERSION));
+    assert!(state.telemetry_declined(TELEMETRY_NOTICE_VERSION));
+
+    state.record_telemetry_notice(TELEMETRY_NOTICE_VERSION, true);
+    assert!(state.telemetry_accepted(TELEMETRY_NOTICE_VERSION));
+    assert!(!state.telemetry_declined(TELEMETRY_NOTICE_VERSION));
+
+    // A decision recorded against different notice content is stale: the
+    // notice is owed again, and the stale `true` is not consent to the new
+    // content.
+    state.record_telemetry_notice("0", true);
+    assert!(state.needs_telemetry_notice(TELEMETRY_NOTICE_VERSION));
+    assert!(!state.telemetry_accepted(TELEMETRY_NOTICE_VERSION));
+    assert!(!state.telemetry_declined(TELEMETRY_NOTICE_VERSION));
+}
+
+#[test]
+fn deferring_the_constitution_checkpoint_does_not_answer_the_telemetry_notice() {
+    // `complete_constitution_checkpoint(_, Deferred)` persists a completed
+    // checkpoint without showing the user anything — reached from the
+    // skip-onboarding path. The telemetry notice must not mirror that.
+    let mut state = SetupState::default();
+    state.complete_constitution_checkpoint("0.9.4", ConstitutionChoice::Deferred);
+
+    assert_eq!(
+        state.constitution_checkpoint_completed_for.as_deref(),
+        Some("0.9.4")
+    );
+    assert_eq!(state.telemetry_notice_decided_for, None);
+    assert!(state.needs_telemetry_notice(TELEMETRY_NOTICE_VERSION));
+    assert!(!state.telemetry_opt_in);
+}
+
+#[test]
+fn inherited_setup_state_never_carries_a_telemetry_decision() {
+    // Upgrading users with no `setup_state.json` get a derived record. It must
+    // not manufacture an answer they never gave.
+    let state = SetupState::derive_inherited(&InheritedConfigFacts {
+        has_provider_route: true,
+        has_credentials_or_local_runtime: true,
+        trust_chosen: true,
+        language: Some("en".to_string()),
+        ..InheritedConfigFacts::default()
+    });
+    assert_eq!(state.telemetry_notice_decided_for, None);
+    assert!(!state.telemetry_opt_in);
+    assert!(state.needs_telemetry_notice(TELEMETRY_NOTICE_VERSION));
+}
+
+#[test]
+fn telemetry_notice_fields_round_trip_and_stay_absent_when_unanswered() {
+    let mut state = SetupState::default();
+    let rendered = serde_json::to_string(&state).expect("serialize setup state");
+    assert!(
+        !rendered.contains("telemetry_notice_decided_for"),
+        "an unanswered notice must not write a field: {rendered}"
+    );
+    assert!(
+        !rendered.contains("telemetry_opt_in"),
+        "a false opt-in must not write a field: {rendered}"
+    );
+
+    state.record_telemetry_notice(TELEMETRY_NOTICE_VERSION, true);
+    let rendered = serde_json::to_string(&state).expect("serialize setup state");
+    let round_tripped: SetupState = serde_json::from_str(&rendered).expect("round trips");
+    assert_eq!(round_tripped, state);
+
+    // Records written before these fields existed load as "notice owed".
+    let legacy: SetupState =
+        serde_json::from_str(r#"{"schema_version":1}"#).expect("legacy record loads");
+    assert_eq!(legacy.telemetry_notice_decided_for, None);
+    assert!(!legacy.telemetry_opt_in);
 }

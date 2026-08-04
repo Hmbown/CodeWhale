@@ -36,6 +36,15 @@ pub const SETUP_STATE_SCHEMA_VERSION: u32 = 1;
 /// Filename of the setup-state sidecar under `$CODEWHALE_HOME`.
 pub const SETUP_STATE_FILE_NAME: &str = "setup_state.json";
 
+/// Version of the *telemetry notice content* — not the app version.
+///
+/// The notice is owed whenever
+/// [`SetupState::telemetry_notice_decided_for`] does not match this string.
+/// Bumping it re-asks everyone, so it is bumped only when what would be
+/// collected materially changes. Keying it to the app version would re-prompt
+/// every release, which is nagging with extra steps.
+pub const TELEMETRY_NOTICE_VERSION: &str = "1";
+
 /// Canonical setup step ids. The ordering matches the first-run spine so a
 /// `BTreeMap<SetupStep, _>` renders in wizard order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -318,6 +327,28 @@ pub struct SetupState {
     /// why an updating user is not treated as a broken fresh install.
     #[serde(default, skip_serializing_if = "is_false")]
     pub inherited: bool,
+
+    // ── Telemetry notice ────────────────────────────────────────────────
+    /// [`TELEMETRY_NOTICE_VERSION`] whose telemetry notice the user has
+    /// answered. `None` means the notice is still owed.
+    ///
+    /// Never auto-completed and never deferred-completed: unlike the
+    /// constitution checkpoint, which records a `Deferred` completion on the
+    /// skip-onboarding path, a telemetry notice that was not rendered and
+    /// answered leaves this `None`. Silence is not consent, so the failure
+    /// mode of a missing notice is that nothing is ever collected.
+    ///
+    /// These are *fields* rather than a new [`SetupStep`] variant on purpose:
+    /// an unknown enum variant fails the whole record parse and silently drops
+    /// the user back to derived-inherited state — including their constitution
+    /// checkpoint — while unknown fields are ignored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telemetry_notice_decided_for: Option<String>,
+    /// The user's answer to the notice. Only meaningful when
+    /// [`Self::telemetry_notice_decided_for`] matches the current
+    /// [`TELEMETRY_NOTICE_VERSION`].
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub telemetry_opt_in: bool,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -341,6 +372,8 @@ impl Default for SetupState {
             runtime_posture_source: RuntimePostureSource::default(),
             operate_receipts_verified: false,
             inherited: false,
+            telemetry_notice_decided_for: None,
+            telemetry_opt_in: false,
         }
     }
 }
@@ -446,6 +479,50 @@ impl SetupState {
         self.constitution_checkpoint_completed_for = Some(version.into());
         self.constitution_choice = choice;
         self
+    }
+
+    /// True when the telemetry notice for `version` has not been answered.
+    ///
+    /// A decision recorded against a *different* notice version does not
+    /// count: the content changed, so the answer is stale and is owed again.
+    #[must_use]
+    pub fn needs_telemetry_notice(&self, version: &str) -> bool {
+        self.telemetry_notice_decided_for.as_deref() != Some(version)
+    }
+
+    /// Record the user's answer to the telemetry notice for `version`.
+    ///
+    /// Call this only from a path where the notice was actually rendered and
+    /// the user actually answered. Deferral, skip-onboarding, and any
+    /// non-interactive surface must leave the record untouched.
+    pub fn record_telemetry_notice(
+        &mut self,
+        version: impl Into<String>,
+        opt_in: bool,
+    ) -> &mut Self {
+        self.telemetry_notice_decided_for = Some(version.into());
+        self.telemetry_opt_in = opt_in;
+        self
+    }
+
+    /// True when the user was asked the current notice and said yes.
+    ///
+    /// This is one half of the emit condition; the other is `telemetry = true`
+    /// in config. Neither alone suffices, which is what makes a stale
+    /// pre-existing `telemetry = true` — settable and inert for a long time —
+    /// not consent.
+    #[must_use]
+    pub fn telemetry_accepted(&self, version: &str) -> bool {
+        !self.needs_telemetry_notice(version) && self.telemetry_opt_in
+    }
+
+    /// True when the user was asked the current notice and said no.
+    ///
+    /// Distinct from "never asked": only a recorded decline is an answer, and
+    /// only an answer may be acted on destructively.
+    #[must_use]
+    pub fn telemetry_declined(&self, version: &str) -> bool {
+        !self.needs_telemetry_notice(version) && !self.telemetry_opt_in
     }
 
     /// Derive a safe inherited state for an existing user with no persisted
