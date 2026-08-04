@@ -3285,11 +3285,24 @@ impl ConfigToml {
             .clone()
             .or_else(|| env.log_level.clone())
             .or_else(|| self.log_level.clone());
-        let telemetry = cli
+        let telemetry_allowed = cli
             .telemetry
             .or(env.telemetry)
             .or(self.telemetry)
             .unwrap_or(false);
+        // Off is sticky: an explicit env "off", or an env value we could not
+        // parse, forces off regardless of CLI flag or config file. A kill
+        // switch that a later flag can re-enable is not a kill switch, and a
+        // typo in `CODEWHALE_TELEMETRY` must never resolve to "on".
+        let telemetry =
+            telemetry_allowed && env.telemetry != Some(false) && !env.telemetry_env_invalid;
+        // Distinguish "the user said no" from "nobody said anything". Only the
+        // former is an answer; the unset default must never be read as one.
+        let telemetry_explicit_off = cli.telemetry == Some(false)
+            || env.telemetry == Some(false)
+            || (cli.telemetry.is_none()
+                && env.telemetry.is_none()
+                && self.telemetry == Some(false));
         let approval_policy = cli
             .approval_policy
             .clone()
@@ -3320,6 +3333,7 @@ impl ConfigToml {
             output_mode,
             log_level,
             telemetry,
+            telemetry_explicit_off,
             approval_policy,
             sandbox_mode,
             yolo,
@@ -4649,6 +4663,14 @@ pub struct ResolvedRuntimeOptions {
     pub output_mode: Option<String>,
     pub log_level: Option<String>,
     pub telemetry: bool,
+    /// A human explicitly turned telemetry off — via `--telemetry false`,
+    /// `CODEWHALE_TELEMETRY=0`, or `telemetry = false` in the config file.
+    ///
+    /// This is *not* the same as [`Self::telemetry`] being `false`, which is
+    /// also the value when nobody has said anything at all. Consumers that
+    /// treat an answer differently from a default must read this flag rather
+    /// than infer intent from the resolved boolean.
+    pub telemetry_explicit_off: bool,
     pub approval_policy: Option<String>,
     pub sandbox_mode: Option<String>,
     pub yolo: Option<bool>,
@@ -6303,6 +6325,11 @@ struct EnvRuntimeOverrides {
     auth_mode: Option<String>,
     log_level: Option<String>,
     telemetry: Option<bool>,
+    /// `CODEWHALE_TELEMETRY`/`DEEPSEEK_TELEMETRY` was set to something
+    /// [`parse_bool`] could not read. A typo in a kill switch must never
+    /// resolve to "on", so this forces telemetry off the same way an explicit
+    /// `false` does.
+    telemetry_env_invalid: bool,
     approval_policy: Option<String>,
     sandbox_mode: Option<String>,
     yolo: Option<bool>,
@@ -6370,6 +6397,7 @@ struct EnvRuntimeOverrides {
 impl EnvRuntimeOverrides {
     fn load() -> Self {
         let (provider, provider_source) = Self::load_provider();
+        let (telemetry, telemetry_env_invalid) = Self::load_telemetry();
         Self {
             provider,
             provider_source,
@@ -6424,16 +6452,8 @@ impl EnvRuntimeOverrides {
             log_level: std::env::var("CODEWHALE_LOG_LEVEL")
                 .or_else(|_| std::env::var("DEEPSEEK_LOG_LEVEL"))
                 .ok(),
-            telemetry: std::env::var("CODEWHALE_TELEMETRY")
-                .or_else(|_| std::env::var("DEEPSEEK_TELEMETRY"))
-                .ok()
-                .and_then(|v| match parse_bool(&v) {
-                    Ok(b) => Some(b),
-                    Err(_) => {
-                        tracing::warn!("Invalid CODEWHALE_TELEMETRY/DEEPSEEK_TELEMETRY value '{v}', expected true/false");
-                        None
-                    }
-                }),
+            telemetry,
+            telemetry_env_invalid,
             approval_policy: std::env::var("CODEWHALE_APPROVAL_POLICY")
                 .or_else(|_| std::env::var("DEEPSEEK_APPROVAL_POLICY"))
                 .ok(),
@@ -6692,6 +6712,31 @@ impl EnvRuntimeOverrides {
         }
 
         (None, None)
+    }
+
+    /// Read the telemetry kill switch, reporting an unreadable value instead of
+    /// swallowing it.
+    ///
+    /// Returns `(value, invalid)`. `invalid` is `true` only when the variable
+    /// was set to something [`parse_bool`] rejected; an unset variable is
+    /// simply `(None, false)`.
+    fn load_telemetry() -> (Option<bool>, bool) {
+        let Some(raw) = std::env::var("CODEWHALE_TELEMETRY")
+            .or_else(|_| std::env::var("DEEPSEEK_TELEMETRY"))
+            .ok()
+        else {
+            return (None, false);
+        };
+        match parse_bool(&raw) {
+            Ok(value) => (Some(value), false),
+            Err(_) => {
+                tracing::warn!(
+                    "Invalid CODEWHALE_TELEMETRY/DEEPSEEK_TELEMETRY value '{raw}'; expected one of \
+                     1/0, true/false, yes/no, on/off, enabled/disabled. Telemetry is forced off."
+                );
+                (None, true)
+            }
+        }
     }
 
     fn base_url_for(&self, provider: ProviderKind) -> Option<String> {

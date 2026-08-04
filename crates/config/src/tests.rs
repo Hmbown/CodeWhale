@@ -7904,3 +7904,151 @@ max_spawn_depth = 1
     assert_eq!(round_tripped.default_trust_level, "local");
     assert_eq!(round_tripped.exec.max_spawn_depth, 1);
 }
+
+/// Save and restore the telemetry env vars around a test that mutates them.
+///
+/// Held together with [`env_lock`]: the process environment is global, so
+/// every telemetry test serialises on the same mutex the provider tests use.
+struct TelemetryEnvGuard {
+    codewhale: Option<OsString>,
+    deepseek: Option<OsString>,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+impl TelemetryEnvGuard {
+    fn take() -> Self {
+        let lock = env_lock();
+        let guard = Self {
+            codewhale: env::var_os("CODEWHALE_TELEMETRY"),
+            deepseek: env::var_os("DEEPSEEK_TELEMETRY"),
+            _lock: lock,
+        };
+        // Safety: test-only environment mutation guarded by the module mutex.
+        unsafe {
+            env::remove_var("CODEWHALE_TELEMETRY");
+            env::remove_var("DEEPSEEK_TELEMETRY");
+        }
+        guard
+    }
+
+    fn set(&self, value: &str) {
+        // Safety: test-only environment mutation guarded by the module mutex.
+        unsafe {
+            env::set_var("CODEWHALE_TELEMETRY", value);
+        }
+    }
+}
+
+impl Drop for TelemetryEnvGuard {
+    fn drop(&mut self) {
+        // Safety: test-only environment mutation guarded by the module mutex.
+        unsafe {
+            match self.codewhale.take() {
+                Some(value) => env::set_var("CODEWHALE_TELEMETRY", value),
+                None => env::remove_var("CODEWHALE_TELEMETRY"),
+            }
+            match self.deepseek.take() {
+                Some(value) => env::set_var("DEEPSEEK_TELEMETRY", value),
+                None => env::remove_var("DEEPSEEK_TELEMETRY"),
+            }
+        }
+    }
+}
+
+#[test]
+fn env_telemetry_off_is_a_floor_over_cli_on() {
+    let guard = TelemetryEnvGuard::take();
+    guard.set("0");
+
+    let config = ConfigToml {
+        telemetry: Some(true),
+        ..ConfigToml::default()
+    };
+    let cli = CliRuntimeOverrides {
+        telemetry: Some(true),
+        ..CliRuntimeOverrides::default()
+    };
+
+    let resolved = config.resolve_runtime_options(&cli);
+
+    // `--telemetry true` must not be able to climb back over an explicit
+    // `CODEWHALE_TELEMETRY=0`. Off is a floor, not one more precedence rung.
+    assert!(!resolved.telemetry);
+    assert!(resolved.telemetry_explicit_off);
+}
+
+#[test]
+fn unparseable_telemetry_env_fails_closed() {
+    let guard = TelemetryEnvGuard::take();
+    guard.set("maybe");
+
+    let config = ConfigToml {
+        telemetry: Some(true),
+        ..ConfigToml::default()
+    };
+    let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+    // A typo must not fall through to the config file's `true`.
+    assert!(!resolved.telemetry);
+    // …but it is also not the user answering "no", so it is not an explicit
+    // opt-out either.
+    assert!(!resolved.telemetry_explicit_off);
+}
+
+#[test]
+fn telemetry_env_invalid_is_recorded_rather_than_swallowed() {
+    let guard = TelemetryEnvGuard::take();
+    guard.set("sure why not");
+
+    let env = EnvRuntimeOverrides::load();
+    assert_eq!(env.telemetry, None);
+    assert!(env.telemetry_env_invalid);
+
+    guard.set("disabled");
+    let env = EnvRuntimeOverrides::load();
+    assert_eq!(env.telemetry, Some(false));
+    assert!(!env.telemetry_env_invalid);
+
+    guard.set("enabled");
+    let env = EnvRuntimeOverrides::load();
+    assert_eq!(env.telemetry, Some(true));
+    assert!(!env.telemetry_env_invalid);
+}
+
+#[test]
+fn telemetry_explicit_off_distinguishes_an_answer_from_the_default() {
+    let _guard = TelemetryEnvGuard::take();
+
+    // Nobody said anything: off, but not an answer.
+    let resolved = ConfigToml::default().resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert!(!resolved.telemetry);
+    assert!(!resolved.telemetry_explicit_off);
+
+    // The config file says no.
+    let config = ConfigToml {
+        telemetry: Some(false),
+        ..ConfigToml::default()
+    };
+    let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert!(!resolved.telemetry);
+    assert!(resolved.telemetry_explicit_off);
+
+    // A CLI `--telemetry true` overrides the file's `false`, so the file is no
+    // longer the answer and telemetry is on.
+    let cli = CliRuntimeOverrides {
+        telemetry: Some(true),
+        ..CliRuntimeOverrides::default()
+    };
+    let resolved = config.resolve_runtime_options(&cli);
+    assert!(resolved.telemetry);
+    assert!(!resolved.telemetry_explicit_off);
+
+    // A CLI `--telemetry false` is an answer.
+    let cli = CliRuntimeOverrides {
+        telemetry: Some(false),
+        ..CliRuntimeOverrides::default()
+    };
+    let resolved = ConfigToml::default().resolve_runtime_options(&cli);
+    assert!(!resolved.telemetry);
+    assert!(resolved.telemetry_explicit_off);
+}
