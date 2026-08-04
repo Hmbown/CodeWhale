@@ -39,6 +39,8 @@ notes, and relevant issue/PR comments.
   preservation in PR #5006
 - **[Paulo Aboim Pinto / aboimpinto](https://github.com/aboimpinto)** — the
   user-command dispatch acceptance contract in PR #4992
+- **[shenjackyuanjie](https://github.com/shenjackyuanjie)** — Windows
+  OpenHarmony linker re-quoting for spaced SDK paths in PR #5095
 
 **Reports, reproductions, and verification**
 

@@ -23,6 +23,7 @@ export const RELEASE_CONTRIBUTORS: string[] = [
   "@SparkofSpike",
   "@XhesicaFrost",
   "@aboimpinto",
+  "@shenjackyuanjie",
 ];
 
 /** Contributors who helped with reports, reproductions, and verification. */
