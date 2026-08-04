@@ -1375,3 +1375,49 @@ fn golden_payload_v1() {
         "the v1 payload changed; bump SCHEMA_VERSION and re-bless the golden file"
     );
 }
+
+#[test]
+fn version_comparison_names_install_upgrade_and_downgrade() {
+    assert!(crate::version_is_older("0.9.3", "0.9.4"));
+    assert!(crate::version_is_older("0.9", "0.9.4"));
+    assert!(crate::version_is_older("0.10.0", "1.0.0"));
+    assert!(!crate::version_is_older("0.9.4", "0.9.4"));
+    assert!(!crate::version_is_older("0.9.5", "0.9.4"));
+    // A pre-release suffix is not part of the ordering question being asked.
+    assert!(!crate::version_is_older("0.9.4-rc.1", "0.9.4"));
+    // Unparseable segments read as zero, so an unknown version never invents an
+    // upgrade that did not happen.
+    assert!(!crate::version_is_older("nightly", "0.0.0"));
+}
+
+#[test]
+fn an_install_or_upgrade_is_reported_once_per_version() {
+    let home = temp_home();
+    let root = root_of(&home);
+    buffer::ensure_dir(&root).expect("create telemetry dir");
+
+    // No prior record on this machine.
+    let mut state = envelope::read_state(&root);
+    assert_eq!(state.last_version, None);
+
+    // The state file is written before the event is queued, so the second
+    // launch at the same version has nothing left to report.
+    state.last_version = Some(env!("CARGO_PKG_VERSION").to_string());
+    envelope::write_state(&root, &state).expect("write state");
+    assert_eq!(
+        envelope::read_state(&root).last_version.as_deref(),
+        Some(env!("CARGO_PKG_VERSION"))
+    );
+
+    // The previous version is read from this file and from nowhere else —
+    // never from session history or config mtimes, which answer the same
+    // question under a different privacy contract.
+    let entries: Vec<String> = std::fs::read_dir(&root)
+        .expect("read dir")
+        .filter_map(|entry| Some(entry.ok()?.file_name().to_string_lossy().into_owned()))
+        .collect();
+    assert!(
+        entries.iter().any(|name| name == "state.json"),
+        "expected state.json in {entries:?}"
+    );
+}

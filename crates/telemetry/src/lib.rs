@@ -111,9 +111,75 @@ pub fn init(consent: TelemetryConsent) {
 
     let _ = ARMED.set(Armed {
         handle: actor::Handle::spawn(context),
-        root,
+        root: root.clone(),
         exit_class: AtomicU8::new(ExitClass::Clean.as_u8()),
     });
+
+    record_install_or_upgrade(&root);
+}
+
+/// Note that this binary's version differs from the one last seen on this
+/// machine, at most once per version.
+///
+/// The previous version comes from `$CODEWHALE_HOME/telemetry/state.json` and
+/// from nowhere else. Session history and config mtimes would answer the same
+/// question and carry a different privacy contract; reading them here would put
+/// this crate one refactor away from the thread store.
+///
+/// The state file is updated before the event is queued, so a process that dies
+/// between the two reports nothing rather than reporting the same upgrade on
+/// every launch.
+fn record_install_or_upgrade(root: &std::path::Path) {
+    let current = env!("CARGO_PKG_VERSION");
+    let mut state = envelope::read_state(root);
+    if state.last_version.as_deref() == Some(current) {
+        return;
+    }
+    let kind = match state.last_version.as_deref() {
+        None => InstallKind::Install,
+        Some(previous) if version_is_older(previous, current) => InstallKind::Upgrade,
+        Some(_) => InstallKind::Downgrade,
+    };
+    let previous_version = state.last_version.clone();
+    state.schema_version = SCHEMA_VERSION;
+    state.last_version = Some(current.to_string());
+    if envelope::write_state(root, &state).is_err() {
+        // Nothing was recorded, so the next launch will try again. Emitting
+        // without the write would re-report the same upgrade forever.
+        return;
+    }
+    record(Event::InstallOrUpgrade {
+        kind,
+        previous_version,
+    });
+}
+
+/// Compare two dotted release numbers, ignoring any pre-release suffix.
+///
+/// Deliberately not a semver dependency: the only question asked is which of
+/// install / upgrade / downgrade to name, and a version this crate cannot parse
+/// answers "not older", which reports a downgrade — the conservative direction,
+/// since it never invents an upgrade that did not happen.
+fn version_is_older(previous: &str, current: &str) -> bool {
+    fn parts(value: &str) -> Vec<u64> {
+        value
+            .split(['-', '+'])
+            .next()
+            .unwrap_or_default()
+            .split('.')
+            .map(|part| part.parse::<u64>().unwrap_or_default())
+            .collect()
+    }
+    let (previous, current) = (parts(previous), parts(current));
+    let width = previous.len().max(current.len());
+    for index in 0..width {
+        let left = previous.get(index).copied().unwrap_or_default();
+        let right = current.get(index).copied().unwrap_or_default();
+        if left != right {
+            return left < right;
+        }
+    }
+    false
 }
 
 /// Whether this process is armed. Every write path checks this first.

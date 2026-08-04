@@ -20,13 +20,17 @@ use codewhale_app_server::{
 };
 use codewhale_config::{
     CliRuntimeOverrides, ConfigApiKeyValueKind, ConfigStore, ConfigToml, ProviderKind,
-    ProviderSource, ResolvedRuntimeOptions, RuntimeApiKeySource, classify_config_api_key_value,
-    provider_base_url_is_official,
+    ProviderSource, ResolvedRuntimeOptions, RuntimeApiKeySource, SetupState,
+    classify_config_api_key_value, provider_base_url_is_official,
 };
 use codewhale_execpolicy::{AskForApproval, ExecPolicyContext, ExecPolicyEngine};
 use codewhale_mcp::{McpServerDefinition, run_stdio_server};
 use codewhale_secrets::Secrets;
 use codewhale_state::{StateStore, ThreadListFilters};
+use codewhale_telemetry::{
+    self as telemetry, Counters, DurationBucket, Errors, Event, ExitClass, SessionSource, Surface,
+    TelemetryDecision, TurnWall,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum ProviderArg {
@@ -187,7 +191,12 @@ struct Cli {
     verbosity: Option<String>,
     #[arg(long = "log-level")]
     log_level: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "BOOL",
+        help = "Opt in to anonymous product telemetry for this run (default off; \
+                CODEWHALE_TELEMETRY=0 always wins)"
+    )]
     telemetry: Option<bool>,
     #[arg(long)]
     approval_policy: Option<String>,
@@ -1820,14 +1829,37 @@ fn run() -> Result<()> {
                     vec!["auth".to_string(), "xai-device".to_string()],
                 )
             }
-            command => run_auth_command_with_runtime(&mut store, command, &runtime_overrides),
+            command => {
+                let resolved_runtime =
+                    resolve_runtime_for_diagnostic_dispatch(&store, &runtime_overrides);
+                let session = start_cli_telemetry(
+                    &resolved_runtime,
+                    Some(store.path().to_path_buf()),
+                    Surface::Cli,
+                );
+                let outcome =
+                    run_auth_command_with_runtime(&mut store, command, &runtime_overrides);
+                finish_cli_telemetry(session, &outcome);
+                outcome
+            }
         },
         Some(Commands::Account(args)) => {
             cloud::reject_inline_api_key(cli.api_key.as_deref())?;
             cloud::run(args, cli.profile.as_deref(), &store)
         }
         Some(Commands::McpServer) => run_mcp_server_command(&mut store),
-        Some(Commands::Config(args)) => run_config_command(&mut store, args.command),
+        Some(Commands::Config(args)) => {
+            let resolved_runtime =
+                resolve_runtime_for_diagnostic_dispatch(&store, &runtime_overrides);
+            let session = start_cli_telemetry(
+                &resolved_runtime,
+                Some(store.path().to_path_buf()),
+                Surface::Cli,
+            );
+            let outcome = run_config_command(&mut store, args.command);
+            finish_cli_telemetry(session, &outcome);
+            outcome
+        }
         Some(Commands::Model(args)) => {
             // `model resolve` is a diagnostic: it must report the same route
             // the runtime would take, so it resolves through the same
@@ -1862,15 +1894,24 @@ fn run() -> Result<()> {
         }
         Some(Commands::Metrics(args)) => run_metrics_command(args),
         Some(Commands::Update(args)) => {
+            let resolved_runtime =
+                resolve_runtime_for_diagnostic_dispatch(&store, &runtime_overrides);
+            let session = start_cli_telemetry(
+                &resolved_runtime,
+                Some(store.path().to_path_buf()),
+                Surface::Cli,
+            );
             #[cfg(not(target_env = "ohos"))]
-            {
-                update::run_update(args.beta, args.check, args.proxy)
-            }
+            let outcome = update::run_update(args.beta, args.check, args.proxy);
             #[cfg(target_env = "ohos")]
-            {
+            let outcome = {
                 let _ = args;
-                bail!("self-update is not supported on HarmonyOS/OpenHarmony yet");
-            }
+                Err(anyhow!(
+                    "self-update is not supported on HarmonyOS/OpenHarmony yet"
+                ))
+            };
+            finish_cli_telemetry(session, &outcome);
+            outcome
         }
         None => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
@@ -1930,6 +1971,77 @@ fn resolve_runtime_for_diagnostic_dispatch(
     runtime_overrides: &CliRuntimeOverrides,
 ) -> ResolvedRuntimeOptions {
     store.config.resolve_runtime_options(runtime_overrides)
+}
+
+/// An armed telemetry session belonging to a subcommand that runs *in this
+/// process*.
+///
+/// Existing at all is the permission: it is only ever constructed behind
+/// [`TelemetryDecision::Enabled`], and the default state of every installation —
+/// no notice answered — yields `None`.
+struct CliTelemetrySession {
+    started: std::time::Instant,
+}
+
+/// Arm telemetry for a subcommand the dispatcher executes itself.
+///
+/// Only the terminal branches take this path. Everything that delegates to the
+/// TUI binary is armed over there, under its own surface, from the environment
+/// this dispatcher forwards — naming a surface here for a delegated command
+/// would report one run twice under two identities.
+///
+/// The setup-state decision is an independent AND condition applied inside
+/// [`telemetry::decide`]; a pre-existing `telemetry = true` is not consent,
+/// because the key has been settable and inert for a long time.
+fn start_cli_telemetry(
+    resolved: &ResolvedRuntimeOptions,
+    config_path: Option<PathBuf>,
+    surface: Surface,
+) -> Option<CliTelemetrySession> {
+    let setup = SetupState::load().ok().flatten().unwrap_or_default();
+    let TelemetryDecision::Enabled(consent) = telemetry::decide(resolved, &setup, surface) else {
+        return None;
+    };
+    telemetry::init(consent.with_config_path(config_path));
+    telemetry::record(Event::SessionStart {
+        source: SessionSource::Unknown,
+    });
+    Some(CliTelemetrySession {
+        started: std::time::Instant::now(),
+    })
+}
+
+/// Close the session opened by [`start_cli_telemetry`] and flush, bounded.
+///
+/// The exit class comes from what actually happened, never from an exit code:
+/// a cancelled run and a SIGINT both exit 130, so a code-derived class would
+/// mislabel every cancel as a signal.
+///
+/// The flush re-resolves telemetry from disk before it sends anything, which is
+/// what makes `codewhale config set telemetry false` take effect on the very run
+/// that wrote it rather than on the next one.
+fn finish_cli_telemetry(session: Option<CliTelemetrySession>, outcome: &Result<()>) {
+    let Some(session) = session else {
+        return;
+    };
+    telemetry::set_exit_class(if outcome.is_ok() {
+        ExitClass::Clean
+    } else {
+        ExitClass::Error
+    });
+    telemetry::record(Event::SessionEnd {
+        duration_bucket: DurationBucket::from_secs(session.started.elapsed().as_secs()),
+        exit_class: telemetry::exit_class(),
+        // Cold start is measured by the TUI's startup trace. This surface has
+        // no equivalent, and inventing one from process start would be a
+        // different measurement wearing the same name.
+        cold_start_bucket: None,
+        providers: Vec::new(),
+        counters: Counters::default(),
+        errors: Errors::default(),
+        turn_wall: TurnWall::default(),
+    });
+    let _ = telemetry::shutdown_blocking(telemetry::SHUTDOWN_FLUSH_TIMEOUT);
 }
 
 fn resolve_runtime_for_dispatch_with_secrets(
@@ -3943,28 +4055,51 @@ fn run_app_server_command(
         return delegate_server_to_tui(cli, resolved_runtime, app_server_serve_passthrough(&args));
     }
 
-    let runtime = tokio::runtime::Builder::new_multi_thread()
+    // Everything below runs the app-server *in this process*, which is why the
+    // surface cannot be derived from the executable: `current_exe()` would
+    // report every one of these sessions as `cli`.
+    let session = start_cli_telemetry(
+        resolved_runtime,
+        args.config.clone().or_else(|| cli.config.clone()),
+        Surface::AppServer,
+    );
+
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .context("failed to create tokio runtime")?;
+        .context("failed to create tokio runtime")
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            let outcome = Err(error);
+            finish_cli_telemetry(session, &outcome);
+            return outcome;
+        }
+    };
     if args.stdio {
-        return runtime.block_on(run_app_server_stdio(args.config));
+        let outcome = runtime.block_on(run_app_server_stdio(args.config));
+        finish_cli_telemetry(session, &outcome);
+        return outcome;
     }
     // Legacy in-process app-server HTTP transport (`/healthz`, `/thread`, `/app`,
     // `/prompt`, `/tool`, `/jobs`). Kept for backward compatibility; defaults to
     // 127.0.0.1:8787 to avoid colliding with the runtime API default of :7878.
     let host = args.host.as_deref().unwrap_or("127.0.0.1");
     let port = args.port.unwrap_or(8787);
-    let listen: SocketAddr = format!("{host}:{port}")
-        .parse()
-        .with_context(|| format!("invalid app-server listen address {host}:{port}"))?;
-    runtime.block_on(run_app_server(AppServerOptions {
-        listen,
-        config_path: args.config,
-        auth_token: args.auth_token.or_else(app_server_token_from_env),
-        insecure_no_auth: args.insecure_no_auth,
-        cors_origins: args.cors_origin,
-    }))
+    let outcome = format!("{host}:{port}")
+        .parse::<SocketAddr>()
+        .with_context(|| format!("invalid app-server listen address {host}:{port}"))
+        .and_then(|listen| {
+            runtime.block_on(run_app_server(AppServerOptions {
+                listen,
+                config_path: args.config,
+                auth_token: args.auth_token.or_else(app_server_token_from_env),
+                insecure_no_auth: args.insecure_no_auth,
+                cors_origins: args.cors_origin,
+            }))
+        });
+    finish_cli_telemetry(session, &outcome);
+    outcome
 }
 
 /// Build the `serve` argv forwarded to the TUI binary for
@@ -4558,6 +4693,14 @@ fn build_tui_command_with_paths(
     let telemetry = resolved_runtime.telemetry.to_string();
     cmd.env("CODEWHALE_TELEMETRY", &telemetry);
     cmd.env("DEEPSEEK_TELEMETRY", &telemetry);
+    // The endpoint travels with the switch. The child re-validates it — plain
+    // `http://` to anything that is not loopback is refused there, and there is
+    // no environment variable that overrides that refusal — so forwarding is a
+    // convenience, never an authorization.
+    if let Some(endpoint) = resolved_runtime.telemetry_endpoint.as_ref() {
+        cmd.env("CODEWHALE_TELEMETRY_ENDPOINT", endpoint);
+        cmd.env("DEEPSEEK_TELEMETRY_ENDPOINT", endpoint);
+    }
     if let Some(policy) = cli.approval_policy.as_ref() {
         cmd.env("CODEWHALE_APPROVAL_POLICY", policy);
         cmd.env("DEEPSEEK_APPROVAL_POLICY", policy);
@@ -8165,6 +8308,60 @@ model = "qwen-2.5-7b"
         assert_eq!(
             command_env(&cmd, "DEEPSEEK_TELEMETRY").as_deref(),
             Some("false")
+        );
+    }
+
+    #[test]
+    fn build_tui_command_forwards_the_endpoint_only_when_one_is_configured() {
+        let _lock = env_lock();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let custom = dir
+            .path()
+            .join(format!("custom-tui{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&custom, b"").unwrap();
+        let custom_str = custom.to_string_lossy().into_owned();
+        let _bin = ScopedEnvVar::set("DEEPSEEK_TUI_BIN", &custom_str);
+
+        let cli = parse_ok(&["codewhale", "exec", "hi"]);
+
+        // The shipped default is unset, and unset must stay unset: naming the
+        // variable with an empty value would look like a configured endpoint to
+        // anything that only checks for presence.
+        let resolved = telemetry_test_resolved();
+        assert_eq!(resolved.telemetry_endpoint, None);
+        let cmd = build_tui_command(&cli, &resolved, Vec::new()).expect("command");
+        assert_eq!(command_env(&cmd, "CODEWHALE_TELEMETRY_ENDPOINT"), None);
+        assert_eq!(command_env(&cmd, "DEEPSEEK_TELEMETRY_ENDPOINT"), None);
+
+        let mut resolved = telemetry_test_resolved();
+        resolved.telemetry_endpoint = Some("https://telemetry.example/v1".to_string());
+        let cmd = build_tui_command(&cli, &resolved, Vec::new()).expect("command");
+        assert_eq!(
+            command_env(&cmd, "CODEWHALE_TELEMETRY_ENDPOINT").as_deref(),
+            Some("https://telemetry.example/v1")
+        );
+        assert_eq!(
+            command_env(&cmd, "DEEPSEEK_TELEMETRY_ENDPOINT").as_deref(),
+            Some("https://telemetry.example/v1")
+        );
+    }
+
+    #[test]
+    fn the_telemetry_flag_documents_itself_in_help() {
+        // A consent control nobody can find is a consent control nobody has.
+        let help = Cli::command().render_long_help().to_string();
+        let telemetry_line = help
+            .lines()
+            .position(|line| line.contains("--telemetry"))
+            .map(|index| help.lines().skip(index).take(3).collect::<String>())
+            .expect("--telemetry must appear in --help");
+        assert!(
+            telemetry_line.contains("telemetry"),
+            "expected a help string beside --telemetry, got: {telemetry_line}"
+        );
+        assert!(
+            telemetry_line.contains("off"),
+            "the help string must say the default is off: {telemetry_line}"
         );
     }
 

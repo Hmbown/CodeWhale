@@ -820,6 +820,7 @@ dependencies = [
  "codewhale-release",
  "codewhale-secrets",
  "codewhale-state",
+ "codewhale-telemetry",
  "codewhale-workflow",
  "console",
  "dirs",
