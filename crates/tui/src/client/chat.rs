@@ -291,6 +291,170 @@ fn apply_minimax_route_reasoning_controls(
     }
 }
 
+/// Model Studio's OpenAI-compatible API uses its own top-level reasoning
+/// controls. Keep them on verified Alibaba Chat Completions routes: a custom
+/// `base_url` points the same provider identity at an arbitrary gateway, and
+/// that gateway must not be handed Alibaba's dialect.
+///
+/// This is the *sole* writer of Model Studio reasoning fields —
+/// `apply_reasoning_effort` deliberately writes nothing for the `Modelstudio*`
+/// identities — so the strip below runs for all four variants, including the
+/// two Anthropic-dialect ones. Those normally reach the Messages adapter
+/// instead, but `wire = "openai"` can route them here, and an unmatched
+/// `enable_thinking` left in the body would then go out unguarded.
+fn apply_modelstudio_route_reasoning_controls(
+    body: &mut Value,
+    provider: ApiProvider,
+    base_url: &str,
+    model: &str,
+    effort: Option<&str>,
+) {
+    if !matches!(
+        provider,
+        ApiProvider::ModelstudioTokenPlan
+            | ApiProvider::ModelstudioTokenPlanAnthropic
+            | ApiProvider::ModelstudioCodingPlan
+            | ApiProvider::ModelstudioCodingPlanAnthropic
+    ) {
+        return;
+    }
+
+    if let Some(object) = body.as_object_mut() {
+        object.remove("thinking");
+        object.remove("enable_thinking");
+        object.remove("preserve_thinking");
+        object.remove("reasoning_effort");
+    }
+    if !is_exact_modelstudio_chat_route(provider, base_url) {
+        return;
+    }
+
+    let thinking_only = modelstudio_model_is_thinking_only(model);
+    if !thinking_only && !modelstudio_model_is_hybrid(model) {
+        return;
+    }
+
+    let thinking_enabled = !modelstudio_effort_disables_thinking(effort);
+    // Thinking-only models emit `reasoning_content` but reject an
+    // enable/disable control. Hybrid models use `enable_thinking`.
+    if !thinking_only {
+        body["enable_thinking"] = json!(thinking_enabled);
+    }
+    if modelstudio_model_supports_preserve_thinking(model) {
+        // Model Studio otherwise drops assistant `reasoning_content` from the
+        // next turn's context. This applies even when the provider default
+        // leaves thinking enabled and no explicit UI effort was selected.
+        body["preserve_thinking"] = json!(thinking_only || thinking_enabled);
+    }
+    if !thinking_only
+        && thinking_enabled
+        && let Some(effort) = effort.and_then(modelstudio_reasoning_effort_for_model)
+        && modelstudio_model_supports_reasoning_effort(model)
+    {
+        body["reasoning_effort"] = json!(effort);
+    }
+}
+
+/// Fail-closed host guard: only Alibaba's own OpenAI-compatible Chat
+/// Completions URL shapes count. Anything else (a proxy, a self-hosted
+/// gateway, a typo) gets the Model Studio fields stripped and nothing added.
+fn is_exact_modelstudio_chat_route(provider: ApiProvider, base_url: &str) -> bool {
+    let trimmed = base_url.trim().trim_end_matches('/').to_ascii_lowercase();
+    let Some((host, path)) = trimmed
+        .strip_prefix("https://")
+        .and_then(|rest| rest.split_once('/'))
+    else {
+        return false;
+    };
+
+    // Includes Token Plan's default and workspace-scoped
+    // `{workspace}.<region>.maas.aliyuncs.com/compatible-mode/v1` hosts.
+    let token_plan_chat = host.ends_with(".maas.aliyuncs.com") && path == "compatible-mode/v1";
+    let coding_plan_chat = host == "coding-intl.dashscope.aliyuncs.com" && path == "v1";
+
+    match provider {
+        // The primary Model Studio provider selects Coding Plan through
+        // `mode = "coding-plan"`, which resolves this base URL without
+        // changing the provider enum. Legacy Coding Plan identities remain
+        // supported as well, so recognize either official Chat route for the
+        // complete Model Studio OpenAI family. The `*Anthropic` identities
+        // speak the Messages dialect and are never verified here.
+        ApiProvider::ModelstudioTokenPlan | ApiProvider::ModelstudioCodingPlan => {
+            token_plan_chat || coding_plan_chat
+        }
+        _ => false,
+    }
+}
+
+fn is_exact_modelstudio_thinking_only_route(
+    provider: ApiProvider,
+    base_url: &str,
+    model: &str,
+) -> bool {
+    is_exact_modelstudio_chat_route(provider, base_url) && modelstudio_model_is_thinking_only(model)
+}
+
+fn modelstudio_effort_disables_thinking(effort: Option<&str>) -> bool {
+    effort.is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "off" | "disabled" | "none" | "false"
+        )
+    })
+}
+
+/// Models with no enable/disable control at all. `models_dev.bundled.json`
+/// lists `qwen3.8-max` as `thinking: always_on` and gives `qwen3.8-max-preview`
+/// effort/budget options with no `toggle`, so sending `enable_thinking` to
+/// either is at best ignored and at worst a 400.
+fn modelstudio_model_is_thinking_only(model: &str) -> bool {
+    let model = model.trim().to_ascii_lowercase();
+    matches!(model.as_str(), "qwen3.8-max" | "qwen3.8-max-preview")
+        // Kimi K2.7 Code on Model Studio is reported always-thinking and
+        // supporting preserve_thinking. Keep it separate from hybrid Kimi
+        // variants so we do not send the unsupported enable_thinking switch.
+        || model.starts_with("kimi-k2.7-code")
+}
+
+fn modelstudio_model_is_hybrid(model: &str) -> bool {
+    let model = model.trim().to_ascii_lowercase();
+    model.starts_with("qwen3.7-")
+        || model.starts_with("qwen3.6-")
+        || model.starts_with("qwen3.5-")
+        || model.starts_with("qwen3-")
+        || model.starts_with("deepseek-v4")
+        || model.starts_with("deepseek-v3.2")
+        || model.starts_with("deepseek-v3.1")
+        || model.starts_with("kimi-k2.6")
+        || model.starts_with("kimi-k2.5")
+        || model.starts_with("glm-")
+}
+
+fn modelstudio_model_supports_preserve_thinking(model: &str) -> bool {
+    let model = model.trim().to_ascii_lowercase();
+    model.starts_with("qwen3.7-max")
+        || model.starts_with("qwen3.7-plus")
+        || model.starts_with("qwen3.6-max-preview")
+        || model.starts_with("qwen3.6-plus")
+        || model.starts_with("qwen3.6-flash")
+        || model.starts_with("kimi-k2.6")
+        || model.starts_with("kimi-k2.7-code")
+}
+
+fn modelstudio_model_supports_reasoning_effort(model: &str) -> bool {
+    let model = model.trim().to_ascii_lowercase();
+    model.starts_with("deepseek-v4") || matches!(model.as_str(), "glm-5.2" | "glm-5.1" | "glm-5")
+}
+
+fn modelstudio_reasoning_effort_for_model(effort: &str) -> Option<&'static str> {
+    match effort.trim().to_ascii_lowercase().as_str() {
+        // Model Studio documents low and medium as aliases for high.
+        "minimal" | "low" | "medium" | "mid" | "high" | "" => Some("high"),
+        "xhigh" | "max" | "highest" | "ultracode" => Some("max"),
+        _ => None,
+    }
+}
+
 /// Final reasoning-control pass shared by streaming and non-streaming Chat
 /// Completions requests. Route-specific shapers run after the generic provider
 /// layer so they can remove fields that are invalid for their exact endpoint.
@@ -302,6 +466,7 @@ pub(super) fn apply_route_reasoning_controls(
     effort: Option<&str>,
 ) {
     apply_reasoning_effort(body, effort, provider);
+    apply_modelstudio_route_reasoning_controls(body, provider, base_url, model, effort);
     apply_minimax_route_reasoning_controls(body, provider, base_url, model, effort);
     apply_inkling_reasoning_effort(body, provider, model, effort);
     apply_openai_reasoning_effort(body, provider, model, effort);
@@ -594,6 +759,7 @@ impl DeepSeekClient {
         let response = self.send_json_with_retry(url, body).await?;
 
         let status = response.status();
+        crate::client::record_provider_response(self.api_provider, status.as_u16());
         if !status.is_success() {
             let raw_error_text = bounded_error_text(response, ERROR_BODY_MAX_BYTES).await;
             let error_text = sanitize_http_error_body(
@@ -676,6 +842,7 @@ impl DeepSeekClient {
         let (response, stream_idle_timeout) = self.open_chat_stream_response(&url, &body).await?;
 
         let status = response.status();
+        crate::client::record_provider_response(self.api_provider, status.as_u16());
         if !status.is_success() {
             let raw_error_text = bounded_error_text(response, ERROR_BODY_MAX_BYTES).await;
             let error_text = sanitize_http_error_body(
@@ -2480,11 +2647,13 @@ fn should_replay_reasoning_content_for_provider_on_route(
     model: &str,
     effort: Option<&str>,
 ) -> bool {
-    // Both exact K3 routes are always-thinking. A stale caller may still carry
-    // `off` before route normalization; retaining the assistant reasoning
-    // trace is required for multi-turn/tool-call continuity regardless.
+    // Both exact K3 routes and Model Studio's thinking-only models are
+    // always-thinking. A stale caller may still carry `off` before route
+    // normalization; retaining the assistant reasoning trace is required for
+    // multi-turn/tool-call continuity regardless.
     if is_exact_direct_moonshot_k3_route(provider, base_url, model)
         || is_exact_kimi_code_k3_route(provider, base_url, model)
+        || is_exact_modelstudio_thinking_only_route(provider, base_url, model)
     {
         return true;
     }
@@ -2501,6 +2670,19 @@ fn should_replay_reasoning_content_for_provider_on_route(
     }
 
     if requires_reasoning_content(model) {
+        return true;
+    }
+
+    // Model Studio replay is deliberately narrower than PR #5233 proposed:
+    // only models Alibaba documents as accepting `preserve_thinking` get their
+    // `reasoning_content` sent back. `deepseek-v3.1`, `deepseek-v3.2` and the
+    // `glm-*` ids stay stripped until someone with a Model Studio key confirms
+    // DashScope does not 400 on `reasoning_content` in input messages.
+    // `deepseek-v4*` already replays via `requires_reasoning_content` above, so
+    // this narrowing removes nothing that exists.
+    if is_exact_modelstudio_chat_route(provider, base_url)
+        && modelstudio_model_supports_preserve_thinking(model)
+    {
         return true;
     }
 
@@ -5019,6 +5201,282 @@ mod alias_thinking_detection_tests {
         // #3016: Moonshot's native endpoint streams Kimi thinking as
         // reasoning_content.
         assert!(provider_accepts_reasoning_content(ApiProvider::Moonshot));
+    }
+
+    #[test]
+    fn modelstudio_hybrid_routes_send_documented_thinking_controls() {
+        let base_url = crate::config::DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL;
+        for (effort, enabled) in [
+            (None, true),
+            (Some("low"), true),
+            (Some("high"), true),
+            (Some("xhigh"), true),
+            (Some("off"), false),
+        ] {
+            let mut body = json!({});
+            apply_route_reasoning_controls(
+                &mut body,
+                ApiProvider::ModelstudioTokenPlan,
+                base_url,
+                "qwen3.7-plus",
+                effort,
+            );
+
+            assert_eq!(body["enable_thinking"], json!(enabled), "{effort:?}");
+            assert_eq!(body["preserve_thinking"], json!(enabled), "{effort:?}");
+            assert!(body.get("thinking").is_none(), "{effort:?}: {body}");
+            assert!(body.get("reasoning_effort").is_none(), "{effort:?}: {body}");
+        }
+    }
+
+    #[test]
+    fn modelstudio_deepseek_v4_maps_effort_to_documented_values() {
+        let base_url = crate::config::DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL;
+        for (requested, expected) in [("low", "high"), ("high", "high"), ("xhigh", "max")] {
+            let mut body = json!({});
+            apply_route_reasoning_controls(
+                &mut body,
+                ApiProvider::ModelstudioTokenPlan,
+                base_url,
+                "deepseek-v4-pro",
+                Some(requested),
+            );
+
+            assert_eq!(body["enable_thinking"], json!(true), "{requested}");
+            assert_eq!(body["reasoning_effort"], json!(expected), "{requested}");
+        }
+    }
+
+    #[test]
+    fn modelstudio_reasoning_controls_fail_closed_on_custom_gateways() {
+        let mut body = json!({
+            "enable_thinking": true,
+            "preserve_thinking": true,
+            "reasoning_effort": "high",
+        });
+        apply_route_reasoning_controls(
+            &mut body,
+            ApiProvider::ModelstudioTokenPlan,
+            "https://proxy.example/v1",
+            "qwen3.7-plus",
+            Some("high"),
+        );
+
+        assert!(body.get("enable_thinking").is_none());
+        assert!(body.get("preserve_thinking").is_none());
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn modelstudio_anthropic_identities_write_nothing_on_the_chat_path() {
+        // The Messages adapter owns these two. If `wire = "openai"` ever routes
+        // them through Chat Completions, the shaper must strip rather than
+        // inherit the OpenAI-dialect fields — there is no provider-enum writer
+        // left to re-add them.
+        for provider in [
+            ApiProvider::ModelstudioTokenPlanAnthropic,
+            ApiProvider::ModelstudioCodingPlanAnthropic,
+        ] {
+            for base_url in [
+                crate::config::DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL,
+                crate::config::MODELSTUDIO_TOKEN_PLAN_ANTHROPIC_BASE_URL,
+            ] {
+                let mut body = json!({ "enable_thinking": true });
+                apply_route_reasoning_controls(
+                    &mut body,
+                    provider,
+                    base_url,
+                    "qwen3.7-plus",
+                    Some("high"),
+                );
+                assert_eq!(body, json!({}), "{provider:?} {base_url}");
+            }
+        }
+    }
+
+    #[test]
+    fn modelstudio_qwen38_route_classifies_reasoning_and_replays_history() {
+        let base_url = crate::config::DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL;
+        for model in ["qwen3.8-max", "qwen3.8-max-preview"] {
+            // qwen3.8 is thinking-only. Effort selection must never hide its
+            // separate reasoning stream, including the stale `off` state
+            // that can arrive before route normalization.
+            assert_eq!(
+                reasoning_stream_style_for_route(
+                    ApiProvider::ModelstudioTokenPlan,
+                    base_url,
+                    model,
+                    None,
+                ),
+                ReasoningStreamStyle::SeparateField,
+                "{model}"
+            );
+            for effort in [None, Some("off"), Some("high"), Some("xhigh")] {
+                assert!(
+                    should_replay_reasoning_content_for_provider_on_route(
+                        ApiProvider::ModelstudioTokenPlan,
+                        base_url,
+                        model,
+                        effort,
+                    ),
+                    "{model} {effort:?}"
+                );
+            }
+            // ...and no enable/disable switch is ever sent for them.
+            let mut body = json!({});
+            apply_route_reasoning_controls(
+                &mut body,
+                ApiProvider::ModelstudioTokenPlan,
+                base_url,
+                model,
+                Some("off"),
+            );
+            assert!(body.get("enable_thinking").is_none(), "{model}: {body}");
+        }
+    }
+
+    #[test]
+    fn modelstudio_hybrid_route_classifies_reasoning_and_replays_history() {
+        let base_url = crate::config::DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL;
+        assert_eq!(
+            reasoning_stream_style_for_route(
+                ApiProvider::ModelstudioTokenPlan,
+                base_url,
+                "qwen3.7-plus",
+                None,
+            ),
+            ReasoningStreamStyle::SeparateField,
+        );
+        assert!(should_replay_reasoning_content_for_provider_on_route(
+            ApiProvider::ModelstudioTokenPlan,
+            base_url,
+            "qwen3.7-plus",
+            None,
+        ));
+        assert!(!should_replay_reasoning_content_for_provider_on_route(
+            ApiProvider::ModelstudioTokenPlan,
+            base_url,
+            "qwen3.7-plus",
+            Some("off"),
+        ));
+    }
+
+    #[test]
+    fn modelstudio_replay_stays_narrow_until_a_live_key_confirms_it() {
+        // Deliberately narrower than PR #5233: only `preserve_thinking` models
+        // replay. GLM and DeepSeek-V3.x on Model Studio stay stripped until
+        // someone with a key confirms DashScope accepts `reasoning_content` in
+        // input messages. deepseek-v4* is unaffected — it replays through
+        // `requires_reasoning_content` on every provider.
+        let base_url = crate::config::DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL;
+        for model in ["glm-5.2", "deepseek-v3.2", "deepseek-v3.1"] {
+            assert!(
+                !should_replay_reasoning_content_for_provider_on_route(
+                    ApiProvider::ModelstudioTokenPlan,
+                    base_url,
+                    model,
+                    None,
+                ),
+                "{model}"
+            );
+        }
+        assert!(should_replay_reasoning_content_for_provider_on_route(
+            ApiProvider::ModelstudioTokenPlan,
+            base_url,
+            "deepseek-v4-pro",
+            None,
+        ));
+    }
+
+    #[test]
+    fn modelstudio_coding_plan_chat_route_is_classified_for_all_supported_identities() {
+        // The picker represents Coding Plan as mode = "coding-plan" under
+        // the primary provider id, so the chat client receives
+        // ModelstudioTokenPlan with the Coding Plan URL. Direct configuration
+        // also retains the legacy ModelstudioCodingPlan identity.
+        let base_url = crate::config::DEFAULT_MODELSTUDIO_CODING_PLAN_BASE_URL;
+        for provider in [
+            ApiProvider::ModelstudioTokenPlan,
+            ApiProvider::ModelstudioCodingPlan,
+        ] {
+            let mut body = json!({});
+            apply_route_reasoning_controls(
+                &mut body,
+                provider,
+                base_url,
+                "qwen3.7-plus",
+                Some("high"),
+            );
+
+            assert_eq!(body["enable_thinking"], json!(true), "{provider:?}");
+            assert_eq!(body["preserve_thinking"], json!(true), "{provider:?}");
+            assert_eq!(
+                reasoning_stream_style_for_route(provider, base_url, "qwen3.7-plus", None),
+                ReasoningStreamStyle::SeparateField,
+                "{provider:?}",
+            );
+            assert!(should_replay_reasoning_content_for_provider_on_route(
+                provider,
+                base_url,
+                "qwen3.7-plus",
+                None,
+            ));
+        }
+    }
+
+    #[test]
+    fn modelstudio_workspace_scoped_token_plan_route_is_recognized() {
+        let workspace_url =
+            "https://workspace-123.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1";
+        assert_eq!(
+            reasoning_stream_style_for_route(
+                ApiProvider::ModelstudioTokenPlan,
+                workspace_url,
+                "qwen3.8-max",
+                None,
+            ),
+            ReasoningStreamStyle::SeparateField,
+        );
+        assert!(should_replay_reasoning_content_for_provider_on_route(
+            ApiProvider::ModelstudioTokenPlan,
+            workspace_url,
+            "qwen3.8-max",
+            None,
+        ));
+    }
+
+    #[test]
+    fn modelstudio_kimi_k27_code_is_thinking_only_and_preserves_trace() {
+        // NOTE: unlike the qwen3.8 pair, this classification is asserted by
+        // PR #5233 rather than corroborated by models_dev.bundled.json, which
+        // lists kimi-k2.7-code with `reasoning: true` and no `always_on`.
+        let base_url = crate::config::DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL;
+        let mut body = json!({});
+        apply_route_reasoning_controls(
+            &mut body,
+            ApiProvider::ModelstudioTokenPlan,
+            base_url,
+            "kimi-k2.7-code",
+            Some("off"),
+        );
+
+        assert!(body.get("enable_thinking").is_none());
+        assert_eq!(body["preserve_thinking"], json!(true));
+        assert_eq!(
+            reasoning_stream_style_for_route(
+                ApiProvider::ModelstudioTokenPlan,
+                base_url,
+                "kimi-k2.7-code",
+                None,
+            ),
+            ReasoningStreamStyle::SeparateField,
+        );
+        assert!(should_replay_reasoning_content_for_provider_on_route(
+            ApiProvider::ModelstudioTokenPlan,
+            base_url,
+            "kimi-k2.7-code",
+            Some("off"),
+        ));
     }
 
     #[test]

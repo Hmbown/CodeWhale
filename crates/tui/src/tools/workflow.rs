@@ -866,7 +866,14 @@ impl ToolSpec for WorkflowTool {
     async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
         let state = shared_workflow_state(&context.workspace);
         attach_bound_workflow_lifecycles(context, &state)?;
-        match parse_workflow_action(&input)? {
+        // Keyed off the parsed `WorkflowAction` discriminant, never off
+        // `input["action"]`. The JSON Schema published to the model is a
+        // declaration, not a guard: the real parse also accepts `spawn`,
+        // `wait`, `list`, `inspect`, `stop`, and `abort`, and its reject arm
+        // embeds the model's string verbatim.
+        let action = parse_workflow_action(&input)?;
+        codewhale_telemetry::session_counters().bump(codewhale_telemetry::Counter::WorkflowRun);
+        match action {
             WorkflowAction::Start => {
                 let wait = optional_bool(&input, "wait", false);
                 start_workflow(

@@ -1324,6 +1324,8 @@ pub(crate) fn handle_context_menu_action(app: &mut App, action: ContextMenuActio
             }
         }
         ContextMenuAction::OpenCommandPalette => {
+            codewhale_telemetry::session_counters()
+                .bump(codewhale_telemetry::Counter::CommandPaletteOpen);
             app.view_stack.push(CommandPaletteView::new_for_locale(
                 app.ui_locale,
                 build_command_palette_entries(

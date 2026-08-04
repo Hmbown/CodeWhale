@@ -183,6 +183,7 @@ impl DeepSeekClient {
         .await?;
 
         let status = response.status();
+        crate::client::record_provider_response(self.api_provider, status.as_u16());
         if !status.is_success() {
             let raw = bounded_error_text(response, ERROR_BODY_MAX_BYTES).await;
             anyhow::bail!("Responses API error (HTTP {status}): {raw}");

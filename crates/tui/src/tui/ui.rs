@@ -1774,6 +1774,7 @@ fn apply_agent_spawned_status_and_observer(
     prompt_summary: &str,
 ) {
     let label = app.ensure_agent_label(agent_id);
+    codewhale_telemetry::session_counters().bump(codewhale_telemetry::Counter::SubagentSpawn);
     app.status_message = Some(format!("{label} starting: {prompt_summary}"));
     if let Err(error) =
         execute_subagent_observer_hook(app, HookEvent::SubagentSpawn, agent_id, "prompt", prompt)
@@ -4199,6 +4200,19 @@ async fn run_event_loop(
                             }
                         }
 
+                        // Counted here, at the caller, never inside
+                        // `execute_turn_end_observer_hook`: that function's
+                        // first statement returns early for anyone with no
+                        // TurnEnd hooks, and the natural future optimization
+                        // hoists that check up to this call site — which would
+                        // silently zero the counter for every user who does
+                        // not use hooks.
+                        {
+                            let telemetry = codewhale_telemetry::session_counters();
+                            telemetry.bump(codewhale_telemetry::Counter::Turns);
+                            telemetry.observe_turn_secs(turn_elapsed.as_secs());
+                        }
+
                         if let Err(error) = execute_turn_end_observer_hook(
                             app,
                             completed_turn.as_ref(),
@@ -4683,6 +4697,11 @@ async fn run_event_loop(
                         intent_summary,
                         approval_force_prompt,
                     } => {
+                        // A count and nothing else. The tool name, the
+                        // description, the input, and the matched rule are all
+                        // user- or model-authored strings.
+                        codewhale_telemetry::session_counters()
+                            .bump(codewhale_telemetry::Counter::ApprovalModalShown);
                         if app.remote_control.blocks_local_input() {
                             let gate = app.remote_control.record_remote_approval(
                                 &id,
@@ -6203,6 +6222,8 @@ async fn run_event_loop(
                 if app.view_stack.is_empty() && app.kill_to_end_of_line() {
                     continue;
                 }
+                codewhale_telemetry::session_counters()
+                    .bump(codewhale_telemetry::Counter::CommandPaletteOpen);
                 app.view_stack.push(CommandPaletteView::new_for_locale(
                     app.ui_locale,
                     build_command_palette_entries(

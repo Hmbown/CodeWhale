@@ -472,6 +472,14 @@ impl Engine {
         };
 
         let duration_ms = started_at.elapsed().as_millis() as u64;
+        // The surface-agnostic choke point for every tool call, so this one
+        // bump covers exec and the CLI as well as the TUI. `memory_search` is
+        // counted here for the same reason — one site, not one per tool.
+        let telemetry = codewhale_telemetry::session_counters();
+        telemetry.bump(codewhale_telemetry::Counter::ToolCalls);
+        if tool_name == "memory_search" {
+            telemetry.bump(codewhale_telemetry::Counter::MemorySearch);
+        }
         match &outcome {
             Ok(result) => {
                 tracing::debug!(
@@ -495,6 +503,18 @@ impl Engine {
                     ToolError::NotAvailable { .. } => "not_available",
                     ToolError::PermissionDenied { .. } => "permission_denied",
                 };
+                // The discriminant and nothing else. `ToolError::PathEscape`'s
+                // `Display` *is* an absolute path, and several sibling
+                // variants render a literal source fragment the model emitted.
+                match err {
+                    ToolError::PermissionDenied { .. } => {
+                        telemetry.bump_error(codewhale_telemetry::ErrorCounter::ToolDeniedByPolicy)
+                    }
+                    ToolError::Timeout { .. } => {
+                        telemetry.bump_error(codewhale_telemetry::ErrorCounter::ToolTimeout);
+                    }
+                    _ => {}
+                }
                 tracing::warn!(
                     target: "engine.tool_execution",
                     tool = %tool_name,

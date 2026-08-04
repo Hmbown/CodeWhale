@@ -5569,6 +5569,11 @@ fn tool_ask_rule_decision_for_context(
     } else if decision.requires_approval {
         Some(ToolAskRuleDecision::Prompt(decision.reason().to_string()))
     } else if decision.matched_action == Some(codewhale_execpolicy::PermissionAction::Allow) {
+        // Count only. Never `matched_rule`, never `reason()`, never the
+        // command or its argv: `auto_allow` patterns are user-authored command
+        // strings.
+        codewhale_telemetry::session_counters()
+            .bump(codewhale_telemetry::Counter::ApprovalAutoAllowed);
         Some(ToolAskRuleDecision::Allow)
     } else {
         None

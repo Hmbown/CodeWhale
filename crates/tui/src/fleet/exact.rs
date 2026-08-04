@@ -785,6 +785,10 @@ pub(crate) fn preflight_route(
     } else if crate::config::has_api_key_for(&scoped, identity.provider) {
         CredentialReadiness::Configured
     } else {
+        // The discriminant only. `Missing { detail }` names the provider table
+        // key, which for a custom route is the customer's own string.
+        codewhale_telemetry::session_counters()
+            .bump_error(codewhale_telemetry::ErrorCounter::AuthPreflightFailed);
         CredentialReadiness::Missing {
             detail: format!("no credential configured for `{}`", identity.key),
         }

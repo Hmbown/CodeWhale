@@ -4502,6 +4502,13 @@ fn snapshot_from_config(
                 }
                 if let Some(conn) = pool.connections.get(name) {
                     snapshot.connected = conn.is_ready();
+                    if snapshot.connected {
+                        // A count of connected servers and nothing else. The
+                        // name, the command or URL, and the error string are
+                        // user-chosen and routinely name internal infra.
+                        codewhale_telemetry::session_counters()
+                            .bump(codewhale_telemetry::Counter::McpServerConnected);
+                    }
                     snapshot.tools = conn
                         .tools()
                         .iter()

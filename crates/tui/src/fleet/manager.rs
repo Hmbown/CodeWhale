@@ -367,6 +367,11 @@ impl FleetManager {
         descriptor: ManagedFleetRunDescriptor,
     ) -> Result<FleetRunReport> {
         validate_task_spec_document(&doc)?;
+        // The single funnel: `create_run` and `create_queued_run` both land
+        // here, so counting at either of those would double-count a plain
+        // `fleet run`. Counted after validation, so a rejected spec is not a
+        // dispatch.
+        codewhale_telemetry::session_counters().bump(codewhale_telemetry::Counter::FleetDispatch);
         worker_runtime::canonicalize_fleet_task_roles(&mut doc.tasks);
         let roster = self.agent_roster();
         worker_runtime::validate_task_agent_profiles(&doc.tasks, roster.members())?;
