@@ -2098,4 +2098,74 @@ mod tests {
             Some("builder")
         );
     }
+
+    /// The env map above is only a claim about a function. This dispatches a
+    /// real worker through the real spawn path and reads what the worker
+    /// process actually received, because that is the environment a Codewhale
+    /// worker would resolve telemetry from.
+    ///
+    /// Also asserts the operator's own home stays clean: a worker is an
+    /// implementation detail of the parent session, and the parent already
+    /// accounts for the dispatch, so a worker that wrote telemetry state into
+    /// `$CODEWHALE_HOME` would double-count every fleet run.
+    #[cfg(unix)]
+    #[test]
+    fn fleet_worker_env_carries_telemetry_off() {
+        let fixture = TempDir::new().expect("fixture root");
+        let workspace = fixture.path().join("workspace");
+        let operator_home = fixture.path().join("operator-codewhale-home");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        std::fs::create_dir_all(&operator_home).expect("operator home");
+        let receipt = fixture.path().join("worker-env.txt");
+
+        let mut adapter = LocalProcessFleetHostAdapter::new(&workspace);
+        let mut request = FleetWorkerStartRequest::new(
+            "telemetry-env-probe",
+            FleetWorkerCommand::new(
+                "/bin/sh",
+                ["-c".to_string(), format!("env > {}", receipt.display())],
+            ),
+        );
+        // A caller that both sets and allowlists the switch still cannot turn
+        // a worker on.
+        request
+            .env
+            .insert("CODEWHALE_TELEMETRY".to_string(), "true".to_string());
+        request.env.insert(
+            "CODEWHALE_HOME".to_string(),
+            operator_home.display().to_string(),
+        );
+        request
+            .env_allowlist
+            .insert("CODEWHALE_TELEMETRY".to_string());
+        request.env_allowlist.insert("CODEWHALE_HOME".to_string());
+
+        adapter.start_worker(request).expect("start worker");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::time::Instant::now() < deadline && !receipt.exists() {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let dumped = std::fs::read_to_string(&receipt).expect("worker must dump its environment");
+
+        let value = |key: &str| {
+            dumped
+                .lines()
+                .find_map(|line| line.strip_prefix(&format!("{key}=")))
+                .map(str::to_string)
+        };
+        assert_eq!(
+            value("CODEWHALE_TELEMETRY").as_deref(),
+            Some("false"),
+            "worker environment:\n{dumped}"
+        );
+        assert_eq!(
+            value("DEEPSEEK_TELEMETRY").as_deref(),
+            Some("false"),
+            "worker environment:\n{dumped}"
+        );
+        assert!(
+            !operator_home.join("telemetry").exists(),
+            "a fleet worker must not write telemetry state into the operator's home"
+        );
+    }
 }

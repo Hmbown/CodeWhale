@@ -17503,13 +17503,29 @@ mod telemetry_surface_tests {
     }
 
     #[test]
-    fn a_cancelled_run_is_an_error_not_a_signal() {
-        // Both exit 130. The class has to come from the atomic, so this pins
-        // the mapping the exec path applies rather than the exit code.
+    fn canceled_run_reports_exit_class_error_not_signal() {
+        // A cancelled turn and a SIGINT both exit 130, so an exit-class derived
+        // from the exit code would report every Esc as a signal. The exec path
+        // states the class from the termination reason instead; this pins the
+        // predicate that site applies (`!is_success()` ⇒ `Error`) and the exit
+        // code collision that makes it necessary.
         use crate::core::termination::RunTerminationReason;
         assert_eq!(RunTerminationReason::Canceled.process_exit_code(), 130);
+        assert_eq!(
+            codewhale_telemetry::ExitClass::Signal.as_str(),
+            "signal",
+            "the SIGINT path's class is a distinct value, not a synonym for error"
+        );
         assert!(!RunTerminationReason::Canceled.is_success());
         assert!(RunTerminationReason::Resolved.is_success());
+        // The exit class is read from the process-wide atomic, and an unarmed
+        // process reports `Clean` rather than inventing one from an exit code.
+        assert!(!codewhale_telemetry::is_armed());
+        codewhale_telemetry::set_exit_class(codewhale_telemetry::ExitClass::Error);
+        assert_eq!(
+            codewhale_telemetry::exit_class(),
+            codewhale_telemetry::ExitClass::Clean
+        );
     }
 }
 

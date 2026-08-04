@@ -953,7 +953,7 @@ fn a_tombstoned_buffer_never_appends_or_drains() {
 }
 
 #[test]
-fn arming_clears_the_tombstone_and_truncates_a_pre_consent_buffer() {
+fn arming_truncates_a_pre_consent_buffer() {
     let home = temp_home();
     let root = root_of(&home);
     buffer::ensure_dir(&root).expect("create root");
