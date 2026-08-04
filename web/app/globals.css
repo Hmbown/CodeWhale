@@ -599,6 +599,53 @@ mark.search-highlight {
   .ticker-track { animation: none; }
 }
 
+/* ---------- ambient ---------- */
+/*
+ * Two effects, both OPT-IN under `no-preference` rather than opted out under
+ * `reduce`. A `reduce` override can be defeated by specificity; a gate cannot.
+ * Reduced motion freezes the field — it never removes it, so the column's
+ * gradient and the whale below are unconditional and only the movement is not.
+ *
+ * The TUI's ambient life — fish, jellyfish, bubbles, the whale cameo — stays
+ * out of scope. This page quotes the product's restraint doctrine in its own
+ * copy. Four keyframes on the whole site, and this is two of them.
+ */
+
+/* M1 — the column breath. Opacity only, on a 90s cycle: the TUI's authored
+   0.018–0.055 phase bias expressed as the same fraction of a mix. Opacity is
+   the one property that cannot cause layout work on an element four bands
+   tall. No position change, no hue shift, no filter. */
+@keyframes cw-breath {
+  0%, 100% { opacity: 0; }
+  50% { opacity: 0.045; }
+}
+
+/* M2 — the caustic. `ambient_life.rs`'s literal behaviour: ~1.3s crossing the
+   mark, parked off-canvas for the remaining ~2.7s, peak 0.33. The easing is a
+   sine in-out, i.e. the raised cosine it is meant to be. */
+@keyframes cw-caustic {
+  0% { transform: translateX(0); }
+  32.5% { transform: translateX(160px); }
+  100% { transform: translateX(160px); }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ocean-column::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background: var(--stage-ambient);
+    opacity: 0;
+    animation: cw-breath 90s ease-in-out infinite;
+  }
+
+  .codewhale-caustic {
+    animation: cw-caustic 4s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+  }
+}
+
 /* ---------- decorative big CJK in margin ---------- */
 .margin-glyph {
   font-family: "Noto Serif SC", serif;
