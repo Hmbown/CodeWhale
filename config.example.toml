@@ -85,8 +85,9 @@ default_text_model = "deepseek-v4-pro"
 # "high"   — reasoning_effort = high (DeepSeek default)
 # "max"    — reasoning_effort = max (deepest reasoning)
 #
-# Shift+Tab in the TUI cycles between off / high / max. The header shows the
-# current tier as a ⚡ chip.
+# Ctrl+T in the TUI cycles the reasoning tier. The header shows the current
+# tier as a ⚡ chip. (Shift+Tab cycles the permission posture — Ask /
+# Auto-Review / Full Access — not the reasoning tier.)
 reasoning_effort = "max"
 
 # NOTE: `show_thinking`, `thinking_default_expanded`, and `cost_currency`
