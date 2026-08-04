@@ -1125,3 +1125,241 @@ fn no_public_api_accepts_a_bare_bool() {
         .is_enabled()
     );
 }
+
+// ------------------------------------------------- docs and code are welded --
+
+const TELEMETRY_DOC: &str = include_str!("../../../docs/TELEMETRY.md");
+const GOLDEN_V1: &str = include_str!("../tests/golden/v1.json");
+
+/// Extract the fenced ```jsonc blocks from the schema doc, in order.
+fn jsonc_blocks(doc: &str) -> Vec<String> {
+    let mut blocks = Vec::new();
+    let mut current: Option<String> = None;
+    for raw in doc.lines() {
+        let line = raw.trim_end();
+        match current.as_mut() {
+            None => {
+                if line.trim() == "```jsonc" {
+                    current = Some(String::new());
+                }
+            }
+            Some(body) => {
+                if line.trim() == "```" {
+                    blocks.push(std::mem::take(body));
+                    current = None;
+                } else {
+                    body.push_str(line);
+                    body.push('\n');
+                }
+            }
+        }
+    }
+    blocks
+}
+
+/// Every `"name":` key in a jsonc block, including nested objects. Values are
+/// never matched: a key is an identifier-shaped string followed by a colon, and
+/// no value in these blocks has that shape.
+fn documented_keys(block: &str) -> std::collections::BTreeSet<String> {
+    let bytes: Vec<char> = block.chars().collect();
+    let mut keys = std::collections::BTreeSet::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != '"' {
+            index += 1;
+            continue;
+        }
+        let start = index + 1;
+        let mut end = start;
+        while end < bytes.len() && bytes[end] != '"' {
+            end += 1;
+        }
+        if end >= bytes.len() {
+            break;
+        }
+        let candidate: String = bytes[start..end].iter().collect();
+        let mut after = end + 1;
+        while after < bytes.len() && bytes[after] == ' ' {
+            after += 1;
+        }
+        let is_key = after < bytes.len() && bytes[after] == ':';
+        let identifier_shaped = !candidate.is_empty()
+            && candidate
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+        if is_key && identifier_shaped {
+            keys.insert(candidate);
+        }
+        index = end + 1;
+    }
+    keys
+}
+
+/// Every key of a serialized value, including nested objects.
+fn serialized_keys(value: &Value) -> std::collections::BTreeSet<String> {
+    let mut keys = std::collections::BTreeSet::new();
+    fn walk(value: &Value, out: &mut std::collections::BTreeSet<String>) {
+        match value {
+            Value::Object(map) => {
+                for (key, item) in map {
+                    out.insert(key.clone());
+                    walk(item, out);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    walk(item, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    walk(value, &mut keys);
+    keys
+}
+
+/// First-column entries of the markdown table that follows `heading`.
+fn table_first_column(doc: &str, heading: &str) -> Vec<String> {
+    let mut lines = doc.lines().skip_while(|line| line.trim() != heading);
+    let mut rows = Vec::new();
+    let mut in_table = false;
+    for line in lines.by_ref() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('|') {
+            if in_table {
+                break;
+            }
+            continue;
+        }
+        in_table = true;
+        let first = trimmed
+            .trim_matches('|')
+            .split('|')
+            .next()
+            .unwrap_or("")
+            .trim();
+        if first.is_empty() || first.chars().all(|c| c == '-' || c == ':') {
+            continue;
+        }
+        let name = first.trim_matches('`').to_string();
+        if name.eq_ignore_ascii_case("field") || name.eq_ignore_ascii_case("file") {
+            continue;
+        }
+        rows.push(name);
+    }
+    rows
+}
+
+#[test]
+fn event_field_names_match_documented_schema() {
+    let blocks = jsonc_blocks(TELEMETRY_DOC);
+    assert_eq!(
+        blocks.len(),
+        5,
+        "expected one jsonc block for the envelope and one per event variant; \
+         a parse miss must fail rather than silently pass"
+    );
+
+    // The envelope.
+    let documented = documented_keys(&blocks[0]);
+    let declared: std::collections::BTreeSet<String> =
+        Batch::FIELDS.iter().map(|f| (*f).to_string()).collect();
+    assert_eq!(documented.len(), Batch::FIELDS.len());
+    assert_eq!(
+        documented, declared,
+        "the batch envelope drifted from the doc"
+    );
+
+    // One block per event variant, in the order the doc presents them.
+    let events = every_event();
+    assert_eq!(events.len(), blocks.len() - 1);
+    for (index, event) in events.iter().enumerate() {
+        let block = &blocks[index + 1];
+        let documented = documented_keys(block);
+        let serialized = serialized_keys(&serde_json::to_value(event).expect("serialize"));
+        assert!(
+            !documented.is_empty(),
+            "no keys parsed out of the {} block",
+            event.name()
+        );
+        assert_eq!(
+            documented,
+            serialized,
+            "the `{}` event drifted from the doc",
+            event.name()
+        );
+    }
+
+    // The envelope table, row for row.
+    let envelope_rows =
+        table_first_column(TELEMETRY_DOC, "### Batch envelope — sent on every POST");
+    assert_eq!(
+        envelope_rows.len(),
+        Batch::FIELDS.len(),
+        "the envelope table lost or gained a row: {envelope_rows:?}"
+    );
+    assert_eq!(
+        envelope_rows,
+        Batch::FIELDS
+            .iter()
+            .map(|f| (*f).to_string())
+            .collect::<Vec<_>>()
+    );
+
+    // The counters and errors tables, which are the two closed field sets a
+    // contributor is most likely to extend without touching the doc.
+    let counter_rows = table_first_column(
+        TELEMETRY_DOC,
+        "**`counters`** — closed field set. Every bump happens at the **call site**, never inside a conditionally-entered handler:",
+    );
+    assert_eq!(
+        counter_rows,
+        Counters::FIELDS
+            .iter()
+            .map(|f| (*f).to_string())
+            .collect::<Vec<_>>(),
+        "the counters table drifted from `Counters`"
+    );
+    let error_rows = table_first_column(
+        TELEMETRY_DOC,
+        "**`errors`** — closed field set. Every value is a **variant discriminant**, never `err.to_string()`:",
+    );
+    assert_eq!(
+        error_rows,
+        Errors::FIELDS
+            .iter()
+            .map(|f| (*f).to_string())
+            .collect::<Vec<_>>(),
+        "the errors table drifted from `Errors`"
+    );
+}
+
+#[test]
+fn golden_payload_v1() {
+    // `crates/telemetry/tests/golden/v1.json` is one fully-populated instance of
+    // the envelope and every event. Any field add, remove, or retype fails here
+    // until the developer re-blesses it under a bumped `SCHEMA_VERSION` — and it
+    // is also the artifact a future receiver author reads to know exactly what
+    // v1 was.
+    //
+    // Re-bless with: `CODEWHALE_BLESS_TELEMETRY_GOLDEN=1 cargo test -p codewhale-telemetry`
+    let batch = every_field_batch();
+    assert_eq!(
+        batch.schema_version, SCHEMA_VERSION,
+        "the fixture must be built at the current schema version"
+    );
+    let mut rendered = serde_json::to_string_pretty(&batch).expect("serialize");
+    rendered.push('\n');
+
+    if std::env::var("CODEWHALE_BLESS_TELEMETRY_GOLDEN").is_ok() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/v1.json");
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("create golden dir");
+        std::fs::write(&path, &rendered).expect("write golden");
+        return;
+    }
+
+    assert_eq!(
+        rendered, GOLDEN_V1,
+        "the v1 payload changed; bump SCHEMA_VERSION and re-bless the golden file"
+    );
+}
