@@ -393,6 +393,17 @@ impl Default for ModelRegistry {
                 supports_tools: true,
                 supports_reasoning: true,
             },
+            // GLM-5.3 capabilities are INHERITED FROM glm-5.2 PENDING OFFICIAL
+            // Z.AI RELEASE METADATA (2026-08-03); see
+            // crates/config/assets/models_dev.bundled.json
+            // `_meta.pending_release_metadata`.
+            ModelInfo {
+                id: "z-ai/glm-5.3".to_string(),
+                provider: ProviderKind::Openrouter,
+                aliases: vec!["glm-5.3".to_string(), "zai-glm-5.3".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
             ModelInfo {
                 id: "z-ai/glm-5-turbo".to_string(),
                 provider: ProviderKind::Openrouter,
@@ -408,6 +419,20 @@ impl Default for ModelRegistry {
                     "glm-5-2".to_string(),
                     "zai-glm-5.2".to_string(),
                     "zai-glm-5-2".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            // Listed after GLM-5.2 on purpose: the first Zai row is the
+            // provider default and GLM-5.2 keeps that seat.
+            ModelInfo {
+                id: "GLM-5.3".to_string(),
+                provider: ProviderKind::Zai,
+                aliases: vec![
+                    "glm-5.3".to_string(),
+                    "glm-5-3".to_string(),
+                    "zai-glm-5.3".to_string(),
+                    "zai-glm-5-3".to_string(),
                 ],
                 supports_tools: true,
                 supports_reasoning: true,
@@ -1022,6 +1047,9 @@ impl Default for ModelRegistry {
                 supports_tools: true,
                 supports_reasoning: true,
             },
+            // No glm-5.3 row (2026-08-03): OpenCode Go publishes no glm-5.3
+            // model. The Z.ai/OpenRouter glm-5.3 rows inherit glm-5.2 metadata;
+            // that inheritance is not evidence this gateway serves it.
             ModelInfo {
                 id: "glm-5.2".to_string(),
                 provider: ProviderKind::OpencodeGo,
@@ -1843,6 +1871,10 @@ mod tests {
             ("GLM-5.2", "GLM-5.2"),
             ("glm-5.2", "GLM-5.2"),
             ("zai-glm-5-2", "GLM-5.2"),
+            ("GLM-5.3", "GLM-5.3"),
+            ("glm-5.3", "GLM-5.3"),
+            ("glm-5-3", "GLM-5.3"),
+            ("zai-glm-5-3", "GLM-5.3"),
             ("GLM-5-Turbo", "GLM-5-Turbo"),
             ("glm-5-turbo", "GLM-5-Turbo"),
             ("zai-glm-5-turbo", "GLM-5-Turbo"),
@@ -2071,6 +2103,7 @@ mod tests {
             ("gemma-4-31b-it", "google/gemma-4-31b-it"),
             ("glm-5.1", "z-ai/glm-5.1"),
             ("glm-5.2", "z-ai/glm-5.2"),
+            ("glm-5.3", "z-ai/glm-5.3"),
             ("minimax-m3", "minimax/minimax-m3"),
             ("minimax-2.7", "minimax/minimax-m2.7"),
             ("openrouter-mimo-v2.5-pro", "xiaomi/mimo-v2.5-pro"),

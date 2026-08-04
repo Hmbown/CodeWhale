@@ -4979,6 +4979,20 @@ fn zai_aliases_resolve_to_canonical_models() {
         DEFAULT_ZAI_MODEL
     );
     assert_eq!(DEFAULT_ZAI_MODEL, "GLM-5.2");
+    // GLM-5.3 is a peer, not the default: its aliases must land on its own id
+    // and must never fold into DEFAULT_ZAI_MODEL.
+    for alias in ["glm-5.3", "glm-5-3", "zai-glm-5.3", "zai-glm-5-3"] {
+        assert_eq!(
+            normalize_model_for_provider(ProviderKind::Zai, alias),
+            ZAI_GLM_5_3_MODEL,
+            "{alias} must canonicalize to GLM-5.3"
+        );
+        assert_ne!(
+            normalize_model_for_provider(ProviderKind::Zai, alias),
+            DEFAULT_ZAI_MODEL,
+            "{alias} must not resolve to the Z.ai default"
+        );
+    }
     assert_eq!(
         normalize_model_for_provider(ProviderKind::Zai, "glm-5-turbo"),
         ZAI_GLM_5_TURBO_MODEL
@@ -6506,6 +6520,7 @@ fn openrouter_provider_normalizes_recent_large_model_aliases() {
         ("gemma-4-31b-it", OPENROUTER_GEMMA_4_31B_MODEL),
         ("glm-5.1", OPENROUTER_GLM_5_1_MODEL),
         ("glm-5.2", OPENROUTER_GLM_5_2_MODEL),
+        ("glm-5.3", OPENROUTER_GLM_5_3_MODEL),
     ] {
         let cli = CliRuntimeOverrides {
             provider: Some(ProviderKind::Openrouter),

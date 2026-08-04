@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Registered `GLM-5.3` (direct Z.ai) and `z-ai/glm-5.3` (OpenRouter) as
+  selectable GLM routes, with their aliases (`glm-5.3`, `glm-5-3`,
+  `zai-glm-5.3`, `zai-glm-5-3`). Z.ai had **not released GLM-5.3 as of
+  2026-08-03** — the ids are registered so they resolve to the Z.ai/OpenRouter
+  routes instead of being rewritten to another vendor's model, and they will
+  fail upstream until Z.ai ships the model. Metadata (context, output,
+  reasoning controls) is inherited wholesale from `GLM-5.2` pending official
+  Z.ai release metadata; pricing is intentionally absent, and `GLM-5.2` remains
+  the default Z.ai model. No third-party gateway roster gained the model:
+  OpenCode Zen, OpenCode Go, Alibaba Model Studio, and TelecomJS publish no
+  glm-5.3 entry, so Codewhale advertises none.
+
 ## [0.9.4] - Unreleased candidate
 
 This is the Codewhale v0.9.4 source candidate. It is not a published release

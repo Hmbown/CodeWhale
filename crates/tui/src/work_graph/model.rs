@@ -156,7 +156,7 @@ pub(crate) fn constrained_effective_reasoning_for_route(
         if !crate::config::is_exact_zai_chat_route(provider, endpoint_identity) {
             return Some(Unavailable);
         }
-        if crate::config::is_exact_zai_glm_5_2_route(provider, endpoint_identity, model) {
+        if crate::config::is_exact_zai_tiered_effort_route(provider, endpoint_identity, model) {
             return Some(match requested {
                 Low | Medium => High,
                 other => other,

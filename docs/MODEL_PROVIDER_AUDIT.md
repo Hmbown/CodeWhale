@@ -199,6 +199,7 @@ shown in picker; runtime compat floor 128,000. OAuth route never shows pricing.
 | Model | Ctx | Out | R | Pricing | Notes |
 |---|---|---|---|---|---|
 | `glm-5.2` (± `z-ai/`) | 1,000,000 | 131,072 | ✓ | 0.26 / 1.40 / 4.40 | |
+| `glm-5.3` (± `z-ai/`) | 1,000,000 | 131,072 | ✓ |  | **not released by Z.ai as of 2026-08-03** — registered id only; limits/reasoning inherited wholesale from `glm-5.2` pending official Z.ai release metadata, not measured; no published price |
 | `glm-5.1` (± `z-ai/`) | 202,752 | 131,072 | ✓ | 0.26 / 1.40 / 4.40 | vendor page says 200K (§7 D-4) |
 | `glm-5-turbo` (± `z-ai/`) | 202,752 | 131,072 | ✓ | 0.24 / 1.20 / 4.00 | fast **text** sibling |
 | `glm-5v-turbo` (± `z-ai/`) | 202,752 | — | ✗ | — | **vision** model, distinct from 5-turbo |
@@ -393,6 +394,7 @@ T = supports tools, R = supports reasoning. Aliases are case-insensitive.
 | `minimax/minimax-m2.7` | Openrouter | ✓ | ✓ | minimax-2.7, minimax-2-7, openrouter-minimax-2.7 |
 | `z-ai/glm-5.1` | Openrouter | ✓ | ✓ | glm-5.1, zai-glm-5.1 |
 | `z-ai/glm-5.2` | Openrouter | ✓ | ✓ | glm-5.2, zai-glm-5.2 |
+| `z-ai/glm-5.3` | Openrouter | ✓ | ✓ | glm-5.3, zai-glm-5.3 |
 | `z-ai/glm-5-turbo` | Openrouter | ✓ | ✓ | glm-5-turbo, zai-glm-5-turbo |
 | `tencent/hy3-preview` | Openrouter | ✓ | ✓ | hy3-preview, tencent-hy3-preview |
 | `google/gemma-4-31b-it` | Openrouter | ✓ | ✓ | gemma-4-31b, gemma-4-31b-it |
@@ -400,6 +402,7 @@ T = supports tools, R = supports reasoning. Aliases are case-insensitive.
 | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free` | Openrouter | ✓ | ✓ | nemotron-3-nano-omni, nemotron-3-nano-omni-reasoning |
 | `nvidia/nemotron-3-ultra-550b-a55b` | Openrouter | ✓ | ✓ | nvidia/nemotron-3-ultra, nemotron-3-ultra, nemotron-3-ultra-550b-a55b, nvidia-nemotron-3-ultra, nvidia-nemotron-3-ultra-550b-a55b |
 | `GLM-5.2` | Zai | ✓ | ✓ | glm-5.2, glm-5-2, zai-glm-5.2, zai-glm-5-2 |
+| `GLM-5.3` | Zai | ✓ | ✓ | glm-5.3, glm-5-3, zai-glm-5.3, zai-glm-5-3 |
 | `GLM-5.1` | Zai | ✓ | ✓ | glm-5.1, glm-5-1, zai-glm-5.1, zai-glm-5-1 |
 | `GLM-5-Turbo` | Zai | ✓ | ✓ | glm-5-turbo, glm-5turbo, zai-glm-5-turbo |
 | `mimo-v2.5-pro` | XiaomiMimo | ✓ | ✓ | mimo, pro, xiaomi-mimo-v2.5-pro, xiaomi-mimo-v2-5-pro |

@@ -971,6 +971,9 @@ fn canonical_openrouter_recent_model_id(model: &str) -> Option<&'static str> {
         OPENROUTER_GLM_5_2_MODEL | "glm-5.2" | "glm-5-2" | "zai-glm-5.2" | "zai-glm-5-2" => {
             Some(OPENROUTER_GLM_5_2_MODEL)
         }
+        OPENROUTER_GLM_5_3_MODEL | "glm-5.3" | "glm-5-3" | "zai-glm-5.3" | "zai-glm-5-3" => {
+            Some(OPENROUTER_GLM_5_3_MODEL)
+        }
         OPENROUTER_GLM_5_TURBO_MODEL | "glm-5-turbo" | "glm-5turbo" | "zai-glm-5-turbo" => {
             Some(OPENROUTER_GLM_5_TURBO_MODEL)
         }
@@ -1140,6 +1143,10 @@ fn canonical_zai_model_id(model: &str) -> Option<&'static str> {
     match normalized.as_str() {
         "glm-5.1" | "glm-5-1" | "zai-glm-5.1" | "zai-glm-5-1" => Some(ZAI_GLM_5_1_MODEL),
         "glm-5.2" | "glm-5-2" | "zai-glm-5.2" | "zai-glm-5-2" => Some(DEFAULT_ZAI_MODEL),
+        // Resolves to its own constant, never to `DEFAULT_ZAI_MODEL`: adding a
+        // model must not silently re-point an explicit 5.3 request at the
+        // default (GLM-5.2).
+        "glm-5.3" | "glm-5-3" | "zai-glm-5.3" | "zai-glm-5-3" => Some(ZAI_GLM_5_3_MODEL),
         "glm-5-turbo" | "glm-5turbo" | "zai-glm-5-turbo" => Some(ZAI_GLM_5_TURBO_MODEL),
         _ => None,
     }
@@ -1424,7 +1431,12 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
         ApiProvider::Qianfan => vec![DEFAULT_QIANFAN_MODEL],
         ApiProvider::OpenaiCodex => vec![DEFAULT_OPENAI_CODEX_MODEL],
         ApiProvider::Openmodel => vec![DEFAULT_OPENMODEL_MODEL],
-        ApiProvider::Zai => vec![DEFAULT_ZAI_MODEL, ZAI_GLM_5_1_MODEL, ZAI_GLM_5_TURBO_MODEL],
+        ApiProvider::Zai => vec![
+            DEFAULT_ZAI_MODEL,
+            ZAI_GLM_5_3_MODEL,
+            ZAI_GLM_5_1_MODEL,
+            ZAI_GLM_5_TURBO_MODEL,
+        ],
         ApiProvider::Stepfun => vec![DEFAULT_STEPFUN_MODEL],
         ApiProvider::Anthropic => vec![
             ANTHROPIC_OPUS_MODEL,
@@ -1454,6 +1466,12 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
             XAI_GROK_4_20_0309_REASONING_MODEL,
             XAI_GROK_4_20_0309_NON_REASONING_MODEL,
         ],
+        // Frozen pre-refresh gateway snapshot: these are the rows TelecomJS
+        // TokenHub advertised when the provider landed (note the still-listed
+        // `GLM-5.0`). It is only a conservative fallback — a configured key
+        // replaces it wholesale with the authenticated live `/models` catalog
+        // (docs/PROVIDERS.md, `telecomjs` row). Do not hand-add newer model
+        // ids here; refresh the whole snapshot from the gateway instead.
         ApiProvider::Telecomjs => vec![
             DEFAULT_TELECOMJS_MODEL,
             "deepseek-v4-flash",
@@ -1478,6 +1496,7 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
             "qwen3.6-flash",
             "deepseek-v4-pro",
             "deepseek-v4-flash-0731",
+            // No glm-5.3: Model Studio publishes no such row (2026-08-03).
             "glm-5.2",
         ],
         // Custom endpoints expose no built-in completion names; the user
@@ -8504,15 +8523,23 @@ pub(crate) fn is_exact_zai_chat_route(provider: ApiProvider, base_url: &str) -> 
         )
 }
 
-/// Whether a route is exactly first-party Z.ai GLM-5.2.
+/// Whether a route is an exact first-party Z.ai model that exposes **tiered**
+/// reasoning effort (`reasoning_effort: high | max`) rather than only the
+/// generic thinking toggle.
+///
+/// GLM-5.2 is the verified member. GLM-5.3 inherits it because its catalog row
+/// inherits GLM-5.2's `reasoning_options` wholesale — see the
+/// `INHERITED FROM glm-5.2` marker in `config/models.rs`. If Z.ai publishes
+/// different reasoning controls for 5.3, this predicate is where they split.
 #[must_use]
-pub(crate) fn is_exact_zai_glm_5_2_route(
+pub(crate) fn is_exact_zai_tiered_effort_route(
     provider: ApiProvider,
     base_url: &str,
     model: &str,
 ) -> bool {
     is_exact_zai_chat_route(provider, base_url)
-        && model.trim().eq_ignore_ascii_case(ZAI_GLM_5_2_MODEL)
+        && (model.trim().eq_ignore_ascii_case(ZAI_GLM_5_2_MODEL)
+            || model.trim().eq_ignore_ascii_case(ZAI_GLM_5_3_MODEL))
 }
 
 /// Whether a route is exactly first-party Z.ai GLM-5-Turbo.
@@ -8527,15 +8554,15 @@ pub(crate) fn is_exact_zai_glm_5_turbo_route(
 }
 
 /// Whether a route is an exact first-party Z.ai model with a verified
-/// reasoning control. GLM-5.2 has tiered effort; GLM-5.1 and GLM-5-Turbo only
-/// expose the generic thinking toggle.
+/// reasoning control. GLM-5.2 and GLM-5.3 have tiered effort; GLM-5.1 and
+/// GLM-5-Turbo only expose the generic thinking toggle.
 #[must_use]
 pub(crate) fn is_exact_known_zai_reasoning_route(
     provider: ApiProvider,
     base_url: &str,
     model: &str,
 ) -> bool {
-    is_exact_zai_glm_5_2_route(provider, base_url, model)
+    is_exact_zai_tiered_effort_route(provider, base_url, model)
         || is_exact_zai_glm_5_turbo_route(provider, base_url, model)
         || (is_exact_zai_chat_route(provider, base_url)
             && model.trim().eq_ignore_ascii_case(ZAI_GLM_5_1_MODEL))

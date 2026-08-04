@@ -1619,6 +1619,10 @@ fn provider_owned_hand_pricing_at(
                 | "claude-fable-5"
                 | "claude-sonnet-5"
         ),
+        // GLM-5.3 is deliberately absent: this allowlist declares that Z.ai
+        // owns a *hand-written price row* for the model, and no GLM-5.3 rate
+        // has been published. An absent price is honest; an owned-but-empty
+        // row is not. See `glm_5_3_has_no_hardcoded_price` below.
         ApiProvider::Zai => matches!(model_lower.as_str(), "glm-5.1" | "glm-5.2" | "glm-5-turbo"),
         ApiProvider::Moonshot => {
             matches!(model_lower.as_str(), "kimi-k2.6" | "kimi-k2.7-code")
@@ -2949,6 +2953,36 @@ mod tests {
                 "cache-write policy for {model}"
             );
         }
+    }
+
+    #[test]
+    fn glm_5_3_has_no_hardcoded_price() {
+        // GLM-5.3's catalog metadata is inherited from GLM-5.2, but Z.ai has
+        // published no GLM-5.3 rate. Inheriting the 5.2 price would invent one,
+        // so every price surface must report *unknown*, never a number and
+        // never $0. If Z.ai publishes rates, delete this test and add the real
+        // row — do not "fix" it by copying 5.2's.
+        for model in ["glm-5.3", "z-ai/glm-5.3"] {
+            assert!(
+                pricing_for_model_at(model, Utc::now()).is_none(),
+                "{model} must have no price row until Z.ai publishes one"
+            );
+            assert!(!has_pricing_for_model(model), "{model} must be unpriced");
+            assert!(
+                calculate_turn_cost_estimate_from_usage(
+                    model,
+                    &Usage {
+                        input_tokens: 1_000_000,
+                        output_tokens: 500_000,
+                        ..Default::default()
+                    },
+                )
+                .is_none(),
+                "{model} must not accrue an invented cost estimate"
+            );
+        }
+        // The priced sibling it inherits capabilities from is unaffected.
+        assert!(has_pricing_for_model("glm-5.2"));
     }
 
     #[test]

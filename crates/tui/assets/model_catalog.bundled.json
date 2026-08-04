@@ -132,6 +132,15 @@
       "supported_parameters": [],
       "provenance": "bundled"
     },
+    "z-ai/glm-5.3": {
+      "id": "z-ai/glm-5.3",
+      "context_window": 1000000,
+      "max_output": 131072,
+      "supports_reasoning": true,
+      "modalities": ["text"],
+      "supported_parameters": [],
+      "provenance": "bundled"
+    },
     "glm-5.2": {
       "id": "glm-5.2",
       "context_window": 1000000,
@@ -139,6 +148,15 @@
       "supports_reasoning": true,
       "input_usd_per_million": 1.4,
       "output_usd_per_million": 4.4,
+      "modalities": ["text"],
+      "supported_parameters": [],
+      "provenance": "bundled"
+    },
+    "glm-5.3": {
+      "id": "glm-5.3",
+      "context_window": 1000000,
+      "max_output": 131072,
+      "supports_reasoning": true,
       "modalities": ["text"],
       "supported_parameters": [],
       "provenance": "bundled"

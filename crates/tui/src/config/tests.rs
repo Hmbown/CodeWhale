@@ -6082,6 +6082,10 @@ fn model_completion_names_for_zai_lists_default_5_1_and_turbo() {
     assert_eq!(DEFAULT_ZAI_MODEL, ZAI_GLM_5_2_MODEL);
     assert!(models.contains(&ZAI_GLM_5_1_MODEL));
     assert!(models.contains(&ZAI_GLM_5_TURBO_MODEL));
+    // GLM-5.3 is offered alongside the others but must not take the default
+    // slot: adding a model never changes anyone's route.
+    assert!(models.contains(&ZAI_GLM_5_3_MODEL));
+    assert_ne!(models.first().copied(), Some(ZAI_GLM_5_3_MODEL));
     // No accidental duplicate entries.
     let mut sorted = models.to_vec();
     sorted.sort_unstable();
@@ -6097,6 +6101,9 @@ fn normalize_model_name_for_zai_canonicalizes_current_glm_models() {
         ("glm-5-1", ZAI_GLM_5_1_MODEL),
         ("glm-5.2", DEFAULT_ZAI_MODEL),
         ("zai-glm-5-2", DEFAULT_ZAI_MODEL),
+        ("glm-5.3", ZAI_GLM_5_3_MODEL),
+        ("glm-5-3", ZAI_GLM_5_3_MODEL),
+        ("zai-glm-5-3", ZAI_GLM_5_3_MODEL),
         ("glm-5-turbo", ZAI_GLM_5_TURBO_MODEL),
         ("zai-glm-5-turbo", ZAI_GLM_5_TURBO_MODEL),
     ] {
@@ -6105,6 +6112,13 @@ fn normalize_model_name_for_zai_canonicalizes_current_glm_models() {
             Some(expected)
         );
     }
+    // The 5.1-era bug shape: a new alias silently resolving to the provider
+    // default. GLM-5.3 must keep its own id.
+    assert_ne!(ZAI_GLM_5_3_MODEL, DEFAULT_ZAI_MODEL);
+    assert_eq!(
+        normalize_model_name_for_provider(ApiProvider::Zai, "glm-5.3").as_deref(),
+        Some(ZAI_GLM_5_3_MODEL)
+    );
     assert_eq!(
         normalize_model_name_for_provider(ApiProvider::Zai, "glm-next-preview").as_deref(),
         Some("glm-next-preview")

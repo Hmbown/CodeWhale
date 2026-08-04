@@ -3816,6 +3816,12 @@ fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
 /// sanitization on this one protocol-scoped contract. The provider's combined
 /// `/models` roster also contains Anthropic-Messages-only models, which are
 /// deliberately absent here.
+///
+/// `glm-5.3` is also deliberately absent (2026-08-03): OpenCode Go documents no
+/// glm-5.3 row. The direct Z.ai and OpenRouter glm-5.3 rows inherit their
+/// metadata from glm-5.2, but that inheritance says nothing about which
+/// subscription gateways carry the model. Add it here only against an OpenCode
+/// Go roster listing.
 pub const OPENCODE_GO_CHAT_MODELS: &[&str] = &[
     DEFAULT_OPENCODE_GO_MODEL,
     OPENCODE_GO_GROK_4_5_MODEL,
@@ -3950,6 +3956,9 @@ fn canonical_zai_model_id(model: &str) -> Option<&'static str> {
     match normalized.as_str() {
         "glm-5.1" | "glm-5-1" | "zai-glm-5.1" | "zai-glm-5-1" => Some(ZAI_GLM_5_1_MODEL),
         "glm-5.2" | "glm-5-2" | "zai-glm-5.2" | "zai-glm-5-2" => Some(DEFAULT_ZAI_MODEL),
+        // GLM-5.3 resolves to its own id, never to DEFAULT_ZAI_MODEL: adding a
+        // model must not silently re-point a route at the default.
+        "glm-5.3" | "glm-5-3" | "zai-glm-5.3" | "zai-glm-5-3" => Some(ZAI_GLM_5_3_MODEL),
         "glm-5-turbo" | "glm-5turbo" | "zai-glm-5-turbo" => Some(ZAI_GLM_5_TURBO_MODEL),
         _ => None,
     }
@@ -3975,6 +3984,9 @@ fn canonical_openrouter_recent_model_id(model: &str) -> Option<&'static str> {
         }
         OPENROUTER_GLM_5_2_MODEL | "glm-5.2" | "glm-5-2" | "zai-glm-5.2" | "zai-glm-5-2" => {
             Some(OPENROUTER_GLM_5_2_MODEL)
+        }
+        OPENROUTER_GLM_5_3_MODEL | "glm-5.3" | "glm-5-3" | "zai-glm-5.3" | "zai-glm-5-3" => {
+            Some(OPENROUTER_GLM_5_3_MODEL)
         }
         OPENROUTER_KIMI_K2_7_CODE_MODEL
         | "kimi"

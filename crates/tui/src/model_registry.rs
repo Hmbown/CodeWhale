@@ -156,8 +156,10 @@ const SEED_MODEL_IDS: &[(&str, ModelProvider)] = &[
     // --- Z.ai GLM (config DEFAULT_ZAI_MODEL) ---
     ("z-ai/glm-5.1", ModelProvider::Zai),
     ("z-ai/glm-5.2", ModelProvider::Zai),
+    ("z-ai/glm-5.3", ModelProvider::Zai),
     ("glm-5.1", ModelProvider::Zai),
     ("glm-5.2", ModelProvider::Zai),
+    ("glm-5.3", ModelProvider::Zai),
     // --- MiniMax (config DEFAULT_MINIMAX_MODEL) ---
     ("minimax/minimax-m3", ModelProvider::Minimax),
     ("minimax-m3", ModelProvider::Minimax),
@@ -281,6 +283,7 @@ mod tests {
             ("kimi-k2.6", Some(262_144)),
             ("z-ai/glm-5.1", Some(202_752)),
             ("z-ai/glm-5.2", Some(1_000_000)),
+            ("z-ai/glm-5.3", Some(1_000_000)),
             ("minimax/minimax-m3", Some(1_000_000)),
             ("minimax-m2.7", Some(204_800)),
             ("qwen/qwen3.6-flash", Some(1_000_000)),

@@ -623,6 +623,22 @@ fn bundled_asset_yields_real_chat_offerings_for_key_models() {
     assert_eq!(glm.limit.as_ref().and_then(|l| l.context), Some(1_000_000));
     assert!(glm.default_for_provider);
 
+    // GLM-5.3 is a peer row whose limits are INHERITED FROM glm-5.2 pending
+    // official Z.ai release metadata. Adding it must not move the default.
+    let glm53 = find(&rows, "zai", "GLM-5.3");
+    assert_eq!(
+        glm53.limit.as_ref().and_then(|l| l.context),
+        glm.limit.as_ref().and_then(|l| l.context)
+    );
+    assert_eq!(
+        glm53.limit.as_ref().and_then(|l| l.output),
+        glm.limit.as_ref().and_then(|l| l.output)
+    );
+    assert!(
+        !glm53.default_for_provider,
+        "GLM-5.3 must not become the Z.ai default"
+    );
+
     let kimi_k27 = find(&rows, "moonshot", "kimi-k2.7-code");
     assert_eq!(
         kimi_k27.limit.as_ref().and_then(|l| l.context),
@@ -720,6 +736,20 @@ fn bundled_asset_pricing_is_honest() {
     assert_eq!(cost.input, Some(1.40));
     assert_eq!(cost.output, Some(4.40));
     assert_eq!(cost.cache_read, Some(0.26));
+
+    // GLM-5.3 was not live on the Z.ai API when it was added (2026-08-03) and
+    // Zhipu has published no rate for it, so every glm-5.3 row stays unpriced
+    // rather than inheriting glm-5.2's published rates.
+    for row in &rows {
+        if row.wire_model_id.to_ascii_lowercase().contains("glm-5.3") {
+            assert!(
+                row.cost.is_none(),
+                "{}/{}: glm-5.3 must stay unpriced until Z.ai publishes rates",
+                row.provider,
+                row.wire_model_id
+            );
+        }
+    }
 
     // M3 has input-length and service tiers that the flat catalog cost shape
     // cannot represent, so the bundled route row stays honestly unpriced.

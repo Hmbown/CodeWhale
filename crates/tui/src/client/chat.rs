@@ -16,7 +16,7 @@ use tokio::time::timeout as tokio_timeout;
 
 use crate::config::{
     TOGETHER_INKLING_MODEL, is_exact_direct_moonshot_k3_route, is_exact_kimi_code_k3_route,
-    is_exact_zai_chat_route, is_exact_zai_glm_5_2_route,
+    is_exact_zai_chat_route, is_exact_zai_tiered_effort_route,
     minimax_m3_route_uses_max_completion_tokens, wire_model_for_provider_route,
 };
 
@@ -201,9 +201,10 @@ fn apply_direct_moonshot_k3_reasoning_effort(
     body["reasoning_effort"] = json!(wire_effort);
 }
 
-/// Keep Z.ai controls on exact first-party routes only. GLM-5.2 receives its
-/// documented top-level effort, GLM-5-Turbo keeps only the generic thinking
-/// toggle, and compatible gateways receive neither field because their
+/// Keep Z.ai controls on exact first-party routes only. The tiered-effort GLM
+/// models (5.2, and 5.3 which inherits its reasoning options) receive the
+/// documented top-level effort, GLM-5.1 and GLM-5-Turbo keep only the generic
+/// thinking toggle, and compatible gateways receive neither field because their
 /// request dialect is not known from provider/model selection alone.
 fn apply_zai_route_reasoning_controls(
     body: &mut Value,
@@ -232,7 +233,7 @@ fn apply_zai_route_reasoning_controls(
         }
         return;
     }
-    if !is_exact_zai_glm_5_2_route(provider, base_url, model) {
+    if !is_exact_zai_tiered_effort_route(provider, base_url, model) {
         // Exact first-party GLM-5-Turbo and GLM-5.1 keep only the generic
         // enabled/disabled thinking control.
         return;
@@ -5055,6 +5056,11 @@ mod alias_thinking_detection_tests {
             "GLM-5.2",
             None,
         ));
+        assert!(should_replay_reasoning_content_for_provider(
+            ApiProvider::Zai,
+            "GLM-5.3",
+            None,
+        ));
         assert!(!should_replay_reasoning_content_for_provider(
             ApiProvider::Moonshot,
             "kimi-for-coding",
@@ -5605,6 +5611,51 @@ mod alias_thinking_detection_tests {
     }
 
     #[test]
+    fn zai_tiered_effort_applies_to_glm_5_2_and_glm_5_3_but_not_5_1() {
+        let zai = crate::config::DEFAULT_ZAI_BASE_URL;
+        // GLM-5.3 inherits GLM-5.2's reasoning_options (effort high/max), so it
+        // must take the same tiered wire path — not the generic toggle.
+        for model in [
+            crate::config::ZAI_GLM_5_2_MODEL,
+            crate::config::ZAI_GLM_5_3_MODEL,
+        ] {
+            let mut body = json!({});
+            apply_route_reasoning_controls(&mut body, ApiProvider::Zai, zai, model, Some("max"));
+            assert_eq!(body["reasoning_effort"], json!("max"), "{model} at max");
+
+            let mut body = json!({});
+            apply_route_reasoning_controls(&mut body, ApiProvider::Zai, zai, model, Some("high"));
+            assert_eq!(body["reasoning_effort"], json!("high"), "{model} at high");
+        }
+
+        // GLM-5.1 and GLM-5-Turbo keep only the generic thinking control.
+        for model in [
+            crate::config::ZAI_GLM_5_1_MODEL,
+            crate::config::ZAI_GLM_5_TURBO_MODEL,
+        ] {
+            let mut body = json!({});
+            apply_route_reasoning_controls(&mut body, ApiProvider::Zai, zai, model, Some("max"));
+            assert!(
+                body.get("reasoning_effort").is_none(),
+                "{model} must not receive tiered effort"
+            );
+        }
+
+        // A compatible gateway is not evidence of the Z.ai dialect, for 5.3
+        // exactly as for 5.2.
+        let mut body = json!({"thinking": {"type": "enabled"}});
+        apply_route_reasoning_controls(
+            &mut body,
+            ApiProvider::Zai,
+            "https://gateway.example.com/v1",
+            crate::config::ZAI_GLM_5_3_MODEL,
+            Some("max"),
+        );
+        assert!(body.get("reasoning_effort").is_none());
+        assert!(body.get("thinking").is_none());
+    }
+
+    #[test]
     fn stream_classifies_known_large_reasoning_models_as_reasoning() {
         // Xiaomi MiMo and OpenRouter/Qwen/Trinity can stream private reasoning through a
         // `reasoning` delta without using a DeepSeek-looking model name. The
@@ -5621,6 +5672,10 @@ mod alias_thinking_detection_tests {
         assert!(
             is_reasoning_model_for_stream(ApiProvider::Zai, "GLM-5.2"),
             "GLM-5.2 should stream reasoning_content as thinking on direct Z.ai"
+        );
+        assert!(
+            is_reasoning_model_for_stream(ApiProvider::Zai, "GLM-5.3"),
+            "GLM-5.3 inherits GLM-5.2's reasoning capability on direct Z.ai"
         );
         for model in [
             "arcee-ai/trinity-large-thinking",

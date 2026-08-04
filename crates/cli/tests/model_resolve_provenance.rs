@@ -278,6 +278,122 @@ fn an_unservable_model_on_the_selected_provider_is_reported_as_a_fallback() {
     );
 }
 
+/// Adding a model to the catalog must make it servable on the provider that
+/// carries it and nowhere else. `glm-5.3` was added as a peer of `glm-5.2`, so
+/// it has to answer on Z.ai without a fallback while a Moonshot-scoped question
+/// still refuses it — the same cross-provider boundary the `glm-5.2` case above
+/// pins, asserted on the newest sibling so the boundary cannot rot as the
+/// family grows.
+#[test]
+fn a_new_glm_sibling_is_servable_on_zai_but_not_on_moonshot() {
+    let served = resolve_with_global_flags(
+        "provider = \"zai\"\n\n[providers.zai]\napi_key = \"k\"\n",
+        &[],
+        &["glm-5.3", "--provider", "zai"],
+    );
+
+    assert_eq!(served.get("provider").map(String::as_str), Some("zai"));
+    assert_eq!(
+        served.get("resolved").map(String::as_str),
+        Some("GLM-5.3"),
+        "a catalogued model must resolve to itself, not to the provider default: {served:?}"
+    );
+    assert_eq!(
+        served.get("used_fallback").map(String::as_str),
+        Some("false"),
+        "a model the provider serves must not be reported as a fallback: {served:?}"
+    );
+
+    let refused = resolve_with_global_flags(
+        "provider = \"moonshot\"\n\n[providers.moonshot]\napi_key = \"k\"\n",
+        &[],
+        &["glm-5.3", "--provider", "moonshot"],
+    );
+
+    assert_eq!(
+        refused.get("provider").map(String::as_str),
+        Some("moonshot")
+    );
+    assert_eq!(
+        refused.get("used_fallback").map(String::as_str),
+        Some("true"),
+        "a Z.ai id must not be presented as honoured by Moonshot: {refused:?}"
+    );
+    let resolved = refused
+        .get("resolved")
+        .map(String::as_str)
+        .unwrap_or_default();
+    assert!(
+        !resolved.to_ascii_lowercase().contains("glm"),
+        "a provider that cannot serve GLM must not be handed a fabricated GLM id: {refused:?}"
+    );
+}
+
+/// The OpenRouter sibling carries a different wire id (`z-ai/glm-5.3`) than the
+/// direct Z.ai row (`GLM-5.3`), so the bare family alias has to be rewritten
+/// per provider rather than passed through. This pins the OpenRouter half of
+/// that rewrite, which the Z.ai case above cannot observe, and pins that adding
+/// the sibling left the OpenRouter default alone.
+#[test]
+fn the_openrouter_glm_sibling_resolves_to_its_own_gateway_wire_id() {
+    let served = resolve_with_global_flags(
+        "provider = \"openrouter\"\n\n[providers.openrouter]\napi_key = \"k\"\n",
+        &[],
+        &["glm-5.3", "--provider", "openrouter"],
+    );
+
+    assert_eq!(
+        served.get("provider").map(String::as_str),
+        Some("openrouter")
+    );
+    assert_eq!(
+        served.get("resolved").map(String::as_str),
+        Some("z-ai/glm-5.3"),
+        "the bare alias must be rewritten to the OpenRouter wire id, not passed through: {served:?}"
+    );
+    assert_eq!(
+        served.get("used_fallback").map(String::as_str),
+        Some("false"),
+        "a gateway row the provider serves must not be reported as a fallback: {served:?}"
+    );
+
+    let default_route = resolve_with_config(
+        "provider = \"openrouter\"\n\n[providers.openrouter]\napi_key = \"k\"\n",
+        &[],
+    );
+    let resolved = default_route
+        .get("resolved")
+        .map(String::as_str)
+        .unwrap_or_default();
+    assert!(
+        !resolved.to_ascii_lowercase().contains("glm"),
+        "adding a GLM sibling must not make GLM the OpenRouter default: {default_route:?}"
+    );
+}
+
+/// Adding a sibling must not move anyone's route. A Z.ai config that names no
+/// model still has to land on `GLM-5.2`: the newer `glm-5.3` is catalogued but
+/// deliberately not the default, and this is the surface where that would
+/// silently change under a user.
+#[test]
+fn adding_a_glm_sibling_leaves_the_zai_default_route_untouched() {
+    let report = resolve_with_config(
+        "provider = \"zai\"\n\n[providers.zai]\napi_key = \"k\"\n",
+        &[],
+    );
+
+    assert_eq!(
+        report.get("resolved").map(String::as_str),
+        Some("GLM-5.2"),
+        "the Z.ai default must stay GLM-5.2 after a newer sibling is added: {report:?}"
+    );
+    assert_eq!(
+        report.get("model_source").map(String::as_str),
+        Some("provider default"),
+        "{report:?}"
+    );
+}
+
 fn codewhale_binary() -> PathBuf {
     if let Some(path) = option_env!("CARGO_BIN_EXE_codewhale") {
         return PathBuf::from(path);

@@ -29,6 +29,7 @@ pub const OPENROUTER_GEMMA_4_31B_MODEL: &str = "google/gemma-4-31b-it";
 pub const OPENROUTER_GEMMA_4_26B_A4B_MODEL: &str = "google/gemma-4-26b-a4b-it";
 pub const OPENROUTER_GLM_5_1_MODEL: &str = "z-ai/glm-5.1";
 pub const OPENROUTER_GLM_5_2_MODEL: &str = "z-ai/glm-5.2";
+pub const OPENROUTER_GLM_5_3_MODEL: &str = "z-ai/glm-5.3";
 pub const OPENROUTER_GLM_5_TURBO_MODEL: &str = "z-ai/glm-5-turbo";
 pub const OPENROUTER_KIMI_K2_7_CODE_MODEL: &str = "moonshotai/kimi-k2.7-code";
 pub const OPENROUTER_KIMI_K2_6_MODEL: &str = "moonshotai/kimi-k2.6";
@@ -65,6 +66,7 @@ pub const RECENT_OPENROUTER_LARGE_MODELS: &[&str] = &[
     OPENROUTER_KIMI_K2_6_MODEL,
     OPENROUTER_GLM_5_1_MODEL,
     OPENROUTER_GLM_5_2_MODEL,
+    OPENROUTER_GLM_5_3_MODEL,
     OPENROUTER_TENCENT_HY3_PREVIEW_MODEL,
     OPENROUTER_GEMMA_4_31B_MODEL,
     OPENROUTER_GEMMA_4_26B_A4B_MODEL,
@@ -163,6 +165,18 @@ pub const OFFICIAL_DEEPSEEK_MODELS: &[&str] = &["deepseek-v4-pro", "deepseek-v4-
 pub const DEFAULT_ZAI_MODEL: &str = "GLM-5.2";
 pub const ZAI_GLM_5_1_MODEL: &str = "GLM-5.1";
 pub const ZAI_GLM_5_2_MODEL: &str = "GLM-5.2";
+// TODO(2026-08-03): GLM-5.3 metadata is INHERITED FROM glm-5.2 PENDING OFFICIAL
+// Z.AI RELEASE METADATA. The id follows the family's own naming convention; no
+// limit, capability, or price here is a vendor-published GLM-5.3 fact. Z.ai's
+// live `/models` catalog did not list GLM-5.3 on that date, so the route is
+// registered (the alias resolves to Z.ai instead of another vendor's model)
+// but will fail upstream until Z.ai ships it. Scope is first-party Z.ai plus
+// its OpenRouter mirror only: metadata inheritance is not evidence that a
+// third-party gateway carries the model, so no OpenCode Zen / OpenCode Go /
+// Model Studio / TelecomJS roster lists it. Correct at the catalog definition
+// (crates/config/assets/models_dev.bundled.json) once Z.ai publishes real
+// metadata, then re-check every site that greps for this marker.
+pub const ZAI_GLM_5_3_MODEL: &str = "GLM-5.3";
 pub const ZAI_GLM_5_TURBO_MODEL: &str = "GLM-5-Turbo";
 pub const DEFAULT_ZAI_BASE_URL: &str = "https://api.z.ai/api/coding/paas/v4";
 pub const DEFAULT_STEPFUN_MODEL: &str = "step-3.7-flash";

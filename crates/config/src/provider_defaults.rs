@@ -35,6 +35,13 @@ pub(crate) const OPENROUTER_GEMMA_4_31B_MODEL: &str = "google/gemma-4-31b-it";
 pub(crate) const OPENROUTER_GEMMA_4_26B_A4B_MODEL: &str = "google/gemma-4-26b-a4b-it";
 pub(crate) const OPENROUTER_GLM_5_1_MODEL: &str = "z-ai/glm-5.1";
 pub(crate) const OPENROUTER_GLM_5_2_MODEL: &str = "z-ai/glm-5.2";
+// GLM-5.3: metadata INHERITED FROM glm-5.2 PENDING OFFICIAL Z.AI RELEASE
+// METADATA (2026-08-03). Zhipu/Z.ai had not released GLM-5.3 on that date, so
+// this id was never verified against OpenRouter's model metadata and cannot be
+// until Z.ai ships it; it is registered so the alias resolves to OpenRouter
+// rather than being rewritten to another vendor's model. See
+// models_dev.bundled.json `_meta.pending_release_metadata`.
+pub(crate) const OPENROUTER_GLM_5_3_MODEL: &str = "z-ai/glm-5.3";
 pub(crate) const OPENROUTER_KIMI_K2_7_CODE_MODEL: &str = "moonshotai/kimi-k2.7-code";
 pub(crate) const OPENROUTER_KIMI_K2_6_MODEL: &str = "moonshotai/kimi-k2.6";
 pub(crate) const OPENROUTER_MINIMAX_M3_MODEL: &str = "minimax/minimax-m3";
@@ -104,6 +111,10 @@ pub(crate) const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
 
 // Z.ai (GLM Coding Plan) defaults
 pub(crate) const DEFAULT_ZAI_MODEL: &str = "GLM-5.2";
+// GLM-5.3 is a peer of the default, never the default. Its capability/limit
+// metadata is INHERITED FROM glm-5.2 PENDING OFFICIAL Z.AI RELEASE METADATA
+// (2026-08-03). See models_dev.bundled.json `_meta.pending_release_metadata`.
+pub(crate) const ZAI_GLM_5_3_MODEL: &str = "GLM-5.3";
 pub(crate) const ZAI_GLM_5_1_MODEL: &str = "GLM-5.1";
 pub(crate) const ZAI_GLM_5_TURBO_MODEL: &str = "GLM-5-Turbo";
 pub(crate) const DEFAULT_ZAI_BASE_URL: &str = "https://api.z.ai/api/coding/paas/v4";

@@ -141,9 +141,12 @@ pub(crate) fn provider_router_candidates(
             .unwrap_or_else(|| current_model.to_string());
         return RouterCandidates {
             // GLM-5.2 (the default) routes faster/explore children to GLM-5-Turbo,
-            // the same-family fast sibling. GLM-5.1 and GLM-5-Turbo itself have no
+            // the same-family fast sibling; GLM-5.3 inherits that pairing without
+            // taking it away from 5.2. GLM-5.1 and GLM-5-Turbo itself have no
             // cheaper tier and keep children on the parent model.
-            cheap: if normalized == crate::config::ZAI_GLM_5_2_MODEL {
+            cheap: if normalized == crate::config::ZAI_GLM_5_2_MODEL
+                || normalized == crate::config::ZAI_GLM_5_3_MODEL
+            {
                 Some(crate::config::ZAI_GLM_5_TURBO_MODEL.to_string())
             } else {
                 None
@@ -159,13 +162,17 @@ pub(crate) fn provider_router_candidates(
             normalized.as_str(),
             crate::config::OPENROUTER_GLM_5_1_MODEL
                 | crate::config::OPENROUTER_GLM_5_2_MODEL
+                | crate::config::OPENROUTER_GLM_5_3_MODEL
                 | crate::config::OPENROUTER_GLM_5_TURBO_MODEL
         )
     {
         return RouterCandidates {
-            // z-ai/glm-5.2 routes faster children to z-ai/glm-5-turbo; the 5.1
-            // and turbo ids have no cheaper tier and keep children on parent.
-            cheap: if normalized == crate::config::OPENROUTER_GLM_5_2_MODEL {
+            // z-ai/glm-5.2 and z-ai/glm-5.3 route faster children to
+            // z-ai/glm-5-turbo; the 5.1 and turbo ids have no cheaper tier and
+            // keep children on parent.
+            cheap: if normalized == crate::config::OPENROUTER_GLM_5_2_MODEL
+                || normalized == crate::config::OPENROUTER_GLM_5_3_MODEL
+            {
                 Some(crate::config::OPENROUTER_GLM_5_TURBO_MODEL.to_string())
             } else {
                 None
@@ -1547,6 +1554,23 @@ mod tests {
             Some(ReasoningEffort::High),
             "low must be normalized up to high for the Z.ai route, not passed through"
         );
+
+        // GLM-5.3 is a first-class peer: same provider ownership, same effort
+        // normalization, and it must resolve to its own id (not fold into the
+        // GLM-5.2 default).
+        let route_53 = resolve_explicit_route_with_inventory(&config, "GLM-5.3")
+            .expect("explicit GLM-5.3 route should resolve to its provider");
+        assert_eq!(
+            route_53.provider,
+            ApiProvider::Zai,
+            "GLM-5.3 must route to Z.ai, not the active DeepSeek provider"
+        );
+        assert_eq!(
+            route_53.model,
+            crate::config::ZAI_GLM_5_3_MODEL,
+            "GLM-5.3 must keep its own id, not fall back to the GLM-5.2 default"
+        );
+        assert_eq!(route_53.reasoning_effort, Some(ReasoningEffort::High));
     }
 
     #[tokio::test]
@@ -2083,6 +2107,15 @@ mod tests {
         let openrouter_glm = provider_router_candidates(ApiProvider::Openrouter, "z-ai/glm-5.2");
         assert_eq!(openrouter_glm.big, "z-ai/glm-5.2");
         assert_eq!(openrouter_glm.cheap.as_deref(), Some("z-ai/glm-5-turbo"));
+
+        // GLM-5.3 inherits the same fast sibling without displacing GLM-5.2's.
+        let zai_53 = provider_router_candidates(ApiProvider::Zai, "GLM-5.3");
+        assert_eq!(zai_53.big, "GLM-5.3");
+        assert_eq!(zai_53.cheap.as_deref(), Some("GLM-5-Turbo"));
+
+        let openrouter_glm_53 = provider_router_candidates(ApiProvider::Openrouter, "z-ai/glm-5.3");
+        assert_eq!(openrouter_glm_53.big, "z-ai/glm-5.3");
+        assert_eq!(openrouter_glm_53.cheap.as_deref(), Some("z-ai/glm-5-turbo"));
 
         // GLM-5.1 has no cheaper tier; faster children stay on the parent.
         let zai_51 = provider_router_candidates(ApiProvider::Zai, "GLM-5.1");

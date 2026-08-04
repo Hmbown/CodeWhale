@@ -94,6 +94,13 @@ const MODELSTUDIO_TEXT_MODELS: &[&str] = &[
     "deepseek-v4-flash-0731",
     // GLM models served under Model Studio are scoped to this provider;
     // they do not collide with first-party Zhipu / Z.ai routes.
+    //
+    // glm-5.3 is deliberately absent (2026-08-03): this list is a curated
+    // snapshot of what Model Studio's upstream roster actually serves, and
+    // Model Studio publishes no glm-5.3 entry. The direct Z.ai / OpenRouter
+    // glm-5.3 rows inherit their metadata from glm-5.2, but metadata
+    // inheritance is not evidence that a third-party gateway carries the
+    // model. Add it here only against a Model Studio console/roster listing.
     "glm-5.2",
 ];
 
@@ -142,6 +149,10 @@ pub(crate) const OPENCODE_ZEN_CHAT_MODELS: &[&str] = &[
     "minimax-m3",
     "minimax-m2.7",
     "minimax-m2.5",
+    // glm-5.3 is deliberately absent (2026-08-03): this snapshot tracks the
+    // official OpenCode Zen endpoint table, which lists no glm-5.3 row. Zen
+    // fails closed on unknown models by design; registering a route Zen does
+    // not serve would convert that into a guaranteed upstream 404.
     "glm-5.2",
     "glm-5.1",
     "glm-5",
