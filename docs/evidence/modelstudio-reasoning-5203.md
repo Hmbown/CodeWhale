@@ -30,7 +30,9 @@ identifies `qwen3.8-max`; the middle frames show `reasoning live` and append
 the `reasoning_content` text in pieces; the final answer appears only after
 the Thinking phase becomes `reasoning done`. Use the two PNGs above as the
 direct Terminal screenshot evidence, and this GIF to make the incremental
-rendering sequence easier to inspect.
+rendering sequence easier to inspect. The raw terminal-control capture remains
+local and is intentionally not committed; it is not needed to run the code and
+does not contain a credential in this evidence record.
 
 ![Recorded Token Plan Lite streaming stages](modelstudio-token-plan-streaming-5203.gif)
 
