@@ -25,6 +25,7 @@ pub(super) const MULTI_TOOL_PARALLEL_NAME: &str = "multi_tool_use.parallel";
 pub(super) const REQUEST_USER_INPUT_NAME: &str = "request_user_input";
 pub(super) const CODE_EXECUTION_TOOL_NAME: &str = "code_execution";
 const CODE_EXECUTION_TOOL_TYPE: &str = "code_execution_20250825";
+const CODE_EXECUTION_DESCRIPTION: &str = "Execute Python code with the local Python interpreter in the workspace and return stdout/stderr/return_code as JSON.";
 pub(super) use crate::tools::js_execution::JS_EXECUTION_TOOL_NAME;
 pub(super) const TOOL_SEARCH_NAME: &str = "tool_search";
 const TOOL_SEARCH_TYPE: &str = "tool_search_20251119";
@@ -269,7 +270,7 @@ pub(super) fn ensure_advanced_tooling(
         catalog.push(Tool {
             tool_type: Some(CODE_EXECUTION_TOOL_TYPE.to_string()),
             name: CODE_EXECUTION_TOOL_NAME.to_string(),
-            description: "Execute Python code in a local sandboxed runtime and return stdout/stderr/return_code as JSON.".to_string(),
+            description: CODE_EXECUTION_DESCRIPTION.to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -1255,7 +1256,19 @@ pub(super) async fn execute_code_execution_tool(
 
 #[cfg(test)]
 mod synthetic_name_tests {
-    use super::{default_synthetic_catalog_tool_names, is_synthetic_catalog_tool};
+    use super::{
+        CODE_EXECUTION_DESCRIPTION, default_synthetic_catalog_tool_names, is_synthetic_catalog_tool,
+    };
+
+    /// `code_execution` writes the script to a tempdir and runs it as a plain
+    /// child process in the workspace — no seccomp, no jail, no container. The
+    /// description is model-facing, so calling it a sandbox would tell the model
+    /// it has isolation the runtime never provides.
+    #[test]
+    fn code_execution_description_does_not_claim_process_sandboxing() {
+        assert!(CODE_EXECUTION_DESCRIPTION.contains("local Python interpreter"));
+        assert!(!CODE_EXECUTION_DESCRIPTION.contains("sandbox"));
+    }
 
     /// The published synthetic-name list and the predicate that classifies a
     /// catalog entry as synthetic must agree. A name that appears in the list
