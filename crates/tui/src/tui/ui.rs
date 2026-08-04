@@ -13670,10 +13670,21 @@ fn build_pending_input_preview(app: &App) -> PendingInputPreview {
 /// yield for nothing.
 ///
 /// The row half of that gate is deliberately *not* mirrored here. It would be
-/// a step down in terminal height — below the floor the rail would take the
+/// a step down in terminal *height* — below the floor the rail would take the
 /// rows, at the floor it would hand them back — and a strip that vanishes as
-/// the terminal grows is the resize flicker this budget exists to avoid. The
-/// column gate has no such problem: width and height move independently.
+/// the terminal grows taller is the resize flicker this budget exists to
+/// avoid. The swept axis must stay monotone.
+///
+/// The column gate is a real trade, not a free one, and an earlier version of
+/// this comment wrongly claimed otherwise. Widening past
+/// `AMBIENT_MIN_CHAT_WIDTH` on a short-but-tall terminal can swap a strip for
+/// the ocean in one column step. That is accepted deliberately: a horizontal
+/// resize past 60 columns is a deliberate act with a visible payoff (the
+/// water appears), whereas the height version fires while dragging the axis
+/// the strip is measured in. Both cannot be monotone at once — charging the
+/// floor is what buys the whale its rows, and something has to give.
+/// `rail_strip_and_whale_swap_at_the_ambient_width` pins the swap so it stays
+/// a decision rather than drifting into an accident.
 ///
 /// The composer is charged at a fixed floor rather than its measured height:
 /// the real `composer_height` is itself computed from the strip height, and

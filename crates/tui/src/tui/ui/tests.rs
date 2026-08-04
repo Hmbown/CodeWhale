@@ -20676,6 +20676,47 @@ fn rail_strip_and_idle_whale_never_thrash_across_a_resize() {
 }
 
 #[test]
+fn rail_strip_and_whale_swap_at_the_ambient_width() {
+    // The width gate is a real trade and this test exists so it stays a
+    // decision rather than drifting into an accident.
+    //
+    // `rail_row_budget` charges the ambient floor only when the mark can
+    // actually draw, which needs AMBIENT_MIN_CHAT_WIDTH columns. So on a
+    // terminal tall enough to be interesting but narrower than that floor,
+    // the rail keeps its rows; widening past the floor hands them to the
+    // water. Unlike the height axis — where the same rule would make the
+    // strip vanish as you drag the very axis it is measured in — this fires
+    // on a deliberate horizontal resize with a visible payoff.
+    let panel = crate::tui::work_surface::RailPanel::Pinned;
+    let width_floor = crate::tui::underwater::AMBIENT_MIN_CHAT_WIDTH;
+    let rows = 24_u16;
+
+    let mut app = idle_rail_app(panel);
+    let narrow_budget = super::rail_row_budget(&app, width_floor - 1, rows, true);
+    let narrow_strip =
+        crate::tui::work_surface::height(&mut app, width_floor - 1, rows, narrow_budget);
+
+    let mut app = idle_rail_app(panel);
+    let wide_budget = super::rail_row_budget(&app, width_floor, rows, true);
+    let wide_strip = crate::tui::work_surface::height(&mut app, width_floor, rows, wide_budget);
+
+    assert!(
+        narrow_strip > wide_strip,
+        "below {width_floor} columns the ambient mark cannot draw, so the rail should \
+         keep its rows ({narrow_strip}) and yield them at the floor ({wide_strip}); if \
+         these are equal the width gate has stopped doing anything"
+    );
+
+    // And the payoff is real: the rows the rail gave up become water.
+    let mut app = idle_rail_app(panel);
+    let rendered = render_underwater_test_app(&mut app, width_floor, rows);
+    assert!(
+        has_idle_whale(&rendered),
+        "yielding the strip at {width_floor}x{rows} must actually buy the ocean\n{rendered}"
+    );
+}
+
+#[test]
 fn side_rail_yields_the_columns_the_idle_ocean_needs() {
     // The width axis carried the same defect: a side rail reserves at least
     // 26 columns while `split_chat` only ever protected a 40-column
