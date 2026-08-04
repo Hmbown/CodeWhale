@@ -4548,10 +4548,17 @@ fn build_tui_command_with_paths(
         cmd.env("CODEWHALE_LOG_LEVEL", log_level);
         cmd.env("DEEPSEEK_LOG_LEVEL", log_level);
     }
-    if let Some(telemetry) = cli.telemetry {
-        cmd.env("CODEWHALE_TELEMETRY", telemetry.to_string());
-        cmd.env("DEEPSEEK_TELEMETRY", telemetry.to_string());
-    }
+    // Forward the *resolved* value, never the raw flag, and forward it
+    // unconditionally including `false`. Forwarding only `Some(flag)`
+    // overwrote an inherited `CODEWHALE_TELEMETRY=0` in the child's
+    // environment, so `CODEWHALE_TELEMETRY=0 codewhale --telemetry true`
+    // handed the TUI — which is the process that would emit — an environment
+    // that resolves on. The child re-resolves from its own environment and
+    // config file, and must not be able to fall back past the floor the
+    // dispatcher has already applied.
+    let telemetry = resolved_runtime.telemetry.to_string();
+    cmd.env("CODEWHALE_TELEMETRY", &telemetry);
+    cmd.env("DEEPSEEK_TELEMETRY", &telemetry);
     if let Some(policy) = cli.approval_policy.as_ref() {
         cmd.env("CODEWHALE_APPROVAL_POLICY", policy);
         cmd.env("DEEPSEEK_APPROVAL_POLICY", policy);
@@ -8126,6 +8133,90 @@ model = "qwen-2.5-7b"
                 .any(|pair| pair == ["--workspace", "/tmp/codewhale-workspace"]),
             "expected workspace forwarding in args: {args:?}"
         );
+    }
+
+    #[test]
+    fn build_tui_command_forwards_the_resolved_telemetry_value_not_the_raw_flag() {
+        let _lock = env_lock();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let custom = dir
+            .path()
+            .join(format!("custom-tui{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&custom, b"").unwrap();
+        let custom_str = custom.to_string_lossy().into_owned();
+        let _bin = ScopedEnvVar::set("DEEPSEEK_TUI_BIN", &custom_str);
+
+        // The user passed `--telemetry true`, but the resolver applied the
+        // kill-switch floor (an explicit `CODEWHALE_TELEMETRY=0`, or an
+        // unreadable value) and resolved to off. The TUI holds every emission
+        // site, so it is the resolved value that must reach it.
+        let cli = parse_ok(&["codewhale", "--telemetry", "true", "exec", "hi"]);
+        assert_eq!(cli.telemetry, Some(true));
+        let mut resolved = telemetry_test_resolved();
+        resolved.telemetry = false;
+        resolved.telemetry_explicit_off = true;
+
+        let cmd = build_tui_command(&cli, &resolved, Vec::new()).expect("command");
+        assert_eq!(
+            command_env(&cmd, "CODEWHALE_TELEMETRY").as_deref(),
+            Some("false")
+        );
+        assert_eq!(
+            command_env(&cmd, "DEEPSEEK_TELEMETRY").as_deref(),
+            Some("false")
+        );
+    }
+
+    #[test]
+    fn build_tui_command_always_states_telemetry_so_an_inherited_value_cannot_leak_through() {
+        let _lock = env_lock();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let custom = dir
+            .path()
+            .join(format!("custom-tui{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&custom, b"").unwrap();
+        let custom_str = custom.to_string_lossy().into_owned();
+        let _bin = ScopedEnvVar::set("DEEPSEEK_TUI_BIN", &custom_str);
+
+        // No `--telemetry` flag at all. The old code forwarded nothing here,
+        // leaving the child to inherit whatever the shell happened to export.
+        let cli = parse_ok(&["codewhale", "exec", "hi"]);
+        assert_eq!(cli.telemetry, None);
+        let mut resolved = telemetry_test_resolved();
+        resolved.telemetry = true;
+
+        let cmd = build_tui_command(&cli, &resolved, Vec::new()).expect("command");
+        assert_eq!(
+            command_env(&cmd, "CODEWHALE_TELEMETRY").as_deref(),
+            Some("true")
+        );
+        assert_eq!(
+            command_env(&cmd, "DEEPSEEK_TELEMETRY").as_deref(),
+            Some("true")
+        );
+    }
+
+    fn telemetry_test_resolved() -> ResolvedRuntimeOptions {
+        ResolvedRuntimeOptions {
+            provider: ProviderKind::Deepseek,
+            provider_source: ProviderSource::Config,
+            model_source: ModelSource::ProviderDefault,
+            model: "deepseek-chat".to_string(),
+            api_key: None,
+            api_key_source: None,
+            base_url: "https://api.deepseek.com".to_string(),
+            auth_mode: None,
+            insecure_skip_tls_verify: false,
+            output_mode: None,
+            log_level: None,
+            telemetry: false,
+            telemetry_explicit_off: false,
+            approval_policy: None,
+            sandbox_mode: None,
+            yolo: None,
+            verbosity: None,
+            http_headers: std::collections::BTreeMap::new(),
+        }
     }
 
     #[test]

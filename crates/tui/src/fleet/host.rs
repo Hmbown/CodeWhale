@@ -215,8 +215,7 @@ impl LocalProcessFleetHostAdapter {
             self.processes.remove(&request.worker_id);
         }
 
-        let mut env = process_base_env();
-        env.extend(filtered_env(&request.env, &request.env_allowlist)?);
+        let env = worker_env(&request.env, &request.env_allowlist)?;
         let log_path = self.log_path_for(&request.worker_id, host_kind);
         let log = open_worker_log(&log_path)?;
         let stderr = log
@@ -1373,7 +1372,35 @@ fn process_base_env() -> BTreeMap<String, String> {
             env.insert(key.to_string(), value);
         }
     }
+    force_worker_telemetry_off(&mut env);
     env
+}
+
+/// Fleet workers are an implementation detail of the parent session, not
+/// sessions of their own — the parent already accounts for the dispatch.
+///
+/// The spawn path `env_clear()`s and rebuilds from [`process_base_env`], so an
+/// operator's opt-out would otherwise never reach a worker at all. Hard-off
+/// here means a worker can never emit, can never inherit an ambient "on", and
+/// can never write telemetry state into the operator's home.
+fn force_worker_telemetry_off(env: &mut BTreeMap<String, String>) {
+    env.insert("CODEWHALE_TELEMETRY".to_string(), "false".to_string());
+    env.insert("DEEPSEEK_TELEMETRY".to_string(), "false".to_string());
+}
+
+/// Build the complete environment a worker is spawned with.
+///
+/// The caller's allowlisted entries are merged over the process base, then
+/// telemetry is forced off again: an allowlist that happens to name
+/// `CODEWHALE_TELEMETRY` must not be able to switch a worker back on.
+fn worker_env(
+    request_env: &BTreeMap<String, String>,
+    allowlist: &BTreeSet<String>,
+) -> FleetHostResult<BTreeMap<String, String>> {
+    let mut env = process_base_env();
+    env.extend(filtered_env(request_env, allowlist)?);
+    force_worker_telemetry_off(&mut env);
+    Ok(env)
 }
 
 fn shell_quote(value: &str) -> String {
@@ -2028,5 +2055,47 @@ mod tests {
         assert_eq!(config.working_directory, PathBuf::from("/srv/codewhale"));
         assert!(config.env_allowlist.contains("FLEET_PROFILE"));
         assert_eq!(config.codewhale_binary, "/usr/local/bin/codewhale");
+    }
+
+    #[test]
+    fn worker_env_forces_telemetry_off_even_when_the_allowlist_says_otherwise() {
+        // The spawn path env_clear()s and rebuilds from this map, so anything
+        // absent here simply does not exist inside the worker.
+        let base = process_base_env();
+        assert_eq!(
+            base.get("CODEWHALE_TELEMETRY").map(String::as_str),
+            Some("false")
+        );
+        assert_eq!(
+            base.get("DEEPSEEK_TELEMETRY").map(String::as_str),
+            Some("false")
+        );
+
+        // A caller that allowlists the switch cannot switch it back on.
+        let request_env = BTreeMap::from([
+            ("CODEWHALE_TELEMETRY".to_string(), "true".to_string()),
+            ("DEEPSEEK_TELEMETRY".to_string(), "1".to_string()),
+            ("FLEET_PROFILE".to_string(), "builder".to_string()),
+        ]);
+        let allowlist = BTreeSet::from([
+            "CODEWHALE_TELEMETRY".to_string(),
+            "DEEPSEEK_TELEMETRY".to_string(),
+            "FLEET_PROFILE".to_string(),
+        ]);
+
+        let env = worker_env(&request_env, &allowlist).expect("worker env");
+        assert_eq!(
+            env.get("CODEWHALE_TELEMETRY").map(String::as_str),
+            Some("false")
+        );
+        assert_eq!(
+            env.get("DEEPSEEK_TELEMETRY").map(String::as_str),
+            Some("false")
+        );
+        // Unrelated allowlisted entries still come through.
+        assert_eq!(
+            env.get("FLEET_PROFILE").map(String::as_str),
+            Some("builder")
+        );
     }
 }
