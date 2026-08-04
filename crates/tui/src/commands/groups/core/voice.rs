@@ -445,7 +445,7 @@ pub async fn capture_and_transcribe(
         return Err(tr(locale, MessageId::VoiceErrNoRecorder).to_string());
     }
     let api_key = config
-        .deepseek_api_key()
+        .active_provider_api_key()
         .map_err(|_| tr(locale, MessageId::VoiceErrNoAuth).to_string())?;
     let base_url = config.deepseek_base_url();
 

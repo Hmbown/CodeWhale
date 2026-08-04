@@ -50,7 +50,7 @@ use crate::automation_manager::{
     AutomationManager, AutomationSchedulerConfig, AutomationStatus, spawn_scheduler,
 };
 use crate::client::{
-    CacheWarmupKey, DeepSeekClient, PromptInspection, build_cache_warmup_request,
+    CacheWarmupKey, PromptInspection, ProviderClient, build_cache_warmup_request,
     inspect_prompt_for_request,
 };
 use crate::commands;
@@ -1508,7 +1508,7 @@ pub async fn run_tui(
     // startup, even when the API key is missing, the base URL is malformed,
     // or the network is unavailable.
     // Translations are skipped with a logged warning until a key is saved.
-    let translation_client = match DeepSeekClient::new(config) {
+    let translation_client = match ProviderClient::new(config) {
         Ok(client) => Some(Arc::new(client)),
         Err(err) => {
             if app.onboarding == OnboardingState::None {
@@ -3176,7 +3176,7 @@ async fn run_event_loop(
     mut engine_handle: EngineHandle,
     task_manager: SharedTaskManager,
     event_broker: &EventBroker,
-    translation_client: Option<Arc<DeepSeekClient>>,
+    translation_client: Option<Arc<ProviderClient>>,
     mut dispatch_completion_rx: tokio::sync::mpsc::Receiver<crate::tui::app::DispatchApplyFn>,
 ) -> Result<()> {
     // Track streaming state
@@ -3240,7 +3240,7 @@ async fn run_event_loop(
     // waiting for a turn to complete.
     if !app.balance_initiated && should_fetch_deepseek_balance(app) {
         let cell = app.balance_cell.clone();
-        let api_key = config.deepseek_api_key().unwrap_or_default();
+        let api_key = config.active_provider_api_key().unwrap_or_default();
         let base_url = config.deepseek_base_url();
         if !api_key.is_empty() {
             app.last_balance_fetch = Some(Instant::now());
@@ -4337,7 +4337,7 @@ async fn run_event_loop(
                             .is_none_or(|t| t.elapsed() >= BALANCE_FETCH_COOLDOWN);
                         if balance_cooldown_expired && should_fetch_deepseek_balance(app) {
                             let cell = app.balance_cell.clone();
-                            let api_key = config.deepseek_api_key().unwrap_or_default();
+                            let api_key = config.active_provider_api_key().unwrap_or_default();
                             let base_url = config.deepseek_base_url();
                             if !api_key.is_empty() {
                                 app.last_balance_fetch = Some(Instant::now());
@@ -7930,9 +7930,9 @@ fn apply_alt_0_shortcut(app: &mut App, modifiers: KeyModifiers) {
 }
 
 async fn fetch_available_models(config: &Config) -> Result<Vec<String>> {
-    use crate::client::DeepSeekClient;
+    use crate::client::ProviderClient;
 
-    let client = DeepSeekClient::new(config)?;
+    let client = ProviderClient::new(config)?;
     let models = tokio::time::timeout(Duration::from_secs(20), client.list_models()).await??;
     let mut ids = models.into_iter().map(|model| model.id).collect::<Vec<_>>();
     ids.sort();
@@ -8045,7 +8045,7 @@ async fn handle_setup_constitution_model_draft(
     // timeout. The loop polls constitution_draft_cell and delivers the result.
     const DRAFT_TIMEOUT: Duration = Duration::from_secs(20);
     let model_label = app.model_display_label();
-    let client = match DeepSeekClient::new(config) {
+    let client = match ProviderClient::new(config) {
         Ok(client) => client,
         Err(err) => {
             deliver_constitution_draft_result(
@@ -8160,7 +8160,7 @@ async fn handle_fleet_profile_model_draft(
     // the wizard interactive with a drafting status.
     const DRAFT_TIMEOUT: Duration = Duration::from_secs(20);
     let model_label = app.model_display_label();
-    let client = match DeepSeekClient::new(config) {
+    let client = match ProviderClient::new(config) {
         Ok(client) => client,
         Err(err) => {
             deliver_fleet_draft_result(
@@ -11404,7 +11404,7 @@ async fn switch_provider(
     // A successful in-session switch must refresh the same key-scoped live
     // catalog as startup. TelecomJS is currently the only provider using this
     // seam; failures preserve the existing/static rows.
-    crate::client::DeepSeekClient::spawn_active_provider_catalog_refresh(config);
+    crate::client::ProviderClient::spawn_active_provider_catalog_refresh(config);
 
     if !app.api_messages.is_empty() {
         let _ = engine_handle
@@ -11521,7 +11521,7 @@ async fn apply_provider_fallback_switch(
     let new_model = resolved_route.model;
     let context_window_source = resolved_route.context_window.source;
 
-    if let Err(err) = DeepSeekClient::from_candidate(&next_config, &resolved_route.candidate) {
+    if let Err(err) = ProviderClient::from_candidate(&next_config, &resolved_route.candidate) {
         app.set_provider_identity_record(previous_identity);
         app.provider_chain = previous_chain;
         app.last_fallback_reason = Some(format!(
@@ -12192,7 +12192,7 @@ async fn apply_command_result(
                     .is_none_or(|t| t.elapsed() >= BALANCE_FETCH_COOLDOWN);
                 if balance_cooldown_expired && should_fetch_deepseek_balance(app) {
                     let cell = app.balance_cell.clone();
-                    let api_key = config.deepseek_api_key().unwrap_or_default();
+                    let api_key = config.active_provider_api_key().unwrap_or_default();
                     let base_url = config.deepseek_base_url();
                     if !api_key.is_empty() {
                         app.last_balance_fetch = Some(Instant::now());

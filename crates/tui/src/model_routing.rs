@@ -8,7 +8,7 @@ use std::time::Duration;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::client::DeepSeekClient;
+use crate::client::ProviderClient;
 use crate::config::{ApiProvider, Config, normalize_model_name_for_provider};
 use crate::llm_client::LlmClient;
 use crate::model_inventory::ModelInventory;
@@ -976,7 +976,7 @@ async fn auto_route_inventory_recommendation(
     router_config.provider = Some(inventory.router_provider.as_str().to_string());
     router_config.default_text_model = Some(inventory.router_model.clone());
 
-    let client = DeepSeekClient::new(&router_config)?;
+    let client = ProviderClient::new(&router_config)?;
     let router_system = inventory_auto_router_system_prompt(inventory, config.auto_cost_saving());
     let router_prompt = classifier_prompt(
         &client,
@@ -1138,7 +1138,7 @@ fn auto_route_prompt(
 }
 
 fn classifier_prompt(
-    client: &DeepSeekClient,
+    client: &ProviderClient,
     latest_request: &str,
     recent_context: &str,
     session_mode: &str,
@@ -1280,7 +1280,7 @@ mod tests {
             api_key: Some(secret.to_string()),
             ..Default::default()
         };
-        let client = DeepSeekClient::new(&config).expect("classifier client");
+        let client = ProviderClient::new(&config).expect("classifier client");
         // `recent_auto_router_context` converts ToolResult blocks into ordinary
         // text before this boundary. Exercise that exact flattened shape.
         let recent_context = format!("assistant: [tool result] token={secret}");

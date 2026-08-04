@@ -46,7 +46,7 @@ use crate::models::{
 };
 
 use super::{
-    DeepSeekClient, ERROR_BODY_MAX_BYTES, SSE_BACKPRESSURE_HIGH_WATERMARK,
+    ERROR_BODY_MAX_BYTES, ProviderClient, SSE_BACKPRESSURE_HIGH_WATERMARK,
     SSE_BACKPRESSURE_SLEEP_MS, SSE_MAX_LINES_PER_CHUNK, acquire_stream_buffer,
     apply_reasoning_effort, bounded_error_text, from_api_tool_name, parse_usage,
     release_stream_buffer, system_to_instructions, to_api_tool_name,
@@ -420,7 +420,7 @@ fn sanitize_moonshot_chat_tools(chat_tools: &mut [Value]) -> Result<()> {
 ///
 /// Produced by [`build_chat_wire_body`], the single place where a
 /// `MessageRequest` becomes Chat-shaped JSON. It is reached only through
-/// [`super::DeepSeekClient::prepare_outbound_request`], the shared outbound
+/// [`super::ProviderClient::prepare_outbound_request`], the shared outbound
 /// seam that the blocking transport, the streaming transport, and
 /// `/preview-request` all consume — so a preview cannot drift from what would
 /// be sent, and no other dialect is projected through this builder.
@@ -560,7 +560,7 @@ pub(crate) fn build_chat_wire_body(
     })
 }
 
-impl DeepSeekClient {
+impl ProviderClient {
     pub(super) async fn create_message_chat(
         &self,
         prepared: &super::PreparedOutboundRequest,
@@ -617,7 +617,7 @@ impl DeepSeekClient {
     }
 }
 
-impl DeepSeekClient {
+impl ProviderClient {
     async fn open_chat_stream_response(
         &self,
         url: &str,

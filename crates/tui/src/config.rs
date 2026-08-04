@@ -5409,8 +5409,8 @@ impl Config {
     /// The in-memory `self.api_key` override is only honored when the user
     /// explicitly set the field (not the legacy `API_KEYRING_SENTINEL`
     /// placeholder, not empty whitespace).
-    pub fn deepseek_api_key(&self) -> Result<String> {
-        self.deepseek_api_key_with_secret_store_mode(false)
+    pub fn active_provider_api_key(&self) -> Result<String> {
+        self.active_provider_api_key_with_secret_store_mode(false)
     }
 
     /// Resolve an API key for a diagnostic without migrating a legacy secret
@@ -5419,10 +5419,10 @@ impl Config {
     /// This retains ordinary credential precedence, including a legacy
     /// file-backed secret as a fallback, but it must only be used by static
     /// diagnostic/reporting paths. Normal runtime and authentication paths use
-    /// [`Self::deepseek_api_key`] and preserve their existing migration
+    /// [`Self::active_provider_api_key`] and preserve their existing migration
     /// behavior.
-    pub(crate) fn deepseek_api_key_read_only(&self) -> Result<String> {
-        self.deepseek_api_key_with_secret_store_mode(true)
+    pub(crate) fn active_provider_api_key_read_only(&self) -> Result<String> {
+        self.active_provider_api_key_with_secret_store_mode(true)
     }
 
     /// Clone this route with a diagnostic-only credential in its in-memory
@@ -5435,13 +5435,13 @@ impl Config {
     /// persisted.
     pub(crate) fn with_read_only_api_key_for_diagnostic(&self) -> Result<Self> {
         let provider = self.api_provider();
-        let api_key = self.deepseek_api_key_read_only()?;
+        let api_key = self.active_provider_api_key_read_only()?;
         let mut diagnostic = self.clone();
         diagnostic.set_provider_api_key_override(provider, Some(api_key));
         Ok(diagnostic)
     }
 
-    fn deepseek_api_key_with_secret_store_mode(&self, read_only: bool) -> Result<String> {
+    fn active_provider_api_key_with_secret_store_mode(&self, read_only: bool) -> Result<String> {
         let provider = self.api_provider();
         let auth_mode = self.auth_mode_for_provider(provider);
         if auth_mode_disables_api_key(auth_mode.as_deref()) {
@@ -10194,7 +10194,7 @@ fn missing_provider_api_key_message(provider: ApiProvider) -> Result<String> {
 ///
 /// Environment variables (`DEEPSEEK_API_KEY`, etc.) are intentionally
 /// **not** unset — they are managed by the user's shell and outside the
-/// CLI's purview. `Config::deepseek_api_key`'s explicit-override path
+/// CLI's purview. `Config::active_provider_api_key`'s explicit-override path
 /// (Path 0) ensures a freshly-entered key still wins over a stale env
 /// var that lingers from a previous session.
 pub fn clear_api_key() -> Result<()> {

@@ -21,7 +21,7 @@ use futures_util::StreamExt;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader, Lines};
 
-use crate::client::DeepSeekClient;
+use crate::client::ProviderClient;
 use crate::config::{ApiProvider, Config};
 use crate::llm_client::{LlmClient, StreamEventBox};
 use crate::models::{
@@ -571,7 +571,7 @@ impl AcpServer {
         let route =
             crate::resolve_cli_auto_route(&self.config, &self.model, last_user_text).await?;
         let execution_config = crate::config_for_cli_route(&self.config, &route);
-        let client = DeepSeekClient::new(&execution_config)?;
+        let client = ProviderClient::new(&execution_config)?;
         let reasoning_effort = route
             .reasoning_effort
             .and_then(|effort| {

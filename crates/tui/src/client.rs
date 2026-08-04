@@ -1,7 +1,7 @@
-//! HTTP client for DeepSeek's OpenAI-compatible Chat Completions API.
+//! Multi-provider model HTTP client.
 //!
-//! DeepSeek documents `/chat/completions` as the primary endpoint, and this
-//! client now routes all normal traffic through that surface.
+//! Supports provider-specific wire formats (OpenAI-compatible chat/responses,
+//! Anthropic messages, Codex, and custom OpenAI-compatible routes).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -163,9 +163,9 @@ pub struct SpeechSynthesisResponse {
     pub voice: Option<String>,
 }
 
-/// Client for DeepSeek's OpenAI-compatible APIs.
+/// Client for provider model APIs.
 #[must_use]
-pub struct DeepSeekClient {
+pub struct ProviderClient {
     pub(super) http_client: reqwest::Client,
     /// HTTP/1.1-only twin of [`Self::http_client`], used for automatic
     /// stream-header fallback when H2 stalls. Same auth and headers.
@@ -440,7 +440,7 @@ fn release_stream_buffer(mut buf: Vec<u8>) {
     }
 }
 
-impl Clone for DeepSeekClient {
+impl Clone for ProviderClient {
     fn clone(&self) -> Self {
         Self {
             http_client: self.http_client.clone(),
@@ -932,7 +932,7 @@ fn build_speech_synthesis_body(
     })
 }
 
-// === DeepSeekClient ===
+// === ProviderClient ===
 
 /// Returns true when CODEWHALE_FORCE_HTTP1 (legacy alias: DEEPSEEK_FORCE_HTTP1)
 /// is set to a truthy value (`1`, `true`, `yes`, `on`, case-insensitive). Used
@@ -991,7 +991,7 @@ fn add_extra_root_certs(
     builder
 }
 
-impl DeepSeekClient {
+impl ProviderClient {
     /// Create a DeepSeek client from CLI configuration.
     pub fn new(config: &Config) -> Result<Self> {
         let api_provider = config.api_provider();
@@ -1056,7 +1056,7 @@ impl DeepSeekClient {
             let credentials = config.codex_credentials()?;
             (credentials.access_token, credentials.account_id)
         } else {
-            (config.deepseek_api_key()?, None)
+            (config.active_provider_api_key()?, None)
         };
         let model_bound_secret_values =
             Arc::new(configured_model_bound_secret_values(config, &api_key));
@@ -1633,7 +1633,7 @@ fn xiaomi_mimo_api_key_uses_token_plan(api_key: &str) -> bool {
     api_key.trim_start().starts_with("tp-")
 }
 
-impl DeepSeekClient {
+impl ProviderClient {
     /// Returns the API base URL used by this client.
     pub fn base_url(&self) -> &str {
         &self.base_url
@@ -2123,7 +2123,7 @@ impl DeepSeekClient {
             return;
         }
 
-        let client = match DeepSeekClient::new(config) {
+        let client = match ProviderClient::new(config) {
             Ok(client) => client,
             Err(err) => {
                 tracing::debug!(
@@ -2485,7 +2485,7 @@ fn retry_reason_label_and_human(err: &LlmError) -> (&'static str, String) {
     }
 }
 
-impl DeepSeekClient {
+impl ProviderClient {
     /// Execute a non-streaming request without consulting or updating the
     /// process-global response cache.
     ///
@@ -2513,7 +2513,7 @@ impl DeepSeekClient {
     }
 }
 
-impl LlmClient for DeepSeekClient {
+impl LlmClient for ProviderClient {
     fn provider_name(&self) -> &'static str {
         self.api_provider.as_str()
     }
@@ -2531,7 +2531,7 @@ impl LlmClient for DeepSeekClient {
         requested_model: &str,
         dispatched_at: chrono::DateTime<chrono::Utc>,
     ) -> crate::cost_status::EffectiveRouteEnvelope {
-        DeepSeekClient::effective_route_envelope(self, requested_model, dispatched_at)
+        ProviderClient::effective_route_envelope(self, requested_model, dispatched_at)
     }
 
     async fn health_check(&self) -> Result<bool> {
@@ -3292,7 +3292,7 @@ pub(super) fn parse_usage(usage: Option<&Value>) -> Usage {
     }
 }
 
-impl DeepSeekClient {
+impl ProviderClient {
     /// Call the DeepSeek `/beta/completions` FIM endpoint.
     pub async fn fim_completion(
         &self,
@@ -3547,8 +3547,8 @@ mod tests {
         route_base_url: &str,
         model: &str,
         transport_base_url: String,
-    ) -> DeepSeekClient {
-        let mut client = DeepSeekClient::new(&Config {
+    ) -> ProviderClient {
+        let mut client = ProviderClient::new(&Config {
             provider: Some("moonshot".to_string()),
             providers: Some(ProvidersConfig {
                 moonshot: ProviderConfig {
@@ -3571,9 +3571,9 @@ mod tests {
         route_base_url: &str,
         model: &str,
         transport_base_url: String,
-    ) -> DeepSeekClient {
+    ) -> ProviderClient {
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let mut client = DeepSeekClient::new(&Config {
+        let mut client = ProviderClient::new(&Config {
             provider: Some("zai".to_string()),
             providers: Some(ProvidersConfig {
                 zai: ProviderConfig {
@@ -3596,9 +3596,9 @@ mod tests {
         route_base_url: &str,
         model: &str,
         transport_base_url: String,
-    ) -> DeepSeekClient {
+    ) -> ProviderClient {
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let mut client = DeepSeekClient::new(&Config {
+        let mut client = ProviderClient::new(&Config {
             provider: Some("minimax".to_string()),
             providers: Some(ProvidersConfig {
                 minimax: ProviderConfig {
@@ -3620,8 +3620,8 @@ mod tests {
     fn deepseek_request_boundary_client(
         route_base_url: &str,
         transport_base_url: String,
-    ) -> DeepSeekClient {
-        let mut client = DeepSeekClient::new(&Config {
+    ) -> ProviderClient {
+        let mut client = ProviderClient::new(&Config {
             provider: Some("deepseek".to_string()),
             api_key: Some("deepseek-request-boundary-key".to_string()),
             base_url: Some(route_base_url.to_string()),
@@ -4014,7 +4014,7 @@ mod tests {
     async fn capture_route_chat_request_body(
         model: &str,
         request: MessageRequest,
-        client_for_transport: impl FnOnce(String) -> DeepSeekClient,
+        client_for_transport: impl FnOnce(String) -> ProviderClient,
     ) -> (String, Value) {
         let streaming = request.stream == Some(true);
         let server = MockServer::start().await;
@@ -4759,7 +4759,7 @@ mod tests {
         assert_kimi_code_captures_exact_general_child_catalog().await;
     }
 
-    fn opencode_zen_client(server: &MockServer, model: &str) -> DeepSeekClient {
+    fn opencode_zen_client(server: &MockServer, model: &str) -> ProviderClient {
         let config = Config {
             provider: Some("opencode-zen".to_string()),
             providers: Some(ProvidersConfig {
@@ -4773,7 +4773,7 @@ mod tests {
             }),
             ..Config::default()
         };
-        DeepSeekClient::new(&config).expect("OpenCode Zen client should resolve its model route")
+        ProviderClient::new(&config).expect("OpenCode Zen client should resolve its model route")
     }
 
     fn minimal_zen_request(model: &str) -> MessageRequest {
@@ -4996,7 +4996,7 @@ mod tests {
         };
 
         crate::external_credentials::reset_side_effect_trap();
-        let client = DeepSeekClient::new(&config).expect("Codex client");
+        let client = ProviderClient::new(&config).expect("Codex client");
         assert_eq!(client.api_key, token_a);
         assert_eq!(client.codex_account_id.as_deref(), Some("account-a"));
         assert_eq!(
@@ -5016,9 +5016,9 @@ mod tests {
         assert_eq!(client.codex_account_id.as_deref(), Some("account-a"));
     }
 
-    fn client_with_config_secret_sentinels() -> DeepSeekClient {
+    fn client_with_config_secret_sentinels() -> ProviderClient {
         let _ = rustls::crypto::ring::default_provider().install_default();
-        DeepSeekClient::new(&Config {
+        ProviderClient::new(&Config {
             provider: Some("zai".to_string()),
             api_key: Some(CONFIG_SECRET_SENTINELS[0].to_string()),
             providers: Some(ProvidersConfig {
@@ -5196,7 +5196,7 @@ mod tests {
             .expect("write isolated inactive provider credential");
 
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let client = DeepSeekClient::new(&Config {
+        let client = ProviderClient::new(&Config {
             provider: Some("zai".to_string()),
             providers: Some(ProvidersConfig {
                 zai: ProviderConfig {
@@ -5435,7 +5435,7 @@ mod tests {
         assert!(!serialized.contains("retrieve_tool_result ref=sha:"));
     }
 
-    fn deepseek_anthropic_client(server: &MockServer) -> DeepSeekClient {
+    fn deepseek_anthropic_client(server: &MockServer) -> ProviderClient {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let providers = ProvidersConfig {
             deepseek_anthropic: ProviderConfig {
@@ -5445,7 +5445,7 @@ mod tests {
             },
             ..ProvidersConfig::default()
         };
-        DeepSeekClient::new(&Config {
+        ProviderClient::new(&Config {
             provider: Some("deepseek-anthropic".to_string()),
             providers: Some(providers),
             ..Config::default()
@@ -5453,7 +5453,7 @@ mod tests {
         .expect("deepseek anthropic client")
     }
 
-    fn minimax_anthropic_client_with_base_url(base_url: String) -> DeepSeekClient {
+    fn minimax_anthropic_client_with_base_url(base_url: String) -> ProviderClient {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let providers = ProvidersConfig {
             minimax_anthropic: ProviderConfig {
@@ -5463,7 +5463,7 @@ mod tests {
             },
             ..ProvidersConfig::default()
         };
-        DeepSeekClient::new(&Config {
+        ProviderClient::new(&Config {
             provider: Some("minimax-anthropic".to_string()),
             providers: Some(providers),
             ..Config::default()
@@ -5471,7 +5471,7 @@ mod tests {
         .expect("minimax anthropic client")
     }
 
-    fn zai_client_for_test() -> DeepSeekClient {
+    fn zai_client_for_test() -> ProviderClient {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let providers = ProvidersConfig {
             zai: ProviderConfig {
@@ -5481,7 +5481,7 @@ mod tests {
             },
             ..ProvidersConfig::default()
         };
-        DeepSeekClient::new(&Config {
+        ProviderClient::new(&Config {
             provider: Some("zai".to_string()),
             providers: Some(providers),
             ..Config::default()
@@ -5524,7 +5524,7 @@ mod tests {
                 StreamEvent::MessageStop,
             )]));
         let mut wrapped =
-            DeepSeekClient::hold_provider_request_permit_for_stream(stream, Some(permit));
+            ProviderClient::hold_provider_request_permit_for_stream(stream, Some(permit));
 
         assert_eq!(client.active_provider_requests(), 1);
         assert!(wrapped.next().await.is_some());
@@ -5737,7 +5737,7 @@ mod tests {
     fn default_headers_include_custom_headers_when_configured() {
         let mut extra = HashMap::new();
         extra.insert("X-Model-Provider-Id".to_string(), "tongyi".to_string());
-        let headers = DeepSeekClient::default_headers("sk-test", &extra).expect("headers");
+        let headers = ProviderClient::default_headers("sk-test", &extra).expect("headers");
         assert_eq!(
             headers
                 .get("x-model-provider-id")
@@ -5750,7 +5750,7 @@ mod tests {
     fn default_headers_ignore_blank_custom_headers() {
         let mut extra = HashMap::new();
         extra.insert("X-Blank".to_string(), "   ".to_string());
-        let headers = DeepSeekClient::default_headers("sk-test", &extra).expect("headers");
+        let headers = ProviderClient::default_headers("sk-test", &extra).expect("headers");
         assert!(headers.get("x-blank").is_none());
     }
 
@@ -5782,7 +5782,7 @@ mod tests {
         extra.insert("Cookie".to_string(), "session=secret".to_string());
         extra.insert("X-Route-Metadata".to_string(), "safe".to_string());
 
-        let headers = DeepSeekClient::default_headers_for_provider_with_auth_disabled(
+        let headers = ProviderClient::default_headers_for_provider_with_auth_disabled(
             "generated-secret",
             &extra,
             ApiProvider::Deepseek,
@@ -5812,7 +5812,7 @@ mod tests {
 
     #[test]
     fn build_http_client_accepts_default_tls_verification() {
-        let client = DeepSeekClient::build_http_client(
+        let client = ProviderClient::build_http_client(
             "sk-test",
             &HashMap::new(),
             ApiProvider::Deepseek,
@@ -5835,7 +5835,7 @@ mod tests {
         };
         assert!(config.insecure_skip_tls_verify());
 
-        let err = match DeepSeekClient::new(&config) {
+        let err = match ProviderClient::new(&config) {
             Ok(_) => panic!("tls skip verify should be rejected"),
             Err(err) => err,
         };
@@ -5846,7 +5846,7 @@ mod tests {
 
     #[test]
     fn client_stream_idle_timeout_uses_tui_config() {
-        let client = DeepSeekClient::new(&Config {
+        let client = ProviderClient::new(&Config {
             api_key: Some("sk-test".to_string()),
             tui: Some(crate::config::TuiConfig {
                 stream_chunk_timeout_secs: Some(777),
@@ -5861,7 +5861,7 @@ mod tests {
 
     #[test]
     fn xiaomi_mimo_token_plan_endpoint_uses_api_key_header() {
-        let headers = DeepSeekClient::default_headers_for_provider(
+        let headers = ProviderClient::default_headers_for_provider(
             "tp-test",
             &HashMap::new(),
             ApiProvider::XiaomiMimo,
@@ -5884,7 +5884,7 @@ mod tests {
         let mut extra = HashMap::new();
         extra.insert("api-key".to_string(), "wrong".to_string());
         extra.insert("Authorization".to_string(), "Bearer wrong".to_string());
-        let headers = DeepSeekClient::default_headers_for_provider(
+        let headers = ProviderClient::default_headers_for_provider(
             "tp-custom",
             &extra,
             ApiProvider::XiaomiMimo,
@@ -5906,7 +5906,7 @@ mod tests {
     fn openrouter_uses_bearer_header_after_mimo_token_plan_context() {
         let mut extra = HashMap::new();
         extra.insert("api-key".to_string(), "wrong".to_string());
-        let headers = DeepSeekClient::default_headers_for_provider(
+        let headers = ProviderClient::default_headers_for_provider(
             "sk-or-test",
             &extra,
             ApiProvider::Openrouter,
@@ -5931,7 +5931,7 @@ mod tests {
         let mut extra = HashMap::new();
         extra.insert("Authorization".to_string(), "Bearer wrong".to_string());
         extra.insert("Content-Type".to_string(), "text/plain".to_string());
-        let headers = DeepSeekClient::default_headers_for_provider(
+        let headers = ProviderClient::default_headers_for_provider(
             "sf-cn-test",
             &extra,
             ApiProvider::SiliconflowCn,
@@ -5959,7 +5959,7 @@ mod tests {
         let mut extra = HashMap::new();
         extra.insert("api-key".to_string(), "wrong".to_string());
         extra.insert("x-api-key".to_string(), "wrong".to_string());
-        let headers = DeepSeekClient::default_headers_for_provider(
+        let headers = ProviderClient::default_headers_for_provider(
             "tokenhub-test",
             &extra,
             ApiProvider::Openai,
@@ -5982,7 +5982,7 @@ mod tests {
         let mut extra = HashMap::new();
         extra.insert("Authorization".to_string(), "Bearer wrong".to_string());
         extra.insert("api-key".to_string(), "wrong".to_string());
-        let headers = DeepSeekClient::default_headers_for_provider(
+        let headers = ProviderClient::default_headers_for_provider(
             "ds-test",
             &extra,
             ApiProvider::DeepseekAnthropic,
@@ -6014,7 +6014,7 @@ mod tests {
 
     #[test]
     fn minimax_anthropic_uses_anthropic_header_dialect() {
-        let headers = DeepSeekClient::default_headers_for_provider(
+        let headers = ProviderClient::default_headers_for_provider(
             "minimax-test",
             &HashMap::new(),
             ApiProvider::MinimaxAnthropic,
@@ -6043,7 +6043,7 @@ mod tests {
         extra.insert("Authorization".to_string(), "Bearer wrong".to_string());
         extra.insert("api-key".to_string(), "wrong".to_string());
         extra.insert("x-api-key".to_string(), "wrong".to_string());
-        let headers = DeepSeekClient::default_headers_for_provider(
+        let headers = ProviderClient::default_headers_for_provider(
             "om-test",
             &extra,
             ApiProvider::Openmodel,
@@ -6245,7 +6245,7 @@ mod tests {
     fn custom_api_key_header_is_allowed_without_primary_provider_key() {
         let mut extra = HashMap::new();
         extra.insert("api-key".to_string(), "gateway-key".to_string());
-        let headers = DeepSeekClient::default_headers_for_provider(
+        let headers = ProviderClient::default_headers_for_provider(
             "",
             &extra,
             ApiProvider::Openai,
@@ -6262,7 +6262,7 @@ mod tests {
 
     #[test]
     fn xiaomi_mimo_pay_as_you_go_endpoint_keeps_bearer_header() {
-        let headers = DeepSeekClient::default_headers_for_provider(
+        let headers = ProviderClient::default_headers_for_provider(
             "sk-test",
             &HashMap::new(),
             ApiProvider::XiaomiMimo,
@@ -7914,9 +7914,9 @@ mod tests {
     // issue's anti-hardcoding rule.
 
     /// Build a client whose OpenRouter base URL points at a mock server.
-    fn openrouter_client_for(server: &MockServer) -> DeepSeekClient {
+    fn openrouter_client_for(server: &MockServer) -> ProviderClient {
         let _ = rustls::crypto::ring::default_provider().install_default();
-        DeepSeekClient::new(&Config {
+        ProviderClient::new(&Config {
             provider: Some("openrouter".to_string()),
             providers: Some(ProvidersConfig {
                 openrouter: ProviderConfig {
@@ -7931,9 +7931,9 @@ mod tests {
         .expect("openrouter client")
     }
 
-    fn opencode_go_client_for(server: &MockServer) -> DeepSeekClient {
+    fn opencode_go_client_for(server: &MockServer) -> ProviderClient {
         let _ = rustls::crypto::ring::default_provider().install_default();
-        DeepSeekClient::new(&Config {
+        ProviderClient::new(&Config {
             provider: Some("opencode-go".to_string()),
             providers: Some(ProvidersConfig {
                 opencode_go: ProviderConfig {
@@ -7948,9 +7948,9 @@ mod tests {
         .expect("OpenCode Go client")
     }
 
-    fn telecomjs_client_for(server: &MockServer) -> DeepSeekClient {
+    fn telecomjs_client_for(server: &MockServer) -> ProviderClient {
         let _ = rustls::crypto::ring::default_provider().install_default();
-        DeepSeekClient::new(&Config {
+        ProviderClient::new(&Config {
             provider: Some("telecomjs".to_string()),
             providers: Some(ProvidersConfig {
                 telecomjs: ProviderConfig {
@@ -8028,7 +8028,7 @@ mod tests {
                 }),
                 ..Config::default()
             };
-            let err = DeepSeekClient::new(&config)
+            let err = ProviderClient::new(&config)
                 .err()
                 .expect("Messages-only model must fail before client construction");
             assert!(err.to_string().contains("Chat Completions"), "{err:#}");
@@ -8401,7 +8401,7 @@ mod tests {
             }),
             ..Config::default()
         };
-        let client = DeepSeekClient::new(&config).expect("MiniMax client");
+        let client = ProviderClient::new(&config).expect("MiniMax client");
         let dispatched_at =
             chrono::DateTime::<chrono::Utc>::from_timestamp(1_234, 0).expect("timestamp");
         let route = client.effective_route_envelope("MiniMax-M3", dispatched_at);
@@ -9154,7 +9154,7 @@ mod tests {
         let (_config, route) =
             deepseek_route_for_test("https://route.example.com/v1", "deepseek-v4-pro");
 
-        let client = DeepSeekClient::from_candidate(&route.config, &route.candidate)
+        let client = ProviderClient::from_candidate(&route.config, &route.candidate)
             .expect("client should construct from candidate");
 
         // The transport is bound to the candidate, not re-derived from Config.
@@ -9174,8 +9174,8 @@ mod tests {
         let (_config, route) =
             deepseek_route_for_test("https://api.deepseek.com/v1", "deepseek-v4-pro");
 
-        let from_new = DeepSeekClient::new(&route.config).expect("new client");
-        let from_candidate = DeepSeekClient::from_candidate(&route.config, &route.candidate)
+        let from_new = ProviderClient::new(&route.config).expect("new client");
+        let from_candidate = ProviderClient::from_candidate(&route.config, &route.candidate)
             .expect("candidate client");
 
         assert_eq!(from_candidate.base_url, from_new.base_url);
@@ -9189,7 +9189,7 @@ mod tests {
             deepseek_route_for_test("https://api.deepseek.com/beta", "deepseek-v4-flash");
         assert_eq!(route.candidate.protocol(), WireFormat::Responses);
 
-        let client = DeepSeekClient::new(&route.config).expect("Flash client resolves");
+        let client = ProviderClient::new(&route.config).expect("Flash client resolves");
         assert_eq!(client.wire_format, WireFormat::Responses);
 
         let prepared = client
@@ -9260,7 +9260,7 @@ mod tests {
         unsafe {
             std::env::set_var("EXAMPLE_API_KEY_FROM_CANDIDATE_TEST", "sk-custom");
         }
-        let client = DeepSeekClient::from_candidate(&route.config, &route.candidate)
+        let client = ProviderClient::from_candidate(&route.config, &route.candidate)
             .expect("client should construct from custom candidate");
         unsafe {
             std::env::remove_var("EXAMPLE_API_KEY_FROM_CANDIDATE_TEST");

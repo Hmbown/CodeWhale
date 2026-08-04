@@ -33,12 +33,12 @@ use crate::logging;
 use crate::models::{ContentBlock, MessageRequest, MessageResponse, StreamEvent, Usage};
 use crate::tools::schema_sanitize;
 
-use super::{DeepSeekClient, ERROR_BODY_MAX_BYTES, bounded_error_text};
+use super::{ERROR_BODY_MAX_BYTES, ProviderClient, bounded_error_text};
 
 /// Maximum `cache_control` breakpoints Anthropic accepts per request.
 const MAX_CACHE_BREAKPOINTS: usize = 4;
 
-impl DeepSeekClient {
+impl ProviderClient {
     /// Build the native Messages API request body from a [`MessageRequest`].
     pub(super) fn build_anthropic_body(&self, request: &MessageRequest, stream: bool) -> Value {
         let model =
@@ -690,7 +690,7 @@ mod tests {
         }
     }
 
-    fn test_client() -> DeepSeekClient {
+    fn test_client() -> ProviderClient {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let config = crate::config::Config {
             provider: Some("anthropic".to_string()),
@@ -703,14 +703,14 @@ mod tests {
             }),
             ..Default::default()
         };
-        DeepSeekClient::new(&config).expect("anthropic client constructs")
+        ProviderClient::new(&config).expect("anthropic client constructs")
     }
 
-    fn minimax_test_client() -> DeepSeekClient {
+    fn minimax_test_client() -> ProviderClient {
         minimax_test_client_for(crate::config::DEFAULT_MINIMAX_ANTHROPIC_BASE_URL)
     }
 
-    fn minimax_test_client_for(base_url: &str) -> DeepSeekClient {
+    fn minimax_test_client_for(base_url: &str) -> ProviderClient {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let config = crate::config::Config {
             provider: Some("minimax-anthropic".to_string()),
@@ -724,10 +724,10 @@ mod tests {
             }),
             ..Default::default()
         };
-        DeepSeekClient::new(&config).expect("MiniMax Messages client constructs")
+        ProviderClient::new(&config).expect("MiniMax Messages client constructs")
     }
 
-    fn deepseek_test_client(base_url: &str) -> DeepSeekClient {
+    fn deepseek_test_client(base_url: &str) -> ProviderClient {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let config = crate::config::Config {
             provider: Some("deepseek-anthropic".to_string()),
@@ -741,7 +741,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        DeepSeekClient::new(&config).expect("DeepSeek Messages client constructs")
+        ProviderClient::new(&config).expect("DeepSeek Messages client constructs")
     }
 
     #[test]
@@ -901,7 +901,7 @@ mod tests {
             );
 
             crate::config::normalize_model_config_for_test(&mut config);
-            let client = DeepSeekClient::new(&config).expect("DeepSeek Messages client");
+            let client = ProviderClient::new(&config).expect("DeepSeek Messages client");
             let model = config.default_model();
             let body = client.build_anthropic_body(
                 &request_with(&model, config.reasoning_effort(), None, None),

@@ -43,7 +43,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::client::DeepSeekClient;
+use crate::client::ProviderClient;
 use crate::dependencies::ExternalTool;
 use crate::features::Feature;
 use crate::llm_client::LlmClient;
@@ -273,7 +273,7 @@ struct CritiqueRun {
 
 /// Agent-callable adversarial self-critique tool.
 pub struct VerifyTool {
-    client: Option<DeepSeekClient>,
+    client: Option<ProviderClient>,
     model: String,
     /// Reasoning tier the critic runs at, independent of the session tier.
     critic_effort: ReasoningEffort,
@@ -282,7 +282,7 @@ pub struct VerifyTool {
 impl VerifyTool {
     /// Construct with the default critic effort ([`ReasoningEffort::Max`]).
     #[must_use]
-    pub fn new(client: Option<DeepSeekClient>, model: String) -> Self {
+    pub fn new(client: Option<ProviderClient>, model: String) -> Self {
         Self {
             client,
             model,

@@ -23,10 +23,10 @@
 //! # Why trait-level (not engine-level)
 //!
 //! As of v0.6.7 the engine (`crates/tui/src/core/engine.rs`) holds a concrete
-//! `Option<DeepSeekClient>` — the [`LlmClient`] trait is implemented but no
+//! `Option<ProviderClient>` — the [`LlmClient`] trait is implemented but no
 //! consumer takes `Arc<dyn LlmClient>` or generic `<C: LlmClient>`. Wiring the
 //! mock into a full engine turn-loop therefore requires a separate refactor:
-//! every `Option<DeepSeekClient>` consumer (engine, registry, rlm, review,
+//! every `Option<ProviderClient>` consumer (engine, registry, rlm, review,
 //! cycle_manager, compaction, subagent) must move to `Arc<dyn LlmClient>`.
 //!
 //! Per the v0.7.0 mock-LLM issue (the parent of this file): "If the engine's

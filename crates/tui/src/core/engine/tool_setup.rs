@@ -42,7 +42,7 @@ impl Engine {
         self.build_turn_tool_registry_builder_for_route(
             mode,
             self.session.allow_shell,
-            self.deepseek_client.clone(),
+            self.provider_client.clone(),
             &self.session.model,
             todo_list,
             plan_state,
@@ -58,7 +58,7 @@ impl Engine {
         &self,
         mode: AppMode,
         allow_shell: bool,
-        client: Option<DeepSeekClient>,
+        client: Option<ProviderClient>,
         model: &str,
         todo_list: SharedTodoList,
         plan_state: SharedPlanState,

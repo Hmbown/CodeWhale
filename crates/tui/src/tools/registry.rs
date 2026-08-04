@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use codewhale_protocol::runtime::DynamicToolSpec;
 use serde_json::Value;
 
-use crate::client::DeepSeekClient;
+use crate::client::ProviderClient;
 use crate::models::Tool;
 use crate::tools::goal::SharedGoalState;
 
@@ -849,7 +849,7 @@ impl ToolRegistryBuilder {
     #[must_use]
     pub fn with_speech_tools(
         self,
-        client: Option<DeepSeekClient>,
+        client: Option<ProviderClient>,
         output_dir: Option<PathBuf>,
     ) -> Self {
         use super::speech::SpeechTool;
@@ -863,7 +863,7 @@ impl ToolRegistryBuilder {
 
     /// Include the canonical persistent RLM session tool.
     #[must_use]
-    pub fn with_rlm_tool(self, client: Option<DeepSeekClient>, _root_model: String) -> Self {
+    pub fn with_rlm_tool(self, client: Option<ProviderClient>, _root_model: String) -> Self {
         use super::rlm::RlmTool;
         self.with_tool(Arc::new(RlmTool::new("rlm", client)))
     }
@@ -878,7 +878,7 @@ impl ToolRegistryBuilder {
 
     /// Include the review tool.
     #[must_use]
-    pub fn with_review_tool(self, client: Option<DeepSeekClient>, model: String) -> Self {
+    pub fn with_review_tool(self, client: Option<ProviderClient>, model: String) -> Self {
         use super::review::ReviewTool;
         self.with_tool(Arc::new(ReviewTool::new(client, model)))
     }
@@ -887,7 +887,7 @@ impl ToolRegistryBuilder {
     /// critic runs at elevated reasoning (default `Max`) independent of the
     /// session tier and is given no tools, so it cannot recurse into `verify`.
     #[must_use]
-    pub fn with_verify_tool(self, client: Option<DeepSeekClient>, model: String) -> Self {
+    pub fn with_verify_tool(self, client: Option<ProviderClient>, model: String) -> Self {
         use super::verify::VerifyTool;
         self.with_tool(Arc::new(VerifyTool::new(client, model)))
     }
@@ -901,7 +901,7 @@ impl ToolRegistryBuilder {
 
     /// Include the FIM (Fill-in-the-Middle) edit tool.
     #[must_use]
-    pub fn with_fim_tool(self, client: Option<DeepSeekClient>, model: String) -> Self {
+    pub fn with_fim_tool(self, client: Option<ProviderClient>, model: String) -> Self {
         use super::fim::FimEditTool;
         self.with_tool(Arc::new(FimEditTool::new(client, model)))
     }
@@ -1024,7 +1024,7 @@ impl ToolRegistryBuilder {
     #[must_use]
     pub fn with_agent_runtime_surface(
         self,
-        client: Option<DeepSeekClient>,
+        client: Option<ProviderClient>,
         model: String,
         options: AgentToolSurfaceOptions,
         todo_list: super::todo::SharedTodoList,
@@ -1070,7 +1070,7 @@ impl ToolRegistryBuilder {
     #[allow(clippy::too_many_arguments)]
     pub fn with_full_agent_surface_options(
         self,
-        client: Option<DeepSeekClient>,
+        client: Option<ProviderClient>,
         model: String,
         manager: super::subagent::SharedSubAgentManager,
         runtime: super::subagent::SubAgentRuntime,

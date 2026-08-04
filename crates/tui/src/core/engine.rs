@@ -23,7 +23,7 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex as AsyncMutex, RwLock, mpsc};
 use tokio_util::sync::CancellationToken;
 
-use crate::client::DeepSeekClient;
+use crate::client::ProviderClient;
 use crate::compaction::{
     CompactionConfig, CompactionLiveState, compact_messages_safe, merge_system_prompts,
     should_compact,
@@ -561,7 +561,7 @@ pub struct Engine {
     /// descriptor (goal continuation, idle child completion, `/edit`). Active
     /// turns keep their already-installed immutable descriptor.
     authoritative_route_config: Option<Arc<parking_lot::RwLock<Config>>>,
-    deepseek_client: Option<DeepSeekClient>,
+    provider_client: Option<ProviderClient>,
     /// Provider-neutral client used by the canonical main turn loop. Concrete
     /// clients remain temporarily available to provider-specific helper tools
     /// while those boundaries migrate independently.
@@ -570,7 +570,7 @@ pub struct Engine {
     /// remains the I/O authority while typed routes still validate receipts,
     /// endpoint metadata, and budgets.
     model_client_injected: bool,
-    deepseek_client_error: Option<String>,
+    provider_client_error: Option<String>,
     api_key_env_only_recovery: Option<String>,
     session: Session,
     subagent_manager: SharedSubAgentManager,
@@ -1010,11 +1010,11 @@ impl Engine {
         self.active_route_limits = limits;
         self.active_route_capabilities = capabilities;
         self.api_key_env_only_recovery = Self::env_only_api_key_recovery_hint(&self.api_config);
-        self.deepseek_client = Some(client.clone());
+        self.provider_client = Some(client.clone());
         if !self.model_client_injected {
             self.model_client = Some(Arc::new(client.clone()));
         }
-        self.deepseek_client_error = None;
+        self.provider_client_error = None;
         self.session.model = model;
         self.config.model.clone_from(&self.session.model);
     }
@@ -1043,7 +1043,7 @@ impl Engine {
         let api_config = *route.config;
         let concrete_client = preflighted_client
             .map(Ok)
-            .unwrap_or_else(|| DeepSeekClient::from_candidate(&api_config, &route.candidate));
+            .unwrap_or_else(|| ProviderClient::from_candidate(&api_config, &route.candidate));
 
         self.api_provider = provider;
         self.api_provider_identity = identity;
@@ -1054,12 +1054,12 @@ impl Engine {
         self.api_key_env_only_recovery = Self::env_only_api_key_recovery_hint(&self.api_config);
         match concrete_client {
             Ok(client) => {
-                self.deepseek_client = Some(client.clone());
-                self.deepseek_client_error = None;
+                self.provider_client = Some(client.clone());
+                self.provider_client_error = None;
             }
             Err(err) => {
-                self.deepseek_client = None;
-                self.deepseek_client_error = Some(err.to_string());
+                self.provider_client = None;
+                self.provider_client_error = Some(err.to_string());
             }
         }
         self.session.model = model;
@@ -1122,11 +1122,11 @@ impl Engine {
             .unwrap_or_else(|| Arc::new(crate::plugins::PluginRegistry::empty(&config.workspace)));
 
         // Create clients for both providers
-        let (deepseek_client, deepseek_client_error) = match DeepSeekClient::new(api_config) {
+        let (provider_client, provider_client_error) = match ProviderClient::new(api_config) {
             Ok(client) => (Some(client), None),
             Err(err) => (None, Some(err.to_string())),
         };
-        let model_client = deepseek_client
+        let model_client = provider_client
             .as_ref()
             .map(|client| Arc::new(client.clone()) as SharedModelClient);
         let api_provider = api_config.api_provider();
@@ -1261,10 +1261,10 @@ impl Engine {
             config,
             api_config: api_config.clone(),
             authoritative_route_config: None,
-            deepseek_client,
+            provider_client,
             model_client,
             model_client_injected: false,
-            deepseek_client_error,
+            provider_client_error,
             api_key_env_only_recovery,
             session,
             subagent_manager,
@@ -1332,7 +1332,7 @@ impl Engine {
         let (mut engine, mut handle) = Self::new(config, api_config);
         engine.model_client = Some(client);
         engine.model_client_injected = true;
-        engine.deepseek_client_error = None;
+        engine.provider_client_error = None;
         handle.client_preflight_required = false;
         (engine, handle)
     }
@@ -1817,7 +1817,7 @@ impl Engine {
         // This message becomes durable goal state. Reuse the model boundary's
         // exact configured-secret redactor when available; that helper also
         // applies the config persistence redactor as a universal backstop.
-        let detail = self.deepseek_client.as_ref().map_or_else(
+        let detail = self.provider_client.as_ref().map_or_else(
             || codewhale_config::persistence::redact_secrets(detail),
             |client| client.redact_model_bound_text(detail),
         );
@@ -2100,9 +2100,9 @@ impl Engine {
                             .await;
                     }
                     Op::SpawnSubAgent { prompt } => {
-                        let Some(client) = self.deepseek_client.clone() else {
+                        let Some(client) = self.provider_client.clone() else {
                             let message = self
-                                .deepseek_client_error
+                                .provider_client_error
                                 .as_deref()
                                 .map(|err| format!("Failed to spawn sub-agent: {err}"))
                                 .unwrap_or_else(|| {
@@ -2494,7 +2494,7 @@ impl Engine {
                         }
                     }
                     Op::GetProviderRuntimeStatus { tx } => {
-                        let status = if let Some(client) = self.deepseek_client.as_ref() {
+                        let status = if let Some(client) = self.provider_client.as_ref() {
                             ProviderRuntimeStatus {
                                 provider: client.api_provider(),
                                 request_concurrency_limit: client
@@ -3834,16 +3834,16 @@ impl Engine {
         // a different endpoint or credential.
         let route_receipt = if self.model_client_injected {
             // Provider-neutral injected clients are the I/O authority, while
-            // `deepseek_client` is only an auxiliary route-shaping client.
+            // `provider_client` is only an auxiliary route-shaping client.
             // It cannot truthfully receipt a transport it did not perform.
             None
         } else {
-            self.deepseek_client
+            self.provider_client
                 .as_ref()
                 .map(|client| client.turn_route_receipt(&provider_identity))
         };
         let route_base_url = self
-            .deepseek_client
+            .provider_client
             .as_ref()
             .map(|client| client.base_url());
         let turn_route = TurnRoute {
@@ -3862,7 +3862,7 @@ impl Engine {
         };
         // Billing provenance follows the *route* that was installed for this
         // turn, which is authoritative even when a test or embedder injected the
-        // transport: `deepseek_client`'s base URL is the resolved route's
+        // transport: `provider_client`'s base URL is the resolved route's
         // endpoint either way. This is a weaker claim than `receipt`, which
         // digests the credential an injected client did not use and is therefore
         // withheld above.
@@ -3946,7 +3946,7 @@ impl Engine {
 
         if self.model_client.is_none() {
             let message = self
-                .deepseek_client_error
+                .provider_client_error
                 .as_deref()
                 .map(|err| format!("Failed to send message: {err}"))
                 .unwrap_or_else(|| "Failed to send message: API client not configured".to_string());
@@ -4055,7 +4055,7 @@ impl Engine {
                     model: self.config.model.clone(),
                     capabilities: route_capabilities,
                     limits: self.active_route_limits,
-                    client: self.deepseek_client.clone(),
+                    client: self.provider_client.clone(),
                     api_config: route_api_config,
                     locale_tag: self.config.locale_tag.clone(),
                     role_models: self.subagent_role_models(),
@@ -4089,7 +4089,7 @@ impl Engine {
         let base_url_for_event = if self.model_client_injected {
             None
         } else {
-            self.deepseek_client
+            self.provider_client
                 .as_ref()
                 .map(|client| client.base_url().to_string())
         };
@@ -4261,7 +4261,7 @@ impl Engine {
             output_tokens: 0,
             ..Usage::default()
         };
-        let Some(client) = self.deepseek_client.clone() else {
+        let Some(client) = self.provider_client.clone() else {
             let message = "Manual compaction unavailable: API client not configured".to_string();
             self.emit_compaction_failed(id, false, message.clone())
                 .await;
@@ -4377,7 +4377,7 @@ impl Engine {
             output_tokens: 0,
             ..Usage::default()
         };
-        let Some(client) = self.deepseek_client.clone() else {
+        let Some(client) = self.provider_client.clone() else {
             let message = "Purge unavailable: API client not configured".to_string();
             emit_purge_failed(&self.tx_event, message.clone()).await;
             let _ = self
@@ -4634,7 +4634,7 @@ impl Engine {
             model: self.session.model.clone(),
             capabilities: self.active_route_capabilities,
             limits: self.active_route_limits,
-            client: self.deepseek_client.clone(),
+            client: self.provider_client.clone(),
             api_config: Box::new(self.api_config.clone()),
             locale_tag: self.config.locale_tag.clone(),
             role_models: self.subagent_role_models(),
@@ -5720,7 +5720,7 @@ pub(crate) struct TurnRouteContext {
     /// Client for this exact route. Tool contexts use it only for
     /// provider-native helper capabilities; previews pass their throw-away
     /// planned client instead of inheriting the installed session client.
-    pub(crate) client: Option<DeepSeekClient>,
+    pub(crate) client: Option<ProviderClient>,
     /// Route-scoped runtime config, captured by the planner. A preview must
     /// never construct child agents from the previously installed config.
     pub(crate) api_config: Box<crate::config::Config>,

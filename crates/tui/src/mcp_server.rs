@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
-use crate::client::DeepSeekClient;
+use crate::client::ProviderClient;
 use crate::config::Config;
 use crate::llm_client::LlmClient;
 use crate::models::{ContentBlock, Message, MessageRequest};
@@ -320,7 +320,7 @@ impl McpServer {
 
     /// Handle a `deepseek` or `deepseek-reply` tool call.
     ///
-    /// Uses `DeepSeekClient` directly (not the full engine) to send a prompt
+    /// Uses `ProviderClient` directly (not the full engine) to send a prompt
     /// and return the response. For `deepseek` a new thread is created; for
     /// `deepseek-reply` the caller supplies a `thread_id` to continue an
     /// existing conversation.
@@ -364,7 +364,7 @@ impl McpServer {
             code: -32000,
             message: format!("Failed to load config: {e}"),
         })?;
-        let client = DeepSeekClient::new(&config).map_err(|e| RpcError {
+        let client = ProviderClient::new(&config).map_err(|e| RpcError {
             code: -32000,
             message: format!("Failed to create DeepSeek client: {e}"),
         })?;
