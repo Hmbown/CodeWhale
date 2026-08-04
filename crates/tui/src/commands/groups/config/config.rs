@@ -2807,7 +2807,7 @@ mod tests {
         // A 60-column host is below the side-rail floor, so the effective
         // placement falls back to top; the status must say so rather than
         // claim a left rail renders.
-        let _ = crate::tui::work_surface::height(&mut app, 60, 24);
+        let _ = crate::tui::work_surface::height(&mut app, 60, 24, u16::MAX);
 
         let result = sidebar(&mut app, None);
 

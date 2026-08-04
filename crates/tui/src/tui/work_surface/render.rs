@@ -32,9 +32,18 @@ fn effective_placement(configured: WorkSurfacePlacement, host_width: u16) -> Wor
     }
 }
 
-/// Responsive work-surface height. The component owns a bounded window; long
-/// work lists scroll instead of consuming the transcript.
-pub fn height(app: &mut App, width: u16, terminal_height: u16) -> u16 {
+/// A non-Tasks panel is a title row plus three content rows. Below that it is
+/// a heading over one truncated line — chrome, not information — so it
+/// collapses rather than degrades.
+const PANEL_STRIP_HEIGHT: u16 = 4;
+
+/// Responsive work-surface height.
+///
+/// `rail_budget` is the caller's answer to "how many rows can the transcript
+/// actually spare this frame" — terminal height minus fixed chrome minus the
+/// transcript's own floor. See [`crate::tui::ui::rail_row_budget`]. The rail
+/// takes spare rows; it never takes rows the transcript needs.
+pub fn height(app: &mut App, width: u16, terminal_height: u16, rail_budget: u16) -> u16 {
     app.work_surface.effective_placement = effective_placement(app.work_surface.placement, width);
     // Off hides the rail outright: no strip, no side reservation, no stale
     // interaction state.
@@ -45,17 +54,19 @@ pub fn height(app: &mut App, width: u16, terminal_height: u16) -> u16 {
     }
     // Non-Tasks panels always own a strip once selected: the user asked for
     // the panel, so an empty panel collapses to a hint line, not a vanished
-    // rail.
+    // rail. It still yields when the transcript has no rows to give.
     if app.work_surface.panel != RailPanel::Tasks {
         if app.work_surface.effective_placement != WorkSurfacePlacement::Top {
             return 0;
         }
-        let terminal_cap = terminal_height
-            .saturating_div(2)
-            .clamp(super::model::TOP_HEIGHT_MIN, super::model::TOP_HEIGHT_MAX);
-        let cap = app.work_surface.top_height.min(terminal_cap);
-        // Title row plus three content rows, bounded by the configured cap.
-        return 4.clamp(super::model::TOP_HEIGHT_MIN, cap);
+        let cap = top_cap(app, terminal_height, rail_budget);
+        // Title row plus three content rows. A budget that cannot seat all
+        // four buys nothing worth the transcript rows, so the panel is absent
+        // rather than a two-row stub.
+        if cap < PANEL_STRIP_HEIGHT {
+            return 0;
+        }
+        return PANEL_STRIP_HEIGHT;
     }
     let rows = project_visible(app);
     if rows.is_empty() {
@@ -77,14 +88,13 @@ pub fn height(app: &mut App, width: u16, terminal_height: u16) -> u16 {
         return 0;
     }
     // The strip auto-fits its content: the literal selectable list plus the
-    // pinned progress receipt and the divider row. `top_height` (drag-resize
-    // / settings) and half the terminal act as caps, so a two-step plan
-    // takes two rows while an eight-step plan grows to show all eight —
-    // never a fixed-height band of blank water.
-    let terminal_cap = terminal_height
-        .saturating_div(2)
-        .clamp(super::model::TOP_HEIGHT_MIN, super::model::TOP_HEIGHT_MAX);
-    let cap = app.work_surface.top_height.min(terminal_cap);
+    // pinned progress receipt and the divider row, bounded by `top_cap`. So a
+    // two-step plan takes two rows while an eight-step plan grows to show all
+    // eight — never a fixed-height band of blank water.
+    let cap = top_cap(app, terminal_height, rail_budget);
+    if cap < super::model::TOP_HEIGHT_MIN {
+        return 0;
+    }
     let selectable = rows.iter().filter(|row| row.selectable).count();
     let progress = u16::from(top_todo_progress(app, &rows).is_some());
     let desired = u16::try_from(selectable)
@@ -94,9 +104,32 @@ pub fn height(app: &mut App, width: u16, terminal_height: u16) -> u16 {
     desired.clamp(super::model::TOP_HEIGHT_MIN, cap)
 }
 
+/// The three independent ceilings on a top strip, smallest wins:
+///
+/// - `top_height`: what the user asked for (drag-resize / settings).
+/// - half the terminal: proportional restraint, so a tall rail on a short
+///   terminal still reads as a strip over a transcript.
+/// - `rail_budget`: the rows the transcript can actually spare. This is the
+///   only one that knows the transcript has a floor, and it is the one that
+///   lets decorative water outrank a panel nobody is watching.
+fn top_cap(app: &App, terminal_height: u16, rail_budget: u16) -> u16 {
+    let terminal_cap = terminal_height
+        .saturating_div(2)
+        .clamp(super::model::TOP_HEIGHT_MIN, super::model::TOP_HEIGHT_MAX);
+    app.work_surface
+        .top_height
+        .min(terminal_cap)
+        .min(rail_budget)
+}
+
 /// Split the transcript slot for a side rail. Top placement consumes its own
 /// vertical row before this point, so it returns the chat area unchanged.
-pub fn split_chat(app: &mut App, area: Rect) -> (Rect, Option<Rect>) {
+///
+/// `min_chat_width` is the column-axis twin of `height`'s `rail_budget`: the
+/// columns the transcript must keep. When the idle ocean is on screen that is
+/// the ambient floor, and a rail that cannot fit beside it hides rather than
+/// squeezing the water into a strip too narrow to draw.
+pub fn split_chat(app: &mut App, area: Rect, min_chat_width: u16) -> (Rect, Option<Rect>) {
     let placement = effective_placement(app.work_surface.placement, area.width);
     app.work_surface.effective_placement = placement;
     if placement == WorkSurfacePlacement::Top
@@ -106,11 +139,12 @@ pub fn split_chat(app: &mut App, area: Rect) -> (Rect, Option<Rect>) {
         return (area, None);
     }
 
+    let min_chat_width = min_chat_width.max(SIDE_RAIL_MIN_CHAT_WIDTH);
     let rail_width = app
         .work_surface
         .side_width
         .clamp(super::model::SIDE_WIDTH_MIN, super::model::SIDE_WIDTH_MAX)
-        .min(area.width.saturating_sub(SIDE_RAIL_MIN_CHAT_WIDTH));
+        .min(area.width.saturating_sub(min_chat_width));
     if rail_width < super::model::SIDE_WIDTH_MIN {
         app.work_surface.effective_placement = WorkSurfacePlacement::Top;
         return (area, None);

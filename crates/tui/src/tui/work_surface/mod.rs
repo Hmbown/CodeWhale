@@ -60,6 +60,18 @@ mod tests {
         app
     }
 
+    /// The row budget `ui::render` would hand the rail on a terminal of this
+    /// height with real work on screen. Calls the production formula rather
+    /// than restating it, so a change to the chrome accounting shows up here
+    /// instead of silently diverging. The idle-empty budget (where the
+    /// ambient floor bites) is covered end-to-end in `ui::tests`.
+    fn working_budget(app: &App, terminal_height: u16) -> u16 {
+        crate::tui::ui::rail_row_budget(app, terminal_height, false)
+    }
+
+    /// A budget wide enough never to bind, for tests about something else.
+    const AMPLE_BUDGET: u16 = u16::MAX;
+
     fn add_todos(app: &mut App, count: usize) {
         let mut todos = app.todos.try_lock().expect("todos");
         for index in 0..count {
@@ -509,25 +521,31 @@ mod tests {
         let mut two_steps = app();
         two_steps.work_surface.top_height = 8;
         add_todos(&mut two_steps, 2);
-        assert_eq!(super::height(&mut two_steps, 100, 40), 4);
+        let budget = working_budget(&two_steps, 40);
+        assert_eq!(super::height(&mut two_steps, 100, 40, budget), 4);
 
         // Ten steps: content wants 12 lines, the default 8-line cap wins.
         let mut ten_steps = app();
         ten_steps.work_surface.top_height = 8;
         add_todos(&mut ten_steps, 10);
-        assert_eq!(super::height(&mut ten_steps, 100, 40), 8);
+        let budget = working_budget(&ten_steps, 40);
+        assert_eq!(super::height(&mut ten_steps, 100, 40, budget), 8);
 
-        // Short terminal: the half-terminal cap beats both content and the
-        // configured cap.
+        // Short terminal: the transcript's spare rows beat both content and
+        // the configured cap. A 12-row terminal spends 1 on the header, 1 on
+        // the phase strip and 3 on the bordered composer, and owes the
+        // transcript its 3-row floor — so 4 rows are actually spare. (This
+        // used to be 6, half the terminal, which left the transcript 2 rows.)
         let mut short_terminal = app();
         short_terminal.work_surface.top_height = 8;
         add_todos(&mut short_terminal, 10);
-        assert_eq!(super::height(&mut short_terminal, 100, 12), 6);
+        let budget = working_budget(&short_terminal, 12);
+        assert_eq!(super::height(&mut short_terminal, 100, 12, budget), 4);
 
         // Nothing to show: no strip at all.
         let mut empty = app();
         empty.work_surface.top_height = 8;
-        assert_eq!(super::height(&mut empty, 100, 40), 0);
+        assert_eq!(super::height(&mut empty, 100, 40, AMPLE_BUDGET), 0);
     }
 
     #[test]
@@ -1000,7 +1018,7 @@ mod tests {
         let rows = super::model::project(&mut app);
 
         assert!(rows.is_empty());
-        assert_eq!(super::height(&mut app, 120, 32), 0);
+        assert_eq!(super::height(&mut app, 120, 32, AMPLE_BUDGET), 0);
     }
 
     #[test]
@@ -1026,8 +1044,11 @@ mod tests {
             app.work_surface.placement = placement;
             let area = ratatui::layout::Rect::new(0, 0, 120, 32);
 
-            assert_eq!(super::height(&mut app, area.width, area.height), 0);
-            assert_eq!(super::split_chat(&mut app, area), (area, None));
+            assert_eq!(
+                super::height(&mut app, area.width, area.height, AMPLE_BUDGET),
+                0
+            );
+            assert_eq!(super::split_chat(&mut app, area, 0), (area, None));
         }
     }
 
@@ -1063,8 +1084,13 @@ mod tests {
                 app.work_surface.panel = panel;
                 let area = ratatui::layout::Rect::new(0, 0, 100, 24);
 
-                let strip = super::height(&mut app, area.width, area.height);
-                let (_chat, rail) = super::split_chat(&mut app, area);
+                // Render coverage, not yield coverage: a 24-row terminal with
+                // work on screen has rows to spare, so the panel is expected
+                // to draw. The idle-empty budget is exercised end-to-end in
+                // `ui::tests::rail_strip_yields_the_ambient_floor_*`.
+                let budget = working_budget(&app, area.height);
+                let strip = super::height(&mut app, area.width, area.height, budget);
+                let (_chat, rail) = super::split_chat(&mut app, area, 0);
                 let backend = TestBackend::new(area.width, area.height);
                 let mut terminal = Terminal::new(backend).expect("terminal");
                 terminal
@@ -1103,8 +1129,11 @@ mod tests {
             app.work_surface.panel = panel;
             let area = ratatui::layout::Rect::new(0, 0, 120, 32);
 
-            assert_eq!(super::height(&mut app, area.width, area.height), 0);
-            assert_eq!(super::split_chat(&mut app, area), (area, None));
+            assert_eq!(
+                super::height(&mut app, area.width, area.height, AMPLE_BUDGET),
+                0
+            );
+            assert_eq!(super::split_chat(&mut app, area, 0), (area, None));
             assert_eq!(app.work_surface.last_area, None);
         }
     }
@@ -1116,9 +1145,10 @@ mod tests {
         app.work_surface.panel = super::RailPanel::Context;
         let area = ratatui::layout::Rect::new(0, 0, 100, 24);
 
-        let strip = super::height(&mut app, area.width, area.height);
+        let budget = working_budget(&app, area.height);
+        let strip = super::height(&mut app, area.width, area.height, budget);
         assert_eq!(strip, 0, "side placements take no top strip");
-        let (_chat, rail) = super::split_chat(&mut app, area);
+        let (_chat, rail) = super::split_chat(&mut app, area, 0);
         let rail = rail.expect("context panel reserves a side rail");
 
         let backend = TestBackend::new(area.width, area.height);
@@ -1693,9 +1723,9 @@ mod tests {
             let mut app = app();
             add_todos(&mut app, 2);
             app.work_surface.placement = placement;
-            assert_eq!(super::height(&mut app, 100, 24), 0);
+            assert_eq!(super::height(&mut app, 100, 24, AMPLE_BUDGET), 0);
             let area = ratatui::layout::Rect::new(0, 0, 100, 12);
-            let (chat, rail) = super::split_chat(&mut app, area);
+            let (chat, rail) = super::split_chat(&mut app, area, 0);
             let rail = rail.expect("side rail");
             assert_eq!(chat.x, expected_chat_x);
             assert_eq!(rail.x, expected_rail_x);
@@ -1814,12 +1844,12 @@ mod tests {
         let graph = operation_graph(NodeState::Failed);
         restore_graph(&mut operation_app, &graph);
 
-        assert_eq!(super::height(&mut operation_app, 100, 24), 0);
+        assert_eq!(super::height(&mut operation_app, 100, 24, AMPLE_BUDGET), 0);
         assert!(operation_app.work_surface.latest_rows.is_empty());
 
         let mut todo_app = app();
         add_todos(&mut todo_app, 2);
-        assert!(super::height(&mut todo_app, 100, 24) > 0);
+        assert!(super::height(&mut todo_app, 100, 24, AMPLE_BUDGET) > 0);
         assert!(
             todo_app
                 .work_surface

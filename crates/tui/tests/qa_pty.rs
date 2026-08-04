@@ -411,10 +411,10 @@ fn assert_empty_state_hierarchy(frame: &qa_harness::Frame, ascii_safe: bool) {
                 >= 8
         }
     });
-    // The unified rail's top strip owns up to four rows when a non-Tasks
-    // panel is selected, so the big BlueWhale is earned at 28+ rows now
-    // (pre-rail: 24). Smaller terminals legitimately shed the whale.
-    if frame.cols() >= 80 && frame.rows() >= 28 {
+    // The idle whale is earned wherever the transcript can seat it, and the
+    // rail now yields the rows rather than evicting it. 24 rows is the
+    // shipped release-evidence size and the pre-rail contract; it stands.
+    if frame.cols() >= 80 && frame.rows() >= 24 {
         assert!(
             whale_row.is_some(),
             "idle whale missing where the terminal earns decorative water:\n{dump}"
@@ -1251,7 +1251,7 @@ fn real_coordination_details_use_typed_persisted_receipts_in_a_unix_pty() -> any
 
     std::fs::write(
         ws.home().join(".codewhale").join("settings.toml"),
-        "work_surface_placement = \"right\"\nrail_panel = \"tasks\"\n",
+        "work_surface_placement = \"right\"\n",
     )?;
     let (_ws, mut h) = spawn_minimal_with_env(ws, &[])?;
     h.wait_for_text("Coordination Work", KEY_TIMEOUT)?;
@@ -1407,7 +1407,7 @@ fn work_and_permission_are_visible_at_release_terminal_sizes() -> anyhow::Result
         )?;
         std::fs::write(
             codewhale_home.join("settings.toml"),
-            "permission_posture = \"full-access\"\nrail_panel = \"tasks\"\n",
+            "permission_posture = \"full-access\"\n",
         )?;
         std::fs::write(
             codex_home.join("models_cache.json"),
@@ -1548,7 +1548,7 @@ fn legacy_work_ctrl_t_save_export_and_restart_are_consistent() -> anyhow::Result
     )?;
     std::fs::write(
         codewhale_home.join("settings.toml"),
-        "permission_posture = \"full-access\"\nrail_panel = \"tasks\"\n",
+        "permission_posture = \"full-access\"\n",
     )?;
     std::fs::write(
         codex_home.join("models_cache.json"),
@@ -3622,10 +3622,7 @@ fn real_tool_lifecycle_crosses_work_status_resize_and_scroll_in_a_unix_pty() -> 
     )?;
     std::fs::write(
         codewhale_home.join("settings.toml"),
-        // Pin the rail's Tasks panel: the running phase asserts the To-do
-        // strip chrome, and an empty Tasks strip hides outright, so the
-        // idle whale phase keeps its full-height ocean.
-        "theme = \"dark\"\nlocale = \"en\"\ndefault_mode = \"agent\"\npermission_posture = \"full-access\"\nlow_motion = false\nfancy_animations = true\ncomposer_border = true\nrail_panel = \"tasks\"\n",
+        "theme = \"dark\"\nlocale = \"en\"\ndefault_mode = \"agent\"\npermission_posture = \"full-access\"\nlow_motion = false\nfancy_animations = true\ncomposer_border = true\n",
     )?;
     std::fs::write(
         codex_home.join("models_cache.json"),

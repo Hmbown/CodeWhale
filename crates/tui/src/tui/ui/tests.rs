@@ -20548,3 +20548,163 @@ fn backtrack_cut_index_skips_tool_result_user_messages() {
     // depth beyond available prompts.
     assert_eq!(super::backtrack_api_cut_index(&msgs, 2), None);
 }
+
+/// The idle BlueWhale needs 16 transcript rows. Everything above the
+/// transcript is paid out of those rows, so a rail strip that reserves a
+/// fixed band evicts the whale on exactly the terminal sizes the release
+/// evidence is captured at. These tests pin the operator-visible threshold at
+/// 80 columns; the row-by-row arithmetic lives in `ui::rail_row_budget`.
+fn idle_rail_app(panel: crate::tui::work_surface::RailPanel) -> App {
+    let mut app = create_test_app();
+    // Pin the chrome the budget charges for: `App::new` reads the developer's
+    // real settings.toml, and a host with `composer_border = false` would
+    // shift every threshold below by a row.
+    app.composer_border = true;
+    app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Top;
+    app.work_surface.panel = panel;
+    app
+}
+
+/// The whale's belly: a run of upper-block glyphs no other chrome draws.
+fn has_idle_whale(rendered: &str) -> bool {
+    rendered.contains("▀▀▀▀▀▀▀▀")
+}
+
+#[test]
+fn rail_strip_yields_its_rows_so_the_idle_whale_survives_at_24_rows() {
+    let panel = crate::tui::work_surface::RailPanel::Pinned;
+    // Below the threshold the always-on panel strip yields entirely and the
+    // ocean keeps its full height. 24 rows is the release-evidence size the
+    // rail regression took the whale away from.
+    for rows in [22_u16, 23, 24, 25] {
+        let mut app = idle_rail_app(panel);
+        let rendered = render_underwater_test_app(&mut app, 80, rows);
+        assert!(
+            has_idle_whale(&rendered),
+            "the idle whale must survive at 80x{rows}: decorative water outranks \
+             a panel nobody is watching\n{rendered}"
+        );
+        assert!(
+            !rendered.contains(panel.title()),
+            "the {panel:?} strip must be absent at 80x{rows}, not squeezed to a \
+             two-row stub\n{rendered}"
+        );
+    }
+
+    // At and above the threshold the rows are genuinely spare, so the rail
+    // behaves exactly as it does today: a four-row panel over a 16-row ocean.
+    for rows in [26_u16, 27, 28, 30] {
+        let mut app = idle_rail_app(panel);
+        let rendered = render_underwater_test_app(&mut app, 80, rows);
+        assert!(
+            has_idle_whale(&rendered),
+            "the idle whale must still be earned at 80x{rows}\n{rendered}"
+        );
+        assert!(
+            rendered.contains(panel.title()),
+            "the {panel:?} strip must render once the transcript can spare the \
+             rows at 80x{rows}\n{rendered}"
+        );
+    }
+
+    // 21 rows cannot seat the ocean at any strip height. That is pre-rail
+    // behavior and the yield rule must not pretend otherwise.
+    let mut app = idle_rail_app(panel);
+    let rendered = render_underwater_test_app(&mut app, 80, 21);
+    assert!(
+        !has_idle_whale(&rendered),
+        "80x21 has no room for the ocean even with no strip at all\n{rendered}"
+    );
+}
+
+#[test]
+fn rail_strip_and_idle_whale_never_thrash_across_a_resize() {
+    // A threshold that is not monotonic in terminal height reads as flicker:
+    // drag a terminal edge and the strip blinks in and out. Growing the
+    // terminal may only ever *add* chrome, never take it away, and the same
+    // size must always produce the same answer.
+    for panel in [
+        crate::tui::work_surface::RailPanel::Pinned,
+        crate::tui::work_surface::RailPanel::Agents,
+        crate::tui::work_surface::RailPanel::Context,
+    ] {
+        for idle_empty in [true, false] {
+            let mut previous_strip = 0_u16;
+            for rows in 8_u16..=48 {
+                let mut app = idle_rail_app(panel);
+                let budget = super::rail_row_budget(&app, rows, idle_empty);
+                let strip = crate::tui::work_surface::height(&mut app, 80, rows, budget);
+                let again = crate::tui::work_surface::height(&mut app, 80, rows, budget);
+                assert_eq!(
+                    strip, again,
+                    "{panel:?} at 80x{rows} (idle={idle_empty}) must be a pure \
+                     function of this frame, not of the last one"
+                );
+                assert!(
+                    strip >= previous_strip,
+                    "{panel:?} strip shrank from {previous_strip} to {strip} when the \
+                     terminal grew to {rows} rows (idle={idle_empty}); a strip that \
+                     blinks on resize is worse than the eviction bug"
+                );
+                previous_strip = strip;
+            }
+        }
+    }
+
+    // The whale is monotone too: once the ocean is earned, growing the
+    // terminal never takes it back.
+    let mut seen_whale = false;
+    for rows in 16_u16..=34 {
+        let mut app = idle_rail_app(crate::tui::work_surface::RailPanel::Pinned);
+        let rendered = render_underwater_test_app(&mut app, 80, rows);
+        let whale = has_idle_whale(&rendered);
+        assert!(
+            whale || !seen_whale,
+            "the idle whale disappeared again at 80x{rows} after being earned at a \
+             smaller size\n{rendered}"
+        );
+        seen_whale |= whale;
+    }
+    assert!(seen_whale, "the sweep never rendered an idle whale at all");
+}
+
+#[test]
+fn side_rail_yields_the_columns_the_idle_ocean_needs() {
+    // The width axis carried the same defect: a side rail reserves at least
+    // 26 columns while `split_chat` only ever protected a 40-column
+    // transcript, well under the ocean's 60-column floor.
+    let idle_floor = super::rail_min_chat_width(true);
+    let right = crate::tui::work_surface::WorkSurfacePlacement::Right;
+
+    let mut app = idle_rail_app(crate::tui::work_surface::RailPanel::Pinned);
+    app.work_surface.placement = right;
+    let area = ratatui::layout::Rect::new(0, 0, 80, 40);
+    let (chat, rail) = crate::tui::work_surface::split_chat(&mut app, area, idle_floor);
+    assert!(
+        rail.is_none(),
+        "an 80-column host cannot seat a 26-column rail beside a 60-column ocean"
+    );
+    assert_eq!(chat, area, "the transcript keeps every column");
+
+    // Wide enough for both: the rail comes back and the ocean keeps its floor.
+    let mut app = idle_rail_app(crate::tui::work_surface::RailPanel::Pinned);
+    app.work_surface.placement = right;
+    let area = ratatui::layout::Rect::new(0, 0, 100, 40);
+    let (chat, rail) = crate::tui::work_surface::split_chat(&mut app, area, idle_floor);
+    let rail = rail.expect("a 100-column host seats both");
+    assert!(
+        chat.width >= crate::tui::underwater::AMBIENT_MIN_CHAT_WIDTH,
+        "chat kept {} columns, below the ambient floor",
+        chat.width
+    );
+    assert!(rail.width >= 26, "rail kept {} columns", rail.width);
+
+    // With work on screen there is no ambient floor, so the 80-column host
+    // keeps its rail: work never yields to decoration.
+    let mut app = idle_rail_app(crate::tui::work_surface::RailPanel::Pinned);
+    app.work_surface.placement = right;
+    let area = ratatui::layout::Rect::new(0, 0, 80, 40);
+    let (_chat, rail) =
+        crate::tui::work_surface::split_chat(&mut app, area, super::rail_min_chat_width(false));
+    assert!(rail.is_some(), "a busy 80-column shell keeps its side rail");
+}

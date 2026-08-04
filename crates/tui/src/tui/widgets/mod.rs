@@ -3234,7 +3234,13 @@ fn vim_mode_style(mode: VimMode) -> Style {
     Style::default().fg(color).bold()
 }
 
-fn should_render_empty_state(app: &App) -> bool {
+/// The "fully idle" predicate: nothing in the transcript, nothing running,
+/// nothing pending. It gates the idle ocean, and — because the idle ocean has
+/// a row floor the layout has to respect — it also gates how many rows the
+/// work rail is allowed to take. Evaluate it *once* per frame in
+/// [`crate::tui::ui::render`] and thread the result, so the reservation and
+/// the render can never disagree inside a single frame.
+pub(crate) fn should_render_empty_state(app: &App) -> bool {
     let active_is_empty = app
         .active_cell
         .as_ref()
