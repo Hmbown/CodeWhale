@@ -23,6 +23,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Opt-in product telemetry, off by default, shipped with no endpoint
+  configured.** A first-run notice asks once, on a terminal, with declining
+  pre-selected — Enter declines. Nothing is collected unless both
+  `telemetry = true` and a recorded "Enable" answer are present, so a
+  `telemetry = true` written before this release stays inert: the key has been
+  settable and inert for a long time, and setting it was never consent. With no
+  `telemetry_endpoint` — the shipped default — an enabled session writes each
+  batch to `$CODEWHALE_HOME/telemetry/dryrun.jsonl` and constructs no HTTP
+  client at all, so you can read exactly what would have been sent.
+
+  Turning it off is an answer, not a flag: it deletes the random install id,
+  truncates every buffered event, and leaves a permanent tombstone that a
+  session already running re-checks before it appends and before it sends. A
+  failed wipe fails closed. `CODEWHALE_TELEMETRY=0` is a hard floor that beats
+  `--telemetry true` and the config key, and a value the parser cannot read
+  also resolves to off. Fleet workers are hard-off. A repo-local
+  `.codewhale/config.toml` can set neither key.
+
+  Never collected: prompts, completions, tool arguments, diffs, file contents,
+  filenames, paths, git remotes, repo or branch names, memory entries, chat
+  history, credentials (not even a boolean asserting one exists), model ids,
+  custom provider table names, MCP server names, error or panic message bodies,
+  per-event timestamps, keystrokes, clipboard, screenshots, or location. The
+  full schema is [`docs/TELEMETRY.md`](docs/TELEMETRY.md), and a test parses the
+  field names out of that file and asserts set equality with the structs the
+  serializer uses.
+
+  This supersedes the roadmap's previous "no Codewhale product telemetry" entry,
+  which moves from "Ruled out" to an opt-in framing. What stays ruled out:
+  always-on or silent telemetry, per-keystroke or per-tool-call phone-home, and
+  any third-party ad or analytics SDK in the runtime binary.
 - Registered `GLM-5.3` (direct Z.ai) and `z-ai/glm-5.3` (OpenRouter) as
   selectable GLM routes, with their aliases (`glm-5.3`, `glm-5-3`,
   `zai-glm-5.3`, `zai-glm-5-3`). Z.ai had **not released GLM-5.3 as of

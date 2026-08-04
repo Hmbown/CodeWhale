@@ -241,7 +241,13 @@ A reproducible headless launch uses only existing generic surfaces:
   contains only the task servers the harness supplies
   (`{"mcpServers":{"task-tools":{"url":""}}}`; the `mcpServers` alias and
   URL-based Streamable HTTP / SSE transports already exist);
-- `CODEWHALE_MEMORY=false` and `CODEWHALE_TELEMETRY=false`;
+- `CODEWHALE_MEMORY=false` and `CODEWHALE_TELEMETRY=false`. Product telemetry
+  is already opt-in and off by default, and a fresh `CODEWHALE_HOME` carries no
+  first-run notice decision, so a sealed harness run collects nothing either
+  way; setting the variable makes that explicit and survives a home the caller
+  reuses. It is a hard floor — an explicit "off" in the environment beats
+  `--telemetry true` and `telemetry = true` in config. See
+  [`docs/TELEMETRY.md`](TELEMETRY.md);
 - `CODEWHALE_ALLOW_INSECURE_HTTP=1` **only** when the harness supplies a
   trusted `http://` interception endpoint (container/tunnel endpoints are not
   always loopback);

@@ -162,11 +162,19 @@ h2 { font-size: clamp(1.5rem, 2.8vw, 2.6rem); line-height: 1.08; word-break: kee
 h3 { font-size: 1.18rem; line-height: 1.25; }
 
 /* `overflow-wrap: anywhere` keeps long English headings safe, but can strand
-   Chinese punctuation on a line of its own. Strict CJK line-breaking keeps
-   punctuation attached while still allowing breaks between Han characters. */
+   CJK punctuation — or a lone numeral — on a line of its own. Strict CJK
+   line-breaking keeps punctuation attached while still allowing breaks between
+   Han characters. ja and ko want the same rule: ja for the identical reason as
+   zh, ko because it has real word boundaries and should break on them. */
 html[lang="zh"] h1,
 html[lang="zh"] h2,
-html[lang="zh"] h3 {
+html[lang="zh"] h3,
+html[lang="ja"] h1,
+html[lang="ja"] h2,
+html[lang="ja"] h3,
+html[lang="ko"] h1,
+html[lang="ko"] h2,
+html[lang="ko"] h3 {
   line-break: strict;
   word-break: normal;
   overflow-wrap: break-word;

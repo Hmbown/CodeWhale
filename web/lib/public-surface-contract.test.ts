@@ -461,7 +461,12 @@ done
 
     expect(matrix.trust.hostedProviderBoundary).toContain("selected hosted provider");
     expect(matrix.trust.localInference).toContain("loopback local-model route");
-    expect(matrix.trust.telemetry).toContain("no Codewhale product telemetry");
+    // 0.9.4 ships an opt-in, default-off telemetry client with no endpoint
+    // configured. The old claim ("no Codewhale product telemetry") was true
+    // until that landed and this gate is what caught it, so the string moves
+    // to what is true now rather than being deleted.
+    expect(matrix.trust.telemetry).toContain("opt-in, off by default");
+    expect(matrix.trust.telemetry).toContain("no mandatory hosted relay");
     expect(faq).toContain("The hosted");
     expect(faq).toContain("provider you select receives the prompt");
     expect(faq).toContain("keep model inference local");

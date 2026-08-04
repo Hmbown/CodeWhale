@@ -178,6 +178,41 @@ memory_path = "~/.codewhale/memory.md"
 # always_load = ["git_show", "notify"]
 
 # ─────────────────────────────────────────────────────────────────────────────────
+# Product telemetry — opt-in, off by default
+# ─────────────────────────────────────────────────────────────────────────────────
+# Nothing is collected unless BOTH of these are true: `telemetry = true` here,
+# and the first-run notice has been answered with "Enable" on this machine. A
+# `telemetry = true` written before 0.9.4 is therefore inert — the key existed
+# and did nothing for a long time, and setting it was never consent.
+#
+# Setting it to `false` is an answer, not just a flag: it deletes the random
+# install id, truncates every buffered event, and leaves a permanent tombstone
+# that a session already running re-checks before it sends anything.
+#
+#   codewhale config set telemetry false     # persistent
+#   CODEWHALE_TELEMETRY=0 codewhale          # one run, and a hard floor
+#
+# What is never collected: prompts, completions, tool arguments, diffs, file
+# contents, filenames, paths, git remotes, repo or branch names, memory
+# entries, chat history, API keys or tokens (not even a boolean saying one
+# exists), model ids, custom provider table names, MCP server names, error or
+# panic message bodies, per-event timestamps, keystrokes, clipboard,
+# screenshots, or location. The complete schema is `docs/TELEMETRY.md`, and a
+# test asserts this file and the serializer agree.
+#
+# A repo-local `.codewhale/config.toml` can set neither key: someone else's
+# repository cannot turn your telemetry on or aim it at a host of their choosing.
+# telemetry = false
+
+# Where batches are POSTed. 0.9.4 ships with this UNSET, and unset means the
+# dry-run sink: batches are serialized exactly as a real endpoint would see
+# them, appended to `$CODEWHALE_HOME/telemetry/dryrun.jsonl`, and no HTTP
+# client is ever constructed. Read that file to see precisely what would have
+# been sent. `https://` is required; plain `http://` is accepted only for
+# loopback, and no environment variable overrides that refusal.
+# telemetry_endpoint = "https://telemetry.example/v1/batch"
+
+# ─────────────────────────────────────────────────────────────────────────────────
 # Security
 # ─────────────────────────────────────────────────────────────────────────────────
 allow_shell = true

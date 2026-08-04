@@ -34,6 +34,7 @@ const tracksEn = [
       { title: "OpenAI-compatible & local runtimes", note: "Generic `openai` route for any OpenAI-compatible gateway, plus vLLM, SGLang, and Ollama against your own localhost endpoints — no key required" },
       { title: "Multi-provider support", note: "Hot-swap between providers (DeepSeek, OpenAI, Anthropic, OpenRouter) per session" },
       { title: "Local web client", note: "Implemented in the v0.9.1 source candidate: `codewhale web` is a loopback-only browser client over the Runtime API behind a one-time bootstrap session boundary; approvals and user input recover across page reloads (#4423)" },
+      { title: "Opt-in product telemetry", note: "Off by default, and unanswered until a first-run notice asks. 0.9.4 ships with no endpoint configured, so even an enabled session writes its batches to $CODEWHALE_HOME/telemetry/dryrun.jsonl and contacts nobody — you can read exactly what would have been sent. Never prompts, completions, tool arguments, file contents, paths, repo or branch names, model ids, or credentials; the full schema is docs/TELEMETRY.md. Turn it off with `codewhale config set telemetry false` or CODEWHALE_TELEMETRY=0, which also deletes the random install id and every buffered event." },
     ],
   },
   {
@@ -59,7 +60,7 @@ const tracksEn = [
   {
     title: "Ruled out",
     items: [
-      { title: "Codewhale product telemetry / phone-home", note: "The local runtime has no product telemetry. A selected hosted provider still receives the context required for its model turn; loopback routes can keep inference local." },
+      { title: "Always-on or silent product telemetry", note: "Product telemetry is opt-in and off by default; nothing is collected until the first-run notice is answered with Enable. There is no always-on mode, no per-keystroke or per-tool-call phone-home, and no third-party ad or analytics SDK in the runtime binary. A selected hosted provider still receives the context required for its model turn; loopback routes can keep inference local." },
       { title: "Mandatory hosted relay for local sessions", note: "The local runtime and bring-your-own-provider routes continue to work without sending sessions through a Codewhale service" },
       { title: "Required account for the local runtime", note: "Installing and running Codewhale locally requires no account" },
       { title: "Sponsored model promotion", note: "Model picker stays neutral — no paid placement" },
@@ -92,6 +93,7 @@ const tracksZh = [
       { title: "OpenAI 兼容与本地运行时", note: "通用 `openai` 路由可接入任意 OpenAI 兼容网关；vLLM、SGLang、Ollama 直连本地端点，无需密钥" },
       { title: "多提供商支持", note: "按会话动态切换提供商（DeepSeek、OpenAI、Anthropic、OpenRouter）" },
       { title: "本地 Web 客户端", note: "v0.9.1 源码候选版已实现：`codewhale web` 是基于 Runtime API 与一次性引导会话边界的回环地址浏览器客户端；审批与用户输入可在页面刷新后恢复（#4423）" },
+      { title: "可选加入的产品遥测", note: "默认关闭，首次运行的提示未回答前不会收集任何内容。0.9.4 未配置任何端点，因此即使启用，批次也只会写入 $CODEWHALE_HOME/telemetry/dryrun.jsonl，不会联系任何服务器——你可以直接查看本应发送的全部内容。永远不收集 prompt、模型回复、工具参数、文件内容、路径、仓库或分支名、模型 id 与凭据；完整 schema 见 docs/TELEMETRY.md。用 `codewhale config set telemetry false` 或 CODEWHALE_TELEMETRY=0 关闭，同时会删除随机安装 id 与所有已缓冲事件。" },
     ],
   },
   {
@@ -117,7 +119,7 @@ const tracksZh = [
   {
     title: "暂不考虑",
     items: [
-      { title: "Codewhale 产品遥测 / 回传", note: "本地运行时没有产品遥测；选用托管 provider 时仍会发送本轮所需上下文，回环地址路由可让推理保持本地" },
+      { title: "默认开启或静默的产品遥测", note: "产品遥测是可选加入且默认关闭的；在首次运行提示被回答为“启用”之前不会收集任何内容。没有常开模式，没有按键级或按工具调用级的回传，运行时二进制中也没有任何第三方广告或分析 SDK。选用托管 provider 时仍会发送本轮所需上下文，回环地址路由可让推理保持本地。" },
       { title: "本地会话强制经过托管中继", note: "本地 Runtime 与自带提供商路由继续工作，无需把会话发送到 Codewhale 服务" },
       { title: "本地 Runtime 强制注册账户", note: "本地安装和运行 Codewhale 不需要账户" },
       { title: "赞助商模型推广", note: "模型选择器保持中立——无付费推荐位" },

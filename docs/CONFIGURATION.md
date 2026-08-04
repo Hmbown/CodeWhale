@@ -840,6 +840,15 @@ the `CODEWHALE_*` value wins.
 - `CODEWHALE_NOTES_PATH`
 - `CODEWHALE_MEMORY` (`1|on|true|yes|y|enabled` turns user memory on)
 - `CODEWHALE_MEMORY_PATH`
+- `CODEWHALE_TELEMETRY` / `DEEPSEEK_TELEMETRY` (legacy alias) — opt-in product
+  telemetry, off by default. Accepts `0|1|true|false|yes|no|on|off|enabled|
+  disabled`. An explicit "off" is a **floor**: it beats `--telemetry true` and
+  `telemetry = true` in config, and a value this list cannot read also resolves
+  to off, because a typo in a kill switch must never resolve to "on". See
+  [`TELEMETRY.md`](TELEMETRY.md).
+- `CODEWHALE_TELEMETRY_ENDPOINT` / `DEEPSEEK_TELEMETRY_ENDPOINT` (legacy alias)
+  — `https://`, or plain `http://` only for loopback. Unset in shipped
+  builds, which routes batches to a local dry-run file instead of a network.
 - `CODEWHALE_ALLOW_SHELL` (`1`/`true` enables)
 - `CODEWHALE_APPROVAL_POLICY` (`on-request|untrusted|never`)
 - `CODEWHALE_SANDBOX_MODE` (`read-only|workspace-write|danger-full-access|external-sandbox`)
@@ -1481,6 +1490,27 @@ If you are upgrading from older releases:
   `eval`) default to `concise` unless config/env/CLI overrides it.
   Override per process with `CODEWHALE_VERBOSITY` or the legacy
   `DEEPSEEK_VERBOSITY` alias.
+- `telemetry` (bool, optional): opt-in product telemetry, **`false` by
+  default**. Setting it to `true` is only half of the switch: nothing is
+  collected unless the first-run notice has also been answered with "Enable" on
+  this machine, so a `telemetry = true` written before 0.9.4 stays inert. An
+  explicit `false` is an *answer* — it deletes the random install id, truncates
+  every buffered event, and leaves a permanent tombstone — while the unset
+  default simply never collects. Override per process with
+  `CODEWHALE_TELEMETRY` (legacy alias `DEEPSEEK_TELEMETRY`), where an explicit
+  "off" is a hard floor that beats both this key and `--telemetry true`. A
+  repo-local `.codewhale/config.toml` cannot set it. Full schema and red lines:
+  [`TELEMETRY.md`](TELEMETRY.md).
+- `telemetry_endpoint` (string, optional): where batches are POSTed. **Unset by
+  default, and 0.9.4 ships with no endpoint configured** — with no endpoint an
+  enabled session writes each batch to `$CODEWHALE_HOME/telemetry/dryrun.jsonl`
+  and constructs no HTTP client at all, so you can read exactly what would have
+  been sent. `https://` is required; plain `http://` is accepted only for
+  loopback hosts, and there is no environment variable that overrides that
+  refusal. A rejected endpoint turns telemetry off for the run rather than
+  falling back to plaintext. Override per process with
+  `CODEWHALE_TELEMETRY_ENDPOINT` (legacy alias `DEEPSEEK_TELEMETRY_ENDPOINT`).
+  A repo-local `.codewhale/config.toml` cannot set it.
 - `allow_shell` (bool, optional): in interactive TUI Agent sessions, omitting
   this keeps shell tools available with approval prompts; setting it to `false`
   hides shell tools. Headless, durable-task, and other noninteractive profiles
