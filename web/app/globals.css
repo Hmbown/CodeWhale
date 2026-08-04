@@ -21,6 +21,11 @@
   --paper: #f4f7fb;
   --paper-deep: #e8eef8;
   --paper-edge: #cbd3df;
+  /* Blue Stage Light's LIGHT_PANEL — cwc's `--surface`. This is the product's
+     *card* value, not its page value: the desktop capture is ivory cards on a
+     blue-grey page. Raising the sheet itself to ivory would break lockstep in
+     the other direction, so warmth arrives only where the product puts it. */
+  --paper-card: #fffdf8;
   --paper-line: #1b2230;
   --paper-line-soft: #cbd3df;
   --ink: #14213a;
@@ -1463,9 +1468,11 @@ body:has(.product-home) .site-github-link {
   margin-bottom: 1.5rem;
 }
 
+/* The one pull-quote on the page: a raised editorial sheet, so it takes the
+   ivory card value rather than the raw white it used to bypass tokens with. */
 .product-proof {
   border-bottom: 1px solid var(--hairline);
-  background: #fff;
+  background: var(--paper-card);
 }
 
 .product-proof-grid {
@@ -1504,23 +1511,23 @@ body:has(.product-home) .site-github-link {
   font-size: clamp(1.8rem, 3.3vw, 3rem);
 }
 
+/* Hairline-ruled ivory cards on the cool page — cwc's exact card grammar, and
+   the only place the warmth the sheet is asking for actually belongs. No
+   shadow: paper stays flat, and the hairline stays sharp because it is. */
 .product-workflow-steps {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1rem;
   margin-top: clamp(2.5rem, 5vw, 4.5rem);
-  border-top: 1px solid var(--hairline);
 }
 
 .product-workflow-steps li {
   position: relative;
   min-height: 12rem;
-  padding: 1.35rem 1.5rem 1.5rem 0;
-  border-bottom: 1px solid var(--hairline);
-}
-
-.product-workflow-steps li + li {
-  padding-left: 1.5rem;
-  border-left: 1px solid var(--hairline);
+  padding: 1.35rem 1.5rem 1.5rem;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: var(--paper-card);
 }
 
 .product-workflow-steps li > span {
@@ -1790,15 +1797,19 @@ body:has(.product-home) .site-github-link {
 }
 
 .product-boundary-list {
-  border-top: 1px solid var(--paper-edge);
+  display: grid;
+  gap: 0.75rem;
 }
 
 .product-boundary-list > div {
   display: grid;
   grid-template-columns: minmax(12rem, 0.85fr) minmax(0, 1.15fr);
+  align-items: baseline;
   gap: 1.5rem;
-  padding-block: 1.4rem;
-  border-bottom: 1px solid var(--paper-edge);
+  padding: 1.25rem 1.4rem;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: var(--paper-card);
 }
 
 .product-boundary-list dt {
@@ -2046,11 +2057,6 @@ html[lang="ko"] .ocean-column h2 {
 
   .product-workflow-steps {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .product-workflow-steps li:nth-child(3) {
-    padding-left: 0;
-    border-left: 0;
   }
 
   .gs-steps {
@@ -2562,6 +2568,7 @@ html[lang="ko"] .ocean-column h2 {
     --paper: #03070d;
     --paper-deep: #0e1729;
     --paper-edge: #263e5c;
+    --paper-card: #182742;
     --ink: #f6f2e8;
     --ink-soft: #b6c0d4;
     --ink-mute: #93a0b8;
@@ -2586,6 +2593,7 @@ html[lang="ko"] .ocean-column h2 {
   --paper: #03070d;
   --paper-deep: #0e1729;
   --paper-edge: #263e5c;
+  --paper-card: #182742;
   --ink: #f6f2e8;
   --ink-soft: #b6c0d4;
   --ink-mute: #93a0b8;
