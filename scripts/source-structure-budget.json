@@ -1,5 +1,6 @@
 {
   "_comment": "One-way source ownership ceilings. Deletion and line-neutral ownership moves pass; new packages, binaries, 1000-line module paths, a larger maximum module, or aggregate owned Rust growth require an explicit reviewed update.",
+  "_todo_2026_08_03": "TODO(v0.9.5): aggregate ceiling bumped 649350 -> 659633 during v0.9.4 train hygiene. The 30-PR stack on 2026-08-02/03 grew owned production Rust by ~10.3k lines; both new thousand-line modules from the stack (crates/tui/src/native_memory.rs, crates/tui/src/tui/views/fleet_roster.rs) were split back under the threshold instead of raising the per-file ceilings. Pay the aggregate back down by deletion/dedup in v0.9.5 rather than treating this as the new normal.",
   "allowed_large_modules": [
     "crates/agent/src/lib.rs",
     "crates/app-server/src/chat_completions.rs",
@@ -67,7 +68,6 @@
     "crates/tui/src/mcp/oauth.rs",
     "crates/tui/src/model_routing.rs",
     "crates/tui/src/models.rs",
-    "crates/tui/src/native_memory.rs",
     "crates/tui/src/palette/themes.rs",
     "crates/tui/src/plugins/manifest.rs",
     "crates/tui/src/plugins/registry.rs",
@@ -185,8 +185,6 @@
   "max_large_module_count": 172,
   "max_module_lines": 19139,
   "max_total_owned_rust_lines": 659633,
-  "_native_memory_exemption": "crates/tui/src/native_memory.rs is allowlisted rather than split. It is the surviving memory system (tui/src/memory.rs was deliberately deleted in v0.9.4, per the locked \u00a73 decision), and it is a single cohesive store: one NativeMemoryStore impl owning the SQLite/FTS schema, the fd-lock write path, and the markdown cache, whose invariants are only checkable as a unit. Cutting it at an arbitrary line would split that impl block, not a seam. Note for whoever revisits this: crates/tui/src/native_memory/tests.rs is tracked, byte-identical to the inline #[cfg(test)] mod tests block, and referenced by nothing \u2014 a merge re-inlined the tests without deleting the extracted sibling. Restoring `mod tests;` would drop this file to 773 lines and retire this entry; that is an owner call, not a budget one.",
-  "_todo_2026_08_03": "TODO(v0.9.5): aggregate ceiling bumped 649350 -> 659633 during v0.9.4 train hygiene. The 30-PR stack on 2026-08-02/03 grew owned production Rust by ~10.3k lines; both new thousand-line modules from the stack (crates/tui/src/native_memory.rs, crates/tui/src/tui/views/fleet_roster.rs) were split back under the threshold instead of raising the per-file ceilings. Pay the aggregate back down by deletion/dedup in v0.9.5 rather than treating this as the new normal.",
   "schema_version": 1,
   "workspace_packages": [
     "codewhale-agent",

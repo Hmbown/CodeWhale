@@ -2085,7 +2085,6 @@ fn credential_metadata_store(store: &ConfigStore) -> Result<Option<ConfigStore>>
     ConfigStore::load(Some(global)).map(Some)
 }
 
-
 #[cfg(test)]
 fn no_keyring_secrets() -> Secrets {
     Secrets::new(std::sync::Arc::new(
