@@ -12,6 +12,12 @@ import { describe, expect, it } from "vitest";
 import { DOC_TOPICS, docTopicHref, getTopic } from "./docs-map";
 import { docsTopicIsCurrent } from "./docs-navigation";
 import { locales } from "./i18n/config";
+import { getChrome, getHome } from "./i18n/dictionaries";
+import {
+  footerProductLinks,
+  footerProjectLinks,
+  navLinks as buildNavLinks,
+} from "./i18n/links";
 
 const webRoot = new URL("../", import.meta.url);
 const repoRoot = new URL("../../", import.meta.url);
@@ -94,23 +100,63 @@ describe("navigation parity and accessibility", () => {
   it("keeps desktop and mobile navigation on one shared link set", () => {
     // Both surfaces consume the same `links` prop from nav.tsx — assert the
     // wiring rather than duplicating the arrays.
-    expect(nav).toContain("<NavLinks links={links} isZh={isZh} />");
+    expect(nav).toContain("<NavLinks links={links} primaryAria={chrome.navPrimaryAria} />");
     expect(nav).toContain("links={links}");
     expect(mobileMenu).toContain("links.map");
     expect(navLinks).toContain("links.map");
+    // One generator feeds both surfaces — no per-locale hardcoded arrays.
+    expect(nav).toContain("navLinks(locale, chrome)");
+    expect(nav).not.toMatch(/const (EN|ZH)_LINKS/);
   });
 
-  it("keeps en/zh nav link paths in exact locale-swap parity", () => {
-    const enHrefs = [...nav.matchAll(/href: "\/en\/([^"]+)"/g)].map((m) => m[1]);
-    const zhHrefs = [...nav.matchAll(/href: "\/zh\/([^"]+)"/g)].map((m) => m[1]);
-    expect(enHrefs.length).toBeGreaterThanOrEqual(4);
-    expect(enHrefs).toEqual(zhHrefs);
-    expect(enHrefs).toContain("docs/guide");
-    expect(enHrefs).toContain("faq");
+  it("keeps nav link paths in exact locale-swap parity for every routed locale", () => {
+    // The hardcoded /en/ and /zh/ arrays are gone; assert the generated set
+    // directly, across every routed locale rather than only two of them.
+    const reference = buildNavLinks("en", getChrome("en")).map((l) =>
+      l.href.replace(/^\/en\//, ""),
+    );
+    expect(reference.length).toBeGreaterThanOrEqual(4);
+    expect(reference).toContain("docs/guide");
+    expect(reference).toContain("faq");
+    for (const locale of locales) {
+      const links = buildNavLinks(locale, getChrome(locale));
+      expect(
+        links.map((l) => l.href.replace(new RegExp(`^/${locale}/`), "")),
+        `${locale} nav routes`,
+      ).toEqual(reference);
+      for (const link of links) {
+        expect(link.href.startsWith(`/${locale}/`), `${locale} ${link.href}`).toBe(true);
+        expect(link.label.trim().length, `${locale} empty nav label`).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("keeps footer link paths in exact locale-swap parity for every routed locale", () => {
+    const reference = footerProductLinks("en", getChrome("en")).map((l) =>
+      l.href.replace(/^\/en\//, ""),
+    );
+    expect(reference).toContain("docs/guide");
+    expect(reference).toContain("faq");
+    for (const locale of locales) {
+      const product = footerProductLinks(locale, getChrome(locale));
+      expect(
+        product.map((l) => l.href.replace(new RegExp(`^/${locale}/`), "")),
+        `${locale} footer product routes`,
+      ).toEqual(reference);
+      const project = footerProjectLinks(locale, getChrome(locale));
+      expect(project.map((l) => l.href), `${locale} footer project routes`).toEqual([
+        "https://github.com/Hmbown/CodeWhale",
+        "https://github.com/Hmbown/CodeWhale/issues",
+        `/${locale}/contribute`,
+        "https://github.com/Hmbown/CodeWhale/blob/main/LICENSE",
+      ]);
+    }
   });
 
   it("labels the primary nav and marks the current page accessibly", () => {
-    expect(navLinks).toContain('aria-label={isZh ? "主导航" : "Primary"}');
+    expect(navLinks).toContain("aria-label={primaryAria}");
+    expect(getChrome("en").navPrimaryAria).toBe("Primary");
+    expect(getChrome("zh").navPrimaryAria).toBe("主导航");
     expect(navLinks).toContain('aria-current={isActive ? "page" : undefined}');
     expect(mobileMenu).toContain('aria-current={isActive ? "page" : undefined}');
     expect(mobileMenu).toContain('aria-expanded={open}');
@@ -138,12 +184,20 @@ describe("navigation parity and accessibility", () => {
   });
 
   it("keeps the footer discovery links alongside the pinned legal links", () => {
-    expect(footer).toContain('href: "/en/docs/guide"');
-    expect(footer).toContain('href: "/zh/docs/guide"');
-    expect(footer).toContain('href: "/en/faq"');
-    expect(footer).toContain(
-      '{ label: "MIT license", href: "https://github.com/Hmbown/CodeWhale/blob/main/LICENSE" }',
-    );
+    // The link sets moved to lib/i18n/links.ts, so assert the rendered
+    // contract for en AND zh rather than scraping literals out of the TSX.
+    for (const locale of ["en", "zh"]) {
+      const product = footerProductLinks(locale, getChrome(locale)).map((l) => l.href);
+      expect(product, `${locale} footer product`).toContain(`/${locale}/docs/guide`);
+      expect(product, `${locale} footer product`).toContain(`/${locale}/faq`);
+    }
+    const license = footerProjectLinks("en", getChrome("en")).at(-1);
+    expect(license).toEqual({
+      label: "MIT license",
+      href: "https://github.com/Hmbown/CodeWhale/blob/main/LICENSE",
+    });
+    expect(footer).toContain("footerProductLinks(locale, chrome)");
+    expect(footer).toContain("footerProjectLinks(locale, chrome)");
   });
 });
 
@@ -162,7 +216,9 @@ describe("homepage integration", () => {
     // Guard against the new band accidentally displacing the public-copy
     // gate's required surface (the full contract lives in public-copy.test.ts).
     expect(homepage).toContain("facts.latestPublishedRelease");
-    expect(homepage).toContain("Source candidate");
+    // "Source candidate" is now the EN dictionary value the page renders.
+    expect(homepage).toContain("d.sourceCandidate");
+    expect(getHome("en").sourceCandidate).toBe("Source candidate");
     expect(homepage).toContain('src="/codewhale-tui.png"');
     for (const label of ["Plan", "Act", "Operate", "Ask", "Auto-Review", "Full Access"]) {
       expect(homepage).toContain(label);

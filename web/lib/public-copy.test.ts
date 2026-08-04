@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { FACTS } from "./facts.generated";
 import { RELEASE_CONTRIBUTORS, RELEASE_HELPERS } from "./release-credits";
+import { EN_CHROME, EN_HOME, getChrome, getHome } from "./i18n/dictionaries";
 
 function pageSource(path: string): string {
   return readFileSync(new URL(`../app/[locale]/${path}`, import.meta.url), "utf8");
@@ -35,6 +36,15 @@ describe("public website copy contracts", () => {
     expect(footer).not.toContain("App preview");
     expect(footer).not.toContain("app.codewhale.net");
     expect(footer).not.toMatch(/Create account|Sign up/);
+
+    // Footer copy is dictionary-driven now, so the same ban has to hold
+    // wherever the strings actually live — in every locale, not just the TSX.
+    for (const locale of ["en", "zh", "ja", "vi", "ko", "ru", "uk", "es", "pt-BR", "id"]) {
+      const values = Object.values(getChrome(locale)).join("\n");
+      expect(values, `${locale} chrome`).not.toContain("app.codewhale.net");
+      expect(values, `${locale} chrome`).not.toMatch(/Create account|Sign up|App preview/);
+    }
+    expect(EN_CHROME.footerLicense).toBe("MIT license");
   });
 
   it("describes ACP and the VS Code extension at their implemented capability level", () => {
@@ -92,10 +102,22 @@ describe("public website copy contracts", () => {
     const community = pageSource("community/page.tsx");
 
     expect(homepage).toContain("facts.latestPublishedRelease");
-    expect(homepage).toContain("source candidate");
+    // The machine-readable source-state attribute stays a literal.
+    expect(homepage).toContain('data-source-state={sourceIsPublished ? "published release" : "source candidate"}');
     expect(homepage).toContain("publishedRelease.url");
-    expect(homepage).toContain("Source candidate");
-    expect(homepage).toContain("provider routes");
+    // The visible wording moved into the dictionary layer (#4934). Assert the
+    // rendered contract — the EN reference value plus the page's use of it —
+    // instead of a raw TSX string, and hold every locale to a real value.
+    expect(homepage).toContain("d.sourceCandidate");
+    expect(homepage).toContain("d.currentSource");
+    expect(EN_HOME.sourceCandidate).toBe("Source candidate");
+    expect(EN_HOME.currentSource).toBe("Current source");
+    expect(homepage).toContain("fill(d.providerRoutes, { count: providerCount })");
+    expect(EN_HOME.providerRoutes).toBe("{count} provider routes");
+    for (const locale of ["zh", "ja", "ru", "pt-BR"]) {
+      expect(getHome(locale).providerRoutes, `${locale} providerRoutes`).toContain("{count}");
+      expect(getHome(locale).sourceCandidate.trim().length).toBeGreaterThan(0);
+    }
     expect(homepage).not.toContain("releases/tag/v${version}");
     expect(homepage).not.toMatch(/Codewhale v0\.9\.1|\"v0\.9\.1 \u00b7/);
     expect(install).toContain("publishedRelease.tag");

@@ -3,17 +3,20 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-
-type MobileLink = { href: string; label: string; cn?: string };
+import type { ChromeLink } from "@/lib/i18n/links";
 
 export function MobileMenu({
   links,
   installHref,
   installLabel,
+  openLabel,
+  closeLabel,
 }: {
-  links: MobileLink[];
+  links: ChromeLink[];
   installHref: string;
   installLabel: string;
+  openLabel: string;
+  closeLabel: string;
 }) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
@@ -38,7 +41,7 @@ export function MobileMenu({
         type="button"
         onClick={() => setOpen((o) => !o)}
         className="md:hidden inline-flex items-center justify-center w-9 h-9 hairline-t hairline-b hairline-l hairline-r hover:bg-paper-deep transition-colors"
-        aria-label={open ? "Close menu" : "Open menu"}
+        aria-label={open ? closeLabel : openLabel}
         aria-expanded={open}
         aria-controls="mobile-menu"
       >
@@ -56,7 +59,7 @@ export function MobileMenu({
       {open && (
         <div
           id="mobile-menu"
-          className="md:hidden fixed inset-x-0 top-[4.25rem] bottom-0 z-40 bg-paper hairline-t overflow-y-auto"
+          className="md:hidden fixed inset-x-0 top-[5.75rem] bottom-0 z-40 bg-paper hairline-t overflow-y-auto"
           role="dialog"
           aria-modal="true"
         >
@@ -73,8 +76,8 @@ export function MobileMenu({
                       aria-current={isActive ? "page" : undefined}
                     >
                       <span className="font-display text-lg">{l.label}</span>
-                      {l.cn && (
-                        <span className="font-cjk text-sm text-ink-mute">{l.cn}</span>
+                      {l.secondary && (
+                        <span className="font-cjk text-sm text-ink-mute">{l.secondary}</span>
                       )}
                       <span className="ml-auto font-mono text-xs text-ink-mute">→</span>
                     </Link>

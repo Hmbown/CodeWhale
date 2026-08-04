@@ -15,7 +15,7 @@ Customer-visible copy also follows the [Codewhale voice and terminal
 charter](VOICE.md); commands, key names, and glyphs remain code-owned around
 localized prose.
 
-Last updated: 2026-07-29 (v0.9.2 wave).
+Last updated: 2026-08-03 (v0.9.4 website dictionary spine, #4934).
 Source-of-truth README: `README.md` (English, post-#3087).
 
 ## Status legend
@@ -62,16 +62,29 @@ The website derives routing, the switcher, sitemap, and hreflang from
 `ALL_LOCALES` in `web/lib/i18n/config.ts` — one canonical registry, no
 second taxonomy. **partial** locales route and are selectable with a
 visible `(partial)` badge in the switcher; their dictionaries
-(`web/lib/i18n/dictionaries/<code>/`) cover shared chrome (nav, footer,
-switcher) and the home page, held to exact key parity with the English
-reference by `npm run check:locales` and `web/lib/i18n/dictionaries.test.ts`.
+(`web/lib/i18n/dictionaries/<code>/`) cover shared chrome (masthead, nav,
+mobile menu, theme toggle, live ticker, footer, switcher) and the home page,
+held to exact key parity with the English reference by
+`npm run check:locales` and `web/lib/i18n/dictionaries.test.ts`.
 Everything outside that scope renders the English page copy — a deliberate
 fallback, never a dictionary key on screen.
 
+**As of #4934 (v0.9.4) there is one dictionary path for every routed
+locale, Chinese included.** `web/app/[locale]/page.tsx`,
+`web/components/nav.tsx`, and `web/components/footer.tsx` no longer carry an
+`isZh` / `foreign` copy branch: they read `getHome(locale)` and
+`getChrome(locale)`. `web/lib/i18n/dictionaries/zh/` now exists (it used to
+be inline TSX), and nav/footer link sets are generated once in
+`web/lib/i18n/links.ts` so every locale gets the identical route shape.
+Reference shape: **`ChromeDict` 51 keys, `HomeDict` 60 keys.** Bilingual
+secondary nav labels, the masthead seal and issue line, the ticker live
+label, and the per-locale `Intl` date tag are dictionary values — no locale
+renders another language's script by accident.
+
 | Locale | Code | Status | Notes |
 |--------|------|--------|-------|
-| English | `en` | **shipped** | Source text. Every page has an EN route. |
-| Simplified Chinese | `zh` | **shipped** | Full parity with EN on all first-class pages (inline en/zh copy). |
+| English | `en` | **shipped** | Source text and the reference dictionary shape. Every page has an EN route. |
+| Simplified Chinese | `zh` | **shipped** | Full parity with EN on all first-class pages. Chrome + home are dictionary-backed (`dictionaries/zh/`) as of #4934; the remaining page bodies are still inline `{ en, zh }` content modules. |
 | Japanese | `ja` | **partial** | #3091. Chrome + home page localized via dictionary; other page bodies/metadata fall back to English. |
 | Vietnamese | `vi` | **partial** | #3091. Same scope as Japanese. |
 | Korean | `ko` | **partial** | #3093. Same scope as Japanese. |
@@ -86,10 +99,21 @@ fallback, never a dictionary key on screen.
 | Hindi | `hi` | **planned** | #4790 — TUI pack shipped in v0.9.2; website next wave. |
 | Arabic | `ar` | **deferred** | RTL candidate. Deferred until layout/typography QA exists (bidirectional text, mirrored chrome, number formatting). |
 
+Every partial locale carries the full 52/62 key set (see
+`npm run check:locales`); the chrome and home page are genuinely translated,
+not English pass-through — `dictionaries.test.ts` fails on an English
+prose value in a non-English pack. The new v0.9.4 strings are
+machine-translated to the same standard as the rest of each pack and are
+**awaiting native-speaker review**, consistent with the TUI packs above.
+
 Remaining website scope for the partial locales (next wave): per-page body
-copy and `generateMetadata` titles/descriptions beyond the home page. The
-dictionary layer, routing, hreflang, and switcher already cover them, so
-filling in a page is a dictionary edit, not plumbing.
+copy and `generateMetadata` titles/descriptions beyond the home page, the
+`{ en, zh }` shared-content modules under `web/lib/content/`, the
+TerminalPlayer scene excerpts in `web/components/thinking-trace.tsx`, and
+the `KIND_LABEL` pairs in `web/components/feed-card.tsx`. The dictionary
+layer, routing, hreflang, and switcher already cover them, so filling in a
+page is a dictionary edit, not plumbing. That remaining English is exactly
+what the `(partial)` badge is honest about.
 
 ## README locales
 
@@ -113,7 +137,9 @@ filling in a page is a dictionary edit, not plumbing.
 | TUI pack key parity with `en.json` (complete packs) | `scripts/check-tui-locale-parity.py` + parity tests in `crates/tui/src/localization.rs` | **Shipped** (CI Lint job) |
 | README translations stay in sync with `README.md` | `scripts/check-readme-translations.py` | **Shipped** (CI Lint job) |
 | README locale links symmetric | `scripts/check-readme-locales.sh` | **Shipped** (CI Lint job) |
-| Website dictionaries cover all routed partial locales | `npm run check:locales` + `web/lib/i18n/dictionaries.test.ts` | **Shipped** (#3091) |
+| Website dictionaries cover every routed locale except the `en` reference | `npm run check:locales` + `web/lib/i18n/dictionaries.test.ts` | **Shipped** (#3091, extended to `zh` in #4934) |
+| No unmarked English prose survives in a non-English website dictionary | `leaves no unmarked English prose in any non-English dictionary` in `web/lib/i18n/dictionaries.test.ts` | **Shipped** (#4934) |
+| Nav/footer routes stay in locale-swap parity for every routed locale | `web/lib/docs-ia.test.ts` over `web/lib/i18n/links.ts` | **Shipped** (#4934) |
 | Accept-Language routes deterministically to all routed locales | `web/lib/i18n/detect.test.ts` (middleware delegates to `lib/i18n/detect.ts`) | **Shipped** (#3091) |
 | Locale selector lists all routed locales with partial badges | `web/lib/i18n/config.test.ts` (switcher + router derive from one registry) | **Shipped** (#3091) |
 | hreflang alternates cover every routed locale | `web/lib/page-meta.test.ts` | **Shipped** (#3091) |

@@ -1,5 +1,5 @@
 /**
- * Dictionary loader for the website localization layer (#3091).
+ * Dictionary loader for the website localization layer (#3091, #4934).
  *
  * Lookup is deterministic: a routed locale with a dictionary gets its own
  * copy; every other locale gets the English reference dictionary. There is
@@ -7,10 +7,16 @@
  * exact key parity with English by `web/scripts/check-locales.mjs` and
  * `dictionaries.test.ts`, so a missing key is a build-time failure, never
  * a runtime "missing marker".
+ *
+ * English resolves through the `?? enChrome` / `?? enHome` fallback rather
+ * than a map entry, which keeps `DICTIONARY_LOCALES` equal to the set of
+ * non-reference locale directories that `check-locales.mjs` walks.
  */
 import type { ChromeDict, HomeDict } from "./types";
 import { chrome as enChrome } from "./en/chrome";
 import { home as enHome } from "./en/home";
+import { chrome as zhChrome } from "./zh/chrome";
+import { home as zhHome } from "./zh/home";
 import { chrome as jaChrome } from "./ja/chrome";
 import { home as jaHome } from "./ja/home";
 import { chrome as viChrome } from "./vi/chrome";
@@ -29,6 +35,7 @@ import { chrome as idChrome } from "./id/chrome";
 import { home as idHome } from "./id/home";
 
 const CHROME: Record<string, ChromeDict> = {
+  zh: zhChrome,
   ja: jaChrome,
   vi: viChrome,
   ko: koChrome,
@@ -40,6 +47,7 @@ const CHROME: Record<string, ChromeDict> = {
 };
 
 const HOME: Record<string, HomeDict> = {
+  zh: zhHome,
   ja: jaHome,
   vi: viHome,
   ko: koHome,
@@ -50,8 +58,7 @@ const HOME: Record<string, HomeDict> = {
   id: idHome,
 };
 
-/** Locales with a dictionary (English and Chinese stay inline in the
- * page/component sources — see web/README.md "Pages are bilingual"). */
+/** Locales with their own dictionary directory (English is the reference). */
 export const DICTIONARY_LOCALES = Object.keys(CHROME) as readonly string[];
 
 export function getChrome(locale: string): ChromeDict {
@@ -72,4 +79,15 @@ export function fill(template: string, vars: Record<string, string | number>): s
   return template.replace(/\{(\w+)\}/g, (match, name: string) =>
     name in vars ? String(vars[name]) : match,
   );
+}
+
+/**
+ * Split a template on a single `{token}` so a call site can typeset the
+ * substituted value as its own element without concatenating translated
+ * fragments around it. Returns the literal parts in template order — the
+ * caller interleaves its node between them, so a locale that puts the token
+ * in a different position still renders correctly.
+ */
+export function splitToken(template: string, token: string): string[] {
+  return template.split(`{${token}}`);
 }

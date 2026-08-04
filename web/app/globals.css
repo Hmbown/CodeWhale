@@ -15,6 +15,9 @@
   --c-ink-mute: 91 103 128;
   --c-stage-soft: 182 192 212;
 
+  /* Paper-newspaper baseline (issue #4934) uses Blue Stage light tokens so
+     the editorial sheet stays in lockstep with the TUI palette. Ocean deep
+     values below power the terminal chrome accents only. */
   --paper: #f4f7fb;
   --paper-deep: #e8eef8;
   --paper-edge: #cbd3df;
@@ -72,7 +75,7 @@ body {
 main, header, footer, nav { position: relative; z-index: 1; }
 
 /* ---------- type ---------- */
-.font-display { font-family: var(--font-display), "Space Grotesk", "Noto Sans SC", system-ui, sans-serif; }
+.font-display { font-family: var(--font-display), "Fraunces", "Noto Serif SC", Georgia, serif; }
 .font-cjk { font-family: "Noto Serif SC", "Source Han Serif SC", serif; }
 
 /* CJK paragraph rhythm — looser leading, wider tracking for body; tighter for headings */
@@ -95,7 +98,7 @@ main, header, footer, nav { position: relative; z-index: 1; }
 .font-mono { font-family: var(--font-mono), "JetBrains Mono", ui-monospace, monospace; }
 
 h1, h2, h3, h4 {
-  font-family: var(--font-display), "Space Grotesk", "Noto Sans SC", system-ui, sans-serif;
+  font-family: var(--font-display), "Fraunces", "Noto Serif SC", Georgia, serif;
   font-weight: 600;
   letter-spacing: -0.03em;
   color: var(--ink);
@@ -288,7 +291,8 @@ mark.search-highlight {
   z-index: 30;
   top: 0;
   border-bottom: 1px solid var(--hairline);
-  background: rgba(247, 248, 250, 0.98);
+  background: rgba(244, 247, 251, 0.94);
+  backdrop-filter: blur(10px);
 }
 
 .site-nav-inner {
@@ -307,10 +311,109 @@ mark.search-highlight {
   align-items: center;
   gap: 0.7rem;
   color: var(--ink);
-  font-family: var(--font-display), "Space Grotesk", system-ui, sans-serif;
+  font-family: var(--font-display), "Fraunces", Georgia, serif;
   font-size: 1.15rem;
   font-weight: 600;
   letter-spacing: -0.03em;
+}
+
+/* Newspaper masthead (issue #4934 baseline) */
+.paper-issue-bar {
+  border-bottom: 1px solid var(--hairline);
+  background: var(--paper);
+}
+
+.paper-issue-inner {
+  display: flex;
+  width: min(100% - 2.5rem, 74rem);
+  margin-inline: auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-block: 0.4rem;
+  font-family: var(--font-mono), "JetBrains Mono", monospace;
+  font-size: 0.62rem;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+
+.paper-issue-left,
+.paper-issue-right {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.paper-issue-sep { opacity: 0.55; }
+
+.paper-nav-inner {
+  min-height: 3.85rem;
+  padding-block: 0.55rem;
+}
+
+.paper-wordmark {
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.paper-wordmark-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+  min-width: 0;
+}
+
+.paper-wordmark-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 1.25rem;
+  letter-spacing: -0.03em;
+}
+
+.paper-wordmark-whale {
+  color: var(--indigo);
+  flex-shrink: 0;
+}
+
+.paper-wordmark-tag {
+  margin-top: 0.18rem;
+  font-family: "Noto Serif SC", "Source Han Serif SC", serif;
+  font-size: 0.66rem;
+  font-weight: 400;
+  letter-spacing: 0.12em;
+  color: var(--ink-mute);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.paper-star-badge {
+  font-family: var(--font-mono), "JetBrains Mono", monospace;
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.paper-install-cta {
+  align-items: center;
+  min-height: 2.25rem;
+  padding: 0.35rem 0.85rem;
+  background: var(--indigo);
+  color: var(--paper);
+  font-family: var(--font-mono), "JetBrains Mono", monospace;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  transition: background-color 150ms ease;
+}
+
+.paper-install-cta:hover {
+  background: var(--indigo-deep);
+  color: var(--paper);
 }
 
 .site-nav-actions {
@@ -1038,7 +1141,8 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 }
 
 /* ------------------------------------------------------------------ */
-/*  Product-first home                                                */
+/*  Product home — newspaper baseline + ocean terminal accents        */
+/*  (issue #4934: restore crisp editorial sheet; fit underwater to it) */
 /* ------------------------------------------------------------------ */
 
 .product-home {
@@ -1051,12 +1155,15 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   margin-inline: auto;
 }
 
-.product-hero {
+.product-hero,
+.paper-hero {
   position: relative;
   overflow: hidden;
-  border-bottom: 1px solid rgba(106, 174, 242, 0.2);
-  background: #071525;
-  color: var(--stage-soft);
+  border-bottom: 1px solid var(--hairline);
+  background:
+    linear-gradient(180deg, rgba(232, 238, 248, 0.55) 0%, transparent 42%),
+    var(--paper);
+  color: var(--ink);
 }
 
 .product-hero-brandline {
@@ -1064,7 +1171,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   align-items: center;
   gap: 0.65rem;
   margin-bottom: 1.35rem;
-  color: var(--stage-text);
+  color: var(--ink);
   font-size: 0.78rem;
   font-weight: 600;
 }
@@ -1072,9 +1179,9 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 .product-hero-brandline em {
   margin-left: 0.25rem;
   padding: 0.2rem 0.48rem;
-  border: 1px solid rgba(106, 174, 242, 0.32);
+  border: 1px solid var(--hairline);
   border-radius: 4px;
-  color: var(--action-on-dark);
+  color: var(--ink-mute);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
   font-size: 0.62rem;
   font-style: normal;
@@ -1085,7 +1192,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 
 .product-kicker {
   margin: 0 0 0.85rem;
-  color: var(--ocean-current);
+  color: var(--ink-mute);
   font-family: var(--font-mono), "JetBrains Mono", ui-monospace, monospace;
   font-size: 0.72rem;
   font-weight: 500;
@@ -1093,22 +1200,24 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   text-transform: uppercase;
 }
 
-.product-hero-grid {
+.product-hero-grid,
+.paper-hero-grid {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(23rem, 0.82fr) minmax(34rem, 1.18fr);
-  gap: clamp(2rem, 4vw, 4rem);
-  align-items: center;
-  min-height: 43rem;
-  padding-block: clamp(4rem, 7vw, 6rem);
+  grid-template-columns: minmax(22rem, 1fr) minmax(22rem, 1fr);
+  gap: clamp(1.75rem, 3.5vw, 3.5rem);
+  align-items: start;
+  min-height: 0;
+  padding-block: clamp(2.5rem, 5vw, 4.25rem);
 }
 
-.product-hero-copy h1 {
-  color: #fff;
-  max-width: 40rem;
-  font-size: clamp(2.8rem, 5vw, 4.65rem);
-  line-height: 0.99;
-  letter-spacing: -0.045em;
+.product-hero-copy h1,
+.paper-hero-copy h1 {
+  color: var(--ink);
+  max-width: 38rem;
+  font-size: clamp(2.35rem, 4.6vw, 4.15rem);
+  line-height: 1.02;
+  letter-spacing: -0.035em;
 }
 
 .product-hero-copy,
@@ -1116,103 +1225,150 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   min-width: 0;
 }
 
-.product-hero-copy h1 span {
-  color: var(--action-on-dark);
+.product-hero-copy h1 span,
+.paper-hero-accent {
+  color: var(--indigo);
 }
 
+.paper-hero-lede,
 .product-hero-copy > p {
   max-width: 38rem;
-  margin-top: 1.5rem;
-  color: rgb(var(--c-stage-soft) / 0.84);
-  font-size: clamp(1rem, 1.6vw, 1.18rem);
-  line-height: 1.68;
+  margin-top: 1.35rem;
+  color: var(--ink-soft);
+  font-size: clamp(1rem, 1.5vw, 1.12rem);
+  line-height: 1.72;
 }
 
-.product-actions {
+.product-actions,
+.paper-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem;
-  margin-top: 1.7rem;
+  margin-top: 1.55rem;
 }
 
 .product-button {
   display: inline-flex;
   min-width: 6.4rem;
-  min-height: 2.85rem;
+  min-height: 2.75rem;
   align-items: center;
   justify-content: center;
-  padding: 0.7rem 1rem;
-  border: 1px solid rgba(209, 235, 244, 0.42);
-  border-radius: 4px;
-  color: var(--stage-text);
-  font-size: 0.82rem;
+  padding: 0.65rem 1rem;
+  border: 1px solid var(--ink);
+  border-radius: 2px;
+  color: var(--ink);
+  font-family: var(--font-mono), "JetBrains Mono", monospace;
+  font-size: 0.74rem;
   font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   transition: border-color 150ms ease, background-color 150ms ease, color 150ms ease;
 }
 
 .product-button:hover {
-  border-color: var(--action-on-dark);
-  background: rgba(106, 174, 242, 0.08);
+  border-color: var(--indigo);
+  background: var(--indigo-pale);
+  color: var(--indigo-deep);
 }
 
 .product-button-primary {
-  border-color: var(--action-on-dark);
-  background: var(--action-on-dark);
-  color: var(--ocean-deep);
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--paper);
 }
 
 .product-button-primary:hover {
-  border-color: #94c9f8;
-  background: #94c9f8;
+  border-color: var(--indigo);
+  background: var(--indigo);
+  color: var(--paper);
 }
 
-.product-install {
+.product-button-ghost {
+  border-color: transparent;
+  color: var(--ink-mute);
+}
+
+.product-button-ghost:hover {
+  border-color: transparent;
+  background: transparent;
+  color: var(--indigo);
+}
+
+.product-install,
+.paper-install {
   max-width: 32rem;
-  margin-top: 1.4rem;
+  margin-top: 1.5rem;
 }
 
-.product-install pre.code-block {
-  border-color: rgba(209, 235, 244, 0.22);
-  background: rgba(2, 8, 18, 0.64);
+.product-install pre.code-block,
+.paper-install pre.code-block {
+  border-color: var(--ocean-mid);
+  background: linear-gradient(180deg, #131d31 0%, #060b16 100%);
+  color: var(--stage-text);
 }
 
-.product-facts {
+.paper-install-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin-top: 0.55rem;
   font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.75rem !important;
+  font-size: 0.68rem;
+  color: var(--ink-mute);
+}
+
+.product-facts,
+.paper-facts {
+  margin-top: 1.1rem;
+  font-family: var(--font-mono), "JetBrains Mono", monospace;
+  font-size: 0.72rem !important;
+  color: var(--ink-mute);
+  line-height: 1.55;
 }
 
 .product-facts span {
   padding-inline: 0.35rem;
-  color: var(--stage-muted);
+  color: var(--ink-mute);
 }
 
-.product-shot {
+/* Ocean terminal frame around the newest session capture */
+.product-shot,
+.paper-shot {
   position: relative;
   margin: 0;
   overflow: hidden;
-  border: 1px solid rgba(106, 174, 242, 0.32);
-  border-radius: 8px;
+  border: 1px solid rgba(15, 22, 38, 0.88);
+  border-radius: 6px;
   background: var(--ocean-deep);
+  box-shadow:
+    0 0 0 1px rgba(79, 209, 197, 0.08),
+    0 18px 48px rgba(3, 7, 13, 0.18);
 }
 
-.product-shot-toolbar {
+.product-shot-toolbar,
+.paper-shot-toolbar {
   display: flex;
-  min-height: 2.75rem;
+  min-height: 2.55rem;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 0.55rem 0.8rem;
-  border-bottom: 1px solid rgba(106, 174, 242, 0.24);
+  padding: 0.5rem 0.8rem;
+  border-bottom: 1px solid rgba(79, 209, 197, 0.16);
+  background: linear-gradient(180deg, #131d31 0%, #0a1220 100%);
   color: var(--stage-muted);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
   font-size: 0.64rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .product-shot-toolbar > span:first-child {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  color: var(--stage-text);
+  color: var(--signal-gold);
 }
 
 .product-shot img {
@@ -1223,17 +1379,19 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 }
 
 .product-shot figcaption {
-  padding: 0.65rem 0.8rem;
-  border-top: 1px solid rgba(106, 174, 242, 0.2);
+  padding: 0.6rem 0.8rem;
+  border-top: 1px solid rgba(79, 209, 197, 0.12);
+  background: #060b16;
   color: var(--stage-muted);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.66rem;
+  font-size: 0.64rem;
   text-align: right;
 }
 
+/* Paper home keeps light sticky nav (no dark ocean override). */
 body:has(.product-home) .site-nav {
-  border-color: rgba(106, 174, 242, 0.22);
-  background: rgba(7, 21, 37, 0.98);
+  border-color: var(--hairline);
+  background: rgba(244, 247, 251, 0.94);
 }
 
 body:has(.product-home) .site-wordmark,
@@ -1241,13 +1399,44 @@ body:has(.product-home) .nav-link,
 body:has(.product-home) .site-github-link,
 body:has(.product-home) .site-nav-actions button,
 body:has(.product-home) .site-nav-actions select {
-  color: var(--stage-text);
+  color: var(--ink);
 }
 
 body:has(.product-home) .site-nav-actions button,
 body:has(.product-home) .site-nav-actions select,
 body:has(.product-home) .site-github-link {
-  border-color: rgba(106, 174, 242, 0.3);
+  border-color: var(--hairline);
+}
+
+/* Constitution trace pane */
+.paper-decides {
+  border-bottom: 1px solid var(--hairline);
+  background: var(--paper-deep);
+  padding-block: clamp(2.5rem, 5vw, 4rem);
+}
+
+.paper-decides-grid {
+  display: grid;
+  grid-template-columns: minmax(14rem, 0.85fr) minmax(20rem, 1.15fr);
+  gap: clamp(1.5rem, 4vw, 3rem);
+  align-items: start;
+}
+
+.paper-decides-lede {
+  max-width: 28rem;
+  color: var(--ink-soft);
+  font-size: 0.95rem;
+  line-height: 1.7;
+}
+
+.paper-start {
+  border-bottom: 1px solid var(--hairline);
+  background: var(--paper);
+  padding-block: clamp(2.75rem, 5vw, 4.5rem);
+}
+
+.paper-start .product-start-lede {
+  margin-bottom: 1.5rem;
 }
 
 .product-proof {
@@ -1733,7 +1922,9 @@ body:has(.product-home) .site-github-link {
 }
 
 @media (max-width: 1050px) {
-  .product-hero-grid {
+  .product-hero-grid,
+  .paper-hero-grid,
+  .paper-decides-grid {
     grid-template-columns: 1fr;
     min-height: auto;
   }
@@ -1750,6 +1941,14 @@ body:has(.product-home) .site-github-link {
 @media (max-width: 760px) {
   .product-container {
     width: min(100% - 2rem, 76rem);
+  }
+
+  .paper-issue-inner {
+    width: min(100% - 2rem, 74rem);
+  }
+
+  .paper-wordmark-tag {
+    max-width: 11rem;
   }
 
   .product-proof-grid,
@@ -1810,9 +2009,14 @@ body:has(.product-home) .site-github-link {
     padding-block: 2.75rem 3.5rem;
   }
 
-  .product-hero-copy h1 {
+  .product-hero-copy h1,
+  .paper-hero-copy h1 {
     max-width: 100%;
-    font-size: clamp(2.4rem, 13vw, 3.25rem);
+    font-size: clamp(2.15rem, 11vw, 3rem);
+  }
+
+  .paper-install-cta {
+    display: none;
   }
 
   .product-actions {

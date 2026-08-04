@@ -14,6 +14,8 @@ import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { FACTS } from "./facts.generated";
 import { SNIPPETS } from "./install-binary-snippets";
+import { getChrome, getHome } from "./i18n/dictionaries";
+import { footerProjectLinks } from "./i18n/links";
 
 const root = new URL("../../", import.meta.url);
 
@@ -495,9 +497,25 @@ done
       expect(contributors).toContain(`github.com/${handle.slice(1)}`);
       expect(releaseCredits).toContain(`"${handle}"`);
     }
-    expect(footer).toContain('{ label: "MIT license", href: "https://github.com/Hmbown/CodeWhale/blob/main/LICENSE" }');
-    expect(footer).toContain('{ label: "MIT 许可证", href: "https://github.com/Hmbown/CodeWhale/blob/main/LICENSE" }');
-    expect(footer).toContain('href="https://github.com/Hmbown/CodeWhale/releases"');
+    // The footer link sets are generated from the locale dictionaries
+    // (lib/i18n/links.ts) rather than hardcoded per-locale arrays, so the
+    // exact MIT pairing is asserted on the rendered contract for both the
+    // English and Chinese editions — same guarantee, one source.
+    expect(footerProjectLinks("en", getChrome("en")).at(-1)).toEqual({
+      label: "MIT license",
+      href: "https://github.com/Hmbown/CodeWhale/blob/main/LICENSE",
+    });
+    expect(footerProjectLinks("zh", getChrome("zh")).at(-1)).toEqual({
+      label: "MIT 许可证",
+      href: "https://github.com/Hmbown/CodeWhale/blob/main/LICENSE",
+    });
+    expect(footer).toContain("href={REPO_RELEASES_URL}");
+    expect(text("web/lib/i18n/links.ts")).toContain(
+      'export const REPO_RELEASES_URL = `${REPO_URL}/releases`',
+    );
+    expect(text("web/lib/i18n/links.ts")).toContain(
+      'export const REPO_URL = "https://github.com/Hmbown/CodeWhale"',
+    );
     expect(footer).toContain("GITEE_ENABLED &&");
   });
 
@@ -515,7 +533,21 @@ done
     const homepage = text("web/app/[locale]/page.tsx");
     expect(readme).toContain("assets/screenshot.png");
     expect(homepage).toContain('src="/codewhale-tui.png"');
-    expect(homepage).toContain("Current Codewhale session");
+    // Alt text and figcaption are dictionary-backed (#4934); the screenshot
+    // contract now runs through the EN reference value and the page's use of
+    // it, and every routed locale must caption the same session honestly.
+    expect(homepage).toContain("alt={d.screenshotAlt}");
+    expect(homepage).toContain("<figcaption>{d.figcaption}</figcaption>");
+    expect(getHome("en").figcaption).toBe(
+      "Current Codewhale session · Operate mode · Ask permission posture",
+    );
+    expect(getHome("en").screenshotAlt).toContain("Operate mode");
+    for (const locale of ["zh", "ja", "vi", "ko", "ru", "uk", "es", "pt-BR", "id"]) {
+      const home = getHome(locale);
+      expect(home.figcaption, `${locale} figcaption`).toContain("Operate");
+      expect(home.figcaption, `${locale} figcaption`).toContain("Ask");
+      expect(home.screenshotAlt.trim().length, `${locale} alt`).toBeGreaterThan(0);
+    }
   });
 
   it("keeps reduced motion static without hiding the reasoning trace", () => {

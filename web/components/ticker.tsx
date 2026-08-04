@@ -1,7 +1,16 @@
 import type { FeedItem } from "@/lib/types";
 import { relativeTime } from "@/lib/github";
 
-export function Ticker({ items }: { items: FeedItem[] }) {
+export function Ticker({
+  items,
+  liveLabel,
+  liveTag,
+}: {
+  items: FeedItem[];
+  /** Locale's own live-seal label — never a hardcoded Han string. */
+  liveLabel: string;
+  liveTag: string;
+}) {
   if (!items.length) return null;
   const doubled = [...items, ...items]; // seamless loop
   return (
@@ -9,8 +18,8 @@ export function Ticker({ items }: { items: FeedItem[] }) {
       <div className="mx-auto max-w-[1400px] flex items-stretch">
         <div className="bg-ink text-paper px-4 py-2 flex items-center shrink-0 gap-2">
           <span className="w-1.5 h-1.5 bg-indigo rounded-full inline-block animate-pulse" />
-          <span className="font-cjk text-sm font-semibold tracking-wider">实 时</span>
-          <span className="font-mono text-[0.55rem] uppercase tracking-widest text-paper-deep/60 ml-1 self-end mb-0.5">LIVE</span>
+          <span className="font-cjk text-sm font-semibold tracking-wider">{liveLabel}</span>
+          <span className="font-mono text-[0.55rem] uppercase tracking-widest text-paper-deep/60 ml-1 self-end mb-0.5">{liveTag}</span>
         </div>
         <div className="flex-1 overflow-hidden relative">
           <div className="ticker-track py-2 font-mono text-[0.78rem]">

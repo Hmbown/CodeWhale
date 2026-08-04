@@ -49,7 +49,17 @@ export interface LocaleEntry {
  */
 export const ALL_LOCALES: LocaleEntry[] = [
   { code: "en", label: "English", status: "shipped" },
-  { code: "zh", label: "中文", status: "shipped" },
+  {
+    code: "zh",
+    label: "中文",
+    status: "shipped",
+    // Shipped on the strength of translated first-class page BODIES
+    // (install, FAQ, community, contribute, models, runtime) — a chrome
+    // dictionary alone never earns `shipped`. Chrome + home moved to
+    // dictionaries/zh/ in #4934; the remaining page bodies are still
+    // inline `{ en, zh }` content modules awaiting the same move.
+    note: "#4934 — chrome + home dictionary-backed; first-class page bodies translated inline",
+  },
   {
     code: "ja",
     label: "日本語",

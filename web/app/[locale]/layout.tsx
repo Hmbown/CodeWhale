@@ -1,12 +1,15 @@
 import type { Metadata } from "next";
-import { IBM_Plex_Sans, JetBrains_Mono, Noto_Serif_SC, Space_Grotesk } from "next/font/google";
+import { Fraunces, IBM_Plex_Sans, JetBrains_Mono, Noto_Serif_SC } from "next/font/google";
 import { Nav } from "@/components/nav";
 import { Footer } from "@/components/footer";
 import { locales, type Locale } from "@/lib/i18n/config";
+import { getChrome, getHome } from "@/lib/i18n/dictionaries";
 import { buildPageMetadata } from "@/lib/page-meta";
 import "../globals.css";
 
-const display = Space_Grotesk({
+// Fraunces is the newspaper-era display face the community asked to keep —
+// crisp, editorial, a little futuristic. Body stays IBM Plex for instrument feel.
+const display = Fraunces({
   subsets: ["latin", "vietnamese"],
   weight: ["400", "500", "600", "700"],
   variable: "--font-display",
@@ -42,16 +45,12 @@ export function generateStaticParams() {
 
 export async function generateMetadata({ params }: { params: Promise<{ locale: string }> }): Promise<Metadata> {
   const { locale } = await params;
-  const isZh = locale === "zh";
+  const home = getHome(locale);
   return buildPageMetadata({
     path: "/",
     locale,
-    title: isZh
-      ? "Codewhale — 潜入数据与代码的深海，让你不必亲自下潜"
-      : "Codewhale — Dive into the deep so you don't have to.",
-    description: isZh
-      ? "数据与代码如海。Codewhale 是给你杠杆的终端智能体——读取、修改、验证，让普通人也能用 LLM 把东西做出来。运行在你自己的机器上；Rust 编写，MIT 许可。"
-      : "Codewhale dives into the deep so you don't have to — a terminal agent that gives ordinary people the leverage of LLMs to build things. Runs on your machine. Rust, MIT.",
+    title: home.metaTitle,
+    description: home.metaDescription,
   });
 }
 
@@ -63,6 +62,7 @@ export default async function LocaleLayout({
   params: Promise<{ locale: string }>;
 }) {
   const { locale } = await params;
+  const chrome = getChrome(locale);
 
   return (
     <html
@@ -80,7 +80,7 @@ export default async function LocaleLayout({
           }}
         />
         <a href="#main-content" className="skip-link">
-          {locale === "zh" ? "跳到主要内容" : "Skip to main content"}
+          {chrome.skipToContent}
         </a>
         <Nav locale={locale as Locale} />
         <main id="main-content">{children}</main>

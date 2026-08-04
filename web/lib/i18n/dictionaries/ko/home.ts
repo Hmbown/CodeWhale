@@ -1,60 +1,110 @@
 import type { HomeDict } from "../types";
 
+/**
+ * Korean home dictionary for the newspaper-ocean landing page.
+ *
+ * Product terms stay literal, matching `crates/tui/locales/ko.json`:
+ * Plan / Act / Operate, Ask / Auto-Review / Full Access, Codewhale, Fleet,
+ * `codewhale exec`. "permission posture" renders as 권한 상태 everywhere;
+ * "provider route" as 프로바이더 경로 (the TUI pack uses 경로 for route);
+ * "receipt" as 기록, the reading the TUI pack uses in prose.
+ *
+ * The hero headline is one sentence split across two lines: heroTitleA ends
+ * on the -고 connective so the <br/> break reads as a pause, not as two
+ * sentences.
+ */
 export const home: HomeDict = {
-  kicker: "데이터와 코드의 바다",
-  heroTitleA: "깊은 바다로 잠수하고,",
+  metaTitle: "Codewhale — 깊은 바다로 대신 잠수하고, 당신은 잠수하지 않아도 됩니다.",
+  metaDescription:
+    "Codewhale이 대신 깊이 잠수하므로 당신은 잠수하지 않아도 됩니다. 평범한 사람도 LLM의 힘을 지렛대 삼아 무언가를 만들 수 있게 하는 터미널 에이전트입니다. 당신의 머신에서 실행되며, Rust로 작성한 MIT 라이선스 오픈소스입니다.",
+
+  kicker: "오픈 소스 · 어떤 모델이든 · 터미널에서 실행",
+  heroTitleA: "깊은 바다로 대신 잠수하고,",
   heroTitleB: "당신은 잠수하지 않아도 됩니다.",
   heroIntro:
-    "Codewhale은 평범한 사람들에게 LLM의 지렛대를 건네줍니다. 터미널에서 저장소를 읽고, 파일을 수정하고, 검사를 실행하고, 기록을 남깁니다 — 코드를 이미 알 필요는 없습니다. 당신의 머신에서 실행됩니다.",
+    "{brand}은 평범한 사람도 LLM의 힘을 지렛대 삼아 무언가를 만들 수 있게 합니다. 터미널에서 저장소를 읽고, 파일을 고치고, 검사를 실행하고, 기록을 남깁니다 — 당신이 이미 코드를 안다고 전제하지 않습니다. 당신의 머신에서 실행되며, 모델은 제품이 아니라 언제든 바꿔 끼울 수 있는 구성 요소입니다.",
   install: "설치",
   docs: "문서",
   copy: "복사",
   copied: "복사됨 ✓",
+
+  installEyebrow: "한 줄 설치",
+  installRequirement: "Node 18+ 필요 — Rust 툴체인은 필요 없음",
+  installOtherWays: "다른 방법 →",
+
   latestRelease: "최신 릴리스 {tag}",
-  releaseUnavailable: "릴리스 상태를 사용할 수 없습니다",
+  releaseUnavailable: "릴리스 상태를 확인할 수 없음",
   currentSource: "현재 소스",
   sourceCandidate: "소스 후보",
-  providerRoutes: "프로바이더 라우트 {count}개",
-  screenshotAlt:
-    "로컬 Ollama 라우트를 사용하는 새로운 Codewhale v{version} 터미널 세션, 빈 Work 바 없음",
-  figcaption: "v{version} {state} · 로컬 Ollama 라우트 · Plan / Act / Operate",
-  publishedRelease: "공개 릴리스",
+  providerRoutes: "프로바이더 경로 {count}개",
+  publishedRelease: "정식 릴리스",
   figcaptionSourceCandidate: "소스 후보",
+
+  shotSession: "현재 세션",
+  screenshotAlt:
+    "Operate 모드, 고래, 입력창, 하단 바가 보이는 현재 Codewhale 터미널 세션",
+  figcaption: "현재 Codewhale 세션 · Operate 모드 · Ask 권한 상태",
+
   proofHeading: "수중 터미널 셸. 모델 중립. 로컬 우선.",
   proofBody:
-    "이미 사용 중인 호스티드, 게이트웨이 또는 로컬 모델을 그대로 사용하세요. Codewhale은 당신의 머신에서 실행되며 모델을 제품이 아닌 선택 가능한 구성 요소로 취급합니다. Plan / Act / Operate와 명시적 권한 상태로 깊은 잠수도 통제할 수 있습니다.",
+    "이미 쓰고 있는 호스팅형, 게이트웨이, 로컬 모델을 그대로 가져오세요. Codewhale은 당신의 머신에서 실행되며, 모델을 제품이 아니라 골라 끼우는 구성 요소로 다룹니다. Plan / Act / Operate와 명시적인 권한 상태가 깊은 잠수를 당신의 통제 아래 둡니다.",
+
+  sealDecides: "法",
+  decidesEyebrow: "판단 과정 보기",
+  decidesHeading: "추론 기록에서 확인되는 규칙",
+  decidesLede:
+    "실제 세션에서 그대로 가져온 발췌입니다 — 우선순위가 매겨진 프로젝트 규칙은 랜딩 페이지의 주장이 아니라 모델의 추론 속에서 드러납니다.",
+
+  sealWorkflow: "行",
   workflowHeading: "작업에서 검증된 변경까지.",
   workflow: [
-    ["검사", "저장소, 지침, 작업을 읽습니다."],
-    ["실행", "명시적 승인 경계 안에서 파일을 수정합니다."],
+    ["검사", "저장소와 지침, 그리고 작업 내용을 읽습니다."],
+    ["실행", "명시적인 승인 경계 안에서 파일을 수정합니다."],
     ["검증", "검사를 실행하고 결과를 확인합니다."],
-    ["보고", "간결하고 지속 가능한 기록을 남깁니다."],
+    ["보고", "간결하고 오래 남는 기록을 남깁니다."],
   ],
   receiptAria: "작업 기록 예시",
+  receiptInspect: "저장소와 지침",
+  receiptAct: "선택한 권한 상태 안에서 수정",
+  receiptReport: "검사 통과 · 기록 저장됨",
+
+  sealStart: "起",
+  startHeading: "Codewhale이 처음인가요? 네 단계면 끝입니다.",
+  startLede:
+    "설치 → 키 없이 시작하는 첫 세션 → 프로바이더 연결 → 첫 Fleet 워크플로. 각 용어의 뜻은 용어 페이지에 정리되어 있습니다.",
+  startGuideLink: "시작 가이드 읽기 →",
+  startVocabularyLink: "제품 용어 보기 →",
+
+  sealBoundaries: "界",
   boundariesHeadingA: "당신의 모델.",
   boundariesHeadingB: "당신의 경계.",
   boundariesBody:
-    "모델, 작업 모드, 권한 상태를 명시적으로 선택하세요. 알 수 없는 비용은 알 수 없는 상태로 유지하고, 미리보기 기능은 그렇게 표시합니다.",
-  hostedGatewayLocal: "호스티드, 게이트웨이, 로컬 모델",
+    "모델과 작업 모드, 권한 상태를 직접 고르세요. 알 수 없는 비용은 알 수 없다고 밝히고, 미리보기 단계의 기능은 그대로 미리보기라고 표시합니다.",
+  hostedGatewayLocal: "호스팅형, 게이트웨이, 로컬 모델",
   planActOperateDesc: "읽기 전용 계획부터 자율 실행까지",
   askAutoReviewDesc: "작업에 맞는 권한 상태 선택",
-  tuiExecWebDesc: "대화형 및 헤드리스 런타임 화면",
-  surfacesHeading: "작업이 일어나는 곳에서 런타임을 사용하세요.",
+  tuiExecWebDesc: "대화형과 헤드리스 런타임 인터페이스",
+
+  sealSurfaces: "面",
+  surfacesHeading: "작업이 일어나는 자리에서 런타임을 사용하세요.",
   surfaces: [
     ["TUI", "대화형 터미널 작업"],
     ["codewhale exec", "스크립트와 CI"],
     ["웹 클라이언트", "루프백 전용 브라우저 클라이언트"],
     ["Runtime API + MCP", "로컬 통합"],
-    ["Fleet", "지속적인 멀티 에이전트 작업"],
+    ["Fleet", "지속형 멀티 에이전트 작업"],
   ],
-  runtimeLink: "런타임 화면과 안정성 노트 보기 →",
-  installBandHeading: "하나의 명령으로 시작하세요.",
+  runtimeLink: "런타임 인터페이스와 안정성 노트 보기 →",
+
+  installBandHeading: "명령 하나로 시작하세요.",
   binaries: "바이너리",
   chinaMirrors: "중국 미러",
   installGuideLink: "설치 가이드 읽기 →",
-  communityHeading: "공개적으로 개발",
+
+  sealCommunity: "众",
+  communityHeading: "공개적으로 개발합니다",
   communityBody:
-    "MIT 라이선스이며 런타임, 프로바이더, 플랫폼, 문서, 테스트 전반의 기여자들이 함께 만들어 갑니다.",
+    "MIT 라이선스로 공개되어 있으며, 런타임과 프로바이더, 플랫폼, 문서, 테스트 전반의 기여자들이 함께 만들어 갑니다.",
   communityLinksAria: "커뮤니티 링크",
-  contribute: "기여",
+  contribute: "기여하기",
 };

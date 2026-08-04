@@ -2,7 +2,7 @@
 
 import { useRouter, usePathname } from "next/navigation";
 import { ALL_LOCALES, locales } from "@/lib/i18n/config";
-import { getChrome } from "@/lib/i18n/dictionaries";
+import { fill, getChrome } from "@/lib/i18n/dictionaries";
 
 /** Labels for the dropdown. Keyed by locale code, displayed in native script. */
 const LOCALE_LABELS: Record<string, string> = {};
@@ -42,7 +42,7 @@ export function LocaleSwitcher({ current }: { current: string }) {
       <button
         onClick={() => switchLocale(other.code)}
         className="font-mono text-[0.72rem] uppercase text-ink-mute hover:text-indigo transition-colors px-2 py-1"
-        aria-label={`Switch to ${other.label}`}
+        aria-label={fill(chrome.switcherSwitchTo, { label: other.label })}
       >
         {other.label}
       </button>

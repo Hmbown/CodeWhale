@@ -15,6 +15,7 @@
 
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
+import { fill } from "@/lib/i18n/dictionaries";
 
 type Mode = "auto" | "light" | "dark";
 const ORDER: Mode[] = ["auto", "light", "dark"];
@@ -26,7 +27,20 @@ function apply(mode: Mode) {
   else el.setAttribute("data-theme", mode);
 }
 
-export function ThemeToggle({ isZh = false }: { isZh?: boolean }) {
+export function ThemeToggle({
+  autoLabel,
+  lightLabel,
+  darkLabel,
+  ariaTemplate,
+  titleLabel,
+}: {
+  autoLabel: string;
+  lightLabel: string;
+  darkLabel: string;
+  /** "Docs theme: {mode} (click to cycle)" — interpolated with fill(). */
+  ariaTemplate: string;
+  titleLabel: string;
+}) {
   const pathname = usePathname();
   const [mode, setMode] = useState<Mode>("auto");
   const [mounted, setMounted] = useState(false);
@@ -51,9 +65,11 @@ export function ThemeToggle({ isZh = false }: { isZh?: boolean }) {
     apply(next);
   };
 
-  const labels: Record<Mode, string> = isZh
-    ? { auto: "自动", light: "浅色", dark: "深色" }
-    : { auto: "auto", light: "light", dark: "dark" };
+  const labels: Record<Mode, string> = {
+    auto: autoLabel,
+    light: lightLabel,
+    dark: darkLabel,
+  };
   const glyph: Record<Mode, string> = { auto: "◐", light: "☀", dark: "☾" };
 
   return (
@@ -61,8 +77,8 @@ export function ThemeToggle({ isZh = false }: { isZh?: boolean }) {
       type="button"
       onClick={cycle}
       className="inline-flex items-center gap-1.5 px-1.5 py-0.5 hairline-l hairline-r hairline-t hairline-b hover:text-indigo transition-colors"
-      aria-label={isZh ? `文档主题：${labels[mode]}（点击切换）` : `Docs theme: ${labels[mode]} (click to cycle)`}
-      title={isZh ? "文档主题 · 自动 / 浅色 / 深色" : "Docs theme · auto / light / dark"}
+      aria-label={fill(ariaTemplate, { mode: labels[mode] })}
+      title={titleLabel}
       suppressHydrationWarning
     >
       <span aria-hidden>{mounted ? glyph[mode] : glyph.auto}</span>

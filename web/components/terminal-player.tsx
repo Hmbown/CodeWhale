@@ -21,7 +21,21 @@ function Caret() {
   return <span className="tp-caret" aria-hidden="true" />;
 }
 
-export function TerminalPlayer({ locale = "en" }: { locale?: string }) {
+export function TerminalPlayer({
+  locale = "en",
+  traceLabel,
+  tabsAria,
+}: {
+  locale?: string;
+  /** Chrome copy from the locale dictionary (getChrome(locale)). */
+  traceLabel: string;
+  tabsAria: string;
+}) {
+  // Scene bodies are faithful excerpts of a real session and live in
+  // components/thinking-trace.tsx as {en, zh} content pairs — the same
+  // shared-content pattern as web/lib/content/. Locales beyond zh fall back
+  // to the English excerpt until that content module gains more pairs
+  // (FINISH-0.9.4 §0A Phase 2); the surrounding chrome is dictionary-driven.
   const isZh = locale === "zh";
   const [active, setActive] = useState(0);
   const scene = SCENES[active];
@@ -87,16 +101,14 @@ export function TerminalPlayer({ locale = "en" }: { locale?: string }) {
             codewhale — thinking
           </span>
         </div>
-        <span className="font-cjk text-[0.6rem] text-paper-deep/70">
-          {isZh ? "推理痕迹" : "reasoning trace"}
-        </span>
+        <span className="font-cjk text-[0.6rem] text-paper-deep/70">{traceLabel}</span>
       </div>
 
       {/* scene tabs */}
       <div
         className="flex border-b border-white/10 overflow-x-auto"
         role="tablist"
-        aria-label={isZh ? "会话片段" : "Session excerpts"}
+        aria-label={tabsAria}
       >
         {SCENES.map((s, i) => (
           <button
