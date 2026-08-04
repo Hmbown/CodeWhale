@@ -233,19 +233,42 @@ Create or copy a Model Studio API key from the
 [Bailian console](https://bailian.console.aliyun.com/). The API key is shared
 across all four provider IDs above; only the base URL and wire protocol differ.
 
-**Thinking / reasoning.** All listed models are hybrid-thinking per Model
-Studio's [deep-thinking docs](https://www.alibabacloud.com/help/en/model-studio/deep-thinking),
-and their reasoning surfaces in the TUI's Thinking view on both dialects. On
-the OpenAI-compatible routes, `reasoning_effort` maps to DashScope's
-`enable_thinking` switch: `off` sends `enable_thinking = false`, any other
-level sends `true` (there is no effort ladder on this dialect), and an unset
-effort sends nothing — the qwen3.x families default to thinking ON
-server-side. Reasoning streams back as `delta.reasoning_content`. On the
-Anthropic-compatible routes, thinking uses the documented
+**Thinking / reasoning.** Reasoning surfaces in the TUI's Thinking view on both
+dialects, per Model Studio's
+[deep-thinking docs](https://www.alibabacloud.com/help/en/model-studio/deep-thinking).
+
+On the OpenAI-compatible routes the top-level controls are **route- and
+model-specific**, and Codewhale fails closed: they are sent only when the
+configured `base_url` is an official Alibaba Chat Completions host
+(`*.maas.aliyuncs.com/compatible-mode/v1`, including workspace-scoped hosts, or
+`coding-intl.dashscope.aliyuncs.com/v1`). A custom `base_url` on the same
+provider ID gets `thinking`, `enable_thinking`, `preserve_thinking`, and
+`reasoning_effort` stripped, so an arbitrary OpenAI-compatible gateway is never
+handed Alibaba's dialect. On a verified host:
+
+- **Hybrid models** (`qwen3.7-*`, `qwen3.6-*`, `deepseek-v4*`, `glm-*`,
+  `kimi-k2.6*`) get `enable_thinking`: `false` for `off`, `true` otherwise.
+- **Thinking-only models** — `qwen3.8-max` (catalogued `thinking: always_on`),
+  `qwen3.8-max-preview` (effort/budget options, no toggle), and
+  `kimi-k2.7-code` — get **no** enable/disable switch at all. Sending one is at
+  best ignored.
+- `preserve_thinking` is sent for the models documented to accept it
+  (`qwen3.7-max`/`-plus`, `qwen3.6-max-preview`/`-plus`/`-flash`, `kimi-k2.6*`,
+  `kimi-k2.7-code`), so the next turn keeps the assistant's trace.
+- `reasoning_effort` is sent only for the two families with a documented ladder
+  — `deepseek-v4*` and `glm-5`/`5.1`/`5.2` — mapped to `high` or `max`.
+
+Reasoning streams back as `delta.reasoning_content`. It is replayed to the
+provider on later turns only for the `preserve_thinking` models above and the
+thinking-only models; `deepseek-v3.1`, `deepseek-v3.2`, and `glm-*` history
+stays stripped pending live confirmation that DashScope accepts
+`reasoning_content` in input messages. (`deepseek-v4*` replays regardless — the
+DeepSeek thinking-mode contract requires it on every provider.)
+
+On the Anthropic-compatible routes, thinking uses the documented
 `{"type":"enabled","budget_tokens":N}` / `{"type":"disabled"}` shapes from the
 [Anthropic-compatible Messages API](https://www.alibabacloud.com/help/en/model-studio/anthropic-api-messages),
-with `budget_tokens` derived from the effort level. Reasoning history is not
-replayed back to the provider on later turns (DashScope does not require it).
+with `budget_tokens` derived from the effort level.
 
 DeepSeek (`deepseek-v4-pro`, `deepseek-v4-flash-0731`) and GLM (`glm-5.2`)
 models served by Model Studio are provider-scoped and do not collide with the

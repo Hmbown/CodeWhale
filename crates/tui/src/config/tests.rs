@@ -237,6 +237,29 @@ max_continuations = 0
 }
 
 #[test]
+fn modelstudio_coding_plan_mode_resolves_the_official_chat_base_url() {
+    // The picker represents Coding Plan as the primary Model Studio provider
+    // plus a mode, rather than switching to the legacy Coding Plan identity.
+    // Keep this config-resolution seam covered: chat-route reasoning support
+    // relies on receiving this exact official URL downstream.
+    let config: Config = toml::from_str(
+        r#"
+provider = "modelstudio-token-plan"
+
+[providers.modelstudio_token_plan]
+mode = "coding-plan"
+"#,
+    )
+    .expect("Coding Plan mode should parse");
+
+    assert_eq!(config.api_provider(), ApiProvider::ModelstudioTokenPlan);
+    assert_eq!(
+        config.deepseek_base_url(),
+        DEFAULT_MODELSTUDIO_CODING_PLAN_BASE_URL
+    );
+}
+
+#[test]
 fn provider_context_window_loads_from_provider_table() -> Result<()> {
     let config: Config = toml::from_str(
         r#"
