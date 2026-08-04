@@ -1046,6 +1046,7 @@ dependencies = [
  "codewhale-protocol",
  "codewhale-release",
  "codewhale-secrets",
+ "codewhale-telemetry",
  "codewhale-tools",
  "codewhale-workflow",
  "codewhale-workflow-js",

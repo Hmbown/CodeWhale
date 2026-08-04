@@ -1539,6 +1539,12 @@ pub async fn run_tui(
     submit_initial_input_if_ready(&mut app, config, &engine_handle).await?;
 
     crate::startup_trace::log_summary();
+    // Pin the cold-start measurement at the same moment the summary is logged.
+    // `log_summary` computes the same number into a local, emits it, clears its
+    // buffer, and returns `()`, so this reads `PROCESS_START` directly rather
+    // than through it. Only this path calls it, which is what keeps the
+    // cold-start bucket absent on surfaces with no event loop.
+    crate::startup_trace::mark_cold_start();
     let result = run_event_loop(
         &mut terminal,
         &mut app,

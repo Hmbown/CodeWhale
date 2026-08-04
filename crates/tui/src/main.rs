@@ -684,9 +684,61 @@ fn spawn_signal_cleanup_task() {
             std::sync::atomic::AtomicBool::new(false);
         if !CLEANED_UP.swap(true, std::sync::atomic::Ordering::SeqCst) {
             crate::tui::ui::emergency_restore_terminal();
+            // Nothing async survives the `exit` below, so this is the last
+            // chance to say how the session ended. `record_blocking` is one
+            // `O_APPEND` write with no lock: taking the compaction lock here
+            // would let a second Codewhale process sharing CODEWHALE_HOME hang
+            // Ctrl-C, and the second-signal short-circuit below has to stay
+            // reachable. A no-op unless this process was armed.
+            //
+            // The class is stated, not derived: `RunTerminationReason::Canceled`
+            // also exits 130, so `exit_code` cannot tell a signal from an
+            // Esc-cancelled turn.
+            record_signal_session_end();
         }
         std::process::exit(exit_code);
     });
+}
+
+/// When this process's armed telemetry session began. Set once, at arming, and
+/// read from both the ordinary teardown and the signal path.
+static TELEMETRY_SESSION_START: std::sync::OnceLock<std::time::Instant> =
+    std::sync::OnceLock::new();
+
+/// Build `session_end` from what this process actually accumulated.
+///
+/// The exit class is read from the process-wide atomic and never derived from
+/// an exit code: `RunTerminationReason::Canceled` maps to 130, the same value
+/// the SIGINT path uses, so a code-based derivation would report every
+/// Esc-cancelled turn as a signal.
+///
+/// The cold-start bucket is `None` unless the interactive event loop actually
+/// began, which is what keeps it absent rather than invented on the surfaces
+/// that have no event loop.
+fn telemetry_session_end() -> codewhale_telemetry::Event {
+    let counters = codewhale_telemetry::session_counters();
+    codewhale_telemetry::Event::SessionEnd {
+        duration_bucket: codewhale_telemetry::DurationBucket::from_secs(
+            TELEMETRY_SESSION_START
+                .get()
+                .map_or(0, |start| start.elapsed().as_secs()),
+        ),
+        exit_class: codewhale_telemetry::exit_class(),
+        cold_start_bucket: crate::startup_trace::cold_start_ms()
+            .map(codewhale_telemetry::ColdStartBucket::from_millis),
+        providers: counters.providers(),
+        counters: counters.counters(),
+        errors: counters.errors(),
+        turn_wall: counters.turn_wall(),
+    }
+}
+
+/// Close the session synchronously, from the signal handler.
+///
+/// A no-op unless this process was armed.
+fn record_signal_session_end() {
+    codewhale_telemetry::set_exit_class(codewhale_telemetry::ExitClass::Signal);
+    codewhale_telemetry::record_blocking(telemetry_session_end());
 }
 
 #[cfg(unix)]
@@ -1370,6 +1422,24 @@ fn main() -> Result<()> {
             .map(|loc| loc.to_string())
             .unwrap_or_else(|| "unknown".to_string());
         tracing::error!(target: "panic", "Process panicked at {location}: {msg}");
+
+        // Telemetry, if and only if this process was armed. This hook is
+        // installed before `Cli::parse()` and long before any config is
+        // resolved, so it cannot consult a resolved value — but it can consult
+        // a `OnceLock` that is by construction empty until resolution
+        // completes. A user who never opted in panics without writing a byte
+        // and without creating a directory.
+        //
+        // The site is allowlist-reduced and `msg` is deliberately not read: a
+        // slicing panic embeds the entire string being sliced, and this tree
+        // slices user and model text in dozens of places.
+        codewhale_telemetry::set_exit_class(codewhale_telemetry::ExitClass::Panic);
+        if let Some(site) = panic_info
+            .location()
+            .map(|loc| codewhale_telemetry::reduce_panic_site(loc.file(), loc.line(), loc.column()))
+        {
+            codewhale_telemetry::record_blocking(codewhale_telemetry::Event::Panic { site });
+        }
         // Write crash dump best-effort
         if let Some(home) = crate::config::effective_home_dir() {
             let crash_dir = home.join(".deepseek").join("crashes");
@@ -1479,7 +1549,128 @@ pub(crate) fn build_runtime() -> Result<tokio::runtime::Runtime> {
         .context("Failed to build the Codewhale Tokio runtime")
 }
 
+/// Which product surface this process is serving.
+///
+/// A function of the parsed subcommand, never of the executable: this one
+/// binary serves at least five surfaces, so `current_exe()` would label all of
+/// them the same.
+fn telemetry_surface(command: Option<&Commands>) -> codewhale_telemetry::Surface {
+    use codewhale_telemetry::Surface;
+    match command {
+        None | Some(Commands::Resume { .. } | Commands::Fork { .. }) => Surface::Tui,
+        Some(Commands::Exec(_)) => Surface::Exec,
+        Some(Commands::Serve(args)) => {
+            if args.mcp {
+                Surface::McpServer
+            } else {
+                Surface::Serve
+            }
+        }
+        Some(_) => Surface::Cli,
+    }
+}
+
+/// How this session was started, for `session_start`.
+fn telemetry_session_source(command: Option<&Commands>) -> codewhale_telemetry::SessionSource {
+    use codewhale_telemetry::SessionSource;
+    match command {
+        None => SessionSource::Interactive,
+        Some(Commands::Resume { .. }) => SessionSource::Resume,
+        Some(Commands::Fork { .. }) => SessionSource::Fork,
+        Some(Commands::Serve(_)) => SessionSource::Api,
+        Some(_) => SessionSource::Unknown,
+    }
+}
+
+/// Resolve the emit predicate and arm, once, before anything can record.
+///
+/// This is the read that v1 of the design was missing entirely:
+/// `resolve_runtime_options` had no non-test caller in this crate, so neither
+/// `telemetry = false` in the config file nor `CODEWHALE_TELEMETRY=0` was ever
+/// consulted by a process that would have emitted.
+///
+/// `CliRuntimeOverrides::default()` is correct here. The dispatcher has already
+/// applied the kill-switch floor and forwarded the *resolved* value through
+/// `CODEWHALE_TELEMETRY`, which `EnvRuntimeOverrides::load()` picks up — and
+/// re-reading `CODEWHALE_TELEMETRY` inside the telemetry crate would fork
+/// `parse_bool`, the `DEEPSEEK_TELEMETRY` alias, and the floor into a second
+/// source of truth.
+fn arm_telemetry(cli: &Cli, command: Option<&Commands>) {
+    let surface = telemetry_surface(command);
+    let Ok(store) = codewhale_config::ConfigStore::load(cli.config.clone()) else {
+        return;
+    };
+    let resolved = store
+        .config
+        .resolve_runtime_options(&codewhale_config::CliRuntimeOverrides::default());
+    let setup = codewhale_config::SetupState::load()
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let codewhale_telemetry::TelemetryDecision::Enabled(consent) =
+        codewhale_telemetry::decide(&resolved, &setup, surface)
+    else {
+        return;
+    };
+    codewhale_telemetry::init(consent.with_config_path(Some(store.path().to_path_buf())));
+    let _ = TELEMETRY_SESSION_START.set(std::time::Instant::now());
+    codewhale_telemetry::record(codewhale_telemetry::Event::SessionStart {
+        source: telemetry_session_source(command),
+    });
+
+    // Recover a prior session that crashed or was signalled before it could
+    // flush. The due check happens *before* the spawn, so "not due" means no
+    // task at all rather than a task that returns early.
+    if codewhale_telemetry::startup_drain_due() {
+        tokio::task::spawn_blocking(|| {
+            codewhale_telemetry::flush_blocking(codewhale_telemetry::SHUTDOWN_FLUSH_TIMEOUT)
+        });
+    }
+}
+
+/// Close the armed session and flush, bounded.
+async fn finish_telemetry(outcome: &Result<()>) {
+    if !codewhale_telemetry::is_armed() {
+        return;
+    }
+    // Only escalate: the panic hook and the signal path have already spoken if
+    // they ran, and a stated class must not be overwritten by an inferred one.
+    if outcome.is_err()
+        && codewhale_telemetry::exit_class() == codewhale_telemetry::ExitClass::Clean
+    {
+        codewhale_telemetry::set_exit_class(codewhale_telemetry::ExitClass::Error);
+    }
+    codewhale_telemetry::record(telemetry_session_end());
+    // `shutdown_blocking` parks a thread waiting on the writer, so it goes to
+    // the blocking pool, and it is bounded there. The persistence actor's
+    // unbounded `let _ = task.await` next door is not a pattern to copy here: a
+    // hung TLS handshake would hold the process open past the last frame.
+    let _ = tokio::time::timeout(
+        codewhale_telemetry::SHUTDOWN_FLUSH_TIMEOUT,
+        tokio::task::spawn_blocking(|| {
+            codewhale_telemetry::shutdown_blocking(codewhale_telemetry::SHUTDOWN_FLUSH_TIMEOUT)
+        }),
+    )
+    .await;
+}
+
 async fn run_async_main_inner(
+    cli: Cli,
+    command: Option<Commands>,
+    plugin_discovery: Arc<crate::plugins::PluginDiscoveryContext>,
+    plugin_registry: Arc<crate::plugins::PluginRegistry>,
+) -> Result<()> {
+    // Arming is what makes the panic hook installed back in `main` — and every
+    // other write path — stop being a no-op. Nothing before this line can
+    // record anything, which is precisely how a disabled user's panic writes
+    // nothing and creates no directory.
+    arm_telemetry(&cli, command.as_ref());
+    let outcome = run_async_main_dispatch(cli, command, plugin_discovery, plugin_registry).await;
+    finish_telemetry(&outcome).await;
+    outcome
+}
+
+async fn run_async_main_dispatch(
     cli: Cli,
     command: Option<Commands>,
     plugin_discovery: Arc<crate::plugins::PluginDiscoveryContext>,
@@ -11184,6 +11375,14 @@ async fn run_exec_agent(
                     approval_required,
                 );
                 summary.termination_reason = Some(termination_reason.as_str().to_string());
+                // State the exit class here rather than inferring it later
+                // from the process exit code: `Canceled` exits 130, the same
+                // value the SIGINT path uses, so a code-based derivation would
+                // report every Esc-cancelled turn as a signal. A no-op unless
+                // this process was armed.
+                if !termination_reason.is_success() {
+                    codewhale_telemetry::set_exit_class(codewhale_telemetry::ExitClass::Error);
+                }
                 let saved_session_id = if should_persist_session && !latest_messages.is_empty() {
                     match persist_exec_session(
                         &latest_messages,
@@ -17208,5 +17407,96 @@ mod pr_prompt_tests {
             !is_command_available("this-command-cannot-exist-codewhale-tui-test-ENOENT-marker"),
             "missing command should return false, not panic"
         );
+    }
+}
+
+#[cfg(test)]
+mod telemetry_surface_tests {
+    use super::*;
+    use clap::Parser;
+    use codewhale_telemetry::{SessionSource, Surface};
+
+    fn command_of(args: &[&str]) -> Option<Commands> {
+        Cli::try_parse_from(args)
+            .expect("CLI args should parse")
+            .command
+    }
+
+    #[test]
+    fn every_surface_is_named_by_the_subcommand_not_the_executable() {
+        // One binary, five surfaces. `current_exe()` would call all of them
+        // the same thing, which is why nothing derives the surface from it.
+        assert_eq!(telemetry_surface(None), Surface::Tui);
+        assert_eq!(
+            telemetry_surface(command_of(&["codewhale-tui", "resume", "--last"]).as_ref()),
+            Surface::Tui
+        );
+        assert_eq!(
+            telemetry_surface(command_of(&["codewhale-tui", "fork", "--last"]).as_ref()),
+            Surface::Tui
+        );
+        assert_eq!(
+            telemetry_surface(command_of(&["codewhale-tui", "exec", "hello"]).as_ref()),
+            Surface::Exec
+        );
+        assert_eq!(
+            telemetry_surface(command_of(&["codewhale-tui", "serve", "--http"]).as_ref()),
+            Surface::Serve
+        );
+        assert_eq!(
+            telemetry_surface(command_of(&["codewhale-tui", "serve", "--mcp"]).as_ref()),
+            Surface::McpServer
+        );
+        assert_eq!(
+            telemetry_surface(command_of(&["codewhale-tui", "doctor"]).as_ref()),
+            Surface::Cli
+        );
+    }
+
+    #[test]
+    fn the_session_source_distinguishes_resume_and_fork_from_a_fresh_launch() {
+        assert_eq!(telemetry_session_source(None), SessionSource::Interactive);
+        assert_eq!(
+            telemetry_session_source(command_of(&["codewhale-tui", "resume", "--last"]).as_ref()),
+            SessionSource::Resume
+        );
+        assert_eq!(
+            telemetry_session_source(command_of(&["codewhale-tui", "fork", "--last"]).as_ref()),
+            SessionSource::Fork
+        );
+        assert_eq!(
+            telemetry_session_source(command_of(&["codewhale-tui", "serve", "--http"]).as_ref()),
+            SessionSource::Api
+        );
+        assert_eq!(
+            telemetry_session_source(command_of(&["codewhale-tui", "doctor"]).as_ref()),
+            SessionSource::Unknown
+        );
+    }
+
+    #[test]
+    fn a_session_end_built_without_arming_writes_nothing() {
+        // `telemetry_session_end` is pure: it reads the counters and the exit
+        // class and builds a value. Nothing about building it may touch disk,
+        // because the signal path builds it on every run including runs that
+        // never armed.
+        let event = telemetry_session_end();
+        assert!(matches!(
+            event,
+            codewhale_telemetry::Event::SessionEnd { .. }
+        ));
+        // And handing it to `record_blocking` while unarmed is a no-op.
+        codewhale_telemetry::record_blocking(event);
+        assert!(!codewhale_telemetry::is_armed());
+    }
+
+    #[test]
+    fn a_cancelled_run_is_an_error_not_a_signal() {
+        // Both exit 130. The class has to come from the atomic, so this pins
+        // the mapping the exec path applies rather than the exit code.
+        use crate::core::termination::RunTerminationReason;
+        assert_eq!(RunTerminationReason::Canceled.process_exit_code(), 130);
+        assert!(!RunTerminationReason::Canceled.is_success());
+        assert!(RunTerminationReason::Resolved.is_success());
     }
 }

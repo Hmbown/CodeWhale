@@ -54,6 +54,7 @@ pub use decision::{
     EndpointError, TELEMETRY_DIR, TelemetryConsent, TelemetryDecision, decide, decide_in_home,
     re_decide, validate_endpoint,
 };
+pub use envelope::reduce_panic_site;
 pub use event::{
     Arch, Batch, ColdStartBucket, Counters, DurationBucket, Errors, Event, ExitClass, InstallKind,
     Libc, Os, SCHEMA_VERSION, SessionSource, Surface, TurnWall,
@@ -186,6 +187,19 @@ fn version_is_older(previous: &str, current: &str) -> bool {
 #[must_use]
 pub fn is_armed() -> bool {
     ARMED.get().is_some()
+}
+
+/// This process's session accumulators.
+///
+/// Deliberately **not** behind the arming gate. Every bump is a relaxed atomic
+/// increment on a counter that never leaves this process unless [`init`] was
+/// reached, so gating them would buy nothing and would put an `is_armed()`
+/// branch on eleven hot call sites. The gate that matters is on the write
+/// paths, and a snapshot of these numbers only ever reaches a payload through
+/// one.
+pub fn session_counters() -> &'static SessionCounters {
+    static COUNTERS: OnceLock<SessionCounters> = OnceLock::new();
+    COUNTERS.get_or_init(SessionCounters::default)
 }
 
 /// Queue an event for the writer thread.

@@ -524,6 +524,18 @@ pub fn record_caught_panic(name: &'static str, message: &str) {
     let location = std::panic::Location::caller();
     tracing::error!(target: "panic", "Task '{name}' panicked at {location}: {message}");
     let _ = write_panic_dump(name, location, message);
+    // A caught panic is still a panic. The site is allowlist-reduced to
+    // `crates/…` or the literal `<dep>`, and `message` is deliberately not
+    // read: a slicing panic embeds the entire string being sliced. The exit
+    // class is left alone — the caller recovered, so this process is not
+    // ending here. A no-op unless this process was armed.
+    codewhale_telemetry::record_blocking(codewhale_telemetry::Event::Panic {
+        site: codewhale_telemetry::reduce_panic_site(
+            location.file(),
+            location.line(),
+            location.column(),
+        ),
+    });
 }
 
 /// Write a panic dump file to `~/.codewhale/crashes/`.
