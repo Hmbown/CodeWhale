@@ -291,13 +291,29 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
           <div className="product-container product-install-grid">
             <h2 className="font-display">{d.installBandHeading}</h2>
             <div>
-              <InstallCodeBlock
-                cmd="npm install -g codewhale"
-                copyLabel={d.copy}
-                copiedLabel={d.copied}
-              />
-              <p>
-                Cargo · {d.binaries} · Docker · Nix · Windows · Android / Termux · {d.chinaMirrors}
+              {/* The composer plate. `❯` is a code-owned literal, like the
+                  install command it prompts for — it is the product's glyph,
+                  not a sentence, and no locale renders it differently. */}
+              <div className="product-composer">
+                <span className="product-composer-prompt" aria-hidden>
+                  ❯
+                </span>
+                <InstallCodeBlock
+                  cmd="npm install -g codewhale"
+                  copyLabel={d.copy}
+                  copiedLabel={d.copied}
+                />
+              </div>
+              {/* Already a dot chain in every locale; the separators just stop
+                  being characters in the markup and become CSS punctuation. */}
+              <p className="dotline">
+                <span>Cargo</span>
+                <span>{d.binaries}</span>
+                <span>Docker</span>
+                <span>Nix</span>
+                <span>Windows</span>
+                <span>Android / Termux</span>
+                <span>{d.chinaMirrors}</span>
               </p>
               <Link href={`/${locale}/install`}>{d.installGuideLink}</Link>
             </div>

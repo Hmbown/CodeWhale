@@ -118,6 +118,35 @@ main, header, footer, nav { position: relative; z-index: 1; }
 }
 .font-mono { font-family: var(--font-mono), "JetBrains Mono", ui-monospace, monospace; }
 
+/* ---------- the ` · ` chain ---------- */
+/* The single most recognisable thing about the TUI — its header, empty state
+   and footer all speak in dot chains — and the grammar the product's voice is
+   carried by on this site, on both sides of the waterline. The separator is
+   punctuation emitted by CSS, never copy: no locale translates it, and no
+   string is ever concatenated around one. No uppercase and no wide tracking:
+   the TUI header has neither, and both are what break Han. */
+.dotline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  font-family: var(--font-mono), "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+.dotline > * + *::before {
+  content: "·";
+  margin-inline: 0.5em;
+  color: var(--stage-dim);
+}
+
+html[lang="zh"] .dotline,
+html[lang="ja"] .dotline,
+html[lang="ko"] .dotline {
+  letter-spacing: 0;
+}
+
 h1, h2, h3, h4 {
   font-family: var(--font-display), "Fraunces", "Noto Serif SC", Georgia, serif;
   font-weight: 600;
@@ -1918,8 +1947,24 @@ html[lang="ko"] .ocean-column h2 {
   font-size: 0.82rem;
 }
 
-.product-install-band {
+/* The install band is the TUI composer.
+ *
+ * It used to be `--indigo-deep` full-bleed: a third register belonging to
+ * neither system, and the last thing on the page that looked like a generic
+ * marketing CTA. The composer is a *raised* plate in the product, so this one
+ * band is opaque over the column rather than transparent through it, bracketed
+ * above by Signal Gold and below by Operate violet — the product's exact
+ * composer framing, and the one place gold is legitimate here, because what it
+ * brackets is the point of human intent.
+ *
+ * The descendant selector is deliberate: it has to out-rank
+ * `.ocean-column > section { background: transparent }`.
+ */
+.ocean-column .product-install-band {
   padding-block: clamp(3rem, 6vw, 5rem);
+  border-top: 1px solid color-mix(in srgb, var(--signal-gold) 40%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--violet) 40%, transparent);
+  background: var(--stage-composer);
   color: var(--stage-text);
 }
 
@@ -1930,16 +1975,53 @@ html[lang="ko"] .ocean-column h2 {
   align-items: start;
 }
 
+/* `❯` sits inside the plate, where the TUI puts it — a code-owned literal in
+   the same class as `Codewhale` and `npm install -g codewhale`. */
+.product-composer {
+  position: relative;
+}
+
+.product-composer pre.code-block {
+  padding-left: 2.6rem;
+}
+
+/* The copy control sits on `--paper` and must not inherit the band's ivory. */
+.product-composer button {
+  color: var(--ink);
+}
+
+.product-composer-prompt {
+  position: absolute;
+  top: 1rem;
+  left: 1.1rem;
+  z-index: 1;
+  color: var(--action-on-dark);
+  font-family: var(--font-mono), "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  pointer-events: none;
+}
+
+@media (max-width: 640px) {
+  .product-composer pre.code-block {
+    padding-left: 2.3rem;
+  }
+
+  .product-composer-prompt {
+    top: 0.85rem;
+    left: 0.95rem;
+    font-size: 0.76rem;
+  }
+}
+
 .product-install-band pre.code-block {
   margin: 0;
   border-color: var(--stage-line);
 }
 
-.product-install-band p {
+.product-install-band .dotline {
   margin-top: 1rem;
   color: var(--stage-hint);
-  font-size: 0.78rem;
-  line-height: 1.7;
 }
 
 .product-install-band a {
