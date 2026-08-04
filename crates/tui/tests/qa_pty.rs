@@ -769,6 +769,11 @@ model = "k3"
         codewhale_config::StepEntry::new(codewhale_config::StepStatus::NeedsAction, true, "0.8.67"),
     );
     setup_state.runtime_posture_source = codewhale_config::RuntimePostureSource::Confirmed;
+    // A returning user has also answered the first-run telemetry notice. Without
+    // this the notice is owed, and it renders on the TTY and blocks on stdin
+    // before the TUI starts — which would make this a test about the notice
+    // rather than about missing-key recovery.
+    setup_state.record_telemetry_notice(codewhale_config::TELEMETRY_NOTICE_VERSION, false);
     setup_state
         .complete_constitution_checkpoint("0.8.67", codewhale_config::ConstitutionChoice::Bundled);
     setup_state.constitution_source = codewhale_config::ConstitutionSource::Bundled;
@@ -905,6 +910,13 @@ web_search = true
         .size(40, 140)
         .spawn()?;
 
+    // The first-run telemetry notice is the first thing an interactive launch
+    // shows, before the terminal enters raw mode. Enter takes the pre-selected
+    // "No thanks" — which is the whole point of the pre-selection, and is what
+    // this harness exercises: a user who presses Enter through onboarding never
+    // enables telemetry.
+    h.wait_for_text("Enable telemetry?", BOOT_TIMEOUT)?;
+    h.send(keys::key::enter())?;
     h.wait_for_text("Press Enter to continue", BOOT_TIMEOUT)?;
     h.send(keys::key::enter())?;
     h.wait_for_text("Choose your language", BOOT_TIMEOUT)?;
