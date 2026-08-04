@@ -3326,6 +3326,11 @@ impl ConfigToml {
             || (cli.telemetry.is_none()
                 && env.telemetry.is_none()
                 && self.telemetry == Some(false));
+        let telemetry_endpoint = env
+            .telemetry_endpoint
+            .clone()
+            .or_else(|| self.telemetry_endpoint.clone())
+            .filter(|value| !value.trim().is_empty());
         let approval_policy = cli
             .approval_policy
             .clone()
@@ -3357,6 +3362,7 @@ impl ConfigToml {
             log_level,
             telemetry,
             telemetry_explicit_off,
+            telemetry_endpoint,
             approval_policy,
             sandbox_mode,
             yolo,
@@ -4694,6 +4700,13 @@ pub struct ResolvedRuntimeOptions {
     /// treat an answer differently from a default must read this flag rather
     /// than infer intent from the resolved boolean.
     pub telemetry_explicit_off: bool,
+    /// Where a telemetry batch would be sent, if telemetry were on.
+    ///
+    /// Unset is the shipped default and is not a placeholder for a built-in
+    /// URL: with no endpoint configured there is nowhere for a batch to go.
+    /// Which schemes are actually contactable is decided where a batch would be
+    /// sent, not here — a user must be able to stage a value.
+    pub telemetry_endpoint: Option<String>,
     pub approval_policy: Option<String>,
     pub sandbox_mode: Option<String>,
     pub yolo: Option<bool>,
@@ -6353,6 +6366,10 @@ struct EnvRuntimeOverrides {
     /// resolve to "on", so this forces telemetry off the same way an explicit
     /// `false` does.
     telemetry_env_invalid: bool,
+    /// `CODEWHALE_TELEMETRY_ENDPOINT`/`DEEPSEEK_TELEMETRY_ENDPOINT`. Overrides
+    /// the config file. A workspace `.env` cannot reach this — the dotenv
+    /// allowlist admits only built-in provider credential names.
+    telemetry_endpoint: Option<String>,
     approval_policy: Option<String>,
     sandbox_mode: Option<String>,
     yolo: Option<bool>,
@@ -6477,6 +6494,10 @@ impl EnvRuntimeOverrides {
                 .ok(),
             telemetry,
             telemetry_env_invalid,
+            telemetry_endpoint: std::env::var("CODEWHALE_TELEMETRY_ENDPOINT")
+                .or_else(|_| std::env::var("DEEPSEEK_TELEMETRY_ENDPOINT"))
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
             approval_policy: std::env::var("CODEWHALE_APPROVAL_POLICY")
                 .or_else(|_| std::env::var("DEEPSEEK_APPROVAL_POLICY"))
                 .ok(),

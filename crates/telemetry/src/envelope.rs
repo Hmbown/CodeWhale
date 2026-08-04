@@ -1,0 +1,202 @@
+//! Install identity and the constant half of the batch envelope.
+
+use std::path::Path;
+
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+
+use crate::buffer;
+use crate::event::{Arch, Libc, Os};
+
+/// How long an install id may live before it is replaced.
+///
+/// A never-rotating id plus one batch per session from the user's IP is a
+/// longitudinal IP and travel trace. Rotation bounds that join. It costs
+/// longitudinal accuracy, and the docs say so in those words: **no count derived
+/// from `install_id` is a user count.**
+pub const ROTATION_DAYS: i64 = 90;
+
+/// The on-disk install identity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstallId {
+    /// Format version of this file.
+    pub schema_version: u32,
+    /// A random v4 UUID.
+    ///
+    /// Never derived from hostname, MAC, `machine-id`, `$HOME`, username, or
+    /// executable path. A derived id is a device fingerprint: it survives
+    /// reinstall and re-identifies a user across their own opt-out, which is the
+    /// single thing an install id must never do.
+    pub install_id: String,
+    /// When this id was minted, RFC3339 UTC.
+    pub rotated_at: String,
+}
+
+/// Per-machine telemetry bookkeeping. Never contains anything about the user's
+/// work — only what this crate needs to avoid re-reporting an install and to
+/// rate-limit its own flushes.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TelemetryState {
+    /// Format version of this file.
+    #[serde(default)]
+    pub schema_version: u32,
+    /// The app version last seen on this machine.
+    #[serde(default)]
+    pub last_version: Option<String>,
+    /// When a flush was last *attempted*, RFC3339 UTC. Attempt, not success, so
+    /// a permanently offline machine tries at most once per interval.
+    #[serde(default)]
+    pub last_flush: Option<String>,
+}
+
+/// Read the install id, minting a fresh one if it is missing, unreadable, or
+/// older than [`ROTATION_DAYS`].
+pub fn read_or_create_install_id(root: &Path) -> Result<InstallId> {
+    let path = buffer::install_id_path(root);
+    let existing = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|body| serde_json::from_str::<InstallId>(&body).ok())
+        .filter(|record| !record.install_id.trim().is_empty())
+        .filter(|record| !is_expired(&record.rotated_at));
+    if let Some(record) = existing {
+        return Ok(record);
+    }
+    let record = InstallId {
+        schema_version: 1,
+        install_id: uuid::Uuid::new_v4().to_string(),
+        rotated_at: now_rfc3339(),
+    };
+    buffer::ensure_dir(root)?;
+    codewhale_config::persistence::atomic_write_json(&path, &record)
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(record)
+}
+
+fn is_expired(rotated_at: &str) -> bool {
+    let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(rotated_at) else {
+        // An unreadable timestamp is treated as expired: minting a fresh random
+        // id is always the safe direction.
+        return true;
+    };
+    let age = chrono::Utc::now().signed_duration_since(parsed.with_timezone(&chrono::Utc));
+    age.num_days() >= ROTATION_DAYS
+}
+
+/// Read `state.json`, or a default when it is missing or unreadable.
+#[must_use]
+pub fn read_state(root: &Path) -> TelemetryState {
+    std::fs::read_to_string(buffer::state_path(root))
+        .ok()
+        .and_then(|body| serde_json::from_str::<TelemetryState>(&body).ok())
+        .unwrap_or_default()
+}
+
+/// Write `state.json`.
+pub fn write_state(root: &Path, state: &TelemetryState) -> Result<()> {
+    buffer::ensure_dir(root)?;
+    let path = buffer::state_path(root);
+    codewhale_config::persistence::atomic_write_json(&path, state)
+        .with_context(|| format!("failed to write {}", path.display()))
+}
+
+/// RFC3339 UTC at second precision. The only timestamp this crate produces, and
+/// it is per-**batch**: individual events carry no timestamps at all.
+#[must_use]
+pub fn now_rfc3339() -> String {
+    chrono::Utc::now()
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        .to_string()
+}
+
+/// The build sha of a release-CI binary, or `None`.
+///
+/// Sourced from `CODEWHALE_RELEASE_BUILD_SHA`, a rustc-env this crate's build
+/// script emits **only** when `DEEPSEEK_BUILD_SHA` or `GITHUB_SHA` was present
+/// in the build environment. `null` for every locally built binary,
+/// unconditionally, with no runtime lookup of any kind.
+///
+/// Never `CODEWHALE_BUILD_COMMIT` — that falls back to the builder's own `HEAD`
+/// on a local build. Never `Thread.git_sha` — that is the *user's* workspace
+/// commit and a red line, one identifier away by name.
+#[must_use]
+pub fn release_build_sha() -> Option<String> {
+    option_env!("CODEWHALE_RELEASE_BUILD_SHA").and_then(short_hex_sha)
+}
+
+/// Reduce a full sha to the first 12 lowercase hex characters, rejecting
+/// anything that is not a sha.
+#[must_use]
+pub fn short_hex_sha(value: &str) -> Option<String> {
+    let trimmed = value.trim().to_ascii_lowercase();
+    if trimmed.len() < 12 || !trimmed.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(trimmed.chars().take(12).collect())
+}
+
+/// The OS family this binary is running on, mapped onto the closed whitelist.
+#[must_use]
+pub fn current_os() -> Os {
+    match std::env::consts::OS {
+        "linux" => Os::Linux,
+        "macos" => Os::Macos,
+        "windows" => Os::Windows,
+        "freebsd" => Os::Freebsd,
+        "android" => Os::Android,
+        _ => Os::Other,
+    }
+}
+
+/// The CPU family, mapped onto the closed whitelist.
+#[must_use]
+pub fn current_arch() -> Arch {
+    match std::env::consts::ARCH {
+        "x86_64" => Arch::X86_64,
+        "aarch64" => Arch::Aarch64,
+        _ => Arch::Other,
+    }
+}
+
+/// The libc this binary was **compiled** against.
+#[must_use]
+pub fn current_libc() -> Libc {
+    if cfg!(target_env = "gnu") {
+        Libc::Gnu
+    } else if cfg!(target_env = "musl") {
+        Libc::Musl
+    } else {
+        Libc::None
+    }
+}
+
+/// Whether both stdin and stdout are terminals.
+///
+/// This varies because consent is machine-scoped: a decision recorded on a TTY
+/// authorizes later headless runs on the same home.
+#[must_use]
+pub fn current_tty() -> bool {
+    use std::io::IsTerminal as _;
+    std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
+}
+
+/// Reduce a panic location to something that is safe to send.
+///
+/// Emit a `crates/…` path verbatim; reduce **everything else** to the literal
+/// `<dep>`. There is no `--remap-path-prefix` in this repo, so a panic inside a
+/// registry dependency yields
+/// `/Users/<builder>/.cargo/registry/src/…/ratatui-0.29.0/src/…` — the build
+/// machine's username, shipped from every user's binary.
+#[must_use]
+pub fn reduce_panic_site(file: &str, line: u32, column: u32) -> String {
+    let normalized = file.replace('\\', "/");
+    if normalized.starts_with("crates/")
+        && normalized.ends_with(".rs")
+        && normalized
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'/' | b'.' | b'-'))
+    {
+        format!("{normalized}:{line}:{column}")
+    } else {
+        "<dep>".to_string()
+    }
+}

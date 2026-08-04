@@ -1,0 +1,1127 @@
+//! The tests are the contract.
+//!
+//! Two of them are load-bearing beyond ordinary coverage:
+//! `every_payload_field_is_bounded` walks a fully-populated batch and asserts
+//! that every string leaf is a member of a declared enum set or one of exactly
+//! three regexed strings, and `every_string_leaf_survives_redaction_unchanged`
+//! runs the workflow crate's disclosure redactor over each leaf **individually**
+//! — never over the serialized document, which would be one whitespace-free
+//! token and would report clean no matter what it contained.
+
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use codewhale_config::{
+    CliRuntimeOverrides, ConfigToml, ResolvedRuntimeOptions, SetupState, TELEMETRY_NOTICE_VERSION,
+};
+use serde_json::Value;
+
+use crate::buffer;
+use crate::decision::{EndpointError, TelemetryDecision, decide_in_home, validate_endpoint};
+use crate::envelope;
+use crate::event::*;
+
+// ---------------------------------------------------------------- fixtures --
+
+fn temp_home() -> tempfile::TempDir {
+    tempfile::tempdir().expect("temp home")
+}
+
+fn root_of(home: &tempfile::TempDir) -> PathBuf {
+    home.path().join(crate::TELEMETRY_DIR)
+}
+
+/// A resolved-options value with everything but telemetry left at its default.
+fn resolved(telemetry: bool, explicit_off: bool, endpoint: Option<&str>) -> ResolvedRuntimeOptions {
+    let mut options =
+        ConfigToml::default().resolve_runtime_options(&CliRuntimeOverrides::default());
+    options.telemetry = telemetry;
+    options.telemetry_explicit_off = explicit_off;
+    options.telemetry_endpoint = endpoint.map(str::to_string);
+    options
+}
+
+fn accepted_setup() -> SetupState {
+    let mut setup = SetupState::default();
+    setup.record_telemetry_notice(TELEMETRY_NOTICE_VERSION, true);
+    setup
+}
+
+fn declined_setup() -> SetupState {
+    let mut setup = SetupState::default();
+    setup.record_telemetry_notice(TELEMETRY_NOTICE_VERSION, false);
+    setup
+}
+
+fn stale_setup() -> SetupState {
+    let mut setup = SetupState::default();
+    setup.record_telemetry_notice("0", true);
+    setup
+}
+
+/// One instance of every event variant, populated with the most adversarial
+/// values the schema permits.
+fn every_event() -> Vec<Event> {
+    vec![
+        Event::InstallOrUpgrade {
+            kind: InstallKind::Upgrade,
+            previous_version: Some("0.9.3-rc.1".to_string()),
+        },
+        Event::SessionStart {
+            source: SessionSource::Resume,
+        },
+        Event::SessionEnd {
+            duration_bucket: DurationBucket::OneToTen,
+            exit_class: ExitClass::Panic,
+            cold_start_bucket: Some(ColdStartBucket::Mid),
+            providers: vec!["custom".to_string(), "deepseek".to_string()],
+            counters: Counters {
+                turns: 14,
+                tool_calls: 61,
+                fleet_dispatch: 0,
+                workflow_run: 0,
+                subagent_spawn: 2,
+                mcp_server_connected: 0,
+                memory_search: 0,
+                approval_modal_shown: 0,
+                approval_auto_allowed: 0,
+                command_palette_open: 3,
+            },
+            errors: Errors {
+                auth_preflight_failed: 0,
+                provider_http_4xx: 0,
+                provider_http_5xx: 1,
+                tool_denied_by_policy: 0,
+                tool_timeout: 0,
+                network_error: 0,
+            },
+            turn_wall: TurnWall {
+                lt_5s: 9,
+                five_to_thirty: 4,
+                thirty_to_onetwenty: 1,
+                gte_120s: 0,
+            },
+        },
+        Event::Panic {
+            site: "crates/tui/src/tui/ui.rs:8801:17".to_string(),
+        },
+    ]
+}
+
+/// A fully-populated batch. This is the artifact the red-line tests walk.
+pub(crate) fn every_field_batch() -> Batch {
+    Batch {
+        schema_version: SCHEMA_VERSION,
+        sent_at: "2026-08-03T18:04:11Z".to_string(),
+        install_id: "3f2a9c1e-0000-4000-8000-000000000001".to_string(),
+        app_version: "0.9.4".to_string(),
+        git_sha: Some("abcdef012345".to_string()),
+        surface: Surface::Tui,
+        os: Os::Macos,
+        arch: Arch::Aarch64,
+        libc: Libc::None,
+        tty: true,
+        events: every_event(),
+    }
+}
+
+// --------------------------------------------------------- schema red lines --
+
+fn walk_strings(value: &Value, path: &str, out: &mut Vec<(String, String)>) {
+    match value {
+        Value::String(text) => out.push((path.to_string(), text.clone())),
+        Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                walk_strings(item, &format!("{path}[{index}]"), out);
+            }
+        }
+        Value::Object(map) => {
+            for (key, item) in map {
+                let child = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{path}.{key}")
+                };
+                walk_strings(item, &child, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+pub(crate) fn string_leaves(value: &Value) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    walk_strings(value, "", &mut out);
+    out
+}
+
+fn is_app_version(value: &str) -> bool {
+    let (core, pre) = match value.split_once('-') {
+        Some((core, pre)) => (core, Some(pre)),
+        None => (value, None),
+    };
+    let parts: Vec<&str> = core.split('.').collect();
+    if parts.len() != 3
+        || !parts
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return false;
+    }
+    match pre {
+        None => true,
+        Some(pre) => !pre.is_empty() && pre.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.'),
+    }
+}
+
+fn is_short_sha(value: &str) -> bool {
+    value.len() == 12
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+}
+
+fn is_panic_site(value: &str) -> bool {
+    if value == "<dep>" {
+        return true;
+    }
+    let Some((file, rest)) = value.split_once(".rs:") else {
+        return false;
+    };
+    let Some((line, column)) = rest.split_once(':') else {
+        return false;
+    };
+    file.starts_with("crates/")
+        && file
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'/' | b'.' | b'-'))
+        && !line.is_empty()
+        && line.bytes().all(|b| b.is_ascii_digit())
+        && !column.is_empty()
+        && column.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Every closed-enum string this schema may ever emit.
+fn closed_enum_values() -> Vec<String> {
+    let mut values: Vec<String> = Vec::new();
+    values.extend(Surface::ALL.iter().map(|v| v.as_str().to_string()));
+    values.extend(Os::ALL.iter().map(|v| v.as_str().to_string()));
+    values.extend(Arch::ALL.iter().map(|v| v.as_str().to_string()));
+    values.extend(Libc::ALL.iter().map(|v| v.as_str().to_string()));
+    values.extend(InstallKind::ALL.iter().map(|v| v.as_str().to_string()));
+    values.extend(SessionSource::ALL.iter().map(|v| v.as_str().to_string()));
+    values.extend(DurationBucket::ALL.iter().map(|v| v.as_str().to_string()));
+    values.extend(ExitClass::ALL.iter().map(|v| v.as_str().to_string()));
+    values.extend(ColdStartBucket::ALL.iter().map(|v| v.as_str().to_string()));
+    // The `event` tag values.
+    values.extend(every_event().iter().map(|e| e.name().to_string()));
+    // `providers` entries: `ProviderKind::as_str()` is a `&'static str` from a
+    // closed enum, and `Custom` yields the literal "custom".
+    values.extend(
+        codewhale_config::ProviderKind::all()
+            .iter()
+            .map(|kind| kind.as_str().to_string()),
+    );
+    values
+}
+
+#[test]
+fn every_payload_field_is_bounded() {
+    let batch = every_field_batch();
+    let json = serde_json::to_value(&batch).expect("serialize batch");
+    let enums = closed_enum_values();
+    let leaves = string_leaves(&json);
+    assert!(
+        leaves.len() >= 10,
+        "the walk found suspiciously few string leaves: {leaves:?}"
+    );
+
+    for (path, value) in leaves {
+        let ok = match path.as_str() {
+            "app_version" => is_app_version(&value),
+            "git_sha" => is_short_sha(&value),
+            "sent_at" => value.ends_with('Z') && value.len() == 20,
+            "install_id" => uuid::Uuid::parse_str(&value).is_ok(),
+            p if p.ends_with(".site") => is_panic_site(&value),
+            p if p.ends_with(".previous_version") => is_app_version(&value),
+            _ => enums.contains(&value),
+        };
+        assert!(ok, "unbounded string leaf at {path}: {value:?}");
+    }
+}
+
+#[test]
+fn counters_and_errors_serialize_every_field_including_zeros() {
+    let json = serde_json::to_value(Counters::default()).expect("serialize counters");
+    let object = json.as_object().expect("counters is an object");
+    assert_eq!(object.len(), Counters::FIELDS.len());
+    for field in Counters::FIELDS {
+        assert_eq!(object.get(*field), Some(&Value::from(0u32)), "{field}");
+    }
+
+    let json = serde_json::to_value(Errors::default()).expect("serialize errors");
+    let object = json.as_object().expect("errors is an object");
+    assert_eq!(object.len(), Errors::FIELDS.len());
+    for field in Errors::FIELDS {
+        assert_eq!(object.get(*field), Some(&Value::from(0u32)), "{field}");
+    }
+
+    let json = serde_json::to_value(TurnWall::default()).expect("serialize turn_wall");
+    let object = json.as_object().expect("turn_wall is an object");
+    assert_eq!(object.len(), TurnWall::FIELDS.len());
+    for field in TurnWall::FIELDS {
+        assert_eq!(object.get(*field), Some(&Value::from(0u32)), "{field}");
+    }
+}
+
+#[test]
+fn no_event_field_is_ever_omitted() {
+    // Options serialize as `null` rather than being skipped, so the key set on
+    // the wire is closed and the doc-match test can be exact.
+    let event = Event::SessionEnd {
+        duration_bucket: DurationBucket::Lt1m,
+        exit_class: ExitClass::Clean,
+        cold_start_bucket: None,
+        providers: Vec::new(),
+        counters: Counters::default(),
+        errors: Errors::default(),
+        turn_wall: TurnWall::default(),
+    };
+    let json = serde_json::to_value(&event).expect("serialize");
+    assert_eq!(json.get("cold_start_bucket"), Some(&Value::Null));
+
+    let event = Event::InstallOrUpgrade {
+        kind: InstallKind::Install,
+        previous_version: None,
+    };
+    let json = serde_json::to_value(&event).expect("serialize");
+    assert_eq!(json.get("previous_version"), Some(&Value::Null));
+}
+
+// ------------------------------------------------------ scrubber assertions --
+
+/// Run the workflow crate's disclosure redactor over **each string leaf**.
+///
+/// Never over the serialized document: `redact_for_disclosure` tokenizes with
+/// `input.split(' ')`, and a compact `serde_json` batch has no spaces, so the
+/// whole document would be one token and every classifier would fail on it. A
+/// batch containing an absolute path, a live-looking key, and a whole prompt
+/// would report clean. The gate would detect nothing while appearing to pass.
+fn redaction_kinds_over_leaves(json: &Value) -> Vec<String> {
+    let mut kinds = Vec::new();
+    for (_, value) in string_leaves(json) {
+        let redaction = codewhale_workflow::redaction::redact_for_disclosure(&value);
+        if redaction.redacted() {
+            kinds.extend(redaction.kinds());
+        }
+    }
+    kinds
+}
+
+#[test]
+fn every_string_leaf_survives_redaction_unchanged() {
+    let json = serde_json::to_value(every_field_batch()).expect("serialize batch");
+    let kinds = redaction_kinds_over_leaves(&json);
+    assert!(
+        kinds.is_empty(),
+        "a real payload tripped the disclosure redactor: {kinds:?}"
+    );
+}
+
+#[test]
+fn redaction_catches_a_planted_absolute_path() {
+    let mut json = serde_json::to_value(every_field_batch()).expect("serialize batch");
+    json["app_version"] = Value::from("/Users/hunter/src/app/main.rs");
+    let kinds = redaction_kinds_over_leaves(&json);
+    assert!(
+        kinds.iter().any(|k| k == "absolute_path"),
+        "the negative control did not fire: {kinds:?}"
+    );
+}
+
+#[test]
+fn redaction_catches_a_planted_secret() {
+    let mut json = serde_json::to_value(every_field_batch()).expect("serialize batch");
+    // Deliberately low-entropy: a realistic token in a fixture trips secret
+    // scanners at push time.
+    json["app_version"] = Value::from("api_key=sk-live-abcdef0123456789abcdef");
+    let kinds = redaction_kinds_over_leaves(&json);
+    assert!(
+        kinds.iter().any(|k| k == "secret"),
+        "the negative control did not fire: {kinds:?}"
+    );
+}
+
+#[test]
+fn panic_site_is_the_only_field_that_may_carry_a_path() {
+    // `panic_site` is a repo-relative path by design, so it is the one
+    // documented exemption. Prove the redactor would flag such a value, and
+    // that no other leaf in a real payload carries one.
+    let planted = codewhale_workflow::redaction::redact_for_disclosure("crates/tui/src/main.rs");
+    assert!(
+        planted.kinds().iter().any(|k| k == "relative_path"),
+        "the redactor no longer classifies a repo-relative path: {:?}",
+        planted.kinds()
+    );
+
+    let json = serde_json::to_value(every_field_batch()).expect("serialize batch");
+    for (path, value) in string_leaves(&json) {
+        if path.ends_with(".site") {
+            continue;
+        }
+        let redaction = codewhale_workflow::redaction::redact_for_disclosure(&value);
+        assert!(
+            !redaction.kinds().iter().any(|k| k.ends_with("path")),
+            "a non-exempt leaf carries a path: {path} = {value:?}"
+        );
+    }
+}
+
+// ------------------------------------------------------------- panic sites --
+
+#[test]
+fn panic_site_reduces_dependency_frames() {
+    assert_eq!(
+        envelope::reduce_panic_site("crates/tui/src/x.rs", 9, 1),
+        "crates/tui/src/x.rs:9:1"
+    );
+    assert_eq!(
+        envelope::reduce_panic_site(
+            "/Users/builder/.cargo/registry/src/index.crates.io-1949cf8c/ratatui-0.29.0/src/y.rs",
+            1,
+            1
+        ),
+        "<dep>"
+    );
+    assert_eq!(
+        envelope::reduce_panic_site("/rustc/deadbeef/library/core/src/panicking.rs", 1, 1),
+        "<dep>"
+    );
+    // A path that merely mentions `crates/` somewhere is not a `crates/` frame.
+    assert_eq!(
+        envelope::reduce_panic_site("../vendor/crates/foo/src/lib.rs", 1, 1),
+        "<dep>"
+    );
+}
+
+#[test]
+fn git_sha_is_null_without_release_env() {
+    // No build script has emitted `CODEWHALE_RELEASE_BUILD_SHA` for this crate,
+    // and no locally built binary ever will.
+    assert_eq!(envelope::release_build_sha(), None);
+    assert_eq!(
+        envelope::short_hex_sha("ABCDEF0123456789abcdef0123456789abcdef01"),
+        Some("abcdef012345".to_string())
+    );
+    assert_eq!(envelope::short_hex_sha("not-a-sha"), None);
+    assert_eq!(envelope::short_hex_sha("abc123"), None);
+}
+
+// --------------------------------------------------------------- decisions --
+
+#[test]
+fn decision_matrix_is_exhaustive() {
+    let home = temp_home();
+    let path = home.path();
+
+    // Row: nobody has said anything. Default off is not an answer.
+    assert!(matches!(
+        decide_in_home(
+            Some(path),
+            &resolved(false, false, None),
+            &SetupState::default(),
+            Surface::Tui
+        ),
+        TelemetryDecision::ForcedOff
+    ));
+
+    // Row: a human said off. That is an answer.
+    assert!(matches!(
+        decide_in_home(
+            Some(path),
+            &resolved(false, true, None),
+            &accepted_setup(),
+            Surface::Tui
+        ),
+        TelemetryDecision::OptedOut
+    ));
+
+    // Row: on, but never asked. A pre-existing `telemetry = true` is not
+    // consent — the key has been settable and inert for a long time.
+    assert!(matches!(
+        decide_in_home(
+            Some(path),
+            &resolved(true, false, None),
+            &SetupState::default(),
+            Surface::Tui
+        ),
+        TelemetryDecision::ForcedOff
+    ));
+
+    // Row: on, asked, declined.
+    assert!(matches!(
+        decide_in_home(
+            Some(path),
+            &resolved(true, false, None),
+            &declined_setup(),
+            Surface::Tui
+        ),
+        TelemetryDecision::OptedOut
+    ));
+
+    // Row: on, but the notice content changed since they answered.
+    assert!(matches!(
+        decide_in_home(
+            Some(path),
+            &resolved(true, false, None),
+            &stale_setup(),
+            Surface::Tui
+        ),
+        TelemetryDecision::ForcedOff
+    ));
+
+    // Row: on and accepted, no home to keep state in.
+    assert!(matches!(
+        decide_in_home(
+            None,
+            &resolved(true, false, None),
+            &accepted_setup(),
+            Surface::Tui
+        ),
+        TelemetryDecision::ForcedOff
+    ));
+
+    // Row: on and accepted, plaintext endpoint to a public host.
+    assert!(matches!(
+        decide_in_home(
+            Some(path),
+            &resolved(true, false, Some("http://example.com/t")),
+            &accepted_setup(),
+            Surface::Tui
+        ),
+        TelemetryDecision::ForcedOff
+    ));
+
+    // Row: on and accepted, no endpoint. The shipped default.
+    let decision = decide_in_home(
+        Some(path),
+        &resolved(true, false, None),
+        &accepted_setup(),
+        Surface::Exec,
+    );
+    let TelemetryDecision::Enabled(consent) = decision else {
+        panic!("an accepted, endpoint-less machine must be Enabled");
+    };
+    assert_eq!(consent.endpoint(), None);
+    assert_eq!(consent.surface(), Surface::Exec);
+    assert_eq!(consent.root(), root_of(&home));
+
+    // Row: on and accepted, https endpoint.
+    assert!(
+        decide_in_home(
+            Some(path),
+            &resolved(true, false, Some("https://example.com/t")),
+            &accepted_setup(),
+            Surface::Tui
+        )
+        .is_enabled()
+    );
+
+    // Row: every headless surface is reachable, because consent is
+    // machine-scoped: a TTY-recorded decision authorizes later exec, cli,
+    // app-server, mcp-server, and serve runs on the same home.
+    for surface in Surface::ALL {
+        assert!(
+            decide_in_home(
+                Some(path),
+                &resolved(true, false, None),
+                &accepted_setup(),
+                *surface
+            )
+            .is_enabled(),
+            "{surface:?} must be able to emit on a consenting machine"
+        );
+    }
+}
+
+#[test]
+fn an_unparseable_env_value_forces_off_and_does_not_wipe() {
+    // The floor in `codewhale-config` turns an unreadable `CODEWHALE_TELEMETRY`
+    // into `telemetry == false` *without* setting `telemetry_explicit_off`. A
+    // typo is not a user answer and must never destroy state.
+    let home = temp_home();
+    let root = root_of(&home);
+    buffer::ensure_dir(&root).expect("create root");
+    let buffer_path = buffer::buffer_path(&root);
+    buffer::append(
+        &root,
+        &buffer_path,
+        "{\"event\":\"session_start\",\"source\":\"api\"}",
+    )
+    .expect("seed");
+
+    let decision = decide_in_home(
+        Some(home.path()),
+        &resolved(false, false, None),
+        &accepted_setup(),
+        Surface::Tui,
+    );
+    assert!(matches!(decision, TelemetryDecision::ForcedOff));
+    assert!(!buffer::tombstone_present(&root));
+    assert_eq!(buffer::read_lines(&buffer_path).len(), 1);
+}
+
+#[test]
+fn only_opt_out_touches_disk() {
+    // Every ForcedOff row against a seeded, consenting home must leave it
+    // byte-identical. This is the finding that a "wipe on resolved false" would
+    // have broken: `false` is the *default*, so it fired on every ordinary run.
+    let forced_off_rows: Vec<(ResolvedRuntimeOptions, SetupState)> = vec![
+        (resolved(false, false, None), accepted_setup()),
+        (resolved(true, false, None), SetupState::default()),
+        (resolved(true, false, None), stale_setup()),
+        (
+            resolved(true, false, Some("http://example.com/t")),
+            accepted_setup(),
+        ),
+    ];
+
+    for (options, setup) in forced_off_rows {
+        let home = temp_home();
+        let root = root_of(&home);
+        buffer::ensure_dir(&root).expect("create root");
+        let before = seed_consenting_home(&root);
+
+        let decision = decide_in_home(Some(home.path()), &options, &setup, Surface::Tui);
+        assert!(
+            matches!(decision, TelemetryDecision::ForcedOff),
+            "expected ForcedOff, got {}",
+            decision.label()
+        );
+        assert_eq!(snapshot(&root), before, "a ForcedOff run touched disk");
+    }
+
+    // Every OptedOut row wipes: tombstone present, data truncated, lock file
+    // still present, identity gone.
+    let home = temp_home();
+    let root = root_of(&home);
+    buffer::ensure_dir(&root).expect("create root");
+    seed_consenting_home(&root);
+
+    let decision = decide_in_home(
+        Some(home.path()),
+        &resolved(false, true, None),
+        &accepted_setup(),
+        Surface::Tui,
+    );
+    assert!(matches!(decision, TelemetryDecision::OptedOut));
+    assert!(buffer::tombstone_present(&root));
+    assert!(buffer::buffer_path(&root).exists());
+    assert!(buffer::read_lines(&buffer::buffer_path(&root)).is_empty());
+    assert!(buffer::read_lines(&buffer::dryrun_path(&root)).is_empty());
+    assert!(
+        buffer::lock_path(&root).exists(),
+        "the lock file must survive a wipe: unlinking it leaves appenders on a dead inode"
+    );
+    assert!(!buffer::install_id_path(&root).exists());
+    assert!(!buffer::state_path(&root).exists());
+}
+
+#[test]
+fn an_opt_out_on_a_fresh_home_creates_nothing() {
+    let home = temp_home();
+    let root = root_of(&home);
+    let decision = decide_in_home(
+        Some(home.path()),
+        &resolved(false, true, None),
+        &SetupState::default(),
+        Surface::Tui,
+    );
+    assert!(matches!(decision, TelemetryDecision::OptedOut));
+    assert!(
+        !root.exists(),
+        "a user who never opted in must not get a telemetry directory for saying no"
+    );
+}
+
+fn seed_consenting_home(root: &Path) -> Vec<(String, Vec<u8>)> {
+    buffer::append(
+        root,
+        &buffer::buffer_path(root),
+        "{\"event\":\"session_start\",\"source\":\"interactive\"}",
+    )
+    .expect("seed buffer");
+    buffer::append_locked(root, &buffer::dryrun_path(root), "{\"schema_version\":1}")
+        .expect("seed dryrun");
+    envelope::read_or_create_install_id(root).expect("seed install id");
+    envelope::write_state(root, &envelope::TelemetryState::default()).expect("seed state");
+    snapshot(root)
+}
+
+fn snapshot(root: &Path) -> Vec<(String, Vec<u8>)> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, Vec<u8>)> = entries
+        .filter_map(Result::ok)
+        .map(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let body = std::fs::read(entry.path()).unwrap_or_default();
+            (name, body)
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+#[test]
+fn failed_wipe_fails_closed() {
+    let home = temp_home();
+    let root = root_of(&home);
+    buffer::ensure_dir(&root).expect("create root");
+    seed_consenting_home(&root);
+
+    // Make the buffer un-truncatable. The tombstone is written first, so even
+    // when the rest of the wipe fails the buffer is permanently undrainable.
+    let buffer_path = buffer::buffer_path(&root);
+    let readonly_worked = make_read_only(&buffer_path);
+
+    let result = buffer::wipe(&root);
+    assert!(
+        buffer::tombstone_present(&root),
+        "the tombstone must survive"
+    );
+    if readonly_worked {
+        assert!(result.is_err(), "a failed truncate must be reported");
+    }
+    assert!(
+        buffer::drain(&root).is_empty(),
+        "a tombstoned buffer must never drain, wipe failure or not"
+    );
+    assert!(
+        buffer::append(
+            &root,
+            &buffer_path,
+            "{\"event\":\"session_start\",\"source\":\"api\"}"
+        )
+        .is_none(),
+        "a tombstoned buffer must never accept an append"
+    );
+}
+
+#[cfg(unix)]
+fn make_read_only(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    // Root ignores the mode bits, so this fixture cannot be relied on there.
+    if geteuid_is_root() {
+        return false;
+    }
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o400)).is_ok()
+}
+
+#[cfg(unix)]
+fn geteuid_is_root() -> bool {
+    unsafe extern "C" {
+        fn geteuid() -> u32;
+    }
+    unsafe { geteuid() == 0 }
+}
+
+#[cfg(not(unix))]
+fn make_read_only(_path: &Path) -> bool {
+    false
+}
+
+// --------------------------------------------------------------- endpoints --
+
+#[test]
+fn plain_http_is_rejected_except_on_loopback() {
+    assert!(validate_endpoint("https://example.com/t").is_ok());
+    assert_eq!(
+        validate_endpoint("http://example.com/t"),
+        Err(EndpointError::InsecureScheme)
+    );
+    assert!(validate_endpoint("http://127.0.0.1:9/x").is_ok());
+    assert!(validate_endpoint("http://localhost:9/x").is_ok());
+    assert!(validate_endpoint("http://[::1]:9/x").is_ok());
+    assert_eq!(
+        validate_endpoint("ftp://example.com/t"),
+        Err(EndpointError::UnsupportedScheme)
+    );
+    assert_eq!(
+        validate_endpoint("example.com"),
+        Err(EndpointError::Unparseable)
+    );
+}
+
+#[test]
+fn no_environment_variable_can_authorize_plaintext() {
+    // `CODEWHALE_ALLOW_INSECURE_HTTP` is a *provider* trust decision — it
+    // permits an insecure model base URL for harnesses that intercept model
+    // traffic. Honouring it here would let that decision also authorize
+    // telemetry POSTs to an arbitrary host. No override of any kind exists.
+    unsafe { std::env::set_var("CODEWHALE_ALLOW_INSECURE_HTTP", "1") };
+    let with_env = validate_endpoint("http://example.com/t");
+    unsafe { std::env::remove_var("CODEWHALE_ALLOW_INSECURE_HTTP") };
+    assert_eq!(with_env, Err(EndpointError::InsecureScheme));
+}
+
+// -------------------------------------------------------- install identity --
+
+#[test]
+fn install_id_is_random_and_rotates() {
+    let first_home = temp_home();
+    let second_home = temp_home();
+    let first_root = root_of(&first_home);
+    let second_root = root_of(&second_home);
+
+    let first = envelope::read_or_create_install_id(&first_root).expect("mint");
+    let second = envelope::read_or_create_install_id(&second_root).expect("mint");
+    assert_ne!(
+        first.install_id, second.install_id,
+        "two fresh homes must not share an id"
+    );
+    assert!(uuid::Uuid::parse_str(&first.install_id).is_ok());
+
+    // Stable across reads on the same home.
+    let again = envelope::read_or_create_install_id(&first_root).expect("re-read");
+    assert_eq!(first.install_id, again.install_id);
+
+    // Not a function of hostname, user, or path: nothing derivable appears in
+    // the value, and two homes under the same user differ.
+    for derived in [
+        std::env::var("USER").unwrap_or_default(),
+        std::env::var("HOME").unwrap_or_default(),
+        first_root.display().to_string(),
+    ] {
+        if derived.trim().is_empty() {
+            continue;
+        }
+        assert!(!first.install_id.contains(derived.trim()));
+    }
+
+    // 91 days old rotates.
+    let stale = envelope::InstallId {
+        schema_version: 1,
+        install_id: first.install_id.clone(),
+        rotated_at: (chrono::Utc::now() - chrono::Duration::days(91))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    };
+    codewhale_config::persistence::atomic_write_json(&buffer::install_id_path(&first_root), &stale)
+        .expect("write stale id");
+    let rotated = envelope::read_or_create_install_id(&first_root).expect("rotate");
+    assert_ne!(rotated.install_id, first.install_id);
+    assert_ne!(rotated.rotated_at, stale.rotated_at);
+}
+
+// ------------------------------------------------------------------ buffer --
+
+fn line(n: usize) -> String {
+    serde_json::to_string(&Event::Panic {
+        site: format!("crates/tui/src/x.rs:{n}:1"),
+    })
+    .expect("serialize")
+}
+
+#[test]
+fn ring_buffer_drops_oldest_at_cap_for_both_sinks() {
+    let home = temp_home();
+    let root = root_of(&home);
+    for path in [buffer::buffer_path(&root), buffer::dryrun_path(&root)] {
+        for n in 0..600 {
+            buffer::append(&root, &path, &line(n)).expect("append");
+        }
+        let kept = buffer::read_lines(&path);
+        assert_eq!(kept.len(), buffer::MAX_EVENTS, "{}", path.display());
+        assert_eq!(
+            kept.first().expect("first"),
+            &line(600 - buffer::MAX_EVENTS)
+        );
+        assert_eq!(kept.last().expect("last"), &line(599));
+    }
+}
+
+#[test]
+fn probe_threshold_cannot_hide_an_over_cap_buffer() {
+    // The append path skips the count probe below a byte threshold. That is
+    // only safe if `MAX_EVENTS` lines cannot fit under it.
+    let shortest = serde_json::to_string(&Event::SessionStart {
+        source: SessionSource::Api,
+    })
+    .expect("serialize");
+    let floor = (shortest.len() as u64 + 1) * buffer::MAX_EVENTS as u64;
+    assert!(
+        floor > 4096,
+        "the shortest event is now small enough that {} of them fit under the probe threshold",
+        buffer::MAX_EVENTS
+    );
+}
+
+#[test]
+fn a_line_over_pipe_buf_is_dropped_not_split() {
+    let home = temp_home();
+    let root = root_of(&home);
+    let path = buffer::buffer_path(&root);
+    let huge = format!("{{\"pad\":\"{}\"}}", "x".repeat(buffer::MAX_LINE_BYTES));
+    assert!(buffer::append(&root, &path, &huge).is_none());
+    assert!(buffer::read_lines(&path).is_empty());
+}
+
+#[test]
+fn drain_skips_a_torn_trailing_line() {
+    let home = temp_home();
+    let root = root_of(&home);
+    let path = buffer::buffer_path(&root);
+    buffer::append(&root, &path, &line(1)).expect("append");
+    buffer::append(&root, &path, &line(2)).expect("append");
+    // `std::process::exit` on the signal path can cut a concurrent write.
+    {
+        use std::io::Write as _;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("open");
+        file.write_all(b"{\"event\":\"pan").expect("tear");
+    }
+    let drained = buffer::drain(&root);
+    assert_eq!(drained.len(), 3, "the drain returns raw lines");
+    let parsed: Vec<Event> = drained
+        .iter()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    assert_eq!(parsed.len(), 2, "the torn line must not reach a batch");
+    assert!(buffer::read_lines(&path).is_empty(), "drain truncates");
+}
+
+#[test]
+fn append_never_blocks_on_a_held_lock() {
+    let home = temp_home();
+    let root = root_of(&home);
+    buffer::ensure_dir(&root).expect("create root");
+    let path = buffer::buffer_path(&root);
+
+    let held = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let release = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let holder_root = root.clone();
+    let holder_held = held.clone();
+    let holder_release = release.clone();
+    let holder = std::thread::spawn(move || {
+        buffer::with_lock(&holder_root, || {
+            holder_held.wait();
+            holder_release.wait();
+            Ok(())
+        })
+    });
+
+    held.wait();
+    let started = Instant::now();
+    buffer::append(&root, &path, &line(7)).expect("append under a held lock");
+    let elapsed = started.elapsed();
+    release.wait();
+    holder.join().expect("holder thread").expect("holder lock");
+
+    assert!(
+        elapsed < Duration::from_millis(250),
+        "an append waited {elapsed:?} on a lock it must never take"
+    );
+    assert_eq!(buffer::read_lines(&path).len(), 1);
+}
+
+#[test]
+fn a_tombstoned_buffer_never_appends_or_drains() {
+    let home = temp_home();
+    let root = root_of(&home);
+    buffer::ensure_dir(&root).expect("create root");
+    buffer::append(&root, &buffer::buffer_path(&root), &line(1)).expect("append");
+    buffer::wipe(&root).expect("wipe");
+
+    assert!(buffer::append(&root, &buffer::buffer_path(&root), &line(2)).is_none());
+    assert!(buffer::append_locked(&root, &buffer::dryrun_path(&root), "{}").is_none());
+    assert!(buffer::drain(&root).is_empty());
+}
+
+#[test]
+fn arming_clears_the_tombstone_and_truncates_a_pre_consent_buffer() {
+    let home = temp_home();
+    let root = root_of(&home);
+    buffer::ensure_dir(&root).expect("create root");
+    buffer::append(&root, &buffer::buffer_path(&root), &line(1)).expect("append");
+    buffer::wipe(&root).expect("wipe");
+
+    buffer::arm(&root).expect("arm");
+    assert!(!buffer::tombstone_present(&root));
+    assert!(buffer::read_lines(&buffer::buffer_path(&root)).is_empty());
+}
+
+// ------------------------------------------------------------ unarmed gate --
+
+#[test]
+fn record_blocking_is_a_noop_when_unarmed() {
+    // The process panic hook is installed before the command line is parsed, so
+    // this is the state the hook runs in for every user who never opted in.
+    let home = temp_home();
+    let root = root_of(&home);
+    assert!(!crate::is_armed());
+    crate::record_blocking(Event::Panic {
+        site: "crates/tui/src/x.rs:1:1".to_string(),
+    });
+    crate::record(Event::SessionStart {
+        source: SessionSource::Interactive,
+    });
+    crate::set_exit_class(ExitClass::Panic);
+    assert_eq!(crate::exit_class(), ExitClass::Clean);
+    assert_eq!(
+        crate::flush_blocking(Duration::from_millis(10)),
+        crate::FlushOutcome::Empty
+    );
+    assert!(!crate::startup_drain_due());
+    assert!(
+        !root.exists(),
+        "an unarmed process must create no directory"
+    );
+}
+
+// ------------------------------------------------------------------ client --
+
+#[test]
+fn endpoint_unset_writes_the_dry_run_sink() {
+    let home = temp_home();
+    let root = root_of(&home);
+    let batch = every_field_batch();
+    assert_eq!(
+        crate::client::send(&root, None, &batch),
+        crate::client::SendOutcome::DryRun
+    );
+    let written = buffer::read_lines(&buffer::dryrun_path(&root));
+    assert_eq!(written.len(), 1);
+    let round_tripped: Batch = serde_json::from_str(&written[0]).expect("parse dry-run batch");
+    assert_eq!(round_tripped, batch);
+    assert!(
+        !buffer::buffer_path(&root).exists(),
+        "the dry-run sink is a separate file from the pending buffer"
+    );
+}
+
+#[test]
+fn a_tombstoned_home_sends_nothing_even_with_an_endpoint() {
+    let home = temp_home();
+    let root = root_of(&home);
+    buffer::ensure_dir(&root).expect("create root");
+    buffer::wipe(&root).expect("wipe");
+    // The tombstone check fires before any client is constructed, so this
+    // asserts on the sink rather than on network timing.
+    assert_eq!(
+        crate::client::send(&root, Some("http://127.0.0.1:1/t"), &every_field_batch()),
+        crate::client::SendOutcome::Dropped
+    );
+    assert!(buffer::read_lines(&buffer::dryrun_path(&root)).is_empty());
+}
+
+// ----------------------------------------------------------------- buckets --
+
+#[test]
+fn buckets_are_half_open_at_every_boundary() {
+    assert_eq!(DurationBucket::from_secs(0), DurationBucket::Lt1m);
+    assert_eq!(DurationBucket::from_secs(59), DurationBucket::Lt1m);
+    assert_eq!(DurationBucket::from_secs(60), DurationBucket::OneToTen);
+    assert_eq!(DurationBucket::from_secs(599), DurationBucket::OneToTen);
+    assert_eq!(DurationBucket::from_secs(600), DurationBucket::TenToSixty);
+    assert_eq!(DurationBucket::from_secs(3599), DurationBucket::TenToSixty);
+    assert_eq!(DurationBucket::from_secs(3600), DurationBucket::Gt60m);
+
+    assert_eq!(ColdStartBucket::from_millis(249), ColdStartBucket::Lt250);
+    assert_eq!(ColdStartBucket::from_millis(250), ColdStartBucket::Mid);
+    assert_eq!(ColdStartBucket::from_millis(999), ColdStartBucket::Mid);
+    assert_eq!(ColdStartBucket::from_millis(1000), ColdStartBucket::Slow);
+    assert_eq!(ColdStartBucket::from_millis(2999), ColdStartBucket::Slow);
+    assert_eq!(ColdStartBucket::from_millis(3000), ColdStartBucket::Gte3000);
+
+    let mut wall = TurnWall::default();
+    for secs in [0, 4, 5, 29, 30, 119, 120, 10_000] {
+        wall.observe_secs(secs);
+    }
+    assert_eq!(wall.lt_5s, 2);
+    assert_eq!(wall.five_to_thirty, 2);
+    assert_eq!(wall.thirty_to_onetwenty, 2);
+    assert_eq!(wall.gte_120s, 2);
+}
+
+#[test]
+fn exit_class_round_trips_through_the_atomic_encoding() {
+    for class in ExitClass::ALL {
+        assert_eq!(ExitClass::from_u8(class.as_u8()), *class);
+    }
+    // An exit code is never the source: 130 is both a cancelled turn and SIGINT.
+    assert_eq!(ExitClass::from_u8(130), ExitClass::Clean);
+}
+
+// ---------------------------------------------------------------- counters --
+
+#[test]
+fn custom_provider_emits_literal_custom() {
+    let counters = crate::SessionCounters::default();
+    counters.record_provider(codewhale_config::ProviderKind::Custom);
+    counters.record_provider(codewhale_config::ProviderKind::Deepseek);
+    counters.record_provider(codewhale_config::ProviderKind::Custom);
+    let providers = counters.providers();
+    assert_eq!(
+        providers,
+        vec!["custom".to_string(), "deepseek".to_string()]
+    );
+}
+
+#[test]
+fn counter_bumps_land_in_the_named_field() {
+    let counters = crate::SessionCounters::default();
+    counters.bump(crate::Counter::Turns);
+    counters.bump(crate::Counter::Turns);
+    counters.bump(crate::Counter::CommandPaletteOpen);
+    counters.bump_error(crate::ErrorCounter::ProviderHttp5xx);
+    counters.observe_turn_secs(3);
+
+    let snapshot = counters.counters();
+    assert_eq!(snapshot.turns, 2);
+    assert_eq!(snapshot.command_palette_open, 1);
+    assert_eq!(snapshot.tool_calls, 0);
+    assert_eq!(counters.errors().provider_http_5xx, 1);
+    assert_eq!(counters.turn_wall().lt_5s, 1);
+}
+
+#[test]
+fn http_status_maps_to_the_class_counter_and_nothing_else() {
+    assert_eq!(
+        crate::counters::http_status_counter(404),
+        Some(crate::ErrorCounter::ProviderHttp4xx)
+    );
+    assert_eq!(
+        crate::counters::http_status_counter(503),
+        Some(crate::ErrorCounter::ProviderHttp5xx)
+    );
+    assert_eq!(crate::counters::http_status_counter(200), None);
+    assert_eq!(crate::counters::http_status_counter(302), None);
+}
+
+// --------------------------------------------------------------- API shape --
+
+#[test]
+fn no_public_api_accepts_a_bare_bool() {
+    // `init` takes a `TelemetryConsent` **by value**, and `TelemetryConsent` has
+    // no public constructor other than `decide`. This is a shape assertion: it
+    // stops compiling if the signature is ever widened.
+    let init: fn(crate::TelemetryConsent) = crate::init;
+    let _ = init;
+
+    // The only source of one is `decide`, which needs both a resolved config
+    // and a setup-state record — neither of which a caller can fake into "yes"
+    // without the user having answered.
+    let home = temp_home();
+    assert!(
+        !decide_in_home(
+            Some(home.path()),
+            &resolved(true, false, None),
+            &SetupState::default(),
+            Surface::Cli
+        )
+        .is_enabled()
+    );
+}

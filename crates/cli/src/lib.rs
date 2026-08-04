@@ -2085,7 +2085,6 @@ fn credential_metadata_store(store: &ConfigStore) -> Result<Option<ConfigStore>>
     ConfigStore::load(Some(global)).map(Some)
 }
 
-
 #[cfg(test)]
 fn no_keyring_secrets() -> Secrets {
     Secrets::new(std::sync::Arc::new(
@@ -4902,6 +4901,7 @@ mod tests {
             log_level: None,
             telemetry: false,
             telemetry_explicit_off: false,
+            telemetry_endpoint: None,
             approval_policy: None,
             sandbox_mode: None,
             yolo: None,
@@ -8095,6 +8095,7 @@ model = "qwen-2.5-7b"
             log_level: None,
             telemetry: false,
             telemetry_explicit_off: false,
+            telemetry_endpoint: None,
             approval_policy: None,
             sandbox_mode: None,
             yolo: None,
@@ -8211,6 +8212,7 @@ model = "qwen-2.5-7b"
             log_level: None,
             telemetry: false,
             telemetry_explicit_off: false,
+            telemetry_endpoint: None,
             approval_policy: None,
             sandbox_mode: None,
             yolo: None,
@@ -8272,6 +8274,7 @@ model = "qwen-2.5-7b"
             log_level: None,
             telemetry: false,
             telemetry_explicit_off: false,
+            telemetry_endpoint: None,
             approval_policy: None,
             sandbox_mode: None,
             yolo: None,
@@ -8325,6 +8328,7 @@ model = "qwen-2.5-7b"
             log_level: None,
             telemetry: false,
             telemetry_explicit_off: false,
+            telemetry_endpoint: None,
             approval_policy: None,
             sandbox_mode: None,
             yolo: None,
@@ -8368,6 +8372,7 @@ model = "qwen-2.5-7b"
             log_level: None,
             telemetry: false,
             telemetry_explicit_off: false,
+            telemetry_endpoint: None,
             approval_policy: None,
             sandbox_mode: None,
             yolo: None,
@@ -8471,6 +8476,7 @@ model = "qwen-2.5-7b"
             log_level: None,
             telemetry: false,
             telemetry_explicit_off: false,
+            telemetry_endpoint: None,
             approval_policy: None,
             sandbox_mode: None,
             yolo: None,
@@ -8580,6 +8586,7 @@ model = "qwen-2.5-7b"
             log_level: None,
             telemetry: false,
             telemetry_explicit_off: false,
+            telemetry_endpoint: None,
             approval_policy: None,
             sandbox_mode: None,
             yolo: None,
@@ -8649,6 +8656,7 @@ model = "qwen-2.5-7b"
             log_level: None,
             telemetry: false,
             telemetry_explicit_off: false,
+            telemetry_endpoint: None,
             approval_policy: None,
             sandbox_mode: None,
             yolo: None,
@@ -8719,6 +8727,7 @@ model = "qwen-2.5-7b"
             log_level: None,
             telemetry: false,
             telemetry_explicit_off: false,
+            telemetry_endpoint: None,
             approval_policy: None,
             sandbox_mode: None,
             yolo: None,
@@ -8769,6 +8778,7 @@ model = "qwen-2.5-7b"
                 log_level: None,
                 telemetry: false,
                 telemetry_explicit_off: false,
+                telemetry_endpoint: None,
                 approval_policy: None,
                 sandbox_mode: None,
                 yolo: None,

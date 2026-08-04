@@ -24,7 +24,7 @@ mod js_authoring;
 mod model_policy;
 mod named_fleet;
 pub mod reasoning_router;
-mod redaction;
+pub mod redaction;
 mod replay;
 mod review_repair;
 mod role_resolve;

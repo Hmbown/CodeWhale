@@ -1,0 +1,430 @@
+//! The on-disk ring buffer, the tombstone, and the wipe.
+//!
+//! Everything lives under `$CODEWHALE_HOME/telemetry/`, created `0700`, with
+//! every file `0600`:
+//!
+//! | file | role |
+//! |---|---|
+//! | `buffer.jsonl` | one JSON event per line, awaiting a flush |
+//! | `buffer.jsonl.lock` | a **sibling** lock file; never the data file |
+//! | `dryrun.jsonl` | the sink when no endpoint is configured, same ring policy |
+//! | `state.json` | last version seen and last flush attempt |
+//! | `install_id.json` | the random install id |
+//! | `disabled` | the tombstone: present ⇒ nothing is appended, drained, or sent |
+//!
+//! **Appends never take a lock.** One `O_APPEND` `write(2)` under `PIPE_BUF` is
+//! atomic on every filesystem this ships to, and taking `fd_lock` here would be
+//! a *blocking* acquisition on the panic hook and the SIGINT path. `flock` is
+//! per-fd within a process, so an actor panic while holding the compaction lock
+//! would self-deadlock the hook — `catch_unwind` runs *after* the hook, so it
+//! cannot save this — and a second Codewhale process sharing `CODEWHALE_HOME`
+//! would hang Ctrl-C, breaking the second-signal contract in `main.rs`.
+//!
+//! Compaction is the only lock holder and uses `try_write()`: on contention it
+//! skips this cycle. Appenders re-open per append, so a compaction rewrite
+//! cannot leave anyone writing to a stale inode.
+
+use std::fs::{self, DirBuilder, File, OpenOptions};
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+
+/// Newest events retained in either sink.
+pub const MAX_EVENTS: usize = 512;
+/// Byte ceiling for either sink.
+pub const MAX_BYTES: u64 = 256 * 1024;
+/// A single append must fit in one atomic `write(2)`.
+pub const MAX_LINE_BYTES: usize = 4096;
+
+/// Below this size a sink cannot possibly hold [`MAX_EVENTS`] lines, so an
+/// append skips the count probe entirely. The shortest serializable event line
+/// is well over 8 bytes, and `512 * 9 > 4096`, so this bound is safe by
+/// construction — `probe_threshold_cannot_hide_an_over_cap_buffer` pins it.
+const PROBE_BYTES: u64 = 4096;
+
+/// `buffer.jsonl` — the pending-event sink.
+#[must_use]
+pub fn buffer_path(root: &Path) -> PathBuf {
+    root.join("buffer.jsonl")
+}
+
+/// `dryrun.jsonl` — where batches go when no endpoint is configured.
+#[must_use]
+pub fn dryrun_path(root: &Path) -> PathBuf {
+    root.join("dryrun.jsonl")
+}
+
+/// `buffer.jsonl.lock` — the sibling lock file. Never the data file, and never
+/// unlinked: replacing it would leave appenders and compactors holding
+/// different inodes and serialising against nothing.
+#[must_use]
+pub fn lock_path(root: &Path) -> PathBuf {
+    root.join("buffer.jsonl.lock")
+}
+
+/// `disabled` — the tombstone.
+#[must_use]
+pub fn tombstone_path(root: &Path) -> PathBuf {
+    root.join("disabled")
+}
+
+/// `install_id.json`.
+#[must_use]
+pub fn install_id_path(root: &Path) -> PathBuf {
+    root.join("install_id.json")
+}
+
+/// `state.json`.
+#[must_use]
+pub fn state_path(root: &Path) -> PathBuf {
+    root.join("state.json")
+}
+
+/// Whether the tombstone is present.
+///
+/// Re-checked on **every** append and immediately before **every** send. This is
+/// what makes `codewhale config set telemetry false` — an external write by
+/// another process — observable to a session that is already running.
+#[must_use]
+pub fn tombstone_present(root: &Path) -> bool {
+    tombstone_path(root).exists()
+}
+
+/// Create the telemetry directory `0700`, if it is missing.
+pub fn ensure_dir(root: &Path) -> Result<()> {
+    if root.is_dir() {
+        return Ok(());
+    }
+    let mut builder = DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        builder.mode(0o700);
+    }
+    builder
+        .create(root)
+        .with_context(|| format!("failed to create {}", root.display()))
+}
+
+#[cfg(unix)]
+fn secure(file: &File) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    file.set_permissions(fs::Permissions::from_mode(0o600))
+        .context("failed to restrict telemetry file permissions")
+}
+
+#[cfg(not(unix))]
+fn secure(_file: &File) -> Result<()> {
+    Ok(())
+}
+
+/// Append one serialized event or batch to `path`.
+///
+/// Returns `None` — never an error — when the tombstone is present, when the
+/// line would not fit in one atomic write, or when any filesystem step fails.
+/// Telemetry is fail-open by construction: it never returns an error to a
+/// caller and never blocks a turn, a tool, or process exit.
+pub fn append(root: &Path, path: &Path, line: &str) -> Option<()> {
+    if tombstone_present(root) {
+        return None;
+    }
+    let bytes = line.as_bytes();
+    if bytes.is_empty() || bytes.len() + 1 > MAX_LINE_BYTES {
+        return None;
+    }
+    ensure_dir(root).ok()?;
+
+    let mut buf = Vec::with_capacity(bytes.len() + 1);
+    buf.extend_from_slice(bytes);
+    buf.push(b'\n');
+
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .ok()?;
+    secure(&file).ok()?;
+    // One `write(2)`, not `write_fmt` and not two calls: a split write is what
+    // a concurrent appender would interleave with.
+    (&file).write_all(&buf).ok()?;
+    file.sync_data().ok()?;
+    drop(file);
+
+    enforce_ring(root, path);
+    Some(())
+}
+
+/// Append a line that is too large for one atomic `write(2)`, serialising
+/// against other writers with the compaction lock instead.
+///
+/// Only the dry-run sink uses this: a whole batch does not fit under
+/// `PIPE_BUF`, and the flush path is neither the panic hook nor the signal
+/// handler, so a **non-blocking** `try_write` is safe there. On contention the
+/// batch is dropped, which is the same fail-open behavior as a failed POST.
+pub fn append_locked(root: &Path, path: &Path, line: &str) -> Option<()> {
+    if tombstone_present(root) {
+        return None;
+    }
+    let bytes = line.as_bytes();
+    if bytes.is_empty() || bytes.len() as u64 + 1 > MAX_BYTES {
+        return None;
+    }
+    ensure_dir(root).ok()?;
+
+    let mut buf = Vec::with_capacity(bytes.len() + 1);
+    buf.extend_from_slice(bytes);
+    buf.push(b'\n');
+
+    let wrote = try_with_lock(root, || {
+        if tombstone_present(root) {
+            return Ok(false);
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .with_context(|| format!("failed to open {}", path.display()))?;
+        secure(&file)?;
+        (&file)
+            .write_all(&buf)
+            .with_context(|| format!("failed to append to {}", path.display()))?;
+        file.sync_data()
+            .with_context(|| format!("failed to sync {}", path.display()))?;
+        Ok(true)
+    })
+    .ok()
+    .flatten()
+    .unwrap_or(false);
+
+    if !wrote {
+        return None;
+    }
+    enforce_ring(root, path);
+    Some(())
+}
+
+/// Keep the newest [`MAX_EVENTS`] lines and at most [`MAX_BYTES`], under the
+/// compaction lock. On lock contention this cycle is skipped: the next append
+/// tries again, and the cap is a ceiling on disk footprint, not an invariant
+/// that must hold at every instant.
+fn enforce_ring(root: &Path, path: &Path) {
+    let Ok(meta) = fs::metadata(path) else {
+        return;
+    };
+    let len = meta.len();
+    if len < PROBE_BYTES {
+        return;
+    }
+    let Ok(contents) = fs::read_to_string(path) else {
+        return;
+    };
+    let lines: Vec<&str> = contents.lines().filter(|l| !l.trim().is_empty()).collect();
+    if lines.len() <= MAX_EVENTS && len <= MAX_BYTES {
+        return;
+    }
+
+    let _ = try_with_lock(root, || {
+        let mut kept: Vec<&str> = lines
+            .iter()
+            .rev()
+            .take(MAX_EVENTS)
+            .rev()
+            .copied()
+            .collect::<Vec<_>>();
+        // Byte ceiling second: drop from the oldest end until the survivors fit.
+        while kept.len() > 1 && byte_len(&kept) > MAX_BYTES {
+            kept.remove(0);
+        }
+        let mut body = kept.join("\n");
+        if !body.is_empty() {
+            body.push('\n');
+        }
+        rewrite(path, body.as_bytes())
+    });
+}
+
+fn byte_len(lines: &[&str]) -> u64 {
+    lines.iter().map(|l| l.len() as u64 + 1).sum()
+}
+
+/// Replace `path` atomically through a sibling temp file in the same directory.
+fn rewrite(path: &Path, bytes: &[u8]) -> Result<()> {
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)
+        .with_context(|| format!("failed to stage a rewrite of {}", path.display()))?;
+    tmp.write_all(bytes)
+        .with_context(|| format!("failed to write a rewrite of {}", path.display()))?;
+    tmp.flush()
+        .with_context(|| format!("failed to flush a rewrite of {}", path.display()))?;
+    secure(tmp.as_file())?;
+    tmp.persist(path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("failed to persist {}", path.display()))?;
+    Ok(())
+}
+
+/// Open (creating if needed) the sibling lock file.
+fn open_lock(root: &Path) -> Result<File> {
+    ensure_dir(root)?;
+    let path = lock_path(root);
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        // The file is only a lock handle; its contents are never read and
+        // truncating it would race other holders for no benefit.
+        .truncate(false)
+        .open(&path)
+        .with_context(|| format!("failed to open {}", path.display()))?;
+    secure(&file)?;
+    Ok(file)
+}
+
+/// Run `operation` holding the exclusive compaction lock, **blocking**.
+///
+/// Only the opt-out wipe uses this. It is not an exit path, so blocking is
+/// fine there and nowhere else.
+pub fn with_lock<T>(root: &Path, operation: impl FnOnce() -> Result<T>) -> Result<T> {
+    let file = open_lock(root)?;
+    let mut lock = fd_lock::RwLock::new(file);
+    let _guard = lock.write().context("failed to take the telemetry lock")?;
+    operation()
+}
+
+/// Run `operation` holding the exclusive compaction lock if it is free.
+///
+/// Returns `Ok(None)` when the lock is held elsewhere. Never blocks.
+pub fn try_with_lock<T>(root: &Path, operation: impl FnOnce() -> Result<T>) -> Result<Option<T>> {
+    let file = open_lock(root)?;
+    let mut lock = fd_lock::RwLock::new(file);
+    match lock.try_write() {
+        Ok(_guard) => operation().map(Some),
+        Err(_) => Ok(None),
+    }
+}
+
+/// Read every intact line from `path`, dropping a torn trailing line.
+///
+/// `std::process::exit` on the signal path can truncate a concurrent write, so
+/// the last line may be a partial JSON document. Skipping unparseable lines is
+/// the whole tolerance: a drain must never fail because one record was cut.
+#[must_use]
+pub fn read_lines(path: &Path) -> Vec<String> {
+    let Ok(contents) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    contents
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Take every buffered line and truncate the buffer, under the compaction lock.
+///
+/// Returns an empty vector when the tombstone is present or the lock is held
+/// elsewhere. Truncates rather than unlinks — `crates/tui/src/fleet/ledger.rs`
+/// documents the rule: replacing the file leaves appenders holding the old
+/// inode.
+#[must_use]
+pub fn drain(root: &Path) -> Vec<String> {
+    if tombstone_present(root) {
+        return Vec::new();
+    }
+    let path = buffer_path(root);
+    let drained = try_with_lock(root, || {
+        // Re-check under the lock: a wipe may have landed between the check
+        // above and the acquisition.
+        if tombstone_present(root) {
+            return Ok(Vec::new());
+        }
+        let lines = read_lines(&path);
+        if !lines.is_empty() {
+            truncate(&path)?;
+        }
+        Ok(lines)
+    });
+    drained.ok().flatten().unwrap_or_default()
+}
+
+/// Truncate a file to zero length, leaving the inode in place. A missing file
+/// is not an error.
+pub fn truncate(path: &Path) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let file = OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(path)
+        .with_context(|| format!("failed to truncate {}", path.display()))?;
+    secure(&file)?;
+    Ok(())
+}
+
+/// Wipe every trace of collection, leaving a permanent tombstone.
+///
+/// Order matters and is the whole of the guarantee:
+///
+/// 1. take the blocking lock — this is not an exit path;
+/// 2. write the tombstone **first**, and never remove it here;
+/// 3. truncate `buffer.jsonl` and `dryrun.jsonl` — do **not** unlink them, and
+///    never unlink the lock file;
+/// 4. remove `install_id.json` and `state.json`.
+///
+/// If any step after the tombstone fails, the error is returned and the caller
+/// logs it — but the tombstone alone already makes the buffer permanently
+/// undrainable, so a failed wipe fails **closed**.
+pub fn wipe(root: &Path) -> Result<()> {
+    with_lock(root, || {
+        let tombstone = tombstone_path(root);
+        let file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&tombstone)
+            .with_context(|| format!("failed to write {}", tombstone.display()))?;
+        secure(&file)?;
+        drop(file);
+
+        let mut failure: Option<anyhow::Error> = None;
+        for path in [buffer_path(root), dryrun_path(root)] {
+            if let Err(error) = truncate(&path) {
+                failure.get_or_insert(error);
+            }
+        }
+        for path in [install_id_path(root), state_path(root)] {
+            if path.exists()
+                && let Err(error) = fs::remove_file(&path)
+            {
+                failure.get_or_insert(
+                    anyhow::Error::new(error)
+                        .context(format!("failed to remove {}", path.display())),
+                );
+            }
+        }
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    })
+}
+
+/// Clear the tombstone and drop anything buffered before consent.
+///
+/// Called by `init` on every arming. No event recorded before the user said yes
+/// can be in the batch that follows it — a stale buffer left by an earlier
+/// consenting run, or by a bug, is not evidence of this user's consent.
+pub fn arm(root: &Path) -> Result<()> {
+    ensure_dir(root)?;
+    with_lock(root, || {
+        let tombstone = tombstone_path(root);
+        if tombstone.exists() {
+            fs::remove_file(&tombstone)
+                .with_context(|| format!("failed to remove {}", tombstone.display()))?;
+        }
+        truncate(&buffer_path(root))
+    })
+}

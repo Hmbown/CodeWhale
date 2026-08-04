@@ -990,6 +990,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "codewhale-telemetry"
+version = "0.9.4"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "codewhale-config",
+ "codewhale-paths",
+ "codewhale-release",
+ "codewhale-workflow",
+ "fd-lock",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "codewhale-tools"
 version = "0.9.4"
 dependencies = [
