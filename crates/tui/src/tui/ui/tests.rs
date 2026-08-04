@@ -20560,6 +20560,13 @@ fn idle_rail_app(panel: crate::tui::work_surface::RailPanel) -> App {
     // real settings.toml, and a host with `composer_border = false` would
     // shift every threshold below by a row.
     app.composer_border = true;
+    // Same reason, and it bites harder: `work_surface_top_height` is
+    // user-settable over 2..=16 and drag-resizing the divider persists it. A
+    // developer whose settings.toml carries a short strip asks for a short
+    // strip and gets one, at a *lower* row threshold than the default 8 — so
+    // leaving this unpinned makes the thresholds below depend on whoever runs
+    // the suite. Pin the shipped default.
+    app.work_surface.top_height = 8;
     app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Top;
     app.work_surface.panel = panel;
     app
@@ -20632,7 +20639,7 @@ fn rail_strip_and_idle_whale_never_thrash_across_a_resize() {
             let mut previous_strip = 0_u16;
             for rows in 8_u16..=48 {
                 let mut app = idle_rail_app(panel);
-                let budget = super::rail_row_budget(&app, rows, idle_empty);
+                let budget = super::rail_row_budget(&app, 80, rows, idle_empty);
                 let strip = crate::tui::work_surface::height(&mut app, 80, rows, budget);
                 let again = crate::tui::work_surface::height(&mut app, 80, rows, budget);
                 assert_eq!(
@@ -20707,4 +20714,73 @@ fn side_rail_yields_the_columns_the_idle_ocean_needs() {
     let (_chat, rail) =
         crate::tui::work_surface::split_chat(&mut app, area, super::rail_min_chat_width(false));
     assert!(rail.is_some(), "a busy 80-column shell keeps its side rail");
+}
+
+#[test]
+fn a_user_who_asks_for_a_short_strip_keeps_it_at_every_terminal_size() {
+    // `work_surface_top_height` is a preference over 2..=16 that drag-resizing
+    // the divider persists to settings.toml. It must never be fed into the
+    // collapse cliff: a 4-row threshold charged against a 2-row *request*
+    // deletes the panel outright, at every size, for a user who explicitly
+    // asked for it.
+    let panel = crate::tui::work_surface::RailPanel::Pinned;
+    for top_height in [2_u16, 3] {
+        let mut seen = false;
+        for rows in 20_u16..=40 {
+            let mut app = idle_rail_app(panel);
+            app.work_surface.top_height = top_height;
+            let budget = super::rail_row_budget(&app, 80, rows, true);
+            let strip = crate::tui::work_surface::height(&mut app, 80, rows, budget);
+            assert!(
+                strip == 0 || strip == top_height,
+                "top_height={top_height} at 80x{rows} produced a {strip}-row strip: \
+                 the user's height is the height, not a starting point"
+            );
+            seen |= strip == top_height;
+        }
+        assert!(
+            seen,
+            "top_height={top_height} never produced a strip at any size in 20..=40 — \
+             the cliff is being charged against the user's preference again"
+        );
+    }
+
+    // And it is still honoured end to end, with the ocean intact: the budget
+    // is what protects the whale, so a short strip costs it nothing.
+    let mut app = idle_rail_app(panel);
+    app.work_surface.top_height = 2;
+    let rendered = render_underwater_test_app(&mut app, 80, 24);
+    assert!(
+        has_idle_whale(&rendered),
+        "a 2-row strip must not cost the whale its rows at 80x24\n{rendered}"
+    );
+    assert!(
+        rendered.contains(panel.title()),
+        "the 2-row strip the user asked for must render at 80x24\n{rendered}"
+    );
+}
+
+#[test]
+fn the_ambient_floor_is_not_charged_where_the_mark_cannot_draw() {
+    // `should_render_empty_state` knows the session is quiet; it does not
+    // know the terminal is too narrow to draw the mark at all. Charging the
+    // 16-row ambient floor below `AMBIENT_MIN_CHAT_WIDTH` reserves rows for
+    // something that can never appear, and the strip yields for nothing.
+    let app = idle_rail_app(crate::tui::work_surface::RailPanel::Pinned);
+    let narrow = crate::tui::underwater::AMBIENT_MIN_CHAT_WIDTH - 1;
+    assert_eq!(
+        super::rail_row_budget(&app, narrow, 24, true),
+        super::rail_row_budget(&app, narrow, 24, false),
+        "a {narrow}-column terminal cannot draw the mark, so idleness must not \
+         change the rail's budget"
+    );
+    assert!(
+        super::rail_row_budget(
+            &app,
+            crate::tui::underwater::AMBIENT_MIN_CHAT_WIDTH,
+            24,
+            true
+        ) < super::rail_row_budget(&app, narrow, 24, true),
+        "at the ambient width floor the mark can draw, so the budget must shrink"
+    );
 }

@@ -48,8 +48,7 @@ pub fn height(app: &mut App, width: u16, terminal_height: u16, rail_budget: u16)
     // Off hides the rail outright: no strip, no side reservation, no stale
     // interaction state.
     if app.work_surface.effective_placement == WorkSurfacePlacement::Off {
-        app.work_surface.last_area = None;
-        app.work_surface.hitboxes.clear();
+        collapse_strip(app);
         return 0;
     }
     // Non-Tasks panels always own a strip once selected: the user asked for
@@ -59,29 +58,32 @@ pub fn height(app: &mut App, width: u16, terminal_height: u16, rail_budget: u16)
         if app.work_surface.effective_placement != WorkSurfacePlacement::Top {
             return 0;
         }
-        let cap = top_cap(app, terminal_height, rail_budget);
-        // Title row plus three content rows. A budget that cannot seat all
-        // four buys nothing worth the transcript rows, so the panel is absent
-        // rather than a two-row stub.
-        if cap < PANEL_STRIP_HEIGHT {
+        // What the panel is actually asking for: its design height, or less
+        // if the user set a shorter strip. `top_height` is a preference, not
+        // a budget — a user who drags the divider to its 2-row minimum wants
+        // a 2-row strip, and that preference persists to settings.toml.
+        let desired = PANEL_STRIP_HEIGHT.min(
+            app.work_surface
+                .top_height
+                .max(super::model::TOP_HEIGHT_MIN),
+        );
+        // The collapse cliff is charged against the *ambient* ceilings only —
+        // never against `desired`. Folding the user's own height in here
+        // would delete the panel at every terminal size for anyone who asked
+        // for a short one, which is the opposite of honouring the request.
+        if ambient_cap(terminal_height, rail_budget) < desired {
+            collapse_strip(app);
             return 0;
         }
-        return PANEL_STRIP_HEIGHT;
+        return desired;
     }
     let rows = project_visible(app);
     if rows.is_empty() {
-        app.work_surface.focused = false;
-        app.work_surface.selected = None;
-        app.work_surface.opened = None;
-        app.work_surface.hovered = None;
-        app.work_surface.last_area = None;
-        app.work_surface.hitboxes.clear();
+        collapse_strip(app);
         app.work_surface.latest_rows.clear();
         app.work_surface.visible_rows = 0;
         app.work_surface.total_rows = 0;
         app.work_surface.scroll_offset = 0;
-        app.work_surface.resizing = false;
-        app.work_surface.divider_hovered = false;
         return 0;
     }
     if app.work_surface.effective_placement != WorkSurfacePlacement::Top {
@@ -93,6 +95,7 @@ pub fn height(app: &mut App, width: u16, terminal_height: u16, rail_budget: u16)
     // eight — never a fixed-height band of blank water.
     let cap = top_cap(app, terminal_height, rail_budget);
     if cap < super::model::TOP_HEIGHT_MIN {
+        collapse_strip(app);
         return 0;
     }
     let selectable = rows.iter().filter(|row| row.selectable).count();
@@ -104,22 +107,48 @@ pub fn height(app: &mut App, width: u16, terminal_height: u16, rail_budget: u16)
     desired.clamp(super::model::TOP_HEIGHT_MIN, cap)
 }
 
-/// The three independent ceilings on a top strip, smallest wins:
+/// The ceilings the *terminal* imposes, independent of anything the user
+/// asked for, smallest wins:
 ///
-/// - `top_height`: what the user asked for (drag-resize / settings).
 /// - half the terminal: proportional restraint, so a tall rail on a short
 ///   terminal still reads as a strip over a transcript.
 /// - `rail_budget`: the rows the transcript can actually spare. This is the
 ///   only one that knows the transcript has a floor, and it is the one that
 ///   lets decorative water outrank a panel nobody is watching.
-fn top_cap(app: &App, terminal_height: u16, rail_budget: u16) -> u16 {
-    let terminal_cap = terminal_height
+///
+/// Kept separate from [`top_cap`] because the collapse cliff must be charged
+/// against ambient room alone. Both are monotone non-decreasing in terminal
+/// height, which is what keeps the strip from blinking across a resize.
+fn ambient_cap(terminal_height: u16, rail_budget: u16) -> u16 {
+    terminal_height
         .saturating_div(2)
-        .clamp(super::model::TOP_HEIGHT_MIN, super::model::TOP_HEIGHT_MAX);
+        .clamp(super::model::TOP_HEIGHT_MIN, super::model::TOP_HEIGHT_MAX)
+        .min(rail_budget)
+}
+
+/// [`ambient_cap`] plus `top_height` — what the user asked for via
+/// drag-resize / settings. This is the ceiling on how *tall* a strip may
+/// grow; it is deliberately not the quantity a collapse threshold is
+/// compared against.
+fn top_cap(app: &App, terminal_height: u16, rail_budget: u16) -> u16 {
     app.work_surface
         .top_height
-        .min(terminal_cap)
-        .min(rail_budget)
+        .min(ambient_cap(terminal_height, rail_budget))
+}
+
+/// Drop the interaction state that only means anything while a strip is on
+/// screen. Every path reporting "no strip this frame" must run this: hitboxes
+/// outlive the rows they described, so a strip that yielded its rows would
+/// still swallow clicks landing on the transcript that replaced it.
+fn collapse_strip(app: &mut App) {
+    app.work_surface.last_area = None;
+    app.work_surface.hitboxes.clear();
+    app.work_surface.focused = false;
+    app.work_surface.selected = None;
+    app.work_surface.opened = None;
+    app.work_surface.hovered = None;
+    app.work_surface.resizing = false;
+    app.work_surface.divider_hovered = false;
 }
 
 /// Split the transcript slot for a side rail. Top placement consumes its own

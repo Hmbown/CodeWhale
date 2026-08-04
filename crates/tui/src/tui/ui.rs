@@ -13660,12 +13660,34 @@ fn build_pending_input_preview(app: &App) -> PendingInputPreview {
 /// drops back to [`MIN_CHAT_HEIGHT`] and the rail gets its rows. Decorative
 /// water yields to work; work never yields to decoration.
 ///
+/// `idle_empty` alone is not enough to charge that floor. It is an
+/// app-state predicate — it knows the session is quiet, not that the terminal
+/// can draw. [`empty_state_mark_visible`](crate::tui::underwater::empty_state_mark_visible)
+/// also demands
+/// [`AMBIENT_MIN_CHAT_WIDTH`](crate::tui::underwater::AMBIENT_MIN_CHAT_WIDTH)
+/// columns, so on a narrow terminal charging the ambient floor would reserve
+/// 16 rows for a mark that cannot render at any height and make the strip
+/// yield for nothing.
+///
+/// The row half of that gate is deliberately *not* mirrored here. It would be
+/// a step down in terminal height — below the floor the rail would take the
+/// rows, at the floor it would hand them back — and a strip that vanishes as
+/// the terminal grows is the resize flicker this budget exists to avoid. The
+/// column gate has no such problem: width and height move independently.
+///
 /// The composer is charged at a fixed floor rather than its measured height:
 /// the real `composer_height` is itself computed from the strip height, and
 /// feeding it back in here would close a loop that oscillates across a
 /// resize instead of settling.
-pub(crate) fn rail_row_budget(app: &App, terminal_height: u16, idle_empty: bool) -> u16 {
-    let chat_floor = if idle_empty {
+pub(crate) fn rail_row_budget(
+    app: &App,
+    terminal_width: u16,
+    terminal_height: u16,
+    idle_empty: bool,
+) -> u16 {
+    let ambient_mark_can_draw =
+        idle_empty && terminal_width >= crate::tui::underwater::AMBIENT_MIN_CHAT_WIDTH;
+    let chat_floor = if ambient_mark_can_draw {
         crate::tui::underwater::AMBIENT_MIN_CHAT_HEIGHT
     } else {
         MIN_CHAT_HEIGHT
@@ -13751,7 +13773,7 @@ fn render(f: &mut Frame, app: &mut App, _config: &Config) {
     // ocean draws its brand mark (in ChatWidget); calling it twice would let
     // the reservation and the render disagree inside a single frame.
     let idle_empty = super::widgets::should_render_empty_state(app);
-    let rail_budget = rail_row_budget(app, size.height, idle_empty);
+    let rail_budget = rail_row_budget(app, size.width, size.height, idle_empty);
     let top_work_strip_height =
         super::work_surface::height(app, size.width, size.height, rail_budget);
 

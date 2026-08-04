@@ -66,7 +66,7 @@ mod tests {
     /// instead of silently diverging. The idle-empty budget (where the
     /// ambient floor bites) is covered end-to-end in `ui::tests`.
     fn working_budget(app: &App, terminal_height: u16) -> u16 {
-        crate::tui::ui::rail_row_budget(app, terminal_height, false)
+        crate::tui::ui::rail_row_budget(app, 80, terminal_height, false)
     }
 
     /// A budget wide enough never to bind, for tests about something else.
@@ -546,6 +546,94 @@ mod tests {
         let mut empty = app();
         empty.work_surface.top_height = 8;
         assert_eq!(super::height(&mut empty, 100, 40, AMPLE_BUDGET), 0);
+    }
+
+    /// A strip that reports zero rows is not on screen, so the interaction
+    /// state describing it must go with it. Stale hitboxes outlive the rows
+    /// they described: the transcript rows that replaced the strip would keep
+    /// routing clicks into a panel that is not there.
+    #[test]
+    fn a_yielded_strip_drops_its_interaction_state() {
+        // Each case is a distinct zero-return inside `height`, and every one
+        // of them has to tear down. `starve` turns a rendered strip into a
+        // yielded one; the assertions are identical either way. The first two
+        // are the returns this yield rule introduced — the ones that had no
+        // teardown at all.
+        type Starve = fn(&mut App) -> (u16, u16, u16);
+        let cases: [(&str, Starve); 3] = [
+            ("budget starves the Tasks strip", |_app| (100, 40, 0)),
+            ("budget starves a switched-to panel", |app| {
+                app.work_surface.panel = super::RailPanel::Pinned;
+                (100, 40, 0)
+            }),
+            ("placement off", |app| {
+                app.work_surface.placement = WorkSurfacePlacement::Off;
+                (100, 40, AMPLE_BUDGET)
+            }),
+        ];
+
+        for (label, starve) in cases {
+            let mut app = app();
+            app.work_surface.placement = WorkSurfacePlacement::Top;
+            // `app()` reads the developer's real settings.toml. Pin the height
+            // too, or the strip this test renders to earn its hitboxes depends
+            // on whoever runs the suite.
+            app.work_surface.top_height = 8;
+            add_todos(&mut app, 4);
+
+            // Earn a real strip, so the hitboxes under test are the ones the
+            // renderer actually produces rather than a fixture's guess.
+            render_text(&mut app, 100, 12);
+            assert!(
+                !app.work_surface.hitboxes.is_empty(),
+                "{label}: setup never rendered a strip to tear down"
+            );
+            app.work_surface.focused = true;
+            app.work_surface.resizing = true;
+            app.work_surface.divider_hovered = true;
+
+            let (width, height, budget) = starve(&mut app);
+            assert_eq!(
+                super::height(&mut app, width, height, budget),
+                0,
+                "{label}: expected the strip to yield"
+            );
+            assert!(
+                app.work_surface.hitboxes.is_empty(),
+                "{label}: left {} stale hitboxes behind",
+                app.work_surface.hitboxes.len()
+            );
+            assert!(
+                app.work_surface.last_area.is_none(),
+                "{label}: stale last_area"
+            );
+            assert!(!app.work_surface.focused, "{label}: focus survived");
+            assert!(!app.work_surface.resizing, "{label}: resize drag survived");
+            assert!(
+                !app.work_surface.divider_hovered,
+                "{label}: divider hover survived"
+            );
+        }
+    }
+
+    /// The collapse cliff belongs to the terminal, not to the user. A short
+    /// `top_height` is a request, and honouring it costs the transcript
+    /// nothing: the budget is what protects the transcript's floor.
+    #[test]
+    fn a_short_top_height_is_honoured_rather_than_collapsed() {
+        for top_height in [2_u16, 3] {
+            let mut app = app();
+            app.work_surface.placement = WorkSurfacePlacement::Top;
+            app.work_surface.panel = super::RailPanel::Pinned;
+            app.work_surface.top_height = top_height;
+            app.composer_border = true;
+            let budget = working_budget(&app, 40);
+            assert_eq!(
+                super::height(&mut app, 100, 40, budget),
+                top_height,
+                "a {top_height}-row strip was asked for and must be what renders"
+            );
+        }
     }
 
     #[test]

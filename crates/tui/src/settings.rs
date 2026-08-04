@@ -636,7 +636,10 @@ fn normalize_rail_panel(value: &str) -> &'static str {
 /// Rail unification (0.9.4): carry the classic sidebar's settings forward
 /// instead of stranding them. `sidebar_focus` picks the rail panel —
 /// pinned/tasks/agents/context map onto the same-named panels, auto folds
-/// into the always-on pinned work panel, and hidden turns the rail off.
+/// into the auto-fitting Tasks panel (it is the shipped default for
+/// `sidebar_focus`, and "show work when there is work" is what Tasks does;
+/// folding it into the always-on Pinned strip inverted that intent for every
+/// upgrading user), and hidden turns the rail off.
 /// `sidebar_width_percent` maps onto the absolute side width at a
 /// 120-column reference. Auto-collapse itself is deliberately dropped: the
 /// rail hides via placement off. Explicit new keys win over migrated ones.
