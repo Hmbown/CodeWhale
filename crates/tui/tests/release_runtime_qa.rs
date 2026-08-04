@@ -260,6 +260,17 @@ fn wait_for_counter(
         if counter.load(Ordering::SeqCst) >= expected {
             return Ok(());
         }
+        // A dead child renders as a hang: `pump()` only feeds *new* bytes into a
+        // retained frame, so `debug_dump()` keeps painting the last frame the TUI
+        // drew before it died. Without this probe a SIGABRT (stack overflow aborts
+        // as 134) burns the whole timeout and then reports a live-looking screen.
+        if let Some(code) = harness.wait_for_exit(Duration::from_millis(0)) {
+            return Err(anyhow!(
+                "TUI exited with {code} before the counter reached {expected}; observed {}\n{}",
+                counter.load(Ordering::SeqCst),
+                harness.debug_dump()
+            ));
+        }
         if Instant::now() >= deadline {
             return Err(anyhow!(
                 "counter did not reach {expected} within {timeout:?}; observed {}\n{}",
@@ -692,6 +703,87 @@ async fn release_six_worker_fanout_keeps_typing_render_and_esc_cancel_live() -> 
     tui.send(keys::key::text("post-cancel-live"))?;
     tui.wait_for_text("post-cancel-live", Duration::from_secs(3))?;
     assert_eq!(child_requests.load(Ordering::SeqCst), 6);
+
+    let _ = tui.shutdown();
+    Ok(())
+}
+
+struct SingleDispatchResponder {
+    child_requests: Arc<AtomicUsize>,
+}
+
+impl Respond for SingleDispatchResponder {
+    fn respond(&self, request: &Request) -> ResponseTemplate {
+        let body = request.body_json::<Value>().unwrap_or(Value::Null);
+        let raw = body.to_string();
+
+        if raw.contains("stay busy worker") && !raw.contains("dispatch one QA worker") {
+            self.child_requests.fetch_add(1, Ordering::SeqCst);
+            return sse_response(text_sse(DEEPSEEK_TEST_MODEL, "child-acknowledged"));
+        }
+
+        if raw.contains("dispatch one QA worker") {
+            return sse_response(fanout_tool_call_sse_n(1));
+        }
+
+        sse_response(text_sse(DEEPSEEK_TEST_MODEL, "unexpected-request"))
+    }
+}
+
+/// Dispatching `agent` must not kill the process.
+///
+/// Regression guard for the 0.9.4 release blocker: the Tokio runtime was built
+/// by `#[tokio::main]`, so every worker thread carried tokio's 2 MiB default
+/// while only the `codewhale-main` owner thread got `CODEWHALE_MAIN_STACK_BYTES`.
+/// The engine runs on a worker, and a debug-build `agent` dispatch measured a
+/// stack high-water mark between 2.25 and 2.5 MiB — it overflowed the guard page
+/// and aborted the process with 134, mid-dispatch, before any child request was
+/// ever issued.
+///
+/// This asserts the invariant that the default violated (the process survives an
+/// `agent` dispatch) rather than re-asserting a child counter, which a dead
+/// process also fails — but fails slowly and for the wrong stated reason.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn release_agent_dispatch_never_aborts_the_runtime() -> Result<()> {
+    let _guard = RELEASE_RUNTIME_QA_LOCK.lock().await;
+    let server = MockServer::start().await;
+    mount_models(&server, &[DEEPSEEK_TEST_MODEL]).await;
+    let child_requests = Arc::new(AtomicUsize::new(0));
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(SingleDispatchResponder {
+            child_requests: Arc::clone(&child_requests),
+        })
+        .mount(&server)
+        .await;
+
+    let ws = make_sealed_workspace()?;
+    std::fs::write(
+        ws.home().join(".codewhale").join("config.toml"),
+        "[subagents]\nmax_concurrent = 1\nlaunch_concurrency = 1\nmax_admitted = 1\n",
+    )?;
+    let mut tui = common_tui_builder(&ws)
+        .env("CODEWHALE_PROVIDER", "deepseek")
+        .env("DEEPSEEK_API_KEY", "deepseek-local-test-key")
+        .env("DEEPSEEK_BASE_URL", server.uri())
+        .env("DEEPSEEK_MODEL", DEEPSEEK_TEST_MODEL)
+        .args(["--yolo", "--max-subagents", "1"])
+        .spawn()?;
+    enter_launch_session(&mut tui)?;
+
+    type_and_submit(&mut tui, "dispatch one QA worker for the stack guard check")?;
+
+    // The abort lands inside the first `agent` dispatch, so the process is
+    // already reaped by the time the child request would have been issued.
+    // Probe liveness first: it names the mechanism in the failure text instead
+    // of leaving a 15s timeout over a retained frame of a dead TUI.
+    assert!(
+        tui.wait_for_exit(Duration::from_millis(250)).is_none(),
+        "codewhale-tui exited during `agent` dispatch (a stack overflow aborts as 134); \
+         the Tokio runtime must carry CODEWHALE_MAIN_STACK_BYTES — see main.rs build_runtime()"
+    );
+
+    wait_for_counter(&mut tui, &child_requests, 1, INTERACTION_TIMEOUT)?;
 
     let _ = tui.shutdown();
     Ok(())

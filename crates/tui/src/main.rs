@@ -1439,8 +1439,47 @@ fn main() -> Result<()> {
     }
 }
 
-#[tokio::main]
-async fn run_async_main(
+fn run_async_main(
+    cli: Cli,
+    command: Option<Commands>,
+    plugin_discovery: Arc<crate::plugins::PluginDiscoveryContext>,
+    plugin_registry: Arc<crate::plugins::PluginRegistry>,
+) -> Result<()> {
+    build_runtime()?.block_on(run_async_main_inner(
+        cli,
+        command,
+        plugin_discovery,
+        plugin_registry,
+    ))
+}
+
+/// Build the runtime that owns every async task in this binary.
+///
+/// `#[tokio::main]` used to expand here, which left every worker thread on
+/// tokio's 2 MiB default while only the `codewhale-main` owner thread above
+/// received `CODEWHALE_MAIN_STACK_BYTES`. The engine does not run on that owner
+/// thread — `core::engine::spawn_engine` hands `Engine::run` to
+/// `utils::spawn_supervised`, a bare `tokio::spawn` — so the explicit stack
+/// never applied where the depth actually is.
+///
+/// A debug-build `agent` dispatch (turn_loop -> FuturesUnordered ->
+/// execute_full_with_context -> AgentTool::execute -> spawn_subagent_from_input)
+/// measured a stack high-water mark between 2.25 and 2.5 MiB and aborted the
+/// whole process on the guard page. A Rust stack overflow is not a panic: it
+/// raises SIGABRT, so `spawn_supervised`'s `catch_unwind` cannot see it and the
+/// process dies with 134 mid-dispatch.
+///
+/// This is behavior-identical to the old `#[tokio::main]` expansion apart from
+/// the stack size, and it makes the knob greppable.
+pub(crate) fn build_runtime() -> Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(CODEWHALE_MAIN_STACK_BYTES)
+        .build()
+        .context("Failed to build the Codewhale Tokio runtime")
+}
+
+async fn run_async_main_inner(
     cli: Cli,
     command: Option<Commands>,
     plugin_discovery: Arc<crate::plugins::PluginDiscoveryContext>,
