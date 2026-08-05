@@ -596,15 +596,28 @@ pub fn delete_fleet(
 /// can never hide the personal Fleet — the personal default is only overridden
 /// for this folder, visibly.
 pub fn selected_fleet(workspace: &Path) -> Option<SelectedFleet> {
-    let ws = read_selection(&workspace_fleets_dir(workspace));
-    if let Some(name) = ws {
-        let path = workspace_fleets_dir(workspace).join(format!("{}.toml", slugify(&name)));
-        if path.is_file() {
+    let ws_dir = workspace_fleets_dir(workspace);
+    if let Some(name) = read_selection(&ws_dir) {
+        // A workspace selection may name a personal Fleet (selected for this
+        // folder only): resolve workspace first, then personal, and report
+        // the scope the Fleet actually lives in.
+        let ws_path = ws_dir.join(format!("{}.toml", slugify(&name)));
+        if ws_path.is_file() {
             return Some(SelectedFleet {
                 name,
                 scope: FleetScope::Workspace,
-                path,
+                path: ws_path,
             });
+        }
+        if let Ok(dir) = personal_fleets_dir() {
+            let personal_path = dir.join(format!("{}.toml", slugify(&name)));
+            if personal_path.is_file() {
+                return Some(SelectedFleet {
+                    name,
+                    scope: FleetScope::Personal,
+                    path: personal_path,
+                });
+            }
         }
     }
     if let Ok(dir) = personal_fleets_dir() {
@@ -633,16 +646,30 @@ fn read_selection(dir: &Path) -> Option<String> {
 }
 
 /// Write the selection for a scope. Returns the exact file written.
+///
+/// The selection file lives in the scope's `fleets/` directory, but the
+/// Fleet it names may live in either scope: a workspace selection may point
+/// at a personal Fleet (selecting it for this folder only), and a personal
+/// selection always points at a personal Fleet. The validation only refuses
+/// a name that exists NOWHERE — a phantom selection would be a lie.
 pub fn set_selected(
     name: &str,
     scope: FleetScope,
     workspace: &Path,
 ) -> Result<PathBuf, FleetStoreError> {
     let dir = ensure_fleets_dir(scope, workspace)?;
-    // The selection must name a Fleet that actually exists in this scope —
-    // a phantom selection would be a lie.
-    let path = dir.join(format!("{}.toml", slugify(name)));
-    if !path.is_file() {
+    let name = name.trim();
+    let exists_in_scope = |target: FleetScope| {
+        let target_dir = match target {
+            FleetScope::Personal => personal_fleets_dir().ok(),
+            FleetScope::Workspace => Some(workspace_fleets_dir(workspace)),
+        };
+        target_dir
+            .map(|d| d.join(format!("{}.toml", slugify(name))).is_file())
+            .unwrap_or(false)
+    };
+    let exists = exists_in_scope(scope) || exists_in_scope(FleetScope::Personal);
+    if !exists {
         return Err(FleetStoreError::NotFound(format!(
             "{} ({})",
             name,
@@ -650,7 +677,7 @@ pub fn set_selected(
         )));
     }
     let selected = dir.join(SELECTED_FILE);
-    atomic_write(&selected, name.trim().as_bytes())?;
+    atomic_write(&selected, name.as_bytes())?;
     Ok(selected)
 }
 

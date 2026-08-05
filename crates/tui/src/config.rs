@@ -20,6 +20,7 @@ use crate::hooks::HooksConfig;
 // each item's visibility) so `crate::config::<CONST>` paths resolve unchanged;
 // the private resolvers are pulled back in without widening external surface
 // (#3311).
+mod scope_tests;
 mod subagent_limits;
 pub use subagent_limits::*;
 use subagent_limits::{resolve_subagent_api_timeout_secs, resolve_subagent_heartbeat_timeout_secs};
@@ -10047,6 +10048,37 @@ pub fn active_provider_uses_env_only_api_key(config: &Config) -> bool {
     active_provider_has_env_api_key(config) && !active_provider_has_config_api_key(config)
 }
 
+/// A key saved in the user-global config file stays visible even when this
+/// process loaded a DIFFERENT config (e.g. an explicit workspace `--config`
+/// path). Credentials are user-global: a workspace override may select a
+/// different route, but it must never make a global credential appear locked.
+///
+/// Bounded, read-only, non-migrating: parses the default config file's raw
+/// provider table directly (never runs legacy migration, never opens a
+/// write-capable backend). Returns the key only when it reads as a real
+/// literal, not a placeholder.
+fn user_global_config_api_key(provider: ApiProvider) -> Option<String> {
+    if provider == ApiProvider::Custom {
+        // Custom providers are per-config by nature; the probe applies to
+        // built-in ids whose keys are saved under the user-global file.
+        return None;
+    }
+    let path = codewhale_config::default_config_path().ok()?;
+    let text = std::fs::read_to_string(path).ok()?;
+    let doc: codewhale_config::ConfigToml = toml::from_str(&text).ok()?;
+    let json = serde_json::to_value(&doc).ok()?;
+    let key = json
+        .get("providers")?
+        .get(provider.as_str())?
+        .get("api_key")?
+        .as_str()?;
+    let key = key.trim();
+    if key.is_empty() || classify_config_api_key_value(key) != ConfigApiKeyValueKind::Literal {
+        return None;
+    }
+    Some(key.to_string())
+}
+
 /// Check whether the given provider has any usable API key — via env var,
 /// provider/root config. Used by the `/provider` picker to decide whether to
 /// prompt for a key inline.
@@ -10150,6 +10182,12 @@ pub fn has_api_key_for(config: &Config, provider: ApiProvider) -> bool {
             .as_ref()
             .is_some_and(|key| classify_config_api_key_value(key) == ConfigApiKeyValueKind::Literal)
     {
+        return true;
+    }
+
+    // Last resort: the user-global config file. A key saved there must not
+    // disappear just because this process loaded a workspace config.
+    if user_global_config_api_key(provider).is_some() {
         return true;
     }
 
