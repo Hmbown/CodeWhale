@@ -530,9 +530,9 @@ pub(super) fn project(app: &mut App) -> Vec<WorkRow> {
 }
 
 /// Projection used by the live surface. The full Work catalog remains intact
-/// for explicit inspectors, while persistent chrome stays literal: plan-step
-/// to-dos first, then current sub-agents. Tool operations, coordination
-/// receipts, file activity, and generic graph headings never enter this list.
+/// for explicit inspectors, while persistent chrome stays literal: current
+/// sub-agents, then plan-step to-dos. Tool operations, coordination receipts,
+/// file activity, and generic graph headings never enter this list.
 ///
 /// "Persistent" is a lifetime promise, not decoration: to-do and sub-agent
 /// rows survive their own completion and stay on the surface for the rest of
@@ -541,10 +541,25 @@ pub(super) fn project(app: &mut App) -> Vec<WorkRow> {
 /// live-only view. Completion is quiet (glyph, tone, frozen receipt), never
 /// an eviction. `ordered_rows` enforces the same rule for side placements.
 ///
-/// On Top, the list is GrokBuild-shaped without losing CodeWhale identity:
-/// selectable to-dos, then a `▾ Subagents N` group header (when any workers
-/// are present), then the workers. To-do density still uses the pinned
-/// progress receipt in `render` rather than a second "To-do" section title.
+/// On Top, the list is GrokBuild-shaped without losing CodeWhale identity: a
+/// `▾ Subagents N` group header (when any workers are present), the workers,
+/// then the selectable to-dos. To-do density still uses the pinned progress
+/// receipt in `render` rather than a second "To-do" section title.
+///
+/// **The sub-agent group outranks the to-do list for strip rows.** The strip
+/// is a fixed-height viewport over this list (`top_height`, 2..=16 rows) and
+/// paints from the top, so whatever is ordered last is what falls off the
+/// bottom behind `↓ N more`. Putting the to-dos first meant a session that
+/// already had a checklist spent every row it had on to-dos and a running
+/// sub-agent never appeared in the top bar at all — the 2026-08-04 owner
+/// report, pinned by `tests/work_bar_subagents_pty.rs`. The workers are the
+/// side that must not fall off: the to-do list keeps a pinned receipt
+/// (`To-do · 3/8 · 5 left`) that survives its rows scrolling away, and a
+/// sub-agent row has no such summary — it is the only place a running worker
+/// is inspectable from the bar. Sub-agent rows are also the bounded set
+/// (`max_concurrent` plus a capped terminal-card retention) while a to-do
+/// list is unbounded, so seating the bounded set first is what keeps both
+/// visible in the common case.
 pub(super) fn project_visible(app: &mut App) -> Vec<WorkRow> {
     let rows = project(app);
     if app.work_surface.effective_placement != WorkSurfacePlacement::Top {
@@ -563,7 +578,6 @@ pub(super) fn project_visible(app: &mut App) -> Vec<WorkRow> {
     }
 
     let mut out = Vec::with_capacity(todos.len() + agents.len() + 1);
-    out.extend(todos);
     if !agents.is_empty() {
         // GrokBuild: `▾ Subagents 2` — count in the header, not a panel name.
         out.push(section_heading(
@@ -573,6 +587,7 @@ pub(super) fn project_visible(app: &mut App) -> Vec<WorkRow> {
         ));
         out.extend(agents);
     }
+    out.extend(todos);
     app.work_surface.latest_rows = out.clone();
     out
 }
@@ -600,9 +615,22 @@ fn plan_step_row_ids(app: &App) -> HashSet<String> {
 ///
 /// - `Tasks` — the full live projection ([`project_visible`]).
 /// - `Agents` — the sub-agent rows only, under the `▾ Subagents N` header.
-/// - `Pinned` — the goal plus the plan-step to-dos, without the workers.
+/// - `Pinned` — the goal, the sub-agent group, then the plan-step to-dos.
 /// - `Context` — empty: session facts are a line list, not work rows, and
 ///   render outside the row machinery.
+///
+/// **No panel choice may hide a running sub-agent.** `Pinned` used to filter
+/// the projection down to plan steps, which meant the owner's own
+/// `rail_panel = "pinned"` made a live worker unreachable: with no to-dos and
+/// no goal the projection was empty, the strip collapsed to zero rows, and
+/// the top bar was header chrome only — the 2026-08-04 "I spawned a sub agent
+/// and the top bar showed nothing" report, pinned by
+/// `tests/work_bar_subagents_pty.rs`. There is no header chip or phase-strip
+/// fallback for sub-agents, so this strip is the *only* persistent surface
+/// they have; a panel preference about which durable work to foreground is
+/// not consent to lose the running fleet. Sub-agent rows are durable in the
+/// same sense the panel's name means (they survive completion — see the row
+/// lifetime rule in the module docs), so they belong here on their own terms.
 pub(super) fn visible_rows_for_panel(app: &mut App) -> Vec<WorkRow> {
     match app.work_surface.panel {
         RailPanel::Tasks => project_visible(app),
@@ -627,11 +655,16 @@ pub(super) fn visible_rows_for_panel(app: &mut App) -> Vec<WorkRow> {
         RailPanel::Pinned => {
             let rows = project(app);
             let todo_ids = plan_step_row_ids(app);
-            let todos: Vec<WorkRow> = rows
-                .into_iter()
-                .filter(|row| todo_ids.contains(&row.id.0))
-                .collect();
-            let mut out = Vec::with_capacity(todos.len() + 1);
+            let mut todos = Vec::new();
+            let mut agents = Vec::new();
+            for row in rows {
+                if todo_ids.contains(&row.id.0) {
+                    todos.push(row);
+                } else if row.id.0.starts_with("worker:") {
+                    agents.push(row);
+                }
+            }
+            let mut out = Vec::with_capacity(todos.len() + agents.len() + 2);
             // On Top the goal is already the strip title; a side column
             // repeats it as its first row so the durable goal home survives
             // in every placement.
@@ -648,6 +681,17 @@ pub(super) fn visible_rows_for_panel(app: &mut App) -> Vec<WorkRow> {
                     };
                     out.push(section_heading("goal", &label, ""));
                 }
+            }
+            // Same priority rule as Tasks: the bounded, summary-less set is
+            // seated before the unbounded to-do list that keeps a pinned
+            // receipt. See [`project_visible`].
+            if !agents.is_empty() {
+                out.push(section_heading(
+                    "agents",
+                    &format!("Subagents {}", agents.len()),
+                    "",
+                ));
+                out.extend(agents);
             }
             out.extend(todos);
             app.work_surface.latest_rows = out.clone();

@@ -462,6 +462,73 @@ async fn work_bar_still_shows_subagents_when_todos_are_present() -> Result<()> {
     Ok(())
 }
 
+/// The owner's *own* `~/.codewhale/settings.toml` (2026-08-04) carries
+/// `rail_panel = "pinned"`. That is the configuration the "I spawned a sub
+/// agent and the top bar showed nothing" screenshot was taken under, and it
+/// is the one the other probes here miss: they all run on a sealed HOME with
+/// no `settings.toml`, so they only ever exercise the default `tasks` panel.
+///
+/// With zero to-dos and no active goal the Pinned projection is empty, the
+/// strip collapses to height 0, and a running sub-agent has nowhere in the
+/// top bar to appear — there is no header chip or phase-strip fallback for
+/// it. A panel choice must not be able to make running work uninspectable.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn work_bar_shows_a_running_subagent_under_the_pinned_rail_panel() -> Result<()> {
+    let _guard = WORK_BAR_PTY_LOCK.lock().await;
+    let server = MockServer::start().await;
+    mount_models(&server).await;
+    let child_requests = Arc::new(AtomicUsize::new(0));
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ProbeResponder {
+            child_requests: Arc::clone(&child_requests),
+            parent_turns: Arc::new(AtomicUsize::new(0)),
+            workers: 2,
+            child_hold: Duration::from_secs(25),
+        })
+        .mount(&server)
+        .await;
+
+    let ws = make_sealed_workspace()?;
+    std::fs::write(
+        ws.home().join(".codewhale").join("config.toml"),
+        "[subagents]\nmax_concurrent = 2\nlaunch_concurrency = 2\nmax_admitted = 2\n",
+    )?;
+    // Verbatim from the owner's settings.toml, minus the keys that do not
+    // touch the rail.
+    std::fs::write(
+        ws.home().join(".codewhale").join("settings.toml"),
+        "work_surface_placement = \"top\"\nwork_surface_top_height = 16\n\
+         work_surface_side_width = 30\nrail_panel = \"pinned\"\n",
+    )?;
+    let mut tui = tui_builder(&ws, &server.uri()).spawn()?;
+    tui.wait_for_text(COMPOSER_READY_TEXT, BOOT_TIMEOUT)?;
+    type_and_submit(&mut tui, PARENT_PROMPT)?;
+    wait_for_counter(&mut tui, &child_requests, 2, INTERACTION_TIMEOUT)?;
+    tui.wait_for_idle(Duration::from_millis(250), Duration::from_secs(6))?;
+
+    let strip = work_bar_text(&mut tui);
+    let worker = work_bar_worker_row(&mut tui);
+    assert!(
+        worker.is_some(),
+        "a running sub-agent is invisible in the top bar under \
+         `rail_panel = \"pinned\"` — the strip painted only:\n{strip}\n---full---\n{}",
+        tui.debug_dump()
+    );
+    let (row, col) = worker.expect("checked above");
+    tui.send(keys::mouse::click(row, col))?;
+    tui.wait_for_text("Agent Details", Duration::from_secs(5))
+        .map_err(|_| {
+            anyhow!(
+                "clicking the sub-agent row did not open its detail\n{}",
+                tui.debug_dump()
+            )
+        })?;
+
+    let _ = tui.shutdown();
+    Ok(())
+}
+
 /// A finished agent must stay in the bar and stay clickable — quiet
 /// completion, not eviction.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
