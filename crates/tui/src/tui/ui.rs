@@ -12392,6 +12392,14 @@ async fn apply_command_result(
                         ));
                 }
             }
+            AppAction::OpenFleetList => {
+                if app.view_stack.top_kind() != Some(ModalKind::FleetList) {
+                    app.view_stack
+                        .push(crate::tui::views::fleet_list::FleetListView::new(
+                            app, config,
+                        ));
+                }
+            }
             AppAction::OpenFleetRoster => {
                 if app.view_stack.top_kind() != Some(ModalKind::FleetRoster) {
                     app.view_stack
@@ -15004,6 +15012,34 @@ async fn handle_view_events(
                         ),
                     );
                 }
+            }
+            ViewEvent::FleetListOpenDetailRequested { name, scope } => {
+                if app.view_stack.top_kind() != Some(ModalKind::FleetDetail) {
+                    if let Some(view) = crate::tui::views::fleet_detail::FleetDetailView::open(
+                        app, config, &name, scope,
+                    ) {
+                        app.view_stack.push(view);
+                    } else {
+                        app.set_sticky_status(
+                            format!(
+                                "Could not open Fleet `{name}` ({}) — the file may have moved or                                  become unreadable.",
+                                scope.label()
+                            ),
+                            crate::tui::app::StatusToastLevel::Error,
+                            None,
+                        );
+                    }
+                }
+            }
+            ViewEvent::FleetStoreChanged { message } => {
+                app.status_message = Some(message);
+                // Refresh the dispatch roster from the fleet-aware source so
+                // selection changes take effect for the next spawn.
+                let roster =
+                    crate::fleet::roster::FleetRoster::load(&config.fleet_config(), &app.workspace);
+                let _ = engine_handle.try_send(Op::SetFleetRoster {
+                    roster: std::sync::Arc::new(roster),
+                });
             }
             ViewEvent::FleetRosterOpenWorkersRequested => {
                 if app.view_stack.top_kind() != Some(ModalKind::SubAgents) {

@@ -29,6 +29,8 @@ use crate::tui::history::{HistoryCell, SubAgentCell, summarize_tool_output};
 use crate::tui::menu_style;
 use crate::tui::widgets::agent_card::AgentLifecycle;
 
+pub mod fleet_detail;
+pub mod fleet_list;
 pub mod fleet_roster;
 pub mod fleet_setup;
 pub mod mode_picker;
@@ -52,6 +54,8 @@ pub enum ModalKind {
     ModePicker,
     FleetRoster,
     FleetSetup,
+    FleetList,
+    FleetDetail,
     HotbarSetup,
     SetupWizard,
     FilePicker,
@@ -898,6 +902,17 @@ pub enum ViewEvent {
     },
     /// Open the live workers tab from the unified Fleet surface.
     FleetRosterOpenWorkersRequested,
+
+    /// The Fleet list view asks the host to open a saved Fleet's detail view.
+    FleetListOpenDetailRequested {
+        name: String,
+        scope: crate::fleet::store::FleetScope,
+    },
+    /// A Fleet store mutation happened (select/save/delete/rename/copy).
+    /// The message is the exact receipt; the host refreshes roster state.
+    FleetStoreChanged {
+        message: String,
+    },
     /// Emitted by the fleet setup Review step after the user previewed a
     /// model-drafted profile and pressed the explicit ratify key. The host
     /// renders TOML deterministically from the validated draft and persists it
@@ -1002,6 +1017,7 @@ pub trait ModalView: std::any::Any {
     fn handle_paste(&mut self, _text: &str) -> bool {
         false
     }
+
     fn handle_mouse(&mut self, _mouse: MouseEvent) -> ViewAction {
         ViewAction::None
     }

@@ -412,17 +412,32 @@ fn collect_entries(dir: &Path, scope: FleetScope, out: &mut Vec<FleetEntry>) {
         .collect();
     files.sort();
     for path in files {
-        let name = path
+        let stem = path
             .file_stem()
-            .map(|stem| stem.to_string_lossy().into_owned())
+            .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let parse_error = fs::read_to_string(&path)
-            .ok()
-            .and_then(|text| FleetFile::parse(&text).err())
+        let text = fs::read_to_string(&path).ok();
+        let parse_error = text
+            .as_deref()
+            .and_then(|text| FleetFile::parse(text).err())
             .map(|e| e.to_string());
         let legacy = parse_error.as_deref().is_some_and(|err| {
             err.contains("unknown schema") || err.contains("invalid fleet TOML")
         });
+        // The row shows the Fleet's own display name, never the file slug —
+        // a file saved as `Temp Fleet` must not appear as `temp-fleet`.
+        let name = text
+            .as_deref()
+            .and_then(|text| toml::from_str::<toml::Value>(text).ok())
+            .and_then(|value| {
+                value
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .map(str::trim)
+                    .filter(|n| !n.is_empty())
+                    .map(str::to_string)
+            })
+            .unwrap_or(stem);
         out.push(FleetEntry {
             name,
             scope,
@@ -473,6 +488,37 @@ pub fn load_fleet(
         message: e.to_string(),
     })?;
     Ok((fleet, scope, path))
+}
+
+/// Load a v2 Fleet by name in one explicit scope. Unlike [`load_fleet`],
+/// this never resolves ambiguity — the caller already knows where the Fleet
+/// lives (e.g. the row the user just picked).
+pub fn load_fleet_in_scope(
+    name: &str,
+    scope: FleetScope,
+    workspace: &Path,
+) -> Result<(FleetFile, PathBuf), FleetStoreError> {
+    let dir = match scope {
+        FleetScope::Personal => personal_fleets_dir()?,
+        FleetScope::Workspace => workspace_fleets_dir(workspace),
+    };
+    let path = dir.join(format!("{}.toml", slugify(name)));
+    if !path.is_file() {
+        return Err(FleetStoreError::NotFound(format!(
+            "{} ({})",
+            name,
+            scope.label()
+        )));
+    }
+    let text = fs::read_to_string(&path).map_err(|e| FleetStoreError::Io {
+        path: path.display().to_string(),
+        message: e.to_string(),
+    })?;
+    let fleet = FleetFile::parse(&text).map_err(|e| FleetStoreError::Parse {
+        path: path.display().to_string(),
+        message: e.to_string(),
+    })?;
+    Ok((fleet, path))
 }
 
 /// Load a v2 Fleet from a specific path (used by the editor on the currently

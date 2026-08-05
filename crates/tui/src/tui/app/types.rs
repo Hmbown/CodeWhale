@@ -878,6 +878,8 @@ pub enum AppAction {
     OpenThemePicker,
     /// Open the `/skills` manager — audit inventory + owned mutations.
     OpenSkillsManager,
+    /// Open `/fleet` — the saved named-Fleet list (the primary Fleet surface).
+    OpenFleetList,
     /// Open the `/fleet` roster — the saved-party view of the agent team.
     OpenFleetRoster,
     /// Open the `/fleet` profile authoring wizard.

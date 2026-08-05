@@ -277,7 +277,7 @@ impl FleetSetupSnapshot {
 /// use their canonical id; named custom routes keep their table key so saved
 /// Fleet profiles can rebuild the same child client.
 /// Callers derive a human-readable label from it for UI text.
-fn cross_provider_model_routes(
+pub(super) fn cross_provider_model_routes(
     config: &Config,
     active: crate::config::ApiProvider,
     health: &crate::provider_readiness::ProviderReadinessSnapshot,
@@ -388,7 +388,7 @@ fn push_unique_model(models: &mut Vec<String>, model: &str) {
 
 /// Human-readable label for a built-in provider id, falling back to an exact
 /// named custom id verbatim.
-fn provider_display_label(provider_id: &str) -> String {
+pub(super) fn provider_display_label(provider_id: &str) -> String {
     crate::config::ApiProvider::parse(provider_id)
         .filter(|provider| provider.as_str() == provider_id)
         .map(|provider| provider.display_name().to_string())

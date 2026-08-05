@@ -78,10 +78,13 @@ impl RegisterCommand for FleetCmd {
 
     fn execute(app: &mut App, arg: Option<&str>) -> CommandResult {
         let Some((verb, target)) = split_verb(arg) else {
-            return CommandResult::action(AppAction::OpenFleetRoster);
+            // The primary Fleet surface is the saved-Fleet list. The legacy
+            // roster remains one subcommand away.
+            return CommandResult::action(AppAction::OpenFleetList);
         };
         match verb {
             "roster" | "party" | "loadout" | "roles" | "role" | "profiles" | "profile" => {
+                // The old per-role roster; the saved-Fleet list is /fleet.
                 CommandResult::action(AppAction::OpenFleetRoster)
             }
             "setup" | "edit" | "new" => CommandResult::action(AppAction::OpenFleetSetup),
@@ -123,12 +126,12 @@ mod tests {
     }
 
     #[test]
-    fn fleet_command_opens_roster_view() {
+    fn fleet_command_opens_fleet_list_view() {
         let mut app = test_app();
 
         let result = FleetCmd::execute(&mut app, None);
 
-        assert_eq!(result.action, Some(AppAction::OpenFleetRoster));
+        assert_eq!(result.action, Some(AppAction::OpenFleetList));
         assert!(result.message.is_none());
     }
 
