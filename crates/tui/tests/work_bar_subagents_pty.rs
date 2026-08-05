@@ -254,7 +254,10 @@ fn work_bar_text(harness: &mut Harness) -> String {
         [first, second, ..] => (first.saturating_add(1), *second),
         _ => (0, rows),
     };
-    (start..end).map(|y| frame.row(y)).collect::<Vec<_>>().join("\n")
+    (start..end)
+        .map(|y| frame.row(y))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// A worker row inside the strip: the rows the `Subagents` header owns, up to
