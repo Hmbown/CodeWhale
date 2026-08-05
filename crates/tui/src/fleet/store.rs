@@ -1035,7 +1035,7 @@ members = []"#;
             .expect("legacy fleet listed");
         assert!(stopship.legacy, "{stopship:?}");
         assert!(stopship.parse_error.is_some(), "{stopship:?}");
-        let flash = entries.iter().find(|e| e.name == "deepseek-flash").unwrap();
+        let flash = entries.iter().find(|e| e.name == "DeepSeek Flash").unwrap();
         assert!(!flash.legacy && flash.parse_error.is_none(), "{flash:?}");
     }
 

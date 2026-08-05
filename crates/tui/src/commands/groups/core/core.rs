@@ -257,14 +257,13 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
             }
             let provider_identity = app.provider_identity_for_persistence().to_string();
             app.provider_models
-                .insert(provider_identity, "auto".to_string());
-            let persist_warning = provider_model_selection_persist_warning(app, "auto");
+                .insert(provider_identity.clone(), "auto".to_string());
+            // Temporary by default; the route-save prompt owns persistence.
+            app.note_session_route_change(&provider_identity, "auto");
             let mut message = tr(app.ui_locale, MessageId::ModelChanged)
                 .replace("{old}", &old_model)
                 .replace("{new}", "auto");
-            if let Some(warning) = persist_warning {
-                message.push_str(&warning);
-            }
+            message.push_str(" (session only — choose how to save it)");
             return CommandResult::with_message_and_action(
                 message,
                 AppAction::UpdateCompaction(app.compaction_config()),
@@ -349,13 +348,13 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
         app.provider_models
             .insert(provider_identity.clone(), model_id.clone());
         app.enable_provider_model(&provider_identity, &model_id);
-        let persist_warning = provider_model_selection_persist_warning(app, &model_id);
+        // Route changes are temporary by default: nothing is written here.
+        // The route-save prompt offers the explicit persistence choices.
+        app.note_session_route_change(&provider_identity, &model_id);
         let mut message = tr(app.ui_locale, MessageId::ModelChanged)
             .replace("{old}", &old_model)
             .replace("{new}", &model_id);
-        if let Some(warning) = persist_warning {
-            message.push_str(&warning);
-        }
+        message.push_str(" (session only — choose how to save it)");
         CommandResult::with_message_and_action(
             message,
             AppAction::UpdateCompaction(app.compaction_config()),
@@ -1156,7 +1155,7 @@ mod tests {
     }
 
     #[test]
-    fn model_command_persists_active_provider_model_scoped() {
+    fn model_command_is_session_local_until_explicitly_saved() {
         let _settings = SettingsPathGuard::new();
         let mut app = create_test_app();
 
@@ -1167,29 +1166,42 @@ mod tests {
             app.provider_models.get("deepseek").map(String::as_str),
             Some("deepseek-v4-flash")
         );
+        // The live session changed and the save decision is pending — the
+        // route-save prompt owns persistence now.
+        let pending = app.pending_route_save.as_ref().expect("pending save");
+        assert_eq!(pending.provider_identity, "deepseek");
+        assert_eq!(pending.model, "deepseek-v4-flash");
+
+        // NOTHING was written to settings: no scoped model, no default
+        // provider, no default model. The message says the change is
+        // session-only.
         let settings = crate::settings::Settings::load().expect("load settings");
-        // #3227: `/model` is session-local. It records the model under the
-        // provider-scoped entry only; it must NOT rewrite the shared global
-        // `default_provider`/`default_model` that other terminals read on
-        // startup.
         assert_eq!(
             settings
                 .provider_models
                 .as_ref()
-                .and_then(|models| models.get("deepseek"))
-                .map(String::as_str),
-            Some("deepseek-v4-flash")
+                .and_then(|models| models.get("deepseek")),
+            None
         );
         assert_eq!(settings.default_provider.as_deref(), None);
         assert_eq!(settings.default_model.as_deref(), None);
+        assert!(
+            result
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("session only"),
+            "the receipt must say the change is temporary: {:?}",
+            result.message
+        );
     }
 
     #[test]
     fn model_command_does_not_mutate_shared_default_provider() {
-        // Regression for #3227: a `/model` change on a non-default provider
-        // must not drag the global `default_provider` onto it. Here the saved
-        // default is DeepSeek; selecting a model while the session is on Z.ai
-        // changes only Z.ai's scoped model.
+        // Regression for #3227, strengthened: a `/model` change must not drag
+        // the global `default_provider` onto it AND must not write the scoped
+        // model either — the change is session-local until the user explicitly
+        // saves it via the route-save prompt.
         let _settings = SettingsPathGuard::new();
         {
             let seed = crate::settings::Settings {
@@ -1211,15 +1223,18 @@ mod tests {
         let settings = crate::settings::Settings::load().expect("load settings");
         // The shared default provider is untouched.
         assert_eq!(settings.default_provider.as_deref(), Some("deepseek"));
-        // Only Z.ai's scoped entry changed.
+        // No scoped entry was written either — session-local.
         assert_eq!(
             settings
                 .provider_models
                 .as_ref()
-                .and_then(|models| models.get("zai"))
-                .map(String::as_str),
-            Some("GLM-5.2")
+                .and_then(|models| models.get("zai")),
+            None
         );
+        // The in-memory route changed and the decision is pending.
+        assert_eq!(app.model, "GLM-5.2");
+        let pending = app.pending_route_save.as_ref().expect("pending save");
+        assert_eq!(pending.provider_identity, "zai");
     }
 
     #[test]
@@ -1259,17 +1274,19 @@ mod tests {
         assert_eq!(app_a.api_provider, crate::config::ApiProvider::Zai);
         assert_eq!(app_a.model, "GLM-5.2");
 
-        // Shared settings: per-provider scoped models recorded for both, and
-        // the global default provider was never flipped by either `/model`.
+        // Shared settings: NOTHING was written by either `/model` — both
+        // changes are session-local with a pending save decision, and the
+        // global default provider was never flipped.
         let settings = crate::settings::Settings::load().expect("load settings");
         assert_eq!(settings.default_provider.as_deref(), None);
-        let provider_models = settings.provider_models.expect("provider_models");
+        assert_eq!(settings.provider_models, None);
+        // Both sessions carry their own pending save decisions.
         assert_eq!(
-            provider_models.get("zai").map(String::as_str),
+            app_a.pending_route_save.as_ref().map(|p| p.model.as_str()),
             Some("GLM-5.2")
         );
         assert_eq!(
-            provider_models.get("deepseek").map(String::as_str),
+            app_b.pending_route_save.as_ref().map(|p| p.model.as_str()),
             Some("deepseek-v4-flash")
         );
     }

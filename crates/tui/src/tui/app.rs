@@ -1012,6 +1012,29 @@ pub type DispatchApplyFn = Box<
 
 /// Global UI state for the TUI.
 #[allow(clippy::struct_excessive_bools)]
+/// A route change made in-session that the user has not yet decided how to
+/// save. Route changes are temporary by default; persisting them requires an
+/// explicit choice (Update this Fleet / Save as a new Fleet / Remember as my
+/// default / Keep for this session only).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingRouteSave {
+    /// Provider identity the session is now on.
+    pub provider_identity: String,
+    /// Exact model id the session is now on.
+    pub model: String,
+    /// The selected Fleet at change time, when one exists.
+    pub fleet: Option<(String, crate::fleet::store::FleetScope)>,
+}
+
+impl PendingRouteSave {
+    /// The change context the prompt shows: which Fleet (if any) the choice
+    /// would update, or none.
+    #[must_use]
+    pub fn fleet_label(&self) -> Option<&str> {
+        self.fleet.as_ref().map(|(name, _)| name.as_str())
+    }
+}
+
 pub struct App {
     pub mode: AppMode,
     /// Registered hotbar actions available for future slot config/render layers.
@@ -1033,6 +1056,10 @@ pub struct App {
     pub active_allowed_tools: Option<Vec<String>>,
     /// True when the active custom slash command opted into pause/resume.
     pub pausable: bool,
+    /// A route change made in-session awaits an explicit save decision. When
+    /// set, the next key press opens the route-save prompt unless a modal is
+    /// already open.
+    pub pending_route_save: Option<PendingRouteSave>,
     /// True after Esc paused a pausable command and before it is resumed or cancelled.
     pub paused: bool,
     /// Saved custom-command objective while the command is paused.
@@ -1902,6 +1929,40 @@ fn push_enabled_provider_model(
 }
 
 impl App {
+    /// Record that the live session route changed to `provider_identity` /
+    /// `model`. The change is temporary until the user explicitly chooses how
+    /// to save it; nothing is written here.
+    pub fn note_session_route_change(&mut self, provider_identity: &str, model: &str) {
+        let fleet =
+            crate::fleet::store::selected_fleet(&self.workspace).map(|sel| (sel.name, sel.scope));
+        self.pending_route_save = Some(PendingRouteSave {
+            provider_identity: provider_identity.to_string(),
+            model: model.to_string(),
+            fleet,
+        });
+    }
+
+    /// Resolve the route the session is currently on, for receipts.
+    pub fn current_route_label(&self) -> String {
+        let provider = if self.auto_model {
+            self.last_effective_provider
+                .unwrap_or(self.api_provider)
+                .as_str()
+                .to_string()
+        } else {
+            self.api_provider.as_str().to_string()
+        };
+        let model = if self.auto_model {
+            self.last_effective_model
+                .as_deref()
+                .map(|m| format!("auto -> {m}"))
+                .unwrap_or_else(|| "auto".to_string())
+        } else {
+            self.model.clone()
+        };
+        format!("{provider}/{model}")
+    }
+
     /// One truthful chip for cumulative session cost surfaces.
     ///
     /// Session history wins over the *current* route: switching to an OAuth or

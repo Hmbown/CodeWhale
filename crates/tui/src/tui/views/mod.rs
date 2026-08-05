@@ -34,6 +34,7 @@ pub mod fleet_list;
 pub mod fleet_roster;
 pub mod fleet_setup;
 pub mod mode_picker;
+pub mod route_save_prompt;
 pub mod skills_manager;
 pub mod status_picker;
 
@@ -56,6 +57,7 @@ pub enum ModalKind {
     FleetSetup,
     FleetList,
     FleetDetail,
+    RouteSavePrompt,
     HotbarSetup,
     SetupWizard,
     FilePicker,
@@ -912,6 +914,11 @@ pub enum ViewEvent {
     /// The message is the exact receipt; the host refreshes roster state.
     FleetStoreChanged {
         message: String,
+    },
+    /// The route-save prompt's explicit choice. The host performs the write
+    /// (or writes nothing) and reports the exact receipt.
+    RouteSaveDecision {
+        choice: crate::tui::views::route_save_prompt::RouteSaveChoice,
     },
     /// Emitted by the fleet setup Review step after the user previewed a
     /// model-drafted profile and pressed the explicit ratify key. The host

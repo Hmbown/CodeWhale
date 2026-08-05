@@ -6117,7 +6117,7 @@ async fn setup_confirm_toast_names_secret_store_and_global_scope() {
 }
 
 #[tokio::test]
-async fn provider_switch_persists_provider_to_config_for_restart() {
+async fn provider_switch_is_session_local_until_explicitly_saved() {
     let _home = SettingsHomeGuard::new();
     let tmp = TempDir::new().expect("config tempdir");
     let config_path = tmp.path().join("config.toml");
@@ -6156,15 +6156,23 @@ api_key = "arcee-key"
     assert_eq!(app.api_provider, ApiProvider::XiaomiMimo);
     assert_eq!(config.provider.as_deref(), Some("xiaomi-mimo"));
 
+    // The live session moved, but NOTHING was written: the config file on
+    // disk still selects the old provider and the startup default is
+    // untouched. A switch made in one folder must never rewrite a config
+    // another folder (or restart) will read.
     let reloaded = Config::load(Some(config_path.clone()), None).expect("reload config");
-    assert_eq!(reloaded.api_provider(), ApiProvider::XiaomiMimo);
-    assert_eq!(
-        reloaded.deepseek_base_url(),
-        "https://token-plan-sgp.xiaomimimo.com/v1"
-    );
+    // The on-disk config still resolves to the OLD provider's endpoint —
+    // nothing changed for a restart or another folder.
+    assert_eq!(reloaded.api_provider(), ApiProvider::Arcee);
+    assert_eq!(reloaded.deepseek_base_url(), "https://api.arcee.ai/api/v1");
 
     let settings = crate::settings::Settings::load().expect("load settings");
-    assert_eq!(settings.default_provider.as_deref(), Some("xiaomi-mimo"));
+    assert_eq!(settings.default_provider.as_deref(), None);
+
+    // The save decision is pending for the route-save prompt.
+    let pending = app.pending_route_save.as_ref().expect("pending save");
+    assert_eq!(pending.provider_identity, "xiaomi-mimo");
+    assert_eq!(pending.model, "mimo-v2.5-pro");
 }
 
 #[tokio::test]
@@ -6235,7 +6243,7 @@ async fn provider_switch_model_override_updates_target_provider_model_slot() {
 }
 
 #[tokio::test]
-async fn provider_switch_skips_setup_receipt_when_route_persistence_fails() {
+async fn provider_switch_succeeds_without_writing_when_config_is_unwritable() {
     let _home = SettingsHomeGuard::new();
     let tmp = TempDir::new().expect("config tempdir");
     let mut app = create_test_app();
@@ -6268,17 +6276,31 @@ async fn provider_switch_skips_setup_receipt_when_route_persistence_fails() {
     .await;
 
     assert_eq!(app.api_provider, ApiProvider::Deepseek);
+    assert_eq!(app.model, "deepseek-v4-flash");
+    // The switch writes nothing, so an unwritable config path cannot fail a
+    // switch, and the receipt must not claim a partial persistence that never
+    // ran.
     assert!(
         app.status_message
             .as_deref()
-            .is_some_and(|message| message.contains("not fully persisted"))
+            .is_none_or(|message| !message.contains("not fully persisted")),
+        "the receipt must not claim a partial persistence that never ran: {:?}",
+        app.status_message
     );
-    assert!(
-        codewhale_config::SetupState::load()
-            .expect("load setup state")
-            .is_none(),
-        "failed route persistence must not create a ProviderModel setup receipt"
-    );
+    let pending = app.pending_route_save.as_ref().expect("pending save");
+    assert_eq!(pending.model, "deepseek-v4-flash");
+    // The on-screen setup-state receipt is still recorded (it is a local
+    // receipt, not a config write) — with the target route, not a stale one.
+    let state = codewhale_config::SetupState::load()
+        .expect("load setup state")
+        .expect("setup state");
+    let result = state
+        .steps
+        .get(&codewhale_config::SetupStep::ProviderModel)
+        .and_then(|entry| entry.result.as_deref())
+        .expect("provider/model result");
+    assert!(result.contains("provider=deepseek"), "{result}");
+    assert!(result.contains("model=deepseek-v4-flash"), "{result}");
 }
 
 #[tokio::test]
@@ -15267,16 +15289,9 @@ async fn model_picker_persists_model_and_reasoning_effort() {
     .await;
 
     let settings = crate::settings::Settings::load().expect("load settings");
-    assert_eq!(settings.default_model.as_deref(), Some("deepseek-v4-pro"));
-    assert_eq!(
-        settings
-            .provider_models
-            .as_ref()
-            .and_then(|models| models.get("deepseek"))
-            .map(String::as_str),
-        Some("deepseek-v4-pro")
-    );
-    assert_eq!(settings.reasoning_effort.as_deref(), Some("high"));
+    assert_eq!(settings.default_model.as_deref(), None);
+    assert_eq!(settings.provider_models, None);
+    assert_eq!(settings.reasoning_effort.as_deref(), None);
     assert!(!app.auto_model);
     assert_eq!(app.reasoning_effort, ReasoningEffort::High);
 
@@ -15328,13 +15343,16 @@ async fn model_picker_auto_commits_visible_implicit_fixed_model_thinking() {
     assert!(app.auto_model);
     assert_eq!(app.reasoning_effort, ReasoningEffort::Max);
     assert_eq!(app.reasoning_effort_preference, Some(ReasoningEffort::Max));
+    // Session-local: the effort tier is not written to settings; the
+    // route-save prompt owns persistence.
     assert_eq!(
         crate::settings::Settings::load()
             .expect("load settings")
             .reasoning_effort
             .as_deref(),
-        Some("max")
+        None
     );
+    assert!(app.pending_route_save.is_some());
 }
 
 #[tokio::test]
@@ -15367,12 +15385,13 @@ async fn model_picker_auto_restores_raw_preference_after_fixed_normalization() {
     assert!(app.auto_model);
     assert_eq!(app.reasoning_effort, ReasoningEffort::Low);
     assert_eq!(app.reasoning_effort_preference, Some(ReasoningEffort::Low));
+    // Session-local: nothing reached settings.
     assert_eq!(
         crate::settings::Settings::load()
             .expect("load settings")
             .reasoning_effort
             .as_deref(),
-        Some("low")
+        None
     );
 }
 
@@ -15413,7 +15432,7 @@ async fn auto_model_effort_picker_persists_unresolved_tier_verbatim() {
 /// "the model changed" made the setup step depend on what the session happened
 /// to be restored to.
 #[tokio::test]
-async fn reselecting_live_model_and_thinking_persists_startup_defaults() {
+async fn reselecting_live_model_and_thinking_is_session_local() {
     let _guard = SettingsHomeGuard::new();
     let mut app = create_test_app();
     app.set_model_selection("deepseek-v4-pro".to_string());
@@ -15444,9 +15463,12 @@ async fn reselecting_live_model_and_thinking_persists_startup_defaults() {
     )
     .await;
 
+    // Reselecting the live pair is session-local too: nothing reached
+    // settings, and the save decision is pending for the route-save prompt.
     let settings = crate::settings::Settings::load().expect("load settings");
-    assert_eq!(settings.default_model.as_deref(), Some("deepseek-v4-pro"));
-    assert_eq!(settings.reasoning_effort.as_deref(), Some("high"));
+    assert_eq!(settings.default_model.as_deref(), None);
+    assert_eq!(settings.reasoning_effort.as_deref(), None);
+    assert!(app.pending_route_save.is_some());
     assert!(
         app.status_message
             .as_deref()
@@ -15604,13 +15626,15 @@ async fn model_picker_auto_switches_exact_named_custom_route_transactionally() {
     assert_eq!(app.reasoning_effort, ReasoningEffort::Low);
     assert_eq!(config.provider.as_deref(), Some("custom-b"));
     assert_eq!(config.deepseek_base_url(), "http://127.0.0.1:18182/v1");
+    // Session-local: the effort tier is not written to settings.
     assert_eq!(
         crate::settings::Settings::load()
             .expect("load settings")
             .reasoning_effort
             .as_deref(),
-        Some("low")
+        None
     );
+    assert!(app.pending_route_save.is_some());
 }
 
 #[test]
@@ -15673,16 +15697,23 @@ async fn model_picker_skips_setup_receipt_when_settings_persistence_fails() {
     )
     .await;
 
+    // Nothing is persisted on a picker apply, so an unwritable home cannot
+    // fail the picker, and no receipt claims a persistence that never ran.
     assert!(
         app.status_message
             .as_deref()
-            .is_some_and(|message| message.contains("not persisted"))
+            .is_none_or(|message| !message.contains("not persisted"))
     );
+    let pending = app.pending_route_save.as_ref().expect("pending save");
+    assert_eq!(pending.model, "deepseek-v4-pro");
+    // The fixture's CODEWHALE_HOME is a file, so no setup-state root can
+    // exist: the receipt is honestly absent, and the picker still applied
+    // the choice without claiming persistence.
     assert!(
         codewhale_config::SetupState::load()
             .expect("load setup state")
             .is_none(),
-        "failed model persistence must not create a ProviderModel setup receipt"
+        "no setup-state root exists in this fixture"
     );
 }
 
@@ -17671,17 +17702,16 @@ async fn provider_switch_auth_error_restores_previous_provider_and_model() {
         config.default_text_model.as_deref(),
         Some("deepseek-v4-pro")
     );
+    // The switch and its rollback wrote nothing: settings are untouched and
+    // no pending save decision survives the rollback.
     let settings = crate::settings::Settings::load().expect("load settings");
-    assert_eq!(settings.default_provider.as_deref(), Some("deepseek"));
-    assert_eq!(
-        settings
-            .provider_models
-            .as_ref()
-            .and_then(|models| models.get("deepseek"))
-            .map(String::as_str),
-        Some("deepseek-v4-pro")
+    assert_eq!(settings.default_provider.as_deref(), None);
+    assert!(
+        app.pending_route_save.is_none(),
+        "rollback must clear the pending decision"
     );
-    assert_eq!(settings.default_model.as_deref(), Some("deepseek-v4-pro"));
+    assert_eq!(settings.provider_models, None);
+    assert_eq!(settings.default_model.as_deref(), None);
     let state = codewhale_config::SetupState::load()
         .expect("load setup state")
         .expect("setup state");
@@ -17773,10 +17803,13 @@ async fn provider_switch_rollback_corrects_setup_receipt_when_persistence_fails(
 
     assert_eq!(app.api_provider, ApiProvider::Deepseek);
     assert_eq!(app.model, "deepseek-v4-pro");
+    // The rollback itself writes nothing — there is no persistence step to
+    // fail, and the receipt must not claim one.
     assert!(
-        rollback_status.contains("not fully persisted"),
+        !rollback_status.contains("not fully persisted"),
         "{rollback_status}"
     );
+    assert!(app.pending_route_save.is_none());
     let state = codewhale_config::SetupState::load()
         .expect("load setup state")
         .expect("setup state");

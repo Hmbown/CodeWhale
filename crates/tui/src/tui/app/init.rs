@@ -603,6 +603,7 @@ impl App {
             session: SessionState::default(),
             active_allowed_tools: None,
             pausable: false,
+            pending_route_save: None,
             paused: false,
             paused_quarry: None,
             history: Vec::new(),
