@@ -462,7 +462,7 @@ provider's first model, ultimate default `deepseek-v4-pro`.
 
 ## 8. Fast-tier derivation contract
 
-Auto routing and `model_strength = faster` use the provider-scoped family map
+Auto routing and the legacy `model_strength = faster` (now the Scout role) use the provider-scoped family map
 in `crates/tui/src/model_routing.rs`. A pair is valid only when the current
 provider's catalog has both model ids; model-name similarity alone is not
 enough. Current non-DeepSeek pairs are:

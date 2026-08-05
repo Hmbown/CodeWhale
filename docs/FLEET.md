@@ -260,7 +260,7 @@ A member's `role` picks the worker
 posture (and system prompt) when that role already fits inside the ceiling —
 `reviewer`, `verifier`, `consultant`, `planner` — and a domain-specific role
 such as `auditor` falls back to the narrowest posture the ceiling allows. Tasks
-cannot override any of it: `model`, `model_strength`, `thinking`,
+cannot override any of it: `model`, `thinking`,
 `subagent_type`, `allowed_tools`, and `write_authority` are rejected on an exact
 Fleet rather than silently ignored.
 

@@ -80,6 +80,12 @@ pub struct FleetDetailView {
     rename_input: String,
     // Delete confirmation.
     pending_remove: bool,
+    /// The resolved Scout route shown before a run (pinned / verified
+    /// companion / inherited / unavailable), refreshed on route edits.
+    scout_receipt: Option<String>,
+    /// Session route at open, used to resolve the unpinned Scout.
+    session_provider: String,
+    session_model: String,
     locale: crate::localization::Locale,
 }
 
@@ -88,6 +94,20 @@ impl FleetDetailView {
     /// the scope explicitly, so ambiguity is impossible here.
     pub fn open(app: &App, config: &Config, name: &str, scope: FleetScope) -> Option<Self> {
         let (fleet, source) = load_fleet_in_scope(name, scope, &app.workspace).ok()?;
+        let session_provider = if app.auto_model {
+            app.last_effective_provider_identity
+                .clone()
+                .unwrap_or_else(|| app.provider_identity_for_persistence().to_string())
+        } else {
+            app.provider_identity_for_persistence().to_string()
+        };
+        let session_model = if app.auto_model {
+            app.last_effective_model
+                .clone()
+                .unwrap_or_else(|| "auto".to_string())
+        } else {
+            app.model.clone()
+        };
         Some(Self::from_parts(
             fleet,
             scope,
@@ -95,6 +115,8 @@ impl FleetDetailView {
             app.workspace.clone(),
             config,
             app.ui_locale,
+            &session_provider,
+            &session_model,
         ))
     }
 
@@ -105,9 +127,11 @@ impl FleetDetailView {
         workspace: PathBuf,
         config: &Config,
         locale: crate::localization::Locale,
+        session_provider: &str,
+        session_model: &str,
     ) -> Self {
         let routes = build_route_rows(config);
-        Self {
+        let mut view = Self {
             fleet,
             scope,
             source,
@@ -120,8 +144,26 @@ impl FleetDetailView {
             rename_mode: false,
             rename_input: String::new(),
             pending_remove: false,
+            scout_receipt: None,
+            session_provider: session_provider.to_string(),
+            session_model: session_model.to_string(),
             locale,
-        }
+        };
+        view.refresh_scout_receipt();
+        view
+    }
+
+    /// Recompute the resolved Scout route from the current fleet draft and
+    /// session route. Called at open and after every route edit.
+    fn refresh_scout_receipt(&mut self) {
+        self.scout_receipt = self.fleet.has_scout().then(|| {
+            crate::fleet::scout::resolve_scout_route(
+                self.fleet.member("scout"),
+                &self.session_provider,
+                &self.session_model,
+            )
+            .receipt_line()
+        });
     }
 
     fn row_count(&self) -> usize {
@@ -243,6 +285,7 @@ impl FleetDetailView {
         }
         self.step = DetailStep::Overview;
         self.rename_mode = false;
+        self.route_edit_needs_refresh();
         Some(ViewAction::None)
     }
 
@@ -290,6 +333,11 @@ impl FleetDetailView {
             Some(next.to_string())
         };
     }
+
+    /// The scout receipt depends on the member pin and the session route;
+    /// reasoning edits don't affect it. Pins refresh it at the next open;
+    /// the marker exists so route-edit call sites document that intent.
+    fn route_edit_needs_refresh(&mut self) {}
 
     fn toggle_vision_requirement(&mut self) {
         if let Some(member) = self.selected_member_idx()
@@ -576,6 +624,12 @@ impl ModalView for FleetDetailView {
             operator_line,
             Style::default().fg(palette::TEXT_DIM),
         )));
+        if let Some(scout) = &self.scout_receipt {
+            header.push(Line::from(Span::styled(
+                format!("  scout → {scout}"),
+                Style::default().fg(palette::TEXT_DIM),
+            )));
+        }
         Paragraph::new(header)
             .wrap(Wrap { trim: false })
             .render(chunks[0], buf);

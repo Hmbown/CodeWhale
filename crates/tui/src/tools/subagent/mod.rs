@@ -6793,21 +6793,16 @@ impl ToolSpec for AgentTool {
                 },
                 "profile": {
                     "type": "string",
-                    "description": "Optional Fleet roster member to run this child as (e.g. reviewer, scout, builder, verifier, synthesizer, manager, or a custom member from project .codewhale/agents/, personal $CODEWHALE_HOME/agents/, or [fleet.profiles] config). The member supplies role posture, model routing, instruction overlay, and delegation bounds. Named profiles bind 1:1 to their configured route — 'model' and 'model_strength' are not accepted when a named profile is set. Only 'general' (no profile) permits model and model_strength options. See /fleet."
-                },
-                "model_strength": {
-                    "type": "string",
-                    "enum": ["same", "faster"],
-                    "description": "Optional child model strength — general dispatch only (no named profile). Children inherit the active model by default. Choose faster explicitly for read-only lookup/search, status, or other low-risk tasks that can use the configured fast sibling. Not accepted when a named fleet profile is set; named agents use their configured route. The run receipt is authoritative for the resolved route; no hidden auto-downgrade happens."
+                    "description": "Optional Fleet roster member to run this child as (e.g. reviewer, scout, builder, verifier, synthesizer, manager, or a custom member from project .codewhale/agents/, personal $CODEWHALE_HOME/agents/, or [fleet.profiles] config). The member supplies role posture, model routing, instruction overlay, and delegation bounds. Named profiles bind 1:1 to their configured route — 'model' is not accepted when a named profile is set. Only 'general' (no profile) permits the model option. See /fleet. For fast exploration use the scout role."
                 },
                 "model": {
                     "type": "string",
-                    "description": "Optional exact provider model id for the child — general dispatch only (no named profile). Overrides model_strength. Not accepted when a named fleet profile is set; named agents use their configured route. Prefer model_strength unless you know the provider-specific id."
+                    "description": "Optional exact provider model id for the child — general dispatch only (no named profile). Not accepted when a named fleet profile is set; named agents use their configured route. For quick research and triage use the scout role, which resolves its own route."
                 },
                 "thinking": {
                     "type": "string",
                     "enum": ["inherit", "auto", "off", "low", "medium", "high", "max"],
-                    "description": "Optional child thinking budget. inherit (default) follows the parent thinking mode. auto chooses from the child prompt. off is best for faster scout/lookups. high is for normal reasoning. max is for hard design/debug/release/security work. Explicit thinking overrides the default off used by model_strength=faster."
+                    "description": "Optional child thinking budget. inherit (default) follows the parent thinking mode. auto chooses from the child prompt. off is best for scout/lookups. high is for normal reasoning. max is for hard design/debug/release/security work."
                 },
                 "cwd": {
                     "type": "string",

@@ -4393,15 +4393,16 @@ fn subagent_tool_schemas_advertise_real_type_and_role_vocabulary() {
     }
     assert!(agent_schema["properties"].get("role").is_none());
     assert!(agent_schema["properties"].get("max_depth").is_some());
-    let model_strength = schema_property_description(&agent_schema, "model_strength");
+    // Scout replaced the user-facing `model_strength` control: the schema no
+    // longer advertises it (legacy parsing survives for compatibility only).
     assert!(
-        model_strength.contains("inherit the active model")
-            && model_strength.contains("Choose faster explicitly"),
-        "model_strength description should teach predictable default routing: {model_strength}"
+        agent_schema["properties"].get("model_strength").is_none(),
+        "model_strength must not be advertised: {}",
+        agent_schema["properties"]
     );
     let thinking = schema_property_description(&agent_schema, "thinking");
     assert!(
-        thinking.contains("inherit") && thinking.contains("model_strength=faster"),
+        thinking.contains("inherit") && thinking.contains("scout/lookups"),
         "thinking description should teach child thinking control: {thinking}"
     );
     assert!(agent_schema["properties"].get("model").is_some());

@@ -46,12 +46,12 @@ base_url = "https://api.deepseek.com/beta"
 #   z-ai/glm-5.2                  — OpenRouter Z.AI GLM 5.2 (default)
 #   z-ai/glm-5.3                  — OpenRouter Z.AI GLM 5.3 (registered only; not released by Z.ai
 #                                   as of 2026-08-03 — metadata inherited from 5.2, unpriced)
-#   z-ai/glm-5-turbo              — OpenRouter Z.AI GLM 5 Turbo (faster/explore sub-agent sibling)
+#   z-ai/glm-5-turbo              — OpenRouter Z.AI GLM 5 Turbo (scout fast sibling)
 #   GLM-5.2                       — default direct Z.AI Coding Plan model
 #   GLM-5.1                       — direct Z.AI smaller model
 #   GLM-5.3                       — direct Z.AI GLM 5.3 (registered only; not live on the Z.ai API
 #                                   as of 2026-08-03 — metadata inherited from 5.2, unpriced)
-#   GLM-5-Turbo                   — direct Z.AI fast model (faster/explore sub-agent sibling)
+#   GLM-5-Turbo                   — direct Z.AI fast model (scout fast sibling)
 #   step-3.7-flash                — default direct StepFun / StepFlash model ID
 #   kimi-k3                         — direct Moonshot K3 model ID (1M context)
 #   kimi-k2.7-code                  — default direct Moonshot/Kimi K2.7 model ID
