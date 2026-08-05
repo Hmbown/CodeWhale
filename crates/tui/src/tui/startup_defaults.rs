@@ -158,25 +158,17 @@ impl StartupDefaults {
         }
     }
 
+    #[cfg(test)]
     #[must_use]
-    pub fn with_reasoning_effort(mut self, setting: impl Into<String>) -> Self {
-        self.reasoning_effort = Some(setting.into());
+    pub fn with_default_model(mut self, model: &str) -> Self {
+        self.default_model = Some(model.to_string());
         self
     }
 
+    #[cfg(test)]
     #[must_use]
-    pub fn with_default_model(mut self, model: impl Into<String>) -> Self {
-        self.default_model = Some(model.into());
-        self
-    }
-
-    #[must_use]
-    pub fn with_provider_model(
-        mut self,
-        provider_identity: impl Into<String>,
-        model: impl Into<String>,
-    ) -> Self {
-        self.provider_model = Some((provider_identity.into(), model.into()));
+    pub fn with_reasoning_effort(mut self, effort: &str) -> Self {
+        self.reasoning_effort = Some(effort.to_string());
         self
     }
 

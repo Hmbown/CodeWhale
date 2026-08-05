@@ -34,6 +34,7 @@ use crate::tui::views::{
 
 /// What the host should do after this view acted on the store.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)] // OpenDetail/None are reserved for the qualified-name flow
 pub enum FleetListOutcome {
     /// A store mutation happened; show `message`, refresh, and pop the stack.
     Done { message: String },
@@ -57,7 +58,6 @@ pub struct FleetListView {
     /// confirmation state).
     pending_delete: Option<usize>,
     fleet_config: codewhale_config::FleetConfigToml,
-    locale: crate::localization::Locale,
     workspace: PathBuf,
 }
 
@@ -79,18 +79,12 @@ impl FleetListView {
             row: 0,
             pending_delete: None,
             fleet_config: config.fleet_config(),
-            locale: app.ui_locale,
             workspace,
         }
     }
 
     fn selected_entry(&self) -> Option<&FleetEntry> {
         self.entries.get(self.row)
-    }
-
-    fn visible_entries(&self) -> Vec<usize> {
-        // Rows: one per entry; the migration banner is rendered separately.
-        (0..self.entries.len()).collect()
     }
 
     fn banner_visible(&self) -> bool {
@@ -528,13 +522,13 @@ fn outcome_to_action(outcome: Option<FleetListOutcome>) -> ViewAction {
 /// How many legacy per-role profile files exist across both scopes.
 fn legacy_profile_file_count(workspace: &std::path::Path) -> usize {
     let mut count = 0;
-    if let Ok(dir) = crate::fleet::profile::personal_agent_profile_dir() {
-        if let Ok(read) = std::fs::read_dir(dir) {
-            count += read
-                .filter_map(|e| e.ok())
-                .filter(|e| e.path().extension().is_some_and(|x| x == "toml"))
-                .count();
-        }
+    if let Ok(dir) = crate::fleet::profile::personal_agent_profile_dir()
+        && let Ok(read) = std::fs::read_dir(dir)
+    {
+        count += read
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|x| x == "toml"))
+            .count();
     }
     let ws_dir = workspace.join(".codewhale").join("agents");
     if let Ok(read) = std::fs::read_dir(ws_dir) {
@@ -544,13 +538,6 @@ fn legacy_profile_file_count(workspace: &std::path::Path) -> usize {
             .count();
     }
     count
-}
-
-/// Read the `[fleet]` table for migration input. The view holds `config` only
-/// at construction; the migration path re-reads via the standard loader so it
-/// never works from a stale snapshot.
-fn config_fleet_table() -> codewhale_config::FleetConfigToml {
-    crate::config::Config::default().fleet_config()
 }
 
 #[cfg(test)]
@@ -564,7 +551,7 @@ mod tests {
     fn sealed_home() -> &'static std::path::Path {
         static HOME: OnceLock<PathBuf> = OnceLock::new();
         HOME.get_or_init(|| {
-            let dir = tempfile::TempDir::new().expect("temp dir").into_path();
+            let dir = tempfile::TempDir::new().expect("temp dir").keep();
             std::fs::create_dir_all(dir.join("fleets")).expect("fleets dir");
             dir
         })

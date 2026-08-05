@@ -354,10 +354,9 @@ impl SnapshotRepo {
         if let Ok(removed) = self.prune_size_pressure(
             MAX_SNAPSHOT_SIZE_MB * BYTES_PER_MB,
             PRUNE_TARGET_MB * BYTES_PER_MB,
-        ) {
-            if removed > 0 {
-                notify_snapshot_history_pruned_once(&self.work_tree, removed);
-            }
+        ) && removed > 0
+        {
+            notify_snapshot_history_pruned_once(&self.work_tree, removed);
         }
         // Stage every tracked + untracked path the workspace exposes.
         // `--all` here means `add` + `update` + `remove` — the same set

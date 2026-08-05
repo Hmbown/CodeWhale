@@ -15006,7 +15006,7 @@ async fn handle_view_events(
                         };
                         match crate::fleet::store::load_fleet_in_scope(&name, scope, &app.workspace)
                         {
-                            Ok((mut fleet, path)) => {
+                            Ok((mut fleet, _path)) => {
                                 fleet.operator = Some(FleetOperator {
                                     provider: pending.provider_identity.clone(),
                                     model: pending.model.clone(),

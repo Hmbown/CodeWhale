@@ -1373,9 +1373,7 @@ fn zz_dump_spacing() {
         ..TranscriptRenderOptions::default()
     };
     cache.ensure(&cells, &revisions, 80, opts);
-    println!("=== BEGIN DUMP (comfortable) ===");
-    for (i, l) in plain_lines(&cache).iter().enumerate() {
-        println!("{i:3} |{}|", l.trim_end());
-    }
-    println!("=== END DUMP ===");
+    // The dump helper is for manual inspection; the assertions in the
+    // sibling tests carry the real contract, so nothing prints here.
+    let _ = plain_lines(&cache);
 }

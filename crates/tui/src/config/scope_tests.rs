@@ -18,27 +18,6 @@ use std::sync::Arc;
 use crate::config::{ApiProvider, Config};
 use crate::provider_readiness::{ResolvedProviderReadiness, resolve_for_model};
 
-/// Sealed user-global home with a saved DeepSeek API key, created once per
-/// process. Tests must hold `lock_test_env` before touching it.
-fn sealed_home() -> &'static Path {
-    static HOME: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    HOME.get_or_init(|| {
-        let dir = tempfile::TempDir::new().expect("temp home").into_path();
-        // Seed the user-global config: DeepSeek is the authorized provider.
-        // The config lives at $CODEWHALE_HOME/config.toml (the primary path
-        // when CODEWHALE_HOME is explicit).
-        std::fs::write(
-            dir.join("config.toml"),
-            r#"provider = "deepseek"
-[providers.deepseek]
-api_key = "sk-test-scope-deepseek"
-"#,
-        )
-        .expect("write config");
-        dir
-    })
-}
-
 struct HomeGuard {
     prev_home: Option<std::ffi::OsString>,
     prev_config_path: Option<std::ffi::OsString>,
@@ -58,6 +37,27 @@ impl Drop for HomeGuard {
             }
         }
     }
+}
+
+/// Sealed user-global home with a saved DeepSeek API key, created once per
+/// process. Tests must hold `lock_test_env` before touching it.
+fn sealed_home() -> &'static Path {
+    static HOME: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    HOME.get_or_init(|| {
+        let dir = tempfile::TempDir::new().expect("temp home").keep();
+        // Seed the user-global config: DeepSeek is the authorized provider.
+        // The config lives at $CODEWHALE_HOME/config.toml (the primary path
+        // when CODEWHALE_HOME is explicit).
+        std::fs::write(
+            dir.join("config.toml"),
+            r#"provider = "deepseek"
+[providers.deepseek]
+api_key = "sk-test-scope-deepseek"
+"#,
+        )
+        .expect("write config");
+        dir
+    })
 }
 
 /// Point `CODEWHALE_HOME` at the sealed home (optionally also pinning
@@ -218,8 +218,8 @@ fn nested_repo_and_symlinked_worktree_do_not_change_readiness() {
         ("symlinked", symlinked.join(".codewhale/config.toml")),
     ] {
         let _home = sealed_env(Some(&config_path));
-        let config =
-            Config::load(Some(config_path.clone()), None).expect(&format!("load from {label}"));
+        let config = Config::load(Some(config_path.clone()), None)
+            .unwrap_or_else(|err| panic!("load from {label}: {err}"));
         let deepseek = deepseek_readiness(&config);
         assert!(
             deepseek.can_attempt(),

@@ -20,6 +20,7 @@ use crate::hooks::HooksConfig;
 // each item's visibility) so `crate::config::<CONST>` paths resolve unchanged;
 // the private resolvers are pulled back in without widening external surface
 // (#3311).
+#[cfg(test)]
 mod scope_tests;
 mod subagent_limits;
 pub use subagent_limits::*;

@@ -1942,27 +1942,6 @@ impl App {
         });
     }
 
-    /// Resolve the route the session is currently on, for receipts.
-    pub fn current_route_label(&self) -> String {
-        let provider = if self.auto_model {
-            self.last_effective_provider
-                .unwrap_or(self.api_provider)
-                .as_str()
-                .to_string()
-        } else {
-            self.api_provider.as_str().to_string()
-        };
-        let model = if self.auto_model {
-            self.last_effective_model
-                .as_deref()
-                .map(|m| format!("auto -> {m}"))
-                .unwrap_or_else(|| "auto".to_string())
-        } else {
-            self.model.clone()
-        };
-        format!("{provider}/{model}")
-    }
-
     /// One truthful chip for cumulative session cost surfaces.
     ///
     /// Session history wins over the *current* route: switching to an OAuth or

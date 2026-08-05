@@ -65,9 +65,7 @@ impl ScoutResolution {
 /// companion exists for this provider/route" — never a guess.
 #[must_use]
 pub fn verified_fast_companion(provider_id: &str, session_model: &str) -> Option<(String, String)> {
-    let Some(provider) = ApiProvider::parse(provider_id) else {
-        return None;
-    };
+    let provider = ApiProvider::parse(provider_id)?;
     let candidates = provider_router_candidates(provider, session_model);
     let cheap = candidates.cheap?;
     // Verification: the suggested model must actually exist as an offering
@@ -90,14 +88,14 @@ pub fn resolve_scout_route(
     session_provider: &str,
     session_model: &str,
 ) -> ScoutResolution {
-    if let Some(member) = scout_member {
-        if let (Some(provider), Some(model)) = (&member.provider, &member.model) {
-            return ScoutResolution {
-                provider: provider.clone(),
-                model: model.clone(),
-                source: ScoutSource::Pinned,
-            };
-        }
+    if let Some(member) = scout_member
+        && let (Some(provider), Some(model)) = (&member.provider, &member.model)
+    {
+        return ScoutResolution {
+            provider: provider.clone(),
+            model: model.clone(),
+            source: ScoutSource::Pinned,
+        };
     }
     if let Some((provider, model)) = verified_fast_companion(session_provider, session_model) {
         return ScoutResolution {

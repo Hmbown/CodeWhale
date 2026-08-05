@@ -1031,22 +1031,18 @@ fn run_workflow_command(
             // tasks resolve against the built-in roster and the session route
             // (matching the TUI tool path). When a fleet IS given, it is
             // loaded and validated before the run starts.
-            let named_fleet = match fleet.as_deref() {
-                Some(name) => {
-                    let roots = named_fleet_search_roots(&workspace);
-                    let loaded =
-                        codewhale_workflow::load_named_fleet(name, &roots).with_context(|| {
-                            format!("load fleet `{name}` from {}", display_roots(&roots))
-                        })?;
-                    if workflow == "stopship" || name == "stopship" {
-                        loaded.validate_stopship_roles().with_context(|| {
-                            format!("validate stopship roles in fleet `{name}`")
-                        })?;
-                    }
-                    Some(loaded)
+            if let Some(name) = fleet.as_deref() {
+                let roots = named_fleet_search_roots(&workspace);
+                let loaded =
+                    codewhale_workflow::load_named_fleet(name, &roots).with_context(|| {
+                        format!("load fleet `{name}` from {}", display_roots(&roots))
+                    })?;
+                if workflow == "stopship" || name == "stopship" {
+                    loaded
+                        .validate_stopship_roles()
+                        .with_context(|| format!("validate stopship roles in fleet `{name}`"))?;
                 }
-                None => None,
-            };
+            }
 
             let process = workflow_exec_command(WorkflowExecSpec {
                 cli,

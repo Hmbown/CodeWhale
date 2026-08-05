@@ -364,18 +364,6 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
     }
 }
 
-fn provider_model_selection_persist_warning(app: &App, model: &str) -> Option<String> {
-    let result = if app.api_provider == ApiProvider::Custom {
-        crate::settings::Settings::transact(|settings| {
-            settings.set_model_for_provider(app.provider_identity_for_persistence(), model);
-            Ok(())
-        })
-    } else {
-        crate::settings::Settings::persist_provider_model_selection(app.api_provider, model)
-    };
-    result.err().map(|err| format!(" (not persisted: {err})"))
-}
-
 /// Fetch and list available models from the configured API endpoint.
 pub fn models(_app: &mut App) -> CommandResult {
     CommandResult::action(AppAction::FetchModels)

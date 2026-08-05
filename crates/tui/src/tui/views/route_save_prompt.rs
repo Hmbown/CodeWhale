@@ -12,7 +12,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::Style,
     text::{Line, Span},
-    widgets::{Block, Clear, Padding, Paragraph, Widget, Wrap},
+    widgets::{Block, Padding, Paragraph, Widget, Wrap},
 };
 
 use crate::palette;
@@ -46,7 +46,6 @@ enum ChoiceRow {
 
 pub struct RouteSavePromptView {
     pending: PendingRouteSave,
-    fleet_selected: bool,
     rows: Vec<ChoiceRow>,
     selected: usize,
 }
@@ -66,7 +65,6 @@ impl RouteSavePromptView {
         rows.push(ChoiceRow::SessionOnly);
         Self {
             pending,
-            fleet_selected,
             rows,
             selected: 0,
         }

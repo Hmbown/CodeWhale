@@ -1862,17 +1862,6 @@ impl Settings {
         Ok(())
     }
 
-    /// Load, update, and save a provider's model selection *without* touching
-    /// the shared global default (the session-local path; see
-    /// [`Self::set_provider_model_selection`]).
-    pub fn persist_provider_model_selection(provider: ApiProvider, model: &str) -> Result<()> {
-        // `transact` reads `load_persisted`, not `load`: env/terminal overlays are
-        // an effective projection, and baking them into the file during an
-        // unrelated model save is how a temporary `NO_ANIMATIONS` becomes
-        // permanent.
-        Self::transact(|settings| settings.set_provider_model_selection(provider, model, false))
-    }
-
     /// Load, update, and save a provider/model tuple as the global default
     /// (the explicit "save as default" path).
     #[allow(dead_code)] // wired to an explicit save-as-default action in a later UX pass (#3227).

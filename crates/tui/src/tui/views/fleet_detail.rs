@@ -86,7 +86,6 @@ pub struct FleetDetailView {
     /// Session route at open, used to resolve the unpinned Scout.
     session_provider: String,
     session_model: String,
-    locale: crate::localization::Locale,
 }
 
 impl FleetDetailView {
@@ -114,7 +113,6 @@ impl FleetDetailView {
             source,
             app.workspace.clone(),
             config,
-            app.ui_locale,
             &session_provider,
             &session_model,
         ))
@@ -126,7 +124,6 @@ impl FleetDetailView {
         source: PathBuf,
         workspace: PathBuf,
         config: &Config,
-        locale: crate::localization::Locale,
         session_provider: &str,
         session_model: &str,
     ) -> Self {
@@ -147,7 +144,6 @@ impl FleetDetailView {
             scout_receipt: None,
             session_provider: session_provider.to_string(),
             session_model: session_model.to_string(),
-            locale,
         };
         view.refresh_scout_receipt();
         view

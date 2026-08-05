@@ -148,14 +148,6 @@ pub struct FleetMember {
     pub requires: Vec<String>,
 }
 
-impl FleetMember {
-    /// Whether this member inherits the session/operator route.
-    #[must_use]
-    pub const fn inherits_route(&self) -> bool {
-        self.provider.is_none() && self.model.is_none()
-    }
-}
-
 /// The saved named Fleet document (`schema = "fleet"`, revision 2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -313,10 +305,8 @@ fn slugify(name: &str) -> String {
     for ch in name.trim().chars() {
         if ch.is_ascii_alphanumeric() {
             slug.push(ch.to_ascii_lowercase());
-        } else if ch.is_whitespace() || ch == '-' || ch == '_' {
-            if !slug.ends_with('-') {
-                slug.push('-');
-            }
+        } else if (ch.is_whitespace() || ch == '-' || ch == '_') && !slug.ends_with('-') {
+            slug.push('-');
         }
     }
     while slug.ends_with('-') {
@@ -450,6 +440,9 @@ fn collect_entries(dir: &Path, scope: FleetScope, out: &mut Vec<FleetEntry>) {
 
 /// Load a v2 Fleet by name. Ambiguity between the two scopes is an error that
 /// names both origins — the caller (UI) resolves it by asking for a scope.
+/// (Kept for the qualified-name flow and the ambiguity tests; the list/detail
+/// UI resolves by scope via load_fleet_in_scope.)
+#[allow(dead_code)]
 pub fn load_fleet(
     name: &str,
     workspace: &Path,
@@ -522,7 +515,9 @@ pub fn load_fleet_in_scope(
 }
 
 /// Load a v2 Fleet from a specific path (used by the editor on the currently
-/// open entry, so the saved scope is exact).
+/// open entry, so the saved scope is exact). API surface for the path-based
+/// editor flows; currently exercised by tests.
+#[allow(dead_code)]
 pub fn load_fleet_at(path: &Path) -> Result<(FleetFile, FleetScope), FleetStoreError> {
     let text = fs::read_to_string(path).map_err(|e| FleetStoreError::Io {
         path: path.display().to_string(),
@@ -532,7 +527,7 @@ pub fn load_fleet_at(path: &Path) -> Result<(FleetFile, FleetScope), FleetStoreE
         path: path.display().to_string(),
         message: e.to_string(),
     })?;
-    let scope = if path.starts_with(&personal_fleets_dir().unwrap_or_default()) {
+    let scope = if path.starts_with(personal_fleets_dir().unwrap_or_default()) {
         FleetScope::Personal
     } else {
         FleetScope::Workspace
@@ -550,16 +545,15 @@ pub fn save_fleet(
     fleet.validate()?;
     let dir = ensure_fleets_dir(scope, workspace)?;
     let path = dir.join(format!("{}.toml", fleet.file_slug()));
-    if path.is_file() {
-        if let Ok(text) = fs::read_to_string(&path)
-            && let Ok(existing) = FleetFile::parse(&text)
-            && existing.name != fleet.name
-        {
-            return Err(FleetStoreError::NameTaken {
-                name: fleet.name.clone(),
-                path: path.display().to_string(),
-            });
-        }
+    if path.is_file()
+        && let Ok(text) = fs::read_to_string(&path)
+        && let Ok(existing) = FleetFile::parse(&text)
+        && existing.name != fleet.name
+    {
+        return Err(FleetStoreError::NameTaken {
+            name: fleet.name.clone(),
+            path: path.display().to_string(),
+        });
     }
     let rendered = fleet.render_toml()?;
     atomic_write(&path, rendered.as_bytes())?;
@@ -587,7 +581,7 @@ pub fn delete_fleet(
     // A selection that pointed at the deleted Fleet must not linger: it would
     // render as a phantom selection. The write is best-effort; a leftover
     // selection is reported by the reader as missing, never as valid.
-    let _ = clear_selection_if_matching(scope, workspace, name);
+    clear_selection_if_matching(scope, workspace, name);
     Ok(path)
 }
 
@@ -620,16 +614,16 @@ pub fn selected_fleet(workspace: &Path) -> Option<SelectedFleet> {
             }
         }
     }
-    if let Ok(dir) = personal_fleets_dir() {
-        if let Some(name) = read_selection(&dir) {
-            let path = dir.join(format!("{}.toml", slugify(&name)));
-            if path.is_file() {
-                return Some(SelectedFleet {
-                    name,
-                    scope: FleetScope::Personal,
-                    path,
-                });
-            }
+    if let Ok(dir) = personal_fleets_dir()
+        && let Some(name) = read_selection(&dir)
+    {
+        let path = dir.join(format!("{}.toml", slugify(&name)));
+        if path.is_file() {
+            return Some(SelectedFleet {
+                name,
+                scope: FleetScope::Personal,
+                path,
+            });
         }
     }
     None
@@ -841,7 +835,7 @@ mod tests {
         HOME.get_or_init(|| {
             let dir = tempfile::TempDir::new()
                 .expect("temp dir for sealed home")
-                .into_path();
+                .keep();
             std::fs::create_dir_all(dir.join("fleets")).expect("fleets dir");
             dir
         })

@@ -4999,7 +4999,7 @@ fn run_transcript_rhythm_probe(
     write_real_pty_evidence(
         &format!("transcript-rhythm-details-{show_tool_details}"),
         "size=64x100 spacing=comfortable show_thinking=true",
-        &frame,
+        frame,
     )?;
     if std::env::var_os("CODEWHALE_QA_PRINT_FRAME").is_some() {
         println!("--- show_tool_details={show_tool_details}\n{dump}");
