@@ -661,9 +661,10 @@ enum WorkflowCommand {
     Run {
         /// Workflow name or path. `stopship` maps to workflows/stopship.workflow.js.
         workflow: String,
-        /// Named Fleet roster (e.g. stopship). Required for role-resolved Workflow runs.
+        /// Named Fleet roster (e.g. stopship). Optional: without one, roles
+        /// resolve against the built-in roster and the session route.
         #[arg(long)]
-        fleet: String,
+        fleet: Option<String>,
         /// Issue id binding recorded on the Lane and passed into workflow args.
         #[arg(long)]
         issue: Option<String>,
@@ -1026,14 +1027,26 @@ fn run_workflow_command(
                 workspace.clone()
             };
 
-            let roots = named_fleet_search_roots(&workspace);
-            let named_fleet = codewhale_workflow::load_named_fleet(&fleet, &roots)
-                .with_context(|| format!("load fleet `{fleet}` from {}", display_roots(&roots)))?;
-            if workflow == "stopship" || fleet == "stopship" {
-                named_fleet
-                    .validate_stopship_roles()
-                    .with_context(|| format!("validate stopship roles in fleet `{fleet}`"))?;
-            }
+            // A fleet is an optional pin layer, not a requirement: role-only
+            // tasks resolve against the built-in roster and the session route
+            // (matching the TUI tool path). When a fleet IS given, it is
+            // loaded and validated before the run starts.
+            let named_fleet = match fleet.as_deref() {
+                Some(name) => {
+                    let roots = named_fleet_search_roots(&workspace);
+                    let loaded =
+                        codewhale_workflow::load_named_fleet(name, &roots).with_context(|| {
+                            format!("load fleet `{name}` from {}", display_roots(&roots))
+                        })?;
+                    if workflow == "stopship" || name == "stopship" {
+                        loaded.validate_stopship_roles().with_context(|| {
+                            format!("validate stopship roles in fleet `{name}`")
+                        })?;
+                    }
+                    Some(loaded)
+                }
+                None => None,
+            };
 
             let process = workflow_exec_command(WorkflowExecSpec {
                 cli,
@@ -1042,7 +1055,7 @@ fn run_workflow_command(
                 source_root: &source_root,
                 source_path: &source_path,
                 workflow: &workflow,
-                fleet: &fleet,
+                fleet: fleet.as_deref(),
                 issue: issue.as_deref(),
                 goal: goal.as_deref(),
                 token_budget,
@@ -1050,7 +1063,7 @@ fn run_workflow_command(
             })?;
             start_lane(LaneStartRequest {
                 workflow: Some(workflow),
-                fleet: Some(fleet),
+                fleet,
                 issue,
                 goal,
                 runtime,
@@ -1193,7 +1206,7 @@ struct WorkflowExecSpec<'a> {
     source_root: &'a Path,
     source_path: &'a Path,
     workflow: &'a str,
-    fleet: &'a str,
+    fleet: Option<&'a str>,
     issue: Option<&'a str>,
     goal: Option<&'a str>,
     token_budget: Option<u64>,
@@ -5726,7 +5739,7 @@ mod tests {
                     ..
                 }
             })) if workflow == "stopship"
-                && fleet == "stopship"
+                && fleet.as_deref() == Some("stopship")
                 && runtime == "tmux"
                 && issue.as_deref() == Some("4375")
         ));
@@ -6071,7 +6084,7 @@ model = "qwen-2.5-7b"
             source_root: &workspace,
             source_path: &source,
             workflow: "stopship",
-            fleet: "stopship",
+            fleet: Some("stopship"),
             issue: Some("4375"),
             goal: Some("fix stopship"),
             token_budget: Some(25_000),
