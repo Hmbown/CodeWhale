@@ -236,6 +236,15 @@ pub fn exit() -> CommandResult {
 /// picker (Pro/Flash + thinking effort) per #39 — gives users a discoverable
 /// way to flip both knobs without memorising the docs.
 pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
+    if model_name.is_some_and(|name| name.eq_ignore_ascii_case("save-default")) {
+        // Explicit persistence of the pending session route as the startup
+        // default — only an explicit command can write settings after an
+        // in-session route change.
+        let message = app.apply_route_save_choice(
+            crate::tui::views::route_save_prompt::RouteSaveChoice::SaveAsDefault,
+        );
+        return CommandResult::message(message);
+    }
     if let Some(name) = model_name {
         // Manual Models.dev catalog refresh (#4187). Dispatched async so the
         // TUI event loop is not blocked; failure keeps prior/bundled rows.
@@ -263,7 +272,9 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
             let mut message = tr(app.ui_locale, MessageId::ModelChanged)
                 .replace("{old}", &old_model)
                 .replace("{new}", "auto");
-            message.push_str(" (session only — choose how to save it)");
+            message.push_str(
+                " (session only — u update Fleet · n save as new · d save as default · k keep)",
+            );
             return CommandResult::with_message_and_action(
                 message,
                 AppAction::UpdateCompaction(app.compaction_config()),
@@ -354,7 +365,9 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
         let mut message = tr(app.ui_locale, MessageId::ModelChanged)
             .replace("{old}", &old_model)
             .replace("{new}", &model_id);
-        message.push_str(" (session only — choose how to save it)");
+        message.push_str(
+            " (session only — u update Fleet · n save as new · d save as default · k keep)",
+        );
         CommandResult::with_message_and_action(
             message,
             AppAction::UpdateCompaction(app.compaction_config()),

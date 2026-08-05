@@ -1027,8 +1027,10 @@ pub struct PendingRouteSave {
 }
 
 impl PendingRouteSave {
-    /// The change context the prompt shows: which Fleet (if any) the choice
-    /// would update, or none.
+    /// The change context the decision band shows: which Fleet (if any) the
+    /// choice would update, or none. Kept for receipts/tests; the band
+    /// renders the fleet context through the pending record itself.
+    #[allow(dead_code)]
     #[must_use]
     pub fn fleet_label(&self) -> Option<&str> {
         self.fleet.as_ref().map(|(name, _)| name.as_str())
@@ -1929,6 +1931,117 @@ fn push_enabled_provider_model(
 }
 
 impl App {
+    /// Persist the pending session route as the explicit choice (`/fleet
+    /// save`, `/fleet save-as`, `/model save-default`). Returns the receipt
+    /// message naming the exact file written — or an error message when the
+    /// write failed. Nothing is ever written without this explicit call.
+    pub fn apply_route_save_choice(
+        &mut self,
+        choice: crate::tui::views::route_save_prompt::RouteSaveChoice,
+    ) -> String {
+        use crate::fleet::store::{FleetFile, FleetOperator, save_fleet, set_selected};
+        use crate::tui::views::route_save_prompt::RouteSaveChoice;
+        let Some(pending) = self.pending_route_save.take() else {
+            return "No pending route change to save.".to_string();
+        };
+        let route = format!("{}/{}", pending.provider_identity, pending.model);
+        match choice {
+            RouteSaveChoice::UpdateFleet => {
+                let Some((name, scope)) = pending.fleet.clone() else {
+                    return "Nothing to update — no Fleet is selected. Use /fleet save-as to \
+                             save this route as a new Fleet."
+                        .to_string();
+                };
+                match crate::fleet::store::load_fleet_in_scope(&name, scope, &self.workspace) {
+                    Ok((mut fleet, _source_path)) => {
+                        fleet.operator = Some(FleetOperator {
+                            provider: pending.provider_identity.clone(),
+                            model: pending.model.clone(),
+                            reasoning: fleet.operator.as_ref().and_then(|op| op.reasoning.clone()),
+                        });
+                        match save_fleet(&fleet, scope, &self.workspace) {
+                            Ok(path) => format!(
+                                "Fleet `{}` now runs on {route} — wrote {}",
+                                fleet.name,
+                                path.display()
+                            ),
+                            Err(err) => format!("Fleet update failed: {err}"),
+                        }
+                    }
+                    Err(err) => format!(
+                        "Fleet update failed: {err} — the saved Fleet may have moved. Use \
+                         /fleet save-as to persist the route."
+                    ),
+                }
+            }
+            RouteSaveChoice::SaveAsNewFleet => {
+                let display = format!(
+                    "{} {}",
+                    crate::config::ApiProvider::parse(&pending.provider_identity)
+                        .map(|p| p.display_name().to_string())
+                        .unwrap_or_else(|| pending.provider_identity.clone()),
+                    pending.model
+                );
+                let Ok(mut fleet) = FleetFile::new(
+                    display.clone(),
+                    Some("Saved from a session route choice.".to_string()),
+                ) else {
+                    return "Could not create the Fleet.".to_string();
+                };
+                fleet.operator = Some(FleetOperator {
+                    provider: pending.provider_identity.clone(),
+                    model: pending.model.clone(),
+                    reasoning: None,
+                });
+                match save_fleet(
+                    &fleet,
+                    crate::fleet::store::FleetScope::Personal,
+                    &self.workspace,
+                ) {
+                    Ok(path) => {
+                        let selected_note = match set_selected(
+                            &display,
+                            crate::fleet::store::FleetScope::Personal,
+                            &self.workspace,
+                        ) {
+                            Ok(sel_path) => format!(
+                                " — selected as your user-global default; wrote {}",
+                                sel_path.display()
+                            ),
+                            Err(err) => format!(" — selection failed: {err}"),
+                        };
+                        format!(
+                            "Saved route {route} as new Fleet `{}` — wrote {}{selected_note}",
+                            display,
+                            path.display()
+                        )
+                    }
+                    Err(err) => format!("Save failed: {err}"),
+                }
+            }
+            RouteSaveChoice::SaveAsDefault => {
+                match crate::settings::Settings::transact(|settings| {
+                    settings.default_provider = Some(pending.provider_identity.clone());
+                    settings.set_model_for_provider(&pending.provider_identity, &pending.model);
+                    if matches!(
+                        crate::config::ApiProvider::parse(&pending.provider_identity),
+                        Some(crate::config::ApiProvider::Deepseek)
+                            | Some(crate::config::ApiProvider::DeepseekCN)
+                    ) {
+                        settings.set("default_model", &pending.model)?;
+                    }
+                    Ok(())
+                }) {
+                    Ok(()) => format!("Remembered {route} as the startup default (settings.toml)."),
+                    Err(err) => format!("Save failed: {err}"),
+                }
+            }
+            RouteSaveChoice::SessionOnly => {
+                format!("Route {route} kept for this session only — nothing was written.")
+            }
+        }
+    }
+
     /// Record that the live session route changed to `provider_identity` /
     /// `model`. The change is temporary until the user explicitly chooses how
     /// to save it; nothing is written here.

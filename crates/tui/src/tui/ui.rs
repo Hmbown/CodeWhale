@@ -5762,17 +5762,13 @@ async fn run_event_loop(
             // to canonical Ctrl+C so the quit-arm flow always runs (#4090).
             normalize_raw_ctrl_c(&mut key);
 
-            // A route change made in-session awaits an explicit save decision.
-            // The prompt takes focus on the next key when nothing else is
-            // open, so a /model or /provider change can never be silently
-            // persisted — and can never be silently forgotten either.
-            if app.view_stack.is_empty()
-                && let Some(pending) = app.pending_route_save.take()
-            {
-                app.view_stack
-                    .push(crate::tui::views::route_save_prompt::RouteSavePromptView::new(pending));
-                app.needs_redraw = true;
-            }
+            // A route change made in-session is temporary and stays that way
+            // until the user EXPLICITLY persists it with a command
+            // (/fleet save updates the selected Fleet, /fleet save-as saves a
+            // new Fleet, /model save-default remembers the startup default).
+            // Nothing here intercepts keys: a scripted or automated terminal
+            // types exactly what it types, and plain typing can never trigger
+            // a fleet write by accident.
 
             // Approval is a decision boundary, not a viewport lock. Keep the
             // card focused for its ordinary selection keys while letting the
@@ -8843,6 +8839,7 @@ fn tool_cell_is_running(tool: &ToolCell) -> bool {
 ///
 /// `severity` drives transcript color: red for `Error`/`Critical`, amber for
 /// `Warning`, dim for `Info`.
+
 pub(crate) fn apply_engine_error_to_app(
     app: &mut App,
     envelope: crate::error_taxonomy::ErrorEnvelope,
@@ -14982,168 +14979,6 @@ async fn handle_view_events(
                             crate::tui::app::StatusToastLevel::Error,
                             None,
                         );
-                    }
-                }
-            }
-            ViewEvent::RouteSaveDecision { choice } => {
-                use crate::fleet::store::{FleetFile, FleetOperator, save_fleet, set_selected};
-                use crate::tui::views::route_save_prompt::RouteSaveChoice;
-                let Some(pending) = app.pending_route_save.take() else {
-                    continue;
-                };
-                let route = format!("{}/{}", pending.provider_identity, pending.model);
-                match choice {
-                    RouteSaveChoice::UpdateFleet => {
-                        let Some((name, scope)) = pending.fleet.clone() else {
-                            app.set_sticky_status(
-                                "Nothing to update — no Fleet is selected. Choose \
-                                 \"Save as a new Fleet\" instead."
-                                    .to_string(),
-                                crate::tui::app::StatusToastLevel::Warning,
-                                None,
-                            );
-                            continue;
-                        };
-                        match crate::fleet::store::load_fleet_in_scope(&name, scope, &app.workspace)
-                        {
-                            Ok((mut fleet, _path)) => {
-                                fleet.operator = Some(FleetOperator {
-                                    provider: pending.provider_identity.clone(),
-                                    model: pending.model.clone(),
-                                    reasoning: fleet
-                                        .operator
-                                        .as_ref()
-                                        .and_then(|op| op.reasoning.clone()),
-                                });
-                                match save_fleet(&fleet, scope, &app.workspace) {
-                                    Ok(path) => {
-                                        app.status_message = Some(format!(
-                                            "Fleet `{}` now runs on {route} — wrote {}",
-                                            fleet.name,
-                                            path.display()
-                                        ));
-                                    }
-                                    Err(err) => {
-                                        app.set_sticky_status(
-                                            format!("Fleet update failed: {err}"),
-                                            crate::tui::app::StatusToastLevel::Error,
-                                            None,
-                                        );
-                                    }
-                                }
-                                let roster = crate::fleet::roster::FleetRoster::load(
-                                    &config.fleet_config(),
-                                    &app.workspace,
-                                );
-                                let _ = engine_handle.try_send(Op::SetFleetRoster {
-                                    roster: std::sync::Arc::new(roster),
-                                });
-                            }
-                            Err(err) => {
-                                app.set_sticky_status(
-                                    format!(
-                                        "Fleet update failed: {err} — the saved Fleet may have \
-                                         moved. Choose \"Save as a new Fleet\" to persist the route."
-                                    ),
-                                    crate::tui::app::StatusToastLevel::Error,
-                                    None,
-                                );
-                            }
-                        }
-                    }
-                    RouteSaveChoice::SaveAsNewFleet => {
-                        let display = format!(
-                            "{} {}",
-                            crate::config::ApiProvider::parse(&pending.provider_identity)
-                                .map(|p| p.display_name().to_string())
-                                .unwrap_or_else(|| pending.provider_identity.clone()),
-                            pending.model
-                        );
-                        let mut fleet = match FleetFile::new(
-                            display.clone(),
-                            Some("Saved from a session route choice.".to_string()),
-                        ) {
-                            Ok(fleet) => fleet,
-                            Err(err) => {
-                                app.set_sticky_status(
-                                    format!("Could not create Fleet: {err}"),
-                                    crate::tui::app::StatusToastLevel::Error,
-                                    None,
-                                );
-                                continue;
-                            }
-                        };
-                        fleet.operator = Some(FleetOperator {
-                            provider: pending.provider_identity.clone(),
-                            model: pending.model.clone(),
-                            reasoning: None,
-                        });
-                        match save_fleet(
-                            &fleet,
-                            crate::fleet::store::FleetScope::Personal,
-                            &app.workspace,
-                        ) {
-                            Ok(path) => {
-                                let selected = set_selected(
-                                    &display,
-                                    crate::fleet::store::FleetScope::Personal,
-                                    &app.workspace,
-                                );
-                                let selected_note = match selected {
-                                    Ok(sel_path) => format!(
-                                        " — selected as your user-global default; wrote {}",
-                                        sel_path.display()
-                                    ),
-                                    Err(err) => format!(" — selection failed: {err}"),
-                                };
-                                app.status_message = Some(format!(
-                                    "Saved route {route} as new Fleet `{}` — wrote {}{selected_note}",
-                                    display,
-                                    path.display()
-                                ));
-                            }
-                            Err(err) => {
-                                app.set_sticky_status(
-                                    format!("Save failed: {err}"),
-                                    crate::tui::app::StatusToastLevel::Error,
-                                    None,
-                                );
-                            }
-                        }
-                    }
-                    RouteSaveChoice::SaveAsDefault => {
-                        let persist_result = crate::settings::Settings::transact(|settings| {
-                            settings.default_provider = Some(pending.provider_identity.clone());
-                            settings
-                                .set_model_for_provider(&pending.provider_identity, &pending.model);
-                            if matches!(
-                                crate::config::ApiProvider::parse(&pending.provider_identity),
-                                Some(crate::config::ApiProvider::Deepseek)
-                                    | Some(crate::config::ApiProvider::DeepseekCN)
-                            ) {
-                                settings.set("default_model", &pending.model)?;
-                            }
-                            Ok(())
-                        });
-                        match persist_result {
-                            Ok(()) => {
-                                app.status_message = Some(format!(
-                                    "Remembered {route} as the startup default (settings.toml)."
-                                ));
-                            }
-                            Err(err) => {
-                                app.set_sticky_status(
-                                    format!("Save failed: {err}"),
-                                    crate::tui::app::StatusToastLevel::Error,
-                                    None,
-                                );
-                            }
-                        }
-                    }
-                    RouteSaveChoice::SessionOnly => {
-                        app.status_message = Some(format!(
-                            "Route {route} kept for this session only — nothing was written."
-                        ));
                     }
                 }
             }

@@ -83,6 +83,24 @@ impl RegisterCommand for FleetCmd {
             return CommandResult::action(AppAction::OpenFleetList);
         };
         match verb {
+            "save" | "update" => {
+                // Explicit persistence of the pending session route into the
+                // selected Fleet's operator. Only an explicit command can
+                // write a saved Fleet after an in-session route change.
+                let message = app.apply_route_save_choice(
+                    crate::tui::views::route_save_prompt::RouteSaveChoice::UpdateFleet,
+                );
+                return CommandResult::message(message);
+            }
+            "save-as" | "saveas" => {
+                let message = app.apply_route_save_choice(
+                    crate::tui::views::route_save_prompt::RouteSaveChoice::SaveAsNewFleet,
+                );
+                return CommandResult::message(message);
+            }
+            _ => {}
+        }
+        match verb {
             "roster" | "party" | "loadout" | "roles" | "role" | "profiles" | "profile" => {
                 // The old per-role roster; the saved-Fleet list is /fleet.
                 CommandResult::action(AppAction::OpenFleetRoster)
