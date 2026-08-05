@@ -131,15 +131,19 @@ fn composer_wrapped_cursor_row_col(
     (row, col)
 }
 
-fn move_composer_cursor_by_wrapped_rows(app: &mut App, text_area: Rect, rows: isize) {
+/// Move the composer caret by wrapped rows. Returns whether the caret actually
+/// moved: a draft that is empty, unwrapped, or already at the boundary in this
+/// direction reports `false` so the wheel can reach the transcript instead of
+/// dying in the composer (#5223).
+fn move_composer_cursor_by_wrapped_rows(app: &mut App, text_area: Rect, rows: isize) -> bool {
     if app.input.is_empty() || rows == 0 {
-        return;
+        return false;
     }
 
     let width = text_area.width.max(1) as usize;
     let wrapped = crate::tui::widgets::wrap_input_lines_for_mouse(&app.input, width);
     if wrapped.len() <= 1 {
-        return;
+        return false;
     }
 
     let (current_row, current_col) =
@@ -152,7 +156,7 @@ fn move_composer_cursor_by_wrapped_rows(app: &mut App, text_area: Rect, rows: is
     };
 
     if target_row == current_row {
-        return;
+        return false;
     }
 
     let (target_start, target_text) = &wrapped[target_row];
@@ -163,6 +167,7 @@ fn move_composer_cursor_by_wrapped_rows(app: &mut App, text_area: Rect, rows: is
         .saturating_add(current_col.min(target_len))
         .min(total);
     app.needs_redraw = true;
+    true
 }
 
 /// Click the WorkflowPanel header to toggle expand/collapse, or the trailing
@@ -236,22 +241,20 @@ pub(crate) fn handle_composer_mouse(app: &mut App, mouse: MouseEvent) -> bool {
             .text_area;
 
     match mouse.kind {
-        MouseEventKind::ScrollUp => {
-            move_composer_cursor_by_wrapped_rows(
-                app,
-                text_area,
-                -(COMPOSER_MOUSE_SCROLL_LINES as isize),
-            );
-            true
-        }
-        MouseEventKind::ScrollDown => {
-            move_composer_cursor_by_wrapped_rows(
-                app,
-                text_area,
-                COMPOSER_MOUSE_SCROLL_LINES as isize,
-            );
-            true
-        }
+        // Only claim the wheel while the caret still has somewhere to go. At
+        // the top or bottom of the draft — or with no wrapped draft at all —
+        // fall through so the transcript scrolls instead of the event being
+        // silently swallowed by the composer rect (#5223).
+        MouseEventKind::ScrollUp => move_composer_cursor_by_wrapped_rows(
+            app,
+            text_area,
+            -(COMPOSER_MOUSE_SCROLL_LINES as isize),
+        ),
+        MouseEventKind::ScrollDown => move_composer_cursor_by_wrapped_rows(
+            app,
+            text_area,
+            COMPOSER_MOUSE_SCROLL_LINES as isize,
+        ),
         MouseEventKind::Down(MouseButton::Left) => {
             if let Some(pos) = mouse_pos_to_char_index(app, mouse.column, mouse.row, text_area) {
                 app.cursor_position = pos;

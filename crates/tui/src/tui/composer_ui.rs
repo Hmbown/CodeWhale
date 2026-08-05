@@ -68,26 +68,28 @@ pub(crate) fn handle_composer_history_arrow(
     // transcript for single-line drafts. Multiline drafts keep editor-like
     // line navigation. If the user holds Up/Down at the first/last line, do
     // not replace their current draft with prompt history unless they are
-    // already navigating history.
+    // already navigating history — scroll the transcript instead. Terminals
+    // that convert the wheel into arrow keys (iTerm2's alternate-screen
+    // setting) reach the composer through this path, so a draft boundary that
+    // merely redraws would strand the user with no way to scroll back (#5223).
     let scroll_transcript = app.composer_arrows_scroll && !app.input.contains('\n');
     let protect_multiline_draft = app.input.contains('\n') && app.history_index.is_none();
 
     match key.code {
         KeyCode::Up => {
-            if scroll_transcript {
+            if scroll_transcript
+                || (protect_multiline_draft && !cursor_has_previous_logical_line(app))
+            {
                 app.scroll_up(COMPOSER_ARROW_SCROLL_LINES);
-            } else if protect_multiline_draft && !cursor_has_previous_logical_line(app) {
-                app.needs_redraw = true;
             } else {
                 app.vim_move_up();
             }
             true
         }
         KeyCode::Down => {
-            if scroll_transcript {
+            if scroll_transcript || (protect_multiline_draft && !cursor_has_next_logical_line(app))
+            {
                 app.scroll_down(COMPOSER_ARROW_SCROLL_LINES);
-            } else if protect_multiline_draft && !cursor_has_next_logical_line(app) {
-                app.needs_redraw = true;
             } else {
                 app.vim_move_down();
             }

@@ -2681,6 +2681,128 @@ fn composer_mouse_wheel_up_moves_within_wrapped_draft() {
     assert!(app.cursor_position < app.input.chars().count());
 }
 
+/// #5223: the wheel over an empty composer used to be consumed and dropped,
+/// leaving no way to reach the scrollback at all.
+#[test]
+fn composer_mouse_wheel_with_empty_draft_scrolls_transcript() {
+    let mut app = create_test_app();
+    app.input.clear();
+    app.cursor_position = 0;
+    app.viewport.last_composer_area = Some(Rect {
+        x: 0,
+        y: 10,
+        width: 12,
+        height: 5,
+    });
+    app.viewport.last_composer_content = Some(Rect {
+        x: 1,
+        y: 11,
+        width: 5,
+        height: 3,
+    });
+
+    handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 2,
+            row: 12,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+
+    assert!(
+        app.viewport.pending_scroll_delta < 0,
+        "wheel over an empty composer must reach the transcript, got {}",
+        app.viewport.pending_scroll_delta
+    );
+}
+
+/// #5223: once the caret sits on the first wrapped row the composer has
+/// nowhere left to go, so the wheel must hand off to the transcript instead of
+/// being swallowed.
+#[test]
+fn composer_mouse_wheel_at_draft_top_falls_through_to_transcript() {
+    let mut app = create_test_app();
+    app.input = "alpha beta gamma delta epsilon".to_string();
+    app.cursor_position = 0;
+    app.viewport.last_composer_area = Some(Rect {
+        x: 0,
+        y: 10,
+        width: 12,
+        height: 5,
+    });
+    app.viewport.last_composer_content = Some(Rect {
+        x: 1,
+        y: 11,
+        width: 5,
+        height: 3,
+    });
+
+    handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 2,
+            row: 12,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+
+    assert_eq!(app.cursor_position, 0, "caret was already at the top");
+    assert!(
+        app.viewport.pending_scroll_delta < 0,
+        "wheel at the top of the draft must reach the transcript, got {}",
+        app.viewport.pending_scroll_delta
+    );
+}
+
+/// #5223: terminals that convert the wheel into arrow keys reach the composer
+/// through the key path. A multiline draft used to dead-end at its first line —
+/// the key was consumed and nothing moved, stranding the user.
+#[test]
+fn multiline_draft_up_at_first_line_scrolls_transcript() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = false;
+    app.input = "first line\nsecond line".to_string();
+    app.cursor_position = 0;
+    app.history_index = None;
+    app.input_history.push("previous prompt".to_string());
+
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+
+    assert_eq!(
+        app.input, "first line\nsecond line",
+        "the multiline draft must not be replaced by prompt history"
+    );
+    assert_eq!(app.viewport.pending_scroll_delta, -3);
+}
+
+/// The mirror of the above at the end of the draft.
+#[test]
+fn multiline_draft_down_at_last_line_scrolls_transcript() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = false;
+    app.input = "first line\nsecond line".to_string();
+    app.cursor_position = app.input.chars().count();
+    app.history_index = None;
+
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+
+    assert_eq!(app.input, "first line\nsecond line");
+    assert_eq!(app.viewport.pending_scroll_delta, 3);
+}
+
 #[test]
 fn composer_mouse_first_visible_character_maps_to_zero_after_prompt_gutter() {
     let mut app = create_test_app();
