@@ -11,5 +11,6 @@ pub mod manager;
 pub mod profile;
 pub mod roster;
 pub mod scheduler;
+pub mod store;
 pub mod task_spec;
 pub mod worker_runtime;
