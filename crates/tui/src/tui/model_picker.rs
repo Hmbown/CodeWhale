@@ -784,13 +784,14 @@ impl ModelPickerView {
         let columns = ModelRowColumns::for_page(&rows[start.min(rows.len())..end.min(rows.len())]);
 
         let mut lines = Vec::with_capacity(end.saturating_sub(start));
+        let pane_height = usize::from(inner.height);
         for (idx, row) in rows.iter().enumerate().skip(start).take(end - start) {
-            let row_y = inner.y.saturating_add(lines.len() as u16);
-            self.row_hitboxes.borrow_mut().push((
-                Rect::new(inner.x, row_y, inner.width, 1),
-                state.pane,
-                idx,
-            ));
+            // Family headers consume pane lines too: stop building (and stop
+            // recording hitboxes) as soon as the pane is full, so rendering
+            // never addresses the buffer past its bounds.
+            if lines.len() >= pane_height {
+                break;
+            }
             let is_selected = idx == state.selected;
             // Non-selectable rows are dimmed with a lock glyph so they never
             // look choosable. Selection still highlights, but stays muted.
@@ -829,6 +830,32 @@ impl ModelPickerView {
             } else {
                 Style::default().fg(palette::TEXT_MUTED)
             };
+            // Provider → family → model grouping: a dim family header is
+            // drawn when the catalog states a family and it differs from the
+            // previous visible row's (families sort contiguously). Unknown
+            // families draw nothing.
+            if let Some(family) = row.family.as_deref() {
+                let prev_family = rows
+                    .get(idx.wrapping_sub(1))
+                    .and_then(|prev| prev.family.as_deref());
+                let prev_provider = rows
+                    .get(idx.wrapping_sub(1))
+                    .map(|prev| prev.route.as_str());
+                if prev_family != Some(family) || prev_provider != Some(row.route.as_str()) {
+                    lines.push(Line::from(Span::styled(
+                        format!("  ─ {family}"),
+                        Style::default().fg(palette::TEXT_DIM),
+                    )));
+                }
+            }
+            // The hitbox points at the row's own line (after any family
+            // header), so mouse/scan targets and keyboard targets agree.
+            let row_y = inner.y.saturating_add(lines.len() as u16);
+            self.row_hitboxes.borrow_mut().push((
+                Rect::new(inner.x, row_y, inner.width, 1),
+                state.pane,
+                idx,
+            ));
             let spans = picker_row_spans(
                 row,
                 marker,
@@ -851,6 +878,12 @@ impl ModelPickerView {
                 message,
                 Style::default().fg(palette::TEXT_MUTED),
             )));
+        }
+        // Family headers can push the visible rows past the viewport; clip
+        // to the area so rendering never indexes the buffer out of bounds
+        // (ratatui-core 0.1.0 panics instead of clipping).
+        if lines.len() > usize::from(inner.height) {
+            lines.truncate(usize::from(inner.height));
         }
         Paragraph::new(lines).render(inner, buf);
     }
@@ -918,6 +951,9 @@ struct PaneRow {
     /// Metadata as separable units. Kept as a list so a squeezed column sheds
     /// whole facts instead of rendering half a word.
     meta: Vec<String>,
+    /// Catalog model family (e.g. `deepseek`, `glm`) for section headers.
+    /// None = the catalog did not state a family (no header is drawn).
+    family: Option<String>,
     /// The route this session is already on.
     active: bool,
 }
@@ -932,6 +968,7 @@ impl PaneRow {
             } else {
                 vec![meta]
             },
+            family: None,
             active: false,
         }
     }
@@ -1770,11 +1807,22 @@ fn route_discriminator(display: &str, provider_id: &str) -> Option<String> {
 /// here: a token repeated on forty rows cannot tell them apart, and it is what
 /// pushed the differentiating tokens off the end of the line. Facts the
 /// registry does not know are omitted rather than guessed.
+/// The catalog model family for a provider/model row, when the catalog
+/// states one. Used for Provider → family → model grouping; unknown families
+/// render no header (never a guessed label).
+fn catalog_family_for(provider: ApiProvider, model_id: &str) -> Option<String> {
+    crate::provider_lake::catalog_offering_for_model(provider, model_id)
+        .and_then(|offering| offering.family)
+}
+
 fn model_row_meta_chips(row: &ModelPickerRow) -> Vec<String> {
     let mut chips = Vec::new();
     if let Some(context_window) = row.metadata.context_window {
         chips.push(format_picker_context_window(u64::from(context_window)));
     }
+    // The reasoning stance is the most decision-relevant fact for a coding
+    // harness, so it sits before the limits/modality chips — the chip budget
+    // sheds from the tail, and a squeezed row must never lose the stance.
     chips.push(
         if row.metadata.reasoning {
             "reasoning"
@@ -1783,6 +1831,23 @@ fn model_row_meta_chips(row: &ModelPickerRow) -> Vec<String> {
         }
         .to_string(),
     );
+    if let Some(max_output) = row.metadata.max_output {
+        chips.push(format!("{max_output} out"));
+    }
+    // Modality and tool facts are shown only when the catalog genuinely knows
+    // them — an unknown is never rendered as a claim.
+    match row.metadata.vision {
+        SupportState::Supported => chips.push("vision".to_string()),
+        SupportState::Unsupported => chips.push("text only".to_string()),
+        SupportState::Unknown => {}
+    }
+    if let Some(tool_calls) = row.metadata.tool_calls {
+        chips.push(if tool_calls {
+            "tools".to_string()
+        } else {
+            "no tools".to_string()
+        });
+    }
     if let Some(reason) = row.blocked_reason.as_deref() {
         chips.push(reason.to_string());
     }
@@ -2558,6 +2623,7 @@ impl ModelPickerView {
                         primary: row.id.clone(),
                         route: String::new(),
                         meta: vec![row.hint.clone()],
+                        family: None,
                         active,
                     },
                     Some(provider) => PaneRow {
@@ -2567,6 +2633,7 @@ impl ModelPickerView {
                             .cloned()
                             .unwrap_or_else(|| provider.display_name().to_string()),
                         meta: model_row_meta_chips(row),
+                        family: catalog_family_for(provider, &row.id),
                         active,
                     },
                 }
@@ -2575,6 +2642,7 @@ impl ModelPickerView {
         if let Some((model, provider)) = self.custom_model_row() {
             model_rows.push(PaneRow {
                 primary: model,
+                family: None,
                 route: provider.display_name().to_string(),
                 meta: vec![if self.query.trim().is_empty() {
                     "current (custom)".to_string()
