@@ -316,7 +316,13 @@ async fn underwater_footer_moves_from_working_through_one_shot_completion() -> R
         .env("DEEPSEEK_BASE_URL", server.uri())
         .env("DEEPSEEK_MODEL", DEEPSEEK_TEST_MODEL)
         .spawn()?;
-    enter_launch_session(&mut tui)?;
+    match tui.wait_for_text(COMPOSER_READY_TEXT, BOOT_TIMEOUT) {
+        Ok(()) => {}
+        Err(e) => {
+            eprintln!("[dogfood] launch wait error debug: {e:?}");
+            return Err(anyhow::anyhow!("launch wait failed: {e:#}"));
+        }
+    }
 
     type_and_submit(&mut tui, "show the underwater phase transition")?;
     // TUI-DOG-008: live phases (working/finishing/done) render on the phase
@@ -1477,6 +1483,134 @@ async fn release_bench_thirty_two_worker_fanout_stays_live() -> Result<()> {
              observed={observed:?}: idle={idle} KiB storm={storm} KiB sample={sample} KiB"
         );
     }
+
+    let _ = tui.shutdown();
+    Ok(())
+}
+
+/// Dogfood of the named-Fleet journey against the release binary:
+/// migration -> session-only route change -> explicit /fleet save -> restart
+/// (selected Fleet operator applied) -> save-as. Every receipt is asserted
+/// on-screen and every claim is checked against the on-disk files.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn release_fleet_route_save_journey() -> Result<()> {
+    let _guard = RELEASE_RUNTIME_QA_LOCK.lock().await;
+    let mock = MockServer::start().await;
+    mount_text_model(&mock, "deepseek-v4-pro", "ok").await;
+    let base_url = mock.uri();
+
+    let ws = make_sealed_workspace()?;
+    let agents_dir = ws.workspace().join(".codewhale").join("agents");
+    std::fs::create_dir_all(&agents_dir)
+        .map_err(|e| anyhow::anyhow!("agents dir {}: {e}", agents_dir.display()))?;
+    std::fs::write(
+        agents_dir.join("scout.toml"),
+        r#"id = "scout"
+role_hint = "scout"
+model = "deepseek-v4-flash"
+provider = "deepseek"
+"#,
+    )
+    .map_err(|e| anyhow::anyhow!("scout profile: {e}"))?;
+    let home_dir = ws.home().join(".codewhale");
+    std::fs::create_dir_all(&home_dir)
+        .map_err(|e| anyhow::anyhow!("home dir {}: {e}", home_dir.display()))?;
+    std::fs::write(
+        home_dir.join("config.toml"),
+        format!(
+            r#"provider = "deepseek"
+[providers.deepseek]
+api_key = "sk-release-qa"
+base_url = "{base_url}"
+"#
+        ),
+    )
+    .map_err(|e| anyhow::anyhow!("home config: {e}"))?;
+
+    let mut tui = common_tui_builder(&ws).spawn()?;
+    enter_launch_session(&mut tui)?;
+
+    // 1. /fleet shows the migration banner and no selection.
+    type_and_submit(&mut tui, "/fleet")?;
+    tui.wait_for_text("legacy role profile", INTERACTION_TIMEOUT)?;
+    tui.wait_for_text("No Fleet selected", INTERACTION_TIMEOUT)?;
+    // 2. m migrates with a receipt; Esc closes the pager, Esc closes the list.
+    tui.send(keys::key::text("m"))?;
+    tui.wait_for_text("Migrated", INTERACTION_TIMEOUT)?;
+    tui.send(keys::key::esc())?;
+    std::thread::sleep(Duration::from_millis(300));
+    tui.send(keys::key::esc())?;
+    std::thread::sleep(Duration::from_millis(300));
+    tui.pump();
+
+    // 3. A route change is session-only and names the explicit commands.
+    type_and_submit(&mut tui, "/model deepseek-v4-pro")?;
+    tui.wait_for_text("session only", INTERACTION_TIMEOUT)?;
+    tui.wait_for_text("/fleet save", INTERACTION_TIMEOUT)?;
+
+    // 4. /fleet save writes the operator; the receipt names the file.
+    type_and_submit(&mut tui, "/fleet save")?;
+    tui.wait_for_text("now runs on deepseek/deepseek-v4-pro", INTERACTION_TIMEOUT)?;
+
+    // 5. The updated Fleet file is the migrated Default (v2 schema with the
+    // operator route pinned to the session model).
+    let fleet_file = ws
+        .home()
+        .join(".codewhale")
+        .join("fleets")
+        .join("default.toml");
+    let fleet_text = std::fs::read_to_string(&fleet_file)?;
+    assert!(
+        fleet_text.contains("schema = \"fleet\"") && fleet_text.contains("deepseek-v4-pro"),
+        "saved fleet must be v2 with the operator: {fleet_text}"
+    );
+
+    // 6. Restart: the selected Fleet's operator is the session route.
+    tui.shutdown()
+        .ok_or_else(|| anyhow::anyhow!("graceful shutdown failed"))?;
+    let mut tui = common_tui_builder(&ws).spawn()?;
+    enter_launch_session(&mut tui)?;
+    tui.wait_for_text("deepseek-v4-pro", INTERACTION_TIMEOUT)?;
+
+    // 7. The list shows the saved Fleet with its user scope and selection.
+    type_and_submit(&mut tui, "/fleet")?;
+    tui.wait_for_text("DeepSeek", INTERACTION_TIMEOUT)?;
+    tui.wait_for_text("[user]", INTERACTION_TIMEOUT)?;
+    tui.wait_for_text("Selected", INTERACTION_TIMEOUT)?;
+    tui.send(keys::key::esc())?;
+    std::thread::sleep(Duration::from_millis(300));
+    tui.send(keys::key::esc())?;
+    std::thread::sleep(Duration::from_millis(300));
+    tui.pump();
+
+    // 8. save-as creates and selects a second user-global Fleet.
+    type_and_submit(&mut tui, "/model deepseek-v4-flash")?;
+    tui.wait_for_text("session only", INTERACTION_TIMEOUT)?;
+    type_and_submit(&mut tui, "/fleet save-as")?;
+    // The receipt wraps across lines at this width; assert on fragments that
+    // land on a single row.
+    tui.wait_for_text("as new Fleet", INTERACTION_TIMEOUT)?;
+    tui.wait_for_text("user-global default", INTERACTION_TIMEOUT)?;
+    // The new Fleet is named after the route: `DeepSeek deepseek-v4-flash`.
+    let second_file = ws
+        .home()
+        .join(".codewhale")
+        .join("fleets")
+        .join("deepseek-deepseek-v4-flash.toml");
+    assert!(
+        second_file.is_file(),
+        "save-as must create the second fleet file"
+    );
+    // The legacy profile file was left untouched.
+    assert!(
+        std::fs::read_to_string(
+            ws.workspace()
+                .join(".codewhale")
+                .join("agents")
+                .join("scout.toml")
+        )?
+        .contains("deepseek-v4-flash")
+    );
 
     let _ = tui.shutdown();
     Ok(())

@@ -8839,7 +8839,6 @@ fn tool_cell_is_running(tool: &ToolCell) -> bool {
 ///
 /// `severity` drives transcript color: red for `Error`/`Critical`, amber for
 /// `Warning`, dim for `Info`.
-
 pub(crate) fn apply_engine_error_to_app(
     app: &mut App,
     envelope: crate::error_taxonomy::ErrorEnvelope,
