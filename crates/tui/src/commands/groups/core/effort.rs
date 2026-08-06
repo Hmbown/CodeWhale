@@ -84,7 +84,7 @@ pub fn effort(app: &mut App, args: Option<&str>) -> CommandResult {
         ));
     }
     // from_setting always returns a ReasoningEffort (defaults to Max on unknown), so validate against available set first
-    if let Some(effort) = ReasoningEffort::parse_strict(&arg).ok() {
+    if let Ok(effort) = ReasoningEffort::parse_strict(&arg) {
         let normalized = effort.normalize_for_provider(app.api_provider);
         app.reasoning_effort_preference = Some(normalized);
         app.reasoning_effort = normalized;
