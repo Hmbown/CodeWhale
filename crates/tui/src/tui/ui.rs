@@ -429,7 +429,7 @@ enum TerminalInputMessage {
     Error(io::Error),
 }
 
-struct TerminalInputPump {
+pub(crate) struct TerminalInputPump {
     rx: std::sync::mpsc::Receiver<TerminalInputMessage>,
     stop: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
@@ -660,7 +660,7 @@ fn engine_drain_budget_exhausted(events_drained: usize, started: Instant, now: I
 
 /// Where a key goes while onboarding owns the screen (#4763).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OnboardingKeyRoute {
+pub(crate) enum OnboardingKeyRoute {
     /// Terminate the session. Ctrl+C is unconditional during onboarding.
     Quit,
     /// Hand the key to the provider picker on the view stack.
@@ -1632,7 +1632,7 @@ static BALANCE_CLIENT: LazyLock<::reqwest::Client> = LazyLock::new(|| {
 });
 
 #[derive(Debug)]
-struct CacheWarmupOutcome {
+pub(crate) struct CacheWarmupOutcome {
     usage: Usage,
     provider_identity: String,
     model: String,
@@ -2039,7 +2039,7 @@ fn app_scoped_runtime_config(app: &App, config: &Config) -> (ProviderIdentity, C
 }
 
 #[derive(Debug, Clone, Copy)]
-enum DispatchRecovery {
+pub(crate) enum DispatchRecovery {
     /// Normal immediate composer submit: restore the composer on failure.
     Immediate,
     /// A queued follow-up that was being edited in the composer.
@@ -2071,7 +2071,7 @@ struct UserDispatchSnapshot {
 /// Send so the spawned task can resolve routes and send without holding `&mut App`.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
-struct UserDispatchPrepare {
+pub(crate) struct UserDispatchPrepare {
     message: QueuedMessage,
     content: String,
     references: Vec<ContextReference>,
@@ -2108,7 +2108,7 @@ struct UserDispatchPrepare {
 /// Data produced by the async dispatch phase that is needed to apply the
 /// post-acceptance mutations to `App`.
 #[derive(Debug, Clone)]
-struct UserDispatchOutcome {
+pub(crate) struct UserDispatchOutcome {
     turn_compaction: CompactionConfig,
     effective_provider: ApiProvider,
     effective_model: String,
@@ -2292,7 +2292,7 @@ fn note_startup_default_not_saved(app: &mut App, save_as_startup_default: bool) 
     });
 }
 
-struct ProviderFallbackRollback {
+pub(crate) struct ProviderFallbackRollback {
     identity: ProviderIdentity,
     chain: Option<codewhale_config::ProviderChain>,
 }
@@ -2395,7 +2395,7 @@ async fn execute_command_input(
 }
 
 #[derive(Debug, Clone)]
-struct SteerPausedSnapshot {
+pub(crate) struct SteerPausedSnapshot {
     paused: bool,
     pausable: bool,
     paused_quarry: Option<String>,
@@ -2473,7 +2473,7 @@ fn prepare_config_update_result(
     result
 }
 
-struct ApprovalDecisionEvent {
+pub(crate) struct ApprovalDecisionEvent {
     tool_id: String,
     tool_name: String,
     decision: ReviewDecision,
@@ -2594,7 +2594,7 @@ fn ignore_stale_stream_event_while_idle(event: &EngineEvent) -> bool {
 
 type ProviderKeyVerification<'a> = Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
 
-trait ProviderKeyVerifier {
+pub(crate) trait ProviderKeyVerifier {
     fn verify<'a>(
         &'a self,
         provider: ApiProvider,
@@ -2700,7 +2700,7 @@ pub(crate) fn active_foreground_shell_running(app: &App) -> bool {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SearchDirection {
+pub(crate) enum SearchDirection {
     Forward,
     Backward,
 }
@@ -2813,7 +2813,7 @@ fn should_notify_subagent_completion(
 // Keyboard-shortcut predicates moved to `tui/key_shortcuts.rs`.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum StartupVersionCheckSource {
+pub(crate) enum StartupVersionCheckSource {
     Disabled,
     ConfiguredUrl(String),
     ReleaseResolver,
@@ -2822,7 +2822,7 @@ enum StartupVersionCheckSource {
 /// A newer-stable-release notice, carrying enough context to render both the
 /// short transient toast and the durable in-transcript update prompt (#3961).
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct UpdateNotice {
+pub(crate) struct UpdateNotice {
     current: String,
     latest: String,
 }
