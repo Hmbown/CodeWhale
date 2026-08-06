@@ -7647,7 +7647,7 @@ fn load_state_rejects_symlinked_state_file() {
 }
 
 #[test]
-fn persist_state_rejects_state_path_outside_workspace() {
+fn persist_state_rejects_state_path_outside_state_root() {
     let tmp = tempdir().expect("tempdir");
     let workspace = tmp.path().join("workspace");
     let outside_state = tmp.path().join("outside-state.json");
@@ -7658,7 +7658,78 @@ fn persist_state_rejects_state_path_outside_workspace() {
         .persist_state()
         .expect_err("outside state path should fail");
 
-    assert!(format!("{err:#}").contains("must stay within workspace"));
+    assert!(format!("{err:#}").contains("must stay within state root"));
+}
+
+#[test]
+fn explicit_state_roots_isolate_managers_for_the_same_execution_workspace() {
+    let tmp = tempdir().expect("tempdir");
+    let workspace = tmp.path().join("workspace");
+    let state_a = tmp.path().join("session-a");
+    let state_b = tmp.path().join("session-b");
+    std::fs::create_dir_all(&workspace).expect("mkdir workspace");
+
+    let manager_a = new_shared_subagent_manager_with_state_root_and_timeout(
+        workspace.clone(),
+        state_a.clone(),
+        2,
+        2,
+        Duration::from_secs(60),
+        2,
+        None,
+    );
+    let manager_b = new_shared_subagent_manager_with_state_root_and_timeout(
+        workspace.clone(),
+        state_b.clone(),
+        2,
+        2,
+        Duration::from_secs(60),
+        2,
+        None,
+    );
+
+    for (manager, expected_root, worker_id) in [
+        (&manager_a, &state_a, "agent_session_a"),
+        (&manager_b, &state_b, "agent_session_b"),
+    ] {
+        let mut manager = manager.try_write().expect("manager write lock");
+        assert_eq!(manager.workspace.as_path(), workspace.as_path());
+        assert_eq!(manager.state_root.as_path(), expected_root.as_path());
+        manager
+            .ensure_coordination_process_lock()
+            .expect("independent state-root coordination lock");
+        manager.register_worker(make_worker_spec(worker_id, workspace.clone()));
+        manager
+            .persist_state_synchronously()
+            .expect("persist isolated state");
+    }
+
+    assert!(default_state_path(&state_a).unwrap().exists());
+    assert!(default_state_path(&state_b).unwrap().exists());
+    let records_a =
+        load_persisted_agent_worker_records_with_state_root(&workspace, &state_a).unwrap();
+    let records_b =
+        load_persisted_agent_worker_records_with_state_root(&workspace, &state_b).unwrap();
+    assert_eq!(records_a.len(), 1);
+    assert_eq!(records_a[0].spec.worker_id, "agent_session_a");
+    assert_eq!(records_b.len(), 1);
+    assert_eq!(records_b[0].spec.worker_id, "agent_session_b");
+
+    let messages = vec![text_message("assistant", "session-a transcript")];
+    write_subagent_transcript_artifact_for_test(&state_a, "agent_session_a", &messages)
+        .expect("write isolated transcript");
+    let restored = load_subagent_transcript_artifact(&state_a, "agent_session_a")
+        .expect("read isolated transcript");
+    assert_eq!(restored.len(), 1);
+    assert_eq!(message_text(&restored[0]), "session-a transcript");
+    assert!(
+        load_subagent_transcript_artifact(&state_b, "agent_session_a").is_err(),
+        "a sibling state root must not see another session's transcript"
+    );
+    assert!(
+        !workspace.join(".codewhale").exists(),
+        "an explicit state root must keep control-plane files out of the execution workspace"
+    );
 }
 
 #[cfg(unix)]
@@ -7676,7 +7747,7 @@ fn persist_state_rejects_symlinked_state_directory() {
     let err = default_state_path(&workspace)
         .expect_err("symlinked state directory should fail before manager construction");
     assert!(
-        format!("{err:#}").contains("must stay within workspace")
+        format!("{err:#}").contains("must stay within state root")
             || format!("{err:#}").contains("must not traverse symlinks")
     );
 }
@@ -16001,19 +16072,27 @@ fn resume_from_rejects_cross_workspace_source() {
 #[test]
 fn resume_from_loads_transcript_artifact_when_available() {
     let tmp = tempdir().expect("tempdir");
+    let workspace = tmp.path().join("workspace");
+    let state_root = tmp.path().join("session-state");
+    std::fs::create_dir_all(&workspace).expect("mkdir workspace");
+    let manager = SubAgentManager::new_with_state_root(workspace.clone(), state_root.clone(), 4);
     let messages = vec![
         text_message("user", "initial task"),
         text_message("assistant", "step one done"),
     ];
     let source_id = "agent_resume_source";
-    write_subagent_transcript_artifact_for_test(tmp.path(), source_id, &messages)
+    write_subagent_transcript_artifact_for_test(&state_root, source_id, &messages)
         .expect("write transcript artifact");
 
-    let loaded =
-        load_subagent_transcript_artifact(tmp.path(), source_id).expect("transcript should load");
+    let loaded = load_subagent_transcript_artifact(&manager.state_root, source_id)
+        .expect("resume transcript should load from the manager state root");
     assert_eq!(loaded.len(), 2);
     assert_eq!(message_text(&loaded[0]), "initial task");
     assert_eq!(message_text(&loaded[1]), "step one done");
+    assert!(
+        !workspace.join(".codewhale").exists(),
+        "resume transcript reads must not fall back to the execution workspace"
+    );
 }
 
 #[test]

@@ -10883,6 +10883,7 @@ async fn run_exec_agent(
         model: effective_model.clone(),
         active_route_limits,
         workspace: workspace.clone(),
+        subagent_state_root: None,
         plugin_registry: Some(engine_plugin_registry),
         allow_shell: !fleet_authority_active && (auto_approve || execution_config.allow_shell()),
         trust_mode,

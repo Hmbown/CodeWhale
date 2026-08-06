@@ -24,6 +24,21 @@ Fleet workers follow the same rule. Write-capable Fleet tasks declare
 `workspace.writable_paths` or `metadata.coordination_contracts`, and the
 resolved values are persisted in their launch manifest.
 
+### Embedding state boundary
+
+By default, delegated control-plane state remains workspace-scoped at
+`<workspace>/.codewhale/state`: the worker ledger, complete transcript
+artifacts, and coordination lock share that root. An embedding host may set
+`EngineConfig::subagent_state_root` to keep those files under a session-owned
+root without changing child cwd, tool path authority, or the execution
+workspace recorded in receipts.
+
+Different state roots intentionally form different coordination domains. They
+do not exchange write claims or contention receipts even when their execution
+workspace is the same. A host choosing that layout must serialize conflicting
+writes itself or give writers isolated worktrees; the state-root override is a
+storage and lifecycle boundary, not cross-session write arbitration.
+
 This record is a cooperative Codewhale coordination boundary, not an operating
 system sandbox. Fleet carries a machine-readable outer cap into each worker,
 rechecks structured mutation targets, rejects symlink aliases, and denies

@@ -2795,15 +2795,19 @@ pub const COORDINATION_LOCK_TIMEOUT_MARKER: &str =
     "timed out acquiring delegated coordination lock";
 
 impl CoordinationProcessLock {
-    fn acquire(workspace: &Path) -> Result<Self> {
-        let lock_path = normalize_subagent_workspace(workspace)
+    fn acquire(state_root: &Path) -> Result<Self> {
+        let requested_root = normalize_subagent_workspace(state_root);
+        let lock_dir = requested_root.join(".codewhale").join("state");
+        fs::create_dir_all(&lock_dir)?;
+        // Creating a missing root can change its canonical spelling on
+        // Windows (for example by adding a `\\?\` prefix). Re-resolve both
+        // sides before checking containment.
+        let state_root = normalize_subagent_workspace(state_root);
+        let lock_path = state_root
             .join(".codewhale")
             .join("state")
             .join(SUBAGENT_STATE_LOCK_FILE);
-        if let Some(parent) = lock_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        reject_workspace_relative_symlinks(&normalize_subagent_workspace(workspace), &lock_path)?;
+        reject_root_relative_symlinks(&state_root, &lock_path)?;
         let lock_file = std::fs::OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -2815,7 +2819,7 @@ impl CoordinationProcessLock {
         let thread = std::thread::spawn(move || {
             let lock = fd_lock::RwLock::new(lock_file);
             // Changed from try_write (exclusive) to try_read (shared) so two
-            // sessions in the same workspace can coexist without a sticky
+            // sessions in the same state root can coexist without a sticky
             // error — job rows still settle via atomic rename + sequence guard.
             // Matches user intent: "no reason to have a lock like that".
             match lock.try_read() {
@@ -2847,7 +2851,7 @@ impl CoordinationProcessLock {
                 if holder_pid == Some(std::process::id()) {
                     Err(anyhow!(
                         "{COORDINATION_SAME_PROCESS_HANDOVER} for {}: {error}",
-                        workspace.display()
+                        state_root.display()
                     ))
                 } else {
                     Err(anyhow!(
@@ -2855,7 +2859,7 @@ impl CoordinationProcessLock {
                         holder_pid
                             .map(|pid| format!(" (pid {pid})"))
                             .unwrap_or_default(),
-                        workspace.display()
+                        state_root.display()
                     ))
                 }
             }
@@ -2864,7 +2868,7 @@ impl CoordinationProcessLock {
                 let _ = thread.join();
                 Err(anyhow!(
                     "{COORDINATION_LOCK_TIMEOUT_MARKER} for {}: {error}",
-                    workspace.display()
+                    state_root.display()
                 ))
             }
         }
@@ -2888,6 +2892,10 @@ pub struct SubAgentManager {
     coordination: CoordinationLedger,
     #[allow(dead_code)] // Stored for future workspace-scoped operations
     workspace: PathBuf,
+    /// Root that owns the delegated-agent ledger, complete transcript
+    /// artifacts and coordination lock. Defaults to `workspace`; embedders may
+    /// isolate it without changing child execution cwd or file authority.
+    state_root: PathBuf,
     state_path: Option<PathBuf>,
     coordination_process_lock: std::sync::Mutex<Option<CoordinationProcessLock>>,
     coordination_process_lock_required: bool,
@@ -2937,6 +2945,14 @@ impl SubAgentManager {
     /// Create a new manager for sub-agents.
     #[must_use]
     pub fn new(workspace: PathBuf, max_agents: usize) -> Self {
+        let state_root = workspace.clone();
+        Self::new_with_state_root(workspace, state_root, max_agents)
+    }
+
+    /// Create a manager whose delegated control-plane state is rooted
+    /// separately from its execution workspace.
+    #[must_use]
+    pub fn new_with_state_root(workspace: PathBuf, state_root: PathBuf, max_agents: usize) -> Self {
         Self {
             agents: HashMap::new(),
             worker_records: HashMap::new(),
@@ -2944,6 +2960,7 @@ impl SubAgentManager {
             persist_sequence: std::sync::atomic::AtomicU64::new(0),
             coordination: CoordinationLedger::default(),
             workspace,
+            state_root,
             state_path: None,
             coordination_process_lock: std::sync::Mutex::new(None),
             coordination_process_lock_required: false,
@@ -3433,7 +3450,7 @@ impl SubAgentManager {
             .coordination_process_lock
             .get_mut()
             .expect("coordination lock slot poisoned") =
-            CoordinationProcessLock::acquire(&self.workspace).ok();
+            CoordinationProcessLock::acquire(&self.state_root).ok();
         self
     }
 
@@ -3452,7 +3469,7 @@ impl SubAgentManager {
         if slot.is_some() {
             return Ok(());
         }
-        match CoordinationProcessLock::acquire(&self.workspace) {
+        match CoordinationProcessLock::acquire(&self.state_root) {
             Ok(lock) => {
                 *slot = Some(lock);
                 Ok(())
@@ -3530,7 +3547,7 @@ impl SubAgentManager {
         let Some(path) = self.state_path.as_ref() else {
             return Ok(None);
         };
-        let path = checked_subagent_state_path(&self.workspace, path)?;
+        let path = checked_subagent_state_path(&self.state_root, path)?;
         let now_ms = epoch_millis_now();
         let mut agents = Vec::with_capacity(self.agents.len());
         for agent in self.agents.values() {
@@ -3596,11 +3613,11 @@ impl SubAgentManager {
             // Nothing to persist — return a no-op handle.
             return Ok(std::thread::spawn(|| {}));
         };
-        let workspace = self.workspace.clone();
+        let state_root = self.state_root.clone();
         // Spawn disk I/O off the write-lock hot path.  `payload` is fully
         // owned (cloned from `self.agents`) so it is `Send` and safe to move.
         let handle = std::thread::spawn(move || {
-            if let Err(err) = write_json_atomic(&workspace, &path, &payload) {
+            if let Err(err) = write_json_atomic(&state_root, &path, &payload) {
                 tracing::warn!(target: "subagent", ?err, "failed to persist sub-agent state");
             }
         });
@@ -3613,7 +3630,7 @@ impl SubAgentManager {
         let Some((path, payload)) = self.build_persist_payload()? else {
             return Ok(());
         };
-        write_json_atomic(&self.workspace, &path, &payload)
+        write_json_atomic(&self.state_root, &path, &payload)
     }
 
     /// Fire-and-forget persist — logs errors, drops the join handle.
@@ -3669,7 +3686,7 @@ impl SubAgentManager {
     /// guarantee data is flushed before the process exits.
     pub fn flush_pending_persist(&mut self) {
         if let Err(error) = self.ensure_coordination_process_lock() {
-            tracing::warn!(target: "subagent", %error, "skipping persist without workspace coordination lock");
+            tracing::warn!(target: "subagent", %error, "skipping persist without state-root coordination lock");
             return;
         }
         if self.persist_pending {
@@ -3678,7 +3695,7 @@ impl SubAgentManager {
             // Synchronous disk I/O — safe because we are shutting down and no
             // callers depend on releasing the write lock quickly.
             if let Ok(Some((path, payload))) = self.build_persist_payload()
-                && let Err(err) = write_json_atomic(&self.workspace, &path, &payload)
+                && let Err(err) = write_json_atomic(&self.state_root, &path, &payload)
             {
                 tracing::warn!(target: "subagent", ?err, "failed to flush pending sub-agent state");
             }
@@ -3689,7 +3706,7 @@ impl SubAgentManager {
         let Some(path) = self.state_path.as_ref() else {
             return Ok(());
         };
-        let path = checked_subagent_state_path(&self.workspace, path)?;
+        let path = checked_subagent_state_path(&self.state_root, path)?;
 
         // If canonical path doesn't exist, try legacy .deepseek/ path for one-time
         // migration. The next persist will write to the canonical .codewhale/ path.
@@ -3697,7 +3714,7 @@ impl SubAgentManager {
             path
         } else {
             let legacy = checked_subagent_state_path(
-                &self.workspace,
+                &self.state_root,
                 &Path::new(".deepseek")
                     .join("state")
                     .join(SUBAGENT_STATE_FILE),
@@ -3714,7 +3731,7 @@ impl SubAgentManager {
             }
         };
 
-        let raw = read_subagent_state_file(&self.workspace, &path)?;
+        let raw = read_subagent_state_file(&self.state_root, &path)?;
         let state = serde_json::from_str::<PersistedSubAgentState>(&raw)?;
         if state.schema_version != SUBAGENT_STATE_SCHEMA_VERSION {
             return Err(anyhow!(
@@ -5745,7 +5762,7 @@ impl SubAgentManager {
             if self.agents.contains_key(&agent_id) || self.worker_records.contains_key(&agent_id) {
                 continue;
             }
-            if let Err(err) = remove_subagent_transcript_artifact(&self.workspace, &agent_id) {
+            if let Err(err) = remove_subagent_transcript_artifact(&self.state_root, &agent_id) {
                 tracing::warn!(
                     target: "subagent",
                     ?err,
@@ -5904,8 +5921,17 @@ impl SubAgentManager {
 pub type SharedSubAgentManager = Arc<RwLock<SubAgentManager>>;
 
 pub fn load_persisted_agent_worker_records(workspace: &Path) -> Result<Vec<AgentWorkerRecord>> {
-    let mut manager = SubAgentManager::new(workspace.to_path_buf(), 1)
-        .with_state_path(default_state_path(workspace)?);
+    load_persisted_agent_worker_records_with_state_root(workspace, workspace)
+}
+
+/// Load persisted worker records from an explicit delegated-agent state root.
+pub fn load_persisted_agent_worker_records_with_state_root(
+    workspace: &Path,
+    state_root: &Path,
+) -> Result<Vec<AgentWorkerRecord>> {
+    let mut manager =
+        SubAgentManager::new_with_state_root(workspace.to_path_buf(), state_root.to_path_buf(), 1)
+            .with_state_path(default_state_path(state_root)?);
     manager.load_state()?;
     Ok(manager.list_worker_records())
 }
@@ -6117,7 +6143,7 @@ async fn subagent_session_projection(
 /// bounded tail; this artifact is the durable source used by the TUI's Open
 /// action when the conversation is larger than that tail.
 struct SubAgentTranscriptArtifactWriter {
-    workspace: PathBuf,
+    state_root: PathBuf,
     path: PathBuf,
     relative_path: PathBuf,
     persisted_messages: usize,
@@ -6125,22 +6151,22 @@ struct SubAgentTranscriptArtifactWriter {
 
 impl SubAgentTranscriptArtifactWriter {
     async fn for_runtime(runtime: &SubAgentRuntime, agent_id: &str) -> Result<Self> {
-        let workspace = runtime.manager.read().await.workspace.clone();
-        Self::create(&workspace, agent_id)
+        let state_root = runtime.manager.read().await.state_root.clone();
+        Self::create(&state_root, agent_id)
     }
 
-    fn create(workspace: &Path, agent_id: &str) -> Result<Self> {
-        let workspace = normalize_subagent_workspace(workspace);
+    fn create(state_root: &Path, agent_id: &str) -> Result<Self> {
+        let state_root = normalize_subagent_workspace(state_root);
         let relative_path = subagent_transcript_artifact_relative_path(agent_id);
-        let path = checked_subagent_transcript_artifact_path(&workspace, agent_id)?;
+        let path = checked_subagent_transcript_artifact_path(&state_root, agent_id)?;
         let header = json!({
             "kind": "subagent_transcript_header",
             "schema_version": SUBAGENT_TRANSCRIPT_ARTIFACT_SCHEMA_VERSION,
             "agent_id": agent_id,
         });
-        create_private_subagent_transcript(&workspace, &path, &json_line(&header)?)?;
+        create_private_subagent_transcript(&state_root, &path, &json_line(&header)?)?;
         Ok(Self {
-            workspace,
+            state_root,
             path,
             relative_path,
             persisted_messages: 0,
@@ -6166,7 +6192,7 @@ impl SubAgentTranscriptArtifactWriter {
         }
 
         if !encoded.is_empty() || durable {
-            append_private_subagent_transcript(&self.workspace, &self.path, &encoded, durable)?;
+            append_private_subagent_transcript(&self.state_root, &self.path, &encoded, durable)?;
         }
         self.persisted_messages = messages.len();
         Ok(())
@@ -6198,9 +6224,9 @@ fn subagent_transcript_artifact_relative_path(agent_id: &str) -> PathBuf {
         .join(format!("{digest}.jsonl"))
 }
 
-fn checked_subagent_transcript_artifact_path(workspace: &Path, agent_id: &str) -> Result<PathBuf> {
+fn checked_subagent_transcript_artifact_path(state_root: &Path, agent_id: &str) -> Result<PathBuf> {
     checked_subagent_state_path(
-        workspace,
+        state_root,
         &subagent_transcript_artifact_relative_path(agent_id),
     )
 }
@@ -6208,14 +6234,14 @@ fn checked_subagent_transcript_artifact_path(workspace: &Path, agent_id: &str) -
 /// Read the complete structured worker chat for the TUI Open action. The path
 /// is derived from `agent_id` rather than accepted from handle JSON, so a
 /// corrupted or model-supplied payload cannot redirect the reader outside the
-/// manager workspace.
-pub(crate) fn load_subagent_transcript_artifact(
-    workspace: &Path,
+/// manager state root.
+pub fn load_subagent_transcript_artifact(
+    state_root: &Path,
     agent_id: &str,
 ) -> Result<Vec<Message>> {
-    let workspace = normalize_subagent_workspace(workspace);
-    let path = checked_subagent_transcript_artifact_path(&workspace, agent_id)?;
-    let raw = read_subagent_state_file(&workspace, &path)?;
+    let state_root = normalize_subagent_workspace(state_root);
+    let path = checked_subagent_transcript_artifact_path(&state_root, agent_id)?;
+    let raw = read_subagent_state_file(&state_root, &path)?;
     let mut lines = raw.lines();
     let header_line = lines
         .next()
@@ -6259,10 +6285,10 @@ pub(crate) fn load_subagent_transcript_artifact(
     Ok(messages)
 }
 
-fn remove_subagent_transcript_artifact(workspace: &Path, agent_id: &str) -> Result<bool> {
-    let workspace = normalize_subagent_workspace(workspace);
-    let path = checked_subagent_transcript_artifact_path(&workspace, agent_id)?;
-    reject_workspace_relative_symlinks(&workspace, &path)?;
+fn remove_subagent_transcript_artifact(state_root: &Path, agent_id: &str) -> Result<bool> {
+    let state_root = normalize_subagent_workspace(state_root);
+    let path = checked_subagent_transcript_artifact_path(&state_root, agent_id)?;
+    reject_root_relative_symlinks(&state_root, &path)?;
     let metadata = match fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
@@ -6280,34 +6306,34 @@ fn remove_subagent_transcript_artifact(workspace: &Path, agent_id: &str) -> Resu
 
 #[cfg(test)]
 pub(crate) fn write_subagent_transcript_artifact_for_test(
-    workspace: &Path,
+    state_root: &Path,
     agent_id: &str,
     messages: &[Message],
 ) -> Result<PathBuf> {
-    let mut writer = SubAgentTranscriptArtifactWriter::create(workspace, agent_id)?;
+    let mut writer = SubAgentTranscriptArtifactWriter::create(state_root, agent_id)?;
     writer.sync_messages(messages, true)?;
     Ok(writer.path)
 }
 
-fn default_state_path(workspace: &Path) -> Result<PathBuf> {
-    let workspace = normalize_subagent_workspace(workspace);
+fn default_state_path(state_root: &Path) -> Result<PathBuf> {
+    let state_root = normalize_subagent_workspace(state_root);
     // Canonical post-rebrand state path. On first run the file won't exist yet;
     // write_json_atomic creates parent directories. Legacy .deepseek/state/ data
     // is migrated on load (see load_state).
     checked_subagent_state_path(
-        &workspace,
+        &state_root,
         &Path::new(".codewhale")
             .join("state")
             .join(SUBAGENT_STATE_FILE),
     )
 }
 
-fn checked_subagent_state_path(workspace: &Path, path: &Path) -> Result<PathBuf> {
-    let workspace = normalize_subagent_workspace(workspace);
+fn checked_subagent_state_path(state_root: &Path, path: &Path) -> Result<PathBuf> {
+    let state_root = normalize_subagent_workspace(state_root);
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
-        workspace.join(path)
+        state_root.join(path)
     };
     let file_name = absolute
         .file_name()
@@ -6321,13 +6347,13 @@ fn checked_subagent_state_path(workspace: &Path, path: &Path) -> Result<PathBuf>
         Err(err) => return Err(err.into()),
     };
     let state_path = parent.join(file_name);
-    if !state_path.starts_with(&workspace) {
+    if !state_path.starts_with(&state_root) {
         return Err(anyhow!(
-            "sub-agent state path must stay within workspace: {}",
+            "sub-agent state path must stay within state root: {}",
             state_path.display()
         ));
     }
-    reject_workspace_relative_symlinks(&workspace, &state_path)?;
+    reject_root_relative_symlinks(&state_root, &state_path)?;
     Ok(state_path)
 }
 
@@ -6364,14 +6390,14 @@ fn normalize_path_components(path: &Path) -> PathBuf {
     }
 }
 
-fn reject_workspace_relative_symlinks(workspace: &Path, path: &Path) -> Result<()> {
-    let relative = path.strip_prefix(workspace).map_err(|_| {
+fn reject_root_relative_symlinks(root: &Path, path: &Path) -> Result<()> {
+    let relative = path.strip_prefix(root).map_err(|_| {
         anyhow!(
-            "sub-agent state path must stay within workspace: {}",
+            "sub-agent state path must stay within state root: {}",
             path.display()
         )
     })?;
-    let mut current = workspace.to_path_buf();
+    let mut current = root.to_path_buf();
     for component in relative.components() {
         current.push(component.as_os_str());
         let Ok(metadata) = fs::symlink_metadata(&current) else {
@@ -6387,9 +6413,9 @@ fn reject_workspace_relative_symlinks(workspace: &Path, path: &Path) -> Result<(
     Ok(())
 }
 
-fn read_subagent_state_file(workspace: &Path, path: &Path) -> Result<String> {
-    let workspace = normalize_subagent_workspace(workspace);
-    reject_workspace_relative_symlinks(&workspace, path)?;
+fn read_subagent_state_file(state_root: &Path, path: &Path) -> Result<String> {
+    let state_root = normalize_subagent_workspace(state_root);
+    reject_root_relative_symlinks(&state_root, path)?;
     let metadata = fs::symlink_metadata(path)?;
     let file_type = metadata.file_type();
     if file_type.is_symlink() || !file_type.is_file() {
@@ -6421,15 +6447,15 @@ fn open_subagent_state_file(path: &Path) -> Result<fs::File> {
     fs::File::open(path).map_err(Into::into)
 }
 
-fn prepare_subagent_transcript_parent(workspace: &Path, path: &Path) -> Result<()> {
-    reject_workspace_relative_symlinks(workspace, path)?;
+fn prepare_subagent_transcript_parent(state_root: &Path, path: &Path) -> Result<()> {
+    reject_root_relative_symlinks(state_root, path)?;
     let parent = path
         .parent()
         .ok_or_else(|| anyhow!("sub-agent transcript artifact must have a parent directory"))?;
     fs::create_dir_all(parent)?;
     // Re-check after creation so a pre-existing component cannot redirect the
-    // private transcript outside the workspace.
-    reject_workspace_relative_symlinks(workspace, path)?;
+    // private transcript outside the state root.
+    reject_root_relative_symlinks(state_root, path)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -6438,8 +6464,8 @@ fn prepare_subagent_transcript_parent(workspace: &Path, path: &Path) -> Result<(
     Ok(())
 }
 
-fn create_private_subagent_transcript(workspace: &Path, path: &Path, bytes: &[u8]) -> Result<()> {
-    prepare_subagent_transcript_parent(workspace, path)?;
+fn create_private_subagent_transcript(state_root: &Path, path: &Path, bytes: &[u8]) -> Result<()> {
+    prepare_subagent_transcript_parent(state_root, path)?;
     let mut file = open_private_subagent_transcript(path, false)?;
     file.write_all(bytes)?;
     file.sync_all()?;
@@ -6447,12 +6473,12 @@ fn create_private_subagent_transcript(workspace: &Path, path: &Path, bytes: &[u8
 }
 
 fn append_private_subagent_transcript(
-    workspace: &Path,
+    state_root: &Path,
     path: &Path,
     bytes: &[u8],
     durable: bool,
 ) -> Result<()> {
-    reject_workspace_relative_symlinks(workspace, path)?;
+    reject_root_relative_symlinks(state_root, path)?;
     let mut file = open_private_subagent_transcript(path, true)?;
     if !bytes.is_empty() {
         file.write_all(bytes)?;
@@ -6525,16 +6551,16 @@ static WRITE_JSON_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU
 static STATE_PUBLISH_SEQUENCES: std::sync::OnceLock<parking_lot::Mutex<HashMap<PathBuf, u64>>> =
     std::sync::OnceLock::new();
 
-fn write_json_atomic(workspace: &Path, path: &Path, value: &PersistedSubAgentState) -> Result<()> {
-    let workspace = normalize_subagent_workspace(workspace);
-    reject_workspace_relative_symlinks(&workspace, path)?;
+fn write_json_atomic(state_root: &Path, path: &Path, value: &PersistedSubAgentState) -> Result<()> {
+    let state_root = normalize_subagent_workspace(state_root);
+    reject_root_relative_symlinks(&state_root, path)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     let payload = serde_json::to_string_pretty(value)?;
     let seq = WRITE_JSON_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let tmp_path = path.with_extension(format!("{}.{seq}.tmp", std::process::id()));
-    reject_workspace_relative_symlinks(&workspace, &tmp_path)?;
+    reject_root_relative_symlinks(&state_root, &tmp_path)?;
     fs::write(&tmp_path, payload)?;
     let publish_sequences =
         STATE_PUBLISH_SEQUENCES.get_or_init(|| parking_lot::Mutex::new(HashMap::new()));
@@ -6580,15 +6606,49 @@ pub fn new_shared_subagent_manager_with_timeout(
     launch_concurrency: usize,
     default_token_budget: Option<u64>,
 ) -> SharedSubAgentManager {
+    let state_root = workspace.clone();
+    new_shared_subagent_manager_with_state_root_and_timeout(
+        workspace,
+        state_root,
+        max_agents,
+        max_admitted_agents,
+        running_heartbeat_timeout,
+        launch_concurrency,
+        default_token_budget,
+    )
+}
+
+/// Create a shared sub-agent manager with an explicit control-plane state root.
+///
+/// `workspace` remains the child execution and file-authority root. The worker
+/// ledger, complete transcript artifacts and coordination lock live under
+/// `state_root/.codewhale/state`. Distinct state roots intentionally do not
+/// share write claims; an embedding host that runs them against the same
+/// workspace must provide any required cross-session write coordination.
+#[must_use]
+pub fn new_shared_subagent_manager_with_state_root_and_timeout(
+    workspace: PathBuf,
+    state_root: PathBuf,
+    max_agents: usize,
+    max_admitted_agents: usize,
+    running_heartbeat_timeout: Duration,
+    launch_concurrency: usize,
+    default_token_budget: Option<u64>,
+) -> SharedSubAgentManager {
     let max_agents = max_agents.clamp(1, MAX_SUBAGENTS);
-    let state_path = match default_state_path(&workspace) {
+    let state_path = match default_state_path(&state_root) {
         Ok(path) => Some(path),
         Err(err) => {
             tracing::warn!(target: "subagent", ?err, "failed to resolve sub-agent state path");
             None
         }
     };
-    let mut manager = SubAgentManager::new(workspace, max_agents)
+    let manager = if state_root == workspace {
+        SubAgentManager::new(workspace, max_agents)
+    } else {
+        SubAgentManager::new_with_state_root(workspace, state_root, max_agents)
+    };
+    let mut manager = manager
         .with_admission_limit(max_admitted_agents)
         .with_running_heartbeat_timeout(running_heartbeat_timeout)
         .with_launch_concurrency(launch_concurrency)
@@ -7816,7 +7876,7 @@ async fn spawn_subagent_from_input(
                         .to_string(),
                 ));
             }
-            let (source_agent_id, source_workspace, checkpoint_messages) = {
+            let (source_agent_id, source_workspace, source_state_root, checkpoint_messages) = {
                 let manager_read = manager.read().await;
                 let source_id = manager_read.resolve_agent_ref(source_ref).map_err(|_| {
                     ToolError::invalid_input(format!(
@@ -7844,10 +7904,16 @@ async fn spawn_subagent_from_input(
                     .filter(|cp| cp.continuable && !cp.messages.is_empty())
                     .map(|cp| cp.messages.clone())
                     .unwrap_or_default();
-                (source_id, source.workspace.clone(), checkpoint_messages)
+                (
+                    source_id,
+                    source.workspace.clone(),
+                    manager_read.state_root.clone(),
+                    checkpoint_messages,
+                )
             };
-            // Cross-workspace resume is rejected: transcript artifact paths are
-            // workspace-relative so a different workspace cannot serve them.
+            // Cross-workspace resume remains unsupported because execution
+            // authority and inherited context belong to the source workspace,
+            // even when the transcript artifact itself has a separate state root.
             let parent_workspace = normalize_subagent_workspace(&runtime.context.workspace);
             let source_workspace_normalized = normalize_subagent_workspace(&source_workspace);
             if parent_workspace != source_workspace_normalized {
@@ -7862,7 +7928,7 @@ async fn spawn_subagent_from_input(
             // Load the full transcript from the on-disk artifact. Fall back to the
             // checkpoint messages for legacy records that predate transcript
             // artifacts or for agents whose artifacts were cleaned up.
-            let messages = load_subagent_transcript_artifact(&source_workspace, &source_agent_id)
+            let messages = load_subagent_transcript_artifact(&source_state_root, &source_agent_id)
                 .unwrap_or(checkpoint_messages);
             let resume_ctx = SubAgentForkContext {
                 messages,

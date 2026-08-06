@@ -61,7 +61,7 @@ use crate::tools::subagent::{
     FleetRole, Mailbox, MailboxMessage, SharedSubAgentManager, SubAgentCompletion,
     SubAgentForkContext, SubAgentManager, SubAgentResult, SubAgentRuntime, SubAgentStatus,
     SubAgentThinking, agent_worker_owner_snapshot, ensure_subagent_model_for_provider,
-    new_shared_subagent_manager_with_timeout, resolve_subagent_assignment_route,
+    new_shared_subagent_manager_with_state_root_and_timeout, resolve_subagent_assignment_route,
 };
 use crate::tools::todo::{SharedTodoList, new_shared_todo_list};
 use crate::tools::user_input::{UserInputRequest, UserInputResponse};
@@ -228,6 +228,16 @@ pub struct EngineConfig {
     pub active_route_limits: Option<codewhale_config::route::RouteLimits>,
     /// Workspace root for tool execution and file operations.
     pub workspace: PathBuf,
+    /// Optional host-owned root for delegated-agent runtime state.
+    ///
+    /// When unset, the worker ledger, complete transcript artifacts and
+    /// coordination lock retain their historical location under
+    /// `workspace/.codewhale/state`. Embedders may set a session-scoped root
+    /// to separate that control-plane state from the execution workspace.
+    /// Child cwd and file authority still derive from `workspace`; hosts using
+    /// distinct state roots for the same workspace must coordinate conflicting
+    /// writes themselves or isolate writers with worktrees.
+    pub subagent_state_root: Option<PathBuf>,
     /// Allow shell tool execution when true.
     pub allow_shell: bool,
     /// Enable trust mode (skip approvals) when true.
@@ -412,6 +422,7 @@ impl Default for EngineConfig {
             model: DEFAULT_TEXT_MODEL.to_string(),
             active_route_limits: None,
             workspace: PathBuf::from("."),
+            subagent_state_root: None,
             allow_shell: true,
             trust_mode: false,
             notes_path: PathBuf::from("notes.txt"),
@@ -1234,8 +1245,13 @@ impl Engine {
             crate::prefix_cache::PrefixStabilityManager::new_unpinned()
         });
 
-        let subagent_manager = new_shared_subagent_manager_with_timeout(
+        let subagent_state_root = config
+            .subagent_state_root
+            .clone()
+            .unwrap_or_else(|| config.workspace.clone());
+        let subagent_manager = new_shared_subagent_manager_with_state_root_and_timeout(
             config.workspace.clone(),
+            subagent_state_root,
             config.max_subagents,
             config.max_admitted_subagents,
             config.subagent_heartbeat_timeout,
