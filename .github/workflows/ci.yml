@@ -427,7 +427,12 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Run tests
         if: needs.changes.outputs.heavy == 'true' && (matrix.os != 'ubuntu-latest' || github.event_name == 'workflow_dispatch')
-        run: cargo test --workspace --all-features --locked
+        run: |
+          export RUST_BACKTRACE=1
+          cargo test -p codewhale-tui --bin codewhale-tui --all-features -- --nocapture tui::underwater::tests || true
+          cargo test -p codewhale-tui --bin codewhale-tui --all-features -- --nocapture tui::file_mention::tests || true
+          cargo test -p codewhale-tui --bin codewhale-tui --all-features -- --nocapture tools::shell::tests::every_advertised_stdin_spelling_reaches_the_command tui::views::fleet_detail::tests::save_writes_the_file_and_receipt_names_the_path || true
+          exit 1
       # The Ubuntu lint lane validates non-RSS backlog fields. Run the same
       # source-bound measurement on macOS so loss or growth of RSS evidence
       # fails closed instead of becoming an unsupported-field skip.
