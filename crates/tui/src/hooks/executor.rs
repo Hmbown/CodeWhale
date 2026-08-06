@@ -5607,6 +5607,9 @@ command = "echo project"
             // touch nothing a hook needs to gate.
             ("Git", "other"),
             ("agent", "other"),
+            // Default-active since the progressive-disclosure kernel (#5077):
+            // read-only skill catalogue loader, nothing a hook needs to gate.
+            ("load_skill", "other"),
             ("remember", "other"),
             ("tasks", "other"),
             ("work_update", "other"),

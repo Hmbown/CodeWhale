@@ -75,7 +75,9 @@ fn contributor_onboarding_ships_at_generation_8_and_keeps_its_refusals() {
         .find(|skill| skill.name == "contributor-onboarding")
         .expect("contributor-onboarding must be bundled");
     assert_eq!(skill.introduced_in, 8);
-    assert_eq!(BUNDLED_SKILL_VERSION, "9");
+    // The pin tracks the current catalog generation: 9 added handoff,
+    // 10 added mcp-discovery (#5238).
+    assert_eq!(BUNDLED_SKILL_VERSION, "10");
 
     let body = skill.body;
     assert!(body.contains("invocation: explicit-only"));
