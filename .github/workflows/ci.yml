@@ -427,6 +427,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Run tests
         if: needs.changes.outputs.heavy == 'true' && (matrix.os != 'ubuntu-latest' || github.event_name == 'workflow_dispatch')
+        shell: bash
         run: |
           export RUST_BACKTRACE=1
           cargo test -p codewhale-tui --bin codewhale-tui --all-features -- --nocapture tui::underwater::tests || true
