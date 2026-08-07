@@ -18,7 +18,7 @@ rest does not compile — an attempt at exactly that produced 38 `cannot find`
 errors. Delete a whole cluster at a time, or delete every item in a file and let
 the compiler pull the thread.
 
-Two hazards this list cannot see:
+Three hazards this list cannot see:
 
 - **Platform-gated code.** This was generated on macOS, so anything referenced
   only from `cfg(windows)` blocks looks dead here and is not. Check before
@@ -26,6 +26,8 @@ Two hazards this list cannot see:
 - **The do-not-delete guardrail** in `AGENTS.md` (`context_budget.rs`,
   `model_registry.rs`, `prompt_zones.rs`, `tools/remember.rs`,
   `config/src/route/`). Those are live despite appearances.
+- **Macro-expanded use.** An item reached only through macro expansion can
+  be reported dead when it is not. Confirm by expansion, not by eye.
 
 ## Items by file
 
