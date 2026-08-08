@@ -734,6 +734,15 @@ max_subagents = 10 # optional (1-20)
 # base_url = "https://api.x.ai/v1"
 # model = "grok-4.5"                       # or grok-4.3, grok-build
 
+# Mistral AI — la Plateforme (https://console.mistral.ai/)
+# OpenAI-compatible Chat Completions route.
+# Provider aliases: mistral, mistral-ai, mistralai, la-plateforme
+# Env var aliases: MISTRAL_API_KEY, MISTRAL_BASE_URL, MISTRAL_MODEL
+[providers.mistral]
+# api_key = "YOUR_MISTRAL_API_KEY"
+# base_url = "https://api.mistral.ai/v1"
+# model = "mistral-code-latest"            # or mistral-medium-latest, mistral-small-latest, magistral-small-latest, mistral-large-latest
+
 # ─────────────────────────────────────────────────────────────────────────────────
 # Alibaba Cloud Model Studio — Token Plan
 # (https://bailian.console.aliyun.com/)

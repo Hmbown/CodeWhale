@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Mistral AI (la Plateforme) is now a first-class OpenAI-compatible provider
+  route. Select it with `provider = "mistral"`, `CODEWHALE_PROVIDER=mistral`,
+  or `codewhale --provider mistral`. Aliases `mistral-ai`, `mistralai`, and
+  `la-plateforme` resolve to the same route. Authenticate with
+  `MISTRAL_API_KEY` (get one at <https://console.mistral.ai/api-keys>), or
+  via `[providers.mistral].api_key` / `codewhale auth set --provider mistral`.
+  Endpoint defaults to `https://api.mistral.ai/v1`; model defaults to
+  `mistral-code-latest` (Codestral coding model, 256K context; the historical
+  `codestral-latest` slug is accepted as an alias). The static model registry
+  ships `mistral-code-latest`, `mistral-medium-latest`, `mistral-small-latest`,
+  `magistral-small-latest`, and `mistral-large-latest` (all 256K context).
+  Reasoning is wired end-to-end for `mistral-medium-latest`,
+  `mistral-small-latest`, and `magistral-small-latest`: Codewhale sends
+  `reasoning_effort` (Mistral currently accepts `none` or `high` only —
+  intermediate tiers get HTTP 400 code 3051), parses the polymorphic
+  `content: [{type: thinking, thinking: [{type: text, text: ...}], closed:
+  bool}, {type: text, text: ...}]` shape emitted during reasoning, and
+  replays the thinking trace back into multi-turn history per
+  docs.mistral.ai/capabilities/reasoning. Non-reasoning models
+  (`mistral-code-latest`, `mistral-large-latest`) never receive the field
+  because Mistral would reject it. FIM (`/v1/fim/completions`) is not wired.
+
 ## [0.9.5] - 2026-08-08
 
 Codewhale v0.9.5 consolidates the terminal application into one compiled

@@ -85,6 +85,8 @@ pub enum ApiProvider {
     OpencodeZen,
     Meta,
     Xai,
+    /// Mistral AI — la Plateforme (OpenAI-compatible Chat Completions).
+    Mistral,
     /// Jiangsu Telecom TokenHub — OpenAI-compatible AI gateway.
     Telecomjs,
     /// Alibaba Cloud Model Studio — Token Plan (OpenAI-compatible Chat Completions).
@@ -314,7 +316,7 @@ impl ApiProvider {
 
     /// `ApiProvider` discriminant → `ProviderKind` lookup.
     /// Index 1 is `None` for the legacy `DeepseekCN` variant.
-    const KIND_LOOKUP: [Option<codewhale_config::ProviderKind>; 42] = [
+    const KIND_LOOKUP: [Option<codewhale_config::ProviderKind>; 43] = [
         Some(codewhale_config::ProviderKind::Deepseek),
         None, // DeepseekCN
         Some(codewhale_config::ProviderKind::DeepseekAnthropic),
@@ -351,6 +353,7 @@ impl ApiProvider {
         Some(codewhale_config::ProviderKind::OpencodeZen),
         Some(codewhale_config::ProviderKind::Meta),
         Some(codewhale_config::ProviderKind::Xai),
+        Some(codewhale_config::ProviderKind::Mistral),
         Some(codewhale_config::ProviderKind::Telecomjs),
         Some(codewhale_config::ProviderKind::ModelstudioTokenPlan),
         Some(codewhale_config::ProviderKind::ModelstudioTokenPlanAnthropic),
@@ -360,7 +363,7 @@ impl ApiProvider {
     ];
 
     /// `ProviderKind` discriminant → `ApiProvider` lookup.
-    const FROM_KIND_LOOKUP: [Self; 41] = [
+    const FROM_KIND_LOOKUP: [Self; 42] = [
         Self::Deepseek,
         Self::DeepseekAnthropic,
         Self::NvidiaNim,
@@ -396,6 +399,7 @@ impl ApiProvider {
         Self::OpencodeZen,
         Self::Meta,
         Self::Xai,
+        Self::Mistral,
         Self::Telecomjs,
         Self::ModelstudioTokenPlan,
         Self::ModelstudioTokenPlanAnthropic,
@@ -1530,6 +1534,13 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
             "deepseek-v4-flash-0731",
             // No glm-5.3: Model Studio publishes no such row (2026-08-03).
             "glm-5.2",
+        ],
+        ApiProvider::Mistral => vec![
+            DEFAULT_MISTRAL_MODEL,
+            "mistral-medium-latest",
+            "mistral-small-latest",
+            "magistral-small-latest",
+            "mistral-large-latest",
         ],
         // Custom endpoints expose no built-in completion names; the user
         // supplies their own model id (#1519).
@@ -3346,6 +3357,15 @@ pub struct ProvidersConfig {
     pub xai: ProviderConfig,
     #[serde(
         default,
+        alias = "mistral-ai",
+        alias = "mistral_ai",
+        alias = "mistralai",
+        alias = "la-plateforme",
+        alias = "la_plateforme"
+    )]
+    pub mistral: ProviderConfig,
+    #[serde(
+        default,
         alias = "telecom-js",
         alias = "telecom_js",
         alias = "telecomjs-cn",
@@ -4789,6 +4809,7 @@ impl Config {
             ApiProvider::OpencodeZen => &providers.opencode_zen,
             ApiProvider::Meta => &providers.meta,
             ApiProvider::Xai => &providers.xai,
+            ApiProvider::Mistral => &providers.mistral,
             ApiProvider::Telecomjs => &providers.telecomjs,
             ApiProvider::ModelstudioTokenPlan => &providers.modelstudio_token_plan,
             ApiProvider::ModelstudioTokenPlanAnthropic => {
@@ -4864,6 +4885,7 @@ impl Config {
             ApiProvider::OpencodeZen => &mut providers.opencode_zen,
             ApiProvider::Meta => &mut providers.meta,
             ApiProvider::Xai => &mut providers.xai,
+            ApiProvider::Mistral => &mut providers.mistral,
             ApiProvider::Telecomjs => &mut providers.telecomjs,
             ApiProvider::ModelstudioTokenPlan => &mut providers.modelstudio_token_plan,
             ApiProvider::ModelstudioTokenPlanAnthropic => {
@@ -5224,6 +5246,7 @@ impl Config {
             ApiProvider::OpencodeZen => DEFAULT_OPENCODE_ZEN_MODEL,
             ApiProvider::Meta => DEFAULT_META_MODEL,
             ApiProvider::Xai => DEFAULT_XAI_MODEL,
+            ApiProvider::Mistral => DEFAULT_MISTRAL_MODEL,
             ApiProvider::Telecomjs => DEFAULT_TELECOMJS_MODEL,
             ApiProvider::ModelstudioTokenPlan
             | ApiProvider::ModelstudioTokenPlanAnthropic
@@ -5341,6 +5364,7 @@ impl Config {
             | ApiProvider::OpencodeZen
             | ApiProvider::Meta
             | ApiProvider::Xai
+            | ApiProvider::Mistral
             | ApiProvider::Telecomjs
             | ApiProvider::ModelstudioTokenPlan
             | ApiProvider::ModelstudioTokenPlanAnthropic
@@ -5445,6 +5469,7 @@ impl Config {
                         ApiProvider::OpencodeZen => DEFAULT_OPENCODE_ZEN_BASE_URL,
                         ApiProvider::Meta => DEFAULT_META_BASE_URL,
                         ApiProvider::Xai => DEFAULT_XAI_BASE_URL,
+                        ApiProvider::Mistral => DEFAULT_MISTRAL_BASE_URL,
                         ApiProvider::Telecomjs => DEFAULT_TELECOMJS_BASE_URL,
                         ApiProvider::ModelstudioTokenPlan
                         | ApiProvider::ModelstudioTokenPlanAnthropic
@@ -6979,6 +7004,7 @@ fn provider_env_base_url_override(provider: ApiProvider) -> Option<String> {
         ApiProvider::Huggingface => &["HUGGINGFACE_BASE_URL", "HF_BASE_URL"],
         ApiProvider::Meta => &["META_MODEL_API_BASE_URL", "MODEL_API_BASE_URL"],
         ApiProvider::Xai => &["XAI_BASE_URL"],
+        ApiProvider::Mistral => &["MISTRAL_BASE_URL"],
         ApiProvider::Telecomjs => &["TELECOMJS_BASE_URL"],
         ApiProvider::ModelstudioTokenPlan | ApiProvider::ModelstudioTokenPlanAnthropic => {
             &["MODELSTUDIO_TOKEN_PLAN_BASE_URL"]
@@ -7309,6 +7335,13 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
                     .xai
                     .base_url = Some(value);
             }
+            ApiProvider::Mistral => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .mistral
+                    .base_url = Some(value);
+            }
             ApiProvider::Telecomjs => {
                 config
                     .providers
@@ -7543,6 +7576,16 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
             .xai
             .base_url = Some(value);
     }
+    if matches!(config.api_provider(), ApiProvider::Mistral)
+        && let Ok(value) = std::env::var("MISTRAL_BASE_URL")
+        && !value.trim().is_empty()
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .mistral
+            .base_url = Some(value);
+    }
     if matches!(config.api_provider(), ApiProvider::Telecomjs)
         && let Ok(value) = std::env::var("TELECOMJS_BASE_URL")
         && !value.trim().is_empty()
@@ -7658,6 +7701,7 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
                 ApiProvider::OpencodeZen => &mut providers.opencode_zen,
                 ApiProvider::Meta => &mut providers.meta,
                 ApiProvider::Xai => &mut providers.xai,
+                ApiProvider::Mistral => &mut providers.mistral,
                 ApiProvider::Telecomjs => &mut providers.telecomjs,
                 ApiProvider::ModelstudioTokenPlan => &mut providers.modelstudio_token_plan,
                 ApiProvider::ModelstudioTokenPlanAnthropic => {
@@ -7991,6 +8035,7 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
                 ApiProvider::OpencodeZen => &mut providers.opencode_zen,
                 ApiProvider::Meta => &mut providers.meta,
                 ApiProvider::Xai => &mut providers.xai,
+                ApiProvider::Mistral => &mut providers.mistral,
                 ApiProvider::Telecomjs => &mut providers.telecomjs,
                 ApiProvider::ModelstudioTokenPlan => &mut providers.modelstudio_token_plan,
                 ApiProvider::ModelstudioTokenPlanAnthropic => {
@@ -9370,6 +9415,7 @@ fn merge_providers(
             opencode_zen: merge_provider_config(base.opencode_zen, override_cfg.opencode_zen),
             meta: merge_provider_config(base.meta, override_cfg.meta),
             xai: merge_provider_config(base.xai, override_cfg.xai),
+            mistral: merge_provider_config(base.mistral, override_cfg.mistral),
             telecomjs: merge_provider_config(base.telecomjs, override_cfg.telecomjs),
             modelstudio_token_plan: merge_provider_config(
                 base.modelstudio_token_plan,

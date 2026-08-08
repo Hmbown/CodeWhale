@@ -486,6 +486,143 @@ pub(super) fn apply_route_reasoning_controls(
     apply_direct_moonshot_k3_reasoning_effort(body, provider, base_url, model, effort);
     apply_kimi_code_k3_reasoning_effort(body, provider, base_url, model, effort);
     apply_zai_route_reasoning_controls(body, provider, base_url, model, effort);
+    apply_mistral_route_reasoning_controls(body, provider, model, effort);
+}
+
+fn mistral_model_supports_reasoning(model: &str) -> bool {
+    let model = model.trim().to_ascii_lowercase();
+    model.starts_with("mistral-medium")
+        || model.starts_with("mistral-small")
+        || model.starts_with("magistral")
+}
+
+fn mistral_reasoning_effort_wire_value(effort: &str) -> Option<&'static str> {
+    match effort.trim().to_ascii_lowercase().as_str() {
+        "off" | "disabled" | "none" | "false" => Some("none"),
+        "high" | "xhigh" | "max" | "highest" | "ultracode" => Some("high"),
+        _ => None,
+    }
+}
+
+/// Rewrite assistant messages that carry `reasoning_content` back into the
+/// polymorphic `content: [{type: thinking, thinking: [{type: text, text: ...}],
+/// closed: bool}, {type: text, text: ...}]` shape that Mistral la Plateforme
+/// emits and accepts on replay. Mistral tolerates plain-string history in a
+/// thinking-capable conversation, but replaying the original thinking trace
+/// keeps multi-turn reasoning quality high per the official docs
+/// (docs.mistral.ai/capabilities/reasoning). Non-assistant messages and
+/// assistant messages without stored thinking are left untouched.
+fn reshape_mistral_messages_for_reasoning_replay(messages: &mut [Value]) {
+    for message in messages.iter_mut() {
+        let Some(object) = message.as_object_mut() else {
+            continue;
+        };
+        if object.get("role").and_then(Value::as_str) != Some("assistant") {
+            continue;
+        }
+        let Some(reasoning) = object.remove("reasoning_content") else {
+            continue;
+        };
+        let reasoning_text = reasoning
+            .as_str()
+            .map(str::to_string)
+            .filter(|s| !s.trim().is_empty());
+        let Some(reasoning_text) = reasoning_text else {
+            continue;
+        };
+        let text_content = object
+            .get("content")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let mut blocks = vec![json!({
+            "type": "thinking",
+            "thinking": [{"type": "text", "text": reasoning_text}],
+            "closed": true,
+        })];
+        if let Some(text) = text_content.filter(|s| !s.trim().is_empty()) {
+            blocks.push(json!({"type": "text", "text": text}));
+        }
+        object.insert("content".to_string(), Value::Array(blocks));
+    }
+}
+
+/// Extract thinking and text content from a Mistral polymorphic `content`
+/// value. Mistral la Plateforme returns `content` as either a plain string
+/// (default) or an array of typed blocks (`{type: "thinking", thinking:
+/// [{type: "text", text: "..."}], closed: bool}` and `{type: "text", text:
+/// "..."}`). This helper flattens the thinking sub-array into a single
+/// string and returns any inline text separately. It ignores plain-string
+/// `content` (returns `(None, None)`) so the shared string fallback still
+/// runs for non-reasoning responses.
+fn extract_mistral_polymorphic_content(value: &Value) -> (Option<String>, Option<String>) {
+    let Some(array) = value.get("content").and_then(Value::as_array) else {
+        return (None, None);
+    };
+    let mut thinking = String::new();
+    let mut text = String::new();
+    for block in array {
+        let Some(kind) = block.get("type").and_then(Value::as_str) else {
+            continue;
+        };
+        match kind {
+            "thinking" => {
+                if let Some(inner) = block.get("thinking").and_then(Value::as_array) {
+                    for sub in inner {
+                        if let Some(sub_text) = sub
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty())
+                        {
+                            thinking.push_str(sub_text);
+                        }
+                    }
+                } else if let Some(inline) = block
+                    .get("thinking")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                {
+                    thinking.push_str(inline);
+                }
+            }
+            "text" => {
+                if let Some(sub_text) = block
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                {
+                    text.push_str(sub_text);
+                }
+            }
+            _ => {}
+        }
+    }
+    let thinking = (!thinking.is_empty()).then_some(thinking);
+    let text = (!text.is_empty()).then_some(text);
+    (thinking, text)
+}
+
+fn apply_mistral_route_reasoning_controls(
+    body: &mut Value,
+    provider: ApiProvider,
+    model: &str,
+    effort: Option<&str>,
+) {
+    if provider != ApiProvider::Mistral {
+        return;
+    }
+    if let Some(object) = body.as_object_mut() {
+        object.remove("thinking");
+        object.remove("reasoning_effort");
+    }
+    if !mistral_model_supports_reasoning(model) {
+        return;
+    }
+    let Some(effort) = effort else {
+        return;
+    };
+    if let Some(wire) = mistral_reasoning_effort_wire_value(effort) {
+        body["reasoning_effort"] = json!(wire);
+    }
 }
 
 /// The direct K3 Chat Completions schema exposes fixed sampling behavior and
@@ -1229,6 +1366,9 @@ impl<'a> PromptBuilder<'a> {
         }
         if provider == ApiProvider::Minimax {
             mirror_minimax_reasoning_details_for_messages(&mut messages);
+        }
+        if provider == ApiProvider::Mistral {
+            reshape_mistral_messages_for_reasoning_replay(&mut messages);
         }
         messages
     }
@@ -2939,7 +3079,19 @@ pub(super) fn parse_chat_message(payload: &Value) -> Result<MessageResponse> {
             thinking: reasoning.to_string(),
         });
     }
-    if let Some(text) = message.get("content").and_then(Value::as_str)
+    let (mistral_thinking, mistral_text) = extract_mistral_polymorphic_content(message);
+    if let Some(thinking) = mistral_thinking.filter(|s| !s.trim().is_empty()) {
+        content_blocks.push(ContentBlock::Thinking {
+            signature: None,
+            thinking,
+        });
+    }
+    if let Some(text) = mistral_text.filter(|s| !s.trim().is_empty()) {
+        content_blocks.push(ContentBlock::Text {
+            text,
+            cache_control: None,
+        });
+    } else if let Some(text) = message.get("content").and_then(Value::as_str)
         && !text.trim().is_empty()
     {
         content_blocks.push(ContentBlock::Text {
@@ -3288,11 +3440,29 @@ fn parse_sse_chunk_with_reasoning_style(
         if let Some(delta) = delta {
             let reasoning_text = reasoning_delta(delta, choice_index, reasoning_detail_buffers)
                 .filter(|s| !s.is_empty());
-            let content_text = delta
-                .get("content")
-                .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string);
+            // Mistral la Plateforme streams reasoning as a polymorphic
+            // `delta.content` value: an array of typed {type: thinking|text}
+            // blocks while thinking, then a plain string once the final
+            // answer starts. Flatten thinking sub-blocks into a single
+            // reasoning delta and treat text sub-blocks as normal content
+            // before the shared string fallback below.
+            let (mistral_thinking, mistral_text) = extract_mistral_polymorphic_content(delta);
+            if let Some(reasoning) = mistral_thinking.as_deref() {
+                push_thinking_delta(
+                    &mut events,
+                    content_index,
+                    text_started,
+                    thinking_started,
+                    reasoning.to_string(),
+                );
+            }
+            let content_text = mistral_text.or_else(|| {
+                delta
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            });
 
             // Handle reasoning_content / reasoning thinking deltas.
             if reasoning_stream_style == ReasoningStreamStyle::SeparateField
@@ -6352,5 +6522,184 @@ mod image_block_wire_tests {
             user["content"].is_string(),
             "text-only turns must stay a plain string: {user}"
         );
+    }
+}
+
+#[cfg(test)]
+mod mistral_reasoning_tests {
+    use super::*;
+
+    #[test]
+    fn mistral_effort_wire_value_covers_codewhale_tiers() {
+        assert_eq!(mistral_reasoning_effort_wire_value("off"), Some("none"));
+        assert_eq!(
+            mistral_reasoning_effort_wire_value("disabled"),
+            Some("none")
+        );
+        assert_eq!(mistral_reasoning_effort_wire_value("none"), Some("none"));
+        assert_eq!(mistral_reasoning_effort_wire_value("false"), Some("none"));
+        assert_eq!(mistral_reasoning_effort_wire_value("high"), Some("high"));
+        assert_eq!(mistral_reasoning_effort_wire_value("xhigh"), Some("high"));
+        assert_eq!(mistral_reasoning_effort_wire_value("max"), Some("high"));
+        assert_eq!(
+            mistral_reasoning_effort_wire_value("ultracode"),
+            Some("high")
+        );
+        // Intermediate tiers must be omitted so the request falls back to
+        // Mistral's own default rather than 400 code 3051 on unsupported
+        // values like "low"/"medium" that the server does not accept today.
+        assert_eq!(mistral_reasoning_effort_wire_value("low"), None);
+        assert_eq!(mistral_reasoning_effort_wire_value("medium"), None);
+        assert_eq!(mistral_reasoning_effort_wire_value("mid"), None);
+        assert_eq!(mistral_reasoning_effort_wire_value("minimal"), None);
+    }
+
+    #[test]
+    fn mistral_model_gate_only_matches_reasoning_capable_families() {
+        assert!(mistral_model_supports_reasoning("mistral-medium-latest"));
+        assert!(mistral_model_supports_reasoning("mistral-medium-3-5"));
+        assert!(mistral_model_supports_reasoning("mistral-small-latest"));
+        assert!(mistral_model_supports_reasoning("mistral-small-2603"));
+        assert!(mistral_model_supports_reasoning("magistral-small-latest"));
+        assert!(mistral_model_supports_reasoning("MISTRAL-MEDIUM-LATEST"));
+        assert!(!mistral_model_supports_reasoning("mistral-code-latest"));
+        assert!(!mistral_model_supports_reasoning("codestral-latest"));
+        assert!(!mistral_model_supports_reasoning("mistral-large-latest"));
+        assert!(!mistral_model_supports_reasoning("mistral-nemo-2407"));
+    }
+
+    #[test]
+    fn mistral_route_shaper_writes_reasoning_only_for_supported_models() {
+        let mut body = json!({"model": "mistral-medium-latest"});
+        apply_mistral_route_reasoning_controls(
+            &mut body,
+            ApiProvider::Mistral,
+            "mistral-medium-latest",
+            Some("high"),
+        );
+        assert_eq!(body["reasoning_effort"], json!("high"));
+
+        let mut body = json!({"model": "mistral-code-latest"});
+        apply_mistral_route_reasoning_controls(
+            &mut body,
+            ApiProvider::Mistral,
+            "mistral-code-latest",
+            Some("high"),
+        );
+        assert!(
+            body.get("reasoning_effort").is_none(),
+            "non-reasoning models must never see reasoning_effort (Mistral 400s on 3051): {body}"
+        );
+
+        let mut body = json!({"model": "mistral-medium-latest", "reasoning_effort": "stale"});
+        apply_mistral_route_reasoning_controls(
+            &mut body,
+            ApiProvider::Mistral,
+            "mistral-medium-latest",
+            Some("low"),
+        );
+        assert!(
+            body.get("reasoning_effort").is_none(),
+            "intermediate tiers must be stripped rather than sent unsupported: {body}"
+        );
+
+        // Non-Mistral providers must not be touched by this shaper.
+        let mut body = json!({"model": "deepseek-v4-pro", "reasoning_effort": "high"});
+        apply_mistral_route_reasoning_controls(
+            &mut body,
+            ApiProvider::Deepseek,
+            "deepseek-v4-pro",
+            Some("high"),
+        );
+        assert_eq!(body["reasoning_effort"], json!("high"));
+    }
+
+    #[test]
+    fn extract_mistral_polymorphic_content_flattens_thinking_and_text() {
+        // Non-reasoning response: plain string content. Extractor returns
+        // (None, None) so the shared string fallback still runs.
+        let plain = json!({"content": "Hello world"});
+        assert_eq!(extract_mistral_polymorphic_content(&plain), (None, None));
+
+        // Missing content: no panic, returns (None, None).
+        let empty = json!({});
+        assert_eq!(extract_mistral_polymorphic_content(&empty), (None, None));
+
+        // Reasoning response: nested thinking array + text block.
+        let reasoning = json!({"content": [
+            {"type": "thinking", "thinking": [
+                {"type": "text", "text": "First "},
+                {"type": "text", "text": "second."},
+            ], "closed": true},
+            {"type": "text", "text": "Final answer."},
+        ]});
+        let (thinking, text) = extract_mistral_polymorphic_content(&reasoning);
+        assert_eq!(thinking.as_deref(), Some("First second."));
+        assert_eq!(text.as_deref(), Some("Final answer."));
+
+        // Thinking-only chunk (mid-stream) with no closing text yet.
+        let thinking_only = json!({"content": [
+            {"type": "thinking", "thinking": [{"type": "text", "text": "still thinking"}]},
+        ]});
+        let (thinking, text) = extract_mistral_polymorphic_content(&thinking_only);
+        assert_eq!(thinking.as_deref(), Some("still thinking"));
+        assert_eq!(text, None);
+    }
+
+    #[test]
+    fn reshape_mistral_messages_reconstructs_polymorphic_shape_for_assistant_replay() {
+        // Assistant message with stored reasoning_content is reshaped into
+        // Mistral's polymorphic content-as-array shape.
+        let mut messages = vec![
+            json!({"role": "user", "content": "compute 3+4"}),
+            json!({
+                "role": "assistant",
+                "content": "The answer is 7.",
+                "reasoning_content": "Let me add 3 and 4 to get 7.",
+            }),
+            json!({"role": "user", "content": "now multiply by 2"}),
+        ];
+        reshape_mistral_messages_for_reasoning_replay(&mut messages);
+
+        assert_eq!(messages[0]["role"], "user");
+        assert!(
+            messages[0]["content"].is_string(),
+            "user turns are left untouched: {}",
+            messages[0]
+        );
+
+        assert_eq!(messages[1]["role"], "assistant");
+        assert!(
+            messages[1].get("reasoning_content").is_none(),
+            "reasoning_content field must be removed after reshape: {}",
+            messages[1]
+        );
+        let content = messages[1]["content"]
+            .as_array()
+            .expect("assistant content is now an array");
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["type"], "thinking");
+        assert_eq!(content[0]["closed"], true);
+        assert_eq!(content[0]["thinking"][0]["type"], "text");
+        assert_eq!(
+            content[0]["thinking"][0]["text"],
+            "Let me add 3 and 4 to get 7."
+        );
+        assert_eq!(content[1]["type"], "text");
+        assert_eq!(content[1]["text"], "The answer is 7.");
+
+        // Assistant with no reasoning stays as-is (plain string content).
+        let mut plain = vec![json!({"role": "assistant", "content": "hi"})];
+        reshape_mistral_messages_for_reasoning_replay(&mut plain);
+        assert_eq!(plain[0]["content"], "hi");
+
+        // Empty reasoning is treated as absent — no reshape.
+        let mut empty = vec![json!({
+            "role": "assistant",
+            "content": "hi",
+            "reasoning_content": "   ",
+        })];
+        reshape_mistral_messages_for_reasoning_replay(&mut empty);
+        assert_eq!(empty[0]["content"], "hi");
     }
 }

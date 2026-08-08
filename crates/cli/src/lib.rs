@@ -99,6 +99,14 @@ enum ProviderArg {
     Meta,
     #[value(alias = "x-ai", alias = "x_ai", alias = "grok")]
     Xai,
+    #[value(
+        alias = "mistral-ai",
+        alias = "mistral_ai",
+        alias = "mistralai",
+        alias = "la-plateforme",
+        alias = "la_plateforme"
+    )]
+    Mistral,
 }
 
 impl From<ProviderArg> for ProviderKind {
@@ -137,6 +145,7 @@ impl From<ProviderArg> for ProviderKind {
             ProviderArg::OpencodeZen => ProviderKind::OpencodeZen,
             ProviderArg::Meta => ProviderKind::Meta,
             ProviderArg::Xai => ProviderKind::Xai,
+            ProviderArg::Mistral => ProviderKind::Mistral,
         }
     }
 }
@@ -7864,8 +7873,8 @@ mod tests {
             .map(|provider| provider.kind())
             .collect();
         // Full registry keeps legacy dialect/plan kinds; ALL is the catalog surface.
-        assert_eq!(registry_kinds.len(), 41);
-        assert_eq!(ProviderKind::ALL.len(), 36);
+        assert_eq!(registry_kinds.len(), 42);
+        assert_eq!(ProviderKind::ALL.len(), 37);
         for kind in ProviderKind::ALL {
             assert!(
                 registry_kinds.contains(&kind),

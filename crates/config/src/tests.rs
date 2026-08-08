@@ -1157,6 +1157,9 @@ struct EnvGuard {
     xai_api_key: Option<OsString>,
     xai_base_url: Option<OsString>,
     xai_model: Option<OsString>,
+    mistral_api_key: Option<OsString>,
+    mistral_base_url: Option<OsString>,
+    mistral_model: Option<OsString>,
     telecomjs_api_key: Option<OsString>,
     telecomjs_base_url: Option<OsString>,
     telecomjs_model: Option<OsString>,
@@ -1193,6 +1196,9 @@ impl EnvGuard {
             xai_api_key: env::var_os("XAI_API_KEY"),
             xai_base_url: env::var_os("XAI_BASE_URL"),
             xai_model: env::var_os("XAI_MODEL"),
+            mistral_api_key: env::var_os("MISTRAL_API_KEY"),
+            mistral_base_url: env::var_os("MISTRAL_BASE_URL"),
+            mistral_model: env::var_os("MISTRAL_MODEL"),
             telecomjs_api_key: env::var_os("TELECOMJS_API_KEY"),
             telecomjs_base_url: env::var_os("TELECOMJS_BASE_URL"),
             telecomjs_model: env::var_os("TELECOMJS_MODEL"),
@@ -1322,6 +1328,9 @@ impl EnvGuard {
             env::remove_var("XAI_API_KEY");
             env::remove_var("XAI_BASE_URL");
             env::remove_var("XAI_MODEL");
+            env::remove_var("MISTRAL_API_KEY");
+            env::remove_var("MISTRAL_BASE_URL");
+            env::remove_var("MISTRAL_MODEL");
             env::remove_var("TELECOMJS_API_KEY");
             env::remove_var("TELECOMJS_BASE_URL");
             env::remove_var("TELECOMJS_MODEL");
@@ -1474,6 +1483,9 @@ impl Drop for EnvGuard {
             Self::restore_var("XAI_API_KEY", self.xai_api_key.take());
             Self::restore_var("XAI_BASE_URL", self.xai_base_url.take());
             Self::restore_var("XAI_MODEL", self.xai_model.take());
+            Self::restore_var("MISTRAL_API_KEY", self.mistral_api_key.take());
+            Self::restore_var("MISTRAL_BASE_URL", self.mistral_base_url.take());
+            Self::restore_var("MISTRAL_MODEL", self.mistral_model.take());
             Self::restore_var("TELECOMJS_API_KEY", self.telecomjs_api_key.take());
             Self::restore_var("TELECOMJS_BASE_URL", self.telecomjs_base_url.take());
             Self::restore_var("TELECOMJS_MODEL", self.telecomjs_model.take());
@@ -4113,6 +4125,21 @@ fn provider_kind_parses_openrouter_and_novita_aliases() {
         assert_eq!(parsed.provider, ProviderKind::Sakana);
     }
 
+    for alias in [
+        "mistral",
+        "mistral-ai",
+        "mistral_ai",
+        "mistralai",
+        "la-plateforme",
+        "la_plateforme",
+    ] {
+        assert_eq!(ProviderKind::parse(alias), Some(ProviderKind::Mistral));
+
+        let parsed: ConfigToml =
+            toml::from_str(&format!("provider = \"{alias}\"")).expect("mistral alias");
+        assert_eq!(parsed.provider, ProviderKind::Mistral);
+    }
+
     for alias in ["qianfan", "baidu-qianfan", "baidu_qianfan", "baidu"] {
         assert_eq!(ProviderKind::parse(alias), Some(ProviderKind::Qianfan));
 
@@ -4475,6 +4502,53 @@ fn xai_api_key_provider_resolves_defaults_and_scopes_env_credentials() {
 }
 
 #[test]
+fn mistral_provider_resolves_defaults_and_metadata() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+
+    let metadata = provider::resolve_provider("mistral").expect("mistral provider metadata");
+    assert_eq!(metadata.id(), "mistral");
+    assert_eq!(metadata.kind(), ProviderKind::Mistral);
+    assert_eq!(metadata.display_name(), "Mistral AI");
+    assert_eq!(metadata.provider_config_key(), "mistral");
+    assert_eq!(metadata.default_base_url(), "https://api.mistral.ai/v1");
+    assert_eq!(metadata.default_model(), "mistral-code-latest");
+    assert_eq!(metadata.env_vars(), &["MISTRAL_API_KEY"]);
+    assert_eq!(
+        metadata.wire_policy().fixed(),
+        Some(provider::WireFormat::ChatCompletions)
+    );
+
+    let help = metadata.credential_help();
+    assert_eq!(
+        help.acquisition,
+        provider::CredentialAcquisition::ApiKey,
+        "Mistral is a hosted API-key provider"
+    );
+    assert_eq!(
+        help.credential_url,
+        Some("https://console.mistral.ai/api-keys")
+    );
+
+    let config: ConfigToml = toml::from_str(
+        r#"
+provider = "mistral-ai"
+
+[providers.mistral]
+api_key = "mistral-config-key"
+model = "mistral-large-latest"
+"#,
+    )
+    .expect("mistral provider table");
+    assert_eq!(config.provider, ProviderKind::Mistral);
+    let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(resolved.provider, ProviderKind::Mistral);
+    assert_eq!(resolved.base_url, "https://api.mistral.ai/v1");
+    assert_eq!(resolved.model, "mistral-large-latest");
+    assert_eq!(resolved.api_key.as_deref(), Some("mistral-config-key"));
+}
+
+#[test]
 fn opencode_go_resolves_current_chat_completions_route() {
     let _lock = env_lock();
     let _env = EnvGuard::without_deepseek_runtime_overrides();
@@ -4729,9 +4803,9 @@ fn meta_model_api_scopes_both_documented_key_names_to_official_endpoint() {
 fn provider_metadata_registry_covers_every_provider_kind_once() {
     let providers = provider::all_providers();
     // Full registry keeps legacy dialect/plan kinds for provider_for_kind.
-    assert_eq!(providers.len(), 41);
+    assert_eq!(providers.len(), 42);
     // Catalog surface is one identity per vendor (no dual-wire / plan rows).
-    assert_eq!(ProviderKind::ALL.len(), 36);
+    assert_eq!(ProviderKind::ALL.len(), 37);
     assert!(ProviderKind::ALL.len() < providers.len());
 
     let mut ids = std::collections::BTreeSet::new();
