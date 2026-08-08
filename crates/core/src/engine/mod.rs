@@ -242,14 +242,15 @@ pub fn spawn_supervised(config: EngineConfig, state: StateStore) -> EngineHandle
 }
 
 // ---------------------------------------------------------------------------
-// Headless helper — the one-liner `codewhale exec` and tests use. No TUI is
-// constructed; the thread is started and the message is driven through the
-// same `Op` channel the TUI uses, so the resulting `ChatRequest` bytes are
-// identical.
+// Headless helper — no TUI is constructed. This currently proves that core
+// can own session lifecycle behind the shared `Op` channel; outbound model
+// dispatch is a later #5261 slice and is not claimed here.
 
-/// Start a headless session and send one message through it. Returns the
-/// handle so the caller can observe `EventMsg`s. This is the API the issue
-/// requires: "a session can start and run a turn with no TUI attached".
+/// Start a headless session and expose its shared operation channel.
+///
+/// Callers can enqueue operations and observe `EventMsg`s through the returned
+/// handle. Outbound model dispatch is intentionally not claimed by this helper
+/// until that part of the engine has moved into core.
 pub fn spawn_headless_thread(
     workspace: PathBuf,
     model: impl Into<String>,

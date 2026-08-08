@@ -1,116 +1,208 @@
-//! Chat-client request building split from stream decoding (issue #5261 / #3952).
+//! Provider-neutral outbound model-request boundary.
 //!
-//! The TUI's `crates/tui/src/client.rs` + `client/chat.rs` (~9.7k + 6.3k
-//! lines) mix three concerns: (1) building the `MessageRequest` (provider
-//! shaping, cache inspection, tool-result compaction, reasoning replay),
-//! (2) decoding the SSE stream, and (3) prompt inspection. This module
-//! owns concern (1) in `crates/core` so TUI and headless `exec` build
-//! byte-identical requests for identical inputs. The decoder and inspector
-//! stay in the TUI's `client/` until their own moves; this file already
-//! guarantees parity because both callers go through the same builder.
-//!
-//! The builder is deliberately small and provider-neutral. It does NOT
-//! rewrite the turn loop, guards, or compaction logic — it moves them.
+//! The request DTOs in this module are consumed by the TUI transport today
+//! and are intentionally free of terminal, HTTP, or provider-client state.
+//! Keeping the logical request in `codewhale-core` lets a headless session
+//! prepare the same serializable value before the existing TUI client applies
+//! provider-specific wire shaping.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-/// Provider-neutral chat request that both TUI and headless produce. Every
-/// consumer — TUI `run_event_loop`, CLI `exec`, app-server, tests — builds
-/// this one type so `headless == TUI` is a byte-equality property.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ChatRequest {
+/// Request payload handed to the model-client preparation seam.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct MessageRequest {
     pub model: String,
-    /// Provider key (`"deepseek"` etc) — headless and TUI must agree.
-    pub model_provider: String,
+    pub messages: Vec<Message>,
+    pub max_tokens: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub system_prompt: Option<String>,
-    pub messages: Vec<ChatMessage>,
-    pub tools: Vec<Value>,
+    pub system: Option<SystemPrompt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Tool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<serde_json::Value>,
+    /// DeepSeek reasoning-effort tier: "off" | "low" | "medium" | "high" | "max".
+    /// Translated by the client into DeepSeek's `reasoning_effort` + `thinking` fields.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
-    #[serde(default)]
-    pub stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ChatMessage {
+/// Inputs that distinguish a primary agent-turn request.
+///
+/// Provider-neutral defaults (`stream = true`, no metadata, no provider-side
+/// thinking object, and no sampling overrides) are applied once by
+/// [`prepare_primary_turn_request`]. Both the production turn loop and its
+/// read-only preview use this input so those defaults cannot drift.
+#[derive(Debug, Clone)]
+pub struct PrimaryTurnRequest {
+    pub model: String,
+    pub messages: Vec<Message>,
+    pub max_tokens: u32,
+    pub system: Option<SystemPrompt>,
+    pub tools: Option<Vec<Tool>>,
+    pub tool_choice: Option<serde_json::Value>,
+    pub reasoning_effort: Option<String>,
+}
+
+/// Prepare the provider-neutral request for a primary agent turn.
+///
+/// This function performs no I/O and no provider-specific transformation.
+/// The existing client transport remains responsible for secret redaction,
+/// protocol binding, dialect shaping, and endpoint selection.
+#[must_use]
+pub fn prepare_primary_turn_request(input: PrimaryTurnRequest) -> MessageRequest {
+    MessageRequest {
+        model: input.model,
+        messages: input.messages,
+        max_tokens: input.max_tokens,
+        system: input.system,
+        tools: input.tools,
+        tool_choice: input.tool_choice,
+        metadata: None,
+        thinking: None,
+        reasoning_effort: input.reasoning_effort,
+        stream: Some(true),
+        temperature: None,
+        top_p: None,
+    }
+}
+
+/// System prompt representation (plain text or structured blocks).
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(untagged)]
+pub enum SystemPrompt {
+    Text(String),
+    Blocks(Vec<SystemBlock>),
+}
+
+/// A structured system prompt block.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct SystemBlock {
+    #[serde(rename = "type")]
+    pub block_type: String,
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<CacheControl>,
+}
+
+/// OpenAI-compatible image URL payload inside a multimodal message.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ImageUrlContent {
+    pub url: String,
+}
+
+/// A chat message with role and content blocks.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct Message {
     pub role: String,
-    pub content: String,
-    #[serde(default)]
-    pub tool_call_id: Option<String>,
-    #[serde(default)]
-    pub tool_calls: Vec<Value>,
+    pub content: Vec<ContentBlock>,
 }
 
-/// Build a `ChatRequest` from already-assembled prompt + history. The
-/// function is pure and deterministic: same inputs → same JSON bytes. Both
-/// the TUI engine (`handle_deepseek_turn` / `refresh_system_prompt`) and
-/// the headless `exec` call this, so the parity invariant is structural,
-/// not best-effort.
-#[must_use]
-pub fn build_chat_request(
-    model: impl Into<String>,
-    model_provider: impl Into<String>,
-    system_prompt: Option<String>,
-    messages: Vec<ChatMessage>,
-    tools: Vec<Value>,
-    reasoning_effort: Option<String>,
-) -> ChatRequest {
-    ChatRequest {
-        model: model.into(),
-        model_provider: model_provider.into(),
-        system_prompt,
-        messages,
-        tools,
-        reasoning_effort,
-        stream: true,
-    }
+/// Internal role used for assistant text that was visible before a turn was interrupted.
+pub const INTERRUPTED_ASSISTANT_ROLE: &str = "assistant_interrupted";
+/// Prefix attached to interrupted assistant output when it is replayed as context.
+pub const INTERRUPTED_ASSISTANT_CONTEXT_PREFIX: &str = "[The following assistant output was interrupted before completion and may be incomplete or wrong]\n";
+
+/// A single content block inside a message.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(tag = "type")]
+pub enum ContentBlock {
+    #[serde(rename = "text")]
+    Text {
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<CacheControl>,
+    },
+    #[serde(rename = "image_url")]
+    ImageUrl { image_url: ImageUrlContent },
+    #[serde(rename = "thinking")]
+    Thinking {
+        thinking: String,
+        /// Anthropic signed-thinking signature (#3014). Only populated on the
+        /// native Messages dialect and serde-skipped when absent so OpenAI
+        /// dialects are unaffected. Anthropic rejects tool loops that drop or
+        /// modify signed thinking blocks, so replay this verbatim.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        signature: Option<String>,
+    },
+    #[serde(rename = "tool_use")]
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        caller: Option<ToolCaller>,
+    },
+    #[serde(rename = "tool_result")]
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        is_error: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        content_blocks: Option<Vec<serde_json::Value>>,
+    },
+    #[serde(rename = "server_tool_use")]
+    ServerToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    #[serde(rename = "tool_search_tool_result")]
+    ToolSearchToolResult {
+        tool_use_id: String,
+        content: serde_json::Value,
+    },
+    #[serde(rename = "code_execution_tool_result")]
+    CodeExecutionToolResult {
+        tool_use_id: String,
+        content: serde_json::Value,
+    },
 }
 
-/// Deterministic JSON byte rendering for parity checks (`headless == TUI`).
-/// The bytes are what is actually put on the wire; `/dryrun` (#1004) and the
-/// test harness compare these directly rather than re-serializing with
-/// different key order.
-#[must_use]
-pub fn render_request_bytes(req: &ChatRequest) -> Vec<u8> {
-    serde_json::to_vec(req).expect("ChatRequest is serializable")
+/// Cache control metadata for tool definitions and blocks.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct CacheControl {
+    #[serde(rename = "type")]
+    pub cache_type: String,
 }
 
-/// Verify that two requests are byte-identical (the invariant the suite
-/// checks for every headless vs TUI pair). Returns `None` on equality,
-/// `Some(diff)` on the first differing byte index for diagnostics.
-#[must_use]
-pub fn byte_parity(a: &ChatRequest, b: &ChatRequest) -> Option<usize> {
-    let ab = render_request_bytes(a);
-    let bb = render_request_bytes(b);
-    if ab == bb {
-        None
-    } else {
-        ab.iter()
-            .zip(bb.iter())
-            .position(|(x, y)| x != y)
-            .or(Some(ab.len().min(bb.len())))
-    }
+/// Metadata describing who invoked a tool call.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ToolCaller {
+    #[serde(rename = "type")]
+    pub caller_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_id: Option<String>,
 }
 
-/// Preview / `dryrun` rendering: the human-readable table form of the
-/// request that `Op::PreviewOutboundRequest` returns without sending. This
-/// mirrors `crates/tui/src/core/engine/preview.rs` but lives in `core` so
-/// the same preview is returned headlessly.
-#[must_use]
-pub fn preview_human(req: &ChatRequest) -> String {
-    let mut out = String::new();
-    out.push_str(&format!("model: {} ({})\n", req.model, req.model_provider));
-    if let Some(sp) = req.system_prompt.as_deref() {
-        out.push_str(&format!("system: {} chars\n", sp.len()));
-    }
-    out.push_str(&format!("messages: {}\n", req.messages.len()));
-    out.push_str(&format!("tools: {}\n", req.tools.len()));
-    if let Some(effort) = req.reasoning_effort.as_deref() {
-        out.push_str(&format!("reasoning_effort: {effort}\n"));
-    }
-    out
+/// Tool definition exposed to the model.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct Tool {
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub tool_type: Option<String>,
+    pub name: String,
+    pub description: String,
+    pub input_schema: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_callers: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub defer_loading: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_examples: Option<Vec<serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strict: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<CacheControl>,
 }
 
 #[cfg(test)]
@@ -118,41 +210,55 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    #[test]
-    fn byte_identical_for_same_inputs() {
-        let msgs = vec![ChatMessage {
-            role: "user".into(),
-            content: "hello".into(),
-            tool_call_id: None,
-            tool_calls: vec![],
-        }];
-        let a = build_chat_request(
-            "deepseek-v4-flash",
-            "deepseek",
-            Some("sys".into()),
-            msgs.clone(),
-            vec![json!({"name":"read"})],
-            Some("low".into()),
-        );
-        let b = build_chat_request(
-            "deepseek-v4-flash",
-            "deepseek",
-            Some("sys".into()),
-            msgs,
-            vec![json!({"name":"read"})],
-            Some("low".into()),
-        );
-        assert_eq!(byte_parity(&a, &b), None);
-        assert_eq!(render_request_bytes(&a), render_request_bytes(&b));
+    fn primary_turn() -> PrimaryTurnRequest {
+        PrimaryTurnRequest {
+            model: "deepseek-v4-flash".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "inspect the request".to_string(),
+                    cache_control: None,
+                }],
+            }],
+            max_tokens: 4096,
+            system: Some(SystemPrompt::Text("system".to_string())),
+            tools: Some(vec![Tool {
+                tool_type: None,
+                name: "read_file".to_string(),
+                description: "Read a file".to_string(),
+                input_schema: json!({"zeta": 1, "alpha": 2, "type": "object"}),
+                allowed_callers: None,
+                defer_loading: None,
+                input_examples: None,
+                strict: None,
+                cache_control: None,
+            }]),
+            tool_choice: Some(json!({"type": "auto"})),
+            reasoning_effort: Some("high".to_string()),
+        }
     }
 
     #[test]
-    fn dryrun_is_pure_inspection() {
-        let req = build_chat_request("m", "deepseek", None, vec![], vec![], None);
-        let preview = preview_human(&req);
-        assert!(preview.contains("model: m"));
-        // Preview must not mutate the request.
-        let req2 = build_chat_request("m", "deepseek", None, vec![], vec![], None);
-        assert_eq!(render_request_bytes(&req), render_request_bytes(&req2));
+    fn primary_turn_preparation_has_stable_serialized_bytes() {
+        let first = prepare_primary_turn_request(primary_turn());
+        let second = prepare_primary_turn_request(primary_turn());
+        let first_bytes = serde_json::to_vec(&first).expect("serialize first request");
+        let second_bytes = serde_json::to_vec(&second).expect("serialize second request");
+
+        assert_eq!(first_bytes, second_bytes);
+        assert_eq!(
+            first_bytes,
+            br#"{"model":"deepseek-v4-flash","messages":[{"role":"user","content":[{"type":"text","text":"inspect the request"}]}],"max_tokens":4096,"system":"system","tools":[{"name":"read_file","description":"Read a file","input_schema":{"zeta":1,"alpha":2,"type":"object"}}],"tool_choice":{"type":"auto"},"reasoning_effort":"high","stream":true}"#
+        );
+    }
+
+    #[test]
+    fn primary_turn_preparation_owns_shared_defaults() {
+        let request = prepare_primary_turn_request(primary_turn());
+        assert_eq!(request.stream, Some(true));
+        assert!(request.metadata.is_none());
+        assert!(request.thinking.is_none());
+        assert!(request.temperature.is_none());
+        assert!(request.top_p.is_none());
     }
 }

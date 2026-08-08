@@ -3885,6 +3885,69 @@ mod tests {
         (path, body)
     }
 
+    #[tokio::test]
+    async fn core_primary_request_preparation_matches_captured_transport_bytes() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string("data: [DONE]\n\n"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let request = codewhale_core::request::prepare_primary_turn_request(
+            codewhale_core::request::PrimaryTurnRequest {
+                model: "deepseek-v4-pro".to_string(),
+                messages: vec![Message {
+                    role: "user".to_string(),
+                    content: vec![ContentBlock::Text {
+                        text: "core request boundary".to_string(),
+                        cache_control: None,
+                    }],
+                }],
+                max_tokens: 64,
+                system: None,
+                tools: Some(vec![Tool {
+                    input_schema: json!({
+                        "zeta": {"type": "string"},
+                        "alpha": {"type": "number"},
+                        "type": "object",
+                    }),
+                    ..test_tool("lookup")
+                }]),
+                tool_choice: Some(json!({"type": "auto"})),
+                reasoning_effort: Some("off".to_string()),
+            },
+        );
+        let client = deepseek_request_boundary_client("https://api.deepseek.com/v1", server.uri());
+        let prepared = client
+            .prepare_outbound_request(request.clone(), true)
+            .expect("core request prepares through the production seam");
+        let prepared_bytes = serde_json::to_vec(&prepared.body).expect("prepared body serializes");
+
+        let mut stream = client
+            .create_message_stream(request)
+            .await
+            .expect("production transport accepts the core request");
+        while let Some(event) = stream.next().await {
+            event.expect("captured SSE response remains valid");
+        }
+
+        let requests = server.received_requests().await.expect("recorded request");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].body, prepared_bytes);
+        let captured = std::str::from_utf8(&requests[0].body).expect("request body is UTF-8 JSON");
+        assert!(
+            captured.contains(
+                r#""parameters":{"zeta":{"type":"string"},"alpha":{"type":"number"},"type":"object"}"#
+            ),
+            "nested core-owned JSON order drifted: {captured}"
+        );
+    }
+
     // This synchronous guard deliberately spans every await: the assertions
     // require exclusive access to process-global retry state for the full call.
     #[allow(clippy::await_holding_lock)]

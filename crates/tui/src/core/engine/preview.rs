@@ -62,6 +62,7 @@ use crate::request_manifest::{
 };
 use crate::route_runtime::ResolvedRuntimeRoute;
 use crate::safe_label::SafeLabel;
+use codewhale_core::request::{PrimaryTurnRequest, prepare_primary_turn_request};
 
 /// Everything the host must supply for the engine to describe the next
 /// request. These are the same posture fields a `SendMessage` would carry, so
@@ -489,20 +490,15 @@ impl Engine {
                 work_state_tail.as_ref(),
             );
 
-        let request = MessageRequest {
+        let request = prepare_primary_turn_request(PrimaryTurnRequest {
             model: model.clone(),
             messages: outbound_messages,
             max_tokens: effective_max_output_tokens_for_route(provider, &model, limits),
             system: system_prompt,
             tools: surface.active.clone(),
             tool_choice: tool_choice.clone(),
-            metadata: None,
-            thinking: None,
             reasoning_effort: effective_reasoning_effort,
-            stream: Some(true),
-            temperature: None,
-            top_p: None,
-        };
+        });
 
         let prepared = match route.client.prepare_outbound_request(request, true) {
             Ok(prepared) => prepared.with_route_id(route.identity.exact_id.clone()),

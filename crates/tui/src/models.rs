@@ -41,162 +41,17 @@ const COMPACTION_THRESHOLD_PERCENT: u32 = 80;
 
 // === Core Message Types ===
 
-/// Request payload for sending a message to the API.
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct MessageRequest {
-    pub model: String,
-    pub messages: Vec<Message>,
-    pub max_tokens: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub system: Option<SystemPrompt>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: Option<Vec<Tool>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_choice: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub thinking: Option<serde_json::Value>,
-    /// DeepSeek reasoning-effort tier: "off" | "low" | "medium" | "high" | "max".
-    /// Translated by the client into DeepSeek's `reasoning_effort` + `thinking` fields.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning_effort: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stream: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub top_p: Option<f32>,
-}
-
-/// System prompt representation (plain text or structured blocks).
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(untagged)]
-pub enum SystemPrompt {
-    Text(String),
-    Blocks(Vec<SystemBlock>),
-}
-
-/// A structured system prompt block.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct SystemBlock {
-    #[serde(rename = "type")]
-    pub block_type: String,
-    pub text: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_control: Option<CacheControl>,
-}
-
-/// OpenAI-compatible image URL payload inside a multimodal message.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct ImageUrlContent {
-    pub url: String,
-}
-
-/// A chat message with role and content blocks.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct Message {
-    pub role: String,
-    pub content: Vec<ContentBlock>,
-}
-
-/// Internal role used for assistant text that was visible before a turn was
-/// interrupted. It is persisted distinctly from a completed answer.
-pub const INTERRUPTED_ASSISTANT_ROLE: &str = "assistant_interrupted";
-pub const INTERRUPTED_ASSISTANT_CONTEXT_PREFIX: &str = "[The following assistant output was interrupted before completion and may be incomplete or wrong]\n";
-
-/// A single content block inside a message.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(tag = "type")]
-pub enum ContentBlock {
-    #[serde(rename = "text")]
-    Text {
-        text: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        cache_control: Option<CacheControl>,
-    },
-    #[serde(rename = "image_url")]
-    ImageUrl { image_url: ImageUrlContent },
-    #[serde(rename = "thinking")]
-    Thinking {
-        thinking: String,
-        /// Anthropic signed-thinking signature (#3014). Only populated on the
-        /// native Messages dialect and serde-skipped when absent so OpenAI
-        /// dialects are unaffected. Anthropic rejects tool loops that drop or
-        /// modify signed thinking blocks, so replay this verbatim.
-        #[serde(skip_serializing_if = "Option::is_none", default)]
-        signature: Option<String>,
-    },
-    #[serde(rename = "tool_use")]
-    ToolUse {
-        id: String,
-        name: String,
-        input: serde_json::Value,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        caller: Option<ToolCaller>,
-    },
-    #[serde(rename = "tool_result")]
-    ToolResult {
-        tool_use_id: String,
-        content: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        is_error: Option<bool>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        content_blocks: Option<Vec<serde_json::Value>>,
-    },
-    #[serde(rename = "server_tool_use")]
-    ServerToolUse {
-        id: String,
-        name: String,
-        input: serde_json::Value,
-    },
-    #[serde(rename = "tool_search_tool_result")]
-    ToolSearchToolResult {
-        tool_use_id: String,
-        content: serde_json::Value,
-    },
-    #[serde(rename = "code_execution_tool_result")]
-    CodeExecutionToolResult {
-        tool_use_id: String,
-        content: serde_json::Value,
-    },
-}
-
-/// Cache control metadata for tool definitions and blocks.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct CacheControl {
-    #[serde(rename = "type")]
-    pub cache_type: String,
-}
-
-/// Metadata describing who invoked a tool call.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct ToolCaller {
-    #[serde(rename = "type")]
-    pub caller_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_id: Option<String>,
-}
-
-/// Tool definition exposed to the model.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct Tool {
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub tool_type: Option<String>,
-    pub name: String,
-    pub description: String,
-    pub input_schema: serde_json::Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub allowed_callers: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub defer_loading: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_examples: Option<Vec<serde_json::Value>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub strict: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_control: Option<CacheControl>,
-}
+// Keep the historical TUI path stable while the production request DTOs are
+// owned by `codewhale-core`. Existing transports and response decoders do not
+// need a flag day, and headless callers can depend on core directly.
+// Some process-test crates include this module privately and exercise only a
+// subset of the compatibility surface, so their crate-local dead-import view
+// is not evidence that a re-export can be removed.
+#[allow(unused_imports)]
+pub use codewhale_core::request::{
+    CacheControl, ContentBlock, INTERRUPTED_ASSISTANT_CONTEXT_PREFIX, INTERRUPTED_ASSISTANT_ROLE,
+    ImageUrlContent, Message, MessageRequest, SystemBlock, SystemPrompt, Tool, ToolCaller,
+};
 
 /// Container metadata for code-execution style server tools.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -769,7 +624,36 @@ pub struct MessageDelta {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::any::TypeId;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn historical_tui_request_path_is_the_core_request_type() {
+        assert_eq!(
+            TypeId::of::<MessageRequest>(),
+            TypeId::of::<codewhale_core::request::MessageRequest>()
+        );
+
+        let via_tui_path = MessageRequest {
+            model: "model".to_string(),
+            messages: vec![],
+            max_tokens: 1024,
+            system: None,
+            tools: None,
+            tool_choice: None,
+            metadata: None,
+            thinking: None,
+            reasoning_effort: None,
+            stream: Some(true),
+            temperature: None,
+            top_p: None,
+        };
+        let via_core_path: codewhale_core::request::MessageRequest = via_tui_path.clone();
+        assert_eq!(
+            serde_json::to_vec(&via_tui_path).expect("serialize TUI path"),
+            serde_json::to_vec(&via_core_path).expect("serialize core path")
+        );
+    }
 
     #[test]
     fn interrupted_assistant_role_round_trips_as_distinct_session_item() {
