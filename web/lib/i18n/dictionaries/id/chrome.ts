@@ -1,7 +1,9 @@
 import type { ChromeDict } from "../types";
 
 /**
- * Indonesian chrome dictionary.
+ * Indonesian chrome dictionary — native rewrite mirroring the current English
+ * direction. The wordmark tag renders "any model, on your machine" natively;
+ * the old positioning is gone.
  *
  * Terminology follows the TUI locale pack (`crates/tui/locales/id.json`):
  * "penyedia" (provider), "izin" / "postur izin" (permission posture),
@@ -37,7 +39,7 @@ export const chrome: ChromeDict = {
   installCta: "Instal →",
 
   wordmarkSeal: "深",
-  wordmarkTag: "model apa pun, lokal dulu",
+  wordmarkTag: "model apa pun, di mesin Anda",
 
   issueLabel: "Edisi {date}",
   dateLocale: "id-ID",
@@ -68,16 +70,16 @@ export const chrome: ChromeDict = {
   themeTitle: "Tema dokumentasi · otomatis / terang / gelap",
 
   footerTagline:
-    "Menyelam ke laut dalam agar Anda tidak perlu melakukannya — dokumentasi, kode sumber, dan komunitas untuk runtime sumber terbuka.",
+    "Codewhale menyelam ke laut dalam, jadi Anda tidak perlu — dokumentasi, kode sumber, dan komunitas untuk runtime sumber terbuka.",
   footerProduct: "Produk",
   footerProject: "Proyek",
   footerDocs: "Dokumentasi",
   footerGuide: "Panduan memulai",
   footerInstall: "Instalasi",
   footerModels: "Model",
-  footerRuntime: "Runtime",
+  footerRuntime: "Antarmuka runtime",
   footerFaq: "Tanya jawab",
-  footerIssues: "Issues",
+  footerIssues: "Masalah",
   footerContribute: "Kontribusi",
   footerLicense: "Lisensi MIT",
   footerCanonicalSource: "Sumber kanonis: ",

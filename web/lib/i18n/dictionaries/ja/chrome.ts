@@ -3,6 +3,9 @@ import type { ChromeDict } from "../types";
 /**
  * Japanese chrome dictionary.
  *
+ * Native rewrite mirroring the current English direction — "any model, on
+ * your machine", not the retired "local-first" positioning.
+ *
  * Terminology follows the TUI locale pack (`crates/tui/locales/ja.json`):
  * modes and permission names stay literal (Plan / Act / Operate, Ask /
  * Auto-Review / Full Access), 権限 is "permissions", 推論 is "reasoning",
@@ -37,7 +40,7 @@ export const chrome: ChromeDict = {
   installCta: "インストール →",
 
   wordmarkSeal: "深",
-  wordmarkTag: "どんなモデルでも、ローカルファースト",
+  wordmarkTag: "どんなモデルでも、あなたのマシンで",
 
   issueLabel: "{date} 号",
   dateLocale: "ja-JP",

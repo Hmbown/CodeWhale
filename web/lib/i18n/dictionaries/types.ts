@@ -64,7 +64,7 @@ export interface ChromeDict {
 
   /** Wordmark seal glyph beside the masthead brand (components/seal.tsx). */
   wordmarkSeal: string;
-  /** Wordmark strapline under the brand, e.g. "any model, local-first". */
+  /** Wordmark strapline under the brand, e.g. "any model, on your machine". */
   wordmarkTag: string;
 
   /** Masthead issue line, e.g. "Issue {date}". */

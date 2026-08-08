@@ -10,7 +10,7 @@ export async function generateMetadata({ params }: { params: Promise<{ locale: s
     title: isZh ? "Fleet 与 Workflow · Codewhale 文档" : "Fleet & Workflow · Codewhale Docs",
     description: isZh
       ? "持久多 worker 运行的本地控制平面，以及可选的 Workflow 编排层。"
-      : "The local-first control plane for durable multi-worker runs, plus the optional Workflow orchestration overlay.",
+      : "The control plane for durable multi-worker runs, plus the optional Workflow orchestration overlay.",
   });
 }
 
@@ -31,8 +31,8 @@ export default async function FleetPage({ params }: { params: Promise<{ locale: 
         <h2 className="font-display text-3xl mb-1">{isZh ? "Fleet 与 Workflow" : "Fleet & Workflow"}</h2>
         <p className={`${bodyClass} mt-3`}>
           {isZh
-            ? "Fleet 是面向持久多 worker 运行的本地优先控制平面。它不是独立的执行引擎：一个 Fleet worker 就是一次由 Fleet 启动并持久跟踪的 codewhale exec 无头运行。当工作需要重试、睡眠/重启后存活、远程执行、收据或可审计的台账时，使用 Fleet 而不是短寿命的 agent 扇出。"
-            : "Fleet is the local-first control plane for durable multi-worker runs. It is not a separate execution engine: a fleet worker is a headless codewhale exec run that the fleet launches and tracks durably. Reach for Fleet instead of short-lived agent fan-out whenever the work needs retry, sleep/restart survival, remote execution, receipts, or a ledgered audit trail."}
+            ? "Fleet 是面向持久多 worker 运行的控制平面。它不是独立的执行引擎：一个 Fleet worker 就是一次由 Fleet 启动并持久跟踪的 codewhale exec 无头运行。当工作需要重试、睡眠/重启后存活、远程执行、收据或可审计的台账时，使用 Fleet 而不是短寿命的 agent 扇出。"
+            : "Fleet is the control plane for durable multi-worker runs. It is not a separate execution engine: a fleet worker is a headless codewhale exec run that the fleet launches and tracks durably. Reach for Fleet instead of short-lived agent fan-out whenever the work needs retry, sleep/restart survival, remote execution, receipts, or a ledgered audit trail."}
         </p>
         <div className="hairline-t mt-6">
           {vocabulary.map((row) => (

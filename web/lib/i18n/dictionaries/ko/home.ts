@@ -1,7 +1,10 @@
 import type { HomeDict } from "../types";
 
 /**
- * Korean home dictionary for the newspaper-ocean landing page.
+ * Korean home dictionary — a native rewrite mirroring the current English
+ * direction: open-source terminal coding agent, bring your own model, runs
+ * on your machine. The old "local-first" / "LLM leverage for ordinary
+ * people" framing is intentionally gone.
  *
  * Product terms stay literal, matching `crates/tui/locales/ko.json`:
  * Plan / Act / Operate, Ask / Auto-Review / Full Access, Codewhale, Fleet,
@@ -14,15 +17,15 @@ import type { HomeDict } from "../types";
  * sentences.
  */
 export const home: HomeDict = {
-  metaTitle: "Codewhale — 깊은 바다로 대신 잠수하고, 당신은 잠수하지 않아도 됩니다.",
+  metaTitle: "Codewhale — 깊은 곳으로 대신 잠수하니, 당신은 잠수하지 않아도 됩니다.",
   metaDescription:
-    "Codewhale이 대신 깊이 잠수하므로 당신은 잠수하지 않아도 됩니다 — LLM의 힘을 손에 닿는 곳에 두는 터미널 에이전트. 당신의 머신에서 실행. Rust, MIT.",
+    "Codewhale이 깊은 곳으로 대신 잠수하니 당신은 잠수하지 않아도 됩니다 — 오픈 소스 터미널 코딩 에이전트. 원하는 모델을 가져오세요. 당신의 머신에서 실행됩니다. Rust, MIT.",
 
-  kicker: "오픈 소스 · 어떤 모델이든 · 터미널에서 실행",
-  heroTitleA: "깊은 바다로 대신 잠수하고,",
+  kicker: "오픈 소스 · 원하는 모델을 그대로 · 터미널에서 실행",
+  heroTitleA: "깊은 곳으로 대신 잠수하고,",
   heroTitleB: "당신은 잠수하지 않아도 됩니다.",
   heroIntro:
-    "{brand}은 평범한 사람도 LLM의 힘을 지렛대 삼아 무언가를 만들 수 있게 합니다. 터미널에서 저장소를 읽고, 파일을 고치고, 검사를 실행하고, 기록을 남깁니다 — 코드를 안다고 전제하지 않습니다. 당신의 머신에서 실행되며, 모델은 골라 끼우는 구성 요소입니다.",
+    "{brand}은 터미널을 위한 오픈 소스 코딩 에이전트입니다. 모델과 작업을 주면 코드를 읽고, 파일을 고치고, 스스로 검사를 실행한 뒤 작업이 끝났거나 당신이 필요할 때 멈춥니다. 어떤 모델이든 가져올 수 있고 섞어 쓸 수도 있습니다 — 역할마다 다른 모델을 지정하세요.",
   install: "설치",
   docs: "문서",
   copy: "복사",
@@ -45,9 +48,9 @@ export const home: HomeDict = {
     "Operate 모드, 고래, 입력창, 하단 바가 보이는 현재 Codewhale 터미널 세션",
   figcaption: "현재 Codewhale 세션 · Operate 모드 · Ask 권한 상태",
 
-  proofHeading: "수중 터미널 셸. 모델 중립. 로컬 우선.",
+  proofHeading: "수중 터미널 셸. 어떤 모델이든. 당신의 머신에서.",
   proofBody:
-    "이미 쓰는 호스팅형, 게이트웨이, 로컬 모델을 그대로. Plan / Act / Operate와 명시적인 권한 상태가 잠수를 당신의 통제 아래 둡니다.",
+    "이미 쓰고 있는 모델을 그대로 가져오세요 — 호스팅형이든, 게이트웨이든, 로컬이든. Plan / Act / Operate와 명시적인 권한 상태가 잠수를 당신의 통제 아래에 둡니다.",
 
   sealDecides: "法",
   decidesEyebrow: "판단 과정 보기",
@@ -58,7 +61,7 @@ export const home: HomeDict = {
   sealWorkflow: "行",
   workflowHeading: "작업에서 검증된 변경까지.",
   workflow: [
-    ["검사", "저장소와 지침, 그리고 작업 내용을 읽습니다."],
+    ["조사", "저장소와 지침, 그리고 작업 내용을 읽습니다."],
     ["실행", "명시적인 승인 경계 안에서 파일을 수정합니다."],
     ["검증", "검사를 실행하고 결과를 확인합니다."],
     ["보고", "간결하고 오래 남는 기록을 남깁니다."],
@@ -71,7 +74,7 @@ export const home: HomeDict = {
   sealStart: "起",
   startHeading: "Codewhale이 처음인가요? 네 단계면 끝입니다.",
   startLede:
-    "설치 → 키 없는 첫 세션 → 프로바이더 연결 → 첫 Fleet 워크플로. 용어는 용어 페이지에.",
+    "설치 → 키 없는 첫 세션 → 프로바이더 연결 → 첫 Fleet 워크플로. 용어는 용어 페이지에 정의되어 있습니다.",
   startGuideLink: "시작 가이드 읽기 →",
   startVocabularyLink: "제품 용어 보기 →",
 

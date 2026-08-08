@@ -1,27 +1,28 @@
 import type { HomeDict } from "../types";
 
 /**
- * Vietnamese home pack. Terminology matches `vi/chrome.ts` and the TUI
+ * Vietnamese home pack. Native rewrite mirroring the current English copy —
+ * the "dives into the deep / any model, on your machine" direction; no trace
+ * of the old positioning. Terminology matches `vi/chrome.ts` and the TUI
  * locale pack: nhà cung cấp (provider), phiên (session), kho mã
- * (repository), quyền (permissions), biên nhận (receipt), nhiệm vụ (task).
- * Modes (Plan / Act / Operate), permission postures (Ask / Auto-Review /
- * Full Access), commands (`codewhale exec`), Fleet, Workflow, Runtime and
- * the product name stay literal, exactly as the TUI renders them.
+ * (repository), mức quyền (permission posture), biên nhận (receipt), nhiệm
+ * vụ (task). Modes (Plan / Act / Operate), permission postures (Ask /
+ * Auto-Review / Full Access), commands (`codewhale exec`), Fleet, Workflow,
+ * Runtime and the product name stay literal, exactly as the TUI renders
+ * them.
  *
  * The `seal*` glyphs are marks, not prose, and are shared with English.
- *
- * Machine-quality translation awaiting native-speaker review.
  */
 export const home: HomeDict = {
-  metaTitle: "Codewhale — Lặn xuống biển sâu, để bạn khỏi phải lặn.",
+  metaTitle: "Codewhale — lặn xuống biển sâu để bạn khỏi phải lặn.",
   metaDescription:
-    "Codewhale lặn xuống biển sâu để bạn khỏi phải lặn — tác nhân terminal đặt đòn bẩy LLM trong tầm tay. Chạy trên máy của bạn. Rust, MIT.",
+    "Codewhale lặn xuống biển sâu để bạn khỏi phải lặn — tác nhân lập trình mã nguồn mở trong terminal. Mang theo mô hình của bạn. Chạy trên máy của bạn. Rust, MIT.",
 
-  kicker: "Nguồn mở · Mọi mô hình · Chạy trong terminal của bạn",
-  heroTitleA: "Lặn xuống biển sâu,",
+  kicker: "Nguồn mở · Mang theo mô hình của bạn · Chạy trong terminal của bạn",
+  heroTitleA: "Codewhale lặn xuống biển sâu",
   heroTitleB: "để bạn khỏi phải lặn.",
   heroIntro:
-    "{brand} trao cho người bình thường đòn bẩy LLM để tự làm ra thứ mình cần. Trong terminal, nó đọc kho mã, sửa tệp, chạy kiểm tra và để lại biên nhận — không đòi hỏi bạn phải biết code. Chạy trên máy của bạn; mô hình là thành phần bạn chọn.",
+    "{brand} là tác nhân lập trình mã nguồn mở trong terminal của bạn. Giao cho nó một mô hình và một nhiệm vụ — nó đọc mã của bạn, sửa tệp, tự chạy kiểm tra, và dừng lại khi việc đã xong hoặc khi nó cần bạn. Mang bất kỳ mô hình nào, hoặc trộn nhiều mô hình: ghim một mô hình riêng cho từng vai trò.",
   install: "Cài đặt",
   docs: "Tài liệu",
   copy: "Sao chép",
@@ -42,17 +43,17 @@ export const home: HomeDict = {
   shotSession: "Phiên hiện tại",
   screenshotAlt:
     "Phiên terminal Codewhale hiện tại hiển thị chế độ Operate, hình cá voi, khung soạn thảo và thanh chân màn hình",
-  figcaption: "Phiên Codewhale hiện tại · chế độ Operate · quyền Ask",
+  figcaption: "Phiên Codewhale hiện tại · chế độ Operate · mức quyền Ask",
 
-  proofHeading: "Một lớp vỏ terminal dưới lòng biển. Trung lập về mô hình. Ưu tiên cục bộ.",
+  proofHeading: "Một lớp vỏ terminal dưới lòng biển. Mọi mô hình. Trên máy của bạn.",
   proofBody:
-    "Mang theo mô hình bạn đang dùng — hosted, gateway hoặc cục bộ. Plan / Act / Operate cùng quyền hạn khai báo rõ giữ cuộc lặn trong tầm kiểm soát.",
+    "Mang theo mô hình bạn đang dùng — hosted, gateway hoặc cục bộ. Plan / Act / Operate cùng các mức quyền khai báo rõ giữ cuộc lặn luôn trong tầm kiểm soát của bạn.",
 
   sealDecides: "法",
   decidesEyebrow: "Xem cách nó quyết định",
   decidesHeading: "Luật lệ bạn quan sát được ngay trong mạch suy luận",
   decidesLede:
-    "Trích đoạn từ phiên thật — thứ bậc luật lệ của dự án thấy được trong suy luận của mô hình, không chỉ là lời quảng cáo trên trang chủ.",
+    "Trích đoạn từ phiên thật — thứ bậc luật lệ của dự án thấy được trong suy luận của mô hình, không chỉ là lời hứa trên trang chủ.",
 
   sealWorkflow: "行",
   workflowHeading: "Từ nhiệm vụ đến thay đổi đã kiểm chứng.",
@@ -70,7 +71,7 @@ export const home: HomeDict = {
   sealStart: "起",
   startHeading: "Mới dùng Codewhale? Bốn bước từ đầu đến cuối.",
   startLede:
-    "Cài đặt → phiên đầu không cần khóa → kết nối nhà cung cấp → Workflow Fleet đầu tiên. Thuật ngữ ở trang thuật ngữ.",
+    "Cài đặt → phiên đầu không cần khóa → kết nối nhà cung cấp → Workflow Fleet đầu tiên. Thuật ngữ được định nghĩa ở trang thuật ngữ.",
   startGuideLink: "Đọc hướng dẫn bắt đầu →",
   startVocabularyLink: "Xem thuật ngữ sản phẩm →",
 
@@ -78,7 +79,7 @@ export const home: HomeDict = {
   boundariesHeadingA: "Mô hình của bạn.",
   boundariesHeadingB: "Ranh giới của bạn.",
   boundariesBody:
-    "Chọn rõ ràng mô hình, chế độ làm việc và quyền hạn. Chi phí chưa biết vẫn được ghi là chưa biết, và những phần còn ở bản xem trước luôn được ghi nhãn đúng như vậy.",
+    "Chọn rõ ràng mô hình, chế độ làm việc và mức quyền. Chi phí chưa biết vẫn được ghi là chưa biết, và những phần còn ở bản xem trước luôn được ghi nhãn đúng như vậy.",
   hostedGatewayLocal: "Mô hình hosted, gateway và cục bộ",
   planActOperateDesc: "Từ lập kế hoạch chỉ đọc đến vận hành tự chủ",
   askAutoReviewDesc: "Chọn mức quyền cho công việc",

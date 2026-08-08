@@ -1,64 +1,70 @@
 import type { HomeDict } from "../types";
 
+/**
+ * Dicionário pt-BR da home — reescrita nativa que espelha a direção atual do
+ * inglês (a linha do mergulho; o posicionamento antigo ficou para trás).
+ * Os glifos `seal*` são marcas editoriais compartilhadas entre as
+ * localidades, como na edição de referência.
+ */
 export const home: HomeDict = {
-  metaTitle: "Codewhale — Mergulhe nas profundezas para que você não precise.",
+  metaTitle: "Codewhale — mergulha fundo para você não precisar.",
   metaDescription:
-    "O Codewhale mergulha nas profundezas para que você não precise — um agente de terminal que coloca a força dos LLMs ao alcance. Na sua máquina. Rust, MIT.",
+    "O Codewhale mergulha fundo para você não precisar — um agente de código open source para o terminal. Traga seu próprio modelo. Roda na sua máquina. Rust, MIT.",
 
-  kicker: "Código aberto · Qualquer modelo · Roda no seu terminal",
-  heroTitleA: "Mergulhe nas profundezas",
-  heroTitleB: "para que você não precise.",
+  kicker: "Código aberto · Traga seu próprio modelo · Roda no seu terminal",
+  heroTitleA: "O Codewhale mergulha fundo",
+  heroTitleB: "para você não precisar.",
   heroIntro:
-    "O {brand} coloca a força dos LLMs nas mãos de quem quer construir coisas. No terminal lê o repositório, edita arquivos, executa verificações e deixa um recibo — sem supor que você já fale código. Na sua máquina; o modelo é um componente que você escolhe.",
+    "O {brand} é um agente de código open source para o seu terminal. Dê a ele um modelo e uma tarefa — ele lê o seu código, edita arquivos, roda as próprias verificações e para quando o trabalho está pronto ou quando precisa de você. Traga qualquer modelo, ou misture vários: defina um modelo diferente para cada função.",
   install: "Instalar",
   docs: "Documentação",
   copy: "Copiar",
   copied: "Copiado ✓",
 
   installEyebrow: "instalação em uma linha",
-  installRequirement: "requer Node 18+ — sem toolchain Rust",
+  installRequirement: "precisa de Node 18+ — sem toolchain Rust",
   installOtherWays: "outras formas →",
 
   latestRelease: "Último lançamento {tag}",
   releaseUnavailable: "Status do lançamento indisponível",
-  currentSource: "Fonte atual",
-  sourceCandidate: "Fonte candidata",
+  currentSource: "Código-fonte atual",
+  sourceCandidate: "Candidato do código-fonte",
   providerRoutes: "{count} rotas de provedores",
   publishedRelease: "lançamento publicado",
-  figcaptionSourceCandidate: "fonte candidata",
+  figcaptionSourceCandidate: "candidato do código-fonte",
 
   shotSession: "Sessão atual",
   screenshotAlt:
-    "Sessão de terminal atual do Codewhale mostrando o modo Operate, a baleia, o compositor e o rodapé",
+    "Sessão de terminal atual do Codewhale, mostrando o modo Operate, a baleia, o composer e o rodapé",
   figcaption: "Sessão atual do Codewhale · modo Operate · postura de permissão Ask",
 
-  proofHeading: "Um terminal submarino. Neutro quanto ao modelo. Local primeiro.",
+  proofHeading: "Um terminal debaixo d'água. Qualquer modelo. Na sua máquina.",
   proofBody:
-    "Traga o modelo que já usa — hospedado, de gateway ou local. Plan / Act / Operate e posturas de permissão explícitas mantêm o mergulho sob seu controle.",
+    "Traga o modelo que você já usa — hospedado, via gateway ou local. Plan / Act / Operate e posturas de permissão explícitas mantêm o mergulho sob o seu controle.",
 
   sealDecides: "法",
   decidesEyebrow: "Veja como ele decide",
   decidesHeading: "Regras que você acompanha no rastro",
   decidesLede:
-    "Trechos de uma sessão real — a hierarquia de regras é observável no raciocínio do modelo, não só numa landing page.",
+    "Trechos de sessões reais — as regras do projeto, em ordem de prioridade, visíveis no raciocínio do modelo. Não é só promessa de landing page.",
 
   sealWorkflow: "行",
   workflowHeading: "Da tarefa à mudança verificada.",
   workflow: [
-    ["Inspecionar", "Lê o repositório, suas instruções e a tarefa."],
+    ["Inspecionar", "Lê o repositório, as instruções e a tarefa."],
     ["Agir", "Edita arquivos dentro de limites de aprovação explícitos."],
-    ["Verificar", "Executa verificações e inspeciona o resultado."],
+    ["Verificar", "Roda as verificações e inspeciona o resultado."],
     ["Relatar", "Deixa um recibo conciso e duradouro."],
   ],
   receiptAria: "Exemplo de recibo de trabalho",
   receiptInspect: "repositório e instruções",
-  receiptAct: "editar sob a postura de permissão escolhida",
+  receiptAct: "edição sob a postura de permissão escolhida",
   receiptReport: "verificações aprovadas · recibo salvo",
 
   sealStart: "起",
   startHeading: "Novo no Codewhale? Quatro passos de ponta a ponta.",
   startLede:
-    "Instalar → primeira sessão sem chaves → conexão com o provedor → primeiro Workflow da Fleet. Termos na página de vocabulário.",
+    "Instalação → primeira sessão sem chave → conectar um provedor → primeiro workflow com a Fleet. Os termos estão definidos na página de vocabulário.",
   startGuideLink: "Ler o guia de primeiros passos →",
   startVocabularyLink: "Ver o vocabulário do produto →",
 
@@ -66,8 +72,8 @@ export const home: HomeDict = {
   boundariesHeadingA: "Seu modelo.",
   boundariesHeadingB: "Seus limites.",
   boundariesBody:
-    "Escolha explicitamente o modelo, o modo de trabalho e a postura de permissão. Custo desconhecido permanece desconhecido, e recursos em prévia continuam rotulados como tal.",
-  hostedGatewayLocal: "Modelos hospedados, de gateway e locais",
+    "Escolha explicitamente o modelo, o modo de trabalho e a postura de permissão. Custo desconhecido continua desconhecido, e recursos em prévia seguem rotulados como tal.",
+  hostedGatewayLocal: "Modelos hospedados, via gateway e locais",
   planActOperateDesc: "Do planejamento somente leitura à operação autônoma",
   askAutoReviewDesc: "Escolha a postura de permissão para o trabalho",
   tuiExecWebDesc: "Interfaces de runtime interativas e headless",

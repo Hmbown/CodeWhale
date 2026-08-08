@@ -103,7 +103,7 @@ export default async function RuntimePage({ params }: { params: Promise<{ locale
         </div>
         <div className="grid sm:grid-cols-2 gap-6 text-sm text-ink-soft leading-relaxed">
           <div>
-            <strong className="text-ink">{isZh ? "本地优先" : "Local-first"}</strong>
+            <strong className="text-ink">{isZh ? "本机运行" : "Runs on your machine"}</strong>
             <p className="mt-1">
               {isZh
                 ? "Runtime API 默认仅监听 127.0.0.1。本地运行时不需要 Codewhale 账户或托管中继。"

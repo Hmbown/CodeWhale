@@ -10,15 +10,15 @@ import type { HomeDict } from "../types";
  * that needs a different mark can set one without touching the page.
  */
 export const home: HomeDict = {
-  metaTitle: "Codewhale — Dive into the deep so you don't have to.",
+  metaTitle: "Codewhale — dives into the deep so you don't have to.",
   metaDescription:
-    "Codewhale dives into the deep so you don't have to — a terminal agent that puts LLM leverage within reach. Runs on your machine. Rust, MIT.",
+    "Codewhale dives into the deep so you don't have to — an open-source terminal coding agent. Bring your own model. Runs on your machine. Rust, MIT.",
 
-  kicker: "Open source · Any model · Runs in your terminal",
-  heroTitleA: "Dive into the deep",
+  kicker: "Open source · Bring your own model · Runs in your terminal",
+  heroTitleA: "Codewhale dives into the deep",
   heroTitleB: "so you don't have to.",
   heroIntro:
-    "{brand} gives ordinary people LLM leverage to build things. In your terminal it reads the repo, edits files, runs checks, and leaves a receipt — no coding fluency assumed. Runs on your machine; the model is a component you pick, not the product.",
+    "{brand} is an open-source coding agent for your terminal. Give it a model and a task — it reads your code, edits files, runs its own checks, and stops when the job's done or it needs you. Bring any model, or mix them: pin a different model to each role.",
   install: "Install",
   docs: "Docs",
   copy: "Copy",
@@ -41,7 +41,7 @@ export const home: HomeDict = {
     "Current Codewhale terminal session showing Operate mode, the whale, composer, and footer",
   figcaption: "Current Codewhale session · Operate mode · Ask permission posture",
 
-  proofHeading: "An underwater terminal shell. Model-neutral. Local-first.",
+  proofHeading: "An underwater terminal shell. Any model. On your machine.",
   proofBody:
     "Bring the model you already use — hosted, gateway, or local. Plan / Act / Operate and explicit permission postures keep the dive under your control.",
 
