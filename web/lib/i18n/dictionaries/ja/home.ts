@@ -3,6 +3,10 @@ import type { HomeDict } from "../types";
 /**
  * Japanese home dictionary for the newspaper-ocean landing page.
  *
+ * Native rewrite mirroring the current English direction: bring your own
+ * model, runs on your machine — no trace of the old "local-first" or
+ * "LLM leverage for everyone" positioning.
+ *
  * Product vocabulary stays literal and matches the TUI locale pack:
  * Plan / Act / Operate, Ask / Auto-Review / Full Access, Codewhale, TUI,
  * `codewhale exec`, Runtime API + MCP, Fleet, Node 18+, Rust, MIT.
@@ -14,13 +18,13 @@ import type { HomeDict } from "../types";
 export const home: HomeDict = {
   metaTitle: "Codewhale — 深く潜るのはこちら。あなたは潜らなくていい。",
   metaDescription:
-    "Codewhale が深く潜るので、あなたは潜らなくて済みます — LLM の力を手の届くところに置くターミナルエージェント。あなたのマシンで動きます。Rust 製、MIT。",
+    "Codewhale が深く潜るので、あなたは潜らなくて済みます — オープンソースのターミナルコーディングエージェント。モデルは自分のものを。あなたのマシンで動く。Rust 製、MIT。",
 
-  kicker: "オープンソース · どんなモデルでも · ターミナルで動く",
-  heroTitleA: "深く潜るのはこちら。",
-  heroTitleB: "あなたは潜らなくていい。",
+  kicker: "オープンソース · モデルは自分で選ぶ · ターミナルで動く",
+  heroTitleA: "Codewhale は深く潜る。",
+  heroTitleB: "あなたが潜る必要はない。",
   heroIntro:
-    "{brand} は LLM の力をふつうの人の手に届け、ものをつくれるようにします。ターミナルでリポジトリを読み、ファイルを編集し、チェックを走らせ、レシートを残す — コードが読めることを前提にしません。あなたのマシンで動き、モデルは選べるコンポーネントです。",
+    "{brand} は、ターミナルで動くオープンソースのコーディングエージェントです。モデルとタスクを渡せば、コードを読み、ファイルを編集し、自分でチェックを回して、仕事が終わるか、あなたの判断が必要になったところで止まります。モデルは何でも持ち込めます。混ぜてもいい — 役割ごとに別のモデルを固定できます。",
   install: "インストール",
   docs: "ドキュメント",
   copy: "コピー",
@@ -43,9 +47,9 @@ export const home: HomeDict = {
     "Operate モード、クジラ、入力欄、フッターが写った現在の Codewhale ターミナルセッション",
   figcaption: "現在の Codewhale セッション · Operate モード · 権限は Ask",
 
-  proofHeading: "水中のターミナルシェル。モデル中立。ローカルファースト。",
+  proofHeading: "水中のターミナルシェル。どんなモデルでも。あなたのマシンで。",
   proofBody:
-    "すでに使っているホスト型、ゲートウェイ、ローカルのモデルをそのまま。Plan / Act / Operate と明示的な権限で、どこまで潜るかはあなたの管理下に。",
+    "すでに使っているモデルをそのまま持ち込めます — ホスト型、ゲートウェイ、ローカル。Plan / Act / Operate と明示的な権限で、どこまで潜るかはあなたの管理下に。",
 
   sealDecides: "法",
   decidesEyebrow: "判断の過程を見る",

@@ -1,11 +1,11 @@
 import type { ChromeDict } from "../types";
 
 /**
- * Simplified Chinese chrome. Extracted verbatim from the previous inline
- * `isZh` branches in components/nav.tsx, components/footer.tsx,
- * components/nav-links.tsx, components/theme-toggle.tsx,
- * components/ticker.tsx, and components/terminal-player.tsx — this was a
- * move, not a retranslation. Only genuinely new keys carry new prose.
+ * Simplified Chinese chrome — a native rewrite mirroring the current
+ * English direction (the wordmark tag is "any model, on your machine";
+ * the retired "local-first" framing is gone). Nav pairs each Chinese
+ * primary label with a short English secondary — the inverse of the
+ * English edition's Han companion labels.
  */
 export const chrome: ChromeDict = {
   navDocs: "文档",
@@ -22,7 +22,7 @@ export const chrome: ChromeDict = {
   navCommunitySecondary: "Community",
   navContributeSecondary: "Contribute",
 
-  skipToContent: "跳到主要内容",
+  skipToContent: "跳转到主要内容",
 
 
   navPrimaryAria: "主导航",
@@ -31,7 +31,7 @@ export const chrome: ChromeDict = {
   installCta: "安装 →",
 
   wordmarkSeal: "深",
-  wordmarkTag: "任何模型 · 本地优先",
+  wordmarkTag: "任意模型，本机运行",
 
   issueLabel: "第 {date} 期",
   dateLocale: "zh-CN",
@@ -42,7 +42,7 @@ export const chrome: ChromeDict = {
   tickerLiveLabel: "实 时",
   tickerLiveTag: "LIVE",
   tickerMerged: "已合并",
-  tickerOpened: "已提出",
+  tickerOpened: "已开启",
   tickerClosed: "已关闭",
   tickerReleased: "已发布",
   tickerFirstContribution: "首次贡献",
@@ -61,7 +61,7 @@ export const chrome: ChromeDict = {
   themeAria: "文档主题：{mode}（点击切换）",
   themeTitle: "文档主题 · 自动 / 浅色 / 深色",
 
-  footerTagline: "潜入数据与代码的深海——开源运行时、文档与社区入口。",
+  footerTagline: "Codewhale 潜入深海，你不必亲自下潜——开源运行时的文档、源码与社区。",
   footerProduct: "产品",
   footerProject: "项目",
   footerDocs: "文档",
@@ -76,7 +76,7 @@ export const chrome: ChromeDict = {
   footerCanonicalSource: "官方源码：",
   footerReleases: " · 发布：",
   footerReleasesLink: "GitHub 发布页",
-  footerSecurity: "安全联系",
+  footerSecurity: "安全",
 
   switcherLabel: "语言",
   switcherSwitchTo: "切换到{label}",

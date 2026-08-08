@@ -1,10 +1,12 @@
 import type { ChromeDict } from "../types";
 
 /**
- * Ukrainian chrome pack. Terminology follows the TUI locale pack
- * (`crates/tui/locales/uk.json`): режим дозволів for the permission posture,
- * провайдер, репозиторій, композер, міркування. Plan / Act / Operate and
- * Ask / Auto-Review / Full Access stay literal there and stay literal here.
+ * Ukrainian chrome pack — native rewrite mirroring the current English copy;
+ * the old "local-first" tag is gone ("any model, on your machine" instead).
+ * Terminology follows the TUI locale pack (`crates/tui/locales/uk.json`):
+ * режим дозволів for the permission posture, провайдер, репозиторій,
+ * композер, міркування. Plan / Act / Operate and Ask / Auto-Review /
+ * Full Access stay literal there and stay literal here.
  *
  * Secondary nav labels pair the Ukrainian primary with a short English
  * companion — the Han pair is the English edition's own device.
@@ -33,7 +35,7 @@ export const chrome: ChromeDict = {
   installCta: "Встановити →",
 
   wordmarkSeal: "深",
-  wordmarkTag: "будь-яка модель, спершу локально",
+  wordmarkTag: "будь-яка модель, на вашій машині",
 
   issueLabel: "Випуск {date}",
   dateLocale: "uk-UA",
@@ -64,7 +66,7 @@ export const chrome: ChromeDict = {
   themeTitle: "Тема документації · авто / світла / темна",
 
   footerTagline:
-    "Ми занурюємось у глибину, щоб не довелося вам — документація, код і спільнота рантайму з відкритим кодом.",
+    "Codewhale занурюється в глибину, щоб не довелося вам — документація, код і спільнота рантайму з відкритим кодом.",
   footerProduct: "Продукт",
   footerProject: "Проєкт",
   footerDocs: "Документація",
@@ -73,7 +75,7 @@ export const chrome: ChromeDict = {
   footerModels: "Моделі",
   footerRuntime: "Рантайм",
   footerFaq: "Питання та відповіді",
-  footerIssues: "Issues",
+  footerIssues: "Проблеми",
   footerContribute: "Участь",
   footerLicense: "Ліцензія MIT",
   footerCanonicalSource: "Канонічне джерело: ",

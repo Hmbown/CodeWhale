@@ -1,5 +1,11 @@
 import type { ChromeDict } from "../types";
 
+/**
+ * Dicionário pt-BR do chrome — reescrita nativa que espelha o inglês atual.
+ * Os rótulos primários da navegação ficam em português e os secundários, em
+ * inglês curto (o inverso do dispositivo editorial em Han da edição de
+ * referência). O selo 深 do wordmark é uma marca compartilhada.
+ */
 export const chrome: ChromeDict = {
   navDocs: "Documentação",
   navStart: "Começar",
@@ -24,7 +30,7 @@ export const chrome: ChromeDict = {
   installCta: "Instalar →",
 
   wordmarkSeal: "深",
-  wordmarkTag: "qualquer modelo, local primeiro",
+  wordmarkTag: "qualquer modelo, na sua máquina",
 
   issueLabel: "Edição {date}",
   dateLocale: "pt-BR",
@@ -55,7 +61,7 @@ export const chrome: ChromeDict = {
   themeTitle: "Tema da documentação · auto / claro / escuro",
 
   footerTagline:
-    "Mergulhe nas profundezas para que você não precise — documentação, código-fonte e comunidade do runtime de código aberto.",
+    "O Codewhale mergulha fundo para você não precisar — documentação, código-fonte e comunidade do runtime de código aberto.",
   footerProduct: "Produto",
   footerProject: "Projeto",
   footerDocs: "Documentação",

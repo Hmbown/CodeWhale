@@ -505,6 +505,22 @@ mark.search-highlight {
 
 .site-github-link:hover { border-color: var(--ink); }
 
+.site-discord-link {
+  display: inline-flex;
+  min-height: 2.25rem;
+  align-items: center;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  color: var(--ink);
+}
+
+.site-discord-link:hover { border-color: var(--ink); }
+
+.brand-mark { width: 1rem; height: 1rem; display: block; }
+
+.paper-star-badge .brand-mark { margin-right: 0.3rem; }
+
 .nav-link {
   font-family: var(--font-body), "IBM Plex Sans", system-ui, sans-serif;
   font-size: 0.78rem;

@@ -1,8 +1,10 @@
 import type { ChromeDict } from "../types";
 
 /**
- * Spanish chrome dictionary — neutral (pan-Hispanic) Spanish, informal `tú`,
- * matching the register of the es-419 TUI pack.
+ * Spanish chrome dictionary — native rewrite in neutral (pan-Hispanic)
+ * Spanish, informal `tú`, matching the register of the es-419 TUI pack and
+ * mirroring the current English direction (bring-your-own-model, runs on
+ * your machine; the old positioning is gone).
  *
  * Terminology is aligned with crates/tui/locales/es-419.json so the website
  * and the terminal name the same things the same way: modes stay literal
@@ -39,10 +41,10 @@ export const chrome: ChromeDict = {
   installCta: "Instalar →",
 
   wordmarkSeal: "深",
-  wordmarkTag: "cualquier modelo · local primero",
+  wordmarkTag: "cualquier modelo, en tu máquina",
 
   issueLabel: "Edición {date}",
-  dateLocale: "es",
+  dateLocale: "es-ES",
 
   starsAria: "Estrellas en GitHub",
   githubFallback: "GitHub",
@@ -70,7 +72,7 @@ export const chrome: ChromeDict = {
   themeTitle: "Tema de la documentación · auto / claro / oscuro",
 
   footerTagline:
-    "Se sumerge en las profundidades para que tú no tengas que hacerlo — documentación, código fuente y comunidad del runtime de código abierto.",
+    "Codewhale se sumerge en las profundidades para que tú no tengas que hacerlo: documentación, código fuente y comunidad del runtime de código abierto.",
   footerProduct: "Producto",
   footerProject: "Proyecto",
   footerDocs: "Documentación",

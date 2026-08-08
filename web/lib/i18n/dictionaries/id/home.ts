@@ -1,7 +1,9 @@
 import type { HomeDict } from "../types";
 
 /**
- * Indonesian home dictionary.
+ * Indonesian home dictionary — native rewrite mirroring the current English
+ * direction: "dives into the deep", bring-your-own-model, runs on your
+ * machine. Every trace of the old positioning has been dropped.
  *
  * Product vocabulary stays fixed: modes Plan / Act / Operate, permission
  * postures Ask / Auto-Review / Full Access, and the product name Codewhale —
@@ -13,15 +15,15 @@ import type { HomeDict } from "../types";
  * locales.
  */
 export const home: HomeDict = {
-  metaTitle: "Codewhale — Menyelam ke laut dalam agar Anda tidak perlu melakukannya.",
+  metaTitle: "Codewhale — menyelam ke laut dalam, jadi Anda tidak perlu.",
   metaDescription:
-    "Codewhale menyelam ke laut dalam agar Anda tidak perlu — agen terminal yang menempatkan daya ungkit LLM dalam jangkauan. Di mesin Anda. Rust, MIT.",
+    "Codewhale menyelam ke laut dalam, jadi Anda tidak perlu — agen coding terminal sumber terbuka. Bawa model sendiri. Berjalan di mesin Anda. Rust, MIT.",
 
-  kicker: "Sumber terbuka · Model apa pun · Berjalan di terminal Anda",
-  heroTitleA: "Menyelam ke laut dalam",
-  heroTitleB: "agar Anda tidak perlu melakukannya.",
+  kicker: "Sumber terbuka · Bawa model sendiri · Berjalan di terminal Anda",
+  heroTitleA: "Codewhale menyelam ke laut dalam",
+  heroTitleB: "jadi Anda tidak perlu.",
   heroIntro:
-    "{brand} memberi orang biasa daya ungkit LLM untuk membangun sesuatu. Di terminal membaca repositori, mengedit berkas, menjalankan pemeriksaan, dan meninggalkan tanda terima — tanpa mengandaikan Anda sudah fasih berkode. Di mesin Anda; model adalah komponen yang dapat dipilih.",
+    "{brand} adalah agen coding sumber terbuka untuk terminal Anda. Beri ia model dan tugas — ia membaca kode Anda, mengedit berkas, menjalankan pemeriksaannya sendiri, dan berhenti saat pekerjaan selesai atau saat butuh Anda. Bawa model apa pun, atau campurkan: pasang model berbeda untuk tiap peran.",
   install: "Instal",
   docs: "Dokumentasi",
   copy: "Salin",
@@ -44,13 +46,13 @@ export const home: HomeDict = {
     "Sesi terminal Codewhale saat ini yang menampilkan mode Operate, sang paus, komposer, dan bilah bawah",
   figcaption: "Sesi Codewhale saat ini · mode Operate · postur izin Ask",
 
-  proofHeading: "Shell terminal bawah laut. Netral terhadap model. Mengutamakan lokal.",
+  proofHeading: "Shell terminal bawah laut. Model apa pun. Di mesin Anda.",
   proofBody:
     "Bawa model yang sudah Anda pakai — di-host, gateway, atau lokal. Plan / Act / Operate dan postur izin eksplisit menjaga penyelaman tetap dalam kendali Anda.",
 
   sealDecides: "法",
   decidesEyebrow: "Lihat bagaimana ia memutuskan",
-  decidesHeading: "Aturan yang bisa Anda amati langsung di jejak",
+  decidesHeading: "Aturan yang bisa Anda saksikan di jejak",
   decidesLede:
     "Cuplikan sesi nyata — aturan proyek yang berjenjang terlihat di penalaran model, bukan sekadar klaim di halaman depan.",
 
@@ -70,7 +72,7 @@ export const home: HomeDict = {
   sealStart: "起",
   startHeading: "Baru mengenal Codewhale? Empat langkah dari awal sampai akhir.",
   startLede:
-    "Instalasi → sesi pertama tanpa kunci → koneksi penyedia → workflow Fleet pertama. Istilah di halaman kosakata.",
+    "Instal → sesi pertama tanpa kunci → hubungkan penyedia → workflow Fleet pertama. Istilah didefinisikan di halaman kosakata.",
   startGuideLink: "Baca panduan memulai →",
   startVocabularyLink: "Lihat kosakata produk →",
 

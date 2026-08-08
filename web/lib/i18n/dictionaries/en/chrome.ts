@@ -33,7 +33,7 @@ export const chrome: ChromeDict = {
   installCta: "Install →",
 
   wordmarkSeal: "深",
-  wordmarkTag: "any model, local-first",
+  wordmarkTag: "any model, on your machine",
 
   issueLabel: "Issue {date}",
   dateLocale: "en-US",
@@ -64,7 +64,7 @@ export const chrome: ChromeDict = {
   themeTitle: "Docs theme · auto / light / dark",
 
   footerTagline:
-    "Dive into the deep so you don't have to — docs, source, and community for the open-source runtime.",
+    "Codewhale dives into the deep so you don't have to — docs, source, and community for the open-source runtime.",
   footerProduct: "Product",
   footerProject: "Project",
   footerDocs: "Docs",

@@ -8,7 +8,7 @@ export const SITE_NAME = "Codewhale";
 
 /** The one-line product identity, used as the default OG image alt text. */
 export const IDENTITY_PHRASE =
-  "Dive into the deep so you don't have to — any model, local-first.";
+  "Codewhale dives into the deep so you don't have to — any model, on your machine.";
 
 /** Shared OG card rendered by app/opengraph-image.tsx (1200×630 PNG). */
 const OG_IMAGE = {

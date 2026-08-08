@@ -1,18 +1,18 @@
 import type { ChromeDict } from "../types";
 
 /**
- * Vietnamese chrome pack. Terminology follows the TUI locale pack
+ * Vietnamese chrome pack. Native rewrite mirroring the current English copy —
+ * the "any model, on your machine" wordmark tag and the deep-dive tagline;
+ * no trace of the old positioning. Terminology follows the TUI locale pack
  * (`crates/tui/locales/vi.json`) so the site and the runtime name the same
  * things the same way: nhà cung cấp (provider), phiên (session), kho mã
- * (repository), quyền (permissions), biên nhận (receipt). Product terms —
- * Codewhale, Plan / Act / Operate, Ask / Auto-Review / Full Access, Fleet,
- * Workflow, Runtime — stay literal, as they do in the TUI.
+ * (repository), mức quyền (permission posture), biên nhận (receipt). Product
+ * terms — Codewhale, Plan / Act / Operate, Ask / Auto-Review / Full Access,
+ * Fleet, Workflow, Runtime — stay literal, as they do in the TUI.
  *
  * The masthead pairs a Vietnamese primary label with a short English
  * secondary one; the Han seals are the English edition's own device and are
  * not borrowed here (only the 深 wordmark glyph is shared).
- *
- * Machine-quality translation awaiting native-speaker review.
  */
 export const chrome: ChromeDict = {
   navDocs: "Tài liệu",
@@ -40,7 +40,7 @@ export const chrome: ChromeDict = {
   installCta: "Cài đặt →",
 
   wordmarkSeal: "深",
-  wordmarkTag: "mọi mô hình, ưu tiên cục bộ",
+  wordmarkTag: "mọi mô hình, trên máy của bạn",
 
   issueLabel: "Số ra {date}",
   dateLocale: "vi-VN",
@@ -71,7 +71,7 @@ export const chrome: ChromeDict = {
   themeTitle: "Giao diện tài liệu · tự động / sáng / tối",
 
   footerTagline:
-    "Lặn xuống biển sâu để bạn khỏi phải lặn — tài liệu, mã nguồn và cộng đồng của runtime nguồn mở.",
+    "Codewhale lặn xuống biển sâu để bạn khỏi phải lặn — tài liệu, mã nguồn và cộng đồng của runtime mã nguồn mở.",
   footerProduct: "Sản phẩm",
   footerProject: "Dự án",
   footerDocs: "Tài liệu",

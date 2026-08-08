@@ -1,7 +1,9 @@
 import type { ChromeDict } from "../types";
 
 /**
- * Korean chrome dictionary.
+ * Korean chrome dictionary — a native rewrite mirroring the current English
+ * direction (bring your own model, runs on your machine); the old
+ * "local-first" wordmark tag is intentionally gone.
  *
  * Terminology follows the TUI locale pack (`crates/tui/locales/ko.json`):
  * mode and permission names stay literal (Plan / Act / Operate, Ask /
@@ -41,7 +43,7 @@ export const chrome: ChromeDict = {
   installCta: "설치 →",
 
   wordmarkSeal: "深",
-  wordmarkTag: "어떤 모델이든 · 로컬 우선",
+  wordmarkTag: "어떤 모델이든, 당신의 머신에서",
 
   // Newspaper dating: Korean papers write the issue date with the 자 suffix
   // (8월 3일자), so the label is the date itself rather than "제N호".
@@ -74,7 +76,7 @@ export const chrome: ChromeDict = {
   themeTitle: "문서 테마 · 자동 / 밝게 / 어둡게",
 
   footerTagline:
-    "깊은 바다로 대신 잠수합니다 — 오픈 소스 런타임의 문서, 소스 코드, 커뮤니티.",
+    "Codewhale이 깊은 곳으로 대신 잠수하니 당신은 잠수하지 않아도 됩니다 — 오픈 소스 런타임의 문서, 소스, 커뮤니티.",
   footerProduct: "제품",
   footerProject: "프로젝트",
   footerDocs: "문서",
@@ -89,7 +91,7 @@ export const chrome: ChromeDict = {
   footerCanonicalSource: "공식 소스: ",
   footerReleases: " · 릴리스: ",
   footerReleasesLink: "GitHub 릴리스",
-  footerSecurity: "보안 연락처",
+  footerSecurity: "보안",
 
   switcherLabel: "언어",
   // "(으)로" is the standard Korean UI hedge when the interpolated noun's

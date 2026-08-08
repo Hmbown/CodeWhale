@@ -1,14 +1,16 @@
 import type { ChromeDict } from "../types";
 
 /**
- * Russian chrome dictionary. Key parity with `en/chrome.ts` is enforced by
+ * Russian chrome dictionary — native rewrite mirroring the current English
+ * direction. Key parity with `en/chrome.ts` is enforced by
  * `npm run check:locales` and `dictionaries.test.ts`.
  *
  * Terminology follows the TUI ru locale pack (`crates/tui/locales/ru.json`):
  * the modes Plan / Act / Operate and the permission postures
  * Ask / Auto-Review / Full Access stay Latin, wrapped in Russian prose
  * ("режим Operate", "режим разрешений"). The 深 seal is the masthead's mark,
- * not prose, and is shared across locales.
+ * not prose, and is shared across locales. Native nav labels pair with short
+ * English secondaries, per the masthead convention.
  */
 export const chrome: ChromeDict = {
   navDocs: "Документация",
@@ -31,10 +33,10 @@ export const chrome: ChromeDict = {
   navPrimaryAria: "Основная навигация",
   navHomeAria: "Главная Codewhale",
 
-  installCta: "Установка →",
+  installCta: "Установить →",
 
   wordmarkSeal: "深",
-  wordmarkTag: "любая модель · работает локально",
+  wordmarkTag: "любая модель, на вашей машине",
 
   issueLabel: "Выпуск {date}",
   dateLocale: "ru-RU",
@@ -65,7 +67,7 @@ export const chrome: ChromeDict = {
   themeTitle: "Тема документации · авто / светлая / тёмная",
 
   footerTagline:
-    "Мы ныряем в глубину, чтобы не пришлось вам — документация, исходный код и сообщество рантайма с открытым кодом.",
+    "Codewhale ныряет в глубину, чтобы вам не пришлось — документация, исходники и сообщество рантайма с открытым кодом.",
   footerProduct: "Продукт",
   footerProject: "Проект",
   footerDocs: "Документация",
