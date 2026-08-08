@@ -413,7 +413,7 @@ fn every_legitimately_recorded_event_survives_the_drain() {
     );
 
     // Dialect kinds (`deepseek-anthropic`, the Model Studio plan variants) are
-    // absent from `ProviderKind::ALL`, which is the 36-row *catalog* subset,
+    // absent from `ProviderKind::ALL`, which is the 37-row *catalog* subset,
     // but `ApiProvider::kind()` yields them for real routes. Narrowing the
     // provider bound to the catalog would drop those users' `session_end`.
     for kind in [

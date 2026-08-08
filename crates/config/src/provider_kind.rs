@@ -131,6 +131,15 @@ pub enum ProviderKind {
     Meta,
     #[serde(alias = "x-ai", alias = "x_ai", alias = "grok")]
     Xai,
+    /// Mistral AI — la Plateforme (OpenAI-compatible Chat Completions).
+    #[serde(
+        alias = "mistral-ai",
+        alias = "mistral_ai",
+        alias = "mistralai",
+        alias = "la-plateforme",
+        alias = "la_plateforme"
+    )]
+    Mistral,
     /// Jiangsu Telecom TokenHub (OpenAI-compatible).
     ///
     /// An AI gateway operated by Jiangsu Telecom that speaks the OpenAI Chat
@@ -195,7 +204,7 @@ impl ProviderKind {
     /// stay on the enum for serde and `provider_for_kind`, but they are not
     /// first-class catalog rows. Plan is `mode` / base_url; dialect is
     /// `wire = openai|anthropic` on the primary provider config.
-    pub const ALL: [Self; 36] = [
+    pub const ALL: [Self; 37] = [
         Self::Deepseek,
         Self::NvidiaNim,
         Self::Openai,
@@ -229,6 +238,7 @@ impl ProviderKind {
         Self::OpencodeZen,
         Self::Meta,
         Self::Xai,
+        Self::Mistral,
         Self::Telecomjs,
         Self::ModelstudioTokenPlan,
         Self::Custom,

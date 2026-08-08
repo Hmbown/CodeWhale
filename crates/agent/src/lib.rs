@@ -1168,6 +1168,51 @@ impl Default for ModelRegistry {
                 supports_tools: true,
                 supports_reasoning: false,
             },
+            ModelInfo {
+                id: "mistral-code-latest".to_string(),
+                provider: ProviderKind::Mistral,
+                aliases: vec![
+                    "codestral".to_string(),
+                    "codestral-latest".to_string(),
+                    "mistral-code".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: false,
+            },
+            ModelInfo {
+                id: "mistral-medium-latest".to_string(),
+                provider: ProviderKind::Mistral,
+                aliases: vec![
+                    "mistral-medium".to_string(),
+                    "mistral-medium-3-5".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "mistral-small-latest".to_string(),
+                provider: ProviderKind::Mistral,
+                aliases: vec![
+                    "mistral-small".to_string(),
+                    "mistral-small-2603".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "magistral-small-latest".to_string(),
+                provider: ProviderKind::Mistral,
+                aliases: vec!["magistral".to_string(), "magistral-small".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "mistral-large-latest".to_string(),
+                provider: ProviderKind::Mistral,
+                aliases: vec!["mistral-large".to_string()],
+                supports_tools: true,
+                supports_reasoning: false,
+            },
         ];
         Self::new(models)
     }

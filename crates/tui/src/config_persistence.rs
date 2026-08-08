@@ -304,6 +304,7 @@ fn provider_base_url_table_key(provider: ApiProvider) -> anyhow::Result<&'static
         ApiProvider::OpencodeZen => Ok("opencode_zen"),
         ApiProvider::Meta => Ok("meta"),
         ApiProvider::Xai => Ok("xai"),
+        ApiProvider::Mistral => Ok("mistral"),
         ApiProvider::Telecomjs => Ok("telecomjs"),
         ApiProvider::ModelstudioTokenPlan => Ok("modelstudio_token_plan"),
         ApiProvider::ModelstudioTokenPlanAnthropic => Ok("modelstudio_token_plan_anthropic"),

@@ -3172,6 +3172,7 @@ pub(super) fn apply_reasoning_effort(
             ApiProvider::OpencodeGo | ApiProvider::OpencodeZen => {}
             ApiProvider::Meta => {}
             ApiProvider::Xai => {}
+            ApiProvider::Mistral => {}
         },
         "low" | "minimal" | "medium" | "mid" | "high" | "" => match provider {
             // DeepSeek first-party Chat Completions: the wire documents
@@ -3294,6 +3295,7 @@ pub(super) fn apply_reasoning_effort(
             ApiProvider::OpencodeGo | ApiProvider::OpencodeZen => {}
             ApiProvider::Meta => {}
             ApiProvider::Xai => {}
+            ApiProvider::Mistral => {}
         },
         "xhigh" | "max" | "highest" | "ultracode" => match provider {
             ApiProvider::Deepseek
@@ -3376,6 +3378,7 @@ pub(super) fn apply_reasoning_effort(
             ApiProvider::OpencodeGo | ApiProvider::OpencodeZen => {}
             ApiProvider::Meta => {}
             ApiProvider::Xai => {}
+            ApiProvider::Mistral => {}
         },
         _ => {}
     }
