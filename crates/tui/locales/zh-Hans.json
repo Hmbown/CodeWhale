@@ -751,7 +751,7 @@
   "CtxMenuContextInspectorDesc": "活动上下文和缓存提示",
   "CtxMenuHelp": "帮助",
   "CtxMenuHelpDesc": "快捷键和命令",
-  "CtxMenuWindowPin": "弹出置顶小窗",
+  "CtxMenuWindowPin": "缩小并置顶",
   "CtxMenuWindowUnpin": "还原窗口",
   "CmdPinDescription": "置顶/还原当前窗口（小窗模式）",
   "CtxMenuWindowPinDesc": "置顶/还原当前窗口",

@@ -728,7 +728,7 @@
   "CtxMenuContextInspectorDesc": "aktiver Kontext und Cache-Hinweise",
   "CtxMenuHelp": "Hilfe",
   "CtxMenuHelpDesc": "Tastenbelegung und Befehle",
-  "CtxMenuWindowPin": "Als immer im Vordergrund liegendes Mini-Fenster einblenden",
+  "CtxMenuWindowPin": "Verkleinern und oben anpinnen",
   "CtxMenuWindowUnpin": "Fenster wiederherstellen",
   "CmdPinDescription": "Fenster als immer oben liegendes Mini-Fenster anpinnen/lösen",
   "CtxMenuWindowPinDesc": "Fenster oben anpinnen/lösen",

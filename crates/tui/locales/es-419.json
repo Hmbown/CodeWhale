@@ -751,7 +751,7 @@
   "CtxMenuContextInspectorDesc": "contexto activo y sugerencias de caché",
   "CtxMenuHelp": "Ayuda",
   "CtxMenuHelpDesc": "atajos de teclado y comandos",
-  "CtxMenuWindowPin": "Mostrar como ventana pequeña siempre encima",
+  "CtxMenuWindowPin": "Reducir y fijar al frente",
   "CtxMenuWindowUnpin": "Restaurar ventana",
   "CmdPinDescription": "Fijar/soltar la ventana como mini ventana siempre encima",
   "CtxMenuWindowPinDesc": "fijar/soltar esta ventana al frente",

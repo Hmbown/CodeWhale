@@ -19,7 +19,11 @@
  */
 
 /** Contributors whose PRs were merged or harvested into this release. */
-export const RELEASE_CONTRIBUTORS: string[] = ["@xavierpestel-ai"];
+export const RELEASE_CONTRIBUTORS: string[] = [
+  "@xavierpestel-ai",
+  "@ousamabenyounes",
+  "@rafaelcavalheri",
+];
 
 /** Contributors who helped with reports, reproductions, and verification. */
 export const RELEASE_HELPERS: string[] = [];

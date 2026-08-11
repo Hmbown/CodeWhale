@@ -728,7 +728,7 @@
   "CtxMenuContextInspectorDesc": "context actiu i pistes de memòria cau",
   "CtxMenuHelp": "Ajuda",
   "CtxMenuHelpDesc": "dreceres de teclat i ordres",
-  "CtxMenuWindowPin": "Mostra com a finestra petita sempre a sobre",
+  "CtxMenuWindowPin": "Redueix i fixa al davant",
   "CtxMenuWindowUnpin": "Restaura la finestra",
   "CmdPinDescription": "Fixa/allibera la finestra com a mini finestra sempre a sobre",
   "CtxMenuWindowPinDesc": "fixa/allibera aquesta finestra a sobre",

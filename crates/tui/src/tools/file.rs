@@ -637,11 +637,12 @@ impl ToolSpec for ReadFileTool {
         context.note_file_read(&file_path);
 
         // The window is a slice; the guard needs the whole file. A second
-        // streaming pass digests the rest without ever materializing it. A
-        // failure here only costs the guard — the read itself already
-        // succeeded, so the window is still returned, just without a hash to
-        // pass back to `edit`.
-        let hash = hash_file_streaming(&file_path).ok();
+        // streaming pass digests the rest without materializing it; failures
+        // only cost the guard. FIFOs are skipped: re-opening one blocks.
+        let hash = std::fs::metadata(&file_path)
+            .ok()
+            .filter(|meta| meta.is_file())
+            .and_then(|_| hash_file_streaming(&file_path).ok());
 
         // `start_line > total_lines` is not an error — it lets the model
         // page past the end without raising. Returns an empty-content

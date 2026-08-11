@@ -9159,9 +9159,16 @@ async fn full_access_auto_approves_non_bypassable_registered_tools() {
     let _lock = lock_test_env();
     let workspace = tempdir().expect("tempdir");
     let marker = workspace.path().join("runtime-tool-must-run");
+    // Use forward slashes on Windows: the server string travels through
+    // shlex-style splitting (`parse_mcp_command`), which folds `\\` back to
+    // `\` inside quotes — Python then reads `C:\Users\...` as a Unicode
+    // escape (`\U`) and dies with a SyntaxError before writing the marker.
+    // `C:/Users/...` is a valid Windows path for `pathlib`, survives the
+    // fold untouched, and is a no-op on Unix where paths contain no
+    // backslashes.
     let marker_literal = marker
         .to_string_lossy()
-        .replace('\\', "\\\\")
+        .replace('\\', "/")
         .replace('\'', "\\'");
     // GitHub's Windows image exposes the interpreter as `python`; Unix
     // images expose `python3`. Keep the runtime-tool execution receipt

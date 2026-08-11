@@ -22,8 +22,6 @@
 //! tab→window mapping. The foreground-window check mitigates this for the
 //! common case (the user just right-clicked inside the host).
 
-use std::sync::Mutex;
-
 /// Default pixel size of the pinned (always-on-top) mini window.
 /// The user can resize the terminal window while pinned; this is the default.
 #[cfg(windows)]
@@ -40,6 +38,7 @@ const MAX_ANCESTOR_HOPS: u32 = 8;
 mod imp {
     use super::*;
     use std::mem::size_of;
+    use std::sync::Mutex;
     use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT};
     use windows::Win32::System::Console::GetConsoleWindow;
     use windows::Win32::System::Diagnostics::ToolHelp::{

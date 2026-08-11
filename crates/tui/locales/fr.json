@@ -728,7 +728,7 @@
   "CtxMenuContextInspectorDesc": "contexte actif et indices de cache",
   "CtxMenuHelp": "Aide",
   "CtxMenuHelpDesc": "raccourcis clavier et commandes",
-  "CtxMenuWindowPin": "Afficher en mini-fenêtre toujours au premier plan",
+  "CtxMenuWindowPin": "Réduire et épingler au premier plan",
   "CtxMenuWindowUnpin": "Restaurer la fenêtre",
   "CmdPinDescription": "Épingler/détacher la fenêtre en mini-fenêtre toujours au premier plan",
   "CtxMenuWindowPinDesc": "épingler/détacher cette fenêtre au premier plan",

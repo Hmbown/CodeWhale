@@ -85,9 +85,9 @@
     "modes": {
       "act": {
         "active": {
-          "bytes": 23406,
+          "bytes": 23644,
           "identity_sha256": "91bbfb5891540ad8eceadb88192efd7087d185877796ebd30760a1d85c20f68a",
-          "tokens_est": 5852,
+          "tokens_est": 5911,
           "tool_names": [
             "Bash",
             "File",
@@ -102,9 +102,9 @@
           "tools": 9
         },
         "full": {
-          "bytes": 68206,
-          "identity_sha256": "5ab3ae7ec9c95d11cafa35d76fa359c96d8e8b12d837a2deb94cdc8f134f938d",
-          "tokens_est": 17052,
+          "bytes": 69206,
+          "identity_sha256": "df721211dcd1f83ec71189dbceb2dfacd361244a3caa325a79120b1b70646763",
+          "tokens_est": 17302,
           "tool_names": [
             "Bash",
             "File",
@@ -149,20 +149,21 @@
             "todo_write",
             "tool_search",
             "tts",
+            "tui_help",
             "update_goal",
             "validate_data",
             "verify",
             "web.run",
             "workflow"
           ],
-          "tools": 48
+          "tools": 49
         }
       },
       "operate": {
         "active": {
-          "bytes": 23406,
+          "bytes": 23644,
           "identity_sha256": "91bbfb5891540ad8eceadb88192efd7087d185877796ebd30760a1d85c20f68a",
-          "tokens_est": 5852,
+          "tokens_est": 5911,
           "tool_names": [
             "Bash",
             "File",
@@ -177,9 +178,9 @@
           "tools": 9
         },
         "full": {
-          "bytes": 68206,
-          "identity_sha256": "5ab3ae7ec9c95d11cafa35d76fa359c96d8e8b12d837a2deb94cdc8f134f938d",
-          "tokens_est": 17052,
+          "bytes": 69206,
+          "identity_sha256": "df721211dcd1f83ec71189dbceb2dfacd361244a3caa325a79120b1b70646763",
+          "tokens_est": 17302,
           "tool_names": [
             "Bash",
             "File",
@@ -224,20 +225,21 @@
             "todo_write",
             "tool_search",
             "tts",
+            "tui_help",
             "update_goal",
             "validate_data",
             "verify",
             "web.run",
             "workflow"
           ],
-          "tools": 48
+          "tools": 49
         }
       },
       "plan": {
         "active": {
-          "bytes": 17221,
+          "bytes": 17459,
           "identity_sha256": "a62fe19356273d0a5b95704ae43f7570855c6e144eee148ae4c673c196b7f21b",
-          "tokens_est": 4306,
+          "tokens_est": 4365,
           "tool_names": [
             "File",
             "Git",
@@ -250,9 +252,9 @@
           "tools": 7
         },
         "full": {
-          "bytes": 42146,
+          "bytes": 42384,
           "identity_sha256": "a857096f86f3a044354a246b567ad7efa06dd0341fddc4da9f4d9d491f71b0bc",
-          "tokens_est": 10537,
+          "tokens_est": 10596,
           "tool_names": [
             "File",
             "Git",

@@ -728,7 +728,7 @@
   "CtxMenuContextInspectorDesc": "активный контекст и подсказки кэша",
   "CtxMenuHelp": "Справка",
   "CtxMenuHelpDesc": "сочетания клавиш и команды",
-  "CtxMenuWindowPin": "Открыть как мини-окно поверх всех окон",
+  "CtxMenuWindowPin": "Уменьшить и закрепить поверх всех",
   "CtxMenuWindowUnpin": "Восстановить окно",
   "CmdPinDescription": "Закрепить/открепить окно как мини-окно поверх всех",
   "CtxMenuWindowPinDesc": "закрепить/открепить это окно поверх всех",

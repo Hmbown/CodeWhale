@@ -751,7 +751,7 @@
   "CtxMenuContextInspectorDesc": "active context and cache hints",
   "CtxMenuHelp": "Help",
   "CtxMenuHelpDesc": "keybindings and commands",
-  "CtxMenuWindowPin": "Shrink to always-on-top mini window",
+  "CtxMenuWindowPin": "Shrink and pin on top",
   "CtxMenuWindowUnpin": "Restore window",
   "CmdPinDescription": "Pin/unpin the window as an always-on-top mini window",
   "CtxMenuWindowPinDesc": "pin/unpin this window on top",

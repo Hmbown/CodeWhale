@@ -728,7 +728,7 @@
   "CtxMenuContextInspectorDesc": "konteks aktif dan petunjuk cache",
   "CtxMenuHelp": "Bantuan",
   "CtxMenuHelpDesc": "keybinding dan perintah",
-  "CtxMenuWindowPin": "Munculkan sebagai jendela mini selalu di atas",
+  "CtxMenuWindowPin": "Kecilkan dan sematkan di atas",
   "CtxMenuWindowUnpin": "Pulihkan jendela",
   "CmdPinDescription": "Sematkan/lepaskan jendela sebagai mini window di atas",
   "CtxMenuWindowPinDesc": "sempatkan/lepaskan jendela ini di atas",

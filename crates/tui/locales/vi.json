@@ -751,7 +751,7 @@
   "CtxMenuContextInspectorDesc": "ngữ cảnh đang hoạt động và gợi ý bộ nhớ đệm",
   "CtxMenuHelp": "Trợ giúp",
   "CtxMenuHelpDesc": "phím tắt và lệnh",
-  "CtxMenuWindowPin": "Hiện ra dưới dạng cửa sổ nhỏ luôn ở trên cùng",
+  "CtxMenuWindowPin": "Thu nhỏ và ghim lên trên cùng",
   "CtxMenuWindowUnpin": "Khôi phục cửa sổ",
   "CmdPinDescription": "Ghim/bỏ ghim cửa sổ thành cửa sổ nhỏ trên cùng",
   "CtxMenuWindowPinDesc": "ghim/bỏ ghim cửa sổ này lên trên cùng",

@@ -751,7 +751,7 @@
   "CtxMenuContextInspectorDesc": "contexto ativo e dicas de cache",
   "CtxMenuHelp": "Ajuda",
   "CtxMenuHelpDesc": "atalhos de teclado e comandos",
-  "CtxMenuWindowPin": "Exibir como mini-janela sempre no topo",
+  "CtxMenuWindowPin": "Reduzir e fixar no topo",
   "CtxMenuWindowUnpin": "Restaurar janela",
   "CmdPinDescription": "Fixar/soltar a janela como mini-janela sempre no topo",
   "CtxMenuWindowPinDesc": "fixar/soltar esta janela sempre no topo",

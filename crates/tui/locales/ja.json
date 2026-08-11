@@ -751,7 +751,7 @@
   "CtxMenuContextInspectorDesc": "アクティブなコンテキストとキャッシュヒント",
   "CtxMenuHelp": "ヘルプ",
   "CtxMenuHelpDesc": "キー操作とコマンド",
-  "CtxMenuWindowPin": "最前面のミニウィンドウとして表示",
+  "CtxMenuWindowPin": "縮小して最前面に固定",
   "CtxMenuWindowUnpin": "ウィンドウを元に戻す",
   "CmdPinDescription": "ウィンドウを最前面のミニウィンドウとして固定/解除",
   "CtxMenuWindowPinDesc": "このウィンドウを最前面に固定/解除",

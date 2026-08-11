@@ -11,10 +11,7 @@ unmaintained = "all"
 unsound = "all"
 # Ignore specific advisories (known issues in dependencies)
 ignore = [
-    "RUSTSEC-2024-0436",  # paste unmaintained - no safe upgrade
-    "RUSTSEC-2026-0192",  # ttf-parser unmaintained - no safe upgrade
-    "RUSTSEC-2024-0388",  # derivative unmaintained - transitive via starlark
-    "RUSTSEC-2025-0057",  # fxhash unmaintained - transitive via starlark
+    "RUSTSEC-2026-0253",  # lru pop() use-after-free (panic-safety) - transitive via ratatui-core 0.1.0, no safe upgrade yet
     "RUSTSEC-2025-0141",  # bincode unmaintained - transitive via syntect, no safe upgrade (syntect 5.3.0 is latest)
     "RUSTSEC-2024-0320",  # yaml-rust unmaintained - transitive via syntect, no safe upgrade (syntect 5.3.0 is latest)
 ]

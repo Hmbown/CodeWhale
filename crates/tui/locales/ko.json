@@ -751,7 +751,7 @@
   "CtxMenuContextInspectorDesc": "활성 컨텍스트와 캐시 힌트",
   "CtxMenuHelp": "도움말",
   "CtxMenuHelpDesc": "단축키와 명령어",
-  "CtxMenuWindowPin": "항상 위 미니 창으로 팝아웃",
+  "CtxMenuWindowPin": "축소해서 항상 위로 고정",
   "CtxMenuWindowUnpin": "창 복원",
   "CmdPinDescription": "창을 항상 위 미니 창으로 고정/해제",
   "CtxMenuWindowPinDesc": "이 창을 항상 위로 고정/해제",

@@ -728,7 +728,7 @@
   "CtxMenuContextInspectorDesc": "सक्रिय कॉन्टेक्स्ट और कैश संकेत",
   "CtxMenuHelp": "मदद",
   "CtxMenuHelpDesc": "कीबाइंडिंग और कमांड",
-  "CtxMenuWindowPin": "हमेशा ऊपर मिनी विंडो के रूप में पॉप आउट करें",
+  "CtxMenuWindowPin": "छोटा करें और ऊपर पिन करें",
   "CtxMenuWindowUnpin": "विंडो पुनर्स्थापित करें",
   "CmdPinDescription": "विंडो को ऊपर मिनी विंडो के रूप में पिन/अनपिन करें",
   "CtxMenuWindowPinDesc": "इस विंडो को ऊपर पिन/अनपिन करें",

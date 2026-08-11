@@ -93,7 +93,7 @@ globset = "0.4"
 ignore = "0.4"
 image = { version = "0.25", default-features = false, features = ["png"] }
 htmd = "0.5.4"
-lru = "0.16"
+lru = "0.18"
 parking_lot = "0.12"
 tar = "0.4"
 flate2 = "1.1"
