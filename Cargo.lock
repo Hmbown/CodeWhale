@@ -1098,6 +1098,7 @@ dependencies = [
  "wait-timeout",
  "webbrowser",
  "windows 0.62.2",
+ "windows-core",
  "windows-sys 0.61.2",
  "wiremock",
 ]

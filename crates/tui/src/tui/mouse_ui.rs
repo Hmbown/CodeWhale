@@ -1244,6 +1244,26 @@ pub(crate) fn build_context_menu_entries(app: &App, mouse: MouseEvent) -> Vec<Co
         .with_glyph("?"),
     );
 
+    // Host window control (Windows only): pin/unpin the terminal window into
+    // an always-on-top mini window. Global action, listed after the app
+    // chrome entries. The label flips while pinned ("还原窗口" instead of
+    // "弹出置顶小窗") so the entry always describes what the click will do.
+    if crate::tui::window_control::available() {
+        let pinned = crate::tui::window_control::pinned();
+        entries.push(
+            ContextMenuEntry::new(
+                app.tr(if pinned {
+                    MessageId::CtxMenuWindowUnpin
+                } else {
+                    MessageId::CtxMenuWindowPin
+                }),
+                app.tr(MessageId::CtxMenuWindowPinDesc),
+                ContextMenuAction::ToggleWindowPin,
+            )
+            .with_glyph(if pinned { "↩" } else { "📌" }),
+        );
+    }
+
     let branch = git_path
         .as_deref()
         .and_then(|_| crate::tui::workspace_context::branch(&app.workspace));
@@ -1308,6 +1328,18 @@ pub(crate) fn handle_context_menu_action(app: &mut App, action: ContextMenuActio
             } else {
                 app.status_message = Some("Copy failed".to_string());
             }
+        }
+        ContextMenuAction::ToggleWindowPin => {
+            let pinned = crate::tui::window_control::toggle_pin();
+            app.status_message = Some(
+                app.tr(if pinned {
+                    MessageId::WindowPinActive
+                } else {
+                    MessageId::WindowPinReleased
+                })
+                .into_owned(),
+            );
+            app.needs_redraw = true;
         }
         ContextMenuAction::OpenCommandPalette => {
             codewhale_telemetry::session_counters()

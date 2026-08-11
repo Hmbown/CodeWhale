@@ -148,3 +148,6 @@ CODEWHALE_0_9_0_CUTOVER.md
 
 # Ralph agent scratch (local only)
 .ralph/
+
+# Local-only cargo mirror config (rsproxy.cn); see .cargo/config.toml
+.cargo/config.toml

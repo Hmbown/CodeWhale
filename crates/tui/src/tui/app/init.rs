@@ -850,6 +850,7 @@ impl App {
             session_artifacts: Vec::new(),
             trust_mode: yolo_compat || initial_mode == AppMode::Yolo || configured_trust_mode,
             translation_enabled: false,
+            mini_window: config.mini_window.clone().unwrap_or_default(),
             status_items: config
                 .tui
                 .as_ref()

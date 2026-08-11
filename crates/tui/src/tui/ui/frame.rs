@@ -732,8 +732,22 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) {
         return;
     }
 
-    let header_height = header_height_for(size.height);
-    let footer_height = crate::tui::phase_strip::height();
+    // Mini-window mode: when the host terminal window is pinned into its
+    // small always-on-top form, hide the shell chrome and keep only what the
+    // user opted to keep (`[mini_window]` in config.toml, or mutated live by
+    // `/config mini_window.keep_*`). The message stream takes the rest.
+    let mini = crate::tui::window_control::pinned();
+    let mini_cfg = app.mini_window.clone();
+    let header_height = if mini && !mini_cfg.keep_header {
+        0
+    } else {
+        header_height_for(size.height)
+    };
+    let footer_height = if mini && !mini_cfg.keep_footer {
+        0
+    } else {
+        crate::tui::phase_strip::height()
+    };
     let slash_menu_entries = visible_slash_menu_entries(app, SLASH_MENU_LIMIT);
     let mention_menu_limit = app.mention_menu_limit;
     let mention_menu_entries =
@@ -747,8 +761,19 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) {
     // the reservation and the render disagree inside a single frame.
     let idle_empty = crate::tui::widgets::should_render_empty_state(app);
     let rail_budget = rail_row_budget(app, shell_area.width, shell_area.height, idle_empty);
-    let top_work_strip_height =
-        crate::tui::work_surface::height(app, shell_area.width, shell_area.height, rail_budget);
+    let top_work_strip_height = if mini && !mini_cfg.keep_todo {
+        // Mini mode hides the strip; when the side rail is also hidden (the
+        // default), drop the work-surface interaction state so stale
+        // hitboxes from the pre-pin layout cannot swallow transcript clicks
+        // or trigger phantom strip actions (review M1). A visible rail/strip
+        // refreshes that state during its own render.
+        if !mini_cfg.keep_sidebar {
+            crate::tui::work_surface::collapse_strip(app);
+        }
+        0
+    } else {
+        crate::tui::work_surface::height(app, shell_area.width, shell_area.height, rail_budget)
+    };
 
     // Defensive two-pass layout: pin the header to the absolute top row,
     // then split the remaining body area for chat / preview / composer /
@@ -768,7 +793,9 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) {
     let composer_max_height = body_height
         .saturating_sub(MIN_CHAT_HEIGHT + footer_height + top_work_strip_height)
         .max(MIN_COMPOSER_HEIGHT);
-    let composer_height = {
+    let composer_height = if mini && !mini_cfg.keep_input {
+        0
+    } else {
         let composer_widget = ComposerWidget::new(
             app,
             composer_max_height,
@@ -783,32 +810,44 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) {
     // "messages typed during a running turn vanish" complaint by giving the
     // user immediate visible feedback above the composer.
     let pending_preview = build_pending_input_preview(app);
-    let desired_preview_height = pending_preview.desired_height(shell_area.width);
+    let desired_preview_height = if mini {
+        0
+    } else {
+        pending_preview.desired_height(shell_area.width)
+    };
 
     // Persistent background-work indicator (#5286): one pinned row above the
     // composer while shells / durable tasks / sub-agents are in flight. The
     // chip mirrors the Work strip and `/jobs` state — no separate registry —
     // and collapses to zero rows when nothing is pending. It is carved from
     // the auxiliary budget so compact terminals shed the chip before they
-    // shed chat/composer space.
+    // shed chat/composer space. Mini mode hides it with the rest of the
+    // chrome.
     let pending_work = crate::tui::background_indicator::pending_work_from_app(app);
     let composer_floor = MIN_COMPOSER_HEIGHT.saturating_add(u16::from(app.composer_border));
-    let indicator_height = u16::from(!pending_work.is_empty()).min(
-        rail_budget
-            .saturating_sub(top_work_strip_height)
-            .saturating_sub(composer_height.saturating_sub(composer_floor)),
-    );
+    let indicator_height = if mini {
+        0
+    } else {
+        u16::from(!pending_work.is_empty()).min(
+            rail_budget
+                .saturating_sub(top_work_strip_height)
+                .saturating_sub(composer_height.saturating_sub(composer_floor)),
+        )
+    };
 
     // WorkflowPanel unified activity surface (#4121). Expanded while running
     // (interactive drill-in above the composer); when collapsed the panel
     // takes no rows — its persistent status lives in the top status bar as a
     // header chip instead (#5040). Zero height when no panel.
-    let desired_workflow_panel_height = app
-        .workflow_panel
-        .as_ref()
-        .filter(|panel| panel.expanded)
-        .map(|panel| panel.desired_height(shell_area.width))
-        .unwrap_or(0);
+    let desired_workflow_panel_height = if mini {
+        0
+    } else {
+        app.workflow_panel
+            .as_ref()
+            .filter(|panel| panel.expanded)
+            .map(|panel| panel.desired_height(shell_area.width))
+            .unwrap_or(0)
+    };
     let auxiliary_budget = body_height
         .saturating_sub(
             top_work_strip_height
@@ -868,8 +907,13 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) {
         ])
         .split(body_area);
 
-    let (work_chat_area, side_work_area) =
-        crate::tui::work_surface::split_chat(app, body_chunks[1], rail_min_chat_width(idle_empty));
+    let (work_chat_area, side_work_area) = if mini && !mini_cfg.keep_sidebar {
+        // Mini mode without the side rail: the transcript takes the whole
+        // chat row. split_chat is skipped so the rail never reserves columns.
+        (body_chunks[1], None)
+    } else {
+        crate::tui::work_surface::split_chat(app, body_chunks[1], rail_min_chat_width(idle_empty))
+    };
 
     if top_work_strip_height > 0 {
         crate::tui::work_surface::render(f, body_chunks[0], app);

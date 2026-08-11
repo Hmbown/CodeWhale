@@ -170,7 +170,7 @@ fn top_cap(app: &App, terminal_height: u16, rail_budget: u16) -> u16 {
 /// screen. Every path reporting "no strip this frame" must run this: hitboxes
 /// outlive the rows they described, so a strip that yielded its rows would
 /// still swallow clicks landing on the transcript that replaced it.
-fn collapse_strip(app: &mut App) {
+pub(crate) fn collapse_strip(app: &mut App) {
     app.work_surface.last_area = None;
     app.work_surface.hitboxes.clear();
     app.work_surface.focused = false;

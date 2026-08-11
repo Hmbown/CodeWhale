@@ -32,6 +32,7 @@ use super::model::{
 mod layout;
 mod rows;
 
+pub(crate) use layout::collapse_strip;
 pub use layout::{height, split_chat};
 
 use rows::{

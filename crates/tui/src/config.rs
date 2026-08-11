@@ -2751,6 +2751,56 @@ pub struct Config {
     /// legacy shared behavior.
     #[serde(skip)]
     pub(crate) root_base_url_owner: BaseUrlEnvReceipt,
+
+    /// Mini-window (pinned, always-on-top) mode layout preferences
+    /// (`[mini_window]` in config.toml). When the host terminal window is
+    /// pinned into its small always-on-top form, the TUI switches to a
+    /// compact layout that keeps only the elements listed here.
+    #[serde(default)]
+    pub mini_window: Option<MiniWindowConfig>,
+}
+
+/// Layout preferences for the pinned (always-on-top) mini-window mode.
+///
+/// When the host window is shrunk into its mini form (the right-click
+/// "弹出置顶小窗" action), the TUI hides the shell chrome and keeps only the
+/// message stream plus whatever the user opted to keep here.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct MiniWindowConfig {
+    /// Keep the composer (message input box) visible in mini mode.
+    /// Default: true — the mini window stays interactive.
+    #[serde(default = "mini_default_keep_input")]
+    pub keep_input: bool,
+    /// Keep the Tasks + To-do strip visible in mini mode. Default: false.
+    #[serde(default)]
+    pub keep_todo: bool,
+    /// Keep the side work rail (work surface side panel) visible in mini
+    /// mode. Default: false.
+    #[serde(default)]
+    pub keep_sidebar: bool,
+    /// Keep the bottom phase strip visible in mini mode. Default: false.
+    #[serde(default)]
+    pub keep_footer: bool,
+    /// Keep the top status bar (route/mode/effort/permission header) visible
+    /// in mini mode. Default: false.
+    #[serde(default)]
+    pub keep_header: bool,
+}
+
+impl Default for MiniWindowConfig {
+    fn default() -> Self {
+        Self {
+            keep_input: true,
+            keep_todo: false,
+            keep_sidebar: false,
+            keep_footer: false,
+            keep_header: false,
+        }
+    }
+}
+
+fn mini_default_keep_input() -> bool {
+    true
 }
 
 /// What the environment layer decided about the generic
@@ -9316,6 +9366,7 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
                 recorded => recorded,
             }
         },
+        mini_window: override_cfg.mini_window.or(base.mini_window),
     }
 }
 

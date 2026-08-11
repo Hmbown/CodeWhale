@@ -909,6 +909,19 @@ pub enum MessageId {
     CtxMenuContextInspectorDesc,
     CtxMenuHelp,
     CtxMenuHelpDesc,
+    /// Right-click menu: pin/unpin the host terminal window into an
+    /// always-on-top mini window.
+    CtxMenuWindowPin,
+    /// Right-click menu: unpin label shown while the window is pinned.
+    CtxMenuWindowUnpin,
+    /// Right-click menu: description for the window-pin entry.
+    CtxMenuWindowPinDesc,
+    /// `/pin` command description (always-on-top mini-window toggle).
+    CmdPinDescription,
+    /// Status toast: host window is now the always-on-top mini window.
+    WindowPinActive,
+    /// Status toast: host window restored from the pinned mini window.
+    WindowPinReleased,
     // Agent fanout card.
     FanoutCounts,
 
@@ -2297,6 +2310,12 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CtxMenuContextInspectorDesc,
     MessageId::CtxMenuHelp,
     MessageId::CtxMenuHelpDesc,
+    MessageId::CtxMenuWindowPin,
+    MessageId::CtxMenuWindowUnpin,
+    MessageId::CtxMenuWindowPinDesc,
+    MessageId::CmdPinDescription,
+    MessageId::WindowPinActive,
+    MessageId::WindowPinReleased,
     MessageId::FanoutCounts,
     MessageId::AppModeAgent,
     MessageId::AppModeAuto,

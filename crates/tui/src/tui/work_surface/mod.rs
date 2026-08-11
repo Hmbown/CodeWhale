@@ -70,6 +70,7 @@ mod render;
 pub use input::{handle_key, handle_mouse};
 pub(crate) use interaction::agent_details_closed;
 pub use model::{RailPanel, WorkSurfacePlacement, WorkSurfaceState};
+pub(crate) use render::collapse_strip;
 pub use render::{height, render, split_chat};
 
 #[cfg(test)]

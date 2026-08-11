@@ -1620,6 +1620,11 @@ pub struct App {
     /// the current locale and a post-hoc translation layer replaces any
     /// remaining English output before it reaches the user.
     pub translation_enabled: bool,
+    /// Mini-window (pinned always-on-top) layout preferences, sourced from
+    /// `[mini_window]` in config.toml at startup and mutated live by
+    /// `/config mini_window.keep_*`. The renderer reads this instead of the
+    /// parsed Config so runtime changes apply without a restart.
+    pub(crate) mini_window: crate::config::MiniWindowConfig,
     /// Ordered list of footer items the user wants visible. Sourced from
     /// `tui.status_items` in `~/.deepseek/config.toml` at startup; mutated
     /// live by `/statusline`. The renderer iterates this slice; no item is

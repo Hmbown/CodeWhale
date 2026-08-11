@@ -106,6 +106,7 @@ pub mod user_input;
 pub mod views;
 pub mod vim_mode;
 pub mod widgets;
+pub mod window_control;
 pub mod work_surface;
 pub mod workspace_context;
 pub mod worktree_manager;

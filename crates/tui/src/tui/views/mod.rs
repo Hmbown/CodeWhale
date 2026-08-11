@@ -631,6 +631,9 @@ pub enum ContextMenuAction {
     CopyText {
         text: String,
     },
+    /// Pin/unpin the host terminal window (normal window ↔ always-on-top
+    /// mini window). Windows only; no-op elsewhere.
+    ToggleWindowPin,
 }
 
 #[derive(Debug, Clone)]
