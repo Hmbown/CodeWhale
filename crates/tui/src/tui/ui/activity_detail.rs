@@ -12,7 +12,9 @@ use crate::tui::app::App;
 use crate::tui::footer_ui::one_line_summary;
 use crate::tui::history::{HistoryCell, ToolCell, ToolStatus};
 use crate::tui::pager::PagerView;
-use crate::tui::ui_text::{history_cell_to_text, truncate_line_to_width};
+use crate::tui::ui_text::{
+    history_cell_to_clipboard_text, history_cell_to_text, truncate_line_to_width,
+};
 
 fn selected_transcript_cell_index(app: &App) -> Option<usize> {
     app.viewport
@@ -513,7 +515,7 @@ pub(crate) fn copy_cell_to_clipboard(app: &mut App, cell_index: usize) -> bool {
         .last_transcript_area
         .map(|area| area.width)
         .unwrap_or(80);
-    let text = history_cell_to_text(cell, width);
+    let text = history_cell_to_clipboard_text(cell, width);
     if text.trim().is_empty() {
         app.status_message = Some("Message is empty".to_string());
         return false;
@@ -1720,5 +1722,25 @@ mod tests {
         assert!(open_reasoning_detail_pager(&mut app));
         let top = app.view_stack.top_kind();
         assert_eq!(top, Some(crate::tui::views::ModalKind::Pager));
+    }
+
+    #[test]
+    fn copy_cell_to_clipboard_uses_canonical_assistant_source() {
+        let mut app = test_app();
+        let content = "A long response with literal ● and ▏ glyphs that wraps visually.";
+        app.history = vec![HistoryCell::Assistant {
+            content: content.to_string(),
+            streaming: false,
+        }];
+        app.resync_history_revisions();
+        app.viewport.last_transcript_area = Some(ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 12,
+            height: 24,
+        });
+
+        assert!(copy_cell_to_clipboard(&mut app, 0));
+        assert_eq!(app.clipboard.last_written_text(), Some(content));
     }
 }
