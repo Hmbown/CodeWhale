@@ -388,13 +388,22 @@ impl ModalView for ContextMenuView {
                 entry.glyph.as_str()
             };
             let hint = entry.hint.as_str();
+            let glyph_width = UnicodeWidthStr::width(glyph);
+            // Fixed glyph slot of two display columns: full-width icons (📌,
+            // 2 cols) fit as-is, narrow ones (? / ↩, 1 col) get a trailing
+            // space so every label starts at the same column.
+            let glyph_slot = if glyph_width < 2 {
+                format!("{glyph} ")
+            } else {
+                glyph.to_string()
+            };
             let label_budget = inner_width
-                .saturating_sub(UnicodeWidthStr::width(glyph))
+                .saturating_sub(glyph_width.max(2))
                 .saturating_sub(UnicodeWidthStr::width(hint))
                 .saturating_sub(4);
             let label = trim_to_width(&entry.label, label_budget);
             let pad = label_budget.saturating_sub(UnicodeWidthStr::width(label.as_str()));
-            let text = format!(" {glyph} {label}{} {hint} ", " ".repeat(pad));
+            let text = format!(" {glyph_slot} {label}{} {hint} ", " ".repeat(pad));
             let style = if !selected && entry.primary {
                 row_style.add_modifier(Modifier::BOLD)
             } else {
