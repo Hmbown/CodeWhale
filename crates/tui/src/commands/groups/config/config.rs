@@ -1997,6 +1997,35 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                 .unwrap_or(crate::pricing::CostCurrency::Usd);
             app.needs_redraw = true;
         }
+        key @ ("mini_window.keep_header"
+        | "mini_window.keep_input"
+        | "mini_window.keep_todo"
+        | "mini_window.keep_sidebar"
+        | "mini_window.keep_footer") => {
+            let field = key.strip_prefix("mini_window.").unwrap_or(key);
+            let value = match parse_config_bool(value) {
+                Ok(value) => value,
+                Err(err) => return CommandResult::error(err),
+            };
+            match field {
+                "keep_header" => app.mini_window.keep_header = value,
+                "keep_input" => app.mini_window.keep_input = value,
+                "keep_todo" => app.mini_window.keep_todo = value,
+                "keep_sidebar" => app.mini_window.keep_sidebar = value,
+                "keep_footer" => app.mini_window.keep_footer = value,
+                _ => unreachable!("mini_window field matched above"),
+            }
+            if persist {
+                if let Err(err) = crate::config_persistence::persist_mini_window_bool_key(
+                    app.config_path.as_deref(),
+                    field,
+                    value,
+                ) {
+                    return CommandResult::error(format!("Failed to persist: {err}"));
+                }
+            }
+            app.needs_redraw = true;
+        }
         "composer_density" | "composer" => {
             app.composer_density =
                 crate::tui::app::ComposerDensity::from_setting(&settings.composer_density);

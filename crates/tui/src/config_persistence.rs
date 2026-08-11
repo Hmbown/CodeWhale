@@ -181,6 +181,14 @@ pub(crate) fn persist_subagents_bool_key(
     persist_table_value_key(config_path, "subagents", key, value.into())
 }
 
+pub(crate) fn persist_mini_window_bool_key(
+    config_path: Option<&Path>,
+    key: &str,
+    value: bool,
+) -> anyhow::Result<PathBuf> {
+    persist_table_value_key(config_path, "mini_window", key, value.into())
+}
+
 pub(crate) fn persist_subagents_integer_key(
     config_path: Option<&Path>,
     key: &str,

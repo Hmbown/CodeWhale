@@ -27,6 +27,7 @@ mod links;
 mod model;
 mod modeldb;
 mod models;
+mod pin;
 mod profile;
 mod provider;
 mod queue;
@@ -181,6 +182,10 @@ impl CommandGroup for CoreCommands {
             Box::new(FunctionCommand::new(
                 voice::VoiceControlCmd::info(),
                 voice::VoiceControlCmd::execute,
+            )),
+            Box::new(FunctionCommand::new(
+                pin::PinCmd::info(),
+                pin::PinCmd::execute
             )),
         ])
     }
