@@ -21,7 +21,7 @@
 # `api_key` / `base_url` are
 # still read as DeepSeek defaults when `[providers.deepseek]` is absent
 # (backward compatibility).
-provider = "deepseek" # deepseek | deepseek-cn | deepseek-anthropic | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | siliconflow-CN | arcee | moonshot | zai | stepfun | minimax | sglang | vllm | ollama | huggingface | together | qianfan | openai-codex | anthropic | openmodel | deepinfra | sakana | longcat | opencode-go | opencode-zen | meta | xai | modelstudio-token-plan | modelstudio-coding-plan
+provider = "deepseek" # deepseek | deepseek-cn | deepseek-anthropic | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | orcarouter | xiaomi-mimo | novita | fireworks | siliconflow | siliconflow-CN | arcee | moonshot | zai | stepfun | minimax | sglang | vllm | ollama | huggingface | together | qianfan | openai-codex | anthropic | openmodel | deepinfra | sakana | longcat | opencode-go | opencode-zen | meta | xai | modelstudio-token-plan | modelstudio-coding-plan
 api_key = "YOUR_DEEPSEEK_API_KEY" # must be non-empty
 base_url = "https://api.deepseek.com/beta"
 # provider = "deepseek-cn"                       # legacy alias (official host is still https://api.deepseek.com)
@@ -528,6 +528,15 @@ max_subagents = 10 # optional (1-20)
 # qwen/qwen3.7-max, google/gemma-4-31b-it, z-ai/glm-5.1, z-ai/glm-5.2,
 # moonshotai/kimi-k2.6,
 # nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free, and nvidia/nemotron-3-ultra.
+
+# OrcaRouter — OpenAI-compatible aggregation gateway (https://www.orcarouter.ai)
+[providers.orcarouter]
+# api_key = "YOUR_ORCAROUTER_API_KEY"
+# base_url = "https://api.orcarouter.ai/v1"
+# model = "deepseek/deepseek-v4-pro"
+# Namespaced wire models pass through verbatim (deepseek/deepseek-v4-pro,
+# deepseek/deepseek-v4-flash); OrcaRouter's own auto-routing model is
+# selectable as "orcarouter/auto".
 
 # Xiaomi MiMo OpenAI-compatible endpoint (https://platform.xiaomimimo.com)
 [providers.xiaomi_mimo]

@@ -20,12 +20,13 @@ use super::{
     DEFAULT_OPENAI_CODEX_BASE_URL, DEFAULT_OPENAI_CODEX_MODEL, DEFAULT_OPENAI_MODEL,
     DEFAULT_OPENCODE_GO_BASE_URL, DEFAULT_OPENCODE_GO_MODEL, DEFAULT_OPENCODE_ZEN_BASE_URL,
     DEFAULT_OPENCODE_ZEN_MODEL, DEFAULT_OPENMODEL_BASE_URL, DEFAULT_OPENMODEL_MODEL,
-    DEFAULT_OPENROUTER_BASE_URL, DEFAULT_OPENROUTER_MODEL, DEFAULT_QIANFAN_BASE_URL,
-    DEFAULT_QIANFAN_MODEL, DEFAULT_SAKANA_BASE_URL, DEFAULT_SAKANA_MODEL, DEFAULT_SGLANG_BASE_URL,
-    DEFAULT_SGLANG_MODEL, DEFAULT_SILICONFLOW_BASE_URL, DEFAULT_SILICONFLOW_CN_BASE_URL,
-    DEFAULT_SILICONFLOW_MODEL, DEFAULT_STEPFUN_BASE_URL, DEFAULT_STEPFUN_MODEL,
-    DEFAULT_TELECOMJS_BASE_URL, DEFAULT_TELECOMJS_MODEL, DEFAULT_TOGETHER_BASE_URL,
-    DEFAULT_TOGETHER_MODEL, DEFAULT_VLLM_BASE_URL, DEFAULT_VLLM_MODEL, DEFAULT_VOLCENGINE_BASE_URL,
+    DEFAULT_OPENROUTER_BASE_URL, DEFAULT_OPENROUTER_MODEL, DEFAULT_ORCAROUTER_BASE_URL,
+    DEFAULT_ORCAROUTER_MODEL, DEFAULT_QIANFAN_BASE_URL, DEFAULT_QIANFAN_MODEL,
+    DEFAULT_SAKANA_BASE_URL, DEFAULT_SAKANA_MODEL, DEFAULT_SGLANG_BASE_URL, DEFAULT_SGLANG_MODEL,
+    DEFAULT_SILICONFLOW_BASE_URL, DEFAULT_SILICONFLOW_CN_BASE_URL, DEFAULT_SILICONFLOW_MODEL,
+    DEFAULT_STEPFUN_BASE_URL, DEFAULT_STEPFUN_MODEL, DEFAULT_TELECOMJS_BASE_URL,
+    DEFAULT_TELECOMJS_MODEL, DEFAULT_TOGETHER_BASE_URL, DEFAULT_TOGETHER_MODEL,
+    DEFAULT_VLLM_BASE_URL, DEFAULT_VLLM_MODEL, DEFAULT_VOLCENGINE_BASE_URL,
     DEFAULT_VOLCENGINE_MODEL, DEFAULT_WANJIE_ARK_BASE_URL, DEFAULT_WANJIE_ARK_MODEL,
     DEFAULT_XAI_BASE_URL, DEFAULT_XAI_MODEL, DEFAULT_XIAOMI_MIMO_BASE_URL,
     DEFAULT_XIAOMI_MIMO_MODEL, DEFAULT_ZAI_BASE_URL, DEFAULT_ZAI_MODEL,
@@ -233,6 +234,12 @@ pub const fn credential_help(kind: ProviderKind) -> CredentialHelp {
             credential_url: Some("https://openrouter.ai/settings/keys"),
             docs_url: Some("https://openrouter.ai/docs/api/reference/authentication"),
             guidance: "Create an OpenRouter key from account settings.",
+        },
+        ProviderKind::Orcarouter => CredentialHelp {
+            acquisition: ApiKey,
+            credential_url: Some("https://www.orcarouter.ai"),
+            docs_url: Some("https://www.orcarouter.ai"),
+            guidance: "Create an OrcaRouter API key from the OrcaRouter dashboard.",
         },
         ProviderKind::XiaomiMimo => CredentialHelp {
             acquisition: ApiKey,
@@ -746,6 +753,17 @@ provider!(
     ["OPENROUTER_API_KEY"],
     "openrouter",
     aliases: ["open_router"]
+);
+provider!(
+    Orcarouter,
+    Orcarouter,
+    "orcarouter",
+    "OrcaRouter",
+    DEFAULT_ORCAROUTER_BASE_URL,
+    DEFAULT_ORCAROUTER_MODEL,
+    ["ORCAROUTER_API_KEY"],
+    "orcarouter",
+    aliases: ["orca_router"]
 );
 provider!(
     XiaomiMimo,
@@ -1514,6 +1532,7 @@ static ATLASCLOUD: Atlascloud = Atlascloud;
 static WANJIE_ARK: WanjieArk = WanjieArk;
 static VOLCENGINE: Volcengine = Volcengine;
 static OPENROUTER: Openrouter = Openrouter;
+static ORCAROUTER: Orcarouter = Orcarouter;
 static XIAOMI_MIMO: XiaomiMimo = XiaomiMimo;
 static NOVITA: Novita = Novita;
 static FIREWORKS: Fireworks = Fireworks;
@@ -1551,7 +1570,7 @@ static MODELSTUDIO_CODING_PLAN_ANTHROPIC: ModelstudioCodingPlanAnthropic =
     ModelstudioCodingPlanAnthropic;
 static CUSTOM: Custom = Custom;
 
-static PROVIDER_REGISTRY: [&dyn Provider; 42] = [
+static PROVIDER_REGISTRY: [&dyn Provider; 43] = [
     &DEEPSEEK,
     &DEEPSEEK_ANTHROPIC,
     &NVIDIA_NIM,
@@ -1560,6 +1579,7 @@ static PROVIDER_REGISTRY: [&dyn Provider; 42] = [
     &WANJIE_ARK,
     &VOLCENGINE,
     &OPENROUTER,
+    &ORCAROUTER,
     &XIAOMI_MIMO,
     &NOVITA,
     &FIREWORKS,

@@ -3123,6 +3123,7 @@ pub(super) fn apply_reasoning_effort(
             // Handled by the shared DeepSeek table above, before this match.
             ApiProvider::Deepseek | ApiProvider::DeepseekCN => {}
             ApiProvider::Openrouter
+            | ApiProvider::Orcarouter
             | ApiProvider::XiaomiMimo
             | ApiProvider::Novita
             | ApiProvider::Siliconflow
@@ -3234,10 +3235,14 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::ModelstudioTokenPlanAnthropic
             | ApiProvider::ModelstudioCodingPlan
             | ApiProvider::ModelstudioCodingPlanAnthropic => {}
-            // OpenRouter/Novita/Together: pass through the actual user-chosen value.
-            // OpenRouter's unified scale is none/minimal/low/medium/high/xhigh;
-            // DeepSeek models hosted there accept those directly.
-            ApiProvider::Openrouter | ApiProvider::Novita | ApiProvider::Together => {
+            // OpenRouter/OrcaRouter/Novita/Together: pass through the actual
+            // user-chosen value. OpenRouter's unified scale is
+            // none/minimal/low/medium/high/xhigh; DeepSeek models hosted there
+            // accept those directly.
+            ApiProvider::Openrouter
+            | ApiProvider::Orcarouter
+            | ApiProvider::Novita
+            | ApiProvider::Together => {
                 let value = match normalized.as_str() {
                     "low" | "minimal" => "low",
                     "medium" | "mid" => "medium",
@@ -3336,7 +3341,10 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::ModelstudioTokenPlanAnthropic
             | ApiProvider::ModelstudioCodingPlan
             | ApiProvider::ModelstudioCodingPlanAnthropic => {}
-            ApiProvider::Openrouter | ApiProvider::Novita | ApiProvider::Together => {
+            ApiProvider::Openrouter
+            | ApiProvider::Orcarouter
+            | ApiProvider::Novita
+            | ApiProvider::Together => {
                 body["reasoning_effort"] = json!("xhigh");
                 body["thinking"] = json!({ "type": "enabled" });
             }

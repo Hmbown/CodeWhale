@@ -58,6 +58,7 @@ pub enum ApiProvider {
     WanjieArk,
     Volcengine,
     Openrouter,
+    Orcarouter,
     XiaomiMimo,
     Novita,
     Fireworks,
@@ -316,7 +317,7 @@ impl ApiProvider {
 
     /// `ApiProvider` discriminant → `ProviderKind` lookup.
     /// Index 1 is `None` for the legacy `DeepseekCN` variant.
-    const KIND_LOOKUP: [Option<codewhale_config::ProviderKind>; 43] = [
+    const KIND_LOOKUP: [Option<codewhale_config::ProviderKind>; 44] = [
         Some(codewhale_config::ProviderKind::Deepseek),
         None, // DeepseekCN
         Some(codewhale_config::ProviderKind::DeepseekAnthropic),
@@ -326,6 +327,7 @@ impl ApiProvider {
         Some(codewhale_config::ProviderKind::WanjieArk),
         Some(codewhale_config::ProviderKind::Volcengine),
         Some(codewhale_config::ProviderKind::Openrouter),
+        Some(codewhale_config::ProviderKind::Orcarouter),
         Some(codewhale_config::ProviderKind::XiaomiMimo),
         Some(codewhale_config::ProviderKind::Novita),
         Some(codewhale_config::ProviderKind::Fireworks),
@@ -363,7 +365,7 @@ impl ApiProvider {
     ];
 
     /// `ProviderKind` discriminant → `ApiProvider` lookup.
-    const FROM_KIND_LOOKUP: [Self; 42] = [
+    const FROM_KIND_LOOKUP: [Self; 43] = [
         Self::Deepseek,
         Self::DeepseekAnthropic,
         Self::NvidiaNim,
@@ -372,6 +374,7 @@ impl ApiProvider {
         Self::WanjieArk,
         Self::Volcengine,
         Self::Openrouter,
+        Self::Orcarouter,
         Self::XiaomiMimo,
         Self::Novita,
         Self::Fireworks,
@@ -471,6 +474,7 @@ fn subagent_provider_key_matches(key: &str, provider: ApiProvider) -> bool {
             "deepseek_anthropic" | "deepseek_claude" | "deepseek_anthropic_api"
         ),
         ApiProvider::Openrouter => matches!(normalized.as_str(), "openrouter" | "open_router"),
+        ApiProvider::Orcarouter => matches!(normalized.as_str(), "orcarouter" | "orca_router"),
         ApiProvider::OpenaiCodex => matches!(
             normalized.as_str(),
             "openai_codex" | "codex" | "chatgpt" | "openai_chatgpt"
@@ -1415,6 +1419,9 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
             let mut models = vec![DEFAULT_OPENROUTER_MODEL, DEFAULT_OPENROUTER_FLASH_MODEL];
             models.extend_from_slice(RECENT_OPENROUTER_LARGE_MODELS);
             models
+        }
+        ApiProvider::Orcarouter => {
+            vec![DEFAULT_ORCAROUTER_MODEL, DEFAULT_ORCAROUTER_FLASH_MODEL]
         }
         ApiProvider::XiaomiMimo => vec![
             DEFAULT_XIAOMI_MIMO_MODEL,
@@ -3274,6 +3281,8 @@ pub struct ProvidersConfig {
     pub volcengine: ProviderConfig,
     #[serde(default)]
     pub openrouter: ProviderConfig,
+    #[serde(default, alias = "orca_router", alias = "orca")]
+    pub orcarouter: ProviderConfig,
     #[serde(
         default,
         alias = "xiaomi",
@@ -4807,6 +4816,7 @@ impl Config {
             ApiProvider::Atlascloud => &providers.atlascloud,
             ApiProvider::WanjieArk => &providers.wanjie_ark,
             ApiProvider::Openrouter => &providers.openrouter,
+            ApiProvider::Orcarouter => &providers.orcarouter,
             ApiProvider::XiaomiMimo => &providers.xiaomi_mimo,
             ApiProvider::Novita => &providers.novita,
             ApiProvider::Fireworks => &providers.fireworks,
@@ -4883,6 +4893,7 @@ impl Config {
             ApiProvider::Atlascloud => &mut providers.atlascloud,
             ApiProvider::WanjieArk => &mut providers.wanjie_ark,
             ApiProvider::Openrouter => &mut providers.openrouter,
+            ApiProvider::Orcarouter => &mut providers.orcarouter,
             ApiProvider::XiaomiMimo => &mut providers.xiaomi_mimo,
             ApiProvider::Novita => &mut providers.novita,
             ApiProvider::Fireworks => &mut providers.fireworks,
@@ -5234,6 +5245,7 @@ impl Config {
             ApiProvider::Atlascloud => DEFAULT_ATLASCLOUD_MODEL,
             ApiProvider::WanjieArk => DEFAULT_WANJIE_ARK_MODEL,
             ApiProvider::Openrouter => DEFAULT_OPENROUTER_MODEL,
+            ApiProvider::Orcarouter => DEFAULT_ORCAROUTER_MODEL,
             ApiProvider::XiaomiMimo => DEFAULT_XIAOMI_MIMO_MODEL,
             ApiProvider::Novita => DEFAULT_NOVITA_MODEL,
             ApiProvider::Fireworks => DEFAULT_FIREWORKS_MODEL,
@@ -5365,6 +5377,7 @@ impl Config {
             | ApiProvider::Atlascloud
             | ApiProvider::WanjieArk
             | ApiProvider::Openrouter
+            | ApiProvider::Orcarouter
             | ApiProvider::OpenaiCodex
             | ApiProvider::Novita
             | ApiProvider::Fireworks
@@ -5458,6 +5471,7 @@ impl Config {
                         ApiProvider::Atlascloud => DEFAULT_ATLASCLOUD_BASE_URL,
                         ApiProvider::WanjieArk => DEFAULT_WANJIE_ARK_BASE_URL,
                         ApiProvider::Openrouter => DEFAULT_OPENROUTER_BASE_URL,
+                        ApiProvider::Orcarouter => DEFAULT_ORCAROUTER_BASE_URL,
                         ApiProvider::XiaomiMimo => DEFAULT_XIAOMI_MIMO_BASE_URL,
                         ApiProvider::Novita => DEFAULT_NOVITA_BASE_URL,
                         ApiProvider::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
@@ -6783,6 +6797,7 @@ fn root_deepseek_model_is_foreign_to_direct_provider(provider: ApiProvider, mode
         provider,
         ApiProvider::NvidiaNim
             | ApiProvider::Openrouter
+            | ApiProvider::Orcarouter
             | ApiProvider::Novita
             | ApiProvider::Fireworks
             | ApiProvider::Siliconflow
@@ -7021,6 +7036,7 @@ fn provider_env_base_url_override(provider: ApiProvider) -> Option<String> {
         ApiProvider::Openai => &["OPENAI_BASE_URL"],
         ApiProvider::Atlascloud => &["ATLASCLOUD_BASE_URL"],
         ApiProvider::Openrouter => &["OPENROUTER_BASE_URL"],
+        ApiProvider::Orcarouter => &["ORCAROUTER_BASE_URL"],
         ApiProvider::XiaomiMimo => &["XIAOMI_MIMO_BASE_URL", "MIMO_BASE_URL"],
         ApiProvider::WanjieArk => &[
             "WANJIE_ARK_BASE_URL",
@@ -7176,6 +7192,13 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
                     .providers
                     .get_or_insert_with(ProvidersConfig::default)
                     .openrouter
+                    .base_url = Some(value);
+            }
+            ApiProvider::Orcarouter => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .orcarouter
                     .base_url = Some(value);
             }
             ApiProvider::XiaomiMimo => {
@@ -7712,6 +7735,7 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
                 ApiProvider::Atlascloud => &mut providers.atlascloud,
                 ApiProvider::WanjieArk => &mut providers.wanjie_ark,
                 ApiProvider::Openrouter => &mut providers.openrouter,
+                ApiProvider::Orcarouter => &mut providers.orcarouter,
                 ApiProvider::XiaomiMimo => &mut providers.xiaomi_mimo,
                 ApiProvider::Novita => &mut providers.novita,
                 ApiProvider::Fireworks => &mut providers.fireworks,
@@ -8056,6 +8080,7 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
                 ApiProvider::Atlascloud => &mut providers.atlascloud,
                 ApiProvider::WanjieArk => &mut providers.wanjie_ark,
                 ApiProvider::Openrouter => &mut providers.openrouter,
+                ApiProvider::Orcarouter => &mut providers.orcarouter,
                 ApiProvider::XiaomiMimo => &mut providers.xiaomi_mimo,
                 ApiProvider::Novita => &mut providers.novita,
                 ApiProvider::Fireworks => &mut providers.fireworks,
@@ -9436,6 +9461,7 @@ fn merge_providers(
             atlascloud: merge_provider_config(base.atlascloud, override_cfg.atlascloud),
             wanjie_ark: merge_provider_config(base.wanjie_ark, override_cfg.wanjie_ark),
             openrouter: merge_provider_config(base.openrouter, override_cfg.openrouter),
+            orcarouter: merge_provider_config(base.orcarouter, override_cfg.orcarouter),
             xiaomi_mimo: merge_provider_config(base.xiaomi_mimo, override_cfg.xiaomi_mimo),
             novita: merge_provider_config(base.novita, override_cfg.novita),
             fireworks: merge_provider_config(base.fireworks, override_cfg.fireworks),

@@ -42,6 +42,8 @@ pub enum ProviderKind {
     #[serde(alias = "volcengine-ark", alias = "volcengine_ark", alias = "ark")]
     Volcengine,
     Openrouter,
+    #[serde(alias = "orca_router", alias = "orca")]
+    Orcarouter,
     #[serde(alias = "mimo", alias = "xiaomi", alias = "xiaomi_mimo")]
     XiaomiMimo,
     #[serde(alias = "novita-ai", alias = "novita_ai")]
@@ -204,7 +206,7 @@ impl ProviderKind {
     /// stay on the enum for serde and `provider_for_kind`, but they are not
     /// first-class catalog rows. Plan is `mode` / base_url; dialect is
     /// `wire = openai|anthropic` on the primary provider config.
-    pub const ALL: [Self; 37] = [
+    pub const ALL: [Self; 38] = [
         Self::Deepseek,
         Self::NvidiaNim,
         Self::Openai,
@@ -212,6 +214,7 @@ impl ProviderKind {
         Self::WanjieArk,
         Self::Volcengine,
         Self::Openrouter,
+        Self::Orcarouter,
         Self::XiaomiMimo,
         Self::Novita,
         Self::Fireworks,

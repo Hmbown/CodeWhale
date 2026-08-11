@@ -845,6 +845,7 @@ pub(crate) fn mirror_saved_api_key_in_config(
         ApiProvider::WanjieArk => &mut providers.wanjie_ark,
         ApiProvider::Volcengine => &mut providers.volcengine,
         ApiProvider::Openrouter => &mut providers.openrouter,
+        ApiProvider::Orcarouter => &mut providers.orcarouter,
         ApiProvider::XiaomiMimo => &mut providers.xiaomi_mimo,
         ApiProvider::Novita => &mut providers.novita,
         ApiProvider::Fireworks => &mut providers.fireworks,

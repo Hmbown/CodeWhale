@@ -29,6 +29,11 @@ pub(crate) const DEFAULT_VOLCENGINE_BASE_URL: &str =
     "https://ark.cn-beijing.volces.com/api/coding/v3";
 pub(crate) const DEFAULT_OPENROUTER_MODEL: &str = "deepseek/deepseek-v4-pro";
 pub(crate) const DEFAULT_OPENROUTER_FLASH_MODEL: &str = "deepseek/deepseek-v4-flash";
+pub(crate) const DEFAULT_ORCAROUTER_MODEL: &str = "deepseek/deepseek-v4-pro";
+pub(crate) const DEFAULT_ORCAROUTER_FLASH_MODEL: &str = "deepseek/deepseek-v4-flash";
+/// OrcaRouter's own auto-routing model: picks the best upstream model per
+/// request. Resolved from the bare `auto` alias on the OrcaRouter provider.
+pub(crate) const ORCAROUTER_AUTO_MODEL: &str = "orcarouter/auto";
 pub(crate) const OPENROUTER_ARCEE_TRINITY_LARGE_THINKING_MODEL: &str =
     "arcee-ai/trinity-large-thinking";
 pub(crate) const OPENROUTER_GEMMA_4_31B_MODEL: &str = "google/gemma-4-31b-it";
@@ -82,6 +87,7 @@ pub(crate) const DEFAULT_KIMI_CODE_BASE_URL: &str = "https://api.kimi.com/coding
 pub(crate) const DEFAULT_SGLANG_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
 pub(crate) const DEFAULT_SGLANG_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
 pub(crate) const DEFAULT_OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
+pub(crate) const DEFAULT_ORCAROUTER_BASE_URL: &str = "https://api.orcarouter.ai/v1";
 pub(crate) const XIAOMI_MIMO_PAY_AS_YOU_GO_BASE_URL: &str = "https://api.xiaomimimo.com/v1";
 pub(crate) const DEFAULT_XIAOMI_MIMO_BASE_URL: &str = "https://token-plan-sgp.xiaomimimo.com/v1";
 pub(crate) const XIAOMI_MIMO_TOKEN_PLAN_CN_BASE_URL: &str =

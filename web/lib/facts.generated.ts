@@ -99,6 +99,11 @@ export const FACTS: RepoFacts = {
       "env": "OPENROUTER_API_KEY"
     },
     {
+      "id": "orcarouter",
+      "label": "OrcaRouter",
+      "env": "ORCAROUTER_API_KEY"
+    },
+    {
       "id": "xiaomi-mimo",
       "label": "Xiaomi MiMo",
       "env": "XIAOMI_MIMO_TOKEN_PLAN_API_KEY / MIMO_TOKEN_PLAN_API_KEY / XIAOMI_MIMO_API_KEY / XIAOMI_API_KEY / MIMO_API_KEY"

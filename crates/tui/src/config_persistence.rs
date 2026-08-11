@@ -279,6 +279,7 @@ fn provider_base_url_table_key(provider: ApiProvider) -> anyhow::Result<&'static
         ApiProvider::WanjieArk => Ok("wanjie_ark"),
         ApiProvider::Volcengine => Ok("volcengine"),
         ApiProvider::Openrouter => Ok("openrouter"),
+        ApiProvider::Orcarouter => Ok("orcarouter"),
         ApiProvider::XiaomiMimo => Ok("xiaomi_mimo"),
         ApiProvider::Novita => Ok("novita"),
         ApiProvider::Fireworks => Ok("fireworks"),

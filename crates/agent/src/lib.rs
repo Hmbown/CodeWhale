@@ -272,6 +272,27 @@ impl Default for ModelRegistry {
                 supports_reasoning: true,
             },
             ModelInfo {
+                id: "deepseek/deepseek-v4-pro".to_string(),
+                provider: ProviderKind::Orcarouter,
+                aliases: vec!["orcarouter-deepseek-v4-pro".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "deepseek/deepseek-v4-flash".to_string(),
+                provider: ProviderKind::Orcarouter,
+                aliases: vec!["orcarouter-deepseek-v4-flash".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "orcarouter/auto".to_string(),
+                provider: ProviderKind::Orcarouter,
+                aliases: vec!["orcarouter-auto".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
                 id: "arcee-ai/trinity-large-thinking".to_string(),
                 provider: ProviderKind::Openrouter,
                 aliases: vec![

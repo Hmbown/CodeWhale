@@ -24,6 +24,8 @@ pub const DEFAULT_VOLCENGINE_BASE_URL: &str = "https://ark.cn-beijing.volces.com
 pub const DEFAULT_WANJIE_ARK_BASE_URL: &str = "https://maas-openapi.wanjiedata.com/api/v1";
 pub const DEFAULT_OPENROUTER_MODEL: &str = "deepseek/deepseek-v4-pro";
 pub const DEFAULT_OPENROUTER_FLASH_MODEL: &str = "deepseek/deepseek-v4-flash";
+pub const DEFAULT_ORCAROUTER_MODEL: &str = "deepseek/deepseek-v4-pro";
+pub const DEFAULT_ORCAROUTER_FLASH_MODEL: &str = "deepseek/deepseek-v4-flash";
 pub const OPENROUTER_ARCEE_TRINITY_LARGE_THINKING_MODEL: &str = "arcee-ai/trinity-large-thinking";
 pub const OPENROUTER_GEMMA_4_31B_MODEL: &str = "google/gemma-4-31b-it";
 pub const OPENROUTER_GEMMA_4_26B_A4B_MODEL: &str = "google/gemma-4-26b-a4b-it";
@@ -73,6 +75,7 @@ pub const RECENT_OPENROUTER_LARGE_MODELS: &[&str] = &[
     OPENROUTER_NEMOTRON_3_NANO_OMNI_MODEL,
 ];
 pub const DEFAULT_OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
+pub const DEFAULT_ORCAROUTER_BASE_URL: &str = "https://api.orcarouter.ai/v1";
 pub const DEFAULT_XIAOMI_MIMO_MODEL: &str = "mimo-v2.5-pro";
 pub const XIAOMI_MIMO_V2_5_PRO_ULTRASPEED_MODEL: &str = "mimo-v2.5-pro-ultraspeed";
 pub const XIAOMI_MIMO_PAY_AS_YOU_GO_BASE_URL: &str = "https://api.xiaomimimo.com/v1";

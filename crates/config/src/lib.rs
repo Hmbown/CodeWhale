@@ -239,6 +239,8 @@ pub struct ProvidersToml {
     pub volcengine: ProviderConfigToml,
     #[serde(default, skip_serializing_if = "ProviderConfigToml::is_empty")]
     pub openrouter: ProviderConfigToml,
+    #[serde(default, skip_serializing_if = "ProviderConfigToml::is_empty")]
+    pub orcarouter: ProviderConfigToml,
     #[serde(
         default,
         skip_serializing_if = "ProviderConfigToml::is_empty",
@@ -610,6 +612,7 @@ impl ProvidersToml {
             ProviderKind::WanjieArk => &self.wanjie_ark,
             ProviderKind::Volcengine => &self.volcengine,
             ProviderKind::Openrouter => &self.openrouter,
+            ProviderKind::Orcarouter => &self.orcarouter,
             ProviderKind::XiaomiMimo => &self.xiaomi_mimo,
             ProviderKind::Novita => &self.novita,
             ProviderKind::Fireworks => &self.fireworks,
@@ -657,6 +660,7 @@ impl ProvidersToml {
             ProviderKind::WanjieArk => &mut self.wanjie_ark,
             ProviderKind::Volcengine => &mut self.volcengine,
             ProviderKind::Openrouter => &mut self.openrouter,
+            ProviderKind::Orcarouter => &mut self.orcarouter,
             ProviderKind::XiaomiMimo => &mut self.xiaomi_mimo,
             ProviderKind::Novita => &mut self.novita,
             ProviderKind::Fireworks => &mut self.fireworks,
@@ -3167,6 +3171,7 @@ impl ConfigToml {
                 ProviderKind::WanjieArk => DEFAULT_WANJIE_ARK_BASE_URL.to_string(),
                 ProviderKind::Volcengine => DEFAULT_VOLCENGINE_BASE_URL.to_string(),
                 ProviderKind::Openrouter => DEFAULT_OPENROUTER_BASE_URL.to_string(),
+                ProviderKind::Orcarouter => DEFAULT_ORCAROUTER_BASE_URL.to_string(),
                 ProviderKind::XiaomiMimo => DEFAULT_XIAOMI_MIMO_BASE_URL.to_string(),
                 ProviderKind::Novita => DEFAULT_NOVITA_BASE_URL.to_string(),
                 ProviderKind::Fireworks => DEFAULT_FIREWORKS_BASE_URL.to_string(),
@@ -3789,6 +3794,7 @@ fn root_default_model_is_foreign_to_provider(
         provider,
         ProviderKind::NvidiaNim
             | ProviderKind::Openrouter
+            | ProviderKind::Orcarouter
             | ProviderKind::Novita
             | ProviderKind::Fireworks
             | ProviderKind::Siliconflow
@@ -3878,6 +3884,11 @@ fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
     {
         return canonical.to_string();
     }
+    if provider == ProviderKind::Orcarouter
+        && let Some(canonical) = canonical_orcarouter_recent_model_id(&normalized)
+    {
+        return canonical.to_string();
+    }
     match (provider, normalized.as_str()) {
         (ProviderKind::NvidiaNim, "deepseek-v4-pro" | "deepseek-v4pro") => {
             DEFAULT_NVIDIA_NIM_MODEL.to_string()
@@ -3895,6 +3906,14 @@ fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
             "deepseek-v4-flash" | "deepseek-v4flash" | "deepseek-chat" | "deepseek-reasoner"
             | "deepseek-r1" | "deepseek-v3" | "deepseek-v3.2",
         ) => DEFAULT_OPENROUTER_FLASH_MODEL.to_string(),
+        (ProviderKind::Orcarouter, "deepseek-v4-pro" | "deepseek-v4pro") => {
+            DEFAULT_ORCAROUTER_MODEL.to_string()
+        }
+        (
+            ProviderKind::Orcarouter,
+            "deepseek-v4-flash" | "deepseek-v4flash" | "deepseek-chat" | "deepseek-reasoner"
+            | "deepseek-r1" | "deepseek-v3" | "deepseek-v3.2",
+        ) => DEFAULT_ORCAROUTER_FLASH_MODEL.to_string(),
         (ProviderKind::Novita, "deepseek-v4-pro" | "deepseek-v4pro") => {
             DEFAULT_NOVITA_MODEL.to_string()
         }
@@ -4226,6 +4245,24 @@ fn canonical_openrouter_recent_model_id(model: &str) -> Option<&'static str> {
     }
 }
 
+/// Canonical id resolution for OrcaRouter's own auto-routing model.
+///
+/// OrcaRouter is an aggregator whose upstream catalog uses the same
+/// namespaced ids as OpenRouter, so those ids pass through verbatim. The one
+/// OrcaRouter-specific alias worth normalizing is its `orcarouter/auto`
+/// router, which is not an upstream model and needs the bare `auto` spelling
+/// (as users naturally type it) to resolve to the namespaced wire id.
+fn canonical_orcarouter_recent_model_id(model: &str) -> Option<&'static str> {
+    let normalized = model.trim().to_ascii_lowercase();
+    let normalized = normalized.replace(['_', ' '], "-");
+    match normalized.as_str() {
+        ORCAROUTER_AUTO_MODEL | "auto" | "orcarouter-auto" | "orca-auto" => {
+            Some(ORCAROUTER_AUTO_MODEL)
+        }
+        _ => None,
+    }
+}
+
 fn default_model_for_provider(provider: ProviderKind) -> &'static str {
     match provider {
         ProviderKind::Deepseek => DEFAULT_DEEPSEEK_MODEL,
@@ -4236,6 +4273,7 @@ fn default_model_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::WanjieArk => DEFAULT_WANJIE_ARK_MODEL,
         ProviderKind::Volcengine => DEFAULT_VOLCENGINE_MODEL,
         ProviderKind::Openrouter => DEFAULT_OPENROUTER_MODEL,
+        ProviderKind::Orcarouter => DEFAULT_ORCAROUTER_MODEL,
         ProviderKind::XiaomiMimo => DEFAULT_XIAOMI_MIMO_MODEL,
         ProviderKind::Novita => DEFAULT_NOVITA_MODEL,
         ProviderKind::Fireworks => DEFAULT_FIREWORKS_MODEL,
@@ -4282,6 +4320,7 @@ fn default_base_url_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::WanjieArk => DEFAULT_WANJIE_ARK_BASE_URL,
         ProviderKind::Volcengine => DEFAULT_VOLCENGINE_BASE_URL,
         ProviderKind::Openrouter => DEFAULT_OPENROUTER_BASE_URL,
+        ProviderKind::Orcarouter => DEFAULT_ORCAROUTER_BASE_URL,
         ProviderKind::XiaomiMimo => DEFAULT_XIAOMI_MIMO_BASE_URL,
         ProviderKind::Novita => DEFAULT_NOVITA_BASE_URL,
         ProviderKind::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
@@ -6485,6 +6524,7 @@ struct EnvRuntimeOverrides {
     volcengine_model: Option<String>,
     wanjie_ark_model: Option<String>,
     openrouter_model: Option<String>,
+    orcarouter_model: Option<String>,
     moonshot_model: Option<String>,
     xiaomi_mimo_model: Option<String>,
     xiaomi_mimo_mode: Option<String>,
@@ -6522,6 +6562,7 @@ struct EnvRuntimeOverrides {
     volcengine_base_url: Option<String>,
     wanjie_ark_base_url: Option<String>,
     openrouter_base_url: Option<String>,
+    orcarouter_base_url: Option<String>,
     xiaomi_mimo_base_url: Option<String>,
     novita_base_url: Option<String>,
     fireworks_base_url: Option<String>,
@@ -6598,6 +6639,9 @@ impl EnvRuntimeOverrides {
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
             openrouter_model: std::env::var("OPENROUTER_MODEL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            orcarouter_model: std::env::var("ORCAROUTER_MODEL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
             moonshot_model: std::env::var("MOONSHOT_MODEL")
@@ -6703,6 +6747,9 @@ impl EnvRuntimeOverrides {
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
             openrouter_base_url: std::env::var("OPENROUTER_BASE_URL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            orcarouter_base_url: std::env::var("ORCAROUTER_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
             xiaomi_mimo_base_url: std::env::var("XIAOMI_MIMO_BASE_URL")
@@ -6949,6 +6996,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::WanjieArk => self.wanjie_ark_base_url.clone(),
             ProviderKind::Volcengine => self.volcengine_base_url.clone(),
             ProviderKind::Openrouter => self.openrouter_base_url.clone(),
+            ProviderKind::Orcarouter => self.orcarouter_base_url.clone(),
             ProviderKind::XiaomiMimo => self.xiaomi_mimo_base_url.clone(),
             ProviderKind::Novita => self.novita_base_url.clone(),
             ProviderKind::Fireworks => self.fireworks_base_url.clone(),
@@ -6996,6 +7044,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::WanjieArk => self.wanjie_ark_model.clone(),
             ProviderKind::Volcengine => self.volcengine_model.clone(),
             ProviderKind::Openrouter => self.openrouter_model.clone(),
+            ProviderKind::Orcarouter => self.orcarouter_model.clone(),
             ProviderKind::Siliconflow | ProviderKind::SiliconflowCN => {
                 self.siliconflow_model.clone()
             }

@@ -41,6 +41,7 @@ enum ProviderArg {
     WanjieArk,
     Volcengine,
     Openrouter,
+    Orcarouter,
     XiaomiMimo,
     Novita,
     Fireworks,
@@ -119,6 +120,7 @@ impl From<ProviderArg> for ProviderKind {
             ProviderArg::WanjieArk => ProviderKind::WanjieArk,
             ProviderArg::Volcengine => ProviderKind::Volcengine,
             ProviderArg::Openrouter => ProviderKind::Openrouter,
+            ProviderArg::Orcarouter => ProviderKind::Orcarouter,
             ProviderArg::XiaomiMimo => ProviderKind::XiaomiMimo,
             ProviderArg::Novita => ProviderKind::Novita,
             ProviderArg::Fireworks => ProviderKind::Fireworks,
@@ -7840,8 +7842,8 @@ mod tests {
             .map(|provider| provider.kind())
             .collect();
         // Full registry keeps legacy dialect/plan kinds; ALL is the catalog surface.
-        assert_eq!(registry_kinds.len(), 42);
-        assert_eq!(ProviderKind::ALL.len(), 37);
+        assert_eq!(registry_kinds.len(), 43);
+        assert_eq!(ProviderKind::ALL.len(), 38);
         for kind in ProviderKind::ALL {
             assert!(
                 registry_kinds.contains(&kind),

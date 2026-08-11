@@ -4811,9 +4811,9 @@ fn meta_model_api_scopes_both_documented_key_names_to_official_endpoint() {
 fn provider_metadata_registry_covers_every_provider_kind_once() {
     let providers = provider::all_providers();
     // Full registry keeps legacy dialect/plan kinds for provider_for_kind.
-    assert_eq!(providers.len(), 42);
+    assert_eq!(providers.len(), 43);
     // Catalog surface is one identity per vendor (no dual-wire / plan rows).
-    assert_eq!(ProviderKind::ALL.len(), 37);
+    assert_eq!(ProviderKind::ALL.len(), 38);
     assert!(ProviderKind::ALL.len() < providers.len());
 
     let mut ids = std::collections::BTreeSet::new();
@@ -4949,6 +4949,40 @@ fn openrouter_provider_defaults_to_canonical_endpoint_and_model() {
     assert_eq!(resolved.provider, ProviderKind::Openrouter);
     assert_eq!(resolved.base_url, DEFAULT_OPENROUTER_BASE_URL);
     assert_eq!(resolved.model, DEFAULT_OPENROUTER_MODEL);
+}
+
+#[test]
+fn orcarouter_provider_defaults_to_canonical_endpoint_and_model() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+    let config = ConfigToml {
+        provider: ProviderKind::Orcarouter,
+        ..ConfigToml::default()
+    };
+
+    let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+    assert_eq!(resolved.provider, ProviderKind::Orcarouter);
+    assert_eq!(resolved.base_url, DEFAULT_ORCAROUTER_BASE_URL);
+    assert_eq!(resolved.model, DEFAULT_ORCAROUTER_MODEL);
+}
+
+#[test]
+fn orcarouter_provider_normalizes_deepseek_aliases() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+    let config = ConfigToml {
+        provider: ProviderKind::Orcarouter,
+        ..ConfigToml::default()
+    };
+
+    let resolved = config.resolve_runtime_options(&CliRuntimeOverrides {
+        model: Some("deepseek-v4-flash".to_string()),
+        ..CliRuntimeOverrides::default()
+    });
+
+    assert_eq!(resolved.provider, ProviderKind::Orcarouter);
+    assert_eq!(resolved.model, DEFAULT_ORCAROUTER_FLASH_MODEL);
 }
 
 #[test]
