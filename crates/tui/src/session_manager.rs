@@ -91,6 +91,22 @@ pub struct OfflineQueueState {
     pub draft: Option<QueuedSessionMessage>,
 }
 
+/// Result of explicitly repairing a persisted session for process resume.
+///
+/// Normal snapshot reads must not infer that an unmatched tool call crashed:
+/// an embedding host can persist and inspect a session while that tool is
+/// still running. Hosts should use [`SessionManager::load_session_snapshot`]
+/// during normal operation and reserve this recovery path for a known process
+/// or engine restart.
+#[derive(Debug, Clone)]
+pub struct SessionRecovery {
+    pub session: SavedSession,
+    pub changed: bool,
+    pub repaired_call_count: usize,
+    pub duplicate_result_count: usize,
+    pub orphan_result_count: usize,
+}
+
 impl Default for OfflineQueueState {
     fn default() -> Self {
         Self {
@@ -1100,8 +1116,12 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Load a session by ID
-    pub fn load_session(&self, id: &str) -> std::io::Result<SavedSession> {
+    /// Read a session snapshot without repairing tool call/result pairs.
+    ///
+    /// This is the correct API for embedding hosts that inspect or update a
+    /// durable session while an engine may still be executing a tool call.
+    /// A dangling `tool_use` is not proof of a crashed process in that state.
+    pub fn load_session_snapshot(&self, id: &str) -> std::io::Result<SavedSession> {
         let path = self.validated_session_path(id)?;
 
         let content = fs::read_to_string(&path)?;
@@ -1120,8 +1140,20 @@ impl SessionManager {
         session.system_prompt = strip_legacy_truncation_note(session.system_prompt);
         session.ensure_journal();
 
+        Ok(session)
+    }
+
+    /// Load and repair a session after a known process or engine restart.
+    ///
+    /// The returned repair remains in memory until the caller persists
+    /// `recovery.session`. Keeping persistence explicit lets embedding hosts
+    /// serialize recovery with their own transcript mutation lock.
+    pub fn recover_session_for_resume(&self, id: &str) -> std::io::Result<SessionRecovery> {
+        let mut session = self.load_session_snapshot(id)?;
+
         let repair = crate::tool_history_repair::repair_tool_call_pairs(&mut session.messages);
-        if !repair.is_empty() {
+        let changed = !repair.is_empty();
+        if changed {
             if let Some(journal) = session.journal.as_mut() {
                 journal.rebranch_active_messages(&session.messages);
                 session.leaf_id = journal.leaf_id.clone();
@@ -1136,7 +1168,23 @@ impl SessionManager {
             );
         }
 
-        Ok(session)
+        Ok(SessionRecovery {
+            session,
+            changed,
+            repaired_call_count: repair.repaired_call_ids.len(),
+            duplicate_result_count: repair.duplicate_result_ids.len(),
+            orphan_result_count: repair.orphan_result_ids.len(),
+        })
+    }
+
+    /// Load a session by ID for the standalone CodeWhale resume flow.
+    ///
+    /// This preserves the historical recovery behavior for existing callers.
+    /// Embedding hosts performing ordinary runtime reads should use
+    /// [`Self::load_session_snapshot`] instead.
+    pub fn load_session(&self, id: &str) -> std::io::Result<SavedSession> {
+        self.recover_session_for_resume(id)
+            .map(|recovery| recovery.session)
     }
 
     /// Load a session by partial ID prefix
@@ -2484,6 +2532,76 @@ mod tests {
             })
             .count();
         assert_eq!(replayed_envelopes, 2);
+    }
+
+    #[test]
+    fn runtime_snapshot_load_preserves_in_flight_tool_call() {
+        let tmp = tempdir().expect("tempdir");
+        let manager = SessionManager::new(tmp.path().join("sessions")).expect("new");
+        let messages = vec![Message {
+            role: "assistant".to_string(),
+            content: vec![ContentBlock::ToolUse {
+                id: "call-in-flight".to_string(),
+                name: "read_file".to_string(),
+                input: serde_json::json!({"path": "README.md"}),
+                caller: None,
+            }],
+        }];
+        let session = create_saved_session(&messages, "test-model", tmp.path(), 0, None);
+        let session_id = session.metadata.id.clone();
+        manager.save_session(&session).expect("save");
+
+        let loaded = manager
+            .load_session_snapshot(&session_id)
+            .expect("snapshot load");
+
+        assert_eq!(loaded.messages, messages);
+        assert_eq!(loaded.metadata.message_count, 1);
+        assert!(!loaded.messages.iter().any(|message| {
+            message.content.iter().any(|block| {
+                matches!(
+                    block,
+                    ContentBlock::ToolResult { content, .. }
+                        if content.contains("crashed_and_repaired")
+                )
+            })
+        }));
+    }
+
+    #[test]
+    fn explicit_session_recovery_is_reported_and_idempotent_after_save() {
+        let tmp = tempdir().expect("tempdir");
+        let manager = SessionManager::new(tmp.path().join("sessions")).expect("new");
+        let messages = vec![Message {
+            role: "assistant".to_string(),
+            content: vec![ContentBlock::ToolUse {
+                id: "call-crashed".to_string(),
+                name: "read_file".to_string(),
+                input: serde_json::json!({"path": "README.md"}),
+                caller: None,
+            }],
+        }];
+        let session = create_saved_session(&messages, "test-model", tmp.path(), 0, None);
+        let session_id = session.metadata.id.clone();
+        manager.save_session(&session).expect("save");
+
+        let recovered = manager
+            .recover_session_for_resume(&session_id)
+            .expect("recover");
+        assert!(recovered.changed);
+        assert_eq!(recovered.repaired_call_count, 1);
+        assert_eq!(recovered.duplicate_result_count, 0);
+        assert_eq!(recovered.orphan_result_count, 0);
+        manager
+            .save_session(&recovered.session)
+            .expect("persist recovery");
+
+        let second = manager
+            .recover_session_for_resume(&session_id)
+            .expect("recover twice");
+        assert!(!second.changed);
+        assert_eq!(second.repaired_call_count, 0);
+        assert_eq!(second.session.messages, recovered.session.messages);
     }
 
     #[test]
