@@ -1,0 +1,29 @@
+name: Debug windows python
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  debug:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Probe python availability
+        shell: pwsh
+        run: |
+          python --version
+          python3 --version
+          where.exe python
+          where.exe python3
+          py -3 --version
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
+      - name: Run failing test with output
+        shell: pwsh
+        run: cargo test -p codewhale-tui --lib --all-features --locked -- --nocapture full_access_auto_approves_non_bypassable_registered_tools
+        env:
+          RUST_MIN_STACK: '16777216'
