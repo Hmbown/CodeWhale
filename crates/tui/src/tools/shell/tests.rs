@@ -71,6 +71,7 @@ fn contract_bash_nonzero_is_an_error_with_status_after_output() {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn lowercase_bash_returns_one_ordered_stream() {
     let workspace = tempdir().expect("workspace");
