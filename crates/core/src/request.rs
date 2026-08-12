@@ -112,6 +112,19 @@ pub const INTERRUPTED_ASSISTANT_ROLE: &str = "assistant_interrupted";
 /// Prefix attached to interrupted assistant output when it is replayed as context.
 pub const INTERRUPTED_ASSISTANT_CONTEXT_PREFIX: &str = "[The following assistant output was interrupted before completion and may be incomplete or wrong]\n";
 
+/// Provider-owned reasoning continuity that is safe to replay only on the
+/// exact originating API and model. The encrypted payload is deliberately
+/// separate from readable [`ContentBlock::Thinking`] text.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct OpaqueReasoningState {
+    pub provider: String,
+    pub api: String,
+    pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub encrypted_content: String,
+}
+
 /// A single content block inside a message.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(tag = "type")]
@@ -133,6 +146,10 @@ pub enum ContentBlock {
         /// modify signed thinking blocks, so replay this verbatim.
         #[serde(skip_serializing_if = "Option::is_none", default)]
         signature: Option<String>,
+        /// Opaque Responses-style continuity. Never synthesize this from the
+        /// readable `thinking` text or carry it across a route/model switch.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        state: Option<OpaqueReasoningState>,
     },
     #[serde(rename = "tool_use")]
     ToolUse {
@@ -167,6 +184,18 @@ pub enum ContentBlock {
         tool_use_id: String,
         content: serde_json::Value,
     },
+}
+
+impl ContentBlock {
+    /// Build readable reasoning with no provider-owned continuity state.
+    #[must_use]
+    pub fn thinking(thinking: impl Into<String>) -> Self {
+        Self::Thinking {
+            thinking: thinking.into(),
+            signature: None,
+            state: None,
+        }
+    }
 }
 
 /// Cache control metadata for tool definitions and blocks.

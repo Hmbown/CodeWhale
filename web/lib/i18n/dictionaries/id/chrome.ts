@@ -8,7 +8,7 @@ import type { ChromeDict } from "../types";
  * Terminology follows the TUI locale pack (`crates/tui/locales/id.json`):
  * "penyedia" (provider), "izin" / "postur izin" (permission posture),
  * "penalaran" (reasoning), "repositori", "tanda terima" (receipt). The mode
- * names (Plan / Act / Operate) and permission postures (Ask / Auto-Review /
+ * names (Plan / Work / Operate) and permission postures (Ask / Auto-Review /
  * Full Access) stay literal there and stay literal here.
  *
  * Secondary nav labels pair the Indonesian primary with a short English

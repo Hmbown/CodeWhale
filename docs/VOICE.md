@@ -12,7 +12,7 @@ the boundary, and the next useful move.
 - Prefer short sentences and concrete nouns over slogans or celebration.
 - Say `saved`, `reloaded`, `verified`, or `failed` only when that event
   happened. An affordance is not a receipt.
-- Keep product terms exact: Codewhale; Plan / Act / Operate; Ask /
+- Keep product terms exact: Codewhale; Plan / Work / Operate; Ask /
   Auto-Review / Full Access; Fleet / Workflow / Lane / Runtime; Work.
 - Keep commands, key names, paths, and provider/model names literal. Compose
   them in code around localized prose.

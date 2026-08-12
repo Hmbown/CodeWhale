@@ -25,19 +25,16 @@ pub struct CompactionConfig {
     pub enabled: bool,
     pub token_threshold: usize,
     pub model: String,
+    /// Exact route image-input fact for the summarizer's outbound history.
+    pub image_input: crate::model_profile::SupportState,
     /// Route-effective context window. `None` preserves compatibility for
     /// callers that have not resolved a provider route yet.
     pub effective_context_window: Option<u32>,
     pub cache_summary: bool,
     /// Optional user-supplied focus for a manual `/compact <focus>`: injected
-    /// into the successor-brief prompt so the summary weights what the user
+    /// into the summary request so the checkpoint weights what the user
     /// said matters. `None` for automatic compaction.
     pub focus: Option<String>,
-    /// Typed live runtime state for post-compact rehydrate (workers, shells,
-    /// approvals, mode/permission). Canonical To-do state is appended fresh at
-    /// the request tail instead of being frozen into the stable prefix.
-    /// Host-owned snapshot; pure format lives in [`format_live_state_reminder`].
-    pub live_state: Option<CompactionLiveState>,
     /// Runtime turn that owns provider calls made by this compaction pass.
     /// `None` for the foreground TUI. This is accounting provenance only and
     /// is never included in a provider request.
@@ -45,60 +42,19 @@ pub struct CompactionConfig {
     /// Workspace root, used only to re-state the user's `/anchor` file after
     /// the summary. `None` skips anchors.
     pub workspace: Option<std::path::PathBuf>,
-    /// Text of the previously committed compaction summary, if any. Injected
-    /// into the summarization request as a coalescing bridge (the summarizer
-    /// never sees the system prompt the old summary lives in); the commit step
-    /// replaces the old summary with the new one.
-    pub prior_summary: Option<String>,
 }
 
-/// Host-prepared runtime snapshots carried from compaction eligibility through
-/// the successor commit.
-///
-/// The active-operation reanchor is intentionally owned here instead of
-/// recomputed after the model call. Work-graph owner identities are external
-/// data and are not length-bounded, so a fixed reserve cannot conservatively
-/// model them. Capturing the exact prompt makes both reclaimability and commit
-/// use the same active-operation snapshot even if live operations settle while
-/// the compactor is running.
+/// Host-prepared configuration carried from compaction eligibility through
+/// the replacement-history commit.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedCompactionEnvelope {
     pub config: CompactionConfig,
-    pub successor_reanchor: Option<SystemPrompt>,
 }
 
 impl PreparedCompactionEnvelope {
     #[must_use]
-    pub fn new(config: CompactionConfig, successor_reanchor: Option<SystemPrompt>) -> Self {
-        Self {
-            config,
-            successor_reanchor,
-        }
-    }
-}
-
-/// Host-captured live state injected after compaction so the successor agent
-/// does not reconstruct workers/mode from prose alone (compactionidea P1).
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct CompactionLiveState {
-    pub mode: Option<String>,
-    pub permission_posture: Option<String>,
-    /// Running background shell commands (id + command).
-    pub background_shells: Vec<String>,
-    /// Running sub-agents / fleet workers (id + role + objective).
-    pub running_workers: Vec<String>,
-    /// Open approval prompts still awaiting the user.
-    pub open_approvals: Vec<String>,
-}
-
-impl CompactionLiveState {
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.mode.is_none()
-            && self.permission_posture.is_none()
-            && self.background_shells.is_empty()
-            && self.running_workers.is_empty()
-            && self.open_approvals.is_empty()
+    pub fn new(config: CompactionConfig) -> Self {
+        Self { config }
     }
 }
 
@@ -123,13 +79,12 @@ impl Default for CompactionConfig {
             // `compaction_threshold_for_model_and_effort`.
             token_threshold: 800_000,
             model: DEFAULT_TEXT_MODEL.to_string(),
+            image_input: crate::model_profile::SupportState::Unknown,
             effective_context_window: None,
             cache_summary: true,
             focus: None,
-            live_state: None,
             runtime_cost_owner: None,
             workspace: None,
-            prior_summary: None,
         }
     }
 }
@@ -182,22 +137,14 @@ Summarize the task, not the checkpoint machinery: do not mention compaction, che
 context management, and do not carry forward meta-commentary about them (e.g. \"context intact\") \
 from earlier turns.";
 
-/// Bridge preamble for the previous committed summary when a later compaction
-/// runs. The summarizer only sees the live message list — the prior summary
-/// lives in the system prompt it is never shown — so the host injects it here
-/// for coalescing, and the commit step then REPLACES the old summary instead
-/// of appending a second one.
-const PRIOR_SUMMARY_BRIDGE: &str = "A previous context checkpoint produced the summary below. \
-Fold anything still relevant into your new summary — the old summary is replaced by yours, \
-so any fact you drop is lost. Do not quote it verbatim wholesale and do not describe the \
-checkpoint process itself.";
-
-/// Preamble ahead of the committed summary in the successor system prompt
-/// (ported from Codex `templates/compact/summary_prefix.md`).
+/// Preamble for the one conversation-history checkpoint created by compaction.
+/// This intentionally follows Codex's `templates/compact/summary_prefix.md`:
+/// the checkpoint is a user-history item, never standing system-prompt prose.
 const SUMMARY_HEADER: &str = "Another language model started to solve this problem and produced \
-a summary of its progress. Use the information in this summary to build on the work that has \
-already been done and avoid duplicating work. The most recent user messages are retained after \
-this summary.";
+a summary of its thinking process. You also have access to the state of the tools that were used \
+by that language model. Use this to build on the work that has already been done and avoid \
+duplicating work. Here is the summary produced by the other language model, use the information \
+in this summary to assist with your own analysis:";
 
 /// Detection marker for committed compaction-summary text: the stable first
 /// sentence of [`SUMMARY_HEADER`]. `engine/context.rs` restores summaries by
@@ -206,11 +153,78 @@ pub const COMPACTION_SUMMARY_MARKER: &str = "Another language model started to s
 /// Marker written by pre-v0.9.6 compaction; sessions saved under the old
 /// format must still be recognized so their summary is replaced, not stacked.
 pub const LEGACY_COMPACTION_SUMMARY_MARKER: &str = "Conversation Summary (Auto-Generated)";
+const COMPACTION_SUMMARY_BEGIN: &str = "<!-- compaction-summary:begin -->";
+const COMPACTION_SUMMARY_END: &str = "<!-- compaction-summary:end -->";
 
 /// Whether a system-prompt text block is a committed compaction summary.
 #[must_use]
 pub fn is_compaction_summary_text(text: &str) -> bool {
     text.contains(COMPACTION_SUMMARY_MARKER) || text.contains(LEGACY_COMPACTION_SUMMARY_MARKER)
+}
+
+fn summary_section(text: &str) -> Option<&str> {
+    let begin = text.find(COMPACTION_SUMMARY_BEGIN)? + COMPACTION_SUMMARY_BEGIN.len();
+    let remainder = &text[begin..];
+    let end = remainder.find(COMPACTION_SUMMARY_END)?;
+    let summary = remainder[..end].trim();
+    (!summary.is_empty()).then_some(summary)
+}
+
+fn strip_summary_text(mut text: String) -> Option<String> {
+    while let Some(begin) = text.find(COMPACTION_SUMMARY_BEGIN) {
+        let after_begin = begin + COMPACTION_SUMMARY_BEGIN.len();
+        let end = text[after_begin..]
+            .find(COMPACTION_SUMMARY_END)
+            .map_or(text.len(), |offset| {
+                after_begin + offset + COMPACTION_SUMMARY_END.len()
+            });
+        text.replace_range(begin..end, "");
+    }
+    if let Some(marker) = text
+        .find(COMPACTION_SUMMARY_MARKER)
+        .or_else(|| text.find(LEGACY_COMPACTION_SUMMARY_MARKER))
+    {
+        text.truncate(marker);
+    }
+    let text = text.trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+/// Extract the persisted checkpoint payload from a legacy system-prompt
+/// carrier. Runtime-thread storage used that carrier before checkpoints moved
+/// into conversation history; the engine strips it before provider dispatch.
+#[must_use]
+pub fn extract_compaction_summary(prompt: Option<&SystemPrompt>) -> Option<SystemPrompt> {
+    match prompt? {
+        SystemPrompt::Text(text) => summary_section(text)
+            .map(str::to_string)
+            .or_else(|| {
+                text.find(COMPACTION_SUMMARY_MARKER)
+                    .or_else(|| text.find(LEGACY_COMPACTION_SUMMARY_MARKER))
+                    .map(|start| text[start..].trim().to_string())
+            })
+            .map(SystemPrompt::Text),
+        SystemPrompt::Blocks(blocks) => {
+            let blocks = blocks
+                .iter()
+                .filter_map(|block| {
+                    let text = summary_section(&block.text)
+                        .map(str::to_string)
+                        .or_else(|| {
+                            block
+                                .text
+                                .find(COMPACTION_SUMMARY_MARKER)
+                                .or_else(|| block.text.find(LEGACY_COMPACTION_SUMMARY_MARKER))
+                                .map(|start| block.text[start..].trim().to_string())
+                        })?;
+                    let mut summary = block.clone();
+                    summary.text = text;
+                    Some(summary)
+                })
+                .collect::<Vec<_>>();
+            (!blocks.is_empty()).then_some(SystemPrompt::Blocks(blocks))
+        }
+    }
 }
 
 /// Remove every committed compaction-summary block from a system prompt.
@@ -223,20 +237,21 @@ pub fn is_compaction_summary_text(text: &str) -> bool {
 #[must_use]
 pub fn strip_compaction_summaries(prompt: Option<&SystemPrompt>) -> Option<SystemPrompt> {
     match prompt.cloned()? {
-        SystemPrompt::Text(text) => {
-            (!is_compaction_summary_text(&text)).then_some(SystemPrompt::Text(text))
-        }
+        SystemPrompt::Text(text) => strip_summary_text(text).map(SystemPrompt::Text),
         SystemPrompt::Blocks(blocks) => {
             let blocks = blocks
                 .into_iter()
-                .filter(|block| !is_compaction_summary_text(&block.text))
+                .filter_map(|mut block| {
+                    block.text = strip_summary_text(block.text)?;
+                    Some(block)
+                })
                 .collect::<Vec<_>>();
             (!blocks.is_empty()).then_some(SystemPrompt::Blocks(blocks))
         }
     }
 }
 
-/// Flatten a committed summary prompt to plain text for the coalescing bridge.
+/// Flatten a committed summary prompt to the text stored in history.
 #[must_use]
 pub fn summary_prompt_text(prompt: &SystemPrompt) -> String {
     match prompt {
@@ -247,6 +262,22 @@ pub fn summary_prompt_text(prompt: &SystemPrompt) -> String {
             .collect::<Vec<_>>()
             .join("\n\n"),
     }
+}
+
+#[must_use]
+pub(crate) fn compaction_checkpoint_message(prompt: &SystemPrompt) -> Message {
+    Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::Text {
+            text: summary_prompt_text(prompt),
+            cache_control: None,
+        }],
+    }
+}
+
+#[must_use]
+pub(crate) fn is_compaction_checkpoint_message(message: &Message) -> bool {
+    user_text_of(message).is_some_and(|text| is_compaction_summary_text(&text))
 }
 
 fn estimate_tokens_for_message(message: &Message, include_thinking: bool) -> usize {
@@ -262,7 +293,21 @@ fn estimate_tokens_for_message(message: &Message, include_thinking: bool) -> usi
             ContentBlock::ToolUse { input, .. } => serde_json::to_string(input)
                 .map(|s| s.len() / 4)
                 .unwrap_or(100),
-            ContentBlock::ToolResult { content, .. } => content.len() / 4,
+            ContentBlock::ToolResult {
+                content,
+                content_blocks,
+                ..
+            } => {
+                let images = content_blocks.as_ref().map_or(0, |blocks| {
+                    blocks
+                        .iter()
+                        .filter(|block| {
+                            block.get("type").and_then(serde_json::Value::as_str) == Some("image")
+                        })
+                        .count()
+                });
+                content.len() / 4 + images * IMAGE_TOKEN_ESTIMATE
+            }
             // An inline image is real input the model pays for; estimating it
             // at 0 undercounts the budget and risks overflow in image-heavy
             // sessions. Use a conservative flat per-image estimate (vision
@@ -359,32 +404,21 @@ fn estimate_retained_floor_conservative(
     let retained = retained_user_messages(messages, COMPACT_RETAINED_USER_MESSAGE_MAX_TOKENS);
     let retained_tokens = estimate_tokens(&retained).saturating_mul(3).div_ceil(2);
     let framing = retained.len().saturating_mul(12).saturating_add(48);
-    let live_reminder = config
-        .live_state
-        .as_ref()
-        .map(format_live_state_reminder)
-        .filter(|text| !text.is_empty())
-        .unwrap_or_default();
     let anchors = user_anchors_section(config.workspace.as_deref());
-    let summary_scaffolding_tokens = estimate_text_tokens_conservative(
-        &build_compaction_summary_block_text("", &anchors, &live_reminder),
-    );
+    let summary_scaffolding_tokens =
+        estimate_text_tokens_conservative(&build_compaction_summary_block_text("", &anchors));
 
     // Post-compaction the committed summary is REPLACED, not stacked, so prior
     // summary blocks must not inflate the floor. Count only the exact installed
     // scaffolding here; the model owns the concise summary length, just as it
     // owns the answer length on an ordinary turn.
-    let retained_system_prompt =
-        strip_compaction_summaries(strip_active_operation_reanchor(system_prompt).as_ref());
+    let retained_system_prompt = strip_compaction_summaries(system_prompt);
     retained_tokens
         .saturating_add(estimate_system_tokens_conservative(
             retained_system_prompt.as_ref(),
         ))
         .saturating_add(framing)
         .saturating_add(summary_scaffolding_tokens)
-        .saturating_add(estimate_system_tokens_conservative(
-            prepared.successor_reanchor.as_ref(),
-        ))
 }
 
 /// Whether the current canonical request has reached the configured automatic
@@ -471,8 +505,8 @@ pub fn should_compact_with_billed(
         return false;
     }
 
-    // Reclaimability guard: do not start a pass whose successor request
-    // (system prompt + retained user messages + summary allowance + reanchor)
+    // Reclaimability guard: do not start a pass whose replacement request
+    // (system prompt + retained user messages + summary allowance)
     // cannot get below the trigger, or a large stable prefix would cause
     // auto-compaction on every tool step.
     estimate_retained_floor_conservative(messages, system_prompt, prepared) < config.token_threshold
@@ -555,6 +589,12 @@ struct ToolResultPruneCandidate {
     original_len: usize,
 }
 
+fn tool_result_content_blocks_len(content_blocks: Option<&[serde_json::Value]>) -> usize {
+    content_blocks
+        .and_then(|blocks| serde_json::to_vec(blocks).ok())
+        .map_or(0, |bytes| bytes.len())
+}
+
 #[cfg(test)]
 fn prune_tool_results(messages: &mut [Message], protected_window: usize) -> usize {
     prune_tool_results_until(messages, protected_window, |_, _| false)
@@ -589,6 +629,7 @@ where
             let ContentBlock::ToolResult {
                 tool_use_id,
                 content,
+                content_blocks,
                 ..
             } = block
             else {
@@ -605,7 +646,9 @@ where
                 key: info.key.clone(),
                 tool_name: info.name.clone(),
                 args_preview: info.args_preview.clone(),
-                original_len: content.len(),
+                original_len: content
+                    .len()
+                    .saturating_add(tool_result_content_blocks_len(content_blocks.as_deref())),
             });
         }
     }
@@ -642,7 +685,9 @@ where
             ..
         } = &mut messages[candidate.message_idx].content[candidate.block_idx]
         {
-            bytes_saved = bytes_saved.saturating_add(content.len().saturating_sub(summary.len()));
+            bytes_saved = bytes_saved
+                .saturating_add(content.len().saturating_sub(summary.len()))
+                .saturating_add(tool_result_content_blocks_len(content_blocks.as_deref()));
             *content = summary;
             *content_blocks = None;
 
@@ -697,6 +742,7 @@ fn sanitize_retained_messages(mut messages: Vec<Message>) -> Vec<Message> {
                 ContentBlock::Thinking {
                     thinking,
                     signature,
+                    ..
                 } if signature.is_none() => {
                     truncate_retained_block(
                         "thinking block",
@@ -716,13 +762,10 @@ fn sanitize_retained_messages(mut messages: Vec<Message>) -> Vec<Message> {
 pub struct CompactionResult {
     /// Compacted messages
     pub messages: Vec<Message>,
-    /// Summary system prompt
+    /// Host-persistence copy of the history checkpoint.
     pub summary_prompt: Option<SystemPrompt>,
     /// Number of retries used before success
     pub retries_used: u32,
-    /// Exact active-operation reanchor captured before eligibility. The engine
-    /// commits this value instead of rereading mutable Work state.
-    pub successor_reanchor: Option<SystemPrompt>,
 }
 
 /// Classify a compaction LLM failure for the retry / input-ladder policy.
@@ -890,7 +933,6 @@ pub async fn compact_messages_safe(
                 messages: sanitize_retained_messages(pruned_messages),
                 summary_prompt: None,
                 retries_used: 0,
-                successor_reanchor: prepared.successor_reanchor.clone(),
             });
         }
         &pruned_messages
@@ -914,7 +956,6 @@ pub async fn compact_messages_safe(
                     messages: sanitize_retained_messages(msgs),
                     summary_prompt: prompt,
                     retries_used: attempt,
-                    successor_reanchor: prepared.successor_reanchor.clone(),
                 });
             }
             Err(e) => {
@@ -931,11 +972,7 @@ pub async fn compact_messages_safe(
         .unwrap_or_else(|| anyhow::anyhow!("Compaction failed after {MAX_RETRIES} retries")))
 }
 
-fn build_compaction_summary_block_text(
-    summary: &str,
-    anchors: &str,
-    live_reminder: &str,
-) -> String {
+fn build_compaction_summary_block_text(summary: &str, anchors: &str) -> String {
     let summary = summary.trim();
     let summary = if summary.is_empty() {
         "(no summary available)"
@@ -944,10 +981,6 @@ fn build_compaction_summary_block_text(
     };
     let mut text = format!("{SUMMARY_HEADER}\n\n{summary}");
     text.push_str(anchors);
-    if !live_reminder.is_empty() {
-        text.push_str("\n\n");
-        text.push_str(live_reminder.trim_end());
-    }
     text
 }
 
@@ -965,6 +998,9 @@ fn retained_user_messages(messages: &[Message], max_tokens: usize) -> Vec<Messag
         let Some(text) = user_text_of(msg) else {
             continue;
         };
+        if is_compaction_summary_text(&text) {
+            continue;
+        }
         let tokens = estimate_text_tokens_conservative(&text);
         let text = if tokens <= remaining {
             remaining -= tokens;
@@ -1018,22 +1054,19 @@ pub async fn compact_messages(
 
     let summary = create_summary(client, messages, config).await?;
     let anchors = user_anchors_section(config.workspace.as_deref());
-
-    let live_reminder = config
-        .live_state
-        .as_ref()
-        .map(format_live_state_reminder)
-        .filter(|text| !text.is_empty())
-        .unwrap_or_default();
+    let checkpoint_text = build_compaction_summary_block_text(&summary, &anchors);
     let summary_block = SystemBlock {
         block_type: "text".to_string(),
-        text: build_compaction_summary_block_text(&summary, &anchors, &live_reminder),
+        text: checkpoint_text.clone(),
         cache_control: config.cache_summary.then(|| CacheControl {
             cache_type: "ephemeral".to_string(),
         }),
     };
 
-    let retained = retained_user_messages(messages, COMPACT_RETAINED_USER_MESSAGE_MAX_TOKENS);
+    let mut retained = retained_user_messages(messages, COMPACT_RETAINED_USER_MESSAGE_MAX_TOKENS);
+    retained.push(compaction_checkpoint_message(&SystemPrompt::Text(
+        checkpoint_text,
+    )));
     Ok((
         retained,
         Some(SystemPrompt::Blocks(vec![summary_block])),
@@ -1079,20 +1112,20 @@ async fn create_summary(
     // message asking for the handoff summary, so the provider's prefix cache
     // covers everything already sent this session.
     let mut request_messages = messages.to_vec();
-    // Keep the original conversation as an unchanged request prefix for cache
-    // reuse. A prior committed summary lives outside this message list, so
-    // append its coalescing bridge to the final compaction instruction.
-    let prior_summary = config
-        .prior_summary
-        .as_deref()
-        .map(str::trim)
-        .filter(|prior| !prior.is_empty())
-        .map(|prior| format!("\n\n{PRIOR_SUMMARY_BRIDGE}\n\n{prior}"))
-        .unwrap_or_default();
+    let stripped_images = crate::image_attach::strip_images_when_unsupported(
+        &mut request_messages,
+        config.image_input,
+        &config.model,
+    );
+    if stripped_images > 0 {
+        logging::warn(format!(
+            "Compaction omitted {stripped_images} image block(s) unsupported by its route"
+        ));
+    }
     request_messages.push(Message {
         role: "user".to_string(),
         content: vec![ContentBlock::Text {
-            text: format!("{}{prior_summary}", compact_prompt(config.focus.as_deref())),
+            text: compact_prompt(config.focus.as_deref()),
             cache_control: None,
         }],
     });
@@ -1183,45 +1216,6 @@ async fn create_summary(
     }
 }
 
-/// Format a typed post-compact system-reminder from real runtime state.
-pub fn format_live_state_reminder(state: &CompactionLiveState) -> String {
-    if state.is_empty() {
-        return String::new();
-    }
-    let mut out = String::from(
-        "## 🔄 Live State (post-compact rehydrate)\n\n\
-         These facts come from the live runtime, not the summary model. Trust them over prose guesses.\n\n",
-    );
-    if let Some(mode) = state.mode.as_deref() {
-        let _ = writeln!(out, "- Mode: `{mode}`");
-    }
-    if let Some(posture) = state.permission_posture.as_deref() {
-        let _ = writeln!(out, "- Permission posture: `{posture}`");
-    }
-    if !state.background_shells.is_empty() {
-        out.push_str("\n### Running background shells\n");
-        for line in &state.background_shells {
-            let _ = writeln!(out, "- {line}");
-        }
-    }
-    if !state.running_workers.is_empty() {
-        out.push_str("\n### Running workers / sub-agents\n");
-        for line in &state.running_workers {
-            let _ = writeln!(out, "- {line}");
-        }
-    }
-    if !state.open_approvals.is_empty() {
-        out.push_str("\n### Open approvals\n");
-        for line in &state.open_approvals {
-            let _ = writeln!(out, "- {line}");
-        }
-    }
-    out.push_str("\n---\n\n");
-    out
-}
-
-/// Re-inject project instructions (AGENTS.md / CLAUDE.md) **verbatim** after
-/// compaction so they do not depend on the summarizer (compactionidea P1).
 fn is_context_window_error(e: &anyhow::Error) -> bool {
     let text = e.to_string();
     if crate::error_taxonomy::classify_error_message(&text)
@@ -1264,87 +1258,6 @@ fn user_text_of(msg: &Message) -> Option<String> {
     (!text.is_empty()).then(|| text.to_string())
 }
 
-/// Remove the prior active-operation reanchor before sizing or committing a
-/// successor prompt. A prepared envelope supplies the one replacement snapshot
-/// that both paths must use.
-pub(crate) fn strip_active_operation_reanchor(
-    prompt: Option<&SystemPrompt>,
-) -> Option<SystemPrompt> {
-    fn strip_text(mut text: String) -> Option<String> {
-        while let Some(start) = text.find(crate::work_graph::ACTIVE_OPERATION_SUMMARY_START) {
-            let tail = start + crate::work_graph::ACTIVE_OPERATION_SUMMARY_START.len();
-            let end = text[tail..]
-                .find(crate::work_graph::ACTIVE_OPERATION_SUMMARY_END)
-                .map_or(text.len(), |offset| {
-                    tail + offset + crate::work_graph::ACTIVE_OPERATION_SUMMARY_END.len()
-                });
-            text.replace_range(start..end, "");
-        }
-        let text = text.trim().to_string();
-        (!text.is_empty()).then_some(text)
-    }
-
-    match prompt.cloned()? {
-        SystemPrompt::Text(text) => strip_text(text).map(SystemPrompt::Text),
-        SystemPrompt::Blocks(blocks) => {
-            let blocks = blocks
-                .into_iter()
-                .filter_map(|mut block| {
-                    block.text = strip_text(block.text)?;
-                    Some(block)
-                })
-                .collect::<Vec<_>>();
-            (!blocks.is_empty()).then_some(SystemPrompt::Blocks(blocks))
-        }
-    }
-}
-
-pub fn merge_system_prompts(
-    original: Option<&SystemPrompt>,
-    summary: Option<SystemPrompt>,
-) -> Option<SystemPrompt> {
-    match (original, summary) {
-        (None, None) => None,
-        (Some(orig), None) => Some(orig.clone()),
-        (None, Some(sum)) => Some(sum),
-        (Some(SystemPrompt::Text(orig_text)), Some(SystemPrompt::Blocks(mut sum_blocks))) => {
-            // Prepend original system prompt
-            sum_blocks.insert(
-                0,
-                SystemBlock {
-                    block_type: "text".to_string(),
-                    text: orig_text.clone(),
-                    cache_control: None,
-                },
-            );
-            Some(SystemPrompt::Blocks(sum_blocks))
-        }
-        (Some(SystemPrompt::Blocks(orig_blocks)), Some(SystemPrompt::Blocks(mut sum_blocks))) => {
-            // Prepend original blocks
-            for (i, block) in orig_blocks.iter().enumerate() {
-                sum_blocks.insert(i, block.clone());
-            }
-            Some(SystemPrompt::Blocks(sum_blocks))
-        }
-        (Some(orig), Some(SystemPrompt::Text(sum_text))) => {
-            let mut blocks = match orig {
-                SystemPrompt::Text(t) => vec![SystemBlock {
-                    block_type: "text".to_string(),
-                    text: t.clone(),
-                    cache_control: None,
-                }],
-                SystemPrompt::Blocks(b) => b.clone(),
-            };
-            blocks.push(SystemBlock {
-                block_type: "text".to_string(),
-                text: sum_text,
-                cache_control: None,
-            });
-            Some(SystemPrompt::Blocks(blocks))
-        }
-    }
-}
-
 #[cfg(test)]
 #[path = "compaction/tests.rs"]
 mod quota_tests;
@@ -1382,8 +1295,8 @@ mod tests {
         }
     }
 
-    fn prepared_without_reanchor(config: &CompactionConfig) -> PreparedCompactionEnvelope {
-        PreparedCompactionEnvelope::new(config.clone(), None)
+    fn prepared(config: &CompactionConfig) -> PreparedCompactionEnvelope {
+        PreparedCompactionEnvelope::new(config.clone())
     }
 
     fn tool_use(id: &str, name: &str, input: serde_json::Value) -> Message {
@@ -1564,25 +1477,6 @@ mod tests {
     }
 
     #[test]
-    fn live_state_reminder_formats_typed_runtime_facts() {
-        let state = CompactionLiveState {
-            mode: Some("operate".into()),
-            permission_posture: Some("Ask".into()),
-            background_shells: vec!["`sh_1`: `cargo test -p foo`".into()],
-            running_workers: vec!["`agent_a` (role: implementer) — fix flaky".into()],
-            open_approvals: vec!["shell: git push".into()],
-        };
-        let text = format_live_state_reminder(&state);
-        assert!(text.contains("Live State"));
-        assert!(text.contains("operate"));
-        assert!(text.contains("Ask"));
-        assert!(text.contains("cargo test"));
-        assert!(text.contains("agent_a"));
-        assert!(text.contains("git push"));
-        assert!(format_live_state_reminder(&CompactionLiveState::default()).is_empty());
-    }
-
-    #[test]
     fn tool_args_preview_redacts_sensitive_first_without_dropping_siblings() {
         let input: serde_json::Value = serde_json::from_str(
             r#"{"api_key":"sk-tool-secret-value","command":"cargo test -p auth"}"#,
@@ -1736,7 +1630,6 @@ mod tests {
         let config = CompactionConfig {
             model: "test-model".to_string(),
             cache_summary: false,
-            prior_summary: Some("Prior durable fact: keep the sqlite rollback plan.".to_string()),
             ..Default::default()
         };
         let client = FixedSummaryClient::default();
@@ -1755,8 +1648,7 @@ mod tests {
         let ContentBlock::Text { text, .. } = &request.messages.last().unwrap().content[0] else {
             panic!("final compaction instruction must be text");
         };
-        assert!(text.contains(PRIOR_SUMMARY_BRIDGE));
-        assert!(text.contains("Prior durable fact"));
+        assert!(!text.contains(COMPACTION_SUMMARY_MARKER));
         assert_eq!(request.temperature, None);
         assert_eq!(request.top_p, None);
         assert_eq!(
@@ -1775,9 +1667,10 @@ mod tests {
         assert!(text.contains(FIXED_SUMMARY));
         assert!(text.contains("Another language model"));
 
-        // Replacement history is exactly the recent plain user messages —
-        // no tool calls, tool results, or assistant text survive verbatim.
-        assert_eq!(retained.len(), 2);
+        // Replacement history is the recent plain user messages followed by
+        // one Codex-style checkpoint. Tool calls, results, and assistant text
+        // do not survive verbatim.
+        assert_eq!(retained.len(), 3);
         assert!(retained.iter().all(|message| message.role == "user"));
         assert!(retained[0].content.iter().any(|block| matches!(
             block,
@@ -1787,6 +1680,8 @@ mod tests {
             block,
             ContentBlock::Text { text, .. } if text == "Sounds good, do it"
         )));
+        assert!(is_compaction_checkpoint_message(&retained[2]));
+        assert_eq!(user_text_of(&retained[2]).as_deref(), Some(text.as_str()));
     }
 
     #[tokio::test]
@@ -1938,6 +1833,7 @@ mod tests {
                 content: vec![
                     ContentBlock::Thinking {
                         signature: None,
+                        state: None,
                         thinking: thinking.clone(),
                     },
                     ContentBlock::ToolUse {
@@ -2010,11 +1906,7 @@ mod tests {
                 }],
             })
             .collect();
-        assert!(!should_compact(
-            &messages,
-            None,
-            &prepared_without_reanchor(&config)
-        ));
+        assert!(!should_compact(&messages, None, &prepared(&config)));
     }
 
     /// v0.8.11: message-count is no longer a compaction trigger. Long
@@ -2042,11 +1934,7 @@ mod tests {
             .collect();
         // Token total stays minuscule so the token threshold is not hit;
         // without the prior message-count trigger, no compaction.
-        assert!(!should_compact(
-            &many_messages,
-            None,
-            &prepared_without_reanchor(&config)
-        ));
+        assert!(!should_compact(&many_messages, None, &prepared(&config)));
     }
 
     // ========================================================================
@@ -2123,7 +2011,7 @@ mod tests {
                 crate::compaction::should_compact_with_billed(
                     &messages,
                     None,
-                    &prepared_without_reanchor(&config),
+                    &prepared(&config),
                     Some(threshold as u64),
                 ),
                 "billed pressure must trigger eligibility for a {window}-token route"
@@ -2153,11 +2041,7 @@ mod tests {
             "fixture must be under full-request pressure"
         );
         assert!(
-            !should_compact(
-                &messages,
-                Some(&system),
-                &prepared_without_reanchor(&config)
-            ),
+            !should_compact(&messages, Some(&system), &prepared(&config)),
             "a pinned/system floor above the trigger would loop every tool step"
         );
     }
@@ -2188,11 +2072,7 @@ mod tests {
         // Create short messages
         let messages: Vec<Message> = (0..5).map(|_| msg("user", "short")).collect();
 
-        assert!(!should_compact(
-            &messages,
-            None,
-            &prepared_without_reanchor(&config)
-        ));
+        assert!(!should_compact(&messages, None, &prepared(&config)));
     }
 
     #[test]
@@ -2214,112 +2094,7 @@ mod tests {
                 }
             })
             .collect();
-        assert!(should_compact(
-            &messages,
-            None,
-            &prepared_without_reanchor(&config)
-        ));
-    }
-
-    #[test]
-    fn test_merge_system_prompts_none_none() {
-        let result = merge_system_prompts(None, None);
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_merge_system_prompts_some_text_none() {
-        let original = Some(SystemPrompt::Text("original".to_string()));
-        let result = merge_system_prompts(original.as_ref(), None);
-        assert!(matches!(result, Some(SystemPrompt::Text(s)) if s == "original"));
-    }
-
-    #[test]
-    fn test_merge_system_prompts_none_some_blocks() {
-        let summary = Some(SystemPrompt::Blocks(vec![SystemBlock {
-            block_type: "text".to_string(),
-            text: "summary".to_string(),
-            cache_control: None,
-        }]));
-        let result = merge_system_prompts(None, summary);
-        assert!(matches!(result, Some(SystemPrompt::Blocks(b)) if b.len() == 1));
-    }
-
-    #[test]
-    fn test_merge_system_prompts_text_plus_blocks() {
-        let original = Some(SystemPrompt::Text("original".to_string()));
-        let summary = Some(SystemPrompt::Blocks(vec![SystemBlock {
-            block_type: "text".to_string(),
-            text: "summary".to_string(),
-            cache_control: None,
-        }]));
-
-        let result = merge_system_prompts(original.as_ref(), summary);
-
-        match result {
-            Some(SystemPrompt::Blocks(blocks)) => {
-                assert_eq!(blocks.len(), 2);
-                assert!(matches!(&blocks[0], SystemBlock { text, .. } if text == "original"));
-                assert!(matches!(&blocks[1], SystemBlock { text, .. } if text == "summary"));
-            }
-            _ => panic!("Expected Blocks"),
-        }
-    }
-
-    #[test]
-    fn test_merge_system_prompts_blocks_plus_blocks() {
-        let original = Some(SystemPrompt::Blocks(vec![
-            SystemBlock {
-                block_type: "text".to_string(),
-                text: "orig1".to_string(),
-                cache_control: None,
-            },
-            SystemBlock {
-                block_type: "text".to_string(),
-                text: "orig2".to_string(),
-                cache_control: None,
-            },
-        ]));
-
-        let summary = Some(SystemPrompt::Blocks(vec![SystemBlock {
-            block_type: "text".to_string(),
-            text: "summary".to_string(),
-            cache_control: None,
-        }]));
-
-        let result = merge_system_prompts(original.as_ref(), summary);
-
-        match result {
-            Some(SystemPrompt::Blocks(blocks)) => {
-                assert_eq!(blocks.len(), 3);
-                assert!(matches!(&blocks[0], SystemBlock { text, .. } if text == "orig1"));
-                assert!(matches!(&blocks[1], SystemBlock { text, .. } if text == "orig2"));
-                assert!(matches!(&blocks[2], SystemBlock { text, .. } if text == "summary"));
-            }
-            _ => panic!("Expected Blocks"),
-        }
-    }
-
-    #[test]
-    fn test_merge_system_prompts_blocks_plus_text() {
-        let original = Some(SystemPrompt::Blocks(vec![SystemBlock {
-            block_type: "text".to_string(),
-            text: "original".to_string(),
-            cache_control: None,
-        }]));
-
-        let summary = Some(SystemPrompt::Text("summary".to_string()));
-
-        let result = merge_system_prompts(original.as_ref(), summary);
-
-        match result {
-            Some(SystemPrompt::Blocks(blocks)) => {
-                assert_eq!(blocks.len(), 2);
-                assert!(matches!(&blocks[0], SystemBlock { text, .. } if text == "original"));
-                assert!(matches!(&blocks[1], SystemBlock { text, .. } if text == "summary"));
-            }
-            _ => panic!("Expected Blocks"),
-        }
+        assert!(should_compact(&messages, None, &prepared(&config)));
     }
 
     #[test]
@@ -2329,7 +2104,6 @@ mod tests {
             messages: vec![],
             summary_prompt: None,
             retries_used: 2,
-            successor_reanchor: None,
         };
 
         assert_eq!(result.retries_used, 2);

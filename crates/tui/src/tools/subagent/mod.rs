@@ -30,7 +30,14 @@ use uuid::Uuid;
 
 use crate::client::DeepSeekClient;
 use crate::config::MAX_SUBAGENTS;
+use crate::core::engine::tool_catalog::{
+    TOOL_SEARCH_NAME, active_tools_for_request, apply_native_tool_deferral,
+    ensure_advanced_tooling, execute_tool_search_with_cache, initial_active_tools,
+    is_tool_search_tool, remove_evicted_cache_activations, tool_matches_any_rule,
+    touch_cached_tool_after_execution,
+};
 use crate::core::events::{AgentProgressEventMeta, Event};
+use crate::core::session::ToolActivationCache;
 use crate::dependencies::{ExternalTool, Git};
 use crate::llm_client::{LlmClient, LlmError};
 use crate::models::{
@@ -46,7 +53,8 @@ use crate::tools::plan::{PlanState, SharedPlanState};
 use crate::tools::registry::{AgentToolSurfaceOptions, ToolRegistry, ToolRegistryBuilder};
 use crate::tools::shell::SharedShellManager;
 use crate::tools::spec::{
-    ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec,
+    ApprovalRequirement, RichToolResult, ToolCapability, ToolContext, ToolError, ToolResult,
+    ToolSpec,
 };
 use crate::tools::todo::SharedTodoList;
 #[cfg(test)]
@@ -622,6 +630,8 @@ pub struct SubAgentResult {
     pub parent_run_id: Option<String>,
     #[serde(default)]
     pub spawn_depth: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_route: Option<ChildRouteReceipt>,
     pub result: Option<String>,
     pub steps_taken: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -644,6 +654,27 @@ pub struct SubAgentResult {
     pub from_prior_session: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChildRouteReceipt {
+    pub requested_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_profile: Option<String>,
+    pub resolved_profile_id: Option<String>,
+    pub profile_origin: Option<String>,
+    pub canonical_role: String,
+    pub provider_id: String,
+    pub model_id: String,
+    pub route_source: String,
+    pub requested_reasoning: String,
+    pub effective_reasoning: Option<String>,
+    pub runtime_version: String,
+    pub runtime_build_sha: String,
+}
+struct RequestedChildRoute {
+    requested_type: String,
+    requested_profile: Option<String>,
+    requested_reasoning: String,
+}
 /// Headless worker lifecycle states for sub-agent execution.
 ///
 /// This is the TUI-independent state machine that future CLI/API/workflow
@@ -711,6 +742,8 @@ pub struct AgentWorkerSpec {
     pub max_steps: u32,
     pub spawn_depth: u32,
     pub max_spawn_depth: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_route: Option<ChildRouteReceipt>,
     /// #414 launch authority and #4647 write contract, persisted as one record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_manifest: Option<ChildLaunchManifest>,
@@ -761,6 +794,8 @@ pub struct AgentCoordSummary {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_route: Option<ChildRouteReceipt>,
     pub status: String,
     pub steps_taken: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1518,6 +1553,7 @@ pub(crate) struct SubAgentSpawnOptions {
     pub name: Option<String>,
     pub model: Option<String>,
     pub model_route: Option<ModelRoute>,
+    pub child_route: Option<ChildRouteReceipt>,
     pub nickname: Option<String>,
     pub fork_context: bool,
     pub token_budget: Option<u64>,
@@ -1566,27 +1602,13 @@ pub(crate) struct WorkflowTaskSpawnIdentity {
 
 #[derive(Debug, Clone)]
 pub(crate) struct WorkflowTaskSpawnMetadata {
+    pub child_route: ChildRouteReceipt,
     pub resolved_provider: String,
     pub resolved_model: String,
     pub route_source: String,
-    /// Provider the spawn asked for: the id a resolved Fleet profile pins.
-    /// `None` means nothing was pinned and the child inherited the session
-    /// provider — `route_source` names the rule that chose it (#5305).
-    pub requested_provider: Option<String>,
-    /// Model the caller pinned on the spawn request, verbatim (before
-    /// normalization to the provider's wire id). `None` when the caller pinned
-    /// no model (#5305).
-    pub requested_model: Option<String>,
-    /// Reasoning the caller asked for, verbatim (`inherit`/`auto`/effort).
-    /// `None` only when the spawn request carried no reasoning at all (#4039).
     pub requested_reasoning: Option<String>,
-    /// Reasoning the installed child runtime was actually launched with, after
-    /// route resolution. `None` means the provider route carries no reasoning
-    /// control — it is never rendered as an effort value (#4039).
     pub effective_reasoning: Option<String>,
-    /// Fleet role resolved for this spawn, if any (#4177).
     pub resolved_role: Option<String>,
-    /// AgentProfile id resolved for this spawn, if any (#4177).
     pub resolved_profile: Option<String>,
     pub parent_task_id: Option<String>,
     pub depth: u32,
@@ -2043,21 +2065,22 @@ fn terminal_mailbox_message(result: &SubAgentResult, report_ref: Option<&str>) -
 #[derive(Clone, Debug)]
 pub struct SubAgentForkContext {
     pub messages: Vec<Message>,
-    /// Stable, Work-free parent state captured once at turn start. History
+    /// Stable, To-do-free parent state captured once at turn start. History
     /// semantics stay exactly as they were: this text is not re-derived per
     /// spawn.
     pub structured_state_block: Option<String>,
-    /// Where to read the spawning agent's Work ledger *at spawn time*.
+    /// Where to read the spawning agent's To-do list *at spawn time*.
     ///
     /// The block above is captured before the turn's first tool call, so a
     /// `work_update` earlier in the same turn would otherwise hand the child a
-    /// stale ledger (#3983). Only the Work portion is refreshed.
-    pub work_source: Option<crate::work_grounding::WorkStateSource>,
+    /// stale list (#3983). Only the To-do portion is refreshed.
+    pub work_source: Option<crate::todo_snapshot::TodoSource>,
 }
 
 impl SubAgentForkContext {
     /// Resolve the fork-state block at the fork seam: the stable captured
-    /// state, then the current canonical Work body.
+    /// state, then the current To-do snapshot. Shown to the child once, in the
+    /// context block stored in its own history — never re-sent.
     pub(crate) async fn with_resolved_state_block(&self) -> Self {
         let stable = self
             .structured_state_block
@@ -2065,15 +2088,15 @@ impl SubAgentForkContext {
             .map(str::trim)
             .filter(|state| !state.is_empty())
             .map(str::to_string);
-        let work_body = match self.work_source.as_ref() {
-            Some(source) => source.canonical_body().await,
+        let todo_body = match self.work_source.as_ref() {
+            Some(source) => source.body().await,
             None => None,
         };
-        let work_section = work_body
+        let todo_section = todo_body
             .as_deref()
-            .map(crate::work_grounding::fork_state_work_section);
+            .map(crate::todo_snapshot::fork_state_todo_section);
 
-        let structured_state_block = match (stable, work_section) {
+        let structured_state_block = match (stable, todo_section) {
             (Some(stable), Some(work)) => Some(format!("{stable}\n{work}")),
             (Some(stable), None) => Some(stable),
             (None, work) => work,
@@ -2790,6 +2813,7 @@ impl SubAgent {
             runtime_permissions: None,
             parent_run_id: None,
             spawn_depth: 0,
+            child_route: None,
             result: self.result.clone(),
             steps_taken: self.steps_taken,
             checkpoint: self.checkpoint.clone(),
@@ -4854,6 +4878,7 @@ impl SubAgentManager {
             workspace,
             claim,
             preserved_profile,
+            child_route,
         ) = {
             let agent = self
                 .agents
@@ -4898,6 +4923,10 @@ impl SubAgentManager {
                 .worker_records
                 .get(&agent_id)
                 .map(|record| record.spec.runtime_profile.clone());
+            let child_route = self
+                .worker_records
+                .get(&agent_id)
+                .and_then(|record| record.spec.child_route.clone());
             (
                 agent.agent_type.clone(),
                 build_resume_prompt(&agent.prompt, checkpoint, followup_text),
@@ -4908,6 +4937,7 @@ impl SubAgentManager {
                 agent.workspace.clone(),
                 claim,
                 preserved_profile,
+                child_route,
             )
         };
         // Resume runs at child depth with a detached cancellation token, the
@@ -4930,6 +4960,7 @@ impl SubAgentManager {
             name: None, // the old session name stays owned by the terminal record
             model: Some(model),
             model_route: None,
+            child_route,
             nickname: None,
             fork_context,
             write_claim: claim.as_ref().map(|(claim, _)| claim.clone()),
@@ -5068,6 +5099,7 @@ impl SubAgentManager {
             agent_id: snap.agent_id.clone(),
             name: snap.name.clone(),
             parent_run_id: record.and_then(|r| r.parent_run_id.clone()),
+            child_route: record.and_then(|r| r.spec.child_route.clone()),
             status: subagent_status_name(&snap.status).to_string(),
             steps_taken: snap.steps_taken,
             token_budget: record.and_then(|r| r.usage.token_budget),
@@ -5183,6 +5215,7 @@ impl SubAgentManager {
             max_steps: WorkerRuntimeProfile::default().max_steps,
             spawn_depth: 1,
             max_spawn_depth: 3,
+            child_route: None,
             launch_manifest: None,
         };
         self.register_worker(spec);
@@ -5535,6 +5568,7 @@ impl SubAgentManager {
             max_steps,
             spawn_depth: runtime.spawn_depth,
             max_spawn_depth: runtime.max_spawn_depth,
+            child_route: options.child_route.clone(),
             launch_manifest: Some(ChildLaunchManifest {
                 owner_session: runtime
                     .parent_agent_id
@@ -5662,11 +5696,11 @@ impl SubAgentManager {
         );
         self.persist_state_best_effort();
 
-        Ok(self
+        let agent = self
             .agents
             .get(&agent_id)
-            .expect("agent should exist after spawn")
-            .snapshot())
+            .expect("agent should exist after spawn");
+        Ok(self.snapshot_for_listing(agent))
     }
 
     /// Get the current snapshot for an agent.
@@ -5675,7 +5709,7 @@ impl SubAgentManager {
             .agents
             .get(agent_id)
             .ok_or_else(|| anyhow!("Agent {agent_id} not found"))?;
-        Ok(agent.snapshot())
+        Ok(self.snapshot_for_listing(agent))
     }
 
     pub fn get_result_by_ref(&self, agent_ref: &str) -> Result<SubAgentResult> {
@@ -5698,7 +5732,7 @@ impl SubAgentManager {
                     .is_none_or(|record| record.spec.parent_run_id.is_none())
             })
             .filter(|agent| !delivered_ids.contains(&agent.id))
-            .map(SubAgent::snapshot)
+            .map(|agent| self.snapshot_for_listing(agent))
             .collect::<Vec<_>>();
         results.sort_by(|a, b| a.agent_id.cmp(&b.agent_id));
         results
@@ -5827,6 +5861,7 @@ impl SubAgentManager {
                 .clone()
                 .or_else(|| record.spec.parent_run_id.clone());
             snap.spawn_depth = record.spec.spawn_depth;
+            snap.child_route = record.spec.child_route.clone();
         }
         snap
     }
@@ -6055,7 +6090,7 @@ impl SubAgentManager {
     fn finish_terminal_result(
         &mut self,
         agent_id: &str,
-        result: SubAgentResult,
+        mut result: SubAgentResult,
         abort_task: bool,
         persist_after_commit: bool,
     ) -> bool {
@@ -6065,6 +6100,10 @@ impl SubAgentManager {
         if !self.claim_terminal_delivery(agent_id) {
             return false;
         }
+        result.child_route = self
+            .worker_records
+            .get(agent_id)
+            .and_then(|record| record.spec.child_route.clone());
 
         if abort_task
             && let Some(handle) = self
@@ -6200,37 +6239,10 @@ pub struct SubAgentSessionProjection {
     pub timed_out_with_checkpoint: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker_record: Option<AgentWorkerRecord>,
-    /// Fleet roster profile that was resolved for this dispatch, if any.
-    /// Populated on `action=start` receipts; absent for status/peek projections.
-    /// Lets the dispatching model confirm which configured profile each worker
-    /// resolved to before launch (#5046).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fleet_profile: Option<String>,
-    /// Route the child was actually launched on. Populated on `action=start`
-    /// receipts; absent for status/peek projections. Without it a receipt that
-    /// names only the profile invites false model attribution — the reader
-    /// cannot tell whether the child kept the session route or took the
-    /// profile's (#5305).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub child_route: Option<SubAgentChildRouteProjection>,
-}
-
-/// Requested-vs-effective route receipt for a launched child.
-///
-/// Origin labels only: provider ids, model ids, and the precedence rule that
-/// chose them. Never endpoints, credentials, or filesystem paths.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubAgentChildRouteProjection {
-    /// Absent when the spawn pinned no provider (the child inherited the
-    /// session's); `route_source` still says where the route came from.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub requested_provider: Option<String>,
-    /// Absent when the caller pinned no model.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub requested_model: Option<String>,
-    pub effective_provider: String,
-    pub effective_model: String,
-    pub route_source: String,
+    pub child_route: Option<ChildRouteReceipt>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -6384,9 +6396,14 @@ async fn subagent_session_projection(
         snapshot,
         timed_out,
         timed_out_with_checkpoint: timed_out && continuable,
+        fleet_profile: worker_record
+            .as_ref()
+            .and_then(|record| record.spec.child_route.as_ref())
+            .and_then(|receipt| receipt.resolved_profile_id.clone()),
+        child_route: worker_record
+            .as_ref()
+            .and_then(|record| record.spec.child_route.clone()),
         worker_record,
-        fleet_profile: None,
-        child_route: None,
     }
 }
 
@@ -7330,19 +7347,13 @@ impl ToolSpec for AgentTool {
             .get("verbose")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        let (snapshot, spawn_metadata) =
+        let (snapshot, _spawn_metadata) =
             spawn_subagent_from_input(input, self.manager.clone(), self.runtime.clone()).await?;
         let worker_record = {
             let manager = self.manager.read().await;
             manager.get_worker_record(&snapshot.agent_id)
         };
-        let mut projection =
-            subagent_session_projection(snapshot, false, context, worker_record).await;
-        // The receipt names the configured profile that was used (#5046) and
-        // the route that profile actually produced (#5305) — a profile id
-        // alone does not say which provider/model the child got.
-        projection.child_route = Some(spawn_child_route_projection(&spawn_metadata));
-        projection.fleet_profile = spawn_metadata.resolved_profile;
+        let projection = subagent_session_projection(snapshot, false, context, worker_record).await;
         let mut value = serde_json::to_value(&projection)
             .map_err(|e| ToolError::execution_failed(e.to_string()))?;
         compact_spawn_receipt(&mut value, verbose);
@@ -7362,21 +7373,6 @@ impl ToolSpec for AgentTool {
     }
 }
 
-/// Read the child's route off the spawn metadata, which was captured at the
-/// spawn seam: a later session-level model switch cannot rewrite a launched
-/// child's receipt.
-fn spawn_child_route_projection(
-    metadata: &WorkflowTaskSpawnMetadata,
-) -> SubAgentChildRouteProjection {
-    SubAgentChildRouteProjection {
-        requested_provider: metadata.requested_provider.clone(),
-        requested_model: metadata.requested_model.clone(),
-        effective_provider: metadata.resolved_provider.clone(),
-        effective_model: metadata.resolved_model.clone(),
-        route_source: metadata.route_source.clone(),
-    }
-}
-
 /// A spawn receipt is an acknowledgement, not an archive: the full projection
 /// carried the complete child prompt (launch_manifest inside `worker_record`)
 /// plus a duplicated `snapshot` — ~12KB per spawn (morning-report issue #4).
@@ -7389,29 +7385,17 @@ fn compact_spawn_receipt(value: &mut Value, verbose: bool) {
     let Some(object) = value.as_object_mut() else {
         return;
     };
-    // Archive weight: the child prompt and its duplicate.
     object.remove("snapshot");
     object.remove("worker_record");
     object.remove("checkpoint");
-    // Supervision detail that is meaningless seconds after spawn and fully
-    // retrievable via `agent status`: nothing has been written (artifacts),
-    // verified (verification), or worth taking over (takeover), and the
-    // transcript handle re-materializes on every status/peek. Unscoped
-    // status compaction keeps these because there they describe a child
-    // with history; a spawn ack has none yet.
     object.remove("artifacts");
     object.remove("takeover");
     object.remove("transcript_handle");
     object.remove("verification");
-    // `child_route` is kept inside the 1KB budget rather than exempted from
-    // it: five short identifiers cost ~150B, and a receipt that omits the
-    // route the child actually took is the misattribution #5305 is about.
     object.insert("compact".to_string(), json!(true));
     object.insert(
         "compact_note".to_string(),
-        json!(
-            "Spawn receipt compacted; transcript, takeover, artifacts, and the full projection are available via agent status with this agent_id, or pass verbose: true on start."
-        ),
+        json!("Spawn receipt compacted; inspect with agent_id or start verbose: true."),
     );
 }
 
@@ -7488,12 +7472,16 @@ async fn inspect_agent_from_input(
                 unchanged
             };
             if unchanged {
+                let child_route = worker_record
+                    .as_ref()
+                    .and_then(|record| record.spec.child_route.clone());
                 let payload = json!({
                     "action": if peek { "peek" } else { "status" },
                     "agent_id": snapshot.agent_id,
                     "name": snapshot.name,
                     "status": "running",
                     "unchanged": true,
+                    "child_route": child_route,
                     "hint": "No change since your last check. Checking again in a loop is the anti-pattern; one blocking wait is not. Make one agent(action=\"wait\") call — until=\"all\" to join every running child in a single block — or continue independent work, or end your turn. Results arrive automatically as <codewhale:subagent.done> sentinels.",
                 });
                 let mut tool_result = ToolResult::json(&payload)
@@ -7504,6 +7492,7 @@ async fn inspect_agent_from_input(
                     "terminal": false,
                     "agent_id": payload["agent_id"],
                     "unchanged": true,
+                    "child_route": child_route,
                 }));
                 return Ok(tool_result);
             }
@@ -7518,6 +7507,7 @@ async fn inspect_agent_from_input(
             "status": projection.status,
             "terminal": projection.terminal,
             "agent_id": projection.agent_id,
+            "child_route": projection.child_route,
         }));
         return Ok(tool_result);
     }
@@ -7903,7 +7893,6 @@ fn child_client_for_member(
 ) -> Result<DeepSeekClient, ToolError> {
     child_provider_binding(runtime, member).map(|binding| binding.client)
 }
-
 async fn spawn_subagent_from_input(
     input: Value,
     manager: SharedSubAgentManager,
@@ -7912,6 +7901,11 @@ async fn spawn_subagent_from_input(
     apply_session_spawn_defaults(&mut runtime);
     refresh_spawn_route_sources(&mut runtime);
     let mut spawn_request = parse_spawn_request(&input)?;
+    let requested_route = RequestedChildRoute {
+        requested_type: spawn_request.agent_type.as_str().to_string(),
+        requested_profile: spawn_request.profile.clone(),
+        requested_reasoning: subagent_thinking_label(spawn_request.thinking).to_string(),
+    };
     let profile_member = apply_spawn_profile(&mut spawn_request, &runtime.fleet_roster)?;
     // Profile-backed requests cannot be classified safely until the roster
     // resolves their effective role. Enforce the same bounded-write contract
@@ -7936,9 +7930,6 @@ async fn spawn_subagent_from_input(
         )));
     }
 
-    // Bind and validate the exact child route before admission can create a
-    // git worktree. Provider credentials, explicit profile ids, and fixed
-    // model selectors therefore fail without leaving filesystem artifacts.
     let mut child_runtime = runtime.background_runtime();
     let provider_binding = child_provider_binding(&runtime, profile_member.as_ref())?;
     child_runtime.client = provider_binding.client;
@@ -7948,6 +7939,46 @@ async fn spawn_subagent_from_input(
     let providerless =
         crate::fleet::worker_runtime::explicit_fleet_provider_id(profile_member.as_ref()).is_none();
     resolve_fixed_spawn_model_route(&child_runtime, &mut model_selection, providerless)?;
+    let resident_context = spawn_request
+        .resident_file
+        .as_deref()
+        .map(|file_path| read_bounded_resident_context(&runtime.context, file_path))
+        .transpose()?;
+    let effective_prompt = assemble_spawn_prompt(&spawn_request, resident_context.as_ref());
+    let route = resolve_subagent_assignment_route(
+        &child_runtime,
+        None,
+        &effective_prompt,
+        &spawn_request.agent_type,
+        model_selection.model_route,
+        spawn_request.thinking,
+    )
+    .await;
+    let effective_model =
+        ensure_subagent_model_for_provider(&child_runtime, &route.model_route, route.model)?;
+    child_runtime.model = effective_model.clone();
+    if let Some(rebound) = child_runtime
+        .client
+        .rebound_for_model_protocol(child_runtime.api_config.as_deref(), &effective_model)
+        .map_err(|err| {
+            ToolError::execution_failed(format!(
+                "fleet dispatch could not bind the wire protocol for model {effective_model:?}: {err:#}"
+            ))
+        })?
+    {
+        child_runtime.client = rebound;
+    }
+    child_runtime.reasoning_effort = route.reasoning_effort.clone();
+    child_runtime.reasoning_effort_auto = false;
+    let model_route = route.model_route;
+    let child_route = mint_child_route_receipt(
+        &requested_route,
+        &spawn_request,
+        profile_member.as_ref(),
+        &child_runtime,
+        effective_model.clone(),
+        model_selection.source.as_str(),
+    )?;
 
     if spawn_request.worktree.is_some() {
         let manager_guard = manager.read().await;
@@ -8013,124 +8044,21 @@ async fn spawn_subagent_from_input(
     }
     apply_spawn_write_authority(&mut child_runtime, &spawn_request);
     let write_capable = spawn_request_is_write_capable(&spawn_request);
-    let resident_context = spawn_request
-        .resident_file
-        .as_deref()
-        .map(|file_path| read_bounded_resident_context(&runtime.context, file_path))
-        .transpose()?;
-    let effective_prompt = if let Some(resident) = resident_context.as_ref() {
-        let prefixed = format!(
-            "<!-- resident_file: {} -->\n```\n{}\n```\n\n{}",
-            resident.display_path, resident.contents, spawn_request.prompt
-        );
-        prefixed
-    } else {
-        spawn_request.prompt
-    };
-    // Surface the declared expected artifact to the child so the deliberate
-    // contract is visible to the agent doing the work, not just validated at
-    // the parse boundary (TUI-DOG-017).
-    let effective_prompt = match spawn_request.expected_artifact.as_deref() {
-        Some(artifact) => {
-            format!("{effective_prompt}\n\nExpected artifact (declared by the spawner): {artifact}")
-        }
-        None => effective_prompt,
-    };
-    let effective_prompt = if spawn_request.dependencies.is_empty()
-        && spawn_request.acceptance.is_empty()
-    {
-        effective_prompt
-    } else {
-        let dependencies = spawn_request
-            .dependencies
-            .iter()
-            .map(|item| format!("- {}", item.chars().take(256).collect::<String>()))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let acceptance = spawn_request
-            .acceptance
-            .iter()
-            .map(|item| format!("- {}", item.chars().take(256).collect::<String>()))
-            .collect::<Vec<_>>()
-            .join("\n");
-        format!(
-            "{effective_prompt}\n\nDelegation contract (bounded):\nDependencies:\n{dependencies}\nAcceptance:\n{acceptance}"
-        )
-    };
     let write_claim = write_capable.then(|| WriteScopeClaim {
         owner: String::new(),
         roots: spawn_request.write_roots.clone(),
         exact_files: spawn_request.exact_files.clone(),
         contracts: spawn_request.coordination_contracts.clone(),
     });
-    // #4193 seam 2 (cont.): strength/inherit/faster routing and the final
-    // provider-namespace guard both read the provider from the runtime's client,
-    // so route them through `child_runtime` (pinned provider) instead of the
-    // session `runtime`. Router candidates, reasoning-effort defaults, and the
-    // fixed-model validation then all resolve against provider B.
-    let route = resolve_subagent_assignment_route(
-        &child_runtime,
-        None,
-        &effective_prompt,
-        &spawn_request.agent_type,
-        model_selection.model_route,
-        spawn_request.thinking,
-    )
-    .await;
-    let effective_model =
-        ensure_subagent_model_for_provider(&child_runtime, &route.model_route, route.model)?;
-    child_runtime.model = effective_model.clone();
-    // #5042: the child client was bound before the final model was known. A
-    // ModelAware provider (e.g. DeepSeek: pro=chat, flash=responses) can map
-    // the resolved model to a different wire protocol, so delegate to the
-    // same central resolver the main session uses and rebuild the client now
-    // instead of failing deterministically on the child's first send.
-    if let Some(rebound) = child_runtime
-        .client
-        .rebound_for_model_protocol(child_runtime.api_config.as_deref(), &effective_model)
-        .map_err(|err| {
-            ToolError::execution_failed(format!(
-                "fleet dispatch could not bind the wire protocol for model \
-                 {effective_model:?}: {err:#}"
-            ))
-        })?
-    {
-        child_runtime.client = rebound;
-    }
-    child_runtime.reasoning_effort = route.reasoning_effort.clone();
-    child_runtime.reasoning_effort_auto = false;
-    let model_route = route.model_route;
-    let resolved_role = profile_member
-        .as_ref()
-        .map(|member| member.profile.role.name.clone())
-        .filter(|name| !name.trim().is_empty())
-        .or_else(|| spawn_request.assignment.role.clone());
-    let resolved_profile = profile_member
-        .as_ref()
-        .map(|member| member.id.clone())
-        .or_else(|| spawn_request.profile.clone());
     let mut spawn_metadata = WorkflowTaskSpawnMetadata {
-        resolved_provider: child_runtime
-            .api_config
-            .as_ref()
-            .map(|config| config.provider_identity_for(child_runtime.client.api_provider()))
-            .unwrap_or_else(|| child_runtime.client.api_provider().as_str().to_string()),
-        resolved_model: effective_model.clone(),
-        route_source: model_selection.source.as_str().to_string(),
-        // #5305: same explicit-only source the launch route used above, so the
-        // receipt cannot claim a pin the child was never bound to.
-        requested_provider: crate::fleet::worker_runtime::explicit_fleet_provider_id(
-            profile_member.as_ref(),
-        ),
-        requested_model: spawn_request.model.clone(),
-        // #4039: requested is what the caller asked for; effective is what the
-        // child runtime was installed with a line above. Both are read here,
-        // at the spawn seam, so a later session-level model/reasoning switch
-        // can never rewrite a launched row's receipt.
-        requested_reasoning: Some(subagent_thinking_label(spawn_request.thinking).to_string()),
-        effective_reasoning: child_runtime.reasoning_effort.clone(),
-        resolved_role,
-        resolved_profile,
+        resolved_provider: child_route.provider_id.clone(),
+        resolved_model: child_route.model_id.clone(),
+        route_source: child_route.route_source.clone(),
+        requested_reasoning: Some(child_route.requested_reasoning.clone()),
+        effective_reasoning: child_route.effective_reasoning.clone(),
+        resolved_role: Some(child_route.canonical_role.clone()),
+        resolved_profile: child_route.resolved_profile_id.clone(),
+        child_route: child_route.clone(),
         parent_task_id: child_runtime.parent_agent_id.clone(),
         depth: child_runtime.spawn_depth,
         workflow_run_id: None,
@@ -8244,6 +8172,7 @@ async fn spawn_subagent_from_input(
             name: spawn_request.session_name.clone(),
             model: Some(effective_model),
             model_route: Some(model_route),
+            child_route: Some(child_route),
             nickname: None,
             fork_context,
             token_budget: spawn_request.token_budget,
@@ -8274,6 +8203,88 @@ async fn spawn_subagent_from_input(
     }
 
     Ok((result, spawn_metadata))
+}
+const CHILD_ROUTE_RECEIPT_MAX_BYTES: usize = 448;
+
+fn assemble_spawn_prompt(request: &SpawnRequest, resident: Option<&ResidentContext>) -> String {
+    let prompt = match resident {
+        Some(resident) => format!(
+            "<!-- resident_file: {} -->\n```\n{}\n```\n\n{}",
+            resident.display_path, resident.contents, request.prompt
+        ),
+        None => request.prompt.clone(),
+    };
+    let prompt = match request.expected_artifact.as_deref() {
+        Some(artifact) => {
+            format!("{prompt}\n\nExpected artifact (declared by the spawner): {artifact}")
+        }
+        None => prompt,
+    };
+    if request.dependencies.is_empty() && request.acceptance.is_empty() {
+        return prompt;
+    }
+    let lines = |items: &[String]| {
+        items
+            .iter()
+            .map(|item| format!("- {}", item.chars().take(256).collect::<String>()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    format!(
+        "{prompt}\n\nDelegation contract (bounded):\nDependencies:\n{}\nAcceptance:\n{}",
+        lines(&request.dependencies),
+        lines(&request.acceptance),
+    )
+}
+
+fn mint_child_route_receipt(
+    requested_route: &RequestedChildRoute,
+    request: &SpawnRequest,
+    member: Option<&crate::fleet::profile::AgentProfile>,
+    runtime: &SubAgentRuntime,
+    model_id: String,
+    route_source: &str,
+) -> Result<ChildRouteReceipt, ToolError> {
+    let canonical_role = member
+        .map(|member| member.profile.role.name.trim())
+        .filter(|role| !role.is_empty())
+        .map(str::to_string)
+        .or_else(|| request.assignment.role.clone())
+        .unwrap_or_else(|| request.agent_type.as_str().to_string());
+    let provider_id = runtime
+        .api_config
+        .as_ref()
+        .map(|config| config.provider_identity_for(runtime.client.api_provider()))
+        .unwrap_or_else(|| runtime.client.api_provider().as_str().to_string());
+    let receipt = ChildRouteReceipt {
+        requested_type: requested_route.requested_type.clone(),
+        requested_profile: requested_route.requested_profile.clone(),
+        resolved_profile_id: member.map(|member| member.id.clone()),
+        profile_origin: member.map(|member| member.origin.to_string()),
+        canonical_role,
+        provider_id,
+        model_id,
+        route_source: route_source.to_string(),
+        requested_reasoning: requested_route.requested_reasoning.clone(),
+        effective_reasoning: runtime.reasoning_effort.clone(),
+        runtime_version: env!("CARGO_PKG_VERSION").to_string(),
+        // CI builds embed the full 40-hex GITHUB_SHA; a full-length field
+        // pushed real receipts past 384 bytes (394 with the sha, 386 on some
+        // legitimate routes without it), breaking admission. Twelve hex chars
+        // plus the version identify the build without bloating every receipt.
+        runtime_build_sha: option_env!("CODEWHALE_BUILD_COMMIT")
+            .map(|sha| sha.get(..12).unwrap_or(sha).to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
+    };
+    let length = serde_json::to_vec(&receipt)
+        .map_err(|error| ToolError::execution_failed(error.to_string()))?
+        .len();
+    if length > CHILD_ROUTE_RECEIPT_MAX_BYTES {
+        return Err(ToolError::invalid_input(format!(
+            "resolved child route receipt is {length} bytes; the {CHILD_ROUTE_RECEIPT_MAX_BYTES}-byte limit prevents an oversized admission record"
+        )));
+    }
+    Ok(receipt)
 }
 
 fn apply_spawn_write_authority(runtime: &mut SubAgentRuntime, request: &SpawnRequest) {
@@ -8708,9 +8719,9 @@ fn build_initial_subagent_messages_with_system(
 /// Whether an agent's current To-do snapshot is worth publishing to the
 /// mailbox (#4810).
 ///
-/// Two silences are deliberate: an unchanged ledger is not news, and an agent
+/// Two silences are deliberate: an unchanged list is not news, and an agent
 /// that has never stated any work says nothing at all rather than announcing
-/// an empty list. A ledger that goes from non-empty to empty *is* published —
+/// an empty list. A list that goes from non-empty to empty *is* published —
 /// that is a real transition the card must reflect instead of showing stale
 /// items.
 fn work_state_worth_publishing(
@@ -8721,24 +8732,6 @@ fn work_state_worth_publishing(
         Some(last) => last != current,
         None => !current.is_empty(),
     }
-}
-
-/// Messages for one sub-agent provider request: the child's stored messages,
-/// then the transient canonical Work tail rendered from the child's own ledger
-/// (#3983).
-///
-/// The tail is never pushed into the caller's `messages` accumulator, so it
-/// cannot be stored in the child transcript, cannot reach the child's system
-/// prefix, and cannot duplicate across steps or retries.
-async fn subagent_request_messages(
-    messages: &[Message],
-    work_state_source: &crate::work_grounding::WorkStateSource,
-) -> Vec<Message> {
-    let mut request_messages = messages.to_vec();
-    if let Some(tail) = work_state_source.tail_message().await {
-        request_messages.push(tail);
-    }
-    request_messages
 }
 
 fn system_text_message(text: String) -> Message {
@@ -9125,6 +9118,9 @@ fn subagent_done_sentinel(agent_id: &str, res: &SubAgentResult, truncated: bool)
     if let Some(needs_input) = res.needs_input.clone() {
         payload["needs_input"] = json!(needs_input);
     }
+    if let Some(child_route) = res.child_route.clone() {
+        payload["child_route"] = json!(child_route);
+    }
     format!("<codewhale:subagent.done>{payload}</codewhale:subagent.done>")
 }
 
@@ -9168,6 +9164,7 @@ fn subagent_failed_sentinel(res: &SubAgentResult, error: &str) -> String {
         "elapsed_ms": res.duration_ms,
         "transcript_handle": transcript_handle,
         "error_location": "previous_line",
+        "child_route": res.child_route,
     });
     format!("<codewhale:subagent.done>{payload}</codewhale:subagent.done>")
 }
@@ -9209,27 +9206,31 @@ async fn insert_subagent_full_transcript_handle(
     // bounded message tail — embedding it verbatim would duplicate that tail
     // inside one payload. Keep checkpoint metadata, drop its messages, and
     // record how much of the true history the bounded tail omits.
-    let (bounded_messages, omitted_messages) =
-        bounded_tail_messages(messages, SUBAGENT_TRANSCRIPT_MESSAGE_BUDGET_BYTES);
+    let projected_messages = crate::image_attach::safe_tool_result_message_projection(messages);
+    let (bounded_messages, omitted_messages) = bounded_tail_messages(
+        &projected_messages,
+        SUBAGENT_TRANSCRIPT_MESSAGE_BUDGET_BYTES,
+    );
     let checkpoint_meta = checkpoint.map(|checkpoint| SubAgentCheckpoint {
         omitted_messages: checkpoint.message_count,
         messages: Vec::new(),
         ..checkpoint.clone()
     });
     let transcript_artifact = transcript_artifact.map(|writer| {
-        let synced = match writer.sync_messages(messages, *status != SubAgentStatus::Running) {
-            Ok(()) => true,
-            Err(err) => {
-                tracing::warn!(
-                    target: "subagent",
-                    ?err,
-                    agent_id,
-                    "failed to persist complete sub-agent transcript artifact"
-                );
-                false
-            }
-        };
-        writer.metadata(synced && writer.persisted_messages == messages.len())
+        let synced =
+            match writer.sync_messages(&projected_messages, *status != SubAgentStatus::Running) {
+                Ok(()) => true,
+                Err(err) => {
+                    tracing::warn!(
+                        target: "subagent",
+                        ?err,
+                        agent_id,
+                        "failed to persist complete sub-agent transcript artifact"
+                    );
+                    false
+                }
+            };
+        writer.metadata(synced && writer.persisted_messages == projected_messages.len())
     });
     let payload = json!({
         "kind": "subagent_full_transcript",
@@ -9365,8 +9366,11 @@ fn build_subagent_checkpoint(
 ) -> SubAgentCheckpoint {
     let created_at_ms = epoch_millis_now();
     let checkpoint_id = format!("{agent_id}:step:{steps_taken}:ts:{created_at_ms}");
-    let (bounded_messages, omitted_messages) =
-        bounded_tail_messages(messages, SUBAGENT_CHECKPOINT_MESSAGE_BUDGET_BYTES);
+    let projected_messages = crate::image_attach::safe_tool_result_message_projection(messages);
+    let (bounded_messages, omitted_messages) = bounded_tail_messages(
+        &projected_messages,
+        SUBAGENT_CHECKPOINT_MESSAGE_BUDGET_BYTES,
+    );
     SubAgentCheckpoint {
         checkpoint_id: checkpoint_id.clone(),
         agent_id: agent_id.to_string(),
@@ -9818,17 +9822,16 @@ async fn run_subagent(
         &system_prompt,
         refreshed_fork_context.as_ref(),
     );
-    // This agent's *own* Work ledger (#4810): the runtime carries the parent's
-    // work-graph handle but a private To-do list, so this source resolves
-    // against the child's store and can never read a parent's or sibling's
-    // ledger. Rebuilt per request below, so a child `work_update` lands on the
-    // child's next step.
-    let work_state_source = crate::work_grounding::WorkStateSource::new(
+    // This agent's *own* To-do list (#4810): the runtime carries the parent's
+    // work-graph handle but a private list, so this source resolves against
+    // the child's store and can never read a parent's or sibling's list. Read
+    // for the agent card and the fork handoff — never appended to a request.
+    let todo_source = crate::todo_snapshot::TodoSource::new(
         runtime.context.runtime.work.clone(),
         runtime.todos.clone(),
     );
     // Last snapshot published to the mailbox for *this* agent, so repeated
-    // tool calls that leave the ledger untouched do not redraw its card.
+    // tool calls that leave the list untouched do not redraw its card.
     let mut last_published_todo: Option<crate::tools::todo::TodoListSnapshot> = None;
     let mut transcript_artifact =
         match SubAgentTranscriptArtifactWriter::for_runtime(runtime, &agent_id).await {
@@ -9860,8 +9863,8 @@ async fn run_subagent(
             messages: messages.clone(),
             structured_state_block: None,
             // A grandchild forks *this* agent, so it inherits this agent's own
-            // ledger, resolved when that spawn actually happens.
-            work_source: Some(work_state_source.clone()),
+            // list, resolved when that spawn actually happens.
+            work_source: Some(todo_source.clone()),
         },
     );
     let tool_registry = SubAgentToolRegistry::new_with_owner(
@@ -9889,7 +9892,8 @@ async fn run_subagent(
             unavailable_tools.join(", ")
         ));
     }
-    let tools = tool_registry.tools_for_model(&agent_type);
+    let tool_catalog = tool_registry.deferred_catalog_for_model(&agent_type);
+    let mut tool_surface = SubAgentToolSurface::new(tool_catalog, &[]);
     if let Some(mb) = runtime.mailbox.as_ref() {
         let _ = mb.send(MailboxMessage::started(&agent_id, agent_type.clone()));
     }
@@ -9979,6 +9983,7 @@ async fn run_subagent(
                 runtime_permissions: None,
                 parent_run_id: runtime.parent_agent_id.clone(),
                 spawn_depth: runtime.spawn_depth,
+                child_route: None,
                 result: None,
                 steps_taken: steps,
                 checkpoint: latest_checkpoint.clone(),
@@ -10024,15 +10029,43 @@ async fn run_subagent(
             messages.push(child_completion_runtime_message(&child_completions));
         }
 
+        let tools = tool_surface.request_tools(
+            tool_registry.deferred_catalog_for_model(&agent_type),
+            runtime
+                .api_config
+                .as_ref()
+                .and_then(|config| config.strict_tool_mode)
+                .unwrap_or(false),
+        );
+        let request_active_tool_names = tool_surface.active_names.clone();
         let has_tools = !tools.is_empty();
-        // Same canonical tail the parent gets, from this child's own ledger.
-        // Appended to a per-request copy: `messages` (history, transcript,
-        // checkpoints, live inspection) stays byte-identical, so no retry or
-        // later step can accumulate a second block.
-        let request_messages = subagent_request_messages(&messages, &work_state_source).await;
+        // A child sends its stored messages and nothing else. Its To-do state
+        // reaches it the same way the parent's does: through the tool results
+        // its own `work_update` calls returned, which are already in
+        // `messages`. Nothing synthetic is appended per step.
+        let mut request_messages = messages.clone();
         let request_route = runtime
             .client
             .effective_route_envelope(&runtime.model, chrono::Utc::now());
+        let image_input = runtime
+            .api_config
+            .as_deref()
+            .and_then(|config| {
+                crate::route_runtime::resolve_runtime_route(
+                    config,
+                    request_route.provider,
+                    Some(&request_route.model),
+                )
+                .ok()
+            })
+            .map_or(crate::model_profile::SupportState::Unknown, |route| {
+                route.candidate.capabilities().image_input
+            });
+        crate::image_attach::strip_images_when_unsupported(
+            &mut request_messages,
+            image_input,
+            &request_route.model,
+        );
         let request = MessageRequest {
             model: runtime.model.clone(),
             messages: request_messages,
@@ -10122,6 +10155,7 @@ async fn run_subagent(
                     runtime_permissions: None,
                     parent_run_id: runtime.parent_agent_id.clone(),
                     spawn_depth: runtime.spawn_depth,
+                    child_route: None,
                     result: None,
                     steps_taken: steps,
                     checkpoint: latest_checkpoint.clone(),
@@ -10240,6 +10274,7 @@ async fn run_subagent(
                             runtime_permissions: None,
                             parent_run_id: runtime.parent_agent_id.clone(),
                             spawn_depth: runtime.spawn_depth,
+                            child_route: None,
                             result: Some(reason),
                             steps_taken: steps,
                             checkpoint: Some(checkpoint),
@@ -10443,6 +10478,7 @@ async fn run_subagent(
                 runtime_permissions: None,
                 parent_run_id: runtime.parent_agent_id.clone(),
                 spawn_depth: runtime.spawn_depth,
+                child_route: None,
                 result: final_result.clone(),
                 steps_taken: steps,
                 checkpoint: latest_checkpoint.clone(),
@@ -10544,25 +10580,38 @@ async fn run_subagent(
                     step: steps,
                 });
             }
-            let result = match tokio::time::timeout(runtime.tool_timeout, async {
+            let output = match tokio::time::timeout(runtime.tool_timeout, async {
                 tool_registry
-                    .execute(&agent_id, &tool_name, tool_input)
+                    .execute_from_surface(
+                        &agent_id,
+                        &mut tool_surface,
+                        &request_active_tool_names,
+                        &tool_name,
+                        tool_input,
+                    )
                     .await
             })
             .await
             {
                 Ok(Ok(output)) => output,
-                Ok(Err(e)) => format!("Error: {e}"),
-                Err(_) => format!("Error: Tool {tool_name} timed out"),
+                Ok(Err(e)) => RichToolResult::plain(ToolResult::error(format!("Error: {e}"))),
+                Err(_) => RichToolResult::plain(ToolResult::error(format!(
+                    "Error: Tool {tool_name} timed out"
+                ))),
             };
-            let tool_ok = !result.starts_with("Error:");
+            let tool_ok = output.result.success;
+            let content_blocks = output
+                .content_blocks
+                .iter()
+                .filter_map(|block| serde_json::to_value(block).ok())
+                .collect::<Vec<_>>();
             let (result, spilled_to) = bound_subagent_tool_result(
                 &agent_id,
                 &tool_id,
                 &tool_name,
                 &runtime.context.state_namespace,
                 tool_ok,
-                result,
+                output.result.content,
             );
             if let Some(path) = spilled_to.as_ref() {
                 record_agent_progress(
@@ -10594,13 +10643,13 @@ async fn run_subagent(
                     step: steps,
                     ok: tool_ok,
                 });
-                // This child's own ledger, read from its own store right after
+                // This child's own list, read from its own store right after
                 // the tool that may have changed it — so a `work_update` in
                 // this step is visible on this child's card in this same turn,
                 // not one step later (#4810). Published only on change, and
                 // never before the child has stated any work, so a child that
                 // never uses the To-do surface adds no rows to its card.
-                let todo = work_state_source.snapshot().await;
+                let todo = todo_source.snapshot().await;
                 if work_state_worth_publishing(last_published_todo.as_ref(), &todo) {
                     let _ = mb.send(MailboxMessage::work_state(agent_id.clone(), todo.clone()));
                     last_published_todo = Some(todo);
@@ -10611,7 +10660,7 @@ async fn run_subagent(
                 tool_use_id: tool_id,
                 content: result,
                 is_error: None,
-                content_blocks: None,
+                content_blocks: (!content_blocks.is_empty()).then_some(content_blocks),
             });
         }
 
@@ -10715,6 +10764,7 @@ async fn run_subagent(
         runtime_permissions: None,
         parent_run_id: runtime.parent_agent_id.clone(),
         spawn_depth: runtime.spawn_depth,
+        child_route: None,
         result: final_result,
         steps_taken: steps,
         checkpoint: latest_checkpoint,
@@ -11207,8 +11257,8 @@ fn validate_spawn_write_contract(
     }
     // #5123: `type=builder` plus read_only authority used to parse, then
     // silently clamp write/shell off — the child self-BLOCKED as a "builder"
-    // holding only recon tools, after burning a turn discovering it. Fail
-    // closed at spawn instead.
+    // holding only read-only inspection tools, after burning a turn
+    // discovering it. Fail closed at spawn instead.
     //
     // Two narrowings keep this to the actual lie:
     //
@@ -12444,7 +12494,7 @@ pub(crate) fn subagent_progress_tool_display_name(name: &str) -> &str {
         | "exec_wait"
         | "exec_interact"
         | "task_shell_start"
-        | "task_shell_wait" => "Bash",
+        | "task_shell_wait" => "bash",
         _ => name,
     }
 }
@@ -12483,34 +12533,80 @@ fn routine_agent_progress_can_preserve_event_headroom(status: AgentWorkerStatus)
 
 // === Tool Registry Helpers ===
 
-/// Per-sub-agent tool registry.
+/// Request projection over one child's independently filtered full registry.
 ///
-/// Two modes:
-/// - **Full inheritance** (`allowed_tools = None`): the child sees the same
-///   tool surface as the parent's Agent mode, except legacy sub-agent lifecycle
-///   tools are removed. The single `agent` launcher remains visible only while
-///   the configured depth budget allows another child. Approval-gated tools
-///   are callable when the parent runtime is auto-approved; otherwise a
-///   `Suggest`-level call needs a write-capable role (`implementer`, `custom`)
-///   or the in-workspace write carve-out (#5186), and a `Required`-level call
-///   must be the bounded built-in verification surface.
-/// - **Explicit narrow** (`allowed_tools = Some(list)`): legacy / Custom
-///   path. The registry still builds the full surface, but only the listed
-///   tool names are visible to the model and callable.
+/// The forked transcript and instructions remain model context, but never grant
+/// tools or seed authority. Each child starts with its own empty activation
+/// cache and may discover anything that survives that child's role, scope,
+/// depth, and execution-envelope filters. Search and hydration can only admit
+/// names from this filtered catalog; they cannot make a denied tool executable.
+/// The active-name snapshot is rebuilt once per model request so a same-batch
+/// guessed call cannot use a schema that was not present in that request.
+struct SubAgentToolSurface {
+    catalog: Vec<Tool>,
+    active_names: std::collections::HashSet<String>,
+    cache: ToolActivationCache,
+}
+
+impl SubAgentToolSurface {
+    fn new(catalog: Vec<Tool>, warm_names: &[String]) -> Self {
+        let mut cache = ToolActivationCache::default();
+        let activation = cache.activate(&catalog, warm_names);
+        let mut active_names = initial_active_tools(&catalog);
+        active_names.extend(activation.admitted);
+        Self {
+            catalog,
+            active_names,
+            cache,
+        }
+    }
+
+    fn request_tools(&mut self, catalog: Vec<Tool>, strict: bool) -> Vec<Tool> {
+        self.catalog = catalog;
+        self.cache.revalidate(&self.catalog);
+        let mut active_names = initial_active_tools(&self.catalog);
+        active_names.extend(self.cache.names().map(str::to_string));
+        self.active_names = active_names;
+        active_tools_for_request(&self.catalog, &self.active_names, strict).unwrap_or_default()
+    }
+
+    fn search(&mut self, name: &str, input: &Value) -> Result<String> {
+        execute_tool_search_with_cache(
+            name,
+            input,
+            &self.catalog,
+            &mut self.active_names,
+            &mut self.cache,
+        )
+        .map(|result| result.content)
+        .map_err(|error| anyhow!(error))
+    }
+
+    fn hydrate(&mut self, name: &str) -> Result<String> {
+        let activation = self.cache.activate(&self.catalog, &[name.to_string()]);
+        remove_evicted_cache_activations(&self.catalog, &mut self.active_names, activation.evicted);
+        self.active_names
+            .extend(activation.admitted.iter().cloned());
+        if activation.admitted.iter().any(|admitted| admitted == name) {
+            return Ok(format!(
+                "Tool `{name}` was deferred and has now been loaded. Retry the call with the newly available schema."
+            ));
+        }
+        Err(anyhow!(
+            "Tool {name} could not enter the bounded child toolbox; use tool_search with a narrower query"
+        ))
+    }
+}
+
+/// Role-only approval posture; the registry allow/deny and runtime envelope
+/// remain the authoritative per-tool checks.
 ///
-/// Pure per-role posture check (#3217), independent of any runtime: whether a
-/// role may invoke a tool of the given approval level.
-///
-/// - Read (`Auto`) tools are always allowed.
-/// - Write/edit/patch (`Suggest`) tools require a write-capable posture, so the
-///   read-only roles (`explore`/`review`/`plan`/`verifier`) are denied.
-/// - Shell (`Required`) tools require a `Full` shell posture. Scout/reviewer
-///   calls that the Bash spec proves read-only are `Auto`, so they take the
-///   read branch instead; arbitrary commands remain outside their envelope.
-///
-/// `custom` passes this role-only check. Its explicit allowlist, bounded write
-/// authority, and parent-intersected runtime profile jointly form the actual
-/// authority envelope.
+/// `Auto` is safe for every role. `Suggest` requires a write-capable role;
+/// `Required` requires the full-shell posture. A Custom worker may describe
+/// either posture, but its explicit allowlist and the runtime envelope still
+/// narrow what it can execute. Read-only bash operations are classified Auto,
+/// so Scouts and Reviewers do not gain general shell authority through this
+/// branch.
 fn role_posture_permits(agent_type: &FleetRole, approval: ApprovalRequirement) -> bool {
     if matches!(agent_type, FleetRole::Custom) {
         return true;
@@ -12525,17 +12621,12 @@ fn role_posture_permits(agent_type: &FleetRole, approval: ApprovalRequirement) -
     }
 }
 
-/// Fold an explicit **parent** tool subset into the child's allowlist.
+/// Intersect an explicit parent scope with the child's requested subset.
 ///
-/// [`ToolScope::Explicit`] is the parent saying "these tools and no others".
-/// The registry only ever consults `allowed_tools`, so a scope that is not
-/// folded in here is a restriction that exists on paper and nowhere else.
-///
-/// - Parent explicit, child explicit → the intersection: a child may narrow
-///   inside its parent's subset and never step outside it.
-/// - Parent explicit, child unrestricted → the parent's subset, which is the
-///   whole point of the parent having declared one.
-/// - Parent unrestricted → the child's own request stands, unchanged.
+/// A child can narrow an explicit parent scope, never widen it. Omitting the
+/// child list inherits the parent's exact scope. A parent with the default
+/// role-defined scope may accept a child list, but the role and envelope gates
+/// below remain authoritative at visibility and dispatch time.
 fn intersect_explicit_tool_scope(
     parent: &ToolScope,
     child: Option<Vec<String>>,
@@ -12554,54 +12645,45 @@ fn intersect_explicit_tool_scope(
     )
 }
 
-/// Whether an explicit parent scope covers one tool name.
-///
-/// Canonical families and their per-action aliases name the same capability
-/// (`File` ↔ `write_file`), so a parent that granted either form has granted
-/// the child that form's counterpart. Matching is case-insensitive, mirroring
-/// the deny-list comparison.
+/// Family, legacy action, and lowercase primitive spellings are equivalent.
+/// This is intentionally case-insensitive so a saved `File`/`Bash` scope and
+/// the current `read`/`write`/`edit`/`bash` names describe the same authority.
 fn explicit_scope_permits(parent: &[String], name: &str) -> bool {
-    let matches = |candidate: &str| {
-        parent
-            .iter()
-            .any(|allowed| allowed.eq_ignore_ascii_case(candidate))
-    };
-    matches(name)
+    parent
+        .iter()
+        .any(|allowed| policy_tool_name_matches(allowed, name))
+}
+
+fn policy_tool_name_matches(rule: &str, name: &str) -> bool {
+    let empty = Value::Null;
+    let semantic_rule = canonical_action_alias(rule, &empty);
+    let semantic_name = canonical_action_alias(name, &empty);
+    rule.eq_ignore_ascii_case(name)
+        || semantic_rule.eq_ignore_ascii_case(semantic_name)
         || CANONICAL_ACTION_ALIASES.iter().any(|(family, _, alias)| {
-            (name.eq_ignore_ascii_case(family) && matches(alias))
-                || (name.eq_ignore_ascii_case(alias) && matches(family))
+            rule.eq_ignore_ascii_case(family) && semantic_name.eq_ignore_ascii_case(alias)
+                || name.eq_ignore_ascii_case(family) && semantic_rule.eq_ignore_ascii_case(alias)
         })
 }
 
 struct SubAgentToolRegistry {
-    /// `None` → full inheritance (no allowlist filter applied). `Some(list)` →
-    /// only the listed tools are visible to the model and callable. An explicit
-    /// parent [`ToolScope`] is folded in here by
-    /// [`intersect_explicit_tool_scope`] so the parent's subset is enforced by
-    /// the same filter, rather than being recorded on a profile nobody reads.
+    // `None` means the role-defined surface; `Some` is the already-intersected
+    // parent/child scope. Deny rules always win, including canonical prefixes.
     allowed_tools: Option<Vec<String>>,
-    /// Tool deny-list inherited from the parent runtime's `worker_profile`
-    /// (#4042). Deny always wins over allow, even when a tool is in both the
-    /// allowlist and this list. Wildcard matching mirrors the session-side
-    /// `command_denies_tool` (exact + `prefix*`, case-insensitive).
     disallowed_tools: Vec<String>,
+    // Approval posture is separate from authority. Auto approval can remove a
+    // prompt, but cannot restore a tool removed by role, scope, or envelope.
     auto_approve: bool,
-    /// Workflow-spawned children auto-accept Suggest-level file edits.
     accept_edits: bool,
-    /// The role/type of the sub-agent that this registry belongs to. Used to
-    /// decide whether `Suggest`-level tools (write/edit/patch) may run inside
-    /// the child without the parent runtime being auto-approved (#1828, #1833).
     agent_type: FleetRole,
-    /// Already-derived capability envelope for this child. This captures the
-    /// parent posture intersection, so a Plan parent can expose delegation
-    /// without accidentally granting write or shell tools to the child.
     runtime_profile: WorkerRuntimeProfile,
+    // Depth is the only special authority governing nested `agent` calls.
     can_spawn_child: bool,
+    // Every mutation is attributed to the child and checked against its live
+    // coordination claim before the underlying registry sees the call.
     owner_agent_id: String,
     owner_agent_name: String,
     coordination_manager: SharedSubAgentManager,
-    /// Disabled only by the legacy unit-test constructor, which has no
-    /// admitted worker identity. Production registries always enforce claims.
     enforce_write_claim: bool,
     registry: ToolRegistry,
 }
@@ -12640,20 +12722,13 @@ impl SubAgentToolRegistry {
         todo_list: SharedTodoList,
         plan_state: SharedPlanState,
     ) -> Self {
-        // Build the full agent surface — same as the parent's Agent mode except
-        // for root-owned goal lifecycle mutation.
-        // Children inherit shell, file, patch, search, web, git, diagnostics,
-        // review, and RLM, plus per-child fresh todo/plan state. `agent` is
-        // retained only when depth budget remains.
         let can_spawn_child = !runtime.would_exceed_depth();
-        // An explicit parent tool subset has to *bind*, not merely be recorded
-        // on the profile. `derive_child` already intersects the parent's
-        // `ToolScope::Explicit` into the child's contract; until it is folded
-        // into the allowlist the registry actually consults, the child still
-        // sees and can call the parent's full surface — the profile says one
-        // thing and the runtime does another.
         let coordination_manager = Arc::clone(&runtime.manager);
         let mut surface_options = runtime.agent_tool_surface_options.clone();
+        // Shell authority is an intersection: a parent cannot delegate more
+        // than it owns, and read-only inspection roles (Scout, Reviewer) are
+        // narrowed to the hardened read-only classifier even when the parent
+        // has a full shell.
         let parent_shell = ShellPolicy::from_legacy_allow_shell(runtime.allow_shell);
         let mut child_shell = runtime.worker_profile.shell.min_with(parent_shell);
         if matches!(&agent_type, FleetRole::Scout | FleetRole::Reviewer)
@@ -12667,10 +12742,6 @@ impl SubAgentToolRegistry {
             intersect_explicit_tool_scope(&effective_profile.tools, explicit_allowed_tools);
         surface_options.shell_policy = child_shell;
         let context = runtime.context.clone().with_shell_policy(child_shell);
-        // This registry executes as the admitted child named by
-        // `owner_agent_id`. Coordination tools derive their hierarchy caller
-        // from `parent_agent_id`, so stamp the same identity here even for
-        // test/restore constructors whose runtime snapshot predates admission.
         let mut child_runtime = runtime.clone();
         child_runtime.parent_agent_id = Some(owner_agent_id.clone());
         child_runtime.worker_profile = effective_profile.clone();
@@ -12689,10 +12760,9 @@ impl SubAgentToolRegistry {
         }
 
         let mut registry = registry.build(context);
-        // Children may inspect the parent goal for context, but only the root
-        // agent may create or transition that shared lifecycle. Removing the
-        // mutators after all built-in and MCP registrations also prevents an
-        // accidental name collision from restoring child authority.
+        // Goals belong to the root conversation. Registering the complete child
+        // surface first keeps every other tool discoverable, then these two
+        // root-only mutations are removed before catalog filtering and search.
         registry.remove_tool("create_goal");
         registry.remove_tool("update_goal");
 
@@ -12712,26 +12782,16 @@ impl SubAgentToolRegistry {
         }
     }
 
-    /// Whether this role is allowed to use `Suggest`-level tools (write_file,
-    /// edit_file, apply_patch, ...) without the parent runtime being
-    /// auto-approved. Read-only stances (`explore`, `plan`, `review`,
-    /// `verifier`) stay blocked so they can't quietly mutate the workspace
-    /// while a non-auto parent is delegating bounded investigation.
-    /// `Required`-level tools (shell, etc.) still need parent auto-approve
-    /// regardless of role (#1828, #1833).
     fn role_can_delegate_writes(agent_type: &FleetRole) -> bool {
+        // Builder is the named implementation role. Custom may write only when
+        // its profile, explicit scope, and execution envelope all agree.
         matches!(agent_type, FleetRole::Builder | FleetRole::Custom)
     }
 
-    /// #5186: the child-side half of the in-workspace write carve-out
-    /// (#5185). A child whose posture permits writes at all
-    /// (`permissions.write`) may run a `Suggest`-tier write call without
-    /// parent auto-approve when every target path qualifies under the same
-    /// rule the parent session uses: inside the workspace git work tree,
-    /// off `.git` internals, runtime state, and sensitive files. Read-only
-    /// roles never reach this (their posture already bounced the call), and
-    /// out-of-tree or sensitive targets keep the delegation error.
     fn workspace_write_carve_out_permits(&self, name: &str, input: &Value) -> bool {
+        // This is a bounded convenience for write-capable children, not an
+        // authority escalation: every target must resolve inside the workspace
+        // and still pass sensitive-path, repository-law, and claim checks.
         if !self.runtime_profile.permissions.write {
             return false;
         }
@@ -12741,34 +12801,20 @@ impl SubAgentToolRegistry {
         )
     }
 
-    /// Whether a `Required`-level call is the delegated built-in verification
-    /// surface.
-    ///
-    /// `run_tests.args` is raw Cargo argv and can redirect manifests or inject
-    /// toolchain config, so it cannot be delegated wholesale. What *is*
-    /// delegated is decided by the one classifier the envelope also reads
-    /// ([`crate::tools::execution_envelope::classify_verification`]): the fixed
-    /// workspace-root command, and a pure test selection whose every token is
-    /// an allowlisted flag or a separator-free filter. Keeping the judgement in
-    /// one place is what stops this path and the envelope from disagreeing
-    /// about the same call.
     fn is_delegated_builtin_verification(name: &str, input: &Value) -> bool {
         use crate::tools::execution_envelope::{VerificationBound, classify_verification};
 
+        // Reuse the same classifier as the execution envelope. This prevents a
+        // second, looser notion of "test command" from growing in this module.
         matches!(
             classify_verification(canonical_action_alias(name, input), input),
             Some(VerificationBound::Default | VerificationBound::Filter)
         )
     }
 
-    /// Whether the role posture permits a given registered tool, independent of
-    /// parent auto-approval. Delegates to the pure `role_posture_permits`.
-    /// Unregistered names pass through (the allowlist / availability checks
-    /// handle those separately).
     fn posture_permits_tool(&self, name: &str, input: Option<&Value>) -> bool {
-        // Delegation (`agent`) is governed by the depth budget and the
-        // allowlist (`can_spawn_child` / `is_tool_allowed`), not the write/shell
-        // posture — a read-only role may still fan out child work.
+        // Delegation depth governs `agent`; write posture must not accidentally
+        // suppress it or turn depth into a mutation permission.
         if name == "agent" {
             return true;
         }
@@ -12791,22 +12837,39 @@ impl SubAgentToolRegistry {
         }
     }
 
-    /// Check whether a tool name is denied by the `disallowed_tools` list, using
-    /// the same matching logic as the session-side `command_denies_tool`: exact
-    /// match + `prefix*` wildcard, case-insensitive (#4042, #3027).
     fn is_tool_denied(&self, name: &str) -> bool {
-        if self.disallowed_tools.is_empty() {
-            return false;
-        }
-        let tool_name = name.to_ascii_lowercase();
-        self.disallowed_tools.iter().any(|rule| {
-            let rule = rule.to_ascii_lowercase();
-            if let Some(prefix) = rule.strip_suffix('*') {
-                tool_name.starts_with(prefix)
-            } else {
-                tool_name == rule
-            }
-        })
+        // The shared matcher canonicalizes legacy/lowercase spellings before
+        // applying exact or prefix rules. For example `exec_shell*` denies
+        // `bash`, and `write_file*` denies `write`, in roots and children alike.
+        tool_matches_any_rule(&self.disallowed_tools, name)
+    }
+
+    /// Whether this child may surface and dispatch the canonical lowercase
+    /// `bash` tool under the read-only inspection posture.
+    ///
+    /// Scout and Reviewer keep exactly one shell entry point — canonical
+    /// `bash` — whose concrete calls the strict read-only classifier bounds.
+    /// Catalog visibility and dispatch authorization consult this same
+    /// predicate, so a tool that appears on the wire can always be called and
+    /// one that is denied never appears.
+    ///
+    /// The spawn clamp keeps the raw-shell deny list (legacy `Bash` /
+    /// `exec_shell` rules and the [`RAW_SHELL_SENTINEL`]) installed, because
+    /// removing it would read as "this child has raw shell". Instead the
+    /// catalog and dispatch admit canonical `bash` here, behind the same
+    /// input-specific read-only classifier the legacy carve-out used; every
+    /// other role still loses bash to the raw-shell rules.
+    ///
+    /// The name match is **exact**, not case-insensitive. Legacy `Bash` is a
+    /// hidden execution-compatibility alias for saved transcripts, and it is
+    /// exactly what the raw-shell deny list names; admitting it here through a
+    /// case-insensitive compare would hand these roles back the raw shell this
+    /// carve-out exists to withhold. Only the canonical lowercase tool the
+    /// first-turn catalog actually offers is bounded by the classifier.
+    fn allows_bounded_readonly_bash(&self, name: &str) -> bool {
+        name == "bash"
+            && matches!(&self.agent_type, FleetRole::Scout | FleetRole::Reviewer)
+            && self.runtime_profile.shell != crate::worker_profile::ShellPolicy::None
     }
 
     fn legacy_action_alias(family: &str, action: &str) -> Option<&'static str> {
@@ -12819,23 +12882,16 @@ impl SubAgentToolRegistry {
 
     fn is_action_allowed(&self, family: &str, action: &str) -> bool {
         let alias = Self::legacy_action_alias(family, action);
-        let bounded_recon_bash = matches!(&self.agent_type, FleetRole::Scout | FleetRole::Reviewer)
-            && family.eq_ignore_ascii_case("Bash")
-            && action == "run";
-        // A network-denied child keeps the `Web` family's two read-only
-        // actions even though their legacy aliases (`web_search`, `fetch_url`)
-        // are on the deny list: the aliases deny the *standalone* spellings,
-        // while the family's `search`/`fetch` are the evidence surface a recon
-        // member is entitled to (parity with an ordinary scout). Deny still
-        // wins when the family name itself is denied, `wait` stays denied
-        // through `wait_for_dev_server`, and a URL-addressed `fetch` is
-        // refused at dispatch by `reject_network_reaching_input`, so the
-        // carve-out never re-opens the reach.
+        // Read-only inspection keeps two deliberate evidence carve-outs:
+        // classifier-bounded Bash reads and Web search/fetch. They bypass only
+        // the coarse family sentinel; action, posture, and envelope checks still
+        // reject mutation, arbitrary shell, and non-evidence Web actions.
+        let bounded_readonly_bash = self.allows_bounded_readonly_bash(family) && action == "run";
         let web_readonly_action = family.eq_ignore_ascii_case("Web")
             && matches!(action, "search" | "fetch")
             && self.network_is_denied();
         if self.is_tool_denied(family)
-            || !bounded_recon_bash
+            || !bounded_readonly_bash
                 && !web_readonly_action
                 && alias.is_some_and(|name| self.is_tool_denied(name))
         {
@@ -12844,27 +12900,23 @@ impl SubAgentToolRegistry {
         match &self.allowed_tools {
             None => true,
             Some(list) => {
-                list.iter().any(|name| name == family)
-                    || alias.is_some_and(|alias| list.iter().any(|name| name == alias))
+                list.iter().any(|name| name.eq_ignore_ascii_case(family))
+                    || alias.is_some_and(|alias| explicit_scope_permits(list, alias))
             }
         }
     }
 
-    /// Whether a given tool name is permitted under this child's filter.
-    /// `None` filter = everything permitted.
     fn is_tool_allowed(&self, name: &str) -> bool {
         if name == "agent" && !self.can_spawn_child {
             return false;
         }
-        // Deny always wins over allow — check the deny-list first so a tool in
-        // both the allowlist and the deny-list is still blocked (#4042).
-        if self.is_tool_denied(name) {
+        if self.is_tool_denied(name) && !self.allows_bounded_readonly_bash(name) {
             return false;
         }
         match &self.allowed_tools {
             None => true,
             Some(list) => {
-                list.iter().any(|tool| tool == name)
+                explicit_scope_permits(list, name)
                     || Self::ACTION_ALIASES.iter().any(|(family, _, alias)| {
                         *family == name && list.iter().any(|allowed| allowed == alias)
                     })
@@ -12872,14 +12924,19 @@ impl SubAgentToolRegistry {
         }
     }
 
-    /// Recon is a positive evidence profile: every unlisted process, plugin,
-    /// mutation, build, and coordination surface stays absent and refused.
-    /// Verifier separately keeps bounded Run while losing arbitrary shell.
     fn role_blocks_unhardened_process_tool(&self, name: &str) -> bool {
+        // Catalog filtering is defense in depth. Scout/Reviewer see only the
+        // hardened evidence profile; Verifier may receive bounded Run but not
+        // any raw or session-oriented shell path. Dispatch repeats this check.
         let lower = name.to_ascii_lowercase();
-        let recon = matches!(&self.agent_type, FleetRole::Scout | FleetRole::Reviewer)
+        let evidence_tool = crate::tools::registry::readonly_evidence_tool_name(name)
+            || self
+                .registry
+                .get(name)
+                .is_some_and(|tool| crate::tools::registry::readonly_evidence_tool(tool.as_ref()));
+        let bounded_inspection = matches!(&self.agent_type, FleetRole::Scout | FleetRole::Reviewer)
             && lower != "agent"
-            && !crate::tools::registry::readonly_evidence_tool_name(name);
+            && !evidence_tool;
         let raw_shell = lower == "bash"
             || lower.starts_with("exec_shell")
             || matches!(
@@ -12887,54 +12944,32 @@ impl SubAgentToolRegistry {
                 "exec_wait" | "exec_interact" | "task_shell_start" | "task_shell_wait"
             )
             || lower.starts_with("terminal/");
-        recon || matches!(&self.agent_type, FleetRole::Verifier) && raw_shell
+        bounded_inspection || matches!(&self.agent_type, FleetRole::Verifier) && raw_shell
     }
 
-    /// Whether this child's posture removes the network.
-    ///
-    /// Read from both places the posture can arrive so neither has to be
-    /// trusted alone: the worker profile's capability set, and the deny list
-    /// that `network_tool = false` installs
-    /// ([`crate::fleet::exact::NETWORK_DENIAL_SENTINEL`]). Fleet plumbs the deny
-    /// list; ordinary spawn narrowing plumbs the permission set. Either one
-    /// saying "no network" is enough.
     fn network_is_denied(&self) -> bool {
+        // Network denial has two sources: the resolved permission profile and
+        // the exact-fleet sentinel. Either one is sufficient to deny a call.
         !self.runtime_profile.permissions.network
             || self.is_tool_denied(crate::fleet::exact::NETWORK_DENIAL_SENTINEL)
     }
 
-    /// Whether this child's posture removes workspace mutation.
     fn write_is_denied(&self) -> bool {
         !self.runtime_profile.permissions.write
     }
 
-    /// Whether this child's posture removes arbitrary command execution.
-    ///
-    /// Read from both directions for the same reason [`Self::network_is_denied`]
-    /// is: a Fleet ceiling arrives as a deny list, an ordinary spawn narrowing
-    /// arrives as a `ShellPolicy`. Either one saying "no raw shell" is enough.
     fn shell_is_denied(&self) -> bool {
+        // Likewise, shell requires both a Full profile and no explicit shell
+        // sentinel. Read-only evidence commands are Auto-classified exceptions,
+        // not a Full-shell grant.
         !matches!(self.runtime_profile.shell, ShellPolicy::Full)
             || self.is_tool_denied(crate::fleet::exact::SHELL_AUTHORITY_SENTINEL)
     }
 
-    /// The child's real execution authority, assembled once from the posture so
-    /// visibility and dispatch cannot disagree about it.
-    ///
-    /// `network` is deliberately read from the **deny list only**, and not from
-    /// [`Self::network_is_denied`], which is broader. The two answer different
-    /// questions and conflating them was a live over-block:
-    /// `PermissionSet::read_only()` sets `network: false`, so every `scout` /
-    /// `planner` / `reviewer` / `consultant` child carries it — yet web search
-    /// is a normal and intended capability for a read-only researcher, and the
-    /// existing contract only refuses such a child a *URL-addressed* call (see
-    /// `reject_network_reaching_input`). Treating that advisory bit as a hard
-    /// capability denial here would have removed `web_search` from every scout.
-    ///
-    /// The deny-list sentinel means something stronger and narrower: a host
-    /// derived a ceiling (`network_tool = false`) and installed it. That is the
-    /// posture this envelope is entitled to enforce absolutely.
     fn execution_envelope(&self) -> crate::tools::execution_envelope::ExecutionEnvelope {
+        // Keep the network sentinel distinct from the broader permission bit:
+        // read-only Web evidence remains visible when policy allows it, while
+        // arbitrary network-reaching inputs are rejected separately at dispatch.
         crate::tools::execution_envelope::ExecutionEnvelope {
             write: !self.write_is_denied(),
             network: !self.is_tool_denied(crate::fleet::exact::NETWORK_DENIAL_SENTINEL),
@@ -12942,14 +12977,6 @@ impl SubAgentToolRegistry {
         }
     }
 
-    /// The refusal `execute` would produce for this call, or `None` if it would
-    /// be authorized.
-    ///
-    /// Exists so the dispatch-authorization decision is testable without
-    /// standing up the async coordination machinery around it. It is not a
-    /// parallel implementation: it resolves the same spec out of the same
-    /// registry and calls the same guard with the same envelope that
-    /// [`Self::execute`] does.
     #[cfg(test)]
     pub(crate) fn envelope_refusal(&self, name: &str, input: &Value) -> Option<String> {
         let spec = self.registry.get(name)?;
@@ -12962,14 +12989,6 @@ impl SubAgentToolRegistry {
         .err()
     }
 
-    /// Whether the envelope permits a call, for the **visibility** filter.
-    ///
-    /// The model-visible catalog is pruned with the same function that refuses
-    /// the call at dispatch, evaluated against a representative input, so a tool
-    /// the child could never run is never advertised. A model that can see a
-    /// tool will try it, and a refusal is a worse experience than an absent
-    /// capability — but the dispatch guard stays authoritative, because only it
-    /// sees the real arguments.
     fn envelope_permits(&self, name: &str, input: &Value) -> bool {
         let envelope = self.execution_envelope();
         if envelope.is_unrestricted() {
@@ -12983,21 +13002,28 @@ impl SubAgentToolRegistry {
                 envelope,
             )
             .is_ok(),
-            // Unregistered names are handled by the allowlist/availability
-            // checks; this filter has nothing to say about them.
             None => true,
         }
     }
 
-    /// Concrete safe call used to decide catalog visibility for tools whose
-    /// approval is input-sensitive. Dispatch still evaluates the model's real
-    /// input through the same posture and envelope checks.
     fn visibility_representative_input(&self, name: &str) -> Option<Value> {
-        (name == "Bash" && matches!(&self.agent_type, FleetRole::Scout | FleetRole::Reviewer))
-            .then(|| json!({"action": "run", "command": "pwd"}))
+        // Visibility and dispatch consult the same capability guard. These
+        // representative calls let a read-only bash schema survive catalog
+        // shaping without treating an empty input as arbitrary shell authority.
+        if !matches!(&self.agent_type, FleetRole::Scout | FleetRole::Reviewer) {
+            return None;
+        }
+        match name {
+            "bash" => Some(json!({"command": "pwd"})),
+            "Bash" => Some(json!({"action": "run", "command": "pwd"})),
+            _ => None,
+        }
     }
 
     fn tools_for_model(&self, agent_type: &FleetRole) -> Vec<Tool> {
+        // Filter the full registry in deny-first order. These catalog filters
+        // reduce accidental exposure, but are never the authority boundary:
+        // execute() repeats role, scope, posture, envelope, and claim checks.
         let _ = agent_type;
         let api_tools = self.registry.to_api_tools();
         let filtered = match &self.allowed_tools {
@@ -13005,7 +13031,7 @@ impl SubAgentToolRegistry {
             Some(list) => api_tools
                 .into_iter()
                 .filter(|tool| {
-                    list.contains(&tool.name)
+                    explicit_scope_permits(list, &tool.name)
                         || is_action_family(&tool.name)
                             && tool.input_schema["properties"]["action"]["enum"]
                                 .as_array()
@@ -13025,23 +13051,15 @@ impl SubAgentToolRegistry {
         let mut tools = filtered
             .into_iter()
             .filter(|tool| tool.name != "agent" || self.can_spawn_child)
-            // #4042: hide explicitly disallowed tools so the model never sees
-            // them in the function-calling schema (defense-in-depth with the
-            // `is_tool_allowed` / `execute` guards).
-            .filter(|tool| !self.is_tool_denied(&tool.name))
+            .filter(|tool| {
+                !self.is_tool_denied(&tool.name) || self.allows_bounded_readonly_bash(&tool.name)
+            })
             .filter(|tool| !self.role_blocks_unhardened_process_tool(&tool.name))
-            // #3217: hide tools the role posture forbids so the model never
-            // even sees write/edit/patch (read-only roles) or shell (no-shell
-            // roles). Defense-in-depth with the `execute` guard below.
             .filter(|tool| {
                 let representative = self.visibility_representative_input(&tool.name);
                 tool.name == "File"
                     || self.posture_permits_tool(&tool.name, representative.as_ref())
             })
-            // The envelope's visibility half. An action family survives here on
-            // the strength of any one permitted action and has its `action`
-            // enum pruned below; a plain tool the envelope refuses outright is
-            // simply absent.
             .filter(|tool| {
                 if is_action_family(&tool.name) {
                     return true;
@@ -13057,33 +13075,39 @@ impl SubAgentToolRegistry {
             if !is_action_family(&tool.name) {
                 continue;
             }
-            if let Some(actions) = tool.input_schema["properties"]["action"]["enum"].as_array_mut()
-            {
-                actions.retain(|action| {
-                    let Some(action) = action.as_str() else {
-                        return false;
-                    };
-                    let posture_allows = tool.name != "File"
-                        || (self.runtime_profile.permissions.write
-                            && role_posture_permits(
-                                &self.agent_type,
-                                ApprovalRequirement::Suggest,
-                            ))
-                        || matches!(action, "read" | "list" | "search_name" | "search_content");
-                    let evidence_action =
-                        !matches!(&self.agent_type, FleetRole::Scout | FleetRole::Reviewer)
-                            || tool.name != "Web"
-                            || matches!(action, "search" | "fetch");
-                    let mut representative = self
-                        .visibility_representative_input(&tool.name)
-                        .unwrap_or_else(|| json!({}));
-                    representative["action"] = json!(action);
-                    posture_allows
-                        && evidence_action
-                        && self.is_action_allowed(&tool.name, action)
-                        && self.envelope_permits(&tool.name, &representative)
-                });
-            }
+            // Indexing `["properties"]["action"]["enum"]` mutably would
+            // fabricate an `"action": {"enum": null}` property on schemas
+            // that have no action discriminator (the lowercase `bash`
+            // command/timeout shape) — a phantom node that fails Moonshot
+            // MFJS validation. Only shape enums that already exist.
+            let Some(actions) = tool
+                .input_schema
+                .pointer_mut("/properties/action/enum")
+                .and_then(serde_json::Value::as_array_mut)
+            else {
+                continue;
+            };
+            actions.retain(|action| {
+                let Some(action) = action.as_str() else {
+                    return false;
+                };
+                let posture_allows = tool.name != "File"
+                    || (self.runtime_profile.permissions.write
+                        && role_posture_permits(&self.agent_type, ApprovalRequirement::Suggest))
+                    || matches!(action, "read" | "list" | "search_name" | "search_content");
+                let evidence_action =
+                    !matches!(&self.agent_type, FleetRole::Scout | FleetRole::Reviewer)
+                        || tool.name != "Web"
+                        || matches!(action, "search" | "fetch");
+                let mut representative = self
+                    .visibility_representative_input(&tool.name)
+                    .unwrap_or_else(|| json!({}));
+                representative["action"] = json!(action);
+                posture_allows
+                    && evidence_action
+                    && self.is_action_allowed(&tool.name, action)
+                    && self.envelope_permits(&tool.name, &representative)
+            });
         }
         tools.retain(|tool| {
             tool.input_schema["properties"]["action"]["enum"]
@@ -13093,21 +13117,47 @@ impl SubAgentToolRegistry {
         tools
     }
 
+    fn deferred_catalog_for_model(&self, agent_type: &FleetRole) -> Vec<Tool> {
+        // Every allowed tool remains searchable. Native deferral then leaves the
+        // fixed lowercase primitives plus agent/tool_search active; Web, MCP,
+        // plugins, and other tools stay discoverable rather than eager.
+        let mut catalog = self.tools_for_model(agent_type);
+        catalog.retain(|tool| !is_tool_search_tool(&tool.name));
+        ensure_advanced_tooling(
+            &mut catalog,
+            AppMode::Agent,
+            &std::collections::HashSet::new(),
+        );
+        // A tool-free child (explicit empty scope) has nothing to discover:
+        // drop tool_search as well so the wire request genuinely omits tools.
+        let discoverable = !self.allowed_tools.as_ref().is_some_and(Vec::is_empty);
+        catalog.retain(|tool| {
+            (discoverable && tool.name == TOOL_SEARCH_NAME) || self.registry.contains(&tool.name)
+        });
+        apply_native_tool_deferral(&mut catalog, &std::collections::HashSet::new());
+        catalog
+    }
+
     fn unavailable_allowed_tools(&self) -> Vec<String> {
         match &self.allowed_tools {
             None => Vec::new(),
             Some(list) => list
                 .iter()
-                .filter(|name| !self.registry.contains(name))
+                .filter(|name| !is_tool_search_tool(name) && !self.registry.contains(name))
                 .cloned()
                 .collect(),
         }
     }
 
-    async fn execute(&self, _agent_id: &str, name: &str, input: Value) -> Result<String> {
+    async fn execute_full(
+        &self,
+        _agent_id: &str,
+        name: &str,
+        input: Value,
+    ) -> Result<RichToolResult> {
         if self.role_blocks_unhardened_process_tool(name) {
             return Err(anyhow!(
-                "Tool {name} is not available to this read-only worker because its process path does not share the hardened evidence boundary. Use File read/search, classifier-bounded Bash reads, or the verifier's bounded Run tool instead."
+                "Tool {name} is not available to this read-only worker because its process path does not share the hardened evidence boundary. Use read/search, classifier-bounded bash reads, or the verifier's bounded Run tool instead."
             ));
         }
         let action = input.get("action").and_then(Value::as_str);
@@ -13152,7 +13202,7 @@ impl SubAgentToolRegistry {
                 ApprovalRequirement::Auto => {}
                 ApprovalRequirement::Suggest => {
                     // Write/edit/patch tools land here. Explicit
-                    // write-capable roles (`implementer`, `custom`) may run them
+                    // write-capable roles (`builder`, `custom`) may run them
                     // without parent auto-approve (#1828, #1833). Workflow-spawned
                     // children also accept Suggest edits for any write-capable
                     // posture (including general). Read-only roles still bounce.
@@ -13208,7 +13258,7 @@ impl SubAgentToolRegistry {
         }
         let scope_aware_write = matches!(
             name,
-            "write_file" | "edit_file" | "apply_patch" | "fim_edit"
+            "write" | "edit" | "write_file" | "edit_file" | "apply_patch" | "fim_edit"
         ) || (name == "File"
             && input
                 .get("action")
@@ -13270,10 +13320,63 @@ impl SubAgentToolRegistry {
             .clone()
             .with_owner_agent(self.owner_agent_id.clone(), self.owner_agent_name.clone());
         self.registry
-            .execute_full_with_context(name, input, Some(&context))
+            .execute_rich_full_with_context(name, input, Some(&context))
             .await
-            .map(|result| result.content)
             .map_err(|e| anyhow!(e))
+    }
+
+    #[cfg(test)]
+    async fn execute(&self, agent_id: &str, name: &str, input: Value) -> Result<String> {
+        self.execute_full(agent_id, name, input)
+            .await
+            .map(|result| result.result.content)
+    }
+
+    async fn execute_from_surface(
+        &self,
+        agent_id: &str,
+        surface: &mut SubAgentToolSurface,
+        request_active_names: &std::collections::HashSet<String>,
+        name: &str,
+        input: Value,
+    ) -> Result<RichToolResult> {
+        if is_tool_search_tool(name) {
+            if !request_active_names.contains(name) {
+                return Err(anyhow!("Tool {name} is not in this child's catalog"));
+            }
+            return surface
+                .search(name, &input)
+                .map(|content| RichToolResult::plain(ToolResult::success(content)));
+        }
+
+        let Some(deferred) = surface
+            .catalog
+            .iter()
+            .find(|tool| tool.name == name)
+            .map(|tool| tool.defer_loading.unwrap_or(false))
+        else {
+            return Err(anyhow!(
+                "Tool {name} is not in this child's policy-filtered catalog"
+            ));
+        };
+        if deferred && !request_active_names.contains(name) {
+            return surface
+                .hydrate(name)
+                .map(|content| RichToolResult::plain(ToolResult::success(content)));
+        }
+        if !request_active_names.contains(name) {
+            return Err(anyhow!("Tool {name} is not active for this sub-agent"));
+        }
+        let result = self.execute_full(agent_id, name, input).await;
+        if deferred && result.is_ok() {
+            touch_cached_tool_after_execution(
+                &surface.catalog,
+                &mut surface.active_names,
+                &mut surface.cache,
+                name,
+            );
+        }
+        result
     }
 }
 
@@ -13373,7 +13476,7 @@ fn carries_network_url(input: &Value) -> bool {
 /// written. It fails closed and names the posture, so the refusal reads as a
 /// contract rather than a malfunction.
 fn reject_network_reaching_input(name: &str, input: &Value) -> Result<()> {
-    let github_shell_read = matches!(name, "Bash" | "exec_shell")
+    let github_shell_read = matches!(name, "bash" | "Bash" | "exec_shell")
         && input
             .get("command")
             .and_then(Value::as_str)
@@ -13497,7 +13600,7 @@ fn mutation_paths(name: &str, input: &Value) -> Result<Vec<String>> {
 }
 
 fn reject_subagent_terminal_takeover(name: &str, input: &Value) -> Result<()> {
-    let wants_interactive_shell = matches!(name, "exec_shell" | "Bash")
+    let wants_interactive_shell = matches!(name, "bash" | "Bash" | "exec_shell")
         && input
             .get("action")
             .and_then(Value::as_str)
@@ -13785,10 +13888,10 @@ const EXPLORE_AGENT_INTRO: &str = concat!(
     "You are a trusted Fleet scout (role: `scout`). Your job is to map the relevant code quickly and stay strictly read-only.\n",
     "Default to `EFFORT: quick`: aim for about 3-5 tool calls unless the brief explicitly asks for more.\n",
     "Orient first: confirm the workspace/project root, read relevant AGENTS.md/README guidance when the tree is unfamiliar, then search only the likely scope.\n",
-    "Use `File` for bounded reads and `Bash` action `run` for the advertised direct-argv evidence subset: navigation/rg, safe Git reads (for example `git log -n 5`), and read-only GitHub views such as `gh issue view`. Builds, tests, writes, unknown flags, and shell control actions are unavailable.\n",
+    "Use `read` for bounded file reads and `bash` only for the allowed read-only inspection subset: navigation/rg, safe Git reads (for example `git log -n 5`), and read-only GitHub views such as `gh issue view`. Builds, tests, writes, and shell control actions are unavailable.\n",
     "Use your private `todo_write` list as editable working notes when useful; it is agent-owned state, not permission to write project files. Those tool calls remain in the complete transcript artifact returned to the parent.\n",
     "Honor QUESTION, SCOPE, ALREADY_KNOWN, and STOP_CONDITION. Do not repeat ALREADY_KNOWN work unless evidence contradicts it; do not broaden once QUESTION is answered.\n",
-    "Your value is compressed reconnaissance: cite `path:line-range` for each finding and stop once evidence is sufficient. Return partial findings if the next step would be speculative or duplicative.\n",
+    "Your value is compressed evidence: cite `path:line-range` for each finding and stop once evidence is sufficient. Return partial findings if the next step would be speculative or duplicative.\n",
     "CHANGES will almost always be \"None.\" for a scout.\n\n"
 );
 
@@ -13802,7 +13905,7 @@ const PLAN_AGENT_INTRO: &str = concat!(
 const REVIEW_AGENT_INTRO: &str = concat!(
     "You are an adversarial Fleet reviewer (role: `reviewer`). Assume the change is broken until the evidence proves otherwise: actively try to refute the claims made about it, and stay strictly read-only.\n",
     "Read the diff/files, grep sibling patterns/tests, hunt regressions, missing tests, unhandled edge cases, and quiet behavior changes, then order EVIDENCE by severity.\n",
-    "Use `File` for bounded reads and `Bash` action `run` only for the advertised direct-argv navigation/rg, safe Git, and read-only GitHub evidence subset; builds, tests, writes, unknown flags, and shell control actions are unavailable.\n",
+    "Use `read` for bounded file reads and `bash` only for the allowed read-only navigation/rg, safe Git, and read-only GitHub evidence subset; builds, tests, writes, and shell control actions are unavailable.\n",
     "Use your private `todo_write` list as editable working notes when useful; it is agent-owned state, not permission to write project files. Those tool calls remain in the complete transcript artifact returned to the parent.\n",
     "Use BLOCKER/MAJOR/MINOR/NIT and include path:line-range plus suggested fix.\n",
     "You may use more tool calls than quick exploration, but stop after decisive evidence instead of widening the review forever.\n",
@@ -13817,7 +13920,7 @@ const CUSTOM_AGENT_INTRO: &str = concat!(
 
 const IMPLEMENTER_AGENT_INTRO: &str = concat!(
     "You are a trusted Fleet builder (role: `builder`). Your job is to land the assigned change with minimal surrounding edits.\n",
-    "Read target files with `File` action `read` before editing; prefer action `edit` for narrow changes and action `patch` for hunks.\n",
+    "Use `edit` for precise unique replacements, `write` for whole-file changes, and discover `apply_patch` for unified multi-file patches when needed.\n",
     "Run relevant verification after edit batches; write needed tests with the implementation.\n",
     "You are not limited to a scout-style 3-5 tool-call cap. Checkpoint before expanding scope or after repeated failures, then continue only inside the assigned brief.\n",
     "CHANGES is load-bearing: list every modified file with a one-line why.\n",

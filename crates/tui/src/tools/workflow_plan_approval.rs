@@ -588,7 +588,10 @@ fn collect_children(
                 {
                     *network = true;
                 }
-                if matches!(name, "write_file" | "edit_file" | "apply_patch") {
+                if matches!(
+                    name,
+                    "write" | "edit" | "write_file" | "edit_file" | "apply_patch"
+                ) {
                     *writes = true;
                 }
             }
@@ -679,12 +682,18 @@ fn script_suggests_writes(script: &str) -> bool {
         || lower.contains("read_write")
         || lower.contains("allow_write")
         || lower.contains("write_file")
+        || lower.contains("\"write\"")
+        || lower.contains("\"edit\"")
         || lower.contains("apply_patch")
 }
 
 fn script_suggests_shell(script: &str) -> bool {
     let lower = script.to_ascii_lowercase();
-    lower.contains("exec_shell") || (lower.contains("allowedtools") && lower.contains("shell"))
+    lower.contains("exec_shell")
+        || lower.contains("\"bash\"")
+        || lower.contains("bash(")
+        || ((lower.contains("allowedtools") || lower.contains("allowed_tools"))
+            && (lower.contains("shell") || lower.contains("bash")))
 }
 
 fn script_suggests_network(script: &str) -> bool {
@@ -838,6 +847,16 @@ mod tests {
         let summary = analyze_workflow_plan_approval(&input);
         assert!(summary.writes);
         assert!(summary.shell);
+    }
+
+    #[test]
+    fn lowercase_bash_is_classified_as_shell_authority() {
+        for script in [
+            r#"{"allowed_tools":["bash"]}"#,
+            r#"bash({"command":"pwd"})"#,
+        ] {
+            assert!(script_suggests_shell(script), "{script}");
+        }
     }
 
     #[test]

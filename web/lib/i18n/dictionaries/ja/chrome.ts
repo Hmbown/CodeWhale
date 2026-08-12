@@ -7,7 +7,7 @@ import type { ChromeDict } from "../types";
  * your machine", not the retired "local-first" positioning.
  *
  * Terminology follows the TUI locale pack (`crates/tui/locales/ja.json`):
- * modes and permission names stay literal (Plan / Act / Operate, Ask /
+ * modes and permission names stay literal (Plan / Work / Operate, Ask /
  * Auto-Review / Full Access), 権限 is "permissions", 推論 is "reasoning",
  * レシート is "receipt". The pack renders "posture" as 姿勢/権限 rather than
  * the katakana calque ポスチャ, so the website matches it.

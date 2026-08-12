@@ -184,14 +184,17 @@ impl FileMutationReceipt {
                         .add_modifier(Modifier::BOLD),
                 ))];
                 if !self.display_diff.trim().is_empty() {
-                    let rendered = diff_render::render_diff_body(&self.display_diff, width);
-                    let omitted = rendered.len().saturating_sub(MAX_INLINE_DIFF_LINES);
-                    lines.extend(rendered.into_iter().take(MAX_INLINE_DIFF_LINES));
-                    if omitted > 0 {
+                    let rendered = diff_render::render_diff_body_bounded(
+                        &self.display_diff,
+                        width,
+                        MAX_INLINE_DIFF_LINES,
+                    );
+                    lines.extend(rendered.lines);
+                    if rendered.omitted_rows > 0 {
                         let detail_hint =
                             crate::tui::key_shortcuts::tool_details_shortcut_action_hint("change");
                         lines.push(details_affordance_line(
-                            &format!("+{omitted} diff lines · {detail_hint}"),
+                            &format!("+{} diff lines · {detail_hint}", rendered.omitted_rows),
                             Style::default().fg(palette::TEXT_MUTED).italic(),
                         ));
                     } else {

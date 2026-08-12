@@ -381,7 +381,9 @@ fn compact_content_block(block: &ContentBlock) -> Value {
                 "content_chars": chars,
                 "content_sha256": sha256_hex(content.as_bytes()),
                 "content_redacted": large,
-                "content_blocks": content_blocks,
+                "content_blocks": crate::image_attach::safe_tool_result_content_blocks(
+                    content_blocks.as_deref(),
+                ),
             })
         }
         ContentBlock::ServerToolUse { id, name, input } => json!({

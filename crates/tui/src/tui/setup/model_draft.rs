@@ -408,6 +408,7 @@ mod tests {
             ContentBlock::Thinking {
                 thinking: r#"Maybe {"about":"A half-formed scratchpad draft."}"#.to_string(),
                 signature: None,
+                state: None,
             },
         );
         mock.push_message_response(response);

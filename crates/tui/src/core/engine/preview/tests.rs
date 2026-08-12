@@ -35,7 +35,7 @@ fn active_catalog_hash_tracks_membership_order_and_schema() {
 }
 
 #[test]
-fn work_tail_context_ceiling_uses_production_headroom_and_no_send_decision() {
+fn preview_and_production_share_one_input_estimate_and_send_decision() {
     let messages = vec![Message {
         role: "user".to_string(),
         content: vec![ContentBlock::Text {
@@ -43,47 +43,26 @@ fn work_tail_context_ceiling_uses_production_headroom_and_no_send_decision() {
             cache_control: None,
         }],
     }];
-    let work_tail =
-        crate::work_grounding::work_state_message(&crate::tools::todo::TodoListSnapshot {
-            items: vec![crate::tools::todo::TodoItem {
-                id: 1,
-                content: "retain the separately framed Work tail".to_string(),
-                status: crate::tools::todo::TodoStatus::InProgress,
-            }],
-            completion_pct: 0,
-            in_progress_id: Some(1),
-        })
-        .expect("nonempty Work tail");
     let system = SystemPrompt::Text("stable system".to_string());
-    let base = crate::compaction::estimate_input_tokens_conservative(&messages, Some(&system));
-    let production =
-        super::turn_loop::production_input_estimate_with_work_tail(base, Some(&work_tail));
 
-    let mut combined_messages = messages;
-    combined_messages.push(work_tail);
-    let combined_once =
-        crate::compaction::estimate_input_tokens_conservative(&combined_messages, Some(&system));
-    assert!(
-        production > combined_once,
-        "the production decomposition charges a second fixed framing overhead"
-    );
+    // Production sends stored history and nothing else, and preview describes
+    // that same list, so a single estimate drives the manifest number and the
+    // overflow/no-exact-outbound decision. There is no second synthetic list
+    // to charge a separate framing overhead for.
+    let estimate = crate::compaction::estimate_input_tokens_conservative(&messages, Some(&system));
 
-    // This is the reviewed edge: the old combined-once estimate would
-    // allow a send, while production is one token over its ceiling. The
-    // same signed-headroom helper now drives both the manifest number and
-    // preview's overflow/no-exact-outbound decision.
-    let ceiling = production - 1;
+    let ceiling = estimate - 1;
     assert_eq!(
-        crate::request_manifest::production_input_headroom(Some(ceiling), production),
+        crate::request_manifest::production_input_headroom(Some(ceiling), estimate),
         Some(-1)
     );
     assert!(crate::request_manifest::production_input_budget_exceeded(
         Some(ceiling),
-        production
+        estimate
     ));
     assert!(!crate::request_manifest::production_input_budget_exceeded(
-        Some(ceiling),
-        combined_once
+        Some(estimate),
+        estimate
     ));
 }
 
@@ -796,7 +775,7 @@ async fn assert_preview_matches_first_wire_body(
 }
 
 #[tokio::test]
-async fn graph_backed_work_tail_matches_the_first_http_body() {
+async fn graph_backed_todo_is_not_reinjected_into_the_first_http_body() {
     use wiremock::matchers::method;
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -845,7 +824,7 @@ async fn graph_backed_work_tail_matches_the_first_http_body() {
     );
     engine.config.runtime_services.work = Some(work);
 
-    let prompt = "inspect the request with live Work state";
+    let prompt = "inspect the request without restating the To-do list";
     let planned = plan(&config, &identity, false, prompt).await;
     let (_, first_wire_body) = assert_preview_matches_first_wire_body(
         &mut engine,
@@ -856,10 +835,10 @@ async fn graph_backed_work_tail_matches_the_first_http_body() {
     )
     .await;
     let body_text = first_wire_body.to_string();
-    assert!(body_text.contains("<codewhale:work_state>"), "{body_text}");
     assert!(
-        body_text.contains("preserve this graph-authoritative Work item"),
-        "{body_text}"
+        !body_text.contains("<codewhale:work_state>")
+            && !body_text.contains("preserve this graph-authoritative Work item"),
+        "provider requests must not receive a synthetic per-step To-do tail: {body_text}"
     );
 }
 

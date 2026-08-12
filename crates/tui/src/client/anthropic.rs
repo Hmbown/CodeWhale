@@ -601,6 +601,23 @@ fn anthropic_image_block(url: &str) -> Value {
     })
 }
 
+fn anthropic_tool_result_content(content: &str, content_blocks: Option<&[Value]>) -> Value {
+    let (image, omitted) = crate::image_attach::provider_tool_result_image_refs(content_blocks);
+    let content = crate::image_attach::tool_result_text_with_omission(content, omitted);
+    let Some((mime_type, data)) = image else {
+        return json!(content);
+    };
+    let mut blocks = Vec::with_capacity(2);
+    if !content.is_empty() {
+        blocks.push(json!({ "type": "text", "text": content }));
+    }
+    blocks.push(json!({
+        "type": "image",
+        "source": { "type": "base64", "media_type": mime_type, "data": data },
+    }));
+    json!(blocks)
+}
+
 fn content_block_to_anthropic(block: &ContentBlock) -> Option<Value> {
     match block {
         ContentBlock::Text {
@@ -616,6 +633,7 @@ fn content_block_to_anthropic(block: &ContentBlock) -> Option<Value> {
         ContentBlock::Thinking {
             thinking,
             signature,
+            ..
         } => {
             // Anthropic rejects unsigned thinking blocks on replay (and the
             // DeepSeek-era "(reasoning omitted)" placeholders mean nothing to
@@ -641,12 +659,12 @@ fn content_block_to_anthropic(block: &ContentBlock) -> Option<Value> {
             tool_use_id,
             content,
             is_error,
-            ..
+            content_blocks,
         } => {
             let mut value = json!({
                 "type": "tool_result",
                 "tool_use_id": tool_use_id,
-                "content": content,
+                "content": anthropic_tool_result_content(content, content_blocks.as_deref()),
             });
             if let Some(is_error) = is_error {
                 value["is_error"] = json!(is_error);
@@ -1471,10 +1489,12 @@ mod tests {
                     ContentBlock::Thinking {
                         thinking: "signed reasoning".to_string(),
                         signature: Some("sig-abc".to_string()),
+                        state: None,
                     },
                     ContentBlock::Thinking {
                         thinking: "(reasoning omitted)".to_string(),
                         signature: None,
+                        state: None,
                     },
                     ContentBlock::ToolUse {
                         id: "toolu_1".to_string(),
@@ -1721,6 +1741,28 @@ mod tests {
     }
 
     #[test]
+    fn tool_result_image_stays_inside_the_native_tool_result_block() {
+        let content = anthropic_tool_result_content(
+            "screenshot captured",
+            Some(&[json!({
+                "type": "image",
+                "mime_type": "image/png",
+                "data": "QUJD",
+            })]),
+        );
+        let blocks = content.as_array().expect("rich tool_result content");
+
+        assert_eq!(
+            blocks[0],
+            json!({"type": "text", "text": "screenshot captured"})
+        );
+        assert_eq!(blocks[1]["type"], "image");
+        assert_eq!(blocks[1]["source"]["type"], "base64");
+        assert_eq!(blocks[1]["source"]["media_type"], "image/png");
+        assert_eq!(blocks[1]["source"]["data"], "QUJD");
+    }
+
+    #[test]
     fn remote_image_url_stays_a_url_source() {
         let block = content_block_to_anthropic(&ContentBlock::ImageUrl {
             image_url: crate::models::ImageUrlContent {
@@ -1785,18 +1827,25 @@ mod tests {
     }
 
     #[test]
-    fn anthropic_body_serializes_exactly_one_load_skill_definition() {
+    fn anthropic_body_serializes_the_child_catalog_without_duplication() {
         // The real child catalog fixture (not a hand-built tool list) must
-        // survive Messages serialization with exactly one load_skill entry —
-        // no dedup, filter, or sanitizer may drop or duplicate it.
+        // survive Messages serialization with exactly one canonical `read`
+        // entry — no dedup, filter, or sanitizer may drop or duplicate it.
+        // Skills are discoverable through tool_search, so the child wire
+        // catalog carries no load_skill at all.
         let tools = crate::tools::subagent::kimi_general_child_request_tools_fixture();
+        assert_eq!(
+            tools.iter().filter(|tool| tool.name == "read").count(),
+            1,
+            "catalog fixture carries one canonical read"
+        );
         assert_eq!(
             tools
                 .iter()
                 .filter(|tool| tool.name == "load_skill")
                 .count(),
-            1,
-            "catalog fixture carries one load_skill"
+            0,
+            "load_skill is not part of the child wire catalog"
         );
         let client = test_client();
         let mut request = request_with("claude-sonnet-4-6", None, None, None);
@@ -1805,19 +1854,23 @@ mod tests {
         let serialized = body["tools"]
             .as_array()
             .expect("tools serialize as an array");
-        let load_skills: Vec<_> = serialized
+        let reads: Vec<_> = serialized
             .iter()
-            .filter(|tool| tool["name"] == "load_skill")
+            .filter(|tool| tool["name"] == "read")
             .collect();
         assert_eq!(
-            load_skills.len(),
+            reads.len(),
             1,
-            "exactly one load_skill definition reaches the Messages wire"
+            "exactly one canonical read definition reaches the Messages wire"
         );
         assert!(
-            load_skills[0]["input_schema"]["properties"].is_object(),
-            "load_skill keeps a valid object schema: {}",
-            load_skills[0]
+            reads[0]["input_schema"]["properties"].is_object(),
+            "read keeps a valid object schema: {}",
+            reads[0]
+        );
+        assert!(
+            serialized.iter().all(|tool| tool["name"] != "load_skill"),
+            "load_skill must not appear on the child Messages wire"
         );
     }
 

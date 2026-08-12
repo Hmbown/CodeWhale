@@ -7,7 +7,7 @@ import type { ChromeDict } from "../types";
  * (`crates/tui/locales/vi.json`) so the site and the runtime name the same
  * things the same way: nhà cung cấp (provider), phiên (session), kho mã
  * (repository), mức quyền (permission posture), biên nhận (receipt). Product
- * terms — Codewhale, Plan / Act / Operate, Ask / Auto-Review / Full Access,
+ * terms — Codewhale, Plan / Work / Operate, Ask / Auto-Review / Full Access,
  * Fleet, Workflow, Runtime — stay literal, as they do in the TUI.
  *
  * The masthead pairs a Vietnamese primary label with a short English

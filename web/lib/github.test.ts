@@ -1,8 +1,32 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fetchFeed, lastPageFromLink, relativeAge, relativeTime } from "./github";
+import { fetchFeed, fetchRepoStats, lastPageFromLink, relativeAge, relativeTime } from "./github";
 
 // We test the pure helper functions directly.
 // The async fetch functions require mocking the global fetch.
+
+describe("production-build fallback", () => {
+  it("keeps static generation offline and uses truthful empty live chrome", async () => {
+    const previousPhase = process.env.NEXT_PHASE;
+    process.env.NEXT_PHASE = "phase-production-build";
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      expect(await fetchFeed(undefined, 10)).toEqual([]);
+      expect(await fetchRepoStats()).toMatchObject({
+        stars: 0,
+        forks: 0,
+        openIssues: 0,
+        openPulls: 0,
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      if (previousPhase === undefined) delete process.env.NEXT_PHASE;
+      else process.env.NEXT_PHASE = previousPhase;
+      vi.unstubAllGlobals();
+    }
+  });
+});
 
 // ── relativeTime ──────────────────────────────────────────────────────
 

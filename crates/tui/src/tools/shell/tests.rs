@@ -21,6 +21,126 @@ fn env_lock() -> &'static Mutex<()> {
 
 const BACKGROUND_COMPLETION_WAIT_MS: u64 = 30_000;
 
+#[test]
+fn lowercase_bash_schema_is_small_contract() {
+    let schema = LowercaseBashTool.input_schema();
+    assert_eq!(schema["required"], json!(["command"]));
+    assert_eq!(schema["additionalProperties"], false);
+    assert_eq!(
+        schema["properties"]
+            .as_object()
+            .expect("properties")
+            .keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>(),
+        ["command", "timeout"]
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+    );
+    assert!(!BashTool::new("Bash").model_visible());
+}
+
+#[test]
+fn contract_bash_nonzero_is_an_error_with_status_after_output() {
+    let error = finish_contract_bash_result(
+        ShellResult {
+            task_id: None,
+            status: ShellStatus::Failed,
+            exit_code: Some(7),
+            stdout: "before".to_string(),
+            stderr: String::new(),
+            duration_ms: 1,
+            stdout_len: 6,
+            stderr_len: 0,
+            stdout_omitted: 0,
+            stderr_omitted: 0,
+            stdout_truncated: false,
+            stderr_truncated: false,
+            sandboxed: false,
+            sandbox_type: None,
+            sandbox_denied: false,
+        },
+        None,
+    )
+    .expect_err("nonzero must be a failed tool call");
+    assert!(
+        error
+            .to_string()
+            .ends_with("before\n\nCommand exited with code 7")
+    );
+}
+
+#[tokio::test]
+async fn lowercase_bash_returns_one_ordered_stream() {
+    let workspace = tempdir().expect("workspace");
+    let context = ToolContext::new(workspace.path());
+    let result = LowercaseBashTool
+        .execute(
+            json!({"command": "printf out-1; printf err-2 >&2; printf out-3"}),
+            &context,
+        )
+        .await
+        .expect("bash");
+    assert_eq!(result.content, "out-1err-2out-3");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn lowercase_bash_keeps_raw_command_under_readonly_policy() {
+    let workspace = tempdir().expect("workspace");
+    let context = ToolContext::new(workspace.path())
+        .with_shell_policy(crate::worker_profile::ShellPolicy::ReadOnly);
+    let result = LowercaseBashTool
+        .execute(json!({"command": "pwd"}), &context)
+        .await
+        .expect("read-only bash");
+    assert_eq!(
+        result.content.trim(),
+        workspace
+            .path()
+            .canonicalize()
+            .expect("canonical workspace")
+            .display()
+            .to_string()
+    );
+}
+
+#[tokio::test]
+async fn lowercase_bash_readonly_refusal_names_work_mode() {
+    let workspace = tempdir().expect("workspace");
+    let context = ToolContext::new(workspace.path())
+        .with_shell_policy(crate::worker_profile::ShellPolicy::ReadOnly);
+    let result = LowercaseBashTool
+        .execute(json!({"command": "touch blocked-by-plan"}), &context)
+        .await
+        .expect("policy refusal is a normal tool result");
+
+    assert!(!result.success);
+    assert!(result.content.contains("Work mode (`/mode work`)"));
+    assert!(!result.content.contains("Act mode"));
+    assert!(!workspace.path().join("blocked-by-plan").exists());
+}
+
+#[tokio::test]
+async fn lowercase_bash_timeout_uses_seconds_and_fails() {
+    let workspace = tempdir().expect("workspace");
+    let context = ToolContext::new(workspace.path());
+    let error = LowercaseBashTool
+        .execute(
+            json!({"command": sleep_command(2), "timeout": 0.01}),
+            &context,
+        )
+        .await
+        .expect_err("timeout must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("Command timed out after 0.01 seconds"),
+        "{error}"
+    );
+}
+
 fn execute_shell(
     manager: &mut ShellManager,
     command: &str,
@@ -472,6 +592,33 @@ async fn readonly_shell_refuses_raw_string_external_backend() {
         .expect_err("raw-string backend must not receive a classifier-approved argv")
         .to_string();
     assert!(error.contains("raw command string"), "{error}");
+    assert!(!backend.0.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn lowercase_bash_refuses_non_streaming_external_backend() {
+    struct Backend(std::sync::atomic::AtomicBool);
+    #[async_trait::async_trait]
+    impl crate::sandbox::backend::SandboxBackend for Backend {
+        async fn exec(
+            &self,
+            _cmd: &str,
+            _env: &std::collections::HashMap<String, String>,
+        ) -> anyhow::Result<crate::sandbox::backend::SandboxOutput> {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            unreachable!("lowercase bash must fail before external dispatch")
+        }
+    }
+
+    let workspace = tempdir().expect("workspace");
+    let backend = std::sync::Arc::new(Backend(std::sync::atomic::AtomicBool::new(false)));
+    let mut context = ToolContext::new(workspace.path());
+    context.sandbox_backend = Some(backend.clone());
+    let error = LowercaseBashTool
+        .execute(json!({"command": "pwd", "timeout": 1}), &context)
+        .await
+        .expect_err("non-streaming backend must be rejected");
+    assert!(error.to_string().contains("combined streaming output"));
     assert!(!backend.0.load(std::sync::atomic::Ordering::SeqCst));
 }
 
@@ -2123,6 +2270,50 @@ async fn test_exec_shell_foreground_can_move_to_background() {
 }
 
 #[tokio::test]
+async fn lowercase_bash_foreground_detach_is_a_successful_running_receipt() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx = ToolContext::new(tmp.path());
+    let shell_manager = ctx.shell_manager.clone();
+    let command = sleep_command(30);
+    let task_ctx = ctx.clone();
+
+    let task = tokio::spawn(async move {
+        LowercaseBashTool
+            .execute(json!({"command": command}), &task_ctx)
+            .await
+            .expect("execute")
+    });
+
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    shell_manager
+        .lock()
+        .expect("shell manager lock")
+        .request_foreground_background();
+
+    let result = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("foreground shell should detach")
+        .expect("task should not panic");
+
+    assert!(result.success, "{}", result.content);
+    assert!(
+        result.content.contains("moved to /jobs"),
+        "{}",
+        result.content
+    );
+    assert!(!result.content.contains("code -1"), "{}", result.content);
+    let metadata = result.metadata.expect("metadata");
+    assert_eq!(metadata["status"], "Running");
+    assert_eq!(metadata["backgrounded"], true);
+    let task_id = metadata["task_id"].as_str().expect("task id");
+
+    let mut manager = shell_manager.lock().expect("shell manager lock");
+    let job = manager.inspect_job(task_id).expect("inspect job");
+    assert_eq!(job.snapshot.status, ShellStatus::Running);
+    manager.kill(task_id).expect("kill test job");
+}
+
+#[tokio::test]
 async fn test_exec_shell_wait_cancel_leaves_background_process_running() {
     let tmp = tempdir().expect("tempdir");
     let cancel_token = tokio_util::sync::CancellationToken::new();
@@ -2607,6 +2798,7 @@ fn killed_shell_does_not_wait_for_blocked_reader_threads() {
         stdout_cursor: 0,
         stderr_cursor: 0,
         completion_reported: false,
+        bounded_output: None,
         stdin: None,
         child: None,
         windows_job: None,

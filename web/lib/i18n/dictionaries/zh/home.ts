@@ -42,7 +42,7 @@ export const home: HomeDict = {
 
   proofHeading: "水下终端壳。任意模型。本机运行。",
   proofBody:
-    "接入你已经在用的模型——托管、网关或本地都行。Plan / Act / Operate 加上明确的权限姿态，每一次深潜都在你的掌控之中。",
+    "接入你已经在用的模型——托管、网关或本地都行。Plan / Work / Operate 加上明确的权限姿态，每一次深潜都在你的掌控之中。",
 
   sealDecides: "法",
   decidesEyebrow: "看它如何决策",

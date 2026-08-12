@@ -199,8 +199,8 @@ remaining work belongs to later releases:
    `deepseek`/`deepseek-tui` binary shims and shim release assets; finish the
    Homebrew `codewhale` formula rollout (`docs/REBRAND.md`).
 2. **Operate as a value stream** — a control-board surface over the underwater
-   shell (WIP, queue age, bottleneck); model-visible Work state (#3983); phase
-   ledger (#4039); Workrooms Phase 2 (#3209/#3210) as the inbox substrate;
+   shell (WIP, queue age, bottleneck); phase history (#4039); Workrooms Phase 2
+   (#3209/#3210) as the inbox substrate;
    receipt reconciliation.
 3. **Flow control** — real WIP limits and visible queues (#4015, #4016),
    reconciled with the shipped 16-concurrent/1k-run access model (#4292).

@@ -316,11 +316,22 @@ publish Cargo or npm against stale assets.
 
 ## npm Wrapper Release
 
-**The npm publish step is manual.** `release.yml` no longer runs `npm publish`
-because the npm account requires 2FA OTP on every publish, and an automation
-token that bypasses 2FA has not been provisioned. The GitHub Release flow
-remains fully automated; only the npm wrapper publish requires a developer
-on a workstation with `npm login` and an authenticator app.
+`release.yml` publishes `codewhale` through npm Trusted Publishing after the
+exact-SHA GitHub Release job succeeds. The job has only `contents: read` and
+`id-token: write`; it does not use `NPM_TOKEN`, `NODE_AUTH_TOKEN`, or a
+long-lived bypass-2FA credential.
+
+Before the first automated publish, configure the `codewhale` package's npm
+Trusted Publisher with these exact values:
+
+- organization or user: `Hmbown`
+- repository: `CodeWhale`
+- workflow filename: `release.yml`
+- environment: leave blank (the workflow does not claim a GitHub environment)
+
+That npm-side binding is an external release gate. If it is missing or differs
+in case, repository, workflow filename, or environment, the publish job must
+fail; do not add a token fallback to make it pass.
 
 ### Steps
 
@@ -330,62 +341,46 @@ on a workstation with `npm login` and an authenticator app.
    the matching `vX.Y.Z` tag from `main`; `release.yml` then builds the binary
    matrix and drafts the GitHub Release.
 4. **Wait for the GitHub Release to finalize** with the full binary and archive
-   matrix, Windows installer, and both checksum manifests. The npm
-   `prepublishOnly` hook (`scripts/verify-release-assets.js`) requires every
-   asset to be present.
-5. Run the public asset freshness gate from the repo root:
+   matrix, Windows installer, and both checksum manifests. The dependent `npm`
+   job checks the remote tag again, runs the public asset freshness gate and
+   package tests, then publishes with OIDC. The package's `prepublishOnly` hook
+   repeats the clean exact-tag and public-asset checks immediately before the
+   registry write.
+5. Confirm the `npm` job succeeded, then prove the published package and binary
+   version are visible:
 
 ```bash
-./scripts/release/verify-release-assets.sh X.Y.Z
+npm view codewhale@X.Y.Z version codewhaleBinaryVersion --json
+./scripts/release/check-published.sh X.Y.Z
 ```
 
 For a rare packaging-only npm release where the npm package version intentionally
 points at older Rust binaries, add `--allow-npm-binary-mismatch` and keep the
-release notes explicit that no new binary version shipped. Carry the same
-explicit exception through the publish command with
-`CODEWHALE_ALLOW_NPM_BINARY_MISMATCH=1 npm publish --access public`; the exact
-tag/clean-checkout guard still applies.
+release notes explicit that no new binary version shipped. That exception is a
+separate manual release path: the normal trusted-publishing job deliberately
+does not set `CODEWHALE_ALLOW_NPM_BINARY_MISMATCH`.
 
-6. From the same clean detached `vX.Y.Z` worktree used above (or a newly
-   created one), confirm npm auth and publish the wrapper manually. The
-   `prepublishOnly` hook rejects a branch-ahead or dirty checkout before the
-   registry write:
+Do not publish `npm/deepseek-tui`; it is deprecated compatibility metadata only.
 
-```bash
-npm whoami
-cd npm/codewhale
-npm publish --access public
-# (you will be prompted for the npm OTP from your authenticator)
-npm view codewhale@X.Y.Z version codewhaleBinaryVersion --json
-cd ../..
-./scripts/release/check-published.sh X.Y.Z
-```
+### Manual recovery
 
-If `npm whoami` or `npm publish` reports `E401`, `ENEEDAUTH`, or an OTP/login
-failure, do not edit package contents. Run:
+If GitHub OIDC is unavailable after the GitHub Release and public-asset gate are
+green, use a clean detached checkout of the immutable tag. Authenticate
+interactively with npm's normal WebAuthn/2FA flow; never create a long-lived
+bypass-2FA token:
 
 ```bash
+./scripts/release/require-release-tag-checkout.sh X.Y.Z
+./scripts/release/verify-release-assets.sh X.Y.Z
 npm login
 npm whoami
 cd npm/codewhale
 npm publish --access public
 ```
 
-Rerun the same `npm publish --access public` command after completing the login
-or OTP prompt. The package's `prepublishOnly` hook reruns the release-asset
-gate before each publish attempt, so an auth failure cannot accidentally skip
-asset verification on retry.
-
-Do not publish `npm/deepseek-tui`; it is deprecated compatibility metadata only.
-
-### Why not automated?
-
-- `release.yml`'s old `publish-npm` job used `secrets.NPM_TOKEN`, but npm's 2FA-by-default policy means a publish token must be either an automation token with "Bypass 2FA for token authentication" enabled OR an account-level 2FA-disabled state. We don't have either configured.
-- The standalone `publish-npm.yml` and `crates-publish.yml` workflows have been removed; no inert automation plumbing remains. A future move to npm Trusted Publishing (OIDC) would re-introduce a dedicated workflow at that point.
-
-### If you fix the token later
-
-To re-enable automated publish: provision an npm automation token with "Bypass 2FA for token authentication" enabled (or set up npm Trusted Publishing via OIDC), store the corresponding secret on the repo, and re-add a `publish-npm` job to `release.yml` (or a dedicated workflow) along with reverting this section's "manual" framing.
+The same `prepublishOnly` gates rerun on every attempt. An OIDC or login failure
+is not permission to edit the tagged package, move the tag, or skip asset
+verification.
 
 ## CNB Cool mirror
 

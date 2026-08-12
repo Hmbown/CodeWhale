@@ -203,9 +203,10 @@ async fn coalesce_stream_delta(
 
 /// Sentinel delimiters wrapping the compaction summary section persisted in a
 /// thread record's `system_prompt`. The section carries the engine-rendered
-/// summary (which contains the compaction summary marker,
-/// so `SyncSession` → `extract_compaction_summary_prompt` restores it on
-/// engine reload). Delimiters make replacement idempotent: each completed
+/// summary (which contains the compaction summary marker). On reload,
+/// `SyncSession` migrates that carrier into one ordinary history checkpoint
+/// and strips it from the model's standing system prompt. Delimiters make
+/// replacement idempotent: each completed
 /// compaction swaps the section in place instead of stacking duplicates.
 /// External `PATCH /v1/threads/{id}` callers that rewrite `system_prompt`
 /// should preserve this section verbatim or the summary is lost on reload.
@@ -6053,6 +6054,7 @@ impl RuntimeThreadManager {
                             assistant_blocks.push(ContentBlock::Thinking {
                                 thinking,
                                 signature: None,
+                                state: None,
                             });
                         }
                     }
@@ -6580,12 +6582,10 @@ impl RuntimeThreadManager {
                     messages_after,
                     summary_prompt,
                 } => {
-                    // Persist the summary into the thread record so engine
-                    // reloads (LRU eviction / restart) restore it: reload
-                    // passes the record prompt through SyncSession, where
-                    // `extract_compaction_summary_prompt` picks the summary
-                    // back up. Without this the summary lives only in engine
-                    // memory and silently dies with the engine.
+                    // Persist the summary in the legacy thread-record carrier
+                    // so reloads survive LRU eviction/restart. SyncSession
+                    // migrates it into one ordinary history checkpoint and
+                    // strips the carrier from the standing system prompt.
                     if let Some(summary) =
                         summary_prompt.as_deref().filter(|s| !s.trim().is_empty())
                     {

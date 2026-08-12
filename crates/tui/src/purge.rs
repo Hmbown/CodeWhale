@@ -786,6 +786,7 @@ mod tests {
             content: vec![
                 ContentBlock::Thinking {
                     signature: None,
+                    state: None,
                     thinking: "let me think...".to_string(),
                 },
                 ContentBlock::Text {

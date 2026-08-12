@@ -18,6 +18,7 @@ use crate::models::Tool;
 use crate::tools::spec::{ToolError, ToolResult, optional_str, optional_u64, required_str};
 use crate::tui::app::AppMode;
 
+use crate::core::session::ToolActivationCache;
 use crate::dependencies::ExternalTool;
 use crate::regex_cache::compile_user_regex;
 
@@ -27,53 +28,48 @@ pub(super) const CODE_EXECUTION_TOOL_NAME: &str = "code_execution";
 const CODE_EXECUTION_TOOL_TYPE: &str = "code_execution_20250825";
 const CODE_EXECUTION_DESCRIPTION: &str = "Execute Python code with the local Python interpreter in the workspace and return stdout/stderr/return_code as JSON.";
 pub(super) use crate::tools::js_execution::JS_EXECUTION_TOOL_NAME;
-pub(super) const TOOL_SEARCH_NAME: &str = "tool_search";
+pub(crate) const TOOL_SEARCH_NAME: &str = "tool_search";
+const TOOL_RESULT_RETRIEVAL_NAME: &str = "retrieve_tool_result";
 const TOOL_SEARCH_TYPE: &str = "tool_search_20251119";
 const LEGACY_TOOL_SEARCH_REGEX_NAME: &str = "tool_search_tool_regex";
 const LEGACY_TOOL_SEARCH_BM25_NAME: &str = "tool_search_tool_bm25";
-const TOOL_SEARCH_DEFAULT_MAX_RESULTS: usize = 20;
-const TOOL_SEARCH_MAX_RESULTS_LIMIT: usize = 100;
+const TOOL_SEARCH_DEFAULT_MAX_RESULTS: usize = 8;
+const TOOL_SEARCH_MAX_RESULTS_LIMIT: usize = 8;
 
-pub(super) fn is_tool_search_tool(name: &str) -> bool {
+pub(crate) fn is_tool_search_tool(name: &str) -> bool {
     matches!(
         name,
         TOOL_SEARCH_NAME | LEGACY_TOOL_SEARCH_REGEX_NAME | LEGACY_TOOL_SEARCH_BM25_NAME
     )
 }
 
-// Crate-visible rather than `pub(super)` so the hook gate's classifier test can
-// assert it still recognises every default-active name. Without that anchor the
-// test pins hardcoded strings and stays green through a tool rename, while the
-// gate silently reclassifies the renamed tool as unknown.
+// Crate-visible so the hook gate tests the real eager names instead of a copy.
+#[rustfmt::skip]
 pub(crate) const DEFAULT_ACTIVE_NATIVE_TOOLS: &[&str] = &[
-    // #4625: the model-facing shell tool is `Bash`; legacy `exec_shell*`
-    // names are hidden compat aliases and must not be default-active.
-    "Bash",
-    "File",
-    "Git",
-    "Run",
-    "agent",
-    // Skills use a bounded ambient index. Keep the tiny discovery/load schema
-    // active so omitted skills remain one-call discoverable on the first turn.
-    "load_skill",
-    "remember",
-    // Piagent phase B: the model-facing durable-task tool is `tasks`; the
-    // legacy `task_create`/`task_list`/`task_read` names it replaces are
-    // hidden compat aliases and must not be default-active.
-    "tasks",
-    "todo_write",
+    // Specialized native, MCP, plugin, and durable-work tools stay searchable.
+    "read", "write", "edit", "bash", "agent", "todo_write",
 ];
 
 const CORE_ACTION_TOOL_FALLBACKS: &[CoreActionToolFallback] = &[
     CoreActionToolFallback {
-        name: "Bash",
+        name: "bash",
         description: "Run shell commands in the workspace.",
-        unavailable_reason: "Not present in the current model-visible catalog. Interactive Agent sessions expose shell by default unless allow_shell = false; noninteractive and durable profiles require allow_shell = true. Plan mode hides shell, and command tool allow/deny gates can also block it.",
+        unavailable_reason: "Not present in the current model-visible catalog. The session profile, feature availability, or a command tool allow/deny gate can remove shell access. Plan keeps the same primitive identity but centrally refuses execution.",
     },
     CoreActionToolFallback {
-        name: "File",
-        description: "Read, search, and modify workspace files.",
-        unavailable_reason: "Not present in the current model-visible catalog. File reads are available in Plan and Agent modes; write and edit actions require an executable mode, while patch also requires the apply_patch feature.",
+        name: "read",
+        description: "Read workspace files.",
+        unavailable_reason: "Not present in the current model-visible catalog. File reads are available in Plan and executable modes unless a command allow/deny gate removes them.",
+    },
+    CoreActionToolFallback {
+        name: "write",
+        description: "Create or replace workspace files.",
+        unavailable_reason: "Not present in the current model-visible catalog. Plan mode has no file-mutation authority; switch to Work mode before writing.",
+    },
+    CoreActionToolFallback {
+        name: "edit",
+        description: "Apply exact replacements to workspace files.",
+        unavailable_reason: "Not present in the current model-visible catalog. Plan mode has no file-mutation authority; switch to Work mode before editing.",
     },
 ];
 
@@ -140,26 +136,15 @@ pub(super) fn should_default_defer_tool(name: &str, always_load: &HashSet<String
     !default_active_native_tools_set().contains(name)
 }
 
-pub(super) fn apply_native_tool_deferral(catalog: &mut [Tool], always_load: &HashSet<String>) {
+pub(crate) fn apply_native_tool_deferral(catalog: &mut [Tool], always_load: &HashSet<String>) {
     for tool in catalog {
         tool.defer_loading = Some(should_default_defer_tool(&tool.name, always_load));
     }
 }
 
-fn should_keep_mcp_tool_loaded(name: &str) -> bool {
-    matches!(
-        name,
-        "list_mcp_resources"
-            | "list_mcp_resource_templates"
-            | "mcp_read_resource"
-            | "read_mcp_resource"
-            | "mcp_get_prompt"
-    )
-}
-
 pub(super) fn apply_mcp_tool_deferral(
     catalog: &mut [Tool],
-    mode: AppMode,
+    _mode: AppMode,
     always_load: &HashSet<String>,
 ) {
     for tool in catalog {
@@ -167,8 +152,7 @@ pub(super) fn apply_mcp_tool_deferral(
             tool.defer_loading = Some(false);
             continue;
         }
-        tool.defer_loading =
-            Some(mode != AppMode::Yolo && !should_keep_mcp_tool_loaded(&tool.name));
+        tool.defer_loading = Some(true);
     }
 }
 
@@ -231,6 +215,9 @@ const REGISTRY_FIRST_SHELL_GUIDANCE: &str = "Before using this tool for a task w
 /// performs no task matching in the host; the model still compares the user's
 /// context against the Registry catalog itself.
 pub(super) fn apply_registry_first_shell_guidance(catalog: &mut [Tool]) {
+    // The small-contract-shaped lowercase bash schema stays small and direct. This legacy
+    // compatibility hook is intentionally inert unless an old model-visible
+    // exec_shell definition is present.
     let Some(shell) = catalog.iter_mut().find(|tool| tool.name == "exec_shell") else {
         return;
     };
@@ -255,7 +242,7 @@ fn apply_tool_surface_budget(
         if always_load.contains(&tool.name) {
             continue;
         }
-        if matches!(tool.name.as_str(), "agent" | "Run" | "tasks" | "Web") {
+        if matches!(tool.name.as_str(), "Run" | "tasks" | "Web") {
             tool.defer_loading = Some(true);
         }
     }
@@ -281,7 +268,7 @@ pub(super) fn surface_budgets_produce_same_catalog(
     serde_json::to_string(&left).ok() == serde_json::to_string(&right).ok()
 }
 
-pub(super) fn ensure_advanced_tooling(
+pub(crate) fn ensure_advanced_tooling(
     catalog: &mut Vec<Tool>,
     mode: AppMode,
     always_load: &HashSet<String>,
@@ -367,7 +354,7 @@ pub(super) fn ensure_advanced_tooling(
     }
 }
 
-pub(super) fn initial_active_tools(catalog: &[Tool]) -> HashSet<String> {
+pub(crate) fn initial_active_tools(catalog: &[Tool]) -> HashSet<String> {
     let mut active = HashSet::new();
     for tool in catalog {
         if !tool.defer_loading.unwrap_or(false) || is_tool_search_tool(&tool.name) {
@@ -381,6 +368,68 @@ pub(super) fn initial_active_tools(catalog: &[Tool]) -> HashSet<String> {
         active.insert(first.name.clone());
     }
     active
+}
+
+/// Remove schemas evicted from the conversation cache without hiding tools
+/// that the current catalog now exposes eagerly.
+///
+/// A cached tool can become eager after an explicit `tools_always_load`
+/// change or another policy update. Cache revalidation correctly forgets the
+/// old deferred entry, but the eager catalog entry must remain active.
+pub(crate) fn remove_evicted_cache_activations(
+    catalog: &[Tool],
+    active: &mut HashSet<String>,
+    evicted: impl IntoIterator<Item = String>,
+) {
+    for name in evicted {
+        let is_eager_now = catalog
+            .iter()
+            .any(|tool| tool.name == name && !tool.defer_loading.unwrap_or(false));
+        if !is_eager_now {
+            active.remove(&name);
+        }
+    }
+}
+
+/// Promote a successfully executed deferred tool only when this conversation
+/// had already activated it. Execution can update recency, never grant a name.
+pub(crate) fn touch_cached_tool_after_execution(
+    catalog: &[Tool],
+    active: &mut HashSet<String>,
+    cache: &mut ToolActivationCache,
+    name: &str,
+) -> bool {
+    if !cache.names().any(|cached| cached == name) {
+        return false;
+    }
+    let delta = cache.activate(catalog, &[name.to_string()]);
+    remove_evicted_cache_activations(catalog, active, delta.evicted);
+    active.extend(delta.admitted);
+    true
+}
+
+/// Make the recovery schema visible on the next provider step when a tool
+/// result actually publishes retrievable evidence. The initial toolbox stays
+/// small, while a receipt never advertises a deferred route that merely asks
+/// the model to repeat the same call.
+pub(crate) fn activate_result_dependencies(
+    catalog: &[Tool],
+    active: &mut HashSet<String>,
+    cache: &mut ToolActivationCache,
+    result: &ToolResult,
+) {
+    let needs_retrieval = result
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("evidence_available"))
+        .and_then(Value::as_bool)
+        == Some(true);
+    if !needs_retrieval {
+        return;
+    }
+    let delta = cache.activate(catalog, &[TOOL_RESULT_RETRIEVAL_NAME.to_string()]);
+    remove_evicted_cache_activations(catalog, active, delta.evicted);
+    active.extend(delta.admitted);
 }
 
 fn active_tool_list_from_catalog(catalog: &[Tool], active: &HashSet<String>) -> Vec<Tool> {
@@ -517,13 +566,68 @@ pub(super) fn tool_denied(disallowed_tools: Option<&[String]>, tool_name: &str) 
     disallowed_tools.is_some_and(|rules| tool_matches_any_rule(rules, tool_name))
 }
 
-fn tool_matches_any_rule(rules: &[String], tool_name: &str) -> bool {
+pub(crate) fn tool_matches_any_rule(rules: &[String], tool_name: &str) -> bool {
     let tool_name = tool_name.to_ascii_lowercase();
     rules.iter().any(|rule| {
         let rule = rule.to_ascii_lowercase();
-        rule.strip_suffix('*')
-            .map_or_else(|| tool_name == rule, |prefix| tool_name.starts_with(prefix))
+        let (rule_body, is_prefix) = rule
+            .strip_suffix('*')
+            .map_or((rule.as_str(), false), |prefix| (prefix, true));
+        std::iter::once(tool_name.as_str())
+            .chain(policy_tool_aliases(&tool_name).iter().copied())
+            .any(|candidate| {
+                if is_prefix {
+                    candidate.starts_with(rule_body)
+                } else {
+                    candidate == rule_body
+                }
+            })
     })
+}
+
+/// Whether an explicit tool allowlist is provably limited to the native file
+/// and shell primitives. Unknown names and wildcards remain conservative
+/// because a configured MCP server may own them.
+pub(crate) fn allowlist_is_native_file_and_shell_only(allowed_tools: Option<&[String]>) -> bool {
+    let Some(rules) = allowed_tools else {
+        return false;
+    };
+    const NATIVE_NAMES: &[&str] = &[
+        "bash",
+        "exec_shell",
+        "read",
+        "read_file",
+        "write",
+        "write_file",
+        "edit",
+        "edit_file",
+        "file",
+    ];
+    rules.iter().all(|rule| {
+        let rule = rule.trim();
+        !rule.is_empty()
+            && !rule.ends_with('*')
+            && NATIVE_NAMES.contains(&rule.to_ascii_lowercase().as_str())
+    })
+}
+
+fn policy_tool_aliases(name: &str) -> &'static [&'static str] {
+    match name {
+        "read" | "read_file" => &["read", "read_file", "file"],
+        "write" | "write_file" => &["write", "write_file", "file"],
+        "edit" | "edit_file" => &["edit", "edit_file", "file"],
+        "file" => &[
+            "file",
+            "read",
+            "read_file",
+            "write",
+            "write_file",
+            "edit",
+            "edit_file",
+        ],
+        "bash" | "exec_shell" => &["bash", "exec_shell"],
+        _ => &[],
+    }
 }
 
 /// The `tools` field of one outbound request, from a catalog and the set of
@@ -531,7 +635,7 @@ fn tool_matches_any_rule(rules: &[String], tool_name: &str) -> bool {
 ///
 /// Shared by [`ToolSurfacePolicy`] and the per-step rebuild inside the turn
 /// loop, so activating a deferred tool mid-turn goes through one code path.
-pub(super) fn active_tools_for_request(
+pub(crate) fn active_tools_for_request(
     catalog: &[Tool],
     active: &HashSet<String>,
     strict_tool_mode: bool,
@@ -633,7 +737,11 @@ fn discover_tools_with_regex(
 
     let mut matches = Vec::new();
     for tool in catalog {
-        if is_tool_search_tool(&tool.name) {
+        // tool_search loads definitions omitted from the current request. An
+        // eager tool is already present, so returning it as a cache candidate
+        // would misclassify it as rejected (the cache intentionally accepts
+        // deferred definitions only).
+        if !tool.defer_loading.unwrap_or(false) || is_tool_search_tool(&tool.name) {
             continue;
         }
         let hay = tool_search_haystack(tool);
@@ -659,7 +767,7 @@ fn discover_tools_with_bm25_like(catalog: &[Tool], query: &str, max_results: usi
 
     let mut scored: Vec<(i64, String)> = Vec::new();
     for tool in catalog {
-        if is_tool_search_tool(&tool.name) {
+        if !tool.defer_loading.unwrap_or(false) || is_tool_search_tool(&tool.name) {
             continue;
         }
         let hay = tool_search_haystack(tool);
@@ -847,22 +955,24 @@ pub(super) fn missing_tool_error_message(tool_name: &str, catalog: &[Tool]) -> S
     } else {
         None
     };
-    // #5123-class: `exec_shell` was renamed to `Bash`. Name the rename first —
+    // #5123-class: `exec_shell` was replaced by lowercase `bash`. Name it first —
     // otherwise the error misdiagnoses a retired-name call as an allow_shell
     // permission problem and sends the model fixing the wrong thing.
-    let renamed_action = match tool_name {
-        "exec_shell" => Some("run"),
-        "exec_shell_wait" => Some("wait"),
-        "exec_shell_interact" => Some("interact"),
-        "exec_shell_cancel" => Some("cancel"),
-        _ => None,
-    };
-    if let Some(action) = renamed_action {
+    if tool_name == "exec_shell" {
         return format!(
             "Tool '{tool_name}' is not available in the current tool catalog. \
-             `exec_shell` was renamed to `Bash` — call `Bash` with action \"{action}\" instead. \
-             If `Bash` is also absent: {shell_hint}.",
+             `exec_shell` was replaced by `bash` — call `bash` with a `command` instead. \
+             If `bash` is also absent: {shell_hint}.",
             shell_hint = shell_tool_allow_shell_hint()
+        );
+    }
+    if matches!(
+        tool_name,
+        "exec_shell_wait" | "exec_shell_interact" | "exec_shell_cancel"
+    ) {
+        return format!(
+            "Tool '{tool_name}' is not available in the current tool catalog. \
+             Lowercase `bash` is foreground-only; use {TOOL_SEARCH_NAME} to discover shell session controls."
         );
     }
     if suggestions.is_empty() {
@@ -895,8 +1005,8 @@ pub(super) fn missing_tool_error_message(tool_name: &str, catalog: &[Tool]) -> S
 
 fn shell_tool_allow_shell_hint() -> &'static str {
     "Shell tools are absent because this session or profile disabled shell access, \
-     commonly via top-level `allow_shell = false` or Plan mode. \
-     Interactive Act mode exposes shell by default with approval gating unless disabled. \
+     commonly via top-level `allow_shell = false`. \
+     Work mode exposes shell by default with approval gating unless disabled. \
      Run `/config allow_shell true` for this session or add `--save` for future sessions; \
      the next turn will expose shell again"
 }
@@ -910,23 +1020,6 @@ fn is_shell_tool_name(tool_name: &str) -> bool {
             | "task_shell_start"
             | "task_shell_wait"
     )
-}
-
-#[cfg(test)]
-pub(super) fn maybe_activate_requested_deferred_tool(
-    tool_name: &str,
-    catalog: &[Tool],
-    active_tools: &mut HashSet<String>,
-) -> bool {
-    let Some(def) = catalog.iter().find(|def| def.name == tool_name) else {
-        return false;
-    };
-
-    if !def.defer_loading.unwrap_or(false) || active_tools.contains(tool_name) {
-        return false;
-    }
-
-    active_tools.insert(tool_name.to_string())
 }
 
 pub(super) fn maybe_hydrate_requested_deferred_tool(
@@ -1154,11 +1247,35 @@ fn likely_field_corrections(
     corrections
 }
 
+#[cfg(test)]
 pub(super) fn execute_tool_search(
     tool_name: &str,
     input: &serde_json::Value,
     catalog: &[Tool],
     active_tools: &mut HashSet<String>,
+) -> Result<ToolResult, ToolError> {
+    execute_tool_search_inner(tool_name, input, catalog, active_tools, None)
+}
+
+/// Execute tool search while retaining activated schemas in the bounded
+/// conversation cache. Kept separate from the test-only pure search helper so existing
+/// pure catalog tests and compatibility callers do not need an engine session.
+pub(crate) fn execute_tool_search_with_cache(
+    tool_name: &str,
+    input: &serde_json::Value,
+    catalog: &[Tool],
+    active_tools: &mut HashSet<String>,
+    cache: &mut crate::core::session::ToolActivationCache,
+) -> Result<ToolResult, ToolError> {
+    execute_tool_search_inner(tool_name, input, catalog, active_tools, Some(cache))
+}
+
+fn execute_tool_search_inner(
+    tool_name: &str,
+    input: &serde_json::Value,
+    catalog: &[Tool],
+    active_tools: &mut HashSet<String>,
+    cache: Option<&mut crate::core::session::ToolActivationCache>,
 ) -> Result<ToolResult, ToolError> {
     let query = required_str(input, "query")?;
     let match_kind = match tool_name {
@@ -1178,7 +1295,7 @@ pub(super) fn execute_tool_search(
     )?)
     .unwrap_or(TOOL_SEARCH_DEFAULT_MAX_RESULTS)
     .clamp(1, TOOL_SEARCH_MAX_RESULTS_LIMIT);
-    let discovered = if match_kind == "regex" {
+    let mut discovered = if match_kind == "regex" {
         discover_tools_with_regex(catalog, query, max_results)?
     } else {
         discover_tools_with_bm25_like(catalog, query, max_results)
@@ -1190,6 +1307,13 @@ pub(super) fn execute_tool_search(
         unavailable_core_action_tools_with_bm25_like(catalog, query, remaining_results)
     };
 
+    let mut cache_rejected = Vec::new();
+    if let Some(cache) = cache {
+        let delta = cache.activate(catalog, &discovered);
+        remove_evicted_cache_activations(catalog, active_tools, delta.evicted);
+        cache_rejected = delta.rejected;
+        discovered = delta.admitted;
+    }
     for name in &discovered {
         active_tools.insert(name.clone());
     }
@@ -1198,7 +1322,7 @@ pub(super) fn execute_tool_search(
         .iter()
         .map(|name| json!({"type": "tool_reference", "tool_name": name}))
         .collect::<Vec<_>>();
-    let unavailable_references = unavailable
+    let mut unavailable_references = unavailable
         .iter()
         .map(|fallback| {
             json!({
@@ -1208,6 +1332,13 @@ pub(super) fn execute_tool_search(
             })
         })
         .collect::<Vec<_>>();
+    unavailable_references.extend(cache_rejected.iter().map(|name| {
+        json!({
+            "type": "unavailable_tool_reference",
+            "tool_name": name,
+            "reason": "The tool schema exceeds the bounded conversation toolbox (8 cached tools, 16KiB of added serialized schemas). Narrow the search or use a smaller matching tool."
+        })
+    }));
 
     let payload = json!({
         "type": "tool_search_tool_search_result",
@@ -1285,50 +1416,5 @@ pub(super) async fn execute_code_execution_tool(
 }
 
 #[cfg(test)]
-mod synthetic_name_tests {
-    use super::{
-        CODE_EXECUTION_DESCRIPTION, default_synthetic_catalog_tool_names, is_synthetic_catalog_tool,
-    };
-
-    /// `code_execution` writes the script to a tempdir and runs it as a plain
-    /// child process in the workspace — no seccomp, no jail, no container. The
-    /// description is model-facing, so calling it a sandbox would tell the model
-    /// it has isolation the runtime never provides.
-    #[test]
-    fn code_execution_description_does_not_claim_process_sandboxing() {
-        assert!(CODE_EXECUTION_DESCRIPTION.contains("local Python interpreter"));
-        assert!(!CODE_EXECUTION_DESCRIPTION.contains("sandbox"));
-    }
-
-    /// The published synthetic-name list and the predicate that classifies a
-    /// catalog entry as synthetic must agree. A name that appears in the list
-    /// but is not classified synthetic would let the request projection report
-    /// a provenance the engine itself disputes.
-    #[test]
-    fn published_synthetic_names_agree_with_the_synthetic_predicate() {
-        let names = default_synthetic_catalog_tool_names();
-        assert!(!names.is_empty());
-        for name in &names {
-            assert!(
-                is_synthetic_catalog_tool(name),
-                "'{name}' is published as synthetic but the predicate disagrees"
-            );
-        }
-        let mut sorted = names.clone();
-        sorted.sort();
-        sorted.dedup();
-        assert_eq!(names, sorted, "the list must be sorted and deduplicated");
-
-        // MCP names resolve through the real pool, so they are deliberately
-        // absent here even though the predicate accepts them.
-        assert!(!names.iter().any(|name| name.starts_with("mcp_")));
-
-        // `multi_tool_use.parallel` is a call name, never a catalog entry, so
-        // it has no catalog provenance and must not be published as synthetic.
-        assert!(
-            !names
-                .iter()
-                .any(|name| name == super::MULTI_TOOL_PARALLEL_NAME)
-        );
-    }
-}
+#[path = "tool_catalog/tests.rs"]
+mod synthetic_name_tests;

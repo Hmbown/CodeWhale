@@ -46,6 +46,64 @@ fn strip_compaction_summaries_removes_only_summary_blocks() {
 }
 
 #[test]
+fn persisted_summary_carrier_round_trips_without_losing_the_base_prompt() {
+    let carrier = format!(
+        "stable base prompt\n\n{COMPACTION_SUMMARY_BEGIN}\n{COMPACTION_SUMMARY_MARKER}\nnew summary\n{COMPACTION_SUMMARY_END}"
+    );
+
+    assert_eq!(
+        extract_compaction_summary(Some(&SystemPrompt::Text(carrier.clone()))),
+        Some(SystemPrompt::Text(format!(
+            "{COMPACTION_SUMMARY_MARKER}\nnew summary"
+        )))
+    );
+    assert_eq!(
+        strip_compaction_summaries(Some(&SystemPrompt::Text(carrier))),
+        Some(SystemPrompt::Text("stable base prompt".to_string()))
+    );
+}
+
+#[test]
+fn combined_block_carrier_preserves_block_metadata_and_base_text() {
+    let carrier = SystemBlock {
+        block_type: "text".to_string(),
+        text: format!(
+            "stable block\n\n{COMPACTION_SUMMARY_BEGIN}\n{COMPACTION_SUMMARY_MARKER}\nblock summary\n{COMPACTION_SUMMARY_END}"
+        ),
+        cache_control: Some(CacheControl {
+            cache_type: "ephemeral".to_string(),
+        }),
+    };
+
+    let extracted = extract_compaction_summary(Some(&SystemPrompt::Blocks(vec![carrier.clone()])))
+        .expect("checkpoint");
+    let SystemPrompt::Blocks(extracted) = extracted else {
+        panic!("blocks stay blocks");
+    };
+    assert_eq!(extracted.len(), 1);
+    assert_eq!(
+        extracted[0].text,
+        format!("{COMPACTION_SUMMARY_MARKER}\nblock summary")
+    );
+    assert_eq!(extracted[0].cache_control, carrier.cache_control);
+
+    let stripped =
+        strip_compaction_summaries(Some(&SystemPrompt::Blocks(vec![carrier]))).expect("base block");
+    let SystemPrompt::Blocks(stripped) = stripped else {
+        panic!("blocks stay blocks");
+    };
+    assert_eq!(stripped.len(), 1);
+    assert_eq!(stripped[0].text, "stable block");
+    assert_eq!(
+        stripped[0]
+            .cache_control
+            .as_ref()
+            .map(|c| c.cache_type.as_str()),
+        Some("ephemeral")
+    );
+}
+
+#[test]
 fn untyped_usage_limit_text_never_becomes_quota_exhaustion() {
     let error = anyhow::anyhow!(
         "[auth] Authorization failed: You've reached your usage limit for this billing cycle"
@@ -172,8 +230,33 @@ fn pinned_tool_result_local_pruning_is_reclaimable() {
     assert!(should_compact(
         &messages,
         None,
-        &PreparedCompactionEnvelope::new(config, None),
+        &PreparedCompactionEnvelope::new(config),
     ));
+}
+
+#[test]
+fn local_pruning_removes_nested_tool_result_images() {
+    let mut messages = oversized_tool_pair("image-read", "screenshot captured".to_string());
+    let ContentBlock::ToolResult { content_blocks, .. } = &mut messages[1].content[0] else {
+        panic!("tool result fixture");
+    };
+    *content_blocks = Some(vec![serde_json::json!({
+        "type": "image",
+        "mime_type": "image/png",
+        "data": "A".repeat(300_000),
+    })]);
+    messages.extend(pressure_fixture());
+
+    let before = estimate_input_tokens_for_pressure(&messages, None);
+    let pruned = prune_tool_results_until(&mut messages, KEEP_RECENT_MESSAGES, |_, _| false);
+    let after = estimate_input_tokens_for_pressure(&messages, None);
+    let ContentBlock::ToolResult { content_blocks, .. } = &messages[1].content[0] else {
+        panic!("tool result fixture");
+    };
+
+    assert!(pruned > 250_000, "nested image bytes must be reclaimable");
+    assert!(after < before);
+    assert!(content_blocks.is_none(), "base64 must not survive pruning");
 }
 
 #[test]
@@ -184,7 +267,7 @@ fn successor_floor_counts_retained_user_messages_not_tool_results() {
         "z".repeat(RETAINED_TOOL_RESULT_MAX_CHARS * 4),
     ));
     let base_config = CompactionConfig::default();
-    let prepared = PreparedCompactionEnvelope::new(base_config.clone(), None);
+    let prepared = PreparedCompactionEnvelope::new(base_config.clone());
     let retained_floor = estimate_retained_floor_conservative(&messages, None, &prepared);
     let full_pressure = estimate_input_tokens_conservative(&messages, None);
     assert!(
@@ -200,75 +283,6 @@ fn successor_floor_counts_retained_user_messages_not_tool_results() {
     assert!(should_compact(
         &messages,
         None,
-        &PreparedCompactionEnvelope::new(config, None),
+        &PreparedCompactionEnvelope::new(config),
     ));
-}
-
-#[test]
-fn exact_unbounded_reanchor_controls_reclaimability() {
-    let messages = pressure_fixture();
-    let mut config = CompactionConfig::default();
-    let without_reanchor = PreparedCompactionEnvelope::new(config.clone(), None);
-    let retained_floor = estimate_retained_floor_conservative(&messages, None, &without_reanchor);
-    let pressure = estimate_input_tokens_for_pressure(&messages, None);
-    assert!(
-        retained_floor < pressure,
-        "fixture must have reclaimable pressure"
-    );
-    config.token_threshold = retained_floor + (pressure - retained_floor) / 2;
-
-    let without_reanchor = PreparedCompactionEnvelope::new(config.clone(), None);
-    assert!(should_compact(&messages, None, &without_reanchor));
-
-    let external = "x".repeat(300_000);
-    let reanchor = SystemPrompt::Text(format!(
-        "{}\n- `shell:{external}` - active - exact owner\n{}",
-        crate::work_graph::ACTIVE_OPERATION_SUMMARY_START,
-        crate::work_graph::ACTIVE_OPERATION_SUMMARY_END,
-    ));
-    assert!(
-        estimate_system_tokens_conservative(Some(&reanchor)) > 4_096,
-        "fixture must exceed the retired fixed reserve"
-    );
-    let with_exact_reanchor = PreparedCompactionEnvelope::new(config, Some(reanchor));
-    assert!(
-        !should_compact(&messages, None, &with_exact_reanchor),
-        "an unbounded exact reanchor must make an unreclaimable successor ineligible"
-    );
-}
-
-#[test]
-fn stale_installed_reanchor_is_replaced_not_double_counted() {
-    let messages = pressure_fixture();
-    let stale_external = "y".repeat(300_000);
-    let base_system = SystemPrompt::Text("stable base prompt".to_string());
-    let current_system = SystemPrompt::Text(format!(
-        "stable base prompt\n{}\n- `shell:{stale_external}` - active - stale owner\n{}",
-        crate::work_graph::ACTIVE_OPERATION_SUMMARY_START,
-        crate::work_graph::ACTIVE_OPERATION_SUMMARY_END,
-    ));
-    let current_reanchor = SystemPrompt::Text(format!(
-        "{}\n- `shell:current` - active - current owner\n{}",
-        crate::work_graph::ACTIVE_OPERATION_SUMMARY_START,
-        crate::work_graph::ACTIVE_OPERATION_SUMMARY_END,
-    ));
-    let mut config = CompactionConfig::default();
-    let prepared = PreparedCompactionEnvelope::new(config.clone(), Some(current_reanchor.clone()));
-    let retained_floor =
-        estimate_retained_floor_conservative(&messages, Some(&current_system), &prepared);
-    let base_retained_floor =
-        estimate_retained_floor_conservative(&messages, Some(&base_system), &prepared);
-    assert_eq!(
-        retained_floor, base_retained_floor,
-        "the stale installed reanchor must be stripped before sizing its exact replacement"
-    );
-    let pressure = estimate_input_tokens_conservative(&messages, Some(&current_system));
-    assert!(
-        retained_floor < pressure,
-        "stale reanchor must create pressure"
-    );
-    config.token_threshold = retained_floor + 1;
-
-    let prepared = PreparedCompactionEnvelope::new(config, Some(current_reanchor));
-    assert!(should_compact(&messages, Some(&current_system), &prepared));
 }

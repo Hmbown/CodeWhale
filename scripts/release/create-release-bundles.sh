@@ -13,7 +13,32 @@ bundle_dir="$2"
 # still refuses to replace existing release assets; reproducible packaging is a
 # diagnostic and provenance aid, not permission to overwrite published bytes.
 export TZ=UTC
-archive_timestamp="200001010000"
+if [[ -z "${SOURCE_DATE_EPOCH:-}" ]]; then
+  echo "SOURCE_DATE_EPOCH is required; set it to the tagged/source commit timestamp" >&2
+  exit 1
+fi
+if ! [[ "${SOURCE_DATE_EPOCH}" =~ ^[0-9]+$ ]]; then
+  echo "SOURCE_DATE_EPOCH must be an integer Unix timestamp, got: ${SOURCE_DATE_EPOCH}" >&2
+  exit 1
+fi
+
+# Trim leading zeroes before the length and range checks, avoiding arithmetic
+# overflow from malformed values. ZIP stores DOS timestamps, whose valid range
+# is 1980-01-01T00:00:00Z through 2107-12-31T23:59:58Z.
+source_date_epoch="${SOURCE_DATE_EPOCH#"${SOURCE_DATE_EPOCH%%[!0]*}"}"
+source_date_epoch="${source_date_epoch:-0}"
+if (( ${#source_date_epoch} > 10 )) ||
+  (( 10#${source_date_epoch} < 315532800 || 10#${source_date_epoch} > 4354819198 )); then
+  echo "SOURCE_DATE_EPOCH must be between 315532800 (1980-01-01T00:00:00Z) and 4354819198 (2107-12-31T23:59:58Z) for ZIP archives" >&2
+  exit 1
+fi
+source_date_epoch="$((10#${source_date_epoch}))"
+
+if date --version >/dev/null 2>&1; then
+  archive_timestamp="$(date -u -d "@${source_date_epoch}" '+%Y%m%d%H%M.%S')"
+else
+  archive_timestamp="$(date -u -r "${source_date_epoch}" '+%Y%m%d%H%M.%S')"
+fi
 
 if [[ ! -d "${artifact_dir}" ]]; then
   echo "input artifact directory does not exist: ${artifact_dir}" >&2
@@ -21,6 +46,10 @@ if [[ ! -d "${artifact_dir}" ]]; then
 fi
 artifact_dir="$(cd "${artifact_dir}" && pwd)"
 
+if [[ -e "${bundle_dir}" && ! -d "${bundle_dir}" ]]; then
+  echo "output bundle path is not a directory: ${bundle_dir}" >&2
+  exit 1
+fi
 if [[ -e "${bundle_dir}" && -n "$(find "${bundle_dir}" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
   echo "output bundle directory must be empty: ${bundle_dir}" >&2
   exit 1
@@ -39,11 +68,6 @@ bundle() {
   local variant="$5"
 
   local stem="codewhale-${platform}${variant:+-}${variant}"
-  local stage_root
-  stage_root="$(mktemp -d)"
-  local stage_dir="${stage_root}/${stem}"
-  mkdir -p "${stage_dir}"
-
   local cli_dst="codewhale"
   local shim_dst="codew"
   if [[ "${platform}" == windows-* ]]; then
@@ -51,8 +75,24 @@ bundle() {
     shim_dst="codew.exe"
   fi
 
-  cp "${artifact_dir}/${cli_src}/${cli_src}" "${stage_dir}/${cli_dst}"
-  cp "${artifact_dir}/${shim_src}/${shim_src}" "${stage_dir}/${shim_dst}"
+  local cli_path="${artifact_dir}/${cli_src}/${cli_src}"
+  local shim_path="${artifact_dir}/${shim_src}/${shim_src}"
+  if [[ ! -f "${cli_path}" ]]; then
+    echo "missing required release artifact for ${platform}: ${cli_path}" >&2
+    exit 1
+  fi
+  if [[ ! -f "${shim_path}" ]]; then
+    echo "missing required release artifact for ${platform}: ${shim_path}" >&2
+    exit 1
+  fi
+
+  local stage_root
+  stage_root="$(mktemp -d)"
+  local stage_dir="${stage_root}/${stem}"
+  mkdir -p "${stage_dir}"
+
+  cp "${cli_path}" "${stage_dir}/${cli_dst}"
+  cp "${shim_path}" "${stage_dir}/${shim_dst}"
 
   # actions/upload-artifact intentionally normalizes downloaded files to 0644.
   # Restore the executable contract before constructing Unix archives.
@@ -72,8 +112,8 @@ bundle() {
     fi
   fi
 
-  # zip and tar both record mtimes; normalize every staged entry so identical
-  # inputs do not produce packaging-only checksum drift on a rerun.
+  # zip and tar both record mtimes; normalize every staged entry to the exact
+  # source commit timestamp so identical inputs do not produce checksum drift.
   find "${stage_dir}" -exec touch -t "${archive_timestamp}" {} +
 
   local archive="${bundle_dir}/${stem}.${ext}"
@@ -82,7 +122,7 @@ bundle() {
   elif tar --version 2>/dev/null | grep -q 'GNU tar'; then
     tar \
       --sort=name \
-      --mtime='2000-01-01 00:00:00 UTC' \
+      --mtime="@${source_date_epoch}" \
       --owner=0 \
       --group=0 \
       --numeric-owner \

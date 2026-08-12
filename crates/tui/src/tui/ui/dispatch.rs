@@ -75,6 +75,7 @@ pub(crate) fn push_assistant_message(
         blocks.push(ContentBlock::Thinking {
             thinking,
             signature: None,
+            state: None,
         });
     }
     if !text.is_empty() {

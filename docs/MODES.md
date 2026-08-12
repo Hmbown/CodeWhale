@@ -1,8 +1,8 @@
 # Modes and Permission Postures
 
-codewhale has three related concepts:
+Codewhale has three related concepts:
 
-- **TUI mode**: what kind of visible interaction you're in (Plan/Act/Operate).
+- **TUI mode**: what kind of visible interaction you're in (Plan/Work/Operate).
 - **Permission posture**: how aggressively the UI asks before executing tools.
 - **Workflow overlay**: optional long-running orchestration that can
   run on top of any TUI mode when a task needs many coordinated workers.
@@ -21,39 +21,43 @@ into a resumable workflow with its own progress view.
 ## TUI Modes
 
 Press `Tab` to complete composer menus or cycle through the visible modes
-when the composer is empty: **Plan → Act → Operate → Plan**. `Tab` never sends
+when the composer is empty: **Plan → Work → Operate → Plan**. `Tab` never sends
 or queues composer text; use `Enter` to send or queue it.
 Press `Shift+Tab` to cycle permission posture (Ask → Auto-Review → Full Access).
 Press `Ctrl+T` to cycle reasoning effort.
-Run `/mode` to open the mode picker, or switch directly with `/mode act`,
+Run `/mode` to open the mode picker, or switch directly with `/mode work`,
 `/mode plan`, or `/mode operate`.
 
-- **Plan**: design-first prompting. Read-only investigation tools stay available; shell and patch execution stay off. Use this when you want to think out loud and produce a plan to hand to a human (yourself later, or a reviewer).
-- **Act** (Agent): multi-step tool use. In interactive TUI sessions, the canonical `Bash` tool is available by default and approval prompts gate each call. Set top-level `allow_shell = false` to hide it for a workspace/profile. The canonical `File`, `Git`, and `Run` action tools cover structured workspace work.
-- **Operate**: multitask conductor posture. Send ordinary messages and use the same direct tools, shell configuration, sandbox, permission posture, ask-rules, and repository protections as Act. The parent session is the **operator**: dispatching background workers is the **default** way real multi-step or independent work happens (no special multitask command). Handle small or tightly coupled tasks in the parent; for everything else, set a goal when work spans streams, start background `agent` workers early, treat queued follow-ups as new tasks, and keep the parent free for steers and synthesis. **Dispatch is not completion** — every write-capable child must return verification evidence (verifier child, `run_verifiers`, or structured PASS/FAIL with real commands). Prefer direct workers for independent streams; use Workflow when order, phases, gates, shared budgets, or deterministic fan-in matter (starter recipes under `workflows/operate_*.workflow.js`: staged-fix, read-audit, parallel-scout, best-of-n). Best-of-N (skill + starter workflow) runs N worktree implementers then a reviewer; apply the winner only after PASS.
+- **Plan**: design-first prompting. The stable primitive names remain familiar, but the runtime centrally refuses file mutation and shell execution. Read-only inspection and policy-allowed research, including deferred Web search/fetch, remain available.
+- **Work** (internally `agent`): ordinary multi-step execution. The small first-turn toolbox is `read`, `write`, `edit`, `bash`, `agent`, and `tool_search`; approval, sandbox, repository law, and managed policy still decide what may execute.
+- **Operate**: multitask conductor posture. It has the same primitive identities and execution authority as Work. The parent session is the **operator**: dispatching background workers is the default for independent or parallel work. Handle small or tightly coupled tasks in the parent; use background `agent` workers for separable streams, and use Workflow when order, phases, gates, shared budgets, or deterministic fan-in matter. **Dispatch is not completion** — write-capable children must return real verification evidence.
 
-**Act** is accepted as an alias for Agent mode. Saved settings still normalize to `agent` for backward compatibility.
+`Act` and `/mode act` remain compatibility aliases for Work. Saved settings
+still normalize to the internal value `agent`.
 
 ### Tool availability by mode
 
-| Tool family | Plan | Act | Operate |
+| Tool family | Plan | Work | Operate |
 |:---|:---:|:---:|:---:|
-| Read-only file, search, and diagnostic tools | yes | yes | yes |
-| File write and patch tools | no | yes | yes; same active posture and protections as Act |
-| `Bash` (`run`, `wait`, `interact`, `cancel`) | no | approval-gated by default, hidden when `allow_shell = false` | same as Act; delegation is preferred when parallelism or isolation helps |
+| `read` and policy-allowed deferred research tools | yes | yes | yes |
+| `write` and `edit` | visible names; execution denied | approval- and policy-gated | same as Work |
+| `bash` | visible name; execution denied | approval- and policy-gated | same as Work; delegation is preferred when parallelism or isolation helps |
+| `agent` | yes, subject to child-depth authority | yes, subject to child-depth authority | yes, subject to child-depth authority |
+| Deferred native, MCP, and plugin tools | discoverable through `tool_search` when policy permits | same | same |
 | Paid or external-service tools | follows permission posture | follows permission posture | follows permission posture |
-| Access outside the workspace root | explicit trusted paths only | only through trusted paths or trust mode | same trusted-path/trust policy as Act; Fleet profiles never widen it |
+| Access outside the workspace root | explicit trusted paths only | only through trusted paths or trust mode | same trusted-path/trust policy as Work; Fleet profiles never widen it |
 
 Operate changes scheduling emphasis, not authority. It neither adds a
 mode-specific tool denial nor bypasses the active approval, sandbox, shell,
 ask-rule, repository-law, or managed-policy boundary. Plan remains the
-mode-specific read-only boundary for shell and write-capable tools.
+mode-specific execution boundary for shell and write-capable tools; that
+authority difference does not require a different primitive vocabulary.
 
 ### Operate loop (one screen)
 
 ```text
 User message
-  → small / chat / one-file?  → parent does it (Act-equivalent tools)
+  → small / chat / one-file?  → parent does it (Work-equivalent tools)
   → real / multi-stream work? → goal (if needed) → dispatch background workers
        → each write child: implement → VERDICT PASS/FAIL with evidence
        → ordered / gated fan-in? → Workflow (operate_* starters)
@@ -63,16 +67,13 @@ User message
 
 Lifecycle claims stay exact: dispatched ≠ settled ≠ verified.
 
-If a shell tool is missing from the model-visible catalog in Act or Operate, check
-for an explicit `allow_shell = false` in the active config/profile or runtime
-session. Durable tasks and automation keep conservative omitted-field defaults;
-they only receive shell access when their task settings explicitly grant it.
-`allow_shell = true` controls shell availability only; direct multiline `Bash`
-`run` commands remain blocked by shell safety validation. For heredocs,
-embedded scripts, or long manual flows, use single-line commands, write a
-script/file first, or use `Bash` with its background, `wait`, and `interact`
-actions.
-Full Access turns shell access on together with trust mode and auto-approval.
+`allow_shell` controls whether `bash` can execute; it does not rename the tool
+or make mode the approval authority. Durable tasks and automation keep
+conservative omitted-field defaults and receive shell authority only when their
+settings explicitly grant it. Stateful terminal/background controls are
+specialized deferred tools rather than fields on the small foreground `bash`
+schema. Full Access changes the permission posture while hard safety and
+repository-policy holds remain authoritative.
 
 Action-capable modes can discover the deferred `rlm` family through
 `tool_search`; its `open`, `eval`, `configure`, and `close` actions own persistent
@@ -95,7 +96,7 @@ only controls model and thinking selection.
 Workflow builds on the same separation: a goal can ask the agent to keep
 working, while Workflow supplies the repeatable workflow/progress surface for
 large fanout. In the UI, a Workflow run should be shown as an overlay on the
-main screen, not as another mode beside Plan, Act, and Operate.
+main screen, not as another mode beside Plan, Work, and Operate.
 
 App-server clients can persist a thread-scoped goal with `thread/goal/set`, read
 it with `thread/goal/get`, and clear it with `thread/goal/clear`. That persisted
@@ -107,7 +108,7 @@ thread resume semantics.
 
 Choosing a mode interactively also sets the mode a fresh session starts in.
 Tab/Shift+Tab cycling, the `Alt+A` / `Alt+P` / `Alt+Y` shortcuts, the hotbar's
-Plan/Act/Operate actions, and `/mode` all write `default_mode` to
+Plan/Work/Operate actions, and `/mode` all write `default_mode` to
 `~/.codewhale/settings.toml`, so switching to Operate survives a restart. The
 write happens off the event loop; if it fails, the TUI says so in a warning
 toast rather than reverting silently on the next launch.
@@ -119,8 +120,8 @@ rolls back an unrelated key such as `default_model`.
 
 Two paths deliberately do **not** rewrite the startup default: restoring a saved
 session (which re-installs the mode that session was in) and a mode change
-refused because a turn is in flight. The legacy `yolo` entry point installs Act
-plus bypass approvals, and `agent` is what it persists — `yolo` is a permission
+refused because a turn is in flight. The legacy `yolo` entry point installs Work
+plus Full Access, and `agent` is what it persists — `yolo` is a permission
 alias, never a startup mode.
 
 Re-selecting the mode you are already in is not a no-op. After a restored

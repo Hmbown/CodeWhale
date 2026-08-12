@@ -3228,6 +3228,7 @@ async fn seed_thread_keeps_tool_results_on_preceding_turn() -> Result<()> {
                 ContentBlock::Thinking {
                     thinking: "need a tool".to_string(),
                     signature: Some("sig-1".to_string()),
+                    state: None,
                 },
                 ContentBlock::ToolUse {
                     id: "tool-1".to_string(),
@@ -9246,9 +9247,8 @@ fn summary_merge_appends_section_to_base_prompt() {
     assert!(merged.contains(COMPACTION_SUMMARY_BEGIN));
     assert!(merged.contains("User prefers lists."));
     assert!(merged.ends_with(COMPACTION_SUMMARY_END));
-    // Reload restore keys on the marker: SyncSession maps the record to
-    // SystemPrompt::Text and extract_compaction_summary_prompt checks
-    // `contains("Conversation Summary (Auto-Generated)")`.
+    // Reload restore keys on the marker: SyncSession migrates this carrier
+    // into one ordinary history checkpoint before provider dispatch.
     assert!(merged.contains("Conversation Summary (Auto-Generated)"));
 }
 

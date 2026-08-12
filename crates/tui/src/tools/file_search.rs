@@ -36,11 +36,11 @@ impl ToolSpec for FileSearchTool {
     }
 
     fn model_visible(&self) -> bool {
-        false
+        true
     }
 
     fn description(&self) -> &'static str {
-        "Find files by name using fuzzy matching with score-based ranking. Use this instead of `find -name` or `fd` in `exec_shell` for filename search. Pass `extensions` to filter by suffix."
+        "Find workspace files by name using fuzzy matching with score-based ranking. Pass extensions to filter by suffix."
     }
 
     fn input_schema(&self) -> Value {
@@ -67,7 +67,7 @@ impl ToolSpec for FileSearchTool {
                 "exclude": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "Optional glob patterns to exclude, matching grep_files' convention (e.g. [\"target/**\", \"*.lock\"])."
+                    "description": "Optional glob patterns to exclude (e.g. [\"target/**\", \"*.lock\"])."
                 }
             },
             "required": ["query"]

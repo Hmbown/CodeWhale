@@ -127,6 +127,7 @@ function jobBlock(source: string, job: string) {
 describe("web workflow deploy trigger contract", () => {
   const workflow = readWebWorkflow();
   const deploy = jobBlock(workflow, "deploy");
+  const deployReminder = jobBlock(workflow, "deploy-reminder");
 
   it("still runs lint on pushes and pull requests", () => {
     expect(workflow).toContain("  push:\n    branches: [master, main]");
@@ -149,6 +150,16 @@ describe("web workflow deploy trigger contract", () => {
     // trigger here could only ever produce a red deploy job (#4907).
     expect(guard).not.toContain("'push'");
     expect(deploy).toContain("needs: lint");
+  });
+
+  it("surfaces an actionable deployment reminder after a green main push", () => {
+    expect(deployReminder).toContain("needs: lint");
+    expect(deployReminder).toContain(
+      "github.event_name == 'push' && github.ref == 'refs/heads/main'",
+    );
+    expect(deployReminder).toContain("::notice title=Web deployment approval needed::");
+    expect(deployReminder).toContain("gh workflow run web.yml");
+    expect(deployReminder).not.toContain("npm run deploy");
   });
 
   it("checks out the exact dispatched revision before deploying", () => {

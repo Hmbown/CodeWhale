@@ -18,7 +18,8 @@ use serde_json::json;
 
 use crate::models::{Tool, ToolCaller};
 use crate::tools::spec::{
-    ResourceClaim, ToolError, ToolExecutionOutcome, ToolResult, schedule_non_conflicting,
+    ResourceClaim, ToolError, ToolExecutionOutcome, ToolResult, ToolResultContentBlock,
+    schedule_non_conflicting,
 };
 
 use super::ToolUseState;
@@ -33,6 +34,7 @@ pub(super) struct ToolExecOutcome {
     pub(super) input: serde_json::Value,
     pub(super) started_at: std::time::Instant,
     pub(super) terminal: ToolExecutionOutcome,
+    pub(super) content_blocks: Vec<ToolResultContentBlock>,
 }
 
 #[derive(Debug, Clone)]

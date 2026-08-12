@@ -24,10 +24,7 @@ use tokio::sync::{Mutex as AsyncMutex, RwLock, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::client::DeepSeekClient;
-use crate::compaction::{
-    CompactionConfig, CompactionLiveState, PreparedCompactionEnvelope, compact_messages_safe,
-    merge_system_prompts, strip_active_operation_reanchor,
-};
+use crate::compaction::{CompactionConfig, PreparedCompactionEnvelope, compact_messages_safe};
 use crate::config::{ApiProvider, Config, DEFAULT_MAX_SUBAGENTS, DEFAULT_TEXT_MODEL};
 use crate::core::model_client::SharedModelClient;
 use crate::error_taxonomy::{ErrorCategory, ErrorEnvelope, StreamError};
@@ -52,7 +49,7 @@ use crate::tools::goal::{
 use crate::tools::plan::{SharedPlanState, new_shared_plan_state};
 use crate::tools::shell::{SharedShellManager, new_shared_shell_manager};
 use crate::tools::spec::{
-    ApprovalRequirement, ResourceClaim, ToolError, ToolExecutionOutcome, ToolResult,
+    ApprovalRequirement, ResourceClaim, RichToolResult, ToolError, ToolExecutionOutcome, ToolResult,
 };
 use crate::tools::spec::{
     RuntimeToolServices, SharedFileReadTracker, new_shared_file_read_tracker,
@@ -115,11 +112,11 @@ const MCP_REGISTRY_FIRST_INSTRUCTION: &str = "## MCP Registry-first policy\n\nFo
 /// rewriting the parent transcript.
 ///
 /// Deliberately **Work-free**: this is captured once at turn start, and Work
-/// state changes during the turn. The Work section of the fork-state block is
+/// state changes during the turn. The To-do section of the fork-state block is
 /// resolved at the actual fork seam instead (see
 /// `SubAgentForkContext::with_resolved_state_block`), so a `work_update`
 /// followed by an `agent` spawn in the same turn hands the child the current
-/// ledger rather than the one that existed before the turn's first tool call.
+/// list rather than the one that existed before the turn's first tool call.
 #[derive(Debug, Clone, Default)]
 struct StructuredState {
     mode_label: String,
@@ -369,10 +366,9 @@ pub struct EngineConfig {
     pub strict_tool_mode: bool,
     /// Workshop / large-tool-output routing (#548). `None` disables routing.
     pub workshop: Option<crate::tools::large_output_router::WorkshopConfig>,
-    /// Which search backend `web_search` should use. Default: DuckDuckGo.
+    /// Which search backend `web_search` should use. Default: Firecrawl.
     pub search_provider: crate::config::SearchProvider,
-    /// API key for Tavily, Bocha, Metaso, Baidu, Volcengine, or Sofya.
-    /// `None` for Bing, DuckDuckGo, or SearXNG.
+    /// Optional Firecrawl key, or required key for other API search providers.
     /// Metaso also falls back to the `METASO_API_KEY` env var.
     /// Baidu also falls back to `BAIDU_SEARCH_API_KEY`.
     pub search_api_key: Option<String>,
@@ -932,7 +928,7 @@ impl Engine {
 
     /// Render the accumulated compaction summary prompt to plain text so it
     /// can travel in events and be persisted by host layers. All emit sites
-    /// run after `merge_compaction_summary`, so this reflects the summary
+    /// run after `commit_compaction_checkpoint`, so this reflects the checkpoint
     /// state the engine will use for subsequent requests.
     fn rendered_compaction_summary(&self) -> Option<String> {
         self.session
@@ -1459,11 +1455,11 @@ impl Engine {
 
         let result = if mode == AppMode::Plan {
             Err(ToolError::permission_denied(
-                "Tool 'Bash' is unavailable in Plan mode".to_string(),
+                "Tool 'bash' is unavailable in Plan mode".to_string(),
             ))
         } else if !self.config.features.enabled(Feature::ShellTool) {
             Err(ToolError::not_available(
-                "Tool 'Bash' is disabled by feature flag".to_string(),
+                "Tool 'bash' is disabled by feature flag".to_string(),
             ))
         } else if let Some(spec) = registry.get(&tool_name) {
             // #5191: the human typed this command — typing it IS the approval.
@@ -1503,6 +1499,7 @@ impl Engine {
                     None,
                 )
                 .await
+                .map(RichToolResult::into_result)
             }
         } else {
             Err(ToolError::not_available(
@@ -2341,6 +2338,12 @@ impl Engine {
                         workspace,
                         mode,
                     } => {
+                        // Deferred tool activations belong to one
+                        // conversation. SyncSession installs a conversation's
+                        // identity, history, and workspace (including the
+                        // generated-ID new-session path), so never carry the
+                        // previous conversation's toolbox across this edge.
+                        self.session.tool_activation_cache.clear();
                         let plugin_workspace_changed =
                             self.plugin_registry.workspace() != workspace.as_path();
                         if let Some(session_id) = session_id {
@@ -2348,11 +2351,24 @@ impl Engine {
                         } else if messages.is_empty() && system_prompt.is_none() {
                             self.session.id = uuid::Uuid::new_v4().to_string();
                         }
-                        self.session.messages =
-                            crate::runtime_handoff::project_messages_for_restore(&messages).into();
-                        self.session.compaction_summary_prompt =
+                        let compaction_checkpoint =
                             extract_compaction_summary_prompt(system_prompt.clone());
-                        self.session.system_prompt = system_prompt;
+                        let mut restored_messages =
+                            crate::runtime_handoff::project_messages_for_restore(&messages);
+                        // The persisted carrier is authoritative for the one
+                        // history checkpoint. Drop stale projected copies so
+                        // repeated reloads cannot stack or retain an older one.
+                        restored_messages.retain(|message| {
+                            !crate::compaction::is_compaction_checkpoint_message(message)
+                        });
+                        if let Some(checkpoint) = compaction_checkpoint.as_ref() {
+                            restored_messages
+                                .push(crate::compaction::compaction_checkpoint_message(checkpoint));
+                        }
+                        self.session.messages = restored_messages.into();
+                        self.session.compaction_summary_prompt = compaction_checkpoint;
+                        self.session.system_prompt =
+                            crate::compaction::strip_compaction_summaries(system_prompt.as_ref());
                         self.session.last_system_prompt_hash =
                             Some(system_prompt_hash(self.session.system_prompt.as_ref()));
                         // Host-supplied prompts are persisted prefixes. Keep them
@@ -3443,7 +3459,7 @@ impl Engine {
                 structured_state_block: state.to_system_block(),
                 // Resolve at spawn time so a todo_write earlier in this turn
                 // reaches the child rather than freezing turn-start state.
-                work_source: Some(self.work_state_source()),
+                work_source: Some(self.todo_source()),
             })
         } else {
             None
@@ -3615,12 +3631,7 @@ impl Engine {
         // The surface budget belongs to the route the request would go to,
         // which is not necessarily the installed one under auto routing.
         let capability = route.capability_profile();
-        let mut always_load = self.config.tools_always_load.clone();
-        if self.config.features.enabled(Feature::Mcp) {
-            always_load.insert("start_mcp_server".to_string());
-            always_load.insert("registry_sync".to_string());
-            always_load.insert("start_registry_mcp_server".to_string());
-        }
+        let always_load = self.config.tools_always_load.clone();
         let bypass = input_policy.auto_approve
             || input_policy.approval_mode == crate::tui::approval::ApprovalMode::Bypass;
         let catalog_mode = if bypass {
@@ -3637,11 +3648,6 @@ impl Engine {
         );
         if self.config.features.enabled(Feature::Mcp) {
             apply_registry_first_shell_guidance(&mut catalog);
-        }
-        for tool in &mut catalog {
-            if plugin_tool_names.contains(&tool.name) {
-                tool.defer_loading = Some(false);
-            }
         }
         let surface = ToolSurfacePolicy::new(
             tool_registry,
@@ -4252,56 +4258,6 @@ impl Engine {
         outcome
     }
 
-    /// Capture typed live state for post-compact rehydrate (workers, shells,
-    /// mode, permission). To-do state deliberately stays out of this stable
-    /// prefix snapshot: the authoritative graph projection is appended fresh
-    /// to each parent turn-loop and sub-agent step request by
-    /// `work_state_tail_message`.
-    async fn capture_compaction_live_state(&self) -> CompactionLiveState {
-        self.touch_workers_with_running_shells().await;
-        let running_workers = {
-            let mut guard = self.subagent_manager.write().await;
-            guard.cleanup(Duration::from_secs(60 * 60));
-            guard
-                .list()
-                .into_iter()
-                .filter(|s| matches!(s.status, SubAgentStatus::Running))
-                .map(|s| {
-                    let role = s.assignment.role.as_deref().unwrap_or("-");
-                    let goal = if s.assignment.objective.is_empty() {
-                        "(no objective)"
-                    } else {
-                        s.assignment.objective.as_str()
-                    };
-                    format!("`{}` (role: {role}) — {goal}", s.agent_id)
-                })
-                .collect()
-        };
-
-        let background_shells = match self.shell_manager.lock() {
-            Ok(mut manager) => manager
-                .list_jobs()
-                .into_iter()
-                .filter(|job| matches!(job.status, crate::tools::shell::ShellStatus::Running))
-                .map(|job| format!("`{}`: `{}`", job.id, job.command))
-                .collect(),
-            Err(_) => Vec::new(),
-        };
-
-        CompactionLiveState {
-            mode: Some(self.current_mode.as_setting().to_string()),
-            permission_posture: Some(
-                self.session
-                    .approval_mode
-                    .permission_chip_label()
-                    .to_string(),
-            ),
-            background_shells,
-            running_workers,
-            open_approvals: Vec::new(),
-        }
-    }
-
     fn prepare_compaction_envelope(
         &self,
         mut config: CompactionConfig,
@@ -4311,23 +4267,7 @@ impl Engine {
         config
             .workspace
             .get_or_insert_with(|| self.config.workspace.clone());
-        // Carry the committed summary into the summarization request so a
-        // repeat compaction coalesces it; the commit replaces it afterwards.
-        config.prior_summary = crate::compaction::strip_active_operation_reanchor(
-            self.session.compaction_summary_prompt.as_ref(),
-        )
-        .as_ref()
-        .map(crate::compaction::summary_prompt_text)
-        .map(|text| text.trim().to_string())
-        .filter(|text| !text.is_empty());
-        let successor_reanchor = self
-            .config
-            .runtime_services
-            .work
-            .as_ref()
-            .and_then(|work| work.active_operation_summary(Some(&self.session.id)))
-            .map(SystemPrompt::Text);
-        PreparedCompactionEnvelope::new(config, successor_reanchor)
+        PreparedCompactionEnvelope::new(config)
     }
 
     async fn handle_manual_compaction_op(
@@ -4392,10 +4332,7 @@ impl Engine {
         let mut turn_status = TurnOutcomeStatus::Completed;
         let mut turn_error = None;
 
-        let mut compaction_config = self.config.compaction.clone();
-        let live = self.capture_compaction_live_state().await;
-        compaction_config.live_state = (!live.is_empty()).then_some(live);
-        let prepared = self.prepare_compaction_envelope(compaction_config);
+        let prepared = self.prepare_compaction_envelope(self.config.compaction.clone());
 
         match compact_messages_safe(
             &client,
@@ -4410,7 +4347,7 @@ impl Engine {
                     let messages_after = result.messages.len();
                     let retries_used = result.retries_used;
                     self.session.replace_messages(result.messages);
-                    self.merge_compaction_summary(result.summary_prompt, result.successor_reanchor);
+                    self.commit_compaction_checkpoint(result.summary_prompt);
                     self.emit_session_updated().await;
                     let removed = messages_before.saturating_sub(messages_after);
                     let tokens_after = self.estimated_input_tokens();
@@ -4641,7 +4578,6 @@ impl Engine {
 
         let mut retries_used = 0u32;
         let mut summary_prompt = None;
-        let mut successor_reanchor = None;
         let mut compacted_messages: Vec<Message> = self.session.messages.clone().into();
 
         let mut forced_config = self.config.compaction.clone();
@@ -4650,8 +4586,6 @@ impl Engine {
             .token_threshold
             .min(target_budget.saturating_sub(1))
             .max(1);
-        let live = self.capture_compaction_live_state().await;
-        forced_config.live_state = (!live.is_empty()).then_some(live);
         let prepared = self.prepare_compaction_envelope(forced_config);
 
         match compact_messages_safe(
@@ -4666,7 +4600,6 @@ impl Engine {
                 retries_used = result.retries_used;
                 compacted_messages = result.messages;
                 summary_prompt = result.summary_prompt;
-                successor_reanchor = result.successor_reanchor;
             }
             Err(err) => {
                 let _ = self
@@ -4681,7 +4614,7 @@ impl Engine {
         if !compacted_messages.is_empty() || self.session.messages.is_empty() {
             self.session.replace_messages(compacted_messages);
         }
-        self.merge_compaction_summary(summary_prompt, successor_reanchor);
+        self.commit_compaction_checkpoint(summary_prompt);
 
         let trimmed = self.trim_oldest_messages_to_budget(target_budget);
         self.emit_session_updated().await;
@@ -5142,7 +5075,7 @@ impl Engine {
                 },
                 prompt_host,
             );
-        merge_system_prompts(Some(&base), self.session.compaction_summary_prompt.clone())
+        Some(base)
     }
 
     fn installed_next_turn_prompt_context(&self) -> NextTurnPromptContext {
@@ -5162,35 +5095,14 @@ impl Engine {
         )
     }
 
-    /// Merge a compaction summary into the system prompt.
-    ///
-    /// **Zone affiliation (#2264)**: this mutates the system prompt, which is
-    /// part of the `PinnedPrefix` zone in the three-zone contract. Compaction
-    /// is the one intentional mid-session prefix mutation — the engine
-    /// intentionally accepts the cache-invalidation cost because the
-    /// context-reduction benefit outweighs it.
-    fn merge_compaction_summary(
-        &mut self,
-        summary_prompt: Option<SystemPrompt>,
-        successor_reanchor: Option<SystemPrompt>,
-    ) {
+    /// Keep the rendered checkpoint for host persistence and repeat-compaction
+    /// metadata. The model sees the checkpoint exactly once through ordinary
+    /// conversation history; the stable system prefix never carries it.
+    fn commit_compaction_checkpoint(&mut self, summary_prompt: Option<SystemPrompt>) {
         let Some(summary_prompt) = summary_prompt else {
             return;
         };
-        let summary_prompt = merge_system_prompts(Some(&summary_prompt), successor_reanchor)
-            .or(Some(summary_prompt));
-        // Exactly one committed summary is live at a time. The new summary
-        // coalesced the previous one via the summarization bridge, so the old
-        // block is REPLACED here — appending it again grew the stable prefix
-        // by a full summary per pass, which re-latched compaction pressure
-        // and retriggered compaction on every subsequent turn.
-        self.session.compaction_summary_prompt = summary_prompt.clone();
-        let prior_system = crate::compaction::strip_compaction_summaries(
-            strip_active_operation_reanchor(self.session.system_prompt.as_ref()).as_ref(),
-        );
-        let merged = merge_system_prompts(prior_system.as_ref(), summary_prompt);
-        self.session.last_system_prompt_hash = Some(system_prompt_hash(merged.as_ref()));
-        self.session.system_prompt = merged;
+        self.session.compaction_summary_prompt = Some(summary_prompt);
     }
 }
 
@@ -6050,15 +5962,14 @@ use self::tool_catalog::{
     CODE_EXECUTION_TOOL_NAME, JS_EXECUTION_TOOL_NAME, MULTI_TOOL_PARALLEL_NAME,
     REQUEST_USER_INPUT_NAME, ToolSurfacePolicy, active_tools_for_request,
     apply_registry_first_shell_guidance, build_model_tool_catalog_with_surface,
-    default_synthetic_catalog_tool_names, execute_code_execution_tool, execute_tool_search,
-    is_tool_search_tool, maybe_hydrate_requested_deferred_tool, missing_tool_error_message,
+    default_synthetic_catalog_tool_names, execute_code_execution_tool, is_tool_search_tool,
+    maybe_hydrate_requested_deferred_tool, missing_tool_error_message,
 };
 #[cfg(test)]
 use self::tool_catalog::{
     TOOL_SEARCH_NAME, active_tools_for_step, build_model_tool_catalog, ensure_advanced_tooling,
-    initial_active_tools, maybe_activate_requested_deferred_tool,
-    preflight_requested_deferred_tool, should_default_defer_tool, tool_allowed,
-    tool_catalog_consistency_issues, tool_denied,
+    execute_tool_search, initial_active_tools, preflight_requested_deferred_tool,
+    should_default_defer_tool, tool_allowed, tool_catalog_consistency_issues, tool_denied,
 };
 use self::tool_execution::emit_tool_audit;
 use self::tool_preparation::{prepare_tool_call, reprepare_tool_call_after_hook};

@@ -60,12 +60,17 @@ type PublicSurfaceMatrix = {
   };
   toolSurface: {
     defaultActive: string[];
-    actions: Record<string, string[]>;
+    schemas: Record<string, string[]>;
     deferred: Record<string, string[]>;
     compatibility: {
       legacyAliases: string;
       modelVisible: boolean;
       toolSearchDiscoverable: boolean;
+    };
+    activationCache: {
+      maximumNames: number;
+      maximumSchemaBytes: number;
+      scope: string;
     };
     agentConcurrency: {
       defaultConfigured: number;
@@ -372,7 +377,7 @@ done
     const docsMap = text("web/lib/docs-map.ts");
     const matrixText = text("docs/public-surface-facts.json");
 
-    expect(matrix.control.modes).toEqual(["Plan", "Act", "Operate"]);
+    expect(matrix.control.modes).toEqual(["Plan", "Work", "Operate"]);
     expect(matrix.control.permissionPostures).toEqual(["Ask", "Auto-Review", "Full Access"]);
     // Tab is gated on the composer being EMPTY, not idle
     // (crates/tui/src/tui/ui.rs:6978 `if !app.input.is_empty() { continue; }`
@@ -411,36 +416,37 @@ done
     }
   });
 
-  it("enforces the nine-tool default-active policy and replay-only aliases", () => {
+  it("enforces the six-tool core, deferred discovery, and exact hidden compatibility", () => {
     const toolDoc = text("docs/TOOL_SURFACE.md");
-    const design = text("docs/RUNTIME_SIMPLIFICATION_DESIGN.md").replace(/\s+/g, " ");
     const toolsPage = text("web/app/[locale]/docs/tools/page.tsx");
     const registry = text("crates/tui/src/tools/registry.rs");
     const limits = text("crates/tui/src/config/subagent_limits.rs");
     const roadmap = text("web/app/[locale]/roadmap/page.tsx");
 
     expect(matrix.toolSurface.defaultActive).toEqual([
-      "Bash",
-      "File",
-      "Git",
-      "Run",
+      "read",
+      "write",
+      "edit",
+      "bash",
       "agent",
-      "remember",
-      "tasks",
-      "todo_write",
       "tool_search",
     ]);
-    expect(matrix.toolSurface.actions).toEqual({
-      Bash: ["run", "wait", "interact", "cancel"],
-      File: ["read", "list", "search_name", "search_content", "write", "edit", "patch"],
-      Git: ["status", "diff", "log", "show", "blame"],
-      Run: ["tests", "verifiers"],
+    expect(matrix.toolSurface.schemas).toEqual({
+      read: ["path", "offset?", "limit?"],
+      write: ["path", "content"],
+      edit: ["path", "edits"],
+      bash: ["command", "timeout?"],
     });
     expect(matrix.toolSurface.deferred).toEqual({ Web: ["search", "fetch", "wait"] });
     expect(matrix.toolSurface.compatibility).toEqual({
-      legacyAliases: "replay-only",
+      legacyAliases: "hidden-exact",
       modelVisible: false,
       toolSearchDiscoverable: false,
+    });
+    expect(matrix.toolSurface.activationCache).toEqual({
+      maximumNames: 8,
+      maximumSchemaBytes: 16_384,
+      scope: "per conversation; each subagent owns an independent policy-filtered cache",
     });
     expect(matrix.toolSurface.agentConcurrency).toEqual({
       defaultConfigured: 64,
@@ -455,28 +461,22 @@ done
       roadmap.indexOf('title: "Underway"'),
     );
     expect(roadmap).toContain("Implemented in the v0.9.1 source candidate");
-    // Nine, not ten: `update_plan` is a real tool but is not in
-    // DEFAULT_ACTIVE_NATIVE_TOOLS and appears nowhere in tool_catalog.rs.
-    // The facts file claimed it was default-active; the code never did.
-    expect(toolDoc).toContain("exactly these nine names");
+    expect(toolDoc).toContain("exactly seven model-facing names");
     for (const name of matrix.toolSurface.defaultActive) {
       expect(toolDoc, name).toContain(`\`${name}\``);
       expect(toolsPage, name).toContain(name);
     }
-    expect(toolDoc).toContain("`Web` is a conditional, deferred action tool");
-    expect(toolDoc).toContain("hidden from the model");
-    expect(design).toContain(
-      "The final active names are `Bash`, `File`, `Git`, `Run`, `agent`, `remember`, `tasks`, `update_plan`, `todo_write`, and `tool_search`.",
-    );
+    expect(toolDoc).toContain("`Web` is conditional and deferred");
+    expect(toolDoc).toContain("Each subagent gets its own policy-filtered deferred catalog");
+    expect(toolDoc).toContain("Compatibility is execution compatibility, not fuzzy aliasing");
+    expect(registry).toContain("Arc::new(ReadTool)");
+    expect(registry).toContain("Arc::new(WriteTool)");
+    expect(registry).toContain("Arc::new(EditTool)");
+    expect(registry).toContain("Arc::new(LowercaseBashTool)");
     expect(registry).toContain('FileTool::new("File")');
-    expect(registry).toContain('GitTool::new("Git")');
-    expect(registry).toContain('RunTool::new("Run")');
     expect(registry).toContain('BashTool::new("Bash")');
-    expect(registry).not.toContain('BashTool::new("exec_shell")');
-    expect(registry).not.toContain('FileTool::new("read_file")');
-    expect(registry).not.toContain('FileTool::new("list_dir")');
-    expect(toolsPage).not.toContain("read_file · list_dir");
-    expect(toolsPage).not.toContain("rlm_open · rlm_eval");
+    expect(toolsPage).toContain("8 names / 16 KiB");
+    expect(toolsPage).toContain("Web search/fetch");
     expect(toolsPage).not.toContain("docs/TOOL_LIFECYCLE.md");
   });
 

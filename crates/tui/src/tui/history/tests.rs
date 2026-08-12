@@ -51,10 +51,12 @@ fn restored_history_hides_wire_reasoning_placeholder_but_keeps_model_reasoning()
             ContentBlock::Thinking {
                 thinking: "(reasoning omitted)".to_string(),
                 signature: None,
+                state: None,
             },
             ContentBlock::Thinking {
                 thinking: "Actual model reasoning".to_string(),
                 signature: None,
+                state: None,
             },
         ],
     };

@@ -521,6 +521,7 @@ mod tests {
             runtime_permissions: None,
             parent_run_id: None,
             spawn_depth: 1,
+            child_route: None,
             result: None,
             steps_taken: 2,
             checkpoint: None,

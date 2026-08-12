@@ -35,9 +35,6 @@ const LARGE_CONTEXT_WINDOW_TOKENS: u32 = 500_000;
 /// Max chars to keep from metadata-provided output summaries.
 const TOOL_RESULT_METADATA_SUMMARY_CHARS: usize = 320;
 
-pub(super) use crate::compaction::is_compaction_summary_text;
-// Engine tests exercise the marker directly; the runtime path only needs the
-// predicate above.
 #[cfg(test)]
 pub(super) use crate::compaction::COMPACTION_SUMMARY_MARKER;
 
@@ -495,27 +492,7 @@ pub(crate) fn compact_tool_result_for_route(
 pub(super) fn extract_compaction_summary_prompt(
     prompt: Option<SystemPrompt>,
 ) -> Option<SystemPrompt> {
-    match prompt {
-        Some(SystemPrompt::Blocks(blocks)) => {
-            let summary_blocks: Vec<_> = blocks
-                .into_iter()
-                .filter(|block| is_compaction_summary_text(&block.text))
-                .collect();
-            if summary_blocks.is_empty() {
-                None
-            } else {
-                Some(SystemPrompt::Blocks(summary_blocks))
-            }
-        }
-        Some(SystemPrompt::Text(text)) => {
-            if is_compaction_summary_text(&text) {
-                Some(SystemPrompt::Text(text))
-            } else {
-                None
-            }
-        }
-        None => None,
-    }
+    crate::compaction::extract_compaction_summary(prompt.as_ref())
 }
 
 /// Internal input-side token budget for a provider/model route:

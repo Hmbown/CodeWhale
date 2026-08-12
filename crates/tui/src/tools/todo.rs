@@ -172,23 +172,6 @@ impl TodoList {
         item
     }
 
-    /// Update an item's status by id.
-    #[cfg(test)]
-    pub fn update_status(&mut self, id: u32, status: TodoStatus) -> Option<TodoItem> {
-        let mut updated: Option<TodoItem> = None;
-        if status == TodoStatus::InProgress {
-            self.set_single_in_progress(Some(id));
-        }
-        for item in &mut self.items {
-            if item.id == id {
-                item.status = status;
-                updated = Some(item.clone());
-                break;
-            }
-        }
-        updated
-    }
-
     /// Compute completion percentage for the list.
     #[must_use]
     pub fn completion_percentage(&self) -> u8 {

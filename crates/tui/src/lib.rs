@@ -135,6 +135,7 @@ mod telemetry_notice;
 #[cfg(test)]
 mod test_support;
 mod tls;
+mod todo_snapshot;
 mod tool_history_repair;
 mod tool_inspection;
 mod tool_output_receipts;
@@ -144,7 +145,6 @@ mod turn_route_plan;
 mod utils;
 mod vision;
 mod work_graph;
-mod work_grounding;
 mod worker_profile;
 mod working_set;
 mod workspace_discovery;
@@ -6772,11 +6772,11 @@ fn doctor_search_provider_line(config: &Config) -> String {
     let switch_hint = if matches!(
         (search_provider.provider, search_provider.source),
         (
-            crate::config::SearchProvider::DuckDuckGo,
+            crate::config::SearchProvider::Firecrawl,
             crate::config::SearchProviderSource::Default
         )
     ) {
-        "; set [search] provider = \"bing\" | \"tavily\" | \"bocha\" to switch"
+        "; set [search] provider = \"baidu\" | \"metaso\" | \"volcengine\" for China"
     } else {
         ""
     };
@@ -11132,6 +11132,9 @@ async fn run_exec_agent(
         outer_network_access,
         outer_shell_authority,
     );
+    if crate::core::allowlist_is_native_file_and_shell_only(allowed_tools.as_deref()) {
+        engine_features.disable(crate::features::Feature::Mcp);
+    }
     let engine_plugin_registry = if fleet_authority_active {
         std::sync::Arc::new(crate::plugins::PluginRegistry::empty(&workspace))
     } else {
@@ -13491,7 +13494,7 @@ mod doctor_endpoint_tests {
     }
 
     #[test]
-    fn doctor_search_provider_line_includes_duckduckgo_default_source_and_switch_hint() {
+    fn doctor_search_provider_line_includes_firecrawl_default_source_and_switch_hint() {
         let _guard = crate::test_support::lock_test_env();
         let prev = std::env::var_os("DEEPSEEK_SEARCH_PROVIDER");
         unsafe { std::env::remove_var("DEEPSEEK_SEARCH_PROVIDER") };
@@ -13502,10 +13505,10 @@ mod doctor_endpoint_tests {
             Some(value) => unsafe { std::env::set_var("DEEPSEEK_SEARCH_PROVIDER", value) },
             None => unsafe { std::env::remove_var("DEEPSEEK_SEARCH_PROVIDER") },
         }
-        assert!(line.contains("search_provider: duckduckgo"));
+        assert!(line.contains("search_provider: firecrawl"));
         assert!(line.contains("source: default"));
         assert!(line.contains("[search] provider"));
-        assert!(line.contains("provider = \"bing\""));
+        assert!(line.contains("provider = \"baidu\""));
     }
 
     #[test]
@@ -15699,10 +15702,7 @@ mod terminal_mode_tests {
             Message {
                 role: "assistant".to_string(),
                 content: vec![
-                    ContentBlock::Thinking {
-                        thinking: "checking context".to_string(),
-                        signature: None,
-                    },
+                    ContentBlock::thinking("checking context"),
                     ContentBlock::Text {
                         text: "working".to_string(),
                         cache_control: None,

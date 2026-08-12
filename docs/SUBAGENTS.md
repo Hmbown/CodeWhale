@@ -65,9 +65,9 @@ stewardship.
 | Role          | Stance                                 | Writes? | Shell posture | Typical use                                  |
 |---------------|----------------------------------------|---------|---------------|----------------------------------------------|
 | `worker`      | flexible; do whatever the parent says  | yes     | yes           | the default; multi-step tasks                |
-| `scout`       | read-only; map the relevant code fast  | no      | recon (net + bounded verify) | "find every call site of `Foo`; check the PR with gh" |
+| `scout`       | read-only; map the relevant code fast  | no      | read-only (net + bounded verify) | "find every call site of `Foo`; check the PR with gh" |
 | `planner`     | analyse and produce a strategy         | minimal | minimal       | "design the migration; don't execute"        |
-| `reviewer`    | read-and-grade with severity scores    | no      | recon (net + bounded verify) | "audit this PR for bugs"                     |
+| `reviewer`    | read-and-grade with severity scores    | no      | read-only (net + bounded verify) | "audit this PR for bugs"                     |
 | `builder`     | land a specific change with min edit   | yes     | yes           | "rewrite `bar.rs::Foo::bar` to do X"         |
 | `verifier`    | run tests / validation, report outcome | no      | test-focused  | "run cargo test --workspace, report"         |
 | `consultant`  | short-lived, high-reasoning counsel     | no      | none          | "what are we missing in this design?"        |
@@ -93,24 +93,22 @@ Use fresh sessions for independent exploration. Use forked sessions when the
 task depends on decisions, files, todos, or plan state already in the parent
 transcript.
 
-Forked state renders concrete Work progress from the To-do ledger — the sole
-canonical Work surface, written by `todo_write`. The child's
-`<codewhale:fork_state>` block carries the same bounded body
-(`crates/tui/src/work_grounding.rs`) that the parent's own requests carry, so a
-fork continues from the parent's real progress position rather than a
-paraphrase. That Work section is resolved when the spawn happens, so a
-`todo_write` earlier in the same parent turn is included.
+Forked state shows the parent's To-do snapshot — the sole Work surface, written
+by `todo_write`. The child's `<codewhale:fork_state>` block carries the bounded
+body rendered by `crates/tui/src/todo_snapshot.rs`, so a fork continues from the
+parent's real progress position rather than a paraphrase. That To-do section is
+resolved when the spawn happens, so a `todo_write` earlier in the same parent
+turn is included.
 
-Each agent then grounds on **its own** ledger: every sub-agent request carries
-the same transient `<codewhale:work_state>` tail rendered from that agent's
-private To-do list (#4810), refreshed after the agent's own `todo_write`. It is
-request-scoped — never stored in the child transcript or its system prefix — so
-a worker can never read or write a parent's or sibling's **private transient
-tail**. A deliberately forked child still receives the bounded immutable parent
-ledger snapshot described above as part of its fork context; it cannot mutate
-that snapshot or keep reading later parent changes.
+**The list is shown once, at that spawn, and never re-sent.** No sub-agent
+request re-states a To-do list, and neither does a parent request. Each agent
+keeps its own private list (#4810); what it knows about that list comes from the
+tool results its own `todo_write` calls returned, which are ordinary messages in
+its own transcript. A worker therefore cannot read or write a parent's or a
+sibling's list, and a forked child cannot mutate the snapshot it was handed or
+keep reading later parent changes.
 
-That same private ledger is what the child's in-transcript card shows. A
+That same private list is what the child's in-transcript card shows. A
 delegate card renders a bounded projection of **its own** agent's To-do — the
 settled/total count, the in-progress item always included, up to three rows, and an
 explicit `… +N more` when the bound elides the rest — built by
@@ -121,7 +119,7 @@ appears under another. An agent that has stated no work shows no To-do rows at
 all rather than a placeholder task, and a terminal card keeps the last snapshot
 its agent actually published. Fanout cards stay a dot grid and do not show child
 To-do: with many workers behind one card there is no truthful place to hang a
-single ledger. A child To-do appears only when the runtime already represents
+single list. A child To-do appears only when the runtime already represents
 that child as its own delegate card.
 
 The durable task/Fleet ledger still owns lifecycle state. `update_plan` is no
@@ -174,7 +172,7 @@ OUTPUT: VERDICT, EVIDENCE, GAPS, NEXT
 
 `scout` briefs default to quick, read-only investigation (no writes, but
 network reach and the bounded verification surface are available for real
-recon). About 3-5 tool calls
+scouting). About 3-5 tool calls
 is enough for quick exploration: orient, search, read the decisive lines, and
 return. Do not repeat `ALREADY_KNOWN` work unless evidence contradicts it. Review
 and verifier briefs can spend more calls, but should stop after decisive
@@ -223,7 +221,7 @@ OUTPUT: VERDICT, EVIDENCE, GAPS, NEXT.
   likely scope, and return `path:line-range` evidence instead of a narrative
   tour. The role name to use is `scout`.
 - **`planner`** — when the parent has an objective but no executable
-  decomposition. Planners write artifacts (`todo_write` items for the ledger,
+  decomposition. Planners write artifacts (`todo_write` items,
   strategy in the response body) but don't carry them out.
 - **`reviewer`** — when there's already a change and the parent wants
   it graded. Reviewers don't patch — they describe the fix in the

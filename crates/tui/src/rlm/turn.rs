@@ -1135,6 +1135,7 @@ mod tests {
             },
             ContentBlock::Thinking {
                 signature: None,
+                state: None,
                 thinking: "skip".to_string(),
             },
             ContentBlock::Text {

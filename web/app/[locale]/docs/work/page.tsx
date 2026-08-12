@@ -8,8 +8,8 @@ export async function generateMetadata({ params }: { params: Promise<{ locale: s
     locale,
     title: isZh ? "工作面板 · Codewhale 文档" : "Work Surface · Codewhale Docs",
     description: isZh
-      ? "唯一的 To-do 执行台账、模型可见的 Work grounding，以及同一份工作状态的延续路径。"
-      : "The single canonical To-do ledger, model-facing Work grounding, and how one work state stays continuous.",
+      ? "唯一的 To-do 列表、模型如何看到它，以及同一份工作状态的延续路径。"
+      : "The single To-do list, how the model sees it, and how one work state stays continuous.",
   });
 }
 
@@ -67,8 +67,8 @@ export default async function WorkSurfacePage({ params }: { params: Promise<{ lo
         </h2>
         <p className={`${bodyClass} mt-3`}>
           {isZh
-            ? "update_plan 承载的是可选的高层策略，不是第二个台账。它的字段面向阶段级理解：标题、目标、上下文摘要、说明、来源、关键文件、约束、推荐方案、验证计划、风险与未知、交接包，以及一组步骤。它帮助父会话或后续 worker 理解“为什么这么做”；具体执行进度始终属于 To-do 台账。侧栏有意不把策略状态渲染成第二条进度列表，模型可见的 Work grounding 也不会包含它——只有 update_plan 而 To-do 为空时，不会产生任何 Work 状态。"
-            : "update_plan carries optional high-level strategy — it is not a second ledger. Its fields serve phase-level understanding: title, objective, context summary, explanation, sources, critical files, constraints, recommended approach, verification plan, risks and unknowns, a handoff packet, and a list of steps. It helps a parent session or a later worker understand the approach; concrete execution progress always belongs to the To-do ledger. The sidebar deliberately does not render strategy state as a second progress list, and model-facing Work grounding excludes it entirely — plan state with an empty To-do produces no Work state at all."}
+            ? "update_plan 承载的是可选的高层策略，不是第二份清单。它的字段面向阶段级理解：标题、目标、上下文摘要、说明、来源、关键文件、约束、推荐方案、验证计划、风险与未知、交接包，以及一组步骤。它帮助父会话或后续 worker 理解“为什么这么做”；具体执行进度始终属于 To-do 列表。侧栏有意不把策略状态渲染成第二条进度列表，各个 To-do 快照出口也不会包含它——只有 update_plan 而 To-do 为空时，不会产生任何 To-do 快照。"
+            : "update_plan carries optional high-level strategy — it is not a second list. Its fields serve phase-level understanding: title, objective, context summary, explanation, sources, critical files, constraints, recommended approach, verification plan, risks and unknowns, a handoff packet, and a list of steps. It helps a parent session or a later worker understand the approach; concrete execution progress always belongs to the To-do list. The sidebar deliberately does not render strategy state as a second progress list, and neither does any To-do snapshot surface — plan state with an empty To-do produces no snapshot at all."}
         </p>
       </section>
 
@@ -78,8 +78,8 @@ export default async function WorkSurfacePage({ params }: { params: Promise<{ lo
         </h2>
         <p className={`${bodyClass} mt-3`}>
           {isZh
-            ? "同一份工作状态喂给多个出口，而且用的是同一个渲染器：每个父回合循环和子 Agent 步骤请求的尾部会附加一个瞬时的 <codewhale:work_state> 块；分叉（fork_context）的子 Agent 在其前缀的结构化状态块里收到同样的正文；/relay 把同样的正文写进交接指令。三处的 To-do 正文逐字节一致——子 Agent 与下一个线程因此从父级真实的进度位置继续，而不是从转述的摘要开始。侧栏的 To-do 区域则实时渲染同一份状态。"
-            : "The same work state feeds several surfaces through one renderer: a transient <codewhale:work_state> block is appended to each parent turn-loop and sub-agent step request; a forked (fork_context) sub-agent receives the same body inside its structured state block; and /relay writes the same body into the handoff instruction. The To-do body is byte-identical in all three, so a child agent and the next thread continue from the parent's real progress position instead of a paraphrased summary. The sidebar renders that same state live."}
+            ? "模型通过自己的工具结果了解 To-do：todo_write 返回的结果就是普通的会话历史，因此无需在每一步重复注入清单。只有在有人明确要求的节点，才会用同一个渲染器展示一次当前 To-do：分叉（fork_context）的子 Agent 在其结构化状态块里收到该正文；/relay 把同样的正文写进交接指令。两处的 To-do 正文逐字节一致——子 Agent 与下一个线程因此从父级真实的进度位置继续，而不是从转述的摘要开始。侧栏的 To-do 区域则完整实时渲染同一份状态。"
+            : "The model learns the To-do from its own tool results: what todo_write returned is ordinary conversation history, so nothing re-states the list on each step. Only at a seam a person asked for does one renderer show the current To-do once: a forked (fork_context) sub-agent receives that body inside its structured state block, and /relay writes the same body into the handoff instruction. The To-do body is byte-identical in both, so a child agent and the next thread continue from the parent's real progress position instead of a paraphrased summary. The sidebar renders that same state live, in full."}
         </p>
       </section>
 
@@ -126,13 +126,13 @@ elapsed: 18m
         </h2>
         <p className={`${bodyClass} mt-3`}>
           {isZh
-            ? "已被实现和测试证实的模型可见路径有五条：todo_write 工具本身是模型目录里的活跃工具；每个父回合循环请求尾部的 <codewhale:work_state> 块（#3983）；每个子 Agent 步骤请求尾部的同一个块——渲染自它自己的清单；分叉子 Agent 的结构化状态块（<codewhale:fork_state> 中的 Work 小节，在真正 fork 的那一刻解析）；以及 /relay 输出。侧栏渲染是视觉呈现——它给人看，不注入模型上下文。"
-            : "Five model-facing paths are implemented and covered by tests: the todo_write tool itself, which is active in the model catalog; the <codewhale:work_state> block appended to each parent turn-loop request (#3983); the same block on each sub-agent step request, rendered from that agent's own list; the forked sub-agent's structured state block (the Work section inside <codewhale:fork_state>, resolved at the moment of the fork); and /relay output. The sidebar rendering is a visual presentation — it informs the operator and is not injected into model context."}
+            ? "已被实现和测试证实的模型可见路径有三条：todo_write 工具本身是模型目录里的活跃工具，它返回的工具结果就是模型看到清单的方式；分叉子 Agent 的结构化状态块（<codewhale:fork_state> 中的 To-do 小节，在真正 fork 的那一刻解析）；以及 /relay 输出。没有任何一步请求会重复注入 To-do——一条结构化测试直接断言真实出站请求体里不含该清单。侧栏渲染是视觉呈现——它给人看，不注入模型上下文。"
+            : "Three model-facing paths are implemented and covered by tests: the todo_write tool itself, which is active in the model catalog and whose tool result is how the model sees the list; the forked sub-agent's structured state block (the To-do section inside <codewhale:fork_state>, resolved at the moment of the fork); and /relay output. No request re-states the To-do on any step — a structural test asserts the real outbound request body does not contain the list. The sidebar rendering is a visual presentation — it informs the operator and is not injected into model context."}
         </p>
         <p className={`${bodyClass} mt-3`}>
           {isZh
-            ? "边界值得说清楚：这个块是瞬时的——它只属于当次请求，既不写进会话历史，也不进入稳定系统前缀，因此稳定的系统与工具前缀仍可参与前缀缓存；各提供商对最新用户消息的缓存方式仍以其自身协议为准。它会在每个父回合循环和子 Agent 步骤请求前重建，读取的是权威状态（有 work graph 时读它暂存的投影，而不是尚未发布的旧视图），所以工具循环中途的一次 todo_write 会在下一步出现。父回合循环的上下文预检按真正会发出的那一份尾部计费，因此不会先放行、再因为附加这个块而超限；离线计数一律偏保守。条目数与字符数都有硬上限，进行中的条目优先保留，被省略的部分带省略标记。To-do 为空时不输出任何块。渲染器只保证包裹结构、控制字符与上限这三件事——它不会审查条目文本的含义，任意 To-do 内容不因此变成可信指令。"
-            : "The boundaries are worth stating: the block is transient — it belongs to a single request, is never written to session history, and never enters the stable system prefix, so the stable system-and-tool prefix remains eligible for prefix caching; each provider's treatment of the latest user message still depends on its wire protocol. It is rebuilt before each parent turn-loop and sub-agent step request from the authoritative state (the work graph's staged projection where one exists, not the not-yet-published legacy view), so a todo_write made mid tool-loop appears on the following step. The parent turn-loop context preflight is charged for the exact tail that will be sent, so it cannot approve a request that goes over-limit only once the block is appended; offline counts stay conservative. Item count and character count are both hard-bounded, the in-progress item is preserved preferentially, and elided content is marked. An empty To-do emits no block at all. The renderer guarantees exactly three things — wrapper framing cannot be closed early, control characters cannot forge the line format, and the bounds hold. It does not vet what item text says, so arbitrary To-do content is not thereby made safe to follow as instructions."}
+            ? "边界值得说清楚：因为没有逐步注入，稳定的系统与工具前缀完全不受 To-do 变化影响，前缀缓存也不会因此失效。fork 那一次的快照读取的是权威状态（有 work graph 时读它暂存的投影，而不是尚未发布的旧视图），所以同一回合里较早的一次 todo_write 也会被带上。条目数与字符数都有硬上限，进行中的条目优先保留，被省略的部分带省略标记。To-do 为空时不输出任何内容。渲染器只保证包裹结构、控制字符与上限这三件事——它不会审查条目文本的含义，任意 To-do 内容不因此变成可信指令。"
+            : "The boundaries are worth stating: because nothing is injected per step, the stable system-and-tool prefix is untouched by To-do changes and prefix caching is never invalidated by them. The one snapshot taken at a fork reads the authoritative state (the work graph's staged projection where one exists, not the not-yet-published legacy view), so a todo_write made earlier in the same turn is included. Item count and character count are both hard-bounded, the in-progress item is preserved preferentially, and elided content is marked. An empty To-do emits nothing at all. The renderer guarantees exactly three things — wrapper framing cannot be closed early, control characters cannot forge the line format, and the bounds hold. It does not vet what item text says, so arbitrary To-do content is not thereby made safe to follow as instructions."}
         </p>
       </section>
 

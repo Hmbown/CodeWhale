@@ -422,11 +422,17 @@ fn modelstudio_effort_disables_thinking(effort: Option<&str>) -> bool {
 /// either is at best ignored and at worst a 400.
 fn modelstudio_model_is_thinking_only(model: &str) -> bool {
     let model = model.trim().to_ascii_lowercase();
-    matches!(model.as_str(), "qwen3.8-max" | "qwen3.8-max-preview")
-        // Kimi K2.7 Code on Model Studio is reported always-thinking and
-        // supporting preserve_thinking. Keep it separate from hybrid Kimi
-        // variants so we do not send the unsupported enable_thinking switch.
-        || model.starts_with("kimi-k2.7-code")
+    matches!(
+        model.as_str(),
+        "qwen3.8-max"
+            | "qwen3.8-max-preview"
+            // Kimi K2.7 Code is always-thinking. Keep both Alibaba-hosted and
+            // Moonshot-supplied exact IDs separate from hybrid Kimi variants
+            // so we never send the unsupported enable_thinking switch.
+            | "kimi-k2.7-code"
+            | "kimi/kimi-k2.7-code"
+            | "kimi/kimi-k2.7-code-highspeed"
+    )
 }
 
 fn modelstudio_model_is_hybrid(model: &str) -> bool {
@@ -439,19 +445,35 @@ fn modelstudio_model_is_hybrid(model: &str) -> bool {
         || model.starts_with("deepseek-v3.2")
         || model.starts_with("deepseek-v3.1")
         || model.starts_with("kimi-k2.6")
+        || matches!(model.as_str(), "kimi/kimi-k2.6")
         || model.starts_with("kimi-k2.5")
         || model.starts_with("glm-")
 }
 
 fn modelstudio_model_supports_preserve_thinking(model: &str) -> bool {
     let model = model.trim().to_ascii_lowercase();
-    model.starts_with("qwen3.7-max")
-        || model.starts_with("qwen3.7-plus")
-        || model.starts_with("qwen3.6-max-preview")
-        || model.starts_with("qwen3.6-plus")
-        || model.starts_with("qwen3.6-flash")
-        || model.starts_with("kimi-k2.6")
-        || model.starts_with("kimi-k2.7-code")
+    matches!(
+        model.as_str(),
+        "qwen3.7-max"
+            | "qwen3.7-max-us"
+            | "qwen3.7-max-2026-05-17"
+            | "qwen3.7-max-2026-05-20"
+            | "qwen3.7-max-2026-06-08"
+            | "qwen3.7-max-preview"
+            | "qwen3.7-plus"
+            | "qwen3.7-plus-us"
+            | "qwen3.7-plus-2026-05-26"
+            | "qwen3.6-max-preview"
+            | "qwen3.6-plus"
+            | "qwen3.6-plus-2026-04-02"
+            | "qwen3.6-flash"
+            | "qwen3.6-flash-2026-04-16"
+            | "kimi-k2.6"
+            | "kimi-k2.7-code"
+            | "kimi/kimi-k2.6"
+            | "kimi/kimi-k2.7-code"
+            | "kimi/kimi-k2.7-code-highspeed"
+    )
 }
 
 fn modelstudio_model_supports_reasoning_effort(model: &str) -> bool {
@@ -2047,7 +2069,10 @@ fn turn_meta_budget_json(turn_meta: &TurnMetaBudget) -> Value {
 /// never advertise a process-wide SHA as retrievable: that store cannot prove
 /// session ownership.
 fn is_mutation_tool(tool_name: &str) -> bool {
-    matches!(tool_name, "write_file" | "edit_file" | "apply_patch")
+    matches!(
+        tool_name,
+        "write" | "edit" | "write_file" | "edit_file" | "apply_patch"
+    )
 }
 
 fn compact_tool_result_for_wire(
@@ -2228,7 +2253,7 @@ fn build_chat_messages_with_reasoning(
         let mut thinking_parts = Vec::new();
         let mut tool_calls = Vec::new();
         let mut tool_call_infos = Vec::new();
-        let mut tool_results: Vec<(String, String, String)> = Vec::new();
+        let mut tool_results: Vec<(String, String, String, Vec<Value>)> = Vec::new();
         let mut turn_meta_budget: Option<TurnMetaBudget> = None;
 
         for block in &message.content {
@@ -2286,10 +2311,16 @@ fn build_chat_messages_with_reasoning(
                 ContentBlock::ToolResult {
                     tool_use_id,
                     content,
+                    content_blocks,
                     ..
                 } => {
                     let message_label = format!("Message #{message_index}");
-                    tool_results.push((tool_use_id.clone(), content.clone(), message_label));
+                    tool_results.push((
+                        tool_use_id.clone(),
+                        content.clone(),
+                        message_label,
+                        content_blocks.clone().unwrap_or_default(),
+                    ));
                 }
                 ContentBlock::ServerToolUse { .. }
                 | ContentBlock::ToolSearchToolResult { .. }
@@ -2403,8 +2434,14 @@ fn build_chat_messages_with_reasoning(
             if pending_tool_calls.is_empty() {
                 logging::warn("Dropping tool results without matching tool_calls");
             } else {
-                for (tool_id, content, message_label) in tool_results {
+                let mut tool_result_images = Vec::new();
+                for (tool_id, content, message_label, content_blocks) in tool_results {
                     if let Some(tool_info) = pending_tool_calls.remove(&tool_id) {
+                        let (image, omitted) = crate::image_attach::provider_tool_result_image_refs(
+                            Some(&content_blocks),
+                        );
+                        let content =
+                            crate::image_attach::tool_result_text_with_omission(&content, omitted);
                         let wire_result = compact_tool_result_for_wire(
                             &tool_info.tool_name,
                             &tool_info.input,
@@ -2426,11 +2463,29 @@ fn build_chat_messages_with_reasoning(
                             });
                         }
                         out.push(tool_msg);
+                        if let Some((mime_type, data)) = image {
+                            tool_result_images.push(json!({
+                                "type": "text",
+                                "text": format!(
+                                    "Image returned by tool `{}` (call `{tool_id}`):",
+                                    tool_info.tool_name,
+                                ),
+                            }));
+                            tool_result_images.push(json!({
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": format!("data:{mime_type};base64,{data}")
+                                },
+                            }));
+                        }
                     } else {
                         logging::warn(format!(
                             "Dropping tool result for unknown tool_call_id: {tool_id}"
                         ));
                     }
+                }
+                if !tool_result_images.is_empty() {
+                    out.push(json!({ "role": "user", "content": tool_result_images }));
                 }
             }
         } else if role != "assistant" && role != crate::models::INTERRUPTED_ASSISTANT_ROLE {
@@ -2800,10 +2855,6 @@ fn requires_reasoning_content(model: &str) -> bool {
         // `reasoning_content` on subsequent turns or the API returns 400.
         || lower.starts_with("deepseek-chat")
         || lower.starts_with("deepseek-reasoner")
-        // Generic reasoning markers used by custom/proxied deployments.
-        || lower.contains("reasoner")
-        || lower.contains("-reasoning")
-        || lower.contains("-thinking")
         || has_deepseek_r_series_marker(&lower)
 }
 
@@ -2844,18 +2895,46 @@ fn should_replay_reasoning_content_for_provider_on_route(
     model: &str,
     effort: Option<&str>,
 ) -> bool {
-    // Both exact K3 routes and Model Studio's thinking-only models are
-    // always-thinking. A stale caller may still carry `off` before route
-    // normalization; retaining the assistant reasoning trace is required for
-    // multi-turn/tool-call continuity regardless.
+    // Exact always-thinking routes replay their reasoning trace regardless of
+    // a stale caller effort: the API contract requires the assistant
+    // reasoning field on later tool turns for multi-turn continuity.
     if is_exact_direct_moonshot_k3_route(provider, base_url, model)
         || is_exact_kimi_code_k3_route(provider, base_url, model)
-        || is_exact_modelstudio_thinking_only_route(provider, base_url, model)
         || (is_exact_mistral_chat_route(provider, base_url)
             && mistral_model_has_native_reasoning(model))
     {
         return true;
     }
+
+    // The exact Model Studio route policy evaluates BEFORE any generic
+    // model-name heuristic. Only models Alibaba documents as accepting
+    // `preserve_thinking` replay historical `reasoning_content`, plus the
+    // concrete DeepSeek V4 family ids whose own API contract requires the
+    // reasoning field on tool turns. A model named `foo-thinking` or
+    // `foo-reasoner` proves nothing about DashScope's request dialect and
+    // must not gain replay here — replaying stale Thinking blocks feeds the
+    // model its own past reasoning and re-triggers it every turn (observed
+    // as a repeated handoff loop with the always-thinking qwen3.8 family).
+    // Pi does not replay those either.
+    if is_exact_modelstudio_chat_route(provider, base_url) {
+        if modelstudio_model_supports_preserve_thinking(model) {
+            // Thinking-only preserve models (kimi-k2.7-code) are
+            // always-thinking and replay even with a stale `off`; hybrid
+            // preserve models defer to the effort gate like every other
+            // hybrid.
+            if is_exact_modelstudio_thinking_only_route(provider, base_url, model)
+                || !modelstudio_effort_disables_thinking(effort)
+            {
+                return true;
+            }
+            return false;
+        }
+        let lower = model.trim().to_ascii_lowercase();
+        return lower.contains("deepseek-v4")
+            || lower.starts_with("deepseek-chat")
+            || lower.starts_with("deepseek-reasoner");
+    }
+
     if effort
         .map(|value| {
             matches!(
@@ -2874,19 +2953,6 @@ fn should_replay_reasoning_content_for_provider_on_route(
 
     if is_exact_mistral_chat_route(provider, base_url)
         && mistral_model_has_adjustable_reasoning(model)
-    {
-        return true;
-    }
-
-    // Model Studio replay is deliberately narrower than PR #5233 proposed:
-    // only models Alibaba documents as accepting `preserve_thinking` get their
-    // `reasoning_content` sent back. `deepseek-v3.1`, `deepseek-v3.2` and the
-    // `glm-*` ids stay stripped until someone with a Model Studio key confirms
-    // DashScope does not 400 on `reasoning_content` in input messages.
-    // `deepseek-v4*` already replays via `requires_reasoning_content` above, so
-    // this narrowing removes nothing that exists.
-    if is_exact_modelstudio_chat_route(provider, base_url)
-        && modelstudio_model_supports_preserve_thinking(model)
     {
         return true;
     }
@@ -2924,6 +2990,13 @@ fn is_reasoning_model_for_stream_on_route(
 ) -> bool {
     if is_exact_kimi_code_k3_route(provider, base_url, model)
         || is_exact_direct_moonshot_k3_route(provider, base_url, model)
+    {
+        return true;
+    }
+
+    if is_exact_modelstudio_chat_route(provider, base_url)
+        && (modelstudio_model_is_thinking_only(model)
+            || modelstudio_model_supports_preserve_thinking(model))
     {
         return true;
     }
@@ -3138,6 +3211,7 @@ fn parse_chat_message_for_route(
     {
         content_blocks.push(ContentBlock::Thinking {
             signature: None,
+            state: None,
             thinking: reasoning.to_string(),
         });
     }
@@ -3149,6 +3223,7 @@ fn parse_chat_message_for_route(
     if let Some(thinking) = mistral_thinking.filter(|s| !s.trim().is_empty()) {
         content_blocks.push(ContentBlock::Thinking {
             signature: None,
+            state: None,
             thinking,
         });
     }
@@ -3956,8 +4031,8 @@ mod minimax_reasoning_replay_tests {
         build_chat_messages_for_request_and_provider_and_route,
     };
     use crate::config::{
-        ApiProvider, DEFAULT_KIMI_CODE_BASE_URL, DEFAULT_MINIMAX_MODEL, DEFAULT_MOONSHOT_BASE_URL,
-        KIMI_CODE_K3_MODEL,
+        ApiProvider, DEFAULT_KIMI_CODE_BASE_URL, DEFAULT_MINIMAX_MODEL,
+        DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL, DEFAULT_MOONSHOT_BASE_URL, KIMI_CODE_K3_MODEL,
     };
     use crate::models::{ContentBlock, Message, MessageRequest};
 
@@ -3970,6 +4045,7 @@ mod minimax_reasoning_replay_tests {
                     ContentBlock::Thinking {
                         thinking: "Inspect tool state".to_string(),
                         signature: None,
+                        state: None,
                     },
                     ContentBlock::Text {
                         text: "Done.".to_string(),
@@ -4042,6 +4118,149 @@ mod minimax_reasoning_replay_tests {
         assert!(
             neighbor[0].get("reasoning_content").is_none(),
             "a generic Moonshot k3 identifier must not inherit Kimi Code replay"
+        );
+    }
+
+    #[test]
+    fn modelstudio_qwen38_wire_body_replays_no_historical_reasoning_across_tool_loop() {
+        // One user handoff, one assistant Thinking + Text + ToolUse turn, and
+        // its matching ToolResult. On the exact Model Studio route the
+        // always-thinking qwen3.8 family must not receive historical
+        // `reasoning_content`, while the handoff occurs exactly once and the
+        // tool call id, arguments, and result stay intact.
+        let mut request = request_with_assistant_thinking();
+        request.model = "qwen3.8-max".to_string();
+        request.messages = vec![
+            Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "HANDOFF-SENTINEL: fix the widget.".to_string(),
+                    cache_control: None,
+                }],
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: vec![
+                    ContentBlock::Thinking {
+                        thinking: "stale thinking from the prior turn".to_string(),
+                        signature: None,
+                        state: None,
+                    },
+                    ContentBlock::Text {
+                        text: "I'll read the widget first.".to_string(),
+                        cache_control: None,
+                    },
+                    ContentBlock::ToolUse {
+                        id: "call_qwen38_001".to_string(),
+                        name: "read".to_string(),
+                        input: serde_json::json!({ "path": "widget.rs" }),
+                        caller: None,
+                    },
+                ],
+            },
+            Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "call_qwen38_001".to_string(),
+                    content: "widget.rs: struct Widget { .. }".to_string(),
+                    is_error: None,
+                    content_blocks: None,
+                }],
+            },
+        ];
+
+        let messages = build_chat_messages_for_request_and_provider_and_route(
+            &request,
+            ApiProvider::ModelstudioTokenPlan,
+            DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL,
+        );
+
+        // The handoff occurs exactly once, as a plain user text message.
+        let handoff_carriers: Vec<&serde_json::Value> = messages
+            .iter()
+            .filter(|message| {
+                message.get("role").and_then(serde_json::Value::as_str) == Some("user")
+                    && message
+                        .get("content")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|content| content.contains("HANDOFF-SENTINEL"))
+            })
+            .collect();
+        assert_eq!(
+            handoff_carriers.len(),
+            1,
+            "the handoff must appear in exactly one user message: {messages:?}"
+        );
+
+        // The assistant turn keeps its text and tool call, but no historical
+        // reasoning_content for qwen3.8.
+        let assistant = messages
+            .iter()
+            .find(|message| {
+                message.get("role").and_then(serde_json::Value::as_str) == Some("assistant")
+            })
+            .expect("assistant message");
+        assert_eq!(
+            assistant.get("content").and_then(serde_json::Value::as_str),
+            Some("I'll read the widget first.")
+        );
+        assert!(
+            assistant.get("reasoning_content").is_none(),
+            "qwen3.8 must not receive historical reasoning_content: {assistant:?}"
+        );
+        let tool_calls = assistant
+            .get("tool_calls")
+            .and_then(serde_json::Value::as_array)
+            .expect("tool_calls array");
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0]["id"], serde_json::json!("call_qwen38_001"));
+        assert_eq!(
+            tool_calls[0].pointer("/function/name"),
+            Some(&serde_json::json!("read"))
+        );
+        assert_eq!(
+            tool_calls[0].pointer("/function/arguments"),
+            Some(&serde_json::json!(r#"{"path":"widget.rs"}"#))
+        );
+
+        // The matching tool result rides along under its original id.
+        let tool_result = messages
+            .iter()
+            .find(|message| message.get("role").and_then(serde_json::Value::as_str) == Some("tool"))
+            .expect("tool result message");
+        assert_eq!(
+            tool_result.get("tool_call_id"),
+            Some(&serde_json::json!("call_qwen38_001"))
+        );
+        assert_eq!(
+            tool_result
+                .get("content")
+                .and_then(serde_json::Value::as_str),
+            Some("widget.rs: struct Widget { .. }")
+        );
+
+        // Control: the same handoff/tool loop with a documented
+        // preserve-thinking model replays its historical reasoning, proving
+        // the strip above is model-gated, not route-gated.
+        let mut preserve_request = request;
+        preserve_request.model = "qwen3.7-plus".to_string();
+        let preserve_messages = build_chat_messages_for_request_and_provider_and_route(
+            &preserve_request,
+            ApiProvider::ModelstudioTokenPlan,
+            DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL,
+        );
+        let preserve_assistant = preserve_messages
+            .iter()
+            .find(|message| {
+                message.get("role").and_then(serde_json::Value::as_str) == Some("assistant")
+            })
+            .expect("assistant message");
+        assert_eq!(
+            preserve_assistant
+                .get("reasoning_content")
+                .and_then(serde_json::Value::as_str),
+            Some("stale thinking from the prior turn"),
+            "documented preserve-thinking models keep replaying history"
         );
     }
 }
@@ -4285,7 +4504,7 @@ mod alias_thinking_detection_tests {
     }
 
     #[test]
-    fn modelstudio_qwen38_route_classifies_reasoning_and_replays_history() {
+    fn modelstudio_qwen38_route_streams_reasoning_without_replaying_history() {
         let base_url = crate::config::DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL;
         for model in ["qwen3.8-max", "qwen3.8-max-preview"] {
             // qwen3.8 is thinking-only. Effort selection must never hide its
@@ -4301,9 +4520,14 @@ mod alias_thinking_detection_tests {
                 ReasoningStreamStyle::SeparateField,
                 "{model}"
             );
+            // ...but Alibaba does not document `preserve_thinking` for the
+            // qwen3.8 family, so no historical `reasoning_content` may be
+            // replayed — even when a stale effort claims thinking is off.
+            // Replaying it feeds the model its own past Thinking blocks and
+            // re-triggers them every turn (observed handoff loop).
             for effort in [None, Some("off"), Some("high"), Some("xhigh")] {
                 assert!(
-                    should_replay_reasoning_content_for_provider_on_route(
+                    !should_replay_reasoning_content_for_provider_on_route(
                         ApiProvider::ModelstudioTokenPlan,
                         base_url,
                         model,
@@ -4312,16 +4536,24 @@ mod alias_thinking_detection_tests {
                     "{model} {effort:?}"
                 );
             }
-            // ...and no enable/disable switch is ever sent for them.
-            let mut body = json!({});
-            apply_route_reasoning_controls(
-                &mut body,
-                ApiProvider::ModelstudioTokenPlan,
-                base_url,
-                model,
-                Some("off"),
-            );
-            assert!(body.get("enable_thinking").is_none(), "{model}: {body}");
+            // ...and no enable/disable or preserve switch is ever sent for
+            // them.
+            for effort in [None, Some("off"), Some("high")] {
+                let mut body = json!({});
+                apply_route_reasoning_controls(
+                    &mut body,
+                    ApiProvider::ModelstudioTokenPlan,
+                    base_url,
+                    model,
+                    effort,
+                );
+                assert!(body.get("enable_thinking").is_none(), "{model}: {body}");
+                assert!(
+                    body.get("preserve_thinking").is_none(),
+                    "{model} {effort:?}: {body}"
+                );
+                assert!(body.get("reasoning_effort").is_none(), "{model}: {body}");
+            }
         }
     }
 
@@ -4418,6 +4650,7 @@ mod alias_thinking_detection_tests {
     fn modelstudio_workspace_scoped_token_plan_route_is_recognized() {
         let workspace_url =
             "https://workspace-123.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1";
+        // Stream classification works on the workspace-scoped host...
         assert_eq!(
             reasoning_stream_style_for_route(
                 ApiProvider::ModelstudioTokenPlan,
@@ -4427,12 +4660,141 @@ mod alias_thinking_detection_tests {
             ),
             ReasoningStreamStyle::SeparateField,
         );
-        assert!(should_replay_reasoning_content_for_provider_on_route(
+        assert_eq!(
+            reasoning_stream_style_for_route(
+                ApiProvider::ModelstudioTokenPlan,
+                workspace_url,
+                "qwen3.7-plus",
+                None,
+            ),
+            ReasoningStreamStyle::SeparateField,
+        );
+        // ...and the route gate decides replay the same way it does on the
+        // default host: qwen3.8 never replays, documented preserve models do.
+        assert!(!should_replay_reasoning_content_for_provider_on_route(
             ApiProvider::ModelstudioTokenPlan,
             workspace_url,
             "qwen3.8-max",
             None,
         ));
+        assert!(should_replay_reasoning_content_for_provider_on_route(
+            ApiProvider::ModelstudioTokenPlan,
+            workspace_url,
+            "qwen3.7-plus",
+            None,
+        ));
+        let mut body = json!({});
+        apply_route_reasoning_controls(
+            &mut body,
+            ApiProvider::ModelstudioTokenPlan,
+            workspace_url,
+            "qwen3.7-plus",
+            Some("high"),
+        );
+        assert_eq!(body["preserve_thinking"], json!(true), "{body}");
+    }
+
+    #[test]
+    fn modelstudio_thinking_named_unknown_model_cannot_bypass_the_route_gate() {
+        // An unknown Model Studio model whose *name* suggests reasoning must
+        // not gain replay: only the documented `preserve_thinking` list (plus
+        // the concrete DeepSeek V4 family ids) authorizes historical
+        // `reasoning_content` on exact Model Studio routes. The generic
+        // `-thinking`/`reasoner` heuristics prove nothing about DashScope's
+        // request dialect.
+        let base_url = crate::config::DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL;
+        for model in [
+            "foo-thinking",
+            "foo-reasoner",
+            "new-model-reasoning",
+            "acme-reasoner-v2",
+        ] {
+            assert!(
+                !should_replay_reasoning_content_for_provider_on_route(
+                    ApiProvider::ModelstudioTokenPlan,
+                    base_url,
+                    model,
+                    None,
+                ),
+                "{model}"
+            );
+            // The shaper writes no reasoning controls for it either — fail
+            // closed on the wire.
+            let mut body = json!({ "enable_thinking": true, "preserve_thinking": true });
+            apply_route_reasoning_controls(
+                &mut body,
+                ApiProvider::ModelstudioTokenPlan,
+                base_url,
+                model,
+                Some("high"),
+            );
+            assert!(body.get("enable_thinking").is_none(), "{model}: {body}");
+            assert!(body.get("preserve_thinking").is_none(), "{model}: {body}");
+        }
+        // A suggestive name is not a replay contract on any route.
+        assert!(!requires_reasoning_content("foo-thinking"));
+        assert!(!requires_reasoning_content("foo-reasoner"));
+    }
+
+    #[test]
+    fn modelstudio_qwen36_flash_preserves_thinking_per_current_documentation() {
+        // Current Alibaba documentation explicitly includes qwen3.6-flash
+        // (and its documented snapshots) among the `preserve_thinking`
+        // models. Keep positive coverage so any future narrowing of the
+        // preserve list has to remove it deliberately.
+        let base_url = crate::config::DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL;
+        for model in ["qwen3.6-flash", "qwen3.6-flash-2026-04-16"] {
+            assert!(should_replay_reasoning_content_for_provider_on_route(
+                ApiProvider::ModelstudioTokenPlan,
+                base_url,
+                model,
+                None,
+            ));
+            let mut body = json!({});
+            apply_route_reasoning_controls(
+                &mut body,
+                ApiProvider::ModelstudioTokenPlan,
+                base_url,
+                model,
+                Some("high"),
+            );
+            assert_eq!(body["enable_thinking"], json!(true), "{model}");
+            assert_eq!(body["preserve_thinking"], json!(true), "{model}: {body}");
+            // Hybrid semantics: an explicit off disables both, and replay
+            // follows the effort gate.
+            assert!(!should_replay_reasoning_content_for_provider_on_route(
+                ApiProvider::ModelstudioTokenPlan,
+                base_url,
+                model,
+                Some("off"),
+            ));
+            let mut off_body = json!({});
+            apply_route_reasoning_controls(
+                &mut off_body,
+                ApiProvider::ModelstudioTokenPlan,
+                base_url,
+                model,
+                Some("off"),
+            );
+            assert_eq!(off_body["enable_thinking"], json!(false), "{model}");
+            assert_eq!(off_body["preserve_thinking"], json!(false), "{model}");
+        }
+
+        for invented in [
+            "qwen3.6-flash-future",
+            "qwen3.7-plus-proxy",
+            "kimi-k2.7-code-unverified",
+        ] {
+            assert!(
+                !should_replay_reasoning_content_for_provider_on_route(
+                    ApiProvider::ModelstudioTokenPlan,
+                    base_url,
+                    invented,
+                    None,
+                ),
+                "prefix lookalikes must fail closed: {invented}"
+            );
+        }
     }
 
     #[test]
@@ -4441,32 +4803,39 @@ mod alias_thinking_detection_tests {
         // PR #5233 rather than corroborated by models_dev.bundled.json, which
         // lists kimi-k2.7-code with `reasoning: true` and no `always_on`.
         let base_url = crate::config::DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL;
-        let mut body = json!({});
-        apply_route_reasoning_controls(
-            &mut body,
-            ApiProvider::ModelstudioTokenPlan,
-            base_url,
+        for model in [
             "kimi-k2.7-code",
-            Some("off"),
-        );
-
-        assert!(body.get("enable_thinking").is_none());
-        assert_eq!(body["preserve_thinking"], json!(true));
-        assert_eq!(
-            reasoning_stream_style_for_route(
+            "kimi/kimi-k2.7-code",
+            "kimi/kimi-k2.7-code-highspeed",
+        ] {
+            let mut body = json!({});
+            apply_route_reasoning_controls(
+                &mut body,
                 ApiProvider::ModelstudioTokenPlan,
                 base_url,
-                "kimi-k2.7-code",
-                None,
-            ),
-            ReasoningStreamStyle::SeparateField,
-        );
-        assert!(should_replay_reasoning_content_for_provider_on_route(
-            ApiProvider::ModelstudioTokenPlan,
-            base_url,
-            "kimi-k2.7-code",
-            Some("off"),
-        ));
+                model,
+                Some("off"),
+            );
+
+            assert!(body.get("enable_thinking").is_none(), "{model}: {body}");
+            assert_eq!(body["preserve_thinking"], json!(true), "{model}");
+            assert_eq!(
+                reasoning_stream_style_for_route(
+                    ApiProvider::ModelstudioTokenPlan,
+                    base_url,
+                    model,
+                    None,
+                ),
+                ReasoningStreamStyle::SeparateField,
+                "{model}",
+            );
+            assert!(should_replay_reasoning_content_for_provider_on_route(
+                ApiProvider::ModelstudioTokenPlan,
+                base_url,
+                model,
+                Some("off"),
+            ));
+        }
     }
 
     #[test]
@@ -5034,6 +5403,33 @@ mod alias_thinking_detection_tests {
     }
 
     #[test]
+    fn suggestive_unknown_model_names_never_authorize_reasoning_replay() {
+        for provider in [
+            ApiProvider::Openai,
+            ApiProvider::Deepseek,
+            ApiProvider::Openrouter,
+            ApiProvider::Moonshot,
+            ApiProvider::Zai,
+        ] {
+            for model in [
+                "foo-thinking",
+                "foo-reasoner",
+                "acme-reasoning",
+                "future-reasoner-v9",
+            ] {
+                assert!(
+                    !should_replay_reasoning_content_for_provider(provider, model, None),
+                    "{provider:?} {model}"
+                );
+                assert!(
+                    !is_reasoning_model_for_stream(provider, model),
+                    "stream classification must fail closed too: {provider:?} {model}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn stream_classifies_deepseek_model_on_openai_provider_as_reasoning() {
         // #1739: the SSE parser must treat a DeepSeek thinking model on the
         // generic `openai` provider (DeepSeek-compatible endpoint) as a
@@ -5285,6 +5681,61 @@ mod image_block_wire_tests {
             "text-only turns must stay a plain string: {user}"
         );
     }
+
+    #[test]
+    fn tool_result_image_follows_its_tool_message_as_multimodal_user_content() {
+        let mut request = request_with_image();
+        request.messages = vec![
+            Message {
+                role: "assistant".to_string(),
+                content: vec![ContentBlock::ToolUse {
+                    id: "call_image_1".to_string(),
+                    name: "read".to_string(),
+                    input: serde_json::json!({"path": "shot.png"}),
+                    caller: None,
+                }],
+            },
+            Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "call_image_1".to_string(),
+                    content: "screenshot captured".to_string(),
+                    is_error: Some(false),
+                    content_blocks: Some(vec![serde_json::json!({
+                        "type": "image",
+                        "mime_type": "image/png",
+                        "data": "QUJD",
+                    })]),
+                }],
+            },
+        ];
+
+        let body = build_chat_wire_body(
+            &request,
+            ApiProvider::Openai,
+            "https://api.openai.com/v1",
+            false,
+        )
+        .expect("wire body");
+        let messages = body.body["messages"].as_array().expect("messages");
+        let tool_index = messages
+            .iter()
+            .position(|message| message["role"] == "tool")
+            .expect("tool result");
+        assert_eq!(messages[tool_index]["tool_call_id"], "call_image_1");
+        assert_eq!(messages[tool_index]["content"], "screenshot captured");
+
+        let image_message = &messages[tool_index + 1];
+        assert_eq!(image_message["role"], "user");
+        let parts = image_message["content"].as_array().expect("image parts");
+        assert_eq!(parts[1]["type"], "image_url");
+        assert_eq!(parts[1]["image_url"]["url"], "data:image/png;base64,QUJD");
+        assert!(
+            parts[0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("read") && text.contains("call_image_1"))
+        );
+    }
 }
 
 #[cfg(test)]
@@ -5302,6 +5753,7 @@ mod mistral_reasoning_tests {
                             thinking: "Inspect the current state before calling the tool."
                                 .to_string(),
                             signature: None,
+                            state: None,
                         },
                         ContentBlock::Text {
                             text: "I will inspect it now.".to_string(),

@@ -260,7 +260,6 @@ fn tool_status_for_activity(tool: &ToolCell) -> Option<ToolStatus> {
         ToolCell::PlanUpdate(cell) => Some(cell.status),
         ToolCell::PatchSummary(cell) => Some(cell.status),
         ToolCell::Review(cell) => Some(cell.status),
-        ToolCell::DiffPreview(_) => Some(ToolStatus::Success),
         ToolCell::Mcp(cell) => Some(cell.status),
         ToolCell::ViewImage(_) => Some(ToolStatus::Success),
         ToolCell::WebSearch(cell) => Some(cell.status),
@@ -569,7 +568,6 @@ pub(crate) fn detail_target_label(app: &App, cell_index: usize) -> Option<String
                 format!("review {target}")
             })
         }
-        HistoryCell::Tool(ToolCell::DiffPreview(diff)) => Some(format!("diff {}", diff.title)),
         HistoryCell::Tool(ToolCell::Mcp(mcp)) => Some(format!("tool {}", mcp.tool)),
         HistoryCell::Tool(ToolCell::ViewImage(image)) => {
             Some(format!("image {}", image.path.display()))
@@ -1045,7 +1043,6 @@ fn timeline_tool_summary(app: &App, idx: usize, tool: &ToolCell) -> (&'static st
                 },
             )
         }
-        ToolCell::DiffPreview(diff) => ("diff", truncate_line_to_width(&diff.title, 88)),
         ToolCell::Mcp(mcp) => ("MCP tool", truncate_line_to_width(&mcp.tool, 88)),
         ToolCell::ViewImage(image) => (
             "image",
@@ -1105,13 +1102,11 @@ fn timeline_cell_actions(app: &App, idx: usize, cell: &HistoryCell) -> Vec<Strin
         );
         // Diff-bearing cells open their diff through the same details chord;
         // bare `v` / `d` always type text (TUI-DOG-002), so no bare-key claim.
-        let is_diff = matches!(
-            cell,
-            HistoryCell::Tool(ToolCell::DiffPreview(_) | ToolCell::PatchSummary(_))
-        ) || matches!(
-            cell,
-            HistoryCell::Tool(ToolCell::Generic(generic)) if generic.is_diff
-        );
+        let is_diff = matches!(cell, HistoryCell::Tool(ToolCell::PatchSummary(_)))
+            || matches!(
+                cell,
+                HistoryCell::Tool(ToolCell::Generic(generic)) if generic.is_diff
+            );
         if is_diff {
             actions.push(format!("{details} diff"));
         } else if matches!(cell, HistoryCell::Error { .. }) {
@@ -1215,12 +1210,6 @@ fn turn_files_changed(app: &App, start: usize, end: usize) -> Vec<String> {
                     "• {} — {}",
                     truncate_line_to_width(&patch.path, 60),
                     activity_status_label(patch.status)
-                ));
-            }
-            ToolCell::DiffPreview(diff) if seen.insert(diff.title.clone()) => {
-                lines.push(format!(
-                    "• {} (diff)",
-                    truncate_line_to_width(&diff.title, 60)
                 ));
             }
             _ => {}

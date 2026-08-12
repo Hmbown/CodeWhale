@@ -28,7 +28,7 @@ export const revalidate = 300;
  * — English, Chinese, and every other routed locale take the identical path,
  * with the English dictionary as the build-time-guaranteed fallback. The only
  * literals left in this file are code-owned per docs/VOICE.md: the product
- * control vocabulary (`Plan · Act · Operate`, `Ask · Auto-Review · Full
+ * control vocabulary (`Plan · Work · Operate`, `Ask · Auto-Review · Full
  * Access`, `TUI · exec · web · API`), the install command, `cargo test
  * --locked`, the receipt verbs, package-manager and mirror proper nouns, and
  * the screenshot path.
@@ -284,7 +284,7 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
               <dd>{d.hostedGatewayLocal}</dd>
             </div>
             <div>
-              <dt>Plan · Act · Operate</dt>
+              <dt>Plan · Work · Operate</dt>
               <dd>{d.planActOperateDesc}</dd>
             </div>
             <div>

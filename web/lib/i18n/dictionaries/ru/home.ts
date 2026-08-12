@@ -7,7 +7,7 @@ import type { HomeDict } from "../types";
  * `npm run check:locales` and `dictionaries.test.ts`.
  *
  * Fixed product vocabulary stays Latin and matches the TUI ru locale pack:
- * Plan / Act / Operate, Ask / Auto-Review / Full Access, Codewhale, Fleet.
+ * Plan / Work / Operate, Ask / Auto-Review / Full Access, Codewhale, Fleet.
  * "receipt" is rendered "квитанция", as in `crates/tui/locales/ru.json`.
  * The `seal*` values are the paper's marks, shared across locales.
  */
@@ -45,7 +45,7 @@ export const home: HomeDict = {
 
   proofHeading: "Подводная оболочка для терминала. Любая модель. На вашей машине.",
   proofBody:
-    "Подключите модель, которой уже пользуетесь — облачную, через шлюз или локальную. Plan / Act / Operate и явные режимы разрешений держат погружение под вашим контролем.",
+    "Подключите модель, которой уже пользуетесь — облачную, через шлюз или локальную. Plan / Work / Operate и явные режимы разрешений держат погружение под вашим контролем.",
 
   sealDecides: "法",
   decidesEyebrow: "Как он принимает решения",

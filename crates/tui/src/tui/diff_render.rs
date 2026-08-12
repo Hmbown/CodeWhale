@@ -16,34 +16,55 @@ pub struct DiffFileSummary {
     pub hunks: usize,
 }
 
-pub fn render_diff(diff: &str, width: u16) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    let summaries = summarize_diff(diff);
+/// A rendered diff preview with an exact count of rows not retained.
+///
+/// The renderer still scans the complete diff so summaries and omission
+/// counts stay truthful, but it never accumulates more than the requested
+/// number of body rows. This keeps narrow, generated diffs from first
+/// materializing an unbounded `Vec<Line>` only to be truncated by a caller.
+#[derive(Debug, Clone)]
+pub struct BoundedDiffRender {
+    pub lines: Vec<Line<'static>>,
+    pub omitted_rows: usize,
+}
 
+pub fn render_diff(diff: &str, width: u16) -> Vec<Line<'static>> {
+    render_diff_bounded(diff, width, usize::MAX).lines
+}
+
+/// Render a diff summary and at most `max_body_rows` rows of diff evidence.
+#[must_use]
+pub fn render_diff_bounded(diff: &str, width: u16, max_body_rows: usize) -> BoundedDiffRender {
+    let summaries = summarize_diff(diff);
+    let mut rendered = render_diff_body_bounded(diff, width, max_body_rows);
     if !summaries.is_empty() {
-        lines.extend(render_diff_summary(&summaries, width));
+        let mut lines = render_diff_summary(&summaries, width);
+        lines.append(&mut rendered.lines);
+        rendered.lines = lines;
     }
-    lines.extend(render_diff_body(diff, width));
-    lines
+    rendered
 }
 
 /// Render only the diff body. Callers that already own a semantic summary use
 /// this form so the bounded preview budget is spent on the actual red/green
 /// evidence instead of a second, generic summary.
+/// Render at most `max_rows` body rows while counting every omitted wrapped
+/// row. Allocation is bounded by the retained preview plus one source line's
+/// wrapped representation, rather than by the size of the complete diff.
 #[must_use]
-pub fn render_diff_body(diff: &str, width: u16) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
+pub fn render_diff_body_bounded(diff: &str, width: u16, max_rows: usize) -> BoundedDiffRender {
+    let mut collector = BoundedLineCollector::new(max_rows);
     let mut old_line: Option<usize> = None;
     let mut new_line: Option<usize> = None;
 
     for raw in diff.lines() {
         if raw.starts_with("diff --git") || raw.starts_with("index ") {
-            lines.extend(render_header_line(raw, width));
+            collector.extend(render_header_line(raw, width));
             continue;
         }
 
         if raw.starts_with("--- ") || raw.starts_with("+++ ") {
-            lines.extend(render_header_line(raw, width));
+            collector.extend(render_header_line(raw, width));
             continue;
         }
 
@@ -52,13 +73,13 @@ pub fn render_diff_body(diff: &str, width: u16) -> Vec<Line<'static>> {
                 old_line = Some(old_start);
                 new_line = Some(new_start);
             }
-            lines.extend(render_hunk_header(raw, width));
+            collector.extend(render_hunk_header(raw, width));
             continue;
         }
 
         if raw.starts_with('+') && !raw.starts_with("+++") {
             let content = raw.trim_start_matches('+');
-            lines.extend(render_diff_line(
+            collector.extend(render_diff_line(
                 content,
                 width,
                 old_line,
@@ -76,7 +97,7 @@ pub fn render_diff_body(diff: &str, width: u16) -> Vec<Line<'static>> {
 
         if raw.starts_with('-') && !raw.starts_with("---") {
             let content = raw.trim_start_matches('-');
-            lines.extend(render_diff_line(
+            collector.extend(render_diff_line(
                 content,
                 width,
                 old_line,
@@ -94,7 +115,7 @@ pub fn render_diff_body(diff: &str, width: u16) -> Vec<Line<'static>> {
 
         if raw.starts_with(' ') {
             let content = raw.trim_start_matches(' ');
-            lines.extend(render_diff_line(
+            collector.extend(render_diff_line(
                 content,
                 width,
                 old_line,
@@ -111,10 +132,39 @@ pub fn render_diff_body(diff: &str, width: u16) -> Vec<Line<'static>> {
             continue;
         }
 
-        lines.extend(render_header_line(raw, width));
+        collector.extend(render_header_line(raw, width));
     }
 
-    lines
+    collector.finish()
+}
+
+struct BoundedLineCollector {
+    lines: Vec<Line<'static>>,
+    max_rows: usize,
+    total_rows: usize,
+}
+
+impl BoundedLineCollector {
+    fn new(max_rows: usize) -> Self {
+        Self {
+            lines: Vec::with_capacity(max_rows.min(256)),
+            max_rows,
+            total_rows: 0,
+        }
+    }
+
+    fn extend(&mut self, rows: Vec<Line<'static>>) {
+        self.total_rows = self.total_rows.saturating_add(rows.len());
+        let remaining = self.max_rows.saturating_sub(self.lines.len());
+        self.lines.extend(rows.into_iter().take(remaining));
+    }
+
+    fn finish(self) -> BoundedDiffRender {
+        BoundedDiffRender {
+            omitted_rows: self.total_rows.saturating_sub(self.lines.len()),
+            lines: self.lines,
+        }
+    }
 }
 
 #[must_use]
@@ -549,5 +599,44 @@ diff --git a/src/lib.rs b/src/lib.rs
         }
 
         assert_eq!(lines.join(""), text);
+    }
+
+    #[test]
+    fn bounded_body_retains_only_budget_and_counts_wrapped_omissions() {
+        let mut diff = String::from(
+            "diff --git a/src/generated.rs b/src/generated.rs\n\
+             --- a/src/generated.rs\n\
+             +++ b/src/generated.rs\n\
+             @@ -1,0 +1,3000 @@\n",
+        );
+        for index in 0..3_000 {
+            use std::fmt::Write as _;
+            writeln!(
+                diff,
+                "+    generated_{index:04} = a deliberately long value that wraps narrowly"
+            )
+            .expect("append generated diff");
+        }
+
+        let full_row_count = render_diff_body_bounded(&diff, 32, usize::MAX).lines.len();
+        let rendered = render_diff_body_bounded(&diff, 32, 14);
+
+        assert_eq!(rendered.lines.len(), 14);
+        assert_eq!(
+            rendered.omitted_rows,
+            full_row_count.saturating_sub(rendered.lines.len())
+        );
+        let retained = rendered.lines.iter().map(line_text).collect::<Vec<_>>();
+        assert!(
+            retained
+                .iter()
+                .any(|line| line.contains("@@ -1,0 +1,3000 @@"))
+        );
+        assert!(
+            retained
+                .iter()
+                .any(|line| line.contains(" +     generated_0000")),
+            "retained rows preserve gutters and leading whitespace: {retained:?}"
+        );
     }
 }

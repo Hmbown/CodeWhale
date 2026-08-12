@@ -628,9 +628,9 @@ mod tests {
         assert!(message.contains("Requested relay focus: verify install"));
         assert!(message.contains("Goal objective: Unify the work surface"));
         assert!(message.contains("Goal token budget: 12000"));
-        // #3983: the relay artifact carries the same bounded canonical body a
-        // parent request and a forked agent see — byte for byte.
-        let expected_body = crate::work_grounding::canonical_todo_body(
+        // #3983: the relay artifact shows the same bounded To-do snapshot body
+        // a forked agent is handed — byte for byte.
+        let expected_body = crate::todo_snapshot::todo_snapshot_body(
             &app.todos.try_lock().expect("todo lock").snapshot(),
         )
         .expect("canonical body");
@@ -641,10 +641,6 @@ mod tests {
         assert!(
             message.contains(&expected_body),
             "relay must embed the canonical To-do body: {message}"
-        );
-        assert!(
-            !message.contains(crate::work_grounding::WORK_STATE_OPEN_TAG),
-            "the transient request-tail wrapper must not be stored in relay history: {message}"
         );
         assert!(message.contains("Conversational strategy notes from update_plan"));
         assert!(message.contains("Objective: Keep relays grounded"));
@@ -661,8 +657,8 @@ mod tests {
         );
     }
 
-    /// #3983: `update_plan` is conversational strategy, not a Work ledger. A
-    /// session with plan state and an empty To-do has *no* Work state, and the
+    /// #3983: `update_plan` is conversational strategy, not a To-do. A session
+    /// with plan state and an empty To-do has no list to hand off, and the
     /// relay artifact must not manufacture one.
     #[test]
     fn relay_does_not_present_plan_only_state_as_work_state() {
@@ -670,7 +666,7 @@ mod tests {
         {
             let mut plan = app.plan_state.try_lock().expect("plan lock");
             plan.update(UpdatePlanArgs {
-                objective: Some("Ship the grounding seam".to_string()),
+                objective: Some("Ship the To-do seam".to_string()),
                 plan: vec![PlanItemArg {
                     step: "draft the renderer".to_string(),
                     status: StepStatus::InProgress,
@@ -685,12 +681,12 @@ mod tests {
         };
 
         assert!(
-            !message.contains("Current Work state"),
-            "plan-only state must not render as Work state: {message}"
+            !message.contains("Current To-do:"),
+            "plan-only state must not render as a To-do: {message}"
         );
         assert!(
             !message.contains("To-do ("),
-            "plan-only state must not synthesize a To-do ledger: {message}"
+            "plan-only state must not synthesize a To-do list: {message}"
         );
         assert!(message.contains("Conversational strategy notes from update_plan"));
     }

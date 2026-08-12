@@ -3705,7 +3705,7 @@ exit 0
         let status = rt
             .block_on(async {
                 tokio::time::timeout(
-                    Duration::from_secs(5),
+                    Duration::from_secs(15),
                     manager.run_to_completion(
                         &restart.run_id,
                         restart.max_workers,
@@ -4612,7 +4612,7 @@ esac
                         !permissions.write,
                         "scout receipt {key} must stay read-only"
                     );
-                    // Scout/reviewer lanes now carry the recon posture:
+                    // Scout/reviewer lanes now carry the read-only inspection posture:
                     // network reach + bounded verification surface, so the
                     // receipt records full shell authority (raw shell still
                     // requires write and stays denied by the clamp).

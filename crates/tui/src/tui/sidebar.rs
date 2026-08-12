@@ -211,7 +211,7 @@ pub(crate) fn work_panel_lines_with_opts(
 
     if summary.state_updating && lines.len() < max_rows {
         lines.push(Line::from(Span::styled(
-            "Work state updating...",
+            "To-do updating...",
             Style::default().fg(ui_theme.text_muted),
         )));
     }
@@ -1936,6 +1936,7 @@ mod tests {
             runtime_permissions: None,
             parent_run_id: None,
             spawn_depth: 0,
+            child_route: None,
             result: None,
             steps_taken: 1,
             checkpoint: None,

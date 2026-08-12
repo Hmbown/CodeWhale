@@ -22,6 +22,7 @@ pub(crate) enum BackendId {
     Bing,
     #[serde(rename = "duckduckgo")]
     DuckDuckGo,
+    Firecrawl,
     Tavily,
     Bocha,
     Metaso,
@@ -38,6 +39,7 @@ impl BackendId {
             Self::ProviderNative => "provider_native",
             Self::Bing => "bing",
             Self::DuckDuckGo => "duckduckgo",
+            Self::Firecrawl => "firecrawl",
             Self::Tavily => "tavily",
             Self::Bocha => "bocha",
             Self::Metaso => "metaso",

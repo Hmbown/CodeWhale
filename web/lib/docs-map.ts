@@ -61,8 +61,8 @@ export const DOC_TOPICS: DocTopic[] = [
     slug: "vocabulary",
     label: { en: "Vocabulary", zh: "产品名词" },
     description: {
-      en: "The exact product nouns — Fleet, Workflow, Lane, Runtime; Plan / Act / Operate; Consultant; and explicit route provenance — plus measurement principles.",
-      zh: "确切的产品名词——Fleet、Workflow、Lane、Runtime；Plan / Act / Operate；Consultant；明确的路由来源——以及测量原则。",
+      en: "The exact product nouns — Fleet, Workflow, Lane, Runtime; Plan / Work / Operate; Consultant; and explicit route provenance — plus measurement principles.",
+      zh: "确切的产品名词——Fleet、Workflow、Lane、Runtime；Plan / Work / Operate；Consultant；明确的路由来源——以及测量原则。",
     },
     repoSource: ["docs/FLEET.md", "docs/MODES.md", "docs/public-surface-facts.json"],
     hasPage: true,
@@ -110,8 +110,8 @@ export const DOC_TOPICS: DocTopic[] = [
     slug: "modes",
     label: { en: "Modes", zh: "模式" },
     description: {
-      en: "Plan, Act, Operate modes and orthogonal permission posture.",
-      zh: "Plan、Act、Operate 三种模式与正交权限姿态。",
+      en: "Plan, Work, Operate modes and orthogonal permission posture.",
+      zh: "Plan、Work、Operate 三种模式与正交权限姿态。",
     },
     repoSource: "docs/MODES.md",
     hasPage: true,
@@ -123,7 +123,7 @@ export const DOC_TOPICS: DocTopic[] = [
     label: { en: "Tools", zh: "工具" },
     description: {
       en: "Canonical action tools, deferred discovery, and replay compatibility.",
-      zh: "Canonical action 工具、延迟发现与回放兼容边界。",
+      zh: "小型核心工具、按需搜索、会话缓存与精确回放兼容边界。",
     },
     repoSource: ["docs/TOOL_SURFACE.md", "docs/RUNTIME_SIMPLIFICATION_DESIGN.md"],
     hasPage: true,
@@ -134,8 +134,8 @@ export const DOC_TOPICS: DocTopic[] = [
     slug: "work",
     label: { en: "Work Surface", zh: "工作面板" },
     description: {
-      en: "The sole canonical To-do ledger, model-facing Work grounding, and how work state flows to the sidebar, relay, and sub-agents.",
-      zh: "唯一的 To-do 台账、模型可见的 Work grounding，以及工作状态如何流向侧栏、relay 和子 Agent。",
+      en: "The single To-do list, how the model sees it through its own tool results, and how work state flows to the sidebar, relay, and sub-agents.",
+      zh: "唯一的 To-do 列表、模型如何通过自己的工具结果看到它，以及工作状态如何流向侧栏、relay 和子 Agent。",
     },
     repoSource: ["docs/TOOL_SURFACE.md", "docs/TOOL_LIFECYCLE.md"],
     hasPage: true,

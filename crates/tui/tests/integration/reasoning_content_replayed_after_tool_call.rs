@@ -26,6 +26,7 @@ fn assistant_thinking_tool_call(
             ContentBlock::Thinking {
                 thinking: thinking.to_string(),
                 signature: None,
+                state: None,
             },
             ContentBlock::ToolUse {
                 id: id.to_string(),

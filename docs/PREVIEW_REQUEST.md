@@ -125,15 +125,13 @@ production path** up to (but not including) the send:
 4. It rebuilds the tool catalog and narrows it with the same planner the turn
    loop uses, composes the system prompt **for that route's model and context
    window**, and appends the hypothetical user message through the same
-   constructor production uses (turn metadata, route stamp, provenance, and the
-   slop-ledger gate included), then resolves an `auto` reasoning tier against
-   those messages the way the turn loop does. It snapshots the authoritative
-   Work/To-do projection read-only and appends that same transient tail to the
-   prepared provider body. Preflight matches production's deliberately
-   conservative decomposition: stored messages plus system are estimated
-   first, then the Work tail is estimated as its own separately framed list.
-   If graph authority cannot be read, the body is unavailable rather than
-   rebuilt from a potentially stale legacy projection.
+   constructor production uses (turn metadata, route stamp, and provenance),
+   then resolves an `auto` reasoning tier against
+   those messages the way the turn loop does. Production sends stored history
+   and nothing else — Codewhale does not re-state the To-do list on model
+   steps — so the previewed outbound message list is exactly that list, and
+   one estimate over stored messages plus system covers both the manifest
+   number and the overflow decision.
 5. It prepares the request through `DeepSeekClient::prepare_outbound_request`
    and describes the result — unless a runtime transform would rewrite it
    first, in which case the body is typed unavailable instead.
@@ -143,8 +141,8 @@ building its request — the command-scoped tool gate, the effective mode and
 approval posture, the policy-narrowing event, the working set with the new
 message observed — is passed as a value or snapshotted onto a clone. There is
 no write-then-restore: a restore is not atomic across an `await`, and it does
-not survive a cancellation or a panic. The slop-ledger completion gate is read
-through a variant that does not write its memoization cache. A regression test
+not survive a cancellation or a panic. Terminal continuation state is read
+without mutating its counters. A regression test
 asserts that config, caches, session messages, model, system prompt, working
 set, provider, mode, and the MCP pool are all byte-identical afterwards.
 
@@ -478,10 +476,10 @@ comparison until production resolves a concrete route.
 
 `schema_version` is bumped whenever a field is renamed or removed, so scripted
 consumers can detect an incompatible manifest instead of silently reading
-`null`. The current shape is `8`: in addition to the v7 provenance and
-canonical-size contract, authoritative Work state and the active goal token-
-budget terminal gate are explicit fail-closed dependencies of an exact
-outbound request.
+`null`. The current shape is `9`: v8's `work-state-not-snapshottable`
+unavailable reason is gone, because no request carries a To-do block for a
+snapshot to fail on. The active goal token-budget terminal gate remains an
+explicit fail-closed dependency of an exact outbound request.
 
 ## What is still approximate
 

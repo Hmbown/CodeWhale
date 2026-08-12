@@ -29,7 +29,7 @@ Global key chords are not yet user-configurable — tracked for a future release
 | `Alt-!` / `Alt-@` / `Alt-#` / `Alt-$` | Select the work-bar panel: Tasks / Agents / Context / Pinned |
 | `Ctrl-Alt-0`         | Toggle the work bar off / back to the top placement             |
 | `Alt-L`              | Open the pager for the last message (composer empty)             |
-| `Alt-P` / `Alt-A` / `Alt-Y` | Jump to Plan / Act / Operate mode (alternative to `Tab` cycling) |
+| `Alt-P` / `Alt-A` / `Alt-Y` | Jump to Plan / Work / Operate mode (alternative to `Tab` cycling) |
 | `Ctrl-X` (Activity sidebar) | Cancel all running background shell jobs                  |
 | `Esc`                | Close topmost modal · cancel slash menu · dismiss toast        |
 

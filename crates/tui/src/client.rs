@@ -4738,6 +4738,7 @@ mod tests {
                     ContentBlock::Thinking {
                         thinking: "Inspect the saved tool state".to_string(),
                         signature: None,
+                        state: None,
                     },
                     ContentBlock::ToolUse {
                         id: "call-k3-replay".to_string(),
@@ -4960,7 +4961,23 @@ mod tests {
     async fn assert_kimi_code_captures_exact_general_child_catalog() {
         let tools = crate::tools::subagent::kimi_general_child_request_tools_fixture();
         let source_len = tools.len();
-        assert!(source_len > 20, "expected a real General child catalog");
+        // Specialized tools remain discoverable beyond the fixed eager head.
+        assert_eq!(
+            source_len,
+            crate::core::engine::default_active_native_tool_names().len() + 1,
+            "expected the seven-tool General child catalog: {tools:?}"
+        );
+        let source_names = tools
+            .iter()
+            .map(|tool| tool.name.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let expected_names = crate::core::engine::default_active_native_tool_names()
+            .iter()
+            .copied()
+            .chain([crate::core::engine::tool_catalog::TOOL_SEARCH_NAME])
+            .map(str::to_string)
+            .collect();
+        assert_eq!(source_names, expected_names);
 
         // Name the offending first-party tool in test-only diagnostics while
         // production errors remain fixed and non-secret.
@@ -4981,7 +4998,12 @@ mod tests {
 
         let captured = body["tools"].as_array().expect("captured tool catalog");
         assert_eq!(captured.len(), source_len);
-        assert!(captured_function(&body, "get_goal").is_object());
+        for required in &source_names {
+            assert!(
+                captured_function(&body, required).is_object(),
+                "{required} must reach the Kimi Code wire"
+            );
+        }
         assert!(
             captured
                 .iter()
@@ -5004,13 +5026,6 @@ mod tests {
             }
             crate::tools::schema_sanitize::validate_mfjs_parameters(parameters).unwrap();
         }
-
-        let handle_read = &captured_function(&body, "handle_read")["parameters"];
-        assert!(
-            handle_read.to_string().contains("var_handle"),
-            "real nested const fixture must survive as an enum: {handle_read}"
-        );
-        assert!(value_contains_key(handle_read, "enum"), "{handle_read}");
     }
 
     #[tokio::test]
@@ -6724,6 +6739,7 @@ mod tests {
             content: vec![
                 ContentBlock::Thinking {
                     signature: None,
+                    state: None,
                     thinking: "plan".to_string(),
                 },
                 ContentBlock::Text {
@@ -6763,6 +6779,7 @@ mod tests {
                 content: vec![
                     ContentBlock::Thinking {
                         signature: None,
+                        state: None,
                         thinking: "plan".to_string(),
                     },
                     ContentBlock::Text {
@@ -6813,6 +6830,7 @@ mod tests {
                 content: vec![
                     ContentBlock::Thinking {
                         signature: None,
+                        state: None,
                         thinking: "Need to call a tool".to_string(),
                     },
                     ContentBlock::ToolUse {
@@ -6865,6 +6883,7 @@ mod tests {
                 content: vec![
                     ContentBlock::Thinking {
                         signature: None,
+                        state: None,
                         thinking: "Need to call a tool".to_string(),
                     },
                     ContentBlock::ToolUse {
@@ -6936,6 +6955,7 @@ mod tests {
                 content: vec![
                     ContentBlock::Thinking {
                         signature: None,
+                        state: None,
                         thinking: "Internal explanation plan".to_string(),
                     },
                     ContentBlock::Text {
@@ -6980,6 +7000,7 @@ mod tests {
             content: vec![
                 ContentBlock::Thinking {
                     signature: None,
+                    state: None,
                     thinking: "I should explain step by step.".to_string(),
                 },
                 ContentBlock::Text {
@@ -8107,6 +8128,7 @@ mod tests {
             role: "assistant".to_string(),
             content: vec![ContentBlock::Thinking {
                 signature: None,
+                state: None,
                 thinking: "plan".to_string(),
             }],
         };
@@ -8255,6 +8277,7 @@ mod tests {
                 content: vec![
                     ContentBlock::Thinking {
                         signature: None,
+                        state: None,
                         thinking: "Need to inspect the directory".to_string(),
                     },
                     ContentBlock::ToolUse {
@@ -8296,6 +8319,7 @@ mod tests {
                 content: vec![
                     ContentBlock::Thinking {
                         signature: None,
+                        state: None,
                         thinking: "Need to search".to_string(),
                     },
                     ContentBlock::ToolUse {
@@ -8386,6 +8410,7 @@ mod tests {
                 content: vec![
                     ContentBlock::Thinking {
                         signature: None,
+                        state: None,
                         thinking: "Need to list files".to_string(),
                     },
                     ContentBlock::ToolUse {

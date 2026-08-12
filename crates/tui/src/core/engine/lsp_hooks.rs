@@ -16,7 +16,8 @@ use super::*;
 /// three known edit tools — adding more (e.g. specialized refactor tools)
 /// is a one-line change here.
 pub(super) fn edited_paths_for_tool(tool_name: &str, input: &serde_json::Value) -> Vec<PathBuf> {
-    match tool_name {
+    let semantic = crate::tools::canonical_action::canonical_action_alias(tool_name, input);
+    match semantic {
         "edit_file" | "write_file" => {
             if let Some(path) = input.get("path").and_then(|v| v.as_str()) {
                 vec![PathBuf::from(path)]
@@ -112,5 +113,21 @@ impl Engine {
                 injected: true,
             })
             .await;
+    }
+}
+
+#[cfg(test)]
+mod primitive_name_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn lowercase_file_mutations_reach_the_lsp_hook() {
+        for name in ["write", "edit", "write_file", "edit_file"] {
+            assert_eq!(
+                edited_paths_for_tool(name, &json!({"path": "src/lib.rs"})),
+                vec![PathBuf::from("src/lib.rs")]
+            );
+        }
     }
 }

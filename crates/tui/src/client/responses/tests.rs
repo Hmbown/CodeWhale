@@ -369,9 +369,11 @@ async fn responses_stream_fails_fast_on_non_retryable_provider_error() {
 }
 
 #[test]
-fn responses_body_serializes_exactly_one_load_skill_definition() {
+fn responses_body_serializes_the_child_catalog_without_duplication() {
     // Mirror of the Anthropic contract: the real child catalog fixture
-    // maps 1:1 into Responses function tools with one load_skill entry.
+    // maps 1:1 into Responses function tools with one canonical `read` entry.
+    // Skills are discoverable through tool_search, so the child wire catalog
+    // carries no load_skill at all.
     let tools = crate::tools::subagent::kimi_general_child_request_tools_fixture();
     let mut request = minimal_responses_request();
     request.tools = Some(tools);
@@ -379,19 +381,23 @@ fn responses_body_serializes_exactly_one_load_skill_definition() {
     let serialized = body["tools"]
         .as_array()
         .expect("tools serialize as an array");
-    let load_skills: Vec<_> = serialized
+    let reads: Vec<_> = serialized
         .iter()
-        .filter(|tool| tool["name"] == "load_skill")
+        .filter(|tool| tool["name"] == "read")
         .collect();
     assert_eq!(
-        load_skills.len(),
+        reads.len(),
         1,
-        "exactly one load_skill definition reaches the Responses wire"
+        "exactly one canonical read definition reaches the Responses wire"
     );
     assert!(
-        load_skills[0]["parameters"]["properties"].is_object(),
-        "load_skill keeps a valid parameters schema: {}",
-        load_skills[0]
+        reads[0]["parameters"]["properties"].is_object(),
+        "read keeps a valid parameters schema: {}",
+        reads[0]
+    );
+    assert!(
+        serialized.iter().all(|tool| tool["name"] != "load_skill"),
+        "load_skill must not appear on the child Responses wire"
     );
 }
 
@@ -529,6 +535,7 @@ fn deepseek_flash_responses_body_uses_stateless_0731_contract() {
             content: vec![ContentBlock::Thinking {
                 thinking: "preserve this tool-loop reasoning".to_string(),
                 signature: None,
+                state: None,
             }],
         },
     );
@@ -555,6 +562,113 @@ fn deepseek_flash_responses_body_uses_stateless_0731_contract() {
         body.pointer("/input/0/content/0/text"),
         Some(&json!("preserve this tool-loop reasoning"))
     );
+}
+
+#[test]
+fn codex_replays_only_exact_model_opaque_reasoning_state() {
+    const SENTINEL: &str = "readable private reasoning must not be replayed";
+    let state = OpaqueReasoningState {
+        provider: ApiProvider::OpenaiCodex.as_str().to_string(),
+        api: "openai-responses".to_string(),
+        model: "gpt-5.5".to_string(),
+        id: Some("rs_opaque".to_string()),
+        encrypted_content: "enc_opaque_payload".to_string(),
+    };
+    let mut request = minimal_responses_request();
+    request.messages.insert(
+        0,
+        Message {
+            role: "assistant".to_string(),
+            content: vec![ContentBlock::Thinking {
+                thinking: SENTINEL.to_string(),
+                signature: None,
+                state: Some(state),
+            }],
+        },
+    );
+
+    let exact = build_responses_body_for_provider(&request, ApiProvider::OpenaiCodex);
+    let exact_wire = exact.to_string();
+    assert!(!exact_wire.contains(SENTINEL), "{exact}");
+    assert_eq!(exact.pointer("/input/0/type"), Some(&json!("reasoning")));
+    assert_eq!(exact.pointer("/input/0/id"), Some(&json!("rs_opaque")));
+    assert_eq!(exact.pointer("/input/0/summary"), Some(&json!([])));
+    assert_eq!(
+        exact.pointer("/input/0/encrypted_content"),
+        Some(&json!("enc_opaque_payload"))
+    );
+
+    request.model = "gpt-5.6".to_string();
+    let switched_model = build_responses_body_for_provider(&request, ApiProvider::OpenaiCodex);
+    assert!(!switched_model.to_string().contains(SENTINEL));
+    assert!(
+        switched_model
+            .get("input")
+            .and_then(Value::as_array)
+            .is_some_and(|items| items.iter().all(|item| item["type"] != "reasoning")),
+        "{switched_model}"
+    );
+
+    let switched_provider = build_responses_body_for_provider(&request, ApiProvider::Deepseek);
+    let switched_wire = switched_provider.to_string();
+    assert!(!switched_wire.contains(SENTINEL), "{switched_provider}");
+    assert!(
+        !switched_wire.contains("enc_opaque_payload"),
+        "{switched_provider}"
+    );
+}
+
+#[tokio::test]
+async fn codex_stream_captures_encrypted_reasoning_as_opaque_state() {
+    let server = MockServer::start().await;
+    let sse_body = concat!(
+        "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"reasoning\",\"id\":\"rs_1\"}}\n\n",
+        "data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"visible summary\"}\n\n",
+        "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"reasoning\",\"id\":\"rs_1\",\"summary\":[],\"encrypted_content\":\"enc_state\"}}\n\n",
+        "data: [DONE]\n\n",
+    );
+    Mock::given(method("POST"))
+        .and(path(CODEX_RESPONSES_PATH))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Content-Type", "text/event-stream")
+                .set_body_string(sse_body),
+        )
+        .mount(&server)
+        .await;
+
+    let client = {
+        let _env_lock = crate::test_support::lock_test_env();
+        let _codex_token =
+            crate::test_support::EnvVarGuard::set("OPENAI_CODEX_ACCESS_TOKEN", "test-token");
+        let _legacy_codex_token = crate::test_support::EnvVarGuard::remove("CODEX_ACCESS_TOKEN");
+        DeepSeekClient::new(&test_codex_config(&server)).unwrap()
+    };
+    let mut stream = client
+        .handle_responses_stream(
+            &client
+                .prepare_outbound_request(minimal_responses_request(), true)
+                .expect("responses request prepares"),
+        )
+        .await
+        .unwrap();
+    let mut captured = None;
+    while let Some(event) = stream.next().await {
+        if let StreamEvent::ContentBlockDelta {
+            delta: Delta::ReasoningStateDelta { state },
+            ..
+        } = event.unwrap()
+        {
+            captured = Some(state);
+        }
+    }
+
+    let state = captured.expect("encrypted reasoning state delta");
+    assert_eq!(state.provider, ApiProvider::OpenaiCodex.as_str());
+    assert_eq!(state.api, "openai-responses");
+    assert_eq!(state.model, "gpt-5.5");
+    assert_eq!(state.id.as_deref(), Some("rs_1"));
+    assert_eq!(state.encrypted_content, "enc_state");
 }
 
 #[test]
@@ -848,7 +962,7 @@ fn responses_input_includes_user_role_tool_results() {
         top_p: None,
     };
 
-    let input = convert_messages_to_responses_input(&request, false);
+    let input = convert_messages_to_responses_input(&request, ApiProvider::OpenaiCodex);
 
     assert_eq!(input[0]["type"], "function_call");
     assert_eq!(input[0]["call_id"], "call_abc");
@@ -883,7 +997,7 @@ fn responses_input_encodes_tool_call_names() {
         top_p: None,
     };
 
-    let input = convert_messages_to_responses_input(&request, false);
+    let input = convert_messages_to_responses_input(&request, ApiProvider::OpenaiCodex);
 
     assert_eq!(input[0]["type"], "function_call");
     assert_eq!(input[0]["name"], to_api_tool_name("web.run"));
@@ -1010,7 +1124,7 @@ fn user_image_becomes_an_input_image_item() {
         },
     });
 
-    let items = convert_messages_to_responses_input(&request, false);
+    let items = convert_messages_to_responses_input(&request, ApiProvider::OpenaiCodex);
 
     let user = items
         .iter()
@@ -1031,4 +1145,50 @@ fn user_image_becomes_an_input_image_item() {
         content.iter().any(|part| part["type"] == "input_text"),
         "the accompanying question must survive: {user}"
     );
+}
+
+#[test]
+fn tool_result_image_becomes_native_function_output_content() {
+    let mut request = minimal_responses_request();
+    request.messages = vec![
+        Message {
+            role: "assistant".to_string(),
+            content: vec![ContentBlock::ToolUse {
+                id: "call_image_1".to_string(),
+                name: "read".to_string(),
+                input: serde_json::json!({"path": "shot.png"}),
+                caller: None,
+            }],
+        },
+        Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "call_image_1".to_string(),
+                content: "screenshot captured".to_string(),
+                is_error: Some(false),
+                content_blocks: Some(vec![serde_json::json!({
+                    "type": "image",
+                    "mime_type": "image/png",
+                    "data": "QUJD",
+                })]),
+            }],
+        },
+    ];
+
+    let items = convert_messages_to_responses_input(&request, ApiProvider::OpenaiCodex);
+    let output = items
+        .iter()
+        .find(|item| item["type"] == "function_call_output")
+        .expect("function output");
+    let content = output["output"].as_array().expect("rich output array");
+
+    assert_eq!(
+        content[0],
+        serde_json::json!({
+            "type": "input_text",
+            "text": "screenshot captured",
+        })
+    );
+    assert_eq!(content[1]["type"], "input_image");
+    assert_eq!(content[1]["image_url"], "data:image/png;base64,QUJD");
 }

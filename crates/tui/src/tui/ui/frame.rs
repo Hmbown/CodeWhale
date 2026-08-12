@@ -462,7 +462,6 @@ pub(crate) fn tool_cell_is_running(tool: &ToolCell) -> bool {
         ToolCell::PlanUpdate(cell) => cell.status == ToolStatus::Running,
         ToolCell::PatchSummary(cell) => cell.status == ToolStatus::Running,
         ToolCell::Review(cell) => cell.status == ToolStatus::Running,
-        ToolCell::DiffPreview(_) => false,
         ToolCell::Mcp(cell) => cell.status == ToolStatus::Running,
         ToolCell::ViewImage(_) => false,
         ToolCell::WebSearch(cell) => cell.status == ToolStatus::Running,

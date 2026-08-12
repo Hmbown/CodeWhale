@@ -77,37 +77,36 @@ Checklist metadata is the model-visible projection of progress:
 `task_updates.checklist` carries the current items, completion percentage, and
 in-progress item.
 
-**The To-do is the only canonical Work ledger.** `update_plan` is conversational
+**The To-do is the only Work surface.** `update_plan` is conversational
 reasoning — strategy, context, and route notes for complex initiatives. It is
 not a progress surface, must not duplicate To-do items, and plan-only state is
-never rendered as Work grounding.
+never rendered as a To-do snapshot.
 
-Work grounding is one seam (#3983): `crates/tui/src/work_grounding.rs` renders
-the To-do snapshot once, hard-bounded in both item count and characters, with
-the in-progress item preserved preferentially and any elision marked. That body
-is appended to each parent turn-loop and sub-agent step request as a transient
-`<codewhale:work_state>` block — rebuilt per request, so a mid-turn
-`todo_write` is visible on the next step — and is never written to session
-history or the stable system prefix.
-Forked agents (`<codewhale:fork_state>`) and `/relay` reuse the same body.
+**No request re-states the list.** The model learns what is on the To-do the way
+it learns anything else: from the result its own `todo_write` call returned,
+which is ordinary persisted history. Nothing is appended to a parent turn-loop
+step or a sub-agent step. The complete list stays visible in the UI, which is a
+different surface from the request.
 
-Three properties of that seam are load-bearing:
+`crates/tui/src/todo_snapshot.rs` renders the one bounded body — hard-bounded in
+both item count and characters, in-progress item preserved preferentially, any
+elision marked — for the three seams that show a snapshot *once*, because a
+person asked: the `<codewhale:fork_state>` block a newly forked agent is handed,
+`/relay`, and the in-transcript agent card.
+
+Two properties of that renderer are load-bearing:
 
 - **Authority.** The snapshot is read from the `WorkRuntime` graph projection
   when a runtime owns that list, because `todo_write` stages there and only
   publishes into the legacy `SharedTodoList` view later. Sessions with no
   attached runtime read the list directly.
-- **Per-agent isolation.** Every sub-agent gets the same tail rendered from
-  *its own* list (`#4810`), so a worker sees its own progress and never a
-  parent's or sibling's. The parent's ledger reaches a forked child only as the
-  immutable `<codewhale:fork_state>` Work section, resolved at the spawn seam so
-  a same-turn `todo_write` is included.
-- **Context accounting.** The parent turn-loop preflight token estimate runs
-  over the tail message that request actually carries, so it cannot approve a
-  request that goes over-limit once the block is appended. Offline counts stay
-  conservative estimates.
+- **Per-agent isolation.** Every agent reads *its own* list (`#4810`), so a
+  worker sees its own progress and never a parent's or sibling's. The parent's
+  list reaches a forked child only as the immutable `<codewhale:fork_state>`
+  To-do section, resolved at the spawn seam so a same-turn `todo_write` is
+  included.
 
-The renderer bounds and frames the ledger; it does not vet To-do content. It
+The renderer bounds and frames the snapshot; it does not vet To-do content. It
 guarantees that item text cannot close the wrapper early, cannot forge the line
 format with control characters, and cannot exceed the item/character bounds —
 not that arbitrary item text is safe to follow as instructions.
@@ -293,10 +292,10 @@ second catalog snapshot.
 
 The default diet removes `exec_wait` and `exec_interact` from the active head
 (they become hidden-compat; their canonical twins `exec_shell_wait` /
-`exec_shell_interact` stay). `tts` and `todo_*` are *already not* in the active
-set, so they do not change the active budget in this diet. The net effect of
-this specific diet is to remove two duplicate active aliases from whatever
-default active head is current after the surrounding v0.8.53 PR batch.
+`exec_shell_interact` stay). `tts` and the legacy `todo_*` aliases remain out
+of the active set. The canonical `todo_write` tool became eager in v0.9.6 as an
+explicit budget decision so ordinary progress tracking never requires a
+discovery turn.
 
 ### Per mode (Plan / Agent / YOLO)
 

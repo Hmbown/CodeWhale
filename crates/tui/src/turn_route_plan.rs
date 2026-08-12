@@ -209,6 +209,7 @@ pub(crate) async fn plan_turn_route(
             request.auto_compact_threshold_percent,
         ),
         model: turn_route.model.clone(),
+        image_input: turn_route.candidate.capabilities().image_input,
         effective_context_window: Some(crate::route_budget::route_context_window_tokens(
             turn_route.identity.provider,
             &turn_route.model,

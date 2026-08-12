@@ -7,7 +7,7 @@ import type { HomeDict } from "../types";
  * "receipt" renders as «протокол» (a durable, official record) so it stays
  * distinct from the workflow step «Звіт» (Report); "permission posture" is
  * «режим дозволів»; "trace" is «хід міркувань». Mode and permission names —
- * Plan / Act / Operate, Ask / Auto-Review / Full Access — stay literal,
+ * Plan / Work / Operate, Ask / Auto-Review / Full Access — stay literal,
  * matching crates/tui/locales/uk.json.
  */
 export const home: HomeDict = {
@@ -44,7 +44,7 @@ export const home: HomeDict = {
 
   proofHeading: "Підводна термінальна оболонка. Будь-яка модель. На вашій машині.",
   proofBody:
-    "Підключіть модель, якою вже користуєтеся — хмарну, шлюзову чи локальну. Режими Plan / Act / Operate та явні режими дозволів тримають занурення під вашим контролем.",
+    "Підключіть модель, якою вже користуєтеся — хмарну, шлюзову чи локальну. Режими Plan / Work / Operate та явні режими дозволів тримають занурення під вашим контролем.",
 
   sealDecides: "法",
   decidesEyebrow: "Подивіться, як він ухвалює рішення",

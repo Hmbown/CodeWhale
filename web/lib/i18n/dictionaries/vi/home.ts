@@ -6,7 +6,7 @@ import type { HomeDict } from "../types";
  * of the old positioning. Terminology matches `vi/chrome.ts` and the TUI
  * locale pack: nhà cung cấp (provider), phiên (session), kho mã
  * (repository), mức quyền (permission posture), biên nhận (receipt), nhiệm
- * vụ (task). Modes (Plan / Act / Operate), permission postures (Ask /
+ * vụ (task). Modes (Plan / Work / Operate), permission postures (Ask /
  * Auto-Review / Full Access), commands (`codewhale exec`), Fleet, Workflow,
  * Runtime and the product name stay literal, exactly as the TUI renders
  * them.
@@ -47,7 +47,7 @@ export const home: HomeDict = {
 
   proofHeading: "Một lớp vỏ terminal dưới lòng biển. Mọi mô hình. Trên máy của bạn.",
   proofBody:
-    "Mang theo mô hình bạn đang dùng — hosted, gateway hoặc cục bộ. Plan / Act / Operate cùng các mức quyền khai báo rõ giữ cuộc lặn luôn trong tầm kiểm soát của bạn.",
+    "Mang theo mô hình bạn đang dùng — hosted, gateway hoặc cục bộ. Plan / Work / Operate cùng các mức quyền khai báo rõ giữ cuộc lặn luôn trong tầm kiểm soát của bạn.",
 
   sealDecides: "法",
   decidesEyebrow: "Xem cách nó quyết định",

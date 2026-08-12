@@ -331,11 +331,13 @@ pub(crate) fn compaction_for_validated_route(
     app: &App,
     route: &crate::route_runtime::ValidatedRuntimeRoute,
 ) -> crate::compaction::CompactionConfig {
-    app.compaction_config_for_route(
+    let mut config = app.compaction_config_for_route(
         route.identity.provider,
         &route.model,
         crate::route_budget::known_route_limits(route.candidate.limits()),
-    )
+    );
+    config.image_input = route.candidate.capabilities().image_input;
+    config
 }
 
 pub(crate) fn validated_profile_default_route(

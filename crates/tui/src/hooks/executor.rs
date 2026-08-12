@@ -2448,7 +2448,10 @@ fn tool_category_for(tool_name: &str, tool_args: Option<&str>) -> &'static str {
     match tool_name {
         // The shell surface. `exec_shell` is retired but kept here because
         // `shell.rs` still stamps it for the `shell_env` hook event.
-        "Bash" | "exec_shell" => "shell",
+        "bash" | "Bash" | "exec_shell" => "shell",
+        // The lowercase primitives ship without an action envelope.
+        "read" | "todo_write" => "safe",
+        "write" | "edit" => "file_write",
         "File" | "file" => match action.as_deref() {
             Some("read" | "list" | "search_name" | "search_content") => "safe",
             // write/edit/patch, and the unknown-action case, are writes.
@@ -5599,20 +5602,13 @@ command = "echo project"
         // a rename fails on the missing entry and a classifier change fails on
         // the mismatched category.
         const EXPECTED: &[(&str, &str)] = &[
-            ("Bash", "shell"),
-            ("Run", "shell"),
-            ("File", "file_write"),
-            // Action-less Git is not inherently a write; the action arms below
-            // cover the read verbs. The rest are conversational surfaces that
-            // touch nothing a hook needs to gate.
-            ("Git", "other"),
+            ("read", "safe"),
+            ("write", "file_write"),
+            ("edit", "file_write"),
+            ("bash", "shell"),
+            // The router itself touches nothing a hook needs to gate.
             ("agent", "other"),
-            // Default-active since the progressive-disclosure kernel (#5077):
-            // read-only skill catalogue loader, nothing a hook needs to gate.
-            ("load_skill", "other"),
-            ("remember", "other"),
-            ("tasks", "other"),
-            ("todo_write", "other"),
+            ("todo_write", "safe"),
         ];
         for name in crate::core::engine::tool_catalog::DEFAULT_ACTIVE_NATIVE_TOOLS {
             let expected = EXPECTED.iter().find(|(n, _)| n == name).map(|(_, c)| *c);

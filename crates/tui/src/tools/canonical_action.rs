@@ -17,6 +17,10 @@
 use serde_json::Value;
 
 pub(crate) const CANONICAL_ACTION_ALIASES: &[(&str, &str, &str)] = &[
+    ("bash", "run", "exec_shell"),
+    ("bash", "wait", "exec_shell_wait"),
+    ("bash", "interact", "exec_shell_interact"),
+    ("bash", "cancel", "exec_shell_cancel"),
     ("Bash", "run", "exec_shell"),
     ("Bash", "wait", "exec_shell_wait"),
     ("Bash", "interact", "exec_shell_interact"),
@@ -100,7 +104,7 @@ pub(crate) const CANONICAL_ACTION_ALIASES: &[(&str, &str, &str)] = &[
 #[must_use]
 pub(crate) fn action_family_default(tool_name: &str) -> Option<Option<&'static str>> {
     match tool_name {
-        "Bash" => Some(Some("run")),
+        "bash" | "Bash" => Some(Some("run")),
         "File" => Some(Some("read")),
         "Git" => Some(Some("status")),
         "Run" => Some(Some("tests")),
@@ -168,6 +172,16 @@ pub(crate) fn required_action(
 /// deny list entry naming it.
 #[must_use]
 pub(crate) fn canonical_action_alias<'a>(tool_name: &'a str, input: &Value) -> &'a str {
+    // The new model-facing file primitives deliberately reuse the old
+    // semantic policy names. This keeps permissions.toml, repo law, resource
+    // envelopes, approval caches, audit aggregation, and saved policy state
+    // compatible across the presentation change.
+    match tool_name {
+        "read" => return "read_file",
+        "write" => return "write_file",
+        "edit" => return "edit_file",
+        _ => {}
+    }
     let Some(default_action) = action_family_default(tool_name) else {
         return tool_name;
     };
@@ -259,6 +273,21 @@ mod tests {
                 "{family}.{action}"
             );
         }
+    }
+
+    #[test]
+    fn lowercase_primitives_preserve_legacy_policy_names() {
+        assert_eq!(canonical_action_alias("read", &json!({})), "read_file");
+        assert_eq!(canonical_action_alias("write", &json!({})), "write_file");
+        assert_eq!(canonical_action_alias("edit", &json!({})), "edit_file");
+        assert_eq!(
+            canonical_action_alias("bash", &json!({"command": "pwd"})),
+            "exec_shell"
+        );
+        assert_eq!(
+            canonical_action_alias("bash", &json!({"action": "cancel"})),
+            "exec_shell_cancel"
+        );
     }
 
     /// Execution refuses an actionless call; policy still needs a label for

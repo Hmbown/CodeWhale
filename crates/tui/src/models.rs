@@ -50,7 +50,8 @@ const COMPACTION_THRESHOLD_PERCENT: u32 = 80;
 #[allow(unused_imports)]
 pub use codewhale_core::request::{
     CacheControl, ContentBlock, INTERRUPTED_ASSISTANT_CONTEXT_PREFIX, INTERRUPTED_ASSISTANT_ROLE,
-    ImageUrlContent, Message, MessageRequest, SystemBlock, SystemPrompt, Tool, ToolCaller,
+    ImageUrlContent, Message, MessageRequest, OpaqueReasoningState, SystemBlock, SystemPrompt,
+    Tool, ToolCaller,
 };
 
 /// Container metadata for code-execution style server tools.
@@ -674,6 +675,10 @@ pub enum Delta {
     /// of a thinking block on the native Messages stream.
     #[serde(rename = "signature_delta")]
     SignatureDelta { signature: String },
+    /// Opaque Responses reasoning continuity, attached only when the provider
+    /// returns an encrypted item on the exact originating route.
+    #[serde(rename = "reasoning_state_delta")]
+    ReasoningStateDelta { state: OpaqueReasoningState },
 }
 
 #[allow(dead_code)]

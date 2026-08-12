@@ -729,11 +729,6 @@ pub enum ToolCell {
     PlanUpdate(PlanUpdateCell),
     PatchSummary(PatchSummaryCell),
     Review(ReviewCell),
-    /// Standalone preview compatibility cell. Approval previews now live in
-    /// the modal and successful mutations use `PatchSummary`, but keeping this
-    /// renderer avoids discarding the older transcript shape outright.
-    #[allow(dead_code)]
-    DiffPreview(DiffPreviewCell),
     Mcp(McpToolCell),
     ViewImage(ViewImageCell),
     WebSearch(WebSearchCell),
@@ -782,7 +777,7 @@ impl ToolCell {
             ToolCell::Mcp(cell) => Some(cell.status),
             ToolCell::WebSearch(cell) => Some(cell.status),
             ToolCell::Generic(cell) => Some(cell.status),
-            ToolCell::DiffPreview(_) | ToolCell::ViewImage(_) => Some(ToolStatus::Success),
+            ToolCell::ViewImage(_) => Some(ToolStatus::Success),
         }
     }
 
@@ -811,7 +806,6 @@ impl ToolCell {
                 ToolCell::Exec(_)
                     | ToolCell::PatchSummary(_)
                     | ToolCell::Review(_)
-                    | ToolCell::DiffPreview(_)
                     | ToolCell::PlanUpdate(_)
             )
             || matches!(self, ToolCell::Generic(cell) if tool_run::generic_tool_name_is_collapse_guard(&cell.name) || cell.is_diff)
@@ -845,7 +839,6 @@ impl ToolCell {
                 crate::settings::InlineDiffMode::Full,
             ),
             ToolCell::Review(cell) => cell.render(width, low_motion, mode),
-            ToolCell::DiffPreview(cell) => cell.lines_with_motion(width, low_motion),
             ToolCell::Mcp(cell) => cell.render(width, low_motion, mode),
             ToolCell::ViewImage(cell) => cell.lines_with_motion(width, low_motion),
             ToolCell::WebSearch(cell) => cell.lines_with_motion(width, low_motion),
@@ -1379,36 +1372,6 @@ impl ReviewCell {
     }
 }
 
-/// Cell for showing a diff preview before applying changes.
-#[derive(Debug, Clone)]
-pub struct DiffPreviewCell {
-    pub title: String,
-    pub diff: String,
-}
-
-impl DiffPreviewCell {
-    pub fn lines_with_motion(&self, width: u16, low_motion: bool) -> Vec<Line<'static>> {
-        let mut lines = Vec::new();
-        let diff_summary = diff_render::diff_summary_label(&self.diff);
-        lines.push(render_tool_header_with_summary(
-            "Diff",
-            diff_summary.as_deref(),
-            "done",
-            ToolStatus::Success,
-            None,
-            low_motion,
-        ));
-        lines.extend(render_compact_kv(
-            "title",
-            &self.title,
-            tool_value_style(),
-            width,
-        ));
-        lines.extend(diff_render::render_diff(&self.diff, width));
-        lines
-    }
-}
-
 /// Cell representing an MCP tool execution.
 #[derive(Debug, Clone)]
 pub struct McpToolCell {
@@ -1752,7 +1715,23 @@ impl GenericToolCell {
                     None,
                     low_motion,
                 ));
-                lines.extend(diff_render::render_diff(output, width));
+                if matches!(mode, RenderMode::Live) {
+                    let rendered =
+                        diff_render::render_diff_bounded(output, width, TOOL_OUTPUT_LINE_LIMIT);
+                    lines.extend(rendered.lines);
+                    if rendered.omitted_rows > 0 {
+                        let detail_hint =
+                            crate::tui::key_shortcuts::tool_details_shortcut_action_hint("diff");
+                        lines.push(details_affordance_line(
+                            &format!("+{} diff lines · {detail_hint}", rendered.omitted_rows),
+                            Style::default().fg(palette::TEXT_MUTED).italic(),
+                        ));
+                    }
+                } else {
+                    // Transcript/detail mode remains the exact-evidence path;
+                    // only the live frame is budgeted.
+                    lines.extend(diff_render::render_diff(output, width));
+                }
             } else {
                 let output_mode =
                     if matches!(mode, RenderMode::Live) && self.status == ToolStatus::Failed {

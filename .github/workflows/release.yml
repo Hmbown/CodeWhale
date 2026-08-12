@@ -461,6 +461,45 @@ jobs:
           overwrite_files: false
           fail_on_unmatched_files: true
 
+  npm:
+    needs: [release, resolve]
+    if: ${{ !cancelled() && needs.release.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Pin OIDC-capable npm CLI
+        run: npm install --global npm@12.0.2
+      - name: Revalidate release tag before npm publish
+        env:
+          EXPECTED_SHA: ${{ needs.resolve.outputs.sha }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          ./scripts/release/verify-remote-tag.sh \
+            "https://github.com/${GITHUB_REPOSITORY}.git" \
+            "${TAG}" \
+            "${EXPECTED_SHA}"
+      - name: Revalidate public release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/release/verify-release-assets.sh "${{ needs.resolve.outputs.version }}"
+      - name: Test npm wrapper
+        working-directory: npm/codewhale
+        run: npm test
+      - name: Publish npm wrapper with trusted publishing
+        working-directory: npm/codewhale
+        run: npm publish --access public
+
   homebrew:
     needs: [release, resolve]
     if: ${{ !cancelled() && needs.release.result == 'success' }}
@@ -510,7 +549,3 @@ jobs:
           TAP_REPO: Hmbown/homebrew-deepseek-tui
           TOKEN: ${{ secrets.HOMEBREW_TAP_PAT || secrets.RELEASE_TAG_PAT }}
         run: bash .github/scripts/update-homebrew-tap.sh
-
-# npm publish is intentionally not automated. The npm account requires 2FA OTP
-# on every publish. Publish the wrapper manually only after the immutable public
-# GitHub asset gate in docs/RELEASE_RUNBOOK.md succeeds.

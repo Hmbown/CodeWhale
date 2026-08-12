@@ -287,7 +287,7 @@ impl FleetRoster {
                 "scout",
                 FleetSlot::Scout,
                 FleetLoadout::Inherit,
-                "Read-only reconnaissance: find files, map code, gather evidence.",
+                "Read-only scouting: find files, map code, gather evidence.",
                 None,
             ),
             (

@@ -522,6 +522,8 @@ struct WorkflowTaskStartedEvent {
     resolved_provider: String,
     resolved_model: String,
     route_source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    child_route: Option<crate::tools::subagent::ChildRouteReceipt>,
     worktree: bool,
     workspace: Option<PathBuf>,
     git_branch: Option<String>,
@@ -2051,7 +2053,7 @@ fn bounded_run_record_value(
         obj.insert(
             "dispatch_failures_note".to_string(),
             json!(format!(
-                "showing {} of {} dispatch failures with bounded fields; full ledger: {journal}",
+                "showing {} of {} dispatch failures with bounded fields; full record: {journal}",
                 bounds.dispatch_failures_returned,
                 bounds.dispatch_failures_returned + bounds.dispatch_failures_omitted,
             )),
@@ -3593,6 +3595,7 @@ impl SubAgentWorkflowDriver {
                 resolved_provider: metadata.resolved_provider.clone(),
                 resolved_model: metadata.resolved_model.clone(),
                 route_source: metadata.route_source.clone(),
+                child_route: Some(metadata.child_route.clone()),
                 worktree: request.worktree,
                 workspace: result.workspace.clone(),
                 git_branch: result.git_branch.clone(),
@@ -6087,6 +6090,7 @@ permissions = "read_only"
                 resolved_provider: "zai".to_string(),
                 resolved_model: "glm-5".to_string(),
                 route_source: "fleet".to_string(),
+                child_route: None,
                 worktree: false,
                 workspace: None,
                 git_branch: None,

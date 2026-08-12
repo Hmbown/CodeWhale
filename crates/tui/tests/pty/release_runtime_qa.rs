@@ -306,9 +306,9 @@ const COMPACTION_SUMMARY: &str = "1. Primary request and intent — preserve the
 struct CompactionLifecycleResponder {
     stream_requests: Arc<AtomicUsize>,
     compaction_requests: Arc<AtomicUsize>,
-    /// Compaction requests that carried the prior committed summary as a
-    /// coalescing bridge (repeat compactions replace, not stack, summaries).
-    bridged_compaction_requests: Arc<AtomicUsize>,
+    /// Compaction requests that carried the retired system-prompt bridge.
+    /// Checkpoints now live once in ordinary history, Codex-style.
+    legacy_system_bridge_requests: Arc<AtomicUsize>,
     successor_stream_requests: Arc<AtomicUsize>,
     order: Arc<std::sync::Mutex<Vec<&'static str>>>,
     stream_delay: Duration,
@@ -320,7 +320,7 @@ impl CompactionLifecycleResponder {
         Self {
             stream_requests: Arc::new(AtomicUsize::new(0)),
             compaction_requests: Arc::new(AtomicUsize::new(0)),
-            bridged_compaction_requests: Arc::new(AtomicUsize::new(0)),
+            legacy_system_bridge_requests: Arc::new(AtomicUsize::new(0)),
             successor_stream_requests: Arc::new(AtomicUsize::new(0)),
             order: Arc::new(std::sync::Mutex::new(Vec::new())),
             stream_delay,
@@ -355,7 +355,7 @@ impl Respond for CompactionLifecycleResponder {
         if is_compaction {
             self.compaction_requests.fetch_add(1, Ordering::SeqCst);
             if raw.contains("A previous context checkpoint produced the summary below") {
-                self.bridged_compaction_requests
+                self.legacy_system_bridge_requests
                     .fetch_add(1, Ordering::SeqCst);
             }
             self.record("compact");
@@ -724,8 +724,8 @@ async fn release_auto_compaction_label_persists() -> Result<()> {
 /// engine's immediately-following turn-complete status replaced within the
 /// same event drain — the user saw nothing and reported `/compact` as dead.
 /// The outcome must land in the transcript, where it survives later frames.
-/// A second `/compact` must feed the committed summary back into the
-/// summarization request as the coalescing bridge (replace, not stack).
+/// A second `/compact` must replace the checkpoint in ordinary history and
+/// must not revive the retired system-prompt bridge.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn release_idle_compaction_reports_outcome_in_transcript() -> Result<()> {
     let _guard = RELEASE_RUNTIME_QA_LOCK.lock().await;
@@ -764,12 +764,14 @@ async fn release_idle_compaction_reports_outcome_in_transcript() -> Result<()> {
         2,
         INTERACTION_TIMEOUT,
     )?;
-    wait_for_counter(
-        &mut tui,
-        &responder.bridged_compaction_requests,
-        1,
-        INTERACTION_TIMEOUT,
-    )?;
+    tui.wait_for_text("0 removed", INTERACTION_TIMEOUT)?;
+    assert_eq!(
+        responder
+            .legacy_system_bridge_requests
+            .load(Ordering::SeqCst),
+        0,
+        "repeat compaction must not reintroduce a system-prompt bridge"
+    );
 
     let _ = tui.shutdown();
     Ok(())

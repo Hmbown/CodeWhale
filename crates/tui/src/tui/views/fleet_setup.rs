@@ -73,7 +73,7 @@ const ROLES: [Choice; 9] = [
         label: Cow::Borrowed("scout"),
         summary: Cow::Borrowed("Read-first research"),
         description: Cow::Borrowed(
-            "Research and repo reconnaissance. Reads and summarizes before anything is written.",
+            "Research and evidence gathering. Reads and summarizes before anything is written.",
         ),
     },
     Choice {

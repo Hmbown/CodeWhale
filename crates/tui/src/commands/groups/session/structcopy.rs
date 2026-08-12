@@ -296,7 +296,7 @@ fn block_payload(block: &ContentBlock) -> Value {
             "tool_use_id": tool_use_id,
             "is_error": optional_bool(*is_error),
             "content": content,
-            "content_blocks": content_blocks,
+            "content_blocks": crate::image_attach::safe_tool_result_content_blocks(content_blocks.as_deref()),
         }),
         ContentBlock::ImageUrl { image_url } => {
             if image_url.url.starts_with("http://") || image_url.url.starts_with("https://") {
@@ -374,7 +374,7 @@ fn tool_payload(app: &App, call_id: &str) -> Result<(&'static str, Value, Value)
             // from `false` (an explicitly successful result).
             "is_error": optional_bool(is_error),
             "content": content,
-            "content_blocks": content_blocks,
+            "content_blocks": crate::image_attach::safe_tool_result_content_blocks(content_blocks.as_deref()),
         }),
         None => json!({
             "found": false,
@@ -1281,6 +1281,7 @@ mod tests {
                     ContentBlock::Thinking {
                         thinking: "private chain of thought".to_string(),
                         signature: Some("signature-secret".to_string()),
+                        state: None,
                     },
                     ContentBlock::ToolUse {
                         id: "call-7".to_string(),

@@ -6,7 +6,7 @@ import type { ChromeDict } from "../types";
  * "local-first" wordmark tag is intentionally gone.
  *
  * Terminology follows the TUI locale pack (`crates/tui/locales/ko.json`):
- * mode and permission names stay literal (Plan / Act / Operate, Ask /
+ * mode and permission names stay literal (Plan / Work / Operate, Ask /
  * Auto-Review / Full Access), 프로바이더 is "provider", 저장소 is
  * "repository", 추론 is "reasoning", 권한 is "permission". Commands, package
  * names, and GitHub are left as-is per docs/VOICE.md.

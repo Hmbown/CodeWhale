@@ -534,6 +534,7 @@ mod tests {
                 thinking: r#"{"id":"scratchpad","role_hint":"x","description":"half-formed"}"#
                     .to_string(),
                 signature: None,
+                state: None,
             },
         );
         mock.push_message_response(response);

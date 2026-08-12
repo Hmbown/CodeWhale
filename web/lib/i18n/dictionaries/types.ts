@@ -15,7 +15,7 @@
  * time, so an untranslated string renders English copy — never a key.
  *
  * Code-owned strings stay out of these dictionaries per docs/VOICE.md:
- * "Plan · Act · Operate", "Ask · Auto-Review · Full Access",
+ * "Plan · Work · Operate", "Ask · Auto-Review · Full Access",
  * "TUI · exec · web · API", "Codewhale", "GitHub", "Issues",
  * `npm install -g codewhale`, `cargo test --locked`, `codewhale exec`,
  * package-manager proper nouns, mirror names, and `/codewhale-tui.png`.

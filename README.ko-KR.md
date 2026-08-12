@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:797395092563 -->
+<!-- source: README.md sha256:4fb18fffb0fe -->
 # Codewhale
 
 터미널에서 쓰는 오픈소스 코딩 에이전트 — 모델은 당신이 가져옵니다.
@@ -38,7 +38,7 @@ codewhale web                            # local browser client on 127.0.0.1
 ```
 
 
-TUI 안에서: `/model`은 프로바이더와 모델을 함께 전환하고, `/fleet`은 팀을 구성하고 실행하며(한 번에 한 역할씩, 각자 자기 모델을 가집니다), `/undo`는 직전 턴을 되돌리고, `/restore <N>`은 워크스페이스를 이전 스냅샷으로 되돌립니다(인자 없는 `/restore`는 스냅샷 목록만 보여줍니다). 입력창이 비어 있을 때 `Tab`은 Plan / Act / Operate 모드를 순환하고, 입력창에 내용이 있으면 `Tab`은 슬래시 명령과 `@` 멘션을 자동 완성합니다. `Shift+Tab`은 언제든지 Ask / Auto-Review / Full Access 권한 태세를 순환합니다. `!`는 일반 승인 경로를 거쳐 셸 명령을 실행합니다.
+TUI 안에서: `/model`은 프로바이더와 모델을 함께 전환하고, `/fleet`은 팀을 구성하고 실행하며(한 번에 한 역할씩, 각자 자기 모델을 가집니다), `/undo`는 직전 턴을 되돌리고, `/restore <N>`은 워크스페이스를 이전 스냅샷으로 되돌립니다(인자 없는 `/restore`는 스냅샷 목록만 보여줍니다). 입력창이 비어 있을 때 `Tab`은 Plan / Work / Operate 모드를 순환하고, 입력창에 내용이 있으면 `Tab`은 슬래시 명령과 `@` 멘션을 자동 완성합니다. `Shift+Tab`은 언제든지 Ask / Auto-Review / Full Access 권한 태세를 순환합니다. `!`는 일반 승인 경로를 거쳐 셸 명령을 실행합니다.
 
 ## 기능
 

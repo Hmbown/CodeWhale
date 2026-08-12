@@ -40,7 +40,7 @@ export const home: HomeDict = {
 
   proofHeading: "Um terminal debaixo d'água. Qualquer modelo. Na sua máquina.",
   proofBody:
-    "Traga o modelo que você já usa — hospedado, via gateway ou local. Plan / Act / Operate e posturas de permissão explícitas mantêm o mergulho sob o seu controle.",
+    "Traga o modelo que você já usa — hospedado, via gateway ou local. Plan / Work / Operate e posturas de permissão explícitas mantêm o mergulho sob o seu controle.",
 
   sealDecides: "法",
   decidesEyebrow: "Veja como ele decide",

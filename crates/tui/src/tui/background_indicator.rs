@@ -460,6 +460,7 @@ mod tests {
             runtime_permissions: None,
             parent_run_id: None,
             spawn_depth: 0,
+            child_route: None,
             result: None,
             steps_taken: 1,
             checkpoint: None,

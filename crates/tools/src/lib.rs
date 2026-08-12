@@ -133,6 +133,13 @@ pub struct ToolResult {
     pub metadata: Option<Value>,
 }
 
+/// Provider-neutral non-text content returned alongside a tool result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolResultContentBlock {
+    Image { mime_type: String, data: String },
+}
+
 impl ToolResult {
     /// Create a successful result with content.
     #[must_use]

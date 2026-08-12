@@ -4020,6 +4020,7 @@ fn restored_reasoning_and_answer_clear_prior_fold_ownership() {
                     .collect::<Vec<_>>()
                     .join("\n"),
                 signature: None,
+                state: None,
             },
             crate::models::ContentBlock::Text {
                 text: "restored final answer".to_string(),
@@ -10312,6 +10313,7 @@ fn make_subagent(
         runtime_permissions: None,
         parent_run_id: None,
         spawn_depth: 0,
+        child_route: None,
         result: None,
         steps_taken: 0,
         checkpoint: None,
@@ -19610,10 +19612,10 @@ fn displayed_session_cost_is_monotonic_under_negative_reconciliation() {
     // cache discount applied after the fact). The underlying value drops,
     // but the displayed cost must not.
     app.session.subagent_cost = 0.20;
-    let after_recon = app.displayed_session_cost();
+    let after_second = app.displayed_session_cost();
     assert!(
-        after_recon >= after_first,
-        "displayed cost regressed: {after_recon} < {after_first}"
+        after_second >= after_first,
+        "displayed cost regressed: {after_second} < {after_first}"
     );
 
     // Adding more cost should still bump above the high-water.

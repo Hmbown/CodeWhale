@@ -46,7 +46,7 @@ use crate::llm_client::{LlmClient, StreamEventBox};
 use crate::models::{
     ContentBlock, ContentBlockStart, Delta, Message, MessageRequest, StreamEvent, SystemPrompt,
 };
-use crate::tools::spec::{ApprovalRequirement, PreparedToolCall, ToolError, ToolResult};
+use crate::tools::spec::{ApprovalRequirement, PreparedToolCall, RichToolResult, ToolError};
 use crate::tools::{ToolContext, ToolRegistry, ToolRegistryBuilder};
 use crate::worker_profile::ShellPolicy;
 
@@ -166,12 +166,14 @@ pub async fn run_acp_server(config: Config, model: String, default_cwd: PathBuf)
                     // await, and the main task keeps exclusive ownership of
                     // stdout.
                     let outcome = run_agentic_prompt_turn(
-                        &server.config,
-                        &server.model,
-                        &session_id,
+                        AcpTurnContext {
+                            config: &server.config,
+                            model: &server.model,
+                            session_id: &session_id,
+                            tool_registry: &tool_registry,
+                            response_id_policy,
+                        },
                         messages,
-                        &tool_registry,
-                        response_id_policy,
                         &mut reader,
                         &mut writer,
                         |msgs| {
@@ -975,18 +977,38 @@ async fn record_tool_execution_result<W>(
     writer: &mut W,
     session_id: &str,
     call: &PendingToolCall,
-    result: std::result::Result<ToolResult, ToolError>,
+    result: std::result::Result<RichToolResult, ToolError>,
 ) -> Result<Message>
 where
     W: AsyncWrite + Unpin,
 {
-    let (content, is_error) = match result {
-        Ok(tool_result) => (tool_result.content, !tool_result.success),
-        Err(err) => (format!("Error: {err}"), true),
+    let (content, is_error, rich_blocks) = match result {
+        Ok(tool_result) => (
+            tool_result.result.content,
+            !tool_result.result.success,
+            tool_result.content_blocks,
+        ),
+        Err(err) => (format!("Error: {err}"), true, Vec::new()),
     };
     let status = if is_error { "failed" } else { "completed" };
-    write_tool_call_update(writer, session_id, call, status, Some(&content)).await?;
-    Ok(tool_result_message(&call.id, content, is_error))
+    write_tool_call_update_with_blocks(
+        writer,
+        session_id,
+        call,
+        status,
+        Some(&content),
+        &rich_blocks,
+    )
+    .await?;
+    Ok(tool_result_message_with_blocks(
+        &call.id,
+        content,
+        is_error,
+        rich_blocks
+            .iter()
+            .filter_map(|block| serde_json::to_value(block).ok())
+            .collect(),
+    ))
 }
 
 async fn record_unstarted_cancelled_calls<W, I>(
@@ -1008,6 +1030,15 @@ where
     Ok(messages)
 }
 
+#[derive(Clone, Copy)]
+struct AcpTurnContext<'a> {
+    config: &'a Config,
+    model: &'a str,
+    session_id: &'a str,
+    tool_registry: &'a ToolRegistry,
+    response_id_policy: JsonRpcResponseIdPolicy,
+}
+
 /// Execute `tool_calls` in order against `registry`, reporting each one to
 /// the client as `tool_call` / `tool_call_update` session updates, while
 /// racing every execution against the reader for a `session/cancel`
@@ -1016,12 +1047,8 @@ where
 /// cancel-aware tool like `Bash` gets a chance to kill its child
 /// process) before returning [`ToolBatchOutcome::Cancelled`].
 async fn execute_tool_calls_with_cancellation<R, W>(
-    config: &Config,
-    model: &str,
-    registry: &ToolRegistry,
+    context: AcpTurnContext<'_>,
     tool_calls: Vec<PendingToolCall>,
-    session_id: &str,
-    response_id_policy: JsonRpcResponseIdPolicy,
     reader: &mut Lines<R>,
     writer: &mut W,
 ) -> Result<ToolBatchOutcome>
@@ -1029,6 +1056,13 @@ where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin,
 {
+    let AcpTurnContext {
+        config,
+        model,
+        session_id,
+        tool_registry: registry,
+        response_id_policy,
+    } = context;
     let mut result_messages = Vec::with_capacity(tool_calls.len());
     let mut reader_open = true;
     let mut calls = tool_calls.into_iter();
@@ -1103,8 +1137,11 @@ where
         let cancel_token = CancellationToken::new();
         let mut turn_context = registry.context().clone();
         turn_context.cancel_token = Some(cancel_token.clone());
-        let exec_fut =
-            registry.execute_full_with_context(&call.name, call.input.clone(), Some(&turn_context));
+        let exec_fut = registry.execute_rich_full_with_context(
+            &call.name,
+            call.input.clone(),
+            Some(&turn_context),
+        );
         tokio::pin!(exec_fut);
 
         let mut cancelled = false;
@@ -1170,7 +1207,8 @@ where
 
         let exec_result = exec_result.map(|mut result| {
             if let Some(context) = prepared.additional_context.as_deref() {
-                result.content = format!("{}\n\n[hook context] {context}", result.content);
+                result.result.content =
+                    format!("{}\n\n[hook context] {context}", result.result.content);
             }
             result
         });
@@ -1187,13 +1225,22 @@ where
 }
 
 fn tool_result_message(tool_use_id: &str, content: String, is_error: bool) -> Message {
+    tool_result_message_with_blocks(tool_use_id, content, is_error, Vec::new())
+}
+
+fn tool_result_message_with_blocks(
+    tool_use_id: &str,
+    content: String,
+    is_error: bool,
+    content_blocks: Vec<Value>,
+) -> Message {
     Message {
         role: "user".to_string(),
         content: vec![ContentBlock::ToolResult {
             tool_use_id: tool_use_id.to_string(),
             content,
             is_error: Some(is_error),
-            content_blocks: None,
+            content_blocks: (!content_blocks.is_empty()).then_some(content_blocks),
         }],
     }
 }
@@ -1217,12 +1264,8 @@ fn tool_result_message(tool_use_id: &str, content: String, is_error: bool) -> Me
 /// single associated `Fut` type cannot express. Taking ownership sidesteps
 /// that; production callers move the clone into an `async move` block.
 async fn run_agentic_prompt_turn<R, W, F, Fut>(
-    config: &Config,
-    model: &str,
-    session_id: &str,
+    context: AcpTurnContext<'_>,
     mut messages: Vec<Message>,
-    tool_registry: &ToolRegistry,
-    response_id_policy: JsonRpcResponseIdPolicy,
     reader: &mut Lines<R>,
     writer: &mut W,
     mut open_stream: F,
@@ -1233,6 +1276,11 @@ where
     F: FnMut(Vec<Message>) -> Fut,
     Fut: Future<Output = Result<StreamEventBox>>,
 {
+    let AcpTurnContext {
+        session_id,
+        response_id_policy,
+        ..
+    } = context;
     let mut has_tool_receipts = false;
     for _round in 0..MAX_ACP_TOOL_ROUNDS {
         let stream = open_stream(messages.clone())
@@ -1275,18 +1323,9 @@ where
             return Ok((PromptOutcome::Completed(text), messages));
         }
 
-        let batch = execute_tool_calls_with_cancellation(
-            config,
-            model,
-            tool_registry,
-            tool_calls,
-            session_id,
-            response_id_policy,
-            reader,
-            writer,
-        )
-        .await
-        .map_err(|error| AgenticPromptError::new(error, &messages, has_tool_receipts))?;
+        let batch = execute_tool_calls_with_cancellation(context, tool_calls, reader, writer)
+            .await
+            .map_err(|error| AgenticPromptError::new(error, &messages, has_tool_receipts))?;
         match batch {
             ToolBatchOutcome::Cancelled(tool_result_messages) => {
                 messages.extend(tool_result_messages);
@@ -1639,8 +1678,8 @@ impl AcpServer {
             .map(str::to_string);
 
         let tools = tool_registry.to_api_tools();
-        let route_limits =
-            resolve_acp_route_limits(&execution_config, request_route.provider, &model);
+        let (route_limits, image_input) =
+            resolve_acp_route_facts(&execution_config, request_route.provider, &model);
         let system = frozen_acp_system_prompt(
             frozen_system_prompt,
             &execution_config,
@@ -1650,9 +1689,15 @@ impl AcpServer {
             route_limits,
         );
 
+        let mut outbound_messages = messages.to_vec();
+        crate::image_attach::strip_images_when_unsupported(
+            &mut outbound_messages,
+            image_input,
+            &request_route.model,
+        );
         let request = MessageRequest {
             model,
-            messages: messages.to_vec(),
+            messages: outbound_messages,
             max_tokens: crate::route_budget::effective_max_output_tokens_for_route(
                 request_route.provider,
                 &request_route.model,
@@ -1677,14 +1722,22 @@ impl AcpServer {
     }
 }
 
-fn resolve_acp_route_limits(
+fn resolve_acp_route_facts(
     config: &Config,
     provider: ApiProvider,
     model: &str,
-) -> Option<codewhale_config::route::RouteLimits> {
-    crate::route_runtime::resolve_runtime_route(config, provider, Some(model))
-        .ok()
-        .and_then(|route| crate::route_budget::known_route_limits(route.candidate.limits()))
+) -> (
+    Option<codewhale_config::route::RouteLimits>,
+    crate::model_profile::SupportState,
+) {
+    let Ok(route) = crate::route_runtime::resolve_runtime_route(config, provider, Some(model))
+    else {
+        return (None, crate::model_profile::SupportState::Unknown);
+    };
+    (
+        crate::route_budget::known_route_limits(route.candidate.limits()),
+        route.candidate.capabilities().image_input,
+    )
 }
 
 /// Return the first fully composed ACP system prompt for this user turn.
@@ -1965,16 +2018,40 @@ async fn write_tool_call_update<W>(
 where
     W: AsyncWrite + Unpin,
 {
+    write_tool_call_update_with_blocks(writer, session_id, call, status, content, &[]).await
+}
+
+async fn write_tool_call_update_with_blocks<W>(
+    writer: &mut W,
+    session_id: &str,
+    call: &PendingToolCall,
+    status: &str,
+    content: Option<&str>,
+    rich_blocks: &[codewhale_tools::ToolResultContentBlock],
+) -> Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
     let mut update = json!({
         "sessionUpdate": "tool_call_update",
         "toolCallId": call.id,
         "status": status,
     });
-    if let Some(content) = content {
-        update["content"] = json!([{
-            "type": "content",
-            "content": { "type": "text", "text": truncate_for_acp(content) }
-        }]);
+    if content.is_some() || !rich_blocks.is_empty() {
+        let mut blocks = Vec::with_capacity(rich_blocks.len() + usize::from(content.is_some()));
+        if let Some(content) = content {
+            blocks.push(json!({
+                "type": "content",
+                "content": { "type": "text", "text": truncate_for_acp(content) }
+            }));
+        }
+        blocks.extend(rich_blocks.iter().map(|block| match block {
+            codewhale_tools::ToolResultContentBlock::Image { mime_type, data } => json!({
+                "type": "content",
+                "content": { "type": "image", "data": data, "mimeType": mime_type }
+            }),
+        }));
+        update["content"] = json!(blocks);
     }
     let notification = json!({
         "jsonrpc": "2.0",
@@ -2213,6 +2290,39 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::collections::VecDeque;
+
+    #[tokio::test]
+    async fn tool_update_emits_typed_acp_image_content() {
+        let mut output = Vec::new();
+        let call = PendingToolCall {
+            id: "call_image_1".to_string(),
+            name: "read".to_string(),
+            input: json!({"path": "shot.png"}),
+            parse_error: None,
+        };
+        write_tool_call_update_with_blocks(
+            &mut output,
+            "session_1",
+            &call,
+            "completed",
+            Some("screenshot captured"),
+            &[codewhale_tools::ToolResultContentBlock::Image {
+                mime_type: "image/png".to_string(),
+                data: "QUJD".to_string(),
+            }],
+        )
+        .await
+        .expect("ACP update");
+
+        let lines = parse_lines(output);
+        let content = lines[0]["params"]["update"]["content"]
+            .as_array()
+            .expect("ACP content blocks");
+        assert_eq!(content[0]["content"]["type"], "text");
+        assert_eq!(content[1]["content"]["type"], "image");
+        assert_eq!(content[1]["content"]["mimeType"], "image/png");
+        assert_eq!(content[1]["content"]["data"], "QUJD");
+    }
 
     #[test]
     fn initialize_advertises_baseline_acp_agent() {
@@ -2734,12 +2844,14 @@ mod tests {
         let mut writer = agent_output;
 
         let outcome = execute_tool_calls_with_cancellation(
-            config,
-            "test-model",
-            registry,
+            AcpTurnContext {
+                config,
+                model: "test-model",
+                session_id: "sess_1",
+                tool_registry: registry,
+                response_id_policy,
+            },
             vec![call],
-            "sess_1",
-            response_id_policy,
             &mut reader,
             &mut writer,
         )
@@ -3016,6 +3128,7 @@ mod tests {
         assert!(reg1.contains("File"));
         assert!(reg1.contains("Git"));
         assert!(reg1.contains("apply_patch"));
+        assert!(reg1.contains("bash"));
         assert!(reg1.contains("Bash"));
         assert!(
             reg1.names()
@@ -3057,7 +3170,7 @@ mod tests {
             ..Config::default()
         };
         let registry = build_acp_tool_registry(&configured, &workspace, true);
-        assert!(registry.contains("Bash"));
+        assert!(registry.contains("bash"));
         assert!(registry.context().sandbox_backend.is_some());
 
         let unsupported = Config {
@@ -3447,15 +3560,17 @@ mod tests {
         let mut out = Vec::new();
 
         let outcome = execute_tool_calls_with_cancellation(
-            &Config::default(),
-            "test-model",
-            &registry,
+            AcpTurnContext {
+                config: &Config::default(),
+                model: "test-model",
+                session_id: "sess_1",
+                tool_registry: &registry,
+                response_id_policy: JsonRpcResponseIdPolicy::Preserve,
+            },
             vec![pending_call(
                 "File",
                 json!({"action": "read", "path": "read.txt"}),
             )],
-            "sess_1",
-            JsonRpcResponseIdPolicy::Preserve,
             &mut reader,
             &mut out,
         )
@@ -3707,9 +3822,13 @@ mod tests {
         let mut out = Vec::new();
 
         let (outcome, messages) = run_agentic_prompt_turn(
-            &Config::default(),
-            "test-model",
-            "sess_1",
+            AcpTurnContext {
+                config: &Config::default(),
+                model: "test-model",
+                session_id: "sess_1",
+                tool_registry: &registry,
+                response_id_policy: JsonRpcResponseIdPolicy::Preserve,
+            },
             vec![Message {
                 role: "user".to_string(),
                 content: vec![ContentBlock::Text {
@@ -3717,8 +3836,6 @@ mod tests {
                     cache_control: None,
                 }],
             }],
-            &registry,
-            JsonRpcResponseIdPolicy::Preserve,
             &mut reader,
             &mut out,
             |_msgs| scripted.next(),
@@ -3781,9 +3898,13 @@ mod tests {
         let mut out = Vec::new();
 
         let error = run_agentic_prompt_turn(
-            &Config::default(),
-            "test-model",
-            "sess_1",
+            AcpTurnContext {
+                config: &Config::default(),
+                model: "test-model",
+                session_id: "sess_1",
+                tool_registry: &registry,
+                response_id_policy: JsonRpcResponseIdPolicy::Preserve,
+            },
             vec![Message {
                 role: "user".to_string(),
                 content: vec![ContentBlock::Text {
@@ -3791,8 +3912,6 @@ mod tests {
                     cache_control: None,
                 }],
             }],
-            &registry,
-            JsonRpcResponseIdPolicy::Preserve,
             &mut reader,
             &mut out,
             |_msgs| scripted.next(),
@@ -3840,9 +3959,13 @@ mod tests {
         let mut out = Vec::new();
 
         let (outcome, messages) = run_agentic_prompt_turn(
-            &Config::default(),
-            "test-model",
-            "sess_1",
+            AcpTurnContext {
+                config: &Config::default(),
+                model: "test-model",
+                session_id: "sess_1",
+                tool_registry: &registry,
+                response_id_policy: JsonRpcResponseIdPolicy::Preserve,
+            },
             vec![Message {
                 role: "user".to_string(),
                 content: vec![ContentBlock::Text {
@@ -3850,8 +3973,6 @@ mod tests {
                     cache_control: None,
                 }],
             }],
-            &registry,
-            JsonRpcResponseIdPolicy::Preserve,
             &mut reader,
             &mut out,
             |_msgs| scripted.next(),
@@ -3906,9 +4027,13 @@ mod tests {
         let mut out = Vec::new();
 
         let (outcome, messages) = run_agentic_prompt_turn(
-            &Config::default(),
-            "test-model",
-            "sess_1",
+            AcpTurnContext {
+                config: &Config::default(),
+                model: "test-model",
+                session_id: "sess_1",
+                tool_registry: &registry,
+                response_id_policy: JsonRpcResponseIdPolicy::Preserve,
+            },
             vec![Message {
                 role: "user".to_string(),
                 content: vec![ContentBlock::Text {
@@ -3916,8 +4041,6 @@ mod tests {
                     cache_control: None,
                 }],
             }],
-            &registry,
-            JsonRpcResponseIdPolicy::Preserve,
             &mut reader,
             &mut out,
             |_msgs| scripted.next(),

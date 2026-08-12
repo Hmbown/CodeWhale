@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:797395092563 -->
+<!-- source: README.md sha256:4fb18fffb0fe -->
 # Codewhale
 
 一个面向终端的开源编程智能体——模型由你自带。
@@ -38,7 +38,7 @@ codewhale web                            # local browser client on 127.0.0.1
 ```
 
 
-在 TUI 中:`/model` 同时切换 provider 和模型,`/fleet` 构建并运行团队——一次一个角色,各自带着自己的模型,`/undo` 撤销上一轮,`/restore <N>` 把工作区回滚到更早的快照(不带参数的 `/restore` 只列出快照)。输入区为空时,`Tab` 在 Plan / Act / Operate 之间循环切换;输入区有内容时,`Tab` 改为补全斜杠命令和 `@` 提及。`Shift+Tab` 在任何时候都能循环切换 Ask / Auto-Review / Full Access 权限姿态。`!` 让 shell 命令经由正常的审批路径运行。
+在 TUI 中:`/model` 同时切换 provider 和模型,`/fleet` 构建并运行团队——一次一个角色,各自带着自己的模型,`/undo` 撤销上一轮,`/restore <N>` 把工作区回滚到更早的快照(不带参数的 `/restore` 只列出快照)。输入区为空时,`Tab` 在 Plan / Work / Operate 之间循环切换;输入区有内容时,`Tab` 改为补全斜杠命令和 `@` 提及。`Shift+Tab` 在任何时候都能循环切换 Ask / Auto-Review / Full Access 权限姿态。`!` 让 shell 命令经由正常的审批路径运行。
 
 ## 功能
 

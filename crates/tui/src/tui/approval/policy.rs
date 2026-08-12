@@ -70,7 +70,10 @@ pub fn get_tool_category(name: &str) -> ToolCategory {
         // Workflow is multi-agent orchestration; reuse Agent stakes/routing
         // and specialize the impact card via build_impact_summary (#4126).
         ToolCategory::Agent
-    } else if matches!(name, "write_file" | "edit_file" | "apply_patch") {
+    } else if matches!(
+        name,
+        "write" | "edit" | "write_file" | "edit_file" | "apply_patch"
+    ) {
         ToolCategory::FileWrite
     } else if matches!(
         name,
@@ -79,7 +82,9 @@ pub fn get_tool_category(name: &str) -> ToolCategory {
         ToolCategory::Network
     } else if matches!(
         name,
-        "exec_shell"
+        "bash"
+            | "Bash"
+            | "exec_shell"
             | "task_shell_start"
             | "task_shell_wait"
             | "exec_shell_wait"
@@ -98,7 +103,8 @@ pub fn get_tool_category(name: &str) -> ToolCategory {
         ToolCategory::McpAction
     } else if matches!(
         name,
-        "read_file"
+        "read"
+            | "read_file"
             | "list_dir"
             | "work_update"
             | "todo_write"

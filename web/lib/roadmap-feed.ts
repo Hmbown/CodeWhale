@@ -37,6 +37,8 @@ interface KVNamespace {
 }
 
 async function gh<T>(url: string, ghToken?: string): Promise<T | null> {
+  if (process.env.NEXT_PHASE === "phase-production-build") return null;
+
   const headers: Record<string, string> = {
     Accept: "application/vnd.github+json",
     "User-Agent": "codewhale-web-roadmap",

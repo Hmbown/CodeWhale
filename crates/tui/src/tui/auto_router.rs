@@ -139,6 +139,7 @@ mod tests {
                 content: vec![
                     ContentBlock::Thinking {
                         signature: None,
+                        state: None,
                         thinking: "The user seems to be asking me to classify myself.".to_string(),
                     },
                     ContentBlock::Text {

@@ -315,11 +315,11 @@ impl ToolSpec for ApplyPatchTool {
     }
 
     fn model_visible(&self) -> bool {
-        false
+        true
     }
 
     fn description(&self) -> &'static str {
-        "Apply a unified-diff patch (multi-hunk, multi-file). Use this instead of `git apply`, `patch`, or repeated `edit_file` calls in `Bash` — single transactional change with fuzzy matching and a rendered diff. Pass `expected_hash` (the `content_hash` from a prior `read`) to have the whole patch refused, with nothing written, if the target file changed since that read."
+        "Apply a transactional unified-diff patch across one or more files, with fuzzy context matching and a rendered diff."
     }
 
     fn input_schema(&self) -> Value {

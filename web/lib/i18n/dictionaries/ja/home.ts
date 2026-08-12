@@ -8,7 +8,7 @@ import type { HomeDict } from "../types";
  * "LLM leverage for everyone" positioning.
  *
  * Product vocabulary stays literal and matches the TUI locale pack:
- * Plan / Act / Operate, Ask / Auto-Review / Full Access, Codewhale, TUI,
+ * Plan / Work / Operate, Ask / Auto-Review / Full Access, Codewhale, TUI,
  * `codewhale exec`, Runtime API + MCP, Fleet, Node 18+, Rust, MIT.
  * "Permission posture" renders as 権限 (the TUI's own wording), not ポスチャ.
  *
@@ -49,7 +49,7 @@ export const home: HomeDict = {
 
   proofHeading: "水中のターミナルシェル。どんなモデルでも。あなたのマシンで。",
   proofBody:
-    "すでに使っているモデルをそのまま持ち込めます — ホスト型、ゲートウェイ、ローカル。Plan / Act / Operate と明示的な権限で、どこまで潜るかはあなたの管理下に。",
+    "すでに使っているモデルをそのまま持ち込めます — ホスト型、ゲートウェイ、ローカル。Plan / Work / Operate と明示的な権限で、どこまで潜るかはあなたの管理下に。",
 
   sealDecides: "法",
   decidesEyebrow: "判断の過程を見る",

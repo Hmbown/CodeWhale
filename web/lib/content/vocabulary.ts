@@ -3,7 +3,7 @@
  *
  * This module is the single source of truth for the exact product nouns a new
  * user meets on the site: the Fleet/Workflow/Lane/Runtime execution nouns,
- * the Plan/Act/Operate + Ask/Auto-Review/Full Access control vocabulary, the
+ * the Plan/Work/Operate + Ask/Auto-Review/Full Access control vocabulary, the
  * public Consultant role, and the fields that make route provenance legible.
  *
  * TRUTH CONTRACT:
@@ -78,21 +78,21 @@ export interface ControlTerm {
   description: LocalizedText;
 }
 
-/** TUI modes — cycle with Tab when the composer is idle (docs/MODES.md). */
+/** TUI modes — cycle with Tab when the composer is empty (docs/MODES.md). */
 export const CONTROL_MODES: ControlTerm[] = [
   {
     term: "Plan",
     kind: "mode",
     description: {
-      en: "Design-first and always read-only: investigation tools stay available, shell and patch execution stay off.",
-      zh: "设计优先且始终只读：调查工具可用，shell 与补丁执行保持关闭。",
+      en: "Design-first and read-only: the primitive names stay stable while mutation and shell execution are centrally refused.",
+      zh: "设计优先且只读：基础工具名称保持稳定，但修改与 shell 执行会被集中拒绝。",
     },
   },
   {
-    term: "Act",
+    term: "Work",
     kind: "mode",
     description: {
-      en: "The default working mode for new sessions: multi-step tool use with approval prompts gating each shell call.",
+      en: "The default execution mode: multi-step tool use under the active permission posture, sandbox, and repository rules.",
       zh: "新会话的默认工作模式：多步骤工具调用，每次 shell 调用都有审批提示把关。",
     },
   },
@@ -100,13 +100,13 @@ export const CONTROL_MODES: ControlTerm[] = [
     term: "Operate",
     kind: "mode",
     description: {
-      en: "Multitask conductor under the same permission posture, sandbox, and safety rules as Act; background worker dispatch is the default for real multi-step work.",
-      zh: "在与 Act 相同的权限姿态、沙箱和安全规则下进行多任务调度；真正的多步骤工作默认派发给后台 worker。",
+      en: "Multitask conductor under the same permission posture, sandbox, and safety rules as Work; background worker dispatch is the default for separable work.",
+      zh: "在与 Work 相同的权限姿态、沙箱和安全规则下进行多任务调度；可分离工作默认派发给后台 worker。",
     },
   },
 ];
 
-/** Permission postures — cycle with Shift+Tab when the composer is idle. */
+/** Permission postures — cycle with Shift+Tab unless a non-Config modal owns input. */
 export const PERMISSION_POSTURES: ControlTerm[] = [
   {
     term: "Ask",

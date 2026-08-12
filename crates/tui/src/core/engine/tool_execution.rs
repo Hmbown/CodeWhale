@@ -233,7 +233,7 @@ impl Engine {
         tool_registry: Option<&crate::tools::ToolRegistry>,
         tool_exec_lock: Arc<RwLock<()>>,
         context_override: Option<crate::tools::ToolContext>,
-    ) -> Result<ToolResult, ToolError> {
+    ) -> Result<RichToolResult, ToolError> {
         let calls = parse_parallel_tool_calls(&input)?;
         let mcp_pool = if calls.iter().any(|(tool, _)| McpPool::is_mcp_tool(tool)) {
             Some(self.ensure_mcp_pool().await?)
@@ -295,7 +295,8 @@ impl Engine {
             let context_override = context_override.clone();
             let cancel_token = self.cancel_token.clone();
             tasks.push(async move {
-                let _shell_permit = if tool_name == "exec_shell" {
+                let _shell_permit = if matches!(tool_name.as_str(), "bash" | "Bash" | "exec_shell")
+                {
                     shell_permits.acquire_owned().await.ok()
                 } else {
                     None
@@ -320,9 +321,15 @@ impl Engine {
 
         let mut results: Vec<Option<ParallelToolResultEntry>> = Vec::with_capacity(result_count);
         results.resize_with(result_count, || None);
+        let mut content_blocks = Vec::new();
         while let Some((index, tool_name, result)) = tasks.next().await {
             let entry = match result {
                 Ok(output) => {
+                    let RichToolResult {
+                        result: output,
+                        content_blocks: output_blocks,
+                    } = output;
+                    content_blocks.extend(output_blocks);
                     let mut error = None;
                     if !output.success {
                         error = Some(output.content.clone());
@@ -348,8 +355,11 @@ impl Engine {
         }
         let results = results.into_iter().flatten().collect();
 
-        ToolResult::json(&ParallelToolResult { results })
-            .map_err(|e| ToolError::execution_failed(e.to_string()))
+        let result = ToolResult::json(&ParallelToolResult { results })
+            .map_err(|e| ToolError::execution_failed(e.to_string()))?;
+        Ok(crate::image_attach::bound_rich_tool_result(
+            RichToolResult::with_content_blocks(result, content_blocks),
+        ))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -365,7 +375,7 @@ impl Engine {
         registry: Option<&crate::tools::ToolRegistry>,
         mcp_pool: Option<Arc<AsyncMutex<McpPool>>>,
         context_override: Option<crate::tools::ToolContext>,
-    ) -> Result<ToolResult, ToolError> {
+    ) -> Result<RichToolResult, ToolError> {
         if cancel_token
             .as_ref()
             .is_some_and(CancellationToken::is_cancelled)
@@ -449,21 +459,27 @@ impl Engine {
             }
         }
 
-        let outcome = if McpPool::is_mcp_tool(&tool_name) {
+        let outcome: Result<RichToolResult, ToolError> = if McpPool::is_mcp_tool(&tool_name) {
             if let Some(pool) = mcp_pool {
-                Engine::execute_mcp_tool_with_pool(pool, &tool_name, tool_input).await
+                Engine::execute_mcp_tool_with_pool(pool, &tool_name, tool_input)
+                    .await
+                    .map(RichToolResult::plain)
             } else {
                 Err(ToolError::not_available(format!(
                     "tool '{tool_name}' is not registered"
                 )))
             }
         } else if tool_name == CODE_EXECUTION_TOOL_NAME {
-            execute_code_execution_tool(&tool_input, &workspace).await
+            execute_code_execution_tool(&tool_input, &workspace)
+                .await
+                .map(RichToolResult::plain)
         } else if tool_name == JS_EXECUTION_TOOL_NAME {
-            execute_js_execution_tool(&tool_input, &workspace).await
+            execute_js_execution_tool(&tool_input, &workspace)
+                .await
+                .map(RichToolResult::plain)
         } else if let Some(registry) = registry {
             registry
-                .execute_full_with_context(&tool_name, tool_input, context_override.as_ref())
+                .execute_rich_full_with_context(&tool_name, tool_input, context_override.as_ref())
                 .await
         } else {
             Err(ToolError::not_available(format!(
@@ -487,8 +503,8 @@ impl Engine {
                     tool = %tool_name,
                     dispatch,
                     duration_ms,
-                    success = result.success,
-                    output_bytes = result.content.len(),
+                    success = result.result.success,
+                    output_bytes = result.result.content.len(),
                     "tool.exec.end",
                 );
             }

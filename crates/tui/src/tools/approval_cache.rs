@@ -51,6 +51,7 @@ pub struct ApprovalKey(pub String);
 /// invocations of the same tool with different parameters.
 #[must_use]
 pub fn build_approval_key(tool_name: &str, input: &serde_json::Value) -> ApprovalKey {
+    let tool_name = crate::tools::canonical_action::canonical_action_alias(tool_name, input);
     let fingerprint = match tool_name {
         "apply_patch" | "write_file" | "edit_file" | "fim_edit" => {
             format!("file:{tool_name}:{}", hash_json_value(input))
@@ -80,6 +81,7 @@ pub fn build_approval_key(tool_name: &str, input: &serde_json::Value) -> Approva
 /// by flags. Denials must keep using the exact [`build_approval_key`].
 #[must_use]
 pub fn build_approval_grouping_key(tool_name: &str, input: &serde_json::Value) -> ApprovalKey {
+    let tool_name = crate::tools::canonical_action::canonical_action_alias(tool_name, input);
     let fingerprint = match tool_name {
         "apply_patch" => {
             let paths_hash = hash_patch_paths(input);
@@ -389,6 +391,28 @@ mod tests {
         let key_a = build_approval_key("write_file", &json!({"path": "a.txt", "content": "x"}));
         let key_b = build_approval_key("write_file", &json!({"content": "x", "path": "a.txt"}));
         assert_eq!(key_a, key_b);
+    }
+
+    #[test]
+    fn lowercase_primitives_share_legacy_approval_keys() {
+        let shell = json!({"command": "cargo test"});
+        assert_eq!(
+            build_approval_key("bash", &shell),
+            build_approval_key("exec_shell", &shell)
+        );
+        let write = json!({"path": "a.txt", "content": "x"});
+        assert_eq!(
+            build_approval_key("write", &write),
+            build_approval_key("write_file", &write)
+        );
+        let edit = json!({
+            "path": "a.txt",
+            "edits": [{"oldText": "x", "newText": "y"}]
+        });
+        assert_eq!(
+            build_approval_key("edit", &edit),
+            build_approval_key("edit_file", &edit)
+        );
     }
 
     #[test]

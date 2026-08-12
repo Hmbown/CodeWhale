@@ -225,7 +225,7 @@ without a network tool loses every reaching network surface — `web.run`,
 `fetch_url`, `web_search`, `github`, the `mcp*` families, and the reaching
 `rlm` actions — rather than merely being refused at call time. The one
 deliberate exception is the canonical `Web` family's `search`/`fetch` actions:
-they are the read-only web surface a recon/read-only member is entitled to
+they are the read-only web surface a read-only member is entitled to
 (parity with an ordinary scout), so a network-denied member keeps exactly
 `Web {search, fetch}`. It stays read-only in fact, not just in name: a
 URL-addressed `fetch` is refused at dispatch, and nothing else on the surface

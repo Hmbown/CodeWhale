@@ -2639,11 +2639,9 @@ pub struct Config {
     #[serde(default)]
     pub snapshots: Option<SnapshotsConfig>,
 
-    /// Web search provider configuration. When absent, defaults to DuckDuckGo.
-    /// Set `provider` to another supported backend such as `bing`, `tavily`,
-    /// `bocha`, `metaso`, `searxng`, `baidu`, `volcengine`, or `sofya`.
-    /// API-backed services require provider-specific credentials; SearXNG
-    /// requires a trusted `base_url`.
+    /// Web search provider configuration. When absent, defaults to keyless
+    /// Firecrawl. Other API services require credentials; SearXNG requires a
+    /// trusted `base_url`.
     #[serde(default)]
     pub search: Option<SearchConfig>,
 

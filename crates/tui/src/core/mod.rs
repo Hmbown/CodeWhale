@@ -20,6 +20,7 @@ pub mod authority;
 // `Op`-in / `EventMsg`-out API, one `ThreadId`/`SessionId` type, and one
 // `Journal` shape. New code should import from `codewhale_core`.
 pub mod engine;
+pub(crate) use engine::tool_catalog::allowlist_is_native_file_and_shell_only;
 pub mod events;
 // The first production consumer of the staged runtime contract is the
 // provider-neutral model boundary. Keep the remaining contract files staged

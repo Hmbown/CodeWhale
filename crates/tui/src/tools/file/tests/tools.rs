@@ -385,7 +385,7 @@ async fn read_file_byte_truncation_keeps_head_and_tail() {
         result.content
     );
     assert!(
-        result.content.contains("start_line=1 max_lines=20"),
+        result.content.contains("offset=1 limit=20"),
         "the note names a concrete narrower window: {}",
         result.content
     );
@@ -494,8 +494,8 @@ async fn read_file_streamed_range_on_large_file_matches_windowed_contract() {
     assert!(result.content.contains("  1509│ line 1509"));
     assert!(!result.content.contains("  1510│"));
     assert!(result.content.contains(
-            "[TRUNCATED] Showing lines 1500-1509 of 2000. To continue, call File with action=\"read\" path=\"large.txt\" start_line=1510 max_lines=10"
-        ));
+        "[TRUNCATED] Showing lines 1500-1509 of 2000. To continue, call read with path=\"large.txt\" offset=1510 limit=10"
+    ));
     assert!(!result.content.contains("read_file"), "{}", result.content);
 
     // Default window (no range) on the same large file starts at line 1.

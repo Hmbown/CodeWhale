@@ -52,6 +52,25 @@ jobs:
       - name: Build production site
         run: npm run build
 
+  deploy-reminder:
+    name: Deployment approval needed
+    runs-on: ubuntu-latest
+    needs: lint
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Surface the manual deployment gate
+        env:
+          REVISION: ${{ github.sha }}
+        run: |
+          echo "::notice title=Web deployment approval needed::Revision ${REVISION} passed the web gates but is not deployed. Dispatch web.yml on main to publish it."
+          {
+            echo "## Web deployment approval needed"
+            echo
+            echo "Revision \`${REVISION}\` passed the web gates but has **not** been deployed."
+            echo
+            echo "A maintainer can publish it with \`gh workflow run web.yml --repo Hmbown/CodeWhale --ref main\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   deploy:
     name: Deploy to Cloudflare
     runs-on: ubuntu-latest

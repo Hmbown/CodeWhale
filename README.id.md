@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:797395092563 -->
+<!-- source: README.md sha256:4fb18fffb0fe -->
 # Codewhale
 
 Sebuah coding agent sumber terbuka untuk terminal Anda — bawa model pilihan Anda sendiri.
@@ -38,7 +38,7 @@ codewhale web                            # local browser client on 127.0.0.1
 ```
 
 
-Di dalam TUI: `/model` mengganti penyedia dan model sekaligus, `/fleet` menjalankan tim pekerja (workers), `/undo` membatalkan langkah (turn) terakhir, dan `/restore <N>` mengembalikan workspace ke snapshot sebelumnya (`/restore` tanpa argumen hanya menampilkan daftarnya). Saat composer kosong, `Tab` beralih antar mode Plan / Act / Operate; bila composer berisi teks, `Tab` justru melengkapi perintah slash dan sebutan `@`. `Shift+Tab` beralih antar postur izin Ask / Auto-Review / Full Access kapan saja. `!` menjalankan perintah shell melalui alur persetujuan normal.
+Di dalam TUI: `/model` mengganti penyedia dan model sekaligus, `/fleet` menjalankan tim pekerja (workers), `/undo` membatalkan langkah (turn) terakhir, dan `/restore <N>` mengembalikan workspace ke snapshot sebelumnya (`/restore` tanpa argumen hanya menampilkan daftarnya). Saat composer kosong, `Tab` beralih antar mode Plan / Work / Operate; bila composer berisi teks, `Tab` justru melengkapi perintah slash dan sebutan `@`. `Shift+Tab` beralih antar postur izin Ask / Auto-Review / Full Access kapan saja. `!` menjalankan perintah shell melalui alur persetujuan normal.
 
 ## Fitur & Kapabilitas
 

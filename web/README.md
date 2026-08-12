@@ -42,6 +42,10 @@ git rev-parse origin/main
 gh workflow run web.yml --repo Hmbown/CodeWhale --ref main
 ```
 
+Every green push to `main` also emits a `Deployment approval needed` workflow
+notice with that command. The reminder does not receive Cloudflare credentials
+and cannot deploy; it keeps the manual production approval boundary visible.
+
 The manual job records the pre-deploy source drift, builds the OpenNext bundle,
 deploys only after the protected Cloudflare inputs pass, and then requires the
 public `/api/facts` receipt to report the exact workflow SHA. A credential-free

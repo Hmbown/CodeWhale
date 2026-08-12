@@ -200,7 +200,7 @@ pub(crate) const MUTATING_TOOL_DENYLIST: &[&str] = &[
 /// receipt says `write=false`. Denying the raw shell entries and leaving the
 /// bounded verification surface (`Run` / `run_tests` / `run_verifiers`) intact
 /// keeps the verifier able to do its job under a contract that is true.
-/// Scout/reviewer recon selectively removes only canonical `Bash` from this
+/// Scout/reviewer read-only inspection selectively removes only canonical `Bash` from this
 /// deny list after the role is known; its input-specific read-only classifier
 /// remains the authority for that narrow exception.
 ///
@@ -502,12 +502,12 @@ impl ChildAuthority {
     ) -> Self {
         let mut authority = Self::clamp(member, session);
         authority.posture_role = posture_role_for_member(role, authority.ceiling);
-        let named_recon = matches!(
+        let bounded_inspection_role = matches!(
             role.trim().to_ascii_lowercase().as_str(),
             "scout" | "explore" | "explorer" | "reviewer" | "review"
         );
-        if named_recon && authority.ceiling.shell != ShellCeiling::None {
-            // Recon needs ordinary `git`/`rg`/`gh ... view|list` inspection.
+        if bounded_inspection_role && authority.ceiling.shell != ShellCeiling::None {
+            // Read-only inspection needs ordinary `git`/`rg`/`gh ... view|list` inspection.
             // Keep one canonical foreground tool and leave every legacy,
             // background, interactive, and terminal alias denied. The Bash
             // spec and the machine authority envelope both reclassify the
@@ -1619,7 +1619,7 @@ fn exact_member_profile(
     source: Option<&std::path::Path>,
 ) -> AgentProfile {
     let posture_role = posture_role_for_member(&member.role, member.permissions);
-    let recon_shell = matches!(posture_role, "scout" | "reviewer")
+    let bounded_inspection_shell = matches!(posture_role, "scout" | "reviewer")
         && member.permissions.shell != ShellCeiling::None;
     // The canonical wire model, so the child spawns with exactly what the
     // receipt records.
@@ -1650,9 +1650,9 @@ fn exact_member_profile(
         reasoning_effort: None,
         permissions: codewhale_config::FleetProfilePermissions {
             // This legacy boolean controls whether Bash is registered at all.
-            // Named recon with a non-none ceiling registers it, while the
+            // Named read-only inspection with a non-none ceiling registers it, while the
             // typed worker profile and per-input classifier keep it ReadOnly.
-            allow_shell: member.permissions.shell == ShellCeiling::Full || recon_shell,
+            allow_shell: member.permissions.shell == ShellCeiling::Full || bounded_inspection_shell,
             trust: false,
             approval_required: true,
         },
@@ -1928,7 +1928,7 @@ mod shell_ceiling_tests {
     }
 
     #[test]
-    fn named_recon_keeps_only_classifier_bounded_bash() {
+    fn bounded_inspection_role_keeps_only_classifier_bounded_bash() {
         for role in ["scout", "reviewer"] {
             let authority = ChildAuthority::clamp_for_role(
                 role,
@@ -1969,7 +1969,7 @@ mod shell_ceiling_tests {
                     .disallowed_tools
                     .iter()
                     .any(|name| name.eq_ignore_ascii_case("Bash")),
-                "{role} must not gain the recon exception"
+                "{role} must not gain the read-only inspection exception"
             );
         }
 
@@ -2340,7 +2340,7 @@ permissions = "read_only"
         let workflow = workflow_with(None, GLM_FLEET);
         let auditor = workflow.roster().get("auditor").expect("auditor");
 
-        // `reviewer`'s built-in posture now needs a full shell (recon:
+        // `reviewer`'s built-in posture now needs a full shell (read-only inspection:
         // bounded verification surface + network), which the `read_only`
         // ceiling this member saved refuses — so it is flattened into
         // `scout`, exactly as a `verifier` member under the same ceiling is.
@@ -2367,7 +2367,7 @@ permissions = "read_only"
         let read_write = PermissionCeiling::preset("read_write").expect("preset");
 
         // Roles that fit are preserved, including the renamed public role.
-        // `reviewer` needs a full shell for its recon posture, which a
+        // `reviewer` needs a full shell for its read-only inspection posture, which a
         // read-only ceiling refuses, so it flattens to `scout` like
         // `verifier` does below.
         assert_eq!(posture_role_for_member("reviewer", read_only), "scout");
@@ -2416,7 +2416,7 @@ permissions = "read_only"
         let workflow = workflow_with(None, GLM_FLEET);
         for (id, expected) in [
             // auditor saved `permissions = "read_only"`, which refuses
-            // reviewer's recon shell posture, so it projects scout.
+            // reviewer's read-only inspection shell posture, so it projects scout.
             ("auditor", FleetRole::Scout),
             ("implementer", FleetRole::Builder),
         ] {
@@ -2622,7 +2622,7 @@ permissions = "read_only"
         );
     }
 
-    /// Every network-denied preset — read_only/recon included — leaves the
+    /// Every network-denied preset — read_only/read-only inspection included — leaves the
     /// `Web` family name reachable and seals each of its reaching spellings.
     /// This is the deny-list half of the read-only web-search contract; the
     /// registry-side half (exactly `search`/`fetch`, with URL-addressed calls

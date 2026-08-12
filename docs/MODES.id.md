@@ -2,7 +2,7 @@
 
 Codewhale memiliki tiga konsep yang saling berhubungan:
 
-- **Mode TUI**: jenis interaksi yang terlihat (Plan / Act / Operate).
+- **Mode TUI**: jenis interaksi yang terlihat (Plan / Work / Operate).
 - **Postur Izin**: seberapa ketat antarmuka meminta persetujuan sebelum mengeksekusi alat.
 - **Lapisan Alur Kerja (Workflow Overlay)**: orkestrasi berjangka panjang opsional yang dapat berjalan di atas mode TUI mana pun ketika tugas membutuhkan banyak pekerja terkoordinasi.
 

@@ -169,7 +169,8 @@ pub(crate) fn authority_envelope_for_worker(
         && matches!(&spec.agent_type, FleetRole::Scout | FleetRole::Reviewer)
         && spec.runtime_profile.shell.allows_shell()
     {
-        // Recon gets one classifier-bounded foreground shell. Verifiers keep
+        // Scout and Reviewer get one classifier-bounded foreground shell.
+        // Verifiers keep
         // the dedicated Run surface, while planners/consultants remain
         // shell-less and writers retain the historical subprocess contract.
         ToolShellAuthority::ReadOnly

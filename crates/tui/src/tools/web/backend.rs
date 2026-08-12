@@ -29,6 +29,7 @@ pub(crate) struct BackendContext<'a> {
 pub(crate) enum ConfiguredSearchBackend<'a> {
     Bing(BackendContext<'a>),
     DuckDuckGo(BackendContext<'a>),
+    Firecrawl(BackendContext<'a>),
     Tavily(BackendContext<'a>),
     Bocha(BackendContext<'a>),
     Metaso(BackendContext<'a>),
@@ -52,6 +53,7 @@ impl<'a> ConfiguredSearchBackend<'a> {
         match provider {
             SearchProvider::Bing => Self::Bing(backend),
             SearchProvider::DuckDuckGo => Self::DuckDuckGo(backend),
+            SearchProvider::Firecrawl => Self::Firecrawl(backend),
             SearchProvider::Tavily => Self::Tavily(backend),
             SearchProvider::Bocha => Self::Bocha(backend),
             SearchProvider::Metaso => Self::Metaso(backend),
@@ -66,6 +68,7 @@ impl<'a> ConfiguredSearchBackend<'a> {
         match self {
             Self::Bing(_) => SearchProvider::Bing,
             Self::DuckDuckGo(_) => SearchProvider::DuckDuckGo,
+            Self::Firecrawl(_) => SearchProvider::Firecrawl,
             Self::Tavily(_) => SearchProvider::Tavily,
             Self::Bocha(_) => SearchProvider::Bocha,
             Self::Metaso(_) => SearchProvider::Metaso,
@@ -80,6 +83,7 @@ impl<'a> ConfiguredSearchBackend<'a> {
         match self {
             Self::Bing(context)
             | Self::DuckDuckGo(context)
+            | Self::Firecrawl(context)
             | Self::Tavily(context)
             | Self::Bocha(context)
             | Self::Metaso(context)
@@ -263,6 +267,7 @@ impl SearchBackend for ConfiguredSearchBackend<'_> {
         match self.provider() {
             SearchProvider::Bing => BackendId::Bing,
             SearchProvider::DuckDuckGo => BackendId::DuckDuckGo,
+            SearchProvider::Firecrawl => BackendId::Firecrawl,
             SearchProvider::Tavily => BackendId::Tavily,
             SearchProvider::Bocha => BackendId::Bocha,
             SearchProvider::Metaso => BackendId::Metaso,
@@ -443,6 +448,7 @@ mod tests {
         let cases = [
             (SearchProvider::Bing, BackendId::Bing),
             (SearchProvider::DuckDuckGo, BackendId::DuckDuckGo),
+            (SearchProvider::Firecrawl, BackendId::Firecrawl),
             (SearchProvider::Tavily, BackendId::Tavily),
             (SearchProvider::Bocha, BackendId::Bocha),
             (SearchProvider::Metaso, BackendId::Metaso),

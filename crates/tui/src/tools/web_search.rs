@@ -1,18 +1,9 @@
-//! Web search tool backed by a bounded backend chain: the active route's
-//! documented provider-native search, configured API search, then DuckDuckGo
-//! HTML scrape with a one-way Bing fallback. Explicit Bing and private
-//! DuckDuckGo-compatible routes remain single-provider. API adapters
-//! include Tavily, Bocha (博查),
-//! Metaso API (<https://metaso.cn>), SearXNG JSON API, Baidu AI Search,
-//! Volcengine Ark, and Sofya (<https://sofya.co>).
-//!
-//! This is the primary web search surface for agents. For browsing workflows
-//! (page open, click, screenshot) use a direct URL approach instead.
-//!
-//! Set `[search]` in config.toml to switch providers:
-//!   provider = "duckduckgo"  # or tavily/bocha/metaso/searxng/baidu/volcengine/sofya
+//! Bounded provider-native/configured web search with explicit fallback receipts.
+//! Adapters include Firecrawl, Tavily, Bocha, Metaso, SearXNG, Baidu,
+//! Volcengine, and Sofya; browsing remains a separate `web.run` workflow.
+//! `[search]` example:
+//!   provider = "firecrawl"  # keyless on Firecrawl Cloud; optional api_key
 //!   base_url = `"https://search.example/"`  # DDG-compatible URL or SearXNG instance
-//!   api_key = "tvly-..."
 
 use super::spec::{
     ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec, optional_u64,
@@ -42,6 +33,7 @@ use super::web::scrape::{
 const DUCKDUCKGO_ENDPOINT: &str = "https://html.duckduckgo.com/html/";
 const BING_HOST: &str = "www.bing.com";
 const BING_ENDPOINT: &str = "https://www.bing.com/search";
+const FIRECRAWL_ENDPOINT: &str = "https://api.firecrawl.dev/v2/search";
 const TAVILY_ENDPOINT: &str = "https://api.tavily.com/search";
 const BOCHA_ENDPOINT: &str = "https://api.bochaai.com/v1/web-search";
 const METASO_ENDPOINT: &str = "https://metaso.cn/api/v1";
@@ -82,7 +74,7 @@ fn get_bearer_token_re() -> &'static Regex {
     })
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct WebSearchEntry {
     title: String,
     url: String,
@@ -102,7 +94,7 @@ impl ToolSpec for WebSearchTool {
     }
 
     fn description(&self) -> &'static str {
-        "Search the web and return ranked results with URLs, snippets, session-scoped ref_ids, and an execution receipt. Open a result ref_id with `web.run` when the short summary is not enough; fetch only the few sources needed. When the exact active route reports a documented first-party server-side search tool, it is tried first; otherwise the default backend is DuckDuckGo with Bing fallback. Configured API backends visibly degrade through DuckDuckGo then Bing when unavailable, and every hop is recorded. Configuration and network-policy errors fail closed. Explicit Bing and private DuckDuckGo-compatible routes do not cross providers. Set `[search] provider = \"bing\" | \"tavily\" | \"bocha\" | \"metaso\" | \"searxng\" | \"baidu\" | \"volcengine\" | \"sofya\"` in config.toml, or `[search] base_url` for a private DuckDuckGo-compatible endpoint or trusted SearXNG instance. For a known canonical URL, prefer `fetch_url` directly."
+        "Search the web and return ranked results with URLs, snippets, session-scoped ref_ids, and an execution receipt. Open a result ref_id with `web.run` when the short summary is not enough; fetch only the few sources needed. When the exact active route reports a documented first-party server-side search tool, it is tried first; otherwise keyless Firecrawl is the default. Configured API backends visibly degrade through DuckDuckGo then Bing when unavailable, and every hop is recorded. Configuration and network-policy errors fail closed. Explicit Bing and private DuckDuckGo-compatible routes do not cross providers. Set `[search] provider = \"firecrawl\" | \"bing\" | \"tavily\" | \"bocha\" | \"metaso\" | \"searxng\" | \"baidu\" | \"volcengine\" | \"sofya\"` in config.toml. Firecrawl Cloud works keyless with a bounded quota. For a known canonical URL, prefer `fetch_url` directly."
     }
 
     fn input_schema(&self) -> Value {
@@ -187,11 +179,88 @@ impl ToolSpec for WebSearchTool {
 }
 
 impl WebSearchTool {
-    /// Search via a configured SearXNG JSON API.
-    ///
-    /// SearXNG exposes `/search?q=...&format=json`, but public instances often
-    /// disable JSON output or rate-limit automation. CodeWhale therefore uses
-    /// only the trusted instance configured in `[search] base_url`.
+    async fn run_firecrawl_search(
+        &self,
+        query: &str,
+        max_results: usize,
+        timeout_ms: u64,
+        context: &ToolContext,
+    ) -> Result<(Vec<WebSearchEntry>, String), ToolError> {
+        let env_key = std::env::var("FIRECRAWL_API_KEY").ok();
+        self.run_firecrawl_search_at(
+            FIRECRAWL_ENDPOINT,
+            query,
+            max_results,
+            timeout_ms,
+            context.search_api_key.as_deref().or(env_key.as_deref()),
+        )
+        .await
+    }
+
+    async fn run_firecrawl_search_at(
+        &self,
+        endpoint: &str,
+        query: &str,
+        max_results: usize,
+        timeout_ms: u64,
+        api_key: Option<&str>,
+    ) -> Result<(Vec<WebSearchEntry>, String), ToolError> {
+        let client = crate::tls::reqwest_client_builder()
+            .timeout(Duration::from_millis(timeout_ms))
+            .user_agent(USER_AGENT)
+            .build()
+            .map_err(|e| {
+                ToolError::execution_failed(format!("Failed to build HTTP client: {e}"))
+            })?;
+        let api_key = api_key.map(str::trim).filter(|key| !key.is_empty());
+        let payload = json!({
+            "query": query,
+            "limit": max_results,
+            "sources": [{"type": "web"}],
+        });
+        let mut request = client.post(endpoint).json(&payload);
+        if let Some(key) = api_key {
+            request = request.bearer_auth(key);
+        }
+        let response = request.send().await.map_err(|e| {
+            ToolError::execution_failed(format!("Firecrawl search request failed: {e}"))
+        })?;
+        let status = response.status();
+        let body = response.text().await.map_err(|e| {
+            ToolError::execution_failed(format!("Failed to read Firecrawl response: {e}"))
+        })?;
+        if !status.is_success() {
+            let message = match status.as_u16() {
+                401 | 403 if api_key.is_none() => "Firecrawl rejected keyless search; set `[search] api_key` or FIRECRAWL_API_KEY".to_string(),
+                401 | 403 => "Firecrawl authentication was rejected; check `[search] api_key` or FIRECRAWL_API_KEY".to_string(),
+                429 if api_key.is_none() => "Firecrawl keyless quota is exhausted; retry later or set `[search] api_key` / FIRECRAWL_API_KEY".to_string(),
+                429 => "Firecrawl quota is exhausted; retry later or check the configured account limits".to_string(),
+                code => format!("Firecrawl search failed: HTTP {code} — {}", truncate_error_body(&body)),
+            };
+            return Err(ToolError::execution_failed(message));
+        }
+        let parsed: Value = serde_json::from_str(&body).map_err(|e| {
+            ToolError::execution_failed(format!("Failed to parse Firecrawl response: {e}"))
+        })?;
+        if parsed.get("success").and_then(Value::as_bool) == Some(false) {
+            let detail = first_non_empty_string(&parsed, &["error", "message"])
+                .unwrap_or_else(|| "unknown API error".to_string());
+            return Err(ToolError::execution_failed(format!(
+                "Firecrawl search failed: {detail}"
+            )));
+        }
+        let mode = if api_key.is_some() {
+            "authenticated"
+        } else {
+            "keyless"
+        };
+        Ok((
+            parse_firecrawl_results(&parsed, max_results),
+            format!("Firecrawl {mode}"),
+        ))
+    }
+
+    /// Search a configured SearXNG JSON API; no public instance is assumed.
     async fn run_searxng_search(
         &self,
         query: &str,
@@ -308,11 +377,7 @@ impl WebSearchTool {
         Ok(parse_tavily_results(&parsed, max_results))
     }
 
-    /// Search via Sofya web search API (<https://sofya.co>).
-    ///
-    /// Sofya returns full extracted page content rather than snippets. The API
-    /// key (`ay_live_...`) comes from `[search] api_key`, falling back to the
-    /// `SOFYA_API_KEY` env var, and is sent as a `Bearer` token.
+    /// Search Sofya; it returns extracted content and accepts `SOFYA_API_KEY`.
     async fn run_sofya_search(
         &self,
         query: &str,
@@ -589,15 +654,7 @@ impl WebSearchTool {
         Ok(parse_baidu_results(&parsed, max_results))
     }
 
-    /// Search via Volcengine Ark Responses API web_search tool.
-    /// Uses strict JSON prompt constraints to extract structured results
-    /// from the model's search-augmented response.
-    ///
-    /// Overrides the user-supplied timeout to a minimum of 90 s because the
-    /// Responses API pipeline (web search → model inference → JSON generation)
-    /// is inherently slower than simple search-API round-trips.  A separate
-    /// `connect_timeout` of 15 s lets DNS/TLS failures surface quickly.
-    /// Transient transport errors are retried twice with exponential backoff.
+    /// Search via Volcengine Ark; it needs a 90s floor and retries transport failures.
     async fn run_volcengine_search(
         &self,
         query: &str,
@@ -621,9 +678,6 @@ impl WebSearchTool {
                 )
             })?;
 
-        // Volcengine Responses API pipeline (search + model inference) is
-        // slow, so enforce a floor of 90 s. The caller's value is used only
-        // when it exceeds 90_000 ms.
         let effective_timeout = timeout_ms.max(90_000);
 
         let client = crate::tls::reqwest_client_builder()
@@ -640,8 +694,6 @@ impl WebSearchTool {
 
         let payload = volcengine_search_payload(query, max_results);
 
-        // Retry transient transport errors (DNS, connection reset, timeout)
-        // up to 2 times with exponential backoff: 1 s, 2 s.
         let mut last_err: Option<ToolError> = None;
         for attempt in 0..3 {
             if attempt > 0 {
@@ -806,11 +858,7 @@ fn register_search_citations(response: &mut SearchResponse, context: &ToolContex
     }
 }
 
-/// Reject a misconfigured provider before any cache lookup or network attempt.
-///
-/// Configuration gaps are reported as `InvalidInput` ("not configured", with
-/// the exact config fix) so they stay distinguishable from transport failures
-/// (`ExecutionFailed`) and from successful-but-empty results.
+/// Reject misconfiguration before cache lookup or network access.
 fn preflight_search_provider(context: &ToolContext) -> Result<(), ToolError> {
     let configured_key = context
         .search_api_key
@@ -887,6 +935,7 @@ const fn default_backend_host(backend: BackendId) -> Option<&'static str> {
         BackendId::ProviderNative => None,
         BackendId::Bing => Some(BING_HOST),
         BackendId::DuckDuckGo => Some("html.duckduckgo.com"),
+        BackendId::Firecrawl => Some("api.firecrawl.dev"),
         BackendId::Tavily => Some("api.tavily.com"),
         BackendId::Bocha => Some("api.bochaai.com"),
         BackendId::Metaso => Some("metaso.cn"),
@@ -1008,6 +1057,20 @@ pub(crate) async fn run_backend_search(
     };
 
     match provider {
+        SearchProvider::Firecrawl => {
+            check_policy(context.network_policy.as_ref(), "api.firecrawl.dev")?;
+            let (results, note) = tool
+                .run_firecrawl_search(&query.query, max_results, timeout_ms, context)
+                .await?;
+            Ok(BackendSearch {
+                backend: BackendId::Firecrawl,
+                source: "firecrawl".to_string(),
+                backend_detail: Some("api.firecrawl.dev".to_string()),
+                results: normalize_entries(results),
+                degraded: Vec::new(),
+                note: Some(note),
+            })
+        }
         SearchProvider::Tavily => {
             check_policy(context.network_policy.as_ref(), "api.tavily.com")?;
             Ok(simple(
@@ -1099,9 +1162,6 @@ async fn run_scrape_search(
     timeout_ms: u64,
     context: &ToolContext,
 ) -> Result<BackendSearch, ToolError> {
-    // A configured API backend may carry a provider-specific base URL (most
-    // notably SearXNG). The public scrape fallback must never reinterpret
-    // that endpoint as DuckDuckGo-compatible HTML.
     let fallback_context = (provider == SearchProvider::DuckDuckGo
         && context.search_provider != SearchProvider::DuckDuckGo)
         .then(|| {
@@ -1337,6 +1397,27 @@ fn parse_tavily_results(parsed: &Value, max_results: usize) -> Vec<WebSearchEntr
                 title: title.to_string(),
                 url: url.to_string(),
                 snippet: first_non_empty_string(item, &["content", "snippet"]),
+            })
+        })
+        .take(max_results)
+        .collect()
+}
+
+fn parse_firecrawl_results(parsed: &Value, max_results: usize) -> Vec<WebSearchEntry> {
+    parsed
+        .pointer("/data/web")
+        .or_else(|| parsed.get("data"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            let title = item.get("title")?.as_str()?.trim();
+            let url = item.get("url")?.as_str()?.trim();
+            (!title.is_empty() && !url.is_empty()).then(|| WebSearchEntry {
+                title: title.to_string(),
+                url: url.to_string(),
+                snippet: first_non_empty_string(item, &["description", "markdown", "content"])
+                    .map(|value| value.chars().take(1_000).collect()),
             })
         })
         .take(max_results)
@@ -1906,10 +1987,6 @@ mod tests {
     use serde_json::json;
     use std::time::Instant;
 
-    // Regression guard: Bing /ck/a redirect hrefs are HTML-entity-encoded
-    // (`&amp;`). normalize_bing_url must decode entities before extracting the
-    // `u=` base64 payload, otherwise the real URL is never recovered and the
-    // result remains a Bing tracking URL instead of the cited source.
     #[test]
     fn bing_ckurl_with_html_entities_decodes_real_url() {
         let href = "https://www.bing.com/ck/a?!&amp;&amp;p=abc&amp;u=a1aHR0cHM6Ly9ydXN0LWxhbmcub3JnLw&amp;ntb=1";
@@ -1985,9 +2062,6 @@ mod tests {
 
     #[test]
     fn optional_max_results_prefers_top_level_value() {
-        // Top-level `max_results` wins over the array-form sibling
-        // because callers using the array form usually copy-paste it
-        // wholesale and then tweak the outer max_results afterwards.
         assert_eq!(
             optional_search_max_results(
                 &json!({"query": "x", "max_results": 8, "search_query": [{"q": "y", "max_results": 2}]})
@@ -1998,9 +2072,6 @@ mod tests {
 
     #[test]
     fn optional_max_results_falls_back_to_array_form() {
-        // When only the array form sets max_results, that value is the
-        // one that should reach the caller. This is the path V4 uses
-        // when it emits the structured `search_query: [{…}]` shape.
         assert_eq!(
             optional_search_max_results(&json!({"search_query": [{"q": "y", "max_results": 3}]})),
             3,
@@ -2009,9 +2080,6 @@ mod tests {
 
     #[test]
     fn optional_max_results_uses_default_when_neither_set() {
-        // No explicit bound anywhere → the DEFAULT (currently 5)
-        // applies, so the model can't accidentally pull the maximum
-        // worth of bandwidth just by omitting the field.
         assert_eq!(optional_search_max_results(&json!({"query": "x"})), 5);
         assert_eq!(
             optional_search_max_results(&json!({"search_query": [{"q": "y"}]})),
@@ -2021,10 +2089,6 @@ mod tests {
 
     #[test]
     fn optional_max_results_only_reads_first_array_entry() {
-        // Sub-search support is a future feature; for now the array
-        // entries beyond the first are ignored. Pin so a future
-        // multi-query implementation has to update this test
-        // intentionally rather than silently start fanning out.
         assert_eq!(
             optional_search_max_results(
                 &json!({"search_query": [{"q": "first", "max_results": 1}, {"q": "second", "max_results": 9}]})
@@ -2035,8 +2099,6 @@ mod tests {
 
     #[test]
     fn extract_search_query_trims_whitespace_from_array_form_q_alias() {
-        // The "trimmed" contract is part of the helper's invariant —
-        // a model sometimes pads `q` with newlines from a heredoc.
         let q = extract_search_query(&json!({"search_query": [{"q": "  deepseek tui  "}]}))
             .expect("array form should parse with trim");
         assert_eq!(q, "deepseek tui");
@@ -2044,9 +2106,6 @@ mod tests {
 
     #[test]
     fn extract_search_query_rejects_empty_query() {
-        // A "" query lands in extract_search_query → propagates as
-        // missing_field rather than a confusing engine error a few
-        // layers down. Lock the failure mode.
         for body in [json!({"query": ""}), json!({"q": "   "}), json!({})] {
             let err = extract_search_query(&body).expect_err("empty query must reject");
             let msg = format!("{err}");
@@ -2325,6 +2384,75 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn firecrawl_keyless_request_is_headerless_and_keyed_request_is_explicit() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v2/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "success": true,
+                "data": {"web": [{
+                    "title": "Firecrawl result",
+                    "url": "https://example.com/firecrawl",
+                    "description": "x".repeat(1_200)
+                }]}
+            })))
+            .mount(&server)
+            .await;
+        let endpoint = format!("{}/v2/search", server.uri());
+        let (entries, mode) = WebSearchTool
+            .run_firecrawl_search_at(&endpoint, "codewhale", 5, 5_000, None)
+            .await
+            .expect("keyless Firecrawl search");
+        WebSearchTool
+            .run_firecrawl_search_at(&endpoint, "codewhale", 5, 5_000, Some("fc-secret"))
+            .await
+            .expect("authenticated Firecrawl search");
+        let requests = server.received_requests().await.expect("recorded requests");
+        let payload: serde_json::Value =
+            serde_json::from_slice(&requests[0].body).expect("request JSON");
+
+        assert_eq!(entries[0].title, "Firecrawl result");
+        assert_eq!(entries[0].url, "https://example.com/firecrawl");
+        assert_eq!(
+            entries[0].snippet.as_deref().unwrap().chars().count(),
+            1_000
+        );
+        assert_eq!(mode, "Firecrawl keyless");
+        assert!(requests[0].headers.get("authorization").is_none());
+        assert_eq!(requests[1].headers["authorization"], "Bearer fc-secret");
+        assert!(payload.get("integration").is_none());
+        assert_eq!(payload["sources"][0]["type"], "web");
+    }
+
+    #[tokio::test]
+    async fn firecrawl_keyless_rate_limit_is_actionable() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v2/search"))
+            .respond_with(ResponseTemplate::new(429))
+            .mount(&server)
+            .await;
+        let error = WebSearchTool
+            .run_firecrawl_search_at(
+                &format!("{}/v2/search", server.uri()),
+                "quota",
+                5,
+                5_000,
+                None,
+            )
+            .await
+            .expect_err("429 must be actionable");
+        assert!(error.to_string().contains("keyless quota is exhausted"));
+        assert!(error.to_string().contains("FIRECRAWL_API_KEY"));
+    }
+
     #[test]
     fn volcengine_extract_text_skips_non_text_content_blocks() {
         let body = json!({
@@ -2342,52 +2470,6 @@ mod tests {
         assert_eq!(
             volcengine_extract_text(&body).as_deref(),
             Some("{\"results\":[]}")
-        );
-    }
-
-    #[tokio::test]
-    async fn tavily_provider_without_api_key_surfaces_clear_error_not_silent_fallback() {
-        // Trust-boundary pin: if a user has opted into Tavily but
-        // forgot the api_key, the tool must NOT silently fall through
-        // to DuckDuckGo (which would expose the query to a different
-        // provider than the user authorised). Instead it returns a
-        // ToolError that names the missing key explicitly.
-        use crate::config::SearchProvider;
-        use crate::tools::spec::{ToolContext, ToolSpec};
-
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let mut ctx = ToolContext::new(tmp.path().to_path_buf());
-        ctx.search_provider = SearchProvider::Tavily;
-        ctx.search_api_key = None;
-        let err = WebSearchTool
-            .execute(json!({"query": "anything"}), &ctx)
-            .await
-            .expect_err("missing api_key must surface as ToolError");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("Tavily") && msg.contains("API key"),
-            "error must name the provider and missing key; got `{msg}`"
-        );
-    }
-
-    #[tokio::test]
-    async fn bocha_provider_without_api_key_surfaces_clear_error_not_silent_fallback() {
-        // Same trust-boundary pin for Bocha.
-        use crate::config::SearchProvider;
-        use crate::tools::spec::{ToolContext, ToolSpec};
-
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let mut ctx = ToolContext::new(tmp.path().to_path_buf());
-        ctx.search_provider = SearchProvider::Bocha;
-        ctx.search_api_key = None;
-        let err = WebSearchTool
-            .execute(json!({"query": "anything"}), &ctx)
-            .await
-            .expect_err("missing api_key must surface as ToolError");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("Bocha") && msg.contains("API key"),
-            "error must name the provider and missing key; got `{msg}`"
         );
     }
 
@@ -2423,14 +2505,9 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn sofya_provider_without_api_key_surfaces_clear_error_not_silent_fallback() {
-        // Same trust-boundary pin as Tavily/Bocha: opting into Sofya without a
-        // key must surface a ToolError naming the provider, not silently fall
-        // through to DuckDuckGo.
         use crate::config::SearchProvider;
         use crate::tools::spec::{ToolContext, ToolSpec};
 
-        // This test holds the process-env lock through the awaited tool
-        // execution because the tool reads SOFYA_API_KEY during that call.
         let _guard = crate::test_support::lock_test_env();
         let prev = std::env::var_os("SOFYA_API_KEY");
         unsafe { std::env::remove_var("SOFYA_API_KEY") };
@@ -2462,10 +2539,6 @@ mod tests {
         use crate::config::SearchProvider;
         use crate::tools::spec::{ToolContext, ToolSpec};
 
-        // This test intentionally keeps the process-env lock through the
-        // awaited tool execution because the tool reads env fallbacks during
-        // that call. Dropping the lock before await would reintroduce races
-        // with other env-mutating tests.
         let _guard = crate::test_support::lock_test_env();
         let prev_volc = std::env::var_os("VOLCENGINE_API_KEY");
         let prev_volc_ark = std::env::var_os("VOLCENGINE_ARK_API_KEY");
@@ -3365,10 +3438,6 @@ mod tests {
         );
     }
 
-    // ── Offline deterministic corpus ─────────────────────────────────────────
-    // These tests exercise ranking, deduplication, domain filtering, truncation,
-    // and citation metadata without any network calls.
-
     #[test]
     fn rerank_assigns_sequential_ranks_starting_at_one() {
         // Simulates the post-dedup path: ranks may be non-contiguous after a
@@ -3410,9 +3479,6 @@ mod tests {
 
     #[test]
     fn register_search_citations_deduplicates_results_with_same_canonical_url() {
-        // Two result URLs that differ only by fragment normalize to the same
-        // canonical URL and receive the same ref_id. The second occurrence must
-        // be removed and ranks re-assigned contiguously.
         let namespace = "dedup-test-session-fragments";
         let query = SearchQuery::new("deduplicate".to_string(), 5, None, Vec::new(), None);
         let raw = BackendSearch {
@@ -3457,30 +3523,22 @@ mod tests {
             "duplicate canonical URL must reduce the result count"
         );
         assert_eq!(response.results.len(), 2);
-        // After deduplication, ranks must be re-assigned contiguously.
         assert_eq!(response.results[0].rank, 1);
         assert_eq!(response.results[1].rank, 2);
-        // First occurrence survives with its canonical (fragment-stripped) URL.
         assert_eq!(response.results[0].url, "https://dedup.example.com/page");
-        // The unique URL survives untouched.
         assert_eq!(
             response.results[1].url,
             "https://other.dedup.example.com/different"
         );
-        // The two surviving results must carry distinct ref_ids.
         assert_ne!(
             response.results[0].ref_id, response.results[1].ref_id,
             "surviving results must have distinct ref_ids"
         );
-        // Updated count and message must reflect the deduplicated set.
         assert!(response.message.contains('2'), "{}", response.message);
     }
 
     #[test]
     fn register_search_citations_preserves_title_url_and_ref_id_metadata() {
-        // Verifies that after citation registration, every result has a
-        // non-empty web_-prefixed ref_id, the normalized URL, and the
-        // original title; and that the ref_id is resolvable in the session.
         let namespace = "citation-metadata-test-session";
         let query = SearchQuery::new("docs".to_string(), 5, None, Vec::new(), None);
         let raw = BackendSearch {
@@ -3506,7 +3564,6 @@ mod tests {
 
         assert_eq!(response.count, 1);
         let result = &response.results[0];
-        // ref_id must be populated with the canonical prefix.
         assert!(
             result.ref_id.starts_with("web_"),
             "ref_id must use web_ prefix; got `{}`",
@@ -3518,7 +3575,6 @@ mod tests {
             "https://docs.citation-meta.example.com/reference"
         );
         assert_eq!(result.rank, 1);
-        // The citation must be resolvable in the session that minted it.
         let citation = crate::tools::web::citations::resolve(namespace, &result.ref_id)
             .expect("citation must be registered and resolvable in its session");
         assert_eq!(citation.ref_id, result.ref_id);
@@ -3528,7 +3584,6 @@ mod tests {
             !citation.retrieved_at.is_empty(),
             "retrieved_at must be set to the retrieval timestamp"
         );
-        // Must not be resolvable in a foreign session.
         assert!(
             crate::tools::web::citations::resolve("other-session", &result.ref_id).is_none(),
             "citation must not leak to foreign sessions"
@@ -3537,8 +3592,6 @@ mod tests {
 
     #[test]
     fn finalize_search_response_truncates_to_max_results_and_reranks() {
-        // Backends may return more than max_results; finalize must clip and
-        // reassign contiguous ranks so no gap appears in the model-visible output.
         let query = SearchQuery::new("truncate me".to_string(), 2, None, Vec::new(), None);
         let raw = BackendSearch {
             backend: BackendId::DuckDuckGo,
@@ -3585,38 +3638,30 @@ mod tests {
 
     #[test]
     fn domain_matches_handles_subdomains_www_prefix_and_empty_list() {
-        // Empty domain list: every URL passes (no filtering requested).
         assert!(
             domain_matches("https://any.example.com/page", &[]),
             "empty domain list must accept all URLs"
         );
-        // Exact host match.
         assert!(domain_matches(
             "https://example.com/page",
             &["example.com".to_string()]
         ));
-        // Subdomain match: docs.example.com is a subdomain of example.com.
         assert!(domain_matches(
             "https://docs.example.com/page",
             &["example.com".to_string()]
         ));
-        // www-prefixed URL matches bare domain.
         assert!(domain_matches(
             "https://www.example.com/page",
             &["example.com".to_string()]
         ));
-        // www-prefixed domain filter matches bare URL.
         assert!(domain_matches(
             "https://example.com/page",
             &["www.example.com".to_string()]
         ));
-        // Completely different domain must not match.
         assert!(!domain_matches(
             "https://other.com/page",
             &["example.com".to_string()]
         ));
-        // A domain that shares a suffix but is not a subdomain must not match
-        // (prevents "notexample.com" matching filter "example.com").
         assert!(!domain_matches(
             "https://notexample.com/page",
             &["example.com".to_string()]
@@ -3625,8 +3670,6 @@ mod tests {
 
     #[test]
     fn finalize_search_response_domain_post_filter_reranks_survivors() {
-        // When domain filtering is applied post-search, results that do not
-        // match must be removed and the survivors re-ranked from 1.
         let query = SearchQuery::new(
             "domain filter".to_string(),
             5,
@@ -3674,7 +3717,6 @@ mod tests {
             "survivor must be re-ranked to 1"
         );
         assert_eq!(response.results[0].title, "Keep this");
-        // The receipt must record post-filtering as a degraded reason.
         assert!(
             response.receipt.degraded.iter().any(|reason| matches!(
                 reason,

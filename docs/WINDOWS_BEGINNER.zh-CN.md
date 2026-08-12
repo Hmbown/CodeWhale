@@ -276,7 +276,7 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
 
 ---
 
-## 5. 三种模式：Plan / Act / Operate
+## 5. 三种模式：Plan / Work / Operate
 
 按 `Tab` 键循环切换（输入框为空时），或输入 `/mode plan|act|operate` 直接切换。
 

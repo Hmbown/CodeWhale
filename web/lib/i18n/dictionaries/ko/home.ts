@@ -7,7 +7,7 @@ import type { HomeDict } from "../types";
  * people" framing is intentionally gone.
  *
  * Product terms stay literal, matching `crates/tui/locales/ko.json`:
- * Plan / Act / Operate, Ask / Auto-Review / Full Access, Codewhale, Fleet,
+ * Plan / Work / Operate, Ask / Auto-Review / Full Access, Codewhale, Fleet,
  * `codewhale exec`. "permission posture" renders as 권한 상태 everywhere;
  * "provider route" as 프로바이더 경로 (the TUI pack uses 경로 for route);
  * "receipt" as 기록, the reading the TUI pack uses in prose.
@@ -50,7 +50,7 @@ export const home: HomeDict = {
 
   proofHeading: "수중 터미널 셸. 어떤 모델이든. 당신의 머신에서.",
   proofBody:
-    "이미 쓰고 있는 모델을 그대로 가져오세요 — 호스팅형이든, 게이트웨이든, 로컬이든. Plan / Act / Operate와 명시적인 권한 상태가 잠수를 당신의 통제 아래에 둡니다.",
+    "이미 쓰고 있는 모델을 그대로 가져오세요 — 호스팅형이든, 게이트웨이든, 로컬이든. Plan / Work / Operate와 명시적인 권한 상태가 잠수를 당신의 통제 아래에 둡니다.",
 
   sealDecides: "法",
   decidesEyebrow: "판단 과정 보기",

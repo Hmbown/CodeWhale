@@ -122,7 +122,7 @@ describe("runSemanticDrift draft identity", () => {
     page: "homepage",
     claim: "Codewhale supports three modes",
     evidence: "CHANGELOG: modes renamed in 0.9.0",
-    suggested_replacement: "Codewhale supports Plan / Act / Operate",
+    suggested_replacement: "Codewhale supports Plan / Work / Operate",
   };
 
   beforeEach(() => {

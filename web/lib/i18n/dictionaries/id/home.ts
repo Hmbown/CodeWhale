@@ -5,7 +5,7 @@ import type { HomeDict } from "../types";
  * direction: "dives into the deep", bring-your-own-model, runs on your
  * machine. Every trace of the old positioning has been dropped.
  *
- * Product vocabulary stays fixed: modes Plan / Act / Operate, permission
+ * Product vocabulary stays fixed: modes Plan / Work / Operate, permission
  * postures Ask / Auto-Review / Full Access, and the product name Codewhale —
  * exactly as the TUI locale pack (`crates/tui/locales/id.json`) renders them.
  * Commands, package names, and surface names (`codewhale exec`, Fleet,
@@ -48,7 +48,7 @@ export const home: HomeDict = {
 
   proofHeading: "Shell terminal bawah laut. Model apa pun. Di mesin Anda.",
   proofBody:
-    "Bawa model yang sudah Anda pakai — di-host, gateway, atau lokal. Plan / Act / Operate dan postur izin eksplisit menjaga penyelaman tetap dalam kendali Anda.",
+    "Bawa model yang sudah Anda pakai — di-host, gateway, atau lokal. Plan / Work / Operate dan postur izin eksplisit menjaga penyelaman tetap dalam kendali Anda.",
 
   sealDecides: "法",
   decidesEyebrow: "Lihat bagaimana ia memutuskan",

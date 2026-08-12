@@ -22,7 +22,7 @@
   "sourceCandidate": {
     "version": "0.9.6",
     "providerCount": 41,
-    "toolCount": 70,
+    "toolCount": 74,
     "sandboxBackends": [
       "seatbelt (macOS, when available)",
       "bubblewrap (Linux, opt-in when installed)"
@@ -73,7 +73,7 @@
   "control": {
     "modes": [
       "Plan",
-      "Act",
+      "Work",
       "Operate"
     ],
     "permissionPostures": [
@@ -99,42 +99,30 @@
   },
   "toolSurface": {
     "defaultActive": [
-      "Bash",
-      "File",
-      "Git",
-      "Run",
+      "read",
+      "write",
+      "edit",
+      "bash",
       "agent",
-      "remember",
-      "tasks",
-      "todo_write",
       "tool_search"
     ],
-    "actions": {
-      "Bash": [
-        "run",
-        "wait",
-        "interact",
-        "cancel"
+    "schemas": {
+      "read": [
+        "path",
+        "offset?",
+        "limit?"
       ],
-      "File": [
-        "read",
-        "list",
-        "search_name",
-        "search_content",
-        "write",
-        "edit",
-        "patch"
+      "write": [
+        "path",
+        "content"
       ],
-      "Git": [
-        "status",
-        "diff",
-        "log",
-        "show",
-        "blame"
+      "edit": [
+        "path",
+        "edits"
       ],
-      "Run": [
-        "tests",
-        "verifiers"
+      "bash": [
+        "command",
+        "timeout?"
       ]
     },
     "deferred": {
@@ -145,9 +133,14 @@
       ]
     },
     "compatibility": {
-      "legacyAliases": "replay-only",
+      "legacyAliases": "hidden-exact",
       "modelVisible": false,
       "toolSearchDiscoverable": false
+    },
+    "activationCache": {
+      "maximumNames": 8,
+      "maximumSchemaBytes": 16384,
+      "scope": "per conversation; each subagent owns an independent policy-filtered cache"
     },
     "agentConcurrency": {
       "defaultConfigured": 64,
@@ -228,7 +221,9 @@
       "web/lib/release-credits.ts"
     ],
     "requiredCandidateCredits": [
-      "@xavierpestel-ai"
+      "@xavierpestel-ai",
+      "@ousamabenyounes",
+      "@rafaelcavalheri"
     ]
   },
   "screenshot": {

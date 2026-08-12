@@ -572,6 +572,7 @@ pub(super) fn messages_from_thread_detail(detail: &ThreadDetail) -> Vec<Message>
                         assistant_blocks.push(ContentBlock::Thinking {
                             thinking: thinking.to_string(),
                             signature: None,
+                            state: None,
                         });
                     }
                 }

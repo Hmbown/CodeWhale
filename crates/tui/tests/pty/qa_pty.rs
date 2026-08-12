@@ -701,7 +701,7 @@ fn v091_real_pty_visual_matrix_preserves_control_grammar() -> anyhow::Result<()>
                     if ascii_safe { "-ascii" } else { "" }
                 ),
                 &format!(
-                    "size={cols}x{rows}\ntheme={theme}\nmode=act\npermission=ask\nreduced_motion=true\nascii_safe={ascii_safe}"
+                    "size={cols}x{rows}\ntheme={theme}\nmode=work\npermission=ask\nreduced_motion=true\nascii_safe={ascii_safe}"
                 ),
                 frame,
             )?;
@@ -711,8 +711,7 @@ fn v091_real_pty_visual_matrix_preserves_control_grammar() -> anyhow::Result<()>
         // both dark and light themes. Header labels and split composer edges
         // must change together, and each state must retain its own ANSI color.
         if cols == 140 || theme == "light" {
-            let (work_mode, ask) =
-                assert_control_grammar(h.frame(), "work", "ask", COMPOSER_READY_TEXT);
+            let (work, ask) = assert_control_grammar(h.frame(), "work", "ask", COMPOSER_READY_TEXT);
 
             h.send(b"\t")?;
             h.wait_for(
@@ -747,14 +746,14 @@ fn v091_real_pty_visual_matrix_preserves_control_grammar() -> anyhow::Result<()>
                 ),
                 h.frame(),
             )?;
-            assert_ne!(plan, work_mode, "Plan and Act collapsed to one ANSI color");
+            assert_ne!(plan, work, "Plan and Work collapsed to one ANSI color");
             assert_ne!(
                 plan, operate,
                 "Plan and Operate collapsed to one ANSI color"
             );
             assert_ne!(
-                work_mode, operate,
-                "Act and Operate collapsed to one ANSI color"
+                work, operate,
+                "Work and Operate collapsed to one ANSI color"
             );
 
             h.send(b"\t")?;
@@ -777,7 +776,7 @@ fn v091_real_pty_visual_matrix_preserves_control_grammar() -> anyhow::Result<()>
             write_real_pty_evidence(
                 &format!("permission-auto-{theme}-{cols}x{rows}"),
                 &format!(
-                    "size={cols}x{rows}\ntheme={theme}\nmode=act\npermission=auto\nreduced_motion=true\nascii_safe=false"
+                    "size={cols}x{rows}\ntheme={theme}\nmode=work\npermission=auto\nreduced_motion=true\nascii_safe=false"
                 ),
                 h.frame(),
             )?;
@@ -792,7 +791,7 @@ fn v091_real_pty_visual_matrix_preserves_control_grammar() -> anyhow::Result<()>
             write_real_pty_evidence(
                 &format!("permission-full-access-{theme}-{cols}x{rows}"),
                 &format!(
-                    "size={cols}x{rows}\ntheme={theme}\nmode=act\npermission=full-access\nreduced_motion=true\nascii_safe=false"
+                    "size={cols}x{rows}\ntheme={theme}\nmode=work\npermission=full-access\nreduced_motion=true\nascii_safe=false"
                 ),
                 h.frame(),
             )?;
@@ -4002,7 +4001,7 @@ fn assert_running_tool_lifecycle_frame(
     let dump = frame.debug_dump();
     assert!(
         frame.row(0).contains("work"),
-        "Act missing from header:\n{dump}"
+        "Work missing from header:\n{dump}"
     );
     assert!(
         frame.row(0).contains("Full Access"),

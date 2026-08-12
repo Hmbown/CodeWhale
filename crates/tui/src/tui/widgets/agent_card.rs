@@ -17,11 +17,11 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::palette;
+use crate::todo_snapshot::{TodoCardProjection, card_omission_line, card_todo_projection};
 use crate::tools::subagent::MailboxMessage;
 use crate::tools::todo::TodoListSnapshot;
 use crate::tui::ui_text::truncate_line_to_width;
 use crate::tui::widgets::tool_card::{ToolFamily, family_glyph, family_label};
-use crate::work_grounding::{TodoCardProjection, card_omission_line, card_todo_projection};
 use unicode_width::UnicodeWidthStr;
 
 /// Maximum number of recent actions kept on a `DelegateCard`. Older entries
@@ -100,7 +100,7 @@ pub struct DelegateCard {
     /// The last To-do snapshot **this** agent published for itself (#4810).
     ///
     /// `None` means the child has never reported Work state — the card says
-    /// nothing rather than borrowing the parent's or a sibling's ledger. The
+    /// nothing rather than borrowing the parent's or a sibling's list. The
     /// snapshot is only ever written from an envelope whose `agent_id` matches
     /// [`Self::agent_id`], which is what keeps sibling cards disjoint.
     todo: Option<TodoListSnapshot>,
@@ -612,7 +612,7 @@ pub fn apply_to_delegate(card: &mut DelegateCard, msg: &MailboxMessage) -> bool 
         }
         MailboxMessage::WorkState { todo, .. } => {
             // agent_id already matched above, so this is this child's own
-            // ledger. Publishing live work is evidence that a pending child
+            // list. Publishing live work is evidence that a pending child
             // has started, while terminal cards keep both their terminal
             // status and the last snapshot the child published.
             let status_changed = if card.status == AgentLifecycle::Pending {
@@ -664,7 +664,7 @@ pub fn apply_to_fanout(card: &mut FanoutCard, msg: &MailboxMessage) -> bool {
             card.upsert_worker(child_id, AgentLifecycle::Pending)
         }
         // A fanout card is a dot grid of many workers with no per-worker row
-        // to hang a ledger on. Rather than merge N children's lists into one
+        // to hang a list on. Rather than merge N children's lists into one
         // card — which would be exactly the cross-agent leak this surface must
         // not have — it shows none of them. WorkState is intentionally
         // unavailable on this fanout surface; an individually spawned child
@@ -1194,7 +1194,7 @@ mod tests {
                     ),
                 ),
             ),
-            "a changed ledger must redraw the card"
+            "a changed list must redraw the card"
         );
 
         let rendered = render_to_strings(&card.render_lines(100)).join("\n");
@@ -1232,7 +1232,7 @@ mod tests {
         let rendered = render_to_strings(&card.render_lines(100)).join("\n");
         assert!(
             !rendered.contains("To-do"),
-            "an empty ledger states nothing: {rendered}"
+            "an empty list states nothing: {rendered}"
         );
         assert!(
             !rendered.contains('#'),
@@ -1266,11 +1266,11 @@ mod tests {
         let projection = card.todo_projection().expect("projection");
         assert_eq!(
             projection.items.len(),
-            crate::work_grounding::MAX_CARD_ITEM_LINES
+            crate::todo_snapshot::MAX_CARD_ITEM_LINES
         );
         assert_eq!(
             projection.omitted,
-            9 - crate::work_grounding::MAX_CARD_ITEM_LINES
+            9 - crate::todo_snapshot::MAX_CARD_ITEM_LINES
         );
         assert!(
             projection
@@ -1328,7 +1328,7 @@ mod tests {
             assert!(card.status.is_terminal(), "{:?}", card.status);
             assert!(
                 rendered.contains("[~] #2 run the suite"),
-                "terminal card keeps the last truthful ledger ({:?}): {rendered}",
+                "terminal card keeps the last truthful list ({:?}): {rendered}",
                 card.status
             );
             assert!(rendered.contains("To-do 1/2"), "{rendered}");

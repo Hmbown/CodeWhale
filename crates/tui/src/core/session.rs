@@ -8,7 +8,146 @@ use crate::project_context::{ProjectContext, load_project_context_with_parents};
 use crate::prompt_zones::{AppendLog, FrozenPrefix};
 use crate::tui::approval::ApprovalMode;
 use crate::working_set::WorkingSet;
+use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
+
+/// Maximum number of deferred schemas a conversation may keep in its active
+/// toolbox. The permanent `read`/`write`/`edit`/`bash`/`agent`/`tool_search`
+/// router surface is not counted here.
+pub(crate) const TOOL_ACTIVATION_CACHE_MAX_NAMES: usize = 8;
+/// Maximum serialized bytes added to requests by cached deferred schemas.
+pub(crate) const TOOL_ACTIVATION_CACHE_MAX_SCHEMA_BYTES: usize = 16 * 1024;
+
+/// Bounded, process-local conversation cache for tools activated by
+/// `tool_search`.
+///
+/// Only names are retained. Every turn revalidates them against the currently
+/// filtered catalog, so a disconnected MCP server, changed allow/deny rule, or
+/// mode switch cannot resurrect a tool from an older authority posture.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ToolActivationCache {
+    /// Least-recently used at the front, most-recently used at the back.
+    names: VecDeque<String>,
+}
+
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
+pub(crate) struct ToolActivationDelta {
+    pub(crate) admitted: Vec<String>,
+    pub(crate) evicted: Vec<String>,
+    pub(crate) rejected: Vec<String>,
+}
+
+impl ToolActivationCache {
+    /// Forget every deferred tool activated by the current conversation.
+    ///
+    /// `Op::SyncSession` calls this before installing another conversation's
+    /// identity, history, and workspace. The cache is intentionally
+    /// process-local, but it must still be conversation-local.
+    pub(crate) fn clear(&mut self) {
+        self.names.clear();
+    }
+
+    fn catalog_tool<'a>(
+        catalog: &'a [crate::models::Tool],
+        name: &str,
+    ) -> Option<&'a crate::models::Tool> {
+        catalog
+            .iter()
+            .find(|tool| tool.name == name && tool.defer_loading.unwrap_or(false))
+    }
+
+    fn serialized_bytes(tool: &crate::models::Tool) -> usize {
+        serde_json::to_vec(tool).map_or(usize::MAX, |bytes| bytes.len())
+    }
+
+    fn total_serialized_bytes(&self, catalog: &[crate::models::Tool]) -> usize {
+        self.names
+            .iter()
+            .filter_map(|name| Self::catalog_tool(catalog, name))
+            .map(Self::serialized_bytes)
+            .fold(0usize, usize::saturating_add)
+    }
+
+    /// Drop entries that are no longer deferred members of this turn's
+    /// filtered catalog and enforce both cache bounds.
+    pub(crate) fn revalidate(&mut self, catalog: &[crate::models::Tool]) -> Vec<String> {
+        let mut evicted = Vec::new();
+        self.names.retain(|name| {
+            let keep = Self::catalog_tool(catalog, name).is_some_and(|tool| {
+                Self::serialized_bytes(tool) <= TOOL_ACTIVATION_CACHE_MAX_SCHEMA_BYTES
+            });
+            if !keep {
+                evicted.push(name.clone());
+            }
+            keep
+        });
+        while self.names.len() > TOOL_ACTIVATION_CACHE_MAX_NAMES
+            || self.total_serialized_bytes(catalog) > TOOL_ACTIVATION_CACHE_MAX_SCHEMA_BYTES
+        {
+            if let Some(name) = self.names.pop_front() {
+                evicted.push(name);
+            } else {
+                break;
+            }
+        }
+        evicted
+    }
+
+    /// Touch requested deferred tools in search-result order. An oversized
+    /// schema is rejected; otherwise least-recently-used entries are evicted
+    /// until both bounds hold.
+    pub(crate) fn activate(
+        &mut self,
+        catalog: &[crate::models::Tool],
+        requested: &[String],
+    ) -> ToolActivationDelta {
+        let mut delta = ToolActivationDelta {
+            evicted: self.revalidate(catalog),
+            ..ToolActivationDelta::default()
+        };
+        let mut seen = HashSet::new();
+        for name in requested {
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            let Some(tool) = Self::catalog_tool(catalog, name) else {
+                delta.rejected.push(name.clone());
+                continue;
+            };
+            if Self::serialized_bytes(tool) > TOOL_ACTIVATION_CACHE_MAX_SCHEMA_BYTES {
+                delta.rejected.push(name.clone());
+                continue;
+            }
+            if let Some(index) = self.names.iter().position(|cached| cached == name) {
+                self.names.remove(index);
+            }
+            self.names.push_back(name.clone());
+            while self.names.len() > TOOL_ACTIVATION_CACHE_MAX_NAMES
+                || self.total_serialized_bytes(catalog) > TOOL_ACTIVATION_CACHE_MAX_SCHEMA_BYTES
+            {
+                if let Some(evicted) = self.names.pop_front() {
+                    delta.evicted.push(evicted);
+                }
+            }
+        }
+
+        let retained = self.names.iter().collect::<HashSet<_>>();
+        delta.admitted = requested
+            .iter()
+            .filter(|name| retained.contains(name))
+            .cloned()
+            .collect();
+        delta.evicted.sort();
+        delta.evicted.dedup();
+        delta.rejected.sort();
+        delta.rejected.dedup();
+        delta
+    }
+
+    pub(crate) fn names(&self) -> impl Iterator<Item = &str> {
+        self.names.iter().map(String::as_str)
+    }
+}
 
 /// Session state for the engine.
 #[derive(Debug, Clone)]
@@ -37,7 +176,8 @@ pub struct Session {
     /// Hash of the last assembled stable system prompt. Used to avoid
     /// replacing `system_prompt` when unchanged.
     pub last_system_prompt_hash: Option<u64>,
-    /// Persisted summary blocks generated by context compaction.
+    /// Host-persistence copy of the history checkpoint generated by context
+    /// compaction. This is never part of the standing system prompt.
     pub compaction_summary_prompt: Option<SystemPrompt>,
 
     /// Conversation history (API format), backed by AppendLog (#2264).
@@ -82,6 +222,10 @@ pub struct Session {
     /// request of the session; verified against the current system+tool
     /// state before every subsequent request. None until the first turn.
     pub frozen_prefix: Option<FrozenPrefix>,
+
+    /// Deferred tools explicitly discovered during this conversation. Names
+    /// are revalidated against the live catalog before each request.
+    pub(super) tool_activation_cache: ToolActivationCache,
 
     /// Monotonic counter bumped on every direct mutation of `messages`.
     /// Consumed by the engine token-estimate cache
@@ -163,6 +307,7 @@ impl Session {
             working_set: WorkingSet::default(),
             prefix_stability: None,
             frozen_prefix: None,
+            tool_activation_cache: ToolActivationCache::default(),
             messages_revision: 0,
         }
     }
@@ -202,6 +347,21 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    fn deferred_tool(name: &str, description_bytes: usize) -> crate::models::Tool {
+        crate::models::Tool {
+            tool_type: None,
+            name: name.to_string(),
+            description: "x".repeat(description_bytes),
+            input_schema: json!({"type": "object", "properties": {}}),
+            allowed_callers: None,
+            defer_loading: Some(true),
+            input_examples: None,
+            strict: None,
+            cache_control: None,
+        }
+    }
 
     #[test]
     fn session_usage_cache_starts_none() {
@@ -266,5 +426,86 @@ mod tests {
         // 0 is a valid observed value, must NOT be converted to None
         assert_eq!(usage.cache_read_input_tokens, Some(0));
         assert_eq!(usage.cache_creation_input_tokens, Some(1234));
+    }
+
+    #[test]
+    fn tool_activation_cache_is_lru_bounded_to_eight_names() {
+        let catalog = (0..10)
+            .map(|index| deferred_tool(&format!("tool_{index}"), 8))
+            .collect::<Vec<_>>();
+        let requested = catalog
+            .iter()
+            .map(|tool| tool.name.clone())
+            .collect::<Vec<_>>();
+        let mut cache = ToolActivationCache::default();
+        let delta = cache.activate(&catalog, &requested);
+
+        assert_eq!(cache.names().count(), TOOL_ACTIVATION_CACHE_MAX_NAMES);
+        assert_eq!(
+            cache.names().collect::<Vec<_>>(),
+            vec![
+                "tool_2", "tool_3", "tool_4", "tool_5", "tool_6", "tool_7", "tool_8", "tool_9"
+            ]
+        );
+        assert_eq!(delta.admitted.len(), TOOL_ACTIVATION_CACHE_MAX_NAMES);
+        assert!(delta.evicted.contains(&"tool_0".to_string()));
+        assert!(delta.evicted.contains(&"tool_1".to_string()));
+    }
+
+    #[test]
+    fn touching_a_cached_tool_makes_it_most_recent() {
+        let catalog = (0..9)
+            .map(|index| deferred_tool(&format!("tool_{index}"), 8))
+            .collect::<Vec<_>>();
+        let first_eight = catalog[..8]
+            .iter()
+            .map(|tool| tool.name.clone())
+            .collect::<Vec<_>>();
+        let mut cache = ToolActivationCache::default();
+        cache.activate(&catalog, &first_eight);
+        cache.activate(&catalog, &["tool_0".to_string()]);
+        cache.activate(&catalog, &["tool_8".to_string()]);
+
+        let names = cache.names().collect::<Vec<_>>();
+        assert!(names.contains(&"tool_0"));
+        assert!(!names.contains(&"tool_1"));
+        assert_eq!(names.last().copied(), Some("tool_8"));
+    }
+
+    #[test]
+    fn oversized_schema_is_never_admitted() {
+        let catalog = vec![deferred_tool(
+            "huge",
+            TOOL_ACTIVATION_CACHE_MAX_SCHEMA_BYTES + 1,
+        )];
+        let mut cache = ToolActivationCache::default();
+        let delta = cache.activate(&catalog, &["huge".to_string()]);
+
+        assert_eq!(cache.names().count(), 0);
+        assert_eq!(delta.rejected, vec!["huge"]);
+    }
+
+    #[test]
+    fn revalidate_drops_removed_denied_or_eager_tools() {
+        let catalog = vec![deferred_tool("kept", 8), deferred_tool("gone", 8)];
+        let mut cache = ToolActivationCache::default();
+        cache.activate(&catalog, &["kept".to_string(), "gone".to_string()]);
+        let mut next_catalog = vec![deferred_tool("kept", 8), deferred_tool("gone", 8)];
+        next_catalog[1].defer_loading = Some(false);
+
+        let evicted = cache.revalidate(&next_catalog);
+        assert_eq!(cache.names().collect::<Vec<_>>(), vec!["kept"]);
+        assert_eq!(evicted, vec!["gone"]);
+    }
+
+    #[test]
+    fn clearing_for_session_sync_forgets_all_activated_tools() {
+        let catalog = vec![deferred_tool("one", 8), deferred_tool("two", 8)];
+        let mut cache = ToolActivationCache::default();
+        cache.activate(&catalog, &["one".to_string(), "two".to_string()]);
+
+        cache.clear();
+
+        assert_eq!(cache.names().count(), 0);
     }
 }

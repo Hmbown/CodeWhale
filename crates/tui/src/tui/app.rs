@@ -484,7 +484,7 @@ pub struct AgentProgressMeta {
     /// spend is unknown renders no token figure at all rather than a
     /// fabricated `0`.
     pub received_tokens: Option<u64>,
-    /// Unsettled items on this child's own to-do ledger, from the latest
+    /// Unsettled items on this child's own To-do list, from the latest
     /// `WorkState` envelope. `None` until a real list is published — the
     /// strip never invents a `0 left` chip for agents with no checklist.
     pub todos_remaining: Option<u32>,

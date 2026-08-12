@@ -87,26 +87,27 @@ impl Engine {
             return builder;
         }
 
-        let mut builder = {
-            let builder = ToolRegistryBuilder::new()
-                .with_read_only_file_tools()
-                .with_search_tools()
-                .with_git_tools()
-                .with_git_history_tools()
-                .with_diagnostics_tool()
-                .with_skill_tools()
-                .with_validation_tools()
-                .with_handle_tools()
-                .with_runtime_read_only_task_tools()
-                .with_todo_tool(todo_list)
-                .with_plan_tool(plan_state)
-                .with_goal_tools(self.config.goal_state.clone());
-            if shell_policy.allows_shell() {
-                builder.with_shell_tools().with_runtime_task_shell_tools()
-            } else {
-                builder
-            }
-        };
+        let mut builder = ToolRegistryBuilder::new()
+            // Modes change authority, not the primitive tool identity.
+            // Plan advertises the same file names as Work; the turn-loop
+            // mode gate below the schema boundary blocks write/edit, and
+            // the ToolContext carries ShellPolicy::None.
+            .with_file_tools()
+            // Foreground-only shell registration: never add terminal/*
+            // lifecycle tools to Plan merely to keep the `bash` identity
+            // stable across modes.
+            .with_foreground_shell_tools()
+            .with_search_tools()
+            .with_git_tools()
+            .with_git_history_tools()
+            .with_diagnostics_tool()
+            .with_skill_tools()
+            .with_validation_tools()
+            .with_handle_tools()
+            .with_runtime_read_only_task_tools()
+            .with_todo_tool(todo_list)
+            .with_plan_tool(plan_state)
+            .with_goal_tools(self.config.goal_state.clone());
 
         builder = builder
             .with_review_tool(client, model.to_string())

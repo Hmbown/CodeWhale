@@ -74,11 +74,11 @@ fn build_relay_instruction(app: &App, focus: Option<&str>) -> String {
     // Read through the same authoritative graph-backed snapshot seam used by
     // persistence. A model can call `work_update` immediately before `/relay`;
     // the UI projection may not have published yet, but the handoff must still
-    // describe the staged Work state rather than a stale compatibility list.
+    // describe the staged To-do rather than a stale compatibility list.
     match app.work_state_snapshot() {
         Ok(Some(state)) => {
-            if let Some(body) = crate::work_grounding::canonical_todo_body(&state.todos) {
-                let _ = writeln!(out, "\nCurrent Work state (the To-do ledger is canonical):");
+            if let Some(body) = crate::todo_snapshot::todo_snapshot_body(&state.todos) {
+                let _ = writeln!(out, "\nCurrent To-do:");
                 let _ = writeln!(out, "{body}");
             }
         }

@@ -238,6 +238,13 @@ assert.match(artifacts, /codew-windows-arm64\.exe/);
 assert.match(artifacts, /CodeWhaleSetup\.exe/);
 assert.match(artifacts, /assemble-release-assets\.js --verify release-assets/);
 assert.match(artifacts, /CODEWHALE_SMOKE_ASSETS_DIR/);
+const bundleStep = namedStep(artifacts, "Create and checksum platform archives");
+assert.match(bundleStep, /git show -s --format=%ct "\$\{\{ inputs\.source_sha \}\}"/);
+assert.match(
+  bundleStep,
+  /SOURCE_DATE_EPOCH="\$\{source_date_epoch\}"[\s\\]+bash scripts\/release\/create-release-bundles\.sh artifacts bundles/,
+);
+assert.doesNotMatch(bundleStep, /\bdate\b/, "bundle timestamps must come from the pinned source commit, not wall-clock time");
 
 assert.equal(allReleaseAssetNames().length, 34);
 assert.match(release, /^  artifacts:\n/m);
@@ -293,6 +300,33 @@ assert.match(releaseDockerSmoke, /linux\/amd64/);
 assert.match(releaseDockerSmoke, /linux\/arm64/);
 assert.match(releaseDockerSmoke, /--entrypoint codewhale/);
 assert.match(releaseDockerSmoke, /--entrypoint codew/);
+
+const npmJob = release.match(/\n  npm:\n([\s\S]*?)\n  homebrew:\n/);
+assert.ok(npmJob, "public release must retain a dedicated npm publication job");
+assert.match(npmJob[1], /^    needs: \[release, resolve\]$/m);
+assert.match(npmJob[1], /needs\.release\.result == 'success'/);
+assert.match(npmJob[1], /^      contents: read$/m);
+assert.match(npmJob[1], /^      id-token: write$/m);
+assert.match(npmJob[1], /ref: \$\{\{ needs\.resolve\.outputs\.sha \}\}/);
+assert.match(npmJob[1], /fetch-depth: 0/);
+assert.match(npmJob[1], /node-version: 24/);
+assert.match(npmJob[1], /registry-url: https:\/\/registry\.npmjs\.org/);
+assert.match(npmJob[1], /package-manager-cache: false/);
+assert.match(npmJob[1], /npm install --global npm@12\.0\.2/);
+const npmTagGate = namedStep(release, "Revalidate release tag before npm publish");
+const npmAssetGate = namedStep(release, "Revalidate public release assets");
+const npmPublish = namedStep(release, "Publish npm wrapper with trusted publishing");
+assert.match(npmTagGate, /verify-remote-tag\.sh/);
+assert.match(npmAssetGate, /verify-release-assets\.sh/);
+assert.match(npmAssetGate, /GH_TOKEN: \$\{\{ github\.token \}\}/);
+assert.match(npmPublish, /working-directory: npm\/codewhale/);
+assert.match(npmPublish, /npm publish --access public/);
+assert.doesNotMatch(npmJob[1], /NPM_TOKEN|NODE_AUTH_TOKEN|secrets\./);
+assert.ok(
+  release.indexOf("Revalidate public release assets") <
+    release.indexOf("Publish npm wrapper with trusted publishing"),
+  "npm publication must follow the public exact-asset gate",
+);
 
 assert.match(releaseDockerfile, /^FROM debian:bookworm-slim$/m);
 assert.match(releaseDockerfile, /ca-certificates/);

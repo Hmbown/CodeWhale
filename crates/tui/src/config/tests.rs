@@ -943,8 +943,13 @@ fn workflow_config_defaults_when_omitted_and_overrides_round_trip() {
 }
 
 #[test]
-fn search_provider_defaults_to_duckduckgo() {
-    assert_eq!(SearchProvider::default(), SearchProvider::DuckDuckGo);
+fn search_provider_defaults_to_firecrawl() {
+    assert_eq!(SearchProvider::default(), SearchProvider::Firecrawl);
+    assert_eq!(
+        SearchProvider::parse("fire-crawl"),
+        Some(SearchProvider::Firecrawl)
+    );
+    assert_eq!(SearchProvider::Firecrawl.as_str(), "firecrawl");
 }
 
 #[test]
@@ -1125,7 +1130,7 @@ fn search_provider_resolution_reports_default_source() {
     let resolution = Config::default().search_provider_resolution();
 
     unsafe { EnvGuard::restore_var("DEEPSEEK_SEARCH_PROVIDER", prev) };
-    assert_eq!(resolution.provider, SearchProvider::DuckDuckGo);
+    assert_eq!(resolution.provider, SearchProvider::Firecrawl);
     assert_eq!(resolution.source, SearchProviderSource::Default);
 }
 
@@ -5119,8 +5124,10 @@ fn relative_mcp_config_path_falls_back_to_user_global_config() -> Result<()> {
     let temp_root = tempfile::tempdir()?;
     let explicit_home = temp_root.path().join("codewhale-home");
     let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", &explicit_home);
-    let mut config = Config::default();
-    config.mcp_config_path = Some("relative/mcp.json".to_string());
+    let config = Config {
+        mcp_config_path: Some("relative/mcp.json".to_string()),
+        ..Config::default()
+    };
 
     assert_eq!(config.mcp_config_path(), explicit_home.join("mcp.json"));
     Ok(())
@@ -5130,8 +5137,10 @@ fn relative_mcp_config_path_falls_back_to_user_global_config() -> Result<()> {
 fn absolute_mcp_config_path_remains_an_explicit_override() -> Result<()> {
     let temp_root = tempfile::tempdir()?;
     let explicit = temp_root.path().join("custom-mcp.json");
-    let mut config = Config::default();
-    config.mcp_config_path = Some(explicit.display().to_string());
+    let config = Config {
+        mcp_config_path: Some(explicit.display().to_string()),
+        ..Config::default()
+    };
 
     assert_eq!(config.mcp_config_path(), explicit);
     Ok(())

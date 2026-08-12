@@ -6,7 +6,7 @@ import type { ChromeDict } from "../types";
  * `npm run check:locales` and `dictionaries.test.ts`.
  *
  * Terminology follows the TUI ru locale pack (`crates/tui/locales/ru.json`):
- * the modes Plan / Act / Operate and the permission postures
+ * the modes Plan / Work / Operate and the permission postures
  * Ask / Auto-Review / Full Access stay Latin, wrapped in Russian prose
  * ("режим Operate", "режим разрешений"). The 深 seal is the masthead's mark,
  * not prose, and is shared across locales. Native nav labels pair with short

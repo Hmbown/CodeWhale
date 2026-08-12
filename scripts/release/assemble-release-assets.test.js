@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 const assert = require("node:assert/strict");
-const { execFileSync } = require("node:child_process");
+const { execFileSync, spawnSync } = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -26,6 +26,35 @@ const repoRoot = path.resolve(__dirname, "..", "..");
 
 function sha256(filePath) {
   return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+function createBundleInputs(input) {
+  fs.mkdirSync(input, { recursive: true });
+  for (const name of allReleaseAssetNames().filter((asset) =>
+    /^(codewhale|codew)-(linux|android|macos|windows)-/.test(asset) &&
+    !asset.endsWith(".tar.gz") &&
+    !asset.endsWith(".zip"),
+  )) {
+    const artifactDirectory = path.join(input, name);
+    fs.mkdirSync(artifactDirectory, { recursive: true });
+    // GitHub's artifact transport normalizes regular files to 0644. The
+    // bundler must restore executable modes for non-Windows archives.
+    fs.writeFileSync(path.join(artifactDirectory, name), `fixture:${name}\n`, { mode: 0o644 });
+  }
+}
+
+function runBundle(input, output, sourceDateEpoch) {
+  const env = { ...process.env };
+  if (sourceDateEpoch === undefined) {
+    delete env.SOURCE_DATE_EPOCH;
+  } else {
+    env.SOURCE_DATE_EPOCH = sourceDateEpoch;
+  }
+  return spawnSync(
+    "bash",
+    [path.join(repoRoot, "scripts/release/create-release-bundles.sh"), input, output],
+    { cwd: repoRoot, encoding: "utf8", env },
+  );
 }
 
 function makeIntermediateArtifacts(root) {
@@ -105,35 +134,16 @@ test("assembly creates and verifies the exact release asset directory", async ()
   }
 });
 
-test("bundle helper creates the exact nine archives and checksum manifest", () => {
+test("bundle helper emits reproducible timestamped tar and zip archives from paths with spaces", () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codewhale-bundle-assembly-"));
-  const input = path.join(tempRoot, "input");
-  const output = path.join(tempRoot, "output");
-  const repeatedOutput = path.join(tempRoot, "output-repeated");
+  const input = path.join(tempRoot, "input artifacts with spaces");
+  const output = path.join(tempRoot, "output bundles with spaces");
+  const repeatedOutput = path.join(tempRoot, "output bundles repeated with spaces");
+  const sourceDateEpoch = "1700000000";
   try {
-    fs.mkdirSync(input, { recursive: true });
-    for (const name of allReleaseAssetNames().filter((asset) =>
-      /^(codewhale|codew)-(linux|android|macos|windows)-/.test(asset) &&
-      !asset.endsWith(".tar.gz") &&
-      !asset.endsWith(".zip"),
-    )) {
-      const artifactDirectory = path.join(input, name);
-      fs.mkdirSync(artifactDirectory, { recursive: true });
-      // GitHub's artifact transport normalizes regular files to 0644. The
-      // bundler must restore executable modes for non-Windows archives.
-      fs.writeFileSync(path.join(artifactDirectory, name), `fixture:${name}\n`, { mode: 0o644 });
-    }
-
-    execFileSync(
-      "bash",
-      [path.join(repoRoot, "scripts/release/create-release-bundles.sh"), input, output],
-      { cwd: repoRoot, stdio: "pipe" },
-    );
-    execFileSync(
-      "bash",
-      [path.join(repoRoot, "scripts/release/create-release-bundles.sh"), input, repeatedOutput],
-      { cwd: repoRoot, stdio: "pipe" },
-    );
+    createBundleInputs(input);
+    assert.equal(runBundle(input, output, sourceDateEpoch).status, 0);
+    assert.equal(runBundle(input, repeatedOutput, sourceDateEpoch).status, 0);
     assert.deepEqual(
       fs.readdirSync(output).sort(),
       [...BUNDLE_ASSET_NAMES, BUNDLE_CHECKSUM_MANIFEST].sort(),
@@ -160,11 +170,14 @@ test("bundle helper creates the exact nine archives and checksum manifest", () =
       "tar",
       ["-tzf", path.join(output, "codewhale-linux-x64.tar.gz")],
       { encoding: "utf8" },
-    );
-    for (const entry of ["codewhale", "codew", "install.sh"]) {
-      assert.match(linuxEntries, new RegExp(`codewhale-linux-x64/${entry}\\n`));
-    }
-    const extracted = path.join(tempRoot, "extracted");
+    ).trim().split("\n").sort();
+    assert.deepEqual(linuxEntries, [
+      "codewhale-linux-x64/",
+      "codewhale-linux-x64/codew",
+      "codewhale-linux-x64/codewhale",
+      "codewhale-linux-x64/install.sh",
+    ]);
+    const extracted = path.join(tempRoot, "tar extracted");
     fs.mkdirSync(extracted);
     execFileSync(
       "tar",
@@ -174,14 +187,74 @@ test("bundle helper creates the exact nine archives and checksum manifest", () =
     for (const entry of ["codewhale", "codew", "install.sh"]) {
       const mode = fs.statSync(path.join(extracted, "codewhale-linux-x64", entry)).mode & 0o777;
       assert.equal(mode, 0o755, `${entry} should remain executable after artifact transport`);
+      assert.equal(
+        Math.trunc(fs.statSync(path.join(extracted, "codewhale-linux-x64", entry)).mtimeMs / 1000),
+        Number(sourceDateEpoch),
+        `${entry} should retain the source commit timestamp`,
+      );
     }
     const portableEntries = execFileSync(
       "unzip",
       ["-Z1", path.join(output, "codewhale-windows-arm64-portable.zip")],
       { encoding: "utf8" },
+    ).trim().split("\n").sort();
+    assert.deepEqual(portableEntries, [
+      "codewhale-windows-arm64-portable/",
+      "codewhale-windows-arm64-portable/codew.exe",
+      "codewhale-windows-arm64-portable/codewhale.exe",
+    ]);
+    const zipExtracted = path.join(tempRoot, "zip extracted");
+    fs.mkdirSync(zipExtracted);
+    execFileSync(
+      "unzip",
+      ["-qq", path.join(output, "codewhale-windows-arm64-portable.zip"), "-d", zipExtracted],
+      { env: { ...process.env, TZ: "UTC" }, stdio: "pipe" },
     );
-    assert.match(portableEntries, /codewhale-windows-arm64-portable\/codew\.exe\n/);
-    assert.doesNotMatch(portableEntries, /install\.bat/);
+    for (const entry of ["codewhale.exe", "codew.exe"]) {
+      assert.equal(
+        Math.trunc(
+          fs.statSync(path.join(zipExtracted, "codewhale-windows-arm64-portable", entry)).mtimeMs / 1000,
+        ),
+        Number(sourceDateEpoch),
+        `${entry} should retain the source commit timestamp`,
+      );
+    }
+  } finally {
+    fs.rmSync(tempRoot, { force: true, recursive: true });
+  }
+});
+
+test("bundle helper rejects missing, malformed, and ZIP-unrepresentable release epochs", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codewhale-bundle-input-validation-"));
+  const input = path.join(tempRoot, "input");
+  try {
+    createBundleInputs(input);
+
+    const missingEpoch = runBundle(input, path.join(tempRoot, "missing-epoch"));
+    assert.notEqual(missingEpoch.status, 0);
+    assert.match(missingEpoch.stderr, /SOURCE_DATE_EPOCH is required/);
+
+    const malformedEpoch = runBundle(input, path.join(tempRoot, "malformed-epoch"), "not-an-epoch");
+    assert.notEqual(malformedEpoch.status, 0);
+    assert.match(malformedEpoch.stderr, /SOURCE_DATE_EPOCH must be an integer Unix timestamp/);
+
+    const preZipEpoch = runBundle(input, path.join(tempRoot, "pre-zip-epoch"), "0");
+    assert.notEqual(preZipEpoch.status, 0);
+    assert.match(preZipEpoch.stderr, /SOURCE_DATE_EPOCH must be between 315532800/);
+  } finally {
+    fs.rmSync(tempRoot, { force: true, recursive: true });
+  }
+});
+
+test("bundle helper names a missing required release artifact", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codewhale-bundle-missing-artifact-"));
+  const input = path.join(tempRoot, "input");
+  try {
+    createBundleInputs(input);
+    fs.rmSync(path.join(input, "codew-linux-x64", "codew-linux-x64"));
+    const result = runBundle(input, path.join(tempRoot, "output"), "1700000000");
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /missing required release artifact for linux-x64: .*codew-linux-x64/);
   } finally {
     fs.rmSync(tempRoot, { force: true, recursive: true });
   }

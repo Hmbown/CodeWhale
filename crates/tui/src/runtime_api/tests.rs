@@ -1913,6 +1913,7 @@ async fn agent_runs_runtime_api_exposes_persisted_worker_receipts() -> Result<()
             max_steps: 4,
             spawn_depth: 1,
             max_spawn_depth: crate::tools::subagent::DEFAULT_MAX_SPAWN_DEPTH,
+            child_route: None,
             launch_manifest: None,
         },
         actor_kind: "subagent".to_string(),

@@ -1292,7 +1292,6 @@ fn history_cell_has_running_tool(cell: &HistoryCell) -> bool {
         ToolCell::PlanUpdate(plan) => plan.status == ToolStatus::Running,
         ToolCell::PatchSummary(patch) => patch.status == ToolStatus::Running,
         ToolCell::Review(review) => review.status == ToolStatus::Running,
-        ToolCell::DiffPreview(_) => false,
         ToolCell::Mcp(mcp) => mcp.status == ToolStatus::Running,
         ToolCell::ViewImage(_) => false,
         ToolCell::WebSearch(search) => search.status == ToolStatus::Running,

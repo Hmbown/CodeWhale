@@ -13,8 +13,6 @@ use crate::prompts::{
     system_prompt_for_mode_with_context_skills_and_session,
 };
 use crate::test_support::{EnvVarGuard, lock_test_env};
-use crate::tools::spec::ToolCapability;
-use crate::tools::todo::TodoStatus;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
@@ -3715,7 +3713,7 @@ fn structured_state_block_carries_stable_state_without_work() {
     let block = state.to_system_block().expect("fork state block");
 
     assert!(block.contains("- Mode: `Agent`"));
-    assert!(!block.contains(crate::work_grounding::FORK_WORK_SECTION_HEADING));
+    assert!(!block.contains(crate::todo_snapshot::FORK_TODO_SECTION_HEADING));
     assert!(!block.contains("To-do ("));
     assert!(!block.contains("Strategy"));
 }
@@ -6577,12 +6575,12 @@ fn tool_error_messages_include_actionable_hints() {
     // #3020: Plan-mode denials already explain the fix — pass through
     // verbatim, with no conflicting "Adjust approval mode" suffix.
     let plan_denied = ToolError::permission_denied(
-        "'exec_shell' is not available in Plan mode — switch to Act mode (`/mode act`) to run commands and code.",
+        "'bash' is not available in Plan mode — switch to Work mode (`/mode work`) to run commands and code.",
     );
-    let formatted = format_tool_error(&plan_denied, "exec_shell");
+    let formatted = format_tool_error(&plan_denied, "bash");
     assert_eq!(
         formatted,
-        "'exec_shell' is not available in Plan mode — switch to Act mode (`/mode act`) to run commands and code."
+        "'bash' is not available in Plan mode — switch to Work mode (`/mode work`) to run commands and code."
     );
 
     // Bare denials still get the actionable suffix.
@@ -6620,6 +6618,7 @@ fn tool_exec_outcome_tracks_duration() {
         input: json!({"pattern": "test"}),
         started_at: Instant::now(),
         terminal: ToolExecutionOutcome::from_legacy(Ok(ToolResult::success("ok"))),
+        content_blocks: Vec::new(),
     };
 
     assert!(outcome.started_at.elapsed().as_nanos() > 0);
@@ -6670,31 +6669,19 @@ fn approval_stamp_preserves_existing_metadata() {
 }
 
 #[test]
-fn core_native_tools_stay_loaded_in_yolo_mode() {
+fn core_primitives_and_todo_write_default_to_eager() {
     let always_load = HashSet::new();
-    // #4625: `Bash` is the model-facing shell tool; legacy exec_shell names
-    // are hidden compat aliases whose defer state no longer matters.
-    assert!(!should_default_defer_tool("Bash", &always_load));
-    for canonical in ["File", "Git", "Run"] {
-        assert!(!should_default_defer_tool(canonical, &always_load));
+    for core in ["read", "write", "edit", "bash", "agent", "todo_write"] {
+        assert!(!should_default_defer_tool(core, &always_load));
     }
-    // Legacy spellings remain registered for replay but are no longer eager.
-    assert!(should_default_defer_tool("git_blame", &always_load));
+    for searchable in ["File", "Bash", "Git", "Run", "tasks", "git_blame"] {
+        assert!(should_default_defer_tool(searchable, &always_load));
+    }
 }
 
 #[test]
 fn default_active_contract_keeps_discovery_and_core_tools_eager() {
-    const EXPECTED_NATIVE: [&str; 9] = [
-        "Bash",
-        "File",
-        "Git",
-        "Run",
-        "agent",
-        "load_skill",
-        "remember",
-        "tasks",
-        "todo_write",
-    ];
+    const EXPECTED_NATIVE: [&str; 6] = ["read", "write", "edit", "bash", "agent", "todo_write"];
     assert_eq!(
         default_active_native_tool_names(),
         EXPECTED_NATIVE.as_slice()
@@ -6728,17 +6715,17 @@ fn default_active_contract_keeps_discovery_and_core_tools_eager() {
 #[test]
 fn non_yolo_mode_retains_default_defer_policy() {
     let always_load = HashSet::new();
-    for canonical in ["Bash", "File", "Git", "Run"] {
-        assert!(!should_default_defer_tool(canonical, &always_load));
+    for core in ["read", "write", "edit", "bash", "agent", "todo_write"] {
+        assert!(!should_default_defer_tool(core, &always_load));
     }
-    assert!(!should_default_defer_tool("agent", &always_load));
-    assert!(!should_default_defer_tool("load_skill", &always_load));
-    assert!(!should_default_defer_tool("remember", &always_load));
-    assert!(should_default_defer_tool(
+    for searchable in [
+        "Bash",
+        "File",
+        "Git",
+        "Run",
+        "load_skill",
+        "remember",
         REQUEST_USER_INPUT_NAME,
-        &always_load
-    ));
-    for legacy in [
         "read_file",
         "edit_file",
         "apply_patch",
@@ -6747,7 +6734,7 @@ fn non_yolo_mode_retains_default_defer_policy() {
         "run_tests",
         "web_search",
     ] {
-        assert!(should_default_defer_tool(legacy, &always_load));
+        assert!(should_default_defer_tool(searchable, &always_load));
     }
 }
 
@@ -6791,8 +6778,11 @@ fn model_tool_catalog_applies_native_and_mcp_deferral() {
     let always_load = HashSet::new();
     let catalog = build_model_tool_catalog(
         vec![
-            api_tool("File"),
-            api_tool("Bash"),
+            api_tool("read"),
+            api_tool("write"),
+            api_tool("edit"),
+            api_tool("bash"),
+            api_tool("agent"),
             api_tool("Git"),
             api_tool("Run"),
             api_tool("remember"),
@@ -6810,13 +6800,14 @@ fn model_tool_catalog_applies_native_and_mcp_deferral() {
             .and_then(|tool| tool.defer_loading)
     };
 
-    assert_eq!(defer_loading("File"), Some(false));
-    assert_eq!(defer_loading("Bash"), Some(false));
-    assert_eq!(defer_loading("Git"), Some(false));
-    assert_eq!(defer_loading("Run"), Some(false));
-    assert_eq!(defer_loading("remember"), Some(false));
+    for core in ["read", "write", "edit", "bash", "agent"] {
+        assert_eq!(defer_loading(core), Some(false));
+    }
+    assert_eq!(defer_loading("Git"), Some(true));
+    assert_eq!(defer_loading("Run"), Some(true));
+    assert_eq!(defer_loading("remember"), Some(true));
     assert_eq!(defer_loading("project_map"), Some(true));
-    assert_eq!(defer_loading("list_mcp_resources"), Some(false));
+    assert_eq!(defer_loading("list_mcp_resources"), Some(true));
     assert_eq!(defer_loading("mcp_server_write"), Some(true));
 }
 
@@ -6864,8 +6855,11 @@ fn capability_compact_surface_defers_nonessential_core_tools() {
     let always_load = HashSet::new();
     let catalog = build_model_tool_catalog_with_surface(
         vec![
+            api_tool("read"),
+            api_tool("write"),
+            api_tool("edit"),
+            api_tool("bash"),
             api_tool("agent"),
-            api_tool("File"),
             api_tool("Git"),
             api_tool("Run"),
             api_tool(TOOL_SEARCH_NAME),
@@ -6885,29 +6879,37 @@ fn capability_compact_surface_defers_nonessential_core_tools() {
             .and_then(|tool| tool.defer_loading)
     };
 
-    assert_eq!(defer_loading("File"), Some(false));
-    assert_eq!(defer_loading("Git"), Some(false));
+    for core in ["read", "write", "edit", "bash", "agent"] {
+        assert_eq!(defer_loading(core), Some(false));
+    }
+    assert_eq!(defer_loading("Git"), Some(true));
     assert_eq!(defer_loading("update_plan"), Some(true));
     assert_eq!(defer_loading(TOOL_SEARCH_NAME), Some(false));
-    assert_eq!(defer_loading("list_mcp_resources"), Some(false));
-    assert_eq!(defer_loading("agent"), Some(true));
+    assert_eq!(defer_loading("list_mcp_resources"), Some(true));
     assert_eq!(defer_loading("Run"), Some(true));
     assert_eq!(defer_loading("Web"), Some(true));
     assert_eq!(defer_loading("mcp_server_write"), Some(true));
 }
 
 #[test]
-fn capability_full_surface_preserves_default_core_tools() {
+fn capability_full_surface_preserves_small_default_head() {
     let always_load = HashSet::new();
     let catalog = build_model_tool_catalog_with_surface(
-        vec![api_tool("agent"), api_tool("File"), api_tool("Run")],
+        vec![
+            api_tool("read"),
+            api_tool("write"),
+            api_tool("edit"),
+            api_tool("bash"),
+            api_tool("agent"),
+            api_tool("Run"),
+        ],
         Vec::new(),
         AppMode::Agent,
         &always_load,
         crate::model_profile::ToolSurfaceBudget::Full,
     );
 
-    for name in ["agent", "File", "Run"] {
+    for name in ["read", "write", "edit", "bash", "agent"] {
         assert_eq!(
             catalog
                 .iter()
@@ -6917,95 +6919,37 @@ fn capability_full_surface_preserves_default_core_tools() {
             "{name} should stay eager on full tool surfaces"
         );
     }
+    assert_eq!(
+        catalog
+            .iter()
+            .find(|tool| tool.name == "Run")
+            .and_then(|tool| tool.defer_loading),
+        Some(true)
+    );
 }
 
 #[test]
-fn plugin_or_benchmark_tools_marked_loaded_stay_active() {
+fn plugin_or_benchmark_tools_remain_searchable_not_eager() {
     let always_load = HashSet::new();
     let mut catalog = build_model_tool_catalog(
-        vec![api_tool("KB_search"), api_tool("File")],
+        vec![api_tool("KB_search"), api_tool("read")],
         Vec::new(),
         AppMode::Agent,
         &always_load,
     );
 
-    // Mirrors Engine::run after configure_plugin_tools(): plugin tools are
-    // explicitly kept loaded, and no provider-specific policy should re-defer
-    // them before the first model request.
-    let bench_tool = catalog
-        .iter_mut()
-        .find(|tool| tool.name == "KB_search")
-        .expect("benchmark tool in catalog");
-    bench_tool.defer_loading = Some(false);
     ensure_advanced_tooling(&mut catalog, AppMode::Agent, &always_load);
 
     let active = initial_active_tools(&catalog);
-    assert!(
-        active.contains("KB_search"),
-        "plugin/benchmark tools marked loaded must be callable on turn 1"
-    );
-    assert!(active.contains("File"));
-}
-
-#[test]
-fn agent_catalog_keeps_canonical_file_tool_loaded() {
-    let (engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
-    let registry = engine
-        .build_turn_tool_registry_builder(
-            AppMode::Agent,
-            engine.config.todos.clone(),
-            engine.config.plan_state.clone(),
-        )
-        .build(engine.build_tool_context(AppMode::Agent, false));
-    let always_load = HashSet::new();
-    let catalog = build_model_tool_catalog(
-        registry.to_api_tools_with_cache(true),
-        vec![],
-        AppMode::Agent,
-        &always_load,
-    );
-    let file = catalog
-        .iter()
-        .find(|tool| tool.name == "File")
-        .expect("File registered");
-
-    assert_eq!(file.defer_loading, Some(false));
-    let required = file.input_schema["required"]
-        .as_array()
-        .expect("File schema should include required fields");
-    assert!(
-        required
-            .iter()
-            .any(|field| field.as_str() == Some("action"))
-    );
-    assert!(!required.iter().any(|field| field.as_str() == Some("fuzz")));
-    // `fuzz` is `patch`'s integer fuzz factor and nothing else; the boolean
-    // half of the old `oneOf` existed only for the inert `edit` flag.
+    assert!(!active.contains("KB_search"));
+    assert!(active.contains("read"));
     assert_eq!(
-        file.input_schema["properties"]["fuzz"]["type"].as_str(),
-        Some("integer"),
+        catalog
+            .iter()
+            .find(|tool| tool.name == "KB_search")
+            .and_then(|tool| tool.defer_loading),
+        Some(true)
     );
-
-    let active_at_batch_start = initial_active_tools(&catalog);
-    assert!(active_at_batch_start.contains("File"));
-    let mut hydrated_this_batch = HashSet::new();
-    assert!(
-        maybe_hydrate_requested_deferred_tool(
-            "File",
-            &json!({
-                "action": "edit",
-                "path": "src/foo.rs",
-                "search": "before",
-                "replace": "after"
-            }),
-            &catalog,
-            &active_at_batch_start,
-            &mut hydrated_this_batch,
-        )
-        .is_none(),
-        "loaded File calls without fuzz should execute instead of hydrating the schema"
-    );
-    assert!(hydrated_this_batch.is_empty());
 }
 
 #[tokio::test]
@@ -7031,65 +6975,6 @@ async fn registry_discovery_and_start_handlers_exist_in_agent_and_plan_modes() {
 }
 
 #[test]
-fn agent_catalog_advertises_and_searches_core_action_tools() {
-    let (engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
-    let registry = engine
-        .build_turn_tool_registry_builder(
-            AppMode::Agent,
-            engine.config.todos.clone(),
-            engine.config.plan_state.clone(),
-        )
-        .build(engine.build_tool_context(AppMode::Agent, false));
-    let always_load = HashSet::new();
-    let mut catalog = build_model_tool_catalog(
-        registry.to_api_tools_with_cache(true),
-        vec![],
-        AppMode::Agent,
-        &always_load,
-    );
-    ensure_advanced_tooling(&mut catalog, AppMode::Agent, &always_load);
-
-    let issues = tool_catalog_consistency_issues(&catalog, &registry);
-    assert!(
-        issues.is_empty(),
-        "Agent catalog should match the runtime registry: {issues:?}"
-    );
-
-    let names = catalog
-        .iter()
-        .map(|tool| tool.name.as_str())
-        .collect::<HashSet<_>>();
-    for tool_name in ["Bash", "File", "Git", "Run"] {
-        assert!(
-            names.contains(tool_name),
-            "{tool_name} must be advertised in Agent mode"
-        );
-
-        let mut active = initial_active_tools(&catalog);
-        let result = execute_tool_search(
-            TOOL_SEARCH_NAME,
-            &json!({ "query": tool_name }),
-            &catalog,
-            &mut active,
-        )
-        .expect("tool search succeeds");
-        let references = result.metadata.as_ref().unwrap()["tool_references"]
-            .as_array()
-            .expect("tool references are an array");
-        assert!(
-            references
-                .iter()
-                .any(|reference| reference.as_str() == Some(tool_name)),
-            "{tool_name} should be discoverable by tool_search"
-        );
-        assert!(
-            active.contains(tool_name),
-            "{tool_name} should be activated by tool_search"
-        );
-    }
-}
-
-#[test]
 fn catalog_consistency_self_check_flags_registered_core_tool_missing_from_catalog() {
     let (engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
     let registry = engine
@@ -7106,14 +6991,14 @@ fn catalog_consistency_self_check_flags_registered_core_tool_missing_from_catalo
         AppMode::Agent,
         &always_load,
     );
-    catalog.retain(|tool| tool.name != "Bash");
+    catalog.retain(|tool| tool.name != "read");
 
     let issues = tool_catalog_consistency_issues(&catalog, &registry);
     assert!(
         issues
             .iter()
-            .any(|issue| issue.contains("registered core tool 'Bash'")),
-        "missing registered Bash should be reported: {issues:?}"
+            .any(|issue| issue.contains("registered core tool 'read'")),
+        "missing registered read should be reported: {issues:?}"
     );
 }
 
@@ -7306,32 +7191,52 @@ fn metric_tool_names<'a>(
 #[allow(clippy::await_holding_lock)]
 async fn runtime_contract_tool_metric_uses_canonical_mode_surfaces() {
     let payload = measure_production_mode_tool_catalogs().await;
-    let plan = metric_tool_names(&payload, "plan", "full");
-    for required in ["create_goal", "get_goal", "update_goal"] {
-        assert!(plan.contains(required), "Plan must include {required}");
+    let expected_active = HashSet::from([
+        "agent",
+        "bash",
+        "edit",
+        "read",
+        "todo_write",
+        "tool_search",
+        "write",
+    ]);
+
+    for mode in ["plan", "act", "operate"] {
+        let full = metric_tool_names(&payload, mode, "full");
+        for required in [
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "agent",
+            "tool_search",
+            "create_goal",
+            "get_goal",
+            "update_goal",
+        ] {
+            assert!(full.contains(required), "{mode} must include {required}");
+        }
+        for hidden in ["File", "Bash", "read_file", "write_file", "edit_file"] {
+            assert!(!full.contains(hidden), "{mode} must hide {hidden}");
+        }
+        assert_eq!(
+            metric_tool_names(&payload, mode, "active"),
+            expected_active,
+            "{mode} must keep the same Pi-small request head"
+        );
     }
-    for forbidden in ["Bash", "Run", "fim_edit", "verify"] {
+
+    let plan = metric_tool_names(&payload, "plan", "full");
+    for forbidden in ["Run", "fim_edit", "verify"] {
         assert!(!plan.contains(forbidden), "Plan must exclude {forbidden}");
     }
 
     for mode in ["act", "operate"] {
         let full = metric_tool_names(&payload, mode, "full");
-        for required in [
-            "Bash",
-            "Run",
-            "create_goal",
-            "get_goal",
-            "update_goal",
-            "verify",
-            "fim_edit",
-        ] {
+        for required in ["Run", "verify", "fim_edit"] {
             assert!(full.contains(required), "{mode} must include {required}");
         }
     }
-
-    let plan_active = metric_tool_names(&payload, "plan", "active");
-    assert!(!plan_active.contains("Bash"));
-    assert!(!plan_active.contains("Run"));
 }
 
 #[tokio::test]
@@ -7824,85 +7729,34 @@ fn print_skill_discovery_turn_metrics() {
 }
 
 #[test]
-fn deferred_tool_hydration_activates_without_guard_result_for_same_turn_retry() {
-    let mut edit = api_tool("edit_file");
-    edit.defer_loading = Some(true);
-    edit.input_schema = json!({
+fn deferred_apply_patch_first_use_hydrates_schema_without_execution() {
+    let mut apply_patch = api_tool("apply_patch");
+    apply_patch.defer_loading = Some(true);
+    apply_patch.input_schema = json!({
         "type": "object",
         "properties": {
-            "path": { "type": "string" },
-            "search": { "type": "string" },
-            "replace": { "type": "string" }
+            "patch": { "type": "string" }
         },
-        "required": ["path", "search", "replace"]
+        "required": ["patch"]
     });
 
-    let catalog = vec![edit];
-    let active_at_batch_start = HashSet::new();
-    let mut hydrated_this_batch = HashSet::new();
-    let hydration = maybe_hydrate_requested_deferred_tool(
-        "edit_file",
-        &json!({
-            "path": "src/foo.rs",
-            "search": "before",
-            "replace": "after"
-        }),
-        &catalog,
-        &active_at_batch_start,
-        &mut hydrated_this_batch,
-    )
-    .expect("first deferred use should hydrate");
-
-    assert_eq!(
-        hydration.metadata.as_ref().unwrap()["event"],
-        "tool.schema_hydrated"
-    );
-    assert!(hydrated_this_batch.contains("edit_file"));
-    // Turn loop policy (#4074): hydration activates the tool but must not
-    // populate guard_result, so execution proceeds in the same batch.
-    let guard_result: Option<crate::tools::spec::ToolResult> = None;
-    assert!(guard_result.is_none());
-}
-
-#[test]
-fn deferred_edit_file_first_use_hydrates_schema_without_execution() {
-    let mut edit = api_tool("edit_file");
-    edit.defer_loading = Some(true);
-    edit.input_schema = json!({
-        "type": "object",
-        "properties": {
-            "path": { "type": "string" },
-            "search": { "type": "string" },
-            "replace": { "type": "string" }
-        },
-        "required": ["path", "search", "replace"]
-    });
-
-    let catalog = vec![edit];
+    let catalog = vec![apply_patch];
     let active_at_batch_start = HashSet::new();
     let mut hydrated_this_batch = HashSet::new();
     let result = maybe_hydrate_requested_deferred_tool(
-        "edit_file",
-        &json!({
-            "path": "src/foo.rs",
-            "old_string": "before",
-            "new_string": "after"
-        }),
+        "apply_patch",
+        &json!({"patch": "*** Begin Patch\n*** End Patch"}),
         &catalog,
         &active_at_batch_start,
         &mut hydrated_this_batch,
     )
     .expect("first deferred use should hydrate");
 
-    assert!(!active_at_batch_start.contains("edit_file"));
-    assert!(hydrated_this_batch.contains("edit_file"));
+    assert!(!active_at_batch_start.contains("apply_patch"));
+    assert!(hydrated_this_batch.contains("apply_patch"));
     assert!(result.success);
-    assert!(result.content.contains("Tool `edit_file` was deferred"));
-    assert!(result.content.contains("path: string"));
-    assert!(result.content.contains("search: string"));
-    assert!(result.content.contains("replace: string"));
-    assert!(result.content.contains("old_string -> search"));
-    assert!(result.content.contains("new_string -> replace"));
+    assert!(result.content.contains("Tool `apply_patch` was deferred"));
+    assert!(result.content.contains("patch: string"));
     assert!(result.content.contains("The tool was not executed"));
 
     let metadata = result.metadata.expect("metadata");
@@ -7911,23 +7765,26 @@ fn deferred_edit_file_first_use_hydrates_schema_without_execution() {
     assert_eq!(metadata["retry_required"], true);
 
     let second_result = maybe_hydrate_requested_deferred_tool(
-        "edit_file",
-        &json!({"path": "src/bar.rs", "old_string": "before", "new_string": "after"}),
+        "apply_patch",
+        &json!({"patch": "*** Begin Patch\n*** End Patch"}),
         &catalog,
         &active_at_batch_start,
         &mut hydrated_this_batch,
     )
     .expect("later calls in the same batch should hydrate instead of executing");
     assert_eq!(second_result.metadata.unwrap()["executed"], false);
-    assert_eq!(hydrated_this_batch.len(), 1);
+    assert_eq!(
+        hydrated_this_batch,
+        HashSet::from(["apply_patch".to_string()])
+    );
 
     let mut active_next_batch = active_at_batch_start.clone();
     active_next_batch.extend(hydrated_this_batch);
     let mut hydrated_next_batch = HashSet::new();
     assert!(
         maybe_hydrate_requested_deferred_tool(
-            "edit_file",
-            &json!({"path": "src/foo.rs", "search": "before", "replace": "after"}),
+            "apply_patch",
+            &json!({"patch": "*** Begin Patch\n*** End Patch"}),
             &catalog,
             &active_next_batch,
             &mut hydrated_next_batch,
@@ -7941,7 +7798,7 @@ fn deferred_edit_file_first_use_hydrates_schema_without_execution() {
 fn model_tool_catalog_defers_non_core_native_tools_in_yolo_mode() {
     let always_load = HashSet::new();
     let catalog = build_model_tool_catalog(
-        vec![api_tool("File"), api_tool("project_map")],
+        vec![api_tool("read"), api_tool("project_map")],
         vec![api_tool("mcp_server_write")],
         AppMode::Yolo,
         &always_load,
@@ -7954,9 +7811,9 @@ fn model_tool_catalog_defers_non_core_native_tools_in_yolo_mode() {
             .and_then(|tool| tool.defer_loading)
     };
 
-    assert_eq!(defer_loading("File"), Some(false));
+    assert_eq!(defer_loading("read"), Some(false));
     assert_eq!(defer_loading("project_map"), Some(true));
-    assert_eq!(defer_loading("mcp_server_write"), Some(false));
+    assert_eq!(defer_loading("mcp_server_write"), Some(true));
 }
 
 #[test]
@@ -8110,46 +7967,6 @@ fn active_tool_list_pushes_deferred_activations_to_the_tail() {
 }
 
 #[test]
-fn hidden_edit_alias_bypasses_deferred_model_catalog_preflight() {
-    let (engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
-    let registry = engine
-        .build_turn_tool_registry_builder(
-            AppMode::Agent,
-            engine.config.todos.clone(),
-            engine.config.plan_state.clone(),
-        )
-        .build(engine.build_tool_context(AppMode::Agent, false));
-    let always_load = HashSet::new();
-    let mut catalog = build_model_tool_catalog(
-        registry.to_api_tools_with_cache(true),
-        vec![],
-        AppMode::Agent,
-        &always_load,
-    );
-    catalog
-        .iter_mut()
-        .find(|tool| tool.name == "File")
-        .expect("File registered")
-        .defer_loading = Some(true);
-    let mut active = initial_active_tools(&catalog);
-    assert!(!active.contains("File"));
-
-    let result = preflight_requested_deferred_tool(
-        "edit_file",
-        &json!({
-            "path": "src/foo.rs",
-            "old_string": "before",
-            "new_string": "after"
-        }),
-        &catalog,
-        &mut active,
-    );
-
-    assert!(result.is_none());
-    assert!(!active.contains("File"));
-}
-
-#[test]
 fn legacy_rlm_actions_are_not_advertised_to_new_model_turns() {
     let (engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
     let registry = engine
@@ -8212,7 +8029,7 @@ fn model_catalog_exposes_work_update_as_sole_progress_surface() {
     );
     assert!(
         active.contains("todo_write"),
-        "todo_write should load with the default active native set"
+        "todo_write must be available without a discovery turn"
     );
     assert!(
         !catalog_names.contains("update_plan"),
@@ -9040,6 +8857,42 @@ async fn assert_full_access_model_tool_batch_runs(
         "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
     });
     let tool_call_sse = format!("data: {tool_delta}\n\ndata: {tool_finish}\n\ndata: [DONE]\n\n");
+    // Request 1's "model" response: discover the deferred specialized tools
+    // through tool_search, exactly as the lowercase contract expects before
+    // the first direct call.
+    let search_tool_calls = vec![
+        json!({
+            "index": 0,
+            "id": "call_search_mcp",
+            "type": "function",
+            "function": {
+                "name": "tool_search",
+                "arguments": r#"{"query":"mcp server"}"#,
+            },
+        }),
+        json!({
+            "index": 1,
+            "id": "call_search_rlm",
+            "type": "function",
+            "function": {
+                "name": "tool_search",
+                "arguments": r#"{"query":"rlm"}"#,
+            },
+        }),
+    ];
+    let search_delta = json!({
+        "id": "chatcmpl-full-access-search",
+        "choices": [{
+            "index": 0,
+            "delta": {"tool_calls": search_tool_calls},
+            "finish_reason": serde_json::Value::Null,
+        }],
+    });
+    let search_finish = json!({
+        "id": "chatcmpl-full-access-search",
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+    });
+    let search_sse = format!("data: {search_delta}\n\ndata: {search_finish}\n\ndata: [DONE]\n\n");
     let done_sse = concat!(
         "data: {\"id\":\"chatcmpl-done\",\"choices\":[{\"index\":0,",
         "\"delta\":{\"content\":\"done\"},\"finish_reason\":null}]}\n\n",
@@ -9048,9 +8901,19 @@ async fn assert_full_access_model_tool_batch_runs(
         "data: [DONE]\n\n",
     );
 
+    // wiremock keeps every mounted mock matching even after its expected
+    // count is reached, and request history accumulates across the three
+    // steps, so substring matchers on the *calls* would re-fire forever.
+    // Anchor each mock on the tool-result ids that exist in exactly one
+    // request body: request 3 carries the executed batch's results, request 2
+    // carries the search results, and request 1 carries neither.
+
+    // Request 3 (exec batch results) terminates with the done turn.
     Mock::given(method("POST"))
         .and(path("/v1/chat/completions"))
-        .and(body_string_contains("\"role\":\"tool\""))
+        .and(body_string_contains(
+            "\"tool_call_id\":\"call_full_access_0\"",
+        ))
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
@@ -9060,8 +8923,13 @@ async fn assert_full_access_model_tool_batch_runs(
         .with_priority(1)
         .mount(&server)
         .await;
+    // Request 2 (search results) executes the deferred specialized tools that
+    // request 1 discovered through tool_search. The search call activates
+    // them in the session cache, so this request runs them under Full Access
+    // without an approval modal.
     Mock::given(method("POST"))
         .and(path("/v1/chat/completions"))
+        .and(body_string_contains("\"tool_call_id\":\"call_search_mcp\""))
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
@@ -9069,6 +8937,18 @@ async fn assert_full_access_model_tool_batch_runs(
         )
         .expect(1)
         .with_priority(2)
+        .mount(&server)
+        .await;
+    // Request 1: the model discovers the deferred specialized tools it needs.
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(search_sse),
+        )
+        .expect(1)
+        .with_priority(3)
         .mount(&server)
         .await;
 
@@ -9133,8 +9013,12 @@ async fn assert_full_access_model_tool_batch_runs(
                 }
                 seen.insert(name);
             }
-            Event::TurnComplete { status, .. } => {
-                assert_eq!(status, TurnOutcomeStatus::Completed);
+            Event::TurnComplete { status, error, .. } => {
+                assert_eq!(
+                    status,
+                    TurnOutcomeStatus::Completed,
+                    "Full Access turn must complete: {error:?}"
+                );
                 saw_turn_complete = true;
                 break;
             }
@@ -10056,7 +9940,8 @@ async fn run_shell_command_op_preserves_plan_mode_shell_block() {
                 assert_eq!(name, "Bash");
                 let err = result.expect_err("plan shell should fail");
                 assert!(
-                    err.to_string().contains("unavailable in Plan mode"),
+                    err.to_string()
+                        .contains("Tool 'bash' is unavailable in Plan mode"),
                     "{err}"
                 );
             }
@@ -10088,7 +9973,7 @@ fn deferred_tool_preflight_skips_already_active_tools() {
 }
 
 #[test]
-fn turn_tool_registry_builder_keeps_plan_mode_read_only_for_files() {
+fn turn_tool_registry_builder_keeps_plan_primitive_identity() {
     let (engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
     let registry = engine
         .build_turn_tool_registry_builder(
@@ -10098,11 +9983,24 @@ fn turn_tool_registry_builder_keeps_plan_mode_read_only_for_files() {
         )
         .build(engine.build_tool_context(AppMode::Plan, false));
 
-    assert!(registry.contains("File"));
-    assert!(!registry.contains("read_file"));
-    assert!(!registry.contains("list_dir"));
-    assert!(!registry.contains("write_file"));
-    assert!(!registry.contains("edit_file"));
+    for primitive in ["read", "write", "edit", "bash"] {
+        assert!(registry.contains(primitive), "missing {primitive}");
+    }
+    for hidden in ["File", "Bash", "read_file", "write_file", "edit_file"] {
+        assert!(registry.contains(hidden), "missing hidden {hidden}");
+    }
+    assert!(registry.contains("list_dir"));
+    let api_names = registry
+        .to_api_tools()
+        .into_iter()
+        .map(|tool| tool.name)
+        .collect::<HashSet<_>>();
+    for primitive in ["read", "write", "edit", "bash"] {
+        assert!(api_names.contains(primitive), "missing visible {primitive}");
+    }
+    for hidden in ["File", "Bash", "read_file", "write_file", "edit_file"] {
+        assert!(!api_names.contains(hidden), "visible hidden tool {hidden}");
+    }
     assert!(!registry.contains("exec_shell"));
     assert!(!registry.contains("exec_shell_wait"));
     assert!(!registry.contains("exec_shell_interact"));
@@ -10119,35 +10017,9 @@ fn turn_tool_registry_builder_keeps_plan_mode_read_only_for_files() {
     assert!(!registry.contains("task_list"));
     assert!(!registry.contains("task_read"));
     assert!(registry.contains("handle_read"));
-    // Hidden todo aliases are read-only progress surface (not writes/exec)
-    // but must be filtered from the write-check alongside canonical tools.
-    let plan_state_tools = [
-        "checklist_add",
-        "checklist_update",
-        "checklist_write",
-        "todo_add",
-        "todo_update",
-        "todo_write",
-        "work_update",
-        "TodoWrite",
-        "todo",
-        "update_plan",
-    ];
-    let mut write_or_exec_tools: Vec<String> = registry
-        .all()
-        .into_iter()
-        .filter(|tool| !plan_state_tools.contains(&tool.name()))
-        .filter(|tool| {
-            let capabilities = tool.capabilities();
-            capabilities.contains(&ToolCapability::WritesFiles)
-                || capabilities.contains(&ToolCapability::ExecutesCode)
-        })
-        .map(|tool| tool.name().to_string())
-        .collect();
-    write_or_exec_tools.sort();
-    assert!(
-        write_or_exec_tools.is_empty(),
-        "Plan mode must not register file-writing or code-execution tools: {write_or_exec_tools:?}"
+    assert_eq!(
+        registry.context().shell_policy,
+        crate::worker_profile::ShellPolicy::None
     );
 }
 
@@ -10166,11 +10038,13 @@ fn plan_mode_toggle_preserves_catalog_byte_stability() {
 
     // Build catalog for Plan mode twice — must be byte-identical.
     let plan_native = vec![
-        api_tool("read_file"),
+        api_tool("read"),
+        api_tool("write"),
+        api_tool("edit"),
+        api_tool("bash"),
+        api_tool("agent"),
+        api_tool("tool_search"),
         api_tool("list_dir"),
-        api_tool("write_file"),
-        api_tool("edit_file"),
-        api_tool("exec_shell"),
     ];
     let plan_mcp = vec![api_tool("mcp_search"), api_tool("mcp_write")];
 
@@ -10215,9 +10089,8 @@ fn plan_mode_toggle_preserves_catalog_byte_stability() {
         "building the catalog twice for Agent mode must produce identical bytes"
     );
 
-    // Verify that the non-deferred tools that are common to both modes
-    // appear in the same order. Plan mode excludes execution tools, but
-    // the tools that are present in both modes must have stable ordering.
+    // Modes keep the same primitive identities; central authority gates decide
+    // whether an advertised write/edit/bash call may execute.
     let plan_names: Vec<&str> = catalog_a
         .iter()
         .filter(|t| !t.defer_loading.unwrap_or(false))
@@ -10229,13 +10102,9 @@ fn plan_mode_toggle_preserves_catalog_byte_stability() {
         .map(|t| t.name.as_str())
         .collect();
 
-    // The common prefix of non-deferred tools must be identical.
-    let common_len = plan_names.len().min(agent_names.len());
-    assert_eq!(
-        &plan_names[..common_len],
-        &agent_names[..common_len],
-        "non-deferred tools common to Plan and Agent must appear in the same order"
-    );
+    let expected_head = ["agent", "bash", "edit", "read", "tool_search", "write"];
+    assert_eq!(plan_names, expected_head);
+    assert_eq!(agent_names, expected_head);
 
     // Verify that activating a deferred tool mid-session appends to the
     // tail without reordering the head.
@@ -10373,7 +10242,6 @@ fn mode_invariant_matrix_covers_context_catalog_subagents_and_prompt_metadata() 
         trust_mode: bool,
         auto_approve: bool,
         approval_mode: ApprovalMode,
-        bash_available: bool,
         plan_hint: bool,
     }
 
@@ -10386,7 +10254,6 @@ fn mode_invariant_matrix_covers_context_catalog_subagents_and_prompt_metadata() 
             trust_mode: false,
             auto_approve: false,
             approval_mode: ApprovalMode::Suggest,
-            bash_available: false,
             plan_hint: true,
         },
         ModeCase {
@@ -10397,7 +10264,6 @@ fn mode_invariant_matrix_covers_context_catalog_subagents_and_prompt_metadata() 
             trust_mode: false,
             auto_approve: false,
             approval_mode: ApprovalMode::Suggest,
-            bash_available: true,
             plan_hint: false,
         },
         ModeCase {
@@ -10408,7 +10274,6 @@ fn mode_invariant_matrix_covers_context_catalog_subagents_and_prompt_metadata() 
             trust_mode: true,
             auto_approve: true,
             approval_mode: ApprovalMode::Bypass,
-            bash_available: true,
             plan_hint: false,
         },
         ModeCase {
@@ -10419,7 +10284,6 @@ fn mode_invariant_matrix_covers_context_catalog_subagents_and_prompt_metadata() 
             trust_mode: false,
             auto_approve: false,
             approval_mode: ApprovalMode::Suggest,
-            bash_available: true,
             plan_hint: false,
         },
         ModeCase {
@@ -10430,7 +10294,6 @@ fn mode_invariant_matrix_covers_context_catalog_subagents_and_prompt_metadata() 
             trust_mode: false,
             auto_approve: false,
             approval_mode: ApprovalMode::Suggest,
-            bash_available: true,
             plan_hint: false,
         },
         ModeCase {
@@ -10443,7 +10306,6 @@ fn mode_invariant_matrix_covers_context_catalog_subagents_and_prompt_metadata() 
             trust_mode: true,
             auto_approve: true,
             approval_mode: ApprovalMode::Bypass,
-            bash_available: true,
             plan_hint: false,
         },
     ];
@@ -10546,12 +10408,12 @@ fn mode_invariant_matrix_covers_context_catalog_subagents_and_prompt_metadata() 
             .with_subagent_tools(manager, runtime)
             .build(context);
         assert!(registry.contains("agent"), "{}", case.name);
-        assert_eq!(
-            registry.contains("Bash"),
-            case.bash_available,
-            "{}",
-            case.name
-        );
+        // Primitive identity is mode-stable: both the lowercase `bash` and
+        // its legacy `Bash` transcript alias register in every mode, and the
+        // mode gate lives at the execution/catalog boundary (Plan refuses
+        // shell rather than unregistering the identity).
+        assert!(registry.contains("bash"), "{}", case.name);
+        assert!(registry.contains("Bash"), "{}", case.name);
         assert!(
             !registry.contains("exec_shell"),
             "{}: retired exec_shell must remain absent",
@@ -10971,6 +10833,7 @@ async fn session_update_preserves_reasoning_tool_only_turn() {
         content: vec![
             ContentBlock::Thinking {
                 signature: None,
+                state: None,
                 thinking: "Need a tool before answering.".to_string(),
             },
             ContentBlock::ToolUse {
@@ -11225,214 +11088,15 @@ fn messages_with_turn_metadata_returns_stored_session_messages() {
     );
 }
 
-// === #3983: canonical Work grounding at the request tail ===
+// === To-do state reaches the model through its own tool results ===
+//
+// Codewhale has one To-do list. The model learns what is on it the way it
+// learns anything else: from the result its own `work_update` call returned,
+// which is ordinary persisted history. No request re-states the list, on any
+// step. The complete list stays visible in the UI, which is a different
+// surface from the request.
 
-fn work_grounding_engine() -> (Engine, EngineHandle, tempfile::TempDir) {
-    let tmp = tempdir().expect("tempdir");
-    let config = EngineConfig {
-        workspace: tmp.path().to_path_buf(),
-        ..Default::default()
-    };
-    let (mut engine, handle) = Engine::new(config, &Config::default());
-    engine.session.messages = vec![Message {
-        role: "user".to_string(),
-        content: vec![ContentBlock::Text {
-            text: "land the grounding seam".to_string(),
-            cache_control: None,
-        }],
-    }]
-    .into();
-    (engine, handle, tmp)
-}
-
-fn message_text_of(message: &Message) -> String {
-    message
-        .content
-        .iter()
-        .filter_map(|block| match block {
-            ContentBlock::Text { text, .. } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-#[tokio::test]
-async fn empty_todo_appends_no_work_state_block() {
-    let (engine, _handle, _tmp) = work_grounding_engine();
-
-    assert!(engine.work_state_tail_message().await.is_none());
-    assert_eq!(
-        engine.request_messages_with_work_state().await,
-        engine.messages_with_turn_metadata(),
-        "an empty To-do must add nothing to the request"
-    );
-}
-
-#[tokio::test]
-async fn request_tail_carries_work_state_without_storing_it() {
-    let (engine, _handle, _tmp) = work_grounding_engine();
-    {
-        let mut todos = engine.config.todos.lock().await;
-        todos.add("read the seam".to_string(), TodoStatus::Completed);
-        todos.add("write the renderer".to_string(), TodoStatus::InProgress);
-    }
-    let stored = engine.session.messages.clone();
-    let system_before = engine.session.system_prompt.clone();
-
-    let request = engine.request_messages_with_work_state().await;
-
-    // Stable prefix is byte-identical: the block is appended, never woven in.
-    assert_eq!(request.len(), stored.len() + 1);
-    assert_eq!(&request[..stored.len()], &stored[..]);
-    assert_eq!(engine.session.system_prompt, system_before);
-
-    let tail = request.last().expect("tail message");
-    assert_eq!(tail.role, "user");
-    let text = message_text_of(tail);
-    let snapshot = engine.config.todos.lock().await.snapshot();
-    assert_eq!(
-        text,
-        crate::work_grounding::work_state_block(&snapshot).expect("block")
-    );
-    assert!(text.contains("[~] #2 write the renderer"));
-
-    // Transient: nothing about the block reaches session history.
-    assert_eq!(&*engine.session.messages, &*stored);
-    assert!(
-        !engine
-            .session
-            .messages
-            .iter()
-            .any(|message| message_text_of(message)
-                .contains(crate::work_grounding::WORK_STATE_OPEN_TAG)),
-        "the work_state block must never be stored in session history"
-    );
-    assert!(engine.messages_with_turn_metadata().iter().all(|message| {
-        !message_text_of(message).contains(crate::work_grounding::WORK_STATE_OPEN_TAG)
-    }));
-}
-
-/// A `work_update` executed mid tool-loop must be visible on the next model
-/// step, because the block is rebuilt per request rather than pinned once.
-#[tokio::test]
-async fn later_request_sees_an_intervening_work_update() {
-    let (engine, _handle, _tmp) = work_grounding_engine();
-    {
-        let mut todos = engine.config.todos.lock().await;
-        todos.add("first step".to_string(), TodoStatus::InProgress);
-    }
-
-    let first = engine.request_messages_with_work_state().await;
-    let first_text = message_text_of(first.last().expect("tail"));
-    assert!(first_text.contains("first step"));
-    assert!(!first_text.contains("second step"));
-
-    {
-        let mut todos = engine.config.todos.lock().await;
-        let _ = todos.update_status(1, TodoStatus::Completed);
-        todos.add("second step".to_string(), TodoStatus::InProgress);
-    }
-
-    let second_text = message_text_of(
-        engine
-            .request_messages_with_work_state()
-            .await
-            .last()
-            .expect("tail"),
-    );
-    assert!(second_text.contains("[x] #1 first step"));
-    assert!(second_text.contains("[~] #2 second step"));
-}
-
-/// The turn-start structured state is deliberately Work-free: Work moves
-/// during a turn, so it is resolved at the fork seam instead.
-#[test]
-fn turn_start_structured_state_carries_no_work_section() {
-    let state = StructuredState {
-        mode_label: "Agent".to_string(),
-        workspace: PathBuf::from("/workspace/codewhale"),
-        cwd: None,
-        working_set_summary: None,
-        subagent_snapshots: Vec::new(),
-    };
-
-    let block = state.to_system_block().expect("fork state block");
-
-    assert!(
-        !block.contains(crate::work_grounding::FORK_WORK_SECTION_HEADING),
-        "stable capture must not pin a Work section: {block}"
-    );
-    assert!(!block.contains("To-do ("));
-}
-
-/// Parent request tail, fork state block, and `/relay` all state the same
-/// ledger. Relay parity is asserted in `commands::tests`.
-#[tokio::test]
-async fn fork_state_block_reuses_the_canonical_work_body() {
-    let (engine, _handle, _tmp) = work_grounding_engine();
-    {
-        let mut todos = engine.config.todos.lock().await;
-        todos.add(
-            "Wire Fleet progress projection".to_string(),
-            TodoStatus::InProgress,
-        );
-        todos.add("Run focused gates".to_string(), TodoStatus::Pending);
-    }
-    let snapshot = engine.config.todos.lock().await.snapshot();
-    let body = crate::work_grounding::canonical_todo_body(&snapshot).expect("body");
-
-    let state = StructuredState {
-        mode_label: "Agent".to_string(),
-        workspace: PathBuf::from("/workspace/codewhale"),
-        cwd: None,
-        working_set_summary: None,
-        subagent_snapshots: Vec::new(),
-    };
-    let fork_context = crate::tools::subagent::SubAgentForkContext {
-        messages: engine.messages_with_turn_metadata(),
-        structured_state_block: state.to_system_block(),
-        work_source: Some(engine.work_state_source()),
-    };
-
-    let resolved = fork_context
-        .with_resolved_state_block()
-        .await
-        .structured_state_block
-        .expect("resolved fork state block");
-    let tail_block = crate::work_grounding::work_state_block(&snapshot).expect("tail block");
-
-    assert!(resolved.contains(&body), "fork body drifted: {resolved}");
-    assert!(tail_block.contains(&body));
-}
-
-/// `update_plan` is conversational reasoning, not a Work ledger: plan-only
-/// state must not produce Work grounding.
-#[tokio::test]
-async fn plan_only_state_produces_no_work_grounding() {
-    let (engine, _handle, _tmp) = work_grounding_engine();
-    {
-        let mut plan = engine.config.plan_state.lock().await;
-        plan.update(crate::tools::plan::UpdatePlanArgs {
-            objective: Some("Ship the grounding seam".to_string()),
-            plan: vec![crate::tools::plan::PlanItemArg {
-                step: "draft the renderer".to_string(),
-                status: crate::tools::plan::StepStatus::InProgress,
-            }],
-            ..crate::tools::plan::UpdatePlanArgs::default()
-        });
-        assert!(!plan.snapshot().is_empty());
-    }
-
-    assert!(
-        engine.work_state_tail_message().await.is_none(),
-        "legacy plan-only state must not leak into Work grounding"
-    );
-}
-
-/// Engine whose To-do list is owned by a real `WorkRuntime`, i.e. the live
-/// configuration rather than the legacy no-runtime one.
-fn graph_backed_work_grounding_engine() -> (
+fn todo_engine() -> (
     Engine,
     EngineHandle,
     crate::tools::todo::SharedTodoList,
@@ -11453,13 +11117,33 @@ fn graph_backed_work_grounding_engine() -> (
         },
         ..Default::default()
     };
-    let (engine, handle) = Engine::new(config, &Config::default());
+    let (mut engine, handle) = Engine::new(config, &Config::default());
+    engine.session.messages = vec![Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::Text {
+            text: "land the To-do seam".to_string(),
+            cache_control: None,
+        }],
+    }]
+    .into();
     (engine, handle, todos, work, tmp)
 }
 
+fn message_text_of(message: &Message) -> String {
+    message
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Run the real `work_update` tool against the attached graph — not a direct
-/// mutation of the legacy list, which is exactly the state this seam must stop
-/// trusting.
+/// mutation of the legacy list, which is exactly the state the fork seam must
+/// stop trusting.
 async fn run_graph_backed_work_update(
     todos: &crate::tools::todo::SharedTodoList,
     work: &crate::work_graph::SharedWorkRuntime,
@@ -11474,15 +11158,235 @@ async fn run_graph_backed_work_update(
         .expect("graph-backed todo_write");
 }
 
-/// #3983 runtime regression: a real graph-backed `work_update` stages the new
-/// projection in the `WorkRuntime` and publishes into `config.todos` only later,
-/// asynchronously, from the UI. The next provider request must carry the staged
-/// projection, not the pre-write legacy view.
+/// A non-empty To-do adds nothing to the messages a request is built from.
 #[tokio::test]
-async fn next_provider_request_reflects_graph_backed_work_update() {
-    let (engine, _handle, todos, work, _tmp) = graph_backed_work_grounding_engine();
+async fn a_non_empty_todo_adds_nothing_to_the_request_messages() {
+    let (engine, _handle, todos, work, _tmp) = todo_engine();
+    let stored = engine.session.messages.clone();
+
+    run_graph_backed_work_update(
+        &todos,
+        &work,
+        json!([
+            { "content": "read the runtime seam", "status": "completed" },
+            { "content": "write the renderer", "status": "in_progress" }
+        ]),
+    )
+    .await;
+
+    let request = engine.messages_with_turn_metadata();
+
+    assert_eq!(request.len(), stored.len(), "nothing may be appended");
+    assert_eq!(&*engine.session.messages, &*stored, "history is untouched");
+    for message in &request {
+        let text = message_text_of(message);
+        assert!(
+            !text.contains("To-do ("),
+            "request re-stated the list: {text}"
+        );
+        assert!(
+            !text.contains("write the renderer"),
+            "request re-stated an item: {text}"
+        );
+        assert!(!text.contains("codewhale:work"), "{text}");
+    }
+}
+
+/// The outbound payload itself, across a whole turn and the turn after it:
+/// with work on the list, no provider request body mentions it.
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn provider_request_bodies_never_carry_the_todo_list() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let _lock = lock_test_env();
+    let workspace = tempdir().expect("tempdir");
+    let server = MockServer::start().await;
+    let done_sse = concat!(
+        "data: {\"id\":\"chatcmpl-todo\",\"choices\":[{\"index\":0,",
+        "\"delta\":{\"content\":\"noted.\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"id\":\"chatcmpl-todo\",\"choices\":[{\"index\":0,",
+        "\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(done_sse),
+        )
+        .mount(&server)
+        .await;
+
+    let api_config = Config {
+        api_key: Some("test-key".to_string()),
+        base_url: Some(server.uri()),
+        ..Config::default()
+    };
+    let todos = crate::tools::todo::new_shared_todo_list();
+    let plan = crate::tools::plan::new_shared_plan_state();
+    let work = crate::work_graph::new_shared_work_runtime(todos.clone(), plan.clone());
+    let engine_config = EngineConfig {
+        workspace: workspace.path().to_path_buf(),
+        snapshots_enabled: false,
+        subagents_enabled: false,
+        todos: todos.clone(),
+        plan_state: plan,
+        runtime_services: crate::tools::spec::RuntimeToolServices {
+            work: Some(work.clone()),
+            ..Default::default()
+        },
+        ..EngineConfig::default()
+    };
+    run_graph_backed_work_update(
+        &todos,
+        &work,
+        json!([{ "content": "ship the outbound payload test", "status": "in_progress" }]),
+    )
+    .await;
+
+    let (engine, handle) = Engine::new(engine_config, &api_config);
+    let task = tokio::spawn(engine.run());
+
+    for prompt in ["first turn", "second turn"] {
+        handle
+            .send(external_user_message_op(
+                prompt,
+                AppMode::Agent,
+                &api_config,
+            ))
+            .await
+            .expect("send turn");
+        let mut rx = handle.rx_event.write().await;
+        while let Some(event) = tokio::time::timeout(model_turn_event_timeout(), rx.recv())
+            .await
+            .expect("timed out waiting for turn completion")
+        {
+            match event {
+                Event::Error { envelope, .. } => panic!("turn errored: {envelope:?}"),
+                Event::TurnComplete { status, error, .. } => {
+                    assert_eq!(status, TurnOutcomeStatus::Completed, "{error:?}");
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("recorded provider requests");
+    assert!(requests.len() >= 2, "expected one request per turn");
+    for request in &requests {
+        let body = String::from_utf8_lossy(&request.body);
+        assert!(
+            !body.contains("ship the outbound payload test"),
+            "a provider request restated the To-do list: {body}"
+        );
+        assert!(!body.contains("To-do ("), "{body}");
+        assert!(!body.contains("codewhale:work"), "{body}");
+    }
+
+    handle.send(Op::Shutdown).await.expect("shutdown engine");
+    task.await.expect("engine task");
+}
+
+/// The turn-start structured state is deliberately To-do-free: the list moves
+/// during a turn, so it is resolved at the fork seam instead.
+#[test]
+fn turn_start_structured_state_carries_no_todo_section() {
+    let state = StructuredState {
+        mode_label: "Agent".to_string(),
+        workspace: PathBuf::from("/workspace/codewhale"),
+        cwd: None,
+        working_set_summary: None,
+        subagent_snapshots: Vec::new(),
+    };
+
+    let block = state.to_system_block().expect("fork state block");
+
     assert!(
-        engine.work_state_source().is_graph_backed(),
+        !block.contains(crate::todo_snapshot::FORK_TODO_SECTION_HEADING),
+        "stable capture must not pin a To-do section: {block}"
+    );
+    assert!(!block.contains("To-do ("));
+}
+
+/// The fork handoff and `/relay` show the same To-do snapshot body. Relay
+/// parity is asserted in `commands::tests`.
+#[tokio::test]
+async fn fork_state_block_reuses_the_snapshot_body() {
+    let (engine, _handle, todos, work, _tmp) = todo_engine();
+    run_graph_backed_work_update(
+        &todos,
+        &work,
+        json!([
+            { "content": "Wire Fleet progress projection", "status": "in_progress" },
+            { "content": "Run focused gates", "status": "pending" }
+        ]),
+    )
+    .await;
+    let snapshot = engine.todo_source().snapshot().await;
+    let body = crate::todo_snapshot::todo_snapshot_body(&snapshot).expect("body");
+
+    let state = StructuredState {
+        mode_label: "Agent".to_string(),
+        workspace: PathBuf::from("/workspace/codewhale"),
+        cwd: None,
+        working_set_summary: None,
+        subagent_snapshots: Vec::new(),
+    };
+    let fork_context = crate::tools::subagent::SubAgentForkContext {
+        messages: engine.messages_with_turn_metadata(),
+        structured_state_block: state.to_system_block(),
+        work_source: Some(engine.todo_source()),
+    };
+
+    let resolved = fork_context
+        .with_resolved_state_block()
+        .await
+        .structured_state_block
+        .expect("resolved fork state block");
+
+    assert!(resolved.contains(&body), "fork body drifted: {resolved}");
+}
+
+/// `update_plan` is conversational reasoning, not a second list: plan-only
+/// state must not produce a To-do snapshot.
+#[tokio::test]
+async fn plan_only_state_produces_no_todo_snapshot() {
+    let (engine, _handle, _todos, _work, _tmp) = todo_engine();
+    {
+        let mut plan = engine.config.plan_state.lock().await;
+        plan.update(crate::tools::plan::UpdatePlanArgs {
+            objective: Some("Ship the To-do seam".to_string()),
+            plan: vec![crate::tools::plan::PlanItemArg {
+                step: "draft the renderer".to_string(),
+                status: crate::tools::plan::StepStatus::InProgress,
+            }],
+            ..crate::tools::plan::UpdatePlanArgs::default()
+        });
+        assert!(!plan.snapshot().is_empty());
+    }
+
+    assert!(
+        engine.todo_source().body().await.is_none(),
+        "legacy plan-only state must not become a To-do snapshot"
+    );
+}
+
+/// A real graph-backed `work_update` stages the new projection in the
+/// `WorkRuntime` and publishes into `config.todos` only later, asynchronously,
+/// from the UI. The fork seam must read the staged projection, not the
+/// pre-write legacy view.
+#[tokio::test]
+async fn fork_seam_reflects_a_graph_backed_work_update() {
+    let (engine, _handle, todos, work, _tmp) = todo_engine();
+    assert!(
+        engine.todo_source().is_graph_backed(),
         "this engine must read the graph, not the legacy view"
     );
 
@@ -11491,7 +11395,7 @@ async fn next_provider_request_reflects_graph_backed_work_update() {
         &work,
         json!([
             { "content": "read the runtime seam", "status": "completed" },
-            { "content": "ground the next request", "status": "in_progress" }
+            { "content": "hand the child the live list", "status": "in_progress" }
         ]),
     )
     .await;
@@ -11502,46 +11406,19 @@ async fn next_provider_request_reflects_graph_backed_work_update() {
         "precondition: work_update stages in the graph and publishes later"
     );
 
-    let tail = message_text_of(
-        engine
-            .request_messages_with_work_state()
-            .await
-            .last()
-            .expect("tail"),
-    );
+    let body = engine.todo_source().body().await.expect("body");
+    assert!(body.contains("[x] #1 read the runtime seam"), "{body}");
     assert!(
-        tail.contains("[x] #1 read the runtime seam"),
-        "request tail must carry the staged projection: {tail}"
+        body.contains("[~] #2 hand the child the live list"),
+        "{body}"
     );
-    assert!(tail.contains("[~] #2 ground the next request"), "{tail}");
-
-    // And a second graph-backed update lands on the following request.
-    run_graph_backed_work_update(
-        &todos,
-        &work,
-        json!([
-            { "content": "read the runtime seam", "status": "completed" },
-            { "content": "ground the next request", "status": "completed" },
-            { "content": "cover the child seam", "status": "in_progress" }
-        ]),
-    )
-    .await;
-    let tail = message_text_of(
-        engine
-            .request_messages_with_work_state()
-            .await
-            .last()
-            .expect("tail"),
-    );
-    assert!(tail.contains("[x] #2 ground the next request"), "{tail}");
-    assert!(tail.contains("[~] #3 cover the child seam"), "{tail}");
 }
 
-/// #3983: compaction must not freeze a To-do projection into the stable
-/// system prefix. The next request rehydrates from the live graph tail instead.
+/// A compaction checkpoint is history, never a second To-do surface or a
+/// stable-system-prefix mutation.
 #[tokio::test]
-async fn compaction_keeps_todos_out_of_prefix_and_next_tail_current() {
-    let (mut engine, _handle, todos, work, _tmp) = graph_backed_work_grounding_engine();
+async fn compaction_keeps_todos_out_of_the_prefix() {
+    let (mut engine, _handle, todos, work, _tmp) = todo_engine();
     run_graph_backed_work_update(
         &todos,
         &work,
@@ -11553,34 +11430,26 @@ async fn compaction_keeps_todos_out_of_prefix_and_next_tail_current() {
         "precondition: the compatibility list is still stale"
     );
 
-    let live = engine.capture_compaction_live_state().await;
-    let reminder = crate::compaction::format_live_state_reminder(&live);
+    let stable_before = engine.session.system_prompt.clone();
+    engine.commit_compaction_checkpoint(Some(SystemPrompt::Text(format!(
+        "{COMPACTION_SUMMARY_MARKER}\nsummary"
+    ))));
+    assert_eq!(engine.session.system_prompt, stable_before);
+    let checkpoint = engine.rendered_compaction_summary().expect("checkpoint");
     assert!(
-        !reminder.contains("staged graph-only todo") && !reminder.contains("### Todos"),
-        "compaction live state must not create a second To-do surface: {reminder}"
+        !checkpoint.contains("staged graph-only todo"),
+        "{checkpoint}"
     );
-    engine.merge_compaction_summary(
-        Some(SystemPrompt::Text(format!(
-            "{COMPACTION_SUMMARY_MARKER}\nsummary\n{reminder}"
-        ))),
-        None,
-    );
-    let prefix = engine.rendered_compaction_summary().expect("summary");
-    assert!(!prefix.contains("staged graph-only todo"), "{prefix}");
-    assert!(!prefix.contains("### Todos"), "{prefix}");
-
-    let request = engine.request_messages_with_work_state().await;
-    let tail = message_text_of(request.last().expect("current Work tail"));
-    assert!(tail.contains("[~] #1 staged graph-only todo"), "{tail}");
+    assert!(!checkpoint.contains("### Todos"), "{checkpoint}");
 }
 
-/// #3983 runtime regression: `fork_context` is captured once at turn start, so a
-/// `work_update` followed by an `agent` spawn *in the same turn* must still hand
-/// the child the current canonical body. Only the Work portion is refreshed;
-/// the inherited transcript and stable state text are unchanged.
+/// `fork_context` is captured once at turn start, so a `work_update` followed
+/// by an `agent` spawn *in the same turn* must still hand the child the
+/// current snapshot. Only the To-do portion is refreshed; the inherited
+/// transcript and stable state text are unchanged.
 #[tokio::test]
-async fn same_turn_fork_carries_the_updated_work_state() {
-    let (engine, _handle, todos, work, _tmp) = graph_backed_work_grounding_engine();
+async fn same_turn_fork_carries_the_updated_todo() {
+    let (engine, _handle, todos, work, _tmp) = todo_engine();
 
     // Turn start: capture the fork context, before any work exists.
     let stable_block = StructuredState {
@@ -11594,7 +11463,7 @@ async fn same_turn_fork_carries_the_updated_work_state() {
     let fork_context = crate::tools::subagent::SubAgentForkContext {
         messages: engine.messages_with_turn_metadata(),
         structured_state_block: stable_block.clone(),
-        work_source: Some(engine.work_state_source()),
+        work_source: Some(engine.todo_source()),
     };
     let captured_messages = fork_context.messages.clone();
     assert!(
@@ -11604,14 +11473,14 @@ async fn same_turn_fork_carries_the_updated_work_state() {
             .structured_state_block
             .expect("stable block")
             .contains("To-do ("),
-        "no work yet, so no Work section"
+        "no work yet, so no To-do section"
     );
 
     // Mid-turn: the model calls work_update, then spawns an agent.
     run_graph_backed_work_update(
         &todos,
         &work,
-        json!([{ "content": "hand the child the live ledger", "status": "in_progress" }]),
+        json!([{ "content": "hand the child the live list", "status": "in_progress" }]),
     )
     .await;
 
@@ -11620,15 +11489,15 @@ async fn same_turn_fork_carries_the_updated_work_state() {
         .structured_state_block
         .as_deref()
         .expect("resolved block");
-    let snapshot = engine.work_state_source().snapshot().await;
-    let body = crate::work_grounding::canonical_todo_body(&snapshot).expect("body");
+    let snapshot = engine.todo_source().snapshot().await;
+    let body = crate::todo_snapshot::todo_snapshot_body(&snapshot).expect("body");
 
     assert!(
         block.contains(&body),
         "same-turn fork must carry the current body: {block}"
     );
     assert!(
-        block.contains("[~] #1 hand the child the live ledger"),
+        block.contains("[~] #1 hand the child the live list"),
         "{block}"
     );
     // Stable history semantics are untouched.
@@ -11637,85 +11506,6 @@ async fn same_turn_fork_carries_the_updated_work_state() {
         block.starts_with(stable_block.as_deref().expect("stable").trim()),
         "the stable capture must stay a byte-identical prefix: {block}"
     );
-}
-
-/// #3983 context safety: preflight must account for the exact transient tail
-/// bytes it is about to send. A request that fits at the ceiling must not be
-/// approved and then grow by up to `MAX_BODY_CHARS` of Work grounding.
-#[tokio::test]
-async fn preflight_accounting_includes_the_work_tail() {
-    let (mut engine, _handle, todos, work, _tmp) = graph_backed_work_grounding_engine();
-    // A large-but-bounded ledger: the tail is the maximum the renderer emits.
-    let items: Vec<serde_json::Value> = (1..=40)
-        .map(|idx| {
-            json!({
-                "content": format!("item {idx} {}", "grounding detail ".repeat(12)),
-                "status": if idx == 3 { "in_progress" } else { "pending" },
-            })
-        })
-        .collect();
-    run_graph_backed_work_update(&todos, &work, json!(items)).await;
-
-    let tail = engine.work_state_tail_message().await.expect("tail");
-    let tail_chars: usize = message_text_of(&tail).chars().count();
-    assert!(
-        tail_chars > crate::work_grounding::MAX_BODY_CHARS / 2,
-        "expected a near-maximal tail, got {tail_chars} chars"
-    );
-
-    let base = engine.estimated_input_tokens();
-    let with_tail = engine.estimated_input_tokens_with_work_tail(Some(&tail));
-
-    assert!(
-        with_tail > base,
-        "the tail must be counted: {with_tail} vs {base}"
-    );
-    // Near-limit regression: with the budget exactly at the untailed estimate,
-    // the tailed estimate must exceed it so preflight recovers instead of
-    // shipping an over-limit request.
-    let budget_at_the_edge = base;
-    assert!(
-        with_tail > budget_at_the_edge,
-        "preflight would have approved an over-limit request: {with_tail} <= {budget_at_the_edge}"
-    );
-    // Conservative, not exact: never an under-count of the bytes sent.
-    assert!(with_tail >= base + tail_chars / 4);
-
-    // The accounting is over the same message the request carries.
-    let request = engine.request_messages_with_work_tail(Some(&tail));
-    assert_eq!(request.last().expect("tail"), &tail);
-}
-
-/// #3983: repeated requests (retries, later tool-loop steps) must never
-/// accumulate a second tail, and the stored history must stay untouched.
-#[tokio::test]
-async fn repeated_requests_never_accumulate_a_second_work_tail() {
-    let (engine, _handle, todos, work, _tmp) = graph_backed_work_grounding_engine();
-    run_graph_backed_work_update(
-        &todos,
-        &work,
-        json!([{ "content": "only once", "status": "in_progress" }]),
-    )
-    .await;
-    let stored = engine.session.messages.clone();
-
-    for _ in 0..3 {
-        let tail = engine.work_state_tail_message().await;
-        let request = engine.request_messages_with_work_tail(tail.as_ref());
-        let blocks: usize = request
-            .iter()
-            .map(|message| {
-                message_text_of(message)
-                    .matches(crate::work_grounding::WORK_STATE_OPEN_TAG)
-                    .count()
-            })
-            .sum();
-        assert_eq!(blocks, 1, "exactly one Work tail per request");
-        assert_eq!(request.len(), stored.len() + 1);
-        assert_eq!(&request[..stored.len()], &stored[..]);
-    }
-
-    assert_eq!(&*engine.session.messages, &*stored);
 }
 
 #[tokio::test]
@@ -11862,6 +11652,75 @@ async fn sync_session_restores_current_mode() {
         .expect("snapshot");
 
     assert_eq!(snapshot.mode, "plan");
+
+    run.abort();
+}
+
+#[tokio::test]
+async fn sync_session_migrates_one_checkpoint_and_strips_its_system_carrier() {
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        model: "deepseek-v4-pro".to_string(),
+        ..Default::default()
+    };
+    let (engine, handle) = Engine::new(config, &Config::default());
+    let carrier = SystemPrompt::Text(format!(
+        "stable host prompt\n\n<!-- compaction-summary:begin -->\n{COMPACTION_SUMMARY_MARKER}\nnew checkpoint\n<!-- compaction-summary:end -->"
+    ));
+    let old_checkpoint = crate::compaction::compaction_checkpoint_message(&SystemPrompt::Text(
+        format!("{COMPACTION_SUMMARY_MARKER}\nold checkpoint"),
+    ));
+
+    let run = tokio::spawn(engine.run());
+    let mut messages = vec![old_checkpoint];
+    for round in 0..2 {
+        handle
+            .send(Op::SyncSession {
+                session_id: Some("compacted-session".to_string()),
+                messages,
+                system_prompt: Some(carrier.clone()),
+                system_prompt_override: true,
+                model: "deepseek-v4-pro".to_string(),
+                workspace: tmp.path().to_path_buf(),
+                mode: AppMode::Agent,
+            })
+            .await
+            .expect("sync compacted session");
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        handle
+            .send(Op::GetSessionSnapshot {
+                tx: std::sync::Arc::new(std::sync::Mutex::new(Some(tx))),
+            })
+            .await
+            .expect("request snapshot");
+        let snapshot = tokio::time::timeout(Duration::from_secs(2), rx)
+            .await
+            .expect("snapshot response")
+            .expect("snapshot");
+
+        let checkpoints = snapshot
+            .messages
+            .iter()
+            .filter(|message| crate::compaction::is_compaction_checkpoint_message(message))
+            .collect::<Vec<_>>();
+        assert_eq!(checkpoints.len(), 1, "round {round}: {checkpoints:?}");
+        let checkpoint_text = message_text_of(checkpoints[0]);
+        assert!(
+            checkpoint_text.contains("new checkpoint"),
+            "{checkpoint_text}"
+        );
+        assert!(
+            !checkpoint_text.contains("old checkpoint"),
+            "{checkpoint_text}"
+        );
+        assert_eq!(
+            snapshot.system_prompt,
+            Some(SystemPrompt::Text("stable host prompt".to_string()))
+        );
+        messages = snapshot.messages;
+    }
 
     run.abort();
 }
@@ -12482,7 +12341,7 @@ fn evidence_bounded_preview_is_not_recompacted() {
 }
 
 #[test]
-fn codex_tool_retention_uses_oauth_route_window_not_api_model_window() {
+fn codex_tool_retention_uses_oauth_route_window_not_asmall_contract_model_window() {
     let content = "route-effective context\n".repeat(900);
     let output = ToolResult::success(content.clone());
     let limits = codewhale_config::route::RouteLimits {
@@ -14034,7 +13893,7 @@ fn blocks_system_prompt_override_via_runtime_sync_survives_mode_change_refresh()
 }
 
 #[test]
-fn compaction_summary_stays_in_stable_system_prompt() {
+fn compaction_checkpoint_stays_out_of_stable_system_prompt() {
     let tmp = tempdir().expect("tempdir");
     fs::create_dir_all(tmp.path().join("src")).expect("mkdir");
     fs::write(tmp.path().join("src/main.rs"), "fn main() {}").expect("write");
@@ -14049,14 +13908,12 @@ fn compaction_summary_stays_in_stable_system_prompt() {
         .working_set
         .observe_user_message("continue in src/main.rs", tmp.path());
     engine.refresh_system_prompt();
-    engine.merge_compaction_summary(
-        Some(SystemPrompt::Blocks(vec![SystemBlock {
-            block_type: "text".to_string(),
-            text: format!("{COMPACTION_SUMMARY_MARKER}\nsummary"),
-            cache_control: None,
-        }])),
-        None,
-    );
+    let stable_before = engine.session.system_prompt.clone();
+    engine.commit_compaction_checkpoint(Some(SystemPrompt::Blocks(vec![SystemBlock {
+        block_type: "text".to_string(),
+        text: format!("{COMPACTION_SUMMARY_MARKER}\nsummary"),
+        cache_control: None,
+    }])));
 
     let prompt = match &engine.session.system_prompt {
         Some(SystemPrompt::Text(text)) => text.clone(),
@@ -14068,17 +13925,21 @@ fn compaction_summary_stays_in_stable_system_prompt() {
         None => panic!("expected system prompt"),
     };
 
-    assert!(prompt.contains(COMPACTION_SUMMARY_MARKER));
+    assert_eq!(engine.session.system_prompt, stable_before);
+    assert!(!prompt.contains(COMPACTION_SUMMARY_MARKER));
     assert!(!prompt.contains(WORKING_SET_SUMMARY_MARKER));
+    assert!(
+        engine
+            .rendered_compaction_summary()
+            .expect("checkpoint")
+            .contains("summary")
+    );
 }
 
-/// Regression for the v0.9.6 auto-compaction feedback loop: every compaction
-/// appended another summary block to the successor system prompt, so the
-/// stable prefix grew by a full summary per pass, pressure re-latched, and
-/// compaction retriggered on every subsequent turn. Repeated commits must
-/// keep exactly one live summary and a bounded system prompt.
+/// Repeated compaction replaces the host-persistence copy while the stable
+/// system prefix remains byte-for-byte unchanged.
 #[test]
-fn repeated_compaction_replaces_the_committed_summary() {
+fn repeated_compaction_replaces_checkpoint_without_prefix_churn() {
     let (mut engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
     engine.session.system_prompt = Some(SystemPrompt::Text("stable base prompt".to_string()));
 
@@ -14092,200 +13953,23 @@ fn repeated_compaction_replaces_the_committed_summary() {
         None => String::new(),
     };
 
-    let mut sizes = Vec::new();
+    let stable_before = engine.session.system_prompt.clone();
     for round in 0..3 {
-        engine.merge_compaction_summary(
-            Some(SystemPrompt::Text(format!(
-                "{COMPACTION_SUMMARY_MARKER}\nround-{round} summary body"
-            ))),
-            None,
-        );
-        let prompt = flatten(&engine.session.system_prompt);
+        engine.commit_compaction_checkpoint(Some(SystemPrompt::Text(format!(
+            "{COMPACTION_SUMMARY_MARKER}\nround-{round} summary body"
+        ))));
+        assert_eq!(engine.session.system_prompt, stable_before);
+        let prompt = flatten(&engine.session.compaction_summary_prompt);
         assert_eq!(
             prompt.matches(COMPACTION_SUMMARY_MARKER).count(),
             1,
-            "round {round}: exactly one live summary: {prompt}"
+            "round {round}: exactly one checkpoint: {prompt}"
         );
-        assert!(prompt.contains("stable base prompt"), "{prompt}");
         assert!(
             prompt.contains(&format!("round-{round} summary body")),
             "{prompt}"
         );
-        sizes.push(prompt.len());
     }
-    assert_eq!(
-        sizes[0], sizes[2],
-        "the stable prefix must not grow across compactions: {sizes:?}"
-    );
-    let committed = flatten(&engine.session.compaction_summary_prompt);
-    assert_eq!(
-        committed.matches(COMPACTION_SUMMARY_MARKER).count(),
-        1,
-        "the committed summary must be replaced, not stacked: {committed}"
-    );
-}
-
-#[test]
-fn compaction_reanchors_active_operation_identity_without_raw_output() {
-    let tmp = tempdir().expect("tempdir");
-    let todos = crate::tools::todo::new_shared_todo_list();
-    let plan = crate::tools::plan::new_shared_plan_state();
-    let work = crate::work_graph::new_shared_work_runtime(todos, plan);
-    let runtime_services = crate::tools::spec::RuntimeToolServices {
-        work: Some(work.clone()),
-        ..Default::default()
-    };
-    let config = EngineConfig {
-        workspace: tmp.path().to_path_buf(),
-        runtime_services,
-        ..Default::default()
-    };
-    let (mut engine, _handle) = Engine::new(config, &Config::default());
-    let session_id = engine.session.id.clone();
-    work.register_operation(
-        &session_id,
-        crate::work_graph::OperationIntent::new(
-            "shell:shell_compact",
-            "quiet receipt sentinel",
-            false,
-            "exec_shell",
-            "shell_compact",
-        ),
-    )
-    .expect("register active operation");
-    work.reconcile_operation(
-        &session_id,
-        crate::work_graph::OperationOwnerSnapshot::new(
-            "shell:shell_compact",
-            crate::work_graph::OwnerState::Running,
-            1,
-            1,
-        ),
-    )
-    .expect("owner running report");
-
-    let captured = engine
-        .prepare_compaction_envelope(CompactionConfig::default())
-        .successor_reanchor;
-    work.reconcile_operation(
-        &session_id,
-        crate::work_graph::OperationOwnerSnapshot::new(
-            "shell:shell_compact",
-            crate::work_graph::OwnerState::Completed,
-            2,
-            2,
-        ),
-    )
-    .expect("owner completion report");
-    work.register_operation(
-        &session_id,
-        crate::work_graph::OperationIntent::new(
-            "shell:shell_later",
-            "later graph mutation",
-            false,
-            "exec_shell",
-            "shell_later",
-        ),
-    )
-    .expect("register later operation");
-    work.reconcile_operation(
-        &session_id,
-        crate::work_graph::OperationOwnerSnapshot::new(
-            "shell:shell_later",
-            crate::work_graph::OwnerState::Running,
-            3,
-            3,
-        ),
-    )
-    .expect("later owner running report");
-
-    engine.merge_compaction_summary(
-        Some(SystemPrompt::Text(format!(
-            "{COMPACTION_SUMMARY_MARKER}\nordinary summary"
-        ))),
-        captured,
-    );
-    let prompt = match &engine.session.system_prompt {
-        Some(SystemPrompt::Text(text)) => text.clone(),
-        Some(SystemPrompt::Blocks(blocks)) => blocks
-            .iter()
-            .map(|block| block.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n"),
-        None => panic!("expected system prompt"),
-    };
-    assert!(prompt.contains("Active Work Graph Operations"), "{prompt}");
-    assert!(prompt.contains("shell:shell_compact"), "{prompt}");
-    assert!(!prompt.contains("shell:shell_later"), "{prompt}");
-    assert!(prompt.contains("quiet receipt sentinel"), "{prompt}");
-    assert!(prompt.contains("active"), "{prompt}");
-    assert_eq!(
-        prompt
-            .matches(crate::work_graph::ACTIVE_OPERATION_SUMMARY_START)
-            .count(),
-        1,
-        "the active-operation re-anchor must be unique: {prompt}"
-    );
-    assert!(
-        !prompt.contains("raw output sentinel"),
-        "the re-anchor must never copy operation output"
-    );
-
-    let later = engine
-        .prepare_compaction_envelope(CompactionConfig::default())
-        .successor_reanchor;
-    engine.merge_compaction_summary(None, later.clone());
-    let local_prune_only = engine.rendered_compaction_summary().expect("summary");
-    assert!(
-        local_prune_only.contains("shell:shell_compact"),
-        "local-prune-only compaction must preserve the installed reanchor: {local_prune_only}"
-    );
-    assert!(
-        !local_prune_only.contains("shell:shell_later"),
-        "a prepared successor reanchor is committed only with a replacement summary: {local_prune_only}"
-    );
-    engine.merge_compaction_summary(
-        Some(SystemPrompt::Text(format!(
-            "{COMPACTION_SUMMARY_MARKER}\nsecond summary"
-        ))),
-        later,
-    );
-    let repeated = engine.rendered_compaction_summary().expect("summary");
-    assert_eq!(
-        repeated
-            .matches(crate::work_graph::ACTIVE_OPERATION_SUMMARY_START)
-            .count(),
-        1,
-        "repeated compaction must replace, not duplicate, the re-anchor: {repeated}"
-    );
-    assert!(repeated.contains("shell:shell_later"), "{repeated}");
-    assert!(!repeated.contains("shell:shell_compact"), "{repeated}");
-
-    work.reconcile_operation(
-        &session_id,
-        crate::work_graph::OperationOwnerSnapshot::new(
-            "shell:shell_later",
-            crate::work_graph::OwnerState::Completed,
-            4,
-            4,
-        ),
-    )
-    .expect("owner completion report");
-    let completed_reanchor = engine
-        .prepare_compaction_envelope(CompactionConfig::default())
-        .successor_reanchor;
-    assert!(completed_reanchor.is_none());
-    engine.merge_compaction_summary(
-        Some(SystemPrompt::Text(format!(
-            "{COMPACTION_SUMMARY_MARKER}\nthird summary"
-        ))),
-        completed_reanchor,
-    );
-    let completed = engine.rendered_compaction_summary().expect("summary");
-    assert!(
-        !completed.contains("Active Work Graph Operations"),
-        "a completed operation must not survive in a stale re-anchor: {completed}"
-    );
 }
 
 #[test]
@@ -14409,7 +14093,7 @@ fn tool_search_reference_count(result: &ToolResult) -> usize {
 }
 
 #[test]
-fn tool_search_defaults_to_twenty_results_for_regex_and_bm25() {
+fn tool_search_defaults_to_eight_results_for_regex_and_bm25() {
     let catalog = tool_search_catalog_with_matches(25);
 
     for match_kind in ["regex", "bm25"] {
@@ -14422,7 +14106,7 @@ fn tool_search_defaults_to_twenty_results_for_regex_and_bm25() {
         )
         .expect("search succeeds");
 
-        assert_eq!(tool_search_reference_count(&result), 20);
+        assert_eq!(tool_search_reference_count(&result), 8);
     }
 }
 
@@ -14448,7 +14132,7 @@ fn tool_search_respects_and_caps_max_results() {
         &mut active,
     )
     .expect("search succeeds");
-    assert_eq!(tool_search_reference_count(&capped), 100);
+    assert_eq!(tool_search_reference_count(&capped), 8);
 }
 
 #[test]
@@ -14463,8 +14147,8 @@ fn tool_search_schema_exposes_max_results_default_and_cap() {
         .expect("tool search definition exists");
     let schema = &tool.input_schema["properties"]["max_results"];
 
-    assert_eq!(schema["default"], 20);
-    assert_eq!(schema["maximum"], 100);
+    assert_eq!(schema["default"], 8);
+    assert_eq!(schema["maximum"], 8);
     assert_eq!(schema["minimum"], 1);
     assert_eq!(tool.input_schema["properties"]["match"]["default"], "bm25");
 }
@@ -14500,8 +14184,8 @@ async fn code_execution_runs_through_common_executor_after_approval_gate() {
     .await
     .expect("code_execution should run through common executor");
 
-    assert!(result.content.contains("common executor code exec"));
-    assert!(result.content.contains("return_code"));
+    assert!(result.result.content.contains("common executor code exec"));
+    assert!(result.result.content.contains("return_code"));
 }
 
 #[test]
@@ -14524,32 +14208,6 @@ fn plan_mode_catalog_skips_code_execution_tool_but_agent_keeps_it() {
             .any(|tool| tool.name == CODE_EXECUTION_TOOL_NAME),
         "Agent mode should still expose code_execution"
     );
-}
-
-#[test]
-fn deferred_tool_requests_are_auto_activated() {
-    use std::collections::HashSet;
-
-    let catalog = vec![Tool {
-        tool_type: None,
-        name: "exec_shell".to_string(),
-        description: "Run shell commands".to_string(),
-        input_schema: json!({"type":"object","properties":{"cmd":{"type":"string"}}}),
-        allowed_callers: Some(vec!["direct".to_string()]),
-        defer_loading: Some(true),
-        input_examples: None,
-        strict: None,
-        cache_control: None,
-    }];
-
-    let mut active = HashSet::new();
-    assert!(!active.contains("exec_shell"));
-    assert!(maybe_activate_requested_deferred_tool(
-        "exec_shell",
-        &catalog,
-        &mut active
-    ));
-    assert!(active.contains("exec_shell"));
 }
 
 #[test]
@@ -14620,26 +14278,26 @@ fn missing_tool_error_message_redirects_checklist_item_miscalls() {
 
 #[test]
 fn missing_tool_error_message_names_exec_shell_rename() {
-    // #5123-class: retired exec_shell names must be told the rename to Bash,
+    // #5123-class: retired exec_shell must point at lowercase foreground bash,
     // not misdiagnosed as an allow_shell permission problem.
     let catalog = vec![api_tool("read_file")];
 
-    for (tool_name, action) in [
-        ("exec_shell", "run"),
-        ("exec_shell_wait", "wait"),
-        ("exec_shell_interact", "interact"),
-        ("exec_shell_cancel", "cancel"),
+    let message = missing_tool_error_message("exec_shell", &catalog);
+    assert!(message.contains("replaced by `bash`"), "{message}");
+    assert!(message.contains("`command`"), "{message}");
+
+    for tool_name in [
+        "exec_shell_wait",
+        "exec_shell_interact",
+        "exec_shell_cancel",
     ] {
         let message = missing_tool_error_message(tool_name, &catalog);
         assert!(message.contains("not available in the current tool catalog"));
         assert!(
-            message.contains("renamed to `Bash`"),
+            message.contains("foreground-only"),
             "{tool_name}: {message}"
         );
-        assert!(
-            message.contains(&format!("action \"{action}\"")),
-            "{tool_name}: {message}"
-        );
+        assert!(message.contains(TOOL_SEARCH_NAME), "{tool_name}: {message}");
     }
 }
 
@@ -14660,7 +14318,7 @@ fn missing_shell_tool_error_message_names_allow_shell_gate() {
             "{tool_name}: {message}"
         );
         assert!(message.contains("--save"), "{tool_name}: {message}");
-        assert!(message.contains("Act mode"), "{tool_name}: {message}");
+        assert!(message.contains("Work mode"), "{tool_name}: {message}");
         assert!(
             message.contains("approval gating"),
             "{tool_name}: {message}"
@@ -14683,7 +14341,7 @@ fn missing_shell_tool_error_message_keeps_allow_shell_hint_with_suggestions() {
     assert!(message.contains("allow_shell"));
     assert!(message.contains("/config allow_shell true"));
     assert!(message.contains("--save"));
-    assert!(message.contains("Act mode"));
+    assert!(message.contains("Work mode"));
     assert!(!message.contains("YOLO"));
     assert!(!message.contains("auto-approve"));
     assert!(message.contains(TOOL_SEARCH_NAME));
@@ -16959,6 +16617,7 @@ async fn user_prompt_reaches_the_model_exactly_once_per_request() {
     use crate::llm_client::mock::{MockLlmClient, canned};
 
     const FIRST_TURN_SENTINEL: &str = "SENTINEL-BRIEF-ALPHA-do-not-redeliver";
+    const CHECKPOINT_SENTINEL: &str = "SENTINEL-CHECKPOINT-BETA-one-history-item";
 
     let workspace = tempdir().expect("tempdir");
     fs::write(workspace.path().join("README.md"), "once-only-proof\n").expect("write fixture");
@@ -16978,11 +16637,20 @@ async fn user_prompt_reaches_the_model_exactly_once_per_request() {
         canned::simple_text_turn("Second turn complete."),
     ]));
     let client: crate::core::model_client::SharedModelClient = mock.clone();
-    let (engine, handle) = Engine::new_with_model_client(
+    let (mut engine, handle) = Engine::new_with_model_client(
         deterministic_engine_config(workspace.path()),
         &Config::default(),
         client,
     );
+    let checkpoint = SystemPrompt::Text(format!(
+        "{COMPACTION_SUMMARY_MARKER}\n{CHECKPOINT_SENTINEL}"
+    ));
+    engine
+        .session
+        .add_message(crate::compaction::compaction_checkpoint_message(
+            &checkpoint,
+        ));
+    engine.commit_compaction_checkpoint(Some(checkpoint));
     let task = tokio::spawn(engine.run());
 
     for content in [
@@ -17015,6 +16683,41 @@ async fn user_prompt_reaches_the_model_exactly_once_per_request() {
     assert_eq!(requests.len(), 4, "two turns of two steps each");
 
     for (index, request) in requests.iter().enumerate() {
+        let system = match request.system.as_ref() {
+            Some(SystemPrompt::Text(text)) => text.clone(),
+            Some(SystemPrompt::Blocks(blocks)) => blocks
+                .iter()
+                .map(|block| block.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n"),
+            None => String::new(),
+        };
+        assert!(!system.contains(COMPACTION_SUMMARY_MARKER), "{system}");
+        assert!(!system.contains(CHECKPOINT_SENTINEL), "{system}");
+        assert!(
+            !system.contains("Live State (post-compact rehydrate)"),
+            "{system}"
+        );
+
+        let checkpoint_carriers = request
+            .messages
+            .iter()
+            .filter(|message| {
+                message.role == "user"
+                    && message.content.iter().any(|block| {
+                        matches!(
+                            block,
+                            ContentBlock::Text { text, .. }
+                                if text.contains(CHECKPOINT_SENTINEL)
+                        )
+                    })
+            })
+            .count();
+        assert_eq!(
+            checkpoint_carriers, 1,
+            "request {index} must carry one checkpoint history message"
+        );
+
         assert!(
             request.messages.iter().all(|message| {
                 message.content.iter().all(|block| {

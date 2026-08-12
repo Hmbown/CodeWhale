@@ -13,6 +13,7 @@ use crate::runtime_handoff::{
     shell_completion_runtime_message, subagent_completion_runtime_message,
     subagent_failure_runtime_message, waiting_for_subagents_runtime_message,
 };
+use crate::tools::canonical_action::canonical_action_alias;
 use crate::tools::tool_call_budget::ToolCallBudget;
 use codewhale_core::request::{PrimaryTurnRequest, prepare_primary_turn_request};
 
@@ -345,6 +346,21 @@ impl Engine {
         let strict_tool_mode = tool_policy.strict_tool_mode;
         let mut tool_catalog = std::mem::take(&mut tool_policy.catalog);
         let mut active_tool_names = std::mem::take(&mut tool_policy.active_names);
+        // Search activations belong to the conversation, not just the user
+        // turn. Revalidate names against this turn's already-filtered catalog
+        // before exposing them; stale mode/MCP/allow-list entries disappear.
+        let evicted = self.session.tool_activation_cache.revalidate(&tool_catalog);
+        super::tool_catalog::remove_evicted_cache_activations(
+            &tool_catalog,
+            &mut active_tool_names,
+            evicted,
+        );
+        active_tool_names.extend(
+            self.session
+                .tool_activation_cache
+                .names()
+                .map(str::to_string),
+        );
         let tool_registry = Some(&tool_policy.registry);
         // #4415: the turn's tool-call admission counter. It lives here —
         // across every model step and batch of this turn — never in the
@@ -443,11 +459,7 @@ impl Engine {
                     .await;
             }
 
-            // Reclaimability includes the live-state projection and the exact
-            // active-operation reanchor. Avoid capturing them on ordinary
-            // low-pressure steps; once pressure crosses the trigger, capture
-            // once and reuse the same snapshot for eligibility and commit.
-            let mut auto_compaction_config = self.config.compaction.clone();
+            let auto_compaction_config = self.config.compaction.clone();
             // Billing usage accumulates every parent step and child-model
             // call. Only the most recent parent-route request describes the
             // live message list whose pressure we are checking here.
@@ -458,8 +470,6 @@ impl Engine {
                 &auto_compaction_config,
                 billed_input_tokens,
             ) {
-                let live = self.capture_compaction_live_state().await;
-                auto_compaction_config.live_state = (!live.is_empty()).then_some(live);
                 Some(self.prepare_compaction_envelope(auto_compaction_config))
             } else {
                 None
@@ -496,10 +506,7 @@ impl Engine {
                             let auto_messages_after = result.messages.len();
                             let retries_used = result.retries_used;
                             self.session.replace_messages(result.messages);
-                            self.merge_compaction_summary(
-                                result.summary_prompt,
-                                result.successor_reanchor,
-                            );
+                            self.commit_compaction_checkpoint(result.summary_prompt);
                             self.emit_session_updated().await;
                             let removed = auto_messages_before.saturating_sub(auto_messages_after);
                             let auto_tokens_after = self.estimated_input_tokens();
@@ -547,21 +554,13 @@ impl Engine {
                 }
             }
 
-            // Resolve the transient Work tail once per step, before the
-            // preflight gate, and reuse the very same message when the request
-            // is built below (#3983). Anything that estimates one list and
-            // sends another can approve a request that is over the limit only
-            // after up to `MAX_BODY_CHARS` of Work grounding is appended.
-            let work_state_tail = self.work_state_tail_message().await;
-
             if let Some(input_budget) = context_input_budget_for_route(
                 self.api_provider,
                 &self.session.model,
                 self.active_route_limits,
                 0,
             ) {
-                let estimated_input =
-                    self.estimated_input_tokens_with_work_tail(work_state_tail.as_ref());
+                let estimated_input = self.estimated_input_tokens();
                 if estimated_input > input_budget {
                     if context_recovery_attempts >= MAX_CONTEXT_RECOVERY_ATTEMPTS {
                         let message = format!(
@@ -707,7 +706,7 @@ impl Engine {
 
             let mut request = prepare_primary_turn_request(PrimaryTurnRequest {
                 model: self.session.model.clone(),
-                messages: self.request_messages_with_work_tail(work_state_tail.as_ref()),
+                messages: self.messages_with_turn_metadata(),
                 max_tokens: effective_max_output_tokens_for_route(
                     self.api_provider,
                     &self.session.model,
@@ -820,6 +819,7 @@ impl Engine {
             // #3014: Anthropic signed-thinking signature for the current
             // thinking block; must be replayed verbatim in tool loops.
             let mut current_thinking_signature: Option<String> = None;
+            let mut current_thinking_state: Option<crate::models::OpaqueReasoningState> = None;
             let mut tool_uses: Vec<ToolUseState> = Vec::new();
             let mut usage = Usage {
                 input_tokens: 0,
@@ -1158,6 +1158,8 @@ impl Engine {
                         }
                         ContentBlockStart::Thinking { thinking } => {
                             current_thinking = thinking;
+                            current_thinking_signature = None;
+                            current_thinking_state = None;
                             current_block_kind = Some(ContentBlockKind::Thinking);
                             let _ = self
                                 .tx_event
@@ -1252,6 +1254,9 @@ impl Engine {
                                 Some(existing) => existing.push_str(&signature),
                                 None => current_thinking_signature = Some(signature),
                             }
+                        }
+                        Delta::ReasoningStateDelta { state } => {
+                            current_thinking_state = Some(state);
                         }
                         Delta::InputJsonDelta { partial_json } => {
                             if let Some(&tool_idx) = current_tool_indices.get(&index)
@@ -1511,10 +1516,11 @@ impl Engine {
                         // outer `content_blocks` variable is still empty at
                         // this point and will be rebuilt on the next round.
                         let mut resume_blocks: Vec<ContentBlock> = Vec::new();
-                        if !current_thinking.is_empty() {
+                        if !current_thinking.is_empty() || current_thinking_state.is_some() {
                             resume_blocks.push(ContentBlock::Thinking {
                                 thinking: current_thinking.clone(),
                                 signature: current_thinking_signature.clone(),
+                                state: current_thinking_state.clone(),
                             });
                         }
                         if !current_text_visible.is_empty() {
@@ -1581,10 +1587,11 @@ impl Engine {
             // that compatibility value to the outgoing JSON only. Persisting
             // it here leaked an invented "(reasoning omitted)" block into the
             // transcript and every provider-neutral session replay.
-            if !current_thinking.is_empty() {
+            if !current_thinking.is_empty() || current_thinking_state.is_some() {
                 content_blocks.push(ContentBlock::Thinking {
                     thinking: current_thinking.clone(),
                     signature: current_thinking_signature.clone(),
+                    state: current_thinking_state.clone(),
                 });
             }
             let mut final_text = current_text_visible.clone();
@@ -2109,6 +2116,7 @@ impl Engine {
             let active_tools_at_batch_start = active_tool_names.clone();
             let mut deferred_tools_hydrated_this_batch: std::collections::HashSet<String> =
                 std::collections::HashSet::new();
+            let mut deferred_tools_hydrated_in_order = Vec::new();
             // #3026: `additionalContext` strings from tool_call_before hooks,
             // keyed by tool id; appended to the tool result sent to the model.
             let mut hook_contexts: std::collections::HashMap<String, String> =
@@ -2146,7 +2154,7 @@ impl Engine {
                     tool.name = tool_name.clone();
                 }
 
-                let interactive = (tool_name == "exec_shell"
+                let interactive = (matches!(tool_name.as_str(), "bash" | "Bash" | "exec_shell")
                     && tool_input
                         .get("interactive")
                         .and_then(serde_json::Value::as_bool)
@@ -2161,7 +2169,7 @@ impl Engine {
                 let mut detached_start = false;
                 let mut resources = vec![ResourceClaim::GlobalExclusive];
                 let mut blocked_error: Option<ToolError> = None;
-                let guard_result: Option<ToolResult> = None;
+                let mut guard_result: Option<ToolResult> = None;
                 // #3026: set by a hook `ask` decision; applied AFTER the
                 // registry-based approval computation below so it cannot be
                 // clobbered by it.
@@ -2184,7 +2192,7 @@ impl Engine {
 
                 if mode_blocks_command_execution(mode, &tool_name) {
                     blocked_error = Some(ToolError::permission_denied(format!(
-                        "'{tool_name}' is not available in Plan mode — switch to Act mode (`/mode act`) to run commands and code."
+                        "'{tool_name}' is not available in Plan mode — switch to Work mode (`/mode work`) to run commands and code."
                     )));
                 }
 
@@ -2365,10 +2373,10 @@ impl Engine {
                 }
 
                 if blocked_error.is_none()
-                    && mode_blocks_write_capable_tool(mode, &tool_name, read_only)
+                    && mode_blocks_write_capable_tool(mode, &tool_name, &tool_input, read_only)
                 {
                     blocked_error = Some(ToolError::permission_denied(format!(
-                        "'{tool_name}' is not available in Plan mode - switch to Act mode (`/mode act`) to modify files or run write-capable tools."
+                        "'{tool_name}' is not available in Plan mode - switch to Work mode (`/mode work`) to modify files or run write-capable tools."
                     )));
                 }
 
@@ -2525,27 +2533,35 @@ impl Engine {
                         &mut deferred_tools_hydrated_this_batch,
                     )
                 {
+                    if should_emit_hydration_status {
+                        // Retain first-proposal order separately from the set
+                        // used to deduplicate calls in this batch. LRU bounds
+                        // must not depend on randomized HashSet iteration.
+                        deferred_tools_hydrated_in_order.push(tool_name.clone());
+                    }
                     emit_tool_audit(json!({
                         "event": "tool.schema_hydrated",
                         "tool_id": tool_id.clone(),
                         "tool_name": tool_name.clone(),
-                        "auto_retry_same_turn": true,
+                        "auto_retry_same_turn": false,
                         "metadata": result.metadata,
                     }));
                     if should_emit_hydration_status {
                         let status = if requested_tool_name == tool_name {
                             format!(
-                                "Auto-loaded deferred tool '{tool_name}' and retrying the pending call in the same turn."
+                                "Loaded deferred tool '{tool_name}'. Retry the call with its visible schema."
                             )
                         } else {
                             format!(
-                                "Auto-loaded deferred tool '{tool_name}' after resolving '{requested_tool_name}' and retrying in the same turn."
+                                "Loaded deferred tool '{tool_name}' after resolving '{requested_tool_name}'. Retry the call with its visible schema."
                             )
                         };
                         let _ = self.tx_event.send(Event::status(status)).await;
                     }
-                    // Do not set guard_result: the tool is activated for this batch
-                    // and will execute immediately with the model's original input.
+                    // The provider did not advertise this schema in the current
+                    // request. Hydration is discovery, never execution authority:
+                    // return the schema now and require a subsequent model call.
+                    guard_result = Some(result);
                 }
 
                 // DGF-02: when the gate will prompt for a sandbox-executed
@@ -2556,7 +2572,7 @@ impl Engine {
                     && batch_sandbox_read_only
                     && matches!(
                         tool_name.as_str(),
-                        "Bash" | "Run" | "exec_shell" | "task_shell_start"
+                        "bash" | "Bash" | "Run" | "exec_shell" | "task_shell_start"
                     )
                 {
                     approval_description = format!(
@@ -2590,7 +2606,16 @@ impl Engine {
                     guard_result,
                 });
             }
-            active_tool_names.extend(deferred_tools_hydrated_this_batch);
+            let activation = self
+                .session
+                .tool_activation_cache
+                .activate(&tool_catalog, &deferred_tools_hydrated_in_order);
+            super::tool_catalog::remove_evicted_cache_activations(
+                &tool_catalog,
+                &mut active_tool_names,
+                activation.evicted,
+            );
+            active_tool_names.extend(activation.admitted);
 
             // --- Intent summary for write tools (#2381) ---
             // When the model invokes write tools, extract its preceding text
@@ -2687,6 +2712,7 @@ impl Engine {
                             input: plan.input,
                             started_at: Instant::now(),
                             terminal: ToolExecutionOutcome::from_legacy(result),
+                            content_blocks: Vec::new(),
                         });
                     }
                     continue;
@@ -2723,6 +2749,7 @@ impl Engine {
                             input: plan.input,
                             started_at: Instant::now(),
                             terminal,
+                            content_blocks: Vec::new(),
                         });
                     }
                     continue;
@@ -2763,6 +2790,7 @@ impl Engine {
                                 input: plan.input,
                                 started_at: Instant::now(),
                                 terminal: ToolExecutionOutcome::from_legacy(result),
+                                content_blocks: Vec::new(),
                             });
                             continue;
                         }
@@ -2774,6 +2802,7 @@ impl Engine {
                                 input: plan.input,
                                 started_at: Instant::now(),
                                 terminal: ToolExecutionOutcome::from_legacy(Err(err)),
+                                content_blocks: Vec::new(),
                             });
                             continue;
                         }
@@ -2789,11 +2818,12 @@ impl Engine {
                         let cancel_token = self.cancel_token.clone();
 
                         tool_tasks.push(async move {
-                            let _shell_permit = if plan.name == "exec_shell" {
-                                shell_permits.acquire_owned().await.ok()
-                            } else {
-                                None
-                            };
+                            let _shell_permit =
+                                if matches!(plan.name.as_str(), "bash" | "Bash" | "exec_shell") {
+                                    shell_permits.acquire_owned().await.ok()
+                                } else {
+                                    None
+                                };
                             let mut result = Engine::execute_tool_with_lock(
                                 lock,
                                 plan.supports_parallel || plan.detached_start,
@@ -2816,7 +2846,7 @@ impl Engine {
                             if let Ok(tool_result) = result.as_mut()
                                 && let Some(path) =
                                     crate::tools::truncate::apply_spillover_with_artifact(
-                                        tool_result,
+                                        &mut tool_result.result,
                                         &plan.id,
                                         &plan.name,
                                         &session_id,
@@ -2830,11 +2860,16 @@ impl Engine {
                                 }));
                             }
 
+                            let content_blocks = result
+                                .as_ref()
+                                .map(|result| result.content_blocks.clone())
+                                .unwrap_or_default();
+                            let legacy_result = result.map(RichToolResult::into_result);
                             let _ = tx_event
                                 .send(Event::ToolCallComplete {
                                     id: plan.id.clone(),
                                     name: plan.name.clone(),
-                                    result: result.clone(),
+                                    result: legacy_result.clone(),
                                 })
                                 .await;
 
@@ -2844,7 +2879,8 @@ impl Engine {
                                 name: plan.name,
                                 input: plan.input,
                                 started_at,
-                                terminal: ToolExecutionOutcome::from_legacy(result),
+                                terminal: ToolExecutionOutcome::from_legacy(legacy_result),
+                                content_blocks,
                             }
                         });
                     }
@@ -2891,6 +2927,7 @@ impl Engine {
                                 input,
                                 started_at: Instant::now(),
                                 terminal,
+                                content_blocks: Vec::new(),
                             });
                         }
                     }
@@ -2918,6 +2955,7 @@ impl Engine {
                                 input: tool_input,
                                 started_at: Instant::now(),
                                 terminal: ToolExecutionOutcome::from_legacy(result),
+                                content_blocks: Vec::new(),
                             });
                             continue;
                         }
@@ -2939,6 +2977,7 @@ impl Engine {
                                 input: tool_input,
                                 started_at: Instant::now(),
                                 terminal: ToolExecutionOutcome::from_legacy(result),
+                                content_blocks: Vec::new(),
                             });
                             continue;
                         }
@@ -2946,17 +2985,29 @@ impl Engine {
                         if tool_name == MULTI_TOOL_PARALLEL_NAME {
                             let started_at = Instant::now();
                             let cancel_token = self.cancel_token.clone();
-                            let terminal = tokio::select! {
+                            let (terminal, content_blocks) = tokio::select! {
                                 biased;
                                 () = cancel_token.cancelled() => {
-                                    ToolExecutionOutcome::cancelled(interrupted_tool_result())
+                                    (
+                                        ToolExecutionOutcome::cancelled(interrupted_tool_result()),
+                                        Vec::new(),
+                                    )
                                 },
                                 result = self.execute_parallel_tool(
                                     tool_input.clone(),
                                     tool_registry,
                                     tool_exec_lock.clone(),
                                     batch_tool_context.clone(),
-                                ) => ToolExecutionOutcome::from_legacy(result),
+                                ) => match result {
+                                    Ok(rich) => (
+                                        ToolExecutionOutcome::from_legacy(Ok(rich.result)),
+                                        rich.content_blocks,
+                                    ),
+                                    Err(err) => (
+                                        ToolExecutionOutcome::from_legacy(Err(err)),
+                                        Vec::new(),
+                                    ),
+                                },
                             };
                             let result = terminal.legacy_result();
 
@@ -2976,17 +3027,19 @@ impl Engine {
                                 input: tool_input,
                                 started_at,
                                 terminal,
+                                content_blocks,
                             });
                             continue;
                         }
 
                         if is_tool_search_tool(&tool_name) {
                             let started_at = Instant::now();
-                            let result = execute_tool_search(
+                            let result = super::tool_catalog::execute_tool_search_with_cache(
                                 &tool_name,
                                 &tool_input,
                                 &tool_catalog,
                                 &mut active_tool_names,
+                                &mut self.session.tool_activation_cache,
                             );
 
                             let _ = self
@@ -3005,6 +3058,7 @@ impl Engine {
                                 input: tool_input,
                                 started_at,
                                 terminal: ToolExecutionOutcome::from_legacy(result),
+                                content_blocks: Vec::new(),
                             });
                             continue;
                         }
@@ -3049,6 +3103,7 @@ impl Engine {
                                 input: tool_input,
                                 started_at,
                                 terminal: ToolExecutionOutcome::from_legacy(result),
+                                content_blocks: Vec::new(),
                             });
                             continue;
                         }
@@ -3182,6 +3237,7 @@ impl Engine {
                             self.config.snapshots_enabled,
                             result_override.is_some(),
                             tool_name.as_str(),
+                            &tool_input,
                         ) {
                             let ws = self.session.workspace.clone();
                             let tid = tool_id.clone();
@@ -3210,12 +3266,12 @@ impl Engine {
                         let started_at = Instant::now();
                         let (mut result, cancelled_before_completion) =
                             if let Some(result_override) = result_override {
-                                (result_override, false)
+                                (result_override.map(RichToolResult::plain), false)
                             } else {
                                 tokio::select! {
                                     biased;
                                     () = self.cancel_token.cancelled() => {
-                                        (Ok(interrupted_tool_result()), true)
+                                        (Ok(RichToolResult::plain(interrupted_tool_result())), true)
                                     },
                                     result = Self::execute_tool_with_lock(
                                         tool_exec_lock.clone(),
@@ -3236,7 +3292,7 @@ impl Engine {
                         if let Some(approval_stamp) = approval_stamp
                             && let Ok(tool_result) = result.as_mut()
                         {
-                            stamp_tool_result_approval(tool_result, approval_stamp);
+                            stamp_tool_result_approval(&mut tool_result.result, approval_stamp);
                         }
 
                         // #500: spill outsized tool outputs to disk before the
@@ -3249,7 +3305,7 @@ impl Engine {
                         if let Ok(tool_result) = result.as_mut()
                             && let Some(path) =
                                 crate::tools::truncate::apply_spillover_with_artifact(
-                                    tool_result,
+                                    &mut tool_result.result,
                                     &tool_id,
                                     &tool_name,
                                     &self.session.id,
@@ -3263,21 +3319,27 @@ impl Engine {
                             }));
                         }
 
+                        let content_blocks = result
+                            .as_ref()
+                            .map(|result| result.content_blocks.clone())
+                            .unwrap_or_default();
+                        let legacy_result = result.map(RichToolResult::into_result);
                         let _ = self
                             .tx_event
                             .send(Event::ToolCallComplete {
                                 id: tool_id.clone(),
                                 name: tool_name.clone(),
-                                result: result.clone(),
+                                result: legacy_result.clone(),
                             })
                             .await;
 
                         let terminal = if cancelled_before_completion {
                             ToolExecutionOutcome::cancelled(
-                                result.expect("cancelled tool result is always model-visible"),
+                                legacy_result
+                                    .expect("cancelled tool result is always model-visible"),
                             )
                         } else {
-                            ToolExecutionOutcome::from_legacy(result)
+                            ToolExecutionOutcome::from_legacy(legacy_result)
                         };
                         outcomes[plan.index] = Some(ToolExecOutcome {
                             index: plan.index,
@@ -3286,6 +3348,7 @@ impl Engine {
                             input: tool_input,
                             started_at,
                             terminal,
+                            content_blocks,
                         });
                     }
                 }
@@ -3308,6 +3371,20 @@ impl Engine {
                 }
                 match result {
                     Ok(output) => {
+                        super::tool_catalog::activate_result_dependencies(
+                            &tool_catalog,
+                            &mut active_tool_names,
+                            &mut self.session.tool_activation_cache,
+                            &output,
+                        );
+                        if output.success {
+                            super::tool_catalog::touch_cached_tool_after_execution(
+                                &tool_catalog,
+                                &mut active_tool_names,
+                                &mut self.session.tool_activation_cache,
+                                &outcome.name,
+                            );
+                        }
                         // A runtime MCP connection changes the callable tool
                         // surface. Merge the complete schemas into this turn's
                         // catalog before the next model request; waiting for the
@@ -3381,13 +3458,19 @@ impl Engine {
                             None => output_for_context,
                         };
 
+                        let content_blocks = outcome.content_blocks;
+                        let content_blocks = content_blocks
+                            .iter()
+                            .filter_map(|block| serde_json::to_value(block).ok())
+                            .collect::<Vec<_>>();
                         self.add_session_message(Message {
                             role: "user".to_string(),
                             content: vec![ContentBlock::ToolResult {
                                 tool_use_id: outcome.id,
                                 content: output_for_context,
                                 is_error: None,
-                                content_blocks: None,
+                                content_blocks: (!content_blocks.is_empty())
+                                    .then_some(content_blocks),
                             }],
                         })
                         .await;
@@ -3583,98 +3666,25 @@ impl Engine {
         })
     }
 
-    /// This session's authoritative Work state (#3983).
+    /// This session's authoritative To-do state (#3983).
+    ///
+    /// Read at explicit seams only — forking a sub-agent, `/relay`, the UI.
+    /// The turn loop does not consult it: the model already has its own
+    /// `work_update` tool results in history, and Codewhale does not re-state
+    /// the list on model steps.
     ///
     /// The graph projection wins when a `WorkRuntime` owns this session's list:
     /// a real `work_update` stages the new projection there and only publishes
     /// into `config.todos` asynchronously, so reading `config.todos` alone
-    /// would show the model its state from before its own last write. Sessions
-    /// with no attached runtime (legacy paths, one-off contexts) resolve
-    /// against `config.todos`, which is authoritative for them.
-    pub(super) fn work_state_source(&self) -> crate::work_grounding::WorkStateSource {
-        crate::work_grounding::WorkStateSource::new(
+    /// would show a state from before the last write. Sessions with no attached
+    /// runtime (legacy paths, one-off contexts) resolve against `config.todos`,
+    /// which is authoritative for them.
+    pub(super) fn todo_source(&self) -> crate::todo_snapshot::TodoSource {
+        crate::todo_snapshot::TodoSource::new(
             self.config.runtime_services.work.clone(),
             self.config.todos.clone(),
         )
     }
-
-    /// The transient Work grounding block for the *current* To-do state
-    /// (#3983), or `None` when there is no work to state.
-    ///
-    /// This message is deliberately request-scoped: it is never added to
-    /// session history and never enters the system prompt, so the stable
-    /// prefix (and its cache) is untouched and a stale ledger cannot outlive
-    /// the request that carried it.
-    pub(super) async fn work_state_tail_message(&self) -> Option<Message> {
-        self.work_state_source().tail_message().await
-    }
-
-    /// Message list for one provider request: stored history, then the
-    /// already-resolved transient Work block at the tail.
-    ///
-    /// Takes the tail rather than resolving it so that preflight token
-    /// accounting and the request itself are built from the *same* message
-    /// (#3983): if preflight estimated a smaller list than the one sent, it
-    /// could approve a request that only becomes over-limit once the tail is
-    /// added.
-    pub(super) fn request_messages_with_work_tail(
-        &self,
-        work_tail: Option<&Message>,
-    ) -> Vec<Message> {
-        let mut messages = self.messages_with_turn_metadata();
-        if let Some(work_state) = work_tail {
-            messages.push(work_state.clone());
-        }
-        messages
-    }
-
-    /// Resolve the tail and build the request messages in one step.
-    ///
-    /// Test-only: the live turn loop resolves the tail *before* its preflight
-    /// gate and passes that same message to
-    /// [`Self::request_messages_with_work_tail`], so it must not use a helper
-    /// that resolves a second time.
-    #[cfg(test)]
-    pub(super) async fn request_messages_with_work_state(&self) -> Vec<Message> {
-        let tail = self.work_state_tail_message().await;
-        self.request_messages_with_work_tail(tail.as_ref())
-    }
-
-    /// Conservative token cost of the stored history plus the exact transient
-    /// Work tail that will be sent.
-    ///
-    /// Reuses [`estimate_input_tokens_conservative`] — the same estimator the
-    /// preflight budget is expressed in — over the tail message. Summing two
-    /// conservative estimates double-counts the estimator's fixed framing
-    /// constant, so the result is an over-estimate, never an under-estimate;
-    /// that direction is the safe one for a preflight gate, and offline counts
-    /// are conservative estimates by contract.
-    pub(super) fn estimated_input_tokens_with_work_tail(
-        &mut self,
-        work_tail: Option<&Message>,
-    ) -> usize {
-        let base = self.estimated_input_tokens();
-        production_input_estimate_with_work_tail(base, work_tail)
-    }
-}
-
-/// Add the separately framed transient Work tail to a production base-message
-/// estimate.
-///
-/// Production intentionally estimates these as two lists, so the tail pays
-/// its own fixed framing overhead. Preview must call this same seam instead of
-/// estimating one combined list, which can differ at the context ceiling.
-pub(super) fn production_input_estimate_with_work_tail(
-    base_message_estimate: usize,
-    work_tail: Option<&Message>,
-) -> usize {
-    let Some(tail) = work_tail else {
-        return base_message_estimate;
-    };
-    base_message_estimate.saturating_add(crate::compaction::estimate_input_tokens_conservative(
-        std::slice::from_ref(tail),
-        None,
-    ))
 }
 
 pub(super) fn shell_completion_status_text(
@@ -3761,17 +3771,23 @@ fn should_pre_tool_snapshot(
     snapshots_enabled: bool,
     has_result_override: bool,
     tool_name: &str,
+    input: &Value,
 ) -> bool {
     snapshots_enabled
         && !has_result_override
-        && matches!(tool_name, "write_file" | "edit_file" | "apply_patch")
+        && matches!(
+            canonical_action_alias(tool_name, input),
+            "write_file" | "edit_file" | "apply_patch"
+        )
 }
 
 fn mode_blocks_command_execution(mode: AppMode, tool_name: &str) -> bool {
     mode == AppMode::Plan
         && matches!(
             tool_name,
-            "exec_shell"
+            "bash"
+                | "Bash"
+                | "exec_shell"
                 | "exec_shell_wait"
                 | "exec_shell_interact"
                 | "exec_wait"
@@ -3781,10 +3797,17 @@ fn mode_blocks_command_execution(mode: AppMode, tool_name: &str) -> bool {
         )
 }
 
-fn mode_blocks_write_capable_tool(mode: AppMode, tool_name: &str, read_only: bool) -> bool {
+fn mode_blocks_write_capable_tool(
+    mode: AppMode,
+    tool_name: &str,
+    input: &Value,
+    read_only: bool,
+) -> bool {
     mode == AppMode::Plan
-        && (matches!(tool_name, "write_file" | "edit_file" | "apply_patch")
-            || (McpPool::is_mcp_tool(tool_name) && !read_only))
+        && (matches!(
+            canonical_action_alias(tool_name, input),
+            "write_file" | "edit_file" | "apply_patch"
+        ) || (McpPool::is_mcp_tool(tool_name) && !read_only))
 }
 
 /// Synthesize the tool result recorded for a tool call that never executed
@@ -3829,9 +3852,9 @@ mod pre_tool_snapshot_gate_tests {
     // commits, just like the pre/post-turn snapshot sites.
     #[test]
     fn disabled_snapshots_suppress_per_tool_snapshot() {
-        for tool in ["write_file", "edit_file", "apply_patch"] {
+        for tool in ["write", "edit", "write_file", "edit_file", "apply_patch"] {
             assert!(
-                !should_pre_tool_snapshot(false, false, tool),
+                !should_pre_tool_snapshot(false, false, tool, &json!({})),
                 "snapshots.enabled=false must skip per-tool snapshot for {tool}"
             );
         }
@@ -3839,33 +3862,54 @@ mod pre_tool_snapshot_gate_tests {
 
     #[test]
     fn enabled_snapshots_snapshot_file_modifying_tools() {
-        for tool in ["write_file", "edit_file", "apply_patch"] {
+        for tool in ["write", "edit", "write_file", "edit_file", "apply_patch"] {
             assert!(
-                should_pre_tool_snapshot(true, false, tool),
+                should_pre_tool_snapshot(true, false, tool, &json!({})),
                 "snapshots.enabled=true must snapshot {tool} before it runs"
             );
+        }
+        for action in ["write", "edit", "patch"] {
+            assert!(should_pre_tool_snapshot(
+                true,
+                false,
+                "File",
+                &json!({"action": action})
+            ));
         }
     }
 
     #[test]
     fn overridden_result_skips_snapshot() {
         // A denied/short-circuited tool never executes a write, so no snapshot.
-        assert!(!should_pre_tool_snapshot(true, true, "write_file"));
+        assert!(!should_pre_tool_snapshot(
+            true,
+            true,
+            "write_file",
+            &json!({})
+        ));
     }
 
     #[test]
     fn non_modifying_tools_are_never_snapshotted() {
         for tool in ["read_file", "shell", "grep", "list_dir"] {
             assert!(
-                !should_pre_tool_snapshot(true, false, tool),
+                !should_pre_tool_snapshot(true, false, tool, &json!({})),
                 "{tool} does not modify the workspace and must not be snapshotted"
             );
         }
+        assert!(!should_pre_tool_snapshot(
+            true,
+            false,
+            "File",
+            &json!({"action": "read"})
+        ));
     }
 
     #[test]
     fn plan_blocks_write_capable_tools_without_narrowing_operate() {
         for tool in [
+            "bash",
+            "Bash",
             "exec_shell",
             "exec_shell_wait",
             "exec_shell_interact",
@@ -3879,37 +3923,71 @@ mod pre_tool_snapshot_gate_tests {
             );
         }
 
-        for tool in ["write_file", "edit_file", "apply_patch"] {
-            assert!(mode_blocks_write_capable_tool(AppMode::Plan, tool, false));
+        for tool in ["write", "edit", "write_file", "edit_file", "apply_patch"] {
+            assert!(mode_blocks_write_capable_tool(
+                AppMode::Plan,
+                tool,
+                &json!({}),
+                false
+            ));
             assert!(
-                !mode_blocks_write_capable_tool(AppMode::Operate, tool, false),
+                !mode_blocks_write_capable_tool(AppMode::Operate, tool, &json!({}), false),
                 "Operate must not add a mode-only write denial for {tool}"
             );
+        }
+
+        for action in ["write", "edit", "patch"] {
+            let input = json!({"action": action});
+            assert!(mode_blocks_write_capable_tool(
+                AppMode::Plan,
+                "File",
+                &input,
+                false
+            ));
+            assert!(!mode_blocks_write_capable_tool(
+                AppMode::Operate,
+                "File",
+                &input,
+                false
+            ));
+        }
+        for action in ["read", "list", "search_name", "search_content"] {
+            assert!(!mode_blocks_write_capable_tool(
+                AppMode::Plan,
+                "File",
+                &json!({"action": action}),
+                true
+            ));
         }
 
         assert!(mode_blocks_write_capable_tool(
             AppMode::Plan,
             "mcp_filesystem_write",
+            &json!({}),
             false
         ));
         assert!(!mode_blocks_write_capable_tool(
             AppMode::Operate,
             "mcp_filesystem_write",
+            &json!({}),
             false
         ));
         assert!(!mode_blocks_write_capable_tool(
             AppMode::Plan,
             "mcp_filesystem_read",
+            &json!({}),
             true
         ));
         assert!(!mode_blocks_write_capable_tool(
             AppMode::Plan,
             "read_file",
+            &json!({}),
             true
         ));
         assert!(!mode_blocks_write_capable_tool(
             AppMode::Plan,
             "request_user_input",
+            &json!({}),
             false
         ));
     }
@@ -4246,20 +4324,24 @@ fn resolve_tool_definition<'a>(
         && let Some(registry) = tool_registry
         && let Some(canonical) = registry.resolve(tool_name.as_str())
     {
+        let exact_hidden_handler = registry.get(tool_name.as_str()).is_some();
         crate::logging::info(format!(
             "Resolved hallucinated tool name '{tool_name}' -> '{canonical}'"
         ));
         let catalog_name = match canonical {
-            "read_file" | "write_file" | "edit_file" | "list_dir" | "grep_files"
-            | "file_search" | "apply_patch" => "File",
+            "File" | "read_file" => "read",
+            "write_file" => "write",
+            "edit_file" => "edit",
+            "Bash" => "bash",
+            "list_dir" | "grep_files" | "file_search" | "apply_patch" => canonical,
             "git_status" | "git_diff" | "git_log" | "git_show" | "git_blame" => "Git",
             "run_tests" | "run_verifiers" => "Run",
             "web_search" | "fetch_url" | "wait_for_dev_server" => "Web",
             _ => canonical,
         };
         tool_def = tool_catalog.iter().find(|d| d.name == catalog_name);
-        if tool_def.is_some() {
-            *tool_name = canonical.to_string();
+        if tool_def.is_some() && !exact_hidden_handler {
+            *tool_name = catalog_name.to_string();
         }
     }
 
@@ -4729,21 +4811,155 @@ mod tests {
     }
 
     #[test]
-    fn review_regression_allowed_tools_gate_checks_canonical_tool_name() {
+    fn hidden_legacy_name_keeps_its_executable_handler() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let context = crate::tools::spec::ToolContext::new(tmp.path().to_path_buf());
         let registry = crate::tools::ToolRegistryBuilder::new()
             .with_file_tools()
             .build(context);
         let catalog = registry.to_api_tools();
-        let mut tool_name = "file".to_string();
+        let mut tool_name = "read_file".to_string();
 
         let tool_def = resolve_tool_definition(&mut tool_name, &catalog, Some(&registry));
 
         assert!(tool_def.is_some());
-        assert_eq!(tool_name, "File");
-        let allowed = vec!["File".to_string()];
+        assert_eq!(tool_name, "read_file");
+        let allowed = vec!["read_file".to_string()];
         assert!(command_allows_tool(Some(&allowed), &tool_name));
+    }
+
+    #[test]
+    fn legacy_file_names_borrow_lowercase_policy_without_changing_dispatch_name() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let context = crate::tools::spec::ToolContext::new(tmp.path().to_path_buf());
+        let registry = crate::tools::ToolRegistryBuilder::new()
+            .with_file_tools()
+            .build(context);
+        let catalog = registry.to_api_tools();
+
+        for legacy in ["File", "read_file", "write_file", "edit_file"] {
+            let mut name = legacy.to_string();
+            assert!(resolve_tool_definition(&mut name, &catalog, Some(&registry)).is_some());
+            assert_eq!(name, legacy);
+        }
+    }
+
+    #[tokio::test]
+    async fn saved_legacy_file_and_bash_calls_keep_their_handlers_and_inputs() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("legacy.txt"), "before\n").expect("fixture");
+        let context = crate::tools::spec::ToolContext::new(tmp.path().to_path_buf())
+            .with_shell_policy(crate::worker_profile::ShellPolicy::Full);
+        let registry = crate::tools::ToolRegistryBuilder::new()
+            .with_file_tools()
+            .with_foreground_shell_tools()
+            .build(context);
+        let catalog = registry.to_api_tools();
+
+        for input in [
+            serde_json::json!({"action": "read", "path": "legacy.txt"}),
+            serde_json::json!({"action": "write", "path": "written.txt", "content": "saved\n"}),
+            serde_json::json!({
+                "action": "edit",
+                "path": "legacy.txt",
+                "search": "before",
+                "replace": "after"
+            }),
+        ] {
+            let mut name = "File".to_string();
+            assert!(resolve_tool_definition(&mut name, &catalog, Some(&registry)).is_some());
+            assert_eq!(name, "File");
+            registry
+                .execute_full(&name, input)
+                .await
+                .expect("saved File call should replay through the hidden action handler");
+        }
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("legacy.txt")).expect("edited fixture"),
+            "after\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("written.txt")).expect("written fixture"),
+            "saved\n"
+        );
+
+        let mut name = "Bash".to_string();
+        assert!(resolve_tool_definition(&mut name, &catalog, Some(&registry)).is_some());
+        assert_eq!(name, "Bash");
+        let command = if cfg!(windows) {
+            "echo legacy-bash"
+        } else {
+            "printf legacy-bash"
+        };
+        let result = registry
+            .execute_full(
+                &name,
+                serde_json::json!({"action": "run", "command": command}),
+            )
+            .await
+            .expect("saved Bash call should replay through the hidden action handler");
+        assert!(result.content.contains("legacy-bash"), "{}", result.content);
+    }
+
+    #[tokio::test]
+    async fn plan_saved_file_replay_blocks_mutations_without_side_effects() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let legacy_path = tmp.path().join("legacy.txt");
+        std::fs::write(&legacy_path, "before\n").expect("fixture");
+        let context = crate::tools::spec::ToolContext::new(tmp.path().to_path_buf());
+        let registry = crate::tools::ToolRegistryBuilder::new()
+            .with_file_tools()
+            .build(context);
+        let catalog = registry.to_api_tools();
+
+        for input in [
+            json!({"action": "write", "path": "written.txt", "content": "saved\n"}),
+            json!({
+                "action": "edit",
+                "path": "legacy.txt",
+                "search": "before",
+                "replace": "after"
+            }),
+            json!({
+                "action": "patch",
+                "path": "legacy.txt",
+                "patch": "@@ -1,1 +1,1 @@\n-before\n+after\n"
+            }),
+        ] {
+            let mut name = "File".to_string();
+            assert!(resolve_tool_definition(&mut name, &catalog, Some(&registry)).is_some());
+            let prepared = prepare_tool_call(&name, input.clone(), Some(&registry), false)
+                .expect("saved File call prepares through its hidden handler");
+            assert!(!prepared.call.read_only);
+            assert!(mode_blocks_write_capable_tool(
+                AppMode::Plan,
+                &name,
+                &prepared.call.input,
+                prepared.call.read_only
+            ));
+        }
+
+        assert_eq!(
+            std::fs::read_to_string(&legacy_path).expect("unchanged fixture"),
+            "before\n"
+        );
+        assert!(!tmp.path().join("written.txt").exists());
+
+        let read = json!({"action": "read", "path": "legacy.txt"});
+        let prepared = prepare_tool_call("File", read.clone(), Some(&registry), false)
+            .expect("saved read prepares");
+        assert!(prepared.call.read_only);
+        assert!(!mode_blocks_write_capable_tool(
+            AppMode::Plan,
+            "File",
+            &read,
+            prepared.call.read_only
+        ));
+        let result = registry
+            .execute_full("File", read)
+            .await
+            .expect("Plan-compatible saved File read remains usable");
+        assert!(result.content.contains("before"), "{}", result.content);
     }
 
     #[test]

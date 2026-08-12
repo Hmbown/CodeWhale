@@ -43,7 +43,7 @@ export const home: HomeDict = {
 
   proofHeading: "An underwater terminal shell. Any model. On your machine.",
   proofBody:
-    "Bring the model you already use — hosted, gateway, or local. Plan / Act / Operate and explicit permission postures keep the dive under your control.",
+    "Bring the model you already use — hosted, gateway, or local. Plan / Work / Operate and explicit permission postures keep the dive under your control.",
 
   sealDecides: "法",
   decidesEyebrow: "See how it decides",

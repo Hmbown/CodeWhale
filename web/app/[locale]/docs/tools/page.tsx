@@ -9,8 +9,8 @@ export async function generateMetadata({ params }: { params: Promise<{ locale: s
     locale,
     title: isZh ? "工具 · Codewhale 文档" : "Tools · Codewhale Docs",
     description: isZh
-      ? "Bash、File、Git、Run 四个核心 action 工具，以及协调、延迟加载与回放兼容边界。"
-      : "Canonical Bash, File, Git, and Run action tools, coordination tools, deferred loading, and replay compatibility.",
+      ? "六个小型核心工具、按需搜索、会话工具箱缓存与精确回放兼容边界。"
+      : "Six small core tools, on-demand discovery, a conversation toolbox cache, and exact replay compatibility.",
   });
 }
 
@@ -42,32 +42,44 @@ export default async function ToolsPage({ params }: { params: Promise<{ locale: 
         <div className="hairline-t hairline-b mt-6">
           {[
             {
-              group: "Bash",
-              tools: "run · wait · interact · cancel",
+              group: "read",
+              tools: "path · offset? · limit?",
             },
             {
-              group: "File",
-              tools: "read · list · search_name · search_content · write · edit · patch",
+              group: "write",
+              tools: "path · content",
             },
             {
-              group: "Git",
-              tools: "status · diff · log · show · blame",
+              group: "edit",
+              tools: "path · edits",
             },
             {
-              group: "Run",
-              tools: "tests · verifiers",
+              group: "bash",
+              tools: "command · timeout?",
             },
             {
               group: isZh ? "协调" : "Coordination",
               tools: isZh
-                ? "agent · remember（启用内置记忆时）· tasks · todo_write · tool_search（synthetic，始终启用）"
-                : "agent · remember (when built-in memory is enabled) · tasks · todo_write · tool_search (synthetic and always active)",
+                ? "agent · tool_search（始终启用；子 Agent 也有自己的搜索）"
+                : "agent · tool_search (always active; every child has its own search)",
             },
             {
               group: isZh ? "延迟加载" : "Deferred",
               tools: isZh
-                ? "Web（search · fetch · wait）仅在网络策略允许时通过 tool_search 加载；github、automation 与 rlm 也默认延迟加载"
-                : "Web (search · fetch · wait) loads through tool_search only when network policy permits; github, automation, and rlm are deferred by default",
+                ? "Git · Run · tasks · todo_write · remember · Web · MCP · plugins；只在策略允许时由 tool_search 加载"
+                : "Git · Run · tasks · todo_write · remember · Web · MCP · plugins; loaded by tool_search only when policy permits",
+            },
+            {
+              group: isZh ? "会话工具箱" : "Conversation toolbox",
+              tools: isZh
+                ? "最多 8 个名称 / 16 KiB schema；每个子 Agent 独立、每轮重新校验"
+                : "8 names / 16 KiB of schemas; independent per child and revalidated every turn",
+            },
+            {
+              group: isZh ? "只读研究" : "Read-only research",
+              tools: isZh
+                ? "侦察与审查子 Agent 可搜索 Web search/fetch，但不能获得写入或任意网络权限"
+                : "Scout and Reviewer children can discover Web search/fetch without gaining mutation or arbitrary network authority",
             },
             {
               group: "MCP",
@@ -97,8 +109,8 @@ export default async function ToolsPage({ params }: { params: Promise<{ locale: 
         </h2>
         <p className={`text-ink-soft mt-3 ${isZh ? "leading-[1.9] tracking-wide" : "leading-relaxed"}`}>
           {isZh
-            ? "旧的单用途工具名只为已保存的 transcript 与自动化回放保留。它们仍可按原名执行，但不会出现在模型目录或 tool_search 中；新工作应使用上方的 canonical action 工具。"
-            : "Legacy single-purpose names remain callable only so saved transcripts and automation can replay. They stay out of the model catalog and tool_search; new work uses the canonical action tools above."}
+            ? "旧名称只为已保存的 transcript 与协议客户端保留。精确旧调用仍使用旧 schema 的处理器，但不会出现在新模型目录或 tool_search 中；未知名称不会被猜测或模糊改写。"
+            : "Legacy names remain only for saved transcripts and protocol clients. An exact old call still reaches the handler for its old schema, but stays out of new catalogs and tool_search; unknown names are never guessed or fuzzily rewritten."}
         </p>
         <Link
           href="https://github.com/Hmbown/CodeWhale/blob/main/docs/RUNTIME_SIMPLIFICATION_DESIGN.md"

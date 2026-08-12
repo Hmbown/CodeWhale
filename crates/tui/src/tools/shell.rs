@@ -12,6 +12,8 @@ use anyhow::{Context, Result, anyhow};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs::File;
+use std::io;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -21,9 +23,13 @@ use uuid::Uuid;
 use wait_timeout::ChildExt;
 
 #[cfg(unix)]
+use std::os::fd::FromRawFd;
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 #[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
+#[cfg(windows)]
+use std::os::windows::io::FromRawHandle;
 #[cfg(windows)]
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 #[cfg(windows)]
@@ -58,7 +64,10 @@ use crate::work_graph::{
     SharedWorkRuntime,
 };
 use crate::worker_profile::ShellPolicy;
-use output::{tail_from_buffer, take_delta_from_buffer};
+use output::{
+    BoundedOutputAccumulator, BoundedOutputSnapshot, tail_from_buffer, tail_text,
+    take_delta_from_buffer,
+};
 
 const READONLY_ENV_MARKER: &str = "CODEWHALE_INTERNAL_READONLY_ARGV";
 
@@ -137,7 +146,7 @@ fn validate_shell_working_dir(path: &Path, inherited_session_workspace: bool) ->
     Ok(())
 }
 
-/// Status of a shell process
+/// Status of a shell process.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ShellStatus {
     Running,
@@ -147,9 +156,8 @@ pub enum ShellStatus {
     TimedOut,
 }
 
-/// Result from a shell command execution
+/// Result from a shell command execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-
 pub struct ShellResult {
     pub task_id: Option<String>,
     pub status: ShellStatus,
@@ -742,6 +750,77 @@ fn spawn_reader_thread<R: Read + Send + 'static>(
     })
 }
 
+fn spawn_bounded_reader_thread<R: Read + Send + 'static>(
+    mut reader: R,
+    output: Arc<Mutex<BoundedOutputAccumulator>>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut chunk = [0u8; 4096];
+        loop {
+            match reader.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let mut guard = output.lock().unwrap_or_else(|error| error.into_inner());
+                    if let Err(error) = guard.append(&chunk[..n]) {
+                        guard.record_error(&error);
+                        return;
+                    }
+                }
+                Err(error) => {
+                    output
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner())
+                        .record_error(&error);
+                    return;
+                }
+            }
+        }
+        let mut guard = output.lock().unwrap_or_else(|error| error.into_inner());
+        if let Err(error) = guard.finish() {
+            guard.record_error(&error);
+        }
+    })
+}
+
+#[cfg(unix)]
+fn shared_output_pipe() -> io::Result<(File, File, File)> {
+    let mut descriptors = [0; 2];
+    // SAFETY: `pipe` initializes both descriptors on success. Each descriptor
+    // is immediately transferred into exactly one owned `File`.
+    if unsafe { libc::pipe(descriptors.as_mut_ptr()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: successful `pipe` returned two live, uniquely owned descriptors.
+    let reader = unsafe { File::from_raw_fd(descriptors[0]) };
+    let writer = unsafe { File::from_raw_fd(descriptors[1]) };
+    let stderr_writer = writer.try_clone()?;
+    Ok((reader, writer, stderr_writer))
+}
+
+#[cfg(windows)]
+fn shared_output_pipe() -> io::Result<(File, File, File)> {
+    let mut read_handle = std::ptr::null_mut();
+    let mut write_handle = std::ptr::null_mut();
+    // SAFETY: CreatePipe initializes both handles on success; ownership is
+    // transferred to `File` immediately below.
+    if unsafe {
+        windows_sys::Win32::System::Pipes::CreatePipe(
+            &mut read_handle,
+            &mut write_handle,
+            std::ptr::null(),
+            0,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: successful CreatePipe returned two live, uniquely owned handles.
+    let reader = unsafe { File::from_raw_handle(read_handle.cast()) };
+    let writer = unsafe { File::from_raw_handle(write_handle.cast()) };
+    let stderr_writer = writer.try_clone()?;
+    Ok((reader, writer, stderr_writer))
+}
+
 const SYNC_READER_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 const STALE_NO_OUTPUT_AFTER: Duration = Duration::from_secs(60);
 
@@ -794,6 +873,9 @@ pub struct BackgroundShell {
     ownership: ShellOwnership,
     stdout_buffer: Arc<Mutex<Vec<u8>>>,
     stderr_buffer: Option<Arc<Mutex<Vec<u8>>>>,
+    /// Lowercase `bash` streams one combined process pipe through a bounded
+    /// small-contract-compatible accumulator while persisting the complete output.
+    bounded_output: Option<Arc<Mutex<BoundedOutputAccumulator>>>,
     heavy_permit: Option<HeavyCommandPermit>,
     stdout_cursor: usize,
     stderr_cursor: usize,
@@ -982,6 +1064,12 @@ impl BackgroundShell {
     }
 
     fn observed_output_len(&self) -> usize {
+        if let Some(output) = self.bounded_output.as_ref() {
+            return output
+                .lock()
+                .map(|output| output.total_bytes())
+                .unwrap_or(0);
+        }
         let stdout_len = self
             .stdout_buffer
             .lock()
@@ -1049,6 +1137,9 @@ impl BackgroundShell {
     }
 
     fn full_output(&self) -> (String, String, usize, usize) {
+        if let Some(snapshot) = self.bounded_output_snapshot(false).ok().flatten() {
+            return (snapshot.content, String::new(), snapshot.total_bytes, 0);
+        }
         let (stdout_bytes, stderr_bytes) = self.full_output_bytes();
         let stdout_len = stdout_bytes.len();
         let stderr_len = stderr_bytes.len();
@@ -1062,6 +1153,9 @@ impl BackgroundShell {
     }
 
     fn full_output_bytes(&self) -> (Vec<u8>, Vec<u8>) {
+        if let Some(snapshot) = self.bounded_output_snapshot(false).ok().flatten() {
+            return (snapshot.content.into_bytes(), Vec::new());
+        }
         let stdout_bytes = self
             .stdout_buffer
             .lock()
@@ -1076,6 +1170,24 @@ impl BackgroundShell {
     }
 
     fn take_delta(&mut self) -> (String, String, usize, usize, usize, usize) {
+        if let Some(snapshot) = self.bounded_output_snapshot(false).ok().flatten() {
+            let changed = snapshot.total_bytes != self.stdout_cursor;
+            self.stdout_cursor = snapshot.total_bytes;
+            if changed {
+                self.last_output_at = Instant::now();
+                self.last_observed_output_len = snapshot.total_bytes;
+                let delta_len = snapshot.content.len();
+                return (
+                    snapshot.content,
+                    String::new(),
+                    delta_len,
+                    0,
+                    snapshot.total_bytes,
+                    0,
+                );
+            }
+            return (String::new(), String::new(), 0, 0, snapshot.total_bytes, 0);
+        }
         let (stdout_delta, stdout_total) =
             take_delta_from_buffer(&self.stdout_buffer, &mut self.stdout_cursor);
         let (stderr_delta, stderr_total) = if let Some(buffer) = self.stderr_buffer.as_ref() {
@@ -1162,12 +1274,32 @@ impl BackgroundShell {
 
     /// Get a snapshot of the current state
     #[allow(dead_code)]
-    pub fn snapshot(&self) -> ShellResult {
+    pub fn snapshot(&self) -> Result<ShellResult> {
         let sandboxed = !matches!(self.sandbox_type, SandboxType::None);
+        if let Some(snapshot) = self.bounded_output_snapshot(self.status != ShellStatus::Running)? {
+            return Ok(ShellResult {
+                task_id: Some(self.id.clone()),
+                status: self.status.clone(),
+                exit_code: self.exit_code,
+                stdout: snapshot.content,
+                stderr: String::new(),
+                duration_ms: u64::try_from(self.started_at.elapsed().as_millis())
+                    .unwrap_or(u64::MAX),
+                stdout_len: snapshot.total_bytes,
+                stderr_len: 0,
+                stdout_omitted: snapshot.total_bytes.saturating_sub(snapshot.retained_bytes),
+                stderr_omitted: 0,
+                stdout_truncated: snapshot.truncated,
+                stderr_truncated: false,
+                sandboxed,
+                sandbox_type: sandboxed.then(|| self.sandbox_type.to_string()),
+                sandbox_denied: false,
+            });
+        }
         let (stdout_full, stderr_full, _, _) = self.full_output();
         let (stdout, stdout_meta) = truncate_with_meta(&stdout_full);
         let (stderr, stderr_meta) = truncate_with_meta(&stderr_full);
-        ShellResult {
+        Ok(ShellResult {
             task_id: Some(self.id.clone()),
             status: self.status.clone(),
             exit_code: self.exit_code,
@@ -1187,7 +1319,20 @@ impl BackgroundShell {
                 None
             },
             sandbox_denied: self.sandbox_denied(),
-        }
+        })
+    }
+
+    fn bounded_output_snapshot(&self, finalize: bool) -> Result<Option<BoundedOutputSnapshot>> {
+        self.bounded_output
+            .as_ref()
+            .map(|output| {
+                output
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .snapshot(finalize)
+                    .map_err(anyhow::Error::from)
+            })
+            .transpose()
     }
 
     fn job_snapshot(&self) -> ShellJobSnapshot {
@@ -1196,7 +1341,12 @@ impl BackgroundShell {
         // is O(total_bytes_written), which caused the ShellManager mutex to be
         // held for an arbitrarily long time during list_jobs() calls from the
         // TUI event loop — freezing input handling on long automation runs.
-        let (stdout_len, stdout_tail) = tail_from_buffer(&self.stdout_buffer, 1200);
+        let (stdout_len, stdout_tail) =
+            if let Some(snapshot) = self.bounded_output_snapshot(false).ok().flatten() {
+                (snapshot.total_bytes, tail_text(&snapshot.content, 1_200))
+            } else {
+                tail_from_buffer(&self.stdout_buffer, 1200)
+            };
         let (stderr_len, stderr_tail) = self
             .stderr_buffer
             .as_ref()
@@ -1237,7 +1387,14 @@ impl BackgroundShell {
     fn completion_event(&self) -> ShellCompletionEvent {
         let snapshot = self.job_snapshot();
         let (stdout_len, stdout_tail) =
-            bounded_completion_tail(&self.stdout_buffer, SHELL_COMPLETION_TAIL_BYTES);
+            if let Some(output) = self.bounded_output_snapshot(false).ok().flatten() {
+                (
+                    output.total_bytes,
+                    tail_text(&output.content, SHELL_COMPLETION_TAIL_BYTES),
+                )
+            } else {
+                bounded_completion_tail(&self.stdout_buffer, SHELL_COMPLETION_TAIL_BYTES)
+            };
         let (stderr_len, stderr_tail) = self
             .stderr_buffer
             .as_ref()
@@ -1489,6 +1646,7 @@ impl ShellManager {
             None,
             None,
             false,
+            (1_000, 600_000),
         )
     }
 
@@ -1508,6 +1666,7 @@ impl ShellManager {
         work_lifecycle: Option<ShellWorkLifecycle>,
         readonly_workspace: Option<&std::path::Path>,
         persist_pending: bool,
+        timeout_bounds_ms: (u64, u64),
     ) -> Result<ShellResult> {
         // Log execution via ShellDispatcher when SHELL_DISPATCHER_LOG is set.
         crate::shell_dispatcher::ShellDispatcher::log_exec(command);
@@ -1515,8 +1674,7 @@ impl ShellManager {
         let work_dir = working_dir.map_or_else(|| self.default_workspace.clone(), PathBuf::from);
         validate_shell_working_dir(&work_dir, working_dir.is_none())?;
 
-        // Clamp timeout to max 10 minutes (600000ms)
-        let timeout_ms = timeout_ms.clamp(1000, 600_000);
+        let timeout_ms = timeout_ms.clamp(timeout_bounds_ms.0, timeout_bounds_ms.1);
 
         // Use override policy if provided, otherwise use the manager's policy
         let policy = policy_override.unwrap_or_else(|| self.sandbox_policy.clone());
@@ -1540,6 +1698,7 @@ impl ShellManager {
         let exec_env = self.sandbox_manager.prepare(&spec);
 
         if background {
+            let bounded_output = timeout_bounds_ms == (1, BASH_MAX_TIMEOUT_MS);
             self.spawn_background_sandboxed(
                 command,
                 &work_dir,
@@ -1552,6 +1711,7 @@ impl ShellManager {
                     work_lifecycle,
                 },
                 persist_pending,
+                bounded_output,
             )
         } else {
             if tty {
@@ -1888,6 +2048,7 @@ impl ShellManager {
         tty: bool,
         spawn_context: ShellSpawnContext,
         persist_pending: bool,
+        small_contract_mode: bool,
     ) -> Result<ShellResult> {
         let ShellSpawnContext {
             owner_agent,
@@ -1912,11 +2073,16 @@ impl ShellManager {
         }
 
         let stdout_buffer = Arc::new(Mutex::new(Vec::new()));
-        let stderr_buffer = if tty || persist_pending {
+        let stderr_buffer = if tty || persist_pending || small_contract_mode {
             None
         } else {
             Some(Arc::new(Mutex::new(Vec::new())))
         };
+        let bounded_output = small_contract_mode
+            .then(BoundedOutputAccumulator::new)
+            .transpose()
+            .context("Failed to create streaming shell output")?
+            .map(|output| Arc::new(Mutex::new(output)));
 
         #[cfg(windows)]
         let mut windows_job = None;
@@ -1999,10 +2165,16 @@ impl ShellManager {
             let mut cmd = Command::new(program);
             crate::utils::suppress_console_window(&mut cmd);
             push_shell_args(&mut cmd, program, args);
-            cmd.current_dir(working_dir)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
+            cmd.current_dir(working_dir).stdin(Stdio::piped());
+            let combined_reader = if small_contract_mode {
+                let (reader, stdout, stderr) =
+                    shared_output_pipe().context("Failed to create combined shell output pipe")?;
+                cmd.stdout(Stdio::from(stdout)).stderr(Stdio::from(stderr));
+                Some(reader)
+            } else {
+                cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+                None
+            };
             #[cfg(unix)]
             {
                 cmd.process_group(0);
@@ -2019,35 +2191,39 @@ impl ShellManager {
                 windows_job = attach_windows_job(&child, original_command);
             }
 
-            let stdout_handle = match child.stdout.take() {
-                Some(stdout) => stdout,
-                None => {
-                    #[cfg(windows)]
-                    terminate_unregistered_process(&mut child, windows_job.as_ref());
-                    #[cfg(not(windows))]
-                    terminate_unregistered_process(&mut child);
-                    return Err(anyhow!("Failed to capture stdout"));
-                }
-            };
-            let stderr_handle = match child.stderr.take() {
-                Some(stderr) => stderr,
-                None => {
-                    #[cfg(windows)]
-                    terminate_unregistered_process(&mut child, windows_job.as_ref());
-                    #[cfg(not(windows))]
-                    terminate_unregistered_process(&mut child);
-                    return Err(anyhow!("Failed to capture stderr"));
-                }
-            };
             let stdin_handle = child.stdin.take().map(StdinWriter::Pipe);
 
-            let stdout_thread = Some(spawn_reader_thread(
-                stdout_handle,
-                Arc::clone(&stdout_buffer),
-            ));
-            let stderr_thread = stderr_buffer
-                .as_ref()
-                .map(|buffer| spawn_reader_thread(stderr_handle, Arc::clone(buffer)));
+            let (stdout_thread, stderr_thread) =
+                if let (Some(reader), Some(output)) = (combined_reader, bounded_output.as_ref()) {
+                    (
+                        Some(spawn_bounded_reader_thread(reader, Arc::clone(output))),
+                        None,
+                    )
+                } else {
+                    let stdout_handle = child.stdout.take().ok_or_else(|| {
+                        #[cfg(windows)]
+                        terminate_unregistered_process(&mut child, windows_job.as_ref());
+                        #[cfg(not(windows))]
+                        terminate_unregistered_process(&mut child);
+                        anyhow!("Failed to capture stdout")
+                    })?;
+                    let stderr_handle = child.stderr.take().ok_or_else(|| {
+                        #[cfg(windows)]
+                        terminate_unregistered_process(&mut child, windows_job.as_ref());
+                        #[cfg(not(windows))]
+                        terminate_unregistered_process(&mut child);
+                        anyhow!("Failed to capture stderr")
+                    })?;
+                    (
+                        Some(spawn_reader_thread(
+                            stdout_handle,
+                            Arc::clone(&stdout_buffer),
+                        )),
+                        stderr_buffer
+                            .as_ref()
+                            .map(|buffer| spawn_reader_thread(stderr_handle, Arc::clone(buffer))),
+                    )
+                };
 
             (
                 ShellChild::Process(child),
@@ -2076,6 +2252,7 @@ impl ShellManager {
             },
             stdout_buffer,
             stderr_buffer,
+            bounded_output,
             heavy_permit,
             stdout_cursor: 0,
             stderr_cursor: 0,
@@ -2166,13 +2343,13 @@ impl ShellManager {
 
             // If still running after timeout
             if shell.status == ShellStatus::Running {
-                return Ok(shell.snapshot());
+                return shell.snapshot();
             }
         } else {
             shell.poll();
         }
 
-        Ok(shell.snapshot())
+        shell.snapshot()
     }
 
     /// Write data to stdin of a background process.
@@ -2271,7 +2448,7 @@ impl ShellManager {
             .ok_or_else(|| anyhow!("Task {task_id} not found"))?;
 
         shell.kill()?;
-        Ok(shell.snapshot())
+        shell.snapshot()
     }
 
     /// Kill every currently running background shell process.
@@ -3207,14 +3384,17 @@ async fn execute_foreground_via_background(
     command: &str,
     heavy_permit: Option<HeavyCommandPermit>,
     working_dir: Option<String>,
-    timeout_ms: u64,
+    timeout_ms: Option<u64>,
     stdin_data: Option<&str>,
     tty: bool,
     policy_override: Option<ExecutionSandboxPolicy>,
     extra_env: HashMap<String, String>,
     direct_argv: bool,
+    timeout_bounds_ms: (u64, u64),
 ) -> Result<ShellResult> {
-    let timeout_ms = timeout_ms.clamp(1000, 600_000);
+    let timeout_ms =
+        timeout_ms.map(|timeout| timeout.clamp(timeout_bounds_ms.0, timeout_bounds_ms.1));
+    let spawn_timeout_ms = timeout_ms.unwrap_or(timeout_bounds_ms.1);
     let spawned = {
         let mut manager = context
             .shell_manager
@@ -3226,7 +3406,7 @@ async fn execute_foreground_via_background(
         manager.execute_with_options_env_for_owner_and_work(
             command,
             working_dir.as_deref(),
-            timeout_ms,
+            spawn_timeout_ms,
             true,
             stdin_data,
             tty,
@@ -3236,6 +3416,7 @@ async fn execute_foreground_via_background(
             lifecycle,
             direct_argv.then_some(context.workspace.as_path()),
             false,
+            timeout_bounds_ms,
         )?
     };
     let task_id = spawned
@@ -3257,7 +3438,7 @@ async fn execute_foreground_via_background(
         manager.write_stdin(&task_id, "", true)?;
     }
 
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    let deadline = timeout_ms.map(|timeout| Instant::now() + Duration::from_millis(timeout));
     loop {
         if context
             .cancel_token
@@ -3294,7 +3475,7 @@ async fn execute_foreground_via_background(
             return Ok(snapshot);
         }
 
-        if Instant::now() >= deadline {
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             let mut manager = context
                 .shell_manager
                 .lock()
@@ -3309,15 +3490,166 @@ async fn execute_foreground_via_background(
     }
 }
 
-/// Unified shell tool (#4625).
-///
-/// The model sees one tool: `Bash` with an `action` parameter
-/// (run | wait | interact | cancel). The per-action `exec_shell*` execution
-/// aliases were removed in v0.9.3.
+const BASH_MAX_TIMEOUT_MS: u64 = i32::MAX as u64;
+
+fn contract_bash_error_status(result: &ShellResult, timeout_ms: Option<u64>) -> String {
+    match result.status {
+        ShellStatus::TimedOut => {
+            let millis = timeout_ms.unwrap_or(BASH_MAX_TIMEOUT_MS);
+            let seconds = if millis.is_multiple_of(1_000) {
+                (millis / 1_000).to_string()
+            } else {
+                format!("{}", millis as f64 / 1_000.0)
+            };
+            format!("Command timed out after {seconds} seconds")
+        }
+        ShellStatus::Killed => "Command aborted".to_string(),
+        ShellStatus::Failed | ShellStatus::Completed | ShellStatus::Running => format!(
+            "Command exited with code {}",
+            result.exit_code.unwrap_or(-1)
+        ),
+    }
+}
+
+fn finish_contract_bash_result(
+    result: ShellResult,
+    timeout_ms: Option<u64>,
+) -> Result<ToolResult, ToolError> {
+    let mut output = result.stdout.clone();
+    output.push_str(&result.stderr);
+    let metadata = json!({
+        "evidence_routing": "inline", "exit_code": result.exit_code,
+        "status": format!("{:?}", result.status), "duration_ms": result.duration_ms,
+        "sandboxed": result.sandboxed, "sandbox_type": result.sandbox_type,
+        "task_id": result.task_id, "backgrounded": result.status == ShellStatus::Running,
+    });
+    if result.status == ShellStatus::Running {
+        let task_id = result.task_id.as_deref().unwrap_or("unknown");
+        let partial = (!output.is_empty()).then(|| format!("\n\nOutput so far:\n{output}"));
+        return Ok(ToolResult::success(format!(
+            "Foreground shell wait moved to /jobs: {task_id}{}\n\nThe command is still running; completion will appear as a runtime event.",
+            partial.as_deref().unwrap_or_default()
+        )).with_metadata(metadata));
+    }
+    if result.status != ShellStatus::Completed {
+        let status = contract_bash_error_status(&result, timeout_ms);
+        return Err(ToolError::execution_failed(if output.is_empty() {
+            status
+        } else {
+            format!("{output}\n\n{status}")
+        }));
+    }
+
+    Ok(ToolResult::success(if output.is_empty() {
+        "(no output)".to_string()
+    } else {
+        output
+    })
+    .with_metadata(metadata))
+}
+
+/// Small foreground-only shell surface shown to new model turns.
+pub struct LowercaseBashTool;
+
+#[async_trait]
+impl ToolSpec for LowercaseBashTool {
+    fn name(&self) -> &'static str {
+        "bash"
+    }
+
+    fn description(&self) -> &'static str {
+        "Execute a shell command in the workspace and return stdout and stderr. Output keeps the last 2000 lines or 50KB. An optional timeout is expressed in seconds; when omitted there is no default timeout."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "command": { "type": "string", "description": "Bash command to execute." },
+                "timeout": { "type": "number", "description": "Optional timeout in seconds; there is no default timeout." }
+            },
+            "required": ["command"],
+            "additionalProperties": false
+        })
+    }
+
+    fn capabilities(&self) -> Vec<ToolCapability> {
+        BashTool::pi_delegate().capabilities()
+    }
+
+    fn approval_requirement(&self) -> ApprovalRequirement {
+        ApprovalRequirement::Required
+    }
+
+    fn approval_requirement_for(&self, input: &serde_json::Value) -> ApprovalRequirement {
+        let translated = contract_bash_legacy_input(input).unwrap_or_else(|_| input.clone());
+        BashTool::pi_delegate().approval_requirement_for(&translated)
+    }
+
+    fn is_read_only_for(&self, input: &serde_json::Value) -> bool {
+        contract_bash_legacy_input(input)
+            .is_ok_and(|translated| BashTool::pi_delegate().is_read_only_for(&translated))
+    }
+
+    fn supports_parallel_for(&self, input: &serde_json::Value) -> bool {
+        self.is_read_only_for(input)
+    }
+
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+        context: &ToolContext,
+    ) -> Result<ToolResult, ToolError> {
+        let translated = contract_bash_legacy_input(&input)?;
+        BashTool::pi_delegate().execute(translated, context).await
+    }
+}
+
+fn contract_bash_legacy_input(input: &serde_json::Value) -> Result<serde_json::Value, ToolError> {
+    let object = input
+        .as_object()
+        .ok_or_else(|| ToolError::invalid_input("bash input must be an object"))?;
+    let unexpected = object
+        .keys()
+        .filter(|key| !matches!(key.as_str(), "command" | "timeout"))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unexpected.is_empty() {
+        return Err(ToolError::invalid_input(format!(
+            "unexpected bash parameter(s): {}",
+            unexpected.join(", ")
+        )));
+    }
+    let command = required_str(input, "command")?;
+    let mut translated = json!({"command": command});
+    if let Some(timeout) = input.get("timeout") {
+        let seconds = timeout.as_f64().ok_or_else(|| {
+            ToolError::invalid_input("Invalid timeout: expected a finite number of seconds")
+        })?;
+        if !seconds.is_finite() || seconds <= 0.0 {
+            return Err(ToolError::invalid_input(
+                "Invalid timeout: expected a positive finite number of seconds",
+            ));
+        }
+        let millis = seconds * 1000.0;
+        if millis > BASH_MAX_TIMEOUT_MS as f64 {
+            return Err(ToolError::invalid_input(format!(
+                "Invalid timeout: maximum is {} seconds",
+                BASH_MAX_TIMEOUT_MS as f64 / 1000.0
+            )));
+        }
+        translated["timeout_ms"] = json!((millis as u64).max(1));
+    }
+    Ok(translated)
+}
+
+/// Compatibility shell tool retained for saved v0.9.x transcripts and the
+/// background/session control surface. It is hidden from new model catalogs.
 pub struct BashTool {
     name: &'static str,
     forced_action: Option<&'static str>,
     read_only: bool,
+    pi_timeout: bool,
 }
 
 pub(crate) fn readonly_bash_input_schema() -> serde_json::Value {
@@ -3340,6 +3672,7 @@ impl BashTool {
             name,
             forced_action: None,
             read_only: false,
+            pi_timeout: false,
         }
     }
 
@@ -3348,6 +3681,7 @@ impl BashTool {
             name,
             forced_action: None,
             read_only: true,
+            pi_timeout: false,
         }
     }
 
@@ -3356,6 +3690,16 @@ impl BashTool {
             name,
             forced_action: Some(action),
             read_only: false,
+            pi_timeout: false,
+        }
+    }
+
+    const fn pi_delegate() -> Self {
+        Self {
+            name: "bash",
+            forced_action: Some("run"),
+            read_only: false,
+            pi_timeout: true,
         }
     }
 }
@@ -3367,7 +3711,7 @@ impl ToolSpec for BashTool {
     }
 
     fn model_visible(&self) -> bool {
-        self.name == "Bash"
+        false
     }
 
     fn description(&self) -> &'static str {
@@ -3554,13 +3898,25 @@ impl ToolSpec for BashTool {
             }
             ShellPolicy::ReadOnly if !exec_shell_input_is_parallel_readonly(&input) => {
                 return Ok(ToolResult::error(
-                    "Shell command blocked by read-only shell policy. Use a non-mutating, non-background inspection command, or switch to Act mode (`/mode act`) for write-capable shell work.",
+                    "Shell command blocked by read-only shell policy. Use a non-mutating, non-background inspection command, or switch to Work mode (`/mode work`) for write-capable shell work.",
                 ));
             }
             ShellPolicy::ReadOnly | ShellPolicy::Full => {}
         }
         enforce_readonly_github_network_policy(command, context)?;
-        let timeout_ms = optional_u64(&input, "timeout_ms", 120_000)?.min(600_000);
+        let timeout_ms = if self.pi_timeout {
+            input
+                .get("timeout_ms")
+                .map(|value| {
+                    value
+                        .as_u64()
+                        .ok_or_else(|| type_mismatch("timeout_ms", value, "a positive integer"))
+                })
+                .transpose()?
+        } else {
+            Some(optional_u64(&input, "timeout_ms", 120_000)?.min(600_000))
+        };
+        let timeout_value_ms = timeout_ms.unwrap_or(BASH_MAX_TIMEOUT_MS);
         let background = optional_bool(&input, "background", false)?;
         let interactive = optional_bool(&input, "interactive", false)?;
         let combined_output = optional_bool(&input, "combined_output", false)?;
@@ -3790,6 +4146,11 @@ impl ToolSpec for BashTool {
 
         // Route through external sandbox backend when configured.
         if let Some(backend) = &context.sandbox_backend {
+            if self.pi_timeout {
+                return Err(ToolError::not_available(
+                    "bash is unavailable with this external sandbox backend because it cannot preserve combined streaming output and timeout semantics. Use the native sandbox or search for the backend-specific shell tool.",
+                ));
+            }
             if matches!(context.shell_policy, ShellPolicy::ReadOnly) {
                 return Err(ToolError::permission_denied(
                     "Read-only Scout shell cannot use an external sandbox backend because that interface accepts a raw command string rather than the classifier-approved argv. Use File read/search, or run this Scout without the external backend.",
@@ -3920,7 +4281,7 @@ impl ToolSpec for BashTool {
             let result = manager.execute_interactive_with_policy_env(
                 command,
                 working_dir.as_deref(),
-                timeout_ms,
+                timeout_value_ms,
                 policy_override,
                 extra_env,
             );
@@ -3950,7 +4311,7 @@ impl ToolSpec for BashTool {
             let result = manager.execute_with_options_env_for_owner_and_work(
                 command,
                 working_dir.as_deref(),
-                timeout_ms,
+                timeout_value_ms,
                 true,
                 stdin_data.as_deref(),
                 tty,
@@ -3960,6 +4321,7 @@ impl ToolSpec for BashTool {
                 shell_work_lifecycle_from_context(context),
                 None,
                 persist,
+                (1_000, 600_000),
             );
             if let (Ok(result), Some(permit)) = (&result, heavy_permit)
                 && let Some(task_id) = result.task_id.as_deref()
@@ -3981,6 +4343,11 @@ impl ToolSpec for BashTool {
                 policy_override,
                 extra_env,
                 matches!(context.shell_policy, ShellPolicy::ReadOnly),
+                if self.pi_timeout {
+                    (1, BASH_MAX_TIMEOUT_MS)
+                } else {
+                    (1_000, 600_000)
+                },
             )
             .await
         };
@@ -4003,6 +4370,9 @@ impl ToolSpec for BashTool {
                     .cancel_token
                     .as_ref()
                     .is_some_and(|token| token.is_cancelled());
+                if self.pi_timeout {
+                    return finish_contract_bash_result(result, timeout_ms);
+                }
                 let task_id_str = result.task_id.clone().unwrap_or_default();
                 let stdout_summary = summarize_output(&result.stdout);
                 let stderr_summary = summarize_output(&result.stderr);
@@ -4054,7 +4424,7 @@ impl ToolSpec for BashTool {
                     )
                 } else if result.status == ShellStatus::TimedOut {
                     format!(
-                        "Command timed out after {timeout_ms}ms; process killed.\n\n{FOREGROUND_TIMEOUT_RECOVERY_HINT}\n\nSTDOUT:\n{}\n\nSTDERR:\n{}",
+                        "Command timed out after {timeout_value_ms}ms; process killed.\n\n{FOREGROUND_TIMEOUT_RECOVERY_HINT}\n\nSTDOUT:\n{}\n\nSTDERR:\n{}",
                         result.stdout, result.stderr
                     )
                 } else {

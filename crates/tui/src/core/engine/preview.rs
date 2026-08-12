@@ -432,34 +432,6 @@ impl Engine {
             .preview_runtime_transforms(&messages, system_prompt.as_ref(), &planned_compaction)
             .await;
 
-        // Resolve the same authoritative transient Work/To-do tail that the
-        // production loop snapshots once per request. It is appended to the
-        // outbound copy only: like production, auto-compaction and automatic
-        // reasoning inspect stored history plus the submitted user message,
-        // while preflight estimation and the provider body both receive this
-        // exact same tail value. A graph read failure cannot fall back to a
-        // stale legacy list in an exact preview.
-        let work_state_tail = match self.work_state_source().exact_tail_message().await {
-            Ok(tail) => tail,
-            Err(error) => {
-                return RequestManifest::build(ManifestDraft {
-                    session,
-                    route: Availability::unavailable_with(
-                        UnavailableReason::WorkStateNotSnapshottable,
-                        error.clone(),
-                    ),
-                    tools: Availability::unavailable_with(
-                        UnavailableReason::WorkStateNotSnapshottable,
-                        error.clone(),
-                    ),
-                    body: Availability::unavailable_with(
-                        UnavailableReason::WorkStateNotSnapshottable,
-                        error,
-                    ),
-                });
-            }
-        };
-
         // The turn loop resolves an `auto` sentinel tier against the messages
         // it is about to send, *after* the planner normalized it. Skipping
         // that step described a request carrying a literal `auto`, which no
@@ -472,23 +444,19 @@ impl Engine {
             &model,
         );
 
-        let mut outbound_messages = messages.clone();
-        if let Some(work_state_tail) = work_state_tail.as_ref() {
-            outbound_messages.push(work_state_tail.clone());
-        }
+        // Production sends stored history and nothing else — no synthetic
+        // To-do block, on any step — so the previewed outbound message list is
+        // exactly the message list.
+        let outbound_messages = messages.clone();
 
         // The production overflow gate estimates the logical messages and
         // system prompt, not serialized provider-body bytes. Use that same
         // contract here; the manifest keeps its wire estimate separately as
         // an observability metric.
-        let base_input_estimate_tokens = crate::compaction::estimate_input_tokens_conservative(
-            &messages,
-            system_prompt.as_ref(),
-        );
         let production_input_estimate_tokens =
-            super::turn_loop::production_input_estimate_with_work_tail(
-                base_input_estimate_tokens,
-                work_state_tail.as_ref(),
+            crate::compaction::estimate_input_tokens_conservative(
+                &messages,
+                system_prompt.as_ref(),
             );
 
         let request = prepare_primary_turn_request(PrimaryTurnRequest {
@@ -650,22 +618,7 @@ impl Engine {
         }
 
         if crate::compaction::compaction_pressure_reached(messages, system_prompt, compaction) {
-            let mut preview_compaction = compaction.clone();
-            // Production captures these two fields for every compaction.
-            // Running shell/worker state is already represented by the
-            // unavailable reasons above, so it cannot make an inexact body
-            // look exact here.
-            preview_compaction.live_state = Some(crate::compaction::CompactionLiveState {
-                mode: Some(self.current_mode.as_setting().to_string()),
-                permission_posture: Some(
-                    self.session
-                        .approval_mode
-                        .permission_chip_label()
-                        .to_string(),
-                ),
-                ..Default::default()
-            });
-            let prepared = self.prepare_compaction_envelope(preview_compaction);
+            let prepared = self.prepare_compaction_envelope(compaction.clone());
             if should_compact(messages, system_prompt, &prepared) {
                 reasons.push("auto-compaction would rewrite the conversation first");
             }

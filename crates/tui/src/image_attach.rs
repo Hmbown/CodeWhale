@@ -129,6 +129,144 @@ pub struct AttachedImage {
     pub source_bytes: usize,
 }
 
+/// Validated image content returned by lowercase `read`.
+pub struct PreparedToolImage {
+    pub block: Option<codewhale_tools::ToolResultContentBlock>,
+    pub note: String,
+}
+
+/// Prepare one provider-neutral tool-result image using Codewhale's existing
+/// cross-provider format and size policy. Failure is a visible text receipt,
+/// not a failed file read.
+#[must_use]
+pub fn prepare_tool_image_bytes(bytes: &[u8], mime_type: &str) -> PreparedToolImage {
+    let mime_type = mime_type.split(';').next().unwrap_or(mime_type).trim();
+    let valid = sniff_media_type(bytes) == Some(mime_type) && bytes.len() <= MAX_IMAGE_BYTES;
+    if !valid {
+        return PreparedToolImage {
+            block: None,
+            note: format!(
+                "Read image file [{mime_type}]\n[Image omitted: unsupported, invalid, or above the 5 MiB inline limit.]"
+            ),
+        };
+    }
+    PreparedToolImage {
+        block: Some(codewhale_tools::ToolResultContentBlock::Image {
+            mime_type: mime_type.to_string(),
+            data: STANDARD.encode(bytes),
+        }),
+        note: format!("Read image file [{mime_type}]"),
+    }
+}
+
+fn valid_tool_image(mime_type: &str, data: &str) -> bool {
+    matches!(
+        mime_type,
+        "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+    ) && data.len() <= MAX_IMAGE_BYTES.div_ceil(3) * 4
+        && STANDARD.decode(data).is_ok()
+}
+
+/// Enforce the same one-image limit at the tool execution boundary so plugin
+/// or future rich tools cannot create unbounded history.
+#[must_use]
+pub(crate) fn bound_rich_tool_result(
+    mut rich: crate::tools::spec::RichToolResult,
+) -> crate::tools::spec::RichToolResult {
+    let mut kept = Vec::with_capacity(1);
+    let mut omitted = 0usize;
+    for block in rich.content_blocks.drain(..) {
+        let codewhale_tools::ToolResultContentBlock::Image { mime_type, data } = &block;
+        if kept.is_empty() && valid_tool_image(mime_type, data) {
+            kept.push(block);
+        } else {
+            omitted += 1;
+        }
+    }
+    rich.result.content = tool_result_text_with_omission(&rich.result.content, omitted);
+    rich.content_blocks = kept;
+    rich
+}
+
+/// Borrow the first valid inline image and count everything omitted.
+#[must_use]
+pub(crate) fn provider_tool_result_image_refs(
+    blocks: Option<&[serde_json::Value]>,
+) -> (Option<(&str, &str)>, usize) {
+    let mut image = None;
+    let mut omitted = 0usize;
+    for block in blocks.unwrap_or_default() {
+        let fields = block
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .filter(|kind| *kind == "image")
+            .and_then(|_| {
+                block
+                    .get("mime_type")
+                    .and_then(serde_json::Value::as_str)
+                    .zip(block.get("data").and_then(serde_json::Value::as_str))
+            });
+        if image.is_none()
+            && let Some((mime_type, data)) = fields
+            && valid_tool_image(mime_type, data)
+        {
+            image = Some((mime_type, data));
+        } else {
+            omitted += 1;
+        }
+    }
+    (image, omitted)
+}
+
+#[must_use]
+pub(crate) fn tool_result_text_with_omission(content: &str, omitted: usize) -> String {
+    if omitted == 0 {
+        return content.to_string();
+    }
+    format!(
+        "{content}\n[{omitted} tool-result image block(s) omitted: invalid, unsupported, oversized, or additional.]"
+    )
+}
+
+/// Copy/export projection that retains metadata but never inline base64.
+#[must_use]
+pub(crate) fn safe_tool_result_content_blocks(
+    blocks: Option<&[serde_json::Value]>,
+) -> Option<Vec<serde_json::Value>> {
+    blocks.map(|blocks| {
+        blocks
+            .iter()
+            .map(|block| {
+                if block.get("type").and_then(serde_json::Value::as_str) == Some("image") {
+                    serde_json::json!({
+                        "type": "image",
+                        "mime_type": block.get("mime_type").and_then(serde_json::Value::as_str).unwrap_or("application/octet-stream"),
+                        "omission_code": "inline_or_local_image_payload",
+                        "omitted_base64_bytes": block.get("data").and_then(serde_json::Value::as_str).map_or(0, str::len),
+                    })
+                } else {
+                    block.clone()
+                }
+            })
+            .collect()
+    })
+}
+
+#[must_use]
+pub(crate) fn safe_tool_result_message_projection(
+    messages: &[crate::models::Message],
+) -> Vec<crate::models::Message> {
+    let mut projected = messages.to_vec();
+    for message in &mut projected {
+        for block in &mut message.content {
+            if let ContentBlock::ToolResult { content_blocks, .. } = block {
+                *content_blocks = safe_tool_result_content_blocks(content_blocks.as_deref());
+            }
+        }
+    }
+    projected
+}
+
 impl AttachedImage {
     /// The content block this image becomes in a message.
     #[must_use]
@@ -366,16 +504,33 @@ pub fn strip_images_when_unsupported(
     let mut stripped = 0;
     for message in messages.iter_mut() {
         for block in &mut message.content {
-            if matches!(block, ContentBlock::ImageUrl { .. }) {
-                *block = ContentBlock::Text {
-                    text: format!(
-                        "[image content omitted: the active model ({model}) does \
-                         not accept image input. Switch to a vision-capable \
-                         model with /model to see it.]"
-                    ),
-                    cache_control: None,
-                };
-                stripped += 1;
+            match block {
+                ContentBlock::ImageUrl { .. } => {
+                    *block = ContentBlock::Text {
+                        text: format!(
+                            "[image content omitted: the active model ({model}) does \
+                             not accept image input. Switch to a vision-capable \
+                             model with /model to see it.]"
+                        ),
+                        cache_control: None,
+                    };
+                    stripped += 1;
+                }
+                ContentBlock::ToolResult {
+                    content,
+                    content_blocks,
+                    ..
+                } => {
+                    let count = content_blocks.as_ref().map_or(0, Vec::len);
+                    if count > 0 {
+                        *content_blocks = None;
+                        *content = format!(
+                            "{content}\n[{count} image block(s) omitted: the active model ({model}) does not accept image input.]"
+                        );
+                        stripped += count;
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -404,405 +559,5 @@ pub fn notice_block(notices: &[String]) -> Option<ContentBlock> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A 1x1 PNG, as bytes rather than a fixture file so the encoding tests
-    /// have no filesystem dependency.
-    const PNG_1X1: &[u8] = &[
-        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
-        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f,
-        0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00,
-        0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49,
-        0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
-    ];
-
-    #[test]
-    fn sniffs_every_accepted_format_from_magic_bytes() {
-        assert_eq!(sniff_media_type(PNG_1X1), Some("image/png"));
-        assert_eq!(
-            sniff_media_type(&[0xff, 0xd8, 0xff, 0xe0, 0x00]),
-            Some("image/jpeg")
-        );
-        assert_eq!(sniff_media_type(b"GIF89a....."), Some("image/gif"));
-        assert_eq!(sniff_media_type(b"GIF87a....."), Some("image/gif"));
-        assert_eq!(
-            sniff_media_type(b"RIFF\x00\x00\x00\x00WEBPVP8 "),
-            Some("image/webp")
-        );
-    }
-
-    #[test]
-    fn sniffing_ignores_the_extension_and_believes_the_bytes() {
-        // A JPEG named .png must be declared image/jpeg, or the provider
-        // rejects the media-type mismatch.
-        let jpeg = [0xff, 0xd8, 0xff, 0xe0, 0x11, 0x22];
-        let attached = encode_image_bytes(&jpeg, "screenshot.png").expect("attach");
-        assert_eq!(attached.media_type, "image/jpeg");
-        assert!(attached.data_url.starts_with("data:image/jpeg;base64,"));
-    }
-
-    #[test]
-    fn riff_that_is_not_webp_is_not_an_image() {
-        // A WAV file is also RIFF. Matching on "RIFF" alone would attach audio.
-        assert_eq!(sniff_media_type(b"RIFF\x00\x00\x00\x00WAVEfmt "), None);
-    }
-
-    #[test]
-    fn encodes_a_png_to_a_data_url_that_round_trips() {
-        let attached = encode_image_bytes(PNG_1X1, "shot.png").expect("attach");
-        assert_eq!(attached.media_type, "image/png");
-        assert_eq!(attached.source_bytes, PNG_1X1.len());
-
-        let (media_type, payload) = parse_data_url(&attached.data_url).expect("parse");
-        assert_eq!(media_type, "image/png");
-        assert_eq!(STANDARD.decode(payload).expect("decode"), PNG_1X1);
-    }
-
-    #[test]
-    fn rejects_a_file_over_the_size_limit() {
-        let oversized = vec![0u8; MAX_IMAGE_BYTES + 1];
-        let error = encode_image_bytes(&oversized, "huge.png").expect_err("must reject");
-        assert!(
-            matches!(error, ImageAttachError::TooLarge { .. }),
-            "got {error:?}"
-        );
-        let rendered = error.to_string();
-        assert!(rendered.contains("5.0 MB"), "{rendered}");
-        assert!(rendered.contains("huge.png"), "{rendered}");
-    }
-
-    #[test]
-    fn accepts_a_file_exactly_at_the_size_limit() {
-        // The boundary is inclusive; an off-by-one here would reject images
-        // the providers accept.
-        let mut at_limit = PNG_1X1.to_vec();
-        at_limit.resize(MAX_IMAGE_BYTES, 0);
-        assert!(encode_image_bytes(&at_limit, "edge.png").is_ok());
-    }
-
-    #[test]
-    fn rejects_a_real_image_in_an_unsupported_format_by_name() {
-        for (bytes, name) in [
-            (b"BM\x00\x00\x00\x00".as_slice(), "BMP"),
-            (b"II\x2a\x00extra".as_slice(), "TIFF"),
-            (b"MM\x00\x2aextra".as_slice(), "TIFF"),
-            (b"<svg xmlns=".as_slice(), "SVG"),
-            (b"%PDF-1.7".as_slice(), "PDF"),
-        ] {
-            let error = encode_image_bytes(bytes, "f").expect_err("must reject");
-            match error {
-                ImageAttachError::UnsupportedFormat { detected, .. } => {
-                    assert_eq!(detected, name);
-                }
-                other => panic!("expected UnsupportedFormat for {name}, got {other:?}"),
-            }
-        }
-    }
-
-    #[test]
-    fn rejects_a_file_that_is_not_an_image_at_all() {
-        let error =
-            encode_image_bytes(b"#!/bin/sh\necho hi\n", "script.png").expect_err("must reject");
-        assert!(
-            matches!(error, ImageAttachError::NotAnImage { .. }),
-            "got {error:?}"
-        );
-    }
-
-    #[test]
-    fn rejects_an_empty_file() {
-        let error = encode_image_bytes(b"", "empty.png").expect_err("must reject");
-        assert!(
-            matches!(error, ImageAttachError::Empty { .. }),
-            "got {error:?}"
-        );
-    }
-
-    #[test]
-    fn parses_and_rejects_data_urls() {
-        assert_eq!(
-            parse_data_url("data:image/png;base64,QUJD"),
-            Some(("image/png", "QUJD"))
-        );
-        // Not base64-tagged: Anthropic has no shape for a raw data URL.
-        assert_eq!(parse_data_url("data:image/png,QUJD"), None);
-        // Remote URLs are a different source type, not a malformed data URL.
-        assert_eq!(parse_data_url("https://example.com/a.png"), None);
-        // Degenerate forms must not produce an empty base64 payload that the
-        // provider would reject with an opaque error.
-        assert_eq!(parse_data_url("data:;base64,QUJD"), None);
-        assert_eq!(parse_data_url("data:image/png;base64,"), None);
-        assert_eq!(parse_data_url("data:image/png;base64"), None);
-    }
-
-    #[test]
-    fn classifies_remote_urls() {
-        assert!(is_remote_image_url("https://example.com/a.png"));
-        assert!(is_remote_image_url("http://example.com/a.png"));
-        assert!(!is_remote_image_url("data:image/png;base64,QUJD"));
-        assert!(!is_remote_image_url("file:///tmp/a.png"));
-    }
-
-    fn message_with_image(url: &str) -> crate::models::Message {
-        crate::models::Message {
-            role: "user".to_string(),
-            content: vec![
-                ContentBlock::ImageUrl {
-                    image_url: ImageUrlContent {
-                        url: url.to_string(),
-                    },
-                },
-                ContentBlock::Text {
-                    text: "what is this?".to_string(),
-                    cache_control: None,
-                },
-            ],
-        }
-    }
-
-    fn write_png(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
-        let path = dir.join(name);
-        std::fs::write(&path, PNG_1X1).expect("write fixture");
-        path
-    }
-
-    #[test]
-    fn expands_a_placeholder_into_an_image_block() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = write_png(dir.path(), "shot.png");
-        let text = format!("look at this\n[Attached image: {}]", path.display());
-
-        let expanded = expand_attachment_blocks(&text);
-
-        assert!(expanded.notices.is_empty(), "{expanded:?}");
-        // Bracketed: open tag naming the path, the image, close tag.
-        assert_eq!(expanded.blocks.len(), 3, "{expanded:?}");
-        match &expanded.blocks[0] {
-            ContentBlock::Text { text, .. } => {
-                assert!(text.starts_with("<image path=\""), "{text}");
-                assert!(text.contains("shot.png"), "{text}");
-            }
-            other => panic!("expected an opening tag, got {other:?}"),
-        }
-        match &expanded.blocks[1] {
-            ContentBlock::ImageUrl { image_url } => {
-                assert!(image_url.url.starts_with("data:image/png;base64,"));
-            }
-            other => panic!("expected an image block, got {other:?}"),
-        }
-        assert_eq!(
-            expanded.blocks[2],
-            ContentBlock::Text {
-                text: "</image>".to_string(),
-                cache_control: None
-            }
-        );
-    }
-
-    #[test]
-    fn expands_multiple_placeholders_in_order() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let first = write_png(dir.path(), "one.png");
-        let second = write_png(dir.path(), "two.png");
-        std::fs::write(&second, [0xff, 0xd8, 0xff, 0xe0, 0x01]).expect("write jpeg");
-        let text = format!(
-            "[Attached image: {}]\nand\n[Attached image: {}]",
-            first.display(),
-            second.display()
-        );
-
-        let expanded = expand_attachment_blocks(&text);
-
-        let media: Vec<_> = expanded
-            .blocks
-            .iter()
-            .filter_map(|block| match block {
-                ContentBlock::ImageUrl { image_url } => Some(
-                    parse_data_url(&image_url.url)
-                        .expect("data url")
-                        .0
-                        .to_string(),
-                ),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(media, vec!["image/png", "image/jpeg"]);
-
-        // Each image carries its own path tag, so the model can tell two
-        // screenshots in one turn apart.
-        let tags: Vec<_> = expanded
-            .blocks
-            .iter()
-            .filter_map(|block| match block {
-                ContentBlock::Text { text, .. } if text.starts_with("<image path=") => {
-                    Some(text.clone())
-                }
-                _ => None,
-            })
-            .collect();
-        assert_eq!(tags.len(), 2, "{tags:?}");
-        assert!(tags[0].contains("one.png"), "{tags:?}");
-        assert!(tags[1].contains("two.png"), "{tags:?}");
-    }
-
-    #[test]
-    fn ingest_does_not_consult_model_capability() {
-        // Capability is a route property and is re-decided per request. If
-        // ingest started gating on it, attaching under a text-only model would
-        // destroy the image for the rest of the session.
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = write_png(dir.path(), "shot.png");
-        let text = format!("[Attached image: {}]", path.display());
-
-        let expanded = expand_attachment_blocks(&text);
-
-        assert_eq!(expanded.blocks.len(), 3);
-        assert!(expanded.notices.is_empty());
-    }
-
-    #[test]
-    fn a_blind_route_gets_text_in_place_of_every_image() {
-        let mut messages = vec![
-            message_with_image("data:image/png;base64,QUJD"),
-            crate::models::Message {
-                role: "assistant".to_string(),
-                content: vec![ContentBlock::Text {
-                    text: "sure".to_string(),
-                    cache_control: None,
-                }],
-            },
-        ];
-
-        let stripped = strip_images_when_unsupported(
-            &mut messages,
-            SupportState::Unsupported,
-            "deepseek-chat",
-        );
-
-        assert_eq!(stripped, 1);
-        assert!(
-            !messages[0]
-                .content
-                .iter()
-                .any(|block| matches!(block, ContentBlock::ImageUrl { .. })),
-            "no image may survive to a route that cannot read one"
-        );
-        match &messages[0].content[0] {
-            ContentBlock::Text { text, .. } => {
-                assert!(text.contains("deepseek-chat"), "{text}");
-                assert!(text.contains("/model"), "{text}");
-                assert!(text.contains("omitted"), "{text}");
-            }
-            other => panic!("expected replacement text, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn a_supported_or_unknown_route_keeps_its_images() {
-        // Unknown is the common case: models.dev has no modality data for most
-        // routes. Stripping there would make the feature dead on arrival for
-        // self-hosted and custom providers.
-        for vision in [SupportState::Supported, SupportState::Unknown] {
-            let mut messages = vec![message_with_image("data:image/png;base64,QUJD")];
-
-            let stripped = strip_images_when_unsupported(&mut messages, vision, "some-model");
-
-            assert_eq!(stripped, 0, "{vision:?} must not strip");
-            assert!(
-                messages[0]
-                    .content
-                    .iter()
-                    .any(|block| matches!(block, ContentBlock::ImageUrl { .. })),
-                "{vision:?} must keep the image"
-            );
-        }
-    }
-
-    #[test]
-    fn stripping_replaces_every_image_across_every_message() {
-        let mut messages = vec![
-            message_with_image("data:image/png;base64,AAAA"),
-            message_with_image("data:image/jpeg;base64,BBBB"),
-        ];
-
-        let stripped =
-            strip_images_when_unsupported(&mut messages, SupportState::Unsupported, "blind");
-
-        assert_eq!(
-            stripped, 2,
-            "a per-message early return would miss the second"
-        );
-    }
-
-    #[test]
-    fn a_missing_file_becomes_a_notice_not_a_dropped_turn() {
-        let text = "[Attached image: /nonexistent/definitely-not-here.png]";
-
-        let expanded = expand_attachment_blocks(text);
-
-        assert!(expanded.blocks.is_empty());
-        assert_eq!(expanded.notices.len(), 1);
-        assert!(
-            expanded.notices[0].contains("definitely-not-here.png"),
-            "{:?}",
-            expanded.notices
-        );
-    }
-
-    #[test]
-    fn one_bad_attachment_does_not_suppress_a_good_one() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let good = write_png(dir.path(), "good.png");
-        let text = format!(
-            "[Attached image: /nope/missing.png]\n[Attached image: {}]",
-            good.display()
-        );
-
-        let expanded = expand_attachment_blocks(&text);
-
-        assert_eq!(expanded.blocks.len(), 3);
-        assert_eq!(expanded.notices.len(), 1);
-    }
-
-    #[test]
-    fn video_attachments_are_left_as_text() {
-        let text = "[Attached video: /tmp/clip.mp4]";
-
-        let expanded = expand_attachment_blocks(text);
-
-        assert!(expanded.blocks.is_empty(), "{expanded:?}");
-        assert!(expanded.notices.is_empty(), "{expanded:?}");
-    }
-
-    #[test]
-    fn text_with_no_attachments_produces_nothing() {
-        let expanded = expand_attachment_blocks("just a normal question");
-        assert!(expanded.blocks.is_empty());
-        assert!(expanded.notices.is_empty());
-    }
-
-    #[test]
-    fn notice_block_names_the_failure_and_forbids_guessing() {
-        assert_eq!(notice_block(&[]), None);
-        let block =
-            notice_block(&["Cannot attach a.png: the file is empty".to_string()]).expect("block");
-        match block {
-            ContentBlock::Text { text, .. } => {
-                assert!(text.contains("<attachment_notice>"), "{text}");
-                assert!(text.contains("a.png"), "{text}");
-                assert!(text.contains("Do not describe"), "{text}");
-            }
-            other => panic!("expected text, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn attach_from_path_reports_an_unreadable_file() {
-        let error = attach_image_from_path(Path::new("/nonexistent/x.png")).expect_err("must fail");
-        assert!(
-            matches!(error, ImageAttachError::Unreadable { .. }),
-            "got {error:?}"
-        );
-    }
-}
+#[path = "image_attach/tests.rs"]
+pub(crate) mod tests;

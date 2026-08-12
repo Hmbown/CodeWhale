@@ -532,12 +532,12 @@ codewhale --provider openrouter --model deepseek/deepseek-v4-pro
     sources: ["#574", "#1303", "docs/CONFIGURATION.md"],
   },
   {
-    q: "Plan、Act、Operate 三种模式有什么区别？",
+    q: "Plan、Work、Operate 三种模式有什么区别？",
     a: (
       <>
         <ul className="list-disc pl-5 space-y-2 text-sm text-ink-soft">
           <li><strong>Plan（计划）</strong> — 只读调查。可以 grep、读文件、列目录、抓取 URL。不能写入或执行 Shell。</li>
-          <li><strong>Act（执行）</strong> — 常规交互式编码。工具是否可用以及何时请求批准，取决于当前配置和权限姿态。</li>
+          <li><strong>Work（执行）</strong> — 常规交互式编码。工具是否可用以及何时请求批准，取决于当前配置和权限姿态。</li>
           <li><strong>Operate（编排）</strong> — 直接工具遵循与 Act 相同的权限、沙箱、Shell 和安全规则。独立、并行、后台或长时间工作会优先交给 Fleet worker，但不强制委派；只有需要有序阶段和门禁时才需要 Workflow。</li>
         </ul>
         <p className="mt-2">

@@ -11,99 +11,55 @@ Implementation sources:
 
 - `crates/tui/src/core/engine/tool_catalog.rs` owns the eager/deferred catalog.
 - `crates/tui/src/tools/registry.rs` registers canonical tools and hidden aliases.
-- `crates/tui/src/tools/{file_tool,git_tool,run_tool,web_tool,shell}.rs` own the
-  canonical action schemas.
+- `crates/tui/src/tools/{file,file_tool,shell}.rs` own the small foreground
+  primitive behavior and schemas; the other native tools remain searchable.
 - `docs/RUNTIME_SIMPLIFICATION_DESIGN.md` records the v0.9.1 cutover and receipt.
 
 ## Default-active contract
 
-The default-active policy contains exactly these nine names:
+New turns start with exactly seven model-facing names:
 
-1. `Bash`
-2. `File`
-3. `Git`
-4. `Run`
+1. `read`
+2. `write`
+3. `edit`
+4. `bash`
 5. `agent`
-6. `remember`
-7. `tasks`
-8. `todo_write`
-9. `tool_search`
+6. `todo_write`
+7. `tool_search`
 
-The first eight are `DEFAULT_ACTIVE_NATIVE_TOOLS` in
-`crates/tui/src/core/engine/tool_catalog.rs`. `tool_search` is synthetic rather
-than registry-backed and is always active.
+The first six are `DEFAULT_ACTIVE_NATIVE_TOOLS` in
+`crates/tui/src/core/engine/tool_catalog.rs`. `tool_search` is synthetic and is
+always active. An authority boundary may remove `agent` at the maximum child
+depth, but route size alone must not change this core vocabulary.
 
-`remember` is registered only when the user enables the built-in memory path;
-once present, it stays eager so a model can capture a durable preference without
-first discovering the tool. A memory-disabled runtime omits that registration and
-therefore exposes eight of the nine policy names.
+The direct schemas deliberately stay small:
 
-`update_plan` is **hidden from the model**. It is registered
-(`crates/tui/src/tools/plan.rs:401`) but `model_visible()` returns `false`
-(`plan.rs:408-413`), and `build_api_tools` filters on that (`registry.rs:235`),
-so it never enters the API tool list — which is what `tool_search` indexes.
-`tool_search` cannot surface it either. Its own description calls it a "Legacy
-compatibility tool for loading older Plan artifacts", and
-`update_plan_is_hidden_replay_compatibility` (`plan.rs:598-605`) pins that.
-
-Plan mode narrows the active set: `Bash` and `Run` drop out, leaving `File`,
-`Git`, `agent`, `tasks`, `todo_write`, `tool_search`, and — when memory is
-enabled — `remember` (`should_register_remember_tool`,
-`crates/tui/src/core/engine/tool_setup.rs:113-118`).
-
-The surface is action-based. A model calls one stable tool name and selects the
-operation through its `action` field instead of choosing among many synonymous
-single-purpose tools.
-
-### Core action tools
-
-| Tool | Actions | Purpose |
+| Tool | Input | Purpose |
 |---|---|---|
-| `Bash` | `run`, `wait`, `interact`, `cancel` | Run bounded commands, continue background work, send input, and cancel processes. |
-| `File` | `read`, `list`, `search_name`, `search_content`, `write`, `edit`, `patch` | Read, find, and modify workspace files with structured, workspace-aware results. |
-| `Git` | `status`, `diff`, `log`, `show`, `blame` | Inspect repository state and history without parsing shell output. |
-| `Run` | `tests`, `verifiers` | Run project tests or independent verifier gates with structured results. |
+| `read` | `path`, optional `offset`, optional `limit` | Read a bounded file window with explicit continuation or truncation notices. |
+| `write` | `path`, `content` | Create or replace a file. |
+| `edit` | `path`, `edits` | Apply one or more unambiguous text replacements against one original snapshot. |
+| `bash` | `command`, optional `timeout` | Run one cancellable foreground shell command and return a bounded tail. |
+| `agent` | delegated task and optional scope/context controls | Start or inspect focused child work. |
+| `todo_write` | complete replacement list of `{content, status}` items | Keep optional, agent-owned progress notes for genuinely multi-step work. |
+| `tool_search` | `query`, optional matching controls | Discover policy-allowed deferred tools and add selected schemas to this conversation's toolbox. |
 
-`Bash` appears only when the active session/profile permits shell use. Plan
-keeps it unavailable. In Act and Operate, the active permission posture,
-sandbox, command policy, trusted paths, repository law, and managed policy still
-apply. Full Access removes ordinary approval prompts; it does not bypass hard
-safety or repository-policy holds.
+Mode is an authority decision, not a synonym system. Plan, Work, and Operate
+use the same primitive identities. Plan centrally refuses `write`, `edit`, and
+`bash`; Work and Operate still pass those calls through approval, sandbox,
+trusted-path, repository-law, and managed-policy gates. Full Access changes
+ordinary approval behavior but does not bypass hard safety or repository law.
 
-`File` is capability-filtered by mode. Plan advertises its read-only actions;
-write/edit actions require Act or Operate, and `patch` also requires the
-apply-patch feature. The same read-before-edit, workspace, and policy checks used
-by the former spellings remain in force.
-
-### Coordination tools
-
-| Tool | Purpose |
-|---|---|
-| `agent` | Dispatch one focused sub-agent run and return an id, compact receipt, and transcript handle. |
-| `remember` | Append one terse durable preference or convention when the user has enabled built-in memory. |
-| `tasks` | Create, list, read, cancel, gate, and inspect durable task work through one action family. |
-| `update_plan` | Registered but not model-visible; replays older Plan artifacts only. New work uses `todo_write` plus a normal Plan-mode response. |
-| `todo_write` | Replace the concrete To-do / Work progress projection for the active thread or durable task. |
-| `tool_search` | Discover and load a deferred tool only when the current turn needs it. |
-
-`todo_write` writes the **sole canonical Work ledger**. `update_plan` is
-conversational reasoning — strategy, constraints, and route notes that help a
-reader understand the approach. It is not a second Work surface, and plan-only
-state never becomes model-facing Work grounding.
-
-That distinction is enforced at the request boundary (#3983): the current To-do
-snapshot is rendered by one bounded renderer
-(`crates/tui/src/work_grounding.rs`) and appended to each parent turn-loop and
-sub-agent step request as a transient `<codewhale:work_state>` block. Forked
-sub-agents and `/relay` handoffs embed the byte-identical body. An empty To-do
-emits no block at all.
+`update_plan` remains registered only for saved-artifact compatibility and is
+not model-visible. `tasks`, `Git`, `Run`, `Web`, `remember`, and other
+specialized capabilities are searchable rather than first-turn ceremony.
 
 ## Deferred and dynamic tools
 
-`Web` is a conditional, deferred action tool with `search`, `fetch`, and `wait`
-actions. It is discoverable through `tool_search` only when the active network
-policy and runtime backend permit it; it is not one of the nine default-active
-names.
+`Web` is conditional and deferred. It is discoverable through `tool_search`
+only when the active policy and runtime backend permit it. Read-only
+children retain its read-only search/fetch evidence path; read-only authority
+does not mean "unable to research."
 
 The durable `github`, `automation`, and `rlm` action families are also deferred
 by default. `rlm` owns `open`, `eval`, `configure`, and `close` actions for a
@@ -113,7 +69,24 @@ dependencies are available.
 
 MCP tools are dynamic. Successfully connected servers register names such as
 `mcp_<server>_<tool>` from `~/.codewhale/mcp.json`; a failed or disabled server
-must not be presented as an available model tool.
+must not be presented as available. MCP and plugin tools are deferred unless a
+user explicitly names them in `[tools].always_load`.
+
+### Conversation toolbox cache
+
+A successful search activation is remembered by name for the current
+conversation. The cache holds at most eight deferred names and 16 KiB of
+serialized schemas, evicts least-recently-used entries, and revalidates every
+entry against the current catalog and policy before advertising it again. A
+session sync clears it. The cache cannot resurrect a removed, denied, or
+newly-eager tool.
+
+Each subagent gets its own policy-filtered deferred catalog, always-present
+`tool_search`, and bounded activation cache. Forked messages and instructions
+remain in context, but the child cache starts empty and discovers tools locally;
+neither forked context nor a cache can become a discovery allowlist. A child can
+still search every tool its own authority permits, including Web search/fetch
+for read-only research roles.
 
 ## Inspect the model-client request tool payload
 
@@ -142,75 +115,38 @@ the separate route and permission receipts for those facts.
 
 Modes and permission postures are separate controls:
 
-- **Plan** is read-only. It exposes the read-only `File` projection and other
-  safe inspection capabilities, but no shell or file mutation.
-- **Act** is ordinary interactive execution.
-- **Operate** uses the same direct-tool authority as Act while preferring Fleet
+- **Plan** keeps the stable primitive vocabulary but centrally refuses shell
+  execution and file mutation.
+- **Work** is ordinary interactive execution.
+- **Operate** uses the same direct-tool authority as Work while preferring Fleet
   workers for independent, parallel, isolated, background, or long-running work.
 - **Ask**, **Auto-Review**, and **Full Access** control approval behavior within
-  an action-capable mode. They never widen a Plan turn into write access.
+  an action-capable mode. They never widen Plan into write or shell access.
 
 See `docs/MODES.md` for the full mode and posture contract.
 
-## Removed spellings
+## Compatibility names
 
-The per-action single-purpose names below are **not registered**. They were
-deleted, not hidden: a call to any of them fails with `tool '<name>' is not
-registered`, because `resolve` has deliberately no fuzzy step
-(`crates/tui/src/tools/registry.rs:313-316` — "a hallucinated name must fail,
-never dispatch"). There is no replay path for them; a transcript that calls one
-will not re-execute.
+The model-facing contract is the lowercase core above. Saved v0.9.x
+transcripts and protocol clients may still call exact hidden compatibility
+names such as `File`, `Bash`, and the older single-operation file names. Those
+names never enter a new model catalog or `tool_search` result.
 
-| Removed spelling | Use instead |
-|---|---|
-| `exec_shell`, `exec_shell_wait`, `exec_wait`, `exec_shell_interact`, `exec_interact`, `exec_shell_cancel` | `Bash`: `run`, `wait`, `interact`, `cancel` |
-| `read_file`, `list_dir`, `grep_files`, `file_search`, `write_file`, `edit_file` | `File`: `read`, `list`, `search_content`, `search_name`, `write`, `edit` |
-| `git_status`, `git_diff`, `git_log`, `git_show`, `git_blame` | `Git`: matching action |
-| `run_tests`, `run_verifiers` | `Run`: `tests`, `verifiers` |
-| `web_search`, `fetch_url`, `wait_for_dev_server` | `Web`: `search`, `fetch`, `wait` |
+Compatibility is execution compatibility, not fuzzy aliasing: an exact legacy
+call must reach the handler for its legacy schema. It must not be rewritten
+into a small lowercase primitive whose input shape is different. Unknown or
+retired names still fail closed instead of guessing a destination.
 
-Enforced by `shell_surface_contains_only_the_canonical_bash_tool`
-(registry.rs:2290, `"{alias} must be removed"`) and the retired-name loop at
-registry.rs:2066-2088 (`"{retired} must stay removed"` /
-`"{retired} must not be advertised"`).
-
-## Replay-only aliases
-
-There is exactly one: `apply_patch`.
-
-| Replay-only spelling | Canonical action |
-|---|---|
-| `apply_patch` | `File`: `patch` (also DeepSeek Responses' one custom tool) |
-
-It is registered as a `FileTool::alias` (registry.rs:831) and hidden from the
-advertised catalog — `registry.rs:2092-2093` asserts both halves: `contains`
-is true, and no API tool carries the name.
-
-Every other legacy spelling that used to be listed here is **removed, not
-hidden**. Calling one hard-errors as an unknown tool; there is no replay
-compatibility for them. Tests pin the removals:
-
-| Removed spellings | Use instead | Pinned by |
-|---|---|---|
-| `task_create`, `task_list`, `task_read`, `task_cancel`, `task_gate_run` | `tasks` | `runtime_task_families_expose_only_canonical_tools`, registry.rs:2337-2371 |
-| `pr_attempt_*` | `tasks` | same test |
-| `github_issue_context`, `github_pr_context`, `github_comment`, `github_close_issue`, `github_close_pr` | `github` | same test |
-| `automation_create/list/read/update/pause/resume/delete/run` | `automation` | same test |
-| `rlm_session_objects`, `rlm_open`, `rlm_eval`, `rlm_configure`, `rlm_close` | `rlm` | `rlm_is_the_only_registered_session_surface`, registry.rs:1519-1538 |
-| `todo_add/update/list`, `checklist_add/list` (removed); `work_update`, `TodoWrite`, `todo`, `checklist_write/update` (registered hidden aliases) | `todo_write` | registry alias assertions (`registry.rs`) |
-
-This matches the "Removed spellings" section above rather than contradicting
-it. Replay compatibility does not make an alias a supported spelling for new
-model calls; `apply_patch` execution must stay behaviorally equivalent to
-`File`: `patch` and must not be added back to the advertised catalog.
+Specialized native families such as `Git`, `Run`, and `Web` are not aliases for
+the lowercase core. They remain real, policy-filtered deferred tools and are
+loaded through `tool_search` when needed.
 
 ## Long-running work
 
-Use `Bash` with `action: "run"` for bounded commands. Set its background option
-for work that may outlive a normal foreground wait, then use `wait`, `interact`,
-or `cancel` against the returned process id. Live shell jobs are also visible in
-`/jobs`; process-local jobs must be marked stale after restart rather than shown
-as reattached processes.
+`bash` runs one cancellable foreground command. It does not carry background,
+TTY, wait, interact, or cancel action fields. Stateful process and terminal
+control is specialized functionality that must be discovered explicitly; it
+does not enlarge the first-turn shell schema.
 
 Use `tasks` when the work itself needs a durable lifecycle, structured gates,
 artifacts, replayable timelines, or a stable task id. Large tool results should
@@ -308,8 +244,9 @@ catalog and alias visibility at the exact candidate SHA:
 
 ```bash
 python3 scripts/measure-runtime-contract.py
-cargo test -p codewhale-tui --lib --locked tools::registry::tests::shell_surface_contains_only_the_canonical_bash_tool -- --exact
-cargo test -p codewhale-tui --lib --locked tools::registry::tests::runtime_task_families_expose_only_canonical_tools -- --exact
+cargo test -p codewhale-tui --lib --locked core::engine::tests::default_active_contract_keeps_discovery_and_core_tools_eager -- --exact
+cargo test -p codewhale-tui --lib --locked tools::file_tool::tests::primitive_schemas_are_separate_and_small_contract_shaped -- --exact
+cargo test -p codewhale-tui --lib --locked tools::shell::tests::lowercase_bash_schema_is_small_contract -- --exact
 cargo test --locked -p codewhale-tui --lib core::engine::tests::print_mode_tool_catalog_metrics -- --ignored --exact --nocapture
 ```
 
@@ -318,8 +255,7 @@ exits 0 with "0 passed; N filtered out" when a filter matches nothing, so a
 misspelled filter is indistinguishable from a pass. (Three filters printed here
 before v0.9.4 named tests that did not exist.)
 
-The provider-free full-policy receipt enables built-in memory and must report the
-nine default-active names listed above. A memory-disabled receipt truthfully omits
-`remember` and reports eight. A separate repository-wide tool count may include deferred, dynamic,
-feature-gated, and replay-only registrations; it is not the number of tools
-placed in the first-turn model catalog.
+The provider-free receipt must report the seven default-active names listed
+above. A separate repository-wide tool count may include deferred, dynamic,
+feature-gated, and compatibility-only registrations; it is not the number of
+tools placed in the first-turn model catalog.

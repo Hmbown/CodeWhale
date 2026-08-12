@@ -5,7 +5,7 @@ import type { ChromeDict } from "../types";
  * the old "local-first" tag is gone ("any model, on your machine" instead).
  * Terminology follows the TUI locale pack (`crates/tui/locales/uk.json`):
  * режим дозволів for the permission posture, провайдер, репозиторій,
- * композер, міркування. Plan / Act / Operate and Ask / Auto-Review /
+ * композер, міркування. Plan / Work / Operate and Ask / Auto-Review /
  * Full Access stay literal there and stay literal here.
  *
  * Secondary nav labels pair the Ukrainian primary with a short English

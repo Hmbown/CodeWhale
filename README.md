@@ -57,7 +57,7 @@ In the TUI: `/model` switches provider and model together, `/fleet` builds and
 runs the team — one role at a time, each with its own model — `/undo` reverts
 the last turn, and `/restore <N>` rolls the workspace back to an earlier
 snapshot (bare `/restore` lists them). `Tab`
-cycles Plan / Act / Operate when the composer is empty — with text in it, `Tab`
+cycles Plan / Work / Operate when the composer is empty — with text in it, `Tab`
 completes slash commands and `@` mentions instead. `Shift+Tab` cycles the
 Ask / Auto-Review / Full Access permission posture at any time. `!` runs a
 shell command through the normal approval path.

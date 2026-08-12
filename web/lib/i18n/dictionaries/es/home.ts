@@ -51,7 +51,7 @@ export const home: HomeDict = {
 
   proofHeading: "Un shell de terminal submarino. Cualquier modelo. En tu máquina.",
   proofBody:
-    "Trae el modelo que ya usas: alojado, de gateway o local. Plan / Act / Operate y las posturas de permisos explícitas mantienen la inmersión bajo tu control.",
+    "Trae el modelo que ya usas: alojado, de gateway o local. Plan / Work / Operate y las posturas de permisos explícitas mantienen la inmersión bajo tu control.",
 
   sealDecides: "法",
   decidesEyebrow: "Mira cómo decide",

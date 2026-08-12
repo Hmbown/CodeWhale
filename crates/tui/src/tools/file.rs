@@ -1,24 +1,27 @@
-//! File system tools. These structs are the internal handlers behind the single
-//! model-facing `File` tool; their `name()` values (`read_file`, `write_file`,
-//! `edit_file`, `list_dir`, …) are dispatch keys inside `file_tool.rs` and are
-//! NOT registered or advertised — see `crates/tui/src/tools/registry.rs:2066`.
-//! Model-facing text must name `File` plus an `action`, never these.
+//! File system engines for the lowercase `read`, `write`, and `edit` primitives
+//! plus deferred workspace helpers such as `list_dir`. The older `File`,
+//! `read_file`, `write_file`, and `edit_file` names remain registered but hidden
+//! so saved sessions can replay their original schemas and behavior.
 //!
 //! These tools provide safe file system operations within the workspace,
 //! with path validation to prevent escaping the workspace boundary.
 
 use super::diff_format::make_unified_diff;
 use super::spec::{
-    ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec,
-    lsp_diagnostics_for_paths, optional_str, optional_u64, required_str,
+    ApprovalRequirement, RichToolResult, ToolCapability, ToolContext, ToolError, ToolResult,
+    ToolSpec, lsp_diagnostics_for_paths, optional_str, optional_u64, required_str,
 };
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 use tokio_util::sync::CancellationToken;
+use unicode_normalization::UnicodeNormalization;
 
 // === Content-hash edit guards (#3979) ===
 
@@ -104,10 +107,9 @@ fn verify_expected_hash(
 
 /// Shared schema text for the optional guard parameter.
 ///
-/// `File` re-sends its schema every turn of every session and is held to a byte
-/// budget (`file_tool.rs::schema_stays_within_its_catalog_byte_budget`), so
-/// this is instruction only — what to pass and what happens on mismatch. The
-/// rationale lives in the doc comments here, which cost the model nothing.
+/// The hidden compatibility schema still has a byte budget, so this is only the
+/// instruction the legacy caller needs: what to pass and what happens on a
+/// mismatch. The rationale stays in doc comments rather than schema bytes.
 pub(super) const EXPECTED_HASH_DESCRIPTION: &str = "The `content_hash` from a prior read; the write is refused and the file left unchanged if it changed since";
 
 // === Cross-harness parameter aliases ===
@@ -451,8 +453,298 @@ fn is_codewhale_credential_path(path: &Path) -> bool {
     false
 }
 
+// === small-contract-compatible primitive implementation helpers ===
+
+const READ_MAX_LINES: usize = 2_000;
+const READ_MAX_BYTES: usize = 50 * 1024;
+
+type FileMutationMutex = AsyncMutex<()>;
+
+/// File primitives can also be invoked outside the native engine's global
+/// execution lock (for example by an embedded host). Keep writes to one path
+/// ordered in those hosts without exposing any locking ceremony in the tool
+/// schema or result.
+fn file_mutation_lock(path: &Path) -> Result<Arc<FileMutationMutex>, ToolError> {
+    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<FileMutationMutex>>>> = OnceLock::new();
+    let locks = LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut locks = locks.lock().map_err(|_| {
+        ToolError::execution_failed(
+            "file mutation queue is unavailable because its lock was poisoned",
+        )
+    })?;
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    if let Some(lock) = locks.get(path).and_then(Weak::upgrade) {
+        return Ok(lock);
+    }
+    let lock = Arc::new(AsyncMutex::new(()));
+    locks.insert(path.to_path_buf(), Arc::downgrade(&lock));
+    Ok(lock)
+}
+
+async fn acquire_file_mutation(
+    path: &Path,
+    context: &ToolContext,
+) -> Result<OwnedMutexGuard<()>, ToolError> {
+    let lock = file_mutation_lock(path)?;
+    if let Some(cancel) = context.cancel_token.as_ref() {
+        tokio::select! {
+            guard = lock.lock_owned() => Ok(guard),
+            () = cancel.cancelled() => Err(ToolError::cancelled("Operation aborted")),
+        }
+    } else {
+        Ok(lock.lock_owned().await)
+    }
+}
+
+fn check_file_operation_cancelled(context: &ToolContext) -> Result<(), ToolError> {
+    if context
+        .cancel_token
+        .as_ref()
+        .is_some_and(CancellationToken::is_cancelled)
+    {
+        return Err(ToolError::cancelled("Operation aborted"));
+    }
+    Ok(())
+}
+
+async fn contract_mutation_result(
+    context: &ToolContext,
+    file_path: &Path,
+    requested_path: &str,
+    before: &str,
+    after: &str,
+    outcome: &str,
+    summary: String,
+) -> ToolResult {
+    let paths = [file_path.to_path_buf()];
+    let diagnostics = lsp_diagnostics_for_paths(context, &paths).await;
+    ToolResult::success(summary).with_metadata(json!({
+        "event": "file.mutation",
+        "lsp_diagnostics": diagnostics,
+        "mutation": {
+            "diff": make_unified_diff(requested_path, before, after),
+            "files": [{ "path": requested_path, "outcome": outcome }],
+            "renames": []
+        }
+    }))
+}
+
+fn reject_primitive_unknown(input: &Value, tool: &str, allowed: &[&str]) -> Result<(), ToolError> {
+    let object = input
+        .as_object()
+        .ok_or_else(|| ToolError::invalid_input(format!("{tool} input must be an object")))?;
+    let unexpected = object
+        .keys()
+        .filter(|key| !allowed.contains(&key.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if unexpected.is_empty() {
+        return Ok(());
+    }
+    Err(ToolError::invalid_input(format!(
+        "unexpected {tool} parameter(s): {}",
+        unexpected.join(", ")
+    )))
+}
+
+fn contract_line_number(input: &Value, key: &str) -> Result<Option<usize>, ToolError> {
+    let Some(value) = input.get(key) else {
+        return Ok(None);
+    };
+    let number = value
+        .as_u64()
+        .ok_or_else(|| ToolError::invalid_input(format!("{key} must be a non-negative integer")))?;
+    usize::try_from(number)
+        .map(Some)
+        .map_err(|_| ToolError::invalid_input(format!("{key} exceeds platform range")))
+}
+
+fn primitive_image_mime(bytes: &[u8]) -> Option<&'static str> {
+    crate::image_attach::sniff_media_type(bytes)
+        .or_else(|| bytes.starts_with(b"BM").then_some("image/bmp"))
+}
+
+fn contract_format_size(bytes: usize) -> String {
+    if bytes < 1024 {
+        format!("{bytes}B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1}KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1}MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
+#[derive(Debug)]
+struct ContractReadWindow {
+    content: String,
+    shown_lines: usize,
+    truncated_by_bytes: bool,
+    truncated_by_lines: bool,
+    first_line_too_large: bool,
+}
+
+/// Retain only complete lines from the head, stopping at its own independent
+/// line and UTF-8 byte budgets. A terminal newline is content but does not add
+/// a phantom line to the truncation counter.
+fn contract_read_window(content: &str) -> ContractReadWindow {
+    let mut lines = if content.is_empty() {
+        Vec::new()
+    } else {
+        content.split('\n').collect::<Vec<_>>()
+    };
+    if content.ends_with('\n') {
+        let _ = lines.pop();
+    }
+    if lines
+        .first()
+        .is_some_and(|line| line.len() > READ_MAX_BYTES)
+    {
+        return ContractReadWindow {
+            content: String::new(),
+            shown_lines: 0,
+            truncated_by_bytes: true,
+            truncated_by_lines: false,
+            first_line_too_large: true,
+        };
+    }
+
+    if lines.len() <= READ_MAX_LINES && content.len() <= READ_MAX_BYTES {
+        return ContractReadWindow {
+            content: content.to_string(),
+            shown_lines: lines.len(),
+            truncated_by_bytes: false,
+            truncated_by_lines: false,
+            first_line_too_large: false,
+        };
+    }
+
+    let mut kept = Vec::new();
+    let mut bytes = 0usize;
+    let mut truncated_by_bytes = false;
+    for line in lines.iter().take(READ_MAX_LINES) {
+        let next = line.len() + usize::from(!kept.is_empty());
+        if bytes.saturating_add(next) > READ_MAX_BYTES {
+            truncated_by_bytes = true;
+            break;
+        }
+        kept.push(*line);
+        bytes += next;
+    }
+    let shown_lines = kept.len();
+    ContractReadWindow {
+        content: kept.join("\n"),
+        shown_lines,
+        truncated_by_bytes,
+        truncated_by_lines: !truncated_by_bytes,
+        first_line_too_large: false,
+    }
+}
+
 /// Tool for reading UTF-8 files from the workspace.
 pub struct ReadFileTool;
+
+impl ReadFileTool {
+    /// Execute the lowercase `read` primitive without leaking the hidden
+    /// Codewhale hash/snapshot protocol into its small-contract-shaped model contract.
+    pub(super) async fn execute_contract_read(
+        input: Value,
+        context: &ToolContext,
+    ) -> Result<RichToolResult, ToolError> {
+        reject_primitive_unknown(&input, "read", &["path", "offset", "limit"])?;
+        let path_str = required_str(&input, "path")?;
+        let offset = contract_line_number(&input, "offset")?;
+        let limit = contract_line_number(&input, "limit")?;
+        let file_path = context.resolve_path(path_str)?;
+        if is_codewhale_credential_path(&file_path) {
+            return Err(ToolError::permission_denied(
+                "read cannot expose Codewhale configuration or credential-store files; use `codewhale config list` or `codewhale auth status` for safe inspection",
+            ));
+        }
+        check_file_operation_cancelled(context)?;
+        let bytes = fs::read(&file_path).map_err(|error| {
+            ToolError::execution_failed(format!("Failed to read {}: {error}", file_path.display()))
+        })?;
+        check_file_operation_cancelled(context)?;
+        if let Some(mime_type) = primitive_image_mime(&bytes) {
+            let prepared = crate::image_attach::prepare_tool_image_bytes(&bytes, mime_type);
+            context.note_file_read(&file_path);
+            return Ok(RichToolResult::with_content_blocks(
+                ToolResult::success(prepared.note).with_metadata(json!({
+                    "evidence_routing": "inline"
+                })),
+                prepared.block.into_iter().collect(),
+            ));
+        }
+
+        // The small-contract reader decodes non-image buffers as UTF-8 text with replacement
+        // characters instead of refusing the whole read on one invalid byte.
+        let text = String::from_utf8_lossy(&bytes);
+        let all_lines = text.split('\n').collect::<Vec<_>>();
+        let requested_offset = offset.unwrap_or(1);
+        let start = requested_offset.saturating_sub(1);
+        if start >= all_lines.len() {
+            return Err(ToolError::execution_failed(format!(
+                "Offset {requested_offset} is beyond end of file ({} lines total)",
+                all_lines.len()
+            )));
+        }
+
+        let available = &all_lines[start..];
+        let selected = match limit {
+            Some(limit) => &available[..available.len().min(limit)],
+            None => available,
+        };
+        let selected_content = selected.join("\n");
+        let window = contract_read_window(&selected_content);
+        let first_display = start + 1;
+        let mut output = if window.first_line_too_large {
+            let size = selected.first().map_or(0, |line| line.len());
+            format!(
+                "[Line {first_display} is {}, exceeds {} limit. Use bash: sed -n '{first_display}p' {path_str} | head -c {READ_MAX_BYTES}]",
+                contract_format_size(size),
+                contract_format_size(READ_MAX_BYTES)
+            )
+        } else {
+            window.content
+        };
+
+        if !window.first_line_too_large && (window.truncated_by_bytes || window.truncated_by_lines)
+        {
+            let last_display = first_display + window.shown_lines.saturating_sub(1);
+            let next_offset = last_display + 1;
+            if window.truncated_by_bytes {
+                output.push_str(&format!(
+                    "\n\n[Showing lines {first_display}-{last_display} of {} (50KB limit). Use offset={next_offset} to continue.]",
+                    all_lines.len()
+                ));
+            } else {
+                output.push_str(&format!(
+                    "\n\n[Showing lines {first_display}-{last_display} of {}. Use offset={next_offset} to continue.]",
+                    all_lines.len()
+                ));
+            }
+        } else if limit.is_some() {
+            let consumed = selected.len();
+            if start + consumed < all_lines.len() {
+                let remaining = all_lines.len() - (start + consumed);
+                let next_offset = start + consumed + 1;
+                output.push_str(&format!(
+                    "\n\n[{remaining} more lines in file. Use offset={next_offset} to continue.]"
+                ));
+            }
+        }
+
+        // This internal observation keeps hidden legacy edit replay working,
+        // but no hash or read-before-edit ceremony reaches the lowercase
+        // schema or result.
+        context.note_file_read(&file_path);
+        Ok(RichToolResult::plain(
+            ToolResult::success(output).with_metadata(json!({
+                "evidence_routing": "inline"
+            })),
+        ))
+    }
+}
 
 #[async_trait]
 impl ToolSpec for ReadFileTool {
@@ -637,12 +929,16 @@ impl ToolSpec for ReadFileTool {
         context.note_file_read(&file_path);
 
         // The window is a slice; the guard needs the whole file. A second
-        // streaming pass digests the rest without materializing it; failures
-        // only cost the guard. FIFOs are skipped: re-opening one blocks.
-        let hash = std::fs::metadata(&file_path)
-            .ok()
-            .filter(|meta| meta.is_file())
-            .and_then(|_| hash_file_streaming(&file_path).ok());
+        // streaming pass digests the rest without ever materializing it. A
+        // failure here only costs the guard — the read itself already
+        // succeeded, so the window is still returned, just without a hash to
+        // pass back to `edit`. Special files are skipped: reopening a FIFO or
+        // device can block indefinitely (or re-consume a one-shot stream),
+        // and a stream has no stable content an edit guard could pin.
+        let hash = match fs::metadata(&file_path) {
+            Ok(meta) if meta.is_file() => hash_file_streaming(&file_path).ok(),
+            _ => None,
+        };
 
         // `start_line > total_lines` is not an error — it lets the model
         // page past the end without raising. Returns an empty-content
@@ -827,7 +1123,7 @@ fn render_line_window(
     let mut output = format!("<file {attrs}>\n{shown_content}");
     if truncated_by_lines {
         output.push_str(&format!(
-            "\n[TRUNCATED] Showing lines {shown_first}-{shown_last} of {total_lines}. To continue, call File with action=\"read\" path=\"{path_str}\" start_line={next_start} max_lines={max_lines}\n"
+            "\n[TRUNCATED] Showing lines {shown_first}-{shown_last} of {total_lines}. To continue, call read with path=\"{path_str}\" offset={next_start} limit={max_lines}\n"
         ));
     }
     if truncated_by_bytes {
@@ -836,18 +1132,18 @@ fn render_line_window(
             // combination can ever reveal the elided middle, so the note must
             // not pretend otherwise — name the escape hatch that works.
             output.push_str(&format!(
-                "\n[TRUNCATED] Line {shown_first} alone exceeds 16KB; showing its head + tail. No `start_line`/`max_lines` window can reveal the middle of one line — use File action=\"search_content\" to find what you need inside it, or Bash (e.g. `cut -c` on that line) to slice by column.\n"
+                "\n[TRUNCATED] Line {shown_first} alone exceeds 50KB; showing its head + tail. No line window can reveal the middle of one line — use a searched shell slice when needed.\n"
             ));
         } else {
             let narrower = (shown_last - shown_first).div_ceil(2).max(1);
             output.push_str(&format!(
-                "\n[TRUNCATED] The selected range exceeded 16KB; showing head + tail of lines {shown_first}-{shown_last}. Re-read narrower windows to see the middle, e.g. start_line={shown_first} max_lines={narrower}, then advance start_line.\n"
+                "\n[TRUNCATED] The selected range exceeded 50KB; showing head + tail of lines {shown_first}-{shown_last}. Re-read narrower windows to see the middle, e.g. offset={shown_first} limit={narrower}, then advance offset.\n"
             ));
         }
     }
     output.push_str("</file>");
 
-    // The file tool self-bounds at 16 KiB and carries its own continuation
+    // The file tool self-bounds at 50 KiB and carries its own continuation
     // contract (`next_start_line`), so the large-output spillover envelope
     // must never re-wrap a read result with a second, weaker truncation.
     ToolResult::success(output).with_metadata(json!({
@@ -1000,6 +1296,64 @@ async fn read_pdf_with_command(
 /// Tool for writing UTF-8 files to the workspace.
 pub struct WriteFileTool;
 
+impl WriteFileTool {
+    /// Execute the small-contract-shaped lowercase writer. Compatibility-only hash
+    /// arguments remain on the hidden `write_file`/`File` paths.
+    pub(super) async fn execute_contract_write(
+        input: Value,
+        context: &ToolContext,
+    ) -> Result<ToolResult, ToolError> {
+        reject_primitive_unknown(&input, "write", &["path", "content"])?;
+        let path_str = required_str(&input, "path")?;
+        let file_content = required_str(&input, "content")?;
+        let file_path = context.resolve_path(path_str)?;
+        let mutation_guard = acquire_file_mutation(&file_path, context).await?;
+        check_file_operation_cancelled(context)?;
+
+        let existed_before = file_path.exists();
+        let prior_bytes = if existed_before {
+            fs::read(&file_path).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let prior_contents = String::from_utf8_lossy(&prior_bytes);
+
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                ToolError::execution_failed(format!(
+                    "Failed to create directory {}: {error}",
+                    parent.display()
+                ))
+            })?;
+        }
+        check_file_operation_cancelled(context)?;
+        crate::utils::write_atomic_workspace(&file_path, file_content.as_bytes()).map_err(
+            |error| {
+                ToolError::execution_failed(format!(
+                    "Failed to write {}: {error}",
+                    file_path.display()
+                ))
+            },
+        )?;
+        check_file_operation_cancelled(context)?;
+        context.note_file_read(&file_path);
+        drop(mutation_guard);
+
+        let outcome = if existed_before { "updated" } else { "created" };
+        let utf16_units = file_content.encode_utf16().count();
+        Ok(contract_mutation_result(
+            context,
+            &file_path,
+            path_str,
+            prior_contents.as_ref(),
+            file_content,
+            outcome,
+            format!("Successfully wrote {utf16_units} bytes to {path_str}"),
+        )
+        .await)
+    }
+}
+
 #[async_trait]
 impl ToolSpec for WriteFileTool {
     fn name(&self) -> &'static str {
@@ -1137,6 +1491,411 @@ impl ToolSpec for WriteFileTool {
 
 /// Tool for search/replace editing of files.
 pub struct EditFileTool;
+
+#[derive(Clone, Debug)]
+struct ContractEdit {
+    index: usize,
+    old_text: String,
+    new_text: String,
+}
+
+#[derive(Clone, Debug)]
+struct ResolvedContractEdit {
+    index: usize,
+    start: usize,
+    end: usize,
+    replacement: String,
+}
+
+fn normalize_contract_line_endings(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+fn contract_line_ending(text: &str) -> &'static str {
+    match text.find('\n') {
+        Some(index) if index > 0 && text.as_bytes()[index - 1] == b'\r' => "\r\n",
+        _ => "\n",
+    }
+}
+
+fn restore_contract_line_endings(text: &str, ending: &str) -> String {
+    if ending == "\r\n" {
+        text.replace('\n', "\r\n")
+    } else {
+        text.to_string()
+    }
+}
+
+/// Fallback matching view used only after a literal match fails. It follows
+/// The small-contract normalization categories while leaving the public schema as
+/// exact-text replacement rather than teaching a second edit mode.
+fn normalize_contract_fuzzy(text: &str) -> String {
+    let compatible = text.nfkc().collect::<String>();
+    compatible
+        .split('\n')
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .chars()
+        .map(|ch| match ch {
+            '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}' => '\'',
+            '\u{201C}' | '\u{201D}' | '\u{201E}' | '\u{201F}' => '"',
+            '\u{2010}' | '\u{2011}' | '\u{2012}' | '\u{2013}' | '\u{2014}' | '\u{2015}'
+            | '\u{2212}' => '-',
+            '\u{00A0}' | '\u{2002}'..='\u{200A}' | '\u{202F}' | '\u{205F}' | '\u{3000}' => ' ',
+            other => other,
+        })
+        .collect()
+}
+
+fn text_matches(haystack: &str, needle: &str) -> Vec<(usize, usize)> {
+    if needle.is_empty() {
+        return Vec::new();
+    }
+    haystack
+        .match_indices(needle)
+        .map(|(start, matched)| (start, start + matched.len()))
+        .collect()
+}
+
+fn pi_edit_not_found(path: &str, index: usize, total: usize) -> ToolError {
+    if total == 1 {
+        ToolError::execution_failed(format!(
+            "Could not find the exact text in {path}. The old text must match exactly including all whitespace and newlines."
+        ))
+    } else {
+        ToolError::execution_failed(format!(
+            "Could not find edits[{index}] in {path}. The oldText must match exactly including all whitespace and newlines."
+        ))
+    }
+}
+
+fn pi_edit_duplicate(path: &str, index: usize, total: usize, matches: usize) -> ToolError {
+    if total == 1 {
+        ToolError::execution_failed(format!(
+            "Found {matches} occurrences of the text in {path}. The text must be unique. Please provide more context to make it unique."
+        ))
+    } else {
+        ToolError::execution_failed(format!(
+            "Found {matches} occurrences of edits[{index}] in {path}. Each oldText must be unique. Please provide more context to make it unique."
+        ))
+    }
+}
+
+fn prepare_pi_edit_input(mut input: Value) -> Result<Value, ToolError> {
+    let object = input
+        .as_object_mut()
+        .ok_or_else(|| ToolError::invalid_input("edit input must be an object"))?;
+    if let Some(Value::String(encoded)) = object.get("edits")
+        && let Ok(decoded) = serde_json::from_str::<Value>(encoded)
+        && decoded.is_array()
+    {
+        object.insert("edits".to_string(), decoded);
+    }
+
+    let legacy_old = object
+        .get("oldText")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let legacy_new = object
+        .get("newText")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    if let (Some(old_text), Some(new_text)) = (legacy_old, legacy_new) {
+        let legacy = json!({"oldText": old_text, "newText": new_text});
+        let mut edits = object
+            .get("edits")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        edits.push(legacy);
+        object.insert("edits".to_string(), Value::Array(edits));
+        object.remove("oldText");
+        object.remove("newText");
+    }
+    Ok(input)
+}
+
+fn parse_pi_edits(input: &Value) -> Result<Vec<ContractEdit>, ToolError> {
+    let raw = input
+        .get("edits")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ToolError::invalid_input("edits must be an array"))?;
+    if raw.is_empty() {
+        return Err(ToolError::invalid_input(
+            "edit requires at least one replacement in edits",
+        ));
+    }
+    raw.iter()
+        .enumerate()
+        .map(|(index, edit)| {
+            reject_primitive_unknown(edit, &format!("edits[{index}]"), &["oldText", "newText"])?;
+            let old_text = required_str(edit, "oldText")?;
+            let new_text = required_str(edit, "newText")?;
+            if old_text.is_empty() {
+                return Err(ToolError::invalid_input(format!(
+                    "edits[{index}].oldText must not be empty"
+                )));
+            }
+            Ok(ContractEdit {
+                index,
+                old_text: normalize_contract_line_endings(old_text),
+                new_text: normalize_contract_line_endings(new_text),
+            })
+        })
+        .collect()
+}
+
+fn apply_resolved_edits(base: &str, edits: &[ResolvedContractEdit], offset: usize) -> String {
+    let mut updated = base.to_string();
+    for edit in edits.iter().rev() {
+        updated.replace_range(
+            edit.start.saturating_sub(offset)..edit.end.saturating_sub(offset),
+            &edit.replacement,
+        );
+    }
+    updated
+}
+
+fn lines_with_endings(text: &str) -> Vec<&str> {
+    if text.is_empty() {
+        Vec::new()
+    } else {
+        text.split_inclusive('\n').collect()
+    }
+}
+
+fn line_spans(text: &str) -> Vec<(usize, usize)> {
+    let mut offset = 0usize;
+    lines_with_endings(text)
+        .into_iter()
+        .map(|line| {
+            let span = (offset, offset + line.len());
+            offset = span.1;
+            span
+        })
+        .collect()
+}
+
+fn touched_line_range(
+    spans: &[(usize, usize)],
+    edit: &ResolvedContractEdit,
+) -> Result<(usize, usize), ToolError> {
+    let start = spans
+        .iter()
+        .position(|(line_start, line_end)| edit.start >= *line_start && edit.start < *line_end)
+        .ok_or_else(|| ToolError::execution_failed("edit match fell outside the file"))?;
+    let mut end = start;
+    while end < spans.len() && spans[end].1 < edit.end {
+        end += 1;
+    }
+    if end >= spans.len() {
+        return Err(ToolError::execution_failed(
+            "edit match fell outside the file",
+        ));
+    }
+    Ok((start, end + 1))
+}
+
+fn apply_fuzzy_edits_preserving_other_lines(
+    original: &str,
+    normalized: &str,
+    edits: &[ResolvedContractEdit],
+) -> Result<String, ToolError> {
+    let original_lines = lines_with_endings(original);
+    let spans = line_spans(normalized);
+    if original_lines.len() != spans.len() {
+        return Err(ToolError::execution_failed(
+            "fuzzy edit could not preserve the file's untouched lines",
+        ));
+    }
+
+    #[derive(Debug)]
+    struct Group {
+        start_line: usize,
+        end_line: usize,
+        edits: Vec<ResolvedContractEdit>,
+    }
+
+    let mut groups: Vec<Group> = Vec::new();
+    for edit in edits {
+        let (start_line, end_line) = touched_line_range(&spans, edit)?;
+        if let Some(group) = groups.last_mut()
+            && start_line < group.end_line
+        {
+            group.end_line = group.end_line.max(end_line);
+            group.edits.push(edit.clone());
+        } else {
+            groups.push(Group {
+                start_line,
+                end_line,
+                edits: vec![edit.clone()],
+            });
+        }
+    }
+
+    let mut result = String::new();
+    let mut original_line = 0usize;
+    for group in groups {
+        for line in &original_lines[original_line..group.start_line] {
+            result.push_str(line);
+        }
+        let group_start = spans[group.start_line].0;
+        let group_end = spans[group.end_line - 1].1;
+        result.push_str(&apply_resolved_edits(
+            &normalized[group_start..group_end],
+            &group.edits,
+            group_start,
+        ));
+        original_line = group.end_line;
+    }
+    for line in &original_lines[original_line..] {
+        result.push_str(line);
+    }
+    Ok(result)
+}
+
+fn apply_pi_edits(base: &str, edits: &[ContractEdit], path: &str) -> Result<String, ToolError> {
+    let fuzzy_base = normalize_contract_fuzzy(base);
+    let initial = edits
+        .iter()
+        .map(|edit| {
+            if base.contains(&edit.old_text) {
+                Ok(false)
+            } else if fuzzy_base.contains(&normalize_contract_fuzzy(&edit.old_text)) {
+                Ok(true)
+            } else {
+                Err(pi_edit_not_found(path, edit.index, edits.len()))
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let use_fuzzy = initial.into_iter().any(|used| used);
+    let replacement_base = if use_fuzzy { fuzzy_base.as_str() } else { base };
+
+    let mut resolved = Vec::with_capacity(edits.len());
+    for edit in edits {
+        let exact = text_matches(replacement_base, &edit.old_text);
+        let fuzzy_old = normalize_contract_fuzzy(&edit.old_text);
+        let fuzzy_occurrences = text_matches(&fuzzy_base, &fuzzy_old).len();
+        if fuzzy_occurrences > 1 {
+            return Err(pi_edit_duplicate(
+                path,
+                edit.index,
+                edits.len(),
+                fuzzy_occurrences,
+            ));
+        }
+        let matches = if exact.is_empty() {
+            text_matches(replacement_base, &fuzzy_old)
+        } else {
+            exact
+        };
+        let Some(&(start, end)) = matches.first() else {
+            return Err(pi_edit_not_found(path, edit.index, edits.len()));
+        };
+        if matches.len() > 1 {
+            return Err(pi_edit_duplicate(
+                path,
+                edit.index,
+                edits.len(),
+                matches.len(),
+            ));
+        }
+        resolved.push(ResolvedContractEdit {
+            index: edit.index,
+            start,
+            end,
+            replacement: edit.new_text.clone(),
+        });
+    }
+
+    resolved.sort_by_key(|edit| (edit.start, edit.end));
+    for pair in resolved.windows(2) {
+        if pair[0].end > pair[1].start {
+            return Err(ToolError::execution_failed(format!(
+                "edits[{}] and edits[{}] overlap in {path}; merge them or target separate regions",
+                pair[0].index, pair[1].index
+            )));
+        }
+    }
+
+    let updated = if use_fuzzy {
+        apply_fuzzy_edits_preserving_other_lines(base, replacement_base, &resolved)?
+    } else {
+        apply_resolved_edits(replacement_base, &resolved, 0)
+    };
+    if updated == base {
+        return Err(ToolError::execution_failed(format!(
+            "No changes made to {path}; the replacement produced identical content."
+        )));
+    }
+    Ok(updated)
+}
+
+impl EditFileTool {
+    pub(super) async fn execute_pi_edits(
+        input: Value,
+        context: &ToolContext,
+    ) -> Result<ToolResult, ToolError> {
+        let input = prepare_pi_edit_input(input)?;
+        reject_primitive_unknown(&input, "edit", &["path", "edits"])?;
+        let path_str = required_str(&input, "path")?;
+        let edits = parse_pi_edits(&input)?;
+        let file_path = context.resolve_path(path_str)?;
+        let mutation_guard = acquire_file_mutation(&file_path, context).await?;
+        check_file_operation_cancelled(context)?;
+
+        fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&file_path)
+            .map_err(|error| {
+                ToolError::execution_failed(format!(
+                    "Could not edit file {path_str}: target must be readable and writable ({error})"
+                ))
+            })?;
+        check_file_operation_cancelled(context)?;
+        let raw_bytes = fs::read(&file_path).map_err(|error| {
+            ToolError::execution_failed(format!("Could not edit file {path_str}: {error}"))
+        })?;
+        check_file_operation_cancelled(context)?;
+        let raw = String::from_utf8_lossy(&raw_bytes).into_owned();
+        let (bom, without_bom) = raw
+            .strip_prefix('\u{FEFF}')
+            .map_or(("", raw.as_str()), |text| ("\u{FEFF}", text));
+        let ending = contract_line_ending(without_bom);
+        let normalized = normalize_contract_line_endings(without_bom);
+        let updated = apply_pi_edits(&normalized, &edits, path_str)?;
+        check_file_operation_cancelled(context)?;
+        let final_content = format!("{bom}{}", restore_contract_line_endings(&updated, ending));
+
+        crate::utils::write_atomic_workspace(&file_path, final_content.as_bytes()).map_err(
+            |error| {
+                ToolError::execution_failed(format!(
+                    "Failed to write {}: {error}",
+                    file_path.display()
+                ))
+            },
+        )?;
+        check_file_operation_cancelled(context)?;
+        context.note_file_read(&file_path);
+        drop(mutation_guard);
+
+        Ok(contract_mutation_result(
+            context,
+            &file_path,
+            path_str,
+            &raw,
+            &final_content,
+            "updated",
+            format!(
+                "Successfully replaced {} block(s) in {path_str}.",
+                edits.len()
+            ),
+        )
+        .await)
+    }
+}
 
 #[async_trait]
 impl ToolSpec for EditFileTool {
@@ -1810,11 +2569,11 @@ impl ToolSpec for ListDirTool {
     }
 
     fn model_visible(&self) -> bool {
-        false
+        true
     }
 
     fn description(&self) -> &'static str {
-        "List entries in a directory relative to the workspace. Use this instead of `ls`, `ls -la`, or `find . -maxdepth 1` in `Bash` for directory listings."
+        "List entries in a workspace directory. This bounded, sandbox-aware tool is searchable when the core read/write/edit/bash toolbox is not enough."
     }
 
     fn input_schema(&self) -> Value {

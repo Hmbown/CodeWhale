@@ -384,6 +384,8 @@ impl ToolSpec for AgentsFollowupTool {
             "continued_from_checkpoint": receipt.continued_from_checkpoint,
             "continuation_handle": receipt.continuation_handle,
             "note": receipt.note,
+            "child_route": self.manager.read().await.get_worker_record(&receipt.agent_id)
+                .and_then(|record| record.spec.child_route),
         });
         let mut tool_result = ToolResult::json(&payload)
             .map_err(|err| ToolError::execution_failed(err.to_string()))?;
@@ -393,6 +395,8 @@ impl ToolSpec for AgentsFollowupTool {
             "woke": receipt.woke,
             "continued_from_checkpoint": receipt.continued_from_checkpoint,
             "continuation_handle": receipt.continuation_handle,
+            "child_route": self.manager.read().await.get_worker_record(&receipt.agent_id)
+                .and_then(|record| record.spec.child_route),
         }));
         Ok(tool_result)
     }
@@ -496,6 +500,7 @@ impl ToolSpec for AgentsInterruptTool {
             "checkpoint_preserved": projection.checkpoint.is_some(),
             "continuable": projection.continuable,
             "projection": projection,
+            "child_route": projection.child_route,
         });
         let mut tool_result = ToolResult::json(&payload)
             .map_err(|err| ToolError::execution_failed(err.to_string()))?;
@@ -503,6 +508,7 @@ impl ToolSpec for AgentsInterruptTool {
             "action": "interrupt",
             "agent_id": payload["agent_id"],
             "checkpoint_preserved": payload["checkpoint_preserved"],
+            "child_route": payload["child_route"],
         }));
         Ok(tool_result)
     }

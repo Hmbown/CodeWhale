@@ -8,7 +8,7 @@ import type { ChromeDict } from "../types";
  *
  * Terminology is aligned with crates/tui/locales/es-419.json so the website
  * and the terminal name the same things the same way: modes stay literal
- * (Plan / Act / Operate), permission postures stay literal (Ask /
+ * (Plan / Work / Operate), permission postures stay literal (Ask /
  * Auto-Review / Full Access) under "postura de permisos", `Runtime`,
  * `Fleet`, and `Workflow` stay literal product nouns, and "receipt" is
  * "recibo".

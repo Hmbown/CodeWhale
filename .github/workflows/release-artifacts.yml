@@ -264,7 +264,15 @@ jobs:
           pattern: '*'
       - name: Create and checksum platform archives
         shell: bash
-        run: bash scripts/release/create-release-bundles.sh artifacts bundles
+        run: |
+          set -euo pipefail
+          source_date_epoch="$(git show -s --format=%ct "${{ inputs.source_sha }}")"
+          if [[ ! "${source_date_epoch}" =~ ^[0-9]+$ ]]; then
+            echo "Could not read a Unix timestamp for source commit ${{ inputs.source_sha }}" >&2
+            exit 1
+          fi
+          SOURCE_DATE_EPOCH="${source_date_epoch}" \
+            bash scripts/release/create-release-bundles.sh artifacts bundles
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: codewhale-bundles

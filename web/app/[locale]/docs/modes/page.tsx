@@ -8,8 +8,8 @@ export async function generateMetadata({ params }: { params: Promise<{ locale: s
     locale,
     title: isZh ? "模式 · Codewhale 文档" : "Modes · Codewhale Docs",
     description: isZh
-      ? "Plan、Act、Operate 三种运行模式与独立的权限姿态。"
-      : "Plan, Act, Operate modes and independent permission postures.",
+      ? "Plan、Work、Operate 三种运行模式与独立的权限姿态。"
+      : "Plan, Work, Operate modes and independent permission postures.",
   });
 }
 

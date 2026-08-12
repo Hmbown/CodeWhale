@@ -2443,10 +2443,9 @@ mod config_update_tests {
             effective_context_window: Some(128_000),
             cache_summary: true,
             focus: None,
-            live_state: None,
             runtime_cost_owner: None,
             workspace: None,
-            prior_summary: None,
+            image_input: crate::model_profile::SupportState::Unknown,
         };
 
         assert!(try_apply_model_and_compaction_update(

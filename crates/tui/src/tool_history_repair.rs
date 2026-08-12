@@ -64,34 +64,36 @@ fn repair_tool_call_pairs_inner(
     messages: &mut Vec<Message>,
     append_visible_receipt: bool,
 ) -> ToolRepairReceipt {
-    let mut call_message_by_id = HashMap::new();
-    let mut call_ids_in_order = Vec::new();
-    for (message_index, message) in messages.iter().enumerate() {
-        if message.role != "assistant" && message.role != crate::models::INTERRUPTED_ASSISTANT_ROLE
-        {
-            continue;
-        }
-        for block in &message.content {
-            if let ContentBlock::ToolUse { id, .. } = block
-                && !call_message_by_id.contains_key(id)
-            {
-                call_message_by_id.insert(id.clone(), message_index);
-                call_ids_in_order.push(id.clone());
-            }
-        }
-    }
-
-    let mut retained_results = HashSet::new();
+    let mut pending_call_message = None;
+    let mut pending_call_ids = Vec::new();
+    let mut retained_for_pending = HashSet::new();
+    let mut missing_by_message: HashMap<usize, Vec<String>> = HashMap::new();
+    let mut repaired_call_ids = Vec::new();
     let mut duplicate_result_ids = Vec::new();
     let mut orphan_result_ids = Vec::new();
     let mut keep_results = HashSet::new();
     let mut result_ordinal = 0usize;
-    let mut latest_assistant_message = None;
 
     for (message_index, message) in messages.iter().enumerate() {
         if message.role == "assistant" || message.role == crate::models::INTERRUPTED_ASSISTANT_ROLE
         {
-            latest_assistant_message = Some(message_index);
+            record_missing_results(
+                pending_call_message,
+                &pending_call_ids,
+                &retained_for_pending,
+                &mut missing_by_message,
+                &mut repaired_call_ids,
+            );
+            pending_call_ids = message
+                .content
+                .iter()
+                .filter_map(|block| match block {
+                    ContentBlock::ToolUse { id, .. } => Some(id.clone()),
+                    _ => None,
+                })
+                .collect();
+            pending_call_message = (!pending_call_ids.is_empty()).then_some(message_index);
+            retained_for_pending.clear();
         }
         for block in &message.content {
             let ContentBlock::ToolResult { tool_use_id, .. } = block else {
@@ -100,27 +102,25 @@ fn repair_tool_call_pairs_inner(
             let ordinal = result_ordinal;
             result_ordinal = result_ordinal.saturating_add(1);
 
-            let follows_known_call =
-                call_message_by_id
-                    .get(tool_use_id)
-                    .is_some_and(|call_index| {
-                        *call_index < message_index && latest_assistant_message == Some(*call_index)
-                    });
+            let follows_known_call = pending_call_message
+                .is_some_and(|call_index| call_index < message_index)
+                && pending_call_ids.iter().any(|id| id == tool_use_id);
             if !follows_known_call {
                 orphan_result_ids.push(tool_use_id.clone());
-            } else if !retained_results.insert(tool_use_id.clone()) {
+            } else if !retained_for_pending.insert(tool_use_id.clone()) {
                 duplicate_result_ids.push(tool_use_id.clone());
             } else {
                 keep_results.insert(ordinal);
             }
         }
     }
-
-    let repaired_call_ids: Vec<_> = call_ids_in_order
-        .into_iter()
-        .filter(|id| !retained_results.contains(id))
-        .collect();
-    let repaired_set: HashSet<_> = repaired_call_ids.iter().cloned().collect();
+    record_missing_results(
+        pending_call_message,
+        &pending_call_ids,
+        &retained_for_pending,
+        &mut missing_by_message,
+        &mut repaired_call_ids,
+    );
 
     let receipt = ToolRepairReceipt {
         repaired_call_ids,
@@ -139,24 +139,10 @@ fn repair_tool_call_pairs_inner(
     );
     let mut seen_result_ordinal = 0usize;
 
-    for message in original {
-        let missing_after_message: Vec<_> = if message.role == "assistant"
-            || message.role == crate::models::INTERRUPTED_ASSISTANT_ROLE
-        {
-            message
-                .content
-                .iter()
-                .filter_map(|block| match block {
-                    ContentBlock::ToolUse { id, .. } if repaired_set.contains(id) => {
-                        Some(id.clone())
-                    }
-                    _ => None,
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-
+    for (message_index, message) in original.into_iter().enumerate() {
+        let missing_after_message = missing_by_message
+            .remove(&message_index)
+            .unwrap_or_default();
         let mut filtered = message;
         filtered.content.retain(|block| {
             if matches!(block, ContentBlock::ToolResult { .. }) {
@@ -198,6 +184,28 @@ fn repair_tool_call_pairs_inner(
     }
     *messages = rebuilt;
     receipt
+}
+
+fn record_missing_results(
+    call_message: Option<usize>,
+    call_ids: &[String],
+    retained_results: &HashSet<String>,
+    missing_by_message: &mut HashMap<usize, Vec<String>>,
+    repaired_call_ids: &mut Vec<String>,
+) {
+    let Some(message_index) = call_message else {
+        return;
+    };
+    let missing = call_ids
+        .iter()
+        .filter(|id| !retained_results.contains(*id))
+        .cloned()
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return;
+    }
+    repaired_call_ids.extend(missing.iter().cloned());
+    missing_by_message.insert(message_index, missing);
 }
 
 #[cfg(test)]
@@ -246,6 +254,22 @@ mod tests {
         let before = messages.clone();
 
         let receipt = repair_tool_call_pairs(&mut messages);
+
+        assert!(receipt.is_empty());
+        assert_eq!(messages, before);
+    }
+
+    #[test]
+    fn repeated_provider_call_id_is_scoped_to_each_assistant_turn() {
+        let mut messages = vec![
+            tool_call("call-reused"),
+            tool_result("call-reused", "hydrated"),
+            tool_call("call-reused"),
+            tool_result("call-reused", "executed"),
+        ];
+        let before = messages.clone();
+
+        let receipt = repair_tool_call_pairs_for_provider(&mut messages);
 
         assert!(receipt.is_empty());
         assert_eq!(messages, before);

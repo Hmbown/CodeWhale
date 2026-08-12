@@ -4,6 +4,10 @@ const REPO = process.env.GITHUB_REPO ?? "Hmbown/CodeWhale";
 const GH = "https://api.github.com";
 const MIN_KNOWN_CONTRIBUTORS = 141;
 
+function isProductionBuild(): boolean {
+  return process.env.NEXT_PHASE === "phase-production-build";
+}
+
 function headers(token?: string): HeadersInit {
   const h: Record<string, string> = {
     Accept: "application/vnd.github+json",
@@ -15,6 +19,20 @@ function headers(token?: string): HeadersInit {
 }
 
 export async function fetchRepoStats(token?: string): Promise<RepoStats> {
+  // Live repository chrome is optional. Static generation must stay
+  // deterministic and offline; deployed requests and ISR refreshes populate
+  // the current values after the build.
+  if (isProductionBuild()) {
+    return {
+      stars: 0,
+      forks: 0,
+      openIssues: 0,
+      openPulls: 0,
+      contributors: MIN_KNOWN_CONTRIBUTORS,
+      fetchedAt: new Date().toISOString(),
+    };
+  }
+
   const [repoRes, contribRes, releaseRes] = await Promise.all([
     fetch(`${GH}/repos/${REPO}`, { headers: headers(token), next: { revalidate: 1800 } }),
     fetch(`${GH}/repos/${REPO}/contributors?per_page=1&anon=true`, {
@@ -158,6 +176,8 @@ function isBot(login: string): boolean {
  * unauthenticated that is ~13 requests/hour against GitHub's 60/hour/IP.
  */
 export async function fetchFeed(token?: string, limit = 30): Promise<FeedItem[]> {
+  if (isProductionBuild()) return [];
+
   const [issuesRes, pullsRes, releasesRes] = await Promise.all([
     fetch(
       `${GH}/repos/${REPO}/issues?state=all&per_page=${limit}&sort=updated&direction=desc`,

@@ -102,8 +102,8 @@ export const GUIDE_NEXT_LINKS: { href: string; label: LocalizedText; note: Local
     href: "/docs/modes",
     label: { en: "Modes and permission postures", zh: "模式与权限姿态" },
     note: {
-      en: "Plan / Act / Operate and Ask / Auto-Review / Full Access, exactly as the runtime enforces them.",
-      zh: "Plan / Act / Operate 与 Ask / Auto-Review / Full Access，与运行时实际执行的一致。",
+      en: "Plan / Work / Operate and Ask / Auto-Review / Full Access, exactly as the runtime enforces them.",
+      zh: "Plan / Work / Operate 与 Ask / Auto-Review / Full Access，与运行时实际执行的一致。",
     },
   },
   {

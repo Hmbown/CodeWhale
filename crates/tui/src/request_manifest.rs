@@ -67,7 +67,7 @@ const ESTIMATE_MARGIN_PERCENT: usize = 5;
 /// typed route provenance, and an explicit unavailable provider-usage receipt.
 /// v8 makes authoritative Work state and the active goal-budget terminal gate
 /// explicit fail-closed dependencies of an exact body.
-pub(crate) const MANIFEST_SCHEMA_VERSION: u32 = 8;
+pub(crate) const MANIFEST_SCHEMA_VERSION: u32 = 9;
 
 /// Exact readable base-prompt-only disclosure for the explicit
 /// `/preview-request base-prompt` mode. This deliberately returns no runtime
@@ -179,9 +179,6 @@ pub(crate) enum UnavailableReason {
     /// or queued sub-agent completion, or pending LSP diagnostics — and an
     /// inspection may neither run nor consume any of them.
     RuntimeTransformsBeforeSend,
-    /// The authoritative graph-backed Work projection could not be read. A
-    /// stale legacy To-do view must not be substituted into an exact preview.
-    WorkStateNotSnapshottable,
     /// The active goal has consumed its token budget, so the continuation
     /// gate stops before creating another provider request.
     GoalTokenBudgetExhausted,
@@ -218,9 +215,6 @@ impl UnavailableReason {
             }
             Self::RuntimeTransformsBeforeSend => {
                 "the turn loop would transform this request before sending it"
-            }
-            Self::WorkStateNotSnapshottable => {
-                "authoritative Work state cannot be snapshotted exactly"
             }
             Self::GoalTokenBudgetExhausted => {
                 "active goal token budget is exhausted; no outbound request is eligible"
