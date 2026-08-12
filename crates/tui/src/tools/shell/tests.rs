@@ -3543,3 +3543,31 @@ async fn signal_cleanup_kills_staged_persistent_service_group() {
     assert!(libc::WIFSIGNALED(status));
     assert_eq!(libc::WTERMSIG(status), libc::SIGKILL);
 }
+#[tokio::test]
+async fn win_probe_start_mcp_server_direct() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let marker = workspace.path().join("probe-marker");
+    let marker_literal = marker
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('\'', "\\'");
+    let start_probe =
+        format!("python -c \"__import__('pathlib').Path('{marker_literal}').write_text('ran')\"");
+    let pool = std::sync::Arc::new(tokio::sync::Mutex::new(
+        crate::tools::mcp::McpPool::default(),
+    ));
+    let tool = crate::tools::runtime_mcp::StartRuntimeMcpServer::new(pool);
+    let result = tool
+        .execute(
+            serde_json::json!({"server": start_probe, "name": "probe"}),
+            &crate::tools::spec::ToolContext::new(workspace.path().to_path_buf()),
+        )
+        .await;
+    println!("PROBE marker={marker:?}");
+    println!("PROBE result={result:?}");
+    println!("PROBE marker_exists={}", marker.exists());
+    assert!(
+        result.is_ok(),
+        "direct execute should be ok-ish: {result:?}"
+    );
+}
