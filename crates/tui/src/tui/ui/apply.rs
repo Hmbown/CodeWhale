@@ -1436,6 +1436,13 @@ pub(crate) async fn apply_command_result(
                         ));
                 }
             }
+            AppAction::OpenExtensionsManager => {
+                if app.view_stack.top_kind() != Some(ModalKind::ExtensionsManager) {
+                    app.view_stack.push(
+                        crate::tui::views::extensions_manager::ExtensionsManagerView::new(app),
+                    );
+                }
+            }
             AppAction::OpenFleetList => {
                 if app.view_stack.top_kind() != Some(ModalKind::FleetList) {
                     app.view_stack
@@ -1702,6 +1709,13 @@ pub(crate) fn apply_workspace_runtime_state(app: &mut App, config: &Config, work
     app.workspace = workspace.clone();
     app.coordination_detail = None;
     app.plugin_registry = app.plugin_registry.rediscover_for_workspace(&workspace);
+    // The Extensions Manager holds a detached registry snapshot. Rebuild it
+    // after a workspace handoff so no old selector can target the new
+    // workspace's registry state.
+    crate::tui::ui::overlays::refresh_extensions_manager_if_open(
+        app,
+        Some(tr(app.ui_locale, MessageId::PluginReceiptWorkspaceReloaded).into_owned()),
+    );
     app.active_skill = None;
     app.active_skill_provenance = None;
     // Switching workspace reloads the hook set (project hooks are per-repo)

@@ -406,6 +406,27 @@ pub(crate) fn refresh_skills_manager_if_open(
     app.view_stack.push(rebuilt);
 }
 
+pub(crate) fn refresh_extensions_manager_if_open(app: &mut App, status: Option<String>) {
+    if app.view_stack.top_kind() != Some(ModalKind::ExtensionsManager) {
+        return;
+    }
+    let Some(mut boxed) = app.view_stack.pop() else {
+        return;
+    };
+    let rebuilt = if let Some(previous) =
+        boxed
+            .as_any_mut()
+            .downcast_mut::<crate::tui::views::extensions_manager::ExtensionsManagerView>()
+    {
+        crate::tui::views::extensions_manager::ExtensionsManagerView::rebuild_preserving(
+            app, previous, status,
+        )
+    } else {
+        crate::tui::views::extensions_manager::ExtensionsManagerView::new(app)
+    };
+    app.view_stack.push(rebuilt);
+}
+
 pub(crate) fn push_approval_request_view(
     app: &mut App,
     id: &str,

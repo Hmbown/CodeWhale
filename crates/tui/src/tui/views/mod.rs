@@ -29,6 +29,7 @@ use crate::tui::history::{HistoryCell, SubAgentCell, summarize_tool_output};
 use crate::tui::menu_style;
 use crate::tui::widgets::agent_card::AgentLifecycle;
 
+pub mod extensions_manager;
 pub mod fleet_detail;
 pub mod fleet_list;
 pub mod fleet_roster;
@@ -68,6 +69,7 @@ pub enum ModalKind {
     ContextMenu,
     ContextInspector,
     SkillsManager,
+    ExtensionsManager,
     /// Native git worktree manager (list / create / switch / compare).
     WorktreeManager,
 }
@@ -1026,6 +1028,11 @@ pub enum ViewEvent {
     },
     /// Toggle owned-only vs compatible audit scan inside the skills manager.
     SkillsManagerToggleCompatible,
+    /// A lifecycle action emitted by the installed extensions manager. The
+    /// host owns all I/O and rebuilds the view from the immutable registry.
+    PluginManagerActionRequested {
+        action: crate::plugins::controller::PluginAction,
+    },
 }
 
 #[derive(Debug, Clone)]

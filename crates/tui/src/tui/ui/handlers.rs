@@ -786,6 +786,139 @@ pub(crate) async fn handle_skill_mutation_requested(
     app.needs_redraw = true;
 }
 
+async fn handle_plugin_manager_action_requested(
+    app: &mut App,
+    action: crate::plugins::controller::PluginAction,
+    config: &Config,
+    engine_handle: &mut EngineHandle,
+) {
+    use crate::plugins::controller::{
+        PluginActionOutcome, PluginController, active_network_policy,
+    };
+
+    let network = active_network_policy();
+    let result = PluginController::new(&mut app.plugin_registry, &app.workspace)
+        .execute(action, &network)
+        .await;
+    let (status, changed, clear_active_skill) = match result {
+        Ok(receipt) => match receipt.outcome {
+            PluginActionOutcome::Installed { name } => (
+                tr(app.ui_locale, MessageId::PluginReceiptInstalled).replace("{name}", &name),
+                true,
+                false,
+            ),
+            PluginActionOutcome::Updated { name } => (
+                tr(app.ui_locale, MessageId::PluginReceiptUpdated).replace("{name}", &name),
+                true,
+                false,
+            ),
+            PluginActionOutcome::AlreadyUpToDate { name } => (
+                tr(app.ui_locale, MessageId::PluginReceiptAlreadyUpToDate).replace("{name}", &name),
+                false,
+                false,
+            ),
+            PluginActionOutcome::Uninstalled { name } => (
+                tr(app.ui_locale, MessageId::PluginReceiptUninstalled).replace("{name}", &name),
+                true,
+                true,
+            ),
+            PluginActionOutcome::NeedsNetworkApproval { host } => (
+                tr(app.ui_locale, MessageId::PluginReceiptNeedsNetworkApproval)
+                    .replace("{host}", &host),
+                false,
+                false,
+            ),
+            PluginActionOutcome::NetworkDenied { host } => (
+                tr(app.ui_locale, MessageId::PluginReceiptNetworkDenied).replace("{host}", &host),
+                false,
+                false,
+            ),
+            PluginActionOutcome::Trusted { name } => (
+                tr(app.ui_locale, MessageId::PluginReceiptTrusted).replace("{name}", &name),
+                true,
+                false,
+            ),
+            PluginActionOutcome::Enabled { name } => (
+                tr(app.ui_locale, MessageId::PluginReceiptEnabled).replace("{name}", &name),
+                true,
+                false,
+            ),
+            PluginActionOutcome::Disabled { name } => (
+                tr(app.ui_locale, MessageId::PluginReceiptDisabled).replace("{name}", &name),
+                true,
+                true,
+            ),
+            PluginActionOutcome::TrustRevoked { name } => (
+                tr(app.ui_locale, MessageId::PluginReceiptTrustRevoked).replace("{name}", &name),
+                true,
+                true,
+            ),
+            PluginActionOutcome::Validated { selector, clean } => {
+                let target = selector.unwrap_or_else(|| {
+                    tr(app.ui_locale, MessageId::PluginReceiptValidationAll).into_owned()
+                });
+                let status = tr(
+                    app.ui_locale,
+                    if clean {
+                        MessageId::PluginReceiptValidationValid
+                    } else {
+                        MessageId::PluginReceiptValidationInvalid
+                    },
+                );
+                (
+                    tr(app.ui_locale, MessageId::PluginReceiptValidation)
+                        .replace("{target}", &target)
+                        .replace("{status}", &status),
+                    false,
+                    false,
+                )
+            }
+            PluginActionOutcome::Reloaded { count } => (
+                tr(app.ui_locale, MessageId::PluginReceiptReloaded)
+                    .replace("{count}", &count.to_string()),
+                true,
+                false,
+            ),
+            PluginActionOutcome::ReviewRequired { name } => (
+                tr(app.ui_locale, MessageId::PluginReceiptReviewRequired).replace("{name}", &name),
+                false,
+                false,
+            ),
+        },
+        Err(error) => (
+            tr(app.ui_locale, MessageId::CmdPluginActionFailed).replace("{error}", &error),
+            false,
+            false,
+        ),
+    };
+
+    app.status_message = Some(status.clone());
+    if clear_active_skill {
+        app.active_skill = None;
+        app.active_skill_provenance = None;
+    }
+    if changed {
+        app.refresh_skill_cache();
+        let _ = engine_handle.send(Op::Shutdown).await;
+        *engine_handle = spawn_tui_engine(build_engine_config(app, config), config);
+        if !app.api_messages.is_empty() {
+            let _ = engine_handle
+                .send(Op::SyncSession {
+                    session_id: app.current_session_id.clone(),
+                    messages: app.api_messages.clone(),
+                    system_prompt: app.system_prompt.clone(),
+                    system_prompt_override: false,
+                    model: app.model.clone(),
+                    workspace: app.workspace.clone(),
+                    mode: app.mode,
+                })
+                .await;
+        }
+    }
+    refresh_extensions_manager_if_open(app, Some(status));
+    app.needs_redraw = true;
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_config_updated(
     terminal: &mut AppTerminal,
@@ -2009,6 +2142,9 @@ pub(crate) async fn handle_view_events(
             ViewEvent::ContextMenuSelected { action } => handle_context_menu_action(app, action),
             ViewEvent::SkillMutationRequested { request } => {
                 handle_skill_mutation_requested(app, request).await;
+            }
+            ViewEvent::PluginManagerActionRequested { action } => {
+                handle_plugin_manager_action_requested(app, action, config, engine_handle).await;
             }
             ViewEvent::SkillsManagerToggleCompatible => {
                 if app.view_stack.top_kind() == Some(ModalKind::SkillsManager)

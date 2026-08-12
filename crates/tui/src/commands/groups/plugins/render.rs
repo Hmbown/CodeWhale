@@ -300,13 +300,6 @@ pub(super) fn escape_review_text(value: &str) -> String {
     escaped
 }
 
-pub(super) fn review_token(plugin: &LoadedPlugin) -> String {
-    // This is an explicit user confirmation, not cosmetic display text. Bind
-    // the command to both complete SHA-256 receipts so a same-inventory bundle
-    // cannot collide through the former 48-bit content prefix.
-    format!("{}.{}", plugin.content_hash, plugin.capability_hash)
-}
-
 pub(super) fn append_diagnostics(
     app: &App,
     output: &mut String,

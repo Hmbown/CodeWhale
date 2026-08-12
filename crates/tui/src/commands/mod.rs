@@ -25,6 +25,9 @@ use std::sync::OnceLock;
 pub use traits::CommandInfo;
 
 // Long-standing public paths that predate the group layout.
+pub(crate) use groups::plugins::{
+    LegacyToolApproval, LegacyToolInventoryEntry, legacy_tool_inventory,
+};
 pub use groups::project::share;
 #[cfg(test)]
 pub(crate) use groups::session::rename_with_manager as rename_session_with_manager;

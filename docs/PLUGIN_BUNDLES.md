@@ -203,11 +203,21 @@ A successful environment or health check is never treated as trust.
 Use the in-session command surface:
 
 ```text
+/plugin                 # opens the interactive Extensions Manager
 /plugin list
 /plugin validate example
 /plugin show example
 /plugin enable example
 ```
+
+Bare `/plugin` (and its `/plugins` alias) opens the localized interactive
+Extensions Manager. It groups the installed bundle inventory by scope, keeps
+keyboard and mouse selection in sync, exposes the exact content-and-capability
+review token in Details, and can trust, enable, disable, revoke, reload,
+update, or uninstall through the same lifecycle controller as explicit slash
+verbs. `/plugin list` remains the script-friendly text inventory. The
+Marketplace tab intentionally says unavailable: CodeWhale will not imply a
+remote catalogue until it has a curated publisher and provenance policy.
 
 The first `enable` opens a review showing source, component inventory,
 requested permissions, sanitized MCP endpoints, full content and capability

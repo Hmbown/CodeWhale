@@ -125,6 +125,50 @@ fn list_show_validate_are_read_only_and_label_legacy_tools() {
 }
 
 #[test]
+fn bare_plugin_opens_the_extensions_manager_while_list_stays_text_only() {
+    let _lock = crate::test_support::lock_test_env();
+    let root = TempDir::new().unwrap();
+    let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", root.path().join("home"));
+    write_bundle(root.path());
+    let (mut app, _temp) = create_test_app(root.path());
+
+    let manager = plugins(&mut app, None);
+    assert!(!manager.is_error);
+    assert!(matches!(
+        manager.action,
+        Some(crate::tui::app::AppAction::OpenExtensionsManager)
+    ));
+    assert!(manager.message.is_none());
+
+    let list = plugins(&mut app, Some("list"));
+    assert!(!list.is_error);
+    assert!(list.action.is_none());
+    assert!(
+        list.message
+            .as_deref()
+            .is_some_and(|message| message.contains("Plugin bundles (1)"))
+    );
+}
+
+#[test]
+fn public_dispatcher_routes_the_plugins_alias_to_the_extensions_manager() {
+    let _lock = crate::test_support::lock_test_env();
+    let root = TempDir::new().unwrap();
+    let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", root.path().join("home"));
+    write_bundle(root.path());
+    let (mut app, _temp) = create_test_app(root.path());
+
+    let result = crate::commands::execute("/plugins", &mut app);
+
+    assert!(!result.is_error, "{result:?}");
+    assert!(matches!(
+        result.action,
+        Some(crate::tui::app::AppAction::OpenExtensionsManager)
+    ));
+    assert!(result.message.is_none());
+}
+
+#[test]
 fn suggest_ranks_installed_plugins_without_trusting_or_enabling_them() {
     let _lock = crate::test_support::lock_test_env();
     let root = TempDir::new().unwrap();

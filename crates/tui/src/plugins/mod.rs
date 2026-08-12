@@ -2,6 +2,7 @@
 
 pub mod agent_plugin;
 pub mod context;
+pub mod controller;
 pub mod discovery;
 pub mod export;
 pub mod install;

@@ -2468,6 +2468,52 @@ fn skills_opens_manager_owned_then_compatible() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Bare `/plugins` opens the installed-extension manager over a real
+/// workspace-scoped bundle. The always-visible detail panel, narrow layout,
+/// and Marketplace boundary are all visible through the actual command dispatcher.
+#[test]
+fn plugins_open_extensions_manager_with_installed_detail_and_marketplace_boundary()
+-> anyhow::Result<()> {
+    let _guard = qa_pty_test_lock();
+    let ws = make_sealed_workspace()?;
+    let bundle = ws.workspace().join(".codewhale/plugins/pty-demo");
+    std::fs::create_dir_all(&bundle)?;
+    std::fs::write(
+        bundle.join("plugin.toml"),
+        "schema_version = 1\n[plugin]\nname = \"pty-demo\"\nversion = \"1.0.0\"\ndescription = \"PTY extensions manager fixture\"\n",
+    )?;
+    let (_ws, mut h) = spawn_minimal_with_env(ws, &[])?;
+
+    h.send(keys::key::text("/plugins"))?;
+    h.wait_for_idle(Duration::from_millis(300), Duration::from_secs(2))?;
+    h.send(keys::key::enter())?;
+    h.wait_for_text("Extensions Manager", KEY_TIMEOUT)?;
+    h.wait_for_text("pty-demo", KEY_TIMEOUT)?;
+    let installed = h.frame();
+    assert!(
+        !installed.contains("Plugin bundles ("),
+        "bare /plugins must open the manager, not the text list:\n{}",
+        installed.debug_dump()
+    );
+
+    h.wait_for_text("PTY extensions manager fixture", KEY_TIMEOUT)?;
+    h.wait_for_text("Review", KEY_TIMEOUT)?;
+
+    h.send(keys::key::tab())?;
+    h.wait_for_text("Marketplace unavailable", KEY_TIMEOUT)?;
+    h.wait_for_text("curated publisher and provenance policy", KEY_TIMEOUT)?;
+
+    h.send(keys::key::tab())?;
+    h.resize(16, 40)?;
+    h.wait_for_text("Extensions Manager", KEY_TIMEOUT)?;
+    h.wait_for_text("pty-demo", KEY_TIMEOUT)?;
+
+    h.send(keys::key::esc())?;
+    h.wait_for_text(COMPOSER_READY_TEXT, KEY_TIMEOUT)?;
+    let _ = h.shutdown();
+    Ok(())
+}
+
 // ===========================================================================
 // #1073 — pasting multi-line text with a trailing newline must NOT auto-submit
 // ===========================================================================

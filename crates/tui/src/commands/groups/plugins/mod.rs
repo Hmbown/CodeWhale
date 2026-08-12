@@ -26,6 +26,9 @@ use crate::commands::traits::{
     Command, CommandGroup, CommandInfo, FunctionCommand, RegisterCommand,
 };
 use crate::localization::{MessageId, tr};
+use crate::plugins::controller::{
+    PluginAction, PluginActionOutcome, PluginController, active_network_policy,
+};
 use crate::plugins::types::{LoadedPlugin, PluginDiagnosticLevel};
 use crate::tui::app::{App, AppAction};
 
@@ -36,9 +39,51 @@ mod render;
 mod tests;
 
 use legacy::{legacy_tools, scan_legacy_tools};
-use render::{
-    append_diagnostics, escape_review_path, escape_review_text, render_bundle_detail, review_token,
-};
+use render::{append_diagnostics, escape_review_path, escape_review_text, render_bundle_detail};
+
+/// Read-only metadata for a legacy executable tool. These scripts use their
+/// own per-call approval path and intentionally never share bundle trust.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LegacyToolApproval {
+    Auto,
+    Suggest,
+    Required,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LegacyToolInventoryEntry {
+    pub name: String,
+    pub description: String,
+    pub path: PathBuf,
+    pub approval: LegacyToolApproval,
+}
+
+/// Snapshot the legacy executable-tool directory for the Extensions Manager.
+/// It is intentionally read-only: only the existing tool runner performs the
+/// scripts' independent approval flow.
+pub(crate) fn legacy_tool_inventory(app: &App) -> Vec<LegacyToolInventoryEntry> {
+    scan_legacy_tools(app)
+        .map(|(_, tools)| {
+            tools
+                .into_iter()
+                .map(|(path, metadata)| LegacyToolInventoryEntry {
+                    name: metadata.name,
+                    description: metadata.description,
+                    path,
+                    approval: match metadata.approval {
+                        crate::tools::spec::ApprovalRequirement::Auto => LegacyToolApproval::Auto,
+                        crate::tools::spec::ApprovalRequirement::Suggest => {
+                            LegacyToolApproval::Suggest
+                        }
+                        crate::tools::spec::ApprovalRequirement::Required => {
+                            LegacyToolApproval::Required
+                        }
+                    },
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 pub struct PluginsCommands;
 
@@ -76,7 +121,8 @@ fn plugins(app: &mut App, arg: Option<&str>) -> CommandResult {
         .split_whitespace()
         .collect::<Vec<_>>();
     match words.as_slice() {
-        [] | ["list"] => list_bundles_and_legacy_tools(app),
+        [] => CommandResult::action(AppAction::OpenExtensionsManager),
+        ["list"] => list_bundles_and_legacy_tools(app),
         ["help"] => CommandResult::message(tr(app.ui_locale, MessageId::CmdPluginBundleUsage)),
         ["show", selector] => show_bundle(app, selector),
         ["suggest"] | ["recommend"] => CommandResult::error("Usage: /plugin suggest <task>"),
@@ -97,17 +143,7 @@ fn plugins(app: &mut App, arg: Option<&str>) -> CommandResult {
         ["enable", selector] => mutate_bundle(app, selector, Mutation::Enable),
         ["disable", selector] => mutate_bundle(app, selector, Mutation::Disable),
         ["revoke", selector] => mutate_bundle(app, selector, Mutation::Revoke),
-        ["reload"] => {
-            app.plugin_registry = app.plugin_registry.rediscover_for_workspace(&app.workspace);
-            app.refresh_skill_cache();
-            let count = app.plugin_registry.len();
-            CommandResult::with_message_and_action(
-                tr(app.ui_locale, MessageId::CmdPluginBundleReloaded)
-                    .replace("{count}", &count.to_string())
-                    .replace("{workspace}", &app.workspace.display().to_string()),
-                AppAction::PluginRegistryChanged,
-            )
-        }
+        ["reload"] => execute_action(app, PluginAction::Reload),
         ["tools"] => legacy_tools(app, None),
         ["tools", name] => legacy_tools(app, Some(name)),
         [selector] => {
@@ -354,7 +390,7 @@ fn review_bundle(app: &App, selector: &str) -> CommandResult {
         output,
         "\n/plugin trust {} {}",
         plugin.name(),
-        review_token(&plugin)
+        crate::plugins::controller::review_token(&plugin)
     );
     CommandResult::message(output)
 }
@@ -416,169 +452,31 @@ fn validate_bundles(app: &App, selector: Option<&str>) -> CommandResult {
 // bits are always disabled and untrusted until the hash-bound trust flow runs.
 
 fn install_bundle(app: &mut App, spec: &str) -> CommandResult {
-    use crate::plugins::mutation::{
-        PluginMutationContext, PluginMutationOutcome, PluginMutationRequest,
-    };
-
-    let source = match crate::plugins::install::PluginInstallSource::parse(spec) {
-        Ok(source) => source,
-        Err(error) => {
-            return CommandResult::error(format!(
-                "Invalid plugin install source `{spec}`: {error:#}\n\
-                 Expected a local path, github:owner/repo, or an HTTPS tarball URL."
-            ));
-        }
-    };
-    let network = plugin_network_policy();
-    let registry = std::sync::Arc::make_mut(&mut app.plugin_registry);
-    let outcome = run_async(async move {
-        let ctx = PluginMutationContext {
-            network: &network,
-            max_size: crate::plugins::install::DEFAULT_MAX_SIZE_BYTES,
-        };
-        crate::plugins::mutation::execute(PluginMutationRequest::Install { source }, &ctx, registry)
-            .await
-    });
-
-    match outcome {
-        Ok(receipt) => match receipt.outcome {
-            PluginMutationOutcome::Installed => {
-                let name = receipt.name.clone();
-                let path = receipt
-                    .path
-                    .as_deref()
-                    .map(|path| path.display().to_string())
-                    .unwrap_or_default();
-                app.plugin_registry = app.plugin_registry.rediscover_for_workspace(&app.workspace);
-                app.refresh_skill_cache();
-                let mut output = format!(
-                    "Installed plugin '{name}' to {path}.\n\
-                     It is disabled and untrusted. Review its requested authority below, then trust and enable it.\n"
-                );
-                if let Some(review) = review_bundle(app, &name).message {
-                    output.push('\n');
-                    output.push_str(&review);
-                }
-                CommandResult::with_message_and_action(output, AppAction::PluginRegistryChanged)
-            }
-            PluginMutationOutcome::NeedsApproval(host) => {
-                CommandResult::error(needs_approval_message(&host))
-            }
-            PluginMutationOutcome::NetworkDenied(host) => {
-                CommandResult::error(network_denied_message(&host))
-            }
-            other => CommandResult::error(format!("Unexpected install outcome: {other:?}")),
-        },
-        Err(error) => action_error(app, &format!("Plugin install failed: {error:#}")),
+    if let Err(error) = crate::plugins::install::PluginInstallSource::parse(spec) {
+        return CommandResult::error(format!(
+            "Invalid plugin install source `{spec}`: {error:#}\n\
+             Expected a local path, github:owner/repo, or an HTTPS tarball URL."
+        ));
     }
+    execute_action(app, PluginAction::Install { spec: spec.into() })
 }
 
 fn update_bundle(app: &mut App, selector: &str) -> CommandResult {
-    use crate::plugins::mutation::{
-        PluginMutationContext, PluginMutationOutcome, PluginMutationRequest,
-    };
-
-    let network = plugin_network_policy();
-    let selector_owned = selector.to_string();
-    let registry = std::sync::Arc::make_mut(&mut app.plugin_registry);
-    let outcome = run_async(async move {
-        let ctx = PluginMutationContext {
-            network: &network,
-            max_size: crate::plugins::install::DEFAULT_MAX_SIZE_BYTES,
-        };
-        crate::plugins::mutation::execute(
-            PluginMutationRequest::Update {
-                selector: selector_owned,
-            },
-            &ctx,
-            registry,
-        )
-        .await
-    });
-
-    match outcome {
-        Ok(receipt) => match receipt.outcome {
-            PluginMutationOutcome::Updated => {
-                let name = receipt.name.clone();
-                app.plugin_registry = app.plugin_registry.rediscover_for_workspace(&app.workspace);
-                app.refresh_skill_cache();
-                let mut output = format!(
-                    "Updated plugin '{name}'. Its content changed, so the previous trust receipt no \
-                     longer matches — review and trust it again before enabling.\n"
-                );
-                if let Some(review) = review_bundle(app, &name).message {
-                    output.push('\n');
-                    output.push_str(&review);
-                }
-                CommandResult::with_message_and_action(output, AppAction::PluginRegistryChanged)
-            }
-            PluginMutationOutcome::NoChange => {
-                CommandResult::message(format!("Plugin '{}' is already up to date.", receipt.name))
-            }
-            PluginMutationOutcome::NeedsApproval(host) => {
-                CommandResult::error(needs_approval_message(&host))
-            }
-            PluginMutationOutcome::NetworkDenied(host) => {
-                CommandResult::error(network_denied_message(&host))
-            }
-            other => CommandResult::error(format!("Unexpected update outcome: {other:?}")),
+    execute_action(
+        app,
+        PluginAction::Update {
+            selector: selector.into(),
         },
-        Err(error) => action_error(app, &format!("Plugin update failed: {error:#}")),
-    }
+    )
 }
 
 fn uninstall_bundle(app: &mut App, selector: &str) -> CommandResult {
-    use crate::plugins::mutation::{
-        PluginMutationContext, PluginMutationOutcome, PluginMutationRequest,
-    };
-
-    let network = plugin_network_policy();
-    let selector_owned = selector.to_string();
-    let registry = std::sync::Arc::make_mut(&mut app.plugin_registry);
-    let outcome = run_async(async move {
-        let ctx = PluginMutationContext {
-            network: &network,
-            max_size: crate::plugins::install::DEFAULT_MAX_SIZE_BYTES,
-        };
-        crate::plugins::mutation::execute(
-            PluginMutationRequest::Uninstall {
-                selector: selector_owned,
-            },
-            &ctx,
-            registry,
-        )
-        .await
-    });
-
-    match outcome {
-        Ok(receipt) => {
-            debug_assert!(matches!(
-                receipt.outcome,
-                PluginMutationOutcome::Uninstalled
-            ));
-            app.plugin_registry = app.plugin_registry.rediscover_for_workspace(&app.workspace);
-            app.refresh_skill_cache();
-            app.active_skill = None;
-            app.active_skill_provenance = None;
-            CommandResult::with_message_and_action(
-                format!("Uninstalled plugin '{}'.", receipt.name),
-                AppAction::PluginRegistryChanged,
-            )
-        }
-        Err(error) => action_error(app, &format!("Plugin uninstall failed: {error:#}")),
-    }
-}
-
-/// Read the active network policy for plugin downloads. Mirrors the skill
-/// installer's on-demand `Config::load` (`App` carries no `Config` field);
-/// a parse failure falls back to the prompt-default policy so the download
-/// stays gated rather than crashing.
-fn plugin_network_policy() -> crate::network_policy::NetworkPolicy {
-    crate::config::Config::load(None, None)
-        .unwrap_or_default()
-        .network
-        .map(|policy| policy.into_runtime())
-        .unwrap_or_default()
+    execute_action(
+        app,
+        PluginAction::Uninstall {
+            selector: selector.into(),
+        },
+    )
 }
 
 fn run_async<F, T>(future: F) -> T
@@ -588,21 +486,42 @@ where
     // Same bridge as the skill commands: the TUI thread is part of the
     // multi-threaded runtime, so `block_in_place` + `block_on` brings the
     // sync slash-command handler back into the async ecosystem.
-    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(future))
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        tokio::task::block_in_place(|| handle.block_on(future))
+    } else {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("plugin command runtime")
+            .block_on(future)
+    }
 }
 
-fn needs_approval_message(host: &str) -> String {
-    format!(
-        "Network policy requires approval for {host}.\n\
-         Add it to your allow list with `/network allow {host}` (or set [network].default = \"allow\" in ~/.codewhale/config.toml), then retry."
-    )
+fn needs_approval_message(app: &App, host: &str) -> String {
+    tr(app.ui_locale, MessageId::PluginReceiptNeedsNetworkApproval).replace("{host}", host)
 }
 
-fn network_denied_message(host: &str) -> String {
-    format!(
-        "Network policy denied access to {host}.\n\
-         Remove the deny entry from ~/.codewhale/config.toml under [network] or contact your administrator."
-    )
+fn network_denied_message(app: &App, host: &str) -> String {
+    tr(app.ui_locale, MessageId::PluginReceiptNetworkDenied).replace("{host}", host)
+}
+
+fn mutate_bundle(app: &mut App, selector: &str, mutation: Mutation<'_>) -> CommandResult {
+    let action = match mutation {
+        Mutation::Trust(token) => PluginAction::Trust {
+            selector: selector.into(),
+            review_token: token.into(),
+        },
+        Mutation::Enable => PluginAction::Enable {
+            selector: selector.into(),
+        },
+        Mutation::Disable => PluginAction::Disable {
+            selector: selector.into(),
+        },
+        Mutation::Revoke => PluginAction::Revoke {
+            selector: selector.into(),
+        },
+    };
+    execute_action(app, action)
 }
 
 #[derive(Clone, Copy)]
@@ -613,61 +532,106 @@ enum Mutation<'a> {
     Revoke,
 }
 
-fn mutate_bundle(app: &mut App, selector: &str, mutation: Mutation<'_>) -> CommandResult {
-    if matches!(mutation, Mutation::Enable) {
-        let needs_review = app
-            .plugin_registry
-            .get(selector)
-            .is_some_and(|plugin| !plugin.trusted());
-        if needs_review {
-            // Enabling is the natural entry point. Open the exact capability
-            // review instead of leaving the user at an opaque denial.
-            return review_bundle(app, selector);
-        }
-    }
-    if let Mutation::Trust(token) = mutation {
-        let Some(expected) = app.plugin_registry.get(selector).map(review_token) else {
-            return CommandResult::error(
-                tr(app.ui_locale, MessageId::CmdPluginBundleNotFound).replace("{name}", selector),
-            );
-        };
-        if token != expected {
-            return action_error(
-                app,
-                "Review token does not match this bundle content and capability set; run `/plugin trust <name>` again",
-            );
-        }
-    }
-
-    let result = match mutation {
-        Mutation::Trust(_) => std::sync::Arc::make_mut(&mut app.plugin_registry)
-            .trust(selector)
-            .map(|()| "trusted"),
-        Mutation::Enable => std::sync::Arc::make_mut(&mut app.plugin_registry)
-            .enable(selector)
-            .map(|()| "enabled"),
-        Mutation::Disable => std::sync::Arc::make_mut(&mut app.plugin_registry)
-            .disable(selector)
-            .map(|()| "disabled"),
-        Mutation::Revoke => std::sync::Arc::make_mut(&mut app.plugin_registry)
-            .revoke_trust(selector)
-            .map(|()| "trust-revoked"),
+fn execute_action(app: &mut App, action: PluginAction) -> CommandResult {
+    let network = active_network_policy();
+    let result = run_async(
+        PluginController::new(&mut app.plugin_registry, &app.workspace).execute(action, &network),
+    );
+    let receipt = match result {
+        Ok(receipt) => receipt,
+        Err(error) => return action_error(app, &error),
     };
-    match result {
-        Ok(action) => {
+    let changed = receipt.registry_changed;
+    let output = match receipt.outcome {
+        PluginActionOutcome::Installed { name } => {
+            let path = receipt
+                .path
+                .as_deref()
+                .map_or_else(String::new, |path| path.display().to_string());
             app.refresh_skill_cache();
-            if matches!(mutation, Mutation::Disable | Mutation::Revoke) {
-                app.active_skill = None;
-                app.active_skill_provenance = None;
+            let mut output = tr(app.ui_locale, MessageId::PluginReceiptInstalledDetailed)
+                .replace("{name}", &name)
+                .replace("{path}", &path);
+            if let Some(review) = review_bundle(app, &name).message {
+                output.push('\n');
+                output.push_str(&review);
             }
-            CommandResult::with_message_and_action(
-                tr(app.ui_locale, MessageId::CmdPluginBundleMutationSuccess)
-                    .replace("{name}", selector)
-                    .replace("{action}", action),
-                AppAction::PluginRegistryChanged,
-            )
+            output
         }
-        Err(error) => action_error(app, &error),
+        PluginActionOutcome::Updated { name } => {
+            app.refresh_skill_cache();
+            let mut output =
+                tr(app.ui_locale, MessageId::PluginReceiptUpdatedDetailed).replace("{name}", &name);
+            if let Some(review) = review_bundle(app, &name).message {
+                output.push('\n');
+                output.push_str(&review);
+            }
+            output
+        }
+        PluginActionOutcome::AlreadyUpToDate { name } => {
+            tr(app.ui_locale, MessageId::PluginReceiptAlreadyUpToDate).replace("{name}", &name)
+        }
+        PluginActionOutcome::Uninstalled { name } => {
+            app.refresh_skill_cache();
+            app.active_skill = None;
+            app.active_skill_provenance = None;
+            tr(app.ui_locale, MessageId::PluginReceiptUninstalled).replace("{name}", &name)
+        }
+        PluginActionOutcome::NeedsNetworkApproval { host } => {
+            return CommandResult::error(needs_approval_message(app, &host));
+        }
+        PluginActionOutcome::NetworkDenied { host } => {
+            return CommandResult::error(network_denied_message(app, &host));
+        }
+        PluginActionOutcome::Trusted { name } => {
+            app.refresh_skill_cache();
+            tr(app.ui_locale, MessageId::PluginReceiptTrusted).replace("{name}", &name)
+        }
+        PluginActionOutcome::Enabled { name } => {
+            app.refresh_skill_cache();
+            tr(app.ui_locale, MessageId::PluginReceiptEnabled).replace("{name}", &name)
+        }
+        PluginActionOutcome::Disabled { name } => {
+            app.refresh_skill_cache();
+            app.active_skill = None;
+            app.active_skill_provenance = None;
+            tr(app.ui_locale, MessageId::PluginReceiptDisabled).replace("{name}", &name)
+        }
+        PluginActionOutcome::TrustRevoked { name } => {
+            app.refresh_skill_cache();
+            app.active_skill = None;
+            app.active_skill_provenance = None;
+            tr(app.ui_locale, MessageId::PluginReceiptTrustRevoked).replace("{name}", &name)
+        }
+        PluginActionOutcome::Validated { selector, clean } => {
+            let selector = selector.unwrap_or_else(|| {
+                tr(app.ui_locale, MessageId::PluginReceiptValidationAll).into_owned()
+            });
+            let status = tr(
+                app.ui_locale,
+                if clean {
+                    MessageId::PluginReceiptValidationValid
+                } else {
+                    MessageId::PluginReceiptValidationInvalid
+                },
+            );
+            tr(app.ui_locale, MessageId::PluginReceiptValidation)
+                .replace("{target}", &selector)
+                .replace("{status}", &status)
+        }
+        PluginActionOutcome::Reloaded { count } => {
+            app.refresh_skill_cache();
+            tr(app.ui_locale, MessageId::PluginReceiptReloaded)
+                .replace("{count}", &count.to_string())
+        }
+        PluginActionOutcome::ReviewRequired { name } => {
+            return review_bundle(app, &name);
+        }
+    };
+    if changed {
+        CommandResult::with_message_and_action(output, AppAction::PluginRegistryChanged)
+    } else {
+        CommandResult::message(output)
     }
 }
 

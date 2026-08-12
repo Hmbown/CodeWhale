@@ -13,6 +13,20 @@ step, but never installs, trusts, or enables a bundle. Codewhale deliberately
 does not treat arbitrary remote archives as a plugin marketplace; a remote
 catalog needs publisher and provenance policy before it can make suggestions.
 
+## Managing installed extensions
+
+Use bare `/plugin` or `/plugins` to open the interactive Extensions Manager.
+The Installed tab shows scope, activation/trust state, component inventory,
+diagnostics, and the exact digest-bound review token. It exposes trust,
+enable/disable, revoke, reload, update, and uninstall using the same lifecycle
+checks as the explicit commands below. Use `/plugin list` when you need the
+stable text-only inventory for a script or transcript.
+
+The Marketplace tab is deliberately unavailable. CodeWhale has no remote
+publisher catalogue or provenance policy yet, so it does not present arbitrary
+archives as discoverable marketplace items. Install a reviewed source
+explicitly instead.
+
 ## Sources
 
 `/plugin install <spec>` accepts three source kinds:
