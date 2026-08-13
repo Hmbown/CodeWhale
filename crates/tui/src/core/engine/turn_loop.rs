@@ -37,6 +37,79 @@ fn approval_intent_summary(text: &str) -> Option<String> {
     Some(summary)
 }
 
+/// #5352: an automatic Auto-Review block used to reach the model as a bare
+/// `permission_denied`, which invited the exact workaround loop the block
+/// exists to stop. Like the user-denial message (#5146), name the correct
+/// next behavior. The original reason stays first and verbatim — audit
+/// events and tests match on it.
+pub(super) fn auto_review_block_tool_error(reason: &str) -> ToolError {
+    ToolError::permission_denied(format!(
+        "{reason}. This block is automatic — do not look for a way around it; \
+         take a safer approach that stays inside the current permissions, or \
+         stop and tell the user what you wanted to run."
+    ))
+}
+
+/// #5352: how many consecutive auto-blocked tool calls end the turn.
+const AUTO_BLOCK_TRIP_CONSECUTIVE: u32 = 3;
+/// #5352: rolling window of recent planned tool calls the breaker remembers.
+const AUTO_BLOCK_WINDOW: usize = 50;
+/// #5352: how many auto-blocks within [`AUTO_BLOCK_WINDOW`] end the turn.
+const AUTO_BLOCK_TRIP_IN_WINDOW: usize = 10;
+
+/// #5352: circuit breaker over automatic Auto-Review blocks within one turn.
+///
+/// A model that keeps proposing blocked calls burns its whole step budget
+/// re-phrasing the same denied action. Codex aborts the turn at 3 consecutive
+/// denials or 10 in the last 50; these thresholds mirror that. State is
+/// turn-local — a fresh turn starts forgiven, like
+/// `consecutive_empty_repl_rounds` above it in the turn loop.
+pub(super) struct AutoReviewBlockBreaker {
+    consecutive: u32,
+    window: std::collections::VecDeque<bool>,
+}
+
+impl AutoReviewBlockBreaker {
+    pub(super) fn new() -> Self {
+        Self {
+            consecutive: 0,
+            window: std::collections::VecDeque::with_capacity(AUTO_BLOCK_WINDOW),
+        }
+    }
+
+    /// Record one planned tool call, in plan order. `auto_blocked` is true
+    /// only for calls blocked by the Auto-Review decision itself — not user
+    /// denials, repo law, or ask-rules, which have their own remedies.
+    pub(super) fn record(&mut self, auto_blocked: bool) {
+        if auto_blocked {
+            self.consecutive = self.consecutive.saturating_add(1);
+        } else {
+            self.consecutive = 0;
+        }
+        if self.window.len() == AUTO_BLOCK_WINDOW {
+            self.window.pop_front();
+        }
+        self.window.push_back(auto_blocked);
+    }
+
+    /// Which threshold tripped, if any, phrased for the turn-abort message.
+    pub(super) fn tripped(&self) -> Option<String> {
+        if self.consecutive >= AUTO_BLOCK_TRIP_CONSECUTIVE {
+            return Some(format!(
+                "{AUTO_BLOCK_TRIP_CONSECUTIVE} consecutive tool calls were blocked by Auto-Review"
+            ));
+        }
+        let in_window = self.window.iter().filter(|blocked| **blocked).count();
+        if in_window >= AUTO_BLOCK_TRIP_IN_WINDOW {
+            return Some(format!(
+                "{in_window} of the last {} tool calls were blocked by Auto-Review",
+                self.window.len()
+            ));
+        }
+        None
+    }
+}
+
 pub(super) fn registered_tool_approval_required(
     tool_name: &str,
     requirement: ApprovalRequirement,
@@ -373,6 +446,11 @@ impl Engine {
         // across model steps so 3 consecutive empty blocks end the turn, not
         // just 3 blocks inside one message.
         let mut consecutive_empty_repl_rounds: u32 = 0;
+        // #5352: turn-scoped Auto-Review denial breaker. Fed in plan order as
+        // calls are admitted below; checked at the top of the loop so the
+        // blocked batch's results still reach the transcript before the turn
+        // ends.
+        let mut auto_review_block_breaker = AutoReviewBlockBreaker::new();
         // Outer stream-retry counter: when the chunked-transfer connection
         // dies mid-stream and either nothing useful was streamed (#103
         // Phase 3), the host slept mid-turn (#2990), or a headless host hit
@@ -433,6 +511,24 @@ impl Engine {
                 let error = format!(
                     "Maximum model steps reached before completion (limit: {})",
                     self.config.max_steps
+                );
+                let _ = self.tx_event.send(Event::status(error.clone())).await;
+                return (TurnOutcomeStatus::Failed, Some(error));
+            }
+
+            // #5352: Auto-Review denial circuit breaker. Checked here — after
+            // the blocked batch's results landed in the transcript, before the
+            // next model request is authorized — so the model's step budget
+            // stops paying for re-phrasings of a denied action. Same
+            // delivered-answer carve-out as the step budget above.
+            if let Some(trip) = auto_review_block_breaker.tripped() {
+                if !step_budget_exhaustion_is_terminal {
+                    break;
+                }
+                let error = format!(
+                    "Turn stopped: {trip}. The current approach keeps hitting \
+                     permission blocks — take a different approach, or ask the \
+                     user to run it under Ask or adjust permissions."
                 );
                 let _ = self.tx_event.send(Event::status(error.clone())).await;
                 return (TurnOutcomeStatus::Failed, Some(error));
@@ -2181,6 +2277,10 @@ impl Engine {
                 let mut detached_start = false;
                 let mut resources = vec![ResourceClaim::GlobalExclusive];
                 let mut blocked_error: Option<ToolError> = None;
+                // #5352: true only when `blocked_error` came from the
+                // Auto-Review decision — the breaker must not count user
+                // denials, repo law, ask-rules, or missing-tool errors.
+                let mut auto_review_blocked_call = false;
                 let mut guard_result: Option<ToolResult> = None;
                 // #3026: set by a hook `ask` decision; applied AFTER the
                 // registry-based approval computation below so it cannot be
@@ -2485,7 +2585,8 @@ impl Engine {
                         AutoReviewPlanDecision::Block(reason) => {
                             approval_required = false;
                             approval_force_prompt = false;
-                            blocked_error = Some(ToolError::permission_denied(reason));
+                            auto_review_blocked_call = true;
+                            blocked_error = Some(auto_review_block_tool_error(&reason));
                         }
                     }
                 }
@@ -2601,6 +2702,10 @@ impl Engine {
                     tool_call_budget.refund();
                 }
 
+                // #5352: feed the breaker in plan order. Blocked plans never
+                // execute, so plan admission is the last moment every call —
+                // blocked or not — passes through one point.
+                auto_review_block_breaker.record(auto_review_blocked_call);
                 plans.push(ToolExecutionPlan {
                     index,
                     id: tool_id,

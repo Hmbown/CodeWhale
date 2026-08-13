@@ -3,7 +3,8 @@ use super::*;
 use super::context::{COMPACTION_SUMMARY_MARKER, TURN_MAX_OUTPUT_TOKENS};
 use super::streaming::{TOOL_CALL_END_MARKERS, TOOL_CALL_MARKER_PAIRS};
 use super::turn_loop::{
-    merge_new_runtime_mcp_tools, registered_tool_approval_required, registered_tool_forces_prompt,
+    AutoReviewBlockBreaker, auto_review_block_tool_error, merge_new_runtime_mcp_tools,
+    registered_tool_approval_required, registered_tool_forces_prompt,
     workspace_write_carve_out_applies,
 };
 use crate::config::ApiProvider;
@@ -5772,6 +5773,201 @@ fn auto_review_still_blocks_interactive_destructive_shell() {
     );
     assert_eq!(audit["decision"], "ask_user");
     assert_eq!(audit["action_kind"], "destructive");
+}
+
+/// #5352: an Auto-Review block reaches the model with the original reason
+/// verbatim, first, plus the next-behavior guidance — never a bare denial.
+#[test]
+fn auto_review_block_error_names_the_next_behavior() {
+    let reason = "Auto-Review held tool 'exec_shell': sensitive or destructive action requires explicit review";
+    let rendered = auto_review_block_tool_error(reason).to_string();
+    assert!(
+        rendered.starts_with("Failed to authorize tool execution: "),
+        "{rendered}"
+    );
+    let reason_at = rendered.find(reason).expect("reason must stay verbatim");
+    let guidance_at = rendered
+        .find("This block is automatic")
+        .expect("guidance must be present");
+    assert!(
+        reason_at < guidance_at,
+        "reason first, guidance after: {rendered}"
+    );
+    assert!(
+        rendered.contains("do not look for a way around it"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("stop and tell the user"), "{rendered}");
+}
+
+/// #5352: three consecutive auto-blocks end the turn (Codex parity).
+#[test]
+fn auto_review_breaker_trips_after_three_consecutive_blocks() {
+    let mut breaker = AutoReviewBlockBreaker::new();
+    breaker.record(true);
+    breaker.record(true);
+    assert!(breaker.tripped().is_none(), "two blocks must not trip");
+    breaker.record(true);
+    let trip = breaker.tripped().expect("three consecutive blocks trip");
+    assert!(trip.contains("3 consecutive"), "{trip}");
+}
+
+/// #5352: any call that is not an auto-block resets the streak — an
+/// occasionally-blocked but progressing turn keeps running.
+#[test]
+fn auto_review_breaker_resets_the_streak_on_any_unblocked_call() {
+    let mut breaker = AutoReviewBlockBreaker::new();
+    for blocked in [true, true, false, true, true] {
+        breaker.record(blocked);
+    }
+    assert!(breaker.tripped().is_none());
+}
+
+/// #5352: ten auto-blocks inside the 50-call window trip even when the
+/// streak never reaches three (Codex's 10-of-50).
+#[test]
+fn auto_review_breaker_trips_on_ten_blocks_inside_the_window() {
+    let mut breaker = AutoReviewBlockBreaker::new();
+    // Two blocks then a pass, repeated: the streak never reaches three.
+    for _ in 0..4 {
+        breaker.record(true);
+        breaker.record(true);
+        breaker.record(false);
+        assert!(breaker.tripped().is_none());
+    }
+    breaker.record(true);
+    breaker.record(true);
+    let trip = breaker.tripped().expect("ten blocks in the window trip");
+    assert!(trip.contains("10 of the last"), "{trip}");
+}
+
+/// #5352: the window is rolling, not cumulative — old blocks age out, so a
+/// long productive stretch genuinely forgives an early rough patch.
+#[test]
+fn auto_review_breaker_forgets_blocks_older_than_the_window() {
+    let mut breaker = AutoReviewBlockBreaker::new();
+    for _ in 0..9 {
+        breaker.record(true);
+        breaker.record(false);
+    }
+    assert!(breaker.tripped().is_none());
+    for _ in 0..50 {
+        breaker.record(false);
+    }
+    // A cumulative counter would trip on this tenth block; the rolling
+    // window has already forgotten the first nine.
+    breaker.record(true);
+    assert!(breaker.tripped().is_none());
+}
+
+/// #5352 end to end: three auto-blocked calls in one batch feed the breaker
+/// at plan admission, every blocked result still reaches the model with the
+/// guidance attached, and the turn stops at the next request boundary — the
+/// mock scripts no second turn, so reaching the model again fails the test
+/// by itself.
+#[tokio::test]
+async fn auto_review_breaker_stops_the_turn_after_three_blocked_calls() {
+    use crate::llm_client::mock::{MockLlmClient, canned};
+
+    let workspace = tempdir().expect("tempdir");
+    let blocked_turn = vec![
+        canned::message_start("mock_msg_auto_blocked"),
+        canned::tool_use_block_start(0, "call-blocked-1", "Bash"),
+        canned::tool_input_delta(0, r#"{"command":"rm -rf /"}"#),
+        canned::block_stop(0),
+        canned::tool_use_block_start(1, "call-blocked-2", "Bash"),
+        canned::tool_input_delta(1, r#"{"command":"rm -rf /tmp"}"#),
+        canned::block_stop(1),
+        canned::tool_use_block_start(2, "call-blocked-3", "Bash"),
+        canned::tool_input_delta(2, r#"{"command":"rm -rf /var"}"#),
+        canned::block_stop(2),
+        canned::message_delta("tool_use", None),
+        canned::message_stop(),
+    ];
+    let mock = std::sync::Arc::new(MockLlmClient::new(vec![blocked_turn]));
+    let client: crate::core::model_client::SharedModelClient = mock.clone();
+    let (engine, handle) = Engine::new_with_model_client(
+        deterministic_engine_config(workspace.path()),
+        &Config::default(),
+        client,
+    );
+    let task = tokio::spawn(engine.run());
+
+    // `external_user_message_op` hardcodes Suggest; Auto is the mode under
+    // test, so the op is spelled out.
+    handle
+        .send(Op::SendMessage {
+            content: "Clean the disk.".to_string(),
+            mode: AppMode::Agent,
+            route: resolved_route_for_test(&Config::default(), crate::config::DEFAULT_TEXT_MODEL),
+            compaction: Box::new(CompactionConfig::default()),
+            goal_objective: None,
+            goal_token_budget: None,
+            goal_status: crate::tools::goal::GoalStatus::Active,
+            reasoning_effort: None,
+            reasoning_effort_auto: false,
+            auto_model: false,
+            allow_shell: true,
+            trust_mode: false,
+            auto_approve: false,
+            approval_mode: crate::tui::approval::ApprovalMode::Auto,
+            translation_enabled: false,
+            allowed_tools: None,
+            dynamic_tools: Vec::new(),
+            hook_executor: None,
+            verbosity: None,
+            provenance: UserInputProvenance::ExternalUser,
+        })
+        .await
+        .expect("send auto-blocked trajectory");
+
+    let mut blocked_results = Vec::new();
+    let mut rx = handle.rx_event.write().await;
+    let (status, error) = loop {
+        let event = tokio::time::timeout(model_turn_event_timeout(), rx.recv())
+            .await
+            .expect("timed out waiting for the auto-blocked trajectory")
+            .expect("engine event");
+        match event {
+            Event::ToolCallComplete { name, result, .. } if name == "Bash" => {
+                blocked_results.push(result);
+            }
+            Event::TurnComplete { status, error, .. } => break (status, error),
+            _ => {}
+        }
+    };
+    drop(rx);
+
+    assert_eq!(
+        blocked_results.len(),
+        3,
+        "all three blocked calls must still answer the model"
+    );
+    for result in &blocked_results {
+        let rendered = result
+            .as_ref()
+            .expect_err("auto-blocked call must fail")
+            .to_string();
+        assert!(rendered.contains("This block is automatic"), "{rendered}");
+        assert!(
+            rendered.contains("Auto-Review held tool 'Bash'"),
+            "original reason must stay verbatim: {rendered}"
+        );
+    }
+
+    assert_eq!(
+        status,
+        TurnOutcomeStatus::Failed,
+        "a breaker abort must never report Completed"
+    );
+    let error = error.expect("breaker abort must carry a terminal error");
+    assert!(
+        error.contains("3 consecutive tool calls were blocked by Auto-Review"),
+        "{error}"
+    );
+
+    handle.send(Op::Shutdown).await.expect("shutdown engine");
+    task.await.expect("engine task");
 }
 
 #[test]
