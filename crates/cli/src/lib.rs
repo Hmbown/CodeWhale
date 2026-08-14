@@ -7849,8 +7849,8 @@ mod tests {
             .map(|provider| provider.kind())
             .collect();
         // Full registry keeps legacy dialect/plan kinds; ALL is the catalog surface.
-        assert_eq!(registry_kinds.len(), 43);
-        assert_eq!(ProviderKind::ALL.len(), 38);
+        assert_eq!(registry_kinds.len(), 45);
+        assert_eq!(ProviderKind::ALL.len(), 40);
         for kind in ProviderKind::ALL {
             assert!(
                 registry_kinds.contains(&kind),
