@@ -58,6 +58,107 @@ fn decode_chunks_with_style(
     events
 }
 
+/// Drive the Chat Completions SSE path with raw byte chunks so tests can
+/// split a multi-byte UTF-8 character across HTTP/2-style DATA boundaries.
+fn decode_sse_byte_chunks(
+    chunks: &[&[u8]],
+) -> Result<Vec<StreamEvent>, super::super::InvalidSseUtf8> {
+    struct FrameState {
+        line_buf: String,
+        content_index: u32,
+        text_started: bool,
+        thinking_started: bool,
+        tool_indices: std::collections::HashMap<u32, u32>,
+        reasoning_detail_buffers: std::collections::HashMap<u32, String>,
+        inline_reasoning_tags: InlineReasoningTagState,
+        events: Vec<StreamEvent>,
+    }
+
+    impl FrameState {
+        fn new() -> Self {
+            Self {
+                line_buf: String::new(),
+                content_index: 0,
+                text_started: false,
+                thinking_started: false,
+                tool_indices: std::collections::HashMap::new(),
+                reasoning_detail_buffers: std::collections::HashMap::new(),
+                inline_reasoning_tags: InlineReasoningTagState::default(),
+                events: Vec::new(),
+            }
+        }
+
+        fn handle_line(&mut self, line: &str) -> bool {
+            if line.is_empty() {
+                return matches!(self.flush_frame(), SseDataFrame::Done);
+            }
+            if let Some(data) = super::super::extract_sse_data_value(line) {
+                if !self.line_buf.is_empty() {
+                    self.line_buf.push('\n');
+                }
+                self.line_buf.push_str(data);
+            }
+            false
+        }
+
+        fn flush_frame(&mut self) -> SseDataFrame {
+            if self.line_buf.is_empty() {
+                return SseDataFrame::Events(Vec::new());
+            }
+            let data = std::mem::take(&mut self.line_buf);
+            match parse_sse_data_frame(
+                &data,
+                &mut self.content_index,
+                &mut self.text_started,
+                &mut self.thinking_started,
+                &mut self.tool_indices,
+                &mut self.reasoning_detail_buffers,
+                &mut self.inline_reasoning_tags,
+                ReasoningStreamStyle::SeparateField,
+            ) {
+                SseDataFrame::Done => SseDataFrame::Done,
+                SseDataFrame::Events(frame_events) => {
+                    self.events.extend(frame_events);
+                    SseDataFrame::Events(Vec::new())
+                }
+            }
+        }
+    }
+
+    let mut decoder = super::super::SseLineDecoder::new();
+    let mut state = FrameState::new();
+    for chunk in chunks {
+        for line in decoder.push(chunk)? {
+            if state.handle_line(&line) {
+                return Ok(state.events);
+            }
+        }
+    }
+    if let Some(line) = decoder.finish()?
+        && state.handle_line(&line)
+    {
+        return Ok(state.events);
+    }
+    state.flush_frame();
+    Ok(state.events)
+}
+
+fn cjk_content_sse(text: &str) -> Vec<u8> {
+    let payload = serde_json::json!({
+        "choices": [{ "delta": { "content": text } }]
+    });
+    format!("data: {payload}\n\n").into_bytes()
+}
+
+fn mid_char_split(bytes: &[u8], ch: char) -> usize {
+    let needle = ch.to_string();
+    let start = bytes
+        .windows(needle.len())
+        .position(|window| window == needle.as_bytes())
+        .unwrap_or_else(|| panic!("{ch:?} present in SSE frame"));
+    start + 1
+}
+
 fn text_delta_text(events: &[StreamEvent]) -> String {
     events
         .iter()
@@ -82,6 +183,51 @@ fn thinking_delta_text(events: &[StreamEvent]) -> String {
             _ => None,
         })
         .collect()
+}
+
+#[test]
+fn decoder_reassembles_cjk_split_across_byte_chunks() {
+    let frame = cjk_content_sse("你好世界");
+    let split = mid_char_split(&frame, '好');
+    let events = decode_sse_byte_chunks(&[&frame[..split], &frame[split..]]).expect("valid utf-8");
+    let text = text_delta_text(&events);
+    assert_eq!(text, "你好世界");
+    assert!(
+        !text.contains('\u{FFFD}'),
+        "HTTP/2 mid-character split must not substitute U+FFFD; got {text:?}"
+    );
+}
+
+#[test]
+fn decoder_reassembles_emoji_and_cjk_fed_one_byte_at_a_time() {
+    let frame = cjk_content_sse("你好🌊世界");
+    let chunks: Vec<&[u8]> = frame.chunks(1).collect();
+    let events = decode_sse_byte_chunks(&chunks).expect("valid utf-8");
+    let text = text_delta_text(&events);
+    assert_eq!(text, "你好🌊世界");
+    assert!(
+        !text.contains('\u{FFFD}'),
+        "byte-at-a-time feed garbled: {text:?}"
+    );
+}
+
+#[test]
+fn decoder_rejects_invalid_sse_bytes_without_replacement() {
+    let mut frame = cjk_content_sse("ok");
+    // Bare 0xFF is never valid UTF-8. Insert it inside the first SSE line.
+    let newline = frame.iter().position(|&b| b == b'\n').expect("SSE line");
+    frame.insert(newline, 0xFF);
+    let result = decode_sse_byte_chunks(&[&frame]);
+    let err = result.expect_err("invalid SSE bytes must fail closed");
+    assert!(
+        !err.to_string().contains('\u{FFFD}'),
+        "error path must not substitute U+FFFD: {err}"
+    );
+
+    // Unterminated tail of continuation bytes: fail on flush, no replacement.
+    let result = decode_sse_byte_chunks(&[&[0x80, 0xBF]]);
+    let err = result.expect_err("invalid unterminated flush must fail closed");
+    assert!(!err.to_string().contains('\u{FFFD}'));
 }
 
 #[test]

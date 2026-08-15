@@ -303,41 +303,49 @@ impl DeepSeekClient {
         let stream = async_stream::stream! {
             use futures_util::StreamExt;
 
-            // Raw byte buffer: decode only COMPLETE lines so a multi-byte
-            // UTF-8 char (CJK/emoji) split across two network reads is never
-            // corrupted to U+FFFD. Line boundaries ('\n') are ASCII and can
-            // never fall inside a multi-byte sequence. (Mirrors chat.rs.)
+            // Raw byte buffer: decode only COMPLETE lines (or the stream-end
+            // tail) via the shared take_sse_line / flush_sse_line helpers so a
+            // multi-byte UTF-8 char (CJK/emoji) split across HTTP/2 DATA is
+            // never corrupted to U+FFFD. Genuine invalid bytes fail closed.
             let mut buffer: Vec<u8> = Vec::new();
             let stream_start = std::time::Instant::now();
             let mut last_chunk_at = std::time::Instant::now();
             let mut bytes_received: usize = 0;
+            let mut ended = false;
             tokio::pin!(byte_stream);
 
             loop {
-                let chunk = match tokio::time::timeout(stream_idle_timeout, byte_stream.next()).await {
-                    Ok(Some(Ok(chunk))) => chunk,
-                    Ok(Some(Err(e))) => {
-                        yield Err(anyhow::anyhow!("Stream read error: {e}"));
+                if !ended {
+                    match tokio::time::timeout(stream_idle_timeout, byte_stream.next()).await {
+                        Ok(Some(Ok(chunk))) => {
+                            bytes_received += chunk.len();
+                            last_chunk_at = std::time::Instant::now();
+                            buffer.extend_from_slice(&chunk);
+                        }
+                        Ok(Some(Err(e))) => {
+                            yield Err(anyhow::anyhow!("Stream read error: {e}"));
+                            return;
+                        }
+                        Ok(None) => ended = true,
+                        Err(_) => {
+                            yield Err(anyhow::anyhow!(super::stream_entry::idle_timeout_message(
+                                stream_idle_timeout,
+                                bytes_received,
+                                stream_start.elapsed(),
+                                last_chunk_at.elapsed(),
+                            )));
+                            return;
+                        }
+                    }
+                }
+
+                while let Some(line) = match super::next_sse_line(&mut buffer, ended) {
+                    Ok(line) => line,
+                    Err(err) => {
+                        yield Err(anyhow::anyhow!(err));
                         return;
                     }
-                    Ok(None) => break,
-                    Err(_) => {
-                        yield Err(anyhow::anyhow!(super::stream_entry::idle_timeout_message(
-                            stream_idle_timeout,
-                            bytes_received,
-                            stream_start.elapsed(),
-                            last_chunk_at.elapsed(),
-                        )));
-                        return;
-                    }
-                };
-
-                bytes_received += chunk.len();
-                last_chunk_at = std::time::Instant::now();
-                buffer.extend_from_slice(&chunk);
-
-                while let Some(line) = super::take_sse_line(&mut buffer) {
-
+                } {
                     // `event:` lines are redundant (the data payload carries
                     // `type`) and comment/heartbeat lines are ignorable.
                     let Some(data) = super::extract_sse_data_value(&line) else {
@@ -364,6 +372,10 @@ impl DeepSeekClient {
                         }
                         None => {}
                     }
+                }
+
+                if ended {
+                    break;
                 }
             }
         };
