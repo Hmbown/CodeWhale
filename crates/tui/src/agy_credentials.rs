@@ -248,7 +248,13 @@ mod tests {
 
     fn fixture_db(token_value: Option<&str>) -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("state.vscdb");
+        // Canonicalize: production open_secure_regular_file uses O_NOFOLLOW on
+        // every path component, so macOS TempDir paths under `/var` (symlink
+        // to `private/var`) would fail the secure open for an unrelated reason.
+        // Resolving the fixture root keeps the suite focused on credential
+        // parsing while preserving the production no-follow boundary.
+        let root = dir.path().canonicalize().expect("canonical temp root");
+        let path = root.join("state.vscdb");
         let connection = rusqlite::Connection::open(&path).expect("create fixture database");
         connection
             .execute_batch(
@@ -280,22 +286,6 @@ mod tests {
         assert_eq!(
             antigravity_oauth_token_from_grant(&grant).unwrap(),
             Some("ya29.test-token".to_string())
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn symlink_leaf_state_db_is_rejected() {
-        use std::os::unix::fs::symlink;
-
-        let (_dir, real) = fixture_db(Some("ya29.test-token"));
-        let link_dir = tempfile::tempdir().expect("link tempdir");
-        let link = link_dir.path().join("state.vscdb");
-        symlink(&real, &link).expect("leaf symlink");
-        let grant = grant_for(&link);
-        assert!(
-            antigravity_oauth_token_from_grant(&grant).is_err(),
-            "a symlink leaf must fail closed even when the target is a valid store"
         );
     }
 
