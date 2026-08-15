@@ -35,8 +35,9 @@ filtered out of a child's catalog only when the depth budget is spent —
 grandchildren. The removed `agent_open`/`agent_eval`/`agent_close` lifecycle
 tools are gone from every registry, parent and child alike.
 
-`agent` launches detached background work: cancelling the parent turn stops the
-parent wait path, but it does not kill already-opened child runs.
+`agent` launches turn-owned work by default: cancelling the parent turn cancels
+and joins foreground children before `TurnComplete`. Pass `detached=true` for
+independently durable background children that survive the parent turn.
 
 This doc covers the role taxonomy and current compatibility controls. The active
 orchestration surface is `agent`; see the sub-agent guidance in

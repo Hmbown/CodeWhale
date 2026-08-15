@@ -1574,6 +1574,9 @@ pub(crate) struct SubAgentSpawnOptions {
     /// Checkpoint resume: preserve the interrupted child's runtime posture
     /// instead of rebuilding it from the caller's role.
     pub preserve_runtime_profile: Option<WorkerRuntimeProfile>,
+    /// When true, the child is independently durable across parent-turn
+    /// cancellation. Default false binds the child to the initiating turn.
+    pub detached: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1808,6 +1811,10 @@ struct SpawnRequest {
     /// → verify). The source must be settled (not running), in the same
     /// workspace, and reachable by the spawning agent.
     resume_from: Option<String>,
+    /// When true, the child uses an independent cancellation token and survives
+    /// parent-turn cancellation. Default false: the child is owned by the
+    /// initiating turn and is cancelled+joined before `TurnComplete`.
+    detached: bool,
 }
 
 /// Declared child write authority for a (deliberate) spawn.
@@ -2747,6 +2754,9 @@ pub struct SubAgent {
     work_lifecycle: Option<SubAgentWorkLifecycle>,
     input_tx: Option<mpsc::UnboundedSender<SubAgentInput>>,
     task_handle: Option<JoinHandle<()>>,
+    /// Independently durable across parent-turn cancellation when true.
+    /// Default direct spawns are turn-owned (`false`).
+    detached: bool,
 }
 
 impl SubAgent {
@@ -2792,6 +2802,7 @@ impl SubAgent {
             work_lifecycle: None,
             input_tx: Some(input_tx),
             task_handle: None,
+            detached: false,
         }
     }
 
@@ -3906,6 +3917,9 @@ impl SubAgentManager {
                 work_lifecycle: None,
                 input_tx: None,
                 task_handle: None,
+                // Restored records have no live task; treat as detached so a
+                // later turn-end join cannot mistake them for turn-owned work.
+                detached: true,
             };
             self.agents.insert(persisted.id, agent);
         }
@@ -4738,6 +4752,45 @@ impl SubAgentManager {
         self.get_result(&agent_id)
     }
 
+    /// Cancel every turn-owned (non-detached) running child and await its task
+    /// handle. Detached children keep their own tokens and are left alone.
+    ///
+    /// The engine calls this before emitting `TurnComplete` so foreground
+    /// children cannot outlive the turn that owns them.
+    pub async fn cancel_and_join_turn_owned_agents(&mut self) {
+        let turn_owned: Vec<String> = self
+            .agents
+            .iter()
+            .filter(|(_, agent)| {
+                !agent.detached
+                    && agent.status == SubAgentStatus::Running
+                    && !agent.completion_claimed
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        let mut join_handles = Vec::new();
+        for agent_id in turn_owned {
+            let Some(agent) = self.agents.get_mut(&agent_id) else {
+                continue;
+            };
+            if let Some(handle) = agent.task_handle.take() {
+                handle.abort();
+                join_handles.push(handle);
+            }
+            let mut terminal = agent.snapshot();
+            terminal.status = SubAgentStatus::Cancelled;
+            terminal.result = Some("Cancelled because the owning parent turn ended.".to_string());
+            terminal.needs_input = None;
+            // Handle already taken above; abort_task=false avoids a second take.
+            let _ = self.finish_terminal_result(&agent_id, terminal, false, true);
+        }
+
+        for handle in join_handles {
+            let _ = handle.await;
+        }
+    }
+
     /// Queue parent mail without waking the child (`agents/message`).
     pub fn queue_parent_message(
         &mut self,
@@ -5035,8 +5088,8 @@ impl SubAgentManager {
                 child_route,
             )
         };
-        // Resume runs at child depth with a detached cancellation token, the
-        // same seam a fresh spawn uses; fail closed on the depth ceiling.
+        // Resume runs at child depth with a detached cancellation token so the
+        // continuation survives the parent turn that requested the resume.
         // Checked on the parent runtime before derivation, matching the
         // fresh-spawn order (would_exceed_depth at the spawn seam).
         if runtime.would_exceed_depth() {
@@ -5065,6 +5118,7 @@ impl SubAgentManager {
                 .unwrap_or(false),
             claim_pre_namespaced: claim.is_some(),
             preserve_runtime_profile: preserved_profile,
+            detached: true,
             ..Default::default()
         };
         let resumed = self.spawn_background_with_assignment_options(
@@ -5525,6 +5579,7 @@ impl SubAgentManager {
             agent.session_name = name.to_string();
         }
         agent.fork_context = options.fork_context;
+        agent.detached = options.detached;
         let agent_id = agent.id.clone();
         let started_at = agent.started_at;
         let tool_profile = match tools.clone() {
@@ -7083,11 +7138,44 @@ enum AgentToolAction {
 }
 
 fn parse_agent_tool_action(input: &Value) -> Result<AgentToolAction, ToolError> {
+    parse_agent_tool_action_with_policy(input, AgentActionPolicy::RequireAction)
+}
+
+/// Stored/programmatic legacy parsing: a missing `action` still means Start.
+/// Live model-facing calls must use [`parse_agent_tool_action`].
+#[cfg(test)]
+fn parse_agent_tool_action_legacy(input: &Value) -> Result<AgentToolAction, ToolError> {
+    parse_agent_tool_action_with_policy(input, AgentActionPolicy::LegacyMissingMeansStart)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentActionPolicy {
+    RequireAction,
+    LegacyMissingMeansStart,
+}
+
+fn parse_agent_tool_action_with_policy(
+    input: &Value,
+    policy: AgentActionPolicy,
+) -> Result<AgentToolAction, ToolError> {
     let Some(action) = optional_input_str(input, &["action", "op"])? else {
-        return Ok(AgentToolAction::Start);
+        return match policy {
+            AgentActionPolicy::RequireAction => Err(ToolError::invalid_input(
+                "agent requires action. Use start, status, peek, message, followup, interrupt, wait, or cancel."
+                    .to_string(),
+            )),
+            AgentActionPolicy::LegacyMissingMeansStart => Ok(AgentToolAction::Start),
+        };
     };
     match action.trim().to_ascii_lowercase().as_str() {
-        "" | "start" | "spawn" | "run" => Ok(AgentToolAction::Start),
+        "" if matches!(policy, AgentActionPolicy::LegacyMissingMeansStart) => {
+            Ok(AgentToolAction::Start)
+        }
+        "" => Err(ToolError::invalid_input(
+            "agent requires action. Use start, status, peek, message, followup, interrupt, wait, or cancel."
+                .to_string(),
+        )),
+        "start" | "spawn" | "run" => Ok(AgentToolAction::Start),
         "status" | "list" | "inspect" => Ok(AgentToolAction::Status),
         "peek" | "progress" => Ok(AgentToolAction::Peek),
         "message" | "queue_message" => Ok(AgentToolAction::Message),
@@ -7205,7 +7293,11 @@ impl ToolSpec for AgentTool {
                 "action": {
                     "type": "string",
                     "enum": ["start", "status", "peek", "message", "followup", "interrupt", "wait", "cancel"],
-                    "description": "start (default) launches a background worker and returns immediately. status/peek inspect. message queues a note without waking a running child. followup delivers queued notes and wakes a running child for its next user-provenance model turn. interrupt stops the current turn while preserving the child checkpoint. wait only observes; see until. cancel permanently cancels a running child."
+                    "description": "Required. start launches a worker owned by this turn and returns immediately (cancelled+joined when the turn ends). Pass detached=true for independently durable background work. status/peek inspect. message queues a note without waking a running child. followup delivers queued notes and wakes a running child for its next user-provenance model turn. interrupt stops the current turn while preserving the child checkpoint. wait only observes; see until. cancel permanently cancels a running child."
+                },
+                "detached": {
+                    "type": "boolean",
+                    "description": "For action=start only. Default false: the child is owned by the initiating turn. Set true to keep the child running after the parent turn cancels or completes."
                 },
                 "until": {
                     "type": "string",
@@ -7397,7 +7489,7 @@ impl ToolSpec for AgentTool {
                     ]
                 }
             },
-            "required": []
+            "required": ["action"]
         })
     }
 
@@ -8086,7 +8178,14 @@ async fn spawn_subagent_from_input(
         )));
     }
 
-    let mut child_runtime = runtime.background_runtime();
+    // Default direct spawns are turn-owned (`child_runtime`). Explicit
+    // `detached=true` keeps an independent cancel token so the child survives
+    // parent-turn cancellation.
+    let mut child_runtime = if spawn_request.detached {
+        runtime.background_runtime()
+    } else {
+        runtime.child_runtime()
+    };
     let provider_binding = child_provider_binding(&runtime, profile_member.as_ref())?;
     child_runtime.client = provider_binding.client;
     child_runtime.api_config = provider_binding.api_config;
@@ -8340,6 +8439,7 @@ async fn spawn_subagent_from_input(
             resume_from_agent_id: resume_from_agent_id.clone(),
             claim_pre_namespaced: false,
             preserve_runtime_profile: None,
+            detached: spawn_request.detached,
         },
     );
     let result = match result {
@@ -8518,6 +8618,8 @@ pub(crate) async fn spawn_workflow_task(
     let mut input = json!({
         "prompt": request.description,
         "worktree": request.worktree,
+        // Workflow-backed children are independently durable orchestration.
+        "detached": true,
     });
     if let Some(value) = request.cwd {
         input["cwd"] = json!(value);
@@ -10092,8 +10194,8 @@ async fn run_subagent(
 
     for _step in 0..max_steps {
         // Cooperative cancellation: bail if this session's token was cancelled
-        // while we were between steps. Top-level model-visible sub-agents use
-        // a detached token so parent turn cancellation does not stop them.
+        // while we were between steps. Default turn-owned children share the
+        // parent turn token; explicit detached=true children keep their own.
         if runtime.cancel_token.is_cancelled() {
             record_agent_progress(
                 runtime,
@@ -11342,6 +11444,7 @@ fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
+    let detached = parse_optional_bool(input, &["detached"])?.unwrap_or(false);
     let prompt_only_general = agent_type == FleetRole::Worker
         && !agent_type_explicit
         && profile.is_none()
@@ -11380,6 +11483,7 @@ fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
         exact_files,
         coordination_contracts,
         resume_from,
+        detached,
     };
     // A roster profile may resolve the parse-time General placeholder to a
     // read-only scout/reviewer or to a write-capable manager/builder. Defer

@@ -15580,6 +15580,59 @@ async fn agent_peek_unchanged_within_window_returns_compact_nudge() {
 }
 
 #[test]
+fn agent_action_requires_action_for_model_facing_calls() {
+    let err = parse_agent_tool_action(&json!({"prompt": "look around"}))
+        .expect_err("missing action must fail for live model calls");
+    assert!(
+        err.to_string().contains("requires action"),
+        "error should name the missing action: {err}"
+    );
+}
+
+#[test]
+fn agent_action_legacy_missing_means_start() {
+    assert_eq!(
+        parse_agent_tool_action_legacy(&json!({"prompt": "look around"}))
+            .expect("legacy parse accepts missing action"),
+        AgentToolAction::Start,
+    );
+}
+
+#[test]
+fn parse_spawn_request_defaults_to_turn_owned_unless_detached() {
+    let owned = parse_spawn_request(&json!({
+        "prompt": "inspect the module",
+        "type": "scout"
+    }))
+    .expect("spawn should parse");
+    assert!(!owned.detached, "default direct spawns are turn-owned");
+
+    let detached = parse_spawn_request(&json!({
+        "prompt": "inspect the module",
+        "type": "scout",
+        "detached": true
+    }))
+    .expect("detached spawn should parse");
+    assert!(detached.detached);
+}
+
+#[test]
+fn turn_owned_children_cancel_with_parent_while_detached_survive() {
+    let parent = stub_runtime();
+    let owned = parent.child_runtime();
+    let detached = parent.background_runtime();
+    parent.cancel_token.cancel();
+    assert!(
+        owned.cancel_token.is_cancelled(),
+        "turn-owned children share the parent cancel token"
+    );
+    assert!(
+        !detached.cancel_token.is_cancelled(),
+        "explicit detached children keep an independent token"
+    );
+}
+
+#[test]
 fn agent_action_parses_wait_aliases() {
     for alias in ["wait", "join", "await", "block"] {
         assert_eq!(

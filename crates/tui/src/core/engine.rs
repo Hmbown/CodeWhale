@@ -4158,6 +4158,15 @@ impl Engine {
         self.session.total_usage.add(&turn.usage);
         self.record_goal_usage_for_turn(&turn.usage, turn.elapsed());
 
+        // On turn cancellation, cancel and join turn-owned (non-detached)
+        // children before the mailbox seal / TurnComplete. Explicit
+        // detached=true children keep their own tokens. Successful turns leave
+        // turn-owned children running so completion sentinels can wake the
+        // parent on a later turn.
+        if status == TurnOutcomeStatus::Interrupted {
+            let mut manager = self.subagent_manager.write().await;
+            manager.cancel_and_join_turn_owned_agents().await;
+        }
         // Seal and fully forward every accepted mailbox envelope before the
         // terminal event. This is the durability barrier for child usage: an
         // event can no longer arrive after `TurnComplete` and be mistaken for
