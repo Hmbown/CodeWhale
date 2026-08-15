@@ -38,7 +38,7 @@ weaken the configured approval and sandbox policies.
 
 ## Authentication boundary
 
-The browser-launch URL contains a random, short-lived, one-time bootstrap
+The browser-launch URL contains a random, ten-minute, one-time bootstrap
 capability. It never contains the Runtime bearer token. A loopback request
 exchanges the capability for an `HttpOnly`, `SameSite=Strict`, process-local
 session cookie and immediately invalidates the capability.
@@ -68,9 +68,10 @@ before operating either one, especially before selecting a non-loopback bind.
 ## Troubleshooting
 
 - If port `7878` is occupied, pass an unused `--port` value.
-- If the browser cannot be opened, the command exits with an error rather than
-  printing or leaving a reusable bootstrap capability behind. Check the
-  operating system's default-browser setup, then start `codewhale web` again.
+- If the browser cannot be opened, the Runtime keeps serving and prints a
+  single-use bootstrap URL (valid for ten minutes) for manual recovery. Open
+  that URL in any local browser; do not share it. Check the operating system's
+  default-browser setup if you want auto-open next time.
 - If the page loads but a provider is unavailable, inspect `codewhale doctor`
   and `/provider`; the web command does not configure or move provider
   credentials.

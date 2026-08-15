@@ -14,7 +14,7 @@ use super::RuntimeApiState;
 const WEB_HTML: &str = include_str!("../runtime_web/index.html");
 const WEB_CSS: &str = include_str!("../runtime_web/styles.css");
 const WEB_JS: &str = include_str!("../runtime_web/app.mjs");
-const BOOTSTRAP_TTL: Duration = Duration::from_secs(120);
+const BOOTSTRAP_TTL: Duration = Duration::from_secs(10 * 60);
 const WEB_SESSION_TTL: Duration = Duration::from_secs(12 * 60 * 60);
 const BOOTSTRAP_PREFIX: &str = "cwwb_";
 const WEB_SESSION_PREFIX: &str = "cwws_";
@@ -225,6 +225,11 @@ fn secure_headers(response: &mut Response, content_type: &'static str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bootstrap_ttl_is_ten_minutes_for_manual_recovery() {
+        assert_eq!(BOOTSTRAP_TTL, Duration::from_secs(10 * 60));
+    }
 
     #[test]
     fn bootstrap_is_loopback_only_one_time_and_expires() {

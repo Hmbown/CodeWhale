@@ -865,10 +865,14 @@ pub async fn run_http_server(
         println!("Codewhale web enabled at http://{bound_addr}/");
         let bootstrap_url = web::bootstrap_url(bound_addr, &bootstrap);
         if let Err(error) = crate::utils::open_url(&bootstrap_url) {
-            scheduler_cancel.cancel();
-            scheduler_handle.abort();
-            return Err(error)
-                .context("Failed to open the Codewhale web client in the default browser");
+            // A missing or broken browser opener must not tear down a healthy
+            // Runtime. Print the single-use bootstrap URL for manual recovery.
+            eprintln!(
+                "warning: could not open the default browser ({error:#}). \
+                 Runtime is still serving. Open this single-use bootstrap URL \
+                 within ten minutes to authenticate the local web client:\n  {bootstrap_url}"
+            );
+            println!("Manual bootstrap (single-use, expires in 10 minutes):\n  {bootstrap_url}");
         }
     }
     let is_loopback = options.host == "127.0.0.1" || options.host == "::1";
