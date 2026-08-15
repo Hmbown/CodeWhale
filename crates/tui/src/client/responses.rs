@@ -833,7 +833,7 @@ fn codex_responses_reasoning_effort(raw: &str) -> Option<&'static str> {
         "minimal" => Some("low"),
         "low" => Some("low"),
         "high" => Some("high"),
-        "xhigh" | "max" | "maximum" | "ultracode" => Some("xhigh"),
+        "xhigh" | "max" | "maximum" | "ultra" | "ultracode" => Some("xhigh"),
         _ => Some("medium"),
     }
 }

@@ -172,7 +172,7 @@ fn apply_inkling_reasoning_effort(
         "low" => "low",
         "medium" | "mid" | "" => "medium",
         "high" => "high",
-        "max" | "xhigh" | "highest" | "ultracode" => "max",
+        "max" | "xhigh" | "highest" | "ultra" | "ultracode" => "max",
         _ => return,
     };
     body["reasoning_effort"] = json!(wire_effort);
@@ -292,7 +292,7 @@ fn apply_zai_route_reasoning_controls(
         .as_deref()
     {
         Some("high") => body["reasoning_effort"] = json!("high"),
-        Some("xhigh") | Some("max") | Some("highest") | Some("ultracode") => {
+        Some("xhigh") | Some("max") | Some("highest") | Some("ultra") | Some("ultracode") => {
             body["reasoning_effort"] = json!("max");
         }
         // Off, lower tiers, omitted effort, and unknown legacy values retain
@@ -331,7 +331,7 @@ fn apply_minimax_route_reasoning_controls(
             body["thinking"] = json!({ "type": "disabled" });
         }
         Some(
-            "low" | "minimal" | "medium" | "mid" | "high" | "xhigh" | "max" | "highest"
+            "low" | "minimal" | "medium" | "mid" | "high" | "xhigh" | "max" | "highest" | "ultra"
             | "ultracode" | "",
         ) => {
             body["thinking"] = json!({ "type": "adaptive" });
@@ -530,7 +530,7 @@ fn modelstudio_reasoning_effort_for_model(effort: &str) -> Option<&'static str> 
     match effort.trim().to_ascii_lowercase().as_str() {
         // Model Studio documents low and medium as aliases for high.
         "minimal" | "low" | "medium" | "mid" | "high" | "" => Some("high"),
-        "xhigh" | "max" | "highest" | "ultracode" => Some("max"),
+        "xhigh" | "max" | "highest" | "ultra" | "ultracode" => Some("max"),
         _ => None,
     }
 }
@@ -713,7 +713,7 @@ fn mistral_model_supports_reasoning(model: &str) -> bool {
 fn mistral_reasoning_effort_wire_value(effort: &str) -> Option<&'static str> {
     match effort.trim().to_ascii_lowercase().as_str() {
         "off" | "disabled" | "none" | "false" => Some("none"),
-        "high" | "xhigh" | "max" | "highest" | "ultracode" => Some("high"),
+        "high" | "xhigh" | "max" | "highest" | "ultra" | "ultracode" => Some("high"),
         _ => None,
     }
 }
@@ -874,8 +874,8 @@ fn openai_compatible_reasoning_effort(
         "medium" | "mid" | "" => Some("medium"),
         "high" => Some("high"),
         "xhigh" => Some("xhigh"),
-        "max" | "highest" | "ultracode" if supports_max => Some("max"),
-        "max" | "highest" | "ultracode" => Some("xhigh"),
+        "max" | "highest" | "ultra" | "ultracode" if supports_max => Some("max"),
+        "max" | "highest" | "ultra" | "ultracode" => Some("xhigh"),
         _ => None,
     }
 }
@@ -6051,6 +6051,7 @@ mod mistral_reasoning_tests {
         assert_eq!(mistral_reasoning_effort_wire_value("high"), Some("high"));
         assert_eq!(mistral_reasoning_effort_wire_value("xhigh"), Some("high"));
         assert_eq!(mistral_reasoning_effort_wire_value("max"), Some("high"));
+        assert_eq!(mistral_reasoning_effort_wire_value("ultra"), Some("high"));
         assert_eq!(
             mistral_reasoning_effort_wire_value("ultracode"),
             Some("high")

@@ -3366,7 +3366,7 @@ pub(super) fn apply_reasoning_effort(
             ApiProvider::Google => {}
             ApiProvider::Antigravity => {}
         },
-        "xhigh" | "max" | "highest" | "ultracode" => match provider {
+        "xhigh" | "max" | "highest" | "ultra" | "ultracode" => match provider {
             // Handled by the shared DeepSeek table above, before this match.
             ApiProvider::Deepseek | ApiProvider::DeepseekCN => {}
             ApiProvider::Siliconflow
