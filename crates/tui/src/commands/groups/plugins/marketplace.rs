@@ -47,11 +47,11 @@ pub(super) fn dispatch(app: &mut App, words: &[&str]) -> CommandResult {
     }
 }
 
-fn open_store(app: &App) -> Result<MarketplaceStore, CommandResult> {
+fn open_store(app: &App) -> Result<MarketplaceStore, Box<CommandResult>> {
     MarketplaceStore::open(app.plugin_registry.state_path()).ok_or_else(|| {
-        CommandResult::error(
+        Box::new(CommandResult::error(
             "This plugin registry has no persistence store, so marketplace catalogs cannot be saved.",
-        )
+        ))
     })
 }
 
@@ -73,7 +73,7 @@ fn add(app: &mut App, name: &str, raw_path: &str) -> CommandResult {
     }
     let store = match open_store(app) {
         Ok(store) => store,
-        Err(result) => return result,
+        Err(result) => return *result,
     };
     let path = PathBuf::from(raw_path.trim());
     let path = if path.is_absolute() {
@@ -141,7 +141,7 @@ fn add(app: &mut App, name: &str, raw_path: &str) -> CommandResult {
 fn list(app: &mut App) -> CommandResult {
     let store = match open_store(app) {
         Ok(store) => store,
-        Err(result) => return result,
+        Err(result) => return *result,
     };
     let state = match store.load() {
         Ok(state) => state,
@@ -174,7 +174,7 @@ fn list(app: &mut App) -> CommandResult {
 fn show(app: &mut App, name: &str) -> CommandResult {
     let store = match open_store(app) {
         Ok(store) => store,
-        Err(result) => return result,
+        Err(result) => return *result,
     };
     let state = match store.load() {
         Ok(state) => state,
@@ -204,7 +204,7 @@ fn show(app: &mut App, name: &str) -> CommandResult {
 fn remove(app: &mut App, name: &str) -> CommandResult {
     let store = match open_store(app) {
         Ok(store) => store,
-        Err(result) => return result,
+        Err(result) => return *result,
     };
     match store.remove(name) {
         Ok(true) => CommandResult::message(format!(
@@ -222,7 +222,7 @@ fn remove(app: &mut App, name: &str) -> CommandResult {
 fn install(app: &mut App, catalog_name: &str, candidate_name: &str) -> CommandResult {
     let store = match open_store(app) {
         Ok(store) => store,
-        Err(result) => return result,
+        Err(result) => return *result,
     };
     let state = match store.load() {
         Ok(state) => state,
