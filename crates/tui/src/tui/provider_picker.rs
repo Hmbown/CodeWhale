@@ -5706,7 +5706,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn move_to_provider_id(picker: &mut ProviderPickerView, provider_id: &str) {
         if let Some(idx) = picker
             .rows
