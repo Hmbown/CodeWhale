@@ -27,7 +27,7 @@ export interface RepoFacts {
 }
 
 export const FACTS: RepoFacts = {
-  "generatedAt": "2026-08-14T15:23:06.794Z",
+  "generatedAt": "2026-08-15T05:57:01.838Z",
   "sourceRevision": null,
   "sourceCommittedAt": null,
   "version": "0.9.8",
@@ -243,6 +243,16 @@ export const FACTS: RepoFacts = {
       "id": "mistral",
       "label": "Mistral AI",
       "env": "MISTRAL_API_KEY"
+    },
+    {
+      "id": "google",
+      "label": "Google Gemini",
+      "env": "GOOGLE_API_KEY / GEMINI_API_KEY"
+    },
+    {
+      "id": "antigravity",
+      "label": "Google Antigravity",
+      "env": "ANTIGRAVITY_API_KEY / AGY_ADC_AUTH"
     },
     {
       "id": "telecomjs",
