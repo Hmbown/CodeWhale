@@ -574,7 +574,7 @@ fn tool_call_sse(hang: bool) -> String {
 /// and this single-threaded fixture never answers.
 #[cfg(unix)]
 fn read_limited_http_body(
-    reader: &mut impl std::io::Read,
+    reader: &mut (impl std::io::Read + ?Sized),
     content_length: Option<usize>,
 ) -> String {
     const MAX: usize = 64 * 1024;
@@ -691,13 +691,22 @@ fn visible_review_confirmation(tui: &mut Harness) -> Option<String> {
 
 #[cfg(all(unix, feature = "long-running-tests"))]
 fn review_confirmation_in_text(text: &str) -> Option<String> {
-    text.lines().map(str::trim).find_map(|line| {
-        let token = line.strip_prefix("/plugin trust demo ")?;
-        (token.contains('.')
-            && token.len() >= 17
-            && token.chars().all(|ch| ch.is_ascii_hexdigit() || ch == '.'))
-        .then(|| line.to_string())
-    })
+    // The confirmation is `/plugin trust demo <64-hex>.<64-hex>` (129 chars).
+    // Transcript cards wrap well before that, so a single rendered line no
+    // longer holds the token. Join trimmed lines and recover the two digests.
+    let joined: String = text.lines().map(str::trim).collect();
+    let marker = "/plugin trust demo ";
+    let start = joined.find(marker)?;
+    let token: String = joined[start + marker.len()..]
+        .chars()
+        .take_while(|ch| ch.is_ascii_hexdigit() || *ch == '.')
+        .collect();
+    let (content, capability) = token.split_once('.')?;
+    (content.len() == 64
+        && capability.len() == 64
+        && content.chars().all(|ch| ch.is_ascii_hexdigit())
+        && capability.chars().all(|ch| ch.is_ascii_hexdigit()))
+    .then(|| format!("{marker}{content}.{capability}"))
 }
 
 #[cfg(all(unix, feature = "long-running-tests"))]
@@ -733,9 +742,21 @@ fn short_diagnostics(tui: &mut Harness, log_path: Option<&std::path::Path>) -> S
             Err(err) => out.push_str(&format!("mcp log unreadable: {err}\n")),
         }
     }
-    out.push_str("visible lines:\n");
-    for (index, line) in tui.frame().text().lines().take(24).enumerate() {
+    let lines: Vec<String> = tui.frame().text().lines().map(str::to_owned).collect();
+    out.push_str("visible head:\n");
+    for (index, line) in lines.iter().take(12).enumerate() {
         out.push_str(&format!("{index:>3} | {}\n", sanitize_diag_line(line)));
+    }
+    if lines.len() > 12 {
+        out.push_str("visible tail:\n");
+        let start = lines.len().saturating_sub(12);
+        for (index, line) in lines.iter().skip(start).enumerate() {
+            out.push_str(&format!(
+                "{:>3} | {}\n",
+                start + index,
+                sanitize_diag_line(line)
+            ));
+        }
     }
     out
 }
@@ -894,6 +915,23 @@ async fn plugin_toml_binary_lifecycle_skill_and_stdio_mcp_acceptance() {
     let _ = tui.shutdown();
     let _ = shutdown_tx.send(());
     let _ = model_thread.join();
+}
+
+#[cfg(all(unix, feature = "long-running-tests"))]
+#[test]
+fn review_confirmation_survives_transcript_wrap() {
+    let content = "a".repeat(64);
+    let capability = "b".repeat(64);
+    let wrapped = format!(
+        "  /plugin trust demo {head}\n  {mid}\n  {tail}\n",
+        head = &format!("{content}.{capability}")[..40],
+        mid = &format!("{content}.{capability}")[40..90],
+        tail = &format!("{content}.{capability}")[90..],
+    );
+    assert_eq!(
+        review_confirmation_in_text(&wrapped),
+        Some(format!("/plugin trust demo {content}.{capability}"))
+    );
 }
 
 #[cfg(unix)]
