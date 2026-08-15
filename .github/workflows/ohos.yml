@@ -30,7 +30,8 @@ permissions:
 
 concurrency:
   group: ohos-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Same as ci.yml: cancel superseded PR heads only; never cancel main pushes.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always

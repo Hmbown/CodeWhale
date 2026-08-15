@@ -19,7 +19,10 @@ permissions:
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # PRs: cancel superseded head runs. Push/schedule/dispatch on main must not
+  # cancel each other — they share github.ref with no pull_request.number, and
+  # canceling mid-run hid assertion failures that shipped in v0.9.8 (#5383).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
