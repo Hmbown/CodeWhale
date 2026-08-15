@@ -982,9 +982,11 @@ pub(crate) fn build_chat_wire_body(
     provider: ApiProvider,
     base_url: &str,
     stream: bool,
+    tool_result_max_bytes: Option<usize>,
 ) -> Result<ChatWireBody> {
-    let messages =
-        build_chat_messages_for_request_and_provider_and_route(request, provider, base_url);
+    let messages = PromptBuilder::for_request(request)
+        .with_tool_result_max_bytes(tool_result_max_bytes)
+        .build_for_provider_and_route(provider, base_url);
     let model = {
         let wire = wire_model_for_provider_route(provider, base_url, &request.model);
         crate::models::effective_muse_wire_id(&wire).to_string()
@@ -1497,6 +1499,7 @@ pub(super) fn build_chat_messages(
         model,
         should_replay_reasoning_content(model, None),
         false,
+        None,
     )
 }
 
@@ -1541,6 +1544,7 @@ struct PromptBuilder<'a> {
     tools: Option<&'a [Tool]>,
     model: &'a str,
     reasoning_effort: Option<&'a str>,
+    tool_result_max_bytes: Option<usize>,
 }
 
 impl<'a> PromptBuilder<'a> {
@@ -1551,7 +1555,13 @@ impl<'a> PromptBuilder<'a> {
             tools: request.tools.as_deref(),
             model: &request.model,
             reasoning_effort: request.reasoning_effort.as_deref(),
+            tool_result_max_bytes: None,
         }
+    }
+
+    fn with_tool_result_max_bytes(mut self, tool_result_max_bytes: Option<usize>) -> Self {
+        self.tool_result_max_bytes = tool_result_max_bytes;
+        self
     }
 
     #[cfg(test)]
@@ -1562,6 +1572,7 @@ impl<'a> PromptBuilder<'a> {
             self.model,
             should_replay_reasoning_content(self.model, self.reasoning_effort),
             false,
+            self.tool_result_max_bytes,
         )
     }
 
@@ -1577,6 +1588,7 @@ impl<'a> PromptBuilder<'a> {
                 self.reasoning_effort,
             ),
             false,
+            self.tool_result_max_bytes,
         );
         dump_system_prompt_if_requested(&messages);
         if provider == ApiProvider::Arcee {
@@ -1601,6 +1613,7 @@ impl<'a> PromptBuilder<'a> {
             self.model,
             should_replay_reasoning_content(self.model, self.reasoning_effort),
             true,
+            self.tool_result_max_bytes,
         );
         inspect_wire_request(self.tools, &messages)
     }
@@ -2250,15 +2263,16 @@ fn compact_tool_result_for_wire(
     content: &str,
     message_label: &str,
     seen_tool_results: &mut HashMap<String, SeenToolResult>,
+    tool_result_max_bytes: Option<usize>,
 ) -> WireToolResult {
     let original_chars = content.chars().count();
     let sha = sha256_hex(content.as_bytes());
+    let sent_budget = tool_result_max_bytes.unwrap_or(TOOL_RESULT_SENT_CHAR_BUDGET);
 
     // Only medium, non-mutation results can point back to a full earlier
     // message in this one request. Oversized results are already excerpts, so
     // a back-reference would falsely imply the exact bytes remain available.
-    let dedup_eligible = (TOOL_RESULT_DEDUP_MIN_CHARS..=TOOL_RESULT_SENT_CHAR_BUDGET)
-        .contains(&original_chars)
+    let dedup_eligible = (TOOL_RESULT_DEDUP_MIN_CHARS..=sent_budget).contains(&original_chars)
         && !is_mutation_tool(tool_name);
 
     if dedup_eligible && let Some(previous) = seen_tool_results.get(&sha) {
@@ -2288,7 +2302,7 @@ fn compact_tool_result_for_wire(
         );
     }
 
-    if original_chars <= TOOL_RESULT_SENT_CHAR_BUDGET {
+    if original_chars <= sent_budget {
         return WireToolResult {
             content: content.to_string(),
             original_chars,
@@ -2400,6 +2414,7 @@ fn build_chat_messages_with_reasoning(
     _model: &str,
     include_reasoning: bool,
     include_tool_budget_metadata: bool,
+    tool_result_max_bytes: Option<usize>,
 ) -> Vec<Value> {
     let mut out = Vec::new();
     let mut pending_tool_calls: HashMap<String, PendingToolCallInfo> = HashMap::new();
@@ -2620,6 +2635,7 @@ fn build_chat_messages_with_reasoning(
                             &content,
                             &message_label,
                             &mut seen_tool_results,
+                            tool_result_max_bytes,
                         );
                         let mut tool_msg = json!({
                             "role": "tool",
@@ -5869,6 +5885,7 @@ mod image_block_wire_tests {
             ApiProvider::Openai,
             "https://api.openai.com/v1",
             false,
+            None,
         )
         .expect("wire body");
 
@@ -5915,6 +5932,7 @@ mod image_block_wire_tests {
             ApiProvider::Openai,
             "https://api.openai.com/v1",
             false,
+            None,
         )
         .expect("wire body");
 
@@ -5963,6 +5981,7 @@ mod image_block_wire_tests {
             ApiProvider::Openai,
             "https://api.openai.com/v1",
             false,
+            None,
         )
         .expect("wire body");
         let messages = body.body["messages"].as_array().expect("messages");
@@ -6332,6 +6351,7 @@ mod mistral_reasoning_tests {
             ApiProvider::Mistral,
             crate::config::DEFAULT_MISTRAL_BASE_URL,
             true,
+            None,
         )
         .expect("Mistral stream wire body");
         let assistant = &wire.body["messages"][0];
@@ -6481,6 +6501,7 @@ mod google_thought_signature_tests {
             ApiProvider::Google,
             DEFAULT_GOOGLE_BASE_URL,
             false,
+            None,
         )
         .err()
         .expect("missing signature must fail closed before transport");
@@ -6501,6 +6522,7 @@ mod google_thought_signature_tests {
             ApiProvider::Google,
             DEFAULT_GOOGLE_BASE_URL,
             false,
+            None,
         )
         .expect("flash-lite replay must not require a signature");
     }
@@ -6536,6 +6558,7 @@ mod google_thought_signature_tests {
             ApiProvider::Google,
             "https://gateway.example.com/v1",
             false,
+            None,
         )
         .expect("non-official Google base URL must not require signatures");
         let messages = build_chat_messages_for_request_and_provider_and_route(
@@ -6560,6 +6583,7 @@ mod google_thought_signature_tests {
             ApiProvider::Google,
             DEFAULT_GOOGLE_BASE_URL,
             false,
+            None,
         )
         .expect("valid google body");
         assert_eq!(
@@ -6571,8 +6595,14 @@ mod google_thought_signature_tests {
 
         let mut low = google_request_with_signed_tool(Some("SIG"));
         low.reasoning_effort = Some("low".to_string());
-        let body = build_chat_wire_body(&low, ApiProvider::Google, DEFAULT_GOOGLE_BASE_URL, false)
-            .expect("valid google body");
+        let body = build_chat_wire_body(
+            &low,
+            ApiProvider::Google,
+            DEFAULT_GOOGLE_BASE_URL,
+            false,
+            None,
+        )
+        .expect("valid google body");
         assert_eq!(
             body.body
                 .pointer("/google/thinking_config/thinking_level")

@@ -1085,6 +1085,12 @@ exponential_base = 2.0
 #
 # [workshop]
 # large_output_threshold_tokens = 4096
+# Optional per-result ceilings for what the model sees. Omit both keys to
+# keep today's conservative defaults (read 50 KiB / hidden read_file 16 KiB;
+# tool-result context+wire 12 000 chars, or 48 000 on ≥500K windows).
+# These do not disable session compaction.
+# read_result_max_bytes = 131072
+# tool_result_max_bytes = 131072
 # [workshop.per_tool_thresholds]
 # Bash = 2048          # shell output synthesised aggressively
 # Web  = 8192          # web results can be large; give them more room

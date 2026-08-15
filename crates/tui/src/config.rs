@@ -2741,8 +2741,10 @@ pub struct Config {
     #[serde(default)]
     pub runtime_api: Option<RuntimeApiConfig>,
 
-    /// Workshop / large-tool-output routing (#548). When absent, the global
-    /// default threshold of 4 096 tokens applies and routing is active.
+    /// Workshop / large-tool-output routing (#548) and optional per-result
+    /// model-visible budgets (#5367). When absent, routing uses the built-in
+    /// threshold and read/tool-result size limits stay at their conservative
+    /// constants.
     #[serde(default)]
     pub workshop: Option<crate::tools::large_output_router::WorkshopConfig>,
 

@@ -47,6 +47,25 @@ pub struct WorkshopConfig {
     /// `large_output_threshold_tokens`.
     #[serde(default)]
     pub per_tool_thresholds: Option<HashMap<String, usize>>,
+
+    /// Optional model-visible byte budget for `read` / hidden `read_file`.
+    ///
+    /// When unset, each call site keeps its own conservative constant
+    /// (`READ_MAX_BYTES` 50 KiB, `MAX_VISIBLE_BYTES` / `SMALL_FILE_BYTES`
+    /// 16 KiB). Setting this key applies the same budget at every one of
+    /// those sites via `.unwrap_or(CURRENT_CONSTANT)`.
+    #[serde(default)]
+    pub read_result_max_bytes: Option<usize>,
+
+    /// Optional character budget for a single tool result on the context
+    /// path and the Chat Completions wire.
+    ///
+    /// When unset, the context hard limit stays 12 000 characters (48 000
+    /// on routes whose window is ≥ 500K) and the wire sent budget stays
+    /// 12 000. Setting this key overrides those hard ceilings; it does not
+    /// disable session compaction or change the 4K+4K head/tail excerpt.
+    #[serde(default)]
+    pub tool_result_max_bytes: Option<usize>,
 }
 
 impl WorkshopConfig {
@@ -60,6 +79,18 @@ impl WorkshopConfig {
         }
         self.large_output_threshold_tokens
             .unwrap_or(DEFAULT_LARGE_OUTPUT_THRESHOLD_TOKENS)
+    }
+
+    /// Model-visible read budget, or `default` when the key is absent.
+    #[must_use]
+    pub fn read_result_max_bytes_or(&self, default: usize) -> usize {
+        self.read_result_max_bytes.unwrap_or(default)
+    }
+
+    /// Tool-result character budget, or `default` when the key is absent.
+    #[must_use]
+    pub fn tool_result_max_bytes_or(&self, default: usize) -> usize {
+        self.tool_result_max_bytes.unwrap_or(default)
     }
 }
 
@@ -108,6 +139,12 @@ impl LargeOutputRouter {
     #[must_use]
     pub fn new(config: WorkshopConfig) -> Self {
         Self { config }
+    }
+
+    /// The `[workshop]` table this router was built from.
+    #[must_use]
+    pub fn workshop_config(&self) -> &WorkshopConfig {
+        &self.config
     }
 
     /// Decide whether classic routing would synthesize `result`.
@@ -384,6 +421,7 @@ mod tests {
         let config = WorkshopConfig {
             large_output_threshold_tokens: Some(4096),
             per_tool_thresholds: Some(per_tool),
+            ..Default::default()
         };
         let router = LargeOutputRouter::new(config);
         // 100 tokens * 3 = 300 chars → trigger with 400 chars
@@ -431,5 +469,23 @@ mod tests {
         assert!(wrapped.contains("web_search"));
         assert!(wrapped.contains("5000"));
         assert!(wrapped.contains("key facts here"));
+    }
+
+    #[test]
+    fn workshop_result_budgets_default_absent_and_parse_when_set() {
+        let absent: WorkshopConfig = toml::from_str("large_output_threshold_tokens = 4096\n")
+            .expect("parse workshop table without result budgets");
+        assert_eq!(absent.read_result_max_bytes, None);
+        assert_eq!(absent.tool_result_max_bytes, None);
+        assert_eq!(absent.read_result_max_bytes_or(50 * 1024), 50 * 1024);
+        assert_eq!(absent.tool_result_max_bytes_or(12_000), 12_000);
+
+        let present: WorkshopConfig =
+            toml::from_str("read_result_max_bytes = 131072\ntool_result_max_bytes = 131072\n")
+                .expect("parse workshop result budgets");
+        assert_eq!(present.read_result_max_bytes, Some(131_072));
+        assert_eq!(present.tool_result_max_bytes, Some(131_072));
+        assert_eq!(present.read_result_max_bytes_or(50 * 1024), 131_072);
+        assert_eq!(present.tool_result_max_bytes_or(12_000), 131_072);
     }
 }

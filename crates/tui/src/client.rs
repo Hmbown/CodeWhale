@@ -210,6 +210,9 @@ pub struct DeepSeekClient {
     test_messages_transport_base_url: Option<String>,
     pub(super) reasoning_stream_style: Option<String>,
     pub(super) stream_idle_timeout: Duration,
+    /// Optional `[workshop].tool_result_max_bytes` char budget for wire
+    /// compaction. `None` keeps `TOOL_RESULT_SENT_CHAR_BUDGET` (12 000).
+    tool_result_max_bytes: Option<usize>,
 }
 
 const CONNECTION_FAILURE_THRESHOLD: u32 = 2;
@@ -467,6 +470,7 @@ impl Clone for DeepSeekClient {
             test_messages_transport_base_url: self.test_messages_transport_base_url.clone(),
             reasoning_stream_style: self.reasoning_stream_style.clone(),
             stream_idle_timeout: self.stream_idle_timeout,
+            tool_result_max_bytes: self.tool_result_max_bytes,
         }
     }
 }
@@ -1178,6 +1182,10 @@ impl DeepSeekClient {
             test_messages_transport_base_url: None,
             reasoning_stream_style,
             stream_idle_timeout,
+            tool_result_max_bytes: config
+                .workshop
+                .as_ref()
+                .and_then(|workshop| workshop.tool_result_max_bytes),
         })
     }
 
@@ -1823,6 +1831,7 @@ impl DeepSeekClient {
                     chat_shape_provider,
                     &self.base_url,
                     stream,
+                    self.tool_result_max_bytes,
                 )?;
                 let url = chat_completions_url(
                     self.chat_transport_base_url(),

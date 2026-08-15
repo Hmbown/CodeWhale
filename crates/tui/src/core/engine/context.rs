@@ -417,7 +417,7 @@ pub(crate) fn compact_tool_result_for_context(
     tool_name: &str,
     output: &ToolResult,
 ) -> String {
-    compact_tool_result_for_route(ApiProvider::Deepseek, model, None, tool_name, output)
+    compact_tool_result_for_route(ApiProvider::Deepseek, model, None, tool_name, output, None)
 }
 
 pub(crate) fn compact_tool_result_for_route(
@@ -426,6 +426,7 @@ pub(crate) fn compact_tool_result_for_route(
     route_limits: Option<RouteLimits>,
     tool_name: &str,
     output: &ToolResult,
+    tool_result_max_bytes: Option<usize>,
 ) -> String {
     let raw = output.content.trim();
     if raw.is_empty() {
@@ -466,7 +467,8 @@ pub(crate) fn compact_tool_result_for_route(
 
     let context_window =
         crate::route_budget::route_context_window_tokens(provider, model, route_limits);
-    let limits = tool_result_context_limits_for_window(context_window);
+    let mut limits = tool_result_context_limits_for_window(context_window);
+    limits.hard_limit_chars = tool_result_max_bytes.unwrap_or(limits.hard_limit_chars);
     let raw_chars = raw.chars().count();
     let should_compact = raw_chars > limits.hard_limit_chars
         || (tool_result_is_noisy(tool_name) && raw_chars > limits.noisy_soft_limit_chars);

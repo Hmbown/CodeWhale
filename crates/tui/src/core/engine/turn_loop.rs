@@ -3714,6 +3714,10 @@ impl Engine {
                             self.active_route_limits,
                             &outcome.name,
                             &output,
+                            self.config
+                                .workshop
+                                .as_ref()
+                                .and_then(|workshop| workshop.tool_result_max_bytes),
                         );
                         let tool_was_executed = output
                             .metadata

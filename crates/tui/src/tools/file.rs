@@ -458,6 +458,14 @@ fn is_codewhale_credential_path(path: &Path) -> bool {
 const READ_MAX_LINES: usize = 2_000;
 const READ_MAX_BYTES: usize = 50 * 1024;
 
+fn configured_read_result_max_bytes(context: &ToolContext, default: usize) -> usize {
+    context
+        .large_output_router
+        .as_ref()
+        .map(|router| router.workshop_config().read_result_max_bytes_or(default))
+        .unwrap_or(default)
+}
+
 type FileMutationMutex = AsyncMutex<()>;
 
 /// File primitives can also be invoked outside the native engine's global
@@ -587,6 +595,10 @@ struct ContractReadWindow {
 /// line and UTF-8 byte budgets. A terminal newline is content but does not add
 /// a phantom line to the truncation counter.
 fn contract_read_window(content: &str) -> ContractReadWindow {
+    contract_read_window_with_limit(content, READ_MAX_BYTES)
+}
+
+fn contract_read_window_with_limit(content: &str, max_bytes: usize) -> ContractReadWindow {
     let mut lines = if content.is_empty() {
         Vec::new()
     } else {
@@ -595,10 +607,7 @@ fn contract_read_window(content: &str) -> ContractReadWindow {
     if content.ends_with('\n') {
         let _ = lines.pop();
     }
-    if lines
-        .first()
-        .is_some_and(|line| line.len() > READ_MAX_BYTES)
-    {
+    if lines.first().is_some_and(|line| line.len() > max_bytes) {
         return ContractReadWindow {
             content: String::new(),
             shown_lines: 0,
@@ -608,7 +617,7 @@ fn contract_read_window(content: &str) -> ContractReadWindow {
         };
     }
 
-    if lines.len() <= READ_MAX_LINES && content.len() <= READ_MAX_BYTES {
+    if lines.len() <= READ_MAX_LINES && content.len() <= max_bytes {
         return ContractReadWindow {
             content: content.to_string(),
             shown_lines: lines.len(),
@@ -623,7 +632,7 @@ fn contract_read_window(content: &str) -> ContractReadWindow {
     let mut truncated_by_bytes = false;
     for line in lines.iter().take(READ_MAX_LINES) {
         let next = line.len() + usize::from(!kept.is_empty());
-        if bytes.saturating_add(next) > READ_MAX_BYTES {
+        if bytes.saturating_add(next) > max_bytes {
             truncated_by_bytes = true;
             break;
         }
@@ -695,14 +704,15 @@ impl ReadFileTool {
             None => available,
         };
         let selected_content = selected.join("\n");
-        let window = contract_read_window(&selected_content);
+        let max_bytes = configured_read_result_max_bytes(context, READ_MAX_BYTES);
+        let window = contract_read_window_with_limit(&selected_content, max_bytes);
         let first_display = start + 1;
         let mut output = if window.first_line_too_large {
             let size = selected.first().map_or(0, |line| line.len());
             format!(
-                "[Line {first_display} is {}, exceeds {} limit. Use bash: sed -n '{first_display}p' {path_str} | head -c {READ_MAX_BYTES}]",
+                "[Line {first_display} is {}, exceeds {} limit. Use bash: sed -n '{first_display}p' {path_str} | head -c {max_bytes}]",
                 contract_format_size(size),
-                contract_format_size(READ_MAX_BYTES)
+                contract_format_size(max_bytes)
             )
         } else {
             window.content
@@ -714,8 +724,9 @@ impl ReadFileTool {
             let next_offset = last_display + 1;
             if window.truncated_by_bytes {
                 output.push_str(&format!(
-                    "\n\n[Showing lines {first_display}-{last_display} of {} (50KB limit). Use offset={next_offset} to continue.]",
-                    all_lines.len()
+                    "\n\n[Showing lines {first_display}-{last_display} of {} ({} limit). Use offset={next_offset} to continue.]",
+                    all_lines.len(),
+                    contract_format_size(max_bytes)
                 ));
             } else {
                 output.push_str(&format!(
@@ -828,6 +839,8 @@ impl ToolSpec for ReadFileTool {
             ToolError::execution_failed(format!("Failed to read {}: {}", file_path.display(), e))
         })?;
         let file_bytes = file.metadata().map(|meta| meta.len()).unwrap_or(u64::MAX);
+        let max_visible_bytes = configured_read_result_max_bytes(context, MAX_VISIBLE_BYTES);
+        let small_file_bytes = configured_read_result_max_bytes(context, SMALL_FILE_BYTES);
 
         let explicit_range = input
             .get("start_line")
@@ -837,7 +850,7 @@ impl ToolSpec for ReadFileTool {
         // Small-file fast path. Only applies when the caller didn't pass an
         // explicit range — otherwise an explicit `start_line = 5` on a
         // tiny file would silently ignore the request.
-        if !explicit_range && file_bytes <= SMALL_FILE_BYTES as u64 {
+        if !explicit_range && file_bytes <= small_file_bytes as u64 {
             drop(file);
             let contents = fs::read_to_string(&file_path).map_err(|e| {
                 ToolError::execution_failed(format!(
@@ -877,6 +890,7 @@ impl ToolSpec for ReadFileTool {
                 1,
                 DEFAULT_READ_LINES,
                 Some(hash.as_str()),
+                max_visible_bytes,
             ));
         }
 
@@ -967,6 +981,7 @@ impl ToolSpec for ReadFileTool {
             start_line,
             max_lines,
             hash.as_deref(),
+            max_visible_bytes,
         ))
     }
 }
@@ -1080,6 +1095,7 @@ fn render_line_window(
     start_line: usize,
     max_lines: usize,
     content_hash: Option<&str>,
+    max_visible_bytes: usize,
 ) -> ToolResult {
     let zero_based_start = start_line - 1;
     let zero_based_end = std::cmp::min(zero_based_start + max_lines, total_lines);
@@ -1096,9 +1112,9 @@ fn render_line_window(
     // short head (budget/5) plus the matching tail so the model sees both
     // ends of a long range. The full file already lives at `path_str` — the
     // recovery note names that absolute/workspace path for a re-read.
-    let truncated_by_bytes = numbered.len() > MAX_VISIBLE_BYTES;
+    let truncated_by_bytes = numbered.len() > max_visible_bytes;
     let shown_content = if truncated_by_bytes {
-        let (head, tail) = head_tail_for_budget(&numbered, MAX_VISIBLE_BYTES);
+        let (head, tail) = head_tail_for_budget(&numbered, max_visible_bytes);
         format!("{head}{BYTE_TRUNCATION_SEPARATOR}{tail}")
     } else {
         numbered
@@ -1132,12 +1148,14 @@ fn render_line_window(
             // combination can ever reveal the elided middle, so the note must
             // not pretend otherwise — name the escape hatch that works.
             output.push_str(&format!(
-                "\n[TRUNCATED] Line {shown_first} alone exceeds 50KB; showing its head + tail. No line window can reveal the middle of one line — use a searched shell slice when needed.\n"
+                "\n[TRUNCATED] Line {shown_first} alone exceeds {}; showing its head + tail. No line window can reveal the middle of one line — use a searched shell slice when needed.\n",
+                contract_format_size(max_visible_bytes)
             ));
         } else {
             let narrower = (shown_last - shown_first).div_ceil(2).max(1);
             output.push_str(&format!(
-                "\n[TRUNCATED] The selected range exceeded 50KB; showing head + tail of lines {shown_first}-{shown_last}. Re-read narrower windows to see the middle, e.g. offset={shown_first} limit={narrower}, then advance offset.\n"
+                "\n[TRUNCATED] The selected range exceeded {}; showing head + tail of lines {shown_first}-{shown_last}. Re-read narrower windows to see the middle, e.g. offset={shown_first} limit={narrower}, then advance offset.\n",
+                contract_format_size(max_visible_bytes)
             ));
         }
     }

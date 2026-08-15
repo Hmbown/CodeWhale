@@ -1632,6 +1632,10 @@ pub struct App {
     /// `/config mini_window.keep_*`. The renderer reads this instead of the
     /// parsed Config so runtime changes apply without a restart.
     pub(crate) mini_window: crate::config::MiniWindowConfig,
+    /// Optional `[workshop]` table from config.toml. Used to honor
+    /// `tool_result_max_bytes` when the TUI path compacts a tool result
+    /// for the next model turn.
+    pub(crate) workshop: Option<crate::tools::large_output_router::WorkshopConfig>,
     /// Ordered list of footer items the user wants visible. Sourced from
     /// `tui.status_items` in `~/.deepseek/config.toml` at startup; mutated
     /// live by `/statusline`. The renderer iterates this slice; no item is

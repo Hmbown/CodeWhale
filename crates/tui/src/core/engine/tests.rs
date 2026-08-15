@@ -7705,6 +7705,7 @@ fn registry_catalog_bypasses_generic_tool_result_compaction() {
         None,
         "registry_sync",
         &output,
+        None,
     );
 
     assert_eq!(context, raw);
@@ -13307,6 +13308,32 @@ fn v4_keeps_large_file_reads_but_compacts_noisy_shell_output() {
 }
 
 #[test]
+fn configured_tool_result_budget_keeps_large_file_read_on_small_context_model() {
+    let content = "0123456789abcdef\n".repeat(4_000);
+    let output = ToolResult::success(content.clone());
+
+    let default_context = compact_tool_result_for_route(
+        ApiProvider::Deepseek,
+        "deepseek-v3.2-128k",
+        None,
+        "read_file",
+        &output,
+        None,
+    );
+    assert!(default_context.contains("output compacted to protect context"));
+
+    let configured_context = compact_tool_result_for_route(
+        ApiProvider::Deepseek,
+        "deepseek-v3.2-128k",
+        None,
+        "read_file",
+        &output,
+        Some(131_072),
+    );
+    assert_eq!(configured_context, content.trim());
+}
+
+#[test]
 fn evidence_bounded_preview_is_not_recompacted() {
     // The adaptive evidence envelope already produced an honest bounded
     // preview (head + footer with the recovery path + tail). The context
@@ -13344,6 +13371,7 @@ fn codex_tool_retention_uses_oauth_route_window_not_asmall_contract_model_window
         Some(limits),
         "read_file",
         &output,
+        None,
     );
 
     assert!(context.contains("output compacted to protect context"));

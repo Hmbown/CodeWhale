@@ -1843,6 +1843,9 @@ async fn tool_result_content_for_api_message(
             app.active_route_limits,
             name,
             output,
+            app.workshop
+                .as_ref()
+                .and_then(|workshop| workshop.tool_result_max_bytes),
         );
     }
 
@@ -1869,6 +1872,9 @@ async fn tool_result_content_for_api_message(
         app.active_route_limits,
         name,
         output,
+        app.workshop
+            .as_ref()
+            .and_then(|workshop| workshop.tool_result_max_bytes),
     )
 }
 

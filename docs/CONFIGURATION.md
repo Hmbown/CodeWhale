@@ -772,6 +772,31 @@ compaction settings and [Token Quantities and
 Drivers](#token-quantities-and-drivers) for what each displayed token number
 actually measures.
 
+### Model-visible read / tool-result budgets
+
+Self-hosted long-context routes still use conservative per-result ceilings so
+a single `read` or tool result cannot flood a 128K window. Those ceilings are
+independent of the session window: raising `context_window` does not enlarge
+them. Optional `[workshop]` keys raise the individual-result budgets without
+turning session compaction off (#5367). Omit them to keep today's defaults.
+
+```toml
+[workshop]
+# Model-visible `read` / hidden `read_file` byte budget.
+# Unset: `read` stays at 50 KiB; `read_file` stays at 16 KiB
+# (including the small-file fast path).
+# read_result_max_bytes = 131072
+
+# Character budget for one tool result on the context path and the Chat
+# Completions wire. Unset: 12 000 characters (48 000 on routes whose
+# window is ≥ 500K). Setting this overrides both hard ceilings.
+# Does not disable session compaction or change the 4K+4K excerpt.
+# tool_result_max_bytes = 131072
+```
+
+Do not put these on `[[harness_profiles]]`. Harness profiles are a preview
+schema and are not consumed at runtime.
+
 ## Profiles
 
 You can define multiple profiles in the same file:
