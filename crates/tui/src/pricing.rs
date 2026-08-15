@@ -3974,7 +3974,13 @@ mod tests {
             crate::provider_lake::LiveSource::ModelsDev,
         );
 
-        let usage = million_input_usage();
+        // Stay under the 272K long-context surcharge so this asserts the
+        // catalog source, not the unrepresented-tier guard.
+        let usage = Usage {
+            input_tokens: 10_000,
+            output_tokens: 0,
+            ..Usage::default()
+        };
         let audit = official_route_audit(ApiProvider::Openai, "gpt-5.5", &usage);
         crate::provider_lake::clear_live_snapshot();
 
@@ -3983,7 +3989,7 @@ mod tests {
         assert_eq!(audit.live_pricing_defect, None);
         let estimate = audit.estimate.expect("priced");
         assert!(
-            (estimate.usd - 5.00).abs() < 1e-12,
+            (estimate.usd - 0.05).abs() < 1e-12,
             "bundled OpenAI rate must win over models.dev leftover cost: {}",
             estimate.usd
         );
