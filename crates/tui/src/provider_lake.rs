@@ -222,6 +222,51 @@ pub fn merge_live_offerings(new_offerings: Vec<CatalogOffering>) {
     }
 }
 
+/// Which live partition currently holds `(provider, wire_model_id)`, if any.
+///
+/// Per-provider `/models` rows win on collision, matching merge precedence.
+/// Pricing uses this so a Models.dev capabilities overlay is never treated as
+/// a rate source (#5241).
+#[must_use]
+pub fn live_catalog_origin(provider: ApiProvider, wire_model_id: &str) -> Option<LiveSource> {
+    let catalog_id = catalog_provider_id(provider);
+    let needle = wire_model_id.trim();
+    if needle.is_empty() {
+        return None;
+    }
+    let Ok(guard) = LIVE_SNAPSHOT.read() else {
+        return None;
+    };
+    let matches = |row: &CatalogOffering| {
+        row.provider.eq_ignore_ascii_case(catalog_id)
+            && row.wire_model_id.eq_ignore_ascii_case(needle)
+    };
+    if guard
+        .per_provider
+        .values()
+        .any(|snap| snap.offerings.iter().any(matches))
+    {
+        return Some(LiveSource::PerProvider);
+    }
+    if guard
+        .models_dev
+        .as_ref()
+        .is_some_and(|snap| snap.offerings.iter().any(matches))
+    {
+        return Some(LiveSource::ModelsDev);
+    }
+    None
+}
+
+/// Serialize tests that mutate the process-wide live snapshot.
+#[cfg(test)]
+pub(crate) fn lock_live_snapshot() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// The merged catalog snapshot: live rows override bundled rows on
 /// `(provider, wire_model_id)` identity (#4188). When no live snapshot is
 /// present, this is just the offline bundled snapshot. Per-provider live rows
@@ -450,15 +495,6 @@ mod tests {
     use super::*;
     use crate::config::{DEFAULT_TOGETHER_FLASH_MODEL, DEFAULT_TOGETHER_MODEL};
     use codewhale_config::catalog::CatalogSource;
-    use std::sync::{Mutex, MutexGuard, OnceLock};
-
-    /// Serialize tests that mutate the process-wide live snapshot.
-    fn lock_live_snapshot() -> MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
 
     #[test]
     fn together_catalog_includes_flash_from_bundled_asset() {
@@ -644,6 +680,47 @@ mod tests {
         clear_live_snapshot();
         let after_clear = all_catalog_models_for_provider(ApiProvider::Deepseek);
         assert_eq!(after_clear, bundled);
+    }
+
+    #[test]
+    fn live_catalog_origin_prefers_per_provider_over_models_dev() {
+        let _live = lock_live_snapshot();
+        clear_live_snapshot();
+        let wire = "accounts/fireworks/models/deepseek-v4-flash-0731";
+        assert_eq!(live_catalog_origin(ApiProvider::Fireworks, wire), None);
+
+        set_live_snapshot(
+            CatalogSnapshot {
+                offerings: vec![CatalogOffering {
+                    provider: "fireworks".to_string(),
+                    wire_model_id: wire.to_string(),
+                    endpoint_key: "chat".to_string(),
+                    ..Default::default()
+                }],
+            },
+            LiveSource::ModelsDev,
+        );
+        assert_eq!(
+            live_catalog_origin(ApiProvider::Fireworks, wire),
+            Some(LiveSource::ModelsDev)
+        );
+
+        set_live_snapshot(
+            CatalogSnapshot {
+                offerings: vec![CatalogOffering {
+                    provider: "fireworks".to_string(),
+                    wire_model_id: wire.to_string(),
+                    endpoint_key: "chat".to_string(),
+                    ..Default::default()
+                }],
+            },
+            LiveSource::PerProvider,
+        );
+        assert_eq!(
+            live_catalog_origin(ApiProvider::Fireworks, wire),
+            Some(LiveSource::PerProvider)
+        );
+        clear_live_snapshot();
     }
 
     /// Memoization: repeated `merged_snapshot()` calls return the cached merge
