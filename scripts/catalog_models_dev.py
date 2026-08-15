@@ -170,6 +170,34 @@ def public_models_dev_document(data: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def public_source_label(source: str) -> str:
+    """Log a catalog origin without query/fragment (tokens live there)."""
+    if source.startswith("url:"):
+        url = source[4:]
+        for sep in ("?", "#"):
+            url = url.split(sep, 1)[0]
+        return f"url:{url}"
+    return source
+
+
+def public_limit_value(value: Any) -> str:
+    """Format a catalog limit for logs. Never print credential-shaped strings.
+
+    Remote catalog JSON is tainted for clear-text-logging rules. Only numeric
+    limits are meaningful here; anything else (including token-shaped strings)
+    is replaced with a constant so the raw value cannot reach stdout.
+    """
+    if isinstance(value, bool):
+        return "redacted"
+    if value is None:
+        return "null"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return format(value, ".6g")
+    return "redacted"
+
+
 def catalog_stats(data: dict[str, Any]) -> str:
     models = data.get("models") or {}
     providers = data.get("providers") or {}
@@ -322,7 +350,11 @@ def _collect_limit_drift(
         bundled = seed_limit.get(field)
         upstream = upstream_limit.get(field)
         if bundled != upstream:
-            drift.append(f"{path}: limit.{field} bundled={bundled!r} upstream={upstream!r}")
+            drift.append(
+                f"{path}: limit.{field} "
+                f"bundled={public_limit_value(bundled)} "
+                f"upstream={public_limit_value(upstream)}"
+            )
 
 
 def cmd_drift(args: argparse.Namespace) -> None:
@@ -389,7 +421,7 @@ def cmd_drift(args: argparse.Namespace) -> None:
                 )
 
     print(f"bundled seed: {seed_path}")
-    print(f"upstream: {source}")
+    print(f"upstream: {public_source_label(source)}")
     if missing_upstream:
         print("removed upstream (bundled id no longer present):")
         for path in missing_upstream:
