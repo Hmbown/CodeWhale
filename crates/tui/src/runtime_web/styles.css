@@ -34,6 +34,7 @@ body {
   width: 100%;
   min-width: 280px;
   height: 100%;
+  height: var(--vv-height, 100dvh);
   margin: 0;
   overflow: hidden;
   background: var(--ink-0);
@@ -1006,6 +1007,24 @@ noscript {
 
   .composer-bar {
     justify-content: flex-end;
+  }
+}
+
+@media (pointer: coarse) {
+  .icon-button,
+  .quiet-button,
+  .primary-button,
+  .send-button,
+  .new-thread,
+  .thread-row,
+  .answer-option,
+  .rail-open,
+  .rail-close {
+    min-height: 44px;
+  }
+
+  .answer-option {
+    padding: 12px 14px;
   }
 }
 

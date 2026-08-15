@@ -6,16 +6,24 @@ import {
   STREAM_EVENT_NAMES,
   applyRuntimeEvent,
   applySnapshot,
+  captureTranscriptChrome,
+  collectUserInputAnswers,
+  compactFailureSummary,
   createThreadState,
   eventStreamUrl,
   formatRuntimeProvenance,
+  looksLikeMcpOrToolFailure,
   modeLabel,
+  refusalMessage,
   renderRuntimeProvenance,
+  resolveUserInputTarget,
   restoreDraft,
+  restoreTranscriptChrome,
   runtimeEventContinuity,
   saveDraft,
   setSafeText,
   snapshotThenSubscribe,
+  threadTarget,
 } from "../src/runtime_web/app.mjs";
 
 function snapshot(threadId = "thread-a", latestSeq = 7) {
@@ -584,4 +592,137 @@ test("renders hostile Runtime text only through the textContent sink", async () 
   assert.equal(source.includes("insertAdjacent" + "HTML"), false);
   assert.equal(source.includes("local" + "Storage"), false);
   assert.equal(source.includes("session" + "Storage"), false);
+});
+
+test("SSE gap flag clears only after snapshot and resubscription both succeed", async () => {
+  const state = createThreadState("thread-a");
+  applySnapshot(state, snapshot("thread-a", 7));
+  let streamGap = true;
+  let subscribeCalls = 0;
+
+  const recovered = await snapshotThenSubscribe({
+    state,
+    threadId: "thread-a",
+    loadSnapshot: async () => snapshot("thread-a", 15),
+    subscribe: () => {
+      subscribeCalls += 1;
+    },
+  });
+  assert.equal(recovered, true);
+  assert.equal(subscribeCalls, 1);
+  // Mirrors recoverProjection: clear only after both steps succeed.
+  if (recovered) streamGap = false;
+  assert.equal(streamGap, false);
+
+  streamGap = true;
+  const failed = await snapshotThenSubscribe({
+    state,
+    threadId: "thread-a",
+    loadSnapshot: async () => ({ thread: { id: "other" }, latest_seq: 1 }),
+    subscribe: () => {
+      subscribeCalls += 1;
+    },
+  });
+  assert.equal(failed, false);
+  assert.equal(subscribeCalls, 1);
+  if (failed) streamGap = false;
+  assert.equal(streamGap, true);
+});
+
+test("stream re-render restores open disclosures without losing chrome", () => {
+  const openDetails = [{ getAttribute: () => "item-reason" }];
+  const restored = { open: false };
+  const stubRoot = {
+    querySelectorAll: (sel) => (sel.includes("details") ? openDetails : []),
+    querySelector: () => restored,
+    ownerDocument: { activeElement: null },
+    contains: () => false,
+  };
+  const chrome = captureTranscriptChrome(stubRoot);
+  assert.deepEqual(chrome.openIds, ["item-reason"]);
+  restoreTranscriptChrome(stubRoot, chrome);
+  assert.equal(restored.open, true);
+});
+
+test("transcript is not a polite live region; streaming bodies mute announcements", async () => {
+  const html = await readFile(new URL("../src/runtime_web/index.html", import.meta.url), "utf8");
+  assert.match(html, /id="status-banner"[^>]*aria-live="polite"/);
+  assert.doesNotMatch(
+    html,
+    /id="transcript"[^>]*aria-live="/,
+  );
+  const source = await readFile(new URL("../src/runtime_web/app.mjs", import.meta.url), "utf8");
+  assert.match(source, /aria-live", "off"/);
+  assert.match(source, /data-live-body/);
+});
+
+test("user-input Other is always offered with exact single-select cardinality and thread binding", () => {
+  const checked = { checked: true };
+  const unchecked = { checked: false };
+  const other = { value: "custom" };
+  const ok = collectUserInputAnswers([
+    {
+      question: { id: "q1", multi_select: false, header: "Pick" },
+      controls: [{ input: unchecked, label: "A", value: "A" }],
+      other,
+    },
+  ]);
+  assert.equal(ok.ok, true);
+  assert.deepEqual(ok.answers, [{ id: "q1", label: "Other", value: "custom" }]);
+
+  const tooMany = collectUserInputAnswers([
+    {
+      question: { id: "q1", multi_select: false, header: "Pick" },
+      controls: [{ input: checked, label: "A", value: "A" }],
+      other,
+    },
+  ]);
+  assert.equal(tooMany.ok, false);
+  assert.match(tooMany.reason, /exactly one/);
+
+  const state = createThreadState("thread-a");
+  applySnapshot(state, {
+    ...snapshot(),
+    pending_user_inputs: [{ id: "input-1", turn_id: "turn-1", request: { questions: [] } }],
+  });
+  const bound = resolveUserInputTarget("input-1", threadTarget("thread-a"), state);
+  assert.equal(bound.ok, true);
+  assert.equal(bound.threadId, "thread-a");
+  const stale = resolveUserInputTarget("input-1", threadTarget("thread-b"), state);
+  assert.equal(stale.ok, false);
+  assert.equal(refusalMessage(stale.reason), "That thread is no longer the selected one — nothing was sent.");
+});
+
+test("long MCP failures stay compact until expanded", () => {
+  const detail = `MCP server error\n${"x".repeat(400)}\ntraceback: boom`;
+  assert.equal(looksLikeMcpOrToolFailure("tool failed", detail), true);
+  const summary = compactFailureSummary("tool failed", detail, 40);
+  assert.ok(summary.length <= 41);
+  assert.match(summary, /…$/);
+});
+
+test("mobile drawer uses modal semantics with Escape, inert, and coarse targets", async () => {
+  const [source, styles] = await Promise.all([
+    readFile(new URL("../src/runtime_web/app.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../src/runtime_web/styles.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(source, /aria-modal/);
+  assert.match(source, /session\.inert/);
+  assert.match(source, /Escape/);
+  assert.match(source, /visualViewport/);
+  assert.match(styles, /@media \(pointer: coarse\)/);
+  assert.match(styles, /min-height:\s*44px/);
+  assert.match(styles, /--vv-height/);
+});
+
+test("gap recovery clears streamGap only on successful snapshotThenSubscribe", async () => {
+  const source = await readFile(new URL("../src/runtime_web/app.mjs", import.meta.url), "utf8");
+  assert.match(source, /app\.streamGap = true/);
+  // Success path inside recoverProjection must clear the flag after subscribe.
+  assert.match(
+    source,
+    /if \(!subscribed\) return;\s*\/\/ Gap state clears only after both[\s\S]*?app\.streamGap = false/m,
+  );
+  // Failure path must not clear the flag.
+  assert.match(source, /Leave streamGap true/);
 });

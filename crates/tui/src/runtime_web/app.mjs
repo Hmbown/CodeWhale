@@ -285,6 +285,113 @@ export function resolveApprovalTarget(approvalId, target, streamState) {
   return { ok: true, threadId: reply.threadId, approvalId };
 }
 
+// Resolve a pending user-input submission to the live thread that owns it.
+export function resolveUserInputTarget(inputId, target, streamState) {
+  const reply = resolveReplyTarget(target, streamState);
+  if (!reply.ok) return reply;
+  if (!inputId) return { ok: false, reason: "no-user-input" };
+  if (!streamState || streamState.threadId !== reply.threadId) {
+    return { ok: false, reason: "stale-target" };
+  }
+  if (!streamState.userInputs || !streamState.userInputs.has(inputId)) {
+    return { ok: false, reason: "stale-user-input" };
+  }
+  return { ok: true, threadId: reply.threadId, inputId };
+}
+
+/**
+ * Collect answers with TUI parity: Other is always available, and each
+ * question yields the exact answer cardinality the control implies
+ * (one for single-select; one-or-more for multi-select).
+ */
+export function collectUserInputAnswers(groups) {
+  const answers = [];
+  for (const group of groups) {
+    const selected = [];
+    for (const control of group.controls) {
+      if (control.input?.checked) {
+        selected.push({
+          id: group.question.id,
+          label: control.label,
+          value: control.value,
+        });
+      }
+    }
+    const otherValue = group.other?.value?.trim?.() || "";
+    if (otherValue) {
+      selected.push({ id: group.question.id, label: "Other", value: otherValue });
+    }
+    if (selected.length === 0) {
+      return {
+        ok: false,
+        reason: `Choose an answer for ${group.question.header || group.question.question || "each question"}.`,
+      };
+    }
+    if (!group.question.multi_select && selected.length !== 1) {
+      return {
+        ok: false,
+        reason: `Pick exactly one answer for ${group.question.header || group.question.question || "each question"}.`,
+      };
+    }
+    answers.push(...selected);
+  }
+  return { ok: true, answers };
+}
+
+/** Compact preview for long MCP / tool failure receipts. */
+export function compactFailureSummary(summary, detail, maxChars = 160) {
+  const head = String(summary || "").trim();
+  const body = String(detail || "").trim();
+  if (!body || body === head) return head || "Failed";
+  if (body.length <= maxChars && !looksLikeMcpOrToolFailure(head, body)) {
+    return head || body.slice(0, maxChars);
+  }
+  const preview = (head || body).replace(/\s+/g, " ").slice(0, maxChars);
+  return preview.endsWith("…") ? preview : `${preview}…`;
+}
+
+export function looksLikeMcpOrToolFailure(summary, detail) {
+  const text = `${summary || ""}\n${detail || ""}`.toLowerCase();
+  return (
+    text.includes("mcp")
+    || text.includes("tool failed")
+    || text.includes("tool error")
+    || text.includes("server error")
+    || text.includes("traceback")
+    || (detail && detail.length > 280 && /failed|error|exception/i.test(text))
+  );
+}
+
+/** Capture open disclosures + selection so a stream re-render can restore them. */
+export function captureTranscriptChrome(root) {
+  const openIds = [];
+  const selectedText = globalThis.getSelection?.()?.toString?.() || "";
+  if (!root) return { openIds, selectedText, focusItemId: null, focusIsOther: false };
+  for (const details of root.querySelectorAll("details[data-item-id][open]")) {
+    openIds.push(details.getAttribute("data-item-id"));
+  }
+  const active = root.ownerDocument?.activeElement;
+  let focusItemId = null;
+  let focusIsOther = false;
+  if (active && root.contains(active)) {
+    focusItemId = active.closest?.("[data-item-id]")?.getAttribute("data-item-id") || null;
+    focusIsOther = active.classList?.contains("other-answer") || active.tagName === "TEXTAREA";
+  }
+  return { openIds, selectedText, focusItemId, focusIsOther };
+}
+
+export function restoreTranscriptChrome(root, chrome) {
+  if (!root || !chrome) return;
+  const escape = (value) =>
+    (globalThis.CSS && typeof globalThis.CSS.escape === "function")
+      ? globalThis.CSS.escape(value)
+      : String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  for (const id of chrome.openIds || []) {
+    const details = root.querySelector(`details[data-item-id="${escape(id)}"]`);
+    if (details) details.open = true;
+  }
+}
+
 // Human-readable reason for a refusal, for the status banner.
 export function refusalMessage(reason) {
   switch (reason) {
@@ -294,10 +401,16 @@ export function refusalMessage(reason) {
       return "That thread is no longer the selected one — nothing was sent.";
     case "stale-approval":
       return "That request was already answered or has expired — nothing was sent.";
+    case "stale-user-input":
+      return "That question was already answered or has expired — nothing was sent.";
     case "no-approval":
       return "No approval was identified — nothing was sent.";
-    default:
+    case "no-user-input":
+      return "No pending question was identified — nothing was sent.";
+    case "no-target":
       return "Select a live thread first — nothing was sent.";
+    default:
+      return "Nothing was sent.";
   }
 }
 
@@ -378,6 +491,8 @@ function appendItemDelta(state, itemId, payload) {
 function startBrowserClient() {
   const dom = {
     shell: document.querySelector("#app-shell"),
+    rail: document.querySelector("#thread-rail"),
+    session: document.querySelector("main.session"),
     railOpen: document.querySelector("#rail-open"),
     railClose: document.querySelector("#rail-close"),
     railScrim: document.querySelector("#rail-scrim"),
@@ -427,6 +542,8 @@ function startBrowserClient() {
     reconnectTimer: null,
     generation: 0,
     searchTimer: null,
+    railPreviousFocus: null,
+    railKeyHandler: null,
   };
 
   function element(tag, className, text) {
@@ -436,9 +553,81 @@ function startBrowserClient() {
     return created;
   }
 
+  function railFocusable() {
+    if (!dom.rail) return [];
+    return Array.from(
+      dom.rail.querySelectorAll(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter((node) => node.getClientRects().length > 0);
+  }
+
+  function releaseRailModal() {
+    if (dom.session) dom.session.inert = false;
+    if (dom.rail) {
+      dom.rail.removeAttribute("aria-modal");
+      dom.rail.removeAttribute("role");
+    }
+    if (app.railKeyHandler) {
+      document.removeEventListener("keydown", app.railKeyHandler, true);
+      app.railKeyHandler = null;
+    }
+  }
+
   function closeRail() {
+    const restore = app.railPreviousFocus;
+    app.railPreviousFocus = null;
+    releaseRailModal();
     dom.shell.classList.remove("rail-visible");
-    dom.railOpen.focus({ preventScroll: true });
+    const target = restore && typeof restore.focus === "function" ? restore : dom.railOpen;
+    target?.focus?.({ preventScroll: true });
+  }
+
+  function openRail() {
+    if (dom.shell.classList.contains("rail-visible")) return;
+    app.railPreviousFocus = document.activeElement;
+    dom.shell.classList.add("rail-visible");
+    if (dom.session) dom.session.inert = true;
+    if (dom.rail) {
+      dom.rail.setAttribute("role", "dialog");
+      dom.rail.setAttribute("aria-modal", "true");
+    }
+    app.railKeyHandler = (event) => {
+      if (!dom.shell.classList.contains("rail-visible")) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeRail();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const candidates = railFocusable();
+      const first = candidates[0];
+      const last = candidates[candidates.length - 1];
+      if (!first || !last) {
+        event.preventDefault();
+        return;
+      }
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || !dom.rail?.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !dom.rail?.contains(active))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", app.railKeyHandler, true);
+    requestAnimationFrame(() => {
+      (railFocusable()[0] || dom.railClose)?.focus?.({ preventScroll: true });
+    });
+  }
+
+  function syncVisualViewport() {
+    const viewport = globalThis.visualViewport;
+    const height = viewport?.height || globalThis.innerHeight || 0;
+    if (height > 0) {
+      document.documentElement.style.setProperty("--vv-height", `${Math.round(height)}px`);
+    }
   }
 
   function setConnection(kind, message) {
@@ -774,11 +963,16 @@ function startBrowserClient() {
         isCurrent: () => generation === app.generation && threadId === app.selectedThreadId,
       });
       if (!subscribed) return;
+      // Gap state clears only after both the replacement snapshot and the
+      // resubscription have succeeded.
+      app.streamGap = false;
       renderAll();
       showStatus("");
       setConnection("ready", "Local runtime connected");
     } catch (error) {
       if (generation !== app.generation || threadId !== app.selectedThreadId) return;
+      // Leave streamGap true so the connection label stays honest until a
+      // later recovery actually lands a snapshot + subscription.
       showStatus(`Could not refresh the thread snapshot: ${error.message}`);
       setConnection("error", "Runtime recovery failed");
       app.reconnectTimer = setTimeout(
@@ -838,19 +1032,48 @@ function startBrowserClient() {
 
   function renderTranscript(preserveScroll) {
     const wasNearBottom = dom.transcript.scrollHeight - dom.transcript.scrollTop - dom.transcript.clientHeight < 120;
-    dom.transcript.replaceChildren();
-    if (!app.threadState.thread) {
-      dom.transcript.append(emptyState("Your local agent, in the browser.", "Create a thread or choose one from the rail. This client uses the same Runtime as the terminal."));
-      return;
+    const chrome = captureTranscriptChrome(dom.transcript);
+    const liveBodies = new Map();
+    for (const node of dom.transcript.querySelectorAll("[data-item-id][data-live-body='true']")) {
+      liveBodies.set(node.getAttribute("data-item-id"), node);
     }
-    if (app.threadState.itemOrder.length === 0) {
-      dom.transcript.append(emptyState("Ready for a task.", "Send a message below. Model, mode, and permission posture come from the Runtime and are shown read-only above."));
-      return;
+
+    // Prefer in-place body patches for growing agent text so assistive tech
+    // and selection are not reset on every token.
+    let patchedOnly = false;
+    if (
+      preserveScroll
+      && liveBodies.size > 0
+      && app.threadState.itemOrder.length > 0
+      && dom.transcript.childElementCount === app.threadState.itemOrder.length
+    ) {
+      patchedOnly = true;
+      for (const itemId of app.threadState.itemOrder) {
+        const item = app.threadState.items.get(itemId);
+        const existing = liveBodies.get(itemId);
+        if (!item || !existing || item.kind !== "agent_message" || item.status !== "in_progress") {
+          patchedOnly = false;
+          break;
+        }
+        const detail = item.detail || item.summary || "";
+        if (existing.textContent !== detail) setSafeText(existing, detail);
+      }
     }
-    for (const itemId of app.threadState.itemOrder) {
-      const item = app.threadState.items.get(itemId);
-      if (!item) continue;
-      dom.transcript.append(renderItem(item));
+
+    if (!patchedOnly) {
+      dom.transcript.replaceChildren();
+      if (!app.threadState.thread) {
+        dom.transcript.append(emptyState("Your local agent, in the browser.", "Create a thread or choose one from the rail. This client uses the same Runtime as the terminal."));
+      } else if (app.threadState.itemOrder.length === 0) {
+        dom.transcript.append(emptyState("Ready for a task.", "Send a message below. Model, mode, and permission posture come from the Runtime and are shown read-only above."));
+      } else {
+        for (const itemId of app.threadState.itemOrder) {
+          const item = app.threadState.items.get(itemId);
+          if (!item) continue;
+          dom.transcript.append(renderItem(item));
+        }
+        restoreTranscriptChrome(dom.transcript, chrome);
+      }
     }
     if (!preserveScroll || wasNearBottom) {
       requestAnimationFrame(() => {
@@ -872,24 +1095,49 @@ function startBrowserClient() {
     if (item.kind === "user_message" || item.kind === "agent_message") {
       const role = item.kind === "user_message" ? "user" : "agent";
       const card = element("article", `message ${role} ${item.status === "in_progress" ? "in-progress" : ""}`.trim());
+      card.dataset.itemId = item.id;
       card.append(element("div", "message-label", role === "user" ? "You" : "Codewhale"));
-      card.append(element("div", "message-body", detail));
+      const body = element("div", "message-body", detail);
+      body.dataset.itemId = item.id;
+      if (role === "agent" && item.status === "in_progress") {
+        // Growing token streams must not re-announce the whole reply.
+        body.dataset.liveBody = "true";
+        body.setAttribute("aria-live", "off");
+      }
+      card.append(body);
       return card;
     }
     if (item.kind === "agent_reasoning") {
       const reasoning = element("article", "reasoning");
+      reasoning.dataset.itemId = item.id;
       const disclosure = element("details");
+      disclosure.dataset.itemId = item.id;
       disclosure.append(element("summary", "", item.status === "in_progress" ? "Reasoning…" : "Reasoning"));
       disclosure.append(element("pre", "", detail));
       reasoning.append(disclosure);
       return reasoning;
     }
 
-    const receipt = element("article", `receipt ${item.status === "failed" ? "failed" : ""}`.trim());
+    const failed = item.status === "failed";
+    const receipt = element("article", `receipt ${failed ? "failed" : ""}`.trim());
+    receipt.dataset.itemId = item.id;
     receipt.append(element("div", "receipt-label", `${humanize(item.kind)} · ${humanize(item.status)}`));
+    const longFailure = failed && looksLikeMcpOrToolFailure(item.summary, detail);
+    if (longFailure) {
+      receipt.append(
+        element("div", "receipt-summary", compactFailureSummary(item.summary, detail)),
+      );
+      const disclosure = element("details");
+      disclosure.dataset.itemId = item.id;
+      disclosure.append(element("summary", "", "Show full error"));
+      disclosure.append(element("pre", "", detail || item.summary || ""));
+      receipt.append(disclosure);
+      return receipt;
+    }
     receipt.append(element("div", "receipt-summary", item.summary || detail || humanize(item.kind)));
     if (detail && detail !== item.summary) {
       const disclosure = element("details");
+      disclosure.dataset.itemId = item.id;
       disclosure.append(element("summary", "", "Show receipt"));
       disclosure.append(element("pre", "", detail));
       receipt.append(disclosure);
@@ -954,6 +1202,7 @@ function startBrowserClient() {
 
   function renderUserInput(inputId, envelope) {
     const card = element("form", "attention-card");
+    card.dataset.inputId = inputId;
     card.append(element("p", "eyebrow", "Input required"));
     card.append(element("h2", "", "Codewhale has a question"));
     const questions = Array.isArray(envelope.request?.questions) ? envelope.request.questions : [];
@@ -975,15 +1224,13 @@ function startBrowserClient() {
         fieldset.append(label);
         controls.push({ input, label: option.label || "", value: option.label || "" });
       }
-      let other = null;
-      if (question.allow_free_text) {
-        other = document.createElement("input");
-        other.className = "other-answer";
-        other.type = "text";
-        other.placeholder = "Other response";
-        other.setAttribute("aria-label", `${question.header || "Question"} other response`);
-        fieldset.append(other);
-      }
+      // TUI parity: Other is always reachable, even when allow_free_text is false.
+      const other = document.createElement("input");
+      other.className = "other-answer";
+      other.type = "text";
+      other.placeholder = "Other response";
+      other.setAttribute("aria-label", `${question.header || "Question"} other response`);
+      fieldset.append(other);
       card.append(fieldset);
       groups.push({ question, controls, other });
     }
@@ -994,25 +1241,25 @@ function startBrowserClient() {
     card.append(actions);
     card.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const answers = [];
-      for (const group of groups) {
-        for (const control of group.controls) {
-          if (control.input.checked) {
-            answers.push({ id: group.question.id, label: control.label, value: control.value });
-          }
-        }
-        const otherValue = group.other?.value.trim();
-        if (otherValue) answers.push({ id: group.question.id, label: "Other", value: otherValue });
-        if (!answers.some((answer) => answer.id === group.question.id)) {
-          showStatus(`Choose an answer for ${group.question.header || group.question.question || "each question"}.`);
-          return;
-        }
+      const resolved = resolveUserInputTarget(inputId, app.target, app.threadState);
+      if (!resolved.ok) {
+        showStatus(refusalMessage(resolved.reason));
+        renderAttention();
+        return;
+      }
+      const collected = collectUserInputAnswers(groups);
+      if (!collected.ok) {
+        showStatus(collected.reason);
+        return;
       }
       try {
-        await api(`/v1/user-input/${encodeURIComponent(app.selectedThreadId)}/${encodeURIComponent(inputId)}`, {
-          method: "POST",
-          body: JSON.stringify({ answers }),
-        });
+        await api(
+          `/v1/user-input/${encodeURIComponent(resolved.threadId)}/${encodeURIComponent(resolved.inputId)}`,
+          {
+            method: "POST",
+            body: JSON.stringify({ answers: collected.answers }),
+          },
+        );
         app.threadState.userInputs.delete(inputId);
         showStatus("");
         renderAttention();
@@ -1177,9 +1424,13 @@ function startBrowserClient() {
     if (globalThis.matchMedia("(max-width: 800px)").matches) closeRail();
   }
 
-  dom.railOpen.addEventListener("click", () => dom.shell.classList.add("rail-visible"));
+  dom.railOpen.addEventListener("click", openRail);
   dom.railClose.addEventListener("click", closeRail);
   dom.railScrim.addEventListener("click", closeRail);
+  syncVisualViewport();
+  globalThis.visualViewport?.addEventListener("resize", syncVisualViewport);
+  globalThis.visualViewport?.addEventListener("scroll", syncVisualViewport);
+  globalThis.addEventListener("resize", syncVisualViewport);
   dom.newThread.addEventListener("click", createThread);
   dom.rename.addEventListener("click", openRenameDialog);
   dom.archive.addEventListener("click", archiveThread);
