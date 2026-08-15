@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Catalog drift logs never print remote token-shaped values. Limit diffs
   emit numbers or `redacted`; source URLs drop query strings.
+- Release, candidate, and artifact workflows restore caches from the
+  trusted workflow SHA and a lockfile + OS + stable-toolchain key. They
+  no longer interpolate tag, dispatch, or caller SHAs into checkout refs
+  or cache keys.
 
 - Wide terminals and tmux panes fill the full available width again for the
   transcript and composer (#5322). The brief v0.9 session-shell side gutter is

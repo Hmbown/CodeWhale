@@ -116,9 +116,11 @@ jobs:
     needs: resolve
     runs-on: ubuntu-latest
     steps:
+      # resolve already proved GITHUB_SHA equals the tag commit. Do not
+      # interpolate needs.resolve.outputs.sha into checkout or cache keys —
+      # CodeQL treats a *sha* ref as an untrusted checkout on workflow_dispatch
+      # (default-branch cache write).
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-        with:
-          ref: ${{ needs.resolve.outputs.sha }}
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master 2026-07-18
         with:
           toolchain: stable
@@ -143,9 +145,13 @@ jobs:
             sleep 15
           done
           sudo apt-get install -y libdbus-1-dev pkg-config
+      # Restore after the trusted lockfile is on disk. Key is OS + arch +
+      # explicit stable toolchain + rust-cache's Cargo.lock / rust-toolchain
+      # hash. Never interpolate github.event, github.ref, github.sha, or inputs.
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           cache-bin: false
+          prefix-key: v1-${{ runner.os }}-${{ runner.arch }}-stable
       - name: Format check
         run: cargo fmt --all -- --check
       - name: Compile check
@@ -427,6 +433,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 20
+          package-manager-cache: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: codewhale-release-assets

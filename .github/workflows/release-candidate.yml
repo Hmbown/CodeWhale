@@ -31,6 +31,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 20
+          package-manager-cache: false
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # stable 2026-07-18
         with:
           toolchain: stable
@@ -82,9 +83,9 @@ jobs:
       run:
         working-directory: web
     steps:
+      # resolve already proved expected_sha equals GITHUB_SHA. Do not
+      # interpolate that SHA into checkout or the npm cache key.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-        with:
-          ref: ${{ needs.resolve.outputs.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22

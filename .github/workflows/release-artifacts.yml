@@ -24,9 +24,31 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   RUSTFLAGS: -Dwarnings
-  DEEPSEEK_BUILD_SHA: ${{ inputs.source_sha }}
+  # Build identity is the trusted workflow SHA. Callers pass source_sha only
+  # so `pin` can refuse a mismatch; it must not retarget checkout or caches.
+  DEEPSEEK_BUILD_SHA: ${{ github.sha }}
 
 jobs:
+  pin:
+    name: Pin caller SHA to this run
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require source_sha equals github.sha
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          if [[ "${#SOURCE_SHA}" -ne 40 || "${SOURCE_SHA}" =~ [^0-9a-fA-F] ]]; then
+            echo "::error::source_sha must be a full 40-character commit SHA." >&2
+            exit 1
+          fi
+          expected="$(printf '%s' "${SOURCE_SHA}" | tr '[:upper:]' '[:lower:]')"
+          actual="$(printf '%s' "${GITHUB_SHA}" | tr '[:upper:]' '[:lower:]')"
+          if [[ "${actual}" != "${expected}" ]]; then
+            echo "::error::Reusable workflow SHA ${actual} does not match source_sha ${SOURCE_SHA}." >&2
+            exit 1
+          fi
+
   build:
     name: Build ${{ matrix.platform }}
     # FreeBSD is a source-build target validated via `cargo check --target x86_64-unknown-freebsd -p codewhale-cli --locked`
@@ -93,10 +115,11 @@ jobs:
             shim_artifact: codew-windows-arm64.exe
             tui_artifact: codewhale-tui-windows-arm64.exe
     runs-on: ${{ matrix.os }}
+    needs: pin
     steps:
+      # No ref: — GITHUB_SHA only. CodeQL treats workflow_call checkout-with-ref
+      # and any ref named *sha* as an untrusted checkout (cache-poisoning).
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-        with:
-          ref: ${{ inputs.source_sha }}
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master 2026-07-18
         with:
           toolchain: stable
@@ -113,9 +136,13 @@ jobs:
             echo "RUSTC_WRAPPER=sccache"
             echo "SCCACHE_IGNORE_SERVER_IO_ERROR=1"
           } >> "${GITHUB_ENV}"
+      # Restore after the trusted lockfile is on disk. Key is OS + arch +
+      # explicit stable toolchain + rust-cache's Cargo.lock / rust-toolchain
+      # hash. Never interpolate github.event, github.ref, github.sha, or inputs.
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           cache-bin: false
+          prefix-key: v1-${{ runner.os }}-${{ runner.arch }}-stable
       - name: Build static Linux binaries (musl)
         if: endsWith(matrix.target, '-unknown-linux-musl')
         shell: bash
@@ -256,19 +283,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-        with:
-          ref: ${{ inputs.source_sha }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: artifacts
           pattern: '*'
       - name: Create and checksum platform archives
         shell: bash
+        env:
+          SOURCE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          source_date_epoch="$(git show -s --format=%ct "${{ inputs.source_sha }}")"
+          source_date_epoch="$(git show -s --format=%ct "${SOURCE_SHA}")"
           if [[ ! "${source_date_epoch}" =~ ^[0-9]+$ ]]; then
-            echo "Could not read a Unix timestamp for source commit ${{ inputs.source_sha }}" >&2
+            echo "Could not read a Unix timestamp for source commit ${SOURCE_SHA}" >&2
             exit 1
           fi
           SOURCE_DATE_EPOCH="${source_date_epoch}" \
@@ -290,8 +317,6 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-        with:
-          ref: ${{ inputs.source_sha }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: artifacts
@@ -332,11 +357,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-        with:
-          ref: ${{ inputs.source_sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 20
+          package-manager-cache: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: intermediate-artifacts
@@ -358,11 +382,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-        with:
-          ref: ${{ inputs.source_sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 20
+          package-manager-cache: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: codewhale-release-assets
@@ -383,7 +406,7 @@ jobs:
           {
             echo "### Release artifact candidate"
             echo ""
-            echo "- Source: \`${{ inputs.source_sha }}\`"
+            echo "- Source: \`${{ github.sha }}\`"
             echo "- Version metadata: \`${{ inputs.version }}\`"
             echo "- Inventory: 7 targets / 34 files (single binary; 7 legacy alias assets)"
             echo "- Publication: none (Actions artifact \`codewhale-release-assets\` only)"

@@ -120,7 +120,13 @@ assert.doesNotMatch(candidate, /^  (push|pull_request|schedule):/m);
 assert.match(candidate, /uses: \.\/\.github\/workflows\/release-artifacts\.yml/);
 assert.match(candidate, /source_sha: \$\{\{ needs\.resolve\.outputs\.sha \}\}/);
 assert.match(candidate, /^  web:\n/m);
-assert.match(candidate, /ref: \$\{\{ needs\.resolve\.outputs\.sha \}\}/);
+assert.doesNotMatch(
+  candidate,
+  /ref: \$\{\{ needs\.resolve\.outputs\.sha \}\}/,
+  "candidate jobs must checkout GITHUB_SHA, not interpolate the dispatch SHA into ref",
+);
+assert.match(candidate, /cache-dependency-path: web\/package-lock\.json/);
+assert.match(candidate, /package-manager-cache: false/);
 assert.match(candidate, /working-directory: web/);
 for (const command of [
   "npm ci",
@@ -259,13 +265,50 @@ assert.match(artifacts, /codew-windows-arm64\.exe/);
 assert.match(artifacts, /CodeWhaleSetup\.exe/);
 assert.match(artifacts, /assemble-release-assets\.js --verify release-assets/);
 assert.match(artifacts, /CODEWHALE_SMOKE_ASSETS_DIR/);
+assert.match(artifacts, /^  pin:\n/m);
+assert.match(artifacts, /Require source_sha equals github\.sha/);
+assert.doesNotMatch(
+  artifacts,
+  /ref: \$\{\{ inputs\.source_sha \}\}/,
+  "artifact jobs must checkout GITHUB_SHA, not interpolate the caller SHA into ref",
+);
+assert.match(artifacts, /prefix-key: v1-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-stable/);
+assert.equal(
+  (artifacts.match(/package-manager-cache: false/g) || []).length,
+  2,
+  "assemble and smoke must disable setup-node's implicit npm cache",
+);
 const bundleStep = namedStep(artifacts, "Create and checksum platform archives");
-assert.match(bundleStep, /git show -s --format=%ct "\$\{\{ inputs\.source_sha \}\}"/);
+assert.match(bundleStep, /SOURCE_SHA: \$\{\{ github\.sha \}\}/);
+assert.match(bundleStep, /git show -s --format=%ct "\$\{SOURCE_SHA\}"/);
 assert.match(
   bundleStep,
   /SOURCE_DATE_EPOCH="\$\{source_date_epoch\}"[\s\\]+bash scripts\/release\/create-release-bundles\.sh artifacts bundles/,
 );
+assert.doesNotMatch(bundleStep, /inputs\.source_sha/);
 assert.doesNotMatch(bundleStep, /\bdate\b/, "bundle timestamps must come from the pinned source commit, not wall-clock time");
+
+const rustCacheBlocks = [...artifacts.matchAll(/uses: Swatinem\/rust-cache@[\s\S]*?(?=\n      - )/g)].map(
+  (match) => match[0],
+);
+assert.ok(rustCacheBlocks.length >= 1, "shared artifact workflow must pin rust-cache");
+for (const block of rustCacheBlocks) {
+  assert.doesNotMatch(block, /github\.(event|ref|sha)|inputs\./);
+}
+
+const parity = release.match(/\n  parity:\n([\s\S]*?)\n  artifacts:\n/);
+assert.ok(parity, "public release must retain a parity job");
+assert.doesNotMatch(
+  parity[1],
+  /ref: \$\{\{ needs\.resolve\.outputs\.sha \}\}/,
+  "parity must checkout GITHUB_SHA after resolve, not interpolate the tag SHA into ref",
+);
+assert.match(parity[1], /prefix-key: v1-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-stable/);
+const parityRustCache = [...parity[1].matchAll(/uses: Swatinem\/rust-cache@[\s\S]*?(?=\n      - )/g)].map(
+  (match) => match[0],
+);
+assert.equal(parityRustCache.length, 1, "parity must pin exactly one rust-cache");
+assert.doesNotMatch(parityRustCache[0], /github\.(event|ref|sha)|inputs\./);
 
 assert.equal(allReleaseAssetNames().length, 34);
 assert.match(release, /^  artifacts:\n/m);
