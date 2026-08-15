@@ -1565,11 +1565,22 @@ fn push_configured_provider_model(
 }
 
 fn provider_catalog_model_ids(provider: ApiProvider) -> Vec<String> {
+    provider_catalog_model_ids_for(provider, provider.as_str())
+}
+
+fn provider_catalog_model_ids_for(provider: ApiProvider, provider_id: &str) -> Vec<String> {
     let mut models = Vec::new();
     for id in all_catalog_models_for_provider(provider) {
         // The catalog describes the built-in provider route. A custom route's
         // endpoint-owned current/configured model is appended separately.
         push_model_id(&mut models, picker_visible_model_id(provider, &id, false));
+    }
+    if provider == ApiProvider::Custom
+        && let Some(template) = codewhale_config::provider_setup_template(provider_id)
+    {
+        for id in template.picker_models() {
+            push_model_id(&mut models, id);
+        }
     }
     models
 }
@@ -1579,7 +1590,12 @@ fn provider_scoped_model_ids_for_app(app: &App, include_current_model: bool) -> 
     // separate custom/current-model row.
     let mut models = Vec::new();
     push_model_id(&mut models, "auto");
-    for id in provider_catalog_model_ids(app.api_provider) {
+    let catalog_id = if app.api_provider == ApiProvider::Custom {
+        app.provider_identity_for_persistence()
+    } else {
+        app.api_provider.as_str()
+    };
+    for id in provider_catalog_model_ids_for(app.api_provider, catalog_id) {
         push_model_id(&mut models, &id);
     }
 
@@ -1689,9 +1705,14 @@ fn push_model_row(
 /// Fresh/live rows stay unmarked; stale and failed caches get an explicit
 /// suffix so users know the live layer is still visible but not current.
 fn catalog_freshness_title_suffix() -> &'static str {
-    match models_dev_live::status().freshness {
+    catalog_freshness_title_suffix_for(models_dev_live::status().freshness)
+}
+
+fn catalog_freshness_title_suffix_for(freshness: ModelsDevFreshness) -> &'static str {
+    match freshness {
         ModelsDevFreshness::Stale => " · stale",
-        ModelsDevFreshness::Failed => " · cache failed",
+        // A failed optional refresh keeps bundled / template rows available.
+        ModelsDevFreshness::Failed => " · refresh failed; catalog available",
         ModelsDevFreshness::Bundled | ModelsDevFreshness::Live => "",
     }
 }
@@ -3013,6 +3034,29 @@ mod tests {
     /// nothing but their near-identical ids. This asserts the two failure modes
     /// that produced: rows that are byte-identical to each other, and rows that
     /// carry no metadata at all.
+    #[test]
+    fn failed_live_catalog_refresh_names_the_working_fallback() {
+        assert_eq!(
+            catalog_freshness_title_suffix_for(ModelsDevFreshness::Failed),
+            " · refresh failed; catalog available"
+        );
+        assert!(
+            !catalog_freshness_title_suffix_for(ModelsDevFreshness::Failed)
+                .contains("cache failed")
+        );
+    }
+
+    #[test]
+    fn custom_agnes_template_seeds_model_list() {
+        let ids = provider_catalog_model_ids_for(ApiProvider::Custom, "agnes");
+        assert!(
+            ids.iter()
+                .any(|id| id == codewhale_config::AGNES_DEFAULT_MODEL),
+            "{ids:?}"
+        );
+        assert!(ids.iter().any(|id| id == "agnes-2.0-flash"), "{ids:?}");
+    }
+
     #[test]
     fn deepseek_rows_render_distinguishably() {
         let (app, mut config, _lock) = create_test_app();

@@ -7,7 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Prefab `/provider` templates for OpenCode Zen, OpenCode Go, Agnes, and
+  SenseNova (#5350). First-class routes keep their existing key-only setup;
+  Agnes and SenseNova persist as named OpenAI-compatible tables with a fixed
+  URL and a common model list so the user only enters an API key. `P` opens
+  the template list; `T` tests the connection by probing `/models` and
+  refreshes status without treating a 2xx as model-ready.
+
 ### Fixed
+
+- `/model` no longer labels a failed Models.dev refresh as `cache failed`.
+  The picker keeps bundled or template rows and says
+  `refresh failed; catalog available`, matching `/provider`. OpenCode Zen's
+  fallback list is the full curated roster instead of only the default
+  model.
 
 - Wide terminals and tmux panes fill the full available width again for the
   transcript and composer (#5322). The brief v0.9 session-shell side gutter is

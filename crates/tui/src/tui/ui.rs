@@ -3444,6 +3444,119 @@ mod provider_key_validation_tests {
         );
     }
 
+    #[test]
+    fn picker_identity_resolves_unconfigured_agnes_template() {
+        let config = Config::default();
+        let identity = picker_provider_identity(&config, ApiProvider::Custom, Some("agnes"))
+            .expect("agnes template identity");
+        assert_eq!(identity.provider, ApiProvider::Custom);
+        assert_eq!(identity.key, "agnes");
+        assert_eq!(identity.exact_id.as_deref(), Some("agnes"));
+    }
+
+    #[tokio::test]
+    async fn test_connection_records_models_probe_not_ready() {
+        let _config_env = ConfigPathEnvGuard::new();
+        let mut app = create_test_app();
+        let mut engine = mock_engine_handle();
+        let mut config = openrouter_config("https://mock.openrouter.test/v1");
+        if let Some(providers) = config.providers.as_mut() {
+            providers.openrouter.api_key = Some("sk-saved".to_string());
+        }
+        let verifier = MockProviderKeyVerifier::new(Ok(()));
+        let identity = picker_provider_identity(&config, ApiProvider::Openrouter, None)
+            .expect("OpenRouter identity");
+
+        apply_provider_picker_test_connection_with_verifier(
+            &mut app,
+            &mut engine.handle,
+            &mut config,
+            identity,
+            &verifier,
+        )
+        .await;
+
+        assert_eq!(
+            verifier.calls(),
+            vec![(
+                ApiProvider::Openrouter,
+                "sk-saved".to_string(),
+                "https://mock.openrouter.test/v1".to_string()
+            )]
+        );
+        assert!(
+            app.status_message.as_deref().is_some_and(|status| {
+                status.contains("Connection checked (/models returned 2xx)")
+                    && status.contains("Model availability is not checked")
+            }),
+            "status names connection-probe success: {:?}",
+            app.status_message
+        );
+        let verified_route = crate::provider_readiness::route_identity_for_model(
+            &config,
+            ApiProvider::Openrouter,
+            crate::config::DEFAULT_OPENROUTER_MODEL,
+        );
+        assert_eq!(
+            crate::provider_readiness::resolve_with_identity(
+                &verified_route,
+                crate::provider_readiness::CredentialState::Saved,
+                true,
+                &app.provider_health,
+            ),
+            crate::provider_readiness::ResolvedProviderReadiness::ConnectionCheckedModelUnchecked,
+            "Test Connection must not report the model as ready",
+        );
+        assert_eq!(app.view_stack.top_kind(), Some(ModalKind::ProviderPicker));
+        let picker = app.view_stack.pop().expect("provider picker reopened");
+        let area = Rect::new(0, 0, 90, 16);
+        let mut buf = Buffer::empty(area);
+        picker.render(area, &mut buf);
+        let rendered = (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !rendered.contains("Pick a default model"),
+            "Test Connection must reopen the list, not model pick:\n{rendered}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_connection_without_key_does_not_probe() {
+        let _config_env = ConfigPathEnvGuard::new();
+        let _agnes = crate::test_support::EnvVarGuard::remove("AGNES_API_KEY");
+        let mut app = create_test_app();
+        let mut engine = mock_engine_handle();
+        let mut config = Config::default();
+        let verifier = MockProviderKeyVerifier::new(Ok(()));
+        let identity = picker_provider_identity(&config, ApiProvider::Custom, Some("agnes"))
+            .expect("agnes identity");
+
+        apply_provider_picker_test_connection_with_verifier(
+            &mut app,
+            &mut engine.handle,
+            &mut config,
+            identity,
+            &verifier,
+        )
+        .await;
+
+        assert!(verifier.calls().is_empty(), "{:?}", verifier.calls());
+        assert!(
+            app.status_message
+                .as_deref()
+                .is_some_and(|status| status.contains("No API key saved")),
+            "{:?}",
+            app.status_message
+        );
+        assert_eq!(app.view_stack.top_kind(), Some(ModalKind::ProviderPicker));
+    }
+
     /// #4526: the wizard's StepFun billing-route choice must be the endpoint
     /// the key is probed against, and it must reach disk only once the user
     /// confirms — never as a side effect of validation.

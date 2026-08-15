@@ -854,6 +854,12 @@ pub enum ViewEvent {
         provider: crate::config::ApiProvider,
         provider_id: Option<String>,
     },
+    /// Emitted by the `/provider` picker (`T`) to probe `/models` and refresh
+    /// readiness. A 2xx is reachability only — never model ready (#5350).
+    ProviderPickerTestConnection {
+        provider: crate::config::ApiProvider,
+        provider_id: Option<String>,
+    },
     /// Emitted by the `/mode` picker when the user chooses a mode.
     ModeSelected {
         mode: crate::tui::app::AppMode,

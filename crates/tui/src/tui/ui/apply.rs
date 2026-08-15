@@ -1410,6 +1410,31 @@ pub(crate) async fn apply_command_result(
                     );
                 }
             }
+            AppAction::OpenTemplateSetup { template_id } => {
+                if app.view_stack.top_kind() != Some(ModalKind::ProviderPicker) {
+                    let runtime_status = query_provider_runtime_status(engine_handle).await;
+                    if let Some(picker) =
+                        crate::tui::provider_picker::ProviderPickerView::new_for_template_setup(
+                            app.api_provider,
+                            &template_id,
+                            config,
+                            runtime_status,
+                        )
+                    {
+                        app.view_stack.push(
+                            picker
+                                .with_locale(app.ui_locale)
+                                .with_provider_health(&app.provider_health),
+                        );
+                        app.status_message = Some(format!(
+                            "Provider template '{template_id}' opened. Enter an API key only."
+                        ));
+                    } else {
+                        app.status_message =
+                            Some(format!("Unknown provider template '{template_id}'."));
+                    }
+                }
+            }
             AppAction::StartXaiDeviceLogin => {
                 let _switched =
                     run_xai_device_login_from_tui(terminal, app, engine_handle, config).await?;
@@ -2099,6 +2124,7 @@ pub(crate) async fn apply_provider_picker_api_key_with_verifier(
     let provider = identity.provider;
     let mut scoped_config = config.clone();
     scoped_config.provider = Some(identity.key.clone());
+    seed_custom_template_route(&mut scoped_config, &identity, base_url_override.as_deref());
     // #4526: a billing route chosen in the wizard is applied to the scoped
     // clone only, so the key is probed against the endpoint it will be saved
     // for without touching the on-disk config before the user confirms.
@@ -2131,7 +2157,17 @@ pub(crate) async fn apply_provider_picker_api_key_with_verifier(
             // Key is valid — continue the guided flow at model pick without
             // writing the secret yet.
             let runtime_status = query_provider_runtime_status(engine_handle).await;
-            if let Some(picker) =
+            let picker = if provider == ApiProvider::Custom {
+                crate::tui::provider_picker::ProviderPickerView::new_for_validated_model_pick(
+                    app.api_provider,
+                    provider,
+                    Some(identity.key.as_str()),
+                    &scoped_config,
+                    runtime_status,
+                    api_key,
+                    base_url_override,
+                )
+            } else {
                 crate::tui::provider_picker::ProviderPickerView::new_for_model_pick_after_validation(
                     app.api_provider,
                     provider,
@@ -2140,12 +2176,12 @@ pub(crate) async fn apply_provider_picker_api_key_with_verifier(
                     api_key,
                     base_url_override,
                 )
-                .map(|picker| {
-                    picker
-                        .with_locale(app.ui_locale)
-                        .with_provider_health(&app.provider_health)
-                })
-            {
+            };
+            if let Some(picker) = picker.map(|picker| {
+                picker
+                    .with_locale(app.ui_locale)
+                    .with_provider_health(&app.provider_health)
+            }) {
                 app.view_stack.push(picker);
                 app.status_message = Some(
                     "Connection checked (/models returned 2xx). Pick a default model; model availability is not checked."
@@ -2164,7 +2200,16 @@ pub(crate) async fn apply_provider_picker_api_key_with_verifier(
             // stage with the provider's actual error so the user can fix
             // the key instead of dead-ending with a status toast.
             let runtime_status = query_provider_runtime_status(engine_handle).await;
-            if let Some(picker) =
+            let picker = if provider == ApiProvider::Custom {
+                crate::tui::provider_picker::ProviderPickerView::new_for_key_entry_with_error_on(
+                    app.api_provider,
+                    provider,
+                    Some(identity.key.as_str()),
+                    &scoped_config,
+                    runtime_status,
+                    reason,
+                )
+            } else {
                 crate::tui::provider_picker::ProviderPickerView::new_for_key_entry_with_error(
                     app.api_provider,
                     provider,
@@ -2172,12 +2217,12 @@ pub(crate) async fn apply_provider_picker_api_key_with_verifier(
                     runtime_status,
                     reason,
                 )
-                .map(|picker| {
-                    picker
-                        .with_locale(app.ui_locale)
-                        .with_provider_health(&app.provider_health)
-                })
-            {
+            };
+            if let Some(picker) = picker.map(|picker| {
+                picker
+                    .with_locale(app.ui_locale)
+                    .with_provider_health(&app.provider_health)
+            }) {
                 app.view_stack.push(picker);
                 app.status_message = Some(format!(
                     "{} API key verification failed - check the key and try again.",
@@ -2218,6 +2263,19 @@ pub(crate) async fn apply_provider_picker_setup_confirmed(
             content: format!(
                 "Cannot finish {} setup: default model is empty.\nProvider unchanged.",
                 provider.as_str()
+            ),
+        });
+        return false;
+    }
+
+    if provider == ApiProvider::Custom
+        && let Err(err) =
+            persist_custom_template_table(app, config, &identity, base_url.as_deref(), &model)
+    {
+        app.add_message(HistoryCell::System {
+            content: format!(
+                "Failed to save custom provider {}: {err}\nProvider unchanged.",
+                identity.key
             ),
         });
         return false;
@@ -2307,6 +2365,194 @@ pub(crate) async fn apply_provider_picker_setup_confirmed(
         app.status_message = Some(confirmation);
     }
     switched
+}
+
+/// Prefill a named custom template onto a cloned config so `/models` can be
+/// probed before `[providers.<id>]` exists. Do not set `kind` here: that would
+/// make the picker treat the unpersisted table as a configured named custom.
+fn seed_custom_template_route(
+    config: &mut Config,
+    identity: &crate::config::ProviderIdentity,
+    base_url_override: Option<&str>,
+) {
+    if identity.provider != ApiProvider::Custom {
+        return;
+    }
+    let Some(template) = codewhale_config::provider_setup_template(&identity.key)
+        .filter(|template| template.is_custom())
+    else {
+        return;
+    };
+    config.provider = Some(template.id.to_string());
+    let entry = config
+        .providers
+        .get_or_insert_with(ProvidersConfig::default)
+        .custom
+        .entry(template.id.to_string())
+        .or_default();
+    if let Some(url) = base_url_override
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+    {
+        entry.base_url = Some(url.to_string());
+    } else if entry
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .is_none_or(|url| url.is_empty())
+    {
+        entry.base_url = Some(template.base_url.to_string());
+    }
+    if entry
+        .model
+        .as_deref()
+        .map(str::trim)
+        .is_none_or(|model| model.is_empty())
+    {
+        entry.model = Some(template.default_model.to_string());
+    }
+    if entry
+        .api_key_env
+        .as_deref()
+        .map(str::trim)
+        .is_none_or(|env| env.is_empty())
+    {
+        entry.api_key_env = Some(template.api_key_env.to_string());
+    }
+}
+
+fn persist_custom_template_table(
+    app: &App,
+    config: &mut Config,
+    identity: &crate::config::ProviderIdentity,
+    base_url: Option<&str>,
+    model: &str,
+) -> anyhow::Result<()> {
+    let Some(template) = codewhale_config::provider_setup_template(&identity.key)
+        .filter(|template| template.is_custom())
+    else {
+        return Ok(());
+    };
+    let persist_url = base_url
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .unwrap_or(template.base_url);
+    crate::config_persistence::persist_custom_provider(
+        app.config_path.as_deref(),
+        &identity.key,
+        persist_url,
+        Some(model),
+        Some(template.api_key_env),
+    )?;
+    config.provider = Some(identity.key.clone());
+    let entry = config
+        .providers
+        .get_or_insert_with(ProvidersConfig::default)
+        .custom
+        .entry(identity.key.clone())
+        .or_default();
+    entry.kind = Some("openai-compatible".to_string());
+    entry.base_url = Some(persist_url.trim().trim_end_matches('/').to_string());
+    entry.model = Some(model.to_string());
+    entry.api_key_env = Some(template.api_key_env.to_string());
+    Ok(())
+}
+
+async fn reopen_provider_picker_list(
+    app: &mut App,
+    engine_handle: &mut EngineHandle,
+    config: &Config,
+    selected_provider_id: Option<String>,
+) {
+    let runtime_status = query_provider_runtime_status(engine_handle).await;
+    app.provider_picker_memory = Some(crate::tui::app::ProviderPickerMemory {
+        catalog_view: true,
+        selected_provider_id,
+    });
+    app.view_stack.push(
+        crate::tui::provider_picker::ProviderPickerView::new_with_runtime_status_and_memory(
+            app.api_provider,
+            config,
+            runtime_status,
+            app.provider_picker_memory.as_ref(),
+        )
+        .with_locale(app.ui_locale)
+        .with_provider_health(&app.provider_health),
+    );
+    app.needs_redraw = true;
+}
+
+pub(crate) async fn apply_provider_picker_test_connection(
+    app: &mut App,
+    engine_handle: &mut EngineHandle,
+    config: &mut Config,
+    identity: crate::config::ProviderIdentity,
+) {
+    apply_provider_picker_test_connection_with_verifier(
+        app,
+        engine_handle,
+        config,
+        identity,
+        &LiveProviderKeyVerifier,
+    )
+    .await;
+}
+
+pub(crate) async fn apply_provider_picker_test_connection_with_verifier(
+    app: &mut App,
+    engine_handle: &mut EngineHandle,
+    config: &mut Config,
+    identity: crate::config::ProviderIdentity,
+    verifier: &dyn ProviderKeyVerifier,
+) {
+    let provider = identity.provider;
+    let mut scoped_config = config.clone();
+    scoped_config.provider = Some(identity.key.clone());
+    seed_custom_template_route(&mut scoped_config, &identity, None);
+    let selected_id = if provider == ApiProvider::Custom {
+        Some(identity.key.clone())
+    } else {
+        Some(provider.as_str().to_string())
+    };
+    let api_key = match scoped_config.deepseek_api_key() {
+        Ok(key) if !key.trim().is_empty() => key,
+        _ => {
+            app.status_message = Some(format!(
+                "No API key saved for {}. Enter a key first, then press T to test the connection.",
+                identity.key
+            ));
+            reopen_provider_picker_list(app, engine_handle, config, selected_id).await;
+            return;
+        }
+    };
+    let base_url = scoped_config.deepseek_base_url();
+    let model = scoped_config.default_model();
+    match verifier.verify(provider, &api_key, &base_url).await {
+        Ok(()) => {
+            if crate::client::provider_api_key_verification_is_observed(provider) {
+                app.provider_health
+                    .record_models_probe_success(&scoped_config, provider, &model);
+            }
+            app.status_message = Some(
+                "Connection checked (/models returned 2xx). Model availability is not checked."
+                    .to_string(),
+            );
+        }
+        Err(reason) => {
+            app.provider_health.record_failure_message(
+                &scoped_config,
+                provider,
+                &model,
+                provider_verification_error_category(&reason),
+                &reason,
+            );
+            app.status_message = Some(format!(
+                "{} connection check failed: {reason}",
+                identity.key
+            ));
+        }
+    }
+    reopen_provider_picker_list(app, engine_handle, config, selected_id).await;
 }
 
 pub(crate) async fn apply_codewhale_owned_xai_login(

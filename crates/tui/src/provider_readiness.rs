@@ -565,7 +565,6 @@ impl ProviderReadinessSnapshot {
         );
     }
 
-    #[cfg(test)]
     pub(crate) fn record_failure_message(
         &mut self,
         config: &crate::config::Config,

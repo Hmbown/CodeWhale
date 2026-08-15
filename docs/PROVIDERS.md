@@ -304,6 +304,30 @@ environment. Project-local config overlays intentionally cannot set those keys,
 so a repository cannot silently redirect prompts or credentials to another
 endpoint.
 
+## Prefab third-party templates
+
+`/provider` can start a key-only setup for a few third-party gateways so the
+user does not have to paste a Base URL. Press `P` in the picker, or run
+`/provider setup <id>` / `/setup provider <id>`.
+
+| Template | Persisted as | Base URL | Default model | API key env |
+| --- | --- | --- | --- | --- |
+| `opencode-zen` | first-class `opencode-zen` | `https://opencode.ai/zen/v1` | `gpt-5.6` | `OPENCODE_ZEN_API_KEY` |
+| `opencode-go` | first-class `opencode-go` | `https://opencode.ai/zen/go/v1` | `deepseek-v4-pro` | `OPENCODE_GO_API_KEY` |
+| `agnes` | `[providers.agnes] kind = "openai-compatible"` | `https://apihub.agnes-ai.com/v1` | `agnes-2.5-flash` | `AGNES_API_KEY` |
+| `sensenova` | `[providers.sensenova] kind = "openai-compatible"` | `https://token.sensenova.cn/v1` | `sensenova-6.7-flash-lite` | `SENSENOVA_API_KEY` |
+
+`agnes` and `sensenova` are named custom tables, not `ProviderKind` variants.
+Aliases `sense-nova` and `meituan-sensenova` resolve to `sensenova`. Meituan
+LongCat remains the first-class `longcat` route; SenseNova is SenseTime's
+Token Plan, not LongCat.
+
+`T` (Test Connection) probes `/models` and refreshes the picker status. A 2xx
+means the endpoint accepted the key. It does not mean the selected model is
+ready. When Models.dev refresh fails, `/model` keeps the bundled or template
+catalog and says `refresh failed; catalog available` instead of leaving the
+list stuck at `not checked` / `cache failed`.
+
 ## Local Models (DS4, Ollama, vLLM, SGLang)
 
 Self-hosted OpenAI-compatible runtimes are first-class routes and are keyless

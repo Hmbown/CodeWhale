@@ -88,6 +88,8 @@ enum Stage {
     /// Confirmation summary before any secret or model is persisted (#3875).
     Confirm,
     CustomForm,
+    /// Prefab third-party templates (#5350): fixed URL + common models.
+    TemplatePick,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -457,6 +459,47 @@ impl ProviderDashboardRow {
             config.provider.as_deref(),
             runtime_status,
         )
+    }
+
+    fn from_setup_template(
+        template: &codewhale_config::ProviderSetupTemplate,
+        active: ApiProvider,
+        config: &Config,
+        runtime_status: Option<&ProviderRuntimeStatus>,
+    ) -> Self {
+        let mut scoped = config.clone();
+        scoped.provider = Some(template.id.to_string());
+        let entry = scoped
+            .providers
+            .get_or_insert_with(crate::config::ProvidersConfig::default)
+            .custom
+            .entry(template.id.to_string())
+            .or_default();
+        entry.kind = Some("openai-compatible".to_string());
+        entry.base_url = Some(template.base_url.to_string());
+        entry.model = Some(template.default_model.to_string());
+        entry.api_key_env = Some(template.api_key_env.to_string());
+        let mut row = Self::from_custom_config_with_runtime_status(
+            template.id,
+            active,
+            &scoped,
+            runtime_status,
+        );
+        row.is_configured = false;
+        row.display_name = template.display_name.to_string();
+        row.available_model_count = template.picker_models().len();
+        row.catalog_status = ProviderCatalogStatus::Bundled;
+        row.messages.insert(
+            0,
+            format!(
+                "prefab template · URL fixed · enter API key only ({})",
+                template.api_key_env
+            ),
+        );
+        if let Some(docs) = template.docs_url {
+            row.messages.push(format!("Docs: {docs}"));
+        }
+        row
     }
 
     fn from_custom_config_with_runtime_status(
@@ -1531,6 +1574,21 @@ impl ProviderPickerView {
             })
             .collect();
         rows.extend(custom_rows);
+        let existing_ids: std::collections::HashSet<String> = rows
+            .iter()
+            .map(|row| row.provider_id.to_ascii_lowercase())
+            .collect();
+        for template in codewhale_config::custom_provider_setup_templates() {
+            if existing_ids.contains(&template.id.to_ascii_lowercase()) {
+                continue;
+            }
+            rows.push(ProviderDashboardRow::from_setup_template(
+                template,
+                catalog_active,
+                config,
+                runtime_status,
+            ));
+        }
         rows.sort_by(|a, b| {
             a.display_name
                 .to_ascii_lowercase()
@@ -1664,6 +1722,23 @@ impl ProviderPickerView {
         picker.setup_mode = true;
         picker.enter_ds4_form();
         picker
+    }
+
+    /// Open catalog setup on a prefab template (#5350). First-class templates
+    /// jump into the existing key-only flow; custom templates only ask for a key.
+    #[must_use]
+    pub fn new_for_template_setup(
+        active: ApiProvider,
+        template_id: &str,
+        config: &Config,
+        runtime_status: Option<ProviderRuntimeStatus>,
+    ) -> Option<Self> {
+        let template = codewhale_config::provider_setup_template(template_id)?;
+        let mut picker = Self::new_with_runtime_status(active, config, runtime_status);
+        picker.setup_mode = true;
+        picker.view = ProviderListView::Catalog;
+        picker.begin_template_setup(template);
+        Some(picker)
     }
 
     /// Open the setup catalog for first-run/recovery onboarding (#4763).
@@ -1841,6 +1916,7 @@ impl ProviderPickerView {
             self.enter_stepfun_billing_route();
         } else {
             self.enter_key_entry();
+            self.apply_row_template_url();
         }
     }
 
@@ -1940,8 +2016,20 @@ impl ProviderPickerView {
         runtime_status: Option<ProviderRuntimeStatus>,
         error: String,
     ) -> Option<Self> {
+        Self::new_for_key_entry_with_error_on(active, target, None, config, runtime_status, error)
+    }
+
+    #[must_use]
+    pub fn new_for_key_entry_with_error_on(
+        active: ApiProvider,
+        target: ApiProvider,
+        target_id: Option<&str>,
+        config: &Config,
+        runtime_status: Option<ProviderRuntimeStatus>,
+        error: String,
+    ) -> Option<Self> {
         let mut picker = Self::new_with_runtime_status(active, config, runtime_status);
-        let idx = picker.rows.iter().position(|row| row.provider == target)?;
+        let idx = Self::row_index_for(&picker.rows, target, target_id)?;
         picker.selected_idx = idx;
         picker.view = ProviderListView::Catalog;
         picker.stage = Stage::KeyEntry;
@@ -1960,8 +2048,29 @@ impl ProviderPickerView {
         api_key: String,
         base_url: Option<String>,
     ) -> Option<Self> {
+        Self::new_for_validated_model_pick(
+            active,
+            target,
+            None,
+            config,
+            runtime_status,
+            api_key,
+            base_url,
+        )
+    }
+
+    #[must_use]
+    pub fn new_for_validated_model_pick(
+        active: ApiProvider,
+        target: ApiProvider,
+        target_id: Option<&str>,
+        config: &Config,
+        runtime_status: Option<ProviderRuntimeStatus>,
+        api_key: String,
+        base_url: Option<String>,
+    ) -> Option<Self> {
         let mut picker = Self::new_with_runtime_status(active, config, runtime_status);
-        let idx = picker.rows.iter().position(|row| row.provider == target)?;
+        let idx = Self::row_index_for(&picker.rows, target, target_id)?;
         picker.selected_idx = idx;
         picker.view = ProviderListView::Catalog;
         picker.pending_api_key = Some(api_key);
@@ -1997,6 +2106,18 @@ impl ProviderPickerView {
             route.logical_model.clone()
         };
         let mut models = crate::provider_lake::all_catalog_models_for_provider(provider);
+        if let Some(template) =
+            codewhale_config::provider_setup_template(&self.rows[self.selected_idx].provider_id)
+        {
+            for model in template.picker_models() {
+                if !models
+                    .iter()
+                    .any(|existing| existing.eq_ignore_ascii_case(model))
+                {
+                    models.push(model.to_string());
+                }
+            }
+        }
         if kimi_code_k3
             && !preferred.trim().is_empty()
             && !models
@@ -2101,6 +2222,77 @@ impl ProviderPickerView {
         self.custom_provider_api_key_env.clear();
     }
 
+    fn enter_template_pick(&mut self) {
+        self.stage = Stage::TemplatePick;
+        self.model_selected_idx = 0;
+    }
+
+    fn selected_setup_template(&self) -> Option<&'static codewhale_config::ProviderSetupTemplate> {
+        codewhale_config::provider_setup_templates().get(self.model_selected_idx)
+    }
+
+    fn row_setup_template(&self) -> Option<&'static codewhale_config::ProviderSetupTemplate> {
+        let row = self.rows.get(self.selected_idx)?;
+        if let Some(template) = codewhale_config::provider_setup_template(&row.provider_id) {
+            return Some(template);
+        }
+        let kind = row.provider.kind()?;
+        codewhale_config::provider_setup_templates()
+            .iter()
+            .find(|template| template.first_class == Some(kind))
+    }
+
+    fn apply_row_template_url(&mut self) {
+        let Some(template) = self
+            .row_setup_template()
+            .filter(|template| template.is_custom())
+        else {
+            return;
+        };
+        self.pending_base_url = Some(template.base_url.to_string());
+        if let Some(row) = self.rows.get_mut(self.selected_idx) {
+            row.base_url = template.base_url.to_string();
+        }
+    }
+
+    fn begin_template_setup(&mut self, template: &codewhale_config::ProviderSetupTemplate) {
+        if let Some(kind) = template.first_class {
+            let provider = ApiProvider::from_kind(kind);
+            if let Some(idx) = self.rows.iter().position(|row| row.provider == provider) {
+                self.selected_idx = idx;
+                self.view = ProviderListView::Catalog;
+                self.begin_setup();
+                return;
+            }
+        }
+        if let Some(idx) = self
+            .rows
+            .iter()
+            .position(|row| row.provider_id.eq_ignore_ascii_case(template.id))
+        {
+            self.selected_idx = idx;
+            self.view = ProviderListView::Catalog;
+        }
+        self.enter_key_entry();
+        self.apply_row_template_url();
+    }
+
+    fn apply_selected_template(&mut self) {
+        if let Some(template) = self.selected_setup_template() {
+            self.begin_template_setup(template);
+        }
+    }
+
+    fn row_index_for(
+        rows: &[ProviderDashboardRow],
+        target: ApiProvider,
+        target_id: Option<&str>,
+    ) -> Option<usize> {
+        rows.iter().position(|row| {
+            row.provider == target && target_id.is_none_or(|id| row.provider_id == id)
+        })
+    }
+
     fn custom_form_field_mut(&mut self) -> &mut String {
         match self.custom_provider_field {
             CustomProviderField::Name => &mut self.custom_provider_id,
@@ -2159,6 +2351,9 @@ impl ProviderPickerView {
 
     fn env_var_for_selected_row(&self) -> String {
         let row = &self.rows[self.selected_idx];
+        if let Some(template) = self.row_setup_template() {
+            return template.api_key_env.to_string();
+        }
         if row.provider == ApiProvider::Custom {
             return row
                 .messages
@@ -2258,6 +2453,7 @@ impl ProviderPickerView {
                     ActionHint::new("A", view_action.clone()),
                     ActionHint::new("C", self.tr(MessageId::PickerActionCustom)),
                     ActionHint::new("D", "DS4"),
+                    ActionHint::new("P", "templates"),
                 ],
             )
         } else {
@@ -2271,6 +2467,8 @@ impl ProviderPickerView {
                     ActionHint::new("A", view_action),
                     ActionHint::new("C", self.tr(MessageId::PickerActionCustom)),
                     ActionHint::new("D", "DS4"),
+                    ActionHint::new("P", "templates"),
+                    ActionHint::new("T", "test"),
                     ActionHint::new("R", self.tr(MessageId::PickerActionEditKey)),
                     ActionHint::new("X", self.tr(MessageId::ProviderExternalActionRevoke)),
                     ActionHint::new("M", self.tr(MessageId::PickerActionModels)),
@@ -2688,6 +2886,18 @@ impl ProviderPickerView {
                 Style::default().fg(palette::TEXT_MUTED),
             ))]
         };
+        if let Some(template) = self.row_setup_template() {
+            hint_lines.push(Line::from(Span::styled(
+                format!("Base URL is fixed: {}", template.base_url),
+                Style::default().fg(palette::TEXT_MUTED),
+            )));
+            if let Some(docs) = template.docs_url {
+                hint_lines.push(Line::from(Span::styled(
+                    format!("Docs: {docs}"),
+                    Style::default().fg(palette::TEXT_MUTED),
+                )));
+            }
+        }
         if !oauth_provider {
             if row.provider == ApiProvider::Moonshot
                 && crate::config::moonshot_base_url_is_exact_kimi_code(&row.base_url)
@@ -3123,6 +3333,68 @@ impl ProviderPickerView {
         Paragraph::new(lines).render(content, buf);
     }
 
+    fn render_template_pick(&self, area: Rect, buf: &mut Buffer) {
+        let outer = Block::default()
+            .title(Line::from(Span::styled(
+                " Provider templates ",
+                Style::default()
+                    .fg(palette::WHALE_INFO)
+                    .add_modifier(Modifier::BOLD),
+            )))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(palette::BORDER_COLOR))
+            .style(Style::default().bg(palette::WHALE_BG));
+        let inner = outer.inner(area);
+        outer.render(area, buf);
+
+        let content = render_modal_footer(
+            inner,
+            buf,
+            &[
+                ActionHint::new("↑↓", self.tr(MessageId::PickerActionMove)),
+                ActionHint::new("Enter", "apply"),
+                ActionHint::new("Esc", self.tr(MessageId::SetupActionBack)),
+            ],
+        );
+
+        let templates = codewhale_config::provider_setup_templates();
+        let selected = self
+            .model_selected_idx
+            .min(templates.len().saturating_sub(1));
+        let mut lines = vec![
+            Line::from(Span::styled(
+                "Pick a template. First-class routes keep their own URL; custom templates lock Base URL so you only enter an API key.",
+                Style::default().fg(palette::TEXT_MUTED),
+            )),
+            Line::from(""),
+        ];
+        for (idx, template) in templates.iter().enumerate() {
+            let marker = crate::tui::glyphs::selection_marker(idx == selected);
+            let kind = if template.is_first_class() {
+                "first-class"
+            } else {
+                "custom"
+            };
+            let style = if idx == selected {
+                Style::default()
+                    .fg(palette::TEXT_PRIMARY)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(palette::TEXT_PRIMARY)
+            };
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "{marker} {}  ({kind})  {}  default {}",
+                    template.display_name, template.base_url, template.default_model
+                ),
+                style,
+            )));
+        }
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: true })
+            .render(content, buf);
+    }
+
     fn render_custom_form(&self, area: Rect, buf: &mut Buffer) {
         let outer = Block::default()
             .title(Line::from(Span::styled(
@@ -3285,7 +3557,8 @@ impl ModalView for ProviderPickerView {
             | Stage::ModelPick
             | Stage::PlanTier
             | Stage::StepfunBillingRoute
-            | Stage::Confirm => false,
+            | Stage::Confirm
+            | Stage::TemplatePick => false,
         }
     }
 
@@ -3321,7 +3594,14 @@ impl ModalView for ProviderPickerView {
                     if provider == ApiProvider::Custom
                         && !self.rows[self.selected_idx].is_configured
                     {
-                        self.enter_custom_form();
+                        if let Some(template) = codewhale_config::provider_setup_template(
+                            &provider_id.unwrap_or_default(),
+                        ) && template.is_custom()
+                        {
+                            self.begin_template_setup(template);
+                        } else {
+                            self.enter_custom_form();
+                        }
                         ViewAction::None
                     } else if !self.selected_route_is_valid() {
                         ViewAction::None
@@ -3409,6 +3689,25 @@ impl ModalView for ProviderPickerView {
                 {
                     self.enter_ds4_form();
                     ViewAction::None
+                }
+                KeyCode::Char(c)
+                    if key.modifiers.is_empty()
+                        && self.query.is_empty()
+                        && c.eq_ignore_ascii_case(&'p') =>
+                {
+                    self.enter_template_pick();
+                    ViewAction::None
+                }
+                KeyCode::Char(c)
+                    if key.modifiers.is_empty()
+                        && self.query.is_empty()
+                        && c.eq_ignore_ascii_case(&'t')
+                        && self.row_visible(self.selected_idx) =>
+                {
+                    ViewAction::EmitAndClose(ViewEvent::ProviderPickerTestConnection {
+                        provider: self.selected_provider(),
+                        provider_id: self.selected_provider_id(),
+                    })
                 }
                 // Jump to the `/model` picker pre-filtered to this provider
                 // (#3083). Handled before the type-ahead arm so `m`/`M` opens
@@ -3743,6 +4042,31 @@ impl ModalView for ProviderPickerView {
                 }
                 _ => ViewAction::None,
             },
+            Stage::TemplatePick => match key.code {
+                KeyCode::Esc => {
+                    self.stage = Stage::List;
+                    ViewAction::None
+                }
+                KeyCode::Up => {
+                    let len = codewhale_config::provider_setup_templates().len();
+                    if len > 0 {
+                        self.model_selected_idx = (self.model_selected_idx + len - 1) % len;
+                    }
+                    ViewAction::None
+                }
+                KeyCode::Down => {
+                    let len = codewhale_config::provider_setup_templates().len();
+                    if len > 0 {
+                        self.model_selected_idx = (self.model_selected_idx + 1) % len;
+                    }
+                    ViewAction::None
+                }
+                KeyCode::Enter => {
+                    self.apply_selected_template();
+                    ViewAction::None
+                }
+                _ => ViewAction::None,
+            },
         }
     }
 
@@ -3756,6 +4080,21 @@ impl ModalView for ProviderPickerView {
             Stage::ModelPick => match mouse.kind {
                 MouseEventKind::ScrollUp => self.move_model_selection(-1),
                 MouseEventKind::ScrollDown => self.move_model_selection(1),
+                _ => {}
+            },
+            Stage::TemplatePick => match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    let len = codewhale_config::provider_setup_templates().len();
+                    if len > 0 {
+                        self.model_selected_idx = (self.model_selected_idx + len - 1) % len;
+                    }
+                }
+                MouseEventKind::ScrollDown => {
+                    let len = codewhale_config::provider_setup_templates().len();
+                    if len > 0 {
+                        self.model_selected_idx = (self.model_selected_idx + 1) % len;
+                    }
+                }
                 _ => {}
             },
             Stage::PlanTier
@@ -3785,6 +4124,7 @@ impl ModalView for ProviderPickerView {
             Stage::StepfunBillingRoute => 11,
             Stage::Confirm => 10,
             Stage::CustomForm => 12,
+            Stage::TemplatePick => 14,
         };
         let popup_area = centered_modal_area(area, 120, preferred_height, 64, 8);
 
@@ -3801,6 +4141,7 @@ impl ModalView for ProviderPickerView {
             Stage::StepfunBillingRoute => self.render_stepfun_billing_route(popup_area, buf),
             Stage::Confirm => self.render_confirm(popup_area, buf),
             Stage::CustomForm => self.render_custom_form(popup_area, buf),
+            Stage::TemplatePick => self.render_template_pick(popup_area, buf),
         }
     }
 }
@@ -5363,6 +5704,140 @@ mod tests {
             }
             other => panic!("expected custom provider submit event, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn move_to_provider_id(picker: &mut ProviderPickerView, provider_id: &str) {
+        if let Some(idx) = picker
+            .rows
+            .iter()
+            .position(|row| row.provider_id.eq_ignore_ascii_case(provider_id))
+            && !picker.row_visible(idx)
+        {
+            picker.toggle_view();
+        }
+        if let Some(idx) = picker
+            .rows
+            .iter()
+            .position(|row| row.provider_id.eq_ignore_ascii_case(provider_id))
+        {
+            picker.selected_idx = idx;
+            return;
+        }
+        panic!("provider id {provider_id} not found in picker");
+    }
+
+    #[test]
+    fn catalog_injects_unconfigured_custom_templates() {
+        let picker = ProviderPickerView::new(ApiProvider::Deepseek, &Config::default());
+        let ids: Vec<_> = picker
+            .rows
+            .iter()
+            .map(|row| row.provider_id.as_str())
+            .collect();
+        assert!(ids.contains(&"agnes"), "{ids:?}");
+        assert!(ids.contains(&"sensenova"), "{ids:?}");
+        let agnes = picker
+            .rows
+            .iter()
+            .find(|row| row.provider_id == "agnes")
+            .expect("agnes row");
+        assert!(!agnes.is_configured);
+        assert_eq!(agnes.base_url, codewhale_config::AGNES_BASE_URL);
+        assert!(
+            agnes
+                .messages
+                .iter()
+                .any(|message| message.contains("prefab template"))
+        );
+    }
+
+    #[test]
+    fn enter_on_agnes_template_starts_key_only_setup() {
+        let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &Config::default());
+        move_to_provider_id(&mut picker, "agnes");
+        let action = picker.handle_key(key(KeyCode::Enter));
+        assert!(matches!(action, ViewAction::None), "{action:?}");
+        assert_eq!(picker.stage, Stage::KeyEntry);
+        assert_eq!(
+            picker.pending_base_url.as_deref(),
+            Some(codewhale_config::AGNES_BASE_URL)
+        );
+        let text = render_text(&picker, 90, 16);
+        assert!(
+            text.contains("Base URL is fixed") && text.contains(codewhale_config::AGNES_BASE_URL),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn p_opens_template_pick_and_zen_starts_first_class_setup() {
+        let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &Config::default());
+        picker.handle_key(key(KeyCode::Char('p')));
+        assert_eq!(picker.stage, Stage::TemplatePick);
+        let text = render_text(&picker, 100, 16);
+        assert!(text.contains("OpenCode Zen"), "{text}");
+        assert!(text.contains("Agnes"), "{text}");
+        assert!(text.contains("Meituan Sensenova"), "{text}");
+        picker.handle_key(key(KeyCode::Enter));
+        assert_eq!(picker.stage, Stage::KeyEntry);
+        assert_eq!(picker.selected_provider(), ApiProvider::OpencodeZen);
+    }
+
+    #[test]
+    fn t_emits_test_connection_for_highlighted_row() {
+        let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &Config::default());
+        move_to_provider_id(&mut picker, "agnes");
+        match picker.handle_key(key(KeyCode::Char('t'))) {
+            ViewAction::EmitAndClose(ViewEvent::ProviderPickerTestConnection {
+                provider,
+                provider_id,
+            }) => {
+                assert_eq!(provider, ApiProvider::Custom);
+                assert_eq!(provider_id.as_deref(), Some("agnes"));
+            }
+            other => panic!("expected test-connection event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn template_setup_constructor_opens_agnes_key_entry() {
+        let picker = ProviderPickerView::new_for_template_setup(
+            ApiProvider::Deepseek,
+            "agnes",
+            &Config::default(),
+            None,
+        )
+        .expect("agnes template");
+        assert_eq!(picker.stage, Stage::KeyEntry);
+        assert_eq!(picker.rows[picker.selected_idx].provider_id, "agnes");
+        assert_eq!(
+            picker.pending_base_url.as_deref(),
+            Some(codewhale_config::AGNES_BASE_URL)
+        );
+    }
+
+    #[test]
+    fn validated_model_pick_for_agnes_lists_template_models() {
+        let picker = ProviderPickerView::new_for_validated_model_pick(
+            ApiProvider::Deepseek,
+            ApiProvider::Custom,
+            Some("agnes"),
+            &Config::default(),
+            None,
+            "sk-agnes".to_string(),
+            Some(codewhale_config::AGNES_BASE_URL.to_string()),
+        )
+        .expect("agnes model pick");
+        assert_eq!(picker.stage, Stage::ModelPick);
+        assert!(
+            picker
+                .model_options
+                .iter()
+                .any(|model| model == codewhale_config::AGNES_DEFAULT_MODEL),
+            "{:?}",
+            picker.model_options
+        );
     }
 
     #[test]
