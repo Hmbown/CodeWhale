@@ -5,24 +5,15 @@
 
 use super::*;
 
-/// Keep compact terminals fully fluid, then introduce only a modest symmetric
-/// gutter as the canvas grows. One cell per twelve columns beyond the compact
-/// breakpoint gives wide sessions breathing room without turning the product
-/// into a narrow centered rail; the cap prevents ultra-wide terminals from
-/// accumulating large dead margins.
-const SESSION_SHELL_FLUID_WIDTH: u16 = 112;
-const SESSION_SHELL_GUTTER_STEP: u16 = 12;
-const SESSION_SHELL_MAX_SIDE_GUTTER: u16 = 16;
-
+/// Map the host terminal rect onto the session shell canvas.
+///
+/// Wide terminals use the full available width (v0.8.65 behavior; #5322). A
+/// brief v0.9 gutter capped usable columns beyond 112 and left dead margins on
+/// large displays / tmux panes; that cap is gone. Keep this helper so layout
+/// and PTY oracles share one geometry entry point if a future setting wants a
+/// configurable measure again.
 pub(crate) fn session_shell_area(area: Rect) -> Rect {
-    let side_gutter = (area.width.saturating_sub(SESSION_SHELL_FLUID_WIDTH)
-        / SESSION_SHELL_GUTTER_STEP)
-        .min(SESSION_SHELL_MAX_SIDE_GUTTER);
-    Rect {
-        x: area.x.saturating_add(side_gutter),
-        width: area.width.saturating_sub(side_gutter.saturating_mul(2)),
-        ..area
-    }
+    area
 }
 
 /// Snapshot the posture a real `Op::SendMessage` would carry, and — when the

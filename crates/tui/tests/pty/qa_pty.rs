@@ -28,31 +28,28 @@ const KEY_TIMEOUT: Duration = Duration::from_secs(5);
 const SKILL_SCAN_TIMEOUT: Duration = Duration::from_secs(15);
 const COMPOSER_READY_TEXT: &str = "Write a task";
 // Keep this geometry oracle in step with `tui::ui::frame::session_shell_area`.
-// Integration tests cannot import that private renderer helper, so the PTY
-// contract repeats only its three public-facing constants.
-const SESSION_SHELL_FLUID_WIDTH: u16 = 112;
-const SESSION_SHELL_GUTTER_STEP: u16 = 12;
-const SESSION_SHELL_MAX_SIDE_GUTTER: u16 = 16;
-
-fn expected_session_shell_side_gutter(cols: u16) -> u16 {
-    (cols.saturating_sub(SESSION_SHELL_FLUID_WIDTH) / SESSION_SHELL_GUTTER_STEP)
-        .min(SESSION_SHELL_MAX_SIDE_GUTTER)
+// Integration tests cannot import that private renderer helper. The session
+// shell fills the host terminal (#5322); side gutters are gone.
+fn expected_session_shell_side_gutter(_cols: u16) -> u16 {
+    0
 }
 
 fn expected_session_shell_width(cols: u16) -> u16 {
-    cols.saturating_sub(expected_session_shell_side_gutter(cols).saturating_mul(2))
+    cols
 }
 
 #[test]
-fn pty_geometry_oracle_keeps_wide_canvas_above_the_release_floor() {
-    for (cols, expected_gutter) in [(140, 2), (200, 7), (240, 10)] {
-        let gutter = expected_session_shell_side_gutter(cols);
-        let width = expected_session_shell_width(cols);
-        assert_eq!(gutter, expected_gutter, "{cols} columns");
-        assert!(
-            u32::from(width) * 100 >= u32::from(cols) * 85,
-            "{cols} columns left only {}% usable",
-            u32::from(width) * 100 / u32::from(cols)
+fn pty_geometry_oracle_fills_the_host_terminal_width() {
+    for cols in [80u16, 112, 140, 160, 200, 240, 400] {
+        assert_eq!(
+            expected_session_shell_side_gutter(cols),
+            0,
+            "{cols} columns"
+        );
+        assert_eq!(
+            expected_session_shell_width(cols),
+            cols,
+            "{cols} columns must remain fully usable"
         );
     }
 }
@@ -3950,8 +3947,8 @@ fn horizontal_rule_fills_session_shell(
     let shell_width = expected_session_shell_width(cols);
     let shell_end = shell_start.saturating_add(shell_width);
     let chars = text.chars().collect::<Vec<_>>();
-    // Frame rows omit trailing blank cells. A responsive canvas therefore ends
-    // at `shell_end`, including its modest symmetric wide-terminal gutters.
+    // Frame rows omit trailing blank cells. A full-width session shell (#5322)
+    // therefore ends at `shell_end` with no side gutters.
     UnicodeWidthStr::width(text.as_str()) == usize::from(shell_end)
         && chars
             .iter()

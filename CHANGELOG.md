@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet._
+### Fixed
+
+- Wide terminals and tmux panes fill the full available width again for the
+  transcript and composer (#5322). The brief v0.9 session-shell side gutter is
+  gone so expanding a pane rematerializes layout the same way shrinking does.
 
 ## [0.9.8] - 2026-08-14
 
