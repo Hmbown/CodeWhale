@@ -283,6 +283,22 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn symlink_leaf_state_db_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let (_dir, real) = fixture_db(Some("ya29.test-token"));
+        let link_dir = tempfile::tempdir().expect("link tempdir");
+        let link = link_dir.path().join("state.vscdb");
+        symlink(&real, &link).expect("leaf symlink");
+        let grant = grant_for(&link);
+        assert!(
+            antigravity_oauth_token_from_grant(&grant).is_err(),
+            "a symlink leaf must fail closed even when the target is a valid store"
+        );
+    }
+
     #[test]
     fn extracts_access_token_member_from_json_value() {
         let (_dir, path) = fixture_db(Some(

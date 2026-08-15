@@ -1,10 +1,12 @@
 //! Capability-gated I/O for credentials owned by another CLI.
 //!
 //! Every external open/read stays behind an opaque grant. Consumption opens
-//! one absolute regular file through a no-follow traversal, validates that
-//! same handle, and reads a bounded payload from it. This prevents a consented
-//! path from being redirected through a leaf or parent symlink/reparse point
-//! and avoids the old exists-then-read race.
+//! one absolute regular file, validates that same handle, and reads a bounded
+//! payload from it. Intermediate path components may be ordinary system
+//! directory symlinks (macOS `/var` → `private/var`, a home on an external
+//! volume); the leaf itself must be a regular file with no symlink/reparse
+//! redirection. That leaf no-follow boundary avoids the old exists-then-read
+//! race without rejecting legitimate relocated ambient paths.
 
 use std::fs::File;
 use std::io::{self, Read};
@@ -208,10 +210,13 @@ fn open_secure_regular_file(path: &Path, require_owner_only: bool) -> io::Result
                 }
             });
         }
+        // Follow ordinary intermediate directory symlinks (for example macOS
+        // `/var` → `private/var`). Refuse only a symlink/reparse leaf so the
+        // granted file cannot be redirected after consent.
         let flags = if leaf {
             libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK
         } else {
-            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_DIRECTORY
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY
         };
         use std::os::fd::AsRawFd;
         // SAFETY: the directory fd and component C string are valid for this
@@ -276,11 +281,10 @@ fn open_secure_regular_file(path: &Path, require_owner_only: bool) -> io::Result
         ));
     }
 
-    // Reject every reparse-point component before the final open. The final
-    // handle is opened as the reparse point itself, checked again, and its
-    // kernel-resolved path is compared below. A second component pass catches
-    // replacement during the open window.
-    reject_windows_reparse_components(path)?;
+    // Intermediate reparse points (volume mounts, redirected homes) are
+    // allowed. Reject only a reparse-point leaf: open it as the reparse point
+    // itself, check attributes, and re-check after open to catch a swap.
+    reject_windows_reparse_leaf(path)?;
     let file = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
@@ -294,15 +298,15 @@ fn open_secure_regular_file(path: &Path, require_owner_only: bool) -> io::Result
             "external credential path must name a non-reparse regular file",
         ));
     }
-    reject_windows_reparse_components(path)?;
+    reject_windows_reparse_leaf(path)?;
 
     let handle = file.as_raw_handle();
     // Compare the spelling Windows actually opened rather than asking it to
     // expand the path into its normalized long form. A valid caller path can
     // contain an 8.3 component such as `RUNNER~1`; normalizing only the handle
     // side would make that exact path look redirected. FILE_NAME_OPENED keeps
-    // the comparison handle-relative while the pre/post component checks above
-    // continue to reject reparse points and swaps.
+    // the comparison handle-relative while the leaf reparse checks above
+    // continue to reject a redirected credential file.
     let flags = FILE_NAME_OPENED | VOLUME_NAME_DOS;
     // SAFETY: the handle remains owned by `file`; null output asks Windows for
     // the required UTF-16 buffer length.
@@ -608,29 +612,19 @@ impl Drop for WindowsLocalAllocation {
 }
 
 #[cfg(windows)]
-fn reject_windows_reparse_components(path: &Path) -> io::Result<()> {
+fn reject_windows_reparse_leaf(path: &Path) -> io::Result<()> {
     use std::os::windows::fs::MetadataExt;
     use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
 
-    let mut current = std::path::PathBuf::new();
-    for component in path.components() {
-        current.push(component.as_os_str());
-        if matches!(
-            component,
-            std::path::Component::Prefix(_) | std::path::Component::RootDir
-        ) {
-            continue;
-        }
-        let metadata = std::fs::symlink_metadata(&current)?;
-        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!(
-                    "external credential path contains reparse point {}",
-                    codewhale_config::quote_os_path(&current)
-                ),
-            ));
-        }
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "external credential path leaf is a reparse point {}",
+                codewhale_config::quote_os_path(path)
+            ),
+        ));
     }
     Ok(())
 }
@@ -704,11 +698,9 @@ mod tests {
     fn secure_read_accepts_one_bounded_regular_file() {
         let _env = crate::test_support::lock_test_env();
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir
-            .path()
-            .canonicalize()
-            .expect("canonical temp root")
-            .join("auth.json");
+        // Use the ambient TempDir spelling (often `/var/folders/...` on macOS).
+        // Intermediate system directory symlinks must not fail the open.
+        let path = dir.path().join("auth.json");
         std::fs::write(&path, "{\"token\":\"ok\"}").expect("fixture");
         assert_eq!(
             read_to_string(&grant(&path))
@@ -720,12 +712,12 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn secure_read_rejects_leaf_and_parent_symlinks_and_non_regular_files() {
+    fn secure_read_rejects_leaf_symlink_and_non_regular_files() {
         let _env = crate::test_support::lock_test_env();
         use std::os::unix::fs::symlink;
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path().canonicalize().expect("canonical temp root");
+        let root = dir.path();
         let real_dir = root.join("real");
         std::fs::create_dir(&real_dir).expect("real dir");
         let real = real_dir.join("auth.json");
@@ -733,13 +725,38 @@ mod tests {
 
         let leaf = root.join("leaf.json");
         symlink(&real, &leaf).expect("leaf symlink");
-        assert!(read_to_string(&grant(&leaf)).is_err());
-
-        let parent = root.join("linked-parent");
-        symlink(&real_dir, &parent).expect("parent symlink");
-        assert!(read_to_string(&grant(&parent.join("auth.json"))).is_err());
+        assert!(
+            read_to_string(&grant(&leaf)).is_err(),
+            "a symlink leaf must fail closed"
+        );
 
         assert!(read_to_string(&grant(&real_dir)).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secure_read_allows_intermediate_directory_symlink() {
+        let _env = crate::test_support::lock_test_env();
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let real_dir = root.join("real");
+        std::fs::create_dir(&real_dir).expect("real dir");
+        let real = real_dir.join("auth.json");
+        std::fs::write(&real, "secret").expect("fixture");
+
+        // Simulate macOS `/var` → `private/var`: an ordinary directory symlink
+        // above the credential leaf must still open the regular file.
+        let parent = root.join("linked-parent");
+        symlink(&real_dir, &parent).expect("parent symlink");
+        let via_parent = parent.join("auth.json");
+        assert_eq!(
+            read_to_string(&grant(&via_parent))
+                .expect("intermediate directory symlink")
+                .as_deref(),
+            Some("secret")
+        );
     }
 
     #[cfg(unix)]
@@ -749,7 +766,7 @@ mod tests {
         use std::os::unix::fs::symlink;
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path().canonicalize().expect("canonical temp root");
+        let root = dir.path();
         let path = root.join("auth.json");
         let moved = root.join("auth-before-swap.json");
         let attacker = root.join("attacker.json");
@@ -773,11 +790,7 @@ mod tests {
     fn secure_read_rejects_oversized_regular_file() {
         let _env = crate::test_support::lock_test_env();
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir
-            .path()
-            .canonicalize()
-            .expect("canonical temp root")
-            .join("oversized.json");
+        let path = dir.path().join("oversized.json");
         let file = File::create(&path).expect("fixture");
         file.set_len(MAX_EXTERNAL_CREDENTIAL_BYTES + 1)
             .expect("oversize fixture");
@@ -792,7 +805,7 @@ mod tests {
 
         let _env = crate::test_support::lock_test_env();
         let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path().canonicalize().expect("canonical temp root");
+        let root = dir.path();
         let path = root.join("owned.json");
         std::fs::write(&path, "owned-secret").expect("fixture");
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
@@ -831,11 +844,7 @@ mod tests {
 
         let _env = crate::test_support::lock_test_env();
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir
-            .path()
-            .canonicalize()
-            .unwrap()
-            .join("oversized-owned.json");
+        let path = dir.path().join("oversized-owned.json");
         let file = File::create(&path).expect("fixture");
         file.set_len(MAX_EXTERNAL_CREDENTIAL_BYTES + 1).unwrap();
         file.set_permissions(std::fs::Permissions::from_mode(0o600))
