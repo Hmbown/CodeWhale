@@ -977,6 +977,8 @@ impl App {
             mention_menu_behavior: settings.mention_menu_behavior.clone(),
             workspace_follow_symlinks: settings.workspace_follow_symlinks,
             session_title: None,
+            window_title: None,
+            title_default: config.title.clone(),
             receipt_text: None,
             receipt_started_at: None,
             tool_evidence: Vec::new(),

@@ -2541,6 +2541,14 @@ pub struct Config {
     /// Optional extra HTTP headers sent to model API requests.
     #[serde(alias = "httpHeaders")]
     pub http_headers: Option<HashMap<String, String>>,
+    /// Optional user-facing tab/window title shown as `[title] …` in front of
+    /// the terminal window title (the `Codewhale` / `reasoning…` / `done.`
+    /// states). This is the default for every session in this config scope;
+    /// the `/title` command overrides it per session, and `/config title …
+    /// --save` persists a new default here. Multi-window setups can point each
+    /// workspace at its own `--config` file (or profile) so alt-tabbed
+    /// sessions are identifiable at a glance.
+    pub title: Option<String>,
     #[serde(alias = "defaultTextModel")]
     pub default_text_model: Option<String>,
     #[serde(alias = "authMode")]
@@ -9529,6 +9537,7 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
             }
         },
         mini_window: override_cfg.mini_window.or(base.mini_window),
+        title: override_cfg.title.or(base.title),
     }
 }
 

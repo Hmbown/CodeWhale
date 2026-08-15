@@ -306,6 +306,7 @@
   "CmdRemoteEnvSourceCustodyPolicy": "Codewhale does not upload, migrate, or sync local source into hosted Work. Use {command} to start from the branch tip available at GitHub or CNB. Unpushed commits, dirty or ignored files, secrets, and session state stay local.",
   "CmdRemoteEnvBrowserLabel": "Codewhale hosted Work",
   "CmdRenameDescription": "Rename the current session",
+  "CmdTitleDescription": "Set a tab/window title shown as [title] … in the terminal title",
   "CmdRestoreDescription": "Roll back the workspace to a prior pre/post-turn snapshot. With no arg, lists recent snapshots.",
   "CmdRetryDescription": "Retry the last request",
   "CmdReviewDescription": "Run a structured code review on a file, diff, or PR",

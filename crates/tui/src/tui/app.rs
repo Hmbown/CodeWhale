@@ -1946,6 +1946,17 @@ pub struct App {
     /// Updated when `EngineEvent::SessionUpdated` fires or a saved session is loaded.
     pub session_title: Option<String>,
 
+    /// User-configured tab/window title for the current session, shown as
+    /// `[title] …` in front of the terminal window title. Set with the
+    /// `/title` command and persisted on the saved session; distinct from
+    /// [`session_title`](Self::session_title), which is the session *name*
+    /// shown in the composer border and session picker.
+    pub window_title: Option<String>,
+    /// Default tab/window title from the `title` config key (or a profile
+    /// overlay). Used when the current session has no explicit
+    /// [`window_title`](Self::window_title).
+    pub title_default: Option<String>,
+
     /// Post-turn receipt rendered as transient composer chrome.
     /// Set when a turn completes; cleared when a new turn starts or after expiry.
     pub receipt_text: Option<String>,
@@ -4449,6 +4460,19 @@ impl App {
             self.fancy_animations,
             self.constrained_frame_rate,
         )
+    }
+
+    /// Resolve the `[title] …` window-title prefix for the terminal title.
+    ///
+    /// Precedence: the session-level `/title` override wins over the `title`
+    /// config default; neither configured means no prefix (the historical
+    /// window titles stay byte-for-byte unchanged).
+    #[must_use]
+    pub(crate) fn window_title_prefix(&self) -> Option<&str> {
+        self.window_title
+            .as_deref()
+            .or(self.title_default.as_deref())
+            .filter(|prefix| !prefix.trim().is_empty())
     }
 
     /// Bridge the centralized policy into transcript renderers that still

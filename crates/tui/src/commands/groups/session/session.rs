@@ -153,6 +153,8 @@ pub fn fork_from_session(app: &mut App, session_id_or_prefix: &str) -> CommandRe
     app.current_session_id = Some(forked.metadata.id.clone());
     app.current_session_metadata = Some(forked.metadata.clone());
     app.session_title = Some(forked.metadata.title.clone());
+    // A fork starts as its own session: no inherited tab/window title.
+    app.window_title = None;
     let parent_label = crate::session_manager::truncate_id(&source_session.metadata.id).to_string();
     let fork_label = crate::session_manager::truncate_id(&forked.metadata.id).to_string();
     CommandResult::with_message_and_action(
@@ -273,6 +275,7 @@ pub fn fork(app: &mut App) -> CommandResult {
     app.current_session_id = Some(forked.metadata.id.clone());
     app.current_session_metadata = Some(forked.metadata.clone());
     app.session_title = Some(forked.metadata.title.clone());
+    app.window_title = None;
     let fork_id = forked.metadata.id.clone();
     let parent_label = crate::session_manager::truncate_id(&parent.metadata.id).to_string();
     let fork_label = crate::session_manager::truncate_id(&fork_id).to_string();
@@ -331,6 +334,7 @@ pub fn new_session(app: &mut App, arg: Option<&str>) -> CommandResult {
     app.current_session_id = Some(new_id.clone());
     app.current_session_metadata = None;
     app.session_title = Some(crate::session_manager::DEFAULT_SESSION_TITLE.to_string());
+    app.window_title = None;
     app.scroll_to_bottom();
 
     CommandResult::with_message_and_action(

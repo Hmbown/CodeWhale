@@ -306,6 +306,7 @@
   "CmdRemoteEnvSourceCustodyPolicy": "Codewhale은 로컬 소스를 호스팅 Work에 업로드, 마이그레이션 또는 동기화하지 않습니다. {command}을 사용하여 GitHub 또는 CNB에서 사용할 수 있는 브랜치 끝에서 시작하세요. 푸시하지 않은 커밋, 변경되었거나 무시된 파일, 비밀, 세션 상태는 로컬에 남습니다.",
   "CmdRemoteEnvBrowserLabel": "Codewhale 호스팅 Work",
   "CmdRenameDescription": "현재 세션 이름을 바꿉니다",
+  "CmdTitleDescription": "터미널 제목에 [title] … 로 표시되는 탭/창 제목을 설정",
   "CmdRestoreDescription": "작업 공간을 이전 턴 전/후 스냅샷으로 되돌립니다. 인자가 없으면 최근 스냅샷 목록을 표시합니다.",
   "CmdRetryDescription": "마지막 요청을 재시도합니다",
   "CmdReviewDescription": "파일, diff, PR에 대해 구조화된 코드 리뷰를 실행합니다",

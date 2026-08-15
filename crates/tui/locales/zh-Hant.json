@@ -255,6 +255,7 @@
   "CmdRemoteEnvSourceCustodyPolicy": "Codewhale 不會將本機原始碼上傳、移轉或同步到託管 Work。使用 {command} 從 GitHub 或 CNB 上可用的分支尖端開始。尚未推送的提交、已修改或已忽略的檔案、密鑰和工作階段狀態仍保留在本機。",
   "CmdRemoteEnvBrowserLabel": "Codewhale 託管 Work",
   "CmdRenameDescription": "重新命名目前工作階段",
+  "CmdTitleDescription": "設定標籤頁/視窗標題，終端機標題顯示為 [title] …",
   "CmdRestoreDescription": "將工作區回復到此前的輪次前/後快照。不帶參數時列出最近的快照。",
   "CmdRetryDescription": "重試上一次請求",
   "CmdReviewDescription": "對檔案、diff 或 PR 進行結構化程式碼審查",

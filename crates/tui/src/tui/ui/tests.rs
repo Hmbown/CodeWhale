@@ -5415,6 +5415,7 @@ fn saved_session_with_messages(messages: Vec<Message>) -> SavedSession {
         context_references: Vec::new(),
         artifacts: Vec::new(),
         work_state: None,
+        window_title: None,
         last_auto_route: None,
     }
 }

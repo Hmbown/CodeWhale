@@ -258,6 +258,14 @@ approval_policy = "on-request" # on-request | untrusted | never
 sandbox_mode = "workspace-write" # read-only | workspace-write | danger-full-access | external-sandbox
 # prompt_suggestion = true  # opt-in: show ghost-text follow-up question in composer after each turn
 
+# Optional tab/window title shown as `[title] …` in front of the terminal
+# window title (the `Codewhale` / `reasoning…` / `using tool…` / `done`
+# states). Multi-window setups can give each workspace its own `--config`
+# file (or profile) so alt-tabbed sessions are identifiable at a glance.
+# The `/title` command overrides this per session; `/config title … --save`
+# persists a new default here. Run `/title off` to drop a session override.
+# title = "workspace-x"
+
 # Typed permission rules live in a sibling `permissions.toml` file, not in
 # config.toml. Each `[[rules]]` entry accepts `tool`, optional `command`
 # or `path`, optional absolute `workspace`, optional `command_exact = true`,

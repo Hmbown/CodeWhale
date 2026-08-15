@@ -306,6 +306,7 @@
   "CmdRemoteEnvSourceCustodyPolicy": "Codewhale 不会将本地源代码上传、迁移或同步到托管 Work。使用 {command} 从 GitHub 或 CNB 上可用的分支尖端开始。未推送的提交、已修改或已忽略的文件、密钥和会话状态仍保留在本地。",
   "CmdRemoteEnvBrowserLabel": "Codewhale 托管 Work",
   "CmdRenameDescription": "重命名当前会话",
+  "CmdTitleDescription": "设置标签页标题，终端标题显示为 [title] …",
   "CmdRestoreDescription": "将工作区回滚到此前的轮次前/后快照。不带参数时列出最近的快照。",
   "CmdRetryDescription": "重试上一次请求",
   "CmdReviewDescription": "对文件、diff 或 PR 进行结构化代码审查",

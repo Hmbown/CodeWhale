@@ -2526,6 +2526,7 @@ pub(crate) fn apply_loaded_session(
     app.current_session_metadata = Some(session.metadata.clone());
     app.session_artifacts = session.artifacts.clone();
     app.session_title = Some(session.metadata.title.clone());
+    app.window_title = session.window_title.clone();
     app.workspace_context = None;
     app.workspace_context_refreshed_at = None;
     if let Some(sp) = session.system_prompt.as_ref() {

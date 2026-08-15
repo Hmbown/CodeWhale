@@ -161,6 +161,7 @@ pub fn clear(app: &mut App) -> CommandResult {
     app.current_session_id = None;
     app.current_session_metadata = None;
     app.session_title = None;
+    app.window_title = None;
     let locale = app.ui_locale;
     let message = tr(locale, MessageId::ClearConversation).to_string();
     CommandResult::with_message_and_action(

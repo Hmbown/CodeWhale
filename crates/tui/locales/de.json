@@ -303,6 +303,7 @@
   "CmdRemoteEnvSourceCustodyPolicy": "Codewhale lädt lokalen Quellcode nicht in gehostetes Work hoch und migriert oder synchronisiert ihn nicht dorthin. Verwende {command}, um von der bei GitHub oder CNB verfügbaren Branch-Spitze zu starten. Nicht gepushte Commits, geänderte oder ignorierte Dateien, Geheimnisse und Sitzungsstatus bleiben lokal.",
   "CmdRemoteEnvBrowserLabel": "Gehostetes Work von Codewhale",
   "CmdRenameDescription": "Aktuelle Sitzung umbenennen",
+  "CmdTitleDescription": "Registerkarten-/Fenstertitel festlegen, der als [title] … im Terminaltitel erscheint",
   "CmdRestoreDescription": "Workspace auf einen früheren Pre-/Post-Turn-Snapshot zurücksetzen. Ohne Argument werden die letzten Snapshots aufgelistet.",
   "CmdRetryDescription": "Letzte Anfrage wiederholen",
   "CmdReviewDescription": "Strukturiertes Code-Review für eine Datei, einen Diff oder PR ausführen",

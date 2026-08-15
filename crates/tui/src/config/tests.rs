@@ -964,6 +964,39 @@ fn workflow_config_defaults_when_omitted_and_overrides_round_trip() {
 }
 
 #[test]
+fn window_title_config_parses_and_overlays() {
+    // `title` is a plain optional root key: absent config → `None`.
+    let omitted: Config = toml::from_str("").expect("empty config");
+    assert_eq!(omitted.title, None);
+
+    let config: Config = toml::from_str(r#"title = "workspace-x""#).expect("parse title config");
+    assert_eq!(config.title.as_deref(), Some("workspace-x"));
+
+    // Overlay wins over the base when both define a title.
+    let merged = merge_config(
+        Config {
+            title: Some("base-title".to_string()),
+            ..Config::default()
+        },
+        Config {
+            title: Some("override-title".to_string()),
+            ..Config::default()
+        },
+    );
+    assert_eq!(merged.title.as_deref(), Some("override-title"));
+
+    // Base title survives an overlay that does not mention it.
+    let merged = merge_config(
+        Config {
+            title: Some("base-title".to_string()),
+            ..Config::default()
+        },
+        Config::default(),
+    );
+    assert_eq!(merged.title.as_deref(), Some("base-title"));
+}
+
+#[test]
 fn search_provider_defaults_to_firecrawl() {
     assert_eq!(SearchProvider::default(), SearchProvider::Firecrawl);
     assert_eq!(

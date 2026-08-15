@@ -515,6 +515,10 @@ pub(crate) fn sync_title_activity(app: &App) {
     crate::tui::notifications::set_title_motion_enabled(
         app.motion_policy().allows_decorative() && app.status_indicator != "off",
     );
+    // Keep the `[title] …` window-title prefix in step with the session and
+    // config defaults; change detection inside makes this free when nothing
+    // moved.
+    crate::tui::notifications::set_title_prefix(app.window_title_prefix());
     if app.is_loading
         || matches!(
             ShellPhase::from_app(app),
@@ -1698,6 +1702,57 @@ mod tests {
             worktree_available: true,
             row_areas: Vec::new(),
         }
+    }
+
+    #[test]
+    fn window_title_prefix_prefers_session_over_config_default() {
+        let mut app = test_app();
+        // Nothing configured: no prefix at all.
+        assert_eq!(app.window_title_prefix(), None);
+
+        // Config default alone.
+        app.title_default = Some("workspace-x".to_string());
+        assert_eq!(app.window_title_prefix(), Some("workspace-x"));
+
+        // Session-level `/title` wins over the config default.
+        app.window_title = Some("task-7".to_string());
+        assert_eq!(app.window_title_prefix(), Some("task-7"));
+
+        // Clearing the session title falls back to the default.
+        app.window_title = None;
+        assert_eq!(app.window_title_prefix(), Some("workspace-x"));
+
+        // Whitespace-only titles count as unset.
+        app.window_title = Some("   ".to_string());
+        assert_eq!(app.window_title_prefix(), None);
+        app.window_title = None;
+    }
+
+    #[test]
+    fn sync_title_activity_pushes_the_resolved_prefix() {
+        // The render-loop sync must reach the notifications layer so the
+        // terminal title actually carries the prefix.
+        let _guard = crate::tui::notifications::title_prefix_test_lock();
+        crate::tui::notifications::set_title_prefix(None);
+        let mut app = test_app();
+        app.window_title = Some("sync-check".to_string());
+        sync_title_activity(&app);
+        assert_eq!(
+            crate::tui::notifications::title_prefix_slot()
+                .lock()
+                .unwrap()
+                .as_str(),
+            "sync-check"
+        );
+        app.window_title = None;
+        sync_title_activity(&app);
+        assert_eq!(
+            crate::tui::notifications::title_prefix_slot()
+                .lock()
+                .unwrap()
+                .as_str(),
+            ""
+        );
     }
 
     #[test]

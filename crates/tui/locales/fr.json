@@ -303,6 +303,7 @@
   "CmdRemoteEnvSourceCustodyPolicy": "Codewhale ne téléverse, ne migre et ne synchronise pas le code source local dans le Work hébergé. Utilisez {command} pour démarrer depuis la pointe de la branche disponible sur GitHub ou CNB. Les commits non poussés, les fichiers modifiés ou ignorés, les secrets et l'état de la session restent locaux.",
   "CmdRemoteEnvBrowserLabel": "Work hébergé de Codewhale",
   "CmdRenameDescription": "Renommer la session en cours",
+  "CmdTitleDescription": "Définir un titre d'onglet/fenêtre affiché comme [title] … dans le titre du terminal",
   "CmdRestoreDescription": "Restaurer le workspace à un snapshot pré/post-tour antérieur. Sans argument, liste les snapshots récents.",
   "CmdRetryDescription": "Réessayer la dernière requête",
   "CmdReviewDescription": "Lancer une revue de code structurée sur un fichier, un diff ou une PR",

@@ -306,6 +306,7 @@
   "CmdRemoteEnvSourceCustodyPolicy": "Codewhale không tải lên, di chuyển hoặc đồng bộ mã nguồn cục bộ vào Work được lưu trữ. Dùng {command} để bắt đầu từ đầu nhánh hiện có trên GitHub hoặc CNB. Các commit chưa đẩy, tệp đã thay đổi hoặc bị bỏ qua, bí mật và trạng thái phiên vẫn ở cục bộ.",
   "CmdRemoteEnvBrowserLabel": "Work được Codewhale lưu trữ",
   "CmdRenameDescription": "Đổi tên phiên làm việc hiện tại",
+  "CmdTitleDescription": "Đặt tiêu đề tab/cửa sổ hiển thị dạng [title] … trong tiêu đề terminal",
   "CmdRestoreDescription": "Khôi phục không gian làm việc về bản chụp trước/sau lượt. Nếu không có đối số, hiển thị các bản chụp gần đây.",
   "CmdRetryDescription": "Thử lại yêu cầu gần nhất",
   "CmdReviewDescription": "Chạy một quy trình xem xét mã nguồn có cấu trúc trên tệp, diff hoặc PR",

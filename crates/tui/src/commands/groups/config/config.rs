@@ -272,6 +272,11 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
             };
             Some(config.deepseek_base_url())
         }
+        "title" | "window_title" | "tab_title" => Some(
+            app.window_title_prefix()
+                .map(str::to_string)
+                .unwrap_or_else(|| "(unset)".to_string()),
+        ),
         "provider_url" | "provider_base_url" | "endpoint" => {
             let config = match Config::load(app.config_path.clone(), app.config_profile.as_deref())
             {
@@ -1748,6 +1753,30 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
             return CommandResult::error(
                 "base_url must be saved with --save; client base URL is loaded from config on startup. Restart and re-open your session after saving.",
             );
+        }
+        "title" | "window_title" | "tab_title" => {
+            let value = value.trim();
+            if value.is_empty() {
+                return CommandResult::error(
+                    "title cannot be empty; use /title off to clear a session title",
+                );
+            }
+            if value.chars().count() > 100 {
+                return CommandResult::error("Title too long (max 100 characters)");
+            }
+            let suffix = if persist {
+                match persist_root_string_key(app.config_path.as_deref(), "title", value) {
+                    Ok(path) => format!(" (saved to {})", path.display()),
+                    Err(err) => return CommandResult::error(format!("Failed to save: {err}")),
+                }
+            } else {
+                " (session only, add --save to persist)".to_string()
+            };
+            app.title_default = Some(value.to_string());
+            app.needs_redraw = true;
+            return CommandResult::message(format!(
+                "title = {value}{suffix} — terminal window titles now read [\"{value}\"] … until /title overrides this session"
+            ));
         }
         "provider_url" | "provider_base_url" | "endpoint" => {
             let value = match resolve_provider_url_value(app.api_provider, value) {

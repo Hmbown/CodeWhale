@@ -303,6 +303,7 @@
   "CmdRemoteEnvSourceCustodyPolicy": "Codewhale no carrega, migra ni sincronitza codi font local amb el Work allotjat. Utilitza {command} per començar des de la punta de la branca disponible a GitHub o CNB. Els commits no enviats, els fitxers modificats o ignorats, els secrets i l'estat de la sessió es mantenen en local.",
   "CmdRemoteEnvBrowserLabel": "Work allotjat de Codewhale",
   "CmdRenameDescription": "Reanomena la sessió actual",
+  "CmdTitleDescription": "Defineix un títol de pestanya/finestra mostrat com a [title] … al títol del terminal",
   "CmdRestoreDescription": "Reverteix l'espai de treball a una instantània anterior pre/post-torn. Sense argument, llista les instantànies recents.",
   "CmdRetryDescription": "Reintenta l'última petició",
   "CmdReviewDescription": "Executa una revisió de codi estructurada sobre un fitxer, diff o PR",

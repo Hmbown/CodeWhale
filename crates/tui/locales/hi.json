@@ -303,6 +303,7 @@
   "CmdRemoteEnvSourceCustodyPolicy": "Codewhale लोकल सोर्स को होस्टेड Work में अपलोड, माइग्रेट या सिंक नहीं करता। GitHub या CNB पर उपलब्ध ब्रांच टिप से शुरू करने के लिए {command} का उपयोग करें। पुश न किए गए कमिट, बदली हुई या इग्नोर की गई फ़ाइलें, सीक्रेट और सत्र स्थिति लोकल ही रहती हैं।",
   "CmdRemoteEnvBrowserLabel": "Codewhale होस्टेड Work",
   "CmdRenameDescription": "वर्तमान सत्र का नाम बदलें",
+  "CmdTitleDescription": "टर्मिनल शीर्षक में [title] … के रूप में दिखने वाला टैब/विंडो शीर्षक सेट करें",
   "CmdRestoreDescription": "वर्कस्पेस को पूर्व pre/post-turn स्नैपशॉट पर वापस लाएँ। बिना आर्ग के हालिया स्नैपशॉट सूचीबद्ध करता है।",
   "CmdRetryDescription": "अंतिम अनुरोध पुनः प्रयास करें",
   "CmdReviewDescription": "फ़ाइल, diff या PR पर संरचित कोड समीक्षा चलाएँ",

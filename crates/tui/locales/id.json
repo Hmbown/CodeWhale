@@ -303,6 +303,7 @@
   "CmdRemoteEnvSourceCustodyPolicy": "Codewhale tidak mengunggah, memigrasikan, atau menyinkronkan kode sumber lokal ke Work terhosting. Gunakan {command} untuk memulai dari ujung branch yang tersedia di GitHub atau CNB. Commit yang belum di-push, file yang berubah atau diabaikan, rahasia, dan status sesi tetap lokal.",
   "CmdRemoteEnvBrowserLabel": "Work terhosting Codewhale",
   "CmdRenameDescription": "Ubah nama sesi saat ini",
+  "CmdTitleDescription": "Atur judul tab/jendela yang ditampilkan sebagai [title] … pada judul terminal",
   "CmdRestoreDescription": "Kembalikan workspace ke snapshot pra/pasca-giliran sebelumnya. Tanpa argumen, menampilkan snapshot terbaru.",
   "CmdRetryDescription": "Coba lagi permintaan terakhir",
   "CmdReviewDescription": "Jalankan tinjauan kode terstruktur pada file, diff, atau PR",

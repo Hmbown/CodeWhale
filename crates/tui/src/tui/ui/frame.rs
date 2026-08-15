@@ -429,6 +429,7 @@ pub(crate) fn build_session_snapshot(
     session.artifacts = app.session_artifacts.clone();
     session.work_state = work_state;
     session.last_auto_route = app.auto_route_for_persistence();
+    session.window_title.clone_from(&app.window_title);
     app.current_session_metadata = Some(session.metadata.clone());
     // Claim ownership of this session for the process. From here on the
     // Runtime API refuses external renames/archives of it with a typed 409

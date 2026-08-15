@@ -306,6 +306,7 @@
   "CmdRemoteEnvSourceCustodyPolicy": "Codewhale はローカルソースをホスト型 Work にアップロード、移行、同期しません。{command} を使用して、GitHub または CNB で利用可能なブランチ先端から開始してください。未プッシュのコミット、変更済みまたは無視対象のファイル、シークレット、セッション状態はローカルに残ります。",
   "CmdRemoteEnvBrowserLabel": "Codewhale ホスト型 Work",
   "CmdRenameDescription": "現在のセッションの名前を変更",
+  "CmdTitleDescription": "タブ/ウィンドウのタイトルを設定（端末タイトルに [title] … と表示）",
   "CmdRestoreDescription": "ワークスペースを以前のターン前/後スナップショットへロールバック。引数なしで最近のスナップショットを一覧表示。",
   "CmdRetryDescription": "直前のリクエストを再試行",
   "CmdReviewDescription": "ファイル・diff・PR に対して構造化コードレビューを実行",
