@@ -92,10 +92,51 @@ impl Default for CompactionConfig {
 /// Minimum non-whitespace characters for a usable successor summary.
 /// Below this (or missing required section headings), treat as degenerate and
 /// retry once rather than shipping amnesia (compactionidea failure ladder).
+const COMPACTION_MIN_NON_WHITESPACE_CHARS: usize = 48;
 const COMPACTION_LANGUAGE_CONTRACT: &str = "Use the natural language of the most recent \
 substantive user message for reasoning and user-facing prose. Keep code, identifiers, paths, \
 commands, logs, tool payloads, quotations, and the English structural labels verbatim. English \
 scaffolding is not a request to switch languages.";
+
+/// Placeholder / non-text summaries that must never replace real history.
+const COMPACTION_PLACEHOLDER_SUMMARIES: &[&str] = &[
+    "(no summary available)",
+    "no summary available",
+    "n/a",
+    "none",
+    "null",
+    "undefined",
+    "...",
+    "…",
+    "tbd",
+    "todo",
+    "placeholder",
+];
+
+/// Whether a compaction summary is substantive enough to replace history.
+#[must_use]
+pub fn summary_is_usable(summary: &str) -> bool {
+    let trimmed = summary.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if COMPACTION_PLACEHOLDER_SUMMARIES
+        .iter()
+        .any(|placeholder| lower == *placeholder)
+    {
+        return false;
+    }
+    let non_ws: String = trimmed.chars().filter(|ch| !ch.is_whitespace()).collect();
+    if non_ws.chars().count() < COMPACTION_MIN_NON_WHITESPACE_CHARS {
+        return false;
+    }
+    // Punctuation-only / symbol-only bodies are not handoff text.
+    if non_ws.chars().all(|ch| !ch.is_alphanumeric()) {
+        return false;
+    }
+    true
+}
 
 /// Failure kind for compaction LLM calls (deterministic vs transient).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -405,8 +446,13 @@ fn estimate_retained_floor_conservative(
     let retained_tokens = estimate_tokens(&retained).saturating_mul(3).div_ceil(2);
     let framing = retained.len().saturating_mul(12).saturating_add(48);
     let anchors = user_anchors_section(config.workspace.as_deref());
-    let summary_scaffolding_tokens =
-        estimate_text_tokens_conservative(&build_compaction_summary_block_text("", &anchors));
+    let summary_scaffolding_tokens = estimate_text_tokens_conservative(
+        &build_compaction_summary_block_text(
+            // Scaffolding-size probe only; never committed as a real summary.
+            "Progress checkpoint placeholder used only to size compaction scaffolding tokens for pressure estimates.",
+            &anchors,
+        ),
+    );
 
     // Post-compaction the committed summary is REPLACED, not stacked, so prior
     // summary blocks must not inflate the floor. Count only the exact installed
@@ -955,10 +1001,21 @@ pub async fn compact_messages_safe(
                 return Ok(CompactionResult {
                     messages: sanitize_retained_messages(msgs),
                     summary_prompt: prompt,
+                    // Includes quality-gate retries: each failed attempt
+                    // advances `attempt` before a successful compact.
                     retries_used: attempt,
                 });
             }
             Err(e) => {
+                let message = e.to_string();
+                if message.contains("quality gate") {
+                    logging::warn(format!(
+                        "Compaction quality gate rejected summary on attempt {}: {message}",
+                        attempt + 1
+                    ));
+                    last_error = Some(e);
+                    continue;
+                }
                 // Only retry on transient errors
                 if !is_transient_error(&e) {
                     return Err(e);
@@ -973,12 +1030,13 @@ pub async fn compact_messages_safe(
 }
 
 fn build_compaction_summary_block_text(summary: &str, anchors: &str) -> String {
+    // Callers must only pass usable summaries. Never substitute a placeholder
+    // that would erase real history under the guise of a successful compact.
     let summary = summary.trim();
-    let summary = if summary.is_empty() {
-        "(no summary available)"
-    } else {
-        summary
-    };
+    debug_assert!(
+        summary_is_usable(summary),
+        "compaction must not commit an unusable summary"
+    );
     let mut text = format!("{SUMMARY_HEADER}\n\n{summary}");
     text.push_str(anchors);
     text
@@ -1053,6 +1111,11 @@ pub async fn compact_messages(
     }
 
     let summary = create_summary(client, messages, config).await?;
+    if !summary_is_usable(&summary) {
+        anyhow::bail!(
+            "Compaction summary failed the quality gate (empty, placeholder, punctuation-only, or non-text); history was not replaced."
+        );
+    }
     let anchors = user_anchors_section(config.workspace.as_deref());
     let checkpoint_text = build_compaction_summary_block_text(&summary, &anchors);
     let summary_block = SystemBlock {
@@ -2110,5 +2173,19 @@ mod tests {
 
         assert_eq!(result.retries_used, 2);
         assert!(result.messages.is_empty());
+    }
+
+    #[test]
+    fn unusable_compaction_summaries_fail_the_quality_gate() {
+        assert!(!summary_is_usable(""));
+        assert!(!summary_is_usable("   \n\t  "));
+        assert!(!summary_is_usable("..."));
+        assert!(!summary_is_usable("!!! ??? ---"));
+        assert!(!summary_is_usable("(no summary available)"));
+        assert!(!summary_is_usable("n/a"));
+        assert!(!summary_is_usable("short"));
+        assert!(summary_is_usable(
+            "Current progress: migrated the auth middleware. Next: cover the refresh-token path and fix the flake in session resume."
+        ));
     }
 }
