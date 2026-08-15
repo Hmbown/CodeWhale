@@ -518,15 +518,23 @@ pub(crate) fn title_prefix_test_lock() -> std::sync::MutexGuard<'static, ()> {
 /// next activity-verb update.
 pub fn set_title_prefix(prefix: Option<&str>) {
     let prefix = prefix.unwrap_or_default().trim();
-    let mut slot = title_prefix_slot()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if slot.as_str() == prefix {
-        return;
-    }
-    slot.clear();
-    slot.push_str(prefix);
-    if TITLE_ANIMATION_RUNNING.load(Ordering::SeqCst) {
+    let changed = {
+        let mut slot = title_prefix_slot()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if slot.as_str() == prefix {
+            false
+        } else {
+            slot.clear();
+            slot.push_str(prefix);
+            true
+        }
+    };
+    // Redraw only after the prefix lock is released: the title render path
+    // re-locks [`title_prefix_slot`] through `decorate_title`, and a `Mutex`
+    // is not reentrant — drawing while holding it would deadlock the
+    // render loop on the first `/title` during an active turn.
+    if changed && TITLE_ANIMATION_RUNNING.load(Ordering::SeqCst) {
         let base = title_animation_base()
             .lock()
             .map_or_else(|_| "Codewhale".to_string(), |base| base.clone());
@@ -1281,6 +1289,25 @@ mod tests {
         assert_eq!(title_prefix_slot().lock().unwrap().as_str(), "beta");
         set_title_prefix(None);
         assert_eq!(title_prefix_slot().lock().unwrap().as_str(), "");
+    }
+
+    #[test]
+    fn set_title_prefix_redraws_without_deadlocking_while_animating() {
+        // Regression: `set_title_prefix` used to redraw the title while still
+        // holding the prefix lock. The redraw path (`title_activity_label` →
+        // `decorate_title`) re-locks the same `Mutex`, and `Mutex` is not
+        // reentrant — the first `/title` during an active turn froze the
+        // whole render loop. Exercise the exact path: prefix change while
+        // the animation worker is running.
+        let _guard = prefix_lock();
+        start_title_animation("Codewhale");
+        assert!(TITLE_ANIMATION_RUNNING.load(Ordering::SeqCst));
+        set_title_prefix(Some("task-7"));
+        assert_eq!(title_prefix_slot().lock().unwrap().as_str(), "task-7");
+        set_title_prefix(None);
+        assert_eq!(title_prefix_slot().lock().unwrap().as_str(), "");
+        stop_title_animation_quietly();
+        assert!(!TITLE_ANIMATION_RUNNING.load(Ordering::SeqCst));
     }
 
     /// Serialise tests that mutate process-global environment or notification
