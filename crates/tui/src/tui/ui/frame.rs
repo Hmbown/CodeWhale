@@ -1203,11 +1203,14 @@ pub(crate) fn short_title_truncate(text: &str, max_chars: usize) -> String {
     if text.chars().count() <= max_chars {
         return text.to_string();
     }
-    // Look for a natural boundary within the allowed range.
-    let candidate: String = text.chars().take(max_chars).collect();
+    // Find the boundary as a character index. `str::rfind` returns a byte
+    // offset, which mis-counts multi-byte UTF-8 text when fed back into
+    // `chars().take()`, so operate on `Vec<char>` instead.
+    let candidate: Vec<char> = text.chars().take(max_chars).collect();
     let boundary = candidate
-        .rfind(['.', ',', ':', ';', '—', '-'])
-        .or_else(|| candidate.rfind(' '))
+        .iter()
+        .rposition(|&c| matches!(c, '.' | ',' | ':' | ';' | '—' | '-'))
+        .or_else(|| candidate.iter().rposition(|&c| c == ' '))
         .unwrap_or(max_chars.min(candidate.len()).saturating_sub(1));
     let cut: String = text.chars().take(boundary.max(1)).collect();
     format!("{cut}…")
@@ -1329,4 +1332,39 @@ pub(crate) fn workflow_tool_is_running(app: &App) -> bool {
             .active_cell
             .as_ref()
             .is_some_and(|active| active.entries().iter().any(is_running_workflow))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::short_title_truncate;
+
+    #[test]
+    fn truncates_at_ascii_word_boundary() {
+        assert_eq!(short_title_truncate("hello world foo", 10), "hello…");
+    }
+
+    #[test]
+    fn truncates_non_ascii_titles_by_char_count_not_bytes() {
+        // `str::rfind` returns a byte offset; using it as a char count used to
+        // cut past the limit and mid-word on multi-byte input.
+        assert_eq!(
+            short_title_truncate("你好 world and more", 10),
+            "你好 world…"
+        );
+    }
+
+    #[test]
+    fn truncates_at_punctuation_boundary() {
+        assert_eq!(short_title_truncate("hello, world", 8), "hello…");
+    }
+
+    #[test]
+    fn truncates_mid_word_when_no_boundary_exists() {
+        assert_eq!(short_title_truncate("abcdefghij", 5), "abcd…");
+    }
+
+    #[test]
+    fn leaves_short_titles_untouched() {
+        assert_eq!(short_title_truncate("short", 10), "short");
+    }
 }
