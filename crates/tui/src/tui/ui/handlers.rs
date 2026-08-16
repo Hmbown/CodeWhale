@@ -1954,6 +1954,15 @@ pub(crate) async fn handle_view_events(
                 }
                 open_model_picker_for_provider(app, config, provider);
             }
+            ViewEvent::ProviderPickerTestConnection {
+                provider,
+                provider_id,
+            } => {
+                let identity = picker_provider_identity(config, provider, provider_id.as_deref())
+                    .map_err(anyhow::Error::msg)?;
+                apply_provider_picker_test_connection(app, engine_handle, config, identity).await;
+                refresh_config_view_if_open(app, "provider");
+            }
             ViewEvent::ModeSelected { mode } => {
                 let prior_mode = app.mode;
                 let msg = commands::switch_mode(app, mode);

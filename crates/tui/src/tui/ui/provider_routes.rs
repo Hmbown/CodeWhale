@@ -811,14 +811,30 @@ pub(crate) fn picker_provider_identity(
     provider: ApiProvider,
     provider_id: Option<&str>,
 ) -> Result<crate::config::ProviderIdentity, String> {
-    let identity = match provider_id {
-        Some(provider_id) => config
-            .resolve_persisted_provider_identity(Some(provider.as_str()), Some(provider_id))?,
-        None if provider == ApiProvider::Custom => config.active_provider_identity(provider)?,
-        None => config.resolve_persisted_provider_identity(
-            Some(provider.as_str()),
-            Some(provider.as_str()),
-        )?,
+    let resolved = match provider_id {
+        Some(provider_id) => {
+            config.resolve_persisted_provider_identity(Some(provider.as_str()), Some(provider_id))
+        }
+        None if provider == ApiProvider::Custom => config.active_provider_identity(provider),
+        None => config
+            .resolve_persisted_provider_identity(Some(provider.as_str()), Some(provider.as_str())),
+    };
+    let identity = match resolved {
+        Ok(identity) => identity,
+        Err(err) => {
+            if provider == ApiProvider::Custom
+                && let Some(raw) = provider_id
+                && let Some(template) = codewhale_config::provider_setup_template(raw)
+                    .filter(|template| template.is_custom())
+            {
+                return Ok(crate::config::ProviderIdentity {
+                    provider: ApiProvider::Custom,
+                    key: template.id.to_string(),
+                    exact_id: Some(template.id.to_string()),
+                });
+            }
+            return Err(err);
+        }
     };
     if identity.provider != provider {
         return Err(format!(
@@ -831,7 +847,6 @@ pub(crate) fn picker_provider_identity(
     Ok(identity)
 }
 
-#[cfg(test)]
 pub(crate) fn provider_verification_error_category(
     reason: &str,
 ) -> crate::error_taxonomy::ErrorCategory {

@@ -997,6 +997,10 @@ pub enum AppAction {
     },
     /// Open the named, keyless DS4 local-runtime preset for review and save.
     OpenDs4Setup,
+    /// Open key-only setup for a prefab custom template (`agnes`, `sensenova`).
+    OpenTemplateSetup {
+        template_id: String,
+    },
     /// Run the xAI/Grok device-code flow with the TUI temporarily suspended.
     StartXaiDeviceLogin,
     /// Open the `/mode` picker modal for Act / Plan / Operate.

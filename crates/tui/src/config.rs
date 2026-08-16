@@ -1507,7 +1507,9 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
         ApiProvider::Sakana => vec![DEFAULT_SAKANA_MODEL, SAKANA_FUGU_ULTRA_MODEL],
         ApiProvider::LongCat => vec![DEFAULT_LONGCAT_MODEL],
         ApiProvider::OpencodeGo => OPENCODE_GO_CHAT_MODELS.to_vec(),
-        ApiProvider::OpencodeZen => vec![DEFAULT_OPENCODE_ZEN_MODEL],
+        // Full curated Zen roster so `/model` still lists models when
+        // Models.dev is stale or the live cache failed (#5350).
+        ApiProvider::OpencodeZen => codewhale_config::route::opencode_zen_picker_models(),
         ApiProvider::Meta => vec![
             DEFAULT_META_MODEL,
             "muse-spark-1.1",

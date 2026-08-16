@@ -1,6 +1,7 @@
 //! `/setup` command.
 
 use crate::commands::traits::{CommandInfo, RegisterCommand};
+#[cfg(test)]
 use crate::config::ApiProvider;
 use crate::localization::MessageId;
 use crate::tui::app::{App, AppAction};
@@ -34,20 +35,10 @@ impl RegisterCommand for SetupCmd {
                         "Usage: /setup provider [provider-name]".to_string(),
                     );
                 }
-                if raw_provider.eq_ignore_ascii_case("ds4")
-                    || raw_provider.eq_ignore_ascii_case("dwarfstar")
-                {
-                    return CommandResult::action(AppAction::OpenDs4Setup);
-                }
-                let Some(provider) = ApiProvider::parse(raw_provider) else {
-                    return CommandResult::error(format!(
-                        "Unknown provider '{raw_provider}'. Expected: {}.",
-                        ApiProvider::names_hint()
-                    ));
+                return match super::provider::provider_setup_action_for_name(raw_provider) {
+                    Ok(action) => CommandResult::action(action),
+                    Err(message) => CommandResult::error(message),
                 };
-                return CommandResult::action(AppAction::OpenProviderSetup {
-                    provider: Some(provider),
-                });
             }
         }
 
@@ -228,6 +219,21 @@ mod tests {
         let result = SetupCmd::execute(&mut app, Some("provider ds4"));
 
         assert_eq!(result.action, Some(AppAction::OpenDs4Setup));
+        assert!(result.message.is_none());
+    }
+
+    #[test]
+    fn setup_provider_agnes_opens_key_only_template() {
+        let mut app = test_app();
+
+        let result = SetupCmd::execute(&mut app, Some("provider agnes"));
+
+        assert_eq!(
+            result.action,
+            Some(AppAction::OpenTemplateSetup {
+                template_id: "agnes".to_string(),
+            })
+        );
         assert!(result.message.is_none());
     }
 

@@ -143,6 +143,27 @@ pub(crate) const OPENCODE_ZEN_MESSAGES_MODELS: &[&str] = &[
     "qwen3.5-plus",
 ];
 
+/// Logical default plus every documented Zen wire id, for picker fallbacks
+/// when Models.dev is stale or failed. `gpt-5.6` is the user-facing default;
+/// `gpt-5.6-sol` is the proven Responses wire id.
+#[must_use]
+pub fn opencode_zen_picker_models() -> Vec<&'static str> {
+    let mut models = vec![crate::DEFAULT_OPENCODE_ZEN_MODEL];
+    for model in OPENCODE_ZEN_RESPONSES_MODELS
+        .iter()
+        .chain(OPENCODE_ZEN_MESSAGES_MODELS)
+        .chain(OPENCODE_ZEN_CHAT_MODELS)
+    {
+        if !models
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(model))
+        {
+            models.push(*model);
+        }
+    }
+    models
+}
+
 pub(crate) const OPENCODE_ZEN_CHAT_MODELS: &[&str] = &[
     "deepseek-v4-pro",
     "deepseek-v4-flash",
