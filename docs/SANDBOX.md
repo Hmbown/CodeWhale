@@ -58,11 +58,23 @@ file. The wrapper derives its mounts and network namespace from the resolved
   --unshare-all \
   [--share-net] \
   --ro-bind / / \
+  --dev /dev \
+  --proc /proc \
+  --tmpfs /tmp \
+  [--dev-bind <device-root> <device-root> ...] \
   --bind <writable-root> <writable-root> ... \
   --ro-bind <protected-descendant> <protected-descendant> ... \
+  [--ro-bind <extra-ro-root> <extra-ro-root> ...] \
   --chdir <cwd> \
   -- <program> <args>
 ```
+
+The sandbox always gets a private `/dev` (fresh device nodes, so `>/dev/null`
+works), a private `/proc`, and a tmpfs `/tmp` (#5410). Two optional top-level
+config keys extend the mounts: `bwrap_ro_roots` (extra host paths bind-mounted
+read-only, applied last so they can narrow a policy-writable path) and
+`bwrap_dev_roots` (host character/block device nodes bind-mounted read-write;
+directories are never honored). Missing paths are skipped silently.
 
 That gives the child a read-only root view. For `workspace-write`, every safe,
 existing policy root is mounted read-write: the working directory, configured

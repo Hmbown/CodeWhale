@@ -47,9 +47,9 @@ use std::collections::BTreeSet;
 #[cfg(target_os = "linux")]
 use std::path::{Path, PathBuf};
 
-/// Resolve configured paths against the live filesystem, returning
-/// `(read_only_mounts, device_mounts)` as canonical paths that exist and
-/// satisfy each key's constraints.
+/// Crate-visible wrapper over [`existing_directory`] so the sandbox module's
+/// `BwrapMountExtensions::resolve` applies the same canonicalize + is_dir
+/// rule to user-configured read-only roots (#5410).
 #[cfg(target_os = "linux")]
 pub(crate) fn existing_directory_shim(path: &Path) -> Option<PathBuf> {
     existing_directory(path)
@@ -438,7 +438,6 @@ mod tests {
         );
     }
 
-    #[test]
     #[cfg(target_os = "linux")]
     fn has_mount(command: &[String], flag: &str, path: &Path) -> bool {
         let path = path.to_string_lossy();
