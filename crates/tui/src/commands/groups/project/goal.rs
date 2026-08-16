@@ -41,6 +41,8 @@ fn hunt(app: &mut App, arg: Option<&str>) -> CommandResult {
             close_hunt(app, HuntVerdict::Wounded, GoalStatus::Paused)
         }
         Some("resume") | Some("continue") => resume_hunt(app),
+        Some("help") | Some("?") | Some("usage") => CommandResult::message(goal_usage()),
+        Some("status") | Some("show") => goal_status(app),
         Some("block") | Some("blocked") | Some("escape") | Some("escaped") => {
             close_hunt(app, HuntVerdict::Escaped, GoalStatus::Blocked)
         }
@@ -66,40 +68,13 @@ fn hunt(app: &mut App, arg: Option<&str>) -> CommandResult {
             )
         }
         _ => {
-            if let Some(ref obj) = app.hunt.quarry {
-                let elapsed = app
-                    .hunt
-                    .time_used_seconds
-                    .gt(&0)
-                    .then(|| crate::elapsed::format_elapsed_secs(app.hunt.time_used_seconds))
-                    .or_else(|| {
-                        app.hunt
-                            .started_at
-                            .map(|t| crate::elapsed::format_elapsed_secs(t.elapsed().as_secs()))
-                    })
-                    .unwrap_or_else(|| "unknown".to_string());
-                let budget_str = app
-                    .hunt
-                    .token_budget
-                    .map(|b| {
-                        let used = if app.hunt.tokens_used > 0 {
-                            app.hunt.tokens_used
-                        } else {
-                            u64::from(app.session.total_conversation_tokens)
-                        };
-                        let pct = if b > 0 {
-                            (used as f64 / f64::from(b) * 100.0).min(100.0)
-                        } else {
-                            0.0
-                        };
-                        format!(" | tokens: {used}/{b} ({pct:.0}%)")
-                    })
-                    .unwrap_or_default();
-                let verdict_label = hunt_verdict_label(app.hunt.verdict);
-                CommandResult::message(format!(
-                    "Goal {verdict_label}: \"{obj}\" - elapsed: {elapsed}{budget_str} | continuations: {}",
-                    app.hunt.continuation_count
-                ))
+            if app.hunt.quarry.is_some() {
+                goal_status(app)
+            } else if app.api_messages.is_empty() {
+                // Nothing has happened yet: there is no context to derive an
+                // objective from, so answer with usage instead of spending a
+                // model turn on a question we already know the answer to.
+                CommandResult::message(goal_usage())
             } else {
                 // Context-dependent bare /goal: with no active goal, the
                 // invocation itself is the ask — derive the objective from
@@ -120,6 +95,55 @@ fn hunt(app: &mut App, arg: Option<&str>) -> CommandResult {
             }
         }
     }
+}
+
+/// Plain status line: objective, state, elapsed, budget, continuations, and
+/// — for an active goal that no turn is driving right now — how to continue.
+fn goal_status(app: &App) -> CommandResult {
+    let Some(obj) = app.hunt.quarry.as_deref() else {
+        return CommandResult::message(goal_usage());
+    };
+    let elapsed = app
+        .hunt
+        .time_used_seconds
+        .gt(&0)
+        .then(|| crate::elapsed::format_elapsed_secs(app.hunt.time_used_seconds))
+        .or_else(|| {
+            app.hunt
+                .started_at
+                .map(|t| crate::elapsed::format_elapsed_secs(t.elapsed().as_secs()))
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+    let budget_str = app
+        .hunt
+        .token_budget
+        .map(|b| {
+            let used = if app.hunt.tokens_used > 0 {
+                app.hunt.tokens_used
+            } else {
+                u64::from(app.session.total_conversation_tokens)
+            };
+            let pct = if b > 0 {
+                (used as f64 / f64::from(b) * 100.0).min(100.0)
+            } else {
+                0.0
+            };
+            format!(" · tokens {used}/{b} ({pct:.0}%)")
+        })
+        .unwrap_or_default();
+    let mut state = hunt_verdict_label(app.hunt.verdict).to_string();
+    if let (HuntVerdict::Wounded, Some(reason)) = (app.hunt.verdict, app.hunt.pause_reason) {
+        state = format!("{state} ({})", reason.label());
+    }
+    let mut line = format!(
+        "Goal {state}: \"{obj}\" · elapsed {elapsed}{budget_str} · continuations {}",
+        app.hunt.continuation_count
+    );
+    if app.hunt.verdict == HuntVerdict::Hunting && !app.is_loading {
+        line.push_str(" · ");
+        line.push_str(&app.tr(MessageId::GoalStatusIdleHint));
+    }
+    CommandResult::message(line)
 }
 
 fn declare_hunted(app: &mut App) -> CommandResult {
@@ -173,16 +197,16 @@ fn close_hunt(app: &mut App, verdict: HuntVerdict, status: GoalStatus) -> Comman
         HuntVerdict::Hunted => {
             let elapsed = goal_elapsed_at_close(&app.hunt);
             CommandResult::with_message_and_action(
-                format!("Goal hunted. Elapsed: {elapsed}"),
+                format!("Goal complete. Elapsed: {elapsed}"),
                 action,
             )
         }
         HuntVerdict::Wounded => CommandResult::with_message_and_action(
-            "Goal wounded. Progress is saved; use /goal resume to continue.",
+            "Goal paused. Progress is saved; use /goal resume to continue.",
             action,
         ),
-        HuntVerdict::Escaped => CommandResult::with_message_and_action("Goal escaped.", action),
-        HuntVerdict::Hunting => CommandResult::with_message_and_action("Goal hunting.", action),
+        HuntVerdict::Escaped => CommandResult::with_message_and_action("Goal blocked.", action),
+        HuntVerdict::Hunting => CommandResult::with_message_and_action("Goal active.", action),
     }
 }
 
@@ -209,20 +233,22 @@ fn resume_hunt(app: &mut App) -> CommandResult {
 }
 
 fn goal_usage() -> &'static str {
-    "No goal set. Use /goal <objective> [budget: N] to set one.\n\
-     /goal declare-hunted - override verification and mark hunted\n\
-     /goal wounded - pause without continuing\n\
+    "No goal set. /goal <objective> [budget: N] sets one; the agent works toward it \
+     across turns until it is verified complete, blocked, or you stop it.\n\
+     /goal - progress of the current goal\n\
+     /goal pause - pause without continuing\n\
      /goal resume - resume and continue\n\
-     /goal escaped - mark escaped\n\
+     /goal done - mark complete (declare-hunted skips verification)\n\
+     /goal blocked - mark blocked\n\
      /goal clear - remove the current goal."
 }
 
 fn hunt_verdict_label(verdict: HuntVerdict) -> &'static str {
     match verdict {
-        HuntVerdict::Hunting => "[HUNTING]",
-        HuntVerdict::Hunted => "[HUNTED]",
-        HuntVerdict::Wounded => "[WOUNDED]",
-        HuntVerdict::Escaped => "[ESCAPED]",
+        HuntVerdict::Hunting => "active",
+        HuntVerdict::Hunted => "complete",
+        HuntVerdict::Wounded => "paused",
+        HuntVerdict::Escaped => "blocked",
     }
 }
 
@@ -366,7 +392,7 @@ fn write_trophy_card_contents(mut f: impl Write, card: TrophyCard<'_>) -> std::i
 pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
     name: "goal",
     aliases: &["hunt", "mubiao", "狩猎"],
-    usage: "/goal [objective|clear|wounded|resume|declare-hunted|escaped] [budget: N]",
+    usage: "/goal [objective|status|pause|resume|done|blocked|clear] [budget: N]",
     description_id: MessageId::CmdGoalDescription,
 };
 
@@ -417,6 +443,13 @@ mod tests {
         // derives the objective from the conversation and sets it via
         // create_goal — it must not error with a usage demand.
         let mut app = create_test_app();
+        app.api_messages.push(crate::models::Message {
+            role: "user".to_string(),
+            content: vec![crate::models::ContentBlock::Text {
+                text: "make the tests pass".to_string(),
+                cache_control: None,
+            }],
+        });
         let result = hunt(&mut app, None);
         assert!(!result.is_error);
         let Some(AppAction::SendMessage(message)) = result.action else {
@@ -424,6 +457,44 @@ mod tests {
         };
         assert!(message.contains("Synthesize the objective from the conversation"));
         assert!(message.contains("`create_goal`"));
+    }
+
+    #[test]
+    fn bare_goal_on_an_empty_session_prints_usage_without_a_model_turn() {
+        // No conversation yet: there is nothing to derive an objective from,
+        // so the answer is usage — free, and not a question to the model.
+        let mut app = create_test_app();
+        let result = hunt(&mut app, None);
+        assert!(!result.is_error);
+        assert!(result.action.is_none());
+        assert!(result.message.unwrap().contains("/goal <objective>"));
+
+        let result = hunt(&mut app, Some("help"));
+        assert!(result.action.is_none());
+        assert!(result.message.unwrap().contains("/goal resume"));
+        assert!(
+            app.hunt.quarry.is_none(),
+            "help must not become an objective"
+        );
+    }
+
+    #[test]
+    fn goal_status_is_plain_and_says_how_to_continue_when_idle() {
+        let mut app = create_test_app();
+        let _ = hunt(&mut app, Some("ship the release notes"));
+        app.is_loading = false;
+        let result = hunt(&mut app, Some("status"));
+        let text = result.message.unwrap();
+        assert!(
+            text.starts_with("Goal active: \"ship the release notes\""),
+            "{text}"
+        );
+        assert!(text.contains("/goal resume"), "{text}");
+        assert!(!text.contains('['), "no bracket tags: {text}");
+
+        app.is_loading = true;
+        let text = hunt(&mut app, None).message.unwrap();
+        assert!(!text.contains("/goal resume"), "{text}");
     }
 
     #[test]
@@ -443,10 +514,13 @@ mod tests {
     }
 
     #[test]
-    fn test_command_usage_mentions_hunt_verdicts() {
-        assert!(COMMAND_INFO.usage.contains("declare-hunted"));
-        assert!(COMMAND_INFO.usage.contains("wounded"));
-        assert!(COMMAND_INFO.usage.contains("escaped"));
+    fn test_command_usage_mentions_host_verbs() {
+        assert!(COMMAND_INFO.usage.contains("status"));
+        assert!(COMMAND_INFO.usage.contains("pause"));
+        assert!(COMMAND_INFO.usage.contains("resume"));
+        assert!(COMMAND_INFO.usage.contains("done"));
+        assert!(COMMAND_INFO.usage.contains("blocked"));
+        assert!(COMMAND_INFO.usage.contains("clear"));
     }
 
     #[test]
@@ -566,7 +640,7 @@ mod tests {
                 .message
                 .as_deref()
                 .unwrap_or_default()
-                .contains("Goal hunted. Elapsed:"),
+                .contains("Goal complete. Elapsed:"),
             "close-out message should report a frozen elapsed; got {:?}",
             result.message
         );
@@ -594,8 +668,7 @@ mod tests {
         let result = hunt(&mut app, None);
 
         let message = result.message.as_deref().unwrap_or_default();
-        assert!(message.contains("Goal [ESCAPED]"));
-        assert!(!message.contains("[BLOCKED]"));
+        assert!(message.starts_with("Goal blocked:"), "{message}");
     }
 
     #[test]
@@ -666,9 +739,16 @@ mod tests {
 
     #[test]
     fn test_show_hunt_when_none() {
-        // Bare /goal with no active goal now declares one from context
-        // instead of printing usage.
+        // Bare /goal with no active goal but a live conversation declares one
+        // from context instead of printing usage.
         let mut app = create_test_app();
+        app.api_messages.push(crate::models::Message {
+            role: "user".to_string(),
+            content: vec![crate::models::ContentBlock::Text {
+                text: "fix the flaky test".to_string(),
+                cache_control: None,
+            }],
+        });
         let result = hunt(&mut app, None);
         assert!(
             result

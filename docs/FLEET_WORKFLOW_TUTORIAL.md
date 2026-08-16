@@ -41,13 +41,15 @@ If you want named reusable workers, open the TUI and run:
 ```
 
 Pick a role, choose whether that profile inherits the operator route or pins a
-specific provider/model/thinking tier, review the permissions/tools/route
-posture, and save the rendered TOML. Project profiles are saved under
-`.codewhale/agents/<role>.toml`. On Review, press `s` before previewing to save
-a personal profile under `$CODEWHALE_HOME/agents/<role>.toml`; it is available
-across repositories, while a same-id project profile remains the higher-priority
-override. Fleet task specs can reference either resolved profile with
-`worker.agent_profile` or the shorter `worker.profile` alias.
+specific provider/model, choose where the profile lives (**This project** →
+`.codewhale/agents/<role>.toml`, or **Personal** →
+`$CODEWHALE_HOME/agents/<role>.toml`, available across repositories while a
+same-id project profile remains the higher-priority override), then review the
+exact file, permissions/tools/route posture, and save. The save control names
+its effect ("Save to this project" / "Save as Personal profile"), and
+replacing an existing file always asks for a second confirmation. Fleet task
+specs can reference either resolved profile with `worker.agent_profile` or the
+shorter `worker.profile` alias.
 
 This makes the Fleet definition cross-repository, not the authority of one
 running session. For a multi-repository operation, launch Codewhale from a

@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Update the Homebrew tap at Hmbown/homebrew-deepseek-tui after a release.
+# Update the Homebrew tap after a release.
+#
+# The tap GitHub repo is still Hmbown/homebrew-deepseek-tui until Hunter
+# renames it. The formula users type is `codewhale`. The legacy
+# `deepseek-tui` formula stays as a deprecated alias for one overlap release.
 #
 # Expected environment:
 #   TAG       – git tag, e.g. "v0.8.31"
@@ -7,6 +11,7 @@
 #   TAP_REPO  – owner/repo of the Homebrew tap
 #   TOKEN     – PAT with contents:write on TAP_REPO (optional; skips if unset)
 #   FORMULA_OUTPUT – optional local render path used by contract tests
+#   FORMULA_LEGACY_OUTPUT – optional local render path for the alias formula
 
 set -euo pipefail
 
@@ -52,20 +57,22 @@ readonly SHA_COD_LINUX_X64 SHA_CODEW_LINUX_X64
 # --- temp dirs --------------------------------------------------------
 
 FORMULA_FILE="$(mktemp)"
+LEGACY_FILE="$(mktemp)"
 TAP_DIR="$(mktemp -d)"
-trap 'rm -rf "${TAP_DIR}" "${FORMULA_FILE}"' EXIT
-
-# --- generate formula --------------------------------------------------
+trap 'rm -rf "${TAP_DIR}" "${FORMULA_FILE}" "${LEGACY_FILE}"' EXIT
 
 readonly BASE_URL="https://github.com/Hmbown/CodeWhale/releases/download/${TAG}"
 
-cat > "${FORMULA_FILE}" << EOF
-class DeepseekTui < Formula
+render_formula() {
+  local class_name="${1:?}"
+  local extra_header="${2:-}"
+  cat << EOF
+class ${class_name} < Formula
   desc "Agentic terminal for open-source and open-weight coding models"
   homepage "https://github.com/Hmbown/CodeWhale"
   version "${VERSION}"
   license "MIT"
-
+${extra_header}
   on_macos do
     if Hardware::CPU.arm?
       url "${BASE_URL}/codewhale-macos-arm64", using: :nounzip
@@ -113,10 +120,19 @@ class DeepseekTui < Formula
   end
 end
 EOF
+}
+
+render_formula "Codewhale" "" > "${FORMULA_FILE}"
+render_formula "DeepseekTui" "  deprecate! date: \"2026-08-14\", because: \"renamed to codewhale\"
+" > "${LEGACY_FILE}"
 
 if [ -n "${FORMULA_OUTPUT:-}" ]; then
   cp "${FORMULA_FILE}" "${FORMULA_OUTPUT}"
   echo "Rendered Homebrew formula to ${FORMULA_OUTPUT}"
+  if [ -n "${FORMULA_LEGACY_OUTPUT:-}" ]; then
+    cp "${LEGACY_FILE}" "${FORMULA_LEGACY_OUTPUT}"
+    echo "Rendered legacy Homebrew formula to ${FORMULA_LEGACY_OUTPUT}"
+  fi
   exit 0
 fi
 
@@ -128,13 +144,14 @@ TAP_URL="https://x-access-token:${ENCODED_TOKEN}@github.com/${TAP_REPO}.git"
 git clone --depth 1 "${TAP_URL}" "${TAP_DIR}"
 
 mkdir -p "${TAP_DIR}/Formula"
-cp "${FORMULA_FILE}" "${TAP_DIR}/Formula/deepseek-tui.rb"
+cp "${FORMULA_FILE}" "${TAP_DIR}/Formula/codewhale.rb"
+cp "${LEGACY_FILE}" "${TAP_DIR}/Formula/deepseek-tui.rb"
 
 cd "${TAP_DIR}"
 git config user.name  "github-actions[bot]"
 git config user.email "github-actions[bot]@users.noreply.github.com"
 
-git add Formula/deepseek-tui.rb
+git add Formula/codewhale.rb Formula/deepseek-tui.rb
 
 if git diff --cached --quiet; then
   echo "Formula unchanged (already at ${VERSION}); nothing to push."

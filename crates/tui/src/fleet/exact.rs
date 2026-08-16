@@ -504,7 +504,15 @@ impl ChildAuthority {
         authority.posture_role = posture_role_for_member(role, authority.ceiling);
         let bounded_inspection_role = matches!(
             role.trim().to_ascii_lowercase().as_str(),
-            "scout" | "explore" | "explorer" | "reviewer" | "review"
+            "scout"
+                | "explore"
+                | "explorer"
+                | "reviewer"
+                | "review"
+                | "planner"
+                | "plan"
+                | "planning"
+                | "awaiter"
         );
         if bounded_inspection_role && authority.ceiling.shell != ShellCeiling::None {
             // Read-only inspection needs ordinary `git`/`rg`/`gh ... view|list` inspection.
@@ -601,7 +609,14 @@ fn canonical_role_within_ceiling(role: &str, ceiling: PermissionCeiling) -> Opti
         crate::worker_profile::ShellPolicy::ReadOnly => ShellCeiling::ReadOnly,
         crate::worker_profile::ShellPolicy::Full => ShellCeiling::Full,
     };
-    if (posture.permissions.write && !ceiling.write) || role_shell > ceiling.shell {
+    if posture.permissions.write && !ceiling.write {
+        return None;
+    }
+    // Full-shell roles (verifier, reviewer, scout) do not fit a narrower
+    // ceiling — their job needs that shell. A read-only probe default
+    // (planner) intersects with the ceiling instead of flattening the
+    // named role into scout.
+    if role_shell == ShellCeiling::Full && role_shell > ceiling.shell {
         return None;
     }
     Some(canonical.as_str())
@@ -813,29 +828,39 @@ pub(crate) fn preflight_route(
     })?;
 
     let mut scoped = config.clone();
-    scoped.provider = Some(identity.key.clone());
+    scoped.scope_to_provider_identity(&identity);
     let base_url = scoped.deepseek_base_url();
 
-    // Locally decided. A self-hosted route is keyless by design, and that is a
-    // valid, first-class state — not a downgrade and not a missing credential.
-    let credential = if identity.provider.is_self_hosted() {
-        CredentialReadiness::KeylessLocal
-    } else if crate::config::has_api_key_for(&scoped, identity.provider) {
-        CredentialReadiness::Configured
-    } else {
-        // The discriminant only. `Missing { detail }` names the provider table
-        // key, which for a custom route is the customer's own string.
-        codewhale_telemetry::session_counters()
-            .bump_error(codewhale_telemetry::ErrorCounter::AuthPreflightFailed);
-        CredentialReadiness::Missing {
-            detail: format!("no credential configured for `{}`", identity.key),
-        }
-    };
+    // Locally decided. A concrete loopback/self-hosted route is keyless by
+    // design, and that is a valid, first-class state — not a downgrade and
+    // not a missing credential. Ollama Cloud is hosted and falls through to
+    // the ordinary credential checks.
+    let credential =
+        if crate::config::provider_route_is_keyless_self_hosted(identity.provider, &base_url) {
+            CredentialReadiness::KeylessLocal
+        } else if crate::config::has_api_key_for(&scoped, identity.provider) {
+            CredentialReadiness::Configured
+        } else {
+            // The discriminant only. `Missing { detail }` names the provider table
+            // key, which for a custom route is the customer's own string.
+            codewhale_telemetry::session_counters()
+                .bump_error(codewhale_telemetry::ErrorCounter::AuthPreflightFailed);
+            CredentialReadiness::Missing {
+                detail: format!("no credential configured for `{}`", identity.key),
+            }
+        };
 
     Ok(PreflightedRoute {
         member_id: member_id.to_string(),
         provider_id: identity.key.clone(),
-        provider_kind: format!("{:?}", identity.provider).to_ascii_lowercase(),
+        provider_config_id: identity
+            .migrated_legacy_ollama_cloud_route
+            .then(|| provider.trim().to_string()),
+        provider_kind: if identity.provider == ApiProvider::OllamaCloud {
+            identity.provider.as_str().to_string()
+        } else {
+            format!("{:?}", identity.provider).to_ascii_lowercase()
+        },
         declared_model: model.trim().to_string(),
         wire_model: wire_model.clone(),
         endpoint: EndpointIdentity::from_base_url(&base_url),
@@ -858,7 +883,8 @@ pub(crate) fn preflight_route(
 /// would create two objects that could drift apart.
 fn validate_route_client(route: &PreflightedRoute, config: &Config) -> Result<(), String> {
     let mut scoped = config.clone();
-    scoped.provider = Some(route.provider_id.clone());
+    let identity = config.resolve_provider_identity(route.provider_config_id())?;
+    scoped.scope_to_provider_identity(&identity);
     crate::client::DeepSeekClient::new(&scoped)
         .map(|_| ())
         .map_err(|error| {
@@ -937,16 +963,16 @@ impl LiveFleetRouter {
             reason: error.to_string(),
         })?;
 
-        let mut scoped = config.clone();
-        scoped.provider = Some(route.provider_id.clone());
         let identity = config
-            .resolve_provider_identity(route.provider_id.trim())
+            .resolve_provider_identity(route.provider_config_id())
             .map_err(|detail| RouterBindError {
                 reason: format!(
                     "reasoning router provider `{}` did not resolve: {detail}",
                     route.provider_id
                 ),
             })?;
+        let mut scoped = config.clone();
+        scoped.scope_to_provider_identity(&identity);
         let base_url = scoped.deepseek_base_url();
         let client =
             crate::client::DeepSeekClient::new(&scoped).map_err(|error| RouterBindError {
@@ -1629,7 +1655,7 @@ fn exact_member_profile(
     );
     let provider = route.map_or_else(
         || member.route.provider.clone(),
-        |route| route.provider_id.clone(),
+        |route| route.provider_config_id().to_string(),
     );
 
     let profile = codewhale_config::FleetProfile {
@@ -1847,6 +1873,7 @@ fn test_route(
     PreflightedRoute {
         member_id: member.to_string(),
         provider_id: provider.to_string(),
+        provider_config_id: None,
         provider_kind: provider.to_string(),
         declared_model: model.to_string(),
         wire_model: model.to_string(),
@@ -1929,7 +1956,7 @@ mod shell_ceiling_tests {
 
     #[test]
     fn bounded_inspection_role_keeps_only_classifier_bounded_bash() {
-        for role in ["scout", "reviewer"] {
+        for role in ["scout", "reviewer", "planner"] {
             let authority = ChildAuthority::clamp_for_role(
                 role,
                 ceiling(false, ShellCeiling::ReadOnly),
@@ -1958,7 +1985,7 @@ mod shell_ceiling_tests {
             }
         }
 
-        for role in ["planner", "consultant", "verifier"] {
+        for role in ["consultant", "verifier"] {
             let authority = ChildAuthority::clamp_for_role(
                 role,
                 ceiling(false, ShellCeiling::ReadOnly),
@@ -1985,9 +2012,89 @@ mod shell_ceiling_tests {
                 .any(|name| name.eq_ignore_ascii_case("Bash")),
             "a named Scout may not turn a parent shell-off ceiling into ReadOnly"
         );
+        let planner_parent_shell_off = ChildAuthority::clamp_for_role(
+            "planner",
+            ceiling(false, ShellCeiling::ReadOnly),
+            ceiling(true, ShellCeiling::None),
+        );
+        assert!(
+            planner_parent_shell_off
+                .disallowed_tools
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case("Bash")),
+            "a named planner may not turn a parent shell-off ceiling into ReadOnly"
+        );
+        assert_eq!(planner_parent_shell_off.posture_role, "planner");
         assert_eq!(
             session_shell_ceiling(crate::worker_profile::ShellPolicy::Full, false),
             ShellCeiling::None
+        );
+    }
+
+    /// #5426 acceptance 2, made mechanical: delegation moves work, never
+    /// authority. A read-only scout's own runtime posture is the "session"
+    /// its children clamp against, so a `builder` member dispatched from a
+    /// read-only parent lands read-only — raw shell gone, ceiling-derived
+    /// posture, mutating tools denied — while the delegation itself stays
+    /// available (the depth budget is the parent's, not zero). The escape
+    /// hatch is work capacity, never a wider envelope.
+    #[test]
+    fn a_read_only_parents_delegation_never_widens_authority() {
+        // The scout's live runtime posture, expressed as the session ceiling
+        // a child clamps against: no writes, read-only shell, network kept,
+        // one level of delegation budget left.
+        let scout_runtime = PermissionCeiling {
+            write: false,
+            network_tool: true,
+            shell: ShellCeiling::ReadOnly,
+            delegation_depth: 1,
+            tools: true,
+        };
+        let builder_member = PermissionCeiling {
+            write: true,
+            network_tool: true,
+            shell: ShellCeiling::Full,
+            delegation_depth: 1,
+            tools: true,
+        };
+        assert!(builder_member.write && builder_member.shell == ShellCeiling::Full);
+
+        let authority = ChildAuthority::clamp_for_role("builder", builder_member, scout_runtime);
+
+        // Authority does not widen through delegation: the child is read-only.
+        assert!(!authority.ceiling.write);
+        assert_eq!(authority.ceiling.shell, ShellCeiling::ReadOnly);
+        assert_eq!(authority.write_authority, "read_only");
+        assert_eq!(
+            authority.posture_role, "scout",
+            "a write-capable role name must not smuggle write through delegation"
+        );
+        assert!(denies_raw_shell(&authority));
+        for mutating in ["write_file", "apply_patch"] {
+            assert!(
+                authority
+                    .disallowed_tools
+                    .iter()
+                    .any(|rule| rule == mutating),
+                "{mutating} must stay denied for a scout-delegated builder: {:?}",
+                authority.disallowed_tools
+            );
+        }
+
+        // The escape hatch itself stays open: delegation is still possible
+        // (the parent's budget is intact). But it is useless for shell:
+        // canonical Bash is denied to a delegated child (it is not a bounded
+        // inspection role), so a scout can never obtain bash by spawning —
+        // the scout's own bounded read-only Bash from #5428 is the only shell
+        // path a read-only parent has.
+        assert_eq!(authority.max_depth, 1);
+        assert!(
+            authority
+                .disallowed_tools
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case("Bash")),
+            "a scout-delegated child must not gain canonical Bash: {:?}",
+            authority.disallowed_tools
         );
     }
 
@@ -2373,6 +2480,12 @@ permissions = "read_only"
         assert_eq!(posture_role_for_member("reviewer", read_only), "scout");
         assert_eq!(posture_role_for_member("reviewer", read_write), "reviewer");
         assert_eq!(posture_role_for_member("planner", read_only), "planner");
+        let analyst = PermissionCeiling::preset("analyst").expect("preset");
+        assert_eq!(
+            posture_role_for_member("planner", analyst),
+            "planner",
+            "a named planner under a no-shell ceiling stays planner; shell intersects"
+        );
         assert_eq!(
             posture_role_for_member("consultant", read_only),
             "consultant"
@@ -2991,6 +3104,171 @@ permissions = "read_only"
         assert!(route.credential.is_ready());
         route.require_ready().expect("keyless local is valid");
         assert!(route.endpoint.local, "a local runtime is marked local");
+    }
+
+    #[test]
+    fn ollama_cloud_and_custom_remote_preflight_require_route_scoped_credentials() {
+        let _env_lock = crate::test_support::lock_test_env();
+        let temp = tempfile::tempdir().expect("isolated credential home");
+        let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", temp.path());
+        let _backend = crate::test_support::EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+        let _ollama_cloud_key = crate::test_support::EnvVarGuard::remove("OLLAMA_CLOUD_API_KEY");
+        let _ollama_key = crate::test_support::EnvVarGuard::remove("OLLAMA_API_KEY");
+        let _cli_source = crate::test_support::EnvVarGuard::remove("DEEPSEEK_API_KEY_SOURCE");
+        let _cli_key = crate::test_support::EnvVarGuard::remove("CODEWHALE_CLI_API_KEY");
+        codewhale_secrets::Secrets::auto_detect()
+            .set("ollama", "legacy-cloud-key")
+            .expect("seed released Ollama Cloud slot");
+
+        let cloud = Config {
+            provider: Some("deepseek".to_string()),
+            providers: Some(crate::config::ProvidersConfig {
+                ollama: crate::config::ProviderConfig {
+                    base_url: Some(codewhale_config::provider::OLLAMA_CLOUD_BASE_URL.to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let cloud_route = preflight_route(
+            "cloud-worker",
+            "ollama",
+            crate::config::DEFAULT_OLLAMA_MODEL,
+            &cloud,
+        )
+        .expect("official Cloud route");
+        assert_eq!(cloud_route.provider_id, "ollama-cloud");
+        assert_eq!(cloud_route.provider_config_id.as_deref(), Some("ollama"));
+        assert_eq!(cloud_route.provider_kind, "ollama-cloud");
+        assert_eq!(cloud_route.credential, CredentialReadiness::Configured);
+        assert!(!cloud_route.endpoint.local);
+        cloud_route.require_ready().expect("Cloud env key is ready");
+
+        let custom_remote = Config {
+            provider: Some("ollama".to_string()),
+            providers: Some(crate::config::ProvidersConfig {
+                ollama: crate::config::ProviderConfig {
+                    base_url: Some("https://ollama-gateway.example.test/v1".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let custom_route = preflight_route(
+            "custom-worker",
+            "ollama",
+            crate::config::DEFAULT_OLLAMA_MODEL,
+            &custom_remote,
+        )
+        .expect("custom route still resolves structurally");
+        assert!(matches!(
+            custom_route.credential,
+            CredentialReadiness::Missing { .. }
+        ));
+        assert!(!custom_route.endpoint.local);
+        assert!(custom_route.require_ready().is_err());
+    }
+
+    #[tokio::test]
+    async fn legacy_ollama_cloud_fleet_start_builds_clients_from_the_frozen_source_route() {
+        let _env_lock = crate::test_support::lock_test_env();
+        let temp = tempfile::tempdir().expect("isolated credential home");
+        let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", temp.path());
+        let _backend = crate::test_support::EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+        let _cloud_env = crate::test_support::EnvVarGuard::remove("OLLAMA_CLOUD_API_KEY");
+        let _official_env = crate::test_support::EnvVarGuard::remove("OLLAMA_API_KEY");
+        codewhale_secrets::Secrets::auto_detect()
+            .set("ollama", "legacy-cloud-fleet-key")
+            .expect("seed released Ollama Cloud slot");
+
+        let config = Config {
+            provider: Some("deepseek".to_string()),
+            providers: Some(crate::config::ProvidersConfig {
+                ollama: crate::config::ProviderConfig {
+                    base_url: Some(codewhale_config::provider::OLLAMA_CLOUD_BASE_URL.to_string()),
+                    model: Some(crate::config::DEFAULT_OLLAMA_CLOUD_MODEL.to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let document = FleetDocument::parse(&format!(
+            r#"
+name = "glm-pair"
+schema = "exact"
+
+[[members]]
+id = "cloud-worker"
+role = "builder"
+provider = "ollama"
+model = "{}"
+reasoning = "medium"
+permissions = "read_only"
+"#,
+            crate::config::DEFAULT_OLLAMA_CLOUD_MODEL
+        ))
+        .expect("legacy Cloud fleet parses");
+
+        // `capture` is the real Workflow-start path: it preflights readiness,
+        // constructs every worker client, and freezes the run-scoped roster.
+        let workflow = ExactFleetWorkflow::capture(
+            &document,
+            id(),
+            "2026-08-14T00:00:00Z",
+            Some(&config),
+            &[],
+        )
+        .expect("legacy Cloud fleet starts");
+        let route = workflow
+            .preflight
+            .worker("cloud-worker")
+            .expect("preflighted worker");
+        assert_eq!(route.provider_id, "ollama-cloud");
+        assert_eq!(route.provider_config_id.as_deref(), Some("ollama"));
+        assert_eq!(
+            workflow
+                .roster()
+                .get("cloud-worker")
+                .and_then(|profile| profile.profile.provider.as_deref()),
+            Some("ollama"),
+            "the child pin must rebuild the legacy table/slot even though receipts are canonical"
+        );
+
+        let binding = workflow
+            .bind_member(Some("cloud-worker"), None, full_session())
+            .expect("worker binds");
+        let launch = workflow
+            .route_admitted_task(&binding, "verify the frozen Cloud route")
+            .await
+            .expect("manual-tier launch needs no provider call");
+        assert_eq!(launch.provider, "ollama-cloud");
+        assert_eq!(launch.receipt.provider, "ollama-cloud");
+
+        let router_profile = ReasoningRouterProfile::parse(&format!(
+            r#"
+name = "legacy-cloud-router"
+schema = "reasoning_router"
+provider = "ollama"
+model = "{}"
+call_reasoning = "low"
+"#,
+            crate::config::DEFAULT_OLLAMA_CLOUD_MODEL
+        ))
+        .expect("legacy Cloud router profile parses");
+        let captured =
+            CapturedReasoningRouter::from_profile(&router_profile, "workspace".to_string());
+        let live = LiveFleetRouter::bind(&captured, &config)
+            .expect("legacy Cloud Router binds its source table and secret");
+        assert_eq!(live.route.provider_id, "ollama-cloud");
+        assert_eq!(live.route.provider_config_id.as_deref(), Some("ollama"));
+        assert_eq!(live.client.api_provider(), ApiProvider::OllamaCloud);
+        assert_eq!(
+            live.client.base_url(),
+            codewhale_config::provider::OLLAMA_CLOUD_BASE_URL
+        );
     }
 
     /// A tier label is a selector concept; what a request may carry is a

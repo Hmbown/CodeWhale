@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:3a759de92f8b -->
+<!-- source: README.md sha256:1569156eb887 -->
 # Codewhale
 
 터미널에서 쓰는 오픈소스 코딩 에이전트 — 모델은 당신이 가져옵니다.
@@ -47,6 +47,20 @@ TUI 안에서: `/model`은 프로바이더와 모델을 함께 전환하고, `/f
 - **허용하기 전까지는 읽기 전용.** Plan 모드는 파일을 바꾸지 않고, 위험한 명령은 승인을 거칩니다. OS 샌드박스가 실제로 명령을 래핑할 때 Codewhale은 이를 그대로 표시합니다. macOS에서는 사용 가능한 Seatbelt, Linux에서는 옵트인 bubblewrap입니다. 저장소의 `constitution.json`은 Full Access조차 건너뛸 수 없는 쓰기 홀드로 컴파일됩니다.
 - **이어서 할 수 있는 작업.** Fleet은 모든 단계를 추가 전용 원장에 기록하므로, `fleet resume`으로 멈춘 지점부터 이어갈 수 있습니다.
 
+## 통합
+
+- **DeepSeek Harness(dsh) — Codewhale로 연결.**
+  `codewhale integrations dsh connect`는 기존 `@deepseek-ai/dsh` 설치를
+  Codewhale의 제공자 라우트·권한·작업 공간에 연결하고,
+  `integrations dsh install-bundle`은 옵트인 DSH 플러그인 번들을 추가해
+  `dsh --profile codewhale`이 해당 정체성을 단독으로 유지하게 합니다.
+  권한과 수명 주기는 Codewhale이 담당하며, dsh 고유의 세션·프로필·자격
+  증명은 그대로 유지됩니다.
+  [docs/INTEGRATIONS_DSH.md](docs/INTEGRATIONS_DSH.md) 참조.
+- **VS Code.** 공식 확장 스캐폴드(`extensions/vscode`)는 통합 터미널에서
+  Codewhale을 열고 로컬 런타임 기반의 읽기 전용 Agent View를 제공합니다.
+  현재는 로컬 개발 프리뷰이며 마켓플레이스 릴리스가 아닙니다.
+
 ## 더 알아보기
 
 - [docs/PROVIDERS.md](docs/PROVIDERS.md) — 호스팅·게이트웨이·로컬까지 모든
@@ -84,4 +98,4 @@ TUI 안에서: `/model`은 프로바이더와 모델을 함께 전환하고, `/f
 
 [MIT](LICENSE). 독립 커뮤니티 프로젝트이며, 어떤 모델 프로바이더와도 제휴 관계가 없습니다.
 
-[![Star History Chart](https://api.star-history.com/chart?repos=Hmbown/CodeWhale&type=date&legend=top-left)](https://www.star-history.com/?repos=Hmbown%2FCodeWhale&type=date)
+![터미널에서 읽기 전용 scout 하위 에이전트 세 개를 병렬로 펼치는 Codewhale](assets/fanout.gif)

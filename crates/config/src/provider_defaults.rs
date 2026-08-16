@@ -113,13 +113,18 @@ pub(crate) const DEFAULT_VLLM_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash
 pub(crate) const DEFAULT_VLLM_BASE_URL: &str = "http://localhost:8000/v1";
 pub(crate) const DEFAULT_OLLAMA_MODEL: &str = "deepseek-v4-flash";
 pub(crate) const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
+pub(crate) const DEFAULT_OLLAMA_CLOUD_MODEL: &str = "gpt-oss:120b";
+pub(crate) const DEFAULT_OLLAMA_CLOUD_BASE_URL: &str = "https://ollama.com/v1";
 
-// Z.ai (GLM Coding Plan) defaults
-pub(crate) const DEFAULT_ZAI_MODEL: &str = "GLM-5.2";
-// GLM-5.3 is a live peer of the default, never the default. Capability/limit
+// Z.ai (GLM Coding Plan) defaults. GLM-5.3 is live on the Z.ai Coding Plan
+// (2026-08-13) and is the default for new Z.ai routes. Capability/limit
 // metadata still inherits from glm-5.2 until Z.ai publishes distinct 5.3
-// numbers. See models_dev.bundled.json `_meta.pending_release_metadata`.
+// numbers; no USD price is claimed. See models_dev.bundled.json
+// `_meta.pending_release_metadata`. Explicit GLM-5.2 selections keep their
+// own id: only the default moved.
+pub(crate) const DEFAULT_ZAI_MODEL: &str = ZAI_GLM_5_3_MODEL;
 pub(crate) const ZAI_GLM_5_3_MODEL: &str = "GLM-5.3";
+pub(crate) const ZAI_GLM_5_2_MODEL: &str = "GLM-5.2";
 pub(crate) const ZAI_GLM_5_1_MODEL: &str = "GLM-5.1";
 pub(crate) const ZAI_GLM_5_TURBO_MODEL: &str = "GLM-5-Turbo";
 pub(crate) const DEFAULT_ZAI_BASE_URL: &str = "https://api.z.ai/api/coding/paas/v4";
@@ -178,6 +183,9 @@ pub(crate) const DEFAULT_MISTRAL_BASE_URL: &str = "https://api.mistral.ai/v1";
 // TelecomJS (Jiangsu Telecom TokenHub) defaults
 pub(crate) const DEFAULT_TELECOMJS_MODEL: &str = "deepseek-v4-pro";
 pub(crate) const DEFAULT_TELECOMJS_BASE_URL: &str = "https://aigw.telecomjs.com/v1";
+// Eden AI (OpenAI-compatible AI gateway) defaults
+pub(crate) const DEFAULT_EDENAI_MODEL: &str = "deepseek/deepseek-v4-pro";
+pub(crate) const DEFAULT_EDENAI_BASE_URL: &str = "https://api.edenai.run/v3";
 // Alibaba Cloud Model Studio (DashScope) defaults
 // Token Plan (Personal / Team): shared endpoint, OpenAI + Anthropic dialects
 pub(crate) const DEFAULT_MODELSTUDIO_TOKEN_PLAN_MODEL: &str = "qwen3.8-max";

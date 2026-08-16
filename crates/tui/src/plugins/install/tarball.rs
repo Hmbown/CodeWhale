@@ -3,7 +3,7 @@
 //! Pass one ([`scan_tarball`]) writes nothing: it rejects traversal and
 //! absolute paths, enforces the uncompressed size cap from the headers, and
 //! locates the single bundle root — the directory holding the bundle's
-//! manifest (`plugin.json`, or the legacy `plugin.toml`). Pass two
+//! manifest (`plugin.json`, `kimi.plugin.json`, or the legacy `plugin.toml`). Pass two
 //! ([`extract_into`]) extracts only entries under that root, so a mono-repo's
 //! symlinks elsewhere in the archive are never materialized.
 
@@ -20,7 +20,7 @@ use crate::skills::install::is_safe_path;
 use super::PluginInstallError;
 use super::stage::{StagedPlugin, fresh_staging_dir, validate_staged};
 
-/// Validate a tarball and extract the `plugin.toml`-rooted subtree into a
+/// Validate a tarball and extract the manifest-rooted subtree into a
 /// `.staging-*` sibling of the destination.
 pub(super) fn stage_tarball(
     bytes: &[u8],
@@ -84,6 +84,8 @@ pub(super) fn scan_tarball(bytes: &[u8], max_size: u64) -> Result<TarballScan> {
         if header.entry_type().is_file()
             && path.file_name().is_some_and(|name| {
                 name == std::ffi::OsStr::new(crate::plugins::agent_plugin::PLUGIN_JSON_NAME)
+                    || name
+                        == std::ffi::OsStr::new(crate::plugins::agent_plugin::KIMI_PLUGIN_JSON_NAME)
                     || name == std::ffi::OsStr::new(crate::plugins::agent_plugin::PLUGIN_TOML_NAME)
             })
         {

@@ -96,7 +96,7 @@ export const DOC_TOPICS: DocTopic[] = [
   {
     id: "constitution",
     slug: "constitution",
-    label: { en: "Constitution", zh: "嵌套宪法" },
+    label: { en: "Constitution", zh: "嵌套宪章" },
     description: {
       en: "Agent identity, authority hierarchy, evidence rules, and the nested law system.",
       zh: "Agent 自我模型、权威层次、证据规则和嵌套法律系统。",

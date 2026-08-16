@@ -183,6 +183,12 @@ pub enum Op {
     /// Cancel a running sub-agent by id or session name.
     CancelSubAgent { agent_id: String },
 
+    /// Deliver an operator follow-up to one child on its own fork: live
+    /// delivery to a running child, or a checkpoint continuation (new agent
+    /// id) for an interrupted or completed child. Terminal failed/cancelled
+    /// children answer with a receipt explaining why they cannot continue.
+    FollowUpSubAgent { agent_id: String, text: String },
+
     /// Change the operating mode
     #[allow(dead_code)]
     ChangeMode {

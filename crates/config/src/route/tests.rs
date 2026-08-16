@@ -530,7 +530,7 @@ fn resolver_auto_falls_back_to_descriptor_default_without_catalog_default() {
     assert!(out.logical_model().is_auto());
     assert_eq!(
         out.wire_model_id().as_str(),
-        "GLM-5.2",
+        "GLM-5.3",
         "no catalog default → descriptor built-in default wins"
     );
     assert_eq!(

@@ -41,7 +41,7 @@ registry = "sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/"`;
 const TUNA_INSTALL = `cargo install codewhale-cli --locked`;
 
 const BREW = `brew tap Hmbown/deepseek-tui
-brew install deepseek-tui`;
+brew install codewhale`;
 
 const DOCKER = `docker volume create codewhale-home
 docker run --rm -it \\
@@ -189,7 +189,7 @@ codewhale doctor`;
               <code className="inline">cargo install</code> 命令并加 <code className="inline">--force</code>；
               Cargo 只安装 <code className="inline">codewhale</code>，如需短名称可自行定义{" "}
               <code className="inline">codew</code> shell alias；
-              旧版 Homebrew tap 用 <code className="inline">brew upgrade deepseek-tui</code>。
+              Homebrew 用 <code className="inline">brew upgrade codewhale</code>。
             </>
           ) : (
             <>
@@ -202,8 +202,8 @@ codewhale doctor`;
               <code className="inline">--force</code>. Cargo installs only{" "}
               <code className="inline">codewhale</code>; define your own{" "}
               <code className="inline">codew</code> shell alias if you want the shorter name;
-              the legacy Homebrew tap updates with{" "}
-              <code className="inline">brew upgrade deepseek-tui</code>.
+              Homebrew updates with{" "}
+              <code className="inline">brew upgrade codewhale</code>.
             </>
           )}
         </p>
@@ -446,14 +446,14 @@ codewhale doctor`;
               <div className="eyebrow mb-2 text-indigo">
                 Homebrew{" "}
                 <span className="text-ink-mute font-mono normal-case tracking-normal">
-                  {isZh ? "· macOS / Linux · 旧版 tap" : "· macOS / Linux · legacy tap"}
+                  {isZh ? "· macOS / Linux" : "· macOS / Linux"}
                 </span>
               </div>
               <InstallCodeBlock cmd={BREW} copyLabel={copyLabel} copiedLabel={copiedLabel} />
               <p className="mt-3 text-sm text-ink-soft leading-relaxed max-w-2xl">
                 {isZh
-                  ? "这是旧版 deepseek-tui tap，在 formula 重命名为 codewhale 期间保留以保证兼容，安装的同样是当前版本的二进制。"
-                  : "This is the legacy deepseek-tui tap, kept for compatibility while the formula is renamed to codewhale. It installs the same current-release binaries."}
+                  ? "formula 是 codewhale。tap 仓库在重命名前仍叫 Hmbown/homebrew-deepseek-tui；brew tap Hmbown/deepseek-tui 继续有效。旧的 deepseek-tui formula 作为一轮重叠的弃用别名保留。"
+                  : "The formula is codewhale. The tap repo is still Hmbown/homebrew-deepseek-tui until it is renamed; brew tap Hmbown/deepseek-tui keeps working. The legacy deepseek-tui formula remains a deprecated alias for one overlap release."}
               </p>
             </div>
 

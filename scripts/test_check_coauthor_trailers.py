@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 import unittest
+import unittest.mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,6 +54,28 @@ class CheckCoauthorTrailersTests(unittest.TestCase):
         body = (FIXTURES / "human-canonical.txt").read_text(encoding="utf-8")
         errors = mod.validate([commit("human credit", body)], self.aliases, False)
         self.assertEqual(errors, [])
+
+    def test_merge_of_contributor_pr_carries_harvest_credit_by_authorship(self) -> None:
+        merge = mod.Commit(
+            sha="feedface" * 5,
+            parents="1111111111111111111111111111111111111111 2222222222222222222222222222222222222222",
+            author_name="CodeWhale Bot",
+            author_email="bot@codewhale.net",
+            subject="Merge PR #5423: test(tui): isolate background verifier from rustup",
+            body="Merge PR #5423\n\nHarvested from PR #5423 by @wuisabel-gif",
+        )
+        with unittest.mock.patch.object(
+            mod,
+            "merged_author_emails",
+            return_value={"231155141+wuisabel-gif@users.noreply.github.com"},
+        ):
+            errors = mod.validate([merge], self.aliases, False)
+        self.assertEqual(errors, [])
+        # Without the contributor on the merged side the same merge still needs a trailer.
+        with unittest.mock.patch.object(mod, "merged_author_emails", return_value=set()):
+            errors = mod.validate([merge], self.aliases, False)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("needs machine-readable credit", errors[0])
 
     def test_allows_merge_commit_with_bot_trailer(self) -> None:
         merge = mod.Commit(

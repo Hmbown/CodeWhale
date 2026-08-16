@@ -1681,16 +1681,26 @@ impl ShellManager {
 
         // Create command spec and prepare sandboxed environment
         let spec = if let Some(workspace) = readonly_workspace {
-            let (program, args) = hardened_readonly_argv(command)?;
-            let program = resolve_readonly_program(&program, workspace)?;
-            CommandSpec::program(
-                program
-                    .to_str()
-                    .ok_or_else(|| anyhow!("read-only executable path is not valid UTF-8"))?,
-                args,
-                work_dir.clone(),
-                Duration::from_millis(timeout_ms),
-            )
+            if command.contains('|') {
+                // An agent read-only pipeline: every segment was admitted by
+                // `is_agent_readonly_shell_command` (no separators, redirects,
+                // expansions, or subshells — only `|` between validated
+                // segments), so a shell is needed solely to bind the segments
+                // and report a failed stage through pipefail.
+                let piped = format!("set -o pipefail; {command}");
+                CommandSpec::shell(&piped, work_dir.clone(), Duration::from_millis(timeout_ms))
+            } else {
+                let (program, args) = hardened_readonly_argv(command)?;
+                let program = resolve_readonly_program(&program, workspace)?;
+                CommandSpec::program(
+                    program
+                        .to_str()
+                        .ok_or_else(|| anyhow!("read-only executable path is not valid UTF-8"))?,
+                    args,
+                    work_dir.clone(),
+                    Duration::from_millis(timeout_ms),
+                )
+            }
         } else {
             CommandSpec::shell(command, work_dir.clone(), Duration::from_millis(timeout_ms))
         };
@@ -2750,8 +2760,8 @@ pub fn new_shared_shell_manager(workspace: PathBuf) -> SharedShellManager {
 // === ToolSpec Implementations ===
 
 use crate::command_safety::{
-    SafetyLevel, analyze_command, extract_primary_command, is_github_readonly_command,
-    is_parallel_readonly_command,
+    SafetyLevel, analyze_command, extract_primary_command, is_agent_readonly_shell_command,
+    is_github_readonly_command, is_parallel_readonly_command,
 };
 use crate::execpolicy::{ExecPolicyDecision, load_default_policy};
 use crate::features::Feature;
@@ -3070,7 +3080,34 @@ fn enforce_readonly_github_network_policy(
     }
 }
 
+/// `exec_shell_input_is_parallel_readonly` with the agent-posture classifier:
+/// same input-shape restrictions (run action only, no background/tty/stdin),
+/// but commands are judged by [`is_agent_readonly_shell_command`] so
+/// `ShellPolicy::ReadOnly` agents keep a usable inspection surface
+/// (pipelines, globs, `git -C`, `find`, `sed -n`, `npm view`).
+fn exec_shell_input_agent_readonly(input: &serde_json::Value) -> bool {
+    if !exec_shell_input_is_parallel_readonly_shape(input) {
+        return false;
+    }
+    let command = input
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .expect("shape check established a command string");
+    is_agent_readonly_shell_command(command)
+}
+
 fn exec_shell_input_is_parallel_readonly(input: &serde_json::Value) -> bool {
+    if !exec_shell_input_is_parallel_readonly_shape(input) {
+        return false;
+    }
+    let command = input
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .expect("shape check established a command string");
+    is_parallel_readonly_command(command)
+}
+
+fn exec_shell_input_is_parallel_readonly_shape(input: &serde_json::Value) -> bool {
     let Some(fields) = input.as_object() else {
         return false;
     };
@@ -3085,9 +3122,6 @@ fn exec_shell_input_is_parallel_readonly(input: &serde_json::Value) -> bool {
         Some(serde_json::Value::String(action)) if action == "run" => {}
         Some(_) => return false,
     }
-    let Some(command) = input.get("command").and_then(serde_json::Value::as_str) else {
-        return false;
-    };
     if ["background", "interactive", "tty", "combined_output"]
         .iter()
         .any(|key| {
@@ -3112,7 +3146,10 @@ fn exec_shell_input_is_parallel_readonly(input: &serde_json::Value) -> bool {
         return false;
     }
 
-    is_parallel_readonly_command(command)
+    input
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .is_some()
 }
 
 fn hardened_readonly_argv(command: &str) -> Result<(String, Vec<String>)> {
@@ -3125,19 +3162,37 @@ fn hardened_readonly_argv(command: &str) -> Result<(String, Vec<String>)> {
     // Even when repository/user configuration names a diff or signature
     // helper, these flags make Git keep the read inside its own process.
     if argv.first().is_some_and(|program| program == "git") {
-        let subcommand = argv.get(1).map(String::as_str).ok_or_else(|| {
-            anyhow!("classifier-approved Git read was missing its literal subcommand")
-        })?;
+        // The agent read-only classifier admits `git -C <dir>` and
+        // `git --no-pager` before the subcommand; keep the preamble but
+        // locate the subcommand after it so the hardening flags splice in
+        // the right place. `-C` targets were already workspace-checked by
+        // `enforce_readonly_workspace_operands`.
+        let mut subcommand_index = 1;
+        while let Some(flag) = argv.get(subcommand_index) {
+            match flag.as_str() {
+                "--no-pager" => subcommand_index += 1,
+                "-C" => subcommand_index += 2,
+                _ => break,
+            }
+        }
+        let subcommand = argv
+            .get(subcommand_index)
+            .map(String::as_str)
+            .ok_or_else(|| {
+                anyhow!("classifier-approved Git read was missing its literal subcommand")
+            })?;
         match subcommand {
             "diff" => {
+                let at = subcommand_index + 1;
                 argv.splice(
-                    2..2,
+                    at..at,
                     ["--no-ext-diff".to_string(), "--no-textconv".to_string()],
                 );
             }
             "log" | "show" => {
+                let at = subcommand_index + 1;
                 argv.splice(
-                    2..2,
+                    at..at,
                     [
                         "--no-ext-diff".to_string(),
                         "--no-textconv".to_string(),
@@ -3935,7 +3990,7 @@ impl ToolSpec for BashTool {
                     "Shell tools are disabled by the active permission profile.",
                 ));
             }
-            ShellPolicy::ReadOnly if !exec_shell_input_is_parallel_readonly(&input) => {
+            ShellPolicy::ReadOnly if !exec_shell_input_agent_readonly(&input) => {
                 return Ok(ToolResult::error(
                     "Shell command blocked by read-only shell policy. Use a non-mutating, non-background inspection command, or switch to Work mode (`/mode work`) for write-capable shell work.",
                 ));

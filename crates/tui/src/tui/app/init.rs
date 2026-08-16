@@ -161,6 +161,7 @@ impl App {
                     provider,
                     key,
                     exact_id,
+                    migrated_legacy_ollama_cloud_route: false,
                 }
             });
         if !explicit_launch_provider
@@ -170,10 +171,10 @@ impl App {
             provider = resolved.provider;
             provider_identity_record = resolved;
         }
+        let mut effective_auth_config = config.clone();
+        effective_auth_config.scope_to_provider_identity(&provider_identity_record);
         let provider_identity = provider_identity_record.key;
         let provider_exact_id = provider_identity_record.exact_id;
-        let mut effective_auth_config = config.clone();
-        effective_auth_config.provider = Some(provider_identity.clone());
 
         // #5032: a stale `[providers.xai] oauth_credential_generation` pointer
         // whose owned credential file is gone makes `credentials_valid` return
@@ -725,6 +726,8 @@ impl App {
             reasoning_effort_preference,
             last_effective_reasoning_effort: None,
             workspace,
+            workflow_config: config.workflow_config(),
+            goal_max_continuations: config.goal_max_continuations(),
             configured_sandbox_mode: config.sandbox_mode.clone(),
             sandbox_backend: crate::sandbox::get_platform_sandbox_with_bwrap_preference(
                 config.prefer_bwrap.unwrap_or(false),
@@ -820,6 +823,8 @@ impl App {
             agent_activity_started_at: None,
             agent_counter: 0,
             agent_label_map: HashMap::new(),
+            agent_focus: None,
+            agent_queued_follow_ups: HashMap::new(),
             agent_role_counters: HashMap::new(),
             last_agent_progress_redraw: None,
             last_workflow_budget_redraw: None,
@@ -916,6 +921,8 @@ impl App {
             reasoning_header: None,
             last_reasoning: None,
             pending_tool_uses: Vec::new(),
+            pending_gate_receipts: Vec::new(),
+            child_gate_receipts: std::collections::HashMap::new(),
             queued_messages: VecDeque::new(),
             queued_draft: None,
             pending_steers: VecDeque::new(),
@@ -924,6 +931,7 @@ impl App {
             turn_started_at: None,
             turn_last_activity_at: None,
             cumulative_turn_duration: std::time::Duration::ZERO,
+            session_metrics: crate::tui::session_metrics::SessionMetrics::default(),
             balance_cell: std::sync::Arc::new(std::sync::Mutex::new(None)),
             draft_gen: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             fleet_draft_cell: std::sync::Arc::new(std::sync::Mutex::new(None)),
@@ -961,6 +969,10 @@ impl App {
             prefix_stability_pct: None,
             last_prefix_change_desc: None,
             last_pinned_prefix_hash: None,
+            prefix_pin_reason: None,
+            prefix_last_miss_reason: None,
+            prefix_drift_count: 0,
+            prefix_context_updates: 0,
             collapsed_cells: HashSet::new(),
             folded_thinking: HashSet::new(),
             collapsed_cell_map: Vec::new(),

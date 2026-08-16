@@ -65,6 +65,7 @@ fn route(member: &str, provider: &str, model: &str) -> PreflightedRoute {
     PreflightedRoute {
         member_id: member.to_string(),
         provider_id: provider.to_string(),
+        provider_config_id: None,
         provider_kind: provider.to_string(),
         declared_model: model.to_string(),
         wire_model: model.to_string(),

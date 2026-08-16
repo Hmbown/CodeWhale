@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:3a759de92f8b -->
+<!-- source: README.md sha256:1569156eb887 -->
 # Codewhale
 
 Um agente de programação de código aberto para o seu terminal — traga o seu próprio modelo.
@@ -87,6 +87,21 @@ executa um comando de shell pelo caminho normal de aprovação.
   livro-razão de apenas inclusão, então `fleet resume` retoma de onde você
   parou.
 
+## Integrações
+
+- **DeepSeek Harness (dsh) — conectado via Codewhale.**
+  `codewhale integrations dsh connect` vincula uma instalação existente do
+  `@deepseek-ai/dsh` à sua rota de provedor, permissões e espaço de trabalho
+  do Codewhale; `integrations dsh install-bundle` adiciona o pacote de plugin
+  DSH opcional para que `dsh --profile codewhale` carregue essa identidade por
+  conta própria. O Codewhale detém a autoridade sobre permissões e ciclo de
+  vida; o dsh mantém suas sessões, perfis e credenciais intactos. Veja
+  [docs/INTEGRATIONS_DSH.md](docs/INTEGRATIONS_DSH.md).
+- **VS Code.** O scaffold oficial da extensão (`extensions/vscode`) abre o
+  Codewhale em um terminal integrado e expõe uma Agent View somente leitura
+  sobre o runtime local. É uma prévia de desenvolvimento local, não um
+  lançamento no marketplace.
+
 ## Saiba mais
 
 - [docs/PROVIDERS.md](docs/PROVIDERS.md) — cada rota de provedor: hospedada,
@@ -137,4 +152,4 @@ experiência de agente no terminal.
 [MIT](LICENSE). Projeto comunitário independente; sem afiliação com nenhum
 provedor de modelos.
 
-[![Gráfico de Star History](https://api.star-history.com/chart?repos=Hmbown/CodeWhale&type=date&legend=top-left)](https://www.star-history.com/?repos=Hmbown%2FCodeWhale&type=date)
+![Codewhale distribuindo três subagentes scout somente leitura em um terminal](assets/fanout.gif)

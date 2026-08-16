@@ -24,6 +24,12 @@ pub enum PluginMutationRequest {
     /// Fetch (or copy) a bundle into the user plugins root. The bundle lands
     /// disabled and untrusted; the caller should route to the trust review.
     Install { source: PluginInstallSource },
+    /// Install only when the staged copy matches a prior content review.
+    /// A mismatch is rejected before the destination is created.
+    InstallExact {
+        source: PluginInstallSource,
+        expected_content_hash: String,
+    },
     /// Re-download a previously installed bundle by name or id. A changed
     /// bundle automatically invalidates its trust receipt at next discovery.
     Update { selector: String },
@@ -52,9 +58,10 @@ pub struct PluginMutationReceipt {
     pub name: String,
     /// Final bundle path (present for install/update).
     pub path: Option<PathBuf>,
-    /// Whole-bundle content hash of the installed tree (informational; trust
-    /// receipts always bind to the discovery-time hash).
+    /// Source payload hash before installer provenance is added.
     pub content_hash: Option<String>,
+    /// Exact complete-tree hash after installer provenance is written.
+    pub installed_content_hash: Option<String>,
     pub outcome: PluginMutationOutcome,
 }
 
@@ -76,7 +83,13 @@ pub async fn execute(
     registry: &mut PluginRegistry,
 ) -> Result<PluginMutationReceipt> {
     match request {
-        PluginMutationRequest::Install { source } => install_plugin(source, ctx, registry).await,
+        PluginMutationRequest::Install { source } => {
+            install_plugin(source, None, ctx, registry).await
+        }
+        PluginMutationRequest::InstallExact {
+            source,
+            expected_content_hash,
+        } => install_plugin(source, Some(expected_content_hash.as_str()), ctx, registry).await,
         PluginMutationRequest::Update { selector } => update_plugin(&selector, ctx, registry).await,
         PluginMutationRequest::Uninstall { selector } => uninstall_plugin(&selector, registry),
     }
@@ -91,6 +104,7 @@ fn user_plugins_dir(registry: &PluginRegistry) -> Result<PathBuf> {
 
 async fn install_plugin(
     source: PluginInstallSource,
+    expected_content_hash: Option<&str>,
     ctx: &PluginMutationContext<'_>,
     registry: &mut PluginRegistry,
 ) -> Result<PluginMutationReceipt> {
@@ -107,20 +121,36 @@ async fn install_plugin(
             )
         })
     };
-    let outcome = install::install(
-        source,
-        &plugins_dir,
-        ctx.max_size,
-        ctx.network,
-        false,
-        &name_conflict,
-    )
-    .await?;
+    let outcome = match expected_content_hash {
+        Some(expected) => {
+            install::install_with_expected_content_hash(
+                source,
+                &plugins_dir,
+                ctx.max_size,
+                ctx.network,
+                &name_conflict,
+                expected,
+            )
+            .await?
+        }
+        None => {
+            install::install(
+                source,
+                &plugins_dir,
+                ctx.max_size,
+                ctx.network,
+                false,
+                &name_conflict,
+            )
+            .await?
+        }
+    };
     Ok(match outcome {
         PluginInstallOutcome::Installed(installed) => PluginMutationReceipt {
             name: installed.name,
             path: Some(installed.path),
             content_hash: Some(installed.content_hash),
+            installed_content_hash: Some(installed.installed_content_hash),
             outcome: PluginMutationOutcome::Installed,
         },
         PluginInstallOutcome::NeedsApproval(host) => blocked(host, true),
@@ -151,12 +181,14 @@ async fn update_plugin(
             name: plugin.name().to_string(),
             path: None,
             content_hash: None,
+            installed_content_hash: None,
             outcome: PluginMutationOutcome::NoChange,
         },
         PluginUpdateResult::Updated(installed) => PluginMutationReceipt {
             name: installed.name,
             path: Some(installed.path),
             content_hash: Some(installed.content_hash),
+            installed_content_hash: Some(installed.installed_content_hash),
             outcome: PluginMutationOutcome::Updated,
         },
         PluginUpdateResult::NeedsApproval(host) => blocked(host, true),
@@ -190,6 +222,7 @@ fn uninstall_plugin(
         name: plugin.name().to_string(),
         path: None,
         content_hash: None,
+        installed_content_hash: None,
         outcome: PluginMutationOutcome::Uninstalled,
     })
 }
@@ -199,6 +232,7 @@ fn blocked(host: String, needs_approval: bool) -> PluginMutationReceipt {
         name: String::new(),
         path: None,
         content_hash: None,
+        installed_content_hash: None,
         outcome: if needs_approval {
             PluginMutationOutcome::NeedsApproval(host)
         } else {

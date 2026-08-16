@@ -41,15 +41,20 @@ You can always type `/workflow` to request orchestration explicitly.
 |------|---------|---------|
 | `automatic` | `true` | Soft-auto orchestration is enabled |
 | `auto_start_read_only` | `true` | Read-only plans may start without a write-approval card |
-| `require_approval_for_writes` | `true` | Writes / elevated plans need explicit approval |
-| `auto_start_child_limit` | `8` | Soft cap on automatic child count |
-| `max_children` / `max_depth` | `64` / `2` | Hard ceilings |
+| `require_approval_for_writes` | `true` | Gates the plan-approval card for writes / elevated starts |
+| `auto_start_child_limit` | `16` | Soft cap on automatic child count |
+| `max_children` / `max_concurrent` / `max_depth` | `1000` / `16` / `2` | Hard ceilings |
 | `default_token_budget` | `120000` | Shared admission hint; not an exact mid-stream cutoff |
 | `persist_completed_activity` | `true` | Keep completed panel/history activity |
 
 Elevated work (writes, shell beyond read-only, network, secrets, worktrees, high
-budget) should surface an approval card with goal, child summary, capability
-flags, and budget before launch (#4126).
+budget) surfaces an approval card with goal, child summary, capability flags,
+and budget before launch (#4126) when `require_approval_for_writes` is on.
+That flag only gates the card. Session-level auto-approve (YOLO / Full Access /
+`bypass`) still skips it, the same as other ordinary `Required` tools.
+Writes inside a running VM `task()` step are the VM runtime contract
+(sandbox, `writeAuthority`, parent tool policy) — this flag does not re-ask
+for each child write.
 
 Worktree isolation and write ownership are separate. A write-capable `task()`
 declares `writeAuthority: "workspace_write"` or `"worktree_write"` plus at
@@ -65,6 +70,20 @@ directory it should use. The host validates that the directory exists inside
 the parent workspace before dispatch. Use `worktree: true` for isolated writes;
 `cwd` selects an existing checkout and does not grant write authority or
 isolation by itself.
+
+## Controlling a run
+
+`/workflow status [run_id]`, `/workflow cancel [run_id]`, and `/workflow
+settings` are answered by Codewhale itself from the run journal and the live
+run state — they never spend a model turn, so a status check is free and a
+cancel lands even while the model is busy. `/workflow cancel` with no id stops
+the only running workflow. `/workflow run <path/to/x.workflow.js>` launches a
+checked-in workflow as-is; `/workflow <objective>` and bare `/workflow` ask
+the model to author and run one. The `[workflow]` table above is read from
+your `config.toml` for every launch decision (auto-start, write-approval
+card, child limits); `/workflow settings` prints the effective values with
+what each one does. Reloading `config.toml` refreshes that table for both
+settings and the workflow tool.
 
 ## What you see while it runs
 

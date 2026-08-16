@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:3a759de92f8b -->
+<!-- source: README.md sha256:1569156eb887 -->
 # Codewhale
 
 Открытый агент для программирования в вашем терминале — модель приносите с собой.
@@ -89,6 +89,21 @@ Work / Operate; если в поле есть текст, `Tab` дополняе
   доступный только на добавление, поэтому `fleet resume` продолжает с того места,
   где вы остановились.
 
+## Интеграции
+
+- **DeepSeek Harness (dsh) — подключается через Codewhale.**
+  `codewhale integrations dsh connect` связывает существующую установку
+  `@deepseek-ai/dsh` с вашим маршрутом провайдера, правами и рабочей
+  областью Codewhale; `integrations dsh install-bundle` добавляет
+  опциональный бандл-плагин DSH, чтобы `dsh --profile codewhale` нёс эту
+  идентичность самостоятельно. Права и жизненный цикл остаются за
+  Codewhale; сессии, профили и учётные данные dsh не затрагиваются. См.
+  [docs/INTEGRATIONS_DSH.md](docs/INTEGRATIONS_DSH.md).
+- **VS Code.** Официальный каркас расширения (`extensions/vscode`) открывает
+  Codewhale во встроенном терминале и даёт read-only Agent View поверх
+  локального рантайма. Это превью для локальной разработки, а не релиз в
+  маркетплейсе.
+
 ## Узнать больше
 
 - [docs/PROVIDERS.md](docs/PROVIDERS.md) — все маршруты провайдеров: облачные,
@@ -137,4 +152,4 @@ Work / Operate; если в поле есть текст, `Tab` дополняе
 [MIT](LICENSE). Независимый проект сообщества, не аффилированный ни с одним
 провайдером моделей.
 
-[![Star History Chart](https://api.star-history.com/chart?repos=Hmbown/CodeWhale&type=date&legend=top-left)](https://www.star-history.com/?repos=Hmbown%2FCodeWhale&type=date)
+![Codewhale запускает три read-only scout-субагента параллельно в терминале](assets/fanout.gif)

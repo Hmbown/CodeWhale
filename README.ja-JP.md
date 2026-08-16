@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:3a759de92f8b -->
+<!-- source: README.md sha256:1569156eb887 -->
 # Codewhale
 
 ターミナルで動くオープンソースのコーディングエージェント — モデルはあなたが持ち込む。
@@ -47,6 +47,21 @@ TUI では、`/model` がプロバイダとモデルをまとめて切り替え�
 - **許可するまでは読み取り専用。** Plan モードはファイルを変更せず、リスクのあるコマンドは承認でゲートされます。OS サンドボックスが実際にコマンドをラップするとき、Codewhale はそれを明示します。macOS では利用可能な Seatbelt、Linux ではオプトインの bubblewrap です。リポジトリの `constitution.json` は書き込みホールドへとコンパイルされ、Full Access でもスキップできません。
 - **再開できる作業。** Fleet はすべてのステップを追記専用の台帳に記録するので、`fleet resume` で止めたところから再開できます。
 
+## インテグレーション
+
+- **DeepSeek Harness（dsh）— Codewhale 経由で接続。**
+  `codewhale integrations dsh connect` は既存の `@deepseek-ai/dsh`
+  インストールを Codewhale のプロバイダールート、権限、ワークスペースに
+  接続し、`integrations dsh install-bundle` はオプトインの DSH プラグイン
+  バンドルを追加して、`dsh --profile codewhale` が単独で同じ ID を持てる
+  ようにします。権限とライフサイクルは Codewhale が管理し、dsh の
+  セッション、プロファイル、認証情報は一切変更されません。
+  [docs/INTEGRATIONS_DSH.md](docs/INTEGRATIONS_DSH.md) を参照。
+- **VS Code。** 公式拡張機能の雛形（`extensions/vscode`）は Codewhale を
+  統合ターミナルで開き、ローカルランタイム経由の読み取り専用 Agent View
+  を提供します。現在はローカル開発プレビューであり、マーケットプレイス
+  版ではありません。
+
 ## さらに詳しく
 
 - [docs/PROVIDERS.md](docs/PROVIDERS.md) — ホスト型・ゲートウェイ・ローカル
@@ -82,4 +97,4 @@ Issue、PR、再現手順、ログ、機能要望は、どれもここでは本�
 
 [MIT](LICENSE)。独立したコミュニティプロジェクトであり、いかなるモデルプロバイダとも提携していません。
 
-[![Star History Chart](https://api.star-history.com/chart?repos=Hmbown/CodeWhale&type=date&legend=top-left)](https://www.star-history.com/?repos=Hmbown%2FCodeWhale&type=date)
+![ターミナルで 3 つの読み取り専用 scout サブエージェントを並列起動する Codewhale](assets/fanout.gif)

@@ -7,8 +7,8 @@
 //! - a successful exec releases the explicitly persisted service: the exec
 //!   process exits 0, emits a `service_released` receipt, and the service
 //!   process is still alive afterwards;
-//! - a failed exec (provider truncation) kills the pending service and exits
-//!   nonzero;
+//! - a failed exec (incomplete non-limit stop) kills the pending service and
+//!   exits nonzero;
 //! - a terminating signal mid-turn kills the pending service and exits
 //!   nonzero.
 
@@ -85,20 +85,22 @@ fn final_answer_sse() -> String {
     .join("")
 }
 
-/// Second model turn: provider-truncated output, which must fail the turn.
-fn truncated_answer_sse() -> String {
+/// Second model turn: incomplete non-limit stop. `length` now degrades and
+/// continues the headless loop (no default max-turns), so this fixture uses
+/// `content_filter` to force a failed exec and prove pending services die.
+fn incomplete_answer_sse() -> String {
     [
         sse_chunk(json!({
-            "id": "chatcmpl-truncated",
+            "id": "chatcmpl-incomplete",
             "object": "chat.completion.chunk",
             "model": TEST_MODEL,
             "choices": [{"index": 0, "delta": {"content": "partial"}, "finish_reason": null}]
         })),
         sse_chunk(json!({
-            "id": "chatcmpl-truncated",
+            "id": "chatcmpl-incomplete",
             "object": "chat.completion.chunk",
             "model": TEST_MODEL,
-            "choices": [{"index": 0, "delta": {}, "finish_reason": "length"}],
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "content_filter"}],
             "usage": {"prompt_tokens": 30, "completion_tokens": 2, "total_tokens": 32}
         })),
         "data: [DONE]\n\n".to_string(),
@@ -375,7 +377,7 @@ async fn successful_exec_releases_persisted_service() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn failed_exec_kills_pending_service_and_exits_nonzero() {
-    let server = start_mock_llm(SERVICE_COMMAND, truncated_answer_sse(), None).await;
+    let server = start_mock_llm(SERVICE_COMMAND, incomplete_answer_sse(), None).await;
     let workspace = TempDir::new().expect("workspace tempdir");
     let home = TempDir::new().expect("home tempdir");
 
@@ -384,21 +386,23 @@ async fn failed_exec_kills_pending_service_and_exits_nonzero() {
         .expect("spawn codewhale-tui exec");
     let stdout_reader = read_pipe_in_background(child.stdout.take().expect("stdout pipe"));
     let stderr_reader = read_pipe_in_background(child.stderr.take().expect("stderr pipe"));
-    let status = child
-        .wait_timeout(RUN_TIMEOUT)
-        .expect("wait for exec")
-        .unwrap_or_else(|| {
+    let status = match child.wait_timeout(RUN_TIMEOUT).expect("wait for exec") {
+        Some(status) => status,
+        None => {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("exec timed out");
-        });
+            let stdout = join_pipe(stdout_reader, "stdout");
+            let stderr = join_pipe(stderr_reader, "stderr");
+            panic!("exec timed out\nstdout:\n{stdout}\nstderr:\n{stderr}");
+        }
+    };
     let stdout = join_pipe(stdout_reader, "stdout");
     let stderr = join_pipe(stderr_reader, "stderr");
 
     let service_pid = wait_for_pid_file(&workspace.path().join("service.pid"));
     assert!(
         !status.success(),
-        "provider truncation must fail the exec\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        "provider incomplete stop must fail the exec\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
     assert!(
         !stream_events(&stdout)

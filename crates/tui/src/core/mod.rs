@@ -34,7 +34,9 @@ pub mod termination;
 // scaffolding and remains deliberately uncompiled until it has production
 // consumers (TUI-DOG-017).
 pub mod session;
-pub mod tool_parser;
+// Moved to `codewhale_core::tool_parser` (zero crate-internal dependencies);
+// re-exported so `crate::core::tool_parser` keeps working.
+pub use codewhale_core::tool_parser;
 pub mod turn;
 
 // Re-exports

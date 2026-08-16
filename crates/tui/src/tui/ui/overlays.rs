@@ -406,6 +406,7 @@ pub(crate) fn refresh_skills_manager_if_open(
     app.view_stack.push(rebuilt);
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn push_approval_request_view(
     app: &mut App,
     id: &str,

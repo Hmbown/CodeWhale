@@ -20,6 +20,11 @@
 //!    ever gaining new privileges via setuid/setgid/fscaps. This is
 //!    irreversible and must be applied before executing any helper binaries or
 //!    subprocesses that might (incorrectly) rely on privilege boundaries.
+//!    Because this also blocks intentional privilege gains — `sudo`, `su`,
+//!    setuid helpers — a user who runs Codewhale as a wheel/wheel-equivalent
+//!    administrator and wants the model to be able to escalate can opt out of
+//!    exactly this one measure with `CODEWHALE_NO_NEW_PRIVS=0` (#5413). The
+//!    other two measures stay on.
 //!
 //! 3. `RLIMIT_CORE` — disables core dumps so that sensitive in-memory data
 //!    (API keys, tokens, prompt content) is never written to disk on a crash.
@@ -31,11 +36,39 @@
 //! from the `libc` crate). On non-Linux platforms, `apply_process_hardening()`
 //! is a no-op that logs a debug-level message.
 
+/// Environment variable that opts the process out of `PR_SET_NO_NEW_PRIVS`.
+///
+/// `PR_SET_NO_NEW_PRIVS` is an irreversible, inherited-by-children kernel
+/// flag, so applying it by default breaks workflows where the user *wants*
+/// Codewhale to be able to escalate: `sudo`, `su`, setuid/fscaps helpers run
+/// by a wheel-group administrator (#5413). Setting this variable to any
+/// falsey value (`0`, `false`, `no`, `off`, `disabled`, or empty) skips
+/// exactly this one measure. Any other value, or leaving it unset, keeps the
+/// default hardening. `PR_SET_DUMPABLE` and `RLIMIT_CORE` are never skipped.
+pub(crate) const NO_NEW_PRIVS_ENV: &str = "CODEWHALE_NO_NEW_PRIVS";
+
+/// Whether a `CODEWHALE_NO_NEW_PRIVS` value requests skipping the
+/// no-new-privileges flag. Falsey per the workspace env convention — the same
+/// value set (`""`, `0`, `false`, `no`, `off`, `disabled`) that
+/// `docs/CONFIGURATION.md` treats as "not set".
+fn is_no_new_privs_opt_out(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "" | "0" | "false" | "no" | "off" | "disabled"
+    )
+}
+
+fn no_new_privs_opted_out() -> bool {
+    std::env::var_os(NO_NEW_PRIVS_ENV)
+        .is_some_and(|value| is_no_new_privs_opt_out(&value.to_string_lossy()))
+}
+
 /// Apply process-level hardening measures.
 ///
 /// On Linux, this:
 /// - Sets `PR_SET_DUMPABLE` to 0 (prevents ptrace, core dumps)
-/// - Sets `PR_SET_NO_NEW_PRIVS` to 1 (irreversible no-new-privileges)
+/// - Sets `PR_SET_NO_NEW_PRIVS` to 1 (irreversible no-new-privileges),
+///   unless `CODEWHALE_NO_NEW_PRIVS` holds a falsey value (#5413)
 /// - Sets `RLIMIT_CORE` to 0 (disables core dumps)
 ///
 /// On non-Linux platforms this is a no-op.
@@ -88,19 +121,33 @@ fn apply_linux_hardening() {
     // transitions. This is the strongest anti-escalation primitive the kernel
     // offers.
     //
+    // That strength is also the flag's one legitimate break: a wheel-group
+    // administrator running Codewhale over ssh loses `sudo`/`su`/setuid
+    // helpers for the whole process tree (#5413). `CODEWHALE_NO_NEW_PRIVS`
+    // with a falsey value skips only this measure, before any thread exists —
+    // the same point in startup where the flag itself is applied.
+    //
     // Pattern from openai/codex codex-rs/codex-sandbox/src/linux.rs; reimplemented.
     //
     // Safety: prctl with PR_SET_NO_NEW_PRIVS modifies only the calling process
     // and its future descendants.
-    let result = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1i64, 0i64, 0i64, 0i64) };
-    if result != 0 {
-        let err = std::io::Error::last_os_error();
-        tracing::warn!(
-            "PR_SET_NO_NEW_PRIVS failed ({}); continuing without this hardening",
-            err
+    if no_new_privs_opted_out() {
+        tracing::info!(
+            target: "sandbox",
+            "PR_SET_NO_NEW_PRIVS skipped via {NO_NEW_PRIVS_ENV}: setuid/sudo escalation is \
+             allowed for this process tree"
         );
     } else {
-        tracing::debug!("PR_SET_NO_NEW_PRIVS=1 applied");
+        let result = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1i64, 0i64, 0i64, 0i64) };
+        if result != 0 {
+            let err = std::io::Error::last_os_error();
+            tracing::warn!(
+                "PR_SET_NO_NEW_PRIVS failed ({}); continuing without this hardening",
+                err
+            );
+        } else {
+            tracing::debug!("PR_SET_NO_NEW_PRIVS=1 applied");
+        }
     }
 
     // ── RLIMIT_CORE = 0 ────────────────────────────────────────────────────
@@ -135,5 +182,56 @@ mod tests {
         // This test exists to ensure the function can be called without
         // panicking, even on platforms where hardening is a no-op.
         apply_process_hardening();
+    }
+
+    #[test]
+    fn no_new_privs_opt_out_accepts_exactly_the_falsey_values() {
+        // The workspace env convention: "", 0, false, no, off, disabled.
+        for value in ["", "0", "false", "no", "off", "disabled"] {
+            assert!(
+                is_no_new_privs_opt_out(value),
+                "{value:?} should opt out of PR_SET_NO_NEW_PRIVS"
+            );
+            // Case and surrounding whitespace must not change the answer.
+            assert!(is_no_new_privs_opt_out(&format!(
+                " {} ",
+                value.to_uppercase()
+            )));
+        }
+    }
+
+    #[test]
+    fn no_new_privs_opt_out_rejects_truthy_and_garbage_values() {
+        // Anything else — including a typo — keeps the hardening on, so the
+        // opt-out can never be entered by accident.
+        for value in [
+            "1",
+            "true",
+            "yes",
+            "on",
+            "enabled",
+            "maybe",
+            "0x0",
+            "false-ish",
+            "off!",
+        ] {
+            assert!(
+                !is_no_new_privs_opt_out(value),
+                "{value:?} should NOT opt out of PR_SET_NO_NEW_PRIVS"
+            );
+        }
+    }
+
+    #[test]
+    fn no_new_privs_env_wiring_reads_the_documented_variable() {
+        // The env is process-global and tests run in parallel threads, so the
+        // wiring is asserted structurally: the constant is the documented
+        // name, and the reader is a pure projection of var_os over that
+        // constant. Setting/removing the variable here would race every other
+        // test in the process.
+        assert_eq!(NO_NEW_PRIVS_ENV, "CODEWHALE_NO_NEW_PRIVS");
+        let projected = std::env::var_os(NO_NEW_PRIVS_ENV)
+            .is_some_and(|value| is_no_new_privs_opt_out(&value.to_string_lossy()));
+        assert_eq!(projected, no_new_privs_opted_out());
     }
 }

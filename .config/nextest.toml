@@ -1,0 +1,50 @@
+# cargo-nextest profile for contributors (`cargo nextest run --workspace`).
+#
+# `cargo test --workspace --all-features --locked` remains the authoritative
+# release gate. nextest is a faster local loop: it runs each test in its own
+# process, so the 10k-test codewhale-tui unit suite finishes in well under
+# half the wall-clock time of libtest on a multi-core machine, and slow or
+# hanging tests are named instead of stalling the whole binary.
+#
+# Because tests no longer share a process, the suites that serialize on an
+# in-process mutex today (PTY / terminal-matrix / release-runtime QA) must be
+# serialized here instead: they contend for pseudo-terminals, mock-server
+# ports, and wall-clock timing budgets.
+
+[profile.default]
+# Name tests that take longer than this so contributors see where the time goes.
+slow-timeout = { period = "30s" }
+# Keep failures visible in the final summary and never retry silently:
+# a flaky test is a bug report, not something to paper over.
+retries = 0
+fail-fast = false
+final-status-level = "slow"
+# RUST_MIN_STACK is not a nextest.toml key. CI and scripts/dev-test.sh
+# export 16 MiB so local nextest matches the product thread stack.
+
+[test-groups]
+pty = { max-threads = 1 }
+# Integration tests that spawn the real `codewhale` binary and wait on
+# service start-up deadlines; bounded so a fully parallel run on a busy
+# machine cannot starve them past their 30 s budgets.
+spawns-binaries = { max-threads = 4 }
+
+[[profile.default.overrides]]
+# The PTY test binary (`crates/tui/tests/pty`) drives real pseudo-terminals
+# and shares mock servers; run it one test at a time, in the background of
+# everything else.
+filter = 'binary(pty)'
+test-group = 'pty'
+slow-timeout = { period = "120s" }
+
+[[profile.default.overrides]]
+filter = 'binary(integration)'
+test-group = 'spawns-binaries'
+
+# CI (profiles inherit from default): the final summary lists every failure and
+# slow test in full so the run log is enough to diagnose without rerunning.
+[profile.ci]
+retries = 0
+fail-fast = false
+final-status-level = "slow"
+failure-output = "immediate-final"

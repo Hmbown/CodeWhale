@@ -12,16 +12,16 @@ DeepSeek provider integration changed — only the local CLI / TUI brand.
 npm uninstall -g deepseek-tui      # or:
 cargo uninstall deepseek-tui-cli 2>/dev/null || true
 cargo uninstall deepseek-tui 2>/dev/null || true
-                                    # legacy Homebrew installs may use:
-                                    # brew upgrade deepseek-tui
+                                    # Homebrew:
+                                    # brew upgrade codewhale
 
 # 2. Install under the new name.
 npm install -g codewhale            # or:
 cargo install codewhale-cli --locked
 cargo install codewhale-tui --locked
-                                    # legacy Homebrew installs may still use
-                                    # brew install deepseek-tui until the tap
-                                    # formula is renamed.
+                                    # Homebrew:
+                                    # brew tap Hmbown/deepseek-tui
+                                    # brew install codewhale
 
 # 3. Run with the new command.
 codewhale doctor
@@ -68,10 +68,11 @@ Anything that targets the DeepSeek provider API stays exactly as it was:
   fallback).
 - **GitHub repository URL**: `https://github.com/Hmbown/CodeWhale`.
   The old `Hmbown/DeepSeek-TUI` URL redirects there during the transition.
-- **Homebrew tap and formula** (`Hmbown/homebrew-deepseek-tui`): still uses
-  the legacy formula name for existing installs. Treat it as compatibility-only
-  until the tap is renamed; new install docs prefer `codewhale` npm, Cargo,
-  Docker, or direct downloads.
+- **Homebrew tap and formula**: the formula is `codewhale`. The tap GitHub
+  repo is still `Hmbown/homebrew-deepseek-tui` until it is renamed;
+  `brew tap Hmbown/deepseek-tui && brew install codewhale` is the current
+  path. The legacy `deepseek-tui` formula remains a deprecated alias for
+  one overlap release.
 - **Docker image**: `ghcr.io/hmbown/codewhale`.
 
 ## Deprecation shims (removed in v0.9.0)
@@ -129,36 +130,25 @@ to `npm install -g codewhale`.
 
 ### Homebrew
 
-**Current state (v0.9.x):** The tap formula still uses the legacy
-`deepseek-tui` name for compatibility. Existing users keep running
-`brew upgrade deepseek-tui`. The formula installs the same current-release
-`codewhale` / `codew` / `codewhale-tui` binaries.
+**Current state (v0.9.8):** The formula is `codewhale`. New installs:
 
-**Target state:** A `codewhale` formula in a renamed tap
-(`Hmbown/codewhale` or the existing `Hmbown/deepseek-tui` tap with an
-added `codewhale` formula alias). The legacy `deepseek-tui` formula
-remains installable as a compatibility-only alias.
+```bash
+brew tap Hmbown/deepseek-tui
+brew install codewhale
+brew upgrade codewhale
+```
 
-**Rollout steps:**
+The tap GitHub repo is still `Hmbown/homebrew-deepseek-tui` until it is
+renamed to `Hmbown/homebrew-codewhale` (then `brew tap Hmbown/codewhale`
+works; the old tap name keeps working through GitHub's redirect). The
+legacy `deepseek-tui` formula remains a deprecated alias for this overlap
+release so existing `brew upgrade deepseek-tui` crontabs keep working.
 
-1. **Audit the formula Ruby file** — confirm it already installs
-   `codewhale` / `codewhale-tui` binaries and only the formula *name* is
-   legacy.
-2. **Add a `codewhale` formula** to the tap that is identical to or
-   aliases the existing `deepseek-tui` formula.
-3. **Update website and docs** — show `brew install codewhale` as the
-   primary Homebrew path, mark `brew install deepseek-tui` as legacy
-   compatibility.
-4. **One release of overlap** — ship at least one release with both
-   `codewhale` and `deepseek-tui` formulas available so existing
-   crontabs/scripts can migrate.
-5. **Deprecation notice** — add a `caveat` in the legacy formula
-   directing users to `brew uninstall deepseek-tui && brew install codewhale`.
-6. **Eventually remove** the `deepseek-tui` formula after a deprecation
-   window (e.g., two minor releases).
+**Remaining rollout:**
 
-Until the formula rename ships, new installs should prefer npm, Cargo,
-Docker, or direct downloads.
+1. Rename the tap repo to `Hmbown/homebrew-codewhale` when adding
+   `HOMEBREW_TAP_PAT`, then tell Codewhalebot.
+2. After one more minor release, remove the `deepseek-tui` alias.
 
 ### Manual / GitHub Releases
 

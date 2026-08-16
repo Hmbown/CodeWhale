@@ -354,14 +354,14 @@ impl FleetRoster {
                 "planner",
                 FleetSlot::Planner,
                 FleetLoadout::Inherit,
-                "Planning: analysis-only for architectural planning; read-only, no shell.",
+                "Planning: grounded strategy; read-only workspace, network reads, read-only shell probes.",
                 None,
             ),
             (
                 "custom",
                 FleetSlot::Custom("custom".to_string()),
                 FleetLoadout::Inherit,
-                "Custom tool access defined at spawn time via allowed_tools; locked down until then.",
+                "Custom tool access: inherits the parent's write/network/shell posture; narrowed by allowed_tools.",
                 None,
             ),
         ]

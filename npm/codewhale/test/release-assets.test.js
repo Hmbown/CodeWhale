@@ -120,6 +120,38 @@ test("assertReleaseAssetsFresh accepts assets updated by the release workflow ru
   );
 });
 
+test("assertReleaseAssetsFresh accepts assets uploaded before a job-level rerun bumped run_started_at (#5429)", () => {
+  assert.doesNotThrow(() =>
+    assertReleaseAssetsFresh(
+      { assets: [{ name: "codewhale-linux-x64", state: "uploaded", updated_at: "2026-08-15T02:00:00Z" }] },
+      ["codewhale-linux-x64"],
+      {
+        database_id: 123,
+        // `gh run rerun --failed` moves the run-level start forward…
+        run_started_at: "2026-08-15T10:00:00Z",
+        // …but the release job that actually uploaded the assets is unchanged.
+        release_job_started_at: "2026-08-15T01:00:00Z",
+      },
+    ),
+  );
+});
+
+test("assertReleaseAssetsFresh still rejects assets older than the successful release job", () => {
+  assert.throws(
+    () =>
+      assertReleaseAssetsFresh(
+        { assets: [{ name: "codewhale-linux-x64", state: "uploaded", updated_at: "2026-08-15T00:30:00Z" }] },
+        ["codewhale-linux-x64"],
+        {
+          database_id: 123,
+          run_started_at: "2026-08-15T10:00:00Z",
+          release_job_started_at: "2026-08-15T01:00:00Z",
+        },
+      ),
+    /asset set is stale/,
+  );
+});
+
 test("findReleaseWorkflowRun accepts a successful release job when a downstream job failed", async () => {
   const run = {
     id: 123,
@@ -136,13 +168,16 @@ test("findReleaseWorkflowRun accepts a successful release job when a downstream 
     assert.equal(endpoint, "/actions/runs/123/jobs?per_page=100");
     return {
       jobs: [
-        { name: "release", conclusion: "success" },
+        { name: "release", conclusion: "success", started_at: "2026-08-12T07:30:00Z" },
         { name: "npm", conclusion: "failure" },
       ],
     };
   };
 
-  assert.equal(await findReleaseWorkflowRun("owner/repo", "v0.9.6", "abc123", api), run);
+  assert.deepEqual(await findReleaseWorkflowRun("owner/repo", "v0.9.6", "abc123", api), {
+    ...run,
+    release_job_started_at: "2026-08-12T07:30:00Z",
+  });
 });
 
 test("findReleaseWorkflowRun rejects runs without a successful release job", async () => {

@@ -4,8 +4,9 @@
 //! the model to synthesize the objective from the conversation context and
 //! orchestrate it through the `workflow` tool (the same contract as goal-mode
 //! `/goal`: context-dependent, no argument required). `/workflow <objective>`
-//! narrows the run to an explicit objective, and `/workflow status` relays
-//! typed run receipts without starting anything new.
+//! narrows the run to an explicit objective. Control verbs (`status`,
+//! `cancel`, `settings`, `help`) are answered by the host from the run
+//! journal and live state — they never spend a model turn.
 
 use crate::commands::traits::{CommandInfo, RegisterCommand};
 use crate::localization::MessageId;
@@ -16,7 +17,7 @@ use super::CommandResult;
 pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
     name: "workflow",
     aliases: &["workflows", "wf"],
-    usage: "/workflow [objective|status|cancel <run_id>]",
+    usage: "/workflow [objective|run <path>|status [run_id]|cancel [run_id]|settings]",
     description_id: MessageId::CmdWorkflowDescription,
 };
 
@@ -45,10 +46,11 @@ const ORCHESTRATION_CONTRACT: &str = "Author a workflow script for the `workflow
      narrate phases as they complete, verify findings before reporting them as facts, \
      and end with a compact receipt summary: run_id, status, and per-leaf outcomes.";
 
-pub fn workflow(_app: &mut App, arg: Option<&str>) -> CommandResult {
+pub fn workflow(app: &mut App, arg: Option<&str>) -> CommandResult {
+    let _app: &App = app;
     let arg = arg.map(str::trim).filter(|value| !value.is_empty());
 
-    if let Some(action) = parse_workflow_control_action(arg) {
+    if let Some(action) = parse_workflow_control_action(_app, arg) {
         return action;
     }
 
@@ -84,51 +86,140 @@ pub fn workflow(_app: &mut App, arg: Option<&str>) -> CommandResult {
     }
 }
 
-/// Route `status`/`cancel` through the `workflow` tool without starting a run.
-fn parse_workflow_control_action(arg: Option<&str>) -> Option<CommandResult> {
+/// Host-side `status` / `runs` / `cancel` / `settings`: read the run journal and
+/// live run state directly and answer without a model turn, so a status
+/// check is free and a cancel lands even while the model is busy.
+fn parse_workflow_control_action(app: &App, arg: Option<&str>) -> Option<CommandResult> {
     let arg = arg?;
     let (verb, rest) = match arg.split_once(char::is_whitespace) {
         Some((verb, rest)) => (verb, rest.trim()),
         None => (arg, ""),
     };
     match verb {
-        "status" | "runs" | "list" | "inspect" => {
-            let target = if rest.is_empty() {
-                "all runs".to_string()
-            } else {
-                format!("run_id `{rest}`")
-            };
+        "status" | "runs" | "list" | "inspect" => Some(workflow_status(app, rest)),
+        "cancel" | "stop" | "abort" => Some(workflow_cancel(app, rest)),
+        "settings" | "config" => Some(super::super::config::workflow_settings(app)),
+        "help" | "?" => Some(CommandResult::message(WORKFLOW_USAGE)),
+        // `/workflow run <path>` — the form the checked-in examples document.
+        // The run itself needs the tool's runtime, so the model is asked to
+        // launch exactly this source path (no re-authoring, no new plan).
+        "run" if !rest.is_empty() && !rest.contains(char::is_whitespace) => {
             let message = format!(
-                "Call the `workflow` tool with action `status`{} and summarize the receipts for \
-                 the user: run_id, status, phase progress, per-leaf outcomes, and any errors. \
-                 Keep it compact. Do not start a new workflow.",
-                if rest.is_empty() {
-                    String::new()
-                } else {
-                    format!(" and run_id `{rest}`")
-                }
+                "The user invoked /workflow run with the checked-in source path {rest:?} — this is \
+                 authorization to launch it as-is. Call the `workflow` tool with `source_path` set \
+                 to that path (action `run` to wait, or `start` then `status` if it is long), do not \
+                 rewrite or replace the script, narrate phases as they complete, and end with a \
+                 compact receipt: run_id, status, and per-leaf outcomes."
             );
             Some(CommandResult::with_message_and_action(
-                format!("Fetching workflow status for {target}..."),
-                AppAction::SendMessage(message),
-            ))
-        }
-        "cancel" | "stop" | "abort" => {
-            if rest.is_empty() || rest.contains(char::is_whitespace) {
-                return Some(CommandResult::error(
-                    "Usage: /workflow cancel <run_id>\n\nUse /workflow status to list run ids.",
-                ));
-            }
-            let message = format!(
-                "Call the `workflow` tool with action `cancel` and run_id `{rest}`, then report \
-                 the final run status to the user. Do not start a new workflow."
-            );
-            Some(CommandResult::with_message_and_action(
-                format!("Cancelling workflow {rest}..."),
+                format!("Running workflow {rest}..."),
                 AppAction::SendMessage(message),
             ))
         }
         _ => None,
+    }
+}
+
+const WORKFLOW_USAGE: &str =
+    "/workflow <objective> — orchestrate the objective with the workflow tool
+/workflow — orchestrate the current work
+/workflow status [run_id] — runs known to this workspace (no model turn)
+/workflow cancel [run_id] — stop a running workflow (no model turn)
+/workflow settings — the effective [workflow] configuration";
+
+fn describe_run(line: &crate::tools::workflow::HostWorkflowRunLine, now_ms: u64) -> String {
+    let elapsed = line
+        .completed_at_ms
+        .unwrap_or(now_ms)
+        .saturating_sub(line.started_at_ms)
+        / 1000;
+    let mut text = format!(
+        "{}  {}  {}  {}  {} children",
+        line.run_id,
+        line.status,
+        line.label,
+        crate::elapsed::format_elapsed_secs(elapsed),
+        line.child_count
+    );
+    if let Some(progress) = line.last_progress.as_deref() {
+        text.push_str("  ·  ");
+        text.push_str(progress);
+    }
+    if let Some(error) = line.error.as_deref() {
+        text.push_str("  ·  ");
+        text.push_str(error);
+    }
+    text
+}
+
+fn workflow_status(app: &App, run_id: &str) -> CommandResult {
+    let runs = crate::tools::workflow::host_workflow_runs(&app.workspace);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or_default();
+    if !run_id.is_empty() {
+        return match runs.iter().find(|line| line.run_id == run_id) {
+            Some(line) => CommandResult::message(describe_run(line, now_ms)),
+            None => CommandResult::error(format!(
+                "Unknown workflow run '{run_id}'. /workflow status lists the runs this workspace knows."
+            )),
+        };
+    }
+    if runs.is_empty() {
+        return CommandResult::message(
+            "No workflow runs in this workspace yet. /workflow <objective> starts one.",
+        );
+    }
+    let running = runs.iter().filter(|line| line.status == "running").count();
+    let mut lines = vec![format!(
+        "{} workflow run{} · {running} running",
+        runs.len(),
+        if runs.len() == 1 { "" } else { "s" }
+    )];
+    // Newest first; the journal can hold every run the workspace ever made.
+    for line in runs.iter().rev().take(20) {
+        lines.push(describe_run(line, now_ms));
+    }
+    if runs.len() > 20 {
+        lines.push(format!(
+            "… {} older runs in .codewhale/workflow-runs.jsonl",
+            runs.len() - 20
+        ));
+    }
+    CommandResult::message(lines.join("\n"))
+}
+
+fn workflow_cancel(app: &App, run_id: &str) -> CommandResult {
+    if run_id.contains(char::is_whitespace) {
+        return CommandResult::error("Usage: /workflow cancel [run_id]");
+    }
+    let target = if run_id.is_empty() {
+        let running: Vec<_> = crate::tools::workflow::host_workflow_runs(&app.workspace)
+            .into_iter()
+            .filter(|line| line.status == "running")
+            .collect();
+        match running.as_slice() {
+            [] => return CommandResult::message("No workflow is running."),
+            [only] => only.run_id.clone(),
+            many => {
+                let ids: Vec<&str> = many.iter().map(|line| line.run_id.as_str()).collect();
+                return CommandResult::error(format!(
+                    "{} workflows are running; name one: {}",
+                    many.len(),
+                    ids.join(", ")
+                ));
+            }
+        }
+    } else {
+        run_id.to_string()
+    };
+    match crate::tools::workflow::host_cancel_workflow(&app.workspace, &target) {
+        Ok(line) => CommandResult::message(format!(
+            "Workflow {} {} · {}",
+            line.run_id, line.status, line.label
+        )),
+        Err(reason) => CommandResult::error(reason),
     }
 }
 
@@ -177,29 +268,158 @@ mod tests {
     }
 
     #[test]
-    fn workflow_status_and_cancel_route_to_tool_without_new_runs() {
+    fn workflow_status_and_cancel_answer_from_the_host_without_a_model_turn() {
+        let dir = tempfile::tempdir().expect("tempdir");
         let mut app = test_app();
+        app.workspace = dir.path().to_path_buf();
+
+        // Nothing has run in this workspace: status is a plain answer, and it
+        // must not create the run journal just to say so.
         let result = workflow(&mut app, Some("status"));
-        let Some(AppAction::SendMessage(message)) = result.action else {
-            panic!("expected SendMessage action");
-        };
-        assert!(message.contains("action `status`"));
-        assert!(message.contains("Do not start a new workflow"));
+        assert!(!result.is_error);
+        assert!(
+            result.action.is_none(),
+            "status must not send a model message"
+        );
+        assert!(
+            result
+                .message
+                .as_deref()
+                .unwrap()
+                .contains("No workflow runs")
+        );
+        assert!(!dir.path().join(".codewhale/workflow-runs.jsonl").exists());
 
-        let result = workflow(&mut app, Some("status wf_run_1"));
-        let Some(AppAction::SendMessage(message)) = result.action else {
-            panic!("expected SendMessage action");
-        };
-        assert!(message.contains("run_id `wf_run_1`"));
+        let result = workflow(&mut app, Some("status wf_missing"));
+        assert!(result.is_error);
+        assert!(result.action.is_none());
 
-        let result = workflow(&mut app, Some("cancel wf_run_1"));
-        let Some(AppAction::SendMessage(message)) = result.action else {
-            panic!("expected SendMessage action");
-        };
-        assert!(message.contains("action `cancel`"));
-        assert!(message.contains("run_id `wf_run_1`"));
+        // A seeded run is listed and described from host state.
+        crate::tools::workflow::structcopy_test_seed_run(dir.path(), "workflow_seed");
+        let result = workflow(&mut app, Some("runs"));
+        let text = result.message.unwrap();
+        assert!(text.contains("workflow_seed"), "{text}");
+        assert!(text.contains("running"), "{text}");
+        assert!(result.action.is_none());
 
+        // Cancel with one running run needs no id and never asks the model.
+        // The seeded record has no live controller (no VM ran); cancel still
+        // marks the journal cancelled with an honest nothing-live receipt.
         let result = workflow(&mut app, Some("cancel"));
-        assert!(result.is_error, "cancel without a run id is a usage error");
+        assert!(result.action.is_none());
+        assert!(!result.is_error, "{:?}", result.message);
+        let text = result.message.as_deref().unwrap();
+        assert!(text.contains("workflow_seed"), "{text}");
+        assert!(text.contains("cancelled"), "{text}");
+        let after = crate::tools::workflow::host_workflow_runs(&app.workspace);
+        assert_eq!(
+            after
+                .iter()
+                .find(|line| line.run_id == "workflow_seed")
+                .map(|line| line.status),
+            Some("cancelled")
+        );
+
+        let result = workflow(&mut app, Some("cancel with spaces"));
+        assert!(result.is_error);
+
+        let result = workflow(&mut app, Some("help"));
+        assert!(result.message.unwrap().contains("/workflow status"));
+
+        // `/workflow run <path>` launches exactly that source through the tool.
+        let result = workflow(&mut app, Some("run workflows/tiny.workflow.js"));
+        let Some(AppAction::SendMessage(message)) = result.action else {
+            panic!("expected SendMessage action");
+        };
+        assert!(message.contains("`source_path`"), "{message}");
+        assert!(message.contains("workflows/tiny.workflow.js"), "{message}");
+        assert!(message.contains("do not"), "{message}");
+    }
+
+    #[test]
+    fn workflow_settings_explains_the_session_table() {
+        let mut app = test_app();
+        app.workflow_config.automatic = false;
+        app.workflow_config.require_approval_for_writes = false;
+        app.goal_max_continuations = 25;
+        let result = workflow(&mut app, Some("settings"));
+        assert!(result.action.is_none());
+        let text = result.message.unwrap();
+        assert!(text.contains("automatic = off"), "{text}");
+        assert!(text.contains("require_approval_for_writes = off"), "{text}");
+        assert!(text.contains("max_continuations = 25"), "{text}");
+    }
+
+    #[test]
+    fn workflow_settings_and_tool_share_a_refreshed_session_table() {
+        use crate::tools::spec::{ApprovalRequirement, ToolContext, ToolSpec};
+        use crate::tools::subagent::{SubAgentRuntime, new_shared_subagent_manager};
+        use crate::tools::workflow::WorkflowTool;
+        use serde_json::json;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut app = test_app();
+        app.workspace = dir.path().to_path_buf();
+
+        let mut table = app.workflow_config.clone();
+        table.automatic = false;
+        table.require_approval_for_writes = false;
+        table.auto_start_read_only = false;
+        crate::tools::workflow::set_session_workflow_config(&app.workspace, table.clone());
+        app.workflow_config = table;
+
+        let result = workflow(&mut app, Some("settings"));
+        assert!(result.action.is_none());
+        let text = result.message.unwrap();
+        assert!(text.contains("automatic = off"), "{text}");
+        assert!(text.contains("require_approval_for_writes = off"), "{text}");
+        assert!(text.contains("auto_start_read_only = off"), "{text}");
+
+        let ctx = ToolContext::new(dir.path().to_path_buf());
+        let manager = new_shared_subagent_manager(dir.path().to_path_buf(), 2);
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let client = crate::client::DeepSeekClient::new(&crate::config::Config {
+            api_key: Some("test-key".to_string()),
+            ..crate::config::Config::default()
+        })
+        .expect("stub client");
+        let mut runtime = SubAgentRuntime::new(
+            client,
+            "deepseek-v4-flash".to_string(),
+            ctx,
+            true,
+            None,
+            manager.clone(),
+        );
+        // Stale snapshot: product defaults still require write approval.
+        runtime.api_config = Some(std::sync::Arc::new(crate::config::Config::default()));
+        let tool = WorkflowTool::new(manager, runtime);
+
+        let write_plan = json!({
+            "action": "start",
+            "plan": {
+                "goal": "write freely",
+                "risk": "writes",
+                "children": [{ "prompt": "edit", "type": "implementer" }]
+            }
+        });
+        let read_only = json!({
+            "action": "start",
+            "plan": {
+                "goal": "scout crates",
+                "risk": "read_only",
+                "children": [{ "prompt": "look", "type": "explore" }]
+            }
+        });
+        assert_eq!(
+            tool.approval_requirement_for(&write_plan),
+            ApprovalRequirement::Auto,
+            "refreshed require_approval_for_writes = false must win over the stale runtime snapshot"
+        );
+        assert_eq!(
+            tool.approval_requirement_for(&read_only),
+            ApprovalRequirement::Required,
+            "refreshed auto_start_read_only = false must still ask"
+        );
     }
 }

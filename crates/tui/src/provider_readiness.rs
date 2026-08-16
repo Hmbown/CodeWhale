@@ -229,7 +229,10 @@ pub(crate) fn credential_state_for_provider(
             CredentialState::MissingKey
         };
     }
-    if provider.is_self_hosted() {
+    if crate::config::provider_route_is_keyless_self_hosted(
+        provider,
+        &config.base_url_for_route(provider),
+    ) {
         return if api_key_required {
             if crate::config::has_api_key_for(config, provider) {
                 CredentialState::Saved
@@ -1318,6 +1321,59 @@ mod tests {
         assert_eq!(
             ResolvedProviderReadiness::NoAuthUnchecked.label(),
             "no auth · not checked"
+        );
+    }
+
+    #[test]
+    fn ollama_readiness_distinguishes_local_from_cloud_credentials() {
+        let _lock = crate::test_support::lock_test_env();
+        let temp = tempfile::tempdir().expect("isolated credential home");
+        let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", temp.path());
+        let _backend = crate::test_support::EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+        let _ollama_cloud_key = crate::test_support::EnvVarGuard::remove("OLLAMA_CLOUD_API_KEY");
+        let _ollama_key = crate::test_support::EnvVarGuard::remove("OLLAMA_API_KEY");
+        let _cli_source = crate::test_support::EnvVarGuard::remove("DEEPSEEK_API_KEY_SOURCE");
+        let _cli_key = crate::test_support::EnvVarGuard::remove("CODEWHALE_CLI_API_KEY");
+
+        let local = crate::config::Config {
+            provider: Some("ollama".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            credential_state_for_provider(&local, ApiProvider::Ollama),
+            CredentialState::Local
+        );
+        assert_eq!(
+            auth_class_for_provider(&local, ApiProvider::Ollama),
+            ProviderAuthClass::Local
+        );
+
+        let mut cloud = crate::config::Config {
+            provider: Some("ollama".to_string()),
+            providers: Some(crate::config::ProvidersConfig {
+                ollama: crate::config::ProviderConfig {
+                    base_url: Some(codewhale_config::provider::OLLAMA_CLOUD_BASE_URL.to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(cloud.api_provider(), ApiProvider::OllamaCloud);
+        assert_eq!(
+            credential_state_for_provider(&cloud, ApiProvider::OllamaCloud),
+            CredentialState::MissingKey
+        );
+        assert_eq!(
+            auth_class_for_provider(&cloud, ApiProvider::OllamaCloud),
+            ProviderAuthClass::ApiKey
+        );
+
+        cloud.providers.as_mut().expect("providers").ollama.api_key =
+            Some("ollama-cloud-key".to_string());
+        assert_eq!(
+            credential_state_for_provider(&cloud, ApiProvider::OllamaCloud),
+            CredentialState::Saved
         );
     }
 

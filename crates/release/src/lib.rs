@@ -5,6 +5,7 @@ use serde::Deserialize;
 
 pub mod check;
 pub mod install;
+pub mod tls;
 
 pub use check::{SuppressionReason, UpdateCheckCache, suppression_reason};
 pub use install::{InstallMethod, current_install_method};

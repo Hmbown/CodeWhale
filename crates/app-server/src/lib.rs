@@ -2009,6 +2009,18 @@ async fn persist_config(state: &AppState, config: codewhale_config::ConfigToml) 
     store.save()
 }
 
+/// Install the process-wide rustls crypto provider once for tests that build
+/// an HTTP client. Production installs it at startup; each test must do the
+/// same instead of relying on another test in the process having run first
+/// (nextest runs every test in its own process).
+#[cfg(test)]
+pub(crate) fn install_test_crypto_provider() {
+    static INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    INIT.get_or_init(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2336,6 +2348,7 @@ mod tests {
 
     #[tokio::test]
     async fn failed_config_set_keeps_the_stdio_bridge() {
+        crate::install_test_crypto_provider();
         // #4737: `set_value` rejects an invalid value before assigning, so the
         // request is a no-op — but `apply_config_update` ran anyway and
         // invalidated the cached bridge, dropping the child runtime along with
@@ -2379,6 +2392,7 @@ mod tests {
 
     #[tokio::test]
     async fn successful_config_set_still_invalidates_the_stdio_bridge() {
+        crate::install_test_crypto_provider();
         // The other half of #4737: a mutation that *did* happen must still
         // rebuild the bridge, or the runtime keeps serving the old config.
         let tmp = tempfile::tempdir().expect("tempdir");

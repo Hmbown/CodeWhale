@@ -31,16 +31,16 @@ Sources to keep in sync:
 
 ## Provider Selection
 
-The canonical provider IDs are the 38 entries of `ProviderKind::ALL`
-(`crates/config/src/provider_kind.rs:198-234`), in that order:
+The canonical provider IDs are the 42 entries of `ProviderKind::ALL`
+(`crates/config/src/provider_kind.rs`), in that order:
 
 `deepseek`, `nvidia-nim`, `openai`, `atlascloud`, `wanjie-ark`, `volcengine`,
 `openrouter`, `orcarouter`, `xiaomi-mimo`, `novita`, `fireworks`, `siliconflow`, `arcee`,
-`siliconflow-CN`, `moonshot`, `sglang`, `vllm`, `ollama`, `huggingface`,
+`siliconflow-CN`, `moonshot`, `sglang`, `vllm`, `ollama`, `ollama-cloud`, `huggingface`,
 `together`, `qianfan`, `openai-codex`, `anthropic`, `openmodel`, `zai`,
 `stepfun`, `minimax`, `deepinfra`, `sakana`, `longcat`, `opencode-go`,
 `opencode-zen`, `meta`, `xai`, `mistral`, `telecomjs`, `modelstudio-token-plan`,
-and `custom`.
+`google`, `antigravity`, `edenai`, and `custom`.
 
 `deepseek-anthropic` is *not* on this list — it is a wire dialect of
 `deepseek`, reached with `wire = "anthropic"`, not a separate route to select.
@@ -112,7 +112,8 @@ the listed provider env vars.
 | `moonshot` | `[providers.moonshot]` | OpenAI Chat Completions | `MOONSHOT_API_KEY`, `KIMI_API_KEY` |
 | `sglang` | `[providers.sglang]` | OpenAI Chat Completions | `SGLANG_API_KEY` |
 | `vllm` | `[providers.vllm]` | OpenAI Chat Completions | `VLLM_API_KEY` |
-| `ollama` | `[providers.ollama]` | Ollama-local OpenAI-compatible Chat Completions | `OLLAMA_API_KEY` |
+| `ollama` | `[providers.ollama]` | Local OpenAI-compatible Chat Completions | `OLLAMA_API_KEY` (optional; only for an authenticated local route) |
+| `ollama-cloud` | `[providers.ollama_cloud]` | Hosted OpenAI-compatible Chat Completions | `OLLAMA_CLOUD_API_KEY`, `OLLAMA_API_KEY` |
 | `huggingface` | `[providers.huggingface]` | OpenAI Chat Completions | `HUGGINGFACE_API_KEY`, `HF_TOKEN` |
 | `together` | `[providers.together]` | OpenAI Chat Completions | `TOGETHER_API_KEY` |
 | `qianfan` | `[providers.qianfan]` | OpenAI Chat Completions | `QIANFAN_API_KEY`, `BAIDU_QIANFAN_API_KEY` |
@@ -133,6 +134,7 @@ the listed provider env vars.
 | `mistral` | `[providers.mistral]` | OpenAI Chat Completions | `MISTRAL_API_KEY` |
 | `google` | `[providers.google]` | OpenAI Chat Completions (official Gemini OpenAI-compat route; captures and replays thought signatures on tool calls) | `GOOGLE_API_KEY`, `GEMINI_API_KEY` |
 | `antigravity` | `[providers.antigravity]` | none — requests fail closed; credential import only | `ANTIGRAVITY_API_KEY` (key plane); `AGY_ADC_AUTH` (process env) |
+| `edenai` | `[providers.edenai]` | OpenAI Chat Completions | `EDENAI_API_KEY` |
 | `modelstudio-token-plan` | `[providers.modelstudio_token_plan]` | OpenAI Chat Completions | `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` |
 | `modelstudio-token-plan-anthropic` | `[providers.modelstudio_token_plan_anthropic]` | Anthropic Messages | `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` |
 | `modelstudio-coding-plan` | `[providers.modelstudio_coding_plan]` | OpenAI Chat Completions | `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` |
@@ -313,7 +315,7 @@ table.
 
 | Runner | Default base URL | Default model | Base URL override |
 | --- | --- | --- | --- |
-| `ollama` | `http://localhost:11434/v1` | `deepseek-v4-flash` | `OLLAMA_BASE_URL` |
+| `ollama` | `http://localhost:11434/v1` | `deepseek-coder:1.3b` | `OLLAMA_BASE_URL` |
 | `vllm` | `http://localhost:8000/v1` | `deepseek-ai/DeepSeek-V4-Pro` | `VLLM_BASE_URL` |
 | `sglang` | `http://localhost:30000/v1` | `deepseek-ai/DeepSeek-V4-Pro` | `SGLANG_BASE_URL` |
 
@@ -379,6 +381,34 @@ codewhale --provider ollama --model <model>
 
 Provider-hinted model names are sent as-is, so `--model qwen3:8b` works with
 any tag Ollama has pulled.
+
+### Ollama Cloud
+
+Ollama Cloud is a separate hosted provider. It uses the authenticated
+OpenAI-compatible `/v1/chat/completions` route and defaults to `gpt-oss:120b`:
+
+```toml
+provider = "ollama-cloud"
+
+[providers.ollama_cloud]
+base_url = "https://ollama.com/v1"
+model = "gpt-oss:120b"
+```
+
+Create a key in [Ollama account settings](https://ollama.com/settings/keys),
+then run `codewhale auth set --provider ollama-cloud`. For ambient auth,
+`OLLAMA_CLOUD_API_KEY` wins over Ollama's official `OLLAMA_API_KEY`.
+`OLLAMA_CLOUD_BASE_URL` and `OLLAMA_CLOUD_MODEL` override the Cloud defaults;
+arbitrary provider-owned model IDs pass through unchanged. Local `ollama`
+remains a separate, keyless-by-default provider.
+
+Compatibility is read-only and in memory: a released config that selected
+`provider = "ollama"` with the exact normalized
+`[providers.ollama] base_url = "https://ollama.com/v1"` tuple is treated as
+`ollama-cloud` at runtime. Only that exact tuple may fall back to the legacy
+`ollama` secret slot. Codewhale does not rewrite the config, copy or delete a
+secret, migrate neighboring paths, or make an explicit `ollama-cloud` route
+consume the legacy slot.
 
 ### vLLM
 
@@ -446,7 +476,9 @@ configuration path instead of guessing a vendor page.
 | `anthropic` | [Anthropic API keys](https://console.anthropic.com/settings/keys) |
 | `openmodel` | [OpenModel console](https://console.openmodel.ai/) ([authentication guide](https://docs.openmodel.ai/en/docs/getting-started/authentication)) |
 | `openai-codex` | Run `codex login`, then explicitly grant Codewhale read-only access to that exact credential file; no Codewhale API key is stored. |
-| `sglang`, `vllm`, `ollama` | Local OpenAI-compatible endpoints are keyless by default; configure a key only when the server requires one. |
+| `sglang`, `vllm` | Local OpenAI-compatible endpoints are keyless by default; configure a key only when the server requires one. |
+| `ollama` | Local Ollama is keyless by default; configure a key only when the local server requires one. |
+| `ollama-cloud` | Create an [Ollama API key](https://ollama.com/settings/keys), save it with `codewhale auth set --provider ollama-cloud`, or set `OLLAMA_CLOUD_API_KEY` / `OLLAMA_API_KEY` in that precedence order. |
 | `sakana` | [Sakana AI API keys](https://console.sakana.ai/api-keys) ([get started](https://console.sakana.ai/get-started)) |
 | `longcat` | [Meituan LongCat platform](https://longcat.chat/platform) |
 | `opencode-go` | [OpenCode Go](https://opencode.ai/docs/go/) |
@@ -457,6 +489,7 @@ configuration path instead of guessing a vendor page.
 | `mistral` | [Mistral Console (la Plateforme)](https://console.mistral.ai/api-keys) |
 | `google` | [Google AI Studio](https://aistudio.google.com/apikey) — Codewhale uses the official Gemini OpenAI-compatible endpoint and never reads Google OAuth files. |
 | `antigravity` | Sign in with the official `agy` CLI (1.1.13). Codewhale can read that login's OAuth token read-only from the exact pinned `state.vscdb` after `codewhale auth external-consent`; it never writes or refreshes the file. An `ANTIGRAVITY_API_KEY` or the process's `AGY_ADC_AUTH` wins over the file. The cloud-code wire protocol is not implemented: requests fail closed with an actionable message — use `google` for Gemini models. |
+| `edenai` | [Eden AI API keys](https://app.edenai.run/settings/api-keys) |
 | `modelstudio-token-plan`, `modelstudio-token-plan-anthropic`, `modelstudio-coding-plan`, `modelstudio-coding-plan-anthropic` | [Alibaba Cloud Model Studio (Bailian console)](https://bailian.console.aliyun.com/) — create or copy a Model Studio API key. |
 | `custom` | Set the named provider's `base_url` and `api_key_env` or `api_key`; no canonical vendor credential page exists. |
 
@@ -505,6 +538,16 @@ validated basename in config, and revokes any Grok-file grant. Superseded
 generations are cleaned only after the new config pointer commits.
 Kimi remains API-key-only; external consent for Kimi is rejected.
 
+The official DeepSeek Harness (`dsh`) is a third read-only credential owner:
+`codewhale auth external-consent --provider deepseek --mode read-only` grants
+exact-path read access to `DEEPSEEK_API_KEY` in `$DSH_HOME/.credentials.yaml`
+(or `~/.dsh/.credentials.yaml`), which Codewhale never writes, refreshes, or
+loads into the process environment. This is separate from the DSH *harness*
+integration (`codewhale integrations dsh …`, see
+[INTEGRATIONS_DSH.md](INTEGRATIONS_DSH.md)), which never touches credentials
+in either direction: it pins Codewhale's route identity into a `--patch`
+overlay and lets DSH resolve its own keys.
+
 ## Shipped Providers
 
 | Provider ID | TOML table | Auth env | Base URL env and default | Default or static models | Notes |
@@ -527,13 +570,14 @@ Kimi remains API-key-only; external consent for Kimi is rejected.
 | `moonshot` | `[providers.moonshot]` | `MOONSHOT_API_KEY`, `KIMI_API_KEY` | `MOONSHOT_BASE_URL`, `KIMI_BASE_URL`; default `https://api.moonshot.ai/v1` | Direct Moonshot: `kimi-k3`, `kimi-k2.7-code`, `kimi-k2.6`; Kimi Code membership: `k3`, `kimi-for-coding`, `kimi-for-coding-highspeed` at `https://api.kimi.com/coding/v1` | Moonshot/Kimi route. `kimi` and `kimi-k2` aliases select `kimi-k2.7-code`; `MOONSHOT_MODEL`, `KIMI_MODEL_NAME`, and `KIMI_MODEL` are accepted. Kimi thinking streams through `reasoning_content`; Codewhale keeps it in Thinking cells and replays it for thinking/tool-call continuity. For direct K3, use exact `base_url = "https://api.moonshot.ai/v1"` and `model = "kimi-k3"`; it is always-thinking and receives top-level `reasoning_effort = "low" | "high" | "max"` (`off` normalizes to `low`), uses only `max_completion_tokens`, and omits `temperature`/`top_p` per the [K3 quickstart](https://platform.kimi.ai/docs/guide/kimi-k3-quickstart). For Kimi Code K3, use a key from the [Kimi Code console](https://www.kimi.com/code/console), exact `base_url = "https://api.kimi.com/coding/v1"`, and bare `model = "k3"`; `off` becomes enabled `low`, while normal dispatched `auto` selects and sends a concrete Codewhale tier. Only an omitted reasoning setting leaves the provider default in control. That membership route defaults safely to 262,144 context tokens; the [Kimi Code model-tier table](https://www.kimi.com/code/docs/en/kimi-code/models.html) grants Allegretto and higher plans up to 1M, which those plans may express as `context_window = 1048576`. `k3[1m]` is Claude Code-only and Codewhale rejects it. `kimi-for-coding` remains the valid K2.7 membership route, and `kimi-for-coding-highspeed` is its own high-speed roster entry (262,144 context); membership ids are rejected on the direct platform endpoint, and `kimi-k3` stays rejected on the membership endpoint. Billing is decided by the endpoint the route resolves to, judged once against the two exact product endpoints: direct Moonshot (`https://api.moonshot.ai/v1` or the default) bills metered with dollar estimates, the exact Kimi Code membership endpoint bills as Kimi Code quota and never shows dollar estimates, and anything else — a gateway host, a neighboring Kimi-hosted path — reports `cost: unknown` rather than borrowing either product. An imported Kimi Code token with no `base_url` in its table still resolves to the membership endpoint, so it bills as Kimi Code quota and never accrues dollars. A completed turn, parent or sub-agent, is billed from the immutable endpoint receipt its own client was built with, never from a later config re-read: `MOONSHOT_BASE_URL`/`KIMI_BASE_URL` are merged into the *active* provider's table only, and an in-turn provider switch can move the ambient config off the route that actually ran. Legacy `auth_mode = "kimi_oauth"` fails to API-key guidance without probing Kimi CLI files. Codewhale does not impersonate `kimi_cli` or `kimi_code_cli`. **China-region keys:** contributor field evidence (@vFONGv, PR #5229, verified on Windows 10) reports that a China-region Moonshot key must be paired with `base_url = "https://api.moonshot.cn/v1"`; left on the default international host (`https://api.moonshot.ai/v1`) it fails authentication. We have no China-region key to verify this ourselves, so it is recorded as a user report rather than a tested route. Note also that editing `base_url` alone does not take effect until `codewhale auth set` is re-run for that provider. |
 | `antigravity` | `[providers.antigravity]` | `ANTIGRAVITY_API_KEY` | `ANTIGRAVITY_BASE_URL`; default `https://cloudcode-pa.googleapis.com/v1internal` | none advertised — requests fail closed until the cloud-code wire protocol exists | Antigravity (`agy` 1.1.13) credential plane: consent-gated read-only import of the official CLI's `state.vscdb` OAuth token (`antigravityUnifiedStateSync.oauthToken`), pinned to the exact per-OS app-profile path. The store is opened read-only through the secure no-follow boundary with an inode recheck; Codewhale never writes, refreshes, or re-authenticates. Precedence: `ANTIGRAVITY_API_KEY` > process `AGY_ADC_AUTH` > consented file. Not an embed of any other harness. No live calls made in this environment. |
 | `google` | `[providers.google]` | `GOOGLE_API_KEY`, `GEMINI_API_KEY` | `GOOGLE_BASE_URL`, `GEMINI_BASE_URL`; default `https://generativelanguage.googleapis.com/v1beta/openai/` | `gemini-3.1-pro-preview` (default); `/model` also lists `gemini-3-pro-preview`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-2.5-pro`, `gemini-2.5-flash` | Google Gemini as its own backend on the official OpenAI-compatible Chat Completions route. Thinking models capture `extra_content.google.thought_signature` on tool calls and replay it with the assistant tool-call messages; replaying a tool call whose signature was not captured fails closed with an actionable error instead of letting the tool loop break. `gemini-2.5-flash-lite` ships thinking off and degrades with a warning instead. Reasoning effort maps onto the documented `google.thinking_config.thinking_level` (`low`/`high`). The dialect binds to the exact official base URL: a `google` row pointed at another gateway gets plain OpenAI semantics and no signature requirements. Codewhale never reads Google OAuth files; only an AI Studio API key is used. Not live-tested against the real endpoint in this environment. |
-| `zai` | `[providers.zai]` | `ZAI_API_KEY`, `Z_AI_API_KEY` | `ZAI_BASE_URL`, `Z_AI_BASE_URL`; default `https://api.z.ai/api/coding/paas/v4`; general API `https://api.z.ai/api/paas/v4` | `GLM-5.2` default; `/model` also lists `GLM-5.3`, `GLM-5.1`, and `GLM-5-Turbo` | Z.AI GLM Coding Plan route. `GLM-5.2` stays the default. `GLM-5.3` is a first-class picker row (`model = "GLM-5.3"` or `ZAI_MODEL=GLM-5.3`) and is not rewritten to another vendor. Limits and reasoning options are inherited from `GLM-5.2` until Z.ai publishes distinct 5.3 metadata; it carries no price. A live call can still 429 with entitlement code 1311 on accounts that are not provisioned for 5.3. |
+| `zai` | `[providers.zai]` | `ZAI_API_KEY`, `Z_AI_API_KEY` | `ZAI_BASE_URL`, `Z_AI_BASE_URL`; default `https://api.z.ai/api/coding/paas/v4`; general API `https://api.z.ai/api/paas/v4` | `GLM-5.3` default; `/model` also lists `GLM-5.2`, `GLM-5.1`, and `GLM-5-Turbo` | Z.AI GLM Coding Plan route. `GLM-5.3` is the default and a first-class picker row (`model = "GLM-5.3"` or `ZAI_MODEL=GLM-5.3`); an explicit `GLM-5.2` selection keeps its own id. Limits and reasoning options are inherited from `GLM-5.2` until Z.ai publishes distinct 5.3 metadata; it carries no price. A live call can still 429 with entitlement code 1311 on accounts that are not provisioned for 5.3. |
 | `stepfun` | `[providers.stepfun]` | `STEPFUN_API_KEY`, `STEP_API_KEY` | `STEPFUN_BASE_URL`, `STEP_BASE_URL`; default `https://api.stepfun.ai/v1`; Coding Plan endpoint `https://api.stepfun.ai/step_plan/v1` | `step-3.7-flash` | StepFun / StepFlash direct OpenAI-compatible route. `/provider` setup asks which billing route the key belongs to — pay-as-you-go or Step Plan — validates the key against the chosen endpoint, and writes the answer to `[providers.stepfun].base_url` only. A base URL that is neither recognized route is left alone and the question is skipped. You can also set `[providers.stepfun].base_url` or `STEP_BASE_URL` to the Coding Plan URL by hand. Offline accounting labels recognized routes as `stepfun-payg` or `stepfun-plan` without persisting the raw endpoint, and only the standard PAYG route receives token pricing. `STEPFUN_MODEL` and `STEP_MODEL` are accepted. |
 | `minimax` | `[providers.minimax]` | `MINIMAX_API_KEY` | `MINIMAX_BASE_URL`; default `https://api.minimax.io/v1`; China `https://api.minimaxi.com/v1` | `MiniMax-M3`, `MiniMax-M2.7`, `MiniMax-M2.7-highspeed`, `MiniMax-M2.5`, `MiniMax-M2.5-highspeed`, `MiniMax-M2.1`, `MiniMax-M2.1-highspeed`, `MiniMax-M2` | MiniMax direct OpenAI-compatible route. Codewhale sends `reasoning_split = true` so MiniMax thinking arrives separately from answer text. Both MiniMax dialects sell pay-as-you-go and Token Plan over the same endpoints and the same key, so billing is classified from the credential *product*, never from the endpoint or from a default. `mode = "token-plan"` in `[providers.minimax]`/`[providers.minimax_anthropic]`, or a Token Plan key shaped `sk-cp…`, bills as MiniMax Token Plan quota with no dollar estimates; an explicit pay-as-you-go mode (`pay-as-you-go`/`payg`/`metered`) wins over key shape. The key's product prefix is only visible when the key is in config, bound by `api_key_env`, or exported as `MINIMAX_API_KEY` on an official endpoint — a key saved through `codewhale auth set` (secret store / OS keyring) is deliberately not read to classify billing. With no explicit mode and no visible product marker the route reports `cost: unknown` rather than assuming pay-as-you-go, so a Token Plan account is never charged invented dollars. Custom/gateway endpoints also fail closed with `cost: unknown`. Official M3 input modalities are text, image, and video; M2.7 is text-only. |
 | `minimax-anthropic` | `[providers.minimax_anthropic]` | `MINIMAX_API_KEY` | `MINIMAX_ANTHROPIC_BASE_URL`; default `https://api.minimax.io/anthropic`; China `https://api.minimaxi.com/anthropic` | `MiniMax-M3`, `MiniMax-M2.7` | MiniMax direct Anthropic-compatible Messages route. Keep the `/anthropic` suffix because Codewhale appends `/v1/messages`; the route uses `x-api-key`. M3 supports adaptive or disabled thinking. M2.7 always keeps thinking enabled. |
 | `sglang` | `[providers.sglang]` | Optional `SGLANG_API_KEY` | `SGLANG_BASE_URL`; default `http://localhost:30000/v1` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | Self-hosted OpenAI-compatible route. Localhost deployments commonly omit auth. `SGLANG_MODEL` is accepted. |
 | `vllm` | `[providers.vllm]` | Optional `VLLM_API_KEY` | `VLLM_BASE_URL`; default `http://localhost:8000/v1` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | Self-hosted vLLM OpenAI-compatible route. Localhost deployments commonly omit auth. `VLLM_MODEL` is accepted. |
-| `ollama` | `[providers.ollama]` | Optional `OLLAMA_API_KEY` | `OLLAMA_BASE_URL`; default `http://localhost:11434/v1` | `deepseek-coder:1.3b`; provider-hinted custom tags pass through | Self-hosted Ollama OpenAI-compatible route. Localhost deployments commonly omit auth. `OLLAMA_MODEL` is accepted. |
+| `ollama` | `[providers.ollama]` | Local optional `OLLAMA_API_KEY` | `OLLAMA_BASE_URL`; default `http://localhost:11434/v1` | `deepseek-coder:1.3b`; provider-hinted custom tags pass through | Local Ollama is keyless by default. `OLLAMA_MODEL` is accepted. |
+| `ollama-cloud` | `[providers.ollama_cloud]` | `OLLAMA_CLOUD_API_KEY`, then `OLLAMA_API_KEY` | `OLLAMA_CLOUD_BASE_URL`; default `https://ollama.com/v1` | `gpt-oss:120b`; arbitrary provider-owned IDs pass through | Hosted OpenAI-compatible `/v1/chat/completions` route. Save credentials under `ollama-cloud`; the exact released `ollama` + Cloud URL tuple has bounded read-only in-memory compatibility with its legacy table and secret slot. `OLLAMA_CLOUD_MODEL` is accepted. |
 | `huggingface` | `[providers.huggingface]` | `HUGGINGFACE_API_KEY`, `HF_TOKEN` | `HUGGINGFACE_BASE_URL`, `HF_BASE_URL`; default `https://router.huggingface.co/v1` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | Hugging Face Inference Providers OpenAI-compatible router route. Accepted aliases: `huggingface`, `hugging-face`, `hugging_face`, `hf`. Org-prefixed model IDs pass through. `HUGGINGFACE_MODEL` and `HF_MODEL` are accepted. Hub browsing/export are separate future features. |
 | `deepinfra` | `[providers.deepinfra]` | `DEEPINFRA_API_KEY`, `DEEPINFRA_TOKEN` | `DEEPINFRA_BASE_URL`; default `https://api.deepinfra.com/v1/openai` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | DeepInfra OpenAI-compatible route. Drop-in replacement for OpenAI SDK. |
 | `together` | `[providers.together]` | `TOGETHER_API_KEY` | `TOGETHER_BASE_URL`; default `https://api.together.xyz/v1` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash`, `thinkingmachines/inkling` | Together AI OpenAI-compatible route. `TOGETHER_MODEL` is accepted. Model aliases `deepseek-v4-pro` and `deepseek-v4-flash` normalize to Together's org-prefixed IDs; `inkling` and `together-inkling` normalize to Together's published lowercase Inkling wire ID. Inkling uses the exact `none`/`minimal`/`low`/`medium`/`high`/`max` reasoning vocabulary from Thinking Machines' [official model repository](https://huggingface.co/thinkingmachines/Inkling). Together's [launch post](https://www.together.ai/blog/together-ai-brings-thinking-machines-labs-new-model-inkling-on-day-0) currently says Inkling is live with 1M context, while its [model detail page](https://www.together.ai/models/inkling) says coming soon with 256K context and publishes no price. Until Together's active `/models` endpoint and the Models.dev catalog resolve that conflict, Inkling is not seeded into Codewhale's offline picker and no route-specific context or cost is inferred. |
@@ -548,6 +592,7 @@ Kimi remains API-key-only; external consent for Kimi is rejected.
 | `meta` | `[providers.meta]` | `META_MODEL_API_KEY`, `MODEL_API_KEY` | `META_MODEL_API_BASE_URL`, `MODEL_API_BASE_URL`; default `https://api.meta.ai/v1` | `muse-spark-1.2` (default) | [Meta Model API](https://developer.meta.com/ai/resources/blog/build-with-muse-spark/) public-preview route using OpenAI-compatible Chat Completions. Muse Spark 1.2 keeps its wire ID, tool support, 1M context, 32K output metadata, and `none` through `xhigh` reasoning effort. `META_MODEL_API_MODEL` and `MODEL_API_MODEL` are accepted. Provider aliases: `meta-ai`, `meta_model_api`, `muse`, `muse-spark`. |
 | `telecomjs` | `[providers.telecomjs]` | `TELECOMJS_API_KEY` | `TELECOMJS_BASE_URL`; default `https://aigw.telecomjs.com/v1` | `deepseek-v4-pro` conservative fallback; authenticated `/models` rows when a key is configured | TelecomJS TokenHub OpenAI-compatible Chat Completions route. Live catalogs are isolated by provider and key fingerprint, stale rows survive transient refresh failures, and unsupported reasoning request fields are omitted. `TELECOMJS_MODEL` is accepted. Provider aliases: `telecom-js`, `telecom_js`, `telecomjs-cn`, `tokenhub`. |
 | `mistral` | `[providers.mistral]` | `MISTRAL_API_KEY` | `MISTRAL_BASE_URL`; default `https://api.mistral.ai/v1` | `mistral-code-latest` (default; `codestral-latest` accepted as alias), `mistral-medium-latest` (aliases: `mistral-medium-3-5`), `mistral-small-latest` (aliases: `mistral-small-2603`), `mistral-large-latest` | Mistral AI (la Plateforme) OpenAI-compatible Chat route. On the documented first-party HTTPS `/v1` hosts, Medium and Small send adjustable `reasoning_effort` (`none` or `high` only), parse Mistral's polymorphic thinking/text blocks, and replay stored thinking in that same wire shape. Deprecated native Magistral IDs remain explicit-configuration compatibility routes: they are always-reasoning and never receive the adjustable effort field. Code and Large are non-reasoning. A custom `MISTRAL_BASE_URL` keeps generic Chat semantics unless it is one of the documented first-party hosts. `MISTRAL_MODEL` is accepted. Provider aliases: `mistral-ai`, `mistralai`, `la-plateforme`. |
+| `edenai` | `[providers.edenai]` | `EDENAI_API_KEY` | `EDENAI_BASE_URL`; default `https://api.edenai.run/v3`; EU `https://api.eu.edenai.run/v3` | `deepseek/deepseek-v4-pro` (default); live `/models` catalog of `provider/model` ids | Eden AI OpenAI-compatible aggregation gateway. Catalog rows remain provider-scoped; generic reasoning controls are omitted because supported fields depend on the selected upstream family. `EDENAI_MODEL` is accepted. The default `deepseek/deepseek-v4-pro` is listed on the global catalog only; on the EU endpoint set `EDENAI_MODEL` (or `model`) to a row from the EU `/models` list, for example `qwen/deepseek-v4-pro`. Provider aliases: `eden-ai`, `eden_ai`. |
 | `xai` | `[providers.xai]` | `XAI_API_KEY`, Codewhale-owned device OAuth, or explicit read-only Grok CLI consent | `XAI_BASE_URL`; default `https://api.x.ai/v1` | `grok-4.6` (default), `grok-4.5`, `grok-4.3`, `grok-build`, `grok-composer-2.5-fast`, `grok-4.20-0309-reasoning`, `grok-4.20-0309-non-reasoning` | xAI/Grok OpenAI-compatible Chat Completions route. Grok 4.6 has a 500K context window, text/image input, function calls, structured output, server-side web search, and `low`/`medium`/`high`/`xhigh` reasoning (default `high`). Its standard rates double when the prompt reaches 200K tokens. There is no documented `latest`/`fast` alias and no published numeric output limit. **API-key** (default): Bearer token from console.x.ai via `XAI_API_KEY` / keyring / `api_key`. **OAuth**: `codewhale auth xai-device` uses SSH-friendly device login and Codewhale-owned storage, which may refresh itself. Existing Grok CLI credentials require `codewhale auth external-consent --provider xai --mode read-only`; the granted external file is never refreshed or rewritten. OAuth may return HTTP 403 on some SuperGrok tiers — keep API-key as the reliable fallback. `XAI_MODEL` is accepted. Provider aliases: `x-ai`, `x_ai`, `grok`. |
 | `modelstudio-token-plan` | `[providers.modelstudio_token_plan]` | `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` | `MODELSTUDIO_TOKEN_PLAN_BASE_URL`; default `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` | `qwen3.8-max` (default), `qwen3.8-max-preview`, `qwen3.7-plus`, `qwen3.7-max`, `qwen3.6-flash`, `deepseek-v4-pro`, `deepseek-v4-flash-0731`, `glm-5.2` | Alibaba Cloud Model Studio Token Plan OpenAI-compatible Chat Completions route. Token Plan Personal and Team share this endpoint. All listed models are reasoning-capable text/coding models. DeepSeek and GLM entries are provider-scoped and do not collide with first-party routes. `MODELSTUDIO_TOKEN_PLAN_MODEL` is accepted. Provider aliases: `modelstudio-token-plan`, `alibaba-token-plan`, `dashscope-token-plan`. |
 | `modelstudio-token-plan-anthropic` | `[providers.modelstudio_token_plan_anthropic]` | `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` | default `https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic` | Same model catalog as `modelstudio-token-plan` | Token Plan Anthropic-compatible Messages route (`/apps/anthropic`). Same API key as the OpenAI dialect. Provider aliases: `modelstudio-token-plan-anthropic`, `alibaba-token-plan-anthropic`. |
@@ -680,13 +725,14 @@ large models verified through OpenRouter's model metadata:
 `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free`.
 `minimax/minimax-m3` was added from OpenRouter's May 31, 2026 listing as a 1M
 context multimodal model for coding, tool use, and long-horizon agentic work.
-`z-ai/glm-5.2` is now the default GLM route on both the Z.AI Coding Plan and
-OpenRouter; `GLM-5.1` / `z-ai/glm-5.1` remain available as the smaller model,
-and `GLM-5-Turbo` / `z-ai/glm-5-turbo` serve as the faster same-family sibling
+`GLM-5.3` is now the default direct Z.AI Coding Plan model; `GLM-5.2` /
+`z-ai/glm-5.2` remain available (explicit selections keep their own id),
+`GLM-5.1` / `z-ai/glm-5.1` remain available as the smaller model, and
+`GLM-5-Turbo` / `z-ai/glm-5-turbo` serve as the faster same-family sibling
 used by faster/explore sub-agents.
 `GLM-5.3` / `z-ai/glm-5.3` are first-class picker ids on the Z.ai and
 OpenRouter routes (`/model` after `/provider zai`, or `model = "GLM-5.3"`).
-They are not the default. Limits and reasoning options are inherited from
+Limits and reasoning options are inherited from
 `GLM-5.2` until Z.ai publishes distinct 5.3 metadata, and they carry no
 price. A live call can still 429 with entitlement code 1311 on accounts
 that are not provisioned for 5.3.
@@ -714,13 +760,14 @@ endpoint when the endpoint supports model listing.
 | `siliconflow` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | yes | yes |
 | `arcee` | `trinity-large-thinking`, `trinity-large-preview`; provider-hinted custom model IDs pass through | yes | yes for `trinity-large-thinking`; no for `trinity-large-preview` |
 | `moonshot` | `kimi-k2.7-code`, `kimi-k2.6` | yes | yes |
-| `zai` | `GLM-5.2`, `GLM-5.1`, `GLM-5.3`, `GLM-5-Turbo`; provider-hinted custom model IDs pass through | yes | yes |
+| `zai` | `GLM-5.3`, `GLM-5.2`, `GLM-5.1`, `GLM-5-Turbo`; provider-hinted custom model IDs pass through | yes | yes |
 | `stepfun` | `step-3.7-flash` | yes | no |
 | `minimax` | `MiniMax-M3`, `MiniMax-M2.7`, `MiniMax-M2.7-highspeed`, `MiniMax-M2.5`, `MiniMax-M2.5-highspeed`, `MiniMax-M2.1`, `MiniMax-M2.1-highspeed`, `MiniMax-M2` | yes | yes |
 | `minimax-anthropic` | `MiniMax-M3`, `MiniMax-M2.7` | yes | yes |
 | `sglang` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | yes | yes |
 | `vllm` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | yes | yes |
 | `ollama` | `deepseek-coder:1.3b`; custom tags pass through when provider hint is `ollama` | yes | no |
+| `ollama-cloud` | `gpt-oss:120b`; arbitrary provider-owned model IDs pass through | yes | yes |
 | `huggingface` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | yes | no |
 | `deepinfra` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash` | yes | yes |
 | `together` | `deepseek-ai/DeepSeek-V4-Pro`, `deepseek-ai/DeepSeek-V4-Flash`, `thinkingmachines/inkling` | yes | yes |
@@ -797,8 +844,8 @@ keeps a conservative ceiling. The "Max output metadata" column below reads
 | Kimi Code membership `k3` | 262,144 safe baseline; 1,048,576 with an explicit entitled-plan override | 131,072 conservative default ceiling; membership maximum is not published | yes | no | exact `https://api.kimi.com/coding/v1` route |
 | Direct Moonshot/Kimi K2.7/K2.6 (`kimi-k2.7-code`, `kimi-k2.6`) | 262,144 | 32,768 | yes | no | provider-reported bundled catalog |
 | Kimi Code membership `kimi-for-coding`, `kimi-for-coding-highspeed` | 262,144 | unknown — the membership catalog owns these limits and no client-side ceiling is claimed | yes | no | exact `https://api.kimi.com/coding/v1` route |
-| Direct Z.AI `GLM-5.2` (default) | 1,000,000 | 131,072 | yes | no | not documented in code |
-| Direct Z.AI `GLM-5.3` | 1,000,000 | 131,072 | yes | no | live on the GLM Coding Plan; limits inherited from `GLM-5.2` until Z.ai publishes distinct 5.3 numbers; no USD price |
+| Direct Z.AI `GLM-5.3` (default) | 1,000,000 | 131,072 | yes | no | live on the GLM Coding Plan; limits inherited from `GLM-5.2` until Z.ai publishes distinct 5.3 numbers; no USD price |
+| Direct Z.AI `GLM-5.2` | 1,000,000 | 131,072 | yes | no | not documented in code |
 | Direct Z.AI `GLM-5.1` | 202,752 | 131,072 | yes | no | not documented in code |
 | Direct Z.AI `GLM-5-Turbo` | 202,752 | 131,072 | yes | no | faster/explore sub-agent sibling |
 | Direct MiniMax `MiniMax-M3` | 1,000,000 | 524,288 | yes | no | not documented in code |
@@ -909,6 +956,7 @@ Providers marked "omitted" receive no reasoning fields at all for that tier.
 | Kimi Code membership `k3` at exact `https://api.kimi.com/coding/v1` | `thinking: {type: enabled, effort: "low"}` (effective normalization) | `thinking: {type: enabled, effort: "low" | "high"}` | `thinking: {type: enabled, effort: "max"}` |
 | Other `moonshot` routes | `thinking: {type: disabled}` | `thinking: {type: enabled}` | `thinking: {type: enabled}` |
 | `ollama` | `think: false` | `think: true` | `think: true` |
+| `ollama-cloud` | `reasoning_effort: "none"` | exact `low`/`medium`/`high` `reasoning_effort` | `reasoning_effort: "max"` |
 | `xiaomi-mimo` | `thinking: {type: disabled}` | `thinking: {type: enabled}` | `thinking: {type: enabled}` |
 | First-party `minimax` `MiniMax-M3` | `reasoning_split: true` + `thinking: {type: disabled}` | `reasoning_split: true` + `thinking: {type: adaptive}`; effective tier granularity unavailable | `reasoning_split: true` + `thinking: {type: adaptive}`; effective tier granularity unavailable |
 | First-party Z.ai `GLM-5.2` | `thinking: {type: disabled}`; no `reasoning_effort` | enabled thinking; only effective `high` adds `reasoning_effort: "high"` | enabled thinking + `reasoning_effort: "max"` |

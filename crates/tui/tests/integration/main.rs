@@ -1,6 +1,6 @@
 //! Consolidated harness for plain `#[test]`/`#[tokio::test]` acceptance suites.
 //!
-//! See `crates/tui/tests/README.md` for why this exists: 16 small integration
+//! See `crates/tui/tests/README.md` for why this exists: 17 small integration
 //! binaries each re-linked the full `codewhale-tui` graph — one harness keeps the
 //! same test names (`integration::adaptive_evidence_acceptance::...`) so
 //! `cargo test -p codewhale-tui adaptive_evidence_acceptance` still filters.
@@ -88,9 +88,9 @@ mod package_digest;
 mod palette;
 #[path = "../../src/shell_dispatcher.rs"]
 mod shell_dispatcher;
-#[path = "../../src/core/tool_parser.rs"]
-#[allow(dead_code)]
-mod tool_parser;
+// The legacy text tool-call parser lives in codewhale-core now; keep the
+// `crate::tool_parser` path the suites use.
+use codewhale_core::tool_parser;
 
 mod adaptive_evidence_acceptance;
 mod cache_guard;

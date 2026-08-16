@@ -64,7 +64,7 @@ pub(crate) use composer::{
 };
 pub use status::{StatusToast, StatusToastLevel};
 pub use types::{
-    AppAction, AppMode, AutomationAction, ComposerDensity, ComposerSubmitAction,
+    AppAction, AppMode, AppModeUi, AutomationAction, ComposerDensity, ComposerSubmitAction,
     ComposerSubmitChord, InitialInput, McpUiAction, QueuedMessage, ReasoningEffort,
     SettingSelection, ShellJobAction, SubmitDisposition, TaskPanelEntry, TaskPanelEntryKind,
     ToolCollapseMode, ToolDetailRecord, TranscriptSpacing, TuiOptions, VimMode,
@@ -1287,6 +1287,10 @@ pub struct App {
     /// Last effective thinking receipt for the most recently accepted route.
     pub(crate) last_effective_reasoning_effort: Option<EffectiveReasoningEffort>,
     pub workspace: PathBuf,
+    /// Effective `[workflow]` table for this session (`/workflow settings`).
+    pub workflow_config: codewhale_config::WorkflowConfigToml,
+    /// Effective `[goal] max_continuations` backstop; `0` means unlimited.
+    pub goal_max_continuations: u32,
     /// Effective explicit/managed filesystem scope captured at startup. The
     /// named permission posture supplies the default when this is `None`.
     pub configured_sandbox_mode: Option<String>,
@@ -1518,6 +1522,12 @@ pub struct App {
     /// Maps raw agent_id to a stable user-facing label (#3030).
     /// Populated when `AgentSpawned` fires; read by sidebar rendering.
     pub agent_label_map: HashMap<String, String>,
+    /// The child whose full transcript currently owns the main conversation
+    /// area and whose fork the composer addresses (`None` = main session).
+    pub agent_focus: Option<crate::tui::agent_focus::AgentFocus>,
+    /// Follow-ups a running child has not yet taken at its next round
+    /// boundary (`agent_id` → count), from the latest `AgentList` refresh.
+    pub agent_queued_follow_ups: HashMap<String, usize>,
     /// Per-role sequence counters for unnamed children (#3030). Two concurrent
     /// builders render as `builder · 1` and `builder · 2` instead of sharing a
     /// bare, indistinguishable role label.
@@ -1747,6 +1757,14 @@ pub struct App {
     pub last_reasoning: Option<String>,
     /// Tool calls captured for the pending assistant message
     pub pending_tool_uses: Vec<(String, String, Value)>,
+    /// One-line permission receipts (`tool_id`, text) for decisions nobody
+    /// was prompted for, held until that tool's card completes so the note
+    /// lands directly under the card instead of splitting a running tool run.
+    pub pending_gate_receipts: Vec<(String, String)>,
+    /// Permission receipts for child (sub-agent) tool calls, keyed by agent
+    /// id then `(tool_id, text)`, rendered under the matching tool card when
+    /// that child is focused. Session-resident only.
+    pub child_gate_receipts: std::collections::HashMap<String, Vec<(String, String)>>,
     /// User messages queued while a turn is running
     pub queued_messages: VecDeque<QueuedMessage>,
     /// Draft queued message being edited
@@ -1776,6 +1794,10 @@ pub struct App {
     /// Incremented on `TurnComplete` from the elapsed time of the
     /// just-finished turn. Resets per launch.
     pub cumulative_turn_duration: std::time::Duration,
+    /// Session metrics strip accumulators (model-call/tool timings, TTFT,
+    /// throughput). Sourced only from engine events; see
+    /// [`crate::tui::session_metrics`].
+    pub session_metrics: crate::tui::session_metrics::SessionMetrics,
     /// DeepSeek account balance, refreshed once per turn completion.
     /// Shared cell updated by background fetch tasks; read lock in the UI thread.
     pub balance_cell: std::sync::Arc<std::sync::Mutex<Option<crate::pricing::BalanceInfo>>>,
@@ -1918,6 +1940,14 @@ pub struct App {
     /// Updated per-turn via PrefixCacheChange events; surfaced by
     /// `/cache stats` for cache-hit debugging.
     pub last_pinned_prefix_hash: Option<String>,
+    /// Why the current KV-cache prefix pin exists (`initial`/`resume`/`change:*`).
+    pub prefix_pin_reason: Option<String>,
+    /// Explanation of the most recent expected cache miss.
+    pub prefix_last_miss_reason: Option<String>,
+    /// Undeclared prefix drifts this session (should stay 0 after the fix).
+    pub prefix_drift_count: u64,
+    /// `<context_update>` snapshots appended this session.
+    pub prefix_context_updates: u64,
 
     // === Transcript filtering (#397) ===
     /// Transcript cells the user has collapsed (hidden from view).
@@ -2272,6 +2302,10 @@ impl App {
         self.last_effective_provider_identity = None;
         self.last_auto_route_receipt = None;
         self.last_pinned_prefix_hash = None;
+        self.prefix_pin_reason = None;
+        self.prefix_last_miss_reason = None;
+        self.prefix_drift_count = 0;
+        self.prefix_context_updates = 0;
     }
 
     /// Invalidate facts that were accepted under the previous reasoning
@@ -4449,6 +4483,20 @@ impl App {
             self.fancy_animations,
             self.constrained_frame_rate,
         )
+    }
+
+    /// Resolve the current session name used to identify the terminal tab.
+    #[must_use]
+    pub(crate) fn window_title_prefix(&self) -> Option<&str> {
+        self.session_title
+            .as_deref()
+            .map(str::trim)
+            .filter(|title| !title.is_empty())
+            // The "New Session" placeholder is not an identity worth
+            // advertising in the tab; wait for a real or derived name.
+            .filter(|title| {
+                !title.eq_ignore_ascii_case(crate::session_manager::DEFAULT_SESSION_TITLE)
+            })
     }
 
     /// Bridge the centralized policy into transcript renderers that still

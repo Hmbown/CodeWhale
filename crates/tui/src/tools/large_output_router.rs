@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::io;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +34,51 @@ const CHARS_PER_TOKEN_ESTIMATE: usize = 3;
 /// Workshop variable name where the raw tool output is stored.
 pub const WORKSHOP_LAST_TOOL_RESULT_VAR: &str = "last_tool_result";
 
+static ACTIVE_WORKSHOP: OnceLock<Mutex<WorkshopConfig>> = OnceLock::new();
+
+#[cfg(test)]
+static ACTIVE_WORKSHOP_TEST_SERIAL: OnceLock<Mutex<()>> = OnceLock::new();
+
+#[cfg(test)]
+std::thread_local! {
+    static ACTIVE_WORKSHOP_TEST_SERIAL_HELD: std::cell::Cell<bool> = const {
+        std::cell::Cell::new(false)
+    };
+}
+
+/// Holds every test-side workshop activation behind one process-wide gate.
+/// The thread-local marker lets the owning current-thread test call
+/// `install_active` without trying to acquire its own non-reentrant lock.
+#[cfg(test)]
+pub(crate) struct ActiveWorkshopTestGuard {
+    _serial: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl Drop for ActiveWorkshopTestGuard {
+    fn drop(&mut self) {
+        ACTIVE_WORKSHOP_TEST_SERIAL_HELD.with(|held| held.set(false));
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn active_workshop_test_guard() -> ActiveWorkshopTestGuard {
+    assert!(
+        !ACTIVE_WORKSHOP_TEST_SERIAL_HELD.with(std::cell::Cell::get),
+        "active workshop test guard is not reentrant"
+    );
+    let serial = ACTIVE_WORKSHOP_TEST_SERIAL
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    ACTIVE_WORKSHOP_TEST_SERIAL_HELD.with(|held| held.set(true));
+    ActiveWorkshopTestGuard { _serial: serial }
+}
+
+fn active_workshop_slot() -> &'static Mutex<WorkshopConfig> {
+    ACTIVE_WORKSHOP.get_or_init(|| Mutex::new(WorkshopConfig::default()))
+}
+
 // ── Configuration ─────────────────────────────────────────────────────────────
 
 /// Existing `[workshop]` threshold configuration, retained for compatibility.
@@ -47,9 +93,62 @@ pub struct WorkshopConfig {
     /// `large_output_threshold_tokens`.
     #[serde(default)]
     pub per_tool_thresholds: Option<HashMap<String, usize>>,
+
+    /// Optional model-visible byte budget for a single `read` / `read_file`
+    /// result. Absent keeps the compile-time default (#5367).
+    #[serde(default)]
+    pub read_result_max_bytes: Option<usize>,
+
+    /// Optional model-visible byte budget for a generic tool result after
+    /// spillover. Absent keeps the compile-time default (#5367).
+    #[serde(default)]
+    pub tool_result_max_bytes: Option<usize>,
 }
 
 impl WorkshopConfig {
+    /// Install the process-wide workshop budgets used by read/tool compactors.
+    ///
+    /// The returned immutable receipt is the snapshot written while the
+    /// singleton lock was held. Callers that need evidence of their own
+    /// activation can inspect it without racing a later process-wide update.
+    pub fn install_active(config: Option<&Self>) -> Self {
+        #[cfg(test)]
+        let _test_serial = if ACTIVE_WORKSHOP_TEST_SERIAL_HELD.with(std::cell::Cell::get) {
+            None
+        } else {
+            Some(
+                ACTIVE_WORKSHOP_TEST_SERIAL
+                    .get_or_init(|| Mutex::new(()))
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            )
+        };
+        let snapshot = config.cloned().unwrap_or_default();
+        let mut slot = active_workshop_slot()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *slot = snapshot;
+        slot.clone()
+    }
+
+    /// Optional model-visible read budget, when the user opted in (#5367).
+    #[must_use]
+    pub fn active_read_result_max_bytes() -> Option<usize> {
+        active_workshop_slot()
+            .lock()
+            .ok()
+            .and_then(|cfg| cfg.read_result_max_bytes.filter(|n| *n > 0))
+    }
+
+    /// Optional model-visible tool-result budget, when the user opted in (#5367).
+    #[must_use]
+    pub fn active_tool_result_max_bytes() -> Option<usize> {
+        active_workshop_slot()
+            .lock()
+            .ok()
+            .and_then(|cfg| cfg.tool_result_max_bytes.filter(|n| *n > 0))
+    }
+
     /// Resolve the effective threshold for the given tool name.
     #[must_use]
     pub fn threshold_for(&self, tool_name: &str) -> usize {
@@ -384,6 +483,8 @@ mod tests {
         let config = WorkshopConfig {
             large_output_threshold_tokens: Some(4096),
             per_tool_thresholds: Some(per_tool),
+            read_result_max_bytes: None,
+            tool_result_max_bytes: None,
         };
         let router = LargeOutputRouter::new(config);
         // 100 tokens * 3 = 300 chars → trigger with 400 chars
@@ -398,6 +499,29 @@ mod tests {
             router.route("read_file", &result, false),
             RouteDecision::PassThrough
         );
+    }
+
+    #[test]
+    fn workshop_byte_budgets_raise_floor_only() {
+        let _guard = active_workshop_test_guard();
+        let installed = WorkshopConfig::install_active(Some(&WorkshopConfig {
+            large_output_threshold_tokens: None,
+            per_tool_thresholds: None,
+            read_result_max_bytes: Some(102_400),
+            tool_result_max_bytes: Some(80_000),
+        }));
+        assert_eq!(installed.read_result_max_bytes, Some(102_400));
+        assert_eq!(installed.tool_result_max_bytes, Some(80_000));
+        assert_eq!(
+            WorkshopConfig::active_read_result_max_bytes(),
+            Some(102_400)
+        );
+        assert_eq!(WorkshopConfig::active_tool_result_max_bytes(), Some(80_000));
+        let cleared = WorkshopConfig::install_active(None);
+        assert_eq!(cleared.read_result_max_bytes, None);
+        assert_eq!(cleared.tool_result_max_bytes, None);
+        assert_eq!(WorkshopConfig::active_read_result_max_bytes(), None);
+        assert_eq!(WorkshopConfig::active_tool_result_max_bytes(), None);
     }
 
     #[test]

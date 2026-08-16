@@ -91,6 +91,8 @@ pub(super) struct SetupToolsMcpFacts {
     pub(super) tools_result: String,
     pub(super) plugins_result: String,
     pub(super) hotbar_result: String,
+    /// DeepSeek Harness (dsh) integration state; read-only probe.
+    pub(super) dsh_result: String,
     pub(super) result: String,
     pub(super) overall_status: InventoryStatus,
     pub(super) needs_action: bool,
@@ -107,6 +109,7 @@ impl Default for SetupToolsMcpFacts {
             tools_result: "tools dir not loaded".to_string(),
             plugins_result: "plugins dir not loaded".to_string(),
             hotbar_result: "hotbar source metadata not loaded".to_string(),
+            dsh_result: "DeepSeek Harness not probed".to_string(),
             result: "tools/MCP not loaded".to_string(),
             overall_status: InventoryStatus::Off,
             needs_action: false,
@@ -147,6 +150,7 @@ impl SetupToolsMcpFacts {
         let tools_result = format!("{} — {}", tools.status.as_str(), tools.detail);
         let plugins_result = format!("{} — {}", plugins.status.as_str(), plugins.detail);
         let hotbar_result = format!("{} — {}", hotbar.status.as_str(), hotbar.detail);
+        let dsh_result = dsh_integration_result(config, &app.workspace);
 
         let result = format!(
             "mcp={}, skills={}, tools={}, plugins={}, hotbar_sources={}, overall={}, mode=read_only_safe_probe",
@@ -164,6 +168,7 @@ impl SetupToolsMcpFacts {
             tools_result,
             plugins_result,
             hotbar_result,
+            dsh_result,
             result,
             overall_status: overall,
             needs_action,
@@ -174,8 +179,34 @@ impl SetupToolsMcpFacts {
     }
 }
 
+/// Side-effect-free DeepSeek Harness state for the on-ramp card. Detection
+/// only runs `dsh --version`/`--help` and reads `$DSH_HOME` inventory; it
+/// never writes or reads a credential value.
+fn dsh_integration_result(config: &Config, workspace: &Path) -> String {
+    use crate::integrations::dsh;
+    let paths = match dsh::DshPaths::from_process() {
+        Ok(paths) => paths,
+        Err(error) => return format!("unavailable — {error}"),
+    };
+    let detection = dsh::detect::detect(&dsh::DetectEnv::from_process(), &dsh::ProcessRunner);
+    let identity = dsh::codewhale_route_identity(config, workspace);
+    match dsh::compute_status(
+        &paths,
+        detection,
+        identity,
+        false,
+        dsh::bundle_availability_now(),
+    ) {
+        Ok(report) => dsh::status_line(&report),
+        Err(error) => format!("unavailable — {error}"),
+    }
+}
+
 pub(super) fn on_ramp_text(locale: Locale, facts: &SetupToolsMcpFacts) -> String {
     let base = tr(locale, MessageId::SetupToolsMcpOnRampText);
+    let dsh_row =
+        tr(locale, MessageId::SetupToolsMcpDshRow).replace("{dsh_result}", &facts.dsh_result);
+    let base = format!("{base}\n\n{dsh_row}");
     base.replace("{mcp_result}", &facts.servers_result)
         .replace("{skills_result}", &facts.skills_result)
         .replace("{tools_result}", &facts.tools_result)
@@ -1008,6 +1039,7 @@ mod tests {
             tools_result: "off — missing".into(),
             plugins_result: "off — missing".into(),
             hotbar_result: "off — shared adapters: mcp_actions=0".into(),
+            dsh_result: "detected — dsh 0.1.0-rc.6, not connected".into(),
             result: "overall=off".into(),
             overall_status: InventoryStatus::Off,
             needs_action: false,

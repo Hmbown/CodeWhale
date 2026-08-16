@@ -7,16 +7,16 @@
 //! rejection, and marker machinery is *reused* from there (`fetch_tarball`,
 //! `is_safe_path`, `write_installed_from_v2`, `INSTALLED_FROM_MARKER`), while
 //! the scan/extract step is plugin-shaped (a bundle is rooted at the single
-//! `plugin.toml` in the tree, not at a `SKILL.md`).
+//! supported plugin manifest in the tree, not at a `SKILL.md`).
 //!
 //! # Hard rules
 //!
 //! * Everything is staged in a private `.staging-*` sibling first. The
 //!   destination is only created (via atomic rename) once the bundle clears
 //!   every check — half-installed plugins never appear on disk.
-//! * The fetched tree must contain **exactly one** `plugin.toml`; that file's
-//!   directory becomes the bundle root. Zero (not a plugin) or more than one
-//!   (ambiguous mono-repo) are both rejected.
+//! * The fetched tree must contain **exactly one** plugin bundle root holding
+//!   `plugin.json`, `kimi.plugin.json`, or `plugin.toml`. Zero (not a plugin)
+//!   or more than one (ambiguous mono-repo) are both rejected.
 //! * Path traversal (`..`, absolute paths) and symlinks/hard links inside the
 //!   selected bundle subtree are rejected. Entries outside the subtree are
 //!   never extracted.
@@ -38,7 +38,7 @@
 //! * [`stage`] — copy a local bundle into a private `.staging-*` sibling
 //!   (symlink, file-count, and size rejection; manifest validation).
 //! * [`tarball`] — the two-pass archive reader: scan for the single
-//!   `plugin.toml` under the size cap, then extract just that subtree.
+//!   supported manifest under the size cap, then extract just that subtree.
 //! * [`place`] — atomic rename into `<name>/`, marker write, and the
 //!   containment guards shared with discovery.
 //!
@@ -170,6 +170,9 @@ pub struct InstalledPlugin {
     /// Whole-bundle content hash of the staged tree (pre-marker). Informational;
     /// trust receipts always bind to the discovery-time hash.
     pub content_hash: String,
+    /// Whole-bundle hash after the provenance marker is written. Callers can
+    /// compare this with immediate rediscovery before reporting success.
+    pub installed_content_hash: String,
     /// SHA-256 over the downloaded tarball bytes (empty for local copies).
     /// Used by [`update`] to detect upstream changes without re-extracting.
     pub source_checksum: String,
@@ -197,7 +200,7 @@ pub enum PluginInstallError {
     #[error("bundle is too large; uncompressed total would exceed {limit} bytes")]
     OversizedBundle { limit: u64 },
     #[error(
-        "archive must contain exactly one plugin bundle root (a directory holding plugin.json or plugin.toml); found {0} (install a single plugin bundle, not a mono-repo)"
+        "archive must contain exactly one plugin bundle root (a directory holding plugin.json, kimi.plugin.json, or plugin.toml); found {0} (install a single plugin bundle, not a mono-repo)"
     )]
     PluginTomlRoots(usize),
     #[error("symlinks and hard links are not allowed in plugin bundles")]
@@ -218,7 +221,7 @@ pub enum PluginInstallError {
 ///
 /// Steps: resolve source → (remote only) network-gate and download under the
 /// size cap → stage into a `.staging-*` sibling, enforcing traversal/symlink/
-/// size rules and the single-`plugin.toml` requirement → validate the staged
+/// size rules and the single-manifest-root requirement → validate the staged
 /// manifest → `name_conflict` check → atomic rename into `<name>/` → write
 /// `.installed-from` last.
 ///
@@ -237,9 +240,54 @@ pub async fn install(
     update: bool,
     name_conflict: &dyn Fn(&str) -> Option<String>,
 ) -> Result<PluginInstallOutcome> {
+    install_inner(
+        source,
+        user_plugins_dir,
+        max_size,
+        network,
+        update,
+        name_conflict,
+        None,
+    )
+    .await
+}
+
+/// Install only when the exact bytes copied into staging match a prior
+/// review hash. The comparison happens before atomic placement, so a source
+/// that changes between inspection and copying leaves no installed bundle.
+pub async fn install_with_expected_content_hash(
+    source: PluginInstallSource,
+    user_plugins_dir: &Path,
+    max_size: u64,
+    network: &NetworkPolicy,
+    name_conflict: &dyn Fn(&str) -> Option<String>,
+    expected_content_hash: &str,
+) -> Result<PluginInstallOutcome> {
+    install_inner(
+        source,
+        user_plugins_dir,
+        max_size,
+        network,
+        false,
+        name_conflict,
+        Some(expected_content_hash),
+    )
+    .await
+}
+
+async fn install_inner(
+    source: PluginInstallSource,
+    user_plugins_dir: &Path,
+    max_size: u64,
+    network: &NetworkPolicy,
+    update: bool,
+    name_conflict: &dyn Fn(&str) -> Option<String>,
+    expected_content_hash: Option<&str>,
+) -> Result<PluginInstallOutcome> {
     match &source {
         PluginInstallSource::LocalPath(path) => {
             let staged = stage_local_copy(path, user_plugins_dir, max_size)?;
+            verify_expected_content_hash(&staged, expected_content_hash)?;
             if let Some(conflict) = name_conflict(&staged.name) {
                 let _ = fs::remove_dir_all(&staged.staged_path);
                 bail!(conflict);
@@ -274,14 +322,33 @@ pub async fn install(
                 max_size,
                 update,
                 name_conflict,
+                expected_content_hash,
             )
         }
     }
 }
 
+fn verify_expected_content_hash(
+    staged: &stage::StagedPlugin,
+    expected_content_hash: Option<&str>,
+) -> Result<()> {
+    let Some(expected) = expected_content_hash else {
+        return Ok(());
+    };
+    if staged.content_hash == expected {
+        return Ok(());
+    }
+    let actual = staged.content_hash.clone();
+    let _ = fs::remove_dir_all(&staged.staged_path);
+    bail!(
+        "plugin source changed after review: expected content hash {expected}, copied bytes hash is {actual}; nothing was installed"
+    )
+}
+
 /// Stage and finalize an already-downloaded remote tarball. Kept separate
 /// from [`install`] so [`update`] can compare the checksum of the bytes it
 /// already fetched instead of downloading twice.
+#[allow(clippy::too_many_arguments)]
 fn install_remote_bytes(
     remote: &InstallSource,
     bytes: &[u8],
@@ -290,9 +357,11 @@ fn install_remote_bytes(
     max_size: u64,
     update: bool,
     name_conflict: &dyn Fn(&str) -> Option<String>,
+    expected_content_hash: Option<&str>,
 ) -> Result<PluginInstallOutcome> {
     let checksum = sha256_hex(bytes);
     let staged = stage_tarball(bytes, user_plugins_dir, max_size)?;
+    verify_expected_content_hash(&staged, expected_content_hash)?;
     if let Some(conflict) = name_conflict(&staged.name) {
         let _ = fs::remove_dir_all(&staged.staged_path);
         bail!(conflict);
@@ -360,6 +429,7 @@ pub async fn update(
         max_size,
         true,
         &|_| None,
+        None,
     )?;
     match outcome {
         PluginInstallOutcome::Installed(installed) => Ok(PluginUpdateResult::Updated(installed)),

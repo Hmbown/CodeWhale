@@ -1310,6 +1310,19 @@ impl Renderable for ComposerWidget<'_> {
                     Style::default().fg(palette::TEXT_MUTED),
                 )));
             }
+            // Agent focus chip: the composer names the fork it addresses so
+            // a message never goes to a worker by surprise.
+            if let Some(chip) = crate::tui::agent_focus::composer_chip_text(self.app) {
+                top_border = top_border.title_top(
+                    Line::from(Span::styled(
+                        format!(" {chip} "),
+                        Style::default()
+                            .fg(self.app.ui_theme.accent_action)
+                            .add_modifier(Modifier::BOLD),
+                    ))
+                    .right_aligned(),
+                );
+            }
             top_border.render(area, buf);
 
             let mut bottom_border = Block::default()
@@ -1321,10 +1334,21 @@ impl Renderable for ComposerWidget<'_> {
             }
             bottom_border.render(area, buf);
         } else if area.height >= 2 {
-            let block = Block::default()
+            let mut block = Block::default()
                 .borders(Borders::TOP)
                 .border_style(Style::default().fg(self.app.ui_theme.border))
                 .style(background);
+            if let Some(chip) = crate::tui::agent_focus::composer_chip_text(self.app) {
+                block = block.title_top(
+                    Line::from(Span::styled(
+                        format!(" {chip} "),
+                        Style::default()
+                            .fg(self.app.ui_theme.accent_action)
+                            .add_modifier(Modifier::BOLD),
+                    ))
+                    .right_aligned(),
+                );
+            }
             block.render(area, buf);
         } else {
             Block::default().style(background).render(area, buf);
@@ -1343,7 +1367,7 @@ impl Renderable for ComposerWidget<'_> {
             } else {
                 (
                     composer_empty_hint_text(self.app),
-                    Style::default().fg(palette::TEXT_MUTED).italic(),
+                    Style::default().fg(self.app.ui_theme.text_soft),
                 )
             };
             input_lines.push(Line::from(vec![
@@ -3252,12 +3276,14 @@ fn placeholder_visual_lines_for(placeholder: &str, content_width: usize) -> usiz
 }
 
 pub(crate) fn composer_empty_hint_text(app: &App) -> Cow<'static, str> {
-    if app.is_history_search_active() {
+    if let Some(placeholder) = crate::tui::agent_focus::composer_placeholder(app) {
+        Cow::Owned(placeholder)
+    } else if app.is_history_search_active() {
         app.tr(crate::localization::MessageId::HistorySearchPlaceholder)
     } else if app.mode == crate::tui::app::AppMode::Operate {
         // Operate is goal-driven; the empty composer says what to type, not
         // orchestration jargon a first-run user has no model for.
-        Cow::Borrowed("Describe the goal — Codewhale keeps working until it's done")
+        app.tr(crate::localization::MessageId::ComposerOperatePlaceholder)
     } else {
         app.tr(crate::localization::MessageId::ComposerPlaceholder)
     }
@@ -4147,7 +4173,7 @@ mod tests {
         wrap_input_lines, wrap_input_lines_for_mouse, wrap_text,
     };
     use crate::config::{ApiProvider, Config};
-    use crate::localization::Locale;
+    use crate::localization::{Locale, MessageId, tr};
     use crate::palette;
     use crate::tui::active_cell::ActiveCell;
     use crate::tui::app::{
@@ -4163,7 +4189,7 @@ mod tests {
         backend::TestBackend,
         buffer::Buffer,
         layout::Rect,
-        style::{Color, Style},
+        style::{Color, Modifier, Style},
         text::{Line, Span},
     };
     use std::{path::PathBuf, time::Instant};
@@ -5801,6 +5827,17 @@ mod tests {
         let rendered = buffer_text(&buf, area);
 
         assert_eq!(buf[(cursor_x, cursor_y)].symbol(), "W");
+        assert_eq!(
+            buf[(cursor_x, cursor_y)].fg,
+            app.ui_theme.text_soft,
+            "the idle prompt should use the readable soft-text role"
+        );
+        assert!(
+            !buf[(cursor_x, cursor_y)]
+                .modifier
+                .contains(Modifier::ITALIC),
+            "the idle prompt should remain upright at distance"
+        );
         assert!(
             rendered.contains(COMPOSER_PLACEHOLDER),
             "placeholder hint should render on the prompt row: {rendered}"
@@ -6068,6 +6105,17 @@ mod tests {
             composer_empty_hint_text(&app),
             "Describe the goal — Codewhale keeps working until it's done"
         );
+
+        app.ui_locale = Locale::Es419;
+        assert_eq!(
+            composer_empty_hint_text(&app),
+            "Describe el objetivo — Codewhale seguirá trabajando hasta terminarlo"
+        );
+        assert_ne!(
+            composer_empty_hint_text(&app),
+            tr(Locale::En, MessageId::ComposerOperatePlaceholder),
+            "Operate mode must use the active non-English locale"
+        );
     }
 
     #[test]
@@ -6272,7 +6320,8 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(rendered.contains("codewhale · /tmp/codewhale-test-workspace · no git · mcp 2"));
+        assert!(rendered.contains("Codewhale"));
+        assert!(rendered.contains("/tmp/codewhale-test-workspace · no git · mcp 2"));
         assert!(rendered.contains("Fleet ready  /fleet setup"));
         assert!(
             !rendered.contains("Fleet setup  /fleet setup"),
@@ -6281,6 +6330,36 @@ mod tests {
         assert!(rendered.contains("/help or Ctrl+K"));
         assert!(!rendered.contains("Model  /model"));
         assert!(!rendered.contains("Rules  /constitution"));
+    }
+
+    #[test]
+    fn empty_state_uses_readable_brand_and_command_hierarchy() {
+        let mut app = create_test_app();
+        app.onboarding_needs_api_key = false;
+        let lines = build_empty_state_lines(&app, Rect::new(0, 0, 100, 20));
+        let span_for = |needle: &str| {
+            lines
+                .iter()
+                .flat_map(|line| line.spans.iter())
+                .find(|span| span.content.contains(needle))
+                .unwrap_or_else(|| panic!("missing empty-state span {needle:?}"))
+        };
+
+        let brand = span_for("Codewhale");
+        assert_eq!(brand.style.fg, Some(app.ui_theme.text_body));
+        assert!(brand.style.add_modifier.contains(Modifier::BOLD));
+
+        let fleet_label = span_for("Fleet ready");
+        assert_eq!(fleet_label.style.fg, Some(app.ui_theme.text_soft));
+        assert!(!fleet_label.style.add_modifier.contains(Modifier::BOLD));
+
+        let fleet_command = span_for("/fleet setup");
+        assert_eq!(fleet_command.style.fg, Some(app.ui_theme.accent_primary));
+        assert!(fleet_command.style.add_modifier.contains(Modifier::BOLD));
+
+        let help_command = span_for("/help or Ctrl+K");
+        assert_eq!(help_command.style.fg, Some(app.ui_theme.accent_primary));
+        assert!(help_command.style.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]
@@ -6316,7 +6395,7 @@ mod tests {
                     .collect::<String>()
             })
             .collect::<Vec<_>>();
-        let context = "codewhale · /tmp/codewhale-test-workspace · no git · mcp 0";
+        let context = "/tmp/codewhale-test-workspace · no git · mcp 0";
         let context_line = text_lines
             .iter()
             .find(|line| line.trim_start() == context)
@@ -6343,7 +6422,7 @@ mod tests {
 
         let area = Rect::new(0, 0, 100, 20);
         let base = app.ui_theme.surface_bg;
-        let context = format!("codewhale · {} · no git · mcp 0", app.workspace.display());
+        let context = format!("{} · no git · mcp 0", app.workspace.display());
         let mut buf = Buffer::empty(area);
         // Sample one known point in the live motion path. The old test raced
         // the scheduler between App construction and rendering, which could

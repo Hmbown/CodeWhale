@@ -8,7 +8,7 @@ If you just want the short version, see the
 [main README](../README.md#install) or
 [简体中文 README](../README.zh-CN.md#安装).
 
-This branch describes the **v0.9.7 source candidate**. Install commands that use
+This branch describes the **v0.9.8 source candidate**. Install commands that use
 `latest` resolve to the latest published package or GitHub Release, which may
 trail the source candidate. A candidate is not a published install until the
 matching package, tag, checksums, and release assets exist.
@@ -28,7 +28,7 @@ verifies them against `codewhale-artifacts-sha256.txt`, installs to
 ## 1. Supported platforms
 
 Published Codewhale releases ship matched `codewhale` and `codew` prebuilt binaries for their supported platform/architecture
-combinations. The table below is the intended v0.9.7 candidate matrix;
+combinations. The table below is the intended v0.9.8 candidate matrix;
 Android/Termux is preview pending real-device QA. Linux ARM64 is available from
 v0.8.8 onward. Linux RISC-V prebuilts are temporarily paused because the locked
 `rquickjs-sys` dependency does not ship `riscv64gc-unknown-linux-gnu` bindings.
@@ -52,7 +52,7 @@ v0.8.8 onward. Linux RISC-V prebuilts are temporarily paused because the locked
   [Build from source](#7-build-from-source) below.
 ³ RISC-V source builds currently need upstream `rquickjs-sys` RISC-V bindings or
   a bindgen-enabled dependency build.
-⁴ The v0.9.7 source-candidate npm wrapper recognizes Android arm64 and resolves
+⁴ The v0.9.8 source-candidate npm wrapper recognizes Android arm64 and resolves
   the matching `codewhale` and `codew` Android assets. npm
   installation works only for a package version whose GitHub Release publishes
   those matching assets. The Android/Termux path remains preview-only until the
@@ -402,19 +402,20 @@ Install into a NixOS module:
 
 ---
 
-## Homebrew (legacy tap)
+## Homebrew
 
-Homebrew currently ships only the legacy `deepseek-tui` tap, kept for
-compatibility while the formula is renamed to `codewhale`. It installs the
-same current-release binaries:
+The formula is `codewhale`. The tap GitHub repo is still
+`Hmbown/homebrew-deepseek-tui` until it is renamed; `brew tap Hmbown/deepseek-tui`
+keeps working either way.
 
 ```bash
 brew tap Hmbown/deepseek-tui
-brew install deepseek-tui
+brew install codewhale
 ```
 
-Update with `brew upgrade deepseek-tui`. There is no `codewhale` formula yet;
-once the rename lands, this section will switch to it.
+Update with `brew upgrade codewhale`. Existing Cellar installs under the
+legacy `deepseek-tui` formula name can still run `brew upgrade deepseek-tui`
+for one overlap release; new installs should use `codewhale`.
 
 ---
 

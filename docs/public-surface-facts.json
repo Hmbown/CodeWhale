@@ -20,8 +20,8 @@
     ]
   },
   "sourceCandidate": {
-    "version": "0.9.7",
-    "providerCount": 42,
+    "version": "0.9.8",
+    "providerCount": 45,
     "toolCount": 74,
     "sandboxBackends": [
       "seatbelt (macOS, when available)",
@@ -221,11 +221,10 @@
       "web/lib/release-credits.ts"
     ],
     "requiredCandidateCredits": [
-      "@XhesicaFrost",
-      "@h3c-hexin",
-      "@XiaoHuo888-hue",
-      "@USTHzhanglu",
-      "@Lstarsky0"
+      "@EvanProgramming",
+      "@Lstarsky0",
+      "@mvanhorn",
+      "@buiducnhat"
     ]
   },
   "screenshot": {

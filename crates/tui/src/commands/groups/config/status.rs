@@ -84,6 +84,22 @@ fn format_status(app: &App) -> String {
             )
         };
     push_row(&mut out, "Session cache:", &session_cache);
+    // The full, untrimmed session metrics strip (the footer sheds groups to
+    // fit; here every group that has evidence is printed).
+    let metrics = crate::tui::session_metrics::full_text(
+        crate::tui::session_metrics::snapshot_from_app(app),
+        app.ui_locale,
+        crate::tui::color_compat::ascii_safe_enabled(),
+    );
+    let _ = writeln!(
+        out,
+        "  {}",
+        crate::localization::tr(
+            app.ui_locale,
+            crate::localization::MessageId::SessionMetricsStatusLine
+        )
+        .replace("{metrics}", &metrics)
+    );
     push_row(
         &mut out,
         "Session output:",

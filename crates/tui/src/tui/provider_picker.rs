@@ -66,6 +66,15 @@ use std::sync::OnceLock;
 const DS4_PROVIDER_ID: &str = "ds4";
 const DS4_BASE_URL: &str = "http://127.0.0.1:8000/v1";
 const DS4_DEFAULT_MODEL: &str = "deepseek-v4-flash";
+const LM_STUDIO_PROVIDER_ID: &str = "lm_studio";
+const LM_STUDIO_BASE_URL: &str = "http://127.0.0.1:1234/v1";
+/// SenseTime SenseNova OpenAI-compatible host (#5350). Custom form only —
+/// not a first-class provider. Agnes has no published URL, so it has no
+/// preset. OpenCode Zen/Go stay first-class rows.
+const SENSENOVA_PROVIDER_ID: &str = "sensenova";
+const SENSENOVA_BASE_URL: &str = "https://token.sensenova.cn/v1";
+const SENSENOVA_DEFAULT_MODEL: &str = "deepseek-v4-flash";
+const SENSENOVA_API_KEY_ENV: &str = "SENSENOVA_API_KEY";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stage {
@@ -149,12 +158,14 @@ enum CustomProviderField {
 }
 
 /// Which subset of `rows` the list stage shows (#3830). `Configured` is the
-/// default; `A` toggles to `Catalog` to add a new provider or look at one
-/// that hasn't been set up yet.
+/// normal `/provider` default; first-run onboarding opens `Local` so a user
+/// can start with Ollama, SGLang, or vLLM without walking through cloud-key
+/// setup. `A` still exposes the full catalog and `L` returns to local routes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProviderListView {
     Configured,
     Catalog,
+    Local,
 }
 
 pub struct ProviderPickerView {
@@ -516,6 +527,7 @@ impl ProviderDashboardRow {
         let no_auth = crate::config::auth_mode_disables_api_key(auth_mode.as_deref());
         let api_key_required = crate::config::auth_mode_requires_api_key(auth_mode.as_deref());
         let official_endpoint = !config.provider_uses_custom_endpoint(provider);
+        let auth_base_url = config.base_url_for_route(provider);
         let xai_oauth_ready = provider == ApiProvider::Xai
             && official_endpoint
             && crate::xai_oauth::credentials_valid(config);
@@ -524,6 +536,7 @@ impl ProviderDashboardRow {
         } else {
             auth_status_for(
                 provider,
+                &auth_base_url,
                 has_key,
                 configured,
                 no_auth,
@@ -688,6 +701,11 @@ impl ProviderDashboardRow {
         let resolved_pricing =
             if matches!(auth_status, ProviderAuthStatus::ImportedTokenUnavailable) {
                 usage_meter
+            } else if provider == ApiProvider::Ollama
+                && !crate::config::provider_route_is_keyless_self_hosted(provider, &base_url)
+                && resolved_pricing == "cost: local"
+            {
+                "cost: unknown".to_string()
             } else {
                 resolved_pricing
             };
@@ -767,21 +785,28 @@ impl ProviderDashboardRow {
                 format!("{} | {}", self.readiness.label(), self.auth_status.label())
             }
             ProviderListView::Catalog => self.compact_hint(),
+            ProviderListView::Local => format!(
+                "local · no cloud key · {} · {}",
+                compact_base_url(&self.base_url),
+                self.default_route.logical_model
+            ),
         }
     }
 
     fn compact_hint(&self) -> String {
         // Self-hosted providers carry a local/private posture; surface it next
         // to the base URL so the row reads correctly without a key (#3083).
-        let self_hosted = if self.provider.is_self_hosted()
-            || matches!(
-                self.auth_status,
-                ProviderAuthStatus::Local | ProviderAuthStatus::Optional
-            ) {
-            " (self-hosted)"
-        } else {
-            ""
-        };
+        let self_hosted =
+            if crate::config::provider_route_is_keyless_self_hosted(self.provider, &self.base_url)
+                || matches!(
+                    self.auth_status,
+                    ProviderAuthStatus::Local | ProviderAuthStatus::Optional
+                )
+            {
+                " (self-hosted)"
+            } else {
+                ""
+            };
         let request_concurrency = self
             .request_concurrency
             .label()
@@ -1159,8 +1184,10 @@ fn default_reasoning_stream_visibility(provider: ApiProvider) -> ProviderReasoni
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn auth_status_for(
     provider: ApiProvider,
+    base_url: &str,
     has_key: bool,
     configured: Option<&crate::config::ProviderConfig>,
     no_auth: bool,
@@ -1171,7 +1198,7 @@ fn auth_status_for(
     if no_auth {
         return ProviderAuthStatus::NoAuth;
     }
-    if provider.is_self_hosted() {
+    if crate::config::provider_route_is_keyless_self_hosted(provider, base_url) {
         if api_key_required {
             return if has_key {
                 ProviderAuthStatus::Configured
@@ -1689,7 +1716,11 @@ impl ProviderPickerView {
         key_entry_for_missing_auth: bool,
     ) -> Self {
         let mut picker = Self::new_with_runtime_status(active, config, runtime_status);
-        picker.view = ProviderListView::Catalog;
+        picker.view = if !key_entry_for_missing_auth && target.is_none() {
+            ProviderListView::Local
+        } else {
+            ProviderListView::Catalog
+        };
         picker.setup_mode = true;
         if let Some(target) = target
             && let Some(idx) = picker.rows.iter().position(|row| row.provider == target)
@@ -1698,6 +1729,16 @@ impl ProviderPickerView {
             if key_entry_for_missing_auth && !picker.selected_has_key() {
                 picker.begin_setup();
             }
+        } else if picker.view == ProviderListView::Local
+            && let Some(idx) = picker
+                .rows
+                .iter()
+                .position(|row| row.provider == ApiProvider::Ollama)
+        {
+            // Ollama is the broadest beginner path and uses the standard local
+            // OpenAI-compatible endpoint. This only changes the first-run
+            // highlight; nothing is persisted until the user presses Enter.
+            picker.selected_idx = idx;
         }
         picker
     }
@@ -1735,6 +1776,7 @@ impl ProviderPickerView {
         match self.view {
             ProviderListView::Catalog => true,
             ProviderListView::Configured => self.rows[idx].is_configured,
+            ProviderListView::Local => self.rows[idx].provider.is_self_hosted(),
         }
     }
 
@@ -1753,10 +1795,27 @@ impl ProviderPickerView {
         self.view = match self.view {
             ProviderListView::Configured => ProviderListView::Catalog,
             ProviderListView::Catalog => ProviderListView::Configured,
+            ProviderListView::Local => ProviderListView::Catalog,
         };
         if !self.rows.is_empty() && !self.row_visible(self.selected_idx) {
             self.selected_idx = (0..self.rows.len())
                 .find(|idx| self.row_visible(*idx))
+                .unwrap_or(0);
+        }
+    }
+
+    /// Show only the built-in keyless/self-hosted routes. Kept separate from
+    /// `Configured`: merely supporting a local route does not mean the user
+    /// configured it, while first-run should still make those routes obvious.
+    fn show_local_routes(&mut self) {
+        self.view = ProviderListView::Local;
+        self.query.clear();
+        if !self.rows.is_empty() && !self.row_visible(self.selected_idx) {
+            self.selected_idx = self
+                .rows
+                .iter()
+                .position(|row| row.provider == ApiProvider::Ollama)
+                .or_else(|| (0..self.rows.len()).find(|idx| self.row_visible(*idx)))
                 .unwrap_or(0);
         }
     }
@@ -2101,6 +2160,26 @@ impl ProviderPickerView {
         self.custom_provider_api_key_env.clear();
     }
 
+    fn enter_lm_studio_form(&mut self) {
+        self.stage = Stage::CustomForm;
+        self.custom_provider_field = CustomProviderField::Model;
+        self.custom_provider_id = LM_STUDIO_PROVIDER_ID.to_string();
+        self.custom_provider_base_url = LM_STUDIO_BASE_URL.to_string();
+        // LM Studio model identifiers depend on what the user has loaded, so
+        // leave the model editable instead of guessing a stale default.
+        self.custom_provider_model.clear();
+        self.custom_provider_api_key_env.clear();
+    }
+
+    fn enter_sensenova_form(&mut self) {
+        self.stage = Stage::CustomForm;
+        self.custom_provider_field = CustomProviderField::ApiKeyEnv;
+        self.custom_provider_id = SENSENOVA_PROVIDER_ID.to_string();
+        self.custom_provider_base_url = SENSENOVA_BASE_URL.to_string();
+        self.custom_provider_model = SENSENOVA_DEFAULT_MODEL.to_string();
+        self.custom_provider_api_key_env = SENSENOVA_API_KEY_ENV.to_string();
+    }
+
     fn custom_form_field_mut(&mut self) -> &mut String {
         match self.custom_provider_field {
             CustomProviderField::Name => &mut self.custom_provider_id,
@@ -2211,12 +2290,14 @@ impl ProviderPickerView {
             (true, ProviderListView::Catalog) => {
                 format!(" Provider setup · all{} ", catalog_freshness_title_suffix())
             }
+            (true, ProviderListView::Local) => " Local models · no cloud key ".to_string(),
             (false, ProviderListView::Configured) => {
                 format!(" Provider{} ", catalog_freshness_title_suffix())
             }
             (false, ProviderListView::Catalog) => {
                 format!(" Provider · all{} ", catalog_freshness_title_suffix())
             }
+            (false, ProviderListView::Local) => " Provider · local only ".to_string(),
         };
         let outer = Block::default()
             .title(Line::from(Span::styled(
@@ -2234,6 +2315,7 @@ impl ProviderPickerView {
         let view_action = match self.view {
             ProviderListView::Configured => self.tr(MessageId::PickerActionBrowseAll),
             ProviderListView::Catalog => self.tr(MessageId::PickerActionConfigured),
+            ProviderListView::Local => self.tr(MessageId::PickerActionBrowseAll),
         };
         let search_active = !self.query.trim().is_empty();
         // The action footer moves into the body so it wraps instead of clipping
@@ -2256,8 +2338,11 @@ impl ProviderPickerView {
                     ActionHint::new("↑↓", self.tr(MessageId::PickerActionMove)),
                     ActionHint::new("Enter", enter_action),
                     ActionHint::new("A", view_action.clone()),
+                    ActionHint::new("L", "local only"),
+                    ActionHint::new("I", "LM Studio"),
                     ActionHint::new("C", self.tr(MessageId::PickerActionCustom)),
                     ActionHint::new("D", "DS4"),
+                    ActionHint::new("S", "SenseNova"),
                 ],
             )
         } else {
@@ -2269,8 +2354,11 @@ impl ProviderPickerView {
                     ActionHint::new("a-z", self.tr(MessageId::PickerActionJump)),
                     ActionHint::new("Enter", enter_action),
                     ActionHint::new("A", view_action),
+                    ActionHint::new("L", "local only"),
+                    ActionHint::new("I", "LM Studio"),
                     ActionHint::new("C", self.tr(MessageId::PickerActionCustom)),
                     ActionHint::new("D", "DS4"),
+                    ActionHint::new("S", "SenseNova"),
                     ActionHint::new("R", self.tr(MessageId::PickerActionEditKey)),
                     ActionHint::new("X", self.tr(MessageId::ProviderExternalActionRevoke)),
                     ActionHint::new("M", self.tr(MessageId::PickerActionModels)),
@@ -3159,7 +3247,7 @@ impl ProviderPickerView {
             .split(content);
 
         Paragraph::new(Line::from(Span::styled(
-            "OpenAI-compatible endpoint. Store an env var name here, not a raw key.",
+            "OpenAI-compatible endpoint. Store an env var name, not a raw key. OpenCode Zen/Go are first-class rows. SenseNova: S. Agnes has no published URL.",
             Style::default().fg(palette::TEXT_MUTED),
         )))
         .render(layout[0], buf);
@@ -3397,6 +3485,22 @@ impl ModalView for ProviderPickerView {
                 KeyCode::Char(c)
                     if key.modifiers.is_empty()
                         && self.query.is_empty()
+                        && c.eq_ignore_ascii_case(&'l') =>
+                {
+                    self.show_local_routes();
+                    ViewAction::None
+                }
+                KeyCode::Char(c)
+                    if key.modifiers.is_empty()
+                        && self.query.is_empty()
+                        && c.eq_ignore_ascii_case(&'i') =>
+                {
+                    self.enter_lm_studio_form();
+                    ViewAction::None
+                }
+                KeyCode::Char(c)
+                    if key.modifiers.is_empty()
+                        && self.query.is_empty()
                         && c.eq_ignore_ascii_case(&'c') =>
                 {
                     self.enter_custom_form();
@@ -3408,6 +3512,14 @@ impl ModalView for ProviderPickerView {
                         && c.eq_ignore_ascii_case(&'d') =>
                 {
                     self.enter_ds4_form();
+                    ViewAction::None
+                }
+                KeyCode::Char(c)
+                    if key.modifiers.is_empty()
+                        && self.query.is_empty()
+                        && c.eq_ignore_ascii_case(&'s') =>
+                {
+                    self.enter_sensenova_form();
                     ViewAction::None
                 }
                 // Jump to the `/model` picker pre-filtered to this provider
@@ -4500,6 +4612,63 @@ mod tests {
     }
 
     #[test]
+    fn ollama_cloud_row_requires_credentials_and_is_not_labeled_local() {
+        let _env_lock = crate::test_support::lock_test_env();
+        let temp = tempfile::tempdir().expect("isolated credential home");
+        let _home = EnvVarGuard::set("CODEWHALE_HOME", temp.path());
+        let _backend = EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+        let _ollama_cloud_key = EnvVarGuard::remove("OLLAMA_CLOUD_API_KEY");
+        let _ollama_key = EnvVarGuard::remove("OLLAMA_API_KEY");
+        let _cli_source = EnvVarGuard::remove("DEEPSEEK_API_KEY_SOURCE");
+        let _cli_key = EnvVarGuard::remove("CODEWHALE_CLI_API_KEY");
+
+        let mut config = Config {
+            provider: Some("ollama".to_string()),
+            providers: Some(crate::config::ProvidersConfig {
+                ollama: crate::config::ProviderConfig {
+                    base_url: Some(codewhale_config::provider::OLLAMA_CLOUD_BASE_URL.to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        assert_eq!(config.api_provider(), ApiProvider::OllamaCloud);
+        let missing = ProviderDashboardRow::from_config(
+            ApiProvider::OllamaCloud,
+            ApiProvider::OllamaCloud,
+            &config,
+        );
+        assert_eq!(missing.auth_status, ProviderAuthStatus::Missing);
+        assert_eq!(missing.readiness, ResolvedProviderReadiness::MissingKey);
+        assert_eq!(missing.usage_meter, "cost: unknown");
+        assert!(!missing.compact_hint().contains("(self-hosted)"));
+        assert!(
+            missing
+                .messages
+                .iter()
+                .any(|message| message.contains("OLLAMA_API_KEY")),
+            "missing Cloud key guidance: {:?}",
+            missing.messages
+        );
+
+        config.providers.as_mut().expect("providers").ollama.api_key =
+            Some("ollama-cloud-key".to_string());
+        let configured = ProviderDashboardRow::from_config(
+            ApiProvider::OllamaCloud,
+            ApiProvider::OllamaCloud,
+            &config,
+        );
+        assert_eq!(configured.auth_status, ProviderAuthStatus::Configured);
+        assert_eq!(
+            configured.readiness,
+            ResolvedProviderReadiness::SavedUnchecked
+        );
+        assert!(!configured.compact_hint().contains("(self-hosted)"));
+    }
+
+    #[test]
     fn deepseek_cn_row_uses_shared_readiness_and_strict_model_validation() {
         let _lock = crate::test_support::lock_test_env();
         let _key = crate::test_support::EnvVarGuard::remove("DEEPSEEK_API_KEY");
@@ -5366,6 +5535,66 @@ mod tests {
     }
 
     #[test]
+    fn sensenova_preset_fills_published_openai_host() {
+        let config = Config::default();
+        let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+        assert!(matches!(
+            picker.handle_key(key(KeyCode::Char('s'))),
+            ViewAction::None
+        ));
+        assert_eq!(picker.stage, Stage::CustomForm);
+        assert_eq!(picker.custom_provider_id, "sensenova");
+        assert_eq!(
+            picker.custom_provider_base_url,
+            "https://token.sensenova.cn/v1"
+        );
+        assert_eq!(picker.custom_provider_model, "deepseek-v4-flash");
+        assert_eq!(picker.custom_provider_api_key_env, "SENSENOVA_API_KEY");
+    }
+
+    #[test]
+    fn lm_studio_preset_is_loopback_keyless_and_requests_the_loaded_model() {
+        let config = Config::default();
+        let mut picker =
+            ProviderPickerView::new_for_onboarding(ApiProvider::Deepseek, None, &config, None);
+
+        assert_eq!(picker.view, ProviderListView::Local);
+        assert_eq!(picker.selected_provider(), ApiProvider::Ollama);
+        let rendered = render_text(&picker, 100, 28);
+        assert!(rendered.contains("I LM Studio"), "{rendered}");
+        assert!(matches!(
+            picker.handle_key(key(KeyCode::Char('i'))),
+            ViewAction::None
+        ));
+        assert_eq!(picker.stage, Stage::CustomForm);
+        assert_eq!(picker.custom_provider_field, CustomProviderField::Model);
+        assert_eq!(picker.custom_provider_id, "lm_studio");
+        assert_eq!(picker.custom_provider_base_url, "http://127.0.0.1:1234/v1");
+        assert!(picker.custom_provider_model.is_empty());
+        assert!(picker.custom_provider_api_key_env.is_empty());
+
+        for ch in "local-code-model".chars() {
+            picker.handle_key(key(KeyCode::Char(ch)));
+        }
+        picker.handle_key(key(KeyCode::Enter));
+        let action = picker.handle_key(key(KeyCode::Enter));
+        match action {
+            ViewAction::EmitAndClose(ViewEvent::ProviderPickerCustomProviderSubmitted {
+                provider_id,
+                base_url,
+                model,
+                api_key_env,
+            }) => {
+                assert_eq!(provider_id, "lm_studio");
+                assert_eq!(base_url, "http://127.0.0.1:1234/v1");
+                assert_eq!(model.as_deref(), Some("local-code-model"));
+                assert_eq!(api_key_env, None);
+            }
+            other => panic!("expected LM Studio custom-provider submit event, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn ds4_preset_is_keyless_and_ready_to_save() {
         let mut picker =
             ProviderPickerView::new_for_ds4_setup(ApiProvider::Deepseek, &Config::default(), None);
@@ -5835,6 +6064,74 @@ mod tests {
             picker.visible_row_count(),
             picker.rows.len(),
             "onboarding must show the whole provider catalog"
+        );
+    }
+
+    #[test]
+    fn first_run_onboarding_starts_with_local_models_and_no_cloud_rows() {
+        let _lock = crate::test_support::lock_test_env();
+        let config = Config::default();
+        let mut picker =
+            ProviderPickerView::new_for_onboarding(ApiProvider::Deepseek, None, &config, None);
+
+        assert_eq!(picker.stage, Stage::List);
+        assert_eq!(picker.view, ProviderListView::Local);
+        assert_eq!(picker.selected_provider(), ApiProvider::Ollama);
+
+        let visible = picker
+            .filtered_rows()
+            .into_iter()
+            .map(|(_, row)| row.provider)
+            .collect::<Vec<_>>();
+        assert!(!visible.is_empty());
+        assert!(visible.iter().all(|provider| provider.is_self_hosted()));
+        assert!(visible.contains(&ApiProvider::Ollama));
+        assert!(visible.contains(&ApiProvider::Sglang));
+        assert!(visible.contains(&ApiProvider::Vllm));
+        assert!(!visible.contains(&ApiProvider::OllamaCloud));
+        assert!(!visible.contains(&ApiProvider::Deepseek));
+
+        let rendered = render_text(&picker, 100, 28);
+        assert!(
+            rendered.contains("Local models · no cloud key"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("local · no cloud key"), "{rendered}");
+
+        match picker.handle_key(key(KeyCode::Enter)) {
+            ViewAction::EmitAndClose(ViewEvent::ProviderPickerApplied {
+                provider,
+                provider_id,
+            }) => {
+                assert_eq!(provider, ApiProvider::Ollama);
+                assert_eq!(provider_id, None);
+            }
+            other => panic!("expected keyless local provider apply, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn local_shortcut_filters_cloud_rows_from_the_catalog() {
+        let config = Config::default();
+        let mut picker = ProviderPickerView::new_for_onboarding(
+            ApiProvider::Deepseek,
+            Some(ApiProvider::Deepseek),
+            &config,
+            None,
+        );
+        assert_eq!(picker.view, ProviderListView::Catalog);
+
+        assert!(matches!(
+            picker.handle_key(key(KeyCode::Char('l'))),
+            ViewAction::None
+        ));
+        assert_eq!(picker.view, ProviderListView::Local);
+        assert_eq!(picker.selected_provider(), ApiProvider::Ollama);
+        assert!(
+            picker
+                .filtered_rows()
+                .into_iter()
+                .all(|(_, row)| row.provider.is_self_hosted())
         );
     }
 

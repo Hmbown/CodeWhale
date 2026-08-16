@@ -48,7 +48,7 @@ export const GETTING_STARTED_STEPS: GuideStep[] = [
     title: { en: "Open a first session — no key needed", zh: "打开第一个会话——无需密钥" },
     body: {
       en: "Launches without any API key: short constitution-first setup, then the full interface. Explore in Plan mode — always read-only. Model replies need a provider; that's the next step.",
-      zh: "无需任何 API 密钥即可启动：简短的宪法优先设置，然后进入完整界面。在 Plan 模式中探索——始终只读。模型回复需要提供商；这正是下一步。",
+      zh: "无需任何 API 密钥即可启动：简短的宪章优先设置，然后进入完整界面。在 Plan 模式中探索——始终只读。模型回复需要提供商；这正是下一步。",
     },
     commands: ["codewhale"],
     link: {

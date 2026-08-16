@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="dark">
-    <meta name="theme-color" content="#03070d">
+    <meta name="theme-color" content="#0e1729">
     <title>Codewhale</title>
     <link rel="icon" href="data:,">
     <link rel="stylesheet" href="/assets/codewhale-web.css">
@@ -12,24 +12,22 @@
   </head>
   <body>
     <div class="shell" id="app-shell">
-      <aside class="rail" id="thread-rail" aria-label="Threads">
+      <aside class="rail" id="thread-rail" aria-label="Threads" tabindex="-1">
         <div class="rail-brand">
-          <div class="brand-mark" aria-hidden="true">CW</div>
+          <img class="brand-mark" src="/assets/codewhale-192.png" alt="">
           <div>
-            <p class="eyebrow">Shannon Labs</p>
             <p class="brand-name">Codewhale</p>
+            <p class="brand-context">Local runtime</p>
           </div>
-          <button class="icon-button rail-close" id="rail-close" type="button" aria-label="Close threads">×</button>
+          <button class="quiet-button rail-close" id="rail-close" type="button" aria-label="Close threads">Close</button>
         </div>
 
         <button class="primary-button new-thread" id="new-thread" type="button">
-          <span aria-hidden="true">＋</span>
           New thread
         </button>
 
         <label class="search-field">
           <span class="sr-only">Search threads</span>
-          <span aria-hidden="true">⌕</span>
           <input id="thread-search" type="search" autocomplete="off" placeholder="Search threads">
         </label>
 
@@ -58,12 +56,12 @@
         </div>
       </aside>
 
-      <button class="rail-scrim" id="rail-scrim" type="button" aria-label="Close threads"></button>
+      <button class="rail-scrim" id="rail-scrim" type="button" aria-label="Close threads" tabindex="-1" hidden></button>
 
       <main class="session">
         <header class="session-header">
           <div class="session-heading">
-            <button class="icon-button rail-open" id="rail-open" type="button" aria-label="Open threads">☰</button>
+            <button class="quiet-button rail-open" id="rail-open" type="button" aria-controls="thread-rail" aria-expanded="false">Threads</button>
             <div class="title-stack">
               <p class="eyebrow" id="session-kicker">Local runtime</p>
               <h1 id="session-title">Choose a thread</h1>
@@ -80,15 +78,15 @@
 
         <section class="session-peek" id="session-peek" aria-label="Saved session preview" hidden></section>
 
-        <section class="transcript" id="transcript" aria-label="Conversation" aria-live="polite">
+        <section class="transcript" id="transcript" role="log" aria-label="Conversation" aria-live="polite" aria-relevant="additions" aria-atomic="false">
           <div class="empty-state">
-            <div class="empty-orbit" aria-hidden="true">◌</div>
+            <img class="empty-mark" src="/assets/codewhale-192.png" alt="">
             <h2>Your local agent, in the browser.</h2>
             <p>Create a thread or choose one from the rail. This client uses the same Runtime as the terminal.</p>
           </div>
         </section>
 
-        <section class="attention" id="attention" aria-label="Items requiring attention" hidden></section>
+        <section class="attention" id="attention" role="region" aria-label="Items requiring attention" aria-live="assertive" aria-relevant="additions" aria-atomic="false" hidden></section>
 
         <footer class="composer-wrap">
           <form class="composer" id="composer">

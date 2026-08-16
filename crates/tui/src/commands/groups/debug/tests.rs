@@ -1748,8 +1748,12 @@ fn cache_stats_warns_on_prefix_change() {
     app.prefix_stability_pct = Some(67);
     app.prefix_checks_total = 3;
     app.prefix_change_count = 1;
+    // The one change was an undeclared drift — the case worth warning about.
+    app.prefix_drift_count = 1;
+    app.prefix_pin_reason = Some("initial".to_string());
+    app.prefix_last_miss_reason = Some("drift:sys".to_string());
     app.last_prefix_change_desc =
-        Some("prefix cache invalidated: system prompt changed".to_string());
+        Some("drift — prefix cache invalidated: system prompt changed".to_string());
     app.last_pinned_prefix_hash =
         Some("deadbeef0000deadbeef0000deadbeef0000deadbeef0000deadbeef0000deadbeef".to_string());
 
@@ -1757,10 +1761,35 @@ fn cache_stats_warns_on_prefix_change() {
     let msg = result.message.expect("cache stats produces a message");
 
     assert!(msg.contains("Stability: 67%"), "got: {msg}");
-    assert!(msg.contains("WARNING — prefix has changed"), "got: {msg}");
+    assert!(msg.contains("WARNING — 1 undeclared drift"), "got: {msg}");
+    assert!(msg.contains("Last miss:  drift:sys"), "got: {msg}");
     assert!(msg.contains("system prompt changed"), "got: {msg}");
-    assert!(msg.contains("Drift:       WARNING"), "got: {msg}");
     assert!(msg.contains("1 change detected"), "got: {msg}");
+}
+
+#[test]
+fn cache_stats_does_not_warn_on_declared_header_change() {
+    let mut app = create_test_app();
+    app.prefix_stability_pct = Some(67);
+    app.prefix_checks_total = 3;
+    app.prefix_change_count = 1;
+    // A declared header change (e.g. /model): expected, not drift.
+    app.prefix_drift_count = 0;
+    app.prefix_pin_reason = Some("change:model".to_string());
+    app.prefix_last_miss_reason = Some("change:model".to_string());
+    app.last_prefix_change_desc = Some("change:model — tool set changed".to_string());
+    app.last_pinned_prefix_hash =
+        Some("deadbeef0000deadbeef0000deadbeef0000deadbeef0000deadbeef0000deadbeef".to_string());
+
+    let result = cache(&mut app, Some("stats"));
+    let msg = result.message.expect("cache stats produces a message");
+
+    assert!(
+        msg.contains("stable (all changes were declared header changes)"),
+        "got: {msg}"
+    );
+    assert!(!msg.contains("WARNING — "), "got: {msg}");
+    assert!(msg.contains("Pin reason: change:model"), "got: {msg}");
 }
 
 #[test]

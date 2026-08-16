@@ -21,6 +21,7 @@ codewhale-mcp = { path = "../mcp", version = "0.9.8" }
 codewhale-protocol = { path = "../protocol", version = "0.9.8" }
 codewhale-state = { path = "../state", version = "0.9.8" }
 codewhale-tools = { path = "../tools", version = "0.9.8" }
+regex = "1.11"
 serde_json = { workspace = true, features = ["preserve_order"] }
 tokio = { workspace = true, features = ["time"] }
 tracing.workspace = true

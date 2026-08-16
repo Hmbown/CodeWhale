@@ -215,6 +215,7 @@ struct SetupRuntimeFacts {
     tools_mcp_skills_result: String,
     tools_mcp_tools_result: String,
     tools_mcp_plugins_result: String,
+    tools_mcp_dsh_result: String,
     tools_mcp_hotbar_result: String,
     tools_mcp_result: String,
     tools_mcp_needs_action: bool,
@@ -273,6 +274,7 @@ impl Default for SetupRuntimeFacts {
             tools_mcp_skills_result: "skills dir not loaded".to_string(),
             tools_mcp_tools_result: "tools dir not loaded".to_string(),
             tools_mcp_plugins_result: "plugins dir not loaded".to_string(),
+            tools_mcp_dsh_result: "DeepSeek Harness not probed".to_string(),
             tools_mcp_hotbar_result: "hotbar source metadata not loaded".to_string(),
             tools_mcp_result: "tools/MCP not loaded".to_string(),
             tools_mcp_needs_action: false,
@@ -449,6 +451,7 @@ impl SetupRuntimeFacts {
         let tools_mcp_tools_result = tools_mcp.tools_result;
         let tools_mcp_plugins_result = tools_mcp.plugins_result;
         let tools_mcp_hotbar_result = tools_mcp.hotbar_result;
+        let tools_mcp_dsh_result = tools_mcp.dsh_result;
         let tools_mcp_result = tools_mcp.result;
         let tools_mcp_needs_action = tools_mcp.needs_action;
         let tools_mcp_path_display = tools_mcp.mcp_path_display;
@@ -498,6 +501,7 @@ impl SetupRuntimeFacts {
             tools_mcp_tools_result,
             tools_mcp_plugins_result,
             tools_mcp_hotbar_result,
+            tools_mcp_dsh_result,
             tools_mcp_result,
             tools_mcp_needs_action,
             tools_mcp_path_display,
@@ -3485,6 +3489,10 @@ impl SetupWizardView {
                 MessageId::SetupToolsMcpHotbarLabel,
                 &self.facts.tools_mcp_hotbar_result,
             ),
+            self.detail_row(
+                MessageId::SetupToolsMcpDshLabel,
+                &self.facts.tools_mcp_dsh_result,
+            ),
             self.setup_review_hint_line(
                 MessageId::SetupToolsMcpReviewHint,
                 Some("Press R for safe on-ramps (no auto-run)."),
@@ -3888,6 +3896,7 @@ fn tools_mcp_on_ramp_text(locale: Locale, facts: &SetupRuntimeFacts) -> String {
         tools_result: facts.tools_mcp_tools_result.clone(),
         plugins_result: facts.tools_mcp_plugins_result.clone(),
         hotbar_result: facts.tools_mcp_hotbar_result.clone(),
+        dsh_result: facts.tools_mcp_dsh_result.clone(),
         result: facts.tools_mcp_result.clone(),
         overall_status: if facts.tools_mcp_needs_action {
             tools_mcp::InventoryStatus::NeedsConfig

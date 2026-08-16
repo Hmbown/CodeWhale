@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
@@ -775,7 +775,8 @@ impl ToolSpec for WorkflowTool {
             "Start, run, inspect, or cancel a Workflow. Workflows execute deterministic JS with args, phase/log progress, and task(...) calls that dispatch real sub-agents through Fleet/sub-agent scheduling. ",
             "For parallel fan-out, pass an array of zero-argument thunks exactly like `await parallel([() => task({...}), () => task({...})])`; do not pass task promises as variadic arguments. ",
             "Provide exactly one of script, source_path, or plan (structured planner JSON). ",
-            "Use action=start for detached orchestration and action=status with run_id to inspect progress. Use action=run when the model needs the final result before continuing."
+            "Use action=start for detached orchestration and action=status with run_id to inspect progress. Use action=run when the model needs the final result before continuing. ",
+            "Start a workflow on your own only for broad or staged work (the session [workflow].automatic table, default on). An explicit /workflow invocation is authorization. Do not start a workflow for one-file edits or simple questions."
         )
     }
 
@@ -857,9 +858,10 @@ impl ToolSpec for WorkflowTool {
     }
 
     fn approval_requirement_for(&self, input: &Value) -> ApprovalRequirement {
-        // Product defaults for [workflow] when the tool has no live Config
-        // handle. YOLO/bypass still short-circuit upstream of this check.
-        let config = codewhale_config::WorkflowConfigToml::default();
+        // The session's `[workflow]` table decides read-only auto-start and
+        // write approval; product defaults apply only when the runtime never
+        // threaded a config. YOLO/bypass still short-circuit upstream.
+        let config = workflow_config_for(&self.runtime);
         workflow_approval_requirement_for(input, &config)
     }
 
@@ -997,7 +999,7 @@ async fn start_workflow(
 
     // Capture the approved plan envelope for audit/receipt (#4126). Reaching
     // execute means the approval gate already passed (or YOLO/auto-start).
-    let workflow_cfg = codewhale_config::WorkflowConfigToml::default();
+    let workflow_cfg = workflow_config_for(&runtime);
     let summary = source
         .spec
         .as_ref()
@@ -1197,6 +1199,20 @@ async fn cancel_workflow(
 ) -> Result<ToolResult, ToolError> {
     let run_id =
         optional_str(&input, "run_id")?.ok_or_else(|| ToolError::missing_field("run_id"))?;
+    cancel_workflow_run(run_id, state)
+}
+
+/// Synchronous cancellation core shared by the model-facing tool action and
+/// the host `/workflow cancel` command. When a live controller exists this
+/// signals the VM, aborts the run task, journals the terminal snapshot, and
+/// streams the cancelled event. When the journal has a running line but no
+/// controller (typical after a restart), the journal is still marked
+/// cancelled with an honest nothing-live receipt. Nothing here waits on the
+/// network.
+fn cancel_workflow_run(
+    run_id: &str,
+    state: Arc<WorkflowWorkspaceState>,
+) -> Result<ToolResult, ToolError> {
     let controller = {
         let mut controllers_guard = lock_mutex(&state.controllers)?;
         controllers_guard.remove(run_id)
@@ -1217,22 +1233,27 @@ async fn cancel_workflow(
         }
         return workflow_result_for(run_id, state);
     }
+    let live = controller.is_some();
     state.reconcile_cancel(
         run_id,
-        if controller.is_some() {
+        if live {
             CancelOutcome::Requested
         } else {
-            CancelOutcome::StaleUnknown
+            // Nothing live to signal; the journal cancel below is the receipt.
+            CancelOutcome::Acknowledged
         },
     );
-    let Some(controller) = controller else {
-        return Err(ToolError::execution_failed(
-            "workflow controller missing; cancellation outcome is unknown",
-        ));
-    };
-    controller.cancel();
+    if let Some(controller) = controller.as_ref() {
+        controller.cancel();
+    }
+    let reason = if live {
+        "cancelled by workflow tool"
+    } else {
+        "cancelled; no live process to stop"
+    }
+    .to_string();
     let cancelled_event = WorkflowUiEvent::new(WorkflowUiEventKind::RunCancelled {
-        reason: "cancelled by workflow tool".to_string(),
+        reason: reason.clone(),
     });
     let snapshot = {
         let mut runs_guard = lock_mutex(&state.runs)?;
@@ -1242,7 +1263,6 @@ async fn cancel_workflow(
         record.status = WorkflowRunStatus::Cancelled;
         record.lifecycle_seq = record.lifecycle_seq.saturating_add(1);
         record.completed_at_ms = Some(now_ms());
-        let reason = "cancelled by workflow tool".to_string();
         record.error = Some(reason);
         record.push_event(cancelled_event.clone());
         record.clone()
@@ -1257,7 +1277,9 @@ async fn cancel_workflow(
     // The VM may publish its terminal `run_completed` event while cancellation
     // is racing it. Always stream the authoritative cancellation afterward so
     // the live panel finalizes running rows and cannot remain visually failed.
-    controller.driver.emit_ui_event(&cancelled_event);
+    if let Some(controller) = controller {
+        controller.driver.emit_ui_event(&cancelled_event);
+    }
     workflow_result_for(run_id, state)
 }
 
@@ -1886,6 +1908,56 @@ fn render_run_report(record: &WorkflowRunRecord) -> String {
         out.push_str("\n```\n");
     }
     out
+}
+
+fn session_workflow_config_store()
+-> &'static Mutex<HashMap<PathBuf, codewhale_config::WorkflowConfigToml>> {
+    static STORE: OnceLock<Mutex<HashMap<PathBuf, codewhale_config::WorkflowConfigToml>>> =
+        OnceLock::new();
+    STORE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn workflow_session_key(workspace: &Path) -> PathBuf {
+    workspace
+        .canonicalize()
+        .unwrap_or_else(|_| workspace.to_path_buf())
+}
+
+/// Install the session `[workflow]` table after a config.toml reload (or a
+/// test mutation). `/workflow settings` and the workflow tool both read this
+/// so a refresh cannot leave the two surfaces disagreeing.
+pub(crate) fn set_session_workflow_config(
+    workspace: &Path,
+    config: codewhale_config::WorkflowConfigToml,
+) {
+    session_workflow_config_store()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .insert(workflow_session_key(workspace), config);
+}
+
+/// The refreshed session `[workflow]` table, if a reload (or test) installed
+/// one for this workspace.
+pub(crate) fn session_workflow_config(
+    workspace: &Path,
+) -> Option<codewhale_config::WorkflowConfigToml> {
+    session_workflow_config_store()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .get(&workflow_session_key(workspace))
+        .cloned()
+}
+
+/// The effective `[workflow]` table: the refreshed session table when one has
+/// been installed, otherwise the runtime snapshot, otherwise product defaults.
+fn workflow_config_for(runtime: &SubAgentRuntime) -> codewhale_config::WorkflowConfigToml {
+    session_workflow_config(&runtime.context.workspace).unwrap_or_else(|| {
+        runtime
+            .api_config
+            .as_deref()
+            .map(crate::config::Config::workflow_config)
+            .unwrap_or_default()
+    })
 }
 
 fn workflow_result_for(
@@ -4572,8 +4644,8 @@ mod journal {
     use std::sync::{Arc, Mutex, OnceLock};
     use tracing::warn;
 
-    const CODEWHALE_DIR: &str = ".codewhale";
-    const WORKFLOW_RUNS_FILE: &str = "workflow-runs.jsonl";
+    pub(super) const CODEWHALE_DIR: &str = ".codewhale";
+    pub(super) const WORKFLOW_RUNS_FILE: &str = "workflow-runs.jsonl";
 
     /// Per-workspace workflow state shared across tool-registry rebuilds.
     pub(super) struct WorkflowWorkspaceState {
@@ -4585,8 +4657,19 @@ mod journal {
 
     impl WorkflowWorkspaceState {
         pub fn open(workspace: &Path) -> Arc<Self> {
+            Self::open_inner(workspace, true)
+        }
+
+        /// Hydrate the journal without rewriting leftover `running` rows to
+        /// `failed`. Host cancel uses this after a restart so a controller-less
+        /// run can still be marked cancelled instead of looking like a crash.
+        pub fn open_preserving_running(workspace: &Path) -> Arc<Self> {
+            Self::open_inner(workspace, false)
+        }
+
+        fn open_inner(workspace: &Path, recover_orphans: bool) -> Arc<Self> {
             let journal = WorkflowRunJournal::open(workspace);
-            let runs = Arc::new(Mutex::new(journal.hydrate_runs()));
+            let runs = Arc::new(Mutex::new(journal.hydrate_runs(recover_orphans)));
             Arc::new(Self {
                 runs,
                 controllers: Arc::new(Mutex::new(HashMap::new())),
@@ -4755,7 +4838,7 @@ mod journal {
             Self { ledger_path }
         }
 
-        fn hydrate_runs(&self) -> HashMap<String, WorkflowRunRecord> {
+        fn hydrate_runs(&self, recover_orphans: bool) -> HashMap<String, WorkflowRunRecord> {
             let file = match std::fs::File::open(&self.ledger_path) {
                 Ok(file) => file,
                 Err(_) => return HashMap::new(),
@@ -4797,28 +4880,32 @@ mod journal {
             }
             // A run journaled as Running belongs to a process that is gone;
             // without this it would show as live forever after a restart.
-            let mut recovered = Vec::new();
-            for run in runs.values_mut() {
-                if run.status == WorkflowRunStatus::Running {
-                    run.status = WorkflowRunStatus::Failed;
-                    run.lifecycle_seq = run.lifecycle_seq.saturating_add(1);
-                    run.completed_at_ms.get_or_insert_with(super::now_ms);
-                    run.error = Some(
-                        "process exited before the run completed (recovered on startup)"
-                            .to_string(),
-                    );
-                    recovered.push(run.clone());
+            // Host cancel skips this rewrite so it can still mark the line
+            // cancelled with an honest "nothing live to stop" receipt.
+            if recover_orphans {
+                let mut recovered = Vec::new();
+                for run in runs.values_mut() {
+                    if run.status == WorkflowRunStatus::Running {
+                        run.status = WorkflowRunStatus::Failed;
+                        run.lifecycle_seq = run.lifecycle_seq.saturating_add(1);
+                        run.completed_at_ms.get_or_insert_with(super::now_ms);
+                        run.error = Some(
+                            "process exited before the run completed (recovered on startup)"
+                                .to_string(),
+                        );
+                        recovered.push(run.clone());
+                    }
                 }
-            }
-            // The recovery decision is owner truth, not a presentation-only
-            // repair. Append it so another restart replays the same terminal
-            // sequence instead of rediscovering and incrementing it again.
-            for run in recovered {
-                if let Err(err) = self.append_snapshot(&run) {
-                    warn!(
-                        run_id = run.run_id,
-                        "workflow recovery snapshot append failed: {err}"
-                    );
+                // The recovery decision is owner truth, not a presentation-only
+                // repair. Append it so another restart replays the same terminal
+                // sequence instead of rediscovering and incrementing it again.
+                for run in recovered {
+                    if let Err(err) = self.append_snapshot(&run) {
+                        warn!(
+                            run_id = run.run_id,
+                            "workflow recovery snapshot append failed: {err}"
+                        );
+                    }
                 }
             }
             runs
@@ -5047,6 +5134,42 @@ mod journal {
                 "reopening must replay the recovery snapshot without another transition"
             );
         }
+
+        #[test]
+        fn host_cancel_hydrates_a_journal_without_live_process_state() {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let state = WorkflowWorkspaceState::open(tmp.path());
+            let record = sample_record("workflow_prior", WorkflowRunStatus::Running);
+            state.record_snapshot(&record);
+            drop(state);
+
+            assert!(
+                peek_shared_workflow_state(tmp.path()).is_none(),
+                "writing the journal must not insert process-wide live state"
+            );
+
+            let line = super::super::host_cancel_workflow(tmp.path(), "workflow_prior")
+                .expect("a journaled run must be visible to host cancel after restart");
+            assert_eq!(line.run_id, "workflow_prior");
+            assert_eq!(line.status, "cancelled");
+            assert!(
+                line.error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("no live process")),
+                "controller-less cancel must leave an honest receipt, got {:?}",
+                line.error
+            );
+
+            let reopened = WorkflowWorkspaceState::open(tmp.path());
+            let replayed = reopened
+                .runs
+                .lock()
+                .expect("runs lock")
+                .get("workflow_prior")
+                .cloned()
+                .expect("cancelled journal line");
+            assert_eq!(replayed.status, WorkflowRunStatus::Cancelled);
+        }
     }
 }
 
@@ -5090,6 +5213,128 @@ pub(crate) fn structcopy_run_projection(workspace: &Path, run_id: &str) -> Optio
         }
     }
     Some(value)
+}
+
+/// One workflow run as the human-facing `/workflow` command reads it: a
+/// bounded projection of the run record with no raw event payloads and no
+/// filesystem paths beyond the source file name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HostWorkflowRunLine {
+    pub run_id: String,
+    /// Machine token: running | completed | degraded | failed | cancelled.
+    pub status: &'static str,
+    /// The run's goal, its workflow id, or the source file name.
+    pub label: String,
+    pub started_at_ms: u64,
+    pub completed_at_ms: Option<u64>,
+    pub child_count: usize,
+    pub last_progress: Option<String>,
+    pub error: Option<String>,
+}
+
+fn host_run_line(record: &WorkflowRunRecord) -> HostWorkflowRunLine {
+    let summary = record.summary();
+    let label = summary
+        .workflow_goal
+        .clone()
+        .or_else(|| summary.workflow_id.clone())
+        .or_else(|| {
+            summary
+                .source_path
+                .as_ref()
+                .and_then(|path| path.file_name())
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "workflow".to_string());
+    HostWorkflowRunLine {
+        run_id: summary.run_id,
+        status: match summary.status {
+            WorkflowRunStatus::Running => "running",
+            WorkflowRunStatus::Completed => "completed",
+            WorkflowRunStatus::Degraded => "degraded",
+            WorkflowRunStatus::Failed => "failed",
+            WorkflowRunStatus::Cancelled => "cancelled",
+        },
+        label,
+        started_at_ms: summary.started_at_ms,
+        completed_at_ms: summary.completed_at_ms,
+        child_count: summary.child_count,
+        last_progress: summary.last_progress,
+        error: summary.error,
+    }
+}
+
+/// Live workspace state if this process already has it, otherwise the
+/// existing run journal. Never creates `.codewhale/` or the ledger.
+fn host_workflow_state(workspace: &Path) -> Option<Arc<WorkflowWorkspaceState>> {
+    if let Some(state) = peek_shared_workflow_state(workspace) {
+        return Some(state);
+    }
+    // No live state yet: hydrate only if a journal already exists so
+    // status/cancel can see runs from a previous process without creating
+    // files in a workspace that never ran a workflow.
+    workflow_journal_exists(workspace).then(|| shared_workflow_state(workspace))
+}
+
+/// Cancel hydrates an on-disk journal without the restart-orphan Failed
+/// rewrite so a running line with no live controller can still be cancelled.
+fn host_workflow_state_for_cancel(workspace: &Path) -> Option<Arc<WorkflowWorkspaceState>> {
+    if let Some(state) = peek_shared_workflow_state(workspace) {
+        return Some(state);
+    }
+    workflow_journal_exists(workspace)
+        .then(|| WorkflowWorkspaceState::open_preserving_running(workspace))
+}
+
+fn workflow_journal_exists(workspace: &Path) -> bool {
+    workspace
+        .join(journal::CODEWHALE_DIR)
+        .join(journal::WORKFLOW_RUNS_FILE)
+        .is_file()
+}
+
+/// Every workflow run this workspace knows about (live and journaled),
+/// oldest first. Read-only: never creates the journal or workspace state.
+/// The `/workflow status` command reads this directly so status never costs
+/// a model turn.
+pub(crate) fn host_workflow_runs(workspace: &Path) -> Vec<HostWorkflowRunLine> {
+    let Some(state) = host_workflow_state(workspace) else {
+        return Vec::new();
+    };
+    let runs = state
+        .runs
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let mut lines: Vec<HostWorkflowRunLine> = runs.values().map(host_run_line).collect();
+    lines.sort_by_key(|line| line.started_at_ms);
+    lines
+}
+
+/// Cancel a running workflow directly from the host (the `/workflow cancel`
+/// command and the panel's cancel control), without a model turn. Returns
+/// the run's projection after cancellation, or a plain reason when the run
+/// is unknown. A run that already finished is reported as it is. After a
+/// restart, a journaled running line with no live controller is cancelled
+/// in the journal rather than rejected as unknown or controller-missing.
+pub(crate) fn host_cancel_workflow(
+    workspace: &Path,
+    run_id: &str,
+) -> Result<HostWorkflowRunLine, String> {
+    let Some(state) = host_workflow_state_for_cancel(workspace) else {
+        return Err(format!("Unknown workflow run '{run_id}'."));
+    };
+    match cancel_workflow_run(run_id, state.clone()) {
+        Ok(_) => {
+            let runs = state
+                .runs
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            runs.get(run_id)
+                .map(host_run_line)
+                .ok_or_else(|| format!("Unknown workflow run '{run_id}'."))
+        }
+        Err(err) => Err(err.to_string()),
+    }
 }
 
 /// Seed a minimal run record so `/structcopy` tests can exercise the
@@ -5320,7 +5565,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancellation_without_controller_fails_closed_as_stale() {
+    async fn cancellation_without_controller_marks_the_journal_cancelled() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let state = WorkflowWorkspaceState::open(tmp.path());
         let record =
@@ -5366,13 +5611,12 @@ mod tests {
             },
         );
 
-        let error = cancel_workflow(
+        cancel_workflow(
             json!({"run_id": "workflow_missing_controller"}),
             state.clone(),
         )
         .await
-        .expect_err("missing controller cannot acknowledge cancellation");
-        assert!(error.to_string().contains("outcome is unknown"), "{error}");
+        .expect("controller-less cancel must still journal cancelled");
         let record = state
             .runs
             .lock()
@@ -5380,8 +5624,16 @@ mod tests {
             .get("workflow_missing_controller")
             .cloned()
             .expect("workflow owner");
-        assert_eq!(record.status, WorkflowRunStatus::Running);
-        assert_eq!(record.lifecycle_seq, 1);
+        assert_eq!(record.status, WorkflowRunStatus::Cancelled);
+        assert_eq!(record.lifecycle_seq, 2);
+        assert!(
+            record
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("no live process")),
+            "expected an honest nothing-live receipt, got {:?}",
+            record.error
+        );
         let operation = work
             .capture(Some("missing-controller-session"))
             .expect("capture")
@@ -5391,7 +5643,7 @@ mod tests {
             .into_iter()
             .find(|node| node.kind == crate::work_graph::NodeKind::Operation)
             .expect("workflow operation");
-        assert_eq!(operation.state, crate::work_graph::NodeState::Stale);
+        assert_eq!(operation.state, crate::work_graph::NodeState::Cancelled);
     }
 
     #[test]
@@ -5625,6 +5877,77 @@ permissions = "read_only"
         assert_eq!(auditor.thinking.as_deref(), Some("high"));
         assert_eq!(auditor.role.as_deref(), Some("reviewer"));
         assert_eq!(auditor.profile.as_deref(), Some("auditor"));
+    }
+
+    /// The session's `[workflow]` table must decide the approval requirement;
+    /// before this the tool consulted product defaults only, so a user who
+    /// set `require_approval_for_writes = false` (documented in
+    /// docs/AUTOMATIC_WORKFLOWS.md) still got the approval card.
+    #[test]
+    fn workflow_tool_honors_the_session_workflow_config() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+        let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 2);
+        let mut runtime = SubAgentRuntime::new(
+            stub_client(),
+            "deepseek-v4-flash".to_string(),
+            ctx,
+            true,
+            None,
+            manager.clone(),
+        );
+        let input = json!({
+            "action": "start",
+            "plan": {
+                "goal": "write freely",
+                "risk": "writes",
+                "children": [{ "prompt": "edit", "type": "implementer" }]
+            }
+        });
+        let tool = WorkflowTool::new(Arc::clone(&manager), runtime.clone());
+        assert_eq!(
+            tool.approval_requirement_for(&input),
+            ApprovalRequirement::Required,
+            "product default: writes need approval"
+        );
+
+        let config = crate::config::Config {
+            workflow: Some(codewhale_config::WorkflowConfigToml {
+                require_approval_for_writes: false,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        runtime.api_config = Some(Arc::new(config));
+        let tool = WorkflowTool::new(Arc::clone(&manager), runtime.clone());
+        assert_eq!(
+            tool.approval_requirement_for(&input),
+            ApprovalRequirement::Auto,
+            "the session config must win"
+        );
+
+        let read_only = json!({
+            "action": "start",
+            "plan": {
+                "goal": "scout crates",
+                "risk": "read_only",
+                "children": [{ "prompt": "look", "type": "explore" }]
+            }
+        });
+        let config = crate::config::Config {
+            workflow: Some(codewhale_config::WorkflowConfigToml {
+                auto_start_read_only: false,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        runtime.api_config = Some(Arc::new(config));
+        let tool = WorkflowTool::new(manager, runtime);
+        assert_eq!(
+            tool.approval_requirement_for(&read_only),
+            ApprovalRequirement::Required,
+            "auto_start_read_only = false must still ask"
+        );
     }
 
     /// The gate machinery keys on the **semantic role**. It must still fire

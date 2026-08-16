@@ -14,6 +14,31 @@ pub struct MouseOutcome {
     pub action: Option<SidebarRowAction>,
 }
 
+/// `← for agents`: switch the rail to the Agents panel and give it keyboard
+/// ownership so ↑/↓ + Enter select and focus a worker. Returns `false` when
+/// the rail cannot show agents right now (rail off, or nothing to list); the
+/// caller then opens the `/agents` register instead so the key still lands.
+pub fn enter_agents(app: &mut App) -> bool {
+    app.work_surface.panel = super::model::RailPanel::Agents;
+    if app.work_surface.placement == WorkSurfacePlacement::Off {
+        return false;
+    }
+    let rows = visible_rows_for_panel(app);
+    if rows.iter().all(|row| !row.selectable) {
+        return false;
+    }
+    claim_focus(app);
+    if app.work_surface.selected.is_none() {
+        app.work_surface.selected = rows
+            .iter()
+            .find(|row| row.selectable)
+            .map(|row| row.id.clone());
+    }
+    app.work_surface.clamp_selection(&rows);
+    app.needs_redraw = true;
+    true
+}
+
 /// Handle the work surface's focused keyboard contract. `Alt+W` enters the
 /// surface from the composer; Esc returns ownership to the composer (or clears
 /// a local stop arm / open detail first). Plain printable input always returns

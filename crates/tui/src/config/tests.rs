@@ -1471,6 +1471,9 @@ struct EnvGuard {
     vllm_api_key: Option<OsString>,
     vllm_base_url: Option<OsString>,
     vllm_model: Option<OsString>,
+    ollama_cloud_api_key: Option<OsString>,
+    ollama_cloud_base_url: Option<OsString>,
+    ollama_cloud_model: Option<OsString>,
     ollama_api_key: Option<OsString>,
     ollama_base_url: Option<OsString>,
     ollama_model: Option<OsString>,
@@ -1573,6 +1576,9 @@ impl EnvGuard {
         let vllm_api_key_prev = env::var_os("VLLM_API_KEY");
         let vllm_base_url_prev = env::var_os("VLLM_BASE_URL");
         let vllm_model_prev = env::var_os("VLLM_MODEL");
+        let ollama_cloud_api_key_prev = env::var_os("OLLAMA_CLOUD_API_KEY");
+        let ollama_cloud_base_url_prev = env::var_os("OLLAMA_CLOUD_BASE_URL");
+        let ollama_cloud_model_prev = env::var_os("OLLAMA_CLOUD_MODEL");
         let ollama_api_key_prev = env::var_os("OLLAMA_API_KEY");
         let ollama_base_url_prev = env::var_os("OLLAMA_BASE_URL");
         let ollama_model_prev = env::var_os("OLLAMA_MODEL");
@@ -1670,6 +1676,9 @@ impl EnvGuard {
             env::remove_var("VLLM_API_KEY");
             env::remove_var("VLLM_BASE_URL");
             env::remove_var("VLLM_MODEL");
+            env::remove_var("OLLAMA_CLOUD_API_KEY");
+            env::remove_var("OLLAMA_CLOUD_BASE_URL");
+            env::remove_var("OLLAMA_CLOUD_MODEL");
             env::remove_var("OLLAMA_API_KEY");
             env::remove_var("OLLAMA_BASE_URL");
             env::remove_var("OLLAMA_MODEL");
@@ -1767,6 +1776,9 @@ impl EnvGuard {
             vllm_api_key: vllm_api_key_prev,
             vllm_base_url: vllm_base_url_prev,
             vllm_model: vllm_model_prev,
+            ollama_cloud_api_key: ollama_cloud_api_key_prev,
+            ollama_cloud_base_url: ollama_cloud_base_url_prev,
+            ollama_cloud_model: ollama_cloud_model_prev,
             ollama_api_key: ollama_api_key_prev,
             ollama_base_url: ollama_base_url_prev,
             ollama_model: ollama_model_prev,
@@ -1888,6 +1900,9 @@ impl Drop for EnvGuard {
             Self::restore_var("VLLM_API_KEY", self.vllm_api_key.take());
             Self::restore_var("VLLM_BASE_URL", self.vllm_base_url.take());
             Self::restore_var("VLLM_MODEL", self.vllm_model.take());
+            Self::restore_var("OLLAMA_CLOUD_API_KEY", self.ollama_cloud_api_key.take());
+            Self::restore_var("OLLAMA_CLOUD_BASE_URL", self.ollama_cloud_base_url.take());
+            Self::restore_var("OLLAMA_CLOUD_MODEL", self.ollama_cloud_model.take());
             Self::restore_var("OLLAMA_API_KEY", self.ollama_api_key.take());
             Self::restore_var("OLLAMA_BASE_URL", self.ollama_base_url.take());
             Self::restore_var("OLLAMA_MODEL", self.ollama_model.take());
@@ -2665,6 +2680,11 @@ fn save_api_key_writes_config_file_under_cfg_test() -> Result<()> {
 
 #[test]
 fn policy_control_waits_for_foreign_test_env_overrides_to_restore() {
+    // This is a deadlock ceiling, not a latency requirement. In the full
+    // library suite, hundreds of environment-sensitive tests can acquire the
+    // process-wide lock before this deliberately blocked reader resumes.
+    const FULL_SUITE_SCHEDULING_TIMEOUT: Duration = Duration::from_secs(30);
+
     let temp = tempfile::tempdir().expect("tempdir");
     let config_path = temp.path().join("config.toml");
     let workspace = temp.path().join("workspace");
@@ -2692,7 +2712,7 @@ fn policy_control_waits_for_foreign_test_env_overrides_to_restore() {
         });
 
         started_rx
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(FULL_SUITE_SCHEDULING_TIMEOUT)
             .expect("reader reached policy read");
         assert!(
             rx.recv_timeout(Duration::from_millis(50)).is_err(),
@@ -2705,7 +2725,7 @@ fn policy_control_waits_for_foreign_test_env_overrides_to_restore() {
     };
 
     let (shell, approval) = rx
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(FULL_SUITE_SCHEDULING_TIMEOUT)
         .expect("reader resumed after policy overrides were restored");
     reader.join().expect("reader thread");
     assert_eq!(shell, ShellAccessControl::Unset);
@@ -3200,6 +3220,7 @@ fn provider_api_key_config_failure_restores_secret_and_keeps_external_route() ->
             provider: ApiProvider::Xai,
             key: ApiProvider::Xai.as_str().to_string(),
             exact_id: Some(ApiProvider::Xai.as_str().to_string()),
+            migrated_legacy_ollama_cloud_route: false,
         };
         let error = save_api_key_for_identity(&identity, &route_config, "new-xai-secret")
             .expect_err("config directory must reject metadata mutation");
@@ -3305,6 +3326,7 @@ fn provider_key_refuses_plaintext_config_when_secret_store_snapshot_fails() -> R
         provider: ApiProvider::Openrouter,
         key: ApiProvider::Openrouter.as_str().to_string(),
         exact_id: Some(ApiProvider::Openrouter.as_str().to_string()),
+        migrated_legacy_ollama_cloud_route: false,
     };
 
     let error = save_api_key_for_identity(&identity, &Config::default(), "provider-fallback-key")
@@ -5368,6 +5390,7 @@ fn save_then_load_uses_the_same_missing_absolute_env_config_path() -> Result<()>
         provider: ApiProvider::Openrouter,
         key: ApiProvider::Openrouter.as_str().to_string(),
         exact_id: Some(ApiProvider::Openrouter.as_str().to_string()),
+        migrated_legacy_ollama_cloud_route: false,
     };
 
     let written =
@@ -6213,16 +6236,16 @@ fn model_completion_names_for_moonshot_uses_latest_platform_model() {
 fn model_completion_names_for_zai_lists_default_5_1_and_turbo() {
     let models = model_completion_names_for_provider(ApiProvider::Zai);
 
-    // GLM-5.2 is the default and must be first; GLM-5.1 stays available,
-    // and GLM-5-Turbo is the faster sub-agent sibling.
+    // GLM-5.3 is the default and must be first; GLM-5.2 and GLM-5.1 stay
+    // available, and GLM-5-Turbo is the faster sub-agent sibling.
     assert_eq!(models.first().copied(), Some(DEFAULT_ZAI_MODEL));
-    assert_eq!(DEFAULT_ZAI_MODEL, ZAI_GLM_5_2_MODEL);
+    assert_eq!(DEFAULT_ZAI_MODEL, ZAI_GLM_5_3_MODEL);
     assert!(models.contains(&ZAI_GLM_5_1_MODEL));
     assert!(models.contains(&ZAI_GLM_5_TURBO_MODEL));
-    // GLM-5.3 is offered alongside the others but must not take the default
-    // slot: adding a model never changes anyone's route.
-    assert!(models.contains(&ZAI_GLM_5_3_MODEL));
-    assert_ne!(models.first().copied(), Some(ZAI_GLM_5_3_MODEL));
+    // GLM-5.2 is still offered alongside the others but no longer takes the
+    // default slot; explicit 5.2 routes are untouched.
+    assert!(models.contains(&ZAI_GLM_5_2_MODEL));
+    assert_ne!(models.first().copied(), Some(ZAI_GLM_5_2_MODEL));
     // No accidental duplicate entries.
     let mut sorted = models.to_vec();
     sorted.sort_unstable();
@@ -6236,9 +6259,9 @@ fn normalize_model_name_for_zai_canonicalizes_current_glm_models() {
     for (alias, expected) in [
         ("glm-5.1", ZAI_GLM_5_1_MODEL),
         ("glm-5-1", ZAI_GLM_5_1_MODEL),
-        ("glm-5.2", DEFAULT_ZAI_MODEL),
-        ("zai-glm-5-2", DEFAULT_ZAI_MODEL),
-        ("glm-5.3", ZAI_GLM_5_3_MODEL),
+        ("glm-5.2", ZAI_GLM_5_2_MODEL),
+        ("zai-glm-5-2", ZAI_GLM_5_2_MODEL),
+        ("glm-5.3", DEFAULT_ZAI_MODEL),
         ("glm-5-3", ZAI_GLM_5_3_MODEL),
         ("zai-glm-5-3", ZAI_GLM_5_3_MODEL),
         ("glm-5-turbo", ZAI_GLM_5_TURBO_MODEL),
@@ -6249,12 +6272,12 @@ fn normalize_model_name_for_zai_canonicalizes_current_glm_models() {
             Some(expected)
         );
     }
-    // The 5.1-era bug shape: a new alias silently resolving to the provider
-    // default. GLM-5.3 must keep its own id.
-    assert_ne!(ZAI_GLM_5_3_MODEL, DEFAULT_ZAI_MODEL);
+    // The 5.1-era bug shape: an alias silently resolving to the provider
+    // default. Now that GLM-5.3 is the default, GLM-5.2 must keep its own id.
+    assert_ne!(ZAI_GLM_5_2_MODEL, DEFAULT_ZAI_MODEL);
     assert_eq!(
-        normalize_model_name_for_provider(ApiProvider::Zai, "glm-5.3").as_deref(),
-        Some(ZAI_GLM_5_3_MODEL)
+        normalize_model_name_for_provider(ApiProvider::Zai, "glm-5.2").as_deref(),
+        Some(ZAI_GLM_5_2_MODEL)
     );
     assert_eq!(
         normalize_model_name_for_provider(ApiProvider::Zai, "glm-next-preview").as_deref(),
@@ -8008,6 +8031,275 @@ fn ollama_provider_uses_local_defaults_without_api_key() -> Result<()> {
     assert_eq!(config.deepseek_base_url(), DEFAULT_OLLAMA_BASE_URL);
     assert_eq!(config.deepseek_api_key()?, "");
     assert!(has_api_key_for(&config, ApiProvider::Ollama));
+    Ok(())
+}
+
+#[test]
+fn ollama_cloud_resolves_env_key_and_is_not_keyless() -> Result<()> {
+    let _lock = lock_test_env();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp_root = env::temp_dir().join(format!(
+        "codewhale-tui-ollama-cloud-env-{}-{}",
+        std::process::id(),
+        nanos
+    ));
+    fs::create_dir_all(&temp_root)?;
+    let _guard = EnvGuard::new(&temp_root);
+    // Safety: test-only environment mutation guarded by a global mutex.
+    unsafe { env::set_var("OLLAMA_API_KEY", "ollama-cloud-env-key") };
+
+    let config = Config {
+        provider: Some("ollama".to_string()),
+        providers: Some(ProvidersConfig {
+            ollama: ProviderConfig {
+                base_url: Some("https://ollama.com/v1/".to_string()),
+                ..ProviderConfig::default()
+            },
+            ..ProvidersConfig::default()
+        }),
+        ..Config::default()
+    };
+
+    assert_eq!(config.api_provider(), ApiProvider::OllamaCloud);
+    assert!(!provider_route_is_keyless_self_hosted(
+        ApiProvider::OllamaCloud,
+        &config.deepseek_base_url()
+    ));
+    assert_eq!(config.deepseek_api_key()?, "ollama-cloud-env-key");
+    assert!(has_api_key_for(&config, ApiProvider::OllamaCloud));
+    Ok(())
+}
+
+#[test]
+fn ollama_cloud_resolves_saved_provider_key() -> Result<()> {
+    let _lock = lock_test_env();
+    let temp_root = tempfile::tempdir()?;
+    let _guard = EnvGuard::new(temp_root.path());
+    let codewhale_home = temp_root.path().join("isolated-codewhale");
+    fs::create_dir_all(&codewhale_home)?;
+    let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", codewhale_home.as_os_str());
+    let _backend = EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+
+    codewhale_secrets::Secrets::auto_detect().set("ollama", "ollama-cloud-saved-key")?;
+    let config = Config {
+        provider: Some("ollama".to_string()),
+        providers: Some(ProvidersConfig {
+            ollama: ProviderConfig {
+                base_url: Some(codewhale_config::provider::OLLAMA_CLOUD_BASE_URL.to_string()),
+                ..ProviderConfig::default()
+            },
+            ..ProvidersConfig::default()
+        }),
+        ..Config::default()
+    };
+
+    assert_eq!(config.api_provider(), ApiProvider::OllamaCloud);
+    assert_eq!(config.deepseek_api_key()?, "ollama-cloud-saved-key");
+    assert!(has_api_key_for(&config, ApiProvider::OllamaCloud));
+    Ok(())
+}
+
+#[test]
+fn explicit_ollama_cloud_uses_new_secret_slot_without_local_fallback() -> Result<()> {
+    let _lock = lock_test_env();
+    let temp_root = tempfile::tempdir()?;
+    let _guard = EnvGuard::new(temp_root.path());
+    let codewhale_home = temp_root.path().join("isolated-codewhale");
+    fs::create_dir_all(&codewhale_home)?;
+    let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", codewhale_home.as_os_str());
+    let _backend = EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+
+    let secrets = codewhale_secrets::Secrets::auto_detect();
+    secrets.set("ollama", "must-not-be-consumed")?;
+    let config = Config {
+        provider: Some("ollama-cloud".to_string()),
+        providers: Some(ProvidersConfig {
+            ollama: ProviderConfig {
+                base_url: Some(codewhale_config::provider::OLLAMA_CLOUD_BASE_URL.to_string()),
+                ..ProviderConfig::default()
+            },
+            ..ProvidersConfig::default()
+        }),
+        ..Config::default()
+    };
+
+    assert_eq!(config.api_provider(), ApiProvider::OllamaCloud);
+    let identity = config
+        .resolve_provider_identity("ollama-cloud")
+        .expect("explicit Cloud identity");
+    assert!(!identity.migrated_legacy_ollama_cloud_route);
+    assert!(!has_api_key_for(&config, ApiProvider::OllamaCloud));
+    assert!(config.deepseek_api_key().is_err());
+
+    secrets.set("ollama-cloud", "cloud-slot-key")?;
+    assert!(has_api_key_for(&config, ApiProvider::OllamaCloud));
+    assert_eq!(config.deepseek_api_key()?, "cloud-slot-key");
+    Ok(())
+}
+
+#[test]
+fn ollama_cloud_env_precedence_is_cloud_name_then_official_name() -> Result<()> {
+    let _lock = lock_test_env();
+    let temp_root = tempfile::tempdir()?;
+    let _guard = EnvGuard::new(temp_root.path());
+    // Safety: test-only environment mutation guarded by a global mutex and
+    // restored by EnvGuard.
+    unsafe {
+        env::set_var("OLLAMA_CLOUD_API_KEY", "cloud-specific-key");
+        env::set_var("OLLAMA_API_KEY", "official-fallback-key");
+    }
+    let config = Config {
+        provider: Some("ollama-cloud".to_string()),
+        ..Config::default()
+    };
+
+    assert_eq!(config.deepseek_api_key()?, "cloud-specific-key");
+    // Safety: same serialized test and EnvGuard restore the prior value.
+    unsafe { env::remove_var("OLLAMA_CLOUD_API_KEY") };
+    assert_eq!(config.deepseek_api_key()?, "official-fallback-key");
+    Ok(())
+}
+
+#[test]
+fn migrated_ollama_cloud_scope_preserves_legacy_table_and_slot_read_only() -> Result<()> {
+    let _lock = lock_test_env();
+    let temp_root = tempfile::tempdir()?;
+    let _guard = EnvGuard::new(temp_root.path());
+    let codewhale_home = temp_root.path().join("isolated-codewhale");
+    fs::create_dir_all(&codewhale_home)?;
+    let _codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", codewhale_home.as_os_str());
+    let _backend = EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+    codewhale_secrets::Secrets::auto_detect().set("ollama", "legacy-cloud-key")?;
+
+    let config = Config {
+        provider: Some("deepseek".to_string()),
+        providers: Some(ProvidersConfig {
+            ollama: ProviderConfig {
+                base_url: Some(codewhale_config::provider::OLLAMA_CLOUD_BASE_URL.to_string()),
+                model: Some("legacy-cloud-model".to_string()),
+                ..ProviderConfig::default()
+            },
+            ..ProvidersConfig::default()
+        }),
+        ..Config::default()
+    };
+    let identity = config
+        .resolve_provider_identity("ollama")
+        .expect("legacy identity migrates");
+    assert_eq!(identity.provider, ApiProvider::OllamaCloud);
+    assert_eq!(identity.key, "ollama-cloud");
+    assert!(identity.migrated_legacy_ollama_cloud_route);
+
+    let mut scoped = config.clone();
+    scoped.scope_to_provider_identity(&identity);
+    assert_eq!(scoped.api_provider(), ApiProvider::OllamaCloud);
+    assert_eq!(
+        scoped.deepseek_base_url(),
+        codewhale_config::provider::OLLAMA_CLOUD_BASE_URL
+    );
+    assert_eq!(scoped.default_model(), "legacy-cloud-model");
+    assert_eq!(scoped.deepseek_api_key()?, "legacy-cloud-key");
+    assert!(
+        scoped
+            .providers
+            .as_ref()
+            .expect("providers")
+            .ollama_cloud
+            .api_key
+            .is_none(),
+        "migration must not copy secret material into the new config table"
+    );
+    assert_eq!(
+        codewhale_secrets::Secrets::auto_detect().get("ollama-cloud")?,
+        None,
+        "migration must not copy the legacy secret into the new slot"
+    );
+    Ok(())
+}
+
+#[test]
+fn ollama_cloud_without_key_fails_with_cloud_guidance() -> Result<()> {
+    let _lock = lock_test_env();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp_root = env::temp_dir().join(format!(
+        "codewhale-tui-ollama-cloud-missing-key-{}-{}",
+        std::process::id(),
+        nanos
+    ));
+    fs::create_dir_all(&temp_root)?;
+    let _guard = EnvGuard::new(&temp_root);
+
+    let config = Config {
+        provider: Some("ollama".to_string()),
+        providers: Some(ProvidersConfig {
+            ollama: ProviderConfig {
+                base_url: Some("https://ollama.com/v1".to_string()),
+                ..ProviderConfig::default()
+            },
+            ..ProvidersConfig::default()
+        }),
+        ..Config::default()
+    };
+
+    assert_eq!(config.api_provider(), ApiProvider::OllamaCloud);
+    assert!(!has_api_key_for(&config, ApiProvider::OllamaCloud));
+    let error = config
+        .deepseek_api_key()
+        .expect_err("Ollama Cloud must require an API key");
+    let message = error.to_string();
+    assert!(message.contains("Ollama Cloud API key not found"));
+    assert!(message.contains("https://ollama.com/settings/keys"));
+    assert!(message.contains("OLLAMA_CLOUD_API_KEY / OLLAMA_API_KEY"));
+    Ok(())
+}
+
+#[test]
+fn ollama_custom_remote_does_not_inherit_cloud_env_key() -> Result<()> {
+    let _lock = lock_test_env();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp_root = env::temp_dir().join(format!(
+        "codewhale-tui-ollama-custom-remote-{}-{}",
+        std::process::id(),
+        nanos
+    ));
+    fs::create_dir_all(&temp_root)?;
+    let _guard = EnvGuard::new(&temp_root);
+    let _backend = EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+    // Safety: test-only environment mutation guarded by a global mutex.
+    unsafe { env::set_var("OLLAMA_API_KEY", "must-not-cross-routes") };
+    codewhale_secrets::Secrets::auto_detect().set("ollama", "must-not-cross-routes-either")?;
+
+    let config = Config {
+        provider: Some("ollama".to_string()),
+        providers: Some(ProvidersConfig {
+            ollama: ProviderConfig {
+                base_url: Some("https://ollama-gateway.example/v1".to_string()),
+                ..ProviderConfig::default()
+            },
+            ..ProvidersConfig::default()
+        }),
+        ..Config::default()
+    };
+
+    assert!(config.provider_uses_custom_endpoint(ApiProvider::Ollama));
+    assert!(!has_api_key_for(&config, ApiProvider::Ollama));
+    let error = config
+        .deepseek_api_key()
+        .expect_err("custom remote must bind its credential explicitly");
+    assert!(
+        error
+            .to_string()
+            .contains("Custom endpoint credentials for ollama must be bound explicitly")
+    );
     Ok(())
 }
 
@@ -10281,15 +10573,23 @@ fn provider_capability_kimi_membership_ids_report_unknown_output_ceiling() {
 }
 
 #[test]
-fn provider_capability_zai_defaults_to_5_2_and_tracks_5_1_and_turbo() {
-    // GLM-5.2 is now the default direct Z.AI model (1M context window).
+fn provider_capability_zai_defaults_to_5_3_and_tracks_5_2_5_1_and_turbo() {
+    // GLM-5.3 is now the default direct Z.AI model; its limits inherit from
+    // GLM-5.2 (1M context window) until Z.ai publishes distinct 5.3 numbers.
     let default = provider_capability(ApiProvider::Zai, DEFAULT_ZAI_MODEL);
     assert_eq!(default.resolved_model, DEFAULT_ZAI_MODEL);
-    assert_eq!(default.resolved_model, ZAI_GLM_5_2_MODEL);
+    assert_eq!(default.resolved_model, ZAI_GLM_5_3_MODEL);
     assert_eq!(default.context_window, 1_000_000);
     assert_eq!(default.max_output, Some(131_072));
     assert!(default.thinking_supported);
     assert!(!default.cache_telemetry_supported);
+
+    // GLM-5.2 remains available as an explicit model with its own id.
+    let v52 = provider_capability(ApiProvider::Zai, ZAI_GLM_5_2_MODEL);
+    assert_eq!(v52.resolved_model, ZAI_GLM_5_2_MODEL);
+    assert_eq!(v52.context_window, 1_000_000);
+    assert_eq!(v52.max_output, Some(131_072));
+    assert!(v52.thinking_supported);
 
     // GLM-5.1 remains available as an explicit model (smaller window).
     let v51 = provider_capability(ApiProvider::Zai, ZAI_GLM_5_1_MODEL);
@@ -10951,6 +11251,7 @@ fn session_provider_identity_preserves_exact_named_custom_key() {
             provider: ApiProvider::Custom,
             key: "lm-studio".to_string(),
             exact_id: Some("lm-studio".to_string()),
+            migrated_legacy_ollama_cloud_route: false,
         }
     );
     assert_eq!(
@@ -10961,6 +11262,7 @@ fn session_provider_identity_preserves_exact_named_custom_key() {
             provider: ApiProvider::Openrouter,
             key: "openrouter".to_string(),
             exact_id: Some("openrouter".to_string()),
+            migrated_legacy_ollama_cloud_route: false,
         }
     );
     let migrated = config
@@ -10972,8 +11274,91 @@ fn session_provider_identity_preserves_exact_named_custom_key() {
             provider: ApiProvider::Custom,
             key: "lm-studio".to_string(),
             exact_id: Some("lm-studio".to_string()),
+            migrated_legacy_ollama_cloud_route: false,
         }
     );
+}
+
+#[test]
+fn persisted_legacy_ollama_cloud_receipts_upgrade_only_on_exact_live_route() {
+    let exact = Config {
+        provider: Some("ollama".to_string()),
+        providers: Some(ProvidersConfig {
+            ollama: ProviderConfig {
+                base_url: Some(codewhale_config::provider::OLLAMA_CLOUD_BASE_URL.to_string()),
+                ..ProviderConfig::default()
+            },
+            ..ProvidersConfig::default()
+        }),
+        ..Config::default()
+    };
+    for provider_id in [None, Some("ollama")] {
+        let identity = exact
+            .resolve_persisted_provider_identity(Some("ollama"), provider_id)
+            .expect("exact released tuple migrates");
+        assert_eq!(identity.provider, ApiProvider::OllamaCloud);
+        assert_eq!(identity.key, "ollama-cloud");
+        assert_eq!(identity.exact_id.as_deref(), Some("ollama"));
+        assert!(identity.migrated_legacy_ollama_cloud_route);
+    }
+
+    let neighbor = Config {
+        provider: Some("ollama".to_string()),
+        providers: Some(ProvidersConfig {
+            ollama: ProviderConfig {
+                base_url: Some("https://ollama.com/v1/preview".to_string()),
+                ..ProviderConfig::default()
+            },
+            ..ProvidersConfig::default()
+        }),
+        ..Config::default()
+    };
+    let identity = neighbor
+        .resolve_persisted_provider_identity(Some("ollama"), Some("ollama"))
+        .expect("neighbor remains local/custom ollama identity");
+    assert_eq!(identity.provider, ApiProvider::Ollama);
+    assert_eq!(identity.key, "ollama");
+
+    let explicit = Config {
+        provider: Some("ollama-cloud".to_string()),
+        ..Config::default()
+    };
+    let identity = explicit
+        .resolve_persisted_provider_identity(Some("ollama-cloud"), Some("ollama-cloud"))
+        .expect("new receipt remains first-class cloud identity");
+    assert_eq!(identity.provider, ApiProvider::OllamaCloud);
+    assert_eq!(identity.key, "ollama-cloud");
+    assert_eq!(identity.exact_id.as_deref(), Some("ollama-cloud"));
+    assert!(!identity.migrated_legacy_ollama_cloud_route);
+
+    let coexisting = Config {
+        provider: Some("ollama".to_string()),
+        providers: Some(ProvidersConfig {
+            ollama: ProviderConfig {
+                base_url: Some(codewhale_config::provider::OLLAMA_CLOUD_BASE_URL.to_string()),
+                ..ProviderConfig::default()
+            },
+            ollama_cloud: ProviderConfig {
+                base_url: Some(codewhale_config::provider::OLLAMA_CLOUD_BASE_URL.to_string()),
+                ..ProviderConfig::default()
+            },
+            ..ProvidersConfig::default()
+        }),
+        ..Config::default()
+    };
+    let explicit = coexisting
+        .resolve_persisted_provider_identity(Some("ollama-cloud"), Some("ollama-cloud"))
+        .expect("explicit receipt stays on the first-class route");
+    assert!(!explicit.migrated_legacy_ollama_cloud_route);
+    assert_eq!(explicit.exact_id.as_deref(), Some("ollama-cloud"));
+
+    let mut explicit_live = coexisting.clone();
+    explicit_live.provider = Some("ollama-cloud".to_string());
+    let migrated = explicit_live
+        .resolve_persisted_provider_identity(Some("ollama-cloud"), Some("ollama"))
+        .expect("legacy receipt retains its source route after a live provider switch");
+    assert!(migrated.migrated_legacy_ollama_cloud_route);
+    assert_eq!(migrated.exact_id.as_deref(), Some("ollama"));
 }
 
 #[test]
@@ -11106,6 +11491,7 @@ fn persisted_provider_pair_never_collapses_builtin_into_same_key_custom_route() 
             provider: ApiProvider::Custom,
             key: "openai".to_string(),
             exact_id: Some("openai".to_string()),
+            migrated_legacy_ollama_cloud_route: false,
         }
     );
 
@@ -11174,6 +11560,7 @@ fn legacy_literal_custom_identity_requires_one_valid_root_route() {
             provider: ApiProvider::Custom,
             key: "custom".to_string(),
             exact_id: None,
+            migrated_legacy_ollama_cloud_route: false,
         }
     );
     assert_eq!(legacy.deepseek_base_url(), "http://127.0.0.1:1234/v1");

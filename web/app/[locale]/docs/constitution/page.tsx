@@ -7,9 +7,9 @@ export async function generateMetadata({ params }: { params: Promise<{ locale: s
   return buildPageMetadata({
     path: "/docs/constitution",
     locale,
-    title: isZh ? "宪法与 /constitution · Codewhale 文档" : "Constitution and /constitution · Codewhale Docs",
+    title: isZh ? "宪章与 /constitution · Codewhale 文档" : "Constitution and /constitution · Codewhale Docs",
     description: isZh
-      ? "用户全局宪法、仓库本地法、项目说明和运行时边界。"
+      ? "用户全局宪章、仓库本地法、项目说明和运行时边界。"
       : "User-global constitution, repo-local law, project instructions, and runtime boundaries.",
   });
 }
@@ -22,15 +22,15 @@ export default async function ConstitutionPage({ params }: { params: Promise<{ l
     <section className="space-y-10">
       <section id="overview" className="scroll-mt-32">
         <h2 className="font-display text-3xl mb-1">
-          {isZh ? "宪法与 /constitution" : "Constitution and /constitution"}{" "}
+          {isZh ? "宪章与 /constitution" : "Constitution and /constitution"}{" "}
           <span className="font-cjk text-indigo text-2xl ml-2">
-            {isZh ? "Constitution" : "宪法与 /constitution"}
+            {isZh ? "Constitution" : "宪章与 /constitution"}
           </span>
         </h2>
         {isZh ? (
           <p className="text-ink-soft mt-3 leading-[1.9] tracking-wide">
             Codewhale 先给 Agent 一个可追责的地址，再给上下文冲突一套法律。
-            <code className="inline">/constitution</code> 是管理个人常驻宪法的主入口：
+            <code className="inline">/constitution</code> 是管理个人常驻宪章的主入口：
             它把结构化的用户全局设置保存在 <code className="inline">$CODEWHALE_HOME/constitution.json</code>，
             再渲染成模型可读的 prose block。仓库仍可通过{" "}
             <code className="inline">.codewhale/constitution.json</code> 增加本地 law；runtime
@@ -65,7 +65,7 @@ export default async function ConstitutionPage({ params }: { params: Promise<{ l
               name: "Runtime",
               cn: "运行时",
               en: "Constitution text may express preferences, but approval, sandbox, shell, network, trust, and MCP permissions remain enforced config.",
-              zh: "宪法文本可以表达偏好；审批、沙箱、Shell、网络、信任和 MCP 权限仍由运行时配置强制执行。",
+              zh: "宪章文本可以表达偏好；审批、沙箱、Shell、网络、信任和 MCP 权限仍由运行时配置强制执行。",
             },
           ].map((row) => (
             <div key={row.name} className="p-5">
@@ -80,7 +80,7 @@ export default async function ConstitutionPage({ params }: { params: Promise<{ l
         </div>
         <p className={`mt-4 text-sm text-ink-soft ${isZh ? "leading-[1.9] tracking-wide" : "leading-relaxed"}`}>
           {isZh
-            ? "普通项目说明仍放在 AGENTS.md；记忆和交接低于宪法与项目说明；完整 base prompt Markdown 覆盖只是专家逃生口，不是普通设置路径。详见 "
+            ? "普通项目说明仍放在 AGENTS.md；记忆和交接低于宪章与项目说明；完整 base prompt Markdown 覆盖只是专家逃生口，不是普通设置路径。详见 "
             : "Standard project instructions still live in AGENTS.md; memory and handoffs rank below constitutions and project instructions; the full base-prompt Markdown override is an expert escape hatch, not the normal setup path. See "}
           <Link
             href="https://github.com/Hmbown/CodeWhale/blob/main/docs/CONFIGURATION.md#constitution-project-instructions-and-repo-authority"

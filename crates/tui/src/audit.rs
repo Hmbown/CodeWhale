@@ -43,3 +43,11 @@ fn append_event(event: &str, details: Value) -> anyhow::Result<()> {
 fn default_audit_path() -> anyhow::Result<PathBuf> {
     Ok(codewhale_config::codewhale_home()?.join("audit.log"))
 }
+
+/// Where audit events are written, for surfaces that point a person at the
+/// full record (for example `/permissions`). `None` when no Codewhale home
+/// resolves; callers show a placeholder rather than guessing a path.
+#[must_use]
+pub fn audit_log_path() -> Option<PathBuf> {
+    default_audit_path().ok()
+}

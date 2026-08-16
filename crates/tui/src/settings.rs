@@ -130,9 +130,9 @@ impl TuiPrefs {
     /// Return the canonical path of the TUI preferences file:
     /// `~/.codewhale/tui.toml`, or legacy `~/.deepseek/tui.toml` when present.
     ///
-    /// Tests may override the home directory through the
-    /// `DEEPSEEK_CONFIG_PATH` environment variable (the parent directory of
-    /// the pointed-to config is used instead of `~/.deepseek`).
+    /// Tests may override the home directory through the canonical
+    /// `CODEWHALE_CONFIG_PATH` environment variable. The parent directory of
+    /// the pointed-to config is used instead of the default settings home.
     pub fn path() -> Result<PathBuf> {
         #[cfg(test)]
         {
@@ -229,7 +229,7 @@ impl TuiPrefs {
 fn tui_prefs_path_from_environment() -> Result<PathBuf> {
     // Honour the same env-var escape hatch used by Settings::path so that
     // integration tests can redirect all config I/O to a temp directory.
-    if let Some(parent) = legacy_config_override_parent() {
+    if let Some(parent) = config_override_parent() {
         return Ok(parent.join("tui.toml"));
     }
 
@@ -2317,10 +2317,10 @@ fn settings_path_candidates() -> (Option<PathBuf>, Option<PathBuf>, Option<PathB
 
 fn settings_path_candidates_from_environment() -> (Option<PathBuf>, Option<PathBuf>, Option<PathBuf>)
 {
-    // Allow tests to override the settings directory via the same env var
-    // used for config (DEEPSEEK_CONFIG_PATH points at config.toml; the
-    // settings file lives as a sibling in the same directory).
-    if let Some(parent) = legacy_config_override_parent() {
+    // Allow tests to override the settings directory via the same env vars
+    // used for config. CODEWHALE_CONFIG_PATH is canonical; the legacy alias
+    // remains a read-only fallback for existing installs.
+    if let Some(parent) = config_override_parent() {
         return (Some(parent.join(SETTINGS_FILE_NAME)), None, None);
     }
 
@@ -2339,7 +2339,7 @@ fn settings_path_candidates_from_environment() -> (Option<PathBuf>, Option<PathB
     (primary, legacy_home, legacy_config_dir)
 }
 
-fn legacy_config_override_parent() -> Option<PathBuf> {
+fn config_override_parent() -> Option<PathBuf> {
     fn read() -> Option<PathBuf> {
         for var in ["CODEWHALE_CONFIG_PATH", "DEEPSEEK_CONFIG_PATH"] {
             if let Ok(config_path) = std::env::var(var) {

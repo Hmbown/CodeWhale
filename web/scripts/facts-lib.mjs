@@ -59,7 +59,10 @@ export function deriveSandboxBackendsFromSource(source) {
  * display mapping. MUST be kept in sync with the copy in
  * web/lib/facts-drift.ts (for the runtime Cloudflare cron path).
  *
- * Excluded variants: DeepseekCN (not wired through shared ProviderKind, #1104).
+ * Excluded variants: DeepseekCN (not wired through shared ProviderKind,
+ * #1104), Custom (dynamic meta-provider, #1519), and Antigravity
+ * (kept off the website 44 until the cloud-code wire is a first-class
+ * advertised outbound route).
  */
 const PROVIDER_LABEL_MAP = {
   Deepseek: { id: "deepseek", label: "DeepSeek", env: "DEEPSEEK_API_KEY" },
@@ -81,6 +84,7 @@ const PROVIDER_LABEL_MAP = {
   Sglang: { id: "sglang", label: "SGLang", env: "SGLANG_API_KEY" },
   Vllm: { id: "vllm", label: "vLLM", env: "VLLM_API_KEY" },
   Ollama: { id: "ollama", label: "Ollama", env: "OLLAMA_API_KEY" },
+  OllamaCloud: { id: "ollama-cloud", label: "Ollama Cloud", env: "OLLAMA_CLOUD_API_KEY / OLLAMA_API_KEY" },
   Huggingface: { id: "huggingface", label: "Hugging Face", env: "HUGGINGFACE_API_KEY / HF_TOKEN" },
   Deepinfra: { id: "deepinfra", label: "DeepInfra", env: "DEEPINFRA_API_KEY / DEEPINFRA_TOKEN" },
   Together: { id: "together", label: "Together AI", env: "TOGETHER_API_KEY" },
@@ -100,8 +104,8 @@ const PROVIDER_LABEL_MAP = {
   Telecomjs: { id: "telecomjs", label: "TelecomJS TokenHub", env: "TELECOMJS_API_KEY" },
   Xai: { id: "xai", label: "xAI", env: "XAI_API_KEY" },
   Mistral: { id: "mistral", label: "Mistral AI", env: "MISTRAL_API_KEY" },
-  Antigravity: { id: "antigravity", label: "Google Antigravity", env: "ANTIGRAVITY_API_KEY / AGY_ADC_AUTH" },
   Google: { id: "google", label: "Google Gemini", env: "GOOGLE_API_KEY / GEMINI_API_KEY" },
+  Edenai: { id: "edenai", label: "Eden AI", env: "EDENAI_API_KEY" },
   ModelstudioTokenPlan: { id: "modelstudio-token-plan", label: "Model Studio Token Plan", env: "MODELSTUDIO_API_KEY" },
   ModelstudioTokenPlanAnthropic: { id: "modelstudio-token-plan-anthropic", label: "Model Studio Token Plan (Anthropic-compatible)", env: "MODELSTUDIO_API_KEY" },
   ModelstudioCodingPlan: { id: "modelstudio-coding-plan", label: "Model Studio Coding Plan", env: "MODELSTUDIO_API_KEY" },
@@ -111,7 +115,9 @@ const PROVIDER_LABEL_MAP = {
 // DeepseekCN: not wired through shared ProviderKind (#1104).
 // Custom: the dynamic OpenAI-compatible meta-provider (#1519) — a runtime
 // catch-all for user-defined endpoints, not a website-listable provider.
-const EXCLUDED_PROVIDERS = new Set(["DeepseekCN", "Custom"]);
+// Antigravity: credential-import + text-only cloud-code wire. Kept off the
+// website 44-count until it is a first-class advertised outbound route.
+const EXCLUDED_PROVIDERS = new Set(["DeepseekCN", "Custom", "Antigravity"]);
 
 function providerEnumVariants() {
   const cfg = read("crates/tui/src/config.rs");

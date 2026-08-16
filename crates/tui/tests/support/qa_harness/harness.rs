@@ -256,7 +256,18 @@ impl Harness {
 
     /// Resolve a binary by Cargo bin-name (uses `CARGO_BIN_EXE_<name>`).
     /// Tests should call this rather than hard-coding paths.
+    ///
+    /// `QA_TUI_BIN` overrides the `codewhale-tui` resolution entirely — cargo
+    /// itself always sets `CARGO_BIN_EXE_*` for integration tests, so an
+    /// inherited value cannot win. Release QA uses this to A/B an older
+    /// released binary against the in-tree build (e.g. the #5424 sweep).
     pub fn cargo_bin(name: &str) -> PathBuf {
+        if name == "codewhale-tui"
+            && let Some(path) = std::env::var_os("QA_TUI_BIN")
+            && !path.is_empty()
+        {
+            return PathBuf::from(path);
+        }
         // Newer Cargo exposes CARGO_BIN_EXE_* at runtime; older supported
         // Cargo versions expose it to the integration test at compile time.
         let key = format!("CARGO_BIN_EXE_{name}");

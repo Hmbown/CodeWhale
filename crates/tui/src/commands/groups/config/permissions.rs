@@ -95,14 +95,43 @@ fn format_snapshot(app: &App, snapshot: &PermissionsSnapshot) -> String {
     if snapshot.rules().is_empty() {
         output.push('\n');
         output.push_str(&tr(app.ui_locale, MessageId::PermissionsNoRules));
-        return output;
+    } else {
+        for (index, rule) in snapshot.rules().iter().enumerate() {
+            output.push_str("\n\n");
+            output.push_str(&format_rule(app, index + 1, rule));
+        }
     }
-
-    for (index, rule) in snapshot.rules().iter().enumerate() {
-        output.push_str("\n\n");
-        output.push_str(&format_rule(app, index + 1, rule));
-    }
+    output.push_str("\n\n");
+    output.push_str(&format_posture_explainer(app));
     output
+}
+
+/// What the active permission posture decides on its own and what it never
+/// decides, so a person can predict Auto-Review without reading the policy
+/// engine. Rules above are the durable allow/ask/deny surface; the posture is
+/// the session-only layer that decides everything the rules did not.
+fn format_posture_explainer(app: &App) -> String {
+    let posture = app.approval_mode;
+    let mut text = tr(app.ui_locale, MessageId::PermissionsPostureHeader)
+        .replace("{posture}", posture.permission_chip_label());
+    text.push('\n');
+    text.push_str(&tr(
+        app.ui_locale,
+        match posture {
+            crate::tui::approval::ApprovalMode::Suggest => MessageId::PermissionsPostureAsk,
+            crate::tui::approval::ApprovalMode::Auto => MessageId::PermissionsPostureAuto,
+            crate::tui::approval::ApprovalMode::Bypass => MessageId::PermissionsPostureBypass,
+            crate::tui::approval::ApprovalMode::Never => MessageId::PermissionsPostureNever,
+        },
+    ));
+    text.push('\n');
+    let audit_path = crate::audit::audit_log_path()
+        .map(|path| codewhale_config::quote_os_path(&path))
+        .unwrap_or_else(|| "$CODEWHALE_HOME/audit.log".to_string());
+    text.push_str(
+        &tr(app.ui_locale, MessageId::PermissionsReceiptsNote).replace("{audit_path}", &audit_path),
+    );
+    text
 }
 
 fn format_rule(app: &App, display_index: usize, rule: &ToolAskRule) -> String {

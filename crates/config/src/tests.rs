@@ -1143,6 +1143,9 @@ struct EnvGuard {
     sglang_base_url: Option<OsString>,
     vllm_api_key: Option<OsString>,
     vllm_base_url: Option<OsString>,
+    ollama_cloud_api_key: Option<OsString>,
+    ollama_cloud_base_url: Option<OsString>,
+    ollama_cloud_model: Option<OsString>,
     ollama_api_key: Option<OsString>,
     ollama_base_url: Option<OsString>,
     huggingface_api_key: Option<OsString>,
@@ -1163,6 +1166,9 @@ struct EnvGuard {
     telecomjs_api_key: Option<OsString>,
     telecomjs_base_url: Option<OsString>,
     telecomjs_model: Option<OsString>,
+    edenai_api_key: Option<OsString>,
+    edenai_base_url: Option<OsString>,
+    edenai_model: Option<OsString>,
     opencode_go_api_key: Option<OsString>,
     opencode_go_base_url: Option<OsString>,
     opencode_go_model: Option<OsString>,
@@ -1202,6 +1208,9 @@ impl EnvGuard {
             telecomjs_api_key: env::var_os("TELECOMJS_API_KEY"),
             telecomjs_base_url: env::var_os("TELECOMJS_BASE_URL"),
             telecomjs_model: env::var_os("TELECOMJS_MODEL"),
+            edenai_api_key: env::var_os("EDENAI_API_KEY"),
+            edenai_base_url: env::var_os("EDENAI_BASE_URL"),
+            edenai_model: env::var_os("EDENAI_MODEL"),
             opencode_go_api_key: env::var_os("OPENCODE_GO_API_KEY"),
             opencode_go_base_url: env::var_os("OPENCODE_GO_BASE_URL"),
             opencode_go_model: env::var_os("OPENCODE_GO_MODEL"),
@@ -1302,6 +1311,9 @@ impl EnvGuard {
             sglang_base_url: env::var_os("SGLANG_BASE_URL"),
             vllm_api_key: env::var_os("VLLM_API_KEY"),
             vllm_base_url: env::var_os("VLLM_BASE_URL"),
+            ollama_cloud_api_key: env::var_os("OLLAMA_CLOUD_API_KEY"),
+            ollama_cloud_base_url: env::var_os("OLLAMA_CLOUD_BASE_URL"),
+            ollama_cloud_model: env::var_os("OLLAMA_CLOUD_MODEL"),
             ollama_api_key: env::var_os("OLLAMA_API_KEY"),
             ollama_base_url: env::var_os("OLLAMA_BASE_URL"),
             huggingface_api_key: env::var_os("HUGGINGFACE_API_KEY"),
@@ -1334,6 +1346,9 @@ impl EnvGuard {
             env::remove_var("TELECOMJS_API_KEY");
             env::remove_var("TELECOMJS_BASE_URL");
             env::remove_var("TELECOMJS_MODEL");
+            env::remove_var("EDENAI_API_KEY");
+            env::remove_var("EDENAI_BASE_URL");
+            env::remove_var("EDENAI_MODEL");
             env::remove_var("OPENCODE_GO_API_KEY");
             env::remove_var("OPENCODE_GO_BASE_URL");
             env::remove_var("OPENCODE_GO_MODEL");
@@ -1434,6 +1449,9 @@ impl EnvGuard {
             env::remove_var("SGLANG_BASE_URL");
             env::remove_var("VLLM_API_KEY");
             env::remove_var("VLLM_BASE_URL");
+            env::remove_var("OLLAMA_CLOUD_API_KEY");
+            env::remove_var("OLLAMA_CLOUD_BASE_URL");
+            env::remove_var("OLLAMA_CLOUD_MODEL");
             env::remove_var("OLLAMA_API_KEY");
             env::remove_var("OLLAMA_BASE_URL");
             env::remove_var("HUGGINGFACE_API_KEY");
@@ -1489,6 +1507,9 @@ impl Drop for EnvGuard {
             Self::restore_var("TELECOMJS_API_KEY", self.telecomjs_api_key.take());
             Self::restore_var("TELECOMJS_BASE_URL", self.telecomjs_base_url.take());
             Self::restore_var("TELECOMJS_MODEL", self.telecomjs_model.take());
+            Self::restore_var("EDENAI_API_KEY", self.edenai_api_key.take());
+            Self::restore_var("EDENAI_BASE_URL", self.edenai_base_url.take());
+            Self::restore_var("EDENAI_MODEL", self.edenai_model.take());
             Self::restore_var("OPENCODE_GO_API_KEY", self.opencode_go_api_key.take());
             Self::restore_var("OPENCODE_GO_BASE_URL", self.opencode_go_base_url.take());
             Self::restore_var("OPENCODE_GO_MODEL", self.opencode_go_model.take());
@@ -1604,6 +1625,9 @@ impl Drop for EnvGuard {
             Self::restore_var("SGLANG_BASE_URL", self.sglang_base_url.take());
             Self::restore_var("VLLM_API_KEY", self.vllm_api_key.take());
             Self::restore_var("VLLM_BASE_URL", self.vllm_base_url.take());
+            Self::restore_var("OLLAMA_CLOUD_API_KEY", self.ollama_cloud_api_key.take());
+            Self::restore_var("OLLAMA_CLOUD_BASE_URL", self.ollama_cloud_base_url.take());
+            Self::restore_var("OLLAMA_CLOUD_MODEL", self.ollama_cloud_model.take());
             Self::restore_var("OLLAMA_API_KEY", self.ollama_api_key.take());
             Self::restore_var("OLLAMA_BASE_URL", self.ollama_base_url.take());
             Self::restore_var("HUGGINGFACE_API_KEY", self.huggingface_api_key.take());
@@ -1618,29 +1642,54 @@ impl Drop for EnvGuard {
 
 struct RecordingSecretsStore {
     gets: Mutex<Vec<String>>,
+    sets: Mutex<Vec<String>>,
+    deletes: Mutex<Vec<String>>,
     value: Option<String>,
+    values: std::collections::HashMap<String, String>,
 }
 
 impl RecordingSecretsStore {
     fn with_value(value: &str) -> Self {
         Self {
             gets: Mutex::new(Vec::new()),
+            sets: Mutex::new(Vec::new()),
+            deletes: Mutex::new(Vec::new()),
             value: Some(value.to_string()),
+            values: std::collections::HashMap::new(),
         }
+    }
+
+    fn with_entries(entries: &[(&str, &str)]) -> Self {
+        Self {
+            gets: Mutex::new(Vec::new()),
+            sets: Mutex::new(Vec::new()),
+            deletes: Mutex::new(Vec::new()),
+            value: None,
+            values: entries
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+                .collect(),
+        }
+    }
+
+    fn empty() -> Self {
+        Self::with_entries(&[])
     }
 }
 
 impl codewhale_secrets::KeyringStore for RecordingSecretsStore {
     fn get(&self, key: &str) -> Result<Option<String>, codewhale_secrets::SecretsError> {
         self.gets.lock().unwrap().push(key.to_string());
-        Ok(self.value.clone())
+        Ok(self.values.get(key).cloned().or_else(|| self.value.clone()))
     }
 
-    fn set(&self, _key: &str, _value: &str) -> Result<(), codewhale_secrets::SecretsError> {
+    fn set(&self, key: &str, _value: &str) -> Result<(), codewhale_secrets::SecretsError> {
+        self.sets.lock().unwrap().push(key.to_string());
         Ok(())
     }
 
-    fn delete(&self, _key: &str) -> Result<(), codewhale_secrets::SecretsError> {
+    fn delete(&self, key: &str) -> Result<(), codewhale_secrets::SecretsError> {
+        self.deletes.lock().unwrap().push(key.to_string());
         Ok(())
     }
 
@@ -4093,6 +4142,12 @@ fn provider_kind_parses_openrouter_and_novita_aliases() {
         ProviderKind::parse("ollama-local"),
         Some(ProviderKind::Ollama)
     );
+    for alias in ["ollama-cloud", "ollama_cloud"] {
+        assert_eq!(ProviderKind::parse(alias), Some(ProviderKind::OllamaCloud));
+        let parsed: ConfigToml =
+            toml::from_str(&format!("provider = \"{alias}\"")).expect("ollama cloud alias");
+        assert_eq!(parsed.provider, ProviderKind::OllamaCloud);
+    }
     assert_eq!(
         ProviderKind::parse("wanjie-ark"),
         Some(ProviderKind::WanjieArk)
@@ -4711,6 +4766,66 @@ model = "glm-5.2"
 }
 
 #[test]
+fn edenai_resolves_named_chat_gateway_and_environment_overrides() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+
+    for alias in ["edenai", "eden-ai", "eden_ai"] {
+        assert_eq!(ProviderKind::parse(alias), Some(ProviderKind::Edenai));
+        let parsed: ConfigToml =
+            toml::from_str(&format!("provider = \"{alias}\"")).expect("Eden AI alias");
+        assert_eq!(parsed.provider, ProviderKind::Edenai);
+    }
+
+    let metadata = provider::resolve_provider("eden-ai").expect("Eden AI metadata");
+    assert_eq!(metadata.id(), "edenai");
+    assert_eq!(metadata.display_name(), "Eden AI");
+    assert_eq!(metadata.provider_config_key(), "edenai");
+    assert_eq!(metadata.default_base_url(), DEFAULT_EDENAI_BASE_URL);
+    assert_eq!(metadata.default_model(), DEFAULT_EDENAI_MODEL);
+    assert_eq!(metadata.env_vars(), &["EDENAI_API_KEY"]);
+    assert_eq!(
+        metadata.wire_policy(),
+        provider::WirePolicy::Fixed(provider::WireFormat::ChatCompletions)
+    );
+
+    let config: ConfigToml = toml::from_str(
+        r#"
+provider = "edenai"
+
+[providers.edenai]
+api_key = "eden-config-key"
+model = "anthropic/claude-sonnet-4-5"
+"#,
+    )
+    .expect("Eden AI provider table");
+    let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(resolved.provider, ProviderKind::Edenai);
+    assert_eq!(resolved.base_url, DEFAULT_EDENAI_BASE_URL);
+    assert_eq!(resolved.model, "anthropic/claude-sonnet-4-5");
+    assert_eq!(resolved.api_key.as_deref(), Some("eden-config-key"));
+    assert_eq!(
+        resolved.api_key_source,
+        Some(RuntimeApiKeySource::ConfigFile)
+    );
+
+    unsafe {
+        std::env::set_var("EDENAI_API_KEY", "eden-env-key");
+        std::env::set_var("EDENAI_BASE_URL", "https://api.eu.edenai.run/v3");
+        std::env::set_var("EDENAI_MODEL", "deepseek/deepseek-v4-flash");
+    }
+    let env_config = ConfigToml {
+        provider: ProviderKind::Edenai,
+        ..ConfigToml::default()
+    };
+    let resolved = env_config.resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(resolved.base_url, "https://api.eu.edenai.run/v3");
+    assert_eq!(resolved.model, "deepseek/deepseek-v4-flash");
+    assert_eq!(resolved.api_key.as_deref(), Some("eden-env-key"));
+    assert_eq!(resolved.api_key_source, Some(RuntimeApiKeySource::Env));
+}
+
+#[test]
 fn opencode_zen_configures_model_aware_provider_with_catalog_proof() {
     let _lock = env_lock();
     let _env = EnvGuard::without_deepseek_runtime_overrides();
@@ -4811,9 +4926,9 @@ fn meta_model_api_scopes_both_documented_key_names_to_official_endpoint() {
 fn provider_metadata_registry_covers_every_provider_kind_once() {
     let providers = provider::all_providers();
     // Full registry keeps legacy dialect/plan kinds for provider_for_kind.
-    assert_eq!(providers.len(), 45);
+    assert_eq!(providers.len(), 47);
     // Catalog surface is one identity per vendor (no dual-wire / plan rows).
-    assert_eq!(ProviderKind::ALL.len(), 40);
+    assert_eq!(ProviderKind::ALL.len(), 42);
     assert!(ProviderKind::ALL.len() < providers.len());
 
     let mut ids = std::collections::BTreeSet::new();
@@ -5122,24 +5237,28 @@ fn xiaomi_mimo_aliases_resolve_to_canonical_models() {
 
 #[test]
 fn zai_aliases_resolve_to_canonical_models() {
-    // GLM-5.2 is the default; the glm-5.1 alias must still resolve to 5.1
+    // GLM-5.3 is the default; the glm-5.1 alias must still resolve to 5.1
     // (not to the default), and GLM-5-Turbo resolves to its own id.
     assert_eq!(
         normalize_model_for_provider(ProviderKind::Zai, "glm-5.1"),
         ZAI_GLM_5_1_MODEL
     );
-    assert_eq!(
-        normalize_model_for_provider(ProviderKind::Zai, "glm-5-2"),
-        DEFAULT_ZAI_MODEL
-    );
-    assert_eq!(DEFAULT_ZAI_MODEL, "GLM-5.2");
-    // GLM-5.3 is a peer, not the default: its aliases must land on its own id
-    // and must never fold into DEFAULT_ZAI_MODEL.
+    assert_eq!(DEFAULT_ZAI_MODEL, "GLM-5.3");
+    assert_eq!(DEFAULT_ZAI_MODEL, ZAI_GLM_5_3_MODEL);
     for alias in ["glm-5.3", "glm-5-3", "zai-glm-5.3", "zai-glm-5-3"] {
         assert_eq!(
             normalize_model_for_provider(ProviderKind::Zai, alias),
             ZAI_GLM_5_3_MODEL,
             "{alias} must canonicalize to GLM-5.3"
+        );
+    }
+    // GLM-5.2 is a peer, no longer the default: an explicit 5.2 selection
+    // must keep its own id and must never fold into DEFAULT_ZAI_MODEL.
+    for alias in ["glm-5.2", "glm-5-2", "zai-glm-5.2", "zai-glm-5-2"] {
+        assert_eq!(
+            normalize_model_for_provider(ProviderKind::Zai, alias),
+            ZAI_GLM_5_2_MODEL,
+            "{alias} must canonicalize to GLM-5.2"
         );
         assert_ne!(
             normalize_model_for_provider(ProviderKind::Zai, alias),
@@ -5186,10 +5305,10 @@ fn zhipu_aliases_fold_into_zai_provider() {
     );
     assert_eq!(provider.model.as_deref(), Some("glm-5-2"));
 
-    // GLM aliases canonicalize under the Zai umbrella.
+    // GLM aliases canonicalize under the Zai umbrella, to their own ids.
     assert_eq!(
         normalize_model_for_provider(ProviderKind::Zai, "glm-5-2"),
-        DEFAULT_ZAI_MODEL
+        ZAI_GLM_5_2_MODEL
     );
 }
 
@@ -5897,6 +6016,238 @@ fn ollama_provider_defaults_to_local_endpoint_and_small_model() {
 }
 
 #[test]
+fn ollama_cloud_endpoint_is_official_but_neighboring_routes_are_custom() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+
+    assert!(provider_base_url_is_official(
+        ProviderKind::Ollama,
+        DEFAULT_OLLAMA_BASE_URL
+    ));
+    for base_url in [
+        provider::OLLAMA_CLOUD_BASE_URL,
+        "https://ollama.com/v1/",
+        "  HTTPS://OLLAMA.COM/v1/  ",
+    ] {
+        for provider in [ProviderKind::Ollama, ProviderKind::OllamaCloud] {
+            assert!(provider_base_url_is_official(provider, base_url));
+            assert!(!provider_preserves_custom_base_url_model(
+                provider, base_url
+            ));
+        }
+    }
+
+    for base_url in [
+        "http://ollama.com/v1",
+        "https://ollama.com/api",
+        "https://ollama.com/v1/preview",
+        "https://ollama.com.evil.example/v1",
+        "https://ollama-gateway.example/v1",
+    ] {
+        for provider in [ProviderKind::Ollama, ProviderKind::OllamaCloud] {
+            assert!(!provider_base_url_is_official(provider, base_url));
+            assert!(provider_preserves_custom_base_url_model(provider, base_url));
+        }
+    }
+}
+
+#[test]
+fn explicit_ollama_cloud_defaults_to_hosted_route_and_is_not_keyless() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+    let config = ConfigToml {
+        provider: ProviderKind::OllamaCloud,
+        ..ConfigToml::default()
+    };
+
+    let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+    assert_eq!(resolved.provider, ProviderKind::OllamaCloud);
+    assert_eq!(resolved.base_url, DEFAULT_OLLAMA_CLOUD_BASE_URL);
+    assert_eq!(resolved.model, DEFAULT_OLLAMA_CLOUD_MODEL);
+    assert_eq!(resolved.api_key, None);
+}
+
+#[test]
+fn ollama_cloud_preserves_provider_authoritative_model_ids() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+
+    let mut configured = ConfigToml {
+        provider: ProviderKind::OllamaCloud,
+        ..ConfigToml::default()
+    };
+    configured.providers.ollama_cloud.model = Some("vendor/model:tag".to_string());
+    let resolved = configured.resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(resolved.model, "vendor/model:tag");
+
+    let persisted_root = ConfigToml {
+        provider: ProviderKind::OllamaCloud,
+        default_text_model: Some("deepseek-v4-flash:0731".to_string()),
+        ..ConfigToml::default()
+    };
+    let resolved = persisted_root.resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(resolved.model, "deepseek-v4-flash:0731");
+}
+
+#[test]
+fn ollama_cloud_env_prefers_pi_compatible_name_then_official_name() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+    // Safety: test-only environment mutation guarded by a module mutex.
+    unsafe {
+        env::set_var("DEEPSEEK_PROVIDER", "ollama-cloud");
+        env::set_var("OLLAMA_CLOUD_API_KEY", "pi-compatible-key");
+        env::set_var("OLLAMA_API_KEY", "official-fallback-key");
+    }
+
+    let preferred = ConfigToml::default().resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(preferred.provider, ProviderKind::OllamaCloud);
+    assert_eq!(preferred.api_key.as_deref(), Some("pi-compatible-key"));
+    assert_eq!(preferred.api_key_source, Some(RuntimeApiKeySource::Env));
+
+    // Safety: same serialized test restores both values through EnvGuard.
+    unsafe { env::remove_var("OLLAMA_CLOUD_API_KEY") };
+    let fallback = ConfigToml::default().resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(fallback.api_key.as_deref(), Some("official-fallback-key"));
+    assert_eq!(fallback.api_key_source, Some(RuntimeApiKeySource::Env));
+}
+
+#[test]
+fn local_ollama_never_consumes_the_cloud_specific_environment_key() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+    // Safety: test-only environment mutation guarded by a module mutex.
+    unsafe { env::set_var("OLLAMA_CLOUD_API_KEY", "must-not-reach-local-ollama") };
+    let config = ConfigToml {
+        provider: ProviderKind::Ollama,
+        ..ConfigToml::default()
+    };
+
+    let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+    assert_eq!(resolved.provider, ProviderKind::Ollama);
+    assert_eq!(resolved.base_url, DEFAULT_OLLAMA_BASE_URL);
+    assert_eq!(resolved.api_key, None);
+}
+
+#[test]
+fn exact_legacy_ollama_cloud_tuple_migrates_in_memory_without_writes() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+    let store = Arc::new(RecordingSecretsStore::with_entries(&[(
+        "ollama",
+        "legacy-cloud-key",
+    )]));
+    let secrets = Secrets::new(store.clone());
+    let mut config = ConfigToml {
+        provider: ProviderKind::Ollama,
+        ..ConfigToml::default()
+    };
+    config.providers.ollama.base_url = Some(provider::OLLAMA_CLOUD_BASE_URL.to_string());
+    config.providers.ollama.model = Some("legacy-cloud-model".to_string());
+    let before = toml::to_string(&config).expect("serialize pre-migration config");
+
+    let resolved =
+        config.resolve_runtime_options_with_secrets(&CliRuntimeOverrides::default(), &secrets);
+
+    assert_eq!(resolved.provider, ProviderKind::OllamaCloud);
+    assert_eq!(resolved.base_url, provider::OLLAMA_CLOUD_BASE_URL);
+    assert_eq!(resolved.model, "legacy-cloud-model");
+    assert_eq!(resolved.api_key.as_deref(), Some("legacy-cloud-key"));
+    assert_eq!(resolved.api_key_source, Some(RuntimeApiKeySource::Keyring));
+    assert_eq!(
+        store.gets.lock().unwrap().as_slice(),
+        ["ollama-cloud", "ollama"]
+    );
+    assert!(store.sets.lock().unwrap().is_empty());
+    assert!(store.deletes.lock().unwrap().is_empty());
+    assert_eq!(
+        toml::to_string(&config).expect("serialize post-migration config"),
+        before,
+        "runtime migration must not rewrite the parsed config"
+    );
+}
+
+#[test]
+fn explicit_ollama_cloud_uses_only_its_new_secret_slot() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+    let store = Arc::new(RecordingSecretsStore::with_entries(&[
+        ("ollama-cloud", "cloud-key"),
+        ("ollama", "must-not-be-consumed"),
+    ]));
+    let secrets = Secrets::new(store.clone());
+    let mut config = ConfigToml {
+        provider: ProviderKind::OllamaCloud,
+        ..ConfigToml::default()
+    };
+    config.providers.ollama.base_url = Some(provider::OLLAMA_CLOUD_BASE_URL.to_string());
+
+    let resolved =
+        config.resolve_runtime_options_with_secrets(&CliRuntimeOverrides::default(), &secrets);
+
+    assert_eq!(resolved.provider, ProviderKind::OllamaCloud);
+    assert_eq!(resolved.api_key.as_deref(), Some("cloud-key"));
+    assert_eq!(store.gets.lock().unwrap().as_slice(), ["ollama-cloud"]);
+    assert!(store.sets.lock().unwrap().is_empty());
+    assert!(store.deletes.lock().unwrap().is_empty());
+}
+
+#[test]
+fn explicit_ollama_cloud_never_falls_back_to_local_secret_slot() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+    let store = Arc::new(RecordingSecretsStore::with_entries(&[(
+        "ollama",
+        "must-not-be-consumed",
+    )]));
+    let secrets = Secrets::new(store.clone());
+    let config = ConfigToml {
+        provider: ProviderKind::OllamaCloud,
+        ..ConfigToml::default()
+    };
+
+    let resolved =
+        config.resolve_runtime_options_with_secrets(&CliRuntimeOverrides::default(), &secrets);
+
+    assert_eq!(resolved.api_key, None);
+    assert_eq!(store.gets.lock().unwrap().as_slice(), ["ollama-cloud"]);
+}
+
+#[test]
+fn neighboring_legacy_ollama_routes_do_not_migrate_or_probe_cloud_secrets() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+
+    for base_url in [
+        "http://ollama.com/v1",
+        "https://ollama.com/api",
+        "https://ollama.com/v1/preview",
+        "https://ollama.com.evil.example/v1",
+        "https://ollama-gateway.example/v1",
+    ] {
+        let store = Arc::new(RecordingSecretsStore::with_entries(&[
+            ("ollama-cloud", "cloud-key"),
+            ("ollama", "legacy-key"),
+        ]));
+        let secrets = Secrets::new(store.clone());
+        let mut config = ConfigToml {
+            provider: ProviderKind::Ollama,
+            ..ConfigToml::default()
+        };
+        config.providers.ollama.base_url = Some(base_url.to_string());
+
+        let resolved =
+            config.resolve_runtime_options_with_secrets(&CliRuntimeOverrides::default(), &secrets);
+
+        assert_eq!(resolved.provider, ProviderKind::Ollama, "{base_url}");
+        assert_eq!(resolved.api_key, None, "{base_url}");
+        assert!(store.gets.lock().unwrap().is_empty(), "{base_url}");
+    }
+}
+
+#[test]
 fn self_hosted_providers_do_not_probe_secret_store_by_default() {
     let _lock = env_lock();
     let _env = EnvGuard::without_deepseek_runtime_overrides();
@@ -6242,7 +6593,7 @@ fn ollama_provider_preserves_model_tags() {
 }
 
 #[test]
-fn ollama_remote_env_url_does_not_inherit_ambient_optional_key() {
+fn ollama_custom_remote_does_not_inherit_ambient_or_saved_official_key() {
     let _lock = env_lock();
     let _env = EnvGuard::without_deepseek_runtime_overrides();
     // Safety: test-only environment mutation guarded by a module mutex.
@@ -6252,12 +6603,20 @@ fn ollama_remote_env_url_does_not_inherit_ambient_optional_key() {
         env::set_var("OLLAMA_API_KEY", "ollama-env-key");
     }
 
-    let resolved = ConfigToml::default().resolve_runtime_options(&CliRuntimeOverrides::default());
+    let store = Arc::new(RecordingSecretsStore::with_value("ollama-saved-key"));
+    let secrets = Secrets::new(store.clone());
+
+    let resolved = ConfigToml::default()
+        .resolve_runtime_options_with_secrets(&CliRuntimeOverrides::default(), &secrets);
 
     assert_eq!(resolved.provider, ProviderKind::Ollama);
     assert_eq!(resolved.base_url, "http://ollama.example/v1");
     assert_eq!(resolved.api_key, None);
     assert_eq!(resolved.api_key_source, None);
+    assert!(
+        store.gets.lock().unwrap().is_empty(),
+        "a custom Ollama endpoint must not read the official ollama secret slot"
+    );
 }
 
 #[test]
@@ -6931,10 +7290,7 @@ fn sentinel_config_values_fall_through_without_becoming_runtime_keys() {
         assert_eq!(resolved.api_key_source, None);
         assert!(custom_store.gets.lock().unwrap().is_empty());
 
-        let empty_store = Arc::new(RecordingSecretsStore {
-            gets: Mutex::new(Vec::new()),
-            value: None,
-        });
+        let empty_store = Arc::new(RecordingSecretsStore::empty());
         let empty_secrets = Secrets::new(empty_store);
         let mut xiaomi = ConfigToml {
             provider: ProviderKind::XiaomiMimo,

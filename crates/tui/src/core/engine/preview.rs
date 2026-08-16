@@ -370,7 +370,12 @@ impl Engine {
         // an auto-routed preview must not reuse the installed model's prompt.
         // A session-level override wins here exactly as it does in
         // `refresh_system_prompt`.
-        let system_prompt = if self.session.system_prompt_override {
+        // The header is pinned for the session: with unchanged explicit
+        // inputs a real turn reuses the pinned bytes (workspace drift arrives
+        // as a `<context_update>` message instead), so preview mirrors that.
+        let system_prompt = if self.session.system_prompt_override
+            || self.session.pinned_prompt_context.as_ref() == Some(&prompt_context)
+        {
             self.session.system_prompt.clone()
         } else {
             self.compose_stable_system_prompt(&prompt_context)
@@ -472,6 +477,10 @@ impl Engine {
         let prepared = match route.client.prepare_outbound_request(request, true) {
             Ok(prepared) => prepared.with_route_id(route.identity.exact_id.clone()),
             Err(error) => {
+                let detail = super::turn_loop::preview_request_error_user_message(
+                    &self.config.locale_tag,
+                    &error,
+                );
                 // Route identity is read *off the prepared request*, so a
                 // preparation failure leaves the endpoint, wire model, and
                 // dialect unknown too. The tool surface survives: it was built
@@ -480,12 +489,12 @@ impl Engine {
                     session,
                     route: Availability::unavailable_with(
                         UnavailableReason::RequestPreparationFailed,
-                        format!("{error:#}"),
+                        detail.clone(),
                     ),
                     tools,
                     body: Availability::unavailable_with(
                         UnavailableReason::RequestPreparationFailed,
-                        format!("{error:#}"),
+                        detail,
                     ),
                 });
             }

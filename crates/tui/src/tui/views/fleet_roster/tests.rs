@@ -391,6 +391,52 @@ fn fleet_roster_is_usable_and_opaque_at_blocker_sizes() {
     }
 }
 
+/// Whale Teams: member rows carry the species badge and the detail pane
+/// opens with the identity block (portrait at ≥ 60 cols, badge-only below)
+/// with no caption labels and no state claim.
+#[test]
+fn roster_rows_and_detail_carry_whale_identity_without_claiming_state() {
+    let wide = render_through_stack(
+        || {
+            let mut v = built_in_view();
+            v.selected = 2; // scout
+            v
+        },
+        120,
+        32,
+    )
+    .join("\n");
+    assert!(wide.contains("◂▰ scout"), "{wide}");
+    assert!(wide.contains("▰] builder"), "{wide}");
+    assert!(wide.contains("◇▰ reviewer"), "{wide}");
+    assert!(wide.contains("▚△▞"), "portrait fluke missing: {wide}");
+    assert!(wide.contains("Scout · beaked whale · research"), "{wide}");
+    assert!(
+        !wide.contains("Whale identity"),
+        "no caption labels: {wide}"
+    );
+    assert!(!wide.contains("identity only"), "no caption labels: {wide}");
+    for word in ["Working", "Waiting for you", "Blocked", "Offline"] {
+        assert!(!wide.contains(word), "roster must not claim {word}: {wide}");
+    }
+
+    let narrow = render_through_stack(
+        || {
+            let mut v = built_in_view();
+            v.selected = 2;
+            v
+        },
+        56,
+        20,
+    )
+    .join("\n");
+    assert!(narrow.contains("◂▰ Scout · beaked whale"), "{narrow}");
+    assert!(
+        !narrow.contains("▚△▞"),
+        "compact tier is badge-only: {narrow}"
+    );
+}
+
 #[test]
 fn selection_stays_visible_when_list_scrolls() {
     // Select the last member and render short: the pointer row must be
@@ -405,5 +451,5 @@ fn selection_stays_visible_when_list_scrolls() {
         24,
     );
     let text = rows.join("\n");
-    assert!(text.contains("▸ · custom"), "{text}");
+    assert!(text.contains("▸ · ·▰ custom"), "{text}");
 }

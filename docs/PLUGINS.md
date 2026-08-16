@@ -2,7 +2,8 @@
 
 This is the walkthrough for the `/plugin install` on-ramp (v0.9.4, #5182).
 [PLUGIN_BUNDLES.md](PLUGIN_BUNDLES.md) remains the contract for the bundle
-format (`plugin.json` or legacy `plugin.toml`), discovery, validation, and
+format (`plugin.json`, compatible `kimi.plugin.json`, or legacy
+`plugin.toml`), discovery, validation, and
 the trust/enable lifecycle — this document covers how bits get onto disk in
 the first place.
 
@@ -30,7 +31,10 @@ gated by the per-domain network policy: an unknown host returns a
 a denied host aborts without touching disk.
 
 The fetched tree must contain **exactly one** bundle root — a directory
-holding a `plugin.json` (or legacy `plugin.toml`) manifest. Bundles land in
+holding a `plugin.json`, compatible `kimi.plugin.json`, or legacy `plugin.toml`
+manifest. Kimi bundles are accepted when they use Codewhale-compatible Skills,
+commands, agents, and MCP declarations; unsupported Kimi runtime fields fail
+closed instead of being silently ignored. Bundles land in
 the user plugins root at `~/.codewhale/plugins/<name>/`, where `<name>` is the
 manifest's plugin name.
 

@@ -87,6 +87,21 @@ shell command through the normal approval path.
 - **Work you can resume.** A fleet records every step to an append-only ledger,
   so `fleet resume` picks up where you left off.
 
+## Integrations
+
+- **DeepSeek Harness (dsh) — connected through Codewhale.**
+  `codewhale integrations dsh connect` links an existing `@deepseek-ai/dsh`
+  install to your Codewhale provider route, permissions, and workspace, and
+  `integrations dsh install-bundle` adds the opt-in DSH plugin bundle so
+  `dsh --profile codewhale` carries that identity on its own. Codewhale owns
+  permissions and lifecycle authority; dsh keeps its own sessions, profiles,
+  and credentials untouched. See
+  [docs/INTEGRATIONS_DSH.md](docs/INTEGRATIONS_DSH.md).
+- **VS Code.** The official extension scaffold (`extensions/vscode`) opens
+  Codewhale in an integrated terminal and exposes a read-only Agent View over
+  the local runtime. It is a local-development preview, not a marketplace
+  release yet.
+
 ## Learn more
 
 - [docs/PROVIDERS.md](docs/PROVIDERS.md) — every provider route: hosted,
@@ -133,4 +148,4 @@ terminal-agent experience.
 [MIT](LICENSE). An independent community project, not affiliated with any model
 provider.
 
-[![Star History Chart](https://api.star-history.com/chart?repos=Hmbown/CodeWhale&type=date&legend=top-left)](https://www.star-history.com/?repos=Hmbown%2FCodeWhale&type=date)
+![Codewhale fanning out three read-only scout subagents in a terminal](assets/fanout.gif)

@@ -122,6 +122,10 @@ while IFS=$'\t' read -r run_id head_branch run_event run_url; do
       --jq '.jobs[] | select(.name == "release" and .conclusion == "success") | .databaseId' \
       | head -n 1
   )"
+  # Freshness vs the release job's own started_at (not the run-level
+  # run_started_at, which job-level reruns bump past the uploads) is enforced
+  # in npm/codewhale/scripts/verify-release-assets.js — see #5429. This check
+  # only proves a successful release job exists for the tag SHA.
   if [[ -n "${release_job_id}" ]]; then
     run_summary="${run_id}\t${head_branch}\t${run_event}\t${run_url}\trelease job ${release_job_id}"
     break
