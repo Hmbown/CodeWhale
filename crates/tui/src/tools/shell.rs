@@ -1563,6 +1563,12 @@ impl ShellManager {
         self.sandbox_manager.set_prefer_bwrap(prefer);
     }
 
+    /// Set user-configured bwrap mount extensions (#5410): extra read-only
+    /// roots and writable device nodes such as `/dev/null`.
+    pub fn set_bwrap_extensions(&mut self, extensions: crate::sandbox::BwrapMountExtensions) {
+        self.sandbox_manager.set_bwrap_extensions(extensions);
+    }
+
     /// Return the OS sandbox wrapper this shell manager is configured and able
     /// to apply to commands.
     pub fn configured_sandbox_type(&self) -> Option<SandboxType> {

@@ -2642,6 +2642,20 @@ pub struct Config {
     /// separately — we do NOT vendor bwrap.
     #[serde(alias = "preferBwrap")]
     pub prefer_bwrap: Option<bool>,
+    /// Additional host paths to bind read-only inside the bubblewrap sandbox
+    /// (Linux, `prefer_bwrap = true`, #5410). The default root bind already
+    /// exposes the host filesystem read-only; these cover setups where a
+    /// policy or future default narrows it. Non-existent paths are skipped.
+    #[serde(default, alias = "bwrapRoRoots")]
+    pub bwrap_ro_roots: Vec<std::path::PathBuf>,
+    /// Host device nodes to bind read-write inside the bubblewrap sandbox
+    /// (#5410), e.g. `/dev/null` for shell redirection against the host node.
+    /// Only character/block devices are honored — never directories — so
+    /// this key cannot become a writable-root escape hatch. Non-existent or
+    /// non-device paths are skipped. The default private `/dev` already
+    /// provides fresh device nodes, so most users never need this.
+    #[serde(default, alias = "bwrapDevRoots")]
+    pub bwrap_dev_roots: Vec<std::path::PathBuf>,
     #[serde(alias = "managedConfigPath")]
     pub managed_config_path: Option<String>,
     #[serde(alias = "requirementsPath")]
@@ -9696,6 +9710,16 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         sandbox_url: override_cfg.sandbox_url.or(base.sandbox_url),
         sandbox_api_key: override_cfg.sandbox_api_key.or(base.sandbox_api_key),
         prefer_bwrap: override_cfg.prefer_bwrap.or(base.prefer_bwrap),
+        bwrap_ro_roots: if override_cfg.bwrap_ro_roots.is_empty() {
+            base.bwrap_ro_roots
+        } else {
+            override_cfg.bwrap_ro_roots
+        },
+        bwrap_dev_roots: if override_cfg.bwrap_dev_roots.is_empty() {
+            base.bwrap_dev_roots
+        } else {
+            override_cfg.bwrap_dev_roots
+        },
         managed_config_path: override_cfg
             .managed_config_path
             .or(base.managed_config_path),

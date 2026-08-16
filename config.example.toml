@@ -374,6 +374,18 @@ sandbox_mode = "workspace-write" # read-only | workspace-write | danger-full-acc
 # prefer_bwrap = false  # default — use Landlock only
 #
 # Env override: DEEPSEEK_PREFER_BWRAP=true
+#
+# With prefer_bwrap = true, the sandbox gets a private /dev and /proc plus a
+# writable isolated /tmp by default, so toolchains work without widening the
+# filesystem policy (#5410). Two optional escape hatches:
+#
+# bwrap_ro_roots = []      # extra host paths bind-mounted read-only, e.g.
+#                          #   ["/usr/lib", "/usr/lib64"] for system-library
+#                          #   linking when the root bind is narrowed
+# bwrap_dev_roots = []    # host device nodes bind-mounted read-write, e.g.
+#                          #   ["/dev/null"] for redirection against the host
+#                          #   node — character/block devices only, never
+#                          #   directories, so this cannot widen file writes
 
 # auto_allow entries match by command prefix, not raw string.
 # See command_safety.rs for the prefix dictionary.

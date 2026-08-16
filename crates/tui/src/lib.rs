@@ -11435,6 +11435,10 @@ async fn run_exec_agent(
             execution_config.subagent_heartbeat_timeout_secs_for_provider(effective_provider),
         ),
         prefer_bwrap: execution_config.prefer_bwrap.unwrap_or(false),
+        bwrap_extensions: crate::sandbox::BwrapMountExtensions {
+            read_only_roots: execution_config.bwrap_ro_roots.clone(),
+            device_roots: execution_config.bwrap_dev_roots.clone(),
+        },
         memory_enabled: execution_config.memory_enabled(),
         memory_path: execution_config.memory_path(),
         speech_output_dir: execution_config.speech_output_dir(),

@@ -5835,6 +5835,10 @@ impl RuntimeThreadManager {
                     cfg.subagent_heartbeat_timeout_secs_for_provider(provider),
                 ),
                 prefer_bwrap: cfg.prefer_bwrap.unwrap_or(false),
+                bwrap_extensions: crate::sandbox::BwrapMountExtensions {
+                    read_only_roots: cfg.bwrap_ro_roots.clone(),
+                    device_roots: cfg.bwrap_dev_roots.clone(),
+                },
                 memory_enabled: cfg.memory_enabled(),
                 memory_path: cfg.memory_path(),
                 speech_output_dir: cfg.speech_output_dir(),

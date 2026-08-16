@@ -14,6 +14,9 @@
 //! bwrap \
 //!   --unshare-all \
 //!   --ro-bind / / \
+//!   --dev /dev \
+//!   --proc /proc \
+//!   --tmpfs /tmp \
 //!   --bind <writable-root> <writable-root> \
 //!   --chdir <cwd> \
 //!   -- <program> <args>
@@ -21,7 +24,9 @@
 //!
 //! This creates a read-only view of the entire filesystem with write access
 //! limited to the policy-derived writable roots. Policies that allow network
-//! access add `--share-net` after `--unshare-all`.
+//! access add `--share-net` after `--unshare-all`. A private `/dev` and
+//! `/proc` plus a tmpfs `/tmp` keep standard toolchain expectations working
+//! (#5410); user-configured extra roots and device nodes append after them.
 //!
 //! # Important
 //!
@@ -41,6 +46,14 @@ use super::policy::WritableRoot;
 use std::collections::BTreeSet;
 #[cfg(target_os = "linux")]
 use std::path::{Path, PathBuf};
+
+/// Resolve configured paths against the live filesystem, returning
+/// `(read_only_mounts, device_mounts)` as canonical paths that exist and
+/// satisfy each key's constraints.
+#[cfg(target_os = "linux")]
+pub(crate) fn existing_directory_shim(path: &Path) -> Option<PathBuf> {
+    existing_directory(path)
+}
 
 /// Canonical path to the bubblewrap binary.
 #[cfg(target_os = "linux")]
@@ -79,6 +92,8 @@ pub fn is_available() -> bool {
 /// - `args` — arguments to pass to the program
 /// - `writable_roots` — policy-derived directories to remount read-write
 /// - `network_access` — whether to retain the caller's network namespace
+/// - `extensions` — user-configured extra read-only roots and writable
+///   device nodes (#5410); skipped when they do not exist on the host
 ///
 /// # Returns
 ///
@@ -90,8 +105,10 @@ pub fn build_bwrap_command(
     args: &[String],
     writable_roots: &[WritableRoot],
     network_access: bool,
+    extensions: &super::BwrapMountExtensions,
 ) -> Vec<String> {
     let (writable_mounts, read_only_mounts) = safe_mounts(writable_roots);
+    let (extra_read_only, device_mounts) = extensions.resolve();
     let mut cmd: Vec<String> =
         Vec::with_capacity(10 + args.len() + 3 * (writable_mounts.len() + read_only_mounts.len()));
 
@@ -109,6 +126,26 @@ pub fn build_bwrap_command(
     cmd.push("/".to_string());
     cmd.push("/".to_string());
 
+    // Standard container essentials (#5410): a private `/dev` (so device
+    // nodes exist fresh and writable — `>/dev/null` under the read-only
+    // root bind is EROFS without this), `/proc`, and a writable isolated
+    // `/tmp` for toolchain scratch space.
+    cmd.push("--dev".to_string());
+    cmd.push("/dev".to_string());
+    cmd.push("--proc".to_string());
+    cmd.push("/proc".to_string());
+    cmd.push("--tmpfs".to_string());
+    cmd.push("/tmp".to_string());
+
+    // User-configured writable device nodes (#5410), e.g. a host `/dev/null`
+    // when the caller needs the host's, not the fresh private one.
+    for device in device_mounts {
+        let device = device.to_string_lossy().into_owned();
+        cmd.push("--dev-bind".to_string());
+        cmd.push(device.clone());
+        cmd.push(device);
+    }
+
     for root in writable_mounts {
         let root = root.to_string_lossy().into_owned();
         cmd.push("--bind".to_string());
@@ -119,6 +156,16 @@ pub fn build_bwrap_command(
     // Re-apply protected descendants after all writable parents so a broad
     // writable root cannot make .codewhale/.deepseek exceptions writable.
     for root in read_only_mounts {
+        let root = root.to_string_lossy().into_owned();
+        cmd.push("--ro-bind".to_string());
+        cmd.push(root.clone());
+        cmd.push(root);
+    }
+
+    // User-configured extra read-only roots (#5410) apply last so they can
+    // narrow (re-mount read-only over) any earlier writable bind if the
+    // user explicitly lists a path the policy made writable.
+    for root in extra_read_only {
         let root = root.to_string_lossy().into_owned();
         cmd.push("--ro-bind".to_string());
         cmd.push(root.clone());
@@ -214,6 +261,7 @@ mod tests {
             &["-c".to_string(), "echo hi".to_string()],
             &[WritableRoot::new(cwd.to_path_buf())],
             false,
+            &super::BwrapMountExtensions::default(),
         );
 
         // Should start with bwrap
@@ -221,6 +269,11 @@ mod tests {
 
         // Should have ro-bind for root
         assert!(cmd.contains(&"--ro-bind".to_string()));
+
+        // Standard container essentials (#5410): private /dev, /proc, tmpfs /tmp.
+        assert!(cmd.contains(&"--dev".to_string()));
+        assert!(cmd.contains(&"--proc".to_string()));
+        assert!(cmd.contains(&"--tmpfs".to_string()));
 
         // Should have --chdir
         assert!(cmd.contains(&"--chdir".to_string()));
@@ -240,7 +293,14 @@ mod tests {
     fn read_only_command_does_not_remount_the_working_directory_writable() {
         let dir = tempfile::tempdir().expect("tempdir");
         let cwd = dir.path();
-        let cmd = build_bwrap_command(cwd, "true", &[], &[], false);
+        let cmd = build_bwrap_command(
+            cwd,
+            "true",
+            &[],
+            &[],
+            false,
+            &super::BwrapMountExtensions::default(),
+        );
 
         assert!(!cmd.iter().any(|arg| arg == "--bind"));
         assert!(!cmd.iter().any(|arg| arg == "--share-net"));
@@ -266,7 +326,14 @@ mod tests {
             WritableRoot::new(dir.path().join("missing")),
             WritableRoot::new(PathBuf::from("/")),
         ];
-        let cmd = build_bwrap_command(&workspace, "true", &[], &roots, true);
+        let cmd = build_bwrap_command(
+            &workspace,
+            "true",
+            &[],
+            &roots,
+            true,
+            &super::BwrapMountExtensions::default(),
+        );
 
         for root in [&workspace, &extra] {
             let canonical = root.canonicalize().expect("canonical root");
@@ -291,6 +358,87 @@ mod tests {
         assert!(share > unshare);
     }
 
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn extensions_add_ro_roots_and_device_nodes_and_skip_invalid_entries() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cwd = dir.path();
+        let extra_ro = dir.path().join("vendor-libs");
+        std::fs::create_dir_all(&extra_ro).expect("extra ro dir");
+
+        let extensions = super::BwrapMountExtensions {
+            read_only_roots: vec![
+                extra_ro.clone(),
+                dir.path().join("missing-ro"), // silently skipped
+            ],
+            device_roots: vec![
+                // A real char device on every Linux host: /dev/null.
+                PathBuf::from("/dev/null"),
+                // Not a device: skipped even though it exists.
+                extra_ro.clone(),
+                // Missing: skipped.
+                PathBuf::from("/dev/does-not-exist"),
+            ],
+        };
+        let cmd = build_bwrap_command(cwd, "true", &[], &[], false, &extensions);
+
+        assert!(has_mount(
+            &cmd,
+            "--ro-bind",
+            &extra_ro.canonicalize().expect("canonical extra"),
+        ));
+        assert!(has_mount(
+            &cmd,
+            "--dev-bind",
+            &PathBuf::from("/dev/null")
+                .canonicalize()
+                .expect("canonical null")
+        ));
+        // The non-device directory must never appear as a dev-bind — the key
+        // is not a writable-root escape hatch.
+        assert!(!cmd.iter().any(|arg| arg.ends_with("/missing-ro")));
+        let dev_binds_of_extra = cmd
+            .windows(3)
+            .any(|args| args[0] == "--dev-bind" && args[1].as_str() == extra_ro.to_string_lossy());
+        assert!(!dev_binds_of_extra, "directories must not be dev-bound");
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn extension_ro_roots_apply_after_writable_binds_so_they_can_narrow() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workspace = dir.path().join("workspace");
+        let narrowed = workspace.join("vendor-libs");
+        std::fs::create_dir_all(&narrowed).expect("dirs");
+
+        let roots = vec![WritableRoot::new(workspace.clone())];
+        let extensions = super::BwrapMountExtensions {
+            read_only_roots: vec![narrowed.clone()],
+            device_roots: vec![],
+        };
+        let cmd = build_bwrap_command(&workspace, "true", &[], &roots, false, &extensions);
+
+        let writable_pos = cmd
+            .windows(3)
+            .position(|args| {
+                args[0] == "--bind"
+                    && args[1].as_str() == workspace.canonicalize().unwrap().to_string_lossy()
+            })
+            .expect("workspace writable bind");
+        let narrow_pos = cmd
+            .windows(3)
+            .position(|args| {
+                args[0] == "--ro-bind"
+                    && args[1].as_str() == narrowed.canonicalize().unwrap().to_string_lossy()
+            })
+            .expect("narrowed ro bind");
+        assert!(
+            narrow_pos > writable_pos,
+            "extra ro roots must apply after writable binds so they can narrow them"
+        );
+    }
+
+    #[test]
     #[cfg(target_os = "linux")]
     fn has_mount(command: &[String], flag: &str, path: &Path) -> bool {
         let path = path.to_string_lossy();

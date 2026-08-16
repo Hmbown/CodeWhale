@@ -269,6 +269,10 @@ pub(crate) fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
             config.subagent_heartbeat_timeout_secs_for_provider(provider),
         ),
         prefer_bwrap: config.prefer_bwrap.unwrap_or(false),
+        bwrap_extensions: crate::sandbox::BwrapMountExtensions {
+            read_only_roots: config.bwrap_ro_roots.clone(),
+            device_roots: config.bwrap_dev_roots.clone(),
+        },
         memory_enabled: config.memory_enabled(),
         memory_path: config.memory_path(),
         speech_output_dir: config.speech_output_dir(),

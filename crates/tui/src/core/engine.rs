@@ -395,6 +395,9 @@ pub struct EngineConfig {
     /// When true and `/usr/bin/bwrap` is executable on Linux, route exec_shell
     /// through bubblewrap (#2184).
     pub prefer_bwrap: bool,
+    /// User-configured bwrap mount extensions (#5410): extra read-only roots
+    /// and writable device nodes such as `/dev/null`.
+    pub bwrap_extensions: crate::sandbox::BwrapMountExtensions,
     /// Tool override and plugin configuration (`[tools]` table in config.toml).
     /// Applied to the per-turn tool registry after built-in tools are registered.
     /// When `None`, no overrides or plugin loading occurs.
@@ -488,6 +491,7 @@ impl Default for EngineConfig {
             ),
             tools_always_load: HashSet::new(),
             prefer_bwrap: false,
+            bwrap_extensions: crate::sandbox::BwrapMountExtensions::default(),
             verbosity: None,
             tools: None,
             workspace_follow_symlinks: false,
@@ -1269,8 +1273,15 @@ impl Engine {
             .clone()
             .unwrap_or_else(|| new_shared_shell_manager(config.workspace.clone()));
         match shell_manager.lock() {
-            Ok(mut manager) => manager.set_prefer_bwrap(config.prefer_bwrap),
-            Err(poisoned) => poisoned.into_inner().set_prefer_bwrap(config.prefer_bwrap),
+            Ok(mut manager) => {
+                manager.set_prefer_bwrap(config.prefer_bwrap);
+                manager.set_bwrap_extensions(config.bwrap_extensions.clone());
+            }
+            Err(poisoned) => {
+                let mut manager = poisoned.into_inner();
+                manager.set_prefer_bwrap(config.prefer_bwrap);
+                manager.set_bwrap_extensions(config.bwrap_extensions.clone());
+            }
         }
         let file_read_tracker = new_shared_file_read_tracker();
         let lsp_manager = Arc::new(match config.lsp_config.clone() {

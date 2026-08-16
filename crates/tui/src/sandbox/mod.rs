@@ -377,6 +377,67 @@ pub fn is_sandbox_available() -> bool {
 
 /// Manager for sandbox operations.
 ///
+/// User-configured bwrap bind-mount extensions (#5410).
+///
+/// The default `--ro-bind / /` already exposes the host filesystem
+/// read-only, so extra read-only roots are rarely needed; they exist for
+/// setups where a policy or a future default narrows the root bind. Device
+/// roots cover host device nodes that must stay writable (e.g. `/dev/null`
+/// for redirection) — under a read-only root bind `open(O_WRONLY)` on such
+/// nodes fails with `EROFS`, which is the original #5410 report.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BwrapMountExtensions {
+    /// Extra host paths to bind read-only inside the sandbox. Non-existent
+    /// or non-directory paths are skipped silently (same rule as writable
+    /// roots — a sandbox must never fail to start because config went
+    /// stale).
+    pub read_only_roots: Vec<PathBuf>,
+    /// Host device-node paths to bind read-write (e.g. `/dev/null`).
+    /// Non-existent paths are skipped; paths that exist but are not
+    /// character/block devices are skipped too — this key must never become
+    /// a general writable-root escape hatch.
+    pub device_roots: Vec<PathBuf>,
+}
+
+impl BwrapMountExtensions {
+    /// Resolve configured paths against the live filesystem, returning
+    /// `(read_only_mounts, device_mounts)` as canonical paths that exist and
+    /// satisfy each key's constraints. The bwrap module only exists on
+    /// Linux, so the resolution inlines the same two checks its
+    /// `existing_directory` performs (canonicalize + is_dir) — the type is
+    /// carried on every platform because `SandboxManager` is.
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    fn resolve(&self) -> (Vec<PathBuf>, Vec<PathBuf>) {
+        let read_only = self
+            .read_only_roots
+            .iter()
+            .filter_map(|path| bwrap::existing_directory_shim(path))
+            .filter(|path| path != Path::new("/"))
+            .collect();
+        let devices = self
+            .device_roots
+            .iter()
+            .filter_map(|path| {
+                let canonical = path.canonicalize().ok()?;
+                let meta = std::fs::metadata(&canonical).ok()?;
+                use std::os::unix::fs::FileTypeExt;
+                let file_type = meta.file_type();
+                (file_type.is_char_device() || file_type.is_block_device()).then_some(canonical)
+            })
+            .collect();
+        (read_only, devices)
+    }
+
+    /// Same resolution on non-Linux platforms, where the sandbox manager
+    /// carries the type but never uses it: there is no bwrap to build a
+    /// command for, so the extension lists resolve empty rather than doing
+    /// filesystem work whose result would be discarded.
+    #[cfg(not(all(target_os = "linux", not(target_env = "ohos"))))]
+    fn resolve(&self) -> (Vec<PathBuf>, Vec<PathBuf>) {
+        (Vec::new(), Vec::new())
+    }
+}
+
 /// The `SandboxManager` is responsible for:
 /// - Detecting available sandbox technologies
 /// - Transforming `CommandSpecs` into sandboxed `ExecEnvs`
@@ -393,6 +454,10 @@ pub struct SandboxManager {
     /// When true and bwrap is executable on Linux, route commands through
     /// bubblewrap (#2184).
     prefer_bwrap: bool,
+
+    /// User-configured bwrap bind-mount extensions (#5410): extra
+    /// read-only roots and writable device nodes.
+    bwrap_extensions: BwrapMountExtensions,
 }
 
 impl SandboxManager {
@@ -416,6 +481,12 @@ impl SandboxManager {
     pub fn set_prefer_bwrap(&mut self, prefer: bool) {
         self.prefer_bwrap = prefer;
         self.sandbox_available = None;
+    }
+
+    /// Set user-configured bwrap mount extensions (#5410): extra read-only
+    /// roots and writable device nodes such as `/dev/null`.
+    pub fn set_bwrap_extensions(&mut self, extensions: BwrapMountExtensions) {
+        self.bwrap_extensions = extensions;
     }
 
     /// Check if sandboxing is available.
@@ -464,7 +535,7 @@ impl SandboxManager {
             SandboxType::MacosSeatbelt => Self::prepare_seatbelt(spec),
 
             #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
-            SandboxType::LinuxBubblewrap => Self::prepare_bwrap(spec),
+            SandboxType::LinuxBubblewrap => self.prepare_bwrap(spec),
 
             #[cfg(target_os = "windows")]
             SandboxType::Windows => Self::prepare_windows(spec),
@@ -516,8 +587,18 @@ impl SandboxManager {
     }
 
     /// Prepare a bubblewrap-sandboxed execution environment (Linux).
+    ///
+    /// Carries the standard container trio `--dev /dev`, `--proc /proc`,
+    /// `--tmpfs /tmp` (#5410): without a private `/dev`, host device nodes
+    /// inherited through the read-only root bind reject `open(O_WRONLY)`
+    /// with `EROFS` — `foo >/dev/null` was the original report — and
+    /// without `/proc`, toolchains that read process tables misbehave.
+    /// `/tmp` is writable-but-isolated (tmpfs) so linkers and test
+    /// harnesses have scratch space without widening the filesystem
+    /// policy. User-configured extensions (extra read-only roots,
+    /// writable device nodes) apply after the defaults.
     #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
-    fn prepare_bwrap(spec: &CommandSpec) -> ExecEnv {
+    fn prepare_bwrap(&self, spec: &CommandSpec) -> ExecEnv {
         let writable_roots = spec.sandbox_policy.get_writable_roots(&spec.cwd);
         let command = bwrap::build_bwrap_command(
             &spec.cwd,
@@ -525,6 +606,7 @@ impl SandboxManager {
             &spec.args,
             &writable_roots,
             spec.sandbox_policy.has_network_access(),
+            &self.bwrap_extensions,
         );
 
         let mut env = spec.env.clone();
