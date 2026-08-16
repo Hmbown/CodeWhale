@@ -11,12 +11,11 @@ State-dir resolution is consolidated in `crates/config/src/lib.rs`:
 
 | Symbol | Line | Purpose |
 |---|---|---|
-| `CODEWHALE_APP_DIR = ".codewhale"` | 3428 | canonical app dir |
-| `LEGACY_APP_DIR = ".deepseek"` | 3431 | legacy app dir (fallback only) |
-| `codewhale_home()` | 3437 | `~/.codewhale` |
-| `legacy_deepseek_home()` | 3451 | `~/.deepseek` (legacy) |
-| `resolve_state_dir(subdir)` | 3469 | **read** path: `~/.codewhale/<subdir>`, falling back to `~/.deepseek/<subdir>` when only the legacy dir exists |
-| `ensure_state_dir(subdir)` | 3484 | **write** path: always creates under `~/.codewhale/<subdir>` |
+| `CODEWHALE_APP_DIR` / `LEGACY_APP_DIR` | 5369 | re-exported from `crates/paths` (defined at `crates/paths/src/lib.rs` 13 / 16) |
+| `codewhale_home()` | 5375 | `~/.codewhale` |
+| `legacy_deepseek_home()` | 5392 | `~/.deepseek` (legacy) |
+| `resolve_state_dir(subdir)` | 5434 | **read** path: `~/.codewhale/<subdir>`, falling back to `~/.deepseek/<subdir>` when only the legacy dir exists |
+| `ensure_state_dir(subdir)` | 5458 | **write** path: always creates under `~/.codewhale/<subdir>` |
 
 Migration contract: read-with-fallback, write-to-new. This preserves the v0.8.44 migration for
 users who still have `~/.deepseek/` while steering all new writes to `~/.codewhale/`.

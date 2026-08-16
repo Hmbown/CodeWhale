@@ -1,6 +1,6 @@
 //! Consolidated harness for plain `#[test]`/`#[tokio::test]` acceptance suites.
 //!
-//! See `crates/tui/tests/README.md` for why this exists: 16 small integration
+//! See `crates/tui/tests/README.md` for why this exists: 17 small integration
 //! binaries each re-linked the full `codewhale-tui` graph — one harness keeps the
 //! same test names (`integration::adaptive_evidence_acceptance::...`) so
 //! `cargo test -p codewhale-tui adaptive_evidence_acceptance` still filters.

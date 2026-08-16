@@ -88,14 +88,14 @@ Some suites are slow, platform-bound, or intentionally excluded from the
 default run; treat them as documented isolation cases rather than
 failures of the normal gate:
 
-- **PTY snapshots** (`cargo test -p codewhale-tui --test qa_pty
+- **PTY snapshots** (`cargo test -p codewhale-tui --test pty qa_pty
   --locked`) are Unix-only and internally serialized. One recovery-boot
   case is `#[ignore]`d for a documented input-starvation issue. When a
   PTY case fails, rerun that exact case in isolation and diagnose the
   rendered frame before calling it a flake; `run_verifiers_background_*`
   is the one known full-suite-parallelism flake that passes in
   isolation.
-- **Release runtime QA** (`cargo test -p codewhale-tui --test
+- **Release runtime QA** (`cargo test -p codewhale-tui --test pty
   release_runtime_qa --locked`) includes an `#[ignore]`d 32-worker storm
   benchmark that is only run explicitly for evidence gathering.
 - **OCR** (`image_ocr`) uses the macOS Vision framework or a locally
@@ -327,8 +327,8 @@ reopened, ask the contributor to resubmit after the allowlist PR is merged.
 ## Agent-Assisted Improvements
 
 Codewhale is allowed to help improve Codewhale, but the contribution still has
-to be shaped for human review. The recommended workflow is the
-[recursive self-improvement prompt](the `codewhale-ops` repo): run it
+to be shaped for human review. The recommended workflow is the recursive self-improvement prompt
+in the private `codewhale-ops` repo: run it
 from a fresh fork or branch, let the agent find exactly one small friction point,
 and stop after one patch. DeepSeek V4 Pro is the reference path for this loop
 today, but any configured provider works — the review shape matters more than
