@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Session titles truncate by character count, not byte offset, so
+  multi-byte titles (CJK, emoji) cut at the intended width and word
+  boundary instead of past the limit (#5415).
 - Wide terminals and tmux panes fill the full available width again for the
   transcript and composer (#5322). The brief v0.9 session-shell side gutter is
   gone so expanding a pane rematerializes layout the same way shrinking does.
