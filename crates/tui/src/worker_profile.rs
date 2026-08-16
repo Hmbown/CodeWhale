@@ -197,28 +197,40 @@ impl WorkerRuntimeProfile {
     /// read-only; verifier runs tests; implementer/general write).
     #[must_use]
     pub fn for_role(role: FleetRole) -> Self {
+        // A role's default is what the role *intends*, expressed as the widest
+        // posture the role can be given; the parent's effective posture is the
+        // ceiling (`derive_child` intersects, never widens). Read-only roles
+        // stay read-only on the workspace by intent. Nothing else is taken
+        // away by default: network reach is a read, and a worker cut off from
+        // the network or from shell for no role reason cannot do its job.
         let (permissions, shell) = match role {
-            // Read-only investigators. Read-only inspection posture: no workspace writes,
-            // but network reach and the bounded verification surface are
-            // granted so a default scout/reviewer lane can actually run
-            // git/gh/web inspection instead of being reduced to file reads.
-            // Raw shell stays denied by the clamp (write && shell == Full
-            // is required for it), so this widens capability without
-            // widening mutation authority.
+            // Read-only investigators: no workspace writes, but network reach
+            // and the bounded verification surface so a scout/reviewer lane
+            // can run git/gh/web inspection. Raw shell stays denied by the
+            // registry clamp (read-only classifier), so this widens capability
+            // without widening mutation authority.
             FleetRole::Scout | FleetRole::Reviewer => {
                 (PermissionSet::read_only_with_network(), ShellPolicy::Full)
             }
-            // Planner: analysis only, no shell.
-            FleetRole::Planner => (PermissionSet::read_only(), ShellPolicy::None),
-            // Consultant: counsel only. Reads to ground its advice; never acts on
-            // the workspace, so no shell either (#4752).
-            FleetRole::Consultant => (PermissionSet::read_only(), ShellPolicy::None),
-            // Verifier: doesn't modify code, but runs the test suite.
-            FleetRole::Verifier => (PermissionSet::read_only(), ShellPolicy::Full),
-            // Doers.
-            FleetRole::Builder | FleetRole::Worker => (PermissionSet::full(), ShellPolicy::Full),
-            // Custom starts locked down; the caller opens specific tools explicitly.
-            FleetRole::Custom => (PermissionSet::read_only(), ShellPolicy::None),
+            // Planner: analysis only. Reads the workspace and the web and may
+            // run read-only shell probes (`git log`, `rg`) under the read-only
+            // classifier; never mutates.
+            FleetRole::Planner => (
+                PermissionSet::read_only_with_network(),
+                ShellPolicy::ReadOnly,
+            ),
+            // Consultant: counsel only. Reads (workspace and web) to ground
+            // its advice; never acts on the workspace, so no shell (#4752).
+            FleetRole::Consultant => (PermissionSet::read_only_with_network(), ShellPolicy::None),
+            // Verifier: doesn't modify code, but runs the test suite and may
+            // fetch what a test or a doc check needs.
+            FleetRole::Verifier => (PermissionSet::read_only_with_network(), ShellPolicy::Full),
+            // Doers, and Custom: inherit the parent's effective posture. A
+            // custom worker is narrowed by its explicit tool list and by the
+            // spawning call, not by a silent locked-down default.
+            FleetRole::Builder | FleetRole::Worker | FleetRole::Custom => {
+                (PermissionSet::full(), ShellPolicy::Full)
+            }
         };
         Self {
             role: role.clone(),
@@ -587,5 +599,75 @@ mod tests {
         assert!(child.denied_tools.contains(&"exec_shell".to_string()));
         assert!(child.denied_tools.contains(&"mcp_*".to_string()));
         assert!(child.denied_tools.contains(&"write_file".to_string()));
+    }
+
+    /// Every built-in role keeps network reads by default: a worker cut off
+    /// from the network for no role reason cannot do its job. Only workspace
+    /// mutation is a role intent.
+    #[test]
+    fn every_role_default_keeps_network_reads_and_only_read_only_roles_withhold_writes() {
+        for role in [
+            FleetRole::Scout,
+            FleetRole::Reviewer,
+            FleetRole::Planner,
+            FleetRole::Verifier,
+            FleetRole::Consultant,
+            FleetRole::Builder,
+            FleetRole::Worker,
+            FleetRole::Custom,
+        ] {
+            let profile = WorkerRuntimeProfile::for_role(role.clone());
+            assert!(
+                profile.permissions.network,
+                "{role:?} must keep network reads"
+            );
+            let read_only_by_intent = matches!(
+                role,
+                FleetRole::Scout
+                    | FleetRole::Reviewer
+                    | FleetRole::Planner
+                    | FleetRole::Verifier
+                    | FleetRole::Consultant
+            );
+            assert_eq!(
+                profile.permissions.write, !read_only_by_intent,
+                "{role:?} write default"
+            );
+        }
+        // Custom inherits (full ceiling); Planner probes read-only shell;
+        // Consultant never acts on the workspace.
+        assert_eq!(
+            WorkerRuntimeProfile::for_role(FleetRole::Custom).shell,
+            ShellPolicy::Full
+        );
+        assert_eq!(
+            WorkerRuntimeProfile::for_role(FleetRole::Planner).shell,
+            ShellPolicy::ReadOnly
+        );
+        assert_eq!(
+            WorkerRuntimeProfile::for_role(FleetRole::Consultant).shell,
+            ShellPolicy::None
+        );
+    }
+
+    /// The parent's effective posture is the ceiling: a full-default child role
+    /// under a read-only, no-network, read-only-shell parent inherits exactly
+    /// that, never more.
+    #[test]
+    fn derive_child_inherits_the_parent_ceiling_and_never_widens() {
+        let mut parent = WorkerRuntimeProfile::for_role(FleetRole::Worker);
+        parent.permissions = PermissionSet::read_only();
+        parent.shell = ShellPolicy::ReadOnly;
+        for role in [FleetRole::Custom, FleetRole::Builder, FleetRole::Worker] {
+            let child = parent.derive_child(&WorkerRuntimeProfile::for_role(role.clone()));
+            assert!(!child.permissions.write, "{role:?} widened write");
+            assert!(!child.permissions.network, "{role:?} widened network");
+            assert_eq!(child.shell, ShellPolicy::ReadOnly, "{role:?} widened shell");
+        }
+        // And a full parent hands a doer its full posture.
+        let full = WorkerRuntimeProfile::for_role(FleetRole::Worker)
+            .derive_child(&WorkerRuntimeProfile::for_role(FleetRole::Custom));
+        assert!(full.permissions.write && full.permissions.network);
+        assert_eq!(full.shell, ShellPolicy::Full);
     }
 }

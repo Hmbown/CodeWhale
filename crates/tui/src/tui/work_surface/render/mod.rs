@@ -234,10 +234,27 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
         } else {
             row.mark
         };
-        let prefix = if row.tone == WorkTone::Heading {
-            format!("{} ", mark)
+        // Agent focus marker: while a worker is focused every row gains a
+        // two-cell gutter and the focused worker's row shows the selection
+        // glyph in it, so the addressed fork is visible at the left edge.
+        let focus_gutter = if app.agent_focus.is_some() {
+            let focused = row
+                .id
+                .0
+                .strip_prefix("worker:")
+                .is_some_and(|id| app.agent_focus.as_ref().is_some_and(|f| f.is(id)));
+            if focused {
+                "❯ ".to_string()
+            } else {
+                "  ".to_string()
+            }
         } else {
-            format!("{compact_owner}{mark} ")
+            String::new()
+        };
+        let prefix = if row.tone == WorkTone::Heading {
+            format!("{focus_gutter}{} ", mark)
+        } else {
+            format!("{focus_gutter}{compact_owner}{mark} ")
         };
 
         // Sub-agent rows own their own column layout: glyph, agent type,
@@ -245,8 +262,15 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
         // rows in every other respect — same hitbox, same selection, same
         // primary action.
         if let Some(facts) = row.agent.as_ref() {
+            let queued = row
+                .id
+                .0
+                .strip_prefix("worker:")
+                .and_then(|id| crate::tui::agent_focus::queued_suffix(app, id))
+                .map(|queued| format!(" · {queued}"));
+            let queued_width = queued.as_deref().map(UnicodeWidthStr::width).unwrap_or(0);
             let laid_out = layout_agent_row(
-                usize::from(content_area.width),
+                usize::from(content_area.width).saturating_sub(queued_width),
                 UnicodeWidthStr::width(prefix.as_str()),
                 agent_identity(row, identity_cap),
                 identity_column,
@@ -290,6 +314,17 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
                 format!("{}{}", " ".repeat(laid_out.gap), laid_out.receipt),
                 muted,
             ));
+            if let Some(queued) = queued.as_deref() {
+                // Truthful `· N queued`: follow-ups the running child has not
+                // yet folded into its next round. Accent so it reads as live
+                // pending work, not as part of the receipt.
+                spans.push(Span::styled(
+                    queued.to_string(),
+                    Style::default()
+                        .fg(app.ui_theme.accent_action)
+                        .bg(normal.bg.unwrap_or(app.ui_theme.surface_bg)),
+                ));
+            }
             lines.push(Line::from(spans));
 
             hitboxes.push(WorkHitbox {

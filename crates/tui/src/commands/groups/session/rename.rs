@@ -35,7 +35,12 @@ impl RegisterCommand for RenameCmd {
 /// The new title is persisted immediately to `~/.deepseek/sessions/<id>.json`
 /// so the updated name is visible the next time the session picker is opened.
 pub fn rename(app: &mut App, arg: Option<&str>) -> CommandResult {
-    let new_title = match arg.map(str::trim).filter(|s| !s.is_empty()) {
+    // Same character policy as the picker and Runtime API rename: controls
+    // and bidi/zero-width format characters never reach the persisted title.
+    let sanitized = arg
+        .map(crate::session_manager::sanitize_session_title)
+        .unwrap_or_default();
+    let new_title = match Some(sanitized.trim()).filter(|s| !s.is_empty()) {
         Some(t) => t,
         None => return CommandResult::error("Usage: /rename <new title>"),
     };
@@ -67,6 +72,13 @@ pub(crate) fn rename_with_manager(
     manager: &SessionManager,
     app: &mut App,
 ) -> CommandResult {
+    // Same character policy as the picker and Runtime API rename: controls
+    // and bidi/zero-width format characters never reach the persisted title.
+    let sanitized = crate::session_manager::sanitize_session_title(new_title);
+    let new_title = sanitized.trim();
+    if new_title.is_empty() {
+        return CommandResult::error("Usage: /rename <new title>");
+    }
     let mut session = match manager.load_session(session_id) {
         Ok(s) => s,
         Err(e) => return CommandResult::error(format!("Could not load session: {e}")),
@@ -108,7 +120,9 @@ pub(crate) fn rename_with_manager(
                     "Session renamed, but Work views were not published: {err}"
                 ));
             }
-            CommandResult::message(format!("Session renamed to \"{new_title}\""))
+            CommandResult::message(format!(
+                "Session and terminal tab renamed to \"{new_title}\""
+            ))
         }
         Err(e) => CommandResult::error(format!("Could not save session: {e}")),
     }
@@ -230,6 +244,33 @@ mod tests {
                 .map(|metadata| metadata.title.as_str()),
             Some("Brand New Title")
         );
+    }
+
+    #[test]
+    fn rename_strips_terminal_controls_before_persisting() {
+        let tmp = TempDir::new().unwrap();
+        let manager = make_session_manager(&tmp);
+        let mut app = make_app(&tmp);
+        let session =
+            create_saved_session_with_mode(&[], "deepseek-v4-pro", tmp.path(), 0, None, None);
+        let session_id = session.metadata.id.clone();
+        manager.save_session(&session).unwrap();
+        app.current_session_id = Some(session_id.clone());
+
+        let result = rename_with_manager(
+            "Ev\u{1b}]0;PWNED\u{7}il\u{202e} Beta",
+            &session_id,
+            &manager,
+            &mut app,
+        );
+        assert!(!result.is_error, "{result:?}");
+        let reloaded = manager.load_session(&session_id).unwrap();
+        assert_eq!(reloaded.metadata.title, "Ev]0;PWNEDil Beta");
+        assert_eq!(app.session_title.as_deref(), Some("Ev]0;PWNEDil Beta"));
+
+        // Controls alone are the same as no title at all.
+        let result = rename_with_manager("\u{1b}\u{7}\u{200b}", &session_id, &manager, &mut app);
+        assert!(result.is_error);
     }
 
     #[test]

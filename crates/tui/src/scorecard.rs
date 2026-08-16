@@ -864,6 +864,22 @@ mod tests {
         );
         assert_eq!(local.unpriced_reason.as_deref(), Some("not_money_metered"));
         assert!(!local.counts_toward_money_coverage);
+
+        let cloud = provider_scoped_cost(
+            ApiProvider::OllamaCloud,
+            crate::config::DEFAULT_OLLAMA_CLOUD_MODEL,
+            &usage,
+            None,
+            Some(crate::pricing::UNCLASSIFIED_BILLING_SURFACE),
+        );
+        assert_eq!(
+            cloud.unpriced_reason.as_deref(),
+            Some("unknown_billing_basis")
+        );
+        assert!(
+            cloud.counts_toward_money_coverage,
+            "hosted Cloud usage must never disappear as local/free"
+        );
     }
 
     fn cache_write_usage(input: u32, output: u32, cache_hit: u32, cache_write: u32) -> Usage {

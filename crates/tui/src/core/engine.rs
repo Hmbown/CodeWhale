@@ -55,9 +55,10 @@ use crate::tools::spec::{
     RuntimeToolServices, SharedFileReadTracker, new_shared_file_read_tracker,
 };
 use crate::tools::subagent::{
-    FleetRole, Mailbox, MailboxMessage, SharedSubAgentManager, SubAgentCompletion,
-    SubAgentForkContext, SubAgentManager, SubAgentResult, SubAgentRuntime, SubAgentStatus,
-    agent_worker_owner_snapshot, new_shared_subagent_manager_with_state_root_and_timeout,
+    FleetRole, ForegroundChildRegistry, Mailbox, MailboxMessage, SharedSubAgentManager,
+    SubAgentCompletion, SubAgentForkContext, SubAgentManager, SubAgentResult, SubAgentRuntime,
+    SubAgentStatus, agent_worker_owner_snapshot,
+    new_shared_subagent_manager_with_state_root_and_timeout,
 };
 use crate::tools::todo::{SharedTodoList, new_shared_todo_list};
 use crate::tools::user_input::{UserInputRequest, UserInputResponse};
@@ -102,6 +103,7 @@ fn agent_list_event(manager: &SubAgentManager) -> Event {
     Event::AgentList {
         agents: manager.list(),
         coordination: manager.coordination_detail_projection(None, 24),
+        queued_follow_ups: manager.queued_follow_up_counts(),
     }
 }
 
@@ -591,6 +593,9 @@ pub struct Engine {
     /// state stays alive across model turns.
     repl_kernel: Option<crate::repl::PythonRuntime>,
     subagent_manager: SharedSubAgentManager,
+    /// The deterministic Auto-Review policy shared with every child runtime
+    /// so children are gated by the same rules as the parent turn.
+    shared_auto_review_policy: Arc<crate::tui::auto_review::AutoReviewPolicy>,
     shell_manager: SharedShellManager,
     /// Read-before-edit snapshots live for the session, not for one turn's
     /// transient `ToolContext` (#4475).
@@ -1295,6 +1300,7 @@ impl Engine {
             .map(std::sync::Arc::from);
 
         let active_route_limits = config.active_route_limits;
+        let shared_auto_review_policy = Arc::new(config.auto_review_policy.clone());
         let engine = Engine {
             config,
             api_config: api_config.clone(),
@@ -1307,6 +1313,7 @@ impl Engine {
             session,
             repl_kernel: None,
             subagent_manager,
+            shared_auto_review_policy,
             shell_manager,
             file_read_tracker,
             mcp_pool: None,
@@ -1677,7 +1684,7 @@ impl Engine {
         let mode_changed = self.current_mode != authority.mode;
         self.current_mode = authority.mode;
         if mode_changed {
-            self.refresh_system_prompt();
+            self.refresh_system_prompt_with_reason("mode");
         }
         self.session.allow_shell = authority.allow_shell;
         self.config.allow_shell = authority.allow_shell;
@@ -1860,6 +1867,14 @@ impl Engine {
                     completion = self.rx_subagent_completion.recv(), if !host_managed_turns => {
                         return completion.map(EngineRunInput::SubAgentCompletion);
                     }
+                    // A background child may be waiting on a person's answer
+                    // while the parent turn is idle: route it. Any other
+                    // decision has no waiter and is dropped, as before.
+                    decision = self.rx_approval.recv() => {
+                        if let Some(decision) = decision {
+                            self.route_child_approval_decision(decision).await;
+                        }
+                    }
                     // Background shells have no completion channel, so an
                     // idle engine polls only while a goal is active and a
                     // background job is outstanding; the arm disarms itself
@@ -1872,6 +1887,32 @@ impl Engine {
                 }
             }
         }
+    }
+
+    /// Deliver an approval decision to a child waiting on it. Returns whether
+    /// a child took it; the parent's own awaiting call keeps every other id.
+    async fn route_child_approval_decision(
+        &self,
+        decision: super::engine::approval::ApprovalDecision,
+    ) -> bool {
+        use crate::tools::subagent::{ChildApprovalOutcome, SubAgentManager};
+        let (id, outcome) = match &decision {
+            super::engine::approval::ApprovalDecision::Approved { id } => {
+                (id.clone(), ChildApprovalOutcome::Approved)
+            }
+            super::engine::approval::ApprovalDecision::Denied { id } => {
+                (id.clone(), ChildApprovalOutcome::Denied)
+            }
+            // A sandbox retry only exists for the parent's own tool call.
+            super::engine::approval::ApprovalDecision::RetryWithPolicy { .. } => return false,
+        };
+        if !SubAgentManager::is_child_approval_id(&id) {
+            return false;
+        }
+        self.subagent_manager
+            .write()
+            .await
+            .resolve_child_approval(&id, outcome)
     }
 
     /// Whether the idle loop should poll for background shell completion: a
@@ -2221,6 +2262,26 @@ impl Engine {
                             }
                         }
                     }
+                    Op::FollowUpSubAgent { agent_id, text } => {
+                        let runtime = self.off_turn_subagent_runtime();
+                        let manager_handle = Arc::clone(&self.subagent_manager);
+                        let (outcome, refresh) = {
+                            let mut manager = self.subagent_manager.write().await;
+                            let outcome = manager
+                                .continue_child_from_user(manager_handle, runtime, &agent_id, &text)
+                                .map_err(|err| err.to_string());
+                            (outcome, agent_list_event(&manager))
+                        };
+                        let _ = self
+                            .tx_event
+                            .send(Event::SubAgentFollowUp { agent_id, outcome })
+                            .await;
+                        if let Err(_e) = self.tx_event.try_send(refresh) {
+                            tracing::debug!(
+                                "Event channel full; dropping FollowUpSubAgent refresh"
+                            );
+                        }
+                    }
                     Op::ChangeMode { .. } => {
                         // The mailbox payload may predate a newer posture that
                         // was published while the channel was full. Apply the
@@ -2243,7 +2304,7 @@ impl Engine {
                         // facts must not bleed into the new model.
                         self.active_route_capabilities =
                             codewhale_config::route::RouteCapabilities::default();
-                        self.refresh_system_prompt();
+                        self.refresh_system_prompt_with_reason("model");
                         self.emit_session_updated().await;
                         let _ = self
                             .tx_event
@@ -2392,6 +2453,11 @@ impl Engine {
                             crate::compaction::strip_compaction_summaries(system_prompt.as_ref());
                         self.session.last_system_prompt_hash =
                             Some(system_prompt_hash(self.session.system_prompt.as_ref()));
+                        // A session sync installs a new (or restored) prefix.
+                        // Declare it so the next request re-pins the KV-cache
+                        // prefix under a logged `resume` reason instead of
+                        // reporting undeclared drift.
+                        self.session.pending_prefix_change_reason = Some("resume".to_string());
                         // Host-supplied prompts are persisted prefixes. Keep them
                         // byte-stable; mode/runtime state is projected per request.
                         self.session.system_prompt_override =
@@ -2476,6 +2542,9 @@ impl Engine {
                         }
                     }
                     Op::PurgeContext => {
+                        if let Some(pm) = self.session.prefix_stability.as_mut() {
+                            pm.note_history_reset("clear");
+                        }
                         self.handle_purge().await;
                     }
                     Op::EditLastTurn { new_message } => {
@@ -3315,7 +3384,7 @@ impl Engine {
         self.config.goal_objective.clone_from(&snapshot.objective);
         self.config.goal_token_budget = snapshot.token_budget;
         self.config.goal_status = GoalStatus::Blocked;
-        self.refresh_system_prompt();
+        self.refresh_system_prompt_with_reason("goal");
         self.emit_session_updated().await;
         let _ = self.tx_event.send(Event::GoalUpdated { snapshot }).await;
         let _ = self.tx_event.send(Event::status(message)).await;
@@ -3344,7 +3413,7 @@ impl Engine {
         self.config.goal_objective.clone_from(&snapshot.objective);
         self.config.goal_token_budget = snapshot.token_budget;
         self.config.goal_status = GoalStatus::Paused;
-        self.refresh_system_prompt();
+        self.refresh_system_prompt_with_reason("goal");
         self.emit_session_updated().await;
         let _ = self.tx_event.send(Event::GoalUpdated { snapshot }).await;
         let _ = self.tx_event.send(Event::status(message)).await;
@@ -3387,7 +3456,7 @@ impl Engine {
         } else {
             GoalStatus::Active
         };
-        self.refresh_system_prompt();
+        self.refresh_system_prompt_with_reason("goal");
         self.emit_session_updated().await;
         // Unlike routine end-of-turn updates, an explicit clear must publish
         // the canonical empty snapshot. Keeping this scoped to the control op
@@ -3499,6 +3568,7 @@ impl Engine {
         // when every cloned sender is dropped at turn-end.
         let mailbox_for_runtime = if subagents_available && wiring.is_live() {
             let cancel_token = self.cancel_token.child_token();
+            let foreground_children = Arc::new(ForegroundChildRegistry::new());
             let (mailbox, mut receiver) = Mailbox::new(cancel_token.clone());
             let tx_event_clone = self.tx_event.clone();
             let mailbox_turn_id = turn_id.to_string();
@@ -3544,6 +3614,7 @@ impl Engine {
             Some(TurnMailboxBarrier {
                 mailbox,
                 cancel_token,
+                foreground_children,
                 flush_tx,
                 drain_handle,
             })
@@ -3593,7 +3664,12 @@ impl Engine {
                 .with_todos(self.config.todos.clone())
                 .with_parent_completion_tx(self.tx_subagent_completion.clone())
                 .with_runtime_cost_owner(self.config.compaction.runtime_cost_owner.as_deref())
-                .with_parent_mode(input_policy.mode);
+                .with_parent_mode(input_policy.mode)
+                .with_permission_posture(
+                    self.session.approval_mode,
+                    Arc::clone(&self.shared_auto_review_policy),
+                    self.config.terminal_chrome_enabled,
+                );
                 if matches!(input_policy.mode, AppMode::Plan) {
                     rt.worker_profile = WorkerRuntimeProfile::for_role(FleetRole::Planner);
                 }
@@ -3608,7 +3684,8 @@ impl Engine {
                 if let Some(barrier) = mailbox_for_runtime.as_ref() {
                     rt = rt
                         .with_mailbox(barrier.mailbox.clone())
-                        .with_cancel_token(barrier.cancel_token.clone());
+                        .with_cancel_token(barrier.cancel_token.clone())
+                        .with_foreground_children(Arc::clone(&barrier.foreground_children));
                 }
                 Some(rt)
             } else {
@@ -4039,8 +4116,19 @@ impl Engine {
 
         // Compose from the immutable values accepted for this turn. Preview
         // receives the same context before anything is installed, so prompt
-        // bytes cannot depend on stale session state or mutation order.
-        self.refresh_system_prompt_from_context(&prompt_context);
+        // bytes cannot depend on stale session state or mutation order. The
+        // pinned header only moves on an explicit-input change; workspace
+        // drift arrives as a `<context_update>` user message appended below.
+        let context_update = self.refresh_pinned_header_for_turn(&prompt_context);
+        if let Some(update) = context_update {
+            self.session.add_message(Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: update,
+                    cache_control: None,
+                }],
+            });
+        }
 
         self.session
             .working_set
@@ -4164,9 +4252,7 @@ impl Engine {
         // the following turn (or lost by a runtime monitor that already
         // settled the record).
         if let Some(barrier) = mailbox_for_runtime.take() {
-            barrier.mailbox.seal();
-            let _ = barrier.flush_tx.send(());
-            let _ = barrier.drain_handle.await;
+            barrier.cancel_and_flush().await;
         }
 
         // Emit turn complete event — after all post-turn bookkeeping so
@@ -4374,6 +4460,9 @@ impl Engine {
                     let messages_after = result.messages.len();
                     let retries_used = result.retries_used;
                     self.session.replace_messages(result.messages);
+                    if let Some(pm) = self.session.prefix_stability.as_mut() {
+                        pm.note_history_reset("compaction");
+                    }
                     self.commit_compaction_checkpoint(result.summary_prompt);
                     self.emit_session_updated().await;
                     let removed = messages_before.saturating_sub(messages_after);
@@ -4721,6 +4810,55 @@ impl Engine {
         self.build_tool_context_for_turn(&authority, &route)
     }
 
+    /// Build a child runtime from the installed session route, outside any
+    /// turn, for operator follow-ups that continue a child from its checkpoint
+    /// (`Op::FollowUpSubAgent`). Mirrors the per-turn runtime the `agent` tool
+    /// receives, minus the turn-scoped fork context and mailbox barrier: a
+    /// continued fork is a background child of the session, not of a turn.
+    fn off_turn_subagent_runtime(&self) -> Option<SubAgentRuntime> {
+        let client = self.deepseek_client.clone()?;
+        let mode = self.current_mode;
+        let allow_shell = self.session.allow_shell && !matches!(mode, AppMode::Plan);
+        let shell_policy = shell_policy_for_mode(mode, allow_shell);
+        let tool_context = self.build_tool_context(mode, self.session.auto_approve);
+        let mut rt = SubAgentRuntime::new(
+            client,
+            self.session.model.clone(),
+            tool_context,
+            allow_shell,
+            Some(self.tx_event.clone()),
+            Arc::clone(&self.subagent_manager),
+        )
+        .with_locale_tag(self.config.locale_tag.clone())
+        .with_role_models(self.subagent_role_models())
+        .with_api_config(self.api_config.clone())
+        .with_fleet_roster(self.config.fleet_roster.clone())
+        .with_auto_model(self.session.auto_model)
+        .with_reasoning_effort(
+            self.session.reasoning_effort.clone(),
+            self.session.reasoning_effort_auto,
+        )
+        .with_agent_tool_surface_options(self.agent_tool_surface_options(shell_policy))
+        .with_max_spawn_depth(self.config.max_spawn_depth)
+        .with_step_api_timeout(self.config.subagent_api_timeout)
+        .with_speech_output_dir(self.config.speech_output_dir.clone())
+        .with_mcp_pool(self.mcp_pool.clone())
+        .with_todos(self.config.todos.clone())
+        .with_parent_completion_tx(self.tx_subagent_completion.clone())
+        .with_runtime_cost_owner(self.config.compaction.runtime_cost_owner.as_deref())
+        .with_parent_mode(mode)
+        .with_permission_posture(
+            self.session.approval_mode,
+            Arc::clone(&self.shared_auto_review_policy),
+            self.config.terminal_chrome_enabled,
+        );
+        if matches!(mode, AppMode::Plan) {
+            rt.worker_profile = WorkerRuntimeProfile::for_role(FleetRole::Planner);
+        }
+        rt.worker_profile.denied_tools = self.config.disallowed_tools.clone().unwrap_or_default();
+        Some(rt)
+    }
+
     /// Project the current engine authority onto an already-built registry.
     /// Registries own long-lived services and tool definitions; permission,
     /// shell, and sandbox policy are live turn state and must not be read from
@@ -5035,22 +5173,98 @@ impl Engine {
     /// Handle a turn using the DeepSeek API.
     #[allow(clippy::too_many_lines)]
     /// Refresh the stable system prompt based on current non-mode context.
+    #[cfg_attr(not(test), allow(dead_code))]
     fn refresh_system_prompt(&mut self) {
-        let context = self.installed_next_turn_prompt_context();
-        self.refresh_system_prompt_from_context(&context);
+        self.refresh_system_prompt_with_reason("system");
     }
 
-    fn refresh_system_prompt_from_context(&mut self, context: &NextTurnPromptContext) {
+    fn refresh_system_prompt_with_reason(&mut self, reason: &str) {
+        let context = self.installed_next_turn_prompt_context();
+        self.refresh_system_prompt_from_context_with_reason(&context, reason);
+    }
+
+    /// Recompose the stable system prompt from current context. When the bytes
+    /// actually change (hash differs), record `reason` as the declared cause
+    /// so the turn loop's prefix check re-pins the KV-cache prefix under a
+    /// logged reason instead of reporting undeclared drift. This is only ever
+    /// called from explicit header-change edges (session construction, submit
+    /// turn boundary, `/model`, mode change, goal edits) — never mid-tool-loop,
+    /// so an agent writing a file cannot silently move the pinned prefix.
+    fn refresh_system_prompt_from_context_with_reason(
+        &mut self,
+        context: &NextTurnPromptContext,
+        reason: &str,
+    ) {
         let stable_prompt = self.compose_stable_system_prompt(context);
 
         let stable_hash = system_prompt_hash(stable_prompt.as_ref());
         if self.session.system_prompt_override {
             return;
         }
+        self.session.pinned_prompt_context = Some(context.clone());
         if self.session.last_system_prompt_hash != Some(stable_hash) {
             self.session.system_prompt = stable_prompt;
             self.session.last_system_prompt_hash = Some(stable_hash);
+            self.session.pending_prefix_change_reason = Some(reason.to_string());
+            // A re-pinned header carries every workspace change; the delta
+            // baseline restarts from it.
+            self.session.context_update_baseline = None;
         }
+    }
+
+    /// New-user-turn header policy. Called once per submitted user turn,
+    /// never mid-tool-loop.
+    ///
+    /// - When the explicit prompt inputs (model, mode, goal, route,
+    ///   translation, verbosity) changed, that is a declared header change:
+    ///   recompose and re-pin under a `change:<field>` reason.
+    /// - Otherwise the pinned header stays byte-identical. If a fresh compose
+    ///   would differ (workspace files, AGENTS.md, skills, memory drifted), the
+    ///   delta is returned as a bounded `<context_update>` snapshot for the
+    ///   caller to append as a user-role message *before* the user's message
+    ///   — a normal history append, so the prefix still extends.
+    /// - Returns `None` when nothing changed or a header re-pin absorbed it.
+    fn refresh_pinned_header_for_turn(
+        &mut self,
+        context: &NextTurnPromptContext,
+    ) -> Option<String> {
+        if self.session.system_prompt_override {
+            return None;
+        }
+        let explicit_reason = match self.session.pinned_prompt_context.as_ref() {
+            None => Some("system".to_string()),
+            Some(pinned) if pinned != context => {
+                Some(explicit_prompt_context_change_reason(pinned, context))
+            }
+            Some(_) => None,
+        };
+        if let Some(reason) = explicit_reason {
+            self.refresh_system_prompt_from_context_with_reason(context, &reason);
+            return None;
+        }
+
+        let composed = self.compose_stable_system_prompt(context);
+        let composed_hash = system_prompt_hash(composed.as_ref());
+        if self.session.last_system_prompt_hash == Some(composed_hash) {
+            return None;
+        }
+        let pinned_text =
+            crate::prefix_cache::system_prompt_text(self.session.system_prompt.as_ref());
+        let known_text = self
+            .session
+            .context_update_baseline
+            .clone()
+            .unwrap_or(pinned_text);
+        let current_text = crate::prefix_cache::system_prompt_text(composed.as_ref());
+        if known_text == current_text {
+            return None;
+        }
+        let summary = crate::prefix_cache::context_update_message(&known_text, &current_text)?;
+        self.session.context_update_baseline = Some(current_text);
+        if let Some(pm) = self.session.prefix_stability.as_mut() {
+            pm.note_context_update();
+        }
+        Some(summary)
     }
 
     /// Compose the stable system prompt for an explicit route, without
@@ -5702,6 +5916,43 @@ pub(crate) struct NextTurnPromptContext {
     pub(crate) verbosity: Option<String>,
 }
 
+/// Name the explicit prompt inputs that differ between two contexts, for the
+/// `change:<what>` prefix-pin reason.
+pub(crate) fn explicit_prompt_context_change_reason(
+    pinned: &NextTurnPromptContext,
+    next: &NextTurnPromptContext,
+) -> String {
+    let mut fields = Vec::new();
+    if pinned.provider != next.provider {
+        fields.push("provider");
+    }
+    if pinned.model != next.model {
+        fields.push("model");
+    }
+    if pinned.route_limits != next.route_limits {
+        fields.push("route");
+    }
+    if pinned.mode != next.mode {
+        fields.push("mode");
+    }
+    if pinned.goal_objective != next.goal_objective
+        || pinned.goal_token_budget != next.goal_token_budget
+    {
+        fields.push("goal");
+    }
+    if pinned.translation_enabled != next.translation_enabled {
+        fields.push("translation");
+    }
+    if pinned.verbosity != next.verbosity {
+        fields.push("verbosity");
+    }
+    if fields.is_empty() {
+        "system".to_string()
+    } else {
+        fields.join("+")
+    }
+}
+
 impl NextTurnPromptContext {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn for_planned_turn(
@@ -5737,8 +5988,21 @@ impl NextTurnPromptContext {
 pub(crate) struct TurnMailboxBarrier {
     pub(crate) mailbox: Mailbox,
     pub(crate) cancel_token: tokio_util::sync::CancellationToken,
+    pub(crate) foreground_children: Arc<ForegroundChildRegistry>,
     pub(crate) flush_tx: tokio::sync::oneshot::Sender<()>,
     pub(crate) drain_handle: tokio::task::JoinHandle<()>,
+}
+
+impl TurnMailboxBarrier {
+    /// Settle direct foreground work before closing the turn's mailbox.  The
+    /// ordering is intentional: a terminal turn event must never be emitted
+    /// while an owned child can still publish into this turn's shared state.
+    pub(crate) async fn cancel_and_flush(self) {
+        self.foreground_children.cancel_and_wait().await;
+        self.mailbox.seal();
+        let _ = self.flush_tx.send(());
+        let _ = self.drain_handle.await;
+    }
 }
 
 struct TurnToolBuild {
@@ -5922,7 +6186,7 @@ use context::{
 use context::{context_input_budget_for_provider, effective_max_output_tokens};
 mod dispatch;
 mod lsp_hooks;
-mod reviewer;
+pub(crate) mod reviewer;
 mod streaming;
 mod token_estimate_cache;
 pub(crate) mod tool_catalog;
@@ -5977,7 +6241,7 @@ use self::tool_catalog::{
     execute_tool_search, initial_active_tools, preflight_requested_deferred_tool,
     should_default_defer_tool, tool_allowed, tool_catalog_consistency_issues, tool_denied,
 };
-use self::tool_execution::emit_tool_audit;
+pub(crate) use self::tool_execution::emit_tool_audit;
 use self::tool_preparation::{prepare_tool_call, reprepare_tool_call_after_hook};
 use crate::tools::js_execution::execute_js_execution_tool;
 

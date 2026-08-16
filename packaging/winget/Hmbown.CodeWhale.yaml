@@ -1,5 +1,5 @@
 # Hmbown.CodeWhale — winget singleton manifest for CodeWhale (single binary)
-# PackageIdentifier follows the publisher convention used by the Homebrew tap (Hmbown/deepseek-tui).
+# PackageIdentifier follows the publisher convention used by the Homebrew formula (codewhale).
 # This file is the source of truth for winget-pkgs submission; see README.md for the update flow.
 # The single-binary release (v0.9.5+) ships only `codewhale` + `codew` per target — no `codewhale-tui` asset.
 

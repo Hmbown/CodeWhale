@@ -513,6 +513,7 @@ fn codex_reasoning_effort_uses_responses_labels() {
     assert_eq!(codex_responses_reasoning_effort("max"), Some("xhigh"));
     assert_eq!(codex_responses_reasoning_effort("maximum"), Some("xhigh"));
     assert_eq!(codex_responses_reasoning_effort("xhigh"), Some("xhigh"));
+    assert_eq!(codex_responses_reasoning_effort("ultra"), Some("xhigh"));
     assert_eq!(codex_responses_reasoning_effort("ultracode"), Some("xhigh"));
     assert_eq!(codex_responses_reasoning_effort("high"), Some("high"));
     assert_eq!(codex_responses_reasoning_effort("medium"), Some("medium"));

@@ -198,6 +198,12 @@ fn persist_durable(path: &Path, record: &DurableTerminalRecord) -> Result<(), St
 
 #[cfg(unix)]
 fn create_session(name: &str, workspace: &std::path::Path) -> Result<SharedSession, String> {
+    // Unit tests exercise the persistent-PTY contract, not a developer's
+    // interactive shell startup files. Keep their deadlines deterministic and
+    // avoid racing process-global HOME/SHELL overrides from parallel tests.
+    #[cfg(test)]
+    let shell = "/bin/sh".to_string();
+    #[cfg(not(test))]
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
     let workspace = workspace
         .canonicalize()

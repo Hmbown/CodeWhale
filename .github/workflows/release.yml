@@ -123,18 +123,10 @@ jobs:
         with:
           toolchain: stable
           components: clippy, rustfmt
-      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        id: sccache
-        continue-on-error: true
-      - name: Enable sccache
-        if: steps.sccache.outcome == 'success'
-        shell: bash
-        run: |
-          {
-            echo "SCCACHE_GHA_ENABLED=true"
-            echo "RUSTC_WRAPPER=sccache"
-            echo "SCCACHE_IGNORE_SERVER_IO_ERROR=1"
-          } >> "${GITHUB_ENV}"
+      # Privileged release jobs check out a resolved SHA (tag or
+      # workflow_dispatch). Do not restore or save GitHub Actions caches
+      # here: a shared rust-cache / sccache key would let that checkout
+      # write into the default-branch cache (CodeQL #88–#103).
       - name: Install Linux system dependencies
         run: |
           for i in 1 2 3 4 5; do
@@ -143,9 +135,6 @@ jobs:
             sleep 15
           done
           sudo apt-get install -y libdbus-1-dev pkg-config
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          cache-bin: false
       - name: Format check
         run: cargo fmt --all -- --check
       - name: Compile check

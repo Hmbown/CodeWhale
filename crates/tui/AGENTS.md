@@ -1,85 +1,42 @@
-# crates/tui — agent guidance
+# TUI agent guidance
 
-Scope: the TUI, the runtime engine embedded in it, and everything a user sees.
-Read the repo-root `AGENTS.md` first. Current flakes and known debt are in
-the `codewhale-ops` repo, not here.
+Scope: the terminal UI, its embedded runtime engine, and user-visible behavior.
+Read the repository guidance first.
 
-## The shell grammar (do not regress it)
+## UI contracts
 
-The default shell is the underwater system (`src/tui/underwater.rs`, `ocean.rs`,
-`widgets/`, `views/`). Its contract:
-
-- **One owner per fact.** Route/mode/permission/context live in the header;
-  Tasks/To-do in the top strip; receipts and the single live row in the
-  transcript; phase/cost/detail keys in the footer. Never restate a fact in a
-  second place.
-- **One live row.** Settled receipts are still; only the active row and the
-  footer phase mark move. Decorative motion exists only in empty idle water and
-  stops the instant the user types or anything needs attention.
-- **Phase is typed.** `ShellPhase::from_app` derives idle/typing/working/
-  waiting/approval/done/failed from real app state. Never invent state in a
-  renderer; never compare English strings to detect state — use the enums.
-- **Treatment is typed.** `OceanTreatment` (ombre/flat/classic) parses once from
-  settings. Every treatment keeps ambient life; appearance and motion
-  (`low_motion`, `fancy_animations`) are independent axes.
-- **Footer notices go through the toast system** (`push_status_toast` /
-  `active_status_toast`), never the legacy `status_message` sink: toasts carry
-  level + TTL, errors hold sticky, acknowledgements expire.
-- **Compact tiers shed chrome, not content.** At small sizes a room drops
-  titles/captions/spacers before the object the user opened it to manipulate,
-  and bodies budget from the footer's *wrapped* height (`wrapped_footer_lines` /
-  `action_footer_lines`).
-- **Rows are objects.** Anything selectable has a hitbox recorded at render
-  time, keyboard + mouse parity, and visible focus. Destructive controls arm
-  before they fire.
-
-## Localization
-
-Every user-visible string goes through `tr(locale, MessageId::…)` — no hardcoded
-English in render paths. Glyphs (`▸ · ▾ ─`), key names (`Enter`, `Alt+?`), and
-commands (`/fleet setup`) are composed in code, never embedded in translations.
-Adding a string is a four-part change: see `locales/AGENTS.md`.
+- One owner per fact: route/mode/permission/context in the header; work in the
+  top strip; receipts and the active row in the transcript; phase/cost/detail
+  controls in the footer.
+- Derive state from typed enums such as `ShellPhase` and `OceanTreatment`.
+  Renderers must not infer state from English strings or invent lifecycle state.
+- Keep settled output still. Motion is semantic, bounded, and fully disabled by
+  reduced-motion settings.
+- Route notices through the toast system, with typed level and lifetime; do not
+  add new writes to the legacy `status_message` sink.
+- Compact layouts remove chrome before content. Selectable rows need recorded
+  hitboxes, visible focus, keyboard/mouse parity, and confirmation for
+  destructive actions.
+- User-visible prose uses `tr(locale, MessageId::...)`. Commands, key names, and
+  glyphs are composed in code. Follow `locales/AGENTS.md` for string changes.
 
 ## Verification
 
 ```sh
-cargo test -p codewhale-tui --lib --locked             # library unit suite
-cargo test -p codewhale-tui --tests --locked           # every crates/tui/tests/ target
+cargo test -p codewhale-tui --lib --locked
+cargo test -p codewhale-tui --tests --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
-Narrower reruns of the slow acceptance targets, once `--tests` has told you
-which one moved:
-
-```sh
-cargo test -p codewhale-tui --test pty qa_pty --locked
-cargo test -p codewhale-tui --test pty release_runtime_qa --locked
-cargo test -p codewhale-tui --test pty terminal_matrix_qa --locked
-```
-
-**`--lib` and `--tests` are disjoint target sets.** `crates/tui/tests/` holds
-two dozen process-level acceptance targets that a `--lib` run never compiles,
-let alone executes, so a green `cargo test -p codewhale-tui --bin codewhale-tui`
-says nothing about them. `adaptive_evidence_acceptance` sat red across two
-releases for exactly that reason: every routine command anyone ran was a unit-only
-run, and only `cargo test --workspace` reached it. Run both, or run the
-workspace gate.
-
-Run clippy with `--all-targets`: `--bin` alone skips test targets and lets lints
-reach CI.
-
-Real-terminal QA gotchas, learned the hard way:
-
-- The local tmux **server** may carry `NO_COLOR=1` and `TERM=dumb` from old VHS
-  runs — launch panes with `env -u NO_COLOR` or all color QA silently lies. tmux
-  also force-enables the low-motion overlay; prove full motion with
-  `TMUX`/`TMUX_PANE` removed.
-- Scripted PTY input: one Enter on the slash menu both accepts the highlighted
-  match and runs it. A scripted second Enter lands *inside* whatever modal just
-  opened. Send one key, wait, capture.
-- Judge motion from repeated captures diffed over time, never single
-  screenshots. Layout gates: 40x12, 60x16, 80x24, 100x32, 140x40.
-- `CODEWHALE_TUI_DEBUG=1` writes per-frame diff sizes to
-  `~/.codewhale/logs/tui-render.log`. Streaming should be tens of cells per
-  frame; a multi-thousand-cell frame is only acceptable on a genuine layout
-  transition.
+`--lib` and `--tests` are disjoint; use both or the workspace gate.
+`scripts/dev-test.sh <area|path> [filter]` prints and runs the fastest
+targeted invocation for a source path (for example
+`scripts/dev-test.sh crates/tui/src/elapsed.rs`). It uses `cargo nextest
+run` when nextest is installed (`CODEWHALE_DEV_NEXTEST=0` forces libtest)
+and applies `scripts/dev-cache.sh` so a new worktree gets an isolated
+Cargo build-dir. For PTY
+failures, rerun the exact test before changing behavior. Script one input at a
+time and capture after the UI settles. Validate representative layouts at
+40x12, 60x16, 80x24, 100x32, and 140x40; judge motion from repeated frames, not
+a single screenshot. Remove inherited `NO_COLOR`, `TERM=dumb`, and tmux motion
+overrides when they would invalidate the observation.

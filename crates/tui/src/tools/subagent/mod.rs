@@ -395,7 +395,7 @@ const FLEET_ROLE_SCHEMA_VALUES: [&str; 8] = [
     "consultant",
     "custom",
 ];
-const SUBAGENT_TYPE_DESCRIPTION: &str = "Fleet role for this delegated worker. worker: full tool access for multi-step tasks. scout: fast read-only exploration. planner: analysis-only planning. reviewer: reads and grades code. builder: lands focused code changes. verifier: runs tests/validation gates and reports evidence. consultant: read-only high-reasoning counsel for judgement calls and design critique. custom: exactly the tools listed in allowed_tools.";
+const SUBAGENT_TYPE_DESCRIPTION: &str = "Fleet role for this delegated worker. worker: full tool access for multi-step tasks. scout: fast read-only exploration. planner: grounded strategy with read-only probes. reviewer: reads and grades code. builder: lands focused code changes. verifier: runs tests/validation gates and reports evidence. consultant: read-only high-reasoning counsel for judgement calls and design critique. custom: the tools listed in allowed_tools on the parent's posture.";
 
 // === Types ===
 
@@ -434,7 +434,8 @@ pub enum FleetRole {
     Worker,
     /// Fast exploration - read-only tools for codebase search.
     Scout,
-    /// Planning - analysis tools only for architectural planning.
+    /// Planning — grounded strategy. Reads the workspace and the web and
+    /// may run classifier-bounded shell probes; never mutates.
     Planner,
     /// Code review - read + analysis tools.
     Reviewer,
@@ -452,12 +453,14 @@ pub enum FleetRole {
     /// for guidance, judgement calls, and design critique (#4752).
     ///
     /// Read-only and shell-less by construction: a Consultant reasons about the
-    /// code and says what it thinks. It is distinct from `Reviewer`, which
-    /// grades a specific change against a standard, and from `Planner`, which
-    /// produces a plan to execute. A Consultant answers "what should we do here,
-    /// and what are we not seeing".
+    /// code (and may read the web to ground that counsel) and says what it
+    /// thinks. It is distinct from `Reviewer`, which grades a specific change
+    /// against a standard, and from `Planner`, which produces a plan to execute.
+    /// A Consultant answers "what should we do here, and what are we not seeing".
     Consultant,
-    /// Custom tool access defined at spawn time.
+    /// Custom tool access defined at spawn time. Inherits the parent's
+    /// write/network/shell ceiling and is narrowed by the explicit tool list
+    /// or an explicit write_authority, never by a silent lock-down.
     Custom,
 }
 
@@ -1460,8 +1463,9 @@ fn worker_profile_for_spawn(
     custom_write_authority: bool,
 ) -> WorkerRuntimeProfile {
     let mut requested = WorkerRuntimeProfile::for_role(agent_type.clone());
-    // Custom starts locked down, but an explicit bounded write authority may
-    // deliberately open only the posture needed by its explicit tool list.
+    // Custom inherits the parent's effective posture by default (its explicit
+    // tool list is the narrowing). The bounded write authority a spawning call
+    // may pass is kept as an explicit, redundant grant for older callers.
     // Parent intersection below remains the hard ceiling.
     if *agent_type == FleetRole::Custom && custom_write_authority {
         requested.permissions.write = true;
@@ -1697,6 +1701,24 @@ pub(crate) fn subagent_thinking_label(thinking: SubAgentThinking) -> &'static st
 struct SubAgentInput {
     text: String,
     interrupt: bool,
+    /// Live "queued for the next round" counter shared with the manager.
+    /// Decremented when the child loop takes the input off its channel, so
+    /// the rail's `· N queued` count is the truthful number of follow-ups the
+    /// child has not yet folded into its next model round.
+    pending: Option<Arc<std::sync::atomic::AtomicUsize>>,
+}
+
+impl SubAgentInput {
+    /// Mark this input as consumed by the child loop.
+    fn mark_taken(&self) {
+        if let Some(pending) = self.pending.as_ref() {
+            let _ = pending.fetch_update(
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+                |value| Some(value.saturating_sub(1)),
+            );
+        }
+    }
 }
 
 fn append_subagent_inputs_as_user_messages(
@@ -1808,6 +1830,10 @@ struct SpawnRequest {
     /// → verify). The source must be settled (not running), in the same
     /// workspace, and reachable by the spawning agent.
     resume_from: Option<String>,
+    /// Detached children deliberately outlive the active parent turn. The
+    /// default is foreground ownership: a turn-end cancellation stops and
+    /// joins its direct children before the turn becomes terminal.
+    detached: bool,
 }
 
 /// Declared child write authority for a (deliberate) spawn.
@@ -1824,6 +1850,43 @@ struct AgentUsageBudgetScope {
     limit: u64,
     spent: u64,
     remaining: u64,
+}
+
+/// Which terminal states `resume_from_checkpoint_with_policy` may re-dispatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResumePolicy {
+    /// The model-facing `agents/followup` contract: interrupted children only.
+    InterruptedOnly,
+    /// The operator-facing continue-a-fork contract: interrupted or completed
+    /// children whose last checkpoint is continuable.
+    InterruptedOrCompleted,
+}
+
+impl ResumePolicy {
+    fn describe(self) -> &'static str {
+        match self {
+            Self::InterruptedOnly => "only interrupted children are resumable",
+            Self::InterruptedOrCompleted => {
+                "only interrupted or completed children can be continued"
+            }
+        }
+    }
+}
+
+/// Receipt for a user-originated follow-up to a child agent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UserFollowUpOutcome {
+    /// The child the user addressed.
+    pub agent_id: String,
+    /// The child that now carries the conversation: the same id when the
+    /// message was delivered live, or the resumed fork's new id.
+    pub target_agent_id: String,
+    /// Whether the text actually reached a live loop.
+    pub delivered: bool,
+    /// Whether a new agent loop was re-dispatched from the checkpoint.
+    pub resumed: bool,
+    /// Human-readable delivery note (never a secret).
+    pub note: String,
 }
 
 /// Durable recovery point for an interrupted sub-agent session.
@@ -2116,8 +2179,115 @@ impl SubAgentForkContext {
 /// Carries everything a child needs to (a) build its own tool registry —
 /// including the manager so grandchildren can spawn — and (b) cooperate with
 /// lifecycle cancellation and depth caps. `child_runtime()` links cancellation
-/// tokens, while `background_runtime()` deliberately detaches long-running
-/// `agent` sessions from the caller's turn token.
+/// tokens and turn ownership, while `background_runtime()` explicitly detaches
+/// long-running `agent` sessions from the caller's turn token.
+#[derive(Debug)]
+pub(crate) struct ForegroundChildRegistry {
+    state: std::sync::Mutex<ForegroundChildState>,
+    settled: tokio::sync::watch::Sender<()>,
+}
+
+#[derive(Debug, Default)]
+struct ForegroundChildState {
+    cancelled: bool,
+    next_id: u64,
+    tokens: HashMap<u64, CancellationToken>,
+}
+
+pub(crate) struct ForegroundChildRegistration {
+    registry: std::sync::Weak<ForegroundChildRegistry>,
+    id: u64,
+}
+
+impl ForegroundChildRegistry {
+    #[must_use]
+    pub(crate) fn new() -> Self {
+        let (settled, _) = tokio::sync::watch::channel(());
+        Self {
+            state: std::sync::Mutex::new(ForegroundChildState::default()),
+            settled,
+        }
+    }
+
+    pub(crate) fn register(
+        self: &Arc<Self>,
+        token: CancellationToken,
+    ) -> ForegroundChildRegistration {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let id = state.next_id;
+        state.next_id = state.next_id.saturating_add(1);
+        if state.cancelled {
+            token.cancel();
+        }
+        state.tokens.insert(id, token);
+        ForegroundChildRegistration {
+            registry: Arc::downgrade(self),
+            id,
+        }
+    }
+
+    fn release(&self, id: u64) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.tokens.remove(&id).is_some() {
+            self.settled.send_replace(());
+        }
+    }
+
+    /// Cancel every currently-owned direct child and wait until each task has
+    /// released its registration. Multiple terminal paths share this barrier:
+    /// only the first call issues cancellation, while all callers await the
+    /// same settled set. A child registered after cancellation observes the
+    /// latched state and is cancelled before it can reach a provider request.
+    pub(crate) async fn cancel_and_wait(&self) {
+        let mut settled = self.settled.subscribe();
+        let tokens = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if state.cancelled {
+                Vec::new()
+            } else {
+                state.cancelled = true;
+                state.tokens.values().cloned().collect::<Vec<_>>()
+            }
+        };
+        for token in tokens {
+            token.cancel();
+        }
+
+        loop {
+            let is_settled = {
+                let state = self
+                    .state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                state.tokens.is_empty()
+            };
+            if is_settled {
+                return;
+            }
+            // `watch` retains a version change that races this check, unlike a
+            // plain notification created but not yet polled by this task.
+            let _ = settled.changed().await;
+        }
+    }
+}
+
+impl Drop for ForegroundChildRegistration {
+    fn drop(&mut self) {
+        if let Some(registry) = self.registry.upgrade() {
+            registry.release(self.id);
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct SubAgentRuntime {
     pub client: DeepSeekClient,
@@ -2184,9 +2354,13 @@ pub struct SubAgentRuntime {
     /// greater than) so equality is allowed — matches codex's pattern.
     pub max_spawn_depth: u32,
     /// Cooperative cancellation token. Direct `child_runtime()` callers derive
-    /// a child token from the parent; model-visible `agent` uses
-    /// `background_runtime()` to replace that token with a detached one.
+    /// a child token from the parent; explicitly detached model-visible
+    /// `agent` starts use `background_runtime()` to replace it.
     pub cancel_token: CancellationToken,
+    /// Turn-scoped ownership barrier for direct foreground children. Nested
+    /// children inherit the Arc but do not register: their direct parent owns
+    /// their lifecycle. Explicitly detached runtimes clear it.
+    foreground_children: Option<Arc<ForegroundChildRegistry>>,
     /// Structured progress / lifecycle stream. Cloned across children so the
     /// whole spawn tree publishes into one ordered, fan-out-able mailbox.
     /// `None` only when no consumer is wired (legacy entry points / tests).
@@ -2242,6 +2416,18 @@ pub struct SubAgentRuntime {
     pub todos: SharedTodoList,
     /// Session mode of the orchestrating parent at spawn time (Wave 7 M4/M5).
     pub parent_mode: AppMode,
+    /// The session's permission posture at spawn time. Children inherit it
+    /// faithfully: under Auto-Review the same deterministic floor and model
+    /// guardian that gate the parent gate the child's held calls; under Ask a
+    /// held call is routed to the parent's approval UI when one exists;
+    /// Full Access still fails closed on the non-bypassable safety floor.
+    pub approval_mode: crate::tui::approval::ApprovalMode,
+    /// The session's deterministic Auto-Review policy (configured allow/block
+    /// rules plus the built-in safety floor), shared with every descendant.
+    pub auto_review_policy: std::sync::Arc<crate::tui::auto_review::AutoReviewPolicy>,
+    /// Whether the host can answer an approval prompt for a child (an
+    /// interactive TUI). Headless hosts keep the fail-closed denial.
+    pub parent_can_prompt: bool,
 }
 
 impl SubAgentRuntime {
@@ -2282,6 +2468,7 @@ impl SubAgentRuntime {
             parent_agent_id: None,
             max_spawn_depth: DEFAULT_MAX_SPAWN_DEPTH,
             cancel_token: CancellationToken::new(),
+            foreground_children: None,
             mailbox: None,
             runtime_usage_lease: None,
             parent_completion_tx: None,
@@ -2293,6 +2480,11 @@ impl SubAgentRuntime {
             speech_output_dir: None,
             todos: crate::tools::todo::new_shared_todo_list(),
             parent_mode: AppMode::Agent,
+            approval_mode: crate::tui::approval::ApprovalMode::Suggest,
+            auto_review_policy: std::sync::Arc::new(
+                crate::tui::auto_review::AutoReviewPolicy::default(),
+            ),
+            parent_can_prompt: false,
         }
     }
 
@@ -2300,6 +2492,22 @@ impl SubAgentRuntime {
     #[must_use]
     pub fn with_parent_mode(mut self, mode: AppMode) -> Self {
         self.parent_mode = mode;
+        self
+    }
+
+    /// Install the session's permission posture and Auto-Review policy so
+    /// children are gated exactly like the parent, and say whether the host
+    /// can answer a prompt raised on a child's behalf.
+    #[must_use]
+    pub fn with_permission_posture(
+        mut self,
+        approval_mode: crate::tui::approval::ApprovalMode,
+        auto_review_policy: std::sync::Arc<crate::tui::auto_review::AutoReviewPolicy>,
+        parent_can_prompt: bool,
+    ) -> Self {
+        self.approval_mode = approval_mode;
+        self.auto_review_policy = auto_review_policy;
+        self.parent_can_prompt = parent_can_prompt;
         self
     }
 
@@ -2414,6 +2622,17 @@ impl SubAgentRuntime {
         self
     }
 
+    /// Attach the turn-owned direct-child registry. Engine-only wiring keeps
+    /// the ownership boundary out of Fleet scheduling and persisted records.
+    #[must_use]
+    pub(crate) fn with_foreground_children(
+        mut self,
+        foreground_children: Arc<ForegroundChildRegistry>,
+    ) -> Self {
+        self.foreground_children = Some(foreground_children);
+        self
+    }
+
     /// Override the maximum spawn depth (default `DEFAULT_MAX_SPAWN_DEPTH`).
     /// Used by config wiring (`[subagents] max_depth = N`) and tests.
     #[must_use]
@@ -2470,14 +2689,14 @@ impl SubAgentRuntime {
         if provider_id.is_empty() {
             return Err("provider pin was blank".to_string());
         }
-        let identity = api_config.resolve_provider_identity(provider_id)?;
+        let identity = api_config.resolve_provider_pin_identity(provider_id)?;
         let mut provider_config = (**api_config).clone();
         // EPIC #2608: the provider is taken verbatim from the profile pin
         // (built-in id or configured custom id), never inferred from the model
         // id. Overriding only `provider` makes `Config::api_provider`,
         // `deepseek_base_url`, and `deepseek_api_key` all re-resolve for the
         // pinned provider.
-        provider_config.provider = Some(identity.key.clone());
+        provider_config.scope_to_provider_identity(&identity);
         Ok((provider_config, identity))
     }
 
@@ -2513,16 +2732,23 @@ impl SubAgentRuntime {
     }
 
     /// Return a child runtime that is deliberately detached from the parent
-    /// turn cancellation token. Background sub-agents should keep running when
-    /// the parent turn is cancelled; explicit agent cancellation still
-    /// aborts their task handles through the manager.
+    /// turn cancellation token and its foreground ownership barrier. Explicit
+    /// agent cancellation still aborts its task handle through the manager.
     #[must_use]
     pub fn background_runtime(&self) -> Self {
         let mut runtime = self.child_runtime();
         let token = CancellationToken::new();
         runtime.cancel_token = token.clone();
         runtime.context.cancel_token = Some(token);
+        runtime.foreground_children = None;
         runtime
+    }
+
+    fn foreground_child_registration(&self) -> Option<ForegroundChildRegistration> {
+        (self.spawn_depth == 1)
+            .then_some(())
+            .and(self.foreground_children.as_ref())
+            .map(|registry| registry.register(self.cancel_token.clone()))
     }
 
     /// Build a child runtime cloning this one, incrementing `spawn_depth`,
@@ -2562,6 +2788,7 @@ impl SubAgentRuntime {
             parent_agent_id: self.parent_agent_id.clone(),
             max_spawn_depth: self.max_spawn_depth,
             cancel_token: self.cancel_token.child_token(),
+            foreground_children: self.foreground_children.clone(),
             mailbox: self.mailbox.clone(),
             runtime_usage_lease: self.runtime_usage_lease.clone(),
             parent_completion_tx: self.parent_completion_tx.clone(),
@@ -2580,6 +2807,9 @@ impl SubAgentRuntime {
             // opt-in forked child as immutable `fork_context` text.
             todos: crate::tools::todo::new_shared_todo_list(),
             parent_mode: self.parent_mode,
+            approval_mode: self.approval_mode,
+            auto_review_policy: Arc::clone(&self.auto_review_policy),
+            parent_can_prompt: self.parent_can_prompt,
         }
     }
 
@@ -2992,6 +3222,9 @@ pub struct SubAgentManager {
     /// Parent mail queued by `agents/message` without waking the child.
     /// `agents/followup` drains into `input_tx` when a live wake is possible.
     queued_mail: HashMap<String, VecDeque<QueuedParentMessage>>,
+    /// Follow-ups handed to a running child's live input channel that the
+    /// child has not yet taken at a round boundary. Read by the rail rows.
+    pending_follow_ups: HashMap<String, Arc<std::sync::atomic::AtomicUsize>>,
     /// Test/observability: agent ids that received a live wake via followup.
     woken_agents: HashMap<String, bool>,
     /// Agent ids whose handle-store entries should be evicted on the next async
@@ -3003,9 +3236,64 @@ pub struct SubAgentManager {
     /// the same interrupted id returns the existing resumed target instead of
     /// spawning a duplicate agent loop (duplicate-resume guard).
     resume_targets: HashMap<String, String>,
+    /// Approval prompts raised on a child's behalf under Ask: the approval id
+    /// the host sees (`agent:<agent_id>:<n>`) → the waiting child. The engine
+    /// routes the person's decision here; a decision for an id nobody is
+    /// waiting on is dropped, never applied to a different call.
+    child_approvals: HashMap<String, tokio::sync::oneshot::Sender<ChildApprovalOutcome>>,
+    child_approval_seq: u64,
+}
+
+/// A person's answer to an approval prompt raised for a child's tool call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildApprovalOutcome {
+    Approved,
+    Denied,
 }
 
 impl SubAgentManager {
+    /// Register a prompt raised for a child's held call. Returns the approval
+    /// id to publish and the receiver the child awaits.
+    pub fn register_child_approval(
+        &mut self,
+        agent_id: &str,
+    ) -> (String, tokio::sync::oneshot::Receiver<ChildApprovalOutcome>) {
+        self.child_approval_seq = self.child_approval_seq.wrapping_add(1);
+        let id = format!("agent:{agent_id}:approval:{}", self.child_approval_seq);
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.child_approvals.insert(id.clone(), tx);
+        (id, rx)
+    }
+
+    /// Whether an approval id belongs to a child prompt (routing hint for the
+    /// engine before it consults the map).
+    #[must_use]
+    pub fn is_child_approval_id(id: &str) -> bool {
+        id.starts_with("agent:") && id.contains(":approval:")
+    }
+
+    /// Deliver a person's decision to the waiting child. Returns `false` when
+    /// no child is waiting on that id (already answered, cancelled, or not a
+    /// child prompt).
+    pub fn resolve_child_approval(&mut self, id: &str, outcome: ChildApprovalOutcome) -> bool {
+        match self.child_approvals.remove(id) {
+            Some(tx) => tx.send(outcome).is_ok(),
+            None => false,
+        }
+    }
+
+    /// Forget a prompt the child stopped waiting for (cancellation).
+    pub fn cancel_child_approval(&mut self, id: &str) {
+        self.child_approvals.remove(id);
+    }
+
+    /// Number of child prompts currently awaiting a person.
+    #[must_use]
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn pending_child_approvals(&self) -> usize {
+        self.child_approvals.len()
+    }
+
     /// Create a new manager for sub-agents.
     #[must_use]
     pub fn new(workspace: PathBuf, max_agents: usize) -> Self {
@@ -3045,9 +3333,12 @@ impl SubAgentManager {
             persist_pending: false,
             last_cleanup_at: None,
             queued_mail: HashMap::new(),
+            pending_follow_ups: HashMap::new(),
             woken_agents: HashMap::new(),
             pending_handle_evictions: Vec::new(),
             resume_targets: HashMap::new(),
+            child_approvals: HashMap::new(),
+            child_approval_seq: 0,
         }
     }
 
@@ -4836,16 +5127,21 @@ impl SubAgentManager {
                 let mut undelivered = VecDeque::new();
                 let mut delivered = 0_usize;
                 if let Some(tx) = input_tx {
+                    let counter =
+                        Arc::clone(self.pending_follow_ups.entry(agent_id.clone()).or_default());
                     while let Some(mail) = pending.next() {
+                        counter.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
                         if tx
                             .send(SubAgentInput {
                                 text: mail.text.clone(),
                                 interrupt: false,
+                                pending: Some(Arc::clone(&counter)),
                             })
                             .is_ok()
                         {
                             delivered = delivered.saturating_add(1);
                         } else {
+                            counter.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
                             undelivered.push_back(mail);
                             undelivered.extend(pending);
                             break;
@@ -4952,6 +5248,84 @@ impl SubAgentManager {
         agent_ref: &str,
         followup_text: &str,
     ) -> Result<SubAgentResult> {
+        self.resume_from_checkpoint_with_policy(
+            manager_handle,
+            runtime,
+            agent_ref,
+            followup_text,
+            ResumePolicy::InterruptedOnly,
+        )
+    }
+
+    /// Continue a child on its own fork from the user's side of the shell.
+    ///
+    /// This is the operator-facing twin of `agents/followup`: a running child
+    /// receives the text on its live input channel; an interrupted *or
+    /// completed* child whose last checkpoint is continuable is re-dispatched
+    /// from that checkpoint under a new agent id (the terminal record stays an
+    /// immutable receipt and `resume_targets` links the fork). Failed,
+    /// cancelled, and budget-exhausted children cannot be continued.
+    pub(crate) fn continue_child_from_user(
+        &mut self,
+        manager_handle: SharedSubAgentManager,
+        runtime: Option<SubAgentRuntime>,
+        agent_ref: &str,
+        text: &str,
+    ) -> Result<UserFollowUpOutcome> {
+        let agent_id = self.resolve_agent_ref(agent_ref)?;
+        let status = self
+            .agents
+            .get(&agent_id)
+            .map(|agent| agent.status.clone())
+            .ok_or_else(|| anyhow!("Agent {agent_id} not found"))?;
+        match status {
+            SubAgentStatus::Running => {
+                let receipt = self.followup_child(&agent_id, text.to_string())?;
+                Ok(UserFollowUpOutcome {
+                    agent_id: agent_id.clone(),
+                    target_agent_id: agent_id,
+                    delivered: receipt.woke,
+                    resumed: false,
+                    note: receipt.note,
+                })
+            }
+            SubAgentStatus::Interrupted(_) | SubAgentStatus::Completed => {
+                let Some(runtime) = runtime else {
+                    return Err(anyhow!(
+                        "Cannot continue agent {agent_id}: no runtime is available to resume it"
+                    ));
+                };
+                let resumed = self.resume_from_checkpoint_with_policy(
+                    manager_handle,
+                    runtime,
+                    &agent_id,
+                    text,
+                    ResumePolicy::InterruptedOrCompleted,
+                )?;
+                let target = resumed.agent_id.clone();
+                Ok(UserFollowUpOutcome {
+                    agent_id,
+                    delivered: true,
+                    resumed: true,
+                    note: format!("continued from checkpoint as {target}"),
+                    target_agent_id: target,
+                })
+            }
+            other => Err(anyhow!(
+                "Cannot continue agent {agent_id}: status is {} and the child cannot resume",
+                subagent_status_name(&other)
+            )),
+        }
+    }
+
+    fn resume_from_checkpoint_with_policy(
+        &mut self,
+        manager_handle: SharedSubAgentManager,
+        runtime: SubAgentRuntime,
+        agent_ref: &str,
+        followup_text: &str,
+        policy: ResumePolicy,
+    ) -> Result<SubAgentResult> {
         let agent_id = self.resolve_agent_ref(agent_ref)?;
         // Idempotency: a second resume on the same interrupted id returns the
         // already-resumed target instead of spawning a duplicate agent loop
@@ -4979,10 +5353,20 @@ impl SubAgentManager {
                 .agents
                 .get(&agent_id)
                 .ok_or_else(|| anyhow!("Agent {agent_id} not found"))?;
-            if !matches!(agent.status, SubAgentStatus::Interrupted(_)) {
+            let resumable = match policy {
+                ResumePolicy::InterruptedOnly => {
+                    matches!(agent.status, SubAgentStatus::Interrupted(_))
+                }
+                ResumePolicy::InterruptedOrCompleted => matches!(
+                    agent.status,
+                    SubAgentStatus::Interrupted(_) | SubAgentStatus::Completed
+                ),
+            };
+            if !resumable {
                 return Err(anyhow!(
-                    "Cannot resume agent {agent_id}: status is {} (only interrupted children are resumable)",
-                    subagent_status_name(&agent.status)
+                    "Cannot resume agent {agent_id}: status is {} ({})",
+                    subagent_status_name(&agent.status),
+                    policy.describe()
                 ));
             }
             let checkpoint = agent
@@ -5129,6 +5513,18 @@ impl SubAgentManager {
         }
         let snapshot = self.get_result(&agent_id)?;
         Ok((prior, snapshot))
+    }
+
+    /// Follow-ups per running child that were handed to its live input
+    /// channel but not yet taken at a round boundary. Only non-zero entries.
+    pub fn queued_follow_up_counts(&self) -> HashMap<String, usize> {
+        self.pending_follow_ups
+            .iter()
+            .filter_map(|(agent_id, counter)| {
+                let count = counter.load(std::sync::atomic::Ordering::Acquire);
+                (count > 0).then(|| (agent_id.clone(), count))
+            })
+            .collect()
     }
 
     /// Bounded coordination summaries for `agents/list`.
@@ -5759,6 +6155,7 @@ impl SubAgentManager {
         }
 
         let launch_gate = (runtime.spawn_depth == 1).then(|| self.launch_gate.clone());
+        let foreground_child_registration = runtime.foreground_child_registration();
         let task = SubAgentTask {
             manager_handle,
             runtime,
@@ -5774,6 +6171,7 @@ impl SubAgentManager {
             wall_time,
             input_rx,
             launch_gate,
+            _foreground_child_registration: foreground_child_registration,
         };
         let handle = spawn_supervised(
             "subagent-task",
@@ -7173,9 +7571,9 @@ impl ToolSpec for AgentTool {
 
     fn description(&self) -> &'static str {
         concat!(
-            "Start one focused background worker and return immediately with its agent_id; a prompt is enough for a read-only role. ",
+            "Start with action=start and prompt; returns a turn-owned agent_id immediately. Read-only roles need no extra fields. Set detached=true only for work that must remain independently observable after the turn. ",
             "Use multiple starts for independent parallel tasks. ",
-            "type selects the Fleet role: worker (full tool access), scout (fast read-only exploration), planner (analysis-only), reviewer (reads and grades code), builder (lands focused code changes), verifier (runs tests and reports evidence), consultant (read-only design counsel), or custom (exactly allowed_tools). ",
+            "type selects the Fleet role: worker (full tool access), scout (fast read-only exploration), planner (grounded strategy, read-only probes), reviewer (reads and grades code), builder (lands focused code changes), verifier (runs tests and reports evidence), consultant (read-only design counsel), or custom (allowed_tools on the parent's posture). ",
             "profile runs the child as a named Fleet profile (roster member) — its role posture, model route, and instruction overlay — so pass a profile only when the task needs that member and never pass model alongside it. ",
             "max_depth caps how deep the child may spawn its own descendants (it can only narrow the inherited budget). workspace_policy=shared (default) runs in the parent checkout; worktree=true (or workspace_policy=worktree) gives the child an isolated git worktree — use it whenever parallel writers must not collide with the parent checkout. ",
             "A write-capable child defaults write scope to the parent workspace; narrow it with write_roots (repo-relative directory trees) and exact_files (individual files) so parallel children claim disjoint scope. ",
@@ -7183,7 +7581,7 @@ impl ToolSpec for AgentTool {
             "Coordinate through this same tool: action=message queues a note without waking the child; action=followup delivers queued notes and wakes a running child for its next user-provenance turn; action=interrupt stops the current child turn while preserving its checkpoint; action=wait blocks without changing child state, and until=\"all\" joins a whole fan-out in one call. ",
             "Action contract: start requires prompt; message/followup require a target and message; peek/interrupt/cancel require a target; status and wait may be unscoped. ",
             "The narrow agents/list, agents/message, agents/followup, agents/interrupt, and agents/wait tools expose the same semantics directly; there is no second transport. ",
-            "In Operate, background workers are the default for independent or long work; a write-capable root start defaults write scope to the parent workspace unless narrowed with write_roots, exact_files, or coordination_contracts; arbitrary shell remains gated. ",
+            "In Operate, use detached=true only for independent or long work that must outlive the active turn; a write-capable root start defaults write scope to the parent workspace unless narrowed with write_roots, exact_files, or coordination_contracts; arbitrary shell remains gated. ",
             "Legacy action=status|peek|cancel remain for compatibility."
         )
     }
@@ -7205,7 +7603,7 @@ impl ToolSpec for AgentTool {
                 "action": {
                     "type": "string",
                     "enum": ["start", "status", "peek", "message", "followup", "interrupt", "wait", "cancel"],
-                    "description": "start (default) launches a background worker and returns immediately. status/peek inspect. message queues a note without waking a running child. followup delivers queued notes and wakes a running child for its next user-provenance model turn. interrupt stops the current turn while preserving the child checkpoint. wait only observes; see until. cancel permanently cancels a running child."
+                    "description": "start launches a turn-owned worker and returns immediately. status/peek inspect. message queues a note without waking a running child. followup delivers queued notes and wakes a running child for its next user-provenance model turn. interrupt stops the current turn while preserving the child checkpoint. wait only observes; see until. cancel permanently cancels a running child."
                 },
                 "until": {
                     "type": "string",
@@ -7240,7 +7638,11 @@ impl ToolSpec for AgentTool {
                 },
                 "prompt": {
                     "type": "string",
-                    "description": "The focused task to give the background worker. A read-only role needs no write scope; a write-capable role defaults to the parent workspace unless narrowed with write_roots, exact_files, or coordination_contracts."
+                    "description": "The focused task to give the worker. A read-only role needs no write scope; a write-capable role defaults to the parent workspace unless narrowed with write_roots, exact_files, or coordination_contracts."
+                },
+                "detached": {
+                    "type": "boolean",
+                    "description": "False (default): the active turn owns this direct child and cancels it before ending. true: explicitly detached work remains running and inspectable after the parent turn ends; cancel it with agent(action=cancel)."
                 },
                 "dependencies": {
                     "type": "array",
@@ -7397,7 +7799,10 @@ impl ToolSpec for AgentTool {
                     ]
                 }
             },
-            "required": []
+            // Model-facing calls choose an action explicitly so the matching
+            // dependent schema is always active. The parser still defaults a
+            // missing action to start for stored and programmatic legacy calls.
+            "required": ["action"]
         })
     }
 
@@ -7429,13 +7834,12 @@ impl ToolSpec for AgentTool {
         }
     }
 
-    /// #3801: `action=start` launches a background agent and returns immediately —
-    /// it is a detached start that should not hold the global tool-exec write
-    /// lock while the child spins up.  In auto-approved modes (YOLO) this lets
-    /// multiple independent `agent start` calls join a single parallel batch
-    /// instead of being serialized N ways.
+    /// #3801: only explicit `detached=true` starts durable work that should not
+    /// hold the global tool-exec write lock while the child spins up. Foreground
+    /// starts still return promptly, but stay owned by their active turn.
     fn starts_detached_for(&self, input: &Value) -> bool {
         matches!(parse_agent_tool_action(input), Ok(AgentToolAction::Start))
+            && input.get("detached").and_then(Value::as_bool) == Some(true)
     }
 
     /// #3801: Read-only `agent` actions (status, peek) can safely run in
@@ -7964,18 +8368,25 @@ fn provider_pin_matches_session(runtime: &SubAgentRuntime, provider_id: &str) ->
     let provider_id = provider_id.trim();
     let session_provider = runtime.client.api_provider();
     if let Some(config) = runtime.api_config.as_ref() {
-        let Ok(pinned) = config.resolve_provider_identity(provider_id) else {
+        let Ok(pinned) = config.resolve_provider_pin_identity(provider_id) else {
             return false;
         };
-        let active_identity = config.provider_identity_for(session_provider);
-        if pinned.provider == crate::config::ApiProvider::Custom
-            || session_provider == crate::config::ApiProvider::Custom
-        {
-            return pinned.provider == session_provider && pinned.key == active_identity;
-        }
-        return pinned.provider == session_provider;
+        let Ok(active) = config.active_provider_identity(session_provider) else {
+            return false;
+        };
+        return pinned.provider == active.provider
+            && pinned.key == active.key
+            && pinned.migrated_legacy_ollama_cloud_route
+                == active.migrated_legacy_ollama_cloud_route;
     }
     if let Some(provider) = crate::config::ApiProvider::parse(provider_id) {
+        // A Cloud client alone cannot reveal whether it was built from the
+        // explicit Cloud table/slot or the released legacy Ollama tuple. With
+        // no Config to prove provenance, a provider pin must not guess that
+        // either identity is reusable.
+        if session_provider == crate::config::ApiProvider::OllamaCloud {
+            return false;
+        }
         return provider == session_provider;
     }
     false
@@ -8086,7 +8497,11 @@ async fn spawn_subagent_from_input(
         )));
     }
 
-    let mut child_runtime = runtime.background_runtime();
+    let mut child_runtime = if spawn_request.detached {
+        runtime.background_runtime()
+    } else {
+        runtime.child_runtime()
+    };
     let provider_binding = child_provider_binding(&runtime, profile_member.as_ref())?;
     child_runtime.client = provider_binding.client;
     child_runtime.api_config = provider_binding.api_config;
@@ -8927,6 +9342,9 @@ struct SubAgentTask {
     /// holds it until completion, so a fanout burst beyond the limit queues
     /// with a visible reason instead of executing all at once.
     launch_gate: Option<Arc<Semaphore>>,
+    /// Releases the parent turn's cancellation-and-join barrier after this
+    /// direct foreground child has completed its terminal fan-in.
+    _foreground_child_registration: Option<ForegroundChildRegistration>,
 }
 
 #[allow(clippy::too_many_lines)]
@@ -10162,6 +10580,7 @@ async fn run_subagent(
         );
 
         while let Ok(input) = input_rx.try_recv() {
+            input.mark_taken();
             if input.interrupt {
                 pending_inputs.clear();
             }
@@ -10686,6 +11105,7 @@ async fn run_subagent(
                 continue;
             }
             while let Ok(input) = input_rx.try_recv() {
+                input.mark_taken();
                 if input.interrupt {
                     pending_inputs.clear();
                 }
@@ -10740,6 +11160,7 @@ async fn run_subagent(
                 tool_registry
                     .execute_from_surface(
                         &agent_id,
+                        &tool_id,
                         &mut tool_surface,
                         &request_active_tool_names,
                         &tool_name,
@@ -11212,6 +11633,7 @@ fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
     let thinking_explicit = explicit_thinking.is_some();
     let thinking = explicit_thinking.unwrap_or(SubAgentThinking::Inherit);
     let resident_file = optional_input_str(input, &["resident_file"])?.map(str::to_string);
+    let detached = parse_optional_bool(input, &["detached"])?.unwrap_or(false);
     let fork_context =
         parse_optional_bool(input, &["fork_context", "forkContext", "inherit_context"])?;
     let max_depth = parse_optional_u64(input, &["max_depth", "maxDepth", "max_spawn_depth"])?
@@ -11380,6 +11802,7 @@ fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
         exact_files,
         coordination_contracts,
         resume_from,
+        detached,
     };
     // A roster profile may resolve the parse-time General placeholder to a
     // read-only scout/reviewer or to a write-capable manager/builder. Defer
@@ -12842,6 +13265,19 @@ struct SubAgentToolRegistry {
     coordination_manager: SharedSubAgentManager,
     enforce_write_claim: bool,
     registry: ToolRegistry,
+    /// The session posture and reviewer wiring this child is gated by (see
+    /// [`SubAgentToolRegistry::gate_held_call`]). Cloned from the spawning
+    /// runtime so a child is gated exactly like the parent turn.
+    gate_runtime: SubAgentRuntime,
+}
+
+/// What the child permission gate decided for one held call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ChildGateVerdict {
+    /// Run the call.
+    Proceed,
+    /// Refuse the call with this reason (returned to the child model).
+    Deny(String),
 }
 
 impl SubAgentToolRegistry {
@@ -12887,8 +13323,10 @@ impl SubAgentToolRegistry {
         // has a full shell.
         let parent_shell = ShellPolicy::from_legacy_allow_shell(runtime.allow_shell);
         let mut child_shell = runtime.worker_profile.shell.min_with(parent_shell);
-        if matches!(&agent_type, FleetRole::Scout | FleetRole::Reviewer)
-            && child_shell.allows_shell()
+        if matches!(
+            &agent_type,
+            FleetRole::Scout | FleetRole::Reviewer | FleetRole::Planner
+        ) && child_shell.allows_shell()
         {
             child_shell = ShellPolicy::ReadOnly;
         }
@@ -12935,6 +13373,373 @@ impl SubAgentToolRegistry {
             coordination_manager,
             enforce_write_claim: true,
             registry,
+            gate_runtime: runtime,
+        }
+    }
+
+    /// The refusal the pre-posture registry applied to an approval-gated call
+    /// when the parent was not Full Access: read-only roles cannot write,
+    /// arbitrary shell needs the parent auto-approved. `None` when the call
+    /// clears the role-based delegation rules on its own.
+    fn delegation_refusal(&self, name: &str, input: &Value) -> Option<String> {
+        let spec = self.registry.get(name)?;
+        match spec.approval_requirement_for(input) {
+            ApprovalRequirement::Auto => None,
+            ApprovalRequirement::Suggest => {
+                // Write/edit/patch tools land here. Explicit write-capable
+                // roles (`builder`, `custom`) may run them without parent
+                // auto-approve (#1828, #1833). Workflow-spawned children also
+                // accept Suggest edits for any write-capable posture. #5186:
+                // children inherit the session's in-workspace write carve-out
+                // (#5185) too.
+                let may_write = self.runtime_profile.permissions.write
+                    && (self.accept_edits || Self::role_can_delegate_writes(&self.agent_type));
+                (!may_write && !self.workspace_write_carve_out_permits(name, input)).then(|| {
+                    format!(
+                        "Tool {name} requires approval and is not delegated to {role} sub-agents; pick a write-capable role or approve it from the session",
+                        role = self.agent_type.as_str()
+                    )
+                })
+            }
+            ApprovalRequirement::Required => {
+                // #5186: the bounded built-in verification surface is
+                // delegated to any shell-capable child; arbitrary shell and
+                // every other Required tool stay gated.
+                (!Self::is_delegated_builtin_verification(name, input)).then(|| {
+                    format!(
+                        "Tool {name} requires approval and cannot run inside this sub-agent without a session decision"
+                    )
+                })
+            }
+        }
+    }
+
+    /// Emit a transcript-visible receipt for a decision made on this child's
+    /// call without a person seeing a prompt (the audit log has the record).
+    #[allow(clippy::too_many_arguments)]
+    async fn emit_child_gate_receipt(
+        &self,
+        agent_id: &str,
+        tool_id: &str,
+        name: &str,
+        gate: crate::core::events::ToolGate,
+        decision: crate::core::events::ToolGateVerdict,
+        risk: Option<&str>,
+        reason: &str,
+    ) {
+        crate::core::engine::emit_tool_audit(json!({
+            "event": "tool.auto_review",
+            "gate": gate.as_str(),
+            "agent_id": agent_id,
+            "tool_id": tool_id,
+            "tool_name": name,
+            "decision": decision.as_str(),
+            "risk": risk,
+            "reason": reason,
+        }));
+        if let Some(tx) = self.gate_runtime.event_tx.as_ref() {
+            let _ = tx
+                .send(Event::ToolGateDecision {
+                    agent_id: Some(agent_id.to_string()),
+                    tool_id: tool_id.to_string(),
+                    tool_name: name.to_string(),
+                    gate,
+                    decision,
+                    risk: risk.map(str::to_string),
+                    reason: crate::core::events::bounded_gate_reason(reason),
+                })
+                .await;
+        }
+    }
+
+    /// Apply the session's permission posture to one of this child's tool
+    /// calls, exactly as the parent turn applies it to its own:
+    ///
+    /// - **Full Access**: ordinary calls run; the non-bypassable safety floor
+    ///   (publish-like, destructive background work) still fails closed.
+    /// - **Auto-Review**: the deterministic policy allows proven-safe calls
+    ///   and blocks the floor; anything it cannot prove safe goes to the same
+    ///   one-shot model guardian the parent uses. No prompt is ever opened;
+    ///   an unavailable guardian denies (fail closed).
+    /// - **Ask**: a call the role may delegate runs; a held call is raised as
+    ///   an approval prompt in the parent's UI when the host can answer one
+    ///   (the child waits, visibly, as `waiting for user`); otherwise it is
+    ///   denied with the reason.
+    /// - **never**: held calls are denied.
+    ///
+    /// Every decision a person did not make at a prompt is written to the
+    /// audit log and, through [`Event::ToolGateDecision`], into this child's
+    /// transcript. Role posture and the execution envelope are checked by the
+    /// caller before and after; this gate never widens them.
+    async fn gate_held_call(
+        &self,
+        agent_id: &str,
+        tool_id: &str,
+        name: &str,
+        input: &Value,
+    ) -> ChildGateVerdict {
+        use crate::core::engine::{AutoReviewPlanDecision, auto_review_plan_decision_for_context};
+        use crate::core::events::{ToolGate, ToolGateVerdict};
+        use crate::tui::approval::ApprovalMode;
+        use crate::tui::auto_review::{AutoReviewContext, RunOrigin};
+
+        let approval_mode = if self.auto_approve {
+            ApprovalMode::Bypass
+        } else {
+            self.gate_runtime.approval_mode
+        };
+        let workspace = self.gate_runtime.context.workspace.clone();
+        let workspace_trusted = crate::config::is_workspace_trusted(&workspace);
+        // Children are background workers: destructive detached work holds
+        // in every posture, exactly as it does for a detached parent start.
+        let review_context = AutoReviewContext::from_tool_call(
+            name,
+            input,
+            RunOrigin::Background,
+            approval_mode,
+            workspace_trusted,
+            Some(&workspace),
+        );
+        let (decision, _audit) = auto_review_plan_decision_for_context(
+            &self.gate_runtime.auto_review_policy,
+            &review_context,
+        );
+
+        match approval_mode {
+            ApprovalMode::Bypass => match decision {
+                AutoReviewPlanDecision::Block(reason) => {
+                    self.emit_child_gate_receipt(
+                        agent_id,
+                        tool_id,
+                        name,
+                        ToolGate::AutoReviewDeterministic,
+                        ToolGateVerdict::Denied,
+                        None,
+                        &reason,
+                    )
+                    .await;
+                    ChildGateVerdict::Deny(reason)
+                }
+                // Full Access has no prompt to force; the plan decision
+                // already turned every safety-floor hold into a block.
+                AutoReviewPlanDecision::ForcePrompt(reason) => ChildGateVerdict::Deny(reason),
+                AutoReviewPlanDecision::NoChange
+                | AutoReviewPlanDecision::Allow
+                | AutoReviewPlanDecision::ConsultReviewer(_) => ChildGateVerdict::Proceed,
+            },
+            ApprovalMode::Auto => match decision {
+                AutoReviewPlanDecision::Allow | AutoReviewPlanDecision::NoChange => {
+                    ChildGateVerdict::Proceed
+                }
+                AutoReviewPlanDecision::Block(reason)
+                | AutoReviewPlanDecision::ForcePrompt(reason) => {
+                    self.emit_child_gate_receipt(
+                        agent_id,
+                        tool_id,
+                        name,
+                        ToolGate::AutoReviewDeterministic,
+                        ToolGateVerdict::Denied,
+                        None,
+                        &reason,
+                    )
+                    .await;
+                    ChildGateVerdict::Deny(reason)
+                }
+                AutoReviewPlanDecision::ConsultReviewer(held_reason) => {
+                    self.consult_child_guardian(
+                        agent_id,
+                        tool_id,
+                        name,
+                        input,
+                        &review_context,
+                        &held_reason,
+                    )
+                    .await
+                }
+            },
+            ApprovalMode::Suggest | ApprovalMode::Never => {
+                // The deterministic floor still hard-blocks what it blocks for
+                // the parent (publish-like, destructive background work).
+                if let AutoReviewPlanDecision::Block(reason) = &decision {
+                    self.emit_child_gate_receipt(
+                        agent_id,
+                        tool_id,
+                        name,
+                        ToolGate::AutoReviewDeterministic,
+                        ToolGateVerdict::Denied,
+                        None,
+                        reason,
+                    )
+                    .await;
+                    return ChildGateVerdict::Deny(reason.clone());
+                }
+                let force_prompt = matches!(decision, AutoReviewPlanDecision::ForcePrompt(_));
+                let Some(refusal) = self.delegation_refusal(name, input) else {
+                    if !force_prompt {
+                        return ChildGateVerdict::Proceed;
+                    }
+                    // A safety-floor hold on a call the role could otherwise
+                    // delegate: a person still has to decide it.
+                    let AutoReviewPlanDecision::ForcePrompt(reason) = decision else {
+                        unreachable!("force_prompt implies ForcePrompt");
+                    };
+                    return self
+                        .prompt_parent_for_child_call(agent_id, name, input, &reason, true)
+                        .await;
+                };
+                if approval_mode == ApprovalMode::Never {
+                    return ChildGateVerdict::Deny(refusal);
+                }
+                self.prompt_parent_for_child_call(agent_id, name, input, &refusal, force_prompt)
+                    .await
+            }
+        }
+    }
+
+    /// Auto-Review: ask the one-shot model guardian about a held call, using
+    /// the child's own session client, and turn its answer into a verdict
+    /// plus a transcript receipt. Any failure denies (fail closed).
+    async fn consult_child_guardian(
+        &self,
+        agent_id: &str,
+        tool_id: &str,
+        name: &str,
+        input: &Value,
+        review_context: &crate::tui::auto_review::AutoReviewContext<'_>,
+        held_reason: &str,
+    ) -> ChildGateVerdict {
+        use crate::core::engine::reviewer::{ReviewerOutcome, consult_reviewer};
+        use crate::core::events::{ToolGate, ToolGateVerdict};
+
+        let context_text =
+            crate::tui::auto_review::build_reviewer_context(review_context, held_reason, input);
+        let review = consult_reviewer(
+            &self.gate_runtime.client,
+            &context_text,
+            &self.gate_runtime.cancel_token,
+        )
+        .await;
+        let risk = review.outcome.audit_risk();
+        let (verdict, reason) = match &review.outcome {
+            ReviewerOutcome::Allow { reason, .. } => (ToolGateVerdict::Allowed, reason.clone()),
+            ReviewerOutcome::Deny { reason, .. } => (ToolGateVerdict::Denied, reason.clone()),
+            ReviewerOutcome::Unavailable { reason } => {
+                (ToolGateVerdict::Unavailable, reason.clone())
+            }
+            ReviewerOutcome::Cancelled => {
+                return ChildGateVerdict::Deny(
+                    "Auto-Review guardian request cancelled".to_string(),
+                );
+            }
+        };
+        self.emit_child_gate_receipt(
+            agent_id,
+            tool_id,
+            name,
+            ToolGate::AutoReviewGuardian,
+            verdict,
+            risk,
+            &reason,
+        )
+        .await;
+        match review.outcome.into_tool_result(name) {
+            Ok(_) => ChildGateVerdict::Proceed,
+            Err(error) => ChildGateVerdict::Deny(error.to_string()),
+        }
+    }
+
+    /// Ask: raise the held call as an approval prompt in the parent's UI and
+    /// wait for the person, visibly (`waiting for user`). Hosts that cannot
+    /// prompt keep the fail-closed denial with the reason.
+    async fn prompt_parent_for_child_call(
+        &self,
+        agent_id: &str,
+        name: &str,
+        input: &Value,
+        reason: &str,
+        force_prompt: bool,
+    ) -> ChildGateVerdict {
+        let Some(event_tx) = self
+            .gate_runtime
+            .event_tx
+            .as_ref()
+            .filter(|_| self.gate_runtime.parent_can_prompt)
+        else {
+            return ChildGateVerdict::Deny(format!(
+                "{reason} (this host cannot raise a prompt for a worker; run the call in the main conversation, or switch the session to Auto-Review or Full Access)"
+            ));
+        };
+        let (approval_id, receiver) = self
+            .gate_runtime
+            .manager
+            .write()
+            .await
+            .register_child_approval(agent_id);
+        let description = format!(
+            "{} (worker {}) wants to run '{name}': {reason}",
+            self.owner_agent_name,
+            agent_id.chars().take(12).collect::<String>()
+        );
+        let approval_key = format!("{approval_id}:{name}");
+        let sent = event_tx
+            .send(Event::ApprovalRequired {
+                id: approval_id.clone(),
+                tool_name: name.to_string(),
+                description,
+                input: input.clone(),
+                approval_key: approval_key.clone(),
+                approval_grouping_key: approval_key,
+                intent_summary: None,
+                approval_force_prompt: force_prompt,
+            })
+            .await
+            .is_ok();
+        if !sent {
+            self.gate_runtime
+                .manager
+                .write()
+                .await
+                .cancel_child_approval(&approval_id);
+            return ChildGateVerdict::Deny(format!(
+                "{reason} (the session could not be asked; the call was denied)"
+            ));
+        }
+        record_agent_progress(
+            &self.gate_runtime,
+            agent_id,
+            AgentProgressEventMeta::new(AgentWorkerStatus::WaitingForUser)
+                .with_tool(name.to_string()),
+            format!("waiting for your decision on '{name}'"),
+        );
+        let outcome = tokio::select! {
+            () = self.gate_runtime.cancel_token.cancelled() => None,
+            answer = receiver => answer.ok(),
+        };
+        if outcome.is_none() {
+            self.gate_runtime
+                .manager
+                .write()
+                .await
+                .cancel_child_approval(&approval_id);
+        }
+        record_agent_progress(
+            &self.gate_runtime,
+            agent_id,
+            AgentProgressEventMeta::new(AgentWorkerStatus::RunningTool).with_tool(name.to_string()),
+            match outcome {
+                Some(ChildApprovalOutcome::Approved) => format!("approved '{name}'"),
+                Some(ChildApprovalOutcome::Denied) => format!("denied '{name}'"),
+                None => format!("stopped waiting on '{name}'"),
+            },
+        );
+        match outcome {
+            Some(ChildApprovalOutcome::Approved) => ChildGateVerdict::Proceed,
+            Some(ChildApprovalOutcome::Denied) => {
+                ChildGateVerdict::Deny(format!("Tool {name} was denied by the user"))
+            }
+            None => ChildGateVerdict::Deny(format!(
+                "Tool {name} was cancelled while awaiting the user's decision"
+            )),
         }
     }
 
@@ -13003,8 +13808,9 @@ impl SubAgentToolRegistry {
     /// Whether this child may surface and dispatch the canonical lowercase
     /// `bash` tool under the read-only inspection posture.
     ///
-    /// Scout and Reviewer keep exactly one shell entry point — canonical
-    /// `bash` — whose concrete calls the strict read-only classifier bounds.
+    /// Scout, Reviewer, and Planner keep exactly one shell entry point —
+    /// canonical `bash` — whose concrete calls the strict read-only
+    /// classifier bounds.
     /// Catalog visibility and dispatch authorization consult this same
     /// predicate, so a tool that appears on the wire can always be called and
     /// one that is denied never appears.
@@ -13024,7 +13830,10 @@ impl SubAgentToolRegistry {
     /// first-turn catalog actually offers is bounded by the classifier.
     fn allows_bounded_readonly_bash(&self, name: &str) -> bool {
         name == "bash"
-            && matches!(&self.agent_type, FleetRole::Scout | FleetRole::Reviewer)
+            && matches!(
+                &self.agent_type,
+                FleetRole::Scout | FleetRole::Reviewer | FleetRole::Planner
+            )
             && self.runtime_profile.shell != crate::worker_profile::ShellPolicy::None
     }
 
@@ -13166,7 +13975,10 @@ impl SubAgentToolRegistry {
         // Visibility and dispatch consult the same capability guard. These
         // representative calls let a read-only bash schema survive catalog
         // shaping without treating an empty input as arbitrary shell authority.
-        if !matches!(&self.agent_type, FleetRole::Scout | FleetRole::Reviewer) {
+        if !matches!(
+            &self.agent_type,
+            FleetRole::Scout | FleetRole::Reviewer | FleetRole::Planner
+        ) {
             return None;
         }
         match name {
@@ -13307,7 +14119,8 @@ impl SubAgentToolRegistry {
 
     async fn execute_full(
         &self,
-        _agent_id: &str,
+        agent_id: &str,
+        tool_id: &str,
         name: &str,
         input: Value,
     ) -> Result<RichToolResult> {
@@ -13350,46 +14163,18 @@ impl SubAgentToolRegistry {
                 role = self.agent_type.as_str()
             ));
         }
-        if !self.auto_approve {
-            let Some(spec) = self.registry.get(name) else {
-                return Err(anyhow!("Tool {name} is not registered"));
-            };
-            match spec.approval_requirement_for(&input) {
-                ApprovalRequirement::Auto => {}
-                ApprovalRequirement::Suggest => {
-                    // Write/edit/patch tools land here. Explicit
-                    // write-capable roles (`builder`, `custom`) may run them
-                    // without parent auto-approve (#1828, #1833). Workflow-spawned
-                    // children also accept Suggest edits for any write-capable
-                    // posture (including general). Read-only roles still bounce.
-                    // #5186: children also inherit the session's in-workspace
-                    // write carve-out (#5185) — a write-capable-posture child
-                    // may edit in-workspace, non-sensitive, non-`.git` paths
-                    // without the parent being auto-approved.
-                    let may_write = self.runtime_profile.permissions.write
-                        && (self.accept_edits || Self::role_can_delegate_writes(&self.agent_type));
-                    if !may_write && !self.workspace_write_carve_out_permits(name, &input) {
-                        return Err(anyhow!(
-                            "Tool {name} requires approval and is not delegated to {role} sub-agents; rerun the parent with auto approval or pick a write-capable role",
-                            role = self.agent_type.as_str()
-                        ));
-                    }
-                }
-                ApprovalRequirement::Required => {
-                    // #5186: the bounded built-in verification surface (the
-                    // fixed workspace-root command or a pure test selection,
-                    // per the one classifier the execution envelope also
-                    // reads) is delegated to any child whose posture reached
-                    // this branch — shell-capable by construction — instead
-                    // of keying everything off parent auto-approve. Arbitrary
-                    // shell and every other Required tool stay gated.
-                    if !Self::is_delegated_builtin_verification(name, &input) {
-                        return Err(anyhow!(
-                            "Tool {name} requires approval and cannot run inside this sub-agent unless the parent session is auto-approved"
-                        ));
-                    }
-                }
-            }
+        // The session's permission posture, applied to this child exactly as
+        // it is applied to the parent turn: the deterministic Auto-Review
+        // floor first, then (Auto-Review) the model guardian for holds it
+        // could not prove safe, or (Ask) a prompt raised in the parent's UI.
+        // Full Access still fails closed on the non-bypassable safety floor.
+        // Role posture and the execution envelope below stay authoritative:
+        // this gate can only decide whether a call the role permits also
+        // clears the session's approval boundary.
+        if let ChildGateVerdict::Deny(reason) =
+            self.gate_held_call(agent_id, tool_id, name, &input).await
+        {
+            return Err(anyhow!(reason));
         }
         reject_subagent_terminal_takeover(name, &input)?;
         if self.network_is_denied() {
@@ -13483,7 +14268,7 @@ impl SubAgentToolRegistry {
 
     #[cfg(test)]
     async fn execute(&self, agent_id: &str, name: &str, input: Value) -> Result<String> {
-        self.execute_full(agent_id, name, input)
+        self.execute_full(agent_id, "", name, input)
             .await
             .map(|result| result.result.content)
     }
@@ -13491,6 +14276,7 @@ impl SubAgentToolRegistry {
     async fn execute_from_surface(
         &self,
         agent_id: &str,
+        tool_id: &str,
         surface: &mut SubAgentToolSurface,
         request_active_names: &std::collections::HashSet<String>,
         name: &str,
@@ -13523,7 +14309,7 @@ impl SubAgentToolRegistry {
         if !request_active_names.contains(name) {
             return Err(anyhow!("Tool {name} is not active for this sub-agent"));
         }
-        let result = self.execute_full(agent_id, name, input).await;
+        let result = self.execute_full(agent_id, tool_id, name, input).await;
         if deferred && result.is_ok() {
             touch_cached_tool_after_execution(
                 &surface.catalog,
@@ -14054,6 +14840,7 @@ const EXPLORE_AGENT_INTRO: &str = concat!(
 const PLAN_AGENT_INTRO: &str = concat!(
     "You are a trusted Fleet planner (role: `planner`). Your job is to produce a grounded, prioritized plan, not patches.\n",
     "Read enough code to avoid guessing; each step names its artifact and verification.\n",
+    "Use `read` for bounded file reads and `bash` only for the allowed read-only inspection subset: navigation/rg, safe Git reads (for example `git log -n 5`), and read-only GitHub views such as `gh issue view`. Builds, tests, writes, and shell control actions are unavailable.\n",
     "Use todo_write for concrete To-do progress; explain key trade-offs in the plan you return.\n",
     "CHANGES should list plan artifacts only, not future speculative edits.\n\n"
 );
@@ -14099,7 +14886,7 @@ const WRITE_CHILD_VERIFY_CONTRACT: &str = concat!(
 
 const CONSULTANT_AGENT_INTRO: &str = concat!(
     "You are a trusted Fleet consultant (role: `consultant`). You are asked for judgement, not for labour.\n",
-    "You are read-only and have no shell. Read what you need, then give counsel.\n",
+    "You are read-only and have no shell. Read the workspace and the public web to ground your advice, then give counsel.\n",
     "Lead with your actual recommendation, not a survey of options. If you would do something different from what was proposed, say so first and say why.\n",
     "Name what the asker appears not to have considered: the failure mode, the constraint, the cheaper alternative, the reason this is harder than it looks.\n",
     "Distinguish what you verified by reading from what you are inferring. An unverified hunch is still useful — labelled as one.\n",

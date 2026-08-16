@@ -434,6 +434,14 @@ pub fn is_parallel_readonly_command(command: &str) -> bool {
         return false;
     }
 
+    readonly_tokens_admitted(trimmed)
+}
+
+/// The token-level decision shared by every machine-authority read-only
+/// classifier: the charset filters above have already run for the caller's
+/// posture. Keys on the arity-aware canonical form, the literal-program
+/// hardener, the env-prefix rejection, and the per-command option tables.
+fn readonly_tokens_admitted(trimmed: &str) -> bool {
     let tokens = shell_words(trimmed);
     let Some(start) = primary_token_index(&tokens) else {
         return false;
@@ -484,6 +492,168 @@ pub fn is_parallel_readonly_command(command: &str) -> bool {
         .iter()
         .chain(GITHUB_READONLY_PREFIXES.iter())
         .any(|prefix| *prefix == canonical)
+}
+
+/// Read-only shell surface for `ShellPolicy::ReadOnly` agents (fleet scouts
+/// and reviewers, #5356 follow-up): the parallel auto-approve table widened by
+/// exactly the shapes real repo reconnaissance needs, still
+/// mutation-proof-by-construction.
+///
+/// Relaxations relative to [`is_parallel_readonly_command`] (which stays
+/// untouched for the parent's parallel auto-approve chunks, where its
+/// tightness is load-bearing):
+///
+/// - pipelines `a | b`, where **every** segment must itself be an admitted
+///   read-only command (an empty segment — including `||` — rejects);
+/// - glob `*` arguments, expanded by the shell only against workspace paths
+///   the operand gate already confines;
+/// - `git -C <dir> <subcommand>` and `git --no-pager <subcommand>`, whose
+///   remainder re-enters the existing per-subcommand option tables;
+/// - `find` without any mutating primary (`-delete`, `-exec`, `-execdir`,
+///   `-ok`, `-okdir`, `-fprintf`, `-fls`, `-fprint`, `-fprint0`);
+/// - `sed -n '<range>p` — numeric line-range print only, no script verbs
+///   (`w`/`r`/`e`/`s`) can appear in a two-token range script;
+/// - `npm view|show|info <pkg>` — registry reads, matching the scout role's
+///   network-capable read-only posture;
+/// - pure text filters `sort`, `uniq`, `cut`, `tr`, `comm` as pipeline
+///   stages.
+///
+/// Everything else keeps the parallel classifier's posture: no separators,
+/// redirects, backgrounding, command/parameter expansion, subshells, or
+/// env-assignment prefixes.
+pub fn is_agent_readonly_shell_command(command: &str) -> bool {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if trimmed.chars().any(|ch| {
+        matches!(
+            ch,
+            '\n' | '\r'
+                | ';'
+                | '&'
+                | '>'
+                | '<'
+                | '`'
+                | '$'
+                | '?'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '('
+                | ')'
+        )
+    }) {
+        return false;
+    }
+    // A pipeline is admitted only when every segment is: `a | b` is two
+    // read-only commands, while `a | | b`, `a |`, and `||` all carry an empty
+    // segment and reject. Quoted pipes inside an argument mis-split here,
+    // which only ever makes a segment fail classification (fail closed).
+    trimmed.split('|').all(is_agent_readonly_segment)
+}
+
+fn is_agent_readonly_segment(segment: &str) -> bool {
+    let segment = segment.trim();
+    if segment.is_empty() {
+        return false;
+    }
+    let tokens = shell_words(segment);
+    let Some(program) = tokens.first() else {
+        return false;
+    };
+    // No `env ...`/`KEY=value ...` prefix — same rule as the parallel table.
+    if primary_token_index(&tokens) != Some(0) || program.contains('=') {
+        return false;
+    }
+    match program.as_str() {
+        "git" => is_agent_readonly_git(&tokens),
+        "find" => is_agent_readonly_find(&tokens),
+        "sed" => is_agent_readonly_sed(&tokens),
+        "npm" => is_agent_readonly_npm(&tokens),
+        "sort" | "uniq" | "cut" | "tr" | "comm" => true,
+        // Everything else re-uses the parallel table verbatim (including the
+        // gh families and per-command option allowlists); its glob-free
+        // charset is enforced by the caller having already rejected every
+        // metacharacter this classifier permits except `|` and `*`, and the
+        // shared token logic re-checks the rest.
+        _ => readonly_tokens_admitted(segment),
+    }
+}
+
+fn is_agent_readonly_git(tokens: &[String]) -> bool {
+    // Skip the two safe global preambles; anything else before the
+    // subcommand (e.g. `--git-dir`, `-c`) leaves it unclassified and
+    // rejected, exactly like the parallel table.
+    let mut rest = &tokens[1..];
+    loop {
+        match rest.first().map(String::as_str) {
+            Some("--no-pager") => rest = &rest[1..],
+            Some("-C") if rest.len() >= 2 => rest = &rest[2..],
+            _ => break,
+        }
+    }
+    let Some(subcommand) = rest.first().map(String::as_str) else {
+        return false;
+    };
+    if !matches!(
+        subcommand,
+        "status" | "log" | "diff" | "show" | "ls-files" | "blame" | "grep"
+    ) {
+        return false;
+    }
+    // Re-enter the parallel option tables with the preamble stripped so
+    // `git -C dir log --oneline -n 5` is judged as `git log --oneline -n 5`.
+    let mut reduced = vec![tokens[0].clone()];
+    reduced.extend(rest.iter().cloned());
+    readonly_tokens_admitted(&reduced.join(" "))
+}
+
+fn is_agent_readonly_find(tokens: &[String]) -> bool {
+    const MUTATING_PRIMARIES: &[&str] = &[
+        "-delete",
+        "-exec",
+        "-execdir",
+        "-ok",
+        "-okdir",
+        "-fprintf",
+        "-fls",
+        "-fprint",
+        "-fprint0",
+        "-truncate",
+    ];
+    tokens
+        .iter()
+        .skip(1)
+        .all(|token| !MUTATING_PRIMARIES.contains(&token.as_str()))
+}
+
+fn is_agent_readonly_sed(tokens: &[String]) -> bool {
+    if tokens.len() < 3 || tokens[1] != "-n" {
+        return false;
+    }
+    // Numeric line-range print scripts only: `10p`, `1,5p`, `p`. Script
+    // verbs that write or execute (`w`, `r`, `e`, `s///w`) cannot appear in
+    // a two-token range script, and separators like `;` were already
+    // rejected at the charset gate.
+    let script = tokens[2].as_str();
+    let Some(head) = script.strip_suffix(['p', 'P']) else {
+        return false;
+    };
+    let numeric = |part: &str| !part.is_empty() && part.chars().all(|ch| ch.is_ascii_digit());
+    head.is_empty()
+        || numeric(head)
+        || head
+            .split_once(',')
+            .is_some_and(|(a, b)| numeric(a) && numeric(b))
+}
+
+fn is_agent_readonly_npm(tokens: &[String]) -> bool {
+    matches!(
+        tokens.get(1).map(String::as_str),
+        Some("view" | "show" | "info")
+    )
 }
 
 /// Return `true` only for the networked GitHub CLI subset admitted by
@@ -558,6 +728,13 @@ fn readonly_options_are_allowed(canonical: &str, tokens: &[&str]) -> bool {
         && (!canonical.starts_with("gh ") || !github_command_targets_unsupported_host(tokens))
 }
 
+fn is_numeric_count_shorthand(token: &str) -> bool {
+    let Some(digits) = token.strip_prefix('-') else {
+        return false;
+    };
+    !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 fn options_match_allowlist(tokens: &[&str], switches: &str, values: &str) -> bool {
     let mut index = 0;
     let mut options = true;
@@ -568,6 +745,15 @@ fn options_match_allowlist(tokens: &[&str], switches: &str, values: &str) -> boo
         } else if options && token.starts_with('-') && token != "-" {
             if switches.split_ascii_whitespace().any(|name| name == token) {
                 // exact, no-value switch
+            } else if is_numeric_count_shorthand(token)
+                && values
+                    .split_ascii_whitespace()
+                    .any(|name| name == "-n" || name == "--lines")
+            {
+                // `head -5` / `tail -20` are the ubiquitous shorthand for
+                // `-n 5` / `-n 20`; only commands whose value flags include a
+                // line-count accept them, and the digit-only form can carry no
+                // attached path or value injection.
             } else if values.split_ascii_whitespace().any(|name| name == token) {
                 index += 1;
                 if index >= tokens.len() || tokens[index].starts_with('-') {
@@ -1321,6 +1507,104 @@ pub fn extract_primary_command(command: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_readonly_shell_admits_real_reconnaissance_shapes() {
+        for command in [
+            "git log",
+            "git -C crates/tui log --oneline -n 5",
+            "git --no-pager log --stat",
+            "git -C ../sibling status --short",
+            "grep TODO crates/ | head -5",
+            "git log --oneline | head -20",
+            "cat Cargo.toml | wc -l",
+            "rg enum crates/ | sort | uniq -c | head",
+            "find . -name *.rs -maxdepth 3",
+            "find crates -type f -name *.toml | head",
+            "sed -n 10p Cargo.toml",
+            "sed -n 1,5p README.md",
+            "npm view codewhale version",
+            "sort deps.txt | uniq -c",
+            "ls -la *.md",
+        ] {
+            assert!(
+                is_agent_readonly_shell_command(command),
+                "{command} should be agent read-only"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_readonly_shell_rejects_mutation_and_injection() {
+        for command in [
+            "git log; rm -rf /",
+            "git log && rm -rf /",
+            "git log | rm -rf /",
+            "git log | | head",
+            "git log |",
+            "|| head",
+            "cat a > b",
+            "cat a >> b",
+            "echo hi < a",
+            "cat $(which sh)",
+            "cat `which sh`",
+            "echo ${IFS}",
+            "find . -delete",
+            "find . -exec rm {} +",
+            "find . -execdir sh -c true ;",
+            "sed -n 1,5w /tmp/out Cargo.toml",
+            "sed -i s/a/b/ file",
+            "sed -n e true Cargo.toml",
+            "npm install left-pad",
+            "npm run build",
+            "FOO=1 git log",
+            "env PAGER=cat git log",
+            "git --git-dir=/tmp/x.git log",
+            "git -c core.fsmonitor=./hook log",
+            "git log (modified)",
+            "git log | (head)",
+            "git push origin main",
+            "awk BEGIN{system(rm)} file",
+            "python3 -c print(1)",
+        ] {
+            assert!(
+                !is_agent_readonly_shell_command(command),
+                "{command} must stay denied for agents"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_readonly_pipeline_needs_every_segment_readonly() {
+        // The final segment is the classifier-rejected one in each pair.
+        assert!(!is_agent_readonly_shell_command("git log | tee out"));
+        assert!(!is_agent_readonly_shell_command("cat f | xargs rm"));
+        assert!(!is_agent_readonly_shell_command("sort f | tail -1 | sh"));
+        // A denied segment anywhere in the chain denies the whole pipeline.
+        assert!(!is_agent_readonly_shell_command(
+            "head f | rm -rf / | wc -l"
+        ));
+    }
+
+    #[test]
+    fn parallel_classifier_stays_unchanged_for_parent_auto_approve() {
+        // The relaxations belong to the agent surface only; the parent's
+        // parallel auto-approve chunks keep rejecting them.
+        for command in [
+            "git log | head -5",
+            "grep TODO crates/ | head",
+            "find . -name *.rs",
+            "git -C crates/tui log",
+            "sed -n 10p Cargo.toml",
+            "npm view codewhale version",
+        ] {
+            assert!(
+                !is_parallel_readonly_command(command),
+                "{command} must stay parallel-strict"
+            );
+            assert!(is_agent_readonly_shell_command(command));
+        }
+    }
 
     #[test]
     fn test_safe_commands() {

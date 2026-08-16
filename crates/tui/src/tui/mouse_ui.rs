@@ -659,9 +659,9 @@ pub(crate) fn apply_sidebar_row_action(app: &mut App, action: SidebarRowAction) 
             Vec::new()
         }
         SidebarRowAction::OpenAgentTranscript { agent_id } => {
-            // The primary agent destination. Always opens; the surface itself
-            // explains a missing capture instead of dead-ending the click.
-            crate::tui::agent_transcript::open_agent_transcript(app, &agent_id);
+            // The primary agent destination: focus the worker in place. The
+            // focused view explains a missing capture instead of dead-ending.
+            crate::tui::agent_focus::focus_agent(app, &agent_id);
             app.needs_redraw = true;
             Vec::new()
         }
@@ -1979,17 +1979,19 @@ mod tests {
             );
         }
 
-        crate::tui::agent_transcript::open_agent_transcript(&mut app, agent_id);
-        let mut view = app.view_stack.pop().expect("agent chat pager");
-        let pager = view
-            .as_any_mut()
-            .downcast_mut::<crate::tui::agent_transcript::AgentTranscriptView>()
-            .expect("Open should push the agent transcript surface");
-        let body = pager.body_text();
-        assert!(body.contains("EARLY-OPEN-MARKER"));
-        assert!(body.contains("LAST-OPEN-MARKER"));
-        assert!(
-            !body.contains("Earlier messages were omitted"),
+        crate::tui::agent_focus::focus_agent(&mut app, agent_id);
+        let focus = app.agent_focus.as_ref().expect("Open focuses the worker");
+        let body = focus
+            .cells
+            .iter()
+            .flat_map(|cell| cell.transcript_lines(120))
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(body.contains("EARLY-OPEN-MARKER"), "{body}");
+        assert!(body.contains("LAST-OPEN-MARKER"), "{body}");
+        assert_eq!(
+            focus.omitted_messages, 0,
             "Open must use the complete artifact, not the compacted resident tail"
         );
     }

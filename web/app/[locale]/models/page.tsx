@@ -106,6 +106,93 @@ export default async function ModelsPage({ params }: { params: Promise<{ locale:
         </div>
       </section>
 
+      <section className="portal-section settings-preview" aria-labelledby="settings-preview-title">
+        <div className="portal-container">
+          <div className="settings-preview-heading">
+            <div>
+              <span>{isZh ? "设置界面" : "Settings surface"}</span>
+              <h2 id="settings-preview-title">
+                {isZh ? "只读设置预览" : "Read-only settings preview"}
+              </h2>
+            </div>
+            <p>
+              {isZh
+                ? "这是 Codewhale 本地配置界面的只读说明，不会更改你的本地配置。"
+                : "This is a read-only guide to Codewhale's local configuration and does not change your local configuration."}
+            </p>
+          </div>
+
+          <div className="settings-shell">
+            <aside className="settings-rail" aria-label={isZh ? "设置区域" : "Settings areas"}>
+              <div className="settings-rail-title">{isZh ? "设置" : "Settings"}</div>
+              <ul>
+                <li className="settings-rail-item settings-rail-item-active">
+                  <span>{isZh ? "模型与提供商" : "Models & providers"}</span>
+                  <span>{isZh ? "当前" : "Current"}</span>
+                </li>
+                <li className="settings-rail-item">{isZh ? "运行时" : "Runtime"}</li>
+                <li className="settings-rail-item">{isZh ? "模式" : "Modes"}</li>
+                <li className="settings-rail-item">{isZh ? "权限" : "Permissions"}</li>
+                <li className="settings-rail-item">{isZh ? "工具与 MCP" : "Tools & MCP"}</li>
+              </ul>
+            </aside>
+
+            <div className="settings-pane">
+              <div className="settings-pane-heading">
+                <div>
+                  <span>{isZh ? "本地工具链" : "Local harness"}</span>
+                  <h3>{isZh ? "模型与提供商" : "Models & providers"}</h3>
+                </div>
+                <span className="settings-readonly-badge">{isZh ? "只读" : "Read only"}</span>
+              </div>
+
+              <dl className="settings-default-model">
+                <div>
+                  <dt>{isZh ? "默认模型" : "Default model"}</dt>
+                  <dd>
+                    <code className="settings-provider-code">{facts.defaultModel ?? "—"}</code>
+                  </dd>
+                </div>
+                <div>
+                  <dt>{isZh ? "提供商路由" : "Provider routes"}</dt>
+                  <dd>{facts.providers.length}</dd>
+                </div>
+              </dl>
+
+              <div className="settings-provider-heading">
+                <span>{isZh ? "仓库注册表" : "Repository registry"}</span>
+                <span>{isZh ? "认证环境变量" : "Authentication environment"}</span>
+              </div>
+              <ul className="settings-provider-list">
+                {facts.providers.map((provider) => (
+                  <li key={provider.id}>
+                    <div>
+                      <strong>{provider.label}</strong>
+                      <code className="settings-provider-code">{provider.id}</code>
+                    </div>
+                    <div className="settings-provider-auth">
+                      <span className="settings-registry-marker" aria-hidden="true" />
+                      <code className="settings-provider-code">{provider.env}</code>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+
+              <div className="settings-docs-action">
+                <p>
+                  {isZh
+                    ? "要在你的机器上选择路由、模型、端点或凭据，请按照配置文档操作。"
+                    : "To choose a route, model, endpoint, or credentials on your machine, follow the configuration documentation."}
+                </p>
+                <Link href={p("/docs/configuration")}>
+                  {isZh ? "打开配置文档 ↗" : "Open configuration docs ↗"}
+                </Link>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section className="portal-section portal-section-muted">
         <div className="portal-container">
           <div className="portal-docs-heading">

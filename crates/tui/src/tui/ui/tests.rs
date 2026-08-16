@@ -9213,6 +9213,68 @@ fn apply_goal_snapshot_updates_visible_goal_status() {
 }
 
 #[test]
+fn apply_goal_snapshot_prints_a_receipt_when_the_runtime_sets_a_new_goal() {
+    let mut app = create_test_app();
+    let snapshot = crate::tools::goal::GoalSnapshot {
+        objective: Some("make the tests pass".to_string()),
+        status: "active".to_string(),
+        token_budget: None,
+        tokens_used: 0,
+        time_used_seconds: 0,
+        continuation_count: 0,
+        elapsed_seconds: Some(0),
+        evidence: None,
+        blocker: None,
+        pause_reason: None,
+        completion_verification: None,
+        ..Default::default()
+    };
+    assert!(apply_goal_snapshot_to_app(&mut app, &snapshot));
+    let receipts: Vec<&str> = app
+        .history
+        .iter()
+        .filter_map(|cell| match cell {
+            HistoryCell::System { content } if content.contains("Goal set") => {
+                Some(content.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(receipts.len(), 1, "{:?}", app.history);
+    assert!(
+        receipts[0].contains("make the tests pass"),
+        "{}",
+        receipts[0]
+    );
+    assert!(receipts[0].contains("/goal pause"), "{}", receipts[0]);
+
+    let mut usage = snapshot.clone();
+    usage.tokens_used = 12;
+    assert!(apply_goal_snapshot_to_app(&mut app, &usage));
+    let receipts = app
+        .history
+        .iter()
+        .filter(
+            |cell| matches!(cell, HistoryCell::System { content } if content.contains("Goal set")),
+        )
+        .count();
+    assert_eq!(
+        receipts, 1,
+        "the same objective must not reprint the receipt"
+    );
+
+    let mut declared = create_test_app();
+    declared.hunt.quarry = Some("make the tests pass".to_string());
+    apply_goal_snapshot_to_app(&mut declared, &snapshot);
+    assert!(
+        declared.history.iter().all(|cell| {
+            !matches!(cell, HistoryCell::System { content } if content.contains("Goal set"))
+        }),
+        "a user-declared goal must not repeat its own receipt"
+    );
+}
+
+#[test]
 fn canonical_goal_clear_wins_after_stale_active_snapshot() {
     let mut app = create_test_app();
     let stale_active = crate::tools::goal::GoalSnapshot {
@@ -11362,7 +11424,7 @@ fn update_notice_names_the_command_for_the_actual_install_method() {
     assert!(
         notice
             .toast_line(codewhale_release::InstallMethod::Homebrew)
-            .contains("brew upgrade deepseek-tui"),
+            .contains("brew upgrade codewhale"),
         "toast names the Homebrew command"
     );
 
@@ -19079,6 +19141,7 @@ async fn failed_fallback_restores_exact_literal_custom_identity_without_root_cro
         provider: ApiProvider::Custom,
         key: "custom".to_string(),
         exact_id: Some("custom".to_string()),
+        migrated_legacy_ollama_cloud_route: false,
     };
     let mut app = create_test_app();
     app.set_provider_identity_record(previous_identity.clone());
@@ -22129,4 +22192,40 @@ async fn refused_route_change_does_not_pin_a_startup_default_and_says_so() {
         "the operator must be told the default did not move: {:?}",
         app.status_message
     );
+}
+
+#[test]
+fn gate_receipts_are_held_until_their_tool_card_completes_then_flushed_in_order() {
+    let mut app = create_test_app();
+    let before = app.history.len();
+    app.pending_gate_receipts
+        .push(("call-a".to_string(), "receipt for a".to_string()));
+    app.pending_gate_receipts
+        .push(("call-b".to_string(), "receipt for b".to_string()));
+
+    // Completing an unrelated tool moves nothing.
+    assert!(!super::event_loop::flush_gate_receipts_for(
+        &mut app,
+        Some("call-zzz")
+    ));
+    assert_eq!(app.history.len(), before);
+    assert_eq!(app.pending_gate_receipts.len(), 2);
+
+    // Completing tool `b` lands only its receipt, as a System note.
+    assert!(super::event_loop::flush_gate_receipts_for(
+        &mut app,
+        Some("call-b")
+    ));
+    assert_eq!(app.history.len(), before + 1);
+    assert!(matches!(
+        &app.history[before],
+        HistoryCell::System { content } if content == "receipt for b"
+    ));
+    assert_eq!(app.pending_gate_receipts.len(), 1);
+
+    // Turn end flushes whatever is left so no decision goes unseen.
+    assert!(super::event_loop::flush_gate_receipts_for(&mut app, None));
+    assert_eq!(app.history.len(), before + 2);
+    assert!(app.pending_gate_receipts.is_empty());
+    assert!(!super::event_loop::flush_gate_receipts_for(&mut app, None));
 }

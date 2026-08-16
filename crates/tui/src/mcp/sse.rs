@@ -376,6 +376,10 @@ mod endpoint_tests {
 
     #[tokio::test]
     async fn message_before_endpoint_is_rejected_instead_of_buffered() {
+        // Building a reqwest client needs the process-wide rustls provider;
+        // production installs it at startup, and this test must not depend
+        // on another test in the same process having done so first.
+        crate::tls::ensure_rustls_crypto_provider();
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         tx.send(SseInbound::Message(br#"{"jsonrpc":"2.0"}"#.to_vec()))
             .await

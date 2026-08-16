@@ -51,7 +51,7 @@ fn write_kimi_catalog(dir: &Path) -> std::path::PathBuf {
             },
             {
                 "id": "remote-thing",
-                "source": "https://example.invalid/remote-thing",
+                "source": "https://example.invalid/remote-thing.zip",
                 "tier": "curated",
                 "displayName": "Remote Thing"
             }
@@ -114,6 +114,17 @@ fn marketplace_add_list_show_remove_roundtrip() {
     assert!(list.contains(r"remote\-thing"), "{list}");
     assert!(list.contains("tier=official"), "{list}");
     assert!(list.contains("tier=curated"), "{list}");
+
+    // Stored plans keep stable codes; rendering resolves the current locale.
+    app.ui_locale = Locale::Es419;
+    let localized = plugins(&mut app, Some("marketplace list")).message.unwrap();
+    assert!(localized.contains("no admite paquetes ZIP"), "{localized}");
+    assert!(!localized.contains("kimi_zip_unsupported"), "{localized}");
+    assert!(
+        !localized.contains("ZIP bundles are not supported"),
+        "{localized}"
+    );
+    app.ui_locale = Locale::En;
 
     let show = plugins(&mut app, Some("marketplace show kimi"))
         .message

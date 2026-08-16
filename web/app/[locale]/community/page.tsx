@@ -197,14 +197,16 @@ export default async function CommunityPage({ params }: { params: Promise<{ loca
                 ))}
               </div>
             </section>
-            <section>
-              <h3>{isZh ? "报告、复现与验证" : "Reports, reproductions, and verification"}</h3>
-              <div className="community-credit-list">
-                {RELEASE_HELPERS.map((handle) => (
-                  <Link key={handle} href={`https://github.com/${handle.slice(1)}`}>{handle}</Link>
-                ))}
-              </div>
-            </section>
+            {RELEASE_HELPERS.length > 0 ? (
+              <section>
+                <h3>{isZh ? "报告、复现与验证" : "Reports, reproductions, and verification"}</h3>
+                <div className="community-credit-list">
+                  {RELEASE_HELPERS.map((handle) => (
+                    <Link key={handle} href={`https://github.com/${handle.slice(1)}`}>{handle}</Link>
+                  ))}
+                </div>
+              </section>
+            ) : null}
           </div>
         </div>
       </section>

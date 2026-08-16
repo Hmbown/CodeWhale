@@ -17,4 +17,5 @@ pub mod types;
 mod tests;
 
 pub use context::{HostEnvironment, PluginDiscoveryContext};
+pub(crate) use path_identity::metadata_is_link_or_reparse;
 pub use registry::PluginRegistry;

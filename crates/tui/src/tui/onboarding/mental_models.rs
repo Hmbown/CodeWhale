@@ -5,6 +5,7 @@ use ratatui::text::{Line, Span};
 
 use crate::localization::MessageId;
 use crate::palette;
+use crate::tui::app::AppModeUi;
 use crate::tui::app::{App, AppMode};
 
 pub fn lines(app: &App) -> Vec<Line<'static>> {

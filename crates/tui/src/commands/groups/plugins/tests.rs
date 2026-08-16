@@ -411,6 +411,144 @@ fn install_update_uninstall_verbs_drive_the_guided_trust_flow() {
 }
 
 #[test]
+fn kimi_managed_import_is_read_only_until_hash_bound_approval() {
+    let _lock = crate::test_support::lock_test_env();
+    let root = TempDir::new().unwrap();
+    let codewhale_home = root.path().join("codewhale-home");
+    let _codewhale_home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", &codewhale_home);
+    let managed = root.path().join(".kimi-code/plugins/managed/kimi-demo");
+    fs::create_dir_all(managed.join("skills/kimi-demo")).unwrap();
+    fs::write(
+        managed.join("kimi.plugin.json"),
+        r#"{
+          "name": "kimi-demo",
+          "version": "1.0.0",
+          "license": "Proprietary",
+          "skills": "./skills/",
+          "interface": {
+            "displayName": "Kimi Demo",
+            "hostKind": "local",
+            "platforms": ["macos"]
+          }
+        }"#,
+    )
+    .unwrap();
+    fs::write(
+        managed.join("skills/kimi-demo/SKILL.md"),
+        "---\nname: kimi-demo\ndescription: local managed fixture\n---\n",
+    )
+    .unwrap();
+
+    let (mut app, _temp) = create_test_app(root.path());
+    let help = plugins(&mut app, Some("help")).message.unwrap();
+    assert!(help.contains("/plugin import kimi [list]"), "{help}");
+    let listed = plugins_with_kimi_home(&mut app, Some("import kimi"), root.path());
+    assert!(!listed.is_error, "{:?}", listed.message);
+    let message = listed.message.unwrap();
+    assert!(
+        message.contains("Kimi Demo") || message.contains("kimi-demo"),
+        "{message}"
+    );
+    assert!(message.contains("license=Proprietary"), "{message}");
+    assert!(message.contains("content hash:"), "{message}");
+    assert!(message.contains("External Kimi apps"), "{message}");
+    let approval = message
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("approve: /plugin "))
+        .expect("listing must render an exact approval command")
+        .to_string();
+    assert!(app.plugin_registry.get("kimi-demo").is_none());
+    assert!(!codewhale_home.join("plugins/kimi-demo").exists());
+    assert!(!codewhale_home.join("plugins/state.json").exists());
+
+    // The approval token is tied to the bytes that were inspected.
+    fs::write(
+        managed.join("skills/kimi-demo/SKILL.md"),
+        "---\nname: kimi-demo\ndescription: changed fixture\n---\n",
+    )
+    .unwrap();
+    let changed = plugins_with_kimi_home(&mut app, Some(&approval), root.path());
+    assert!(changed.is_error);
+    assert!(changed.message.unwrap().contains("changed since review"));
+    assert!(!codewhale_home.join("plugins/kimi-demo").exists());
+
+    let refreshed = plugins_with_kimi_home(&mut app, Some("import kimi"), root.path())
+        .message
+        .unwrap();
+    let approval = refreshed
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("approve: /plugin "))
+        .unwrap()
+        .to_string();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let installed = plugins_with_kimi_home(&mut app, Some(&approval), root.path());
+        assert!(!installed.is_error, "{:?}", installed.message);
+        assert!(
+            installed
+                .message
+                .as_deref()
+                .is_some_and(|message| message.contains("disabled and untrusted"))
+        );
+    });
+    let plugin = app.plugin_registry.get("kimi-demo").unwrap();
+    assert!(!plugin.enabled && !plugin.trusted());
+    assert!(
+        codewhale_home
+            .join("plugins/kimi-demo/kimi.plugin.json")
+            .is_file()
+    );
+}
+
+#[test]
+fn kimi_managed_import_renders_in_the_selected_non_english_locale() {
+    let root = TempDir::new().unwrap();
+    let (mut app, _temp) = create_test_app(root.path());
+    app.ui_locale = Locale::Es419;
+
+    let message = plugins_with_kimi_home(&mut app, Some("import kimi"), root.path())
+        .message
+        .expect("localized Kimi listing");
+    assert!(
+        message.contains("Plugins gestionados por Kimi"),
+        "{message}"
+    );
+    assert!(
+        message.contains("No se encontraron plugins gestionados válidos"),
+        "{message}"
+    );
+    assert!(
+        !message.contains("No valid managed plugins found"),
+        "{message}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn kimi_managed_import_refuses_linked_children() {
+    use std::os::unix::fs::symlink;
+
+    let root = TempDir::new().unwrap();
+    let managed_root = root.path().join(".kimi-code/plugins/managed");
+    let outside = root.path().join("outside");
+    fs::create_dir_all(&managed_root).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    symlink(&outside, managed_root.join("linked-plugin")).unwrap();
+    let (mut app, _temp) = create_test_app(root.path());
+
+    let result = plugins_with_kimi_home(&mut app, Some("import kimi"), root.path());
+    assert!(!result.is_error);
+    let message = result.message.unwrap();
+    assert!(message.contains("Rejected entries"), "{message}");
+    assert!(message.contains("links and reparse points are refused"));
+    assert!(!message.contains("approve: /plugin import kimi approve linked-plugin"));
+}
+
+#[test]
 fn export_verb_writes_agent_plugins_bundle() {
     let _lock = crate::test_support::lock_test_env();
     let root = TempDir::new().unwrap();

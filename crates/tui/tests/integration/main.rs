@@ -88,9 +88,9 @@ mod package_digest;
 mod palette;
 #[path = "../../src/shell_dispatcher.rs"]
 mod shell_dispatcher;
-#[path = "../../src/core/tool_parser.rs"]
-#[allow(dead_code)]
-mod tool_parser;
+// The legacy text tool-call parser lives in codewhale-core now; keep the
+// `crate::tool_parser` path the suites use.
+use codewhale_core::tool_parser;
 
 mod adaptive_evidence_acceptance;
 mod cache_guard;

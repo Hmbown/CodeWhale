@@ -639,7 +639,7 @@ impl ToolSpec for CreateGoalTool {
     }
 
     fn description(&self) -> &'static str {
-        "Create the current runtime goal. Use this only when the user explicitly asks to pursue a persistent objective and no unfinished goal exists; complete or clear an unfinished goal before creating another."
+        "Create the session's one persistent goal: a completion objective Codewhale keeps working toward across turns until it is verified complete, blocked, or the user stops it. Use it when a direct user request describes a verifiable end state that will take more than one turn (\"until the tests pass\", \"make X work end to end\", \"go through every file in Y\", \"keep going until Z\") — you may infer that intent in any language and phrasing; do not create a goal for routine single-turn work, questions, or one-file edits. Keep the user's full objective, not a shortened one-turn version. Creating a goal shows the user a one-line receipt (they can /goal pause or /goal clear); do not also ask for confirmation. Only one unfinished goal exists at a time: complete or clear it before creating another."
     }
 
     fn input_schema(&self) -> Value {

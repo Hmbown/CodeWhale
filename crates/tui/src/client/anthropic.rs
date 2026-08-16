@@ -336,7 +336,15 @@ impl DeepSeekClient {
                 last_chunk_at = std::time::Instant::now();
                 buffer.extend_from_slice(&chunk);
 
-                while let Some(line) = super::take_sse_line(&mut buffer) {
+                loop {
+                    let line = match super::take_sse_line(&mut buffer) {
+                        Ok(Some(line)) => line,
+                        Ok(None) => break,
+                        Err(err) => {
+                            yield Err(anyhow::anyhow!("{err}"));
+                            return;
+                        }
+                    };
 
                     // `event:` lines are redundant (the data payload carries
                     // `type`) and comment/heartbeat lines are ignorable.

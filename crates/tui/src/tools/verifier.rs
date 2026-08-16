@@ -1490,18 +1490,28 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
     async fn run_verifiers_background_starts_shell_jobs_and_returns_task_ids() {
-        if !crate::dependencies::RustC::available() {
-            return;
-        }
-        // The spawned `rustc` is usually the rustup shim, which resolves its
-        // toolchain through $HOME. Hold the process-wide env mutex so tests
-        // that temporarily swap HOME cannot break the child process.
-        let _env_lock = crate::test_support::lock_test_env();
         let tmp = tempdir().expect("tempdir");
         let ctx = ToolContext::new(tmp.path());
         let tool = RunVerifiersTool;
+        // Unix: drive this very libtest binary with `--list` (no rustup, no
+        // $HOME). Windows: the background gate is rendered with POSIX
+        // quoting and handed to PowerShell, which cannot parse a quoted
+        // absolute path with backslashes, so use a bare `cmd` there — the
+        // listing shape (`name: test`) is the same either way.
+        #[cfg(not(windows))]
+        let (program, args) = (
+            std::env::current_exe()
+                .expect("test executable")
+                .to_string_lossy()
+                .into_owned(),
+            vec!["--list".to_string()],
+        );
+        #[cfg(windows)]
+        let (program, args) = (
+            "cmd".to_string(),
+            vec!["/c".to_string(), "echo test-list: test".to_string()],
+        );
         let result = tool
             .execute(
                 json!({
@@ -1509,9 +1519,9 @@ mod tests {
                     "background": true,
                     "commands": [
                         {
-                            "name": "rustc-version",
-                            "program": crate::dependencies::RustC::resolve().expect("rustc"),
-                            "args": ["--version"]
+                            "name": "test-list",
+                            "program": program,
+                            "args": args
                         }
                     ]
                 }),
@@ -1572,8 +1582,8 @@ mod tests {
             output.stderr
         );
         assert!(
-            output.stdout.contains("rustc"),
-            "stdout should include rustc version: {:?}",
+            output.stdout.lines().any(|line| line.ends_with(": test")),
+            "stdout should include the test listing: {:?}",
             output.stdout
         );
     }

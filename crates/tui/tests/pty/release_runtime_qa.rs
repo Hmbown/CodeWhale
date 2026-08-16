@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use crate::qa_harness::frame::Frame;
 use crate::qa_harness::harness::{Harness, SealedWorkspace, make_sealed_workspace};
 use crate::qa_harness::keys;
 use anyhow::{Result, anyhow};
@@ -279,6 +280,26 @@ fn wait_for_counter(
     }
 }
 
+/// Screen text with transcript continuation rows (`▏` gutter) rejoined to
+/// the row they wrap from, so a receipt can be asserted regardless of where
+/// the terminal width breaks it.
+fn unwrapped_transcript(frame: &Frame) -> String {
+    let mut out = String::new();
+    for row in 0..frame.rows() {
+        let text = frame.row(row);
+        if let Some(rest) = text.strip_prefix('▏') {
+            out.push(' ');
+            out.push_str(rest.trim_start());
+        } else {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&text);
+        }
+    }
+    out
+}
+
 fn type_and_submit(harness: &mut Harness, text: &str) -> Result<()> {
     harness.send(keys::key::text(text))?;
     // Rapid PTY writes intentionally exercise paste-burst detection. Wait
@@ -505,6 +526,52 @@ fn compaction_tui_builder(
         .env("DEEPSEEK_BASE_URL", server.uri())
         .env("DEEPSEEK_MODEL", DEEPSEEK_TEST_MODEL)
         .env("NO_ANIMATIONS", "1")
+}
+
+/// The session metrics strip on the phase row after exactly one completed
+/// turn: `1 turn`, `Input 12` (the mock usage's prompt_tokens), and an
+/// `LLM` time — sourced from the engine's usage receipt and its own model-call
+/// timers, not from anything the transcript displays. The idle row is 150
+/// columns wide, so the strip shares it with the key hints and keeps at
+/// least the headline facts.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn release_session_metrics_strip_reports_one_turn_from_usage() -> Result<()> {
+    let _guard = RELEASE_RUNTIME_QA_LOCK.lock().await;
+    let server = MockServer::start().await;
+    mount_text_model(&server, DEEPSEEK_TEST_MODEL, "metrics-probe-ok").await;
+
+    let ws = make_sealed_workspace()?;
+    let mut tui = compaction_tui_builder(&ws, &server).spawn()?;
+    enter_launch_session(&mut tui)?;
+
+    // Fresh session: nothing has happened, so the strip stays silent.
+    let before = tui.frame().text();
+    assert!(
+        !before.contains("turn") && !before.contains("Input "),
+        "metrics strip must not paint before any evidence: {before}"
+    );
+
+    type_and_submit(&mut tui, "metrics probe")?;
+    tui.wait_for_text("metrics-probe-ok", INTERACTION_TIMEOUT)?;
+
+    // One completed turn: `1 turn`, the provider-reported input count from
+    // the mock (`prompt_tokens: 12`), and a measured LLM time.
+    tui.wait_for(
+        |frame| {
+            let text = frame.text();
+            text.contains("1 turn") && text.contains("Input 12") && text.contains("LLM ")
+        },
+        INTERACTION_TIMEOUT,
+    )?;
+    let text = tui.frame().text();
+    // The mock never reports cache classes, so no cache cell may be invented.
+    assert!(!text.contains("Cache hit"), "{text}");
+    // Steps: one model call (usage receipt) and no tool calls.
+    assert!(
+        text.contains("1 turn · 1 step") || text.contains("1 turn │"),
+        "{text}"
+    );
+    Ok(())
 }
 
 /// Regression for the v0.9.6 `/compact` freeze, upgraded to the v0.9.7
@@ -2071,10 +2138,14 @@ base_url = "{base_url}"
     type_and_submit(&mut tui, "/model deepseek-v4-flash")?;
     tui.wait_for_text("session only", INTERACTION_TIMEOUT)?;
     type_and_submit(&mut tui, "/fleet save-as")?;
-    // The receipt wraps across lines at this width; assert on fragments that
-    // land on a single row.
+    // The receipt wraps across rows at this width and the wrap point moves
+    // with the temp-dir path length, so assert on the receipt with its
+    // transcript continuation rows rejoined rather than on any one row.
     tui.wait_for_text("as new Fleet", INTERACTION_TIMEOUT)?;
-    tui.wait_for_text("user-global default", INTERACTION_TIMEOUT)?;
+    tui.wait_for(
+        |frame| unwrapped_transcript(frame).contains("user-global default"),
+        INTERACTION_TIMEOUT,
+    )?;
     // The new Fleet is named after the route: `DeepSeek deepseek-v4-flash`.
     let second_file = ws
         .home()
@@ -2471,5 +2542,216 @@ async fn release_session_picker_restores_route_identity() -> Result<()> {
     );
 
     let _ = tui.shutdown();
+    Ok(())
+}
+
+/// #5424 repro shape: the provider stays silent for roughly a minute (a slow
+/// "thinking" model), then drips tokens slowly while the transcript repaints.
+/// The TUI must survive both phases with mouse capture on; any exit is a
+/// release blocker. Run against a specific binary with
+/// `CARGO_BIN_EXE_codewhale-tui=/path/to/binary` to A/B versions.
+const REPRO_5424_SILENCE: Duration = Duration::from_secs(45);
+const REPRO_5424_TOKENS: usize = 600;
+const REPRO_5424_TOKEN_INTERVAL: Duration = Duration::from_millis(150);
+const REPRO_5424_ANSWER_TAIL: &str = "repro-5424-drip-done";
+
+/// A minimal loopback HTTP server with byte-level control over one SSE turn:
+/// full silence, then one small chunk every `REPRO_5424_TOKEN_INTERVAL`.
+/// wiremock cannot drip a body, so this is a raw `std::net` listener on a
+/// dedicated thread. `/v1/models` is answered with the QA model.
+fn spawn_repro_5424_server() -> Result<String> {
+    use std::io::{Read as _, Write as _};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind(("127.0.0.1", 0))?;
+    let base_url = format!("http://127.0.0.1:{}", listener.local_addr()?.port());
+    std::thread::Builder::new()
+        .name("repro-5424-server".to_string())
+        .spawn(move || {
+            for stream in listener.incoming().flatten() {
+                std::thread::spawn(move || {
+                    let Ok(mut reader) = stream.try_clone() else {
+                        return;
+                    };
+                    let mut buf = [0u8; 8192];
+                    let mut head = Vec::new();
+                    // Read until end of headers; request bodies here are tiny.
+                    loop {
+                        match reader.read(&mut buf) {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => {
+                                head.extend_from_slice(&buf[..n]);
+                                if head.windows(4).any(|w| w == b"\r\n\r\n") {
+                                    break;
+                                }
+                                if head.len() > 1 << 20 {
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    let head = String::from_utf8_lossy(&head).to_string();
+                    let mut writer = stream;
+                    if head.starts_with("GET /v1/models") {
+                        let body = format!(
+                            "{{\"object\":\"list\",\"data\":[{{\"id\":\"{DEEPSEEK_TEST_MODEL}\",\"object\":\"model\"}}]}}"
+                        );
+                        let _ = write!(
+                            writer,
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                        return;
+                    }
+                    if !head.starts_with("POST /v1/chat/completions") {
+                        let _ = writer.write_all(
+                            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        );
+                        return;
+                    }
+                    let _ = writer.write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n",
+                    );
+                    let mut sse = |payload: &str| {
+                        let chunk = format!("data: {payload}\n\n");
+                        let _ = write!(writer, "{:x}\r\n{}\r\n", chunk.len(), chunk);
+                    };
+                    // Phase 1: dead air, the reporter's "wait about a minute".
+                    std::thread::sleep(REPRO_5424_SILENCE);
+                    // Phase 2: slow drip.
+                    for index in 0..REPRO_5424_TOKENS {
+                        sse(&format!(
+                            "{{\"id\":\"chatcmpl-5424\",\"object\":\"chat.completion.chunk\",\"model\":\"{DEEPSEEK_TEST_MODEL}\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"drip {index:03} \"}},\"finish_reason\":null}}]}}"
+                        ));
+                        std::thread::sleep(REPRO_5424_TOKEN_INTERVAL);
+                    }
+                    sse(&format!(
+                        "{{\"id\":\"chatcmpl-5424\",\"object\":\"chat.completion.chunk\",\"model\":\"{DEEPSEEK_TEST_MODEL}\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"{REPRO_5424_ANSWER_TAIL}\"}},\"finish_reason\":null}}]}}"
+                    ));
+                    sse(&format!(
+                        "{{\"id\":\"chatcmpl-5424\",\"object\":\"chat.completion.chunk\",\"model\":\"{DEEPSEEK_TEST_MODEL}\",\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"stop\"}}],\"usage\":{{\"prompt_tokens\":12,\"completion_tokens\":4,\"total_tokens\":16}}}}"
+                    ));
+                    sse("[DONE]");
+                    let _ = writer.write_all(b"0\r\n\r\n");
+                    // Half-close so a client that reads to EOF sees the end of
+                    // the turn instead of an eternally idle keep-alive socket.
+                    let _ = writer.flush();
+                    let _ = writer.shutdown(std::net::Shutdown::Write);
+                });
+            }
+        })?;
+    Ok(base_url)
+}
+
+/// The live repro for #5424 (v0.9.7 "TUI exits by itself" mid-turn). The
+/// reporter's shape: prompt, ~1 min of model silence, then output. Any exit
+/// code — including an abort-class 134 that bypasses the panic hook and
+/// leaves mouse capture leaking into the shell — fails here with the code.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "#5424 investigation: ~2.5 min wall clock; run explicitly during release QA"]
+async fn release_repro_5424_long_silence_then_slow_drip_keeps_tui_alive() -> Result<()> {
+    let _guard = RELEASE_RUNTIME_QA_LOCK.lock().await;
+    let base_url = spawn_repro_5424_server()?;
+
+    let ws = make_sealed_workspace()?;
+    let mut tui = common_tui_builder(&ws)
+        .env("CODEWHALE_PROVIDER", "deepseek")
+        .env("DEEPSEEK_API_KEY", "deepseek-local-test-key")
+        .env("DEEPSEEK_BASE_URL", &base_url)
+        .env("DEEPSEEK_MODEL", DEEPSEEK_TEST_MODEL)
+        .spawn()?;
+    enter_launch_session(&mut tui)?;
+
+    type_and_submit(&mut tui, "slow answer please, think it through")?;
+
+    let hold = REPRO_5424_SILENCE
+        + REPRO_5424_TOKEN_INTERVAL * REPRO_5424_TOKENS as u32
+        + Duration::from_secs(30);
+    pump_for(&mut tui, hold)?;
+
+    let needle = REPRO_5424_ANSWER_TAIL;
+    tui.wait_for_text(needle, Duration::from_secs(20))?;
+
+    let _ = tui.shutdown();
+    Ok(())
+}
+
+/// #5424 class defense: an abort-class death (stack overflow, allocation
+/// failure, double panic — the classes that skip the panic hook and every
+/// Drop guard) must still restore the terminal and stamp the signal marker,
+/// instead of leaking mouse capture into the user's shell. SIGABRT is the
+/// signal Rust's stack-overflow path lands in, so it is the representative
+/// case. The death itself must remain honest: exit code 134 (128 + SIGABRT),
+/// not a clean zero.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn release_fatal_abort_restores_terminal_and_stamps_the_marker() -> Result<()> {
+    let _guard = RELEASE_RUNTIME_QA_LOCK.lock().await;
+    let server = MockServer::start().await;
+    mount_models(&server, &[DEEPSEEK_TEST_MODEL]).await;
+    let ws = make_sealed_workspace()?;
+    let mut tui = common_tui_builder(&ws)
+        .env("CODEWHALE_PROVIDER", "deepseek")
+        .env("DEEPSEEK_API_KEY", "deepseek-local-test-key")
+        .env("DEEPSEEK_BASE_URL", server.uri())
+        .env("DEEPSEEK_MODEL", DEEPSEEK_TEST_MODEL)
+        .spawn()?;
+    enter_launch_session(&mut tui)?;
+
+    let pid = tui
+        .pid()
+        .ok_or_else(|| anyhow!("child pid unavailable before the fatal signal"))?;
+    // The signal must land on a live interactive TUI, not race a boot-time
+    // self-exit; assert liveness the way the other fatal-path tests do.
+    assert!(
+        tui.wait_for_exit(Duration::from_millis(250)).is_none(),
+        "TUI exited before the fatal signal was delivered: {}",
+        tui.debug_dump()
+    );
+    // Safety: delivering a signal to a process we own in this test.
+    let sent = unsafe { libc::kill(pid as libc::pid_t, libc::SIGABRT) };
+    assert_eq!(sent, 0, "SIGABRT delivery failed");
+
+    let code = tui
+        .wait_for_exit(Duration::from_secs(10))
+        .ok_or_else(|| anyhow!("TUI still alive 10s after SIGABRT\n{}", tui.debug_dump()))?;
+    // portable-pty's ExitStatus flattens a signal death (no exit code) to 1
+    // and keeps only the signal name, so 1 here means "died by signal", not
+    // a graceful exit; the marker below pins the signal to SIGABRT exactly.
+    assert_eq!(
+        code, 1,
+        "expected a signal-class death, got exit code {code}"
+    );
+
+    // The handler's restore bytes are the last thing on the wire: mouse
+    // capture (all four DEC modes) and the alternate screen must be off.
+    let transcript = tui.transcript();
+    for needle in [
+        &b"\x1b[?1006l"[..],
+        b"\x1b[?1003l",
+        b"\x1b[?1000l",
+        b"\x1b[?1049l",
+    ] {
+        assert!(
+            transcript.windows(needle.len()).any(|w| w == needle),
+            "fatal-signal restore did not reset {}: transcript tail was {:?}",
+            String::from_utf8_lossy(needle),
+            String::from_utf8_lossy(&transcript[transcript.len().saturating_sub(200)..]),
+        );
+    }
+
+    // The marker classifies the death for the next real-world report.
+    let marker = std::fs::read_to_string(
+        ws.home()
+            .join(".codewhale")
+            .join("crashes")
+            .join("last-fatal-signal.log"),
+    )
+    .map_err(|err| anyhow!("fatal-signal marker missing after SIGABRT: {err}"))?;
+    assert!(
+        marker.contains("signal=6"),
+        "marker must name SIGABRT, got {marker:?}"
+    );
+
     Ok(())
 }

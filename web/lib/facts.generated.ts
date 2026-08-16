@@ -27,7 +27,7 @@ export interface RepoFacts {
 }
 
 export const FACTS: RepoFacts = {
-  "generatedAt": "2026-08-15T05:57:01.838Z",
+  "generatedAt": "2026-08-16T06:49:12.949Z",
   "sourceRevision": null,
   "sourceCommittedAt": null,
   "version": "0.9.8",
@@ -155,6 +155,11 @@ export const FACTS: RepoFacts = {
       "env": "OLLAMA_API_KEY"
     },
     {
+      "id": "ollama-cloud",
+      "label": "Ollama Cloud",
+      "env": "OLLAMA_CLOUD_API_KEY / OLLAMA_API_KEY"
+    },
+    {
       "id": "huggingface",
       "label": "Hugging Face",
       "env": "HUGGINGFACE_API_KEY / HF_TOKEN"
@@ -250,14 +255,14 @@ export const FACTS: RepoFacts = {
       "env": "GOOGLE_API_KEY / GEMINI_API_KEY"
     },
     {
-      "id": "antigravity",
-      "label": "Google Antigravity",
-      "env": "ANTIGRAVITY_API_KEY / AGY_ADC_AUTH"
-    },
-    {
       "id": "telecomjs",
       "label": "TelecomJS TokenHub",
       "env": "TELECOMJS_API_KEY"
+    },
+    {
+      "id": "edenai",
+      "label": "Eden AI",
+      "env": "EDENAI_API_KEY"
     },
     {
       "id": "modelstudio-token-plan",

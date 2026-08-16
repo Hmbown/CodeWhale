@@ -175,13 +175,6 @@ impl PagerView {
         &self.title
     }
 
-    /// True while the `/`-search prompt is capturing keystrokes. Wrapper
-    /// views (the agent transcript surface) consult this so their own chord
-    /// and close keys never swallow search input.
-    pub(crate) fn in_search_mode(&self) -> bool {
-        self.search_mode
-    }
-
     /// Return the page height (in lines) used for paging keys.
     ///
     /// Falls back to a small constant (10) before the first render so the

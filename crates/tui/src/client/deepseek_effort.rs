@@ -95,6 +95,7 @@ pub(super) const DEEPSEEK_EFFORT_ALIASES: &[(&str, DeepseekEffortTier)] = &[
     ("max", DeepseekEffortTier::Max),
     ("maximum", DeepseekEffortTier::Max),
     ("highest", DeepseekEffortTier::Max),
+    ("ultra", DeepseekEffortTier::Max),
     ("ultracode", DeepseekEffortTier::Max),
 ];
 
@@ -148,6 +149,19 @@ mod tests {
         assert_eq!(
             deepseek_effort_tier_or_default("auto"),
             DeepseekEffortTier::High
+        );
+    }
+
+    #[test]
+    fn ultra_and_legacy_ultracode_alias_resolve_to_max() {
+        assert_eq!(deepseek_effort_tier("ultra"), Some(DeepseekEffortTier::Max));
+        assert_eq!(
+            deepseek_effort_tier("ultracode"),
+            Some(DeepseekEffortTier::Max)
+        );
+        assert_eq!(
+            deepseek_effort_tier_or_default("ultra").responses_effort(),
+            "max"
         );
     }
 

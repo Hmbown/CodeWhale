@@ -276,6 +276,7 @@ mod tests {
             provider: ApiProvider::Deepseek,
             key: ApiProvider::Deepseek.as_str().to_string(),
             exact_id: None,
+            migrated_legacy_ollama_cloud_route: false,
         }
     }
 

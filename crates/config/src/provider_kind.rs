@@ -61,6 +61,8 @@ pub enum ProviderKind {
     Sglang,
     Vllm,
     Ollama,
+    #[serde(alias = "ollama_cloud")]
+    OllamaCloud,
     #[serde(alias = "hugging-face", alias = "hugging_face", alias = "hf")]
     Huggingface,
     #[serde(alias = "together-ai", alias = "together_ai", alias = "togetherai")]
@@ -207,6 +209,12 @@ pub enum ProviderKind {
         alias = "aistudio"
     )]
     Google,
+    /// Eden AI — OpenAI-compatible AI gateway (aggregator).
+    ///
+    /// Serves a broad catalog of upstream models under `provider/model`
+    /// namespaced wire ids over the OpenAI Chat Completions protocol.
+    #[serde(alias = "eden-ai", alias = "eden_ai", alias = "edenai")]
+    Edenai,
     /// User-defined OpenAI-compatible endpoint (#1519).
     ///
     /// A single dynamic identity for arbitrary `[providers.<name>]
@@ -224,7 +232,7 @@ impl ProviderKind {
     /// stay on the enum for serde and `provider_for_kind`, but they are not
     /// first-class catalog rows. Plan is `mode` / base_url; dialect is
     /// `wire = openai|anthropic` on the primary provider config.
-    pub const ALL: [Self; 40] = [
+    pub const ALL: [Self; 42] = [
         Self::Deepseek,
         Self::NvidiaNim,
         Self::Openai,
@@ -243,6 +251,7 @@ impl ProviderKind {
         Self::Sglang,
         Self::Vllm,
         Self::Ollama,
+        Self::OllamaCloud,
         Self::Huggingface,
         Self::Together,
         Self::Qianfan,
@@ -264,6 +273,7 @@ impl ProviderKind {
         Self::ModelstudioTokenPlan,
         Self::Google,
         Self::Antigravity,
+        Self::Edenai,
         Self::Custom,
     ];
 

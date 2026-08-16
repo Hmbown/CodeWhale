@@ -142,6 +142,33 @@ describe("public website copy contracts", () => {
     expect(community).not.toContain("Today's dispatch");
   });
 
+  it("keeps the models settings preview read-only, repository-driven, and responsive", () => {
+    const models = pageSource("models/page.tsx");
+    const styles = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
+
+    expect(models).toContain('className="portal-section settings-preview"');
+    expect(models).toContain('isZh ? "只读设置预览" : "Read-only settings preview"');
+    expect(models).toContain("facts.defaultModel");
+    expect(models).toContain("facts.providers.map((provider)");
+    expect(models).toContain('href={p("/docs/configuration")}');
+    expect(models).toContain("does not change your local configuration");
+    expect(models).toContain("不会更改你的本地配置");
+    expect(models).toContain('className="settings-registry-marker"');
+    expect(models).not.toContain('className="settings-status-dot"');
+    expect(models).not.toMatch(/Save settings|Save changes|Apply changes|Create account|Sign up/);
+
+    expect(styles).toContain("--settings-state-active: var(--indigo-deep);");
+    expect(styles).toContain("--settings-state-ready: var(--jade);");
+    expect(styles).toContain("--settings-state-muted: var(--ink-mute);");
+    expect(styles).toMatch(/\.settings-shell\s*\{[^}]*width: min\(100%, 800px\);/s);
+    expect(styles).toMatch(/\.settings-shell\s*\{[^}]*grid-template-columns: 188px minmax\(0, 1fr\);/s);
+    expect(styles).toMatch(/\.settings-preview a:focus-visible\s*\{[^}]*outline:/s);
+    expect(styles).toMatch(/\.settings-preview a\s*\{[^}]*min-height: 44px;/s);
+    expect(styles).toMatch(/\.settings-provider-code\s*\{[^}]*overflow-wrap: anywhere;/s);
+    expect(styles).toMatch(/\.settings-registry-marker\s*\{[^}]*background: var\(--settings-state-muted\);/s);
+    expect(styles).toMatch(/@media \(max-width: 720px\)[\s\S]*?\.settings-shell\s*\{[^}]*grid-template-columns: 1fr;/);
+  });
+
   it("keeps current-release website credits in exact changelog parity", () => {
     expect(FACTS.version).toBeTruthy();
     const changelog = readFileSync(new URL("../../CHANGELOG.md", import.meta.url), "utf8");

@@ -1173,6 +1173,36 @@ pub(crate) async fn dispatch_composer_message(
         app.push_status_toast(status, StatusToastLevel::Warning, Some(6_000));
         return Ok(());
     }
+    // Agent focus: the composer addresses one child's fork, not the main
+    // session. The follow-up is real runtime work (Op::FollowUpSubAgent); the
+    // main transcript keeps a receipt line and the focused view echoes the
+    // message until the child's own transcript carries it.
+    if let Some(focus) = app.agent_focus.as_ref() {
+        let agent_id = focus.agent_id.clone();
+        let label = focus.label.clone();
+        let text = message.display.clone();
+        crate::tui::agent_focus::echo_user_follow_up(app, &text);
+        let receipt = app
+            .tr(crate::localization::MessageId::AgentFocusFollowUpQueued)
+            .replace("{agent}", &label);
+        app.push_history_cell(crate::tui::history::HistoryCell::System { content: receipt });
+        if engine_handle
+            .send(crate::core::ops::Op::FollowUpSubAgent {
+                agent_id: agent_id.clone(),
+                text,
+            })
+            .await
+            .is_err()
+        {
+            let failed = app
+                .tr(crate::localization::MessageId::AgentFocusFollowUpFailed)
+                .replace("{agent}", &label)
+                .replace("{reason}", "engine unavailable");
+            app.status_message = Some(failed.clone());
+            app.push_status_toast(failed, StatusToastLevel::Warning, Some(5_000));
+        }
+        return Ok(());
+    }
     let disposition = match action {
         ComposerSubmitAction::Submit(disposition) => disposition,
         ComposerSubmitAction::SendQueuedNow | ComposerSubmitAction::Noop => {

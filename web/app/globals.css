@@ -39,6 +39,9 @@
   --jade: #08766d;
   --seafoam: #4fd1c5;
   --cobalt: #315fd8;
+  --settings-state-active: var(--indigo-deep);
+  --settings-state-ready: var(--jade);
+  --settings-state-muted: var(--ink-mute);
   --ocean-deep: #03070d;
   --ocean-mid: #0e1729;
   --ocean-current: #d1ebf4;
@@ -1173,6 +1176,316 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 
 .portal-section-muted {
   background: var(--paper-deep);
+}
+
+/* ---------- read-only settings reference ---------- */
+.settings-preview {
+  background: color-mix(in srgb, var(--paper-deep) 52%, var(--paper));
+}
+
+.settings-preview-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 320px);
+  gap: 32px;
+  align-items: end;
+  width: min(100%, 800px);
+  margin: 0 auto 24px;
+}
+
+.settings-preview-heading span,
+.settings-pane-heading > div > span,
+.settings-provider-heading {
+  color: var(--settings-state-muted);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.settings-preview-heading h2 {
+  margin-top: 8px;
+  font-size: clamp(1.5rem, 3vw, 2.25rem);
+}
+
+.settings-preview-heading p {
+  color: var(--ink-soft);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+
+.settings-shell {
+  display: grid;
+  grid-template-columns: 188px minmax(0, 1fr);
+  width: min(100%, 800px);
+  margin-inline: auto;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--paper-card);
+  box-shadow: 0 16px 40px rgba(5, 12, 24, 0.08);
+}
+
+.settings-rail {
+  min-width: 0;
+  padding: 20px 12px;
+  border-right: 1px solid var(--hairline);
+  background: var(--paper-deep);
+}
+
+.settings-rail-title {
+  padding: 0 8px 16px;
+  color: var(--ink);
+  font-family: var(--font-display), "Fraunces", "Noto Serif SC", Georgia, serif;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.settings-rail ul {
+  display: grid;
+  gap: 4px;
+}
+
+.settings-rail-item {
+  min-width: 0;
+  padding: 12px 8px;
+  border-radius: 4px;
+  color: var(--settings-state-muted);
+  font-size: 0.75rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.settings-rail-item-active {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--indigo-pale);
+  color: var(--settings-state-active);
+  font-weight: 600;
+}
+
+.settings-rail-item-active > span:last-child {
+  flex-shrink: 0;
+  white-space: nowrap;
+  color: var(--settings-state-muted);
+  font-family: var(--font-mono), "JetBrains Mono", monospace;
+  font-size: 0.5625rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.settings-pane {
+  min-width: 0;
+  padding: 24px;
+}
+
+.settings-pane-heading {
+  display: flex;
+  gap: 16px;
+  align-items: start;
+  justify-content: space-between;
+}
+
+.settings-pane-heading h3 {
+  margin-top: 4px;
+  font-size: 1.125rem;
+  letter-spacing: -0.02em;
+}
+
+.settings-readonly-badge {
+  flex: none;
+  padding: 4px 8px;
+  border: 1px solid var(--paper-line-soft);
+  border-radius: 4px;
+  color: var(--settings-state-muted);
+  font-family: var(--font-mono), "JetBrains Mono", monospace;
+  font-size: 0.625rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.settings-default-model {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 0.4fr);
+  gap: 16px;
+  margin-top: 24px;
+}
+
+.settings-default-model > div {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  background: var(--paper);
+}
+
+.settings-default-model dt {
+  color: var(--settings-state-muted);
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+
+.settings-default-model dd {
+  margin-top: 8px;
+  color: var(--ink);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.settings-provider-heading {
+  display: grid;
+  grid-template-columns: minmax(144px, 0.8fr) minmax(0, 1fr);
+  gap: 16px;
+  margin-top: 24px;
+  padding: 0 12px 8px;
+}
+
+.settings-provider-list {
+  border-top: 1px solid var(--hairline);
+}
+
+.settings-provider-list li {
+  display: grid;
+  grid-template-columns: minmax(144px, 0.8fr) minmax(0, 1fr);
+  gap: 16px;
+  min-width: 0;
+  padding: 12px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.settings-provider-list li > div {
+  min-width: 0;
+}
+
+.settings-provider-list strong {
+  display: block;
+  color: var(--ink);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.settings-provider-code {
+  display: block;
+  min-width: 0;
+  margin-top: 4px;
+  color: var(--ink-mute);
+  font-family: var(--font-mono), "JetBrains Mono", monospace;
+  font-size: 0.625rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.settings-provider-auth {
+  display: flex;
+  min-width: 0;
+  gap: 8px;
+  align-items: start;
+}
+
+.settings-registry-marker {
+  flex: 0 0 8px;
+  width: 8px;
+  height: 8px;
+  margin-top: 8px;
+  border-radius: 50%;
+  background: var(--settings-state-muted);
+}
+
+.settings-docs-action {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 24px;
+  padding-top: 16px;
+}
+
+.settings-docs-action p {
+  max-width: 360px;
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+  line-height: 1.6;
+}
+
+.settings-preview a {
+  display: inline-flex;
+  min-height: 44px;
+  flex: none;
+  align-items: center;
+  padding: 8px 12px;
+  border: 1px solid var(--settings-state-active);
+  border-radius: 4px;
+  color: var(--settings-state-active);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.settings-preview a:hover {
+  background: var(--indigo-pale);
+}
+
+.settings-preview a:focus-visible {
+  outline: 2px solid var(--settings-state-active);
+  outline-offset: 2px;
+}
+
+@media (max-width: 720px) {
+  .settings-preview-heading {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .settings-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-rail {
+    padding: 16px 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--hairline);
+  }
+
+  .settings-rail-title {
+    padding-bottom: 12px;
+  }
+
+  .settings-rail ul {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .settings-pane {
+    padding: 20px 16px;
+  }
+
+  .settings-provider-heading,
+  .settings-provider-list li {
+    grid-template-columns: minmax(128px, 0.8fr) minmax(0, 1fr);
+    gap: 12px;
+  }
+}
+
+@media (max-width: 480px) {
+  .settings-default-model,
+  .settings-provider-list li {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-provider-heading {
+    display: none;
+  }
+
+  .settings-docs-action {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .settings-preview a {
+    width: 100%;
+    justify-content: center;
+  }
 }
 
 .portal-section-grid {

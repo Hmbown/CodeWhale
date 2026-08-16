@@ -362,6 +362,7 @@ pub struct ValidatedManifest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ManifestFormat {
     Json,
+    KimiJson,
     Toml,
 }
 
@@ -369,9 +370,10 @@ impl ManifestFormat {
     fn from_path(path: &Path) -> Result<Self, String> {
         match path.file_name().and_then(|name| name.to_str()) {
             Some(super::agent_plugin::PLUGIN_JSON_NAME) => Ok(Self::Json),
+            Some(super::agent_plugin::KIMI_PLUGIN_JSON_NAME) => Ok(Self::KimiJson),
             Some(super::agent_plugin::PLUGIN_TOML_NAME) => Ok(Self::Toml),
             _ => Err(format!(
-                "plugin manifest must be named plugin.json or plugin.toml: {}",
+                "plugin manifest must be named plugin.json, kimi.plugin.json, or plugin.toml: {}",
                 path.display()
             )),
         }
@@ -380,6 +382,7 @@ impl ManifestFormat {
     fn label(self) -> &'static str {
         match self {
             Self::Json => super::agent_plugin::PLUGIN_JSON_NAME,
+            Self::KimiJson => super::agent_plugin::KIMI_PLUGIN_JSON_NAME,
             Self::Toml => super::agent_plugin::PLUGIN_TOML_NAME,
         }
     }
@@ -414,6 +417,10 @@ fn parse_manifest(
             let manifest = super::agent_plugin::standard_to_manifest(standard, mcp_servers, root)?;
             Ok((manifest, mcp_bytes))
         }
+        ManifestFormat::KimiJson => Ok((
+            super::agent_plugin::parse_kimi_plugin_json(text, root)?,
+            None,
+        )),
     }
 }
 
@@ -549,6 +556,14 @@ impl PluginManifest {
                 if !super::agent_plugin::is_standard_plugin_name(&self.plugin.name) {
                     return Err(format!(
                         "plugin name `{}` violates the Agent Plugins name rule (1-{MAX_PLUGIN_NAME_CHARS} lowercase ASCII letters, digits, or internal single hyphens or dots; never `--` or `..`)",
+                        self.plugin.name
+                    ));
+                }
+            }
+            ManifestFormat::KimiJson => {
+                if !super::agent_plugin::is_kimi_plugin_name(&self.plugin.name) {
+                    return Err(format!(
+                        "plugin name `{}` violates the Kimi plugin name rule",
                         self.plugin.name
                     ));
                 }

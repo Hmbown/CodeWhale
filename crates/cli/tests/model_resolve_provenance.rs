@@ -371,12 +371,11 @@ fn the_openrouter_glm_sibling_resolves_to_its_own_gateway_wire_id() {
     );
 }
 
-/// Adding a sibling must not move anyone's route. A Z.ai config that names no
-/// model still has to land on `GLM-5.2`: the newer `glm-5.3` is catalogued but
-/// deliberately not the default, and this is the surface where that would
-/// silently change under a user.
+/// A Z.ai config that names no model lands on the deliberate default,
+/// `GLM-5.3`, with `provider default` provenance. This is the surface where a
+/// default move would otherwise change silently under a user.
 #[test]
-fn adding_a_glm_sibling_leaves_the_zai_default_route_untouched() {
+fn zai_default_route_resolves_to_glm_5_3_with_provider_default_provenance() {
     let report = resolve_with_config(
         "provider = \"zai\"\n\n[providers.zai]\napi_key = \"k\"\n",
         &[],
@@ -384,10 +383,31 @@ fn adding_a_glm_sibling_leaves_the_zai_default_route_untouched() {
 
     assert_eq!(
         report.get("resolved").map(String::as_str),
-        Some("GLM-5.2"),
-        "the Z.ai default must stay GLM-5.2 after a newer sibling is added: {report:?}"
+        Some("GLM-5.3"),
+        "the Z.ai default is GLM-5.3: {report:?}"
     );
     assert_eq!(
+        report.get("model_source").map(String::as_str),
+        Some("provider default"),
+        "{report:?}"
+    );
+}
+
+/// An explicit `GLM-5.2` selection keeps its own id after the default moved
+/// to `GLM-5.3`: only the default changed, never a user's saved route.
+#[test]
+fn explicit_glm_5_2_selection_survives_the_default_move() {
+    let report = resolve_with_config(
+        "provider = \"zai\"\n\n[providers.zai]\napi_key = \"k\"\nmodel = \"GLM-5.2\"\n",
+        &[],
+    );
+
+    assert_eq!(
+        report.get("resolved").map(String::as_str),
+        Some("GLM-5.2"),
+        "an explicit GLM-5.2 route must not be upgraded: {report:?}"
+    );
+    assert_ne!(
         report.get("model_source").map(String::as_str),
         Some("provider default"),
         "{report:?}"

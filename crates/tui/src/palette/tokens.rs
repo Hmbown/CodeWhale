@@ -23,6 +23,12 @@ pub const WHALE_ICE_RGB: (u8, u8, u8) = (209, 235, 244); // #D1EBF4 Ice — stru
 #[allow(dead_code)]
 pub const WHALE_CYAN_RGB: (u8, u8, u8) = (72, 215, 255); // #48D7FF Cyan — bounded accents only
 pub const WHALE_ACCENT_SECONDARY_RGB: (u8, u8, u8) = (79, 209, 197); // #4FD1C5 Seafoam
+// Whale Teams (Signal Cut, CWC 2026-08-15) identity accents. These two brand
+// palette entries have no semantic role in the TUI; they exist only so the
+// Harbor and Echo whale marks carry their exact CWC accent instead of a
+// borrowed state color. Never use them for status, mode, or permission.
+pub const WHALE_BRAND_ORANGE_RGB: (u8, u8, u8) = (255, 138, 61); // #FF8A3D Harbor mooring loop
+pub const WHALE_BRAND_MAGENTA_RGB: (u8, u8, u8) = (240, 78, 184); // #F04EB8 Echo sonar ticks
 pub const WHALE_HUMAN_RGB: (u8, u8, u8) = (246, 196, 83); // #F6C453 Signal Gold
 /// Blue Stage grammar: the primary accent is the interaction blue. Signal Gold
 /// is reserved for the whale mark and human-attention roles

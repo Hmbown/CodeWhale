@@ -1204,6 +1204,7 @@ pub(crate) async fn run_event_loop(
                         stream_display_clock.reset();
                     }
                     EngineEvent::ToolCallStarted { id, name, input } => {
+                        app.session_metrics.record_tool_started(&id);
                         app.pending_tool_uses
                             .push((id.clone(), name.clone(), input.clone()));
                         // Note this dispatch so the next sub-agent `Started`
@@ -1233,6 +1234,7 @@ pub(crate) async fn run_event_loop(
                             tracing::debug!(tool_id = %id, tool_name = %name, "ignored foreign or replayed evidence completion");
                             continue;
                         }
+                        app.session_metrics.record_tool_completed(&id);
                         if is_model_visible_tool_call(&id) {
                             let tool_content = match &result {
                                 Ok(output) => sanitize_stream_chunk(
@@ -1255,6 +1257,9 @@ pub(crate) async fn run_event_loop(
                                 .retain(|(tool_id, _, _)| tool_id != &id);
                         }
                         handle_tool_call_complete(app, &id, &name, &result);
+                        if flush_gate_receipts_for(app, Some(&id)) {
+                            transcript_batch_updated = true;
+                        }
                         if crate::mcp::McpPool::is_mcp_tool(&name)
                             && match &result {
                                 Ok(output) => !output.success,
@@ -1376,6 +1381,11 @@ pub(crate) async fn run_event_loop(
                         tool_catalog,
                         base_url,
                     } => {
+                        // A decision whose tool never reported completion
+                        // still gets its receipt before the turn closes.
+                        if flush_gate_receipts_for(app, None) {
+                            transcript_batch_updated = true;
+                        }
                         let completed_turn = app.active_turn.take();
                         app.session.last_tool_catalog = tool_catalog;
                         // The endpoint this turn's client actually used. Kept
@@ -1437,6 +1447,9 @@ pub(crate) async fn run_event_loop(
                         // uptime since launch.
                         app.cumulative_turn_duration =
                             app.cumulative_turn_duration.saturating_add(turn_elapsed);
+                        // A turn that ended with tools still open (interrupt,
+                        // failure) must not carry their timers forward.
+                        app.session_metrics.clear_in_flight();
                         // Stream lock applies per-turn; clear it so the next
                         // turn's chunks pull the view down again until the
                         // user opts out by scrolling up.
@@ -1868,11 +1881,17 @@ pub(crate) async fn run_event_loop(
                         recoverable: _,
                     } => {
                         let provider_before_error = app.api_provider;
-                        let identity_before_error = ProviderIdentity {
-                            provider: provider_before_error,
-                            key: app.provider_identity_for_persistence().to_string(),
-                            exact_id: app.provider_id_for_persistence().map(str::to_string),
-                        };
+                        let identity_before_error = config
+                            .resolve_persisted_provider_identity(
+                                Some(provider_before_error.as_str()),
+                                app.provider_id_for_persistence(),
+                            )
+                            .unwrap_or_else(|_| ProviderIdentity {
+                                provider: provider_before_error,
+                                key: app.provider_identity_for_persistence().to_string(),
+                                exact_id: app.provider_id_for_persistence().map(str::to_string),
+                                migrated_legacy_ollama_cloud_route: false,
+                            });
                         let fallback_chain_before_error = app.provider_chain.clone();
                         let (health_provider, health_model) =
                             error_health_route(app, provider_before_error);
@@ -1997,14 +2016,28 @@ pub(crate) async fn run_event_loop(
                         stability_pct,
                         changed,
                         pinned_combined_hash,
+                        pin_reason,
+                        last_miss_reason,
+                        context_updates,
                         ..
                     } => {
+                        app.prefix_context_updates = context_updates;
                         app.prefix_checks_total = app.prefix_checks_total.saturating_add(1);
                         app.prefix_stability_pct = Some(stability_pct);
                         app.last_pinned_prefix_hash =
                             (!pinned_combined_hash.is_empty()).then_some(pinned_combined_hash);
+                        app.prefix_pin_reason = (!pin_reason.is_empty()).then_some(pin_reason);
+                        // A declared re-pin or reset is an expected miss, not a
+                        // silent-cache-death drift; only an undeclared drift is
+                        // a real problem.
+                        let is_drift = description.starts_with("drift");
+                        app.prefix_last_miss_reason =
+                            (!last_miss_reason.is_empty()).then_some(last_miss_reason);
                         if changed {
                             app.prefix_change_count = app.prefix_change_count.saturating_add(1);
+                            if is_drift {
+                                app.prefix_drift_count = app.prefix_drift_count.saturating_add(1);
+                            }
                             if !description.is_empty() {
                                 app.last_prefix_change_desc = Some(description);
                             }
@@ -2244,10 +2277,15 @@ pub(crate) async fn run_event_loop(
                         }
                         subagent_list_refresh_requested = true;
                     }
+                    EngineEvent::SubAgentFollowUp { agent_id, outcome } => {
+                        crate::tui::agent_focus::apply_follow_up_receipt(app, &agent_id, &outcome);
+                    }
                     EngineEvent::AgentList {
                         agents,
                         coordination,
+                        queued_follow_ups,
                     } => {
+                        app.agent_queued_follow_ups = queued_follow_ups;
                         let mut sorted = agents.clone();
                         sort_subagents_in_place(&mut sorted);
                         sorted.retain(|a| !a.from_prior_session);
@@ -2419,9 +2457,14 @@ pub(crate) async fn run_event_loop(
                                     }),
                                 );
                                 let _ = engine_handle.deny_tool_call(id.clone()).await;
-                                app.status_message = Some(format!(
-                                    "Auto-Review held tool '{tool_name}' without pausing"
-                                ));
+                                let held = crate::tui::gate_receipts::auto_review_held_receipt(
+                                    app.ui_locale,
+                                    &tool_name,
+                                );
+                                app.add_message(HistoryCell::System {
+                                    content: held.clone(),
+                                });
+                                app.status_message = Some(held);
                             }
                             ApprovalRequestDisposition::AutoDenyNeverPosture => {
                                 log_sensitive_event(
@@ -2615,11 +2658,22 @@ pub(crate) async fn run_event_loop(
                                 Some(format!("Sandbox blocked {tool_name}: {denial_reason}"));
                         }
                     }
-                    EngineEvent::TurnUsage { .. } => {
-                        // Per-step usage receipt for stream consumers (exec
-                        // stream-json). The TUI's token surfaces are driven
-                        // by the cumulative `TurnComplete` usage, so there is
-                        // nothing to render per step here.
+                    EngineEvent::TurnUsage {
+                        usage,
+                        duration_ms,
+                        first_token_ms,
+                        request_ms,
+                    } => {
+                        // Per-step usage receipt. The TUI's token surfaces
+                        // are driven by the cumulative `TurnComplete` usage;
+                        // the session metrics strip folds each model call's
+                        // timing (stream time, TTFT, whole-call time) here.
+                        app.session_metrics.record_model_call(
+                            usage.output_tokens,
+                            duration_ms,
+                            first_token_ms,
+                            request_ms,
+                        );
                     }
                     EngineEvent::AdvisoryNote { note, .. } => {
                         // Advisor background watcher note. Display as a
@@ -2629,6 +2683,48 @@ pub(crate) async fn run_event_loop(
                             app.add_message(HistoryCell::System {
                                 content: format!("⚑ Advisor: {note}"),
                             });
+                        }
+                    }
+                    EngineEvent::ToolGateDecision {
+                        agent_id,
+                        tool_id,
+                        tool_name,
+                        gate,
+                        decision,
+                        risk,
+                        reason,
+                    } => {
+                        // A permission decision nobody was prompted for. The
+                        // audit log already has the full record; the
+                        // transcript gets a one-line receipt so the person
+                        // can see who decided and why, without a modal. It is
+                        // held until the tool card completes so it lands
+                        // under that card rather than inside a running run.
+                        let receipt = crate::tui::gate_receipts::tool_gate_receipt(
+                            app.ui_locale,
+                            &tool_name,
+                            gate,
+                            decision,
+                            risk.as_deref(),
+                            &reason,
+                        );
+                        if let Some(agent_id) = agent_id {
+                            // A child's decision belongs to the child's
+                            // conversation: it renders under that tool card
+                            // in focus mode, not in the main transcript.
+                            app.child_gate_receipts
+                                .entry(agent_id.clone())
+                                .or_default()
+                                .push((tool_id, receipt));
+                            if app
+                                .agent_focus
+                                .as_ref()
+                                .is_some_and(|focus| focus.is(&agent_id))
+                            {
+                                crate::tui::agent_focus::refresh_focus(app);
+                            }
+                        } else {
+                            app.pending_gate_receipts.push((tool_id, receipt));
                         }
                     }
                 }
@@ -4065,6 +4161,15 @@ pub(crate) async fn run_event_loop(
             // Tool details: Alt+V / Option+V only. Bare `v` always types `v`
             // in every focus state (TUI-DOG-002).
             if crate::tui::shell_key_routing::is_tool_details_shortcut(&key) {
+                // While a worker is focused the details chord is that
+                // worker's bounded Agent Details projection.
+                if let Some(agent_id) = app.agent_focus.as_ref().map(|f| f.agent_id.clone()) {
+                    if !crate::tui::agent_details::open_agent_details(app, &agent_id) {
+                        app.status_message = Some("Agent details are unavailable".to_string());
+                    }
+                    app.needs_redraw = true;
+                    continue;
+                }
                 open_tool_details_pager(app);
                 continue;
             }
@@ -4322,6 +4427,46 @@ pub(crate) async fn run_event_loop(
                 {
                     let _ = engine_handle.send(Op::Shutdown).await;
                     return Ok(());
+                }
+                // Agent focus: Esc on an empty composer returns to the main
+                // conversation before any other Esc meaning applies.
+                KeyCode::Esc
+                    if app.agent_focus.is_some()
+                        && app.input.is_empty()
+                        && !slash_menu_open
+                        && !mention_menu_open =>
+                {
+                    crate::tui::agent_focus::exit_focus(app);
+                    continue;
+                }
+                // `← for agents`: with an empty composer, Left enters the agent
+                // list (rail Agents panel, or the /agents register when the rail
+                // is off) so a worker can be selected and focused.
+                KeyCode::Left
+                    if key.modifiers.is_empty()
+                        && app.input.is_empty()
+                        && !slash_menu_open
+                        && !mention_menu_open
+                        && crate::tui::agent_focus::agents_exist(app) =>
+                {
+                    if !crate::tui::work_surface::enter_agents(app) {
+                        open_agents_register(app, &engine_handle).await;
+                    }
+                    continue;
+                }
+                // `↓ to manage`: with an empty composer, Down opens the agents
+                // register (focus, stop, refresh) instead of moving a cursor
+                // that has nowhere to go.
+                KeyCode::Down
+                    if key.modifiers.is_empty()
+                        && app.input.is_empty()
+                        && !slash_menu_open
+                        && !mention_menu_open
+                        && app.selected_composer_attachment_index().is_none()
+                        && crate::tui::agent_focus::agents_exist(app) =>
+                {
+                    open_agents_register(app, &engine_handle).await;
+                    continue;
                 }
                 // Vim composer mode: Esc from Insert/Visual → Normal.
                 // This arm runs before the generic Esc handler so Insert mode
@@ -5225,4 +5370,30 @@ pub(crate) async fn run_xai_device_login_from_tui(
     };
     app.needs_redraw = true;
     Ok(switched)
+}
+
+/// Move held permission receipts into the transcript: those for `tool_id`
+/// when given, otherwise every remaining one. Returns whether anything moved.
+pub(super) fn flush_gate_receipts_for(app: &mut App, tool_id: Option<&str>) -> bool {
+    let (ready, held): (Vec<_>, Vec<_>) = std::mem::take(&mut app.pending_gate_receipts)
+        .into_iter()
+        .partition(|(id, _)| tool_id.is_none_or(|wanted| id == wanted));
+    app.pending_gate_receipts = held;
+    let moved = !ready.is_empty();
+    for (_, content) in ready {
+        app.add_message(HistoryCell::System { content });
+    }
+    moved
+}
+
+/// Open the `/agents` register (the manage view: focus, stop, refresh) and ask
+/// the engine for a fresh listing.
+async fn open_agents_register(app: &mut App, engine_handle: &EngineHandle) {
+    if app.view_stack.top_kind() != Some(ModalKind::SubAgents) {
+        let agents = subagent_view_agents(app, &app.subagent_cache);
+        app.view_stack
+            .push(crate::tui::views::SubAgentsView::new(agents));
+    }
+    let _ = engine_handle.send(Op::ListSubAgents).await;
+    app.needs_redraw = true;
 }

@@ -1546,6 +1546,7 @@ mod tests {
         PreflightedRoute {
             member_id: "implementer".to_string(),
             provider_id: "zai".to_string(),
+            provider_config_id: None,
             provider_kind: "zai".to_string(),
             declared_model: "glm-5".to_string(),
             wire_model: "glm-5".to_string(),

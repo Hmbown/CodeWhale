@@ -99,7 +99,12 @@ impl Engine {
                         ApprovalDecision::RetryWithPolicy { id, policy } if id == tool_id => {
                             return Ok(ApprovalResult::RetryWithPolicy(policy));
                         }
-                        _ => continue,
+                        // A child prompt answered while the parent itself is
+                        // waiting: hand it to the child instead of dropping it.
+                        other => {
+                            self.route_child_approval_decision(other).await;
+                            continue;
+                        }
                     }
                 }
             }

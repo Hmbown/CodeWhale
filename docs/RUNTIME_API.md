@@ -339,8 +339,11 @@ Query-string authentication is not supported.
 ### Local browser client
 
 `codewhale web` starts the canonical Runtime API on `127.0.0.1`, serves
-dependency-free assets embedded in the binary, and opens the default browser.
-It cannot bind to a non-loopback host and cannot run with Runtime auth disabled.
+dependency-free assets embedded in the binary, prints a single-use launch URL,
+and asks the operating system to open that URL in the default browser. If the
+browser does not open, the printed URL remains usable for ten minutes. The
+command cannot bind to a non-loopback host and cannot run with Runtime auth
+disabled.
 
 The browser-launch URL contains a random, short-lived, one-time bootstrap
 capability, never the Runtime token. A loopback request exchanges that
@@ -351,12 +354,11 @@ process starts, consumes the capability immediately, and redirects to `/`.
 Reused, expired, malformed, or
 non-loopback bootstrap attempts fail closed. The Runtime bearer token is not
 placed in rendered HTML, browser storage, logs, URL queries/fragments, or
-browser-launch arguments. The one-time bootstrap capability does transit the
-OS browser launcher's argument list for a sub-second window; a same-user
-process scraping the process table in that window could race the browser to
-the exchange, which is why the capability is single-use, loopback-only, and
-expiring — and why a same-user attacker has strictly easier local avenues
-than this race.
+browser-launch arguments. The one-time bootstrap capability is printed in the
+local terminal and transits the OS browser launcher's argument list. A same-user
+process could race the browser to the exchange, which is why the capability is
+single-use, loopback-only, and expires after ten minutes — and why a same-user
+attacker has strictly easier local avenues than this race.
 Existing bearer/header/cookie authorization for `/v1/*` is unchanged outside
 web mode. In web mode, cookie-authenticated unsafe requests must also carry the
 exact local web origin, and Fetch Metadata identifying a cross-origin cookie

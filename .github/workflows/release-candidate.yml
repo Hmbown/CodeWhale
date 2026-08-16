@@ -88,8 +88,9 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
+          # No npm cache: this job checkouts needs.resolve.outputs.sha from
+          # workflow_dispatch (CodeQL #88–#94). Lockfile-keyed caches would
+          # still be writable from that checkout into the default branch.
       - name: Install web dependencies
         run: npm ci
       - name: Check public facts drift

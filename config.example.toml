@@ -43,14 +43,14 @@ base_url = "https://api.deepseek.com/beta"
 #   xiaomi/mimo-v2.5-pro          — OpenRouter Xiaomi MiMo 2.5 Pro
 #   xiaomi/mimo-v2.5              — OpenRouter Xiaomi MiMo 2.5
 #   z-ai/glm-5.1                  — OpenRouter Z.AI GLM 5.1
-#   z-ai/glm-5.2                  — OpenRouter Z.AI GLM 5.2 (default)
-#   z-ai/glm-5.3                  — OpenRouter Z.AI GLM 5.3 (registered only; not released by Z.ai
-#                                   as of 2026-08-03 — metadata inherited from 5.2, unpriced)
+#   z-ai/glm-5.2                  — OpenRouter Z.AI GLM 5.2
+#   z-ai/glm-5.3                  — OpenRouter Z.AI GLM 5.3 (live on Z.ai since 2026-08-13;
+#                                   metadata inherited from 5.2, unpriced)
 #   z-ai/glm-5-turbo              — OpenRouter Z.AI GLM 5 Turbo (scout fast sibling)
-#   GLM-5.2                       — default direct Z.AI Coding Plan model
+#   GLM-5.3                       — default direct Z.AI Coding Plan model (live since 2026-08-13;
+#                                   metadata inherited from 5.2, unpriced)
+#   GLM-5.2                       — direct Z.AI GLM 5.2 (previous default; explicit selections keep it)
 #   GLM-5.1                       — direct Z.AI smaller model
-#   GLM-5.3                       — direct Z.AI GLM 5.3 (registered only; not live on the Z.ai API
-#                                   as of 2026-08-03 — metadata inherited from 5.2, unpriced)
 #   GLM-5-Turbo                   — direct Z.AI fast model (scout fast sibling)
 #   step-3.7-flash                — default direct StepFun / StepFlash model ID
 #   kimi-k3                         — direct Moonshot K3 model ID (1M context)
@@ -615,12 +615,12 @@ max_subagents = 10 # optional (1-20)
 # base_url = "https://api.z.ai/api/coding/paas/v4"
 # # General API endpoint, if you are not using the Coding Plan:
 # # base_url = "https://api.z.ai/api/paas/v4"
-# model = "GLM-5.2"                             # default; GLM-5.1 is the smaller model, GLM-5-Turbo the fast sub-agent sibling
-# # GLM-5.3 is registered/selectable (model = "GLM-5.3") so the id resolves to
-# # Z.ai instead of being rewritten to another model, but it was NOT live on the
-# # Z.ai API as of 2026-08-03 and will fail upstream until Z.ai ships it. Its
-# # catalog metadata is inherited from GLM-5.2 pending official Z.ai release
-# # metadata, and it carries no price. GLM-5.2 remains the default.
+# model = "GLM-5.3"                             # default; GLM-5.2 is the previous default, GLM-5.1 the smaller model, GLM-5-Turbo the fast sub-agent sibling
+# # GLM-5.3 is live on the Z.ai Coding Plan (2026-08-13). Its catalog metadata
+# # (limits, reasoning options) is inherited from GLM-5.2 until Z.ai publishes
+# # distinct 5.3 numbers, and it carries no price. An explicit model = "GLM-5.2"
+# # keeps sending GLM-5.2; only the default moved. Accounts not provisioned for
+# # 5.3 can still see a 429 with entitlement code 1311.
 
 # StepFun / StepFlash direct OpenAI-compatible endpoint (https://platform.stepfun.ai)
 [providers.stepfun]
@@ -1085,6 +1085,12 @@ exponential_base = 2.0
 #
 # [workshop]
 # large_output_threshold_tokens = 4096
+# # Optional model-visible byte ceilings (#5367). Absent keeps the
+# # compile-time defaults (read 50KiB / read_file 16KiB, then the
+# # compact 12K-char floor). Values raise the floor; they never lower
+# # it. Hard cap is 2MiB.
+# # read_result_max_bytes = 102400
+# # tool_result_max_bytes = 102400
 # [workshop.per_tool_thresholds]
 # Bash = 2048          # shell output synthesised aggressively
 # Web  = 8192          # web results can be large; give them more room

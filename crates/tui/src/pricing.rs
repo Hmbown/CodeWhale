@@ -355,6 +355,11 @@ pub(crate) fn billing_surface_for_route(
         ApiProvider::Ollama | ApiProvider::Sglang | ApiProvider::Vllm => {
             return Some(LOCAL_BILLING_SURFACE);
         }
+        // Ollama Cloud publishes plan/account terms, not a Codewhale-owned
+        // per-token rate. Hosted is not local/free, but it is also not proof
+        // of PAYG dollars: keep it in money coverage as unclassified until an
+        // authoritative billing surface is available.
+        ApiProvider::OllamaCloud => return Some(UNCLASSIFIED_BILLING_SURFACE),
         ApiProvider::OpenaiCodex | ApiProvider::OpencodeGo => {
             return Some(OAUTH_SUBSCRIPTION_BILLING_SURFACE);
         }
@@ -1673,10 +1678,34 @@ fn provider_owned_hand_pricing_at(
             model_lower.as_str(),
             "muse-spark-1.1" | "muse-spark-1.2" | "muse-spark-1.2-contributor"
         ),
+        // Deployment-style ids (Fireworks account prefix, OpenCode Zen
+        // gateway) have no Models.dev cost fields. When the live control
+        // plane 503s, these bundled family rates keep the session priced
+        // instead of `unverified_live_pricing` forever (#5241).
+        ApiProvider::Fireworks => {
+            let bare = model_lower
+                .strip_prefix("accounts/fireworks/models/")
+                .unwrap_or(model_lower.as_str());
+            matches!(bare, "deepseek-v4-flash" | "deepseek-v4-pro")
+        }
+        ApiProvider::OpencodeZen => {
+            matches!(
+                model_lower.as_str(),
+                "deepseek-v4-flash" | "deepseek-v4-pro"
+            )
+        }
         _ => false,
     };
+    let lookup = if provider == ApiProvider::Fireworks {
+        model_lower
+            .strip_prefix("accounts/fireworks/models/")
+            .unwrap_or(model_lower.as_str())
+            .to_string()
+    } else {
+        model_lower
+    };
     provider_owns_row
-        .then(|| pricing_for_model_at(&model_lower, recorded_at))
+        .then(|| pricing_for_model_at(&lookup, recorded_at))
         .flatten()
 }
 
@@ -2070,6 +2099,11 @@ mod tests {
                 ApiProvider::Ollama,
                 LOCAL_BILLING_SURFACE,
                 EndpointMetering::LocalNoBill,
+            ),
+            (
+                ApiProvider::OllamaCloud,
+                UNCLASSIFIED_BILLING_SURFACE,
+                EndpointMetering::Unknown,
             ),
             (
                 ApiProvider::Vllm,
@@ -3525,6 +3559,30 @@ mod tests {
         assert_eq!(pricing.usd.input_cache_hit_per_million, 0.003625);
         assert_eq!(pricing.usd.input_cache_miss_per_million, 0.435);
         assert_eq!(pricing.usd.output_per_million, 0.87);
+    }
+
+    #[test]
+    fn fireworks_and_zen_flash_use_bundled_family_rates() {
+        let now = Utc.with_ymd_and_hms(2026, 8, 14, 0, 0, 0).single().unwrap();
+        let fireworks = provider_owned_hand_pricing_at(
+            ApiProvider::Fireworks,
+            "accounts/fireworks/models/deepseek-v4-flash",
+            now,
+        )
+        .expect("Fireworks Flash should inherit the bundled DeepSeek family row");
+        let zen =
+            provider_owned_hand_pricing_at(ApiProvider::OpencodeZen, "deepseek-v4-flash", now)
+                .expect("OpenCode Zen Flash should inherit the bundled DeepSeek family row");
+        assert_eq!(fireworks.usd.output_per_million, zen.usd.output_per_million);
+        assert!(
+            provider_owned_hand_pricing_at(
+                ApiProvider::Fireworks,
+                "accounts/fireworks/models/kimi-k3",
+                now,
+            )
+            .is_none(),
+            "kimi-k3 has no published bundled rate; do not invent one"
+        );
     }
 
     #[test]

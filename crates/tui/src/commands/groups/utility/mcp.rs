@@ -1,10 +1,13 @@
 //! In-TUI MCP manager command parser.
 
 use crate::commands::traits::{CommandInfo, RegisterCommand};
-use crate::localization::MessageId;
+use crate::localization::{Locale, MessageId, tr};
 use crate::tui::app::{App, AppAction, McpUiAction};
 
 use crate::commands::CommandResult;
+
+const GITHUB_MCP_URL: &str = "https://api.githubcopilot.com/mcp/";
+const CHROME_DEVTOOLS_MCP_PACKAGE: &str = "chrome-devtools-mcp@1.7.0";
 
 pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
     name: "mcp",
@@ -25,7 +28,7 @@ impl RegisterCommand for McpCmd {
     }
 }
 
-fn mcp(_app: &mut App, args: Option<&str>) -> CommandResult {
+fn mcp(app: &mut App, args: Option<&str>) -> CommandResult {
     let raw = args.unwrap_or("").trim();
     if raw.is_empty() || raw.eq_ignore_ascii_case("status") || raw.eq_ignore_ascii_case("list") {
         return CommandResult::action(AppAction::Mcp(McpUiAction::Show));
@@ -38,9 +41,9 @@ fn mcp(_app: &mut App, args: Option<&str>) -> CommandResult {
             force: parts.any(|part| part == "--force" || part == "-f"),
         })),
         "recommend" | "recommended" | "recommendations" => {
-            CommandResult::message(recommended_mcp_text())
+            CommandResult::message(recommended_mcp_text(app.ui_locale))
         }
-        "add" => parse_add(parts.collect()),
+        "add" => parse_add(app.ui_locale, parts.collect()),
         "enable" => match parse_name(parts.next(), "Usage: /mcp enable <name>") {
             Ok(name) => CommandResult::action(AppAction::Mcp(McpUiAction::Enable { name })),
             Err(msg) => CommandResult::error(msg),
@@ -112,7 +115,7 @@ fn parse_name(name: Option<&str>, usage: &str) -> Result<String, String> {
     }
 }
 
-fn parse_add(parts: Vec<&str>) -> CommandResult {
+fn parse_add(locale: Locale, parts: Vec<&str>) -> CommandResult {
     if parts
         .first()
         .is_some_and(|part| part.eq_ignore_ascii_case("recommended"))
@@ -125,8 +128,26 @@ fn parse_add(parts: Vec<&str>) -> CommandResult {
                     transport: None,
                 }))
             }
+            [_, id] if id.eq_ignore_ascii_case("github") || id.eq_ignore_ascii_case("gh") => {
+                CommandResult::action(AppAction::Mcp(McpUiAction::AddHttp {
+                    name: "github".to_string(),
+                    url: GITHUB_MCP_URL.to_string(),
+                    transport: None,
+                }))
+            }
+            [_, id]
+                if id.eq_ignore_ascii_case("chrome-devtools")
+                    || id.eq_ignore_ascii_case("chrome") =>
+            {
+                CommandResult::action(AppAction::Mcp(McpUiAction::AddStdio {
+                    name: "chrome-devtools".to_string(),
+                    command: recommended_npx_command().to_string(),
+                    args: vec!["-y".to_string(), CHROME_DEVTOOLS_MCP_PACKAGE.to_string()],
+                }))
+            }
             [_, _] => CommandResult::error(
-                "Unknown recommended MCP id. Run /mcp recommendations to inspect the curated list.",
+                tr(locale, MessageId::McpRecommendedUnknownId)
+                    .replace("{recommendations_command}", "/mcp recommendations"),
             ),
             _ => CommandResult::error("Usage: /mcp add recommended <id>"),
         };
@@ -158,19 +179,45 @@ fn parse_add(parts: Vec<&str>) -> CommandResult {
     }
 }
 
-fn recommended_mcp_text() -> &'static str {
-    "Recommended MCP servers (suggestions only; nothing is installed automatically)\n\
-     \n\
-     • hugging-face — remote Hugging Face MCP endpoint\n\
-       provenance: bundled Codewhale recommendation\n\
-       add explicitly: /mcp add recommended hugging-face\n\
-       then inspect: /mcp doctor · reload all configured servers: /mcp restart\n\
-     \n\
-     External sources (~/.claude.json, .mcp.json, marketplace manifests):\n\
-       /mcp import — list candidates with provenance (keyboard/mouse status)\n\
-       /mcp import approve <name> — create managed connector after consent\n\
-       /mcp import decline <name> — durable decline until source content changes\n\
-     enabled=false is a hard block and will never import. Nothing is auto-imported."
+fn recommended_mcp_text(locale: Locale) -> String {
+    let safety = tr(locale, MessageId::McpRecommendationsSafety)
+        .replace("{restart_command}", "/mcp restart");
+    let github = tr(locale, MessageId::McpRecommendationGithub)
+        .replace("{endpoint}", GITHUB_MCP_URL)
+        .replace("{login_command}", "/mcp login github")
+        .replace("{add_command}", "/mcp add recommended github");
+    let chrome = tr(locale, MessageId::McpRecommendationChrome)
+        .replace("{package}", CHROME_DEVTOOLS_MCP_PACKAGE)
+        .replace("{launcher}", "npx/npx.cmd")
+        .replace("{restart_command}", "/mcp restart")
+        .replace("{add_command}", "/mcp add recommended chrome-devtools");
+    format!(
+        "Recommended MCP servers (suggestions only; nothing is installed automatically)\n\
+         {safety}\n\
+         \n\
+         • hugging-face — remote Hugging Face MCP endpoint\n\
+           provenance: bundled Codewhale recommendation\n\
+           add explicitly: /mcp add recommended hugging-face\n\
+           then inspect: /mcp doctor · reload all configured servers: /mcp restart\n\
+         \n\
+         {github}\n\
+         \n\
+         {chrome}\n\
+         \n\
+         External sources (~/.claude.json, .mcp.json, marketplace manifests):\n\
+           /mcp import — list candidates with provenance (keyboard/mouse status)\n\
+           /mcp import approve <name> — create managed connector after consent\n\
+           /mcp import decline <name> — durable decline until source content changes\n\
+         enabled=false is a hard block and will never import. Nothing is auto-imported."
+    )
+}
+
+fn recommended_npx_command() -> &'static str {
+    recommended_npx_command_for(cfg!(windows))
+}
+
+fn recommended_npx_command_for(windows: bool) -> &'static str {
+    if windows { "npx.cmd" } else { "npx" }
 }
 
 fn parse_scopes(parts: Vec<&str>) -> Vec<String> {
@@ -259,12 +306,47 @@ mod tests {
             .expect("recommendations text");
         assert!(recommended.contains("nothing is installed automatically"));
         assert!(recommended.contains("provenance:"));
+        assert!(recommended.contains("https://api.githubcopilot.com/mcp/"));
+        assert!(recommended.contains("chrome-devtools-mcp@1.7.0"));
+        assert!(recommended.contains("least-privilege PAT outside command history"));
+        assert!(recommended.contains("read authenticated pages"));
+
+        app.ui_locale = Locale::Es419;
+        let localized = mcp(&mut app, Some("recommendations"))
+            .message
+            .expect("localized recommendations text");
+        assert!(localized.contains("páginas autenticadas"), "{localized}");
+        assert!(
+            !localized.contains("read authenticated pages"),
+            "{localized}"
+        );
+        let unknown = mcp(&mut app, Some("add recommended unknown"))
+            .message
+            .expect("localized unknown recommendation error");
+        assert!(unknown.contains("ID de MCP recomendado"), "{unknown}");
+        app.ui_locale = Locale::En;
 
         let add_recommended = mcp(&mut app, Some("add recommended hugging-face"));
         assert!(matches!(
             add_recommended.action,
             Some(AppAction::Mcp(McpUiAction::AddHttp { name, url, transport: None }))
                 if name == "hugging-face" && url == "https://huggingface.co/mcp"
+        ));
+
+        let add_github = mcp(&mut app, Some("add recommended github"));
+        assert!(matches!(
+            add_github.action,
+            Some(AppAction::Mcp(McpUiAction::AddHttp { name, url, transport: None }))
+                if name == "github" && url == GITHUB_MCP_URL
+        ));
+
+        let add_chrome = mcp(&mut app, Some("add recommended chrome-devtools"));
+        assert!(matches!(
+            add_chrome.action,
+            Some(AppAction::Mcp(McpUiAction::AddStdio { name, command, args }))
+                if name == "chrome-devtools"
+                    && command == recommended_npx_command()
+                    && args == vec!["-y".to_string(), CHROME_DEVTOOLS_MCP_PACKAGE.to_string()]
         ));
 
         let import_list = mcp(&mut app, Some("import"));
@@ -301,5 +383,11 @@ mod tests {
                 if name == "remote"
                     && scopes == vec!["tools/read".to_string(), "tools/write".to_string()]
         ));
+    }
+
+    #[test]
+    fn recommended_chrome_launcher_is_native_on_unix_and_windows() {
+        assert_eq!(recommended_npx_command_for(false), "npx");
+        assert_eq!(recommended_npx_command_for(true), "npx.cmd");
     }
 }

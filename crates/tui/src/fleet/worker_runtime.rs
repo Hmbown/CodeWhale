@@ -481,7 +481,7 @@ pub(crate) fn resolve_fleet_route_with_config(
                 .ok()?,
         };
         let mut scoped = config.clone();
-        scoped.provider = Some(identity.key.clone());
+        scoped.scope_to_provider_identity(&identity);
         let route = resolve_runtime_route(&scoped, identity.provider, model_selector)
             .ok()?
             .validate()
@@ -992,8 +992,10 @@ pub(crate) fn fleet_role_to_agent_type(role: Option<&str>) -> FleetRole {
         // the manager is the middle manager of one Workflow. Both coordinate,
         // so both get the General surface — explicitly, not by fall-through.
         Some("manager") | Some("coordinator") | Some("operator") => FleetRole::Worker,
-        // Synthesis is read-only, no shell: it must never fall through to
-        // General's full-write posture (#fleet-roster cutover (v0.8.67)).
+        // Synthesis is read-only (planner posture: network reads and
+        // read-only probes, never workspace writes). It must never fall
+        // through to General's full-write posture (#fleet-roster cutover
+        // (v0.8.67)).
         Some("synthesizer") | Some("summarizer") | Some("reducer") => FleetRole::Planner,
         Some("general") | None => FleetRole::Worker,
         Some(other) => {
@@ -1911,7 +1913,7 @@ mod tests {
     }
 
     #[test]
-    fn network_brief_warns_for_networkless_reviewer_but_not_worker() {
+    fn network_brief_does_not_warn_for_built_in_roles_that_keep_network_reads() {
         let reviewer = fleet_task(
             "triage",
             Some(worker_profile(
@@ -1933,13 +1935,15 @@ mod tests {
             "reviewer read-only inspection posture must not warn for a gh brief"
         );
 
-        // A genuinely network-less role (planner: analysis only, no shell)
-        // still warns for the same brief.
+        // Every built-in role now keeps network reach (a read); read-only
+        // roles stay read-only on the workspace by intent. A planner brief that
+        // needs gh/curl therefore no longer warns either.
         let mut planner = reviewer.clone();
         planner.worker.as_mut().unwrap().role = Some("planner".to_string());
-        let warning = network_posture_warning_for_task(&planner, &[], None)
-            .expect("network-dependent planner brief should warn");
-        assert!(warning.contains("network=off"));
+        assert!(
+            network_posture_warning_for_task(&planner, &[], None).is_none(),
+            "planner keeps network reads by default"
+        );
 
         let mut worker = reviewer.clone();
         worker.worker.as_mut().unwrap().role = Some("worker".to_string());
@@ -2106,7 +2110,10 @@ mod tests {
                     "role={role}, parent={parent_effort:?}"
                 );
                 assert!(!spec.runtime_profile.permissions.write);
-                assert!(!spec.runtime_profile.permissions.network);
+                assert!(
+                    spec.runtime_profile.permissions.network,
+                    "counsel reads the web; only workspace mutation is withheld"
+                );
                 assert_eq!(
                     spec.runtime_profile.shell,
                     crate::worker_profile::ShellPolicy::None

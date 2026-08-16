@@ -501,6 +501,7 @@ fn deepseek_identity() -> crate::config::ProviderIdentity {
         provider: ApiProvider::Deepseek,
         key: "deepseek".to_string(),
         exact_id: None,
+        migrated_legacy_ollama_cloud_route: false,
     }
 }
 
@@ -1060,6 +1061,7 @@ async fn anthropic_preview_matches_the_first_native_messages_wire_body() {
         provider: ApiProvider::Anthropic,
         key: "anthropic".to_string(),
         exact_id: None,
+        migrated_legacy_ollama_cloud_route: false,
     };
     let (mut engine, _tmp) = wire_preview_engine(&config);
     let prompt = "inspect the native Messages payload";
@@ -1243,6 +1245,7 @@ fn matrix_identity(route: &MatrixRoute) -> crate::config::ProviderIdentity {
         provider: route.provider,
         key: route.provider_key.to_string(),
         exact_id: None,
+        migrated_legacy_ollama_cloud_route: false,
     }
 }
 

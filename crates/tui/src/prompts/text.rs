@@ -266,6 +266,11 @@ Calling a gated write tool is the proposal, not the execution — the change run
 only after approval is granted. If a write call is rejected because approval
 has not been granted yet, do not retry it: present the change in your plan and
 wait for approval before calling the write tool again.
+
+This system context is pinned for the session. When workspace files,
+instructions, skills, memory, or the goal change after that, the delta arrives
+as a `<context_update>` user message; treat it as the current truth for what it
+lists.
 "#;
 /// Sub-agent final-message output contract — injected into every sub-agent
 /// brief by the runner in `tools/subagent/mod.rs` so the parent's parser can

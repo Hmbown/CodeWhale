@@ -19,7 +19,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::commands::CommandResult;
 use crate::commands::traits::{
@@ -29,6 +29,7 @@ use crate::localization::{MessageId, tr};
 use crate::plugins::types::{LoadedPlugin, PluginDiagnosticLevel};
 use crate::tui::app::{App, AppAction};
 
+mod kimi_import;
 mod legacy;
 mod marketplace;
 #[cfg(test)]
@@ -57,7 +58,7 @@ impl CommandGroup for PluginsCommands {
 pub(in crate::commands) const PLUGINS_INFO: CommandInfo = CommandInfo {
     name: "plugin",
     aliases: &["plugins"],
-    usage: "/plugin [list|show|suggest|validate|export|install|update|uninstall|trust|enable|disable|revoke|reload|tools|marketplace]",
+    usage: "/plugin [list|show|suggest|validate|export|install|import|update|uninstall|trust|enable|disable|revoke|reload|tools|marketplace]",
     description_id: MessageId::CmdPluginDescription,
 };
 
@@ -74,14 +75,32 @@ impl RegisterCommand for PluginsCmd {
 }
 
 fn plugins(app: &mut App, arg: Option<&str>) -> CommandResult {
+    plugins_with_kimi_home_override(app, arg, None)
+}
+
+#[cfg(test)]
+fn plugins_with_kimi_home(app: &mut App, arg: Option<&str>, home: &Path) -> CommandResult {
+    plugins_with_kimi_home_override(app, arg, Some(home))
+}
+
+fn plugins_with_kimi_home_override(
+    app: &mut App,
+    arg: Option<&str>,
+    kimi_home: Option<&Path>,
+) -> CommandResult {
     let words = arg
         .unwrap_or_default()
         .split_whitespace()
         .collect::<Vec<_>>();
     match words.as_slice() {
         [] | ["list"] => list_bundles_and_legacy_tools(app),
-        ["help"] => CommandResult::message(tr(app.ui_locale, MessageId::CmdPluginBundleUsage)),
+        ["help"] => CommandResult::message(format!(
+            "{}\n\n/plugin import kimi [list]\n/plugin import kimi approve <name> <content-hash>",
+            tr(app.ui_locale, MessageId::CmdPluginBundleUsage)
+        )),
         ["marketplace", rest @ ..] => marketplace::dispatch(app, rest),
+        ["import", "kimi", rest @ ..] => kimi_import::dispatch(app, rest, kimi_home),
+        ["import", ..] => CommandResult::error(kimi_import::usage(app.ui_locale)),
         ["show", selector] => show_bundle(app, selector),
         ["suggest"] | ["recommend"] => CommandResult::error("Usage: /plugin suggest <task>"),
         ["suggest", task @ ..] | ["recommend", task @ ..] => suggest_bundles(app, &task.join(" ")),
@@ -421,10 +440,6 @@ fn validate_bundles(app: &App, selector: Option<&str>) -> CommandResult {
 // bits are always disabled and untrusted until the hash-bound trust flow runs.
 
 fn install_bundle(app: &mut App, spec: &str) -> CommandResult {
-    use crate::plugins::mutation::{
-        PluginMutationContext, PluginMutationOutcome, PluginMutationRequest,
-    };
-
     let source = match crate::plugins::install::PluginInstallSource::parse(spec) {
         Ok(source) => source,
         Err(error) => {
@@ -434,28 +449,89 @@ fn install_bundle(app: &mut App, spec: &str) -> CommandResult {
             ));
         }
     };
+    install_bundle_source(app, source, None)
+}
+
+fn install_bundle_with_expected_hash(
+    app: &mut App,
+    path: &std::path::Path,
+    expected_content_hash: &str,
+) -> CommandResult {
+    install_bundle_source(
+        app,
+        crate::plugins::install::PluginInstallSource::LocalPath(path.to_path_buf()),
+        Some(expected_content_hash),
+    )
+}
+
+fn install_bundle_source(
+    app: &mut App,
+    source: crate::plugins::install::PluginInstallSource,
+    expected_content_hash: Option<&str>,
+) -> CommandResult {
+    use crate::plugins::mutation::{
+        PluginMutationContext, PluginMutationOutcome, PluginMutationRequest,
+    };
+
     let network = plugin_network_policy();
+    let expected_content_hash = expected_content_hash.map(str::to_string);
+    let expected_for_request = expected_content_hash.clone();
     let registry = std::sync::Arc::make_mut(&mut app.plugin_registry);
     let outcome = run_async(async move {
         let ctx = PluginMutationContext {
             network: &network,
             max_size: crate::plugins::install::DEFAULT_MAX_SIZE_BYTES,
         };
-        crate::plugins::mutation::execute(PluginMutationRequest::Install { source }, &ctx, registry)
-            .await
+        let request = match expected_for_request {
+            Some(expected_content_hash) => PluginMutationRequest::InstallExact {
+                source,
+                expected_content_hash,
+            },
+            None => PluginMutationRequest::Install { source },
+        };
+        crate::plugins::mutation::execute(request, &ctx, registry).await
     });
 
     match outcome {
         Ok(receipt) => match receipt.outcome {
             PluginMutationOutcome::Installed => {
                 let name = receipt.name.clone();
-                let path = receipt
-                    .path
+                let installed_path = receipt.path.clone();
+                let installed_content_hash = receipt.installed_content_hash.clone();
+                let path = installed_path
                     .as_deref()
                     .map(|path| path.display().to_string())
                     .unwrap_or_default();
+                if let Some(expected) = expected_content_hash.as_deref()
+                    && receipt.content_hash.as_deref() != Some(expected)
+                {
+                    return rollback_hash_mismatch(
+                        app,
+                        &name,
+                        installed_path.as_deref(),
+                        expected,
+                        receipt.content_hash.as_deref(),
+                    );
+                }
                 app.plugin_registry = app.plugin_registry.rediscover_for_workspace(&app.workspace);
                 app.refresh_skill_cache();
+                if expected_content_hash.is_some() {
+                    let post_copy_hash = app
+                        .plugin_registry
+                        .get(&name)
+                        .map(|plugin| plugin.content_hash.clone());
+                    if installed_content_hash.is_none()
+                        || post_copy_hash.as_deref() != installed_content_hash.as_deref()
+                    {
+                        return rollback_hash_mismatch(
+                            app,
+                            &name,
+                            installed_path.as_deref(),
+                            installed_content_hash.as_deref().unwrap_or("unavailable"),
+                            post_copy_hash.as_deref(),
+                        );
+                    }
+                }
                 let mut output = format!(
                     "Installed plugin '{name}' to {path}.\n\
                      It is disabled and untrusted. Review its requested authority below, then trust and enable it.\n"
@@ -475,6 +551,54 @@ fn install_bundle(app: &mut App, spec: &str) -> CommandResult {
             other => CommandResult::error(format!("Unexpected install outcome: {other:?}")),
         },
         Err(error) => action_error(app, &format!("Plugin install failed: {error:#}")),
+    }
+}
+
+fn rollback_hash_mismatch(
+    app: &mut App,
+    name: &str,
+    installed_path: Option<&std::path::Path>,
+    expected: &str,
+    actual: Option<&str>,
+) -> CommandResult {
+    let locale = app.ui_locale;
+    let missing_destination =
+        tr(locale, MessageId::PluginKimiRollbackDestinationMissing).into_owned();
+    let rollback = installed_path
+        .and_then(std::path::Path::parent)
+        .ok_or_else(|| anyhow::anyhow!(missing_destination))
+        .and_then(|plugins_dir| crate::plugins::install::uninstall(name, plugins_dir));
+    app.plugin_registry = app.plugin_registry.rediscover_for_workspace(&app.workspace);
+    app.refresh_skill_cache();
+    let actual = actual
+        .map(escape_review_text)
+        .unwrap_or_else(|| tr(locale, MessageId::PluginKimiHashUnavailable).into_owned());
+    let name = escape_review_text(name);
+    let expected = escape_review_text(expected);
+    match rollback {
+        Ok(()) => CommandResult::error(
+            tr(locale, MessageId::PluginKimiMismatchRemoved)
+                .replace("{name}", &name)
+                .replace("{expected}", &expected)
+                .replace("{actual}", &actual),
+        ),
+        Err(error) => CommandResult {
+            message: Some(
+                tr(locale, MessageId::PluginKimiMismatchRollbackFailed)
+                    .replace("{name}", &name)
+                    .replace("{expected}", &expected)
+                    .replace("{actual}", &actual)
+                    .replace("{error}", &escape_review_text(&format!("{error:#}")))
+                    .replace(
+                        "{path}",
+                        &installed_path.map(escape_review_path).unwrap_or_else(|| {
+                            tr(locale, MessageId::PluginKimiUserPluginDirectory).into_owned()
+                        }),
+                    ),
+            ),
+            action: Some(AppAction::PluginRegistryChanged),
+            is_error: true,
+        },
     }
 }
 

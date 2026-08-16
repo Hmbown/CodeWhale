@@ -39,6 +39,7 @@ use crate::tui::views::{
     ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, render_modal_footer,
     truncate_view_text,
 };
+use crate::tui::whales;
 use crate::worker_profile::{ShellPolicy, WorkerRuntimeProfile};
 
 /// The live session route — the operator the roster works for. Read once at
@@ -405,15 +406,45 @@ impl FleetRosterView {
                 } else {
                     ""
                 };
-                (
-                    format!(
-                        "{pointer}{mark} {}  {}{}",
-                        member.id,
-                        member_routing(member),
-                        shadow_badge
-                    ),
-                    Style::default().fg(palette::TEXT_PRIMARY),
-                )
+                // Whale Teams: the species badge sits between the charter role
+                // mark and the id, so a Scout, Patch, or Lantern reads at a
+                // glance even before the detail pane opens.
+                let species = member_species(member);
+                let badge_cells = whales::BADGE_WIDTH + 1;
+                let text = format!(
+                    "{pointer}{mark} {}  {}{}",
+                    member.id,
+                    member_routing(member),
+                    shadow_badge
+                );
+                let text = truncate_view_text(&text, list_width.saturating_sub(badge_cells));
+                let base_style = if is_selected {
+                    menu_style::selected_row_style()
+                } else {
+                    Style::default().fg(palette::TEXT_PRIMARY)
+                };
+                let split = pointer.len() + mark.len() + 1;
+                let (head, tail) = if text.len() >= split && text.is_char_boundary(split) {
+                    text.split_at(split)
+                } else {
+                    (text.as_str(), "")
+                };
+                let mut spans = vec![Span::styled(head.to_string(), base_style)];
+                for span in whales::badge(species, &palette::UI_THEME) {
+                    spans.push(if is_selected {
+                        Span::styled(
+                            span.content,
+                            span.style
+                                .bg(palette::SELECTION_BG)
+                                .add_modifier(Modifier::BOLD),
+                        )
+                    } else {
+                        span
+                    });
+                }
+                spans.push(Span::styled(format!(" {tail}"), base_style));
+                list_lines.push(Line::from(spans));
+                continue;
             };
             let style = if is_selected {
                 menu_style::selected_row_style()
@@ -431,13 +462,19 @@ impl FleetRosterView {
         let lines = if self.operator_selected() {
             operator_detail_lines(&self.operator)
         } else if let Some(member) = self.selected_member() {
+            // Whale Teams identity first: the portrait (or, in the Compact
+            // tier, only the badge) plus species and job. Rendered without a
+            // state — a roster member is a profile, not a runtime, so this
+            // claims nothing about whether anyone is working.
+            let mut lines = whale_identity_lines(member, self.locale, area.width);
             // Session model is the operator route so "fast" loadouts resolve
             // to the fast sibling the runtime will actually launch.
-            member_detail_lines_with_session(
+            lines.extend(member_detail_lines_with_session(
                 member,
                 Some(self.operator.model.as_str()),
                 &self.shadowed,
-            )
+            ));
+            lines
         } else {
             vec![Line::from(Span::styled(
                 "Roster is empty.",
@@ -459,6 +496,46 @@ impl FleetRosterView {
             .scroll((scroll as u16, 0))
             .render(detail_area, buf);
     }
+}
+
+/// Species for a roster member: the profile id first (built-in ids are role
+/// names), then the resolved worker agent type. Unknown → the plain whale.
+fn member_species(member: &AgentProfile) -> whales::WhaleSpecies {
+    match whales::WhaleSpecies::for_role_id(&member.id) {
+        whales::WhaleSpecies::Plain => {
+            whales::WhaleSpecies::for_fleet_role(&roster_member_agent_type(member))
+        }
+        species => species,
+    }
+}
+
+/// Identity block for the detail pane: portrait when the view is at least
+/// the Compact tier width, badge otherwise; then `Name · species · job`. No
+/// state is drawn or claimed — a roster member is a profile, not a runtime.
+fn whale_identity_lines(
+    member: &AgentProfile,
+    locale: Locale,
+    view_width: u16,
+) -> Vec<Line<'static>> {
+    let species = member_species(member);
+    let theme = &palette::UI_THEME;
+    let mut lines: Vec<Line> = Vec::new();
+    if whales::portrait_fits(view_width) {
+        lines.extend(whales::portrait(species, None, 0, theme));
+    }
+    let mut caption = whales::badge(species, theme);
+    caption.push(Span::styled(
+        format!(
+            " {} · {} · {}",
+            species.name(),
+            species.animal(locale),
+            species.job(locale)
+        ),
+        Style::default().fg(palette::TEXT_PRIMARY),
+    ));
+    lines.push(Line::from(caption));
+    lines.push(Line::from(""));
+    lines
 }
 
 fn member_role_mark(member: &AgentProfile) -> &'static str {

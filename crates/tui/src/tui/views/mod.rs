@@ -687,24 +687,15 @@ pub enum ViewEvent {
         agent_id: String,
     },
     /// An agent row activation (Work strip, sidebar dossier, `/agents`) or
-    /// Alt+V from Agent Details requests the agent's transcript — the primary
-    /// destination since the v0.9.7 "one agent, one destination" inversion.
+    /// Alt+V from Agent Details, Enter/click on any agent row, and Enter in the
+    /// `/agents` register all request the agent's transcript — since v0.9.7's
+    /// "one agent, one destination" inversion that is the in-place focus.
     OpenAgentTranscript {
-        agent_id: String,
-    },
-    /// The transcript surface requests the bounded Agent Details projection —
-    /// the secondary action behind the same Alt+V chord.
-    OpenAgentDetails {
         agent_id: String,
     },
     /// Agent Details was popped with Esc/q/Left. The Work surface uses this
     /// to release only its detail-open owner while retaining selection.
     AgentDetailsClosed {
-        agent_id: String,
-    },
-    /// The agent transcript surface was popped with Esc/q/Left. Releases the
-    /// same Work-surface detail-open owner as `AgentDetailsClosed`.
-    AgentTranscriptClosed {
         agent_id: String,
     },
     /// Emitted by the file picker (`Ctrl+P`) when the user presses Enter on a
@@ -2206,7 +2197,7 @@ impl ConfigView {
         let value = self.row_display_value(row).to_lowercase();
         let scope = row.scope.label(self.locale).to_lowercase();
         let scope_en = row.scope.label(Locale::En).to_lowercase();
-        let hint = config_hint_for_key(&row.key).to_lowercase();
+        let hint = config_hint_for_key(self.locale, &row.key).to_lowercase();
 
         filter.split_whitespace().all(|term| {
             section.contains(term)
@@ -2759,7 +2750,7 @@ impl ConfigView {
         let row = self.rows.get(row_idx)?;
         let meta = SettingsRegistry::new(self).meta(row);
         let label = config_label_for_key_for_locale(self.locale, &row.key);
-        let hint = config_hint_for_key(&row.key);
+        let hint = config_hint_for_key(self.locale, &row.key);
         let action_id = if row.key == "provider" {
             MessageId::ConfigActionOpenProvider
         } else if row.key == "model" {
@@ -2984,7 +2975,14 @@ fn humanize_config_key(key: &str) -> String {
         .join(" ")
 }
 
-fn config_hint_for_key(key: &str) -> &'static str {
+fn config_hint_for_key(locale: Locale, key: &str) -> Cow<'static, str> {
+    if key == "provider_url" {
+        return tr(locale, MessageId::ConfigHintProviderUrl);
+    }
+    Cow::Borrowed(config_literal_hint_for_key(key))
+}
+
+fn config_literal_hint_for_key(key: &str) -> &'static str {
     match key {
         "model" => "provider-scoped saved route; Enter opens /model",
         "fast_model" => {
@@ -3039,9 +3037,6 @@ fn config_hint_for_key(key: &str) -> &'static str {
         "work_surface_top_height" => "2..=16 rows · also adjustable by dragging the divider",
         "work_surface_side_width" => "26..=80 columns · also adjustable by dragging the divider",
         "base_url" => "global DeepSeek/root fallback; e.g. https://api.deepseek.com/beta",
-        "provider_url" => {
-            "current provider endpoint; Xiaomi: token-plan | pay-as-you-go | custom URL"
-        }
         // #5134: the filter matches hint text, so the words a confused user
         // actually types — "context length", "context size", "max context",
         // "1m" — have to appear here or these rows stay unfindable.
@@ -3706,7 +3701,7 @@ impl ModalView for ConfigView {
                 if spacious {
                     lines.push(Line::from(""));
                 }
-                let hint = config_hint_for_key(&edit.key);
+                let hint = config_hint_for_key(self.locale, &edit.key);
                 if !hint.is_empty() {
                     lines.push(Line::from(vec![
                         Span::styled(
@@ -4031,6 +4026,13 @@ pub struct SubAgentsView {
     last_render_scroll: std::cell::Cell<usize>,
     /// Visible body height of the last render.
     last_visible_lines: std::cell::Cell<usize>,
+    /// Motion policy at open: the Whale Teams working wake animates only
+    /// under `MotionMode::Full` (Reduced/Still hold the poster frame).
+    motion: crate::tui::motion::mode::MotionMode,
+    /// UI locale for the whale state words.
+    locale: Locale,
+    /// Wall clock anchor for the working-wake frame.
+    opened_at: std::time::Instant,
 }
 
 /// Build the agent rows shown by `/subagents`.
@@ -4183,7 +4185,25 @@ impl SubAgentsView {
             body_area: std::cell::Cell::new(Rect::default()),
             last_render_scroll: std::cell::Cell::new(0),
             last_visible_lines: std::cell::Cell::new(0),
+            motion: crate::tui::motion::mode::MotionMode::Still,
+            locale: Locale::En,
+            opened_at: std::time::Instant::now(),
         }
+    }
+
+    /// Open with the app's motion policy and locale so the whale rows follow
+    /// the user's reduced-motion setting and language.
+    pub fn for_app(app: &App, agents: Vec<SubAgentResult>) -> Self {
+        let mut view = Self::new(agents);
+        view.motion = app.motion_policy().mode();
+        view.locale = app.ui_locale;
+        view
+    }
+
+    /// Working-wake frame for this render: 0 unless motion is Full.
+    fn whale_frame(&self) -> usize {
+        let now_ms = u64::try_from(self.opened_at.elapsed().as_millis()).unwrap_or(0);
+        crate::tui::whales::working_frame(now_ms, self.motion)
     }
 
     /// The five status groups in render order, each sorted the way the view
@@ -4270,6 +4290,14 @@ impl ModalView for SubAgentsView {
             },
             KeyCode::Char('r') | KeyCode::Char('R') => {
                 ViewAction::Emit(ViewEvent::SubAgentsRefresh)
+            }
+            // Manage: stop the selected worker. Terminal workers ignore the
+            // key; the cancel receipt names what happened either way.
+            KeyCode::Char('x') | KeyCode::Char('X') => {
+                match self.ordered_agent_ids().get(self.selected).cloned() {
+                    Some(agent_id) => ViewAction::Emit(ViewEvent::SidebarAgentCancel { agent_id }),
+                    None => ViewAction::None,
+                }
             }
             KeyCode::Char('f') | KeyCode::Char('F') => {
                 ViewAction::Emit(ViewEvent::CommandPaletteSelected {
@@ -4428,6 +4456,10 @@ impl ModalView for SubAgentsView {
                     group,
                     content_width,
                     &selected_id,
+                    WhaleRowContext {
+                        locale: self.locale,
+                        frame: self.whale_frame(),
+                    },
                 );
             }
         }
@@ -4438,7 +4470,8 @@ impl ModalView for SubAgentsView {
             &[
                 ActionHint::new("Esc", "close"),
                 ActionHint::new("↑/↓", "select"),
-                ActionHint::new("Enter", "transcript"),
+                ActionHint::new("Enter", "focus"),
+                ActionHint::new("X", "stop"),
                 ActionHint::new("R", "refresh"),
                 ActionHint::new("F", "roster/setup"),
             ],
@@ -4492,6 +4525,13 @@ impl ModalView for SubAgentsView {
     }
 }
 
+/// Locale and working-wake frame for the whale badge on each worker row.
+#[derive(Debug, Clone, Copy)]
+struct WhaleRowContext {
+    locale: Locale,
+    frame: usize,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn append_subagent_group(
     lines: &mut Vec<ratatui::text::Line<'static>>,
@@ -4501,6 +4541,7 @@ fn append_subagent_group(
     agents: &[&SubAgentResult],
     content_width: usize,
     selected_id: &str,
+    whale: WhaleRowContext,
 ) {
     use ratatui::{
         style::Style,
@@ -4532,13 +4573,28 @@ fn append_subagent_group(
         } else {
             Style::default().fg(palette::TEXT_PRIMARY)
         };
-        lines.push(Line::from(vec![
+        // Whale Teams: species badge from the worker's Fleet role (or its
+        // advisory role hint), then the six-state word derived from the
+        // child's real status — never from elapsed time.
+        let species = agent
+            .assignment
+            .role
+            .as_deref()
+            .map(crate::tui::whales::WhaleSpecies::for_role_id)
+            .filter(|species| *species != crate::tui::whales::WhaleSpecies::Plain)
+            .unwrap_or_else(|| crate::tui::whales::WhaleSpecies::for_fleet_role(&agent.agent_type));
+        let whale_state = crate::tui::whales::WhaleState::for_subagent(agent);
+        let mut row = vec![
             // The selection cursor: Enter (or a click) opens this agent's
             // transcript, matching every other agent surface.
             Span::styled(
                 if is_selected { "\u{25B8} " } else { "  " },
                 Style::default().fg(palette::WHALE_ACTION),
             ),
+        ];
+        row.extend(crate::tui::whales::badge(species, &palette::UI_THEME));
+        row.push(Span::raw(" "));
+        row.extend([
             Span::styled(display_name, name_style),
             Span::raw(" "),
             Span::styled(format!("{id:<11}"), Style::default().fg(palette::TEXT_DIM)),
@@ -4558,7 +4614,21 @@ fn append_subagent_group(
                 format!("{:>6}ms", agent.duration_ms),
                 Style::default().fg(palette::TEXT_DIM),
             ),
-        ]));
+        ]);
+        lines.push(Line::from(row));
+
+        // The whale's own state word, paired with its glyph cue, so the row
+        // says "Waiting for you" / "Blocked" in the user's language next to
+        // the raw runtime status above. No caption text beyond that.
+        let mut whale_line = vec![Span::raw("    ")];
+        whale_line.extend(crate::tui::whales::badge_with_state_frame(
+            species,
+            Some(whale_state),
+            whale.frame,
+            &palette::UI_THEME,
+            whale.locale,
+        ));
+        lines.push(Line::from(whale_line));
 
         if let Some(detail) = status_detail {
             let max_len = content_width.saturating_sub(10);
@@ -5322,6 +5392,44 @@ mod tests {
         ));
     }
 
+    /// Whale Teams rows: every worker carries its species badge and a state
+    /// word derived from the real status (running → Working, completed →
+    /// Resting, failed → Blocked, interrupted → Waiting for you), and the
+    /// working wake holds the poster frame outside Full motion.
+    #[test]
+    fn subagents_rows_carry_species_badges_and_truthful_state_words() {
+        let mut interrupted = manager_agent("agent_wait", SubAgentStatus::Interrupted("q".into()));
+        interrupted.agent_type = FleetRole::Builder;
+        let mut failed = manager_agent("agent_fail", SubAgentStatus::Failed("boom".into()));
+        failed.agent_type = FleetRole::Reviewer;
+        let view = SubAgentsView::new(vec![
+            manager_agent("agent_done", SubAgentStatus::Completed),
+            manager_agent("agent_live", SubAgentStatus::Running),
+            interrupted,
+            failed,
+        ]);
+        assert_eq!(view.whale_frame(), 0, "Still motion holds the poster frame");
+        let area = Rect::new(0, 0, 100, 40);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+        let text = buffer_text(&buf, area);
+        // Scout (manager_agent default role) → beak badge; Builder → Patch
+        // bracket; Reviewer → Lantern lens.
+        assert!(text.contains("◂▰ agent_live"), "{text}");
+        assert!(text.contains("◂▰ · Working"), "{text}");
+        assert!(text.contains("◂▰ Resting"), "{text}");
+        assert!(text.contains("▰] ◆ Waiting for you"), "{text}");
+        assert!(text.contains("◇▰ ▌ Blocked"), "{text}");
+        assert!(
+            !text.contains("Scout · research"),
+            "no caption labels: {text}"
+        );
+        assert!(
+            !text.contains("Lantern · review"),
+            "no caption labels: {text}"
+        );
+    }
+
     /// A click on a rendered `/agents` row opens the clicked agent's
     /// transcript and moves the selection cursor onto it.
     #[test]
@@ -6066,8 +6174,9 @@ base_url = "https://api.xiaomimimo.com/v1"
 
         let mut app = create_test_app();
         app.api_provider = crate::config::ApiProvider::XiaomiMimo;
+        app.ui_locale = Locale::Es419;
         app.config_path = Some(config_path.clone());
-        let view = ConfigView::new_for_app(&app);
+        let mut view = ConfigView::new_for_app(&app);
 
         let row = view
             .rows
@@ -6076,6 +6185,18 @@ base_url = "https://api.xiaomimimo.com/v1"
             .expect("provider_url row missing");
         assert_eq!(row.value, crate::config::DEFAULT_XIAOMI_MIMO_BASE_URL);
         assert!(!view.rows.iter().any(|row| row.key == "base_url"));
+
+        view.focus_key("provider_url");
+        let hint = view
+            .selected_row_hint()
+            .expect("provider URL row should expose its localized guidance");
+        let es_hint = tr(Locale::Es419, MessageId::ConfigHintProviderUrl);
+        assert!(hint.contains(es_hint.as_ref()), "{hint}");
+        assert!(hint.contains("pago por uso"), "{hint}");
+        assert!(
+            !hint.contains(tr(Locale::En, MessageId::ConfigHintProviderUrl).as_ref()),
+            "the Spanish settings view must not leak the English guidance: {hint}"
+        );
     }
 
     #[test]

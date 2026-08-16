@@ -266,6 +266,16 @@ pub enum Event {
         usage: Usage,
         /// Wall-clock duration of this model call's stream.
         duration_ms: u64,
+        /// Wall-clock time from the moment the request was dispatched to the
+        /// provider until the first content-bearing stream event arrived
+        /// (time to first token). `None` when the call produced no content
+        /// or the emitting path does not measure dispatch (reviewer / REPL
+        /// consults), so the session metrics never invent a latency.
+        first_token_ms: Option<u64>,
+        /// Wall-clock time from request dispatch to the usage receipt for
+        /// this model call — the whole call including connection setup, not
+        /// only the stream. `None` where dispatch is not measured.
+        request_ms: Option<u64>,
     },
 
     /// Runtime goal state changed inside the engine, usually from model-visible
@@ -357,11 +367,23 @@ pub enum Event {
     /// Sub-agent completed
     AgentComplete { id: String, result: String },
 
+    /// Receipt for an operator follow-up sent to a child (`Op::FollowUpSubAgent`).
+    /// `Ok` carries the delivery outcome (the target id may differ from the
+    /// addressed id when a fork was continued from a checkpoint); `Err` is the
+    /// exact reason nothing was delivered.
+    SubAgentFollowUp {
+        agent_id: String,
+        outcome: Result<crate::tools::subagent::UserFollowUpOutcome, String>,
+    },
+
     /// Sub-agent listing plus the same bounded typed coordination projection
     /// used by machine-readable `agents/coordinate inspect`.
     AgentList {
         agents: Vec<SubAgentResult>,
         coordination: CoordinationDetailProjection,
+        /// Follow-ups handed to a running child that it has not yet taken at
+        /// its next round boundary (`agent_id` → count). Only non-zero entries.
+        queued_follow_ups: std::collections::HashMap<String, usize>,
     },
 
     /// Structured sub-agent mailbox envelope (issue #128). Carries the
@@ -482,6 +504,35 @@ pub enum Event {
 
     /// Advisory note emitted by the background advisor watcher (#3982).
     ///
+    /// A permission decision the runtime made for one proposed tool call
+    /// without a user prompt, so the transcript can carry a visible receipt
+    /// of who decided and why (the audit log keeps the full record).
+    ///
+    /// Only decisions a person would otherwise never see are emitted:
+    /// Auto-Review guardian verdicts, guardian failures (which deny, fail
+    /// closed), and deterministic Auto-Review blocks. Proven-safe
+    /// deterministic allows stay silent, like rule-based auto-approvals in
+    /// other harnesses, so a routine read does not spam the transcript.
+    ToolGateDecision {
+        /// The child (sub-agent / Fleet worker) whose call was gated, or
+        /// `None` for the parent turn. Hosts route a child's receipt into that
+        /// child's transcript.
+        agent_id: Option<String>,
+        /// Tool-call id the decision applies to.
+        tool_id: String,
+        /// Tool name as the model called it.
+        tool_name: String,
+        /// Which gate decided.
+        gate: ToolGate,
+        /// What it decided.
+        decision: ToolGateVerdict,
+        /// Reviewer risk tier when a guardian answered (`low`, `medium`,
+        /// `high`, `critical`); `None` for deterministic gates and failures.
+        risk: Option<String>,
+        /// Bounded, control-stripped rationale safe to render as one line.
+        reason: String,
+    },
+
     /// Fired fire-and-forget after `TurnComplete` when the advisor is enabled
     /// and the completed turn contained at least one tool call. The note is
     /// a concise LLM-generated summary of concerns observed in the bounded
@@ -516,6 +567,14 @@ pub enum Event {
         /// Carried so `/cache stats` can surface it without reaching
         /// into the engine's PrefixStabilityManager.
         pinned_combined_hash: String,
+        /// Why the current pin exists: `initial`, `resume`, or
+        /// `change:<what>`. Empty when unknown.
+        pin_reason: String,
+        /// Explanation of the most recent expected miss (declared header
+        /// change, history reset, or undeclared drift). Empty when none.
+        last_miss_reason: String,
+        /// `<context_update>` snapshots appended this session.
+        context_updates: u64,
     },
 }
 
@@ -536,4 +595,73 @@ impl Event {
             message: message.into(),
         }
     }
+}
+
+/// Which permission gate produced a [`Event::ToolGateDecision`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolGate {
+    /// The deterministic Auto-Review policy engine (configured rules plus
+    /// the built-in safety floor); never model-reviewed.
+    AutoReviewDeterministic,
+    /// The one-shot Auto-Review model guardian consulted for a fallback hold.
+    AutoReviewGuardian,
+}
+
+impl ToolGate {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AutoReviewDeterministic => "auto_review_deterministic",
+            Self::AutoReviewGuardian => "auto_review_guardian",
+        }
+    }
+}
+
+/// What a permission gate decided for one proposed tool call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolGateVerdict {
+    /// The call may run without a user prompt.
+    Allowed,
+    /// The call was refused with a stated rationale.
+    Denied,
+    /// The gate could not produce a verdict (timeout, transport error,
+    /// unparseable answer) and the call was denied, fail closed.
+    Unavailable,
+}
+
+impl ToolGateVerdict {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Allowed => "allowed",
+            Self::Denied => "denied",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+/// Bound a gate rationale to one safe transcript line: control and bidi
+/// format characters are dropped, whitespace is collapsed, and the text is
+/// capped so a verbose reviewer cannot flood the transcript.
+#[must_use]
+pub fn bounded_gate_reason(reason: &str) -> String {
+    const MAX_CHARS: usize = 220;
+    let cleaned: String = reason
+        .chars()
+        .filter(|c| !c.is_control() && !is_bidi_format_control(*c))
+        .collect();
+    let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() <= MAX_CHARS {
+        return collapsed;
+    }
+    let mut out: String = collapsed.chars().take(MAX_CHARS - 1).collect();
+    out.push('…');
+    out
+}
+
+fn is_bidi_format_control(c: char) -> bool {
+    matches!(
+        c,
+        '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+    )
 }

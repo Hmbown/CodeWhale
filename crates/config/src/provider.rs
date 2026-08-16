@@ -9,30 +9,31 @@ use super::{
     DEFAULT_ARCEE_MODEL, DEFAULT_ATLASCLOUD_BASE_URL, DEFAULT_ATLASCLOUD_MODEL,
     DEFAULT_DEEPINFRA_BASE_URL, DEFAULT_DEEPINFRA_MODEL, DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL,
     DEFAULT_DEEPSEEK_ANTHROPIC_MODEL, DEFAULT_DEEPSEEK_BASE_URL, DEFAULT_DEEPSEEK_MODEL,
-    DEFAULT_FIREWORKS_BASE_URL, DEFAULT_FIREWORKS_MODEL, DEFAULT_GOOGLE_BASE_URL,
-    DEFAULT_GOOGLE_MODEL, DEFAULT_HUGGINGFACE_BASE_URL, DEFAULT_HUGGINGFACE_MODEL,
-    DEFAULT_LONGCAT_BASE_URL, DEFAULT_LONGCAT_MODEL, DEFAULT_META_BASE_URL, DEFAULT_META_MODEL,
+    DEFAULT_EDENAI_BASE_URL, DEFAULT_EDENAI_MODEL, DEFAULT_FIREWORKS_BASE_URL,
+    DEFAULT_FIREWORKS_MODEL, DEFAULT_GOOGLE_BASE_URL, DEFAULT_GOOGLE_MODEL,
+    DEFAULT_HUGGINGFACE_BASE_URL, DEFAULT_HUGGINGFACE_MODEL, DEFAULT_LONGCAT_BASE_URL,
+    DEFAULT_LONGCAT_MODEL, DEFAULT_META_BASE_URL, DEFAULT_META_MODEL,
     DEFAULT_MINIMAX_ANTHROPIC_BASE_URL, DEFAULT_MINIMAX_BASE_URL, DEFAULT_MINIMAX_MODEL,
     DEFAULT_MISTRAL_BASE_URL, DEFAULT_MISTRAL_MODEL, DEFAULT_MODELSTUDIO_CODING_PLAN_BASE_URL,
     DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL, DEFAULT_MODELSTUDIO_TOKEN_PLAN_MODEL,
     DEFAULT_MOONSHOT_BASE_URL, DEFAULT_MOONSHOT_MODEL, DEFAULT_NOVITA_BASE_URL,
     DEFAULT_NOVITA_MODEL, DEFAULT_NVIDIA_NIM_BASE_URL, DEFAULT_NVIDIA_NIM_MODEL,
-    DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_BASE_URL,
-    DEFAULT_OPENAI_CODEX_BASE_URL, DEFAULT_OPENAI_CODEX_MODEL, DEFAULT_OPENAI_MODEL,
-    DEFAULT_OPENCODE_GO_BASE_URL, DEFAULT_OPENCODE_GO_MODEL, DEFAULT_OPENCODE_ZEN_BASE_URL,
-    DEFAULT_OPENCODE_ZEN_MODEL, DEFAULT_OPENMODEL_BASE_URL, DEFAULT_OPENMODEL_MODEL,
-    DEFAULT_OPENROUTER_BASE_URL, DEFAULT_OPENROUTER_MODEL, DEFAULT_ORCAROUTER_BASE_URL,
-    DEFAULT_ORCAROUTER_MODEL, DEFAULT_QIANFAN_BASE_URL, DEFAULT_QIANFAN_MODEL,
-    DEFAULT_SAKANA_BASE_URL, DEFAULT_SAKANA_MODEL, DEFAULT_SGLANG_BASE_URL, DEFAULT_SGLANG_MODEL,
-    DEFAULT_SILICONFLOW_BASE_URL, DEFAULT_SILICONFLOW_CN_BASE_URL, DEFAULT_SILICONFLOW_MODEL,
-    DEFAULT_STEPFUN_BASE_URL, DEFAULT_STEPFUN_MODEL, DEFAULT_TELECOMJS_BASE_URL,
-    DEFAULT_TELECOMJS_MODEL, DEFAULT_TOGETHER_BASE_URL, DEFAULT_TOGETHER_MODEL,
-    DEFAULT_VLLM_BASE_URL, DEFAULT_VLLM_MODEL, DEFAULT_VOLCENGINE_BASE_URL,
-    DEFAULT_VOLCENGINE_MODEL, DEFAULT_WANJIE_ARK_BASE_URL, DEFAULT_WANJIE_ARK_MODEL,
-    DEFAULT_XAI_BASE_URL, DEFAULT_XAI_MODEL, DEFAULT_XIAOMI_MIMO_BASE_URL,
-    DEFAULT_XIAOMI_MIMO_MODEL, DEFAULT_ZAI_BASE_URL, DEFAULT_ZAI_MODEL,
-    MODELSTUDIO_CODING_PLAN_ANTHROPIC_BASE_URL, MODELSTUDIO_TOKEN_PLAN_ANTHROPIC_BASE_URL,
-    ProviderKind,
+    DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_CLOUD_BASE_URL, DEFAULT_OLLAMA_CLOUD_MODEL,
+    DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_BASE_URL, DEFAULT_OPENAI_CODEX_BASE_URL,
+    DEFAULT_OPENAI_CODEX_MODEL, DEFAULT_OPENAI_MODEL, DEFAULT_OPENCODE_GO_BASE_URL,
+    DEFAULT_OPENCODE_GO_MODEL, DEFAULT_OPENCODE_ZEN_BASE_URL, DEFAULT_OPENCODE_ZEN_MODEL,
+    DEFAULT_OPENMODEL_BASE_URL, DEFAULT_OPENMODEL_MODEL, DEFAULT_OPENROUTER_BASE_URL,
+    DEFAULT_OPENROUTER_MODEL, DEFAULT_ORCAROUTER_BASE_URL, DEFAULT_ORCAROUTER_MODEL,
+    DEFAULT_QIANFAN_BASE_URL, DEFAULT_QIANFAN_MODEL, DEFAULT_SAKANA_BASE_URL, DEFAULT_SAKANA_MODEL,
+    DEFAULT_SGLANG_BASE_URL, DEFAULT_SGLANG_MODEL, DEFAULT_SILICONFLOW_BASE_URL,
+    DEFAULT_SILICONFLOW_CN_BASE_URL, DEFAULT_SILICONFLOW_MODEL, DEFAULT_STEPFUN_BASE_URL,
+    DEFAULT_STEPFUN_MODEL, DEFAULT_TELECOMJS_BASE_URL, DEFAULT_TELECOMJS_MODEL,
+    DEFAULT_TOGETHER_BASE_URL, DEFAULT_TOGETHER_MODEL, DEFAULT_VLLM_BASE_URL, DEFAULT_VLLM_MODEL,
+    DEFAULT_VOLCENGINE_BASE_URL, DEFAULT_VOLCENGINE_MODEL, DEFAULT_WANJIE_ARK_BASE_URL,
+    DEFAULT_WANJIE_ARK_MODEL, DEFAULT_XAI_BASE_URL, DEFAULT_XAI_MODEL,
+    DEFAULT_XIAOMI_MIMO_BASE_URL, DEFAULT_XIAOMI_MIMO_MODEL, DEFAULT_ZAI_BASE_URL,
+    DEFAULT_ZAI_MODEL, MODELSTUDIO_CODING_PLAN_ANTHROPIC_BASE_URL,
+    MODELSTUDIO_TOKEN_PLAN_ANTHROPIC_BASE_URL, ProviderKind,
 };
 
 /// Wire protocol spoken by a provider.
@@ -138,6 +139,12 @@ pub struct CredentialHelp {
 /// route-specific helper below owns the choice so a configured Kimi Code route
 /// is never described as a generic Moonshot route.
 pub const KIMI_CODE_MEMBERSHIP_PLAN_CONSOLE_URL: &str = "https://www.kimi.com/code/console";
+
+/// Ollama's account page for creating API keys used by the hosted API.
+pub const OLLAMA_CLOUD_API_KEY_URL: &str = "https://ollama.com/settings/keys";
+
+/// Ollama Cloud's exact OpenAI-compatible API base URL.
+pub const OLLAMA_CLOUD_BASE_URL: &str = DEFAULT_OLLAMA_CLOUD_BASE_URL;
 
 /// Static metadata for a built-in model provider.
 pub trait Provider: Send + Sync {
@@ -302,6 +309,12 @@ pub const fn credential_help(kind: ProviderKind) -> CredentialHelp {
             docs_url: Some("https://docs.ollama.com/api"),
             guidance: "Local Ollama is keyless by default; configure a key only if your server requires one.",
         },
+        ProviderKind::OllamaCloud => CredentialHelp {
+            acquisition: ApiKey,
+            credential_url: Some(OLLAMA_CLOUD_API_KEY_URL),
+            docs_url: Some("https://docs.ollama.com/api/authentication"),
+            guidance: "Ollama Cloud requires an API key. Save it for the ollama-cloud provider, set OLLAMA_CLOUD_API_KEY for Pi compatibility, or set Ollama's official OLLAMA_API_KEY.",
+        },
         ProviderKind::Huggingface => CredentialHelp {
             acquisition: ApiKey,
             credential_url: Some("https://huggingface.co/settings/tokens"),
@@ -412,6 +425,12 @@ pub const fn credential_help(kind: ProviderKind) -> CredentialHelp {
             docs_url: None,
             guidance: "Create a TelecomJS TokenHub API key, then use the provider's live model catalog to discover the models available to that key.",
         },
+        ProviderKind::Edenai => CredentialHelp {
+            acquisition: ApiKey,
+            credential_url: Some("https://app.edenai.run/settings/api-keys"),
+            docs_url: Some("https://www.edenai.co/docs"),
+            guidance: "Create an Eden AI API key from the Eden AI dashboard, then select models by their provider/model namespaced id.",
+        },
         ProviderKind::ModelstudioTokenPlan
         | ProviderKind::ModelstudioTokenPlanAnthropic
         | ProviderKind::ModelstudioCodingPlan
@@ -473,6 +492,28 @@ pub fn is_exact_kimi_code_route(kind: ProviderKind, base_url: &str) -> bool {
     }
 
     is_exact_https_route(base_url, "api.kimi.com", "coding/v1")
+}
+
+/// Whether a configured Ollama route is exactly the hosted OpenAI-compatible
+/// endpoint.
+///
+/// Local Ollama remains keyless. Neighboring paths, HTTP downgrades, and
+/// lookalike hosts remain custom routes so they cannot inherit an Ollama Cloud
+/// credential or durable secret-store slot.
+#[must_use]
+pub fn is_exact_ollama_cloud_route(kind: ProviderKind, base_url: &str) -> bool {
+    matches!(kind, ProviderKind::Ollama | ProviderKind::OllamaCloud)
+        && is_exact_https_route(base_url, "ollama.com", "v1")
+}
+
+/// In-memory compatibility classifier for the released route-sensitive shape.
+///
+/// Only the old `ollama` identity at the exact hosted endpoint migrates. This
+/// deliberately rejects neighboring paths, HTTP downgrades, and lookalike
+/// hosts so no local/custom route can consume Ollama Cloud credentials.
+#[must_use]
+pub fn migrates_legacy_ollama_cloud_route(kind: ProviderKind, base_url: &str) -> bool {
+    kind == ProviderKind::Ollama && is_exact_ollama_cloud_route(kind, base_url)
 }
 
 /// Whether a configured route is exactly Moonshot's direct API endpoint.
@@ -540,6 +581,15 @@ pub fn is_exact_minimax_anthropic_route(kind: ProviderKind, base_url: &str) -> b
 /// endpoint. It performs no discovery, credential lookup, or network I/O.
 #[must_use]
 pub fn credential_help_for_route(kind: ProviderKind, base_url: &str) -> CredentialHelp {
+    if is_exact_ollama_cloud_route(kind, base_url) {
+        return CredentialHelp {
+            acquisition: CredentialAcquisition::ApiKey,
+            credential_url: Some(OLLAMA_CLOUD_API_KEY_URL),
+            docs_url: Some("https://docs.ollama.com/api/authentication"),
+            guidance: "Ollama Cloud requires an API key. Create one in Ollama account settings, then save it for the ollama-cloud provider, set OLLAMA_CLOUD_API_KEY for Pi compatibility, or set Ollama's official OLLAMA_API_KEY.",
+        };
+    }
+
     if is_exact_kimi_code_route(kind, base_url) {
         return CredentialHelp {
             acquisition: CredentialAcquisition::ApiKey,
@@ -915,6 +965,17 @@ provider!(
     ["OLLAMA_API_KEY"],
     "ollama",
     aliases: ["ollama-local"]
+);
+provider!(
+    OllamaCloud,
+    OllamaCloud,
+    "ollama-cloud",
+    "Ollama Cloud",
+    DEFAULT_OLLAMA_CLOUD_BASE_URL,
+    DEFAULT_OLLAMA_CLOUD_MODEL,
+    ["OLLAMA_CLOUD_API_KEY", "OLLAMA_API_KEY"],
+    "ollama_cloud",
+    aliases: ["ollama_cloud"]
 );
 provider!(
     Huggingface,
@@ -1326,6 +1387,17 @@ provider!(
     "telecomjs",
     aliases: ["telecom-js", "telecom_js", "telecomjs-cn", "tokenhub"]
 );
+provider!(
+    Edenai,
+    Edenai,
+    "edenai",
+    "Eden AI",
+    DEFAULT_EDENAI_BASE_URL,
+    DEFAULT_EDENAI_MODEL,
+    ["EDENAI_API_KEY"],
+    "edenai",
+    aliases: ["eden-ai", "eden_ai"]
+);
 
 /// Alibaba Cloud Model Studio — Token Plan (OpenAI-compatible Chat Completions).
 ///
@@ -1590,6 +1662,7 @@ static MOONSHOT: Moonshot = Moonshot;
 static SGLANG: Sglang = Sglang;
 static VLLM: Vllm = Vllm;
 static OLLAMA: Ollama = Ollama;
+static OLLAMA_CLOUD: OllamaCloud = OllamaCloud;
 static HUGGINGFACE: Huggingface = Huggingface;
 static TOGETHER: Together = Together;
 static QIANFAN: Qianfan = Qianfan;
@@ -1610,6 +1683,7 @@ static XAI: Xai = Xai;
 static MISTRAL: Mistral = Mistral;
 static ANTIGRAVITY: Antigravity = Antigravity;
 static TELECOMJS: Telecomjs = Telecomjs;
+static EDENAI: Edenai = Edenai;
 static MODELSTUDIO_TOKEN_PLAN: ModelstudioTokenPlan = ModelstudioTokenPlan;
 static MODELSTUDIO_TOKEN_PLAN_ANTHROPIC: ModelstudioTokenPlanAnthropic =
     ModelstudioTokenPlanAnthropic;
@@ -1618,7 +1692,7 @@ static MODELSTUDIO_CODING_PLAN_ANTHROPIC: ModelstudioCodingPlanAnthropic =
     ModelstudioCodingPlanAnthropic;
 static CUSTOM: Custom = Custom;
 
-static PROVIDER_REGISTRY: [&dyn Provider; 45] = [
+static PROVIDER_REGISTRY: [&dyn Provider; 47] = [
     &DEEPSEEK,
     &DEEPSEEK_ANTHROPIC,
     &NVIDIA_NIM,
@@ -1638,6 +1712,7 @@ static PROVIDER_REGISTRY: [&dyn Provider; 45] = [
     &SGLANG,
     &VLLM,
     &OLLAMA,
+    &OLLAMA_CLOUD,
     &HUGGINGFACE,
     &TOGETHER,
     &QIANFAN,
@@ -1657,6 +1732,7 @@ static PROVIDER_REGISTRY: [&dyn Provider; 45] = [
     &XAI,
     &MISTRAL,
     &TELECOMJS,
+    &EDENAI,
     &MODELSTUDIO_TOKEN_PLAN,
     &MODELSTUDIO_TOKEN_PLAN_ANTHROPIC,
     &MODELSTUDIO_CODING_PLAN,
@@ -1824,6 +1900,53 @@ mod tests {
                 "{neighboring_route} must not inherit Kimi Code membership semantics"
             );
         }
+    }
+
+    #[test]
+    fn ollama_cloud_route_is_exact_and_requires_its_own_key() {
+        for base_url in [
+            OLLAMA_CLOUD_BASE_URL,
+            "https://ollama.com/v1/",
+            "  HTTPS://OLLAMA.COM/v1/  ",
+        ] {
+            for provider in [ProviderKind::Ollama, ProviderKind::OllamaCloud] {
+                assert!(is_exact_ollama_cloud_route(provider, base_url));
+                let help = credential_help_for_route(provider, base_url);
+                assert_eq!(help.acquisition, CredentialAcquisition::ApiKey);
+                assert_eq!(help.credential_url, Some(OLLAMA_CLOUD_API_KEY_URL));
+                assert_eq!(
+                    help.docs_url,
+                    Some("https://docs.ollama.com/api/authentication")
+                );
+                assert!(help.guidance.contains("OLLAMA_CLOUD_API_KEY"));
+                assert!(help.guidance.contains("OLLAMA_API_KEY"));
+            }
+        }
+
+        for base_url in [
+            "http://ollama.com/v1",
+            "https://ollama.com",
+            "https://ollama.com/api",
+            "https://ollama.com/v1/preview",
+            "https://ollama.com.evil.example/v1",
+            "https://api.ollama.com/v1",
+            "https://ollama.com/v1?tenant=other",
+        ] {
+            assert!(!is_exact_ollama_cloud_route(ProviderKind::Ollama, base_url));
+            assert!(!is_exact_ollama_cloud_route(
+                ProviderKind::OllamaCloud,
+                base_url
+            ));
+        }
+        assert!(!is_exact_ollama_cloud_route(
+            ProviderKind::Openai,
+            OLLAMA_CLOUD_BASE_URL
+        ));
+
+        let local = credential_help_for_route(ProviderKind::Ollama, DEFAULT_OLLAMA_BASE_URL);
+        assert_eq!(local.acquisition, CredentialAcquisition::LocalOptional);
+        assert_eq!(local.credential_url, None);
+        assert!(local.guidance.contains("keyless by default"));
     }
 
     #[test]

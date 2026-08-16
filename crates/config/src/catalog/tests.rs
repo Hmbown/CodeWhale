@@ -621,10 +621,13 @@ fn bundled_asset_yields_real_chat_offerings_for_key_models() {
     // proving real facts flow rather than `RouteLimits::default()` (unknown).
     let glm = find(&rows, "zai", "GLM-5.2");
     assert_eq!(glm.limit.as_ref().and_then(|l| l.context), Some(1_000_000));
-    assert!(glm.default_for_provider);
+    assert!(
+        !glm.default_for_provider,
+        "GLM-5.2 is no longer the Z.ai default"
+    );
 
-    // GLM-5.3 is a live peer whose limits still inherit from glm-5.2 until
-    // Z.ai publishes distinct 5.3 numbers. Adding it must not move the default.
+    // GLM-5.3 is the Z.ai default (matching DEFAULT_ZAI_MODEL); its limits
+    // still inherit from glm-5.2 until Z.ai publishes distinct 5.3 numbers.
     let glm53 = find(&rows, "zai", "GLM-5.3");
     assert_eq!(
         glm53.limit.as_ref().and_then(|l| l.context),
@@ -635,8 +638,8 @@ fn bundled_asset_yields_real_chat_offerings_for_key_models() {
         glm.limit.as_ref().and_then(|l| l.output)
     );
     assert!(
-        !glm53.default_for_provider,
-        "GLM-5.3 must not become the Z.ai default"
+        glm53.default_for_provider,
+        "GLM-5.3 must be the Z.ai default"
     );
 
     let kimi_k27 = find(&rows, "moonshot", "kimi-k2.7-code");

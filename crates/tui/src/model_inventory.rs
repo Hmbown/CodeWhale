@@ -363,6 +363,7 @@ fn provider_default_model(config: &Config, provider: ApiProvider) -> String {
         .map(|model| model.as_str())
         .unwrap_or(match provider {
             ApiProvider::Ollama => crate::config::DEFAULT_OLLAMA_MODEL,
+            ApiProvider::OllamaCloud => crate::config::DEFAULT_OLLAMA_CLOUD_MODEL,
             ApiProvider::Sglang => crate::config::DEFAULT_SGLANG_MODEL,
             ApiProvider::Vllm => crate::config::DEFAULT_VLLM_MODEL,
             _ => crate::config::DEFAULT_TEXT_MODEL,
@@ -506,6 +507,35 @@ mod tests {
                 .any(|candidate| candidate.provider == ApiProvider::Ollama
                     && candidate.auth_source == ModelAuthSource::KeylessLocal)
         );
+    }
+
+    #[test]
+    fn inventory_never_marks_ollama_cloud_keyless_or_local() {
+        let _env_lock = crate::test_support::lock_test_env();
+        let _cloud_env = crate::test_support::EnvVarGuard::remove("OLLAMA_CLOUD_API_KEY");
+        let _official_env = crate::test_support::EnvVarGuard::remove("OLLAMA_API_KEY");
+        let config = Config {
+            provider: Some("ollama-cloud".to_string()),
+            providers: Some(crate::config::ProvidersConfig {
+                ollama_cloud: crate::config::ProviderConfig {
+                    api_key: Some("cloud-key".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let inventory = ModelInventory::from_config(&config);
+        let candidate = inventory
+            .candidate(
+                ApiProvider::OllamaCloud,
+                crate::config::DEFAULT_OLLAMA_CLOUD_MODEL,
+            )
+            .expect("authenticated Ollama Cloud candidate");
+        assert_eq!(candidate.auth_source, ModelAuthSource::Config);
+        assert!(!candidate.tags.contains(&"local"));
+        assert_ne!(candidate.readiness.label(), "local · not checked");
     }
 
     #[test]

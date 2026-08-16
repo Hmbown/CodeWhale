@@ -1654,9 +1654,11 @@ pub async fn verify_provider_api_key(
         // malformed; in that case failure-preserving catalog semantics keep the
         // existing/static rows.
         let body = response.text().await.unwrap_or_default();
-        if provider == ApiProvider::Telecomjs
-            && let Ok(offerings) = telecomjs_catalog_offerings_from_body(
+        if matches!(provider, ApiProvider::Telecomjs | ApiProvider::Edenai)
+            && let Some(kind) = provider.kind()
+            && let Ok(offerings) = named_gateway_catalog_offerings_from_body(
                 &body,
+                kind,
                 provider.as_str(),
                 &base_url_fingerprint(base_url),
                 now_unix(),
@@ -1787,18 +1789,18 @@ impl DeepSeekClient {
         request: MessageRequest,
         stream: bool,
     ) -> Result<PreparedOutboundRequest> {
-        // Antigravity is credential-plane only: the agy login can be
-        // imported read-only with consent, but Google's cloud-code wire
-        // protocol is not implemented, and pretending it is OpenAI
-        // compatible would send credentials to a route that cannot serve
-        // them. Fail closed before any body is built.
         if self.api_provider == crate::config::ApiProvider::Antigravity {
-            anyhow::bail!(
-                "Antigravity (agy) requests are not implemented yet: Codewhale can import the \
-                 official CLI's login read-only (`codewhale auth external-consent`), but the \
-                 cloud-code wire protocol is unavailable, so no request is sent. Use the \
-                 `google` provider for Gemini models."
-            );
+            let body = cloud_code::build_generate_content_body(&request)?;
+            let url = cloud_code::stream_generate_content_url(&self.base_url);
+            return Ok(PreparedOutboundRequest::new(
+                WireDialect::GoogleCloudCode,
+                self.endpoint_identity(url, RouteShape::CloudCode),
+                request.model.clone(),
+                body,
+                request.reasoning_effort.clone(),
+                None,
+                CallerStreamMode::from_stream_flag(stream),
+            ));
         }
         let mut request =
             self.bind_request_to_protocol(self.prepare_model_bound_request(request))?;
@@ -2042,7 +2044,7 @@ impl DeepSeekClient {
             let response = match prepared.dialect {
                 WireDialect::OpenAiResponses => self.handle_responses_message(&prepared).await?,
                 WireDialect::AnthropicMessages => self.handle_anthropic_message(&prepared).await?,
-                WireDialect::ChatCompletions => unreachable!(),
+                WireDialect::ChatCompletions | WireDialect::GoogleCloudCode => unreachable!(),
             };
             return translation_text_from_response(&response);
         }
@@ -2184,7 +2186,21 @@ impl DeepSeekClient {
                 })
                 .collect()
         } else if provider == "telecomjs" {
-            telecomjs_catalog_offerings_from_body(&body, &provider, &fingerprint, fetched_at)?
+            named_gateway_catalog_offerings_from_body(
+                &body,
+                codewhale_config::ProviderKind::Telecomjs,
+                &provider,
+                &fingerprint,
+                fetched_at,
+            )?
+        } else if provider == "edenai" {
+            named_gateway_catalog_offerings_from_body(
+                &body,
+                codewhale_config::ProviderKind::Edenai,
+                &provider,
+                &fingerprint,
+                fetched_at,
+            )?
         } else {
             let models = apply_provider_model_cutline(
                 self.api_provider,
@@ -2269,7 +2285,7 @@ impl DeepSeekClient {
         let provider = config.api_provider();
         // Only refresh for providers that serve their own model list and are
         // not already covered by the Models.dev catalog.
-        if !matches!(provider, ApiProvider::Telecomjs) {
+        if !matches!(provider, ApiProvider::Telecomjs | ApiProvider::Edenai) {
             return;
         }
 
@@ -2688,6 +2704,9 @@ impl DeepSeekClient {
             WireDialect::OpenAiResponses => isolated.handle_responses_message(&prepared).await,
             WireDialect::AnthropicMessages => isolated.handle_anthropic_message(&prepared).await,
             WireDialect::ChatCompletions => isolated.create_message_chat(&prepared, false).await,
+            WireDialect::GoogleCloudCode => anyhow::bail!(
+                "Antigravity cloud-code is stream-only; blocking create_message is not implemented"
+            ),
         }
     }
 }
@@ -2751,6 +2770,9 @@ impl LlmClient for DeepSeekClient {
             WireDialect::OpenAiResponses => self.handle_responses_message(&prepared).await,
             WireDialect::AnthropicMessages => self.handle_anthropic_message(&prepared).await,
             WireDialect::ChatCompletions => self.create_message_chat(&prepared, cacheable).await,
+            WireDialect::GoogleCloudCode => anyhow::bail!(
+                "Antigravity cloud-code is stream-only; blocking create_message is not implemented"
+            ),
         }
     }
 
@@ -2760,10 +2782,19 @@ impl LlmClient for DeepSeekClient {
     ) -> Result<crate::llm_client::StreamEventBox> {
         let permit = self.acquire_provider_request_permit().await;
         let prepared = self.prepare_outbound_request(request, true)?;
+        if self.api_provider == crate::config::ApiProvider::Antigravity {
+            return Ok(Self::hold_provider_request_permit_for_stream(
+                self.handle_cloud_code_stream(&prepared).await?,
+                permit,
+            ));
+        }
         let stream = match prepared.dialect {
             WireDialect::OpenAiResponses => self.handle_responses_stream(&prepared).await?,
             WireDialect::AnthropicMessages => self.handle_anthropic_stream(&prepared).await?,
             WireDialect::ChatCompletions => self.handle_chat_completion_stream(prepared).await?,
+            WireDialect::GoogleCloudCode => {
+                unreachable!("Antigravity streams before dialect match")
+            }
         };
         Ok(Self::hold_provider_request_permit_for_stream(
             stream, permit,
@@ -2894,12 +2925,13 @@ fn apply_provider_model_cutline(
     models
 }
 
-/// Convert TelecomJS's bare `/models` response into truthful provider-scoped
+/// Convert a named gateway's `/models` response into truthful provider-scoped
 /// catalog rows. Matching model ids on other providers prove no capabilities,
 /// limits, or prices; only an explicit same-provider bundled row may enrich a
 /// live offering.
-fn telecomjs_catalog_offerings_from_body(
+fn named_gateway_catalog_offerings_from_body(
     body: &str,
+    kind: codewhale_config::ProviderKind,
     provider: &str,
     fingerprint: &str,
     fetched_at: u64,
@@ -2910,9 +2942,7 @@ fn telecomjs_catalog_offerings_from_body(
     }
 
     let bundled = codewhale_config::catalog::bundled_catalog_offerings();
-    let default_model_id = codewhale_config::ProviderKind::Telecomjs
-        .provider()
-        .default_model();
+    let default_model_id = kind.provider().default_model();
     Ok(models
         .into_iter()
         .map(|model| {
@@ -3189,6 +3219,10 @@ pub(super) fn apply_reasoning_effort(
             // (qwen-max, deepseek-chat, gpt-4o, claude, etc.) accepts the same
             // reasoning dialect (#4188 review: verify against actual behavior).
             ApiProvider::Telecomjs => {}
+            // Eden AI documents `thinking` only for Anthropic Claude models.
+            // This gateway can route unrelated model families, so the generic
+            // provider must not inject a model-specific reasoning dialect.
+            ApiProvider::Edenai => {}
             // Model Studio (DashScope): its top-level controls are route- AND
             // model-specific, so the provider enum alone cannot decide them —
             // a custom `base_url` on the same identity is an arbitrary
@@ -3232,6 +3266,12 @@ pub(super) fn apply_reasoning_effort(
                 // #3024: Ollama OpenAI-compat endpoint accepts think param.
                 body["think"] = json!(false);
             }
+            ApiProvider::OllamaCloud => {
+                // Ollama Cloud stays on the documented OpenAI-compatible
+                // `/v1/chat/completions` wire. Native `/api/chat` uses
+                // `think`; this wire uses `reasoning_effort`.
+                body["reasoning_effort"] = json!("none");
+            }
             ApiProvider::Anthropic
             | ApiProvider::DeepseekAnthropic
             | ApiProvider::MinimaxAnthropic
@@ -3273,6 +3313,7 @@ pub(super) fn apply_reasoning_effort(
             // TelecomJS: see comment in the "off" branch above — the gateway's
             // Chat Completions API does not support reasoning_effort or thinking.
             ApiProvider::Telecomjs => {}
+            ApiProvider::Edenai => {}
             // Model Studio: see the "off" branch — the route- and model-aware
             // shaper in client::chat is the sole writer of these fields.
             ApiProvider::ModelstudioTokenPlan
@@ -3336,6 +3377,14 @@ pub(super) fn apply_reasoning_effort(
                 // #3024: Ollama think param.
                 body["think"] = json!(true);
             }
+            ApiProvider::OllamaCloud => {
+                let value = match normalized.as_str() {
+                    "low" | "minimal" => "low",
+                    "medium" | "mid" => "medium",
+                    _ => "high",
+                };
+                body["reasoning_effort"] = json!(value);
+            }
             ApiProvider::Anthropic
             | ApiProvider::DeepseekAnthropic
             | ApiProvider::MinimaxAnthropic
@@ -3366,7 +3415,7 @@ pub(super) fn apply_reasoning_effort(
             ApiProvider::Google => {}
             ApiProvider::Antigravity => {}
         },
-        "xhigh" | "max" | "highest" | "ultracode" => match provider {
+        "xhigh" | "max" | "highest" | "ultra" | "ultracode" => match provider {
             // Handled by the shared DeepSeek table above, before this match.
             ApiProvider::Deepseek | ApiProvider::DeepseekCN => {}
             ApiProvider::Siliconflow
@@ -3381,6 +3430,7 @@ pub(super) fn apply_reasoning_effort(
             // TelecomJS: see comment in the "off" branch above — the gateway's
             // Chat Completions API does not support reasoning_effort or thinking.
             ApiProvider::Telecomjs => {}
+            ApiProvider::Edenai => {}
             // Model Studio: see the "off" branch — the route- and model-aware
             // shaper in client::chat is the sole writer of these fields.
             ApiProvider::ModelstudioTokenPlan
@@ -3423,6 +3473,9 @@ pub(super) fn apply_reasoning_effort(
             ApiProvider::Ollama => {
                 // #3024: Ollama think param.
                 body["think"] = json!(true);
+            }
+            ApiProvider::OllamaCloud => {
+                body["reasoning_effort"] = json!("max");
             }
             ApiProvider::Anthropic
             | ApiProvider::DeepseekAnthropic
@@ -3593,6 +3646,7 @@ impl DeepSeekClient {
 
 mod anthropic;
 mod chat;
+pub(crate) mod cloud_code;
 mod deepseek_effort;
 #[cfg(test)]
 mod ds4_tests;
@@ -3606,19 +3660,79 @@ fn extract_sse_data_value(line: &str) -> Option<&str> {
         .map(|value| value.strip_prefix(' ').unwrap_or(value))
 }
 
+/// A complete SSE line that was not valid UTF-8. Callers must fail closed:
+/// substituting U+FFFD would hide the error and can rewrite provider/model
+/// text into a different string (#5374).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct InvalidSseUtf8 {
+    valid_up_to: usize,
+    error_len: Option<usize>,
+}
+
+impl std::fmt::Display for InvalidSseUtf8 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.error_len {
+            None => write!(
+                f,
+                "SSE line is not valid UTF-8: incomplete sequence at byte {}",
+                self.valid_up_to
+            ),
+            Some(len) => write!(
+                f,
+                "SSE line is not valid UTF-8: invalid sequence of {len} byte(s) at byte {}",
+                self.valid_up_to
+            ),
+        }
+    }
+}
+
+impl std::error::Error for InvalidSseUtf8 {}
+
+fn decode_sse_line_bytes(bytes: &[u8]) -> Result<String, InvalidSseUtf8> {
+    match std::str::from_utf8(bytes) {
+        Ok(line) => Ok(line.trim().to_string()),
+        Err(err) => Err(InvalidSseUtf8 {
+            valid_up_to: err.valid_up_to(),
+            error_len: err.error_len(),
+        }),
+    }
+}
+
 /// Take the next COMPLETE line (up to the first `\n`) off a raw byte buffer,
-/// draining it, and return it trimmed. Returns `None` when no full line is
+/// draining it, and return it trimmed. Returns `Ok(None)` when no full line is
 /// buffered yet. Decoding only complete lines (never an arbitrary network-read
 /// boundary) means a multi-byte UTF-8 char — CJK, emoji, accented letter —
 /// split across two reads is never corrupted to U+FFFD, since the `\n`
 /// delimiter is ASCII and can never fall inside a multi-byte sequence.
-fn take_sse_line(buffer: &mut Vec<u8>) -> Option<String> {
-    let line_end = buffer.iter().position(|&b| b == b'\n')?;
-    let line = String::from_utf8_lossy(&buffer[..line_end])
-        .trim()
-        .to_string();
+///
+/// Complete lines are decoded strictly. Invalid bytes are an error, not a
+/// silent U+FFFD substitution (#5374).
+fn take_sse_line(buffer: &mut Vec<u8>) -> Result<Option<String>, InvalidSseUtf8> {
+    let Some(line_end) = buffer.iter().position(|&b| b == b'\n') else {
+        return Ok(None);
+    };
+    let mut end = line_end;
+    if end > 0 && buffer[end - 1] == b'\r' {
+        end -= 1;
+    }
+    let decoded = decode_sse_line_bytes(&buffer[..end]);
     buffer.drain(..=line_end);
-    Some(line)
+    decoded.map(Some)
+}
+
+/// Decode leftover bytes after the HTTP body ends (final `data:` line with no
+/// trailing newline). Same strict UTF-8 contract as [`take_sse_line`].
+fn flush_sse_line(buffer: &mut Vec<u8>) -> Result<Option<String>, InvalidSseUtf8> {
+    if buffer.is_empty() {
+        return Ok(None);
+    }
+    let mut end = buffer.len();
+    if buffer[end - 1] == b'\r' {
+        end -= 1;
+    }
+    let decoded = decode_sse_line_bytes(&buffer[..end]);
+    buffer.clear();
+    decoded.map(|line| (!line.is_empty()).then_some(line))
 }
 
 pub(crate) use chat::{CacheWarmupKey, PromptInspection};
@@ -3648,7 +3762,9 @@ mod tests {
         tool_to_chat_for_base_url,
     };
     use crate::client::responses::build_responses_body;
-    use crate::config::{DEFAULT_TELECOMJS_MODEL, ProviderConfig, ProvidersConfig};
+    use crate::config::{
+        DEFAULT_EDENAI_MODEL, DEFAULT_TELECOMJS_MODEL, ProviderConfig, ProvidersConfig,
+    };
     use crate::models::{
         ContentBlock, ContentBlockStart, Delta, Message, MessageRequest, MessageResponse,
         StreamEvent, Tool,
@@ -3886,6 +4002,29 @@ mod tests {
         client
     }
 
+    fn ollama_cloud_request_boundary_client(transport_base_url: String) -> DeepSeekClient {
+        let mut client = DeepSeekClient::new(&Config {
+            provider: Some("ollama-cloud".to_string()),
+            providers: Some(ProvidersConfig {
+                ollama_cloud: ProviderConfig {
+                    api_key: Some("ollama-cloud-request-boundary-key".to_string()),
+                    base_url: Some(crate::config::DEFAULT_OLLAMA_CLOUD_BASE_URL.to_string()),
+                    model: Some("gpt-oss:120b".to_string()),
+                    ..ProviderConfig::default()
+                },
+                ..ProvidersConfig::default()
+            }),
+            ..Config::default()
+        })
+        .expect("Ollama Cloud request-boundary client");
+        assert_eq!(
+            client.base_url,
+            crate::config::DEFAULT_OLLAMA_CLOUD_BASE_URL
+        );
+        client.test_chat_transport_base_url = Some(transport_base_url);
+        client
+    }
+
     async fn capture_deepseek_chat_request(
         route_base_url: &str,
         strict: bool,
@@ -4028,6 +4167,81 @@ mod tests {
             ),
             "nested core-owned JSON order drifted: {captured}"
         );
+    }
+
+    #[tokio::test]
+    async fn ollama_cloud_uses_authenticated_openai_compatible_v1_wire() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .and(header(
+                "authorization",
+                "Bearer ollama-cloud-request-boundary-key",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "chatcmpl-ollama-cloud-request-boundary",
+                "object": "chat.completion",
+                "model": "gpt-oss:120b",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2
+                }
+            })))
+            .expect(5)
+            .mount(&server)
+            .await;
+
+        let client = ollama_cloud_request_boundary_client(server.uri());
+        for requested in ["off", "low", "medium", "high", "max"] {
+            client
+                .create_message(MessageRequest {
+                    model: "gpt-oss:120b".to_string(),
+                    messages: vec![Message {
+                        role: "user".to_string(),
+                        content: vec![ContentBlock::Text {
+                            text: "Ollama Cloud request boundary".to_string(),
+                            cache_control: None,
+                        }],
+                    }],
+                    max_tokens: 64,
+                    system: None,
+                    tools: None,
+                    tool_choice: None,
+                    metadata: None,
+                    thinking: None,
+                    reasoning_effort: Some(requested.to_string()),
+                    stream: Some(false),
+                    temperature: None,
+                    top_p: None,
+                })
+                .await
+                .expect("Ollama Cloud request succeeds");
+        }
+
+        let requests = server.received_requests().await.expect("recorded request");
+        assert_eq!(requests.len(), 5);
+        for (request, expected) in requests
+            .iter()
+            .zip(["none", "low", "medium", "high", "max"])
+        {
+            let body: Value = serde_json::from_slice(&request.body).expect("captured request JSON");
+            assert_eq!(body["model"], "gpt-oss:120b");
+            assert_eq!(body["reasoning_effort"], expected);
+            assert!(
+                body.get("think").is_none(),
+                "native Ollama field leaked: {body}"
+            );
+            assert!(
+                body.get("thinking").is_none(),
+                "foreign field leaked: {body}"
+            );
+        }
     }
 
     // This synchronous guard deliberately spans every await: the assertions
@@ -7773,6 +7987,15 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_effort_edenai_does_not_guess_a_model_dialect() {
+        for effort in ["off", "low", "medium", "high", "max", "xhigh"] {
+            let mut body = json!({});
+            apply_reasoning_effort(&mut body, Some(effort), ApiProvider::Edenai);
+            assert_eq!(body, json!({}), "unexpected Eden AI fields for {effort}");
+        }
+    }
+
+    #[test]
     fn moonshot_uses_codewhale_user_agent_not_kimi_cli_identity() {
         let user_agent = client_user_agent(ApiProvider::Moonshot);
 
@@ -7790,6 +8013,25 @@ mod tests {
         let mut body = json!({});
         apply_reasoning_effort(&mut body, Some("off"), ApiProvider::Ollama);
         assert_eq!(body, json!({ "think": false }));
+    }
+
+    #[test]
+    fn reasoning_effort_ollama_cloud_uses_openai_compatible_field() {
+        for (effort, expected) in [
+            ("off", "none"),
+            ("low", "low"),
+            ("medium", "medium"),
+            ("high", "high"),
+            ("max", "max"),
+        ] {
+            let mut body = json!({});
+            apply_reasoning_effort(&mut body, Some(effort), ApiProvider::OllamaCloud);
+            assert_eq!(body, json!({ "reasoning_effort": expected }));
+        }
+
+        let mut local = json!({});
+        apply_reasoning_effort(&mut local, Some("high"), ApiProvider::Ollama);
+        assert_eq!(local, json!({ "think": true }));
     }
 
     #[test]
@@ -8693,6 +8935,23 @@ mod tests {
         .expect("TelecomJS client")
     }
 
+    fn edenai_client_for(server: &MockServer) -> DeepSeekClient {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        DeepSeekClient::new(&Config {
+            provider: Some("edenai".to_string()),
+            providers: Some(ProvidersConfig {
+                edenai: ProviderConfig {
+                    api_key: Some("test-key".to_string()),
+                    base_url: Some(format!("{}/v3", server.uri())),
+                    ..ProviderConfig::default()
+                },
+                ..ProvidersConfig::default()
+            }),
+            ..Config::default()
+        })
+        .expect("Eden AI client")
+    }
+
     async fn mount_models_json(server: &MockServer, status: u16, body: serde_json::Value) {
         Mock::given(method("GET"))
             .and(path("/v1/models"))
@@ -8868,6 +9127,46 @@ mod tests {
             .iter()
             .find(|offering| offering.wire_model_id == DEFAULT_TELECOMJS_MODEL)
             .expect("TelecomJS default row");
+        assert!(default.default_for_provider);
+    }
+
+    #[tokio::test]
+    async fn edenai_live_catalog_marks_the_default_and_keeps_unknowns_unclaimed() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v3/models"))
+            .and(header("authorization", "Bearer test-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [
+                    {"id": "synthetic/vendor-model"},
+                    {"id": DEFAULT_EDENAI_MODEL}
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let delta = edenai_client_for(&server)
+            .fetch_catalog_delta()
+            .await
+            .expect("Eden AI catalog delta");
+        assert_eq!(delta.provider, "edenai");
+        assert_eq!(delta.offerings.len(), 2);
+
+        let unknown = delta
+            .offerings
+            .iter()
+            .find(|offering| offering.wire_model_id == "synthetic/vendor-model")
+            .expect("synthetic Eden AI row");
+        assert_eq!(unknown.canonical_model, None);
+        assert_eq!(unknown.reasoning, None);
+        assert_eq!(unknown.tool_call, None);
+        assert!(!unknown.default_for_provider);
+
+        let default = delta
+            .offerings
+            .iter()
+            .find(|offering| offering.wire_model_id == DEFAULT_EDENAI_MODEL)
+            .expect("Eden AI default row");
         assert!(default.default_for_provider);
     }
 
@@ -9811,10 +10110,12 @@ mod tests {
         let mut buffer: Vec<u8> = Vec::new();
         // First read: no complete line yet.
         buffer.extend_from_slice(&bytes[..split]);
-        assert_eq!(take_sse_line(&mut buffer), None);
+        assert_eq!(take_sse_line(&mut buffer).expect("utf-8"), None);
         // Second read completes the line; '好' must be intact, not U+FFFD.
         buffer.extend_from_slice(&bytes[split..]);
-        let line = take_sse_line(&mut buffer).expect("a complete line");
+        let line = take_sse_line(&mut buffer)
+            .expect("utf-8")
+            .expect("a complete line");
         assert_eq!(line, "data: 你好");
         assert!(!line.contains('\u{FFFD}'), "multibyte char was corrupted");
         assert_eq!(extract_sse_data_value(&line), Some("你好"));
@@ -9825,8 +10126,38 @@ mod tests {
     #[test]
     fn take_sse_line_returns_none_without_newline() {
         let mut buffer = b"data: partial".to_vec();
-        assert_eq!(take_sse_line(&mut buffer), None);
+        assert_eq!(take_sse_line(&mut buffer).expect("utf-8"), None);
         assert_eq!(buffer, b"data: partial");
+    }
+
+    #[test]
+    fn take_sse_line_rejects_invalid_bytes_without_replacement() {
+        let mut buffer = b"data: ok".to_vec();
+        buffer.push(0xFF);
+        buffer.extend_from_slice(b"\n");
+        let err = take_sse_line(&mut buffer).expect_err("0xFF is not UTF-8");
+        assert_eq!(err.error_len, Some(1));
+        assert!(buffer.is_empty(), "invalid line must be drained");
+    }
+
+    #[test]
+    fn flush_sse_line_preserves_unterminated_cjk() {
+        let mut buffer = "data: 你好".as_bytes().to_vec();
+        let line = flush_sse_line(&mut buffer)
+            .expect("utf-8")
+            .expect("residual line");
+        assert_eq!(line, "data: 你好");
+        assert!(!line.contains('\u{FFFD}'));
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn flush_sse_line_rejects_truncated_multibyte_sequence() {
+        let mut buffer = "data: ".as_bytes().to_vec();
+        buffer.extend_from_slice(&"好".as_bytes()[..2]);
+        let err = flush_sse_line(&mut buffer).expect_err("truncated UTF-8");
+        assert!(err.error_len.is_none());
+        assert!(buffer.is_empty());
     }
 
     #[test]

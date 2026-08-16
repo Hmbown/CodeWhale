@@ -46,6 +46,22 @@ def die(msg: str, code: int = 1) -> None:
     raise SystemExit(code)
 
 
+def _safe_catalog_path(path: str) -> str:
+    """Catalog id path only — never a URL, token, or raw JSON value."""
+    return "".join(ch if ch.isalnum() or ch in ".-_/" else "?" for ch in path)[:200]
+
+
+def _safe_source_label(source: str) -> str:
+    """Log scheme + host (or file name), never query strings or credentials."""
+    if source.startswith("file:"):
+        return "file:<local>"
+    if source.startswith("url:"):
+        rest = source[4:]
+        host = rest.split("://", 1)[-1].split("/", 1)[0].split("@")[-1]
+        return f"url:https://{host}/" if host else "url:<redacted>"
+    return "source:<redacted>"
+
+
 def load_json_bytes(raw: bytes, source: str) -> Any:
     try:
         text = raw.decode("utf-8")
@@ -322,7 +338,9 @@ def _collect_limit_drift(
         bundled = seed_limit.get(field)
         upstream = upstream_limit.get(field)
         if bundled != upstream:
-            drift.append(f"{path}: limit.{field} bundled={bundled!r} upstream={upstream!r}")
+            # Log only the catalog path and field name. Never print raw
+            # upstream/bundled values — CodeQL #107 (clear-text logging).
+            drift.append(f"{_safe_catalog_path(path)}: limit.{field} differs")
 
 
 def cmd_drift(args: argparse.Namespace) -> None:
@@ -388,12 +406,12 @@ def cmd_drift(args: argparse.Namespace) -> None:
                     drift,
                 )
 
-    print(f"bundled seed: {seed_path}")
-    print(f"upstream: {source}")
+    print(f"bundled seed: {seed_path.name}")
+    print(f"upstream: {_safe_source_label(source)}")
     if missing_upstream:
         print("removed upstream (bundled id no longer present):")
         for path in missing_upstream:
-            print(f"  - {path}")
+            print(f"  - {_safe_catalog_path(path)}")
     if drift:
         print(f"limit drift detected ({len(drift)}):")
         for path in drift:

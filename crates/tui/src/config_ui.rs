@@ -386,6 +386,7 @@ pub enum StatusItemValue {
     RateLimit,
     Tokens,
     Balance,
+    SessionMetrics,
 }
 
 pub fn parse_mode(arg: Option<&str>) -> Result<ConfigUiMode, String> {
@@ -956,6 +957,12 @@ fn reload_runtime_config(app: &mut App, config: &mut Config) -> Result<()> {
     app.mcp_config_path = reloaded.mcp_config_path();
     app.skills_dir = reloaded.skills_dir();
     app.ui_locale = resolve_locale(&settings.locale);
+    app.workflow_config = reloaded.workflow_config();
+    crate::tools::workflow::set_session_workflow_config(
+        &app.workspace,
+        app.workflow_config.clone(),
+    );
+    app.goal_max_continuations = reloaded.goal_max_continuations();
     Ok(())
 }
 
@@ -1444,6 +1451,7 @@ impl From<StatusItem> for StatusItemValue {
             StatusItem::RateLimit => Self::RateLimit,
             StatusItem::Tokens => Self::Tokens,
             StatusItem::Balance => Self::Balance,
+            StatusItem::SessionMetrics => Self::SessionMetrics,
         }
     }
 }
@@ -1465,6 +1473,7 @@ impl From<StatusItemValue> for StatusItem {
             StatusItemValue::RateLimit => Self::RateLimit,
             StatusItemValue::Tokens => Self::Tokens,
             StatusItemValue::Balance => Self::Balance,
+            StatusItemValue::SessionMetrics => Self::SessionMetrics,
         }
     }
 }

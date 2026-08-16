@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:3a759de92f8b -->
+<!-- source: README.md sha256:1569156eb887 -->
 # Codewhale
 
 Sebuah coding agent sumber terbuka untuk terminal Anda — bawa model pilihan Anda sendiri.
@@ -47,6 +47,21 @@ Di dalam TUI: `/model` mengganti penyedia dan model sekaligus, `/fleet` menjalan
 - **Read-only sampai Anda memberi izin lebih.** Mode Plan tidak dapat mengubah berkas, dan gerbang persetujuan memproteksi perintah berisiko. Ketika sandbox OS membungkus perintah, Codewhale akan menginformasikannya: Seatbelt pada macOS (jika tersedia), serta opsi bubblewrap di Linux. Berkas `constitution.json` repositori dikompilasi menjadi pembatas penulisan yang bahkan tidak dapat dilewati oleh mode Full Access.
 - **Pekerjaan yang dapat dilanjutkan.** Fleet mencatat setiap langkah ke ledger bertipe append-only, sehingga `fleet resume` dapat melanjutkan pekerjaan tepat di mana Anda meninggalkannya.
 
+## Integrasi
+
+- **DeepSeek Harness (dsh) — terhubung melalui Codewhale.**
+  `codewhale integrations dsh connect` menghubungkan instalasi
+  `@deepseek-ai/dsh` yang sudah ada ke rute provider, izin, dan ruang kerja
+  Codewhale Anda; `integrations dsh install-bundle` menambahkan bundel plugin
+  DSH opsional sehingga `dsh --profile codewhale` membawa identitas itu secara
+  mandiri. Codewhale memegang izin dan otoritas siklus hidup; dsh tetap
+  mempertahankan sesi, profil, dan kredensialnya sendiri tanpa tersentuh.
+  Lihat [docs/INTEGRATIONS_DSH.md](docs/INTEGRATIONS_DSH.md).
+- **VS Code.** Kerangka ekstensi resmi (`extensions/vscode`) membuka
+  Codewhale di terminal terintegrasi dan menyajikan Agent View hanya-baca
+  melalui runtime lokal. Ini adalah pratinjau pengembangan lokal, bukan rilis
+  marketplace.
+
 ## Pelajari Lebih Lanjut
 
 - [docs/PROVIDERS.id.md](docs/PROVIDERS.id.md) ([English](docs/PROVIDERS.md)) — setiap rute penyedia: hosted, gateway, dan lokal
@@ -75,4 +90,4 @@ Terima kasih kepada [DeepSeek](https://github.com/deepseek-ai) untuk model dan d
 
 [MIT](LICENSE). Sebuah proyek komunitas independen, tidak terafiliasi dengan penyedia model mana pun.
 
-[![Star History Chart](https://api.star-history.com/chart?repos=Hmbown/CodeWhale&type=date&legend=top-left)](https://www.star-history.com/?repos=Hmbown%2FCodeWhale&type=date)
+![Codewhale memecah tiga subagent scout hanya-baca di terminal](assets/fanout.gif)

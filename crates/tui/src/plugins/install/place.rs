@@ -86,6 +86,23 @@ pub(super) fn finalize_install(
         }
         return Err(error);
     }
+    let installed_content_hash =
+        match crate::plugins::agent_plugin::resolve_manifest_path(&final_path)
+            .ok_or_else(|| anyhow::anyhow!("installed plugin has no supported manifest"))
+            .and_then(|manifest_path| {
+                crate::plugins::manifest::PluginManifest::validate_from_path(&manifest_path)
+                    .map(|validated| validated.content_hash)
+                    .map_err(anyhow::Error::msg)
+            }) {
+            Ok(hash) => hash,
+            Err(error) => {
+                let _ = fs::remove_dir_all(&final_path);
+                if let Some(backup) = backup_path.take() {
+                    let _ = fs::rename(&backup, &final_path);
+                }
+                return Err(error).context("installed plugin failed post-copy validation");
+            }
+        };
     if let Some(backup) = backup_path {
         fs::remove_dir_all(&backup).ok();
     }
@@ -94,6 +111,7 @@ pub(super) fn finalize_install(
         name: staged.name,
         path: final_path,
         content_hash: staged.content_hash,
+        installed_content_hash,
         source_checksum: source_checksum.to_string(),
     }))
 }

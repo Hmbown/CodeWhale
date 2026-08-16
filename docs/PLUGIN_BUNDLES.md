@@ -18,12 +18,14 @@ plugin repositories are a different, unconverted format; that boundary is
 
 Codewhale scans only its own roots, looking in each `<name>/` directory for a
 manifest named `plugin.json` (the native Agent Plugins v1.0.0 format, since
-v0.9.4) or `plugin.toml` (the legacy Codewhale format, still fully readable):
+v0.9.4), `kimi.plugin.json` (the compatible Kimi Skills/MCP subset, since
+v0.9.8), or `plugin.toml` (the legacy Codewhale format, still fully readable):
 
 - User: `~/.codewhale/plugins/<name>/`
 - Workspace: `<workspace>/.codewhale/plugins/<name>/`
 
-A bundle that dual-publishes both manifests is read through its `plugin.json`.
+A bundle that publishes multiple formats is read through `plugin.json` first,
+then `kimi.plugin.json`, then the legacy `plugin.toml`.
 No built-in bundle ships as of v0.9.6. The internal precedence order is
 built-in, user, then workspace; the first bundle with a given name wins. This
 prevents a repository from shadowing an explicitly installed user bundle.

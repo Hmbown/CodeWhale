@@ -1,3 +1,4 @@
+pub mod app_mode;
 pub mod auth_source;
 pub mod auto_model;
 pub mod catalog;
@@ -57,6 +58,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result, bail};
+pub use app_mode::AppMode;
 pub use auth_source::{AuthSourceKind, ProviderAuthSourceToml};
 pub use codewhale_execpolicy::ToolAskRule;
 use codewhale_execpolicy::{ExecPolicyEngine, PermissionAction, Ruleset};
@@ -274,6 +276,12 @@ pub struct ProvidersToml {
     pub vllm: ProviderConfigToml,
     #[serde(default, skip_serializing_if = "ProviderConfigToml::is_empty")]
     pub ollama: ProviderConfigToml,
+    #[serde(
+        default,
+        skip_serializing_if = "ProviderConfigToml::is_empty",
+        alias = "ollama-cloud"
+    )]
+    pub ollama_cloud: ProviderConfigToml,
     #[serde(default, skip_serializing_if = "ProviderConfigToml::is_empty")]
     pub huggingface: ProviderConfigToml,
     #[serde(default, skip_serializing_if = "ProviderConfigToml::is_empty")]
@@ -441,6 +449,14 @@ pub struct ProvidersToml {
         alias = "tokenhub"
     )]
     pub telecomjs: ProviderConfigToml,
+    /// Eden AI — OpenAI-compatible AI gateway (aggregator).
+    #[serde(
+        default,
+        skip_serializing_if = "ProviderConfigToml::is_empty",
+        alias = "eden-ai",
+        alias = "eden_ai"
+    )]
+    pub edenai: ProviderConfigToml,
     /// Alibaba Cloud Model Studio — Token Plan (OpenAI-compatible endpoint).
     #[serde(
         default,
@@ -642,6 +658,7 @@ impl ProvidersToml {
             ProviderKind::Sglang => &self.sglang,
             ProviderKind::Vllm => &self.vllm,
             ProviderKind::Ollama => &self.ollama,
+            ProviderKind::OllamaCloud => &self.ollama_cloud,
             ProviderKind::Huggingface => &self.huggingface,
             ProviderKind::Together => &self.together,
             ProviderKind::Qianfan => &self.qianfan,
@@ -663,6 +680,7 @@ impl ProvidersToml {
             ProviderKind::Google => &self.google,
             ProviderKind::Antigravity => &self.antigravity,
             ProviderKind::Telecomjs => &self.telecomjs,
+            ProviderKind::Edenai => &self.edenai,
             ProviderKind::ModelstudioTokenPlan => &self.modelstudio_token_plan,
             ProviderKind::ModelstudioTokenPlanAnthropic => &self.modelstudio_token_plan_anthropic,
             ProviderKind::ModelstudioCodingPlan => &self.modelstudio_coding_plan,
@@ -692,6 +710,7 @@ impl ProvidersToml {
             ProviderKind::Sglang => &mut self.sglang,
             ProviderKind::Vllm => &mut self.vllm,
             ProviderKind::Ollama => &mut self.ollama,
+            ProviderKind::OllamaCloud => &mut self.ollama_cloud,
             ProviderKind::Huggingface => &mut self.huggingface,
             ProviderKind::Together => &mut self.together,
             ProviderKind::Qianfan => &mut self.qianfan,
@@ -713,6 +732,7 @@ impl ProvidersToml {
             ProviderKind::Google => &mut self.google,
             ProviderKind::Antigravity => &mut self.antigravity,
             ProviderKind::Telecomjs => &mut self.telecomjs,
+            ProviderKind::Edenai => &mut self.edenai,
             ProviderKind::ModelstudioTokenPlan => &mut self.modelstudio_token_plan,
             ProviderKind::ModelstudioTokenPlanAnthropic => {
                 &mut self.modelstudio_token_plan_anthropic
@@ -3214,6 +3234,7 @@ impl ConfigToml {
                 ProviderKind::Sglang => DEFAULT_SGLANG_BASE_URL.to_string(),
                 ProviderKind::Vllm => DEFAULT_VLLM_BASE_URL.to_string(),
                 ProviderKind::Ollama => DEFAULT_OLLAMA_BASE_URL.to_string(),
+                ProviderKind::OllamaCloud => DEFAULT_OLLAMA_CLOUD_BASE_URL.to_string(),
                 ProviderKind::Huggingface => DEFAULT_HUGGINGFACE_BASE_URL.to_string(),
                 ProviderKind::Together => DEFAULT_TOGETHER_BASE_URL.to_string(),
                 ProviderKind::Qianfan => DEFAULT_QIANFAN_BASE_URL.to_string(),
@@ -3235,6 +3256,7 @@ impl ConfigToml {
                 ProviderKind::Google => DEFAULT_GOOGLE_BASE_URL.to_string(),
                 ProviderKind::Antigravity => DEFAULT_ANTIGRAVITY_BASE_URL.to_string(),
                 ProviderKind::Telecomjs => DEFAULT_TELECOMJS_BASE_URL.to_string(),
+                ProviderKind::Edenai => DEFAULT_EDENAI_BASE_URL.to_string(),
                 ProviderKind::ModelstudioTokenPlan
                 | ProviderKind::ModelstudioTokenPlanAnthropic
                 | ProviderKind::ModelstudioCodingPlan
@@ -3246,6 +3268,16 @@ impl ConfigToml {
                 // routes always supply a configured base_url before this point.
                 ProviderKind::Custom => provider.provider().default_base_url().to_string(),
             })
+        };
+        // Released builds represented Ollama Cloud as the local `ollama`
+        // identity plus one exact hosted base URL. Upgrade only that tuple in
+        // memory: the parsed config and secret store are never rewritten, and
+        // neighboring/custom routes retain the local/custom identity.
+        let legacy_ollama_cloud = provider::migrates_legacy_ollama_cloud_route(provider, &base_url);
+        let provider = if legacy_ollama_cloud {
+            ProviderKind::OllamaCloud
+        } else {
+            provider
         };
         // `auth_mode = "none"` is an endpoint contract, so it suppresses every
         // credential source (including explicit CLI/config values). Otherwise
@@ -3284,7 +3316,7 @@ impl ConfigToml {
                 None => (None, None),
             }
         } else {
-            match secrets.resolve_with_source(provider.secret_store_slot()) {
+            match stored_api_key_for_provider(secrets, provider, legacy_ollama_cloud) {
                 Some((value, source)) => {
                     let source = match source {
                         SecretSource::Keyring => RuntimeApiKeySource::Keyring,
@@ -3753,10 +3785,12 @@ fn provider_passes_model_through(provider: ProviderKind) -> bool {
             | ProviderKind::Qianfan
             | ProviderKind::Openmodel
             | ProviderKind::Ollama
+            | ProviderKind::OllamaCloud
             | ProviderKind::Huggingface
             | ProviderKind::Meta
             | ProviderKind::Xai
             | ProviderKind::Telecomjs
+            | ProviderKind::Edenai
             | ProviderKind::ModelstudioTokenPlan
             | ProviderKind::ModelstudioTokenPlanAnthropic
             | ProviderKind::ModelstudioCodingPlan
@@ -3897,6 +3931,7 @@ fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
             | ProviderKind::MinimaxAnthropic
             | ProviderKind::Qianfan
             | ProviderKind::Ollama
+            | ProviderKind::OllamaCloud
             | ProviderKind::Meta
             | ProviderKind::Xai
     ) {
@@ -4171,9 +4206,10 @@ fn canonical_zai_model_id(model: &str) -> Option<&'static str> {
     let normalized = normalized.replace(['_', ' '], "-");
     match normalized.as_str() {
         "glm-5.1" | "glm-5-1" | "zai-glm-5.1" | "zai-glm-5-1" => Some(ZAI_GLM_5_1_MODEL),
-        "glm-5.2" | "glm-5-2" | "zai-glm-5.2" | "zai-glm-5-2" => Some(DEFAULT_ZAI_MODEL),
-        // GLM-5.3 resolves to its own id, never to DEFAULT_ZAI_MODEL: adding a
-        // model must not silently re-point a route at the default.
+        // Every alias resolves to its own id, never through DEFAULT_ZAI_MODEL:
+        // moving the default (now GLM-5.3) must not silently re-point an
+        // explicit GLM-5.2 route.
+        "glm-5.2" | "glm-5-2" | "zai-glm-5.2" | "zai-glm-5-2" => Some(ZAI_GLM_5_2_MODEL),
         "glm-5.3" | "glm-5-3" | "zai-glm-5.3" | "zai-glm-5-3" => Some(ZAI_GLM_5_3_MODEL),
         "glm-5-turbo" | "glm-5turbo" | "zai-glm-5-turbo" => Some(ZAI_GLM_5_TURBO_MODEL),
         _ => None,
@@ -4308,6 +4344,7 @@ fn default_model_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Sglang => DEFAULT_SGLANG_MODEL,
         ProviderKind::Vllm => DEFAULT_VLLM_MODEL,
         ProviderKind::Ollama => DEFAULT_OLLAMA_MODEL,
+        ProviderKind::OllamaCloud => DEFAULT_OLLAMA_CLOUD_MODEL,
         ProviderKind::Huggingface => DEFAULT_HUGGINGFACE_MODEL,
         ProviderKind::Together => DEFAULT_TOGETHER_MODEL,
         ProviderKind::Qianfan => DEFAULT_QIANFAN_MODEL,
@@ -4328,6 +4365,7 @@ fn default_model_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Google => DEFAULT_GOOGLE_MODEL,
         ProviderKind::Antigravity => DEFAULT_ANTIGRAVITY_MODEL,
         ProviderKind::Telecomjs => DEFAULT_TELECOMJS_MODEL,
+        ProviderKind::Edenai => DEFAULT_EDENAI_MODEL,
         ProviderKind::ModelstudioTokenPlan
         | ProviderKind::ModelstudioTokenPlanAnthropic
         | ProviderKind::ModelstudioCodingPlan
@@ -4358,6 +4396,7 @@ fn default_base_url_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Sglang => DEFAULT_SGLANG_BASE_URL,
         ProviderKind::Vllm => DEFAULT_VLLM_BASE_URL,
         ProviderKind::Ollama => DEFAULT_OLLAMA_BASE_URL,
+        ProviderKind::OllamaCloud => DEFAULT_OLLAMA_CLOUD_BASE_URL,
         ProviderKind::Huggingface => DEFAULT_HUGGINGFACE_BASE_URL,
         ProviderKind::Together => DEFAULT_TOGETHER_BASE_URL,
         ProviderKind::Qianfan => DEFAULT_QIANFAN_BASE_URL,
@@ -4379,6 +4418,7 @@ fn default_base_url_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Google => DEFAULT_GOOGLE_BASE_URL,
         ProviderKind::Antigravity => DEFAULT_ANTIGRAVITY_BASE_URL,
         ProviderKind::Telecomjs => DEFAULT_TELECOMJS_BASE_URL,
+        ProviderKind::Edenai => DEFAULT_EDENAI_BASE_URL,
         ProviderKind::ModelstudioTokenPlan => DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL,
         ProviderKind::ModelstudioTokenPlanAnthropic => MODELSTUDIO_TOKEN_PLAN_ANTHROPIC_BASE_URL,
         ProviderKind::ModelstudioCodingPlan => DEFAULT_MODELSTUDIO_CODING_PLAN_BASE_URL,
@@ -4659,6 +4699,15 @@ pub fn provider_base_url_is_official(provider: ProviderKind, base_url: &str) -> 
             xiaomi_mimo_base_url_uses_token_plan(base_url)
                 || xiaomi_mimo_base_url_is_pay_as_you_go(base_url)
         }
+        ProviderKind::Ollama => {
+            normalized == DEFAULT_OLLAMA_BASE_URL
+                || provider::is_exact_ollama_cloud_route(provider, base_url)
+        }
+        ProviderKind::OllamaCloud => provider::is_exact_ollama_cloud_route(provider, base_url),
+        ProviderKind::Edenai => matches!(
+            normalized.as_str(),
+            "https://api.edenai.run/v3" | "https://api.eu.edenai.run/v3"
+        ),
         // Custom routes have no Codewhale-owned official endpoint. The
         // descriptor URL is a schema placeholder, never a credential scope.
         ProviderKind::Custom => false,
@@ -4702,10 +4751,33 @@ fn should_skip_secret_store_for_provider(
         return false;
     }
 
-    matches!(
-        provider,
-        ProviderKind::Sglang | ProviderKind::Vllm | ProviderKind::Ollama
-    ) || base_url_uses_local_host(base_url)
+    matches!(provider, ProviderKind::Sglang | ProviderKind::Vllm)
+        || (provider == ProviderKind::Ollama
+            && !provider::is_exact_ollama_cloud_route(provider, base_url))
+        || base_url_uses_local_host(base_url)
+}
+
+/// Read the durable provider slot without allowing environment fallback to
+/// jump ahead of the bounded legacy slot. The old `ollama` slot is consulted
+/// only for the exact route tuple migrated above; selecting `ollama-cloud`
+/// directly never consumes a local provider credential.
+fn stored_api_key_for_provider(
+    secrets: &Secrets,
+    provider: ProviderKind,
+    legacy_ollama_cloud: bool,
+) -> Option<(String, SecretSource)> {
+    let mut slots = vec![provider.secret_store_slot()];
+    if provider == ProviderKind::OllamaCloud && legacy_ollama_cloud {
+        slots.push(ProviderKind::Ollama.secret_store_slot());
+    }
+    slots.into_iter().find_map(|slot| {
+        secrets
+            .get(slot)
+            .ok()
+            .flatten()
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| (value, SecretSource::Keyring))
+    })
 }
 
 fn env_api_key_for_provider(provider: ProviderKind) -> Option<String> {
@@ -6602,6 +6674,8 @@ struct EnvRuntimeOverrides {
     sglang_base_url: Option<String>,
     vllm_base_url: Option<String>,
     ollama_base_url: Option<String>,
+    ollama_cloud_base_url: Option<String>,
+    ollama_cloud_model: Option<String>,
     huggingface_base_url: Option<String>,
     huggingface_model: Option<String>,
     together_base_url: Option<String>,
@@ -6643,6 +6717,8 @@ struct EnvRuntimeOverrides {
     antigravity_model: Option<String>,
     telecomjs_base_url: Option<String>,
     telecomjs_model: Option<String>,
+    edenai_base_url: Option<String>,
+    edenai_model: Option<String>,
     modelstudio_token_plan_base_url: Option<String>,
     modelstudio_token_plan_model: Option<String>,
     modelstudio_coding_plan_base_url: Option<String>,
@@ -6817,6 +6893,12 @@ impl EnvRuntimeOverrides {
             ollama_base_url: std::env::var("OLLAMA_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            ollama_cloud_base_url: std::env::var("OLLAMA_CLOUD_BASE_URL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            ollama_cloud_model: std::env::var("OLLAMA_CLOUD_MODEL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
             huggingface_base_url: std::env::var("HUGGINGFACE_BASE_URL")
                 .or_else(|_| std::env::var("HF_BASE_URL"))
                 .ok()
@@ -6985,6 +7067,12 @@ impl EnvRuntimeOverrides {
             telecomjs_model: std::env::var("TELECOMJS_MODEL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            edenai_base_url: std::env::var("EDENAI_BASE_URL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            edenai_model: std::env::var("EDENAI_MODEL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
             modelstudio_token_plan_base_url: std::env::var("MODELSTUDIO_TOKEN_PLAN_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
@@ -7063,6 +7151,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::Sglang => self.sglang_base_url.clone(),
             ProviderKind::Vllm => self.vllm_base_url.clone(),
             ProviderKind::Ollama => self.ollama_base_url.clone(),
+            ProviderKind::OllamaCloud => self.ollama_cloud_base_url.clone(),
             ProviderKind::Huggingface => self.huggingface_base_url.clone(),
             ProviderKind::Together => self.together_base_url.clone(),
             ProviderKind::Qianfan => self.qianfan_base_url.clone(),
@@ -7084,6 +7173,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::Google => self.google_base_url.clone(),
             ProviderKind::Antigravity => self.antigravity_base_url.clone(),
             ProviderKind::Telecomjs => self.telecomjs_base_url.clone(),
+            ProviderKind::Edenai => self.edenai_base_url.clone(),
             ProviderKind::ModelstudioTokenPlan | ProviderKind::ModelstudioTokenPlanAnthropic => {
                 self.modelstudio_token_plan_base_url.clone()
             }
@@ -7130,12 +7220,14 @@ impl EnvRuntimeOverrides {
             ProviderKind::Google => self.google_model.clone(),
             ProviderKind::Antigravity => self.antigravity_model.clone(),
             ProviderKind::Telecomjs => self.telecomjs_model.clone(),
+            ProviderKind::Edenai => self.edenai_model.clone(),
             ProviderKind::ModelstudioTokenPlan | ProviderKind::ModelstudioTokenPlanAnthropic => {
                 self.modelstudio_token_plan_model.clone()
             }
             ProviderKind::ModelstudioCodingPlan | ProviderKind::ModelstudioCodingPlanAnthropic => {
                 self.modelstudio_coding_plan_model.clone()
             }
+            ProviderKind::OllamaCloud => self.ollama_cloud_model.clone(),
             _ => None,
         }?;
 
