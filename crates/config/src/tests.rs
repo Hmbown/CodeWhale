@@ -4811,9 +4811,9 @@ fn meta_model_api_scopes_both_documented_key_names_to_official_endpoint() {
 fn provider_metadata_registry_covers_every_provider_kind_once() {
     let providers = provider::all_providers();
     // Full registry keeps legacy dialect/plan kinds for provider_for_kind.
-    assert_eq!(providers.len(), 45);
+    assert_eq!(providers.len(), 46);
     // Catalog surface is one identity per vendor (no dual-wire / plan rows).
-    assert_eq!(ProviderKind::ALL.len(), 40);
+    assert_eq!(ProviderKind::ALL.len(), 41);
     assert!(ProviderKind::ALL.len() < providers.len());
 
     let mut ids = std::collections::BTreeSet::new();

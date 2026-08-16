@@ -1162,6 +1162,7 @@ impl Secrets {
 /// | `meta` / `muse-spark` | `META_MODEL_API_KEY`, `MODEL_API_KEY` |
 /// | `xai` / `grok` | `XAI_API_KEY` |
 /// | `telecomjs` / `tokenhub` | `TELECOMJS_API_KEY` |
+/// | `edenai` / `eden-ai` | `EDENAI_API_KEY` |
 ///
 /// Returns `None` if the provider is not recognised or none of its
 /// candidate environment variables are set to a non-empty value.
@@ -1217,6 +1218,7 @@ pub fn env_for(name: &str) -> Option<String> {
         "telecomjs" | "telecom-js" | "telecom_js" | "telecomjs-cn" | "tokenhub" => {
             &["TELECOMJS_API_KEY"]
         }
+        "edenai" | "eden-ai" | "eden_ai" => &["EDENAI_API_KEY"],
         // One Alibaba Cloud Model Studio account authenticates every plan /
         // dialect variant; all four names share one env convention.
         "modelstudio-token-plan"

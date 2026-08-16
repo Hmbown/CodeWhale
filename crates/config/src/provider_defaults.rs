@@ -178,6 +178,9 @@ pub(crate) const DEFAULT_MISTRAL_BASE_URL: &str = "https://api.mistral.ai/v1";
 // TelecomJS (Jiangsu Telecom TokenHub) defaults
 pub(crate) const DEFAULT_TELECOMJS_MODEL: &str = "deepseek-v4-pro";
 pub(crate) const DEFAULT_TELECOMJS_BASE_URL: &str = "https://aigw.telecomjs.com/v1";
+// Eden AI (OpenAI-compatible AI gateway) defaults
+pub(crate) const DEFAULT_EDENAI_MODEL: &str = "deepseek/deepseek-v4-pro";
+pub(crate) const DEFAULT_EDENAI_BASE_URL: &str = "https://api.edenai.run/v3";
 // Alibaba Cloud Model Studio (DashScope) defaults
 // Token Plan (Personal / Team): shared endpoint, OpenAI + Anthropic dialects
 pub(crate) const DEFAULT_MODELSTUDIO_TOKEN_PLAN_MODEL: &str = "qwen3.8-max";

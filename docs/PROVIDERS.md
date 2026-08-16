@@ -31,7 +31,7 @@ Sources to keep in sync:
 
 ## Provider Selection
 
-The canonical provider IDs are the 38 entries of `ProviderKind::ALL`
+The canonical provider IDs are the 39 entries of `ProviderKind::ALL`
 (`crates/config/src/provider_kind.rs:198-234`), in that order:
 
 `deepseek`, `nvidia-nim`, `openai`, `atlascloud`, `wanjie-ark`, `volcengine`,
@@ -40,7 +40,7 @@ The canonical provider IDs are the 38 entries of `ProviderKind::ALL`
 `together`, `qianfan`, `openai-codex`, `anthropic`, `openmodel`, `zai`,
 `stepfun`, `minimax`, `deepinfra`, `sakana`, `longcat`, `opencode-go`,
 `opencode-zen`, `meta`, `xai`, `mistral`, `telecomjs`, `modelstudio-token-plan`,
-and `custom`.
+`edenai`, and `custom`.
 
 `deepseek-anthropic` is *not* on this list — it is a wire dialect of
 `deepseek`, reached with `wire = "anthropic"`, not a separate route to select.
@@ -133,6 +133,7 @@ the listed provider env vars.
 | `mistral` | `[providers.mistral]` | OpenAI Chat Completions | `MISTRAL_API_KEY` |
 | `google` | `[providers.google]` | OpenAI Chat Completions (official Gemini OpenAI-compat route; captures and replays thought signatures on tool calls) | `GOOGLE_API_KEY`, `GEMINI_API_KEY` |
 | `antigravity` | `[providers.antigravity]` | none — requests fail closed; credential import only | `ANTIGRAVITY_API_KEY` (key plane); `AGY_ADC_AUTH` (process env) |
+| `edenai` | `[providers.edenai]` | OpenAI Chat Completions | `EDENAI_API_KEY` |
 | `modelstudio-token-plan` | `[providers.modelstudio_token_plan]` | OpenAI Chat Completions | `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` |
 | `modelstudio-token-plan-anthropic` | `[providers.modelstudio_token_plan_anthropic]` | Anthropic Messages | `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` |
 | `modelstudio-coding-plan` | `[providers.modelstudio_coding_plan]` | OpenAI Chat Completions | `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` |
@@ -457,6 +458,7 @@ configuration path instead of guessing a vendor page.
 | `mistral` | [Mistral Console (la Plateforme)](https://console.mistral.ai/api-keys) |
 | `google` | [Google AI Studio](https://aistudio.google.com/apikey) — Codewhale uses the official Gemini OpenAI-compatible endpoint and never reads Google OAuth files. |
 | `antigravity` | Sign in with the official `agy` CLI (1.1.13). Codewhale can read that login's OAuth token read-only from the exact pinned `state.vscdb` after `codewhale auth external-consent`; it never writes or refreshes the file. An `ANTIGRAVITY_API_KEY` or the process's `AGY_ADC_AUTH` wins over the file. The cloud-code wire protocol is not implemented: requests fail closed with an actionable message — use `google` for Gemini models. |
+| `edenai` | [Eden AI API keys](https://app.edenai.run/settings/api-keys) |
 | `modelstudio-token-plan`, `modelstudio-token-plan-anthropic`, `modelstudio-coding-plan`, `modelstudio-coding-plan-anthropic` | [Alibaba Cloud Model Studio (Bailian console)](https://bailian.console.aliyun.com/) — create or copy a Model Studio API key. |
 | `custom` | Set the named provider's `base_url` and `api_key_env` or `api_key`; no canonical vendor credential page exists. |
 
@@ -548,6 +550,7 @@ Kimi remains API-key-only; external consent for Kimi is rejected.
 | `meta` | `[providers.meta]` | `META_MODEL_API_KEY`, `MODEL_API_KEY` | `META_MODEL_API_BASE_URL`, `MODEL_API_BASE_URL`; default `https://api.meta.ai/v1` | `muse-spark-1.2` (default) | [Meta Model API](https://developer.meta.com/ai/resources/blog/build-with-muse-spark/) public-preview route using OpenAI-compatible Chat Completions. Muse Spark 1.2 keeps its wire ID, tool support, 1M context, 32K output metadata, and `none` through `xhigh` reasoning effort. `META_MODEL_API_MODEL` and `MODEL_API_MODEL` are accepted. Provider aliases: `meta-ai`, `meta_model_api`, `muse`, `muse-spark`. |
 | `telecomjs` | `[providers.telecomjs]` | `TELECOMJS_API_KEY` | `TELECOMJS_BASE_URL`; default `https://aigw.telecomjs.com/v1` | `deepseek-v4-pro` conservative fallback; authenticated `/models` rows when a key is configured | TelecomJS TokenHub OpenAI-compatible Chat Completions route. Live catalogs are isolated by provider and key fingerprint, stale rows survive transient refresh failures, and unsupported reasoning request fields are omitted. `TELECOMJS_MODEL` is accepted. Provider aliases: `telecom-js`, `telecom_js`, `telecomjs-cn`, `tokenhub`. |
 | `mistral` | `[providers.mistral]` | `MISTRAL_API_KEY` | `MISTRAL_BASE_URL`; default `https://api.mistral.ai/v1` | `mistral-code-latest` (default; `codestral-latest` accepted as alias), `mistral-medium-latest` (aliases: `mistral-medium-3-5`), `mistral-small-latest` (aliases: `mistral-small-2603`), `mistral-large-latest` | Mistral AI (la Plateforme) OpenAI-compatible Chat route. On the documented first-party HTTPS `/v1` hosts, Medium and Small send adjustable `reasoning_effort` (`none` or `high` only), parse Mistral's polymorphic thinking/text blocks, and replay stored thinking in that same wire shape. Deprecated native Magistral IDs remain explicit-configuration compatibility routes: they are always-reasoning and never receive the adjustable effort field. Code and Large are non-reasoning. A custom `MISTRAL_BASE_URL` keeps generic Chat semantics unless it is one of the documented first-party hosts. `MISTRAL_MODEL` is accepted. Provider aliases: `mistral-ai`, `mistralai`, `la-plateforme`. |
+| `edenai` | `[providers.edenai]` | `EDENAI_API_KEY` | `EDENAI_BASE_URL`; default `https://api.edenai.run/v3` | `deepseek/deepseek-v4-pro` (default); any `provider/model` namespaced id from the Eden AI catalog | Eden AI OpenAI-compatible aggregation gateway. Serves a broad upstream catalog under `provider/model` wire ids over the OpenAI Chat Completions protocol. `EDENAI_MODEL` is accepted. Provider aliases: `eden-ai`, `eden_ai`. |
 | `xai` | `[providers.xai]` | `XAI_API_KEY`, Codewhale-owned device OAuth, or explicit read-only Grok CLI consent | `XAI_BASE_URL`; default `https://api.x.ai/v1` | `grok-4.6` (default), `grok-4.5`, `grok-4.3`, `grok-build`, `grok-composer-2.5-fast`, `grok-4.20-0309-reasoning`, `grok-4.20-0309-non-reasoning` | xAI/Grok OpenAI-compatible Chat Completions route. Grok 4.6 has a 500K context window, text/image input, function calls, structured output, server-side web search, and `low`/`medium`/`high`/`xhigh` reasoning (default `high`). Its standard rates double when the prompt reaches 200K tokens. There is no documented `latest`/`fast` alias and no published numeric output limit. **API-key** (default): Bearer token from console.x.ai via `XAI_API_KEY` / keyring / `api_key`. **OAuth**: `codewhale auth xai-device` uses SSH-friendly device login and Codewhale-owned storage, which may refresh itself. Existing Grok CLI credentials require `codewhale auth external-consent --provider xai --mode read-only`; the granted external file is never refreshed or rewritten. OAuth may return HTTP 403 on some SuperGrok tiers — keep API-key as the reliable fallback. `XAI_MODEL` is accepted. Provider aliases: `x-ai`, `x_ai`, `grok`. |
 | `modelstudio-token-plan` | `[providers.modelstudio_token_plan]` | `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` | `MODELSTUDIO_TOKEN_PLAN_BASE_URL`; default `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` | `qwen3.8-max` (default), `qwen3.8-max-preview`, `qwen3.7-plus`, `qwen3.7-max`, `qwen3.6-flash`, `deepseek-v4-pro`, `deepseek-v4-flash-0731`, `glm-5.2` | Alibaba Cloud Model Studio Token Plan OpenAI-compatible Chat Completions route. Token Plan Personal and Team share this endpoint. All listed models are reasoning-capable text/coding models. DeepSeek and GLM entries are provider-scoped and do not collide with first-party routes. `MODELSTUDIO_TOKEN_PLAN_MODEL` is accepted. Provider aliases: `modelstudio-token-plan`, `alibaba-token-plan`, `dashscope-token-plan`. |
 | `modelstudio-token-plan-anthropic` | `[providers.modelstudio_token_plan_anthropic]` | `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` | default `https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic` | Same model catalog as `modelstudio-token-plan` | Token Plan Anthropic-compatible Messages route (`/apps/anthropic`). Same API key as the OpenAI dialect. Provider aliases: `modelstudio-token-plan-anthropic`, `alibaba-token-plan-anthropic`. |

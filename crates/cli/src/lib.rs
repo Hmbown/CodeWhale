@@ -110,6 +110,8 @@ enum ProviderArg {
     Mistral,
     /// Google Gemini (official OpenAI-compatible endpoint).
     Google,
+    #[value(alias = "eden-ai", alias = "eden_ai")]
+    Edenai,
 }
 
 impl From<ProviderArg> for ProviderKind {
@@ -151,6 +153,7 @@ impl From<ProviderArg> for ProviderKind {
             ProviderArg::Xai => ProviderKind::Xai,
             ProviderArg::Mistral => ProviderKind::Mistral,
             ProviderArg::Google => ProviderKind::Google,
+            ProviderArg::Edenai => ProviderKind::Edenai,
         }
     }
 }
@@ -7849,8 +7852,8 @@ mod tests {
             .map(|provider| provider.kind())
             .collect();
         // Full registry keeps legacy dialect/plan kinds; ALL is the catalog surface.
-        assert_eq!(registry_kinds.len(), 45);
-        assert_eq!(ProviderKind::ALL.len(), 40);
+        assert_eq!(registry_kinds.len(), 46);
+        assert_eq!(ProviderKind::ALL.len(), 41);
         for kind in ProviderKind::ALL {
             assert!(
                 registry_kinds.contains(&kind),

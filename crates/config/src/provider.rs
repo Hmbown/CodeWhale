@@ -9,9 +9,10 @@ use super::{
     DEFAULT_ARCEE_MODEL, DEFAULT_ATLASCLOUD_BASE_URL, DEFAULT_ATLASCLOUD_MODEL,
     DEFAULT_DEEPINFRA_BASE_URL, DEFAULT_DEEPINFRA_MODEL, DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL,
     DEFAULT_DEEPSEEK_ANTHROPIC_MODEL, DEFAULT_DEEPSEEK_BASE_URL, DEFAULT_DEEPSEEK_MODEL,
-    DEFAULT_FIREWORKS_BASE_URL, DEFAULT_FIREWORKS_MODEL, DEFAULT_GOOGLE_BASE_URL,
-    DEFAULT_GOOGLE_MODEL, DEFAULT_HUGGINGFACE_BASE_URL, DEFAULT_HUGGINGFACE_MODEL,
-    DEFAULT_LONGCAT_BASE_URL, DEFAULT_LONGCAT_MODEL, DEFAULT_META_BASE_URL, DEFAULT_META_MODEL,
+    DEFAULT_EDENAI_BASE_URL, DEFAULT_EDENAI_MODEL, DEFAULT_FIREWORKS_BASE_URL,
+    DEFAULT_FIREWORKS_MODEL, DEFAULT_GOOGLE_BASE_URL, DEFAULT_GOOGLE_MODEL,
+    DEFAULT_HUGGINGFACE_BASE_URL, DEFAULT_HUGGINGFACE_MODEL, DEFAULT_LONGCAT_BASE_URL,
+    DEFAULT_LONGCAT_MODEL, DEFAULT_META_BASE_URL, DEFAULT_META_MODEL,
     DEFAULT_MINIMAX_ANTHROPIC_BASE_URL, DEFAULT_MINIMAX_BASE_URL, DEFAULT_MINIMAX_MODEL,
     DEFAULT_MISTRAL_BASE_URL, DEFAULT_MISTRAL_MODEL, DEFAULT_MODELSTUDIO_CODING_PLAN_BASE_URL,
     DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL, DEFAULT_MODELSTUDIO_TOKEN_PLAN_MODEL,
@@ -411,6 +412,12 @@ pub const fn credential_help(kind: ProviderKind) -> CredentialHelp {
             credential_url: Some("https://aigw.telecomjs.com/"),
             docs_url: None,
             guidance: "Create a TelecomJS TokenHub API key, then use the provider's live model catalog to discover the models available to that key.",
+        },
+        ProviderKind::Edenai => CredentialHelp {
+            acquisition: ApiKey,
+            credential_url: Some("https://app.edenai.run/settings/api-keys"),
+            docs_url: Some("https://www.edenai.co/docs"),
+            guidance: "Create an Eden AI API key from the Eden AI dashboard, then select models by their provider/model namespaced id.",
         },
         ProviderKind::ModelstudioTokenPlan
         | ProviderKind::ModelstudioTokenPlanAnthropic
@@ -1326,6 +1333,17 @@ provider!(
     "telecomjs",
     aliases: ["telecom-js", "telecom_js", "telecomjs-cn", "tokenhub"]
 );
+provider!(
+    Edenai,
+    Edenai,
+    "edenai",
+    "Eden AI",
+    DEFAULT_EDENAI_BASE_URL,
+    DEFAULT_EDENAI_MODEL,
+    ["EDENAI_API_KEY"],
+    "edenai",
+    aliases: ["eden-ai", "eden_ai"]
+);
 
 /// Alibaba Cloud Model Studio — Token Plan (OpenAI-compatible Chat Completions).
 ///
@@ -1610,6 +1628,7 @@ static XAI: Xai = Xai;
 static MISTRAL: Mistral = Mistral;
 static ANTIGRAVITY: Antigravity = Antigravity;
 static TELECOMJS: Telecomjs = Telecomjs;
+static EDENAI: Edenai = Edenai;
 static MODELSTUDIO_TOKEN_PLAN: ModelstudioTokenPlan = ModelstudioTokenPlan;
 static MODELSTUDIO_TOKEN_PLAN_ANTHROPIC: ModelstudioTokenPlanAnthropic =
     ModelstudioTokenPlanAnthropic;
@@ -1618,7 +1637,7 @@ static MODELSTUDIO_CODING_PLAN_ANTHROPIC: ModelstudioCodingPlanAnthropic =
     ModelstudioCodingPlanAnthropic;
 static CUSTOM: Custom = Custom;
 
-static PROVIDER_REGISTRY: [&dyn Provider; 45] = [
+static PROVIDER_REGISTRY: [&dyn Provider; 46] = [
     &DEEPSEEK,
     &DEEPSEEK_ANTHROPIC,
     &NVIDIA_NIM,
@@ -1657,6 +1676,7 @@ static PROVIDER_REGISTRY: [&dyn Provider; 45] = [
     &XAI,
     &MISTRAL,
     &TELECOMJS,
+    &EDENAI,
     &MODELSTUDIO_TOKEN_PLAN,
     &MODELSTUDIO_TOKEN_PLAN_ANTHROPIC,
     &MODELSTUDIO_CODING_PLAN,

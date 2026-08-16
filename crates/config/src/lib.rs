@@ -441,6 +441,14 @@ pub struct ProvidersToml {
         alias = "tokenhub"
     )]
     pub telecomjs: ProviderConfigToml,
+    /// Eden AI — OpenAI-compatible AI gateway (aggregator).
+    #[serde(
+        default,
+        skip_serializing_if = "ProviderConfigToml::is_empty",
+        alias = "eden-ai",
+        alias = "eden_ai"
+    )]
+    pub edenai: ProviderConfigToml,
     /// Alibaba Cloud Model Studio — Token Plan (OpenAI-compatible endpoint).
     #[serde(
         default,
@@ -663,6 +671,7 @@ impl ProvidersToml {
             ProviderKind::Google => &self.google,
             ProviderKind::Antigravity => &self.antigravity,
             ProviderKind::Telecomjs => &self.telecomjs,
+            ProviderKind::Edenai => &self.edenai,
             ProviderKind::ModelstudioTokenPlan => &self.modelstudio_token_plan,
             ProviderKind::ModelstudioTokenPlanAnthropic => &self.modelstudio_token_plan_anthropic,
             ProviderKind::ModelstudioCodingPlan => &self.modelstudio_coding_plan,
@@ -713,6 +722,7 @@ impl ProvidersToml {
             ProviderKind::Google => &mut self.google,
             ProviderKind::Antigravity => &mut self.antigravity,
             ProviderKind::Telecomjs => &mut self.telecomjs,
+            ProviderKind::Edenai => &mut self.edenai,
             ProviderKind::ModelstudioTokenPlan => &mut self.modelstudio_token_plan,
             ProviderKind::ModelstudioTokenPlanAnthropic => {
                 &mut self.modelstudio_token_plan_anthropic
@@ -3235,6 +3245,7 @@ impl ConfigToml {
                 ProviderKind::Google => DEFAULT_GOOGLE_BASE_URL.to_string(),
                 ProviderKind::Antigravity => DEFAULT_ANTIGRAVITY_BASE_URL.to_string(),
                 ProviderKind::Telecomjs => DEFAULT_TELECOMJS_BASE_URL.to_string(),
+                ProviderKind::Edenai => DEFAULT_EDENAI_BASE_URL.to_string(),
                 ProviderKind::ModelstudioTokenPlan
                 | ProviderKind::ModelstudioTokenPlanAnthropic
                 | ProviderKind::ModelstudioCodingPlan
@@ -4328,6 +4339,7 @@ fn default_model_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Google => DEFAULT_GOOGLE_MODEL,
         ProviderKind::Antigravity => DEFAULT_ANTIGRAVITY_MODEL,
         ProviderKind::Telecomjs => DEFAULT_TELECOMJS_MODEL,
+        ProviderKind::Edenai => DEFAULT_EDENAI_MODEL,
         ProviderKind::ModelstudioTokenPlan
         | ProviderKind::ModelstudioTokenPlanAnthropic
         | ProviderKind::ModelstudioCodingPlan
@@ -4379,6 +4391,7 @@ fn default_base_url_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Google => DEFAULT_GOOGLE_BASE_URL,
         ProviderKind::Antigravity => DEFAULT_ANTIGRAVITY_BASE_URL,
         ProviderKind::Telecomjs => DEFAULT_TELECOMJS_BASE_URL,
+        ProviderKind::Edenai => DEFAULT_EDENAI_BASE_URL,
         ProviderKind::ModelstudioTokenPlan => DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL,
         ProviderKind::ModelstudioTokenPlanAnthropic => MODELSTUDIO_TOKEN_PLAN_ANTHROPIC_BASE_URL,
         ProviderKind::ModelstudioCodingPlan => DEFAULT_MODELSTUDIO_CODING_PLAN_BASE_URL,
@@ -6643,6 +6656,8 @@ struct EnvRuntimeOverrides {
     antigravity_model: Option<String>,
     telecomjs_base_url: Option<String>,
     telecomjs_model: Option<String>,
+    edenai_base_url: Option<String>,
+    edenai_model: Option<String>,
     modelstudio_token_plan_base_url: Option<String>,
     modelstudio_token_plan_model: Option<String>,
     modelstudio_coding_plan_base_url: Option<String>,
@@ -6985,6 +7000,12 @@ impl EnvRuntimeOverrides {
             telecomjs_model: std::env::var("TELECOMJS_MODEL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            edenai_base_url: std::env::var("EDENAI_BASE_URL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            edenai_model: std::env::var("EDENAI_MODEL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
             modelstudio_token_plan_base_url: std::env::var("MODELSTUDIO_TOKEN_PLAN_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
@@ -7084,6 +7105,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::Google => self.google_base_url.clone(),
             ProviderKind::Antigravity => self.antigravity_base_url.clone(),
             ProviderKind::Telecomjs => self.telecomjs_base_url.clone(),
+            ProviderKind::Edenai => self.edenai_base_url.clone(),
             ProviderKind::ModelstudioTokenPlan | ProviderKind::ModelstudioTokenPlanAnthropic => {
                 self.modelstudio_token_plan_base_url.clone()
             }
@@ -7130,6 +7152,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::Google => self.google_model.clone(),
             ProviderKind::Antigravity => self.antigravity_model.clone(),
             ProviderKind::Telecomjs => self.telecomjs_model.clone(),
+            ProviderKind::Edenai => self.edenai_model.clone(),
             ProviderKind::ModelstudioTokenPlan | ProviderKind::ModelstudioTokenPlanAnthropic => {
                 self.modelstudio_token_plan_model.clone()
             }

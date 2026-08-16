@@ -317,6 +317,7 @@ fn provider_base_url_table_key(provider: ApiProvider) -> anyhow::Result<&'static
         ApiProvider::Google => Ok("google"),
         ApiProvider::Antigravity => Ok("antigravity"),
         ApiProvider::Telecomjs => Ok("telecomjs"),
+        ApiProvider::Edenai => Ok("edenai"),
         ApiProvider::ModelstudioTokenPlan => Ok("modelstudio_token_plan"),
         ApiProvider::ModelstudioTokenPlanAnthropic => Ok("modelstudio_token_plan_anthropic"),
         ApiProvider::ModelstudioCodingPlan => Ok("modelstudio_coding_plan"),
