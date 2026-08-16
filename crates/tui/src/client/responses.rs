@@ -256,7 +256,15 @@ impl DeepSeekClient {
                 buffer.extend_from_slice(&chunk);
 
                 // Process complete SSE lines.
-                while let Some(line) = super::take_sse_line(&mut buffer) {
+                loop {
+                    let line = match super::take_sse_line(&mut buffer) {
+                        Ok(Some(line)) => line,
+                        Ok(None) => break,
+                        Err(err) => {
+                            yield Err(anyhow::anyhow!("{err}"));
+                            return;
+                        }
+                    };
 
                     if line.is_empty() || line.starts_with(':') {
                         continue;
@@ -833,7 +841,7 @@ fn codex_responses_reasoning_effort(raw: &str) -> Option<&'static str> {
         "minimal" => Some("low"),
         "low" => Some("low"),
         "high" => Some("high"),
-        "xhigh" | "max" | "maximum" | "ultracode" => Some("xhigh"),
+        "xhigh" | "max" | "maximum" | "ultra" | "ultracode" => Some("xhigh"),
         _ => Some("medium"),
     }
 }

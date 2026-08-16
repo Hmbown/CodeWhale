@@ -29,30 +29,27 @@ const SKILL_SCAN_TIMEOUT: Duration = Duration::from_secs(15);
 const COMPOSER_READY_TEXT: &str = "Write a task";
 // Keep this geometry oracle in step with `tui::ui::frame::session_shell_area`.
 // Integration tests cannot import that private renderer helper, so the PTY
-// contract repeats only its three public-facing constants.
-const SESSION_SHELL_FLUID_WIDTH: u16 = 112;
-const SESSION_SHELL_GUTTER_STEP: u16 = 12;
-const SESSION_SHELL_MAX_SIDE_GUTTER: u16 = 16;
-
-fn expected_session_shell_side_gutter(cols: u16) -> u16 {
-    (cols.saturating_sub(SESSION_SHELL_FLUID_WIDTH) / SESSION_SHELL_GUTTER_STEP)
-        .min(SESSION_SHELL_MAX_SIDE_GUTTER)
+// contract repeats the identity: full host width (#5322).
+fn expected_session_shell_side_gutter(_cols: u16) -> u16 {
+    0
 }
 
 fn expected_session_shell_width(cols: u16) -> u16 {
-    cols.saturating_sub(expected_session_shell_side_gutter(cols).saturating_mul(2))
+    cols
 }
 
 #[test]
-fn pty_geometry_oracle_keeps_wide_canvas_above_the_release_floor() {
-    for (cols, expected_gutter) in [(140, 2), (200, 7), (240, 10)] {
-        let gutter = expected_session_shell_side_gutter(cols);
-        let width = expected_session_shell_width(cols);
-        assert_eq!(gutter, expected_gutter, "{cols} columns");
-        assert!(
-            u32::from(width) * 100 >= u32::from(cols) * 85,
-            "{cols} columns left only {}% usable",
-            u32::from(width) * 100 / u32::from(cols)
+fn pty_geometry_oracle_fills_the_host_terminal_width() {
+    for cols in [80u16, 112, 140, 160, 200, 240, 400] {
+        assert_eq!(
+            expected_session_shell_side_gutter(cols),
+            0,
+            "{cols} columns"
+        );
+        assert_eq!(
+            expected_session_shell_width(cols),
+            cols,
+            "{cols} columns must remain fully usable"
         );
     }
 }
@@ -152,6 +149,61 @@ fn wait_for_native_telemetry_notice(h: &mut Harness, home: &Path) -> anyhow::Res
         !home.join(".codewhale/telemetry/state.json").exists(),
         "telemetry armed before the disclosure was answered"
     );
+    Ok(())
+}
+
+/// `/goal` and `/workflow` control verbs are host answers: usage, status,
+/// settings, and cancel never spend a model turn. This drives the real binary
+/// against a refusing provider so any accidental model round-trip shows up as
+/// a provider error instead of the expected receipt.
+#[test]
+fn goal_and_workflow_control_verbs_answer_from_the_host() -> anyhow::Result<()> {
+    let _guard = qa_pty_test_lock();
+    let (ws, mut h) = boot_minimal()?;
+
+    // No conversation yet: bare /goal is usage, not a model question.
+    h.send(keys::key::text("/goal"))?;
+    h.wait_for_text("/goal", KEY_TIMEOUT)?;
+    std::thread::sleep(Duration::from_millis(180));
+    h.send(keys::key::enter())?;
+    h.wait_for_text("/goal <objective>", KEY_TIMEOUT)?;
+    h.wait_for_text("/goal resume", KEY_TIMEOUT)?;
+
+    // Workflow status reads the workspace journal directly.
+    h.send(keys::key::text("/workflow status"))?;
+    h.wait_for_text("/workflow status", KEY_TIMEOUT)?;
+    std::thread::sleep(Duration::from_millis(180));
+    h.send(keys::key::enter())?;
+    h.wait_for_text("No workflow runs in this workspace yet", KEY_TIMEOUT)?;
+    assert!(
+        !ws.workspace()
+            .join(".codewhale/workflow-runs.jsonl")
+            .exists(),
+        "status must not create the run journal"
+    );
+
+    // Settings explain the effective [workflow] table without a model turn.
+    h.send(keys::key::text("/workflow settings"))?;
+    h.wait_for_text("/workflow settings", KEY_TIMEOUT)?;
+    std::thread::sleep(Duration::from_millis(180));
+    h.send(keys::key::enter())?;
+    h.wait_for_text("require_approval_for_writes", KEY_TIMEOUT)?;
+    h.wait_for_text("max_continuations", KEY_TIMEOUT)?;
+
+    // Cancel with nothing running is a plain answer.
+    h.send(keys::key::text("/workflow cancel"))?;
+    h.wait_for_text("/workflow cancel", KEY_TIMEOUT)?;
+    std::thread::sleep(Duration::from_millis(180));
+    h.send(keys::key::enter())?;
+    h.wait_for_text("No workflow is running.", KEY_TIMEOUT)?;
+
+    let frame = h.frame();
+    assert!(
+        !frame.contains("Model error"),
+        "no control verb may reach the provider:\n{}",
+        frame.debug_dump()
+    );
+    let _ = h.shutdown();
     Ok(())
 }
 
@@ -452,11 +504,14 @@ fn assert_real_pty_frame_geometry(frame: &crate::qa_harness::Frame, cols: u16, r
 
 fn assert_empty_state_hierarchy(frame: &crate::qa_harness::Frame, ascii_safe: bool) {
     let dump = frame.debug_dump();
-    let context = visible_row_with_text(frame, "codewhale").expect("empty-state context row");
+    let brand = visible_row_with_text(frame, "Codewhale").expect("empty-state brand row");
+    let context = visible_row_with_text(frame, "mcp ")
+        .or_else(|| visible_row_with_text(frame, "no git"))
+        .expect("empty-state workspace/branch context row");
     let composer = visible_row_with_text(frame, COMPOSER_READY_TEXT).expect("composer row");
     assert!(
-        context < composer,
-        "empty-state facts must precede the composer:\n{dump}"
+        brand < context && context < composer,
+        "brand and workspace facts must precede the composer in order:\n{dump}"
     );
     if let Some(fleet) = visible_row_with_text(frame, "Fleet ready") {
         assert!(
@@ -476,7 +531,7 @@ fn assert_empty_state_hierarchy(frame: &crate::qa_harness::Frame, ascii_safe: bo
         );
     }
 
-    let whale_row = (2..context).find(|&row| {
+    let whale_row = (2..brand).find(|&row| {
         let text = frame.row(row);
         if ascii_safe {
             text.chars().filter(|ch| *ch == '#').count() >= 8
@@ -503,8 +558,8 @@ fn assert_empty_state_hierarchy(frame: &crate::qa_harness::Frame, ascii_safe: bo
     }
     if let Some(row) = whale_row {
         assert!(
-            row < context,
-            "idle whale must yield before functional empty-state facts:\n{dump}"
+            row < brand,
+            "idle whale must yield before the brand and functional facts:\n{dump}"
         );
     }
 }
@@ -625,7 +680,7 @@ fn v091_real_pty_visual_matrix_preserves_control_grammar() -> anyhow::Result<()>
             .seal_home(ws.home())
             .env("CODEWHALE_HOME", codewhale_home.to_string_lossy())
             .env(
-                "DEEPSEEK_CONFIG_PATH",
+                "CODEWHALE_CONFIG_PATH",
                 codewhale_home.join("config.toml").to_string_lossy(),
             )
             .env("CODEX_HOME", codex_home.to_string_lossy())
@@ -2158,12 +2213,13 @@ fn legacy_work_ctrl_t_save_export_and_restart_are_consistent() -> anyhow::Result
             .seal_home(ws.home())
             .env("CODEWHALE_HOME", codewhale_home.to_string_lossy())
             .env(
-                "DEEPSEEK_CONFIG_PATH",
+                "CODEWHALE_CONFIG_PATH",
                 codewhale_home.join("config.toml").to_string_lossy(),
             )
             .env("CODEX_HOME", codex_home.to_string_lossy())
             .env("DEEPSEEK_API_KEY", "ci-test-key-not-real")
             .env("DEEPSEEK_BASE_URL", "http://127.0.0.1:1")
+            .env("CODEWHALE_DISABLE_MODELS_DEV_FETCH", "1")
             .env("NO_ANIMATIONS", "1")
             .env("RUST_LOG", "warn")
             .args([
@@ -2194,13 +2250,25 @@ fn legacy_work_ctrl_t_save_export_and_restart_are_consistent() -> anyhow::Result
         "{}",
         h.frame().debug_dump()
     );
+    // Pin the live starting tier before cycling. Auto-model startup used to
+    // hide a configured `low` as the word `auto`; the receipt below is only
+    // meaningful if this frame already shows the configured DeepSeek tier.
+    assert!(
+        h.frame().row(0).contains(" · low "),
+        "configured low effort missing from narrow header before Ctrl+T:\n{}",
+        h.frame().debug_dump()
+    );
 
-    h.send(b"\x14")?;
-    h.wait_for_text("Reasoning effort: max", KEY_TIMEOUT)?;
+    // Pinning Models.dev refresh above keeps this fixture on the bundled
+    // DeepSeek ladder: auto → off → low → high → max. One Ctrl+T from the
+    // configured `low` must land on `high`, not the retired off/high/max
+    // shortcut that jumped straight to max.
+    h.send(keys::key::ctrl('t'))?;
+    h.wait_for_text("Reasoning effort: high", KEY_TIMEOUT)?;
     h.wait_for_idle(Duration::from_millis(150), Duration::from_secs(2))?;
     let cycled = h.frame();
     assert!(
-        cycled.row(0).contains(" · max ") && cycled.row(0).contains("Full Access"),
+        cycled.row(0).contains(" · high ") && cycled.row(0).contains("Full Access"),
         "Ctrl+T effort missing from narrow header:\n{}",
         cycled.debug_dump()
     );
@@ -2255,8 +2323,8 @@ fn legacy_work_ctrl_t_save_export_and_restart_are_consistent() -> anyhow::Result
         .and_then(|activities| activities.last())
         .expect("Ctrl+T Work activity");
     assert_eq!(activity["kind"], "reasoning_effort_changed");
-    assert_eq!(activity["requested"], "max");
-    assert_eq!(activity["effective"], "max");
+    assert_eq!(activity["requested"], "high");
+    assert_eq!(activity["effective"], "high");
     assert_eq!(activity["provider"], "deepseek");
     let receipt = activity.as_object().expect("typed activity object");
     for forbidden in ["text", "content", "reasoning", "reasoning_text"] {
@@ -2280,10 +2348,10 @@ fn legacy_work_ctrl_t_save_export_and_restart_are_consistent() -> anyhow::Result
     // The Ctrl+T selection above is the user's last explicit choice, so it is
     // the startup default the next launch must come up with — before any
     // session is loaded. Asserting it here separates the two mechanisms that
-    // could otherwise both explain a `max` header after `/load`: a persisted
+    // could otherwise both explain a `high` header after `/load`: a persisted
     // startup default, or session-restored state.
     assert!(
-        restored.frame().row(0).contains(" · max "),
+        restored.frame().row(0).contains(" · high "),
         "fresh launch lost the persisted effort selection:\n{}",
         restored.frame().debug_dump()
     );
@@ -2305,7 +2373,7 @@ fn legacy_work_ctrl_t_save_export_and_restart_are_consistent() -> anyhow::Result
         frame.debug_dump()
     );
     assert!(
-        frame.row(0).contains(" · max ") && frame.row(0).contains("Full Access"),
+        frame.row(0).contains(" · high ") && frame.row(0).contains("Full Access"),
         "restart lost narrow effort/permission truth:\n{}",
         frame.debug_dump()
     );
@@ -3233,6 +3301,23 @@ fn work_surface_file_mutation_modes_are_truthful_in_real_pty_frames() -> anyhow:
                 |frame| frame.contains("tool issue") && frame.contains("guardian unavailable"),
                 Duration::from_secs(10),
             )?;
+            // Auto-Review never prompted, so the transcript must carry the
+            // one-line receipt for the decision the person did not see.
+            h.wait_for_text("could not review 'File'", Duration::from_secs(10))?;
+            assert!(
+                h.frame().contains("denied, fail closed"),
+                "Auto-Review guardian receipt missing:\n{}",
+                h.frame().debug_dump()
+            );
+            // Optional evidence export for release notes / design docs.
+            if let Ok(dir) = std::env::var("CODEWHALE_PTY_FRAME_DIR") {
+                let _ = std::fs::create_dir_all(&dir);
+                let _ = std::fs::write(
+                    std::path::Path::new(&dir)
+                        .join(format!("auto-review-guardian-receipt-{cols}x{rows}.txt")),
+                    h.frame().debug_dump(),
+                );
+            }
         }
         h.wait_for_idle(Duration::from_millis(250), Duration::from_secs(3))?;
 

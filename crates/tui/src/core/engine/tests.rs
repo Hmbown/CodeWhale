@@ -3,7 +3,8 @@ use super::*;
 use super::context::{COMPACTION_SUMMARY_MARKER, TURN_MAX_OUTPUT_TOKENS};
 use super::streaming::{TOOL_CALL_END_MARKERS, TOOL_CALL_MARKER_PAIRS};
 use super::turn_loop::{
-    auto_review_block_tool_error, merge_new_runtime_mcp_tools, registered_tool_approval_required,
+    auto_review_block_tool_error, initial_stream_error_user_message, merge_new_runtime_mcp_tools,
+    preview_request_error_user_message, registered_tool_approval_required,
     registered_tool_forces_prompt, repo_law_must_block_without_prompt,
     requested_sandbox_escalation, workspace_write_carve_out_applies,
 };
@@ -37,10 +38,89 @@ const REPRESENTATIVE_PROJECT_AUTHORITY_BODY: &str = concat!(
     "- Do not contact remotes, providers, registries, or production services.\n",
     "- Record exact measurements and distinguish source proof from installed proof.\n",
 );
+
+#[test]
+fn cloud_code_system_prompt_rejection_is_localized_from_its_semantic_error() {
+    let error = anyhow::Error::new(
+        crate::client::cloud_code::CloudCodeRequestError::SystemPromptUnsupported,
+    );
+    let message = initial_stream_error_user_message("es-419", &error);
+    assert!(message.contains("No se envió nada"), "{message}");
+    assert!(!message.contains("omit non-empty system"), "{message}");
+}
+
+#[test]
+fn preview_request_error_preserves_non_semantic_context_chain() {
+    let error = anyhow::Error::msg("root cause").context("request preparation failed");
+    assert_eq!(
+        preview_request_error_user_message("en", &error),
+        "request preparation failed: root cause"
+    );
+    assert_eq!(
+        initial_stream_error_user_message("en", &error),
+        "request preparation failed"
+    );
+}
 const REPRESENTATIVE_INLINE_INSTRUCTIONS: &str = "REPRESENTATIVE_INLINE_INSTRUCTIONS";
 const REPRESENTATIVE_SKILL_DESCRIPTION: &str = "REPRESENTATIVE_SKILL_DESCRIPTION";
 const REPRESENTATIVE_MEMORY_CHECKPOINT: &str = "REPRESENTATIVE_MEMORY_CHECKPOINT";
 const REPRESENTATIVE_GOAL_OBJECTIVE: &str = "REPRESENTATIVE_GOAL_OBJECTIVE";
+
+#[tokio::test]
+async fn terminal_barrier_joins_foreground_child_before_flushing_mailbox() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let turn_token = CancellationToken::new();
+    let (mailbox, _receiver) = Mailbox::new(turn_token.clone());
+    let foreground_children = Arc::new(ForegroundChildRegistry::new());
+    let child_token = turn_token.child_token();
+    let registration = foreground_children.register(child_token.clone());
+    let child_settled = Arc::new(AtomicBool::new(false));
+    let child_settled_for_task = Arc::clone(&child_settled);
+    let child = tokio::spawn(async move {
+        child_token.cancelled().await;
+        child_settled_for_task.store(true, Ordering::SeqCst);
+        drop(registration);
+    });
+
+    // Detached work is deliberately not registered in the turn barrier.
+    let detached_token = CancellationToken::new();
+    let flush_after_child_settled = Arc::new(AtomicBool::new(false));
+    let flush_observer = Arc::clone(&flush_after_child_settled);
+    let child_settled_for_flush = Arc::clone(&child_settled);
+    let (flush_tx, flush_rx) = tokio::sync::oneshot::channel();
+    let drain_handle = tokio::spawn(async move {
+        let _ = flush_rx.await;
+        flush_observer.store(
+            child_settled_for_flush.load(Ordering::SeqCst),
+            Ordering::SeqCst,
+        );
+    });
+
+    let barrier = TurnMailboxBarrier {
+        mailbox,
+        cancel_token: turn_token,
+        foreground_children,
+        flush_tx,
+        drain_handle,
+    };
+    tokio::time::timeout(Duration::from_secs(1), barrier.cancel_and_flush())
+        .await
+        .expect("the terminal barrier cancels and joins its direct child");
+    child
+        .await
+        .expect("foreground child task exits after cancellation");
+
+    assert!(child_settled.load(Ordering::SeqCst));
+    assert!(
+        flush_after_child_settled.load(Ordering::SeqCst),
+        "mailbox flushing, and therefore TurnComplete, waits for the owned child"
+    );
+    assert!(
+        !detached_token.is_cancelled(),
+        "explicitly detached work is not owned by the terminal barrier"
+    );
+}
 
 #[tokio::test]
 async fn rejected_manual_compaction_route_closes_typed_lifecycle() {
@@ -5647,16 +5727,27 @@ fn guardian_tool_results<'a>(
         .collect()
 }
 
-async fn collect_guardian_journey(
+/// One transcript-visible gate receipt observed on the event stream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GateReceipt {
+    gate: crate::core::events::ToolGate,
+    decision: crate::core::events::ToolGateVerdict,
+    risk: Option<String>,
+    reason: String,
+}
+
+async fn collect_guardian_journey_with_receipts(
     handle: &EngineHandle,
     call_id: &str,
 ) -> (
     Result<crate::tools::spec::ToolResult, crate::tools::spec::ToolError>,
     Vec<Usage>,
     Usage,
+    Vec<GateReceipt>,
 ) {
     let mut completion = None;
     let mut usage_events = Vec::new();
+    let mut receipts = Vec::new();
     let mut rx = handle.rx_event.write().await;
     let terminal_usage = loop {
         let event = tokio::time::timeout(model_turn_event_timeout(), rx.recv())
@@ -5671,6 +5762,19 @@ async fn collect_guardian_journey(
                 );
             }
             Event::TurnUsage { usage, .. } => usage_events.push(usage),
+            Event::ToolGateDecision {
+                tool_id,
+                gate,
+                decision,
+                risk,
+                reason,
+                ..
+            } if tool_id == call_id => receipts.push(GateReceipt {
+                gate,
+                decision,
+                risk,
+                reason,
+            }),
             Event::TurnComplete {
                 status,
                 error,
@@ -5688,6 +5792,7 @@ async fn collect_guardian_journey(
         completion.expect("held call must have one paired result"),
         usage_events,
         terminal_usage,
+        receipts,
     )
 }
 
@@ -5735,9 +5840,22 @@ async fn auto_review_guardian_allow_executes_once_and_accounts_usage_without_pro
         .await
         .expect("send Auto-Review allow journey");
 
-    let (completion, usage_events, terminal_usage) =
-        collect_guardian_journey(&handle, "call-guardian-allow").await;
+    let (completion, usage_events, terminal_usage, receipts) =
+        collect_guardian_journey_with_receipts(&handle, "call-guardian-allow").await;
     assert!(completion.expect("guardian-approved tool result").success);
+    // The person never saw a prompt, so the transcript gets exactly one
+    // receipt naming the guardian's verdict and risk tier.
+    assert_eq!(receipts.len(), 1, "{receipts:?}");
+    assert_eq!(
+        receipts[0].gate,
+        crate::core::events::ToolGate::AutoReviewGuardian
+    );
+    assert_eq!(
+        receipts[0].decision,
+        crate::core::events::ToolGateVerdict::Allowed
+    );
+    assert!(receipts[0].risk.is_some(), "{receipts:?}");
+    assert!(!receipts[0].reason.contains('\n'));
     assert!(
         usage_events
             .iter()
@@ -5807,9 +5925,16 @@ async fn auto_review_guardian_deny_returns_one_paired_failed_result() {
         .await
         .expect("send Auto-Review deny journey");
 
-    let (completion, _, _) = collect_guardian_journey(&handle, "call-guardian-deny").await;
+    let (completion, _, _, receipts) =
+        collect_guardian_journey_with_receipts(&handle, "call-guardian-deny").await;
     let error = completion.expect_err("guardian denial must fail the tool call");
     assert!(error.to_string().contains(DENIAL), "{error}");
+    assert_eq!(receipts.len(), 1, "{receipts:?}");
+    assert_eq!(
+        receipts[0].decision,
+        crate::core::events::ToolGateVerdict::Denied
+    );
+    assert!(receipts[0].reason.contains(DENIAL), "{receipts:?}");
     assert!(!workspace.path().join(".env").exists());
     assert_eq!(mock.captured_requests().len(), 3);
     handle.send(Op::Shutdown).await.expect("shutdown engine");
@@ -5862,9 +5987,17 @@ async fn auto_review_guardian_parse_and_transport_failures_deny_closed() {
             .await
             .expect("send reviewer failure journey");
 
-        let (completion, _, _) = collect_guardian_journey(&handle, &call_id).await;
+        let (completion, _, _, receipts) =
+            collect_guardian_journey_with_receipts(&handle, &call_id).await;
         let error = completion.expect_err("reviewer failure must deny");
         assert!(error.to_string().contains("fail closed"), "{error}");
+        assert_eq!(receipts.len(), 1, "{receipts:?}");
+        assert_eq!(
+            receipts[0].decision,
+            crate::core::events::ToolGateVerdict::Unavailable,
+            "{receipts:?}"
+        );
+        assert!(receipts[0].risk.is_none());
         assert!(!workspace.path().join(".env").exists());
         handle.send(Op::Shutdown).await.expect("shutdown engine");
         task.await.expect("engine task");
@@ -14797,6 +14930,220 @@ fn turn_metadata_skips_when_only_tool_results_trail() {
 }
 
 #[test]
+fn declared_refresh_sets_pending_prefix_change_reason() {
+    let _lock = lock_test_env();
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let (mut engine, _handle) = Engine::new(config, &Config::default());
+    // Construction pins the initial prompt; clear any construction-time flag.
+    engine.session.pending_prefix_change_reason = None;
+
+    // A no-op refresh (unchanged bytes) declares nothing.
+    engine.refresh_system_prompt_with_reason("system");
+    assert_eq!(engine.session.pending_prefix_change_reason, None);
+
+    // A refresh that actually changes the bytes records the declared reason.
+    engine.config.goal_objective = Some("ship the release".to_string());
+    engine.config.goal_status = crate::tools::goal::GoalStatus::Active;
+    engine.refresh_system_prompt_with_reason("goal");
+    assert_eq!(
+        engine.session.pending_prefix_change_reason.as_deref(),
+        Some("goal")
+    );
+}
+
+#[test]
+fn workspace_file_change_never_moves_the_frozen_prefix() {
+    // The old bug: the tool loop recomposed the system prompt from disk on
+    // every step, so an agent writing a file changed the project pack and
+    // busted DeepSeek's KV prefix cache mid-turn. The header is now frozen
+    // for the session: only an explicit refresh (a declared header change)
+    // recomposes it, and the tool loop no longer calls one.
+    let _lock = lock_test_env();
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        project_context_pack_enabled: true,
+        ..Default::default()
+    };
+    let (mut engine, _handle) = Engine::new(config, &Config::default());
+    let frozen_prompt = engine.session.system_prompt.clone();
+    engine.session.pending_prefix_change_reason = None;
+
+    // Simulate the agent writing a file into the workspace mid-turn.
+    fs::write(tmp.path().join("NEWFILE.md"), "brand new content").expect("write");
+
+    // What a fresh compose WOULD produce now differs — the bug precondition.
+    let recomposed =
+        engine.compose_stable_system_prompt(&engine.installed_next_turn_prompt_context());
+    assert_ne!(
+        recomposed, frozen_prompt,
+        "a workspace file change must change what a fresh compose would produce"
+    );
+
+    // But the session's pinned prompt is untouched and nothing was declared,
+    // because the tool loop performs no mid-loop refresh.
+    assert_eq!(engine.session.system_prompt, frozen_prompt);
+    assert_eq!(engine.session.pending_prefix_change_reason, None);
+}
+
+fn context_update_messages(engine: &Engine) -> Vec<String> {
+    engine
+        .session
+        .messages
+        .iter()
+        .filter(|m| m.role == "user")
+        .filter_map(|m| match m.content.first() {
+            Some(ContentBlock::Text { text, .. }) if text.starts_with("<context_update>") => {
+                Some(text.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn workspace_drift_arrives_as_one_context_update_and_never_moves_the_header() {
+    let _lock = lock_test_env();
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        project_context_pack_enabled: true,
+        ..Default::default()
+    };
+    let (mut engine, _handle) = Engine::new(config, &Config::default());
+    let context = engine.installed_next_turn_prompt_context();
+
+    // Turn 1: establishes the pin key; nothing to report.
+    assert_eq!(engine.refresh_pinned_header_for_turn(&context), None);
+    let pinned = engine.session.system_prompt.clone();
+    let pinned_hash = engine.session.last_system_prompt_hash;
+    engine.session.pending_prefix_change_reason = None;
+
+    // No change → no snapshot.
+    assert_eq!(engine.refresh_pinned_header_for_turn(&context), None);
+
+    // The agent writes a file "mid-turn"; nothing moves until the next user turn.
+    fs::write(tmp.path().join("NEWFILE.md"), "brand new content").expect("write");
+    assert_eq!(engine.session.system_prompt, pinned);
+
+    // Next user turn: header byte-identical, exactly one snapshot with the delta.
+    let update = engine
+        .refresh_pinned_header_for_turn(&context)
+        .expect("workspace drift produces a context update");
+    assert!(update.starts_with("<context_update>"), "{update}");
+    assert!(update.contains("NEWFILE.md"), "{update}");
+    assert_eq!(engine.session.system_prompt, pinned);
+    assert_eq!(engine.session.last_system_prompt_hash, pinned_hash);
+    assert_eq!(engine.session.pending_prefix_change_reason, None);
+    assert_eq!(
+        engine
+            .session
+            .prefix_stability
+            .as_ref()
+            .unwrap()
+            .context_update_count(),
+        1
+    );
+
+    // The same delta is not re-sent on the following turn.
+    assert_eq!(engine.refresh_pinned_header_for_turn(&context), None);
+}
+
+#[test]
+fn agents_md_edit_arrives_as_context_update_carrying_the_new_instructions() {
+    let _lock = lock_test_env();
+    let tmp = tempdir().expect("tempdir");
+    fs::write(tmp.path().join("AGENTS.md"), "# Rules\n\nAlways run fmt.\n").expect("write");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let (mut engine, _handle) = Engine::new(config, &Config::default());
+    let context = engine.installed_next_turn_prompt_context();
+    assert_eq!(engine.refresh_pinned_header_for_turn(&context), None);
+    let pinned = engine.session.system_prompt.clone();
+
+    fs::write(
+        tmp.path().join("AGENTS.md"),
+        "# Rules\n\nAlways run fmt.\nNever push to main.\n",
+    )
+    .expect("write");
+    let update = engine
+        .refresh_pinned_header_for_turn(&context)
+        .expect("AGENTS.md edit produces a context update");
+    assert!(update.contains("+ Never push to main."), "{update}");
+    assert_eq!(engine.session.system_prompt, pinned);
+}
+
+#[test]
+fn explicit_input_change_repins_instead_of_snapshotting() {
+    let _lock = lock_test_env();
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let (mut engine, _handle) = Engine::new(config, &Config::default());
+    let context = engine.installed_next_turn_prompt_context();
+    assert_eq!(engine.refresh_pinned_header_for_turn(&context), None);
+    engine.session.pending_prefix_change_reason = None;
+
+    let mut next = context.clone();
+    next.goal_objective = Some("ship 0.9.8".to_string());
+    assert_eq!(engine.refresh_pinned_header_for_turn(&next), None);
+    assert_eq!(
+        engine.session.pending_prefix_change_reason.as_deref(),
+        Some("goal")
+    );
+    assert_eq!(engine.session.pinned_prompt_context.as_ref(), Some(&next));
+}
+
+#[tokio::test]
+async fn submitted_turn_appends_context_update_before_the_user_message() {
+    let _lock = lock_test_env();
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        project_context_pack_enabled: true,
+        ..Default::default()
+    };
+    let (mut engine, _handle) = Engine::new(config, &Config::default());
+    // Seed the pin key exactly as the first turn would.
+    let context = engine.installed_next_turn_prompt_context();
+    assert_eq!(engine.refresh_pinned_header_for_turn(&context), None);
+    fs::write(tmp.path().join("NEWFILE.md"), "brand new content").expect("write");
+
+    // Drive the real submit path (no client → it stops before any request,
+    // but only after history is assembled) and inspect the order.
+    let update = engine.refresh_pinned_header_for_turn(&context).unwrap();
+    engine.session.add_message(Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::Text {
+            text: update,
+            cache_control: None,
+        }],
+    });
+    engine
+        .session
+        .add_message(engine.user_text_message_with_turn_metadata("hello".into()));
+    let updates = context_update_messages(&engine);
+    assert_eq!(updates.len(), 1);
+    let last_two: Vec<&Message> = engine.session.messages.iter().rev().take(2).collect();
+    assert!(matches!(
+        last_two[1].content.first(),
+        Some(ContentBlock::Text { text, .. }) if text.starts_with("<context_update>")
+    ));
+    assert!(matches!(
+        last_two[0].content.first(),
+        Some(ContentBlock::Text { text, .. }) if text == "hello"
+    ));
+}
+
+#[test]
 fn refresh_system_prompt_is_noop_when_unchanged() {
     // The composed prompt reads ambient process state, so a concurrent test
     // mutating the environment between the two refreshes changes the hash and
@@ -16895,6 +17242,7 @@ fn agent_list_event_carries_the_typed_coordination_projection() {
     let Event::AgentList {
         agents,
         coordination,
+        ..
     } = agent_list_event(&manager)
     else {
         panic!("expected AgentList event");
@@ -17099,6 +17447,7 @@ async fn list_subagents_event_try_send_does_not_block_when_event_channel_full() 
         agents,
         coordination: crate::tools::subagent::SubAgentManager::new(PathBuf::from("."), 1)
             .coordination_detail_projection(None, 24),
+        queued_follow_ups: std::collections::HashMap::new(),
     });
     assert!(
         result.is_err(),
@@ -17766,4 +18115,50 @@ async fn user_prompt_reaches_the_model_exactly_once_per_request() {
 
     handle.send(Op::Shutdown).await.expect("shutdown engine");
     task.await.expect("engine task");
+}
+
+/// A person's answer to a prompt raised for a child (`agent:…:approval:n`)
+/// reaches the waiting child while the parent turn is idle; the parent's
+/// own approval path is untouched by ids it does not own.
+#[tokio::test]
+async fn idle_engine_routes_child_approval_decisions_to_the_waiting_child() {
+    use crate::tools::subagent::ChildApprovalOutcome;
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        model: "deepseek-v4-pro".to_string(),
+        ..Default::default()
+    };
+    let (engine, handle) = Engine::new(config, &Config::default());
+    let manager = engine.subagent_manager.clone();
+    let run = tokio::spawn(engine.run());
+
+    let (approval_id, receiver) = manager.write().await.register_child_approval("agent_child");
+    handle
+        .approve_tool_call(approval_id.clone())
+        .await
+        .expect("approval decision accepted");
+    let outcome = tokio::time::timeout(Duration::from_secs(5), receiver)
+        .await
+        .expect("child must be answered while the engine idles")
+        .expect("child prompt resolved, not dropped");
+    assert_eq!(outcome, ChildApprovalOutcome::Approved);
+    assert_eq!(manager.read().await.pending_child_approvals(), 0);
+
+    // A denial for a second prompt routes the same way.
+    let (approval_id, receiver) = manager.write().await.register_child_approval("agent_child");
+    handle
+        .deny_tool_call(approval_id)
+        .await
+        .expect("denial accepted");
+    let outcome = tokio::time::timeout(Duration::from_secs(5), receiver)
+        .await
+        .expect("child must be answered")
+        .expect("child prompt resolved");
+    assert_eq!(outcome, ChildApprovalOutcome::Denied);
+
+    // A decision for a parent-shaped id has no child waiter and is not routed.
+    assert!(!crate::tools::subagent::SubAgentManager::is_child_approval_id("call_123"));
+    handle.send(Op::Shutdown).await.expect("shutdown engine");
+    run.await.expect("engine task");
 }

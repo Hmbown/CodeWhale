@@ -36,31 +36,28 @@ use crate::tui::selection::{SelectionAutoscroll, TranscriptSelectionPoint};
 use tempfile::TempDir;
 
 #[test]
-fn session_shell_area_keeps_compact_geometry_and_uses_most_of_wide_terminals() {
-    for (width, height) in [(40, 12), (60, 16), (80, 24), (100, 32), (112, 40)] {
-        let fluid = Rect::new(4, 3, width, height);
-        assert_eq!(frame::session_shell_area(fluid), fluid);
-    }
-
-    for (width, height, side_gutter) in [(140, 40, 2), (200, 50, 7), (240, 60, 10)] {
+fn session_shell_area_fills_the_host_terminal_at_every_width() {
+    // #5322: transcript / composer share the full host width — no wide-terminal
+    // side gutters. Shrinking and expanding must both rematerialize at `area`.
+    for (width, height) in [
+        (40, 12),
+        (60, 16),
+        (80, 24),
+        (100, 32),
+        (112, 40),
+        (140, 40),
+        (160, 32),
+        (200, 50),
+        (240, 60),
+        (400, 60),
+    ] {
         let host = Rect::new(4, 3, width, height);
-        let shell = frame::session_shell_area(host);
-        assert_eq!(shell.x, host.x + side_gutter, "{width} columns");
         assert_eq!(
-            shell.right() + side_gutter,
-            host.right(),
-            "{width} columns must retain symmetric gutters"
-        );
-        assert_eq!(shell.height, host.height);
-        assert!(
-            u32::from(shell.width) * 100 >= u32::from(host.width) * 85,
-            "{width} columns left only {}% usable",
-            u32::from(shell.width) * 100 / u32::from(host.width)
+            frame::session_shell_area(host),
+            host,
+            "{width}x{height} must fill the host terminal"
         );
     }
-
-    let ultra_wide = frame::session_shell_area(Rect::new(0, 0, 400, 60));
-    assert_eq!(ultra_wide, Rect::new(16, 0, 368, 60));
 }
 
 #[test]
@@ -3532,8 +3529,9 @@ fn wide_underwater_shell_aligns_transcript_and_composer_on_the_shared_canvas() {
 
     let transcript = app.viewport.last_transcript_area.expect("transcript area");
     let composer = app.viewport.last_composer_area.expect("composer area");
-    assert_eq!((transcript.x, transcript.width), (4, 152));
-    assert_eq!((composer.x, composer.width), (4, 152));
+    // Full host width (#5322) — transcript and composer share one canvas edge.
+    assert_eq!((transcript.x, transcript.width), (0, 160));
+    assert_eq!((composer.x, composer.width), (0, 160));
 }
 
 #[test]
@@ -3549,16 +3547,18 @@ fn wide_underwater_canvas_carries_the_ocean_to_both_terminal_edges() {
         .expect("render wide ocean canvas");
     let buffer = terminal.backend().buffer();
 
-    let mut ocean_tint_seen = false;
+    // Full-width shell (#5322): both terminal edges stay in the water column.
+    // Ombre may tint left and right differently; what must not happen is a flat
+    // surface-bg dead margin on either side.
+    let mut left_ocean = false;
+    let mut right_ocean = false;
     for y in 0..buffer.area.height {
-        let left = buffer[(0, y)].bg;
-        let right = buffer[(buffer.area.width - 1, y)].bg;
-        assert_eq!(left, right, "row {y} split into mismatched outer banks");
-        ocean_tint_seen |= left != surface_bg;
+        left_ocean |= buffer[(0, y)].bg != surface_bg;
+        right_ocean |= buffer[(buffer.area.width - 1, y)].bg != surface_bg;
     }
     assert!(
-        ocean_tint_seen,
-        "wide gutters retained the flat terminal floor instead of the shared ocean"
+        left_ocean && right_ocean,
+        "wide terminal edges retained the flat terminal floor instead of the shared ocean"
     );
 }
 
@@ -9213,6 +9213,68 @@ fn apply_goal_snapshot_updates_visible_goal_status() {
 }
 
 #[test]
+fn apply_goal_snapshot_prints_a_receipt_when_the_runtime_sets_a_new_goal() {
+    let mut app = create_test_app();
+    let snapshot = crate::tools::goal::GoalSnapshot {
+        objective: Some("make the tests pass".to_string()),
+        status: "active".to_string(),
+        token_budget: None,
+        tokens_used: 0,
+        time_used_seconds: 0,
+        continuation_count: 0,
+        elapsed_seconds: Some(0),
+        evidence: None,
+        blocker: None,
+        pause_reason: None,
+        completion_verification: None,
+        ..Default::default()
+    };
+    assert!(apply_goal_snapshot_to_app(&mut app, &snapshot));
+    let receipts: Vec<&str> = app
+        .history
+        .iter()
+        .filter_map(|cell| match cell {
+            HistoryCell::System { content } if content.contains("Goal set") => {
+                Some(content.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(receipts.len(), 1, "{:?}", app.history);
+    assert!(
+        receipts[0].contains("make the tests pass"),
+        "{}",
+        receipts[0]
+    );
+    assert!(receipts[0].contains("/goal pause"), "{}", receipts[0]);
+
+    let mut usage = snapshot.clone();
+    usage.tokens_used = 12;
+    assert!(apply_goal_snapshot_to_app(&mut app, &usage));
+    let receipts = app
+        .history
+        .iter()
+        .filter(
+            |cell| matches!(cell, HistoryCell::System { content } if content.contains("Goal set")),
+        )
+        .count();
+    assert_eq!(
+        receipts, 1,
+        "the same objective must not reprint the receipt"
+    );
+
+    let mut declared = create_test_app();
+    declared.hunt.quarry = Some("make the tests pass".to_string());
+    apply_goal_snapshot_to_app(&mut declared, &snapshot);
+    assert!(
+        declared.history.iter().all(|cell| {
+            !matches!(cell, HistoryCell::System { content } if content.contains("Goal set"))
+        }),
+        "a user-declared goal must not repeat its own receipt"
+    );
+}
+
+#[test]
 fn canonical_goal_clear_wins_after_stale_active_snapshot() {
     let mut app = create_test_app();
     let stale_active = crate::tools::goal::GoalSnapshot {
@@ -11362,7 +11424,7 @@ fn update_notice_names_the_command_for_the_actual_install_method() {
     assert!(
         notice
             .toast_line(codewhale_release::InstallMethod::Homebrew)
-            .contains("brew upgrade deepseek-tui"),
+            .contains("brew upgrade codewhale"),
         "toast names the Homebrew command"
     );
 
@@ -19079,6 +19141,7 @@ async fn failed_fallback_restores_exact_literal_custom_identity_without_root_cro
         provider: ApiProvider::Custom,
         key: "custom".to_string(),
         exact_id: Some("custom".to_string()),
+        migrated_legacy_ollama_cloud_route: false,
     };
     let mut app = create_test_app();
     app.set_provider_identity_record(previous_identity.clone());
@@ -22129,4 +22192,40 @@ async fn refused_route_change_does_not_pin_a_startup_default_and_says_so() {
         "the operator must be told the default did not move: {:?}",
         app.status_message
     );
+}
+
+#[test]
+fn gate_receipts_are_held_until_their_tool_card_completes_then_flushed_in_order() {
+    let mut app = create_test_app();
+    let before = app.history.len();
+    app.pending_gate_receipts
+        .push(("call-a".to_string(), "receipt for a".to_string()));
+    app.pending_gate_receipts
+        .push(("call-b".to_string(), "receipt for b".to_string()));
+
+    // Completing an unrelated tool moves nothing.
+    assert!(!super::event_loop::flush_gate_receipts_for(
+        &mut app,
+        Some("call-zzz")
+    ));
+    assert_eq!(app.history.len(), before);
+    assert_eq!(app.pending_gate_receipts.len(), 2);
+
+    // Completing tool `b` lands only its receipt, as a System note.
+    assert!(super::event_loop::flush_gate_receipts_for(
+        &mut app,
+        Some("call-b")
+    ));
+    assert_eq!(app.history.len(), before + 1);
+    assert!(matches!(
+        &app.history[before],
+        HistoryCell::System { content } if content == "receipt for b"
+    ));
+    assert_eq!(app.pending_gate_receipts.len(), 1);
+
+    // Turn end flushes whatever is left so no decision goes unseen.
+    assert!(super::event_loop::flush_gate_receipts_for(&mut app, None));
+    assert_eq!(app.history.len(), before + 2);
+    assert!(app.pending_gate_receipts.is_empty());
+    assert!(!super::event_loop::flush_gate_receipts_for(&mut app, None));
 }

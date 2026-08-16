@@ -46,7 +46,7 @@ npm install -g codewhale
 cargo install codewhale-cli --locked
 
 # Homebrew (macOS)
-brew tap Hmbown/deepseek-tui && brew install deepseek-tui
+brew tap Hmbown/deepseek-tui && brew install codewhale
 
 # Direct download
 # https://github.com/Hmbown/CodeWhale/releases`}
@@ -376,7 +376,7 @@ npm install -g codewhale@latest
 cargo install codewhale-cli --locked --force
 
 # Homebrew
-brew update && brew upgrade deepseek-tui`}
+brew update && brew upgrade codewhale`}
         </pre>
         <p>
           If you installed via npm, <code className="inline">codewhale update</code> downloads the latest release binaries.
@@ -411,7 +411,7 @@ npm install -g codewhale
 cargo install codewhale-cli --locked
 
 # Homebrew（macOS）
-brew tap Hmbown/deepseek-tui && brew install deepseek-tui
+brew tap Hmbown/deepseek-tui && brew install codewhale
 
 # 直接下载
 # https://github.com/Hmbown/CodeWhale/releases`}
@@ -727,7 +727,7 @@ npm install -g codewhale@latest
 cargo install codewhale-cli --locked --force
 
 # Homebrew
-brew update && brew upgrade deepseek-tui`}
+brew update && brew upgrade codewhale`}
         </pre>
         <p>
           如果通过 npm 安装，<code className="inline">codewhale update</code> 会下载最新发布二进制。

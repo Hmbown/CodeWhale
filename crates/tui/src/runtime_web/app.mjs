@@ -207,7 +207,17 @@ export async function snapshotThenSubscribe({
     return false;
   }
   if (!isCurrent()) return false;
-  subscribe(threadId, state.latestSeq);
+  // A recovery caller may return a stream-open handshake. Await it so a
+  // replacement snapshot is not called continuous until the replacement SSE
+  // stream has actually opened. Synchronous subscribers remain supported.
+  await subscribe(threadId, state.latestSeq);
+  return true;
+}
+
+export async function recoverSnapshotAndSubscribe(options, onRecovered) {
+  const subscribed = await snapshotThenSubscribe(options);
+  if (!subscribed) return false;
+  onRecovered();
   return true;
 }
 
@@ -285,6 +295,79 @@ export function resolveApprovalTarget(approvalId, target, streamState) {
   return { ok: true, threadId: reply.threadId, approvalId };
 }
 
+// Resolve a user-input submission to the live thread and pending request that
+// own it. User-input answers can resume a paused turn, so a stale card must not
+// be able to answer a request from another thread or one already settled by a
+// different client.
+export function resolveUserInputTarget(inputId, target, streamState) {
+  const reply = resolveReplyTarget(target, streamState);
+  if (!reply.ok) return reply;
+  if (!inputId) return { ok: false, reason: "no-user-input" };
+  if (!streamState || streamState.threadId !== reply.threadId) {
+    return { ok: false, reason: "stale-target" };
+  }
+  if (!streamState.userInputs || !streamState.userInputs.has(inputId)) {
+    return { ok: false, reason: "stale-user-input" };
+  }
+  return { ok: true, threadId: reply.threadId, inputId };
+}
+
+function ownAnswerValue(collection, id) {
+  if (collection instanceof Map) return collection.get(id);
+  if (collection && typeof collection === "object" && Object.hasOwn(collection, id)) {
+    return collection[id];
+  }
+  return undefined;
+}
+
+// Build the exact Runtime answer payload from selected options and custom
+// text. This keeps single-select questions single, rejects stale/forged option
+// values, and preserves the TUI rule that a custom answer is always reachable.
+export function answersForUserInput(request, selections = {}, freeText = {}) {
+  const questions = Array.isArray(request?.questions) ? request.questions : [];
+  if (questions.length === 0) {
+    return { ok: false, reason: "invalid-request", question: "the question" };
+  }
+
+  const answers = [];
+  const questionIds = new Set();
+  for (const question of questions) {
+    const id = String(question?.id || "");
+    const questionLabel = String(question?.header || question?.question || id || "the question");
+    if (!id || questionIds.has(id)) {
+      return { ok: false, reason: "invalid-request", question: questionLabel };
+    }
+    questionIds.add(id);
+
+    const optionLabels = new Set(
+      (Array.isArray(question.options) ? question.options : [])
+        .map((option) => String(option?.label || ""))
+        .filter((value) => Boolean(value.trim())),
+    );
+    const selectedValue = ownAnswerValue(selections, id);
+    const selected = Array.isArray(selectedValue)
+      ? [...new Set(selectedValue.map((value) => String(value)).filter((value) => value.trim()))]
+      : [];
+    if (selected.some((value) => !optionLabels.has(value))) {
+      return { ok: false, reason: "invalid-option", question: questionLabel };
+    }
+
+    const otherValue = ownAnswerValue(freeText, id);
+    const other = String(otherValue || "").trim();
+    const count = selected.length + (other ? 1 : 0);
+    if (count === 0) {
+      return { ok: false, reason: "missing-answer", question: questionLabel };
+    }
+    if (!question.multi_select && count !== 1) {
+      return { ok: false, reason: "multiple-answers", question: questionLabel };
+    }
+
+    for (const value of selected) answers.push({ id, label: value, value });
+    if (other) answers.push({ id, label: "Other", value: other });
+  }
+  return { ok: true, answers };
+}
+
 // Human-readable reason for a refusal, for the status banner.
 export function refusalMessage(reason) {
   switch (reason) {
@@ -296,6 +379,10 @@ export function refusalMessage(reason) {
       return "That request was already answered or has expired — nothing was sent.";
     case "no-approval":
       return "No approval was identified — nothing was sent.";
+    case "stale-user-input":
+      return "That question was already answered or has expired — nothing was sent.";
+    case "no-user-input":
+      return "No user-input request was identified — nothing was sent.";
     default:
       return "Select a live thread first — nothing was sent.";
   }
@@ -317,6 +404,31 @@ export function streamCursor(state, { gap = false, connected = true } = {}) {
       : gap
         ? `Gap detected — re-syncing from #${seq}`
         : `Live — event #${seq}`,
+  };
+}
+
+// Keep machine diagnostics available without making them the conversation's
+// loudest content. Known transport failures get one calm product sentence;
+// the byte-for-byte receipt remains behind the disclosure.
+export function receiptPresentation(item = {}) {
+  const detail = String(item.detail || item.summary || "");
+  const raw = String(item.summary || detail || humanize(item.kind));
+  const mcpFailure = raw.match(/Failed to connect MCP server ['"]?([^'":\s]+)['"]?/i);
+  if (mcpFailure) {
+    const server = mcpFailure[1] || "server";
+    return {
+      label: "MCP · Unavailable",
+      summary: `${server} could not connect`,
+      raw,
+      failed: true,
+    };
+  }
+  const failed = item.status === "failed" || /^(?:error|failed|failure)\b/i.test(raw);
+  return {
+    label: `${humanize(item.kind)} · ${humanize(item.status)}`,
+    summary: raw,
+    raw: detail && detail !== raw ? `${raw}\n\n${detail}` : raw,
+    failed,
   };
 }
 
@@ -378,6 +490,7 @@ function appendItemDelta(state, itemId, payload) {
 function startBrowserClient() {
   const dom = {
     shell: document.querySelector("#app-shell"),
+    rail: document.querySelector("#thread-rail"),
     railOpen: document.querySelector("#rail-open"),
     railClose: document.querySelector("#rail-close"),
     railScrim: document.querySelector("#rail-scrim"),
@@ -405,6 +518,7 @@ function startBrowserClient() {
     peek: document.querySelector("#session-peek"),
     savedSessions: document.querySelector("#saved-sessions"),
     sessionList: document.querySelector("#session-list"),
+    session: document.querySelector(".session"),
   };
 
   const app = {
@@ -424,10 +538,15 @@ function startBrowserClient() {
     runtimeInfo: null,
     drafts: new Map(),
     stream: null,
+    streamOpenCancel: null,
     reconnectTimer: null,
     generation: 0,
     searchTimer: null,
+    railReturnFocus: null,
+    pendingAttentionFocus: "",
   };
+
+  const narrowRail = globalThis.matchMedia("(max-width: 800px)");
 
   function element(tag, className, text) {
     const created = document.createElement(tag);
@@ -436,9 +555,128 @@ function startBrowserClient() {
     return created;
   }
 
-  function closeRail() {
+  function setInert(element, inert) {
+    element.inert = inert;
+    if (inert) element.setAttribute("inert", "");
+    else element.removeAttribute("inert");
+  }
+
+  function applyDesktopRailAccessibility() {
     dom.shell.classList.remove("rail-visible");
-    dom.railOpen.focus({ preventScroll: true });
+    dom.rail.removeAttribute("aria-hidden");
+    dom.rail.removeAttribute("aria-modal");
+    dom.rail.removeAttribute("role");
+    dom.session.removeAttribute("aria-hidden");
+    setInert(dom.rail, false);
+    setInert(dom.session, false);
+    dom.railScrim.hidden = true;
+    dom.railOpen.setAttribute("aria-expanded", "false");
+    app.railReturnFocus = null;
+  }
+
+  function applyClosedMobileRailAccessibility() {
+    dom.shell.classList.remove("rail-visible");
+    dom.session.removeAttribute("aria-hidden");
+    setInert(dom.session, false);
+    dom.rail.setAttribute("role", "dialog");
+    dom.rail.setAttribute("aria-modal", "true");
+    dom.rail.setAttribute("aria-hidden", "true");
+    setInert(dom.rail, true);
+    dom.railScrim.hidden = true;
+    dom.railOpen.setAttribute("aria-expanded", "false");
+  }
+
+  function openRail() {
+    if (!narrowRail.matches) return;
+    app.railReturnFocus = document.activeElement;
+    dom.rail.setAttribute("role", "dialog");
+    dom.rail.setAttribute("aria-modal", "true");
+    dom.rail.setAttribute("aria-hidden", "false");
+    setInert(dom.rail, false);
+    dom.railScrim.hidden = false;
+    dom.shell.classList.add("rail-visible");
+    dom.railOpen.setAttribute("aria-expanded", "true");
+    dom.railClose.focus({ preventScroll: true });
+    dom.session.setAttribute("aria-hidden", "true");
+    setInert(dom.session, true);
+  }
+
+  function closeRail({ restoreFocus = true } = {}) {
+    if (!narrowRail.matches) {
+      applyDesktopRailAccessibility();
+      return;
+    }
+    dom.session.removeAttribute("aria-hidden");
+    setInert(dom.session, false);
+    const returnTarget = app.railReturnFocus?.isConnected
+      ? app.railReturnFocus
+      : dom.railOpen;
+    if (restoreFocus) returnTarget.focus({ preventScroll: true });
+    applyClosedMobileRailAccessibility();
+    app.railReturnFocus = null;
+
+    if (app.pendingAttentionFocus) {
+      const pendingKey = app.pendingAttentionFocus;
+      requestAnimationFrame(() => focusPendingAttention(pendingKey));
+    }
+  }
+
+  function syncRailAccessibility() {
+    if (!narrowRail.matches) {
+      applyDesktopRailAccessibility();
+      return;
+    }
+    if (dom.shell.classList.contains("rail-visible")) {
+      dom.rail.setAttribute("role", "dialog");
+      dom.rail.setAttribute("aria-modal", "true");
+      dom.rail.setAttribute("aria-hidden", "false");
+      setInert(dom.rail, false);
+      dom.session.setAttribute("aria-hidden", "true");
+      setInert(dom.session, true);
+      dom.railScrim.hidden = false;
+      dom.railOpen.setAttribute("aria-expanded", "true");
+      return;
+    }
+    if (dom.rail.contains(document.activeElement)) {
+      dom.railOpen.focus({ preventScroll: true });
+    }
+    applyClosedMobileRailAccessibility();
+  }
+
+  function syncVisualViewport() {
+    const viewport = globalThis.visualViewport;
+    const height = viewport?.height || globalThis.innerHeight;
+    const offsetTop = viewport?.offsetTop || 0;
+    if (Number.isFinite(height) && height > 0) {
+      dom.shell.style.setProperty("--visual-viewport-height", `${Math.round(height)}px`);
+    }
+    dom.shell.style.setProperty("--visual-viewport-offset-top", `${Math.max(0, Math.round(offsetTop))}px`);
+  }
+
+  function trapRailFocus(event) {
+    if (
+      event.key !== "Tab"
+      || !narrowRail.matches
+      || !dom.shell.classList.contains("rail-visible")
+    ) return false;
+    const focusable = [...dom.rail.querySelectorAll(
+      'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+    )].filter((node) => !node.hidden && node.getAttribute("aria-hidden") !== "true");
+    if (focusable.length === 0) return false;
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    const active = document.activeElement;
+    if (event.shiftKey && (active === first || !dom.rail.contains(active))) {
+      event.preventDefault();
+      last.focus({ preventScroll: true });
+      return true;
+    }
+    if (!event.shiftKey && (active === last || !dom.rail.contains(active))) {
+      event.preventDefault();
+      first.focus({ preventScroll: true });
+      return true;
+    }
+    return false;
   }
 
   function setConnection(kind, message) {
@@ -660,6 +898,8 @@ function startBrowserClient() {
   }
 
   function stopStream() {
+    if (app.streamOpenCancel) app.streamOpenCancel();
+    app.streamOpenCancel = null;
     if (app.stream) app.stream.close();
     app.stream = null;
     if (app.reconnectTimer) clearTimeout(app.reconnectTimer);
@@ -682,6 +922,7 @@ function startBrowserClient() {
     dom.composerInput.value = restoreDraft(app.drafts, threadId);
     resizeComposer();
     renderThreadList();
+    renderSessionList();
     renderAll();
     closeRailIfNarrow();
     setConnection("", "Loading thread snapshot…");
@@ -692,7 +933,9 @@ function startBrowserClient() {
         state: app.threadState,
         threadId,
         loadSnapshot: (id) => api(`/v1/threads/${encodeURIComponent(id)}`),
-        subscribe: (id, sequence) => connectStream(id, sequence, generation),
+        subscribe: (id, sequence) => {
+          connectStream(id, sequence, generation);
+        },
         isCurrent: () => generation === app.generation && threadId === app.selectedThreadId,
       });
       if (!subscribed) return;
@@ -705,12 +948,41 @@ function startBrowserClient() {
     }
   }
 
-  function connectStream(threadId, sequence, generation) {
+  function connectStream(threadId, sequence, generation, waitForOpen = false) {
     if (generation !== app.generation || threadId !== app.selectedThreadId) return;
+    if (app.streamOpenCancel) app.streamOpenCancel();
+    app.streamOpenCancel = null;
     if (app.stream) app.stream.close();
     const stream = new EventSource(eventStreamUrl(threadId, sequence), { withCredentials: true });
     app.stream = stream;
-    stream.onopen = () => setConnection("ready", "Local runtime connected");
+    let opened = false;
+    let resolveOpen;
+    let rejectOpen;
+    const openHandshake = waitForOpen
+      ? new Promise((resolve, reject) => {
+          resolveOpen = resolve;
+          rejectOpen = reject;
+        })
+      : undefined;
+    const cancelOpen = () => {
+      if (!rejectOpen) return;
+      const reject = rejectOpen;
+      resolveOpen = null;
+      rejectOpen = null;
+      reject(new Error("Runtime event stream open was cancelled"));
+    };
+    if (waitForOpen) app.streamOpenCancel = cancelOpen;
+    const clearOpenHandshake = () => {
+      if (app.streamOpenCancel === cancelOpen) app.streamOpenCancel = null;
+    };
+    stream.onopen = () => {
+      opened = true;
+      setConnection("ready", "Local runtime connected");
+      clearOpenHandshake();
+      if (resolveOpen) resolveOpen();
+      resolveOpen = null;
+      rejectOpen = null;
+    };
     const receive = (message) => {
       if (
         app.stream !== stream
@@ -744,12 +1016,21 @@ function startBrowserClient() {
       stream.close();
       app.stream = null;
       if (generation !== app.generation || threadId !== app.selectedThreadId) return;
+      if (waitForOpen && !opened) {
+        clearOpenHandshake();
+        const reject = rejectOpen;
+        resolveOpen = null;
+        rejectOpen = null;
+        reject?.(new Error("Runtime event stream did not reopen"));
+        return;
+      }
       setConnection("", "Reconnecting to local runtime…");
       app.reconnectTimer = setTimeout(
         () => connectStream(threadId, app.threadState.latestSeq, generation),
         900,
       );
     };
+    return openHandshake;
   }
 
   async function recoverProjection(threadId, generation, sourceStream = null) {
@@ -766,12 +1047,16 @@ function startBrowserClient() {
     setConnection("", "Refreshing thread snapshot…");
 
     try {
-      const subscribed = await snapshotThenSubscribe({
+      const subscribed = await recoverSnapshotAndSubscribe({
         state: app.threadState,
         threadId,
         loadSnapshot: (id) => api(`/v1/threads/${encodeURIComponent(id)}`),
-        subscribe: (id, sequence) => connectStream(id, sequence, generation),
+        subscribe: (id, sequence) => connectStream(id, sequence, generation, true),
         isCurrent: () => generation === app.generation && threadId === app.selectedThreadId,
+      }, () => {
+        // A gap is continuous again only after both the replacement snapshot
+        // and the replacement EventSource open handshake have succeeded.
+        app.streamGap = false;
       });
       if (!subscribed) return;
       renderAll();
@@ -794,8 +1079,6 @@ function startBrowserClient() {
     renderTranscript(preserveScroll);
     renderAttention();
     renderComposer();
-    renderThreadList();
-    renderSessionList();
     renderStreamCursor();
   }
 
@@ -831,6 +1114,7 @@ function startBrowserClient() {
 
   function factChip(label, value) {
     const chip = element("span", "fact-chip");
+    chip.dataset.fact = String(label || "").toLowerCase();
     chip.append(element("span", "", label));
     chip.append(element("strong", "", value));
     return chip;
@@ -838,20 +1122,39 @@ function startBrowserClient() {
 
   function renderTranscript(preserveScroll) {
     const wasNearBottom = dom.transcript.scrollHeight - dom.transcript.scrollTop - dom.transcript.clientHeight < 120;
-    dom.transcript.replaceChildren();
     if (!app.threadState.thread) {
-      dom.transcript.append(emptyState("Your local agent, in the browser.", "Create a thread or choose one from the rail. This client uses the same Runtime as the terminal."));
+      renderTranscriptEmpty(
+        "choose-thread",
+        "Your local agent, in the browser.",
+        "Create a thread or choose one from the rail. This client uses the same Runtime as the terminal.",
+      );
       return;
     }
     if (app.threadState.itemOrder.length === 0) {
-      dom.transcript.append(emptyState("Ready for a task.", "Send a message below. Model, mode, and permission posture come from the Runtime and are shown read-only above."));
+      renderTranscriptEmpty(
+        "ready",
+        "Ready for a task.",
+        "Send a message below. Model, mode, and permission posture come from the Runtime and are shown read-only above.",
+      );
       return;
     }
+
+    const selection = captureTranscriptSelection();
+    const existing = new Map(
+      [...dom.transcript.children]
+        .filter((node) => node.dataset.itemId)
+        .map((node) => [node.dataset.itemId, node]),
+    );
+    const desired = [];
     for (const itemId of app.threadState.itemOrder) {
       const item = app.threadState.items.get(itemId);
       if (!item) continue;
-      dom.transcript.append(renderItem(item));
+      let node = existing.get(itemId);
+      if (!node || !updateItemNode(node, item)) node = renderItem(item);
+      desired.push(node);
     }
+    reconcileChildren(dom.transcript, desired);
+    restoreTranscriptSelection(selection);
     if (!preserveScroll || wasNearBottom) {
       requestAnimationFrame(() => {
         dom.transcript.scrollTop = dom.transcript.scrollHeight;
@@ -859,59 +1162,241 @@ function startBrowserClient() {
     }
   }
 
+  function renderTranscriptEmpty(kind, title, description) {
+    const current = dom.transcript.children.length === 1
+      ? dom.transcript.firstElementChild
+      : null;
+    if (current?.dataset.emptyState === kind) return;
+    const empty = emptyState(title, description);
+    empty.dataset.emptyState = kind;
+    reconcileChildren(dom.transcript, [empty]);
+  }
+
+  function reconcileChildren(container, desired) {
+    const keep = new Set(desired);
+    let cursor = container.firstElementChild;
+    for (const node of desired) {
+      if (node === cursor) {
+        cursor = cursor.nextElementSibling;
+      } else {
+        container.insertBefore(node, cursor);
+      }
+    }
+    for (const child of [...container.children]) {
+      if (!keep.has(child)) child.remove();
+    }
+  }
+
   function emptyState(title, description) {
     const empty = element("div", "empty-state");
-    empty.append(element("div", "empty-orbit", "◌"));
+    const mark = document.createElement("img");
+    mark.className = "empty-mark";
+    mark.src = "/assets/codewhale-192.png";
+    mark.alt = "";
+    empty.append(mark);
     empty.append(element("h2", "", title));
     empty.append(element("p", "", description));
     return empty;
   }
 
   function renderItem(item) {
+    let card;
+    if (item.kind === "user_message" || item.kind === "agent_message") {
+      const role = item.kind === "user_message" ? "user" : "agent";
+      card = element("article", `message ${role}`);
+      const label = element("div", "message-label");
+      label.dataset.itemPart = "label";
+      const body = element("div", "message-body");
+      body.dataset.itemPart = "body";
+      card.append(label, body);
+    } else if (item.kind === "agent_reasoning") {
+      card = element("article", "reasoning");
+      const disclosure = element("details");
+      const summary = element("summary");
+      summary.dataset.itemPart = "summary";
+      const detail = element("pre");
+      detail.dataset.itemPart = "detail";
+      disclosure.append(summary, detail);
+      card.append(disclosure);
+    } else {
+      card = element("article", "receipt");
+      card.append(element("span", "receipt-dot"));
+      const copy = element("span", "receipt-copy");
+      const label = element("strong");
+      label.dataset.itemPart = "label";
+      const summary = element("span", "receipt-summary");
+      summary.dataset.itemPart = "summary";
+      copy.append(label, summary);
+      card.append(copy);
+    }
+    card.dataset.itemId = item.id;
+    card.dataset.itemKind = item.kind;
+    updateItemNode(card, item);
+    return card;
+  }
+
+  function updateItemNode(card, item) {
+    if (card.dataset.itemKind !== item.kind) return false;
     const detail = item.detail || item.summary || "";
     if (item.kind === "user_message" || item.kind === "agent_message") {
       const role = item.kind === "user_message" ? "user" : "agent";
-      const card = element("article", `message ${role} ${item.status === "in_progress" ? "in-progress" : ""}`.trim());
-      card.append(element("div", "message-label", role === "user" ? "You" : "Codewhale"));
-      card.append(element("div", "message-body", detail));
-      return card;
+      card.className = `message ${role} ${item.status === "in_progress" ? "in-progress" : ""}`.trim();
+      setTextIfChanged(card.querySelector('[data-item-part="label"]'), role === "user" ? "You" : "Codewhale");
+      setTextIfChanged(card.querySelector('[data-item-part="body"]'), detail);
+      return true;
     }
     if (item.kind === "agent_reasoning") {
-      const reasoning = element("article", "reasoning");
-      const disclosure = element("details");
-      disclosure.append(element("summary", "", item.status === "in_progress" ? "Reasoning…" : "Reasoning"));
-      disclosure.append(element("pre", "", detail));
-      reasoning.append(disclosure);
-      return reasoning;
+      setTextIfChanged(
+        card.querySelector('[data-item-part="summary"]'),
+        item.status === "in_progress" ? "Reasoning…" : "Reasoning",
+      );
+      setTextIfChanged(card.querySelector('[data-item-part="detail"]'), detail);
+      return true;
     }
 
-    const receipt = element("article", `receipt ${item.status === "failed" ? "failed" : ""}`.trim());
-    receipt.append(element("div", "receipt-label", `${humanize(item.kind)} · ${humanize(item.status)}`));
-    receipt.append(element("div", "receipt-summary", item.summary || detail || humanize(item.kind)));
-    if (detail && detail !== item.summary) {
-      const disclosure = element("details");
-      disclosure.append(element("summary", "", "Show receipt"));
-      disclosure.append(element("pre", "", detail));
-      receipt.append(disclosure);
+    const presentation = receiptPresentation(item);
+    card.className = `receipt ${presentation.failed ? "failed" : ""}`.trim();
+    setTextIfChanged(card.querySelector('[data-item-part="label"]'), presentation.label);
+    setTextIfChanged(card.querySelector('[data-item-part="summary"]'), presentation.summary);
+    const copy = card.querySelector(".receipt-copy");
+    let disclosure = copy.querySelector("details");
+    if (presentation.raw && presentation.raw !== presentation.summary) {
+      if (!disclosure) {
+        disclosure = element("details");
+        const summary = element("summary", "", "Show receipt");
+        const raw = element("pre");
+        raw.dataset.itemPart = "raw";
+        disclosure.append(summary, raw);
+        copy.append(disclosure);
+      }
+      setTextIfChanged(disclosure.querySelector('[data-item-part="raw"]'), presentation.raw);
+    } else if (disclosure) {
+      disclosure.remove();
     }
-    return receipt;
+    return true;
+  }
+
+  function setTextIfChanged(target, value) {
+    const next = value == null ? "" : String(value);
+    if (target.textContent !== next) setSafeText(target, next);
+  }
+
+  function captureTranscriptSelection() {
+    const selection = globalThis.getSelection?.();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return null;
+    const range = selection.getRangeAt(0);
+    const start = transcriptSelectionEndpoint(range.startContainer, range.startOffset);
+    const end = transcriptSelectionEndpoint(range.endContainer, range.endOffset);
+    return start && end ? { start, end } : null;
+  }
+
+  function transcriptSelectionEndpoint(node, offset) {
+    const elementNode = node.nodeType === 1 ? node : node.parentElement;
+    const item = elementNode?.closest?.("[data-item-id]");
+    if (!item || !dom.transcript.contains(item)) return null;
+    const prefix = document.createRange();
+    prefix.selectNodeContents(item);
+    try {
+      prefix.setEnd(node, offset);
+    } catch (_error) {
+      return null;
+    }
+    return { itemId: item.dataset.itemId, offset: prefix.toString().length };
+  }
+
+  function restoreTranscriptSelection(captured) {
+    if (!captured) return;
+    const startRoot = [...dom.transcript.children]
+      .find((node) => node.dataset.itemId === captured.start.itemId);
+    const endRoot = [...dom.transcript.children]
+      .find((node) => node.dataset.itemId === captured.end.itemId);
+    if (!startRoot || !endRoot) return;
+    const start = textPointAt(startRoot, captured.start.offset);
+    const end = textPointAt(endRoot, captured.end.offset);
+    if (!start || !end) return;
+    const range = document.createRange();
+    try {
+      range.setStart(start.node, start.offset);
+      range.setEnd(end.node, end.offset);
+    } catch (_error) {
+      return;
+    }
+    const selection = globalThis.getSelection?.();
+    if (!selection) return;
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
+  function textPointAt(root, requestedOffset) {
+    const walker = document.createTreeWalker(
+      root,
+      globalThis.NodeFilter?.SHOW_TEXT || 4,
+    );
+    let remaining = Math.max(0, requestedOffset);
+    let last = null;
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      last = node;
+      const length = node.data.length;
+      if (remaining <= length) return { node, offset: remaining };
+      remaining -= length;
+    }
+    return last ? { node: last, offset: last.data.length } : null;
   }
 
   function renderAttention() {
-    dom.attention.replaceChildren();
+    const existing = new Map(
+      [...dom.attention.children]
+        .filter((node) => node.dataset.attentionKey)
+        .map((node) => [node.dataset.attentionKey, node]),
+    );
+    const desired = [];
+    const added = [];
     for (const [approvalId, approval] of app.threadState.approvals) {
-      dom.attention.append(renderApproval(approvalId, approval));
+      const key = `approval:${approvalId}`;
+      const card = existing.get(key) || renderApproval(approvalId, approval);
+      card.dataset.attentionKey = key;
+      desired.push(card);
+      if (!existing.has(key)) added.push(card);
     }
     for (const [inputId, input] of app.threadState.userInputs) {
-      dom.attention.append(renderUserInput(inputId, input));
+      const key = `input:${inputId}`;
+      const card = existing.get(key) || renderUserInput(inputId, input);
+      card.dataset.attentionKey = key;
+      desired.push(card);
+      if (!existing.has(key)) added.push(card);
     }
-    dom.attention.hidden = dom.attention.childElementCount === 0;
+    reconcileChildren(dom.attention, desired);
+    dom.attention.hidden = desired.length === 0;
+    if (added[0]) {
+      app.pendingAttentionFocus = added[0].dataset.attentionKey;
+      requestAnimationFrame(() => focusPendingAttention(app.pendingAttentionFocus));
+    } else if (desired.length === 0) {
+      app.pendingAttentionFocus = "";
+    }
+  }
+
+  function focusPendingAttention(key) {
+    if (!key || dom.session.inert) return;
+    const card = [...dom.attention.children]
+      .find((node) => node.dataset.attentionKey === key);
+    if (!card) {
+      if (app.pendingAttentionFocus === key) app.pendingAttentionFocus = "";
+      return;
+    }
+    card.focus({ preventScroll: false });
+    if (app.pendingAttentionFocus === key) app.pendingAttentionFocus = "";
   }
 
   function renderApproval(approvalId, approval) {
     const card = element("article", "attention-card");
+    const titleId = `attention-approval-${safeDomId(approvalId)}`;
+    card.tabIndex = -1;
+    card.setAttribute("role", "group");
+    card.setAttribute("aria-labelledby", titleId);
     card.append(element("p", "eyebrow", "Approval required"));
-    card.append(element("h2", "", approval.tool_name || "Tool request"));
+    const title = element("h2", "", approval.tool_name || "Tool request");
+    title.id = titleId;
+    card.append(title);
     card.append(element("p", "", approval.intent_summary || approval.description || "Codewhale is waiting for permission."));
     const actions = element("div", "attention-actions");
     const rememberLabel = element("label", "remember-field");
@@ -954,8 +1439,14 @@ function startBrowserClient() {
 
   function renderUserInput(inputId, envelope) {
     const card = element("form", "attention-card");
+    const titleId = `attention-input-${safeDomId(inputId)}`;
+    card.tabIndex = -1;
+    card.setAttribute("role", "group");
+    card.setAttribute("aria-labelledby", titleId);
     card.append(element("p", "eyebrow", "Input required"));
-    card.append(element("h2", "", "Codewhale has a question"));
+    const title = element("h2", "", "Codewhale has a question");
+    title.id = titleId;
+    card.append(title);
     const questions = Array.isArray(envelope.request?.questions) ? envelope.request.questions : [];
     const groups = [];
     for (const question of questions) {
@@ -975,15 +1466,26 @@ function startBrowserClient() {
         fieldset.append(label);
         controls.push({ input, label: option.label || "", value: option.label || "" });
       }
-      let other = null;
-      if (question.allow_free_text) {
-        other = document.createElement("input");
-        other.className = "other-answer";
-        other.type = "text";
-        other.placeholder = "Other response";
-        other.setAttribute("aria-label", `${question.header || "Question"} other response`);
-        fieldset.append(other);
+      // Match the terminal surface: a custom answer stays available even when
+      // an older request omitted or disabled the legacy allow_free_text hint.
+      const other = document.createElement("input");
+      other.className = "other-answer";
+      other.type = "text";
+      other.placeholder = "Other response";
+      other.setAttribute("aria-label", `${question.header || "Question"} other response`);
+      if (!question.multi_select) {
+        other.addEventListener("input", () => {
+          if (other.value.trim()) {
+            for (const control of controls) control.input.checked = false;
+          }
+        });
+        for (const control of controls) {
+          control.input.addEventListener("change", () => {
+            if (control.input.checked) other.value = "";
+          });
+        }
       }
+      fieldset.append(other);
       card.append(fieldset);
       groups.push({ question, controls, other });
     }
@@ -994,24 +1496,36 @@ function startBrowserClient() {
     card.append(actions);
     card.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const answers = [];
+      const selections = new Map();
+      const freeText = new Map();
       for (const group of groups) {
+        const selected = [];
         for (const control of group.controls) {
-          if (control.input.checked) {
-            answers.push({ id: group.question.id, label: control.label, value: control.value });
-          }
+          if (control.input.checked) selected.push(control.value);
         }
-        const otherValue = group.other?.value.trim();
-        if (otherValue) answers.push({ id: group.question.id, label: "Other", value: otherValue });
-        if (!answers.some((answer) => answer.id === group.question.id)) {
-          showStatus(`Choose an answer for ${group.question.header || group.question.question || "each question"}.`);
-          return;
-        }
+        selections.set(group.question.id, selected);
+        freeText.set(group.question.id, group.other.value);
+      }
+      const resolved = resolveUserInputTarget(inputId, app.target, app.threadState);
+      if (!resolved.ok) {
+        showStatus(refusalMessage(resolved.reason));
+        renderAttention();
+        return;
+      }
+      const built = answersForUserInput(envelope.request, selections, freeText);
+      if (!built.ok) {
+        const message = built.reason === "missing-answer"
+          ? `Choose an answer for ${built.question}.`
+          : built.reason === "multiple-answers"
+            ? `Choose one answer for ${built.question}.`
+            : `That question changed before it could be submitted — nothing was sent.`;
+        showStatus(message);
+        return;
       }
       try {
-        await api(`/v1/user-input/${encodeURIComponent(app.selectedThreadId)}/${encodeURIComponent(inputId)}`, {
+        await api(`/v1/user-input/${encodeURIComponent(resolved.threadId)}/${encodeURIComponent(resolved.inputId)}`, {
           method: "POST",
-          body: JSON.stringify({ answers }),
+          body: JSON.stringify({ answers: built.answers }),
         });
         app.threadState.userInputs.delete(inputId);
         showStatus("");
@@ -1021,6 +1535,10 @@ function startBrowserClient() {
       }
     });
     return card;
+  }
+
+  function safeDomId(value) {
+    return String(value || "item").replace(/[^a-zA-Z0-9_-]/g, "-");
   }
 
   function latestTurn() {
@@ -1177,7 +1695,7 @@ function startBrowserClient() {
     if (globalThis.matchMedia("(max-width: 800px)").matches) closeRail();
   }
 
-  dom.railOpen.addEventListener("click", () => dom.shell.classList.add("rail-visible"));
+  dom.railOpen.addEventListener("click", openRail);
   dom.railClose.addEventListener("click", closeRail);
   dom.railScrim.addEventListener("click", closeRail);
   dom.newThread.addEventListener("click", createThread);
@@ -1207,9 +1725,22 @@ function startBrowserClient() {
       loadSessions().catch(() => {});
     }, 180);
   });
+  document.addEventListener("keydown", (event) => {
+    if (trapRailFocus(event)) return;
+    if (event.key === "Escape" && narrowRail.matches && dom.shell.classList.contains("rail-visible")) {
+      event.preventDefault();
+      closeRail();
+    }
+  });
+  narrowRail.addEventListener("change", syncRailAccessibility);
+  globalThis.visualViewport?.addEventListener("resize", syncVisualViewport);
+  globalThis.visualViewport?.addEventListener("scroll", syncVisualViewport);
+  globalThis.addEventListener("resize", syncVisualViewport);
   globalThis.addEventListener("beforeunload", stopStream);
 
   async function initialize() {
+    syncVisualViewport();
+    syncRailAccessibility();
     try {
       [app.runtimeInfo, app.workspace] = await Promise.all([
         api("/v1/runtime/info"),

@@ -73,6 +73,15 @@ pub fn config_command(app: &mut App, arg: Option<&str>) -> CommandResult {
         let rest = raw_words.next().unwrap_or("").trim();
         return super::permissions::permissions_command(app, Some(rest));
     }
+    if first_word.is_some_and(|token| {
+        token.eq_ignore_ascii_case("workflow") || token.eq_ignore_ascii_case("goal")
+    }) && raw_words
+        .clone()
+        .next()
+        .is_none_or(|rest| rest.trim().is_empty())
+    {
+        return super::workflow_settings(app);
+    }
     if first_word.is_some_and(|token| token.eq_ignore_ascii_case("subagents")) {
         let rest = raw_words.next().unwrap_or("").trim();
         return subagents_config_command(app, rest);
@@ -2023,14 +2032,14 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                 "keep_footer" => app.mini_window.keep_footer = value,
                 _ => unreachable!("mini_window field matched above"),
             }
-            if persist {
-                if let Err(err) = crate::config_persistence::persist_mini_window_bool_key(
+            if persist
+                && let Err(err) = crate::config_persistence::persist_mini_window_bool_key(
                     app.config_path.as_deref(),
                     field,
                     value,
-                ) {
-                    return CommandResult::error(format!("Failed to persist: {err}"));
-                }
+                )
+            {
+                return CommandResult::error(format!("Failed to persist: {err}"));
             }
             app.needs_redraw = true;
         }
@@ -2543,6 +2552,24 @@ mod tests {
 
     fn create_test_app() -> App {
         create_test_app_with_config(&Config::default())
+    }
+
+    #[test]
+    fn config_workflow_and_goal_explain_the_effective_tables() {
+        let mut app = create_test_app();
+        for token in ["workflow", "goal"] {
+            let result = config_command(&mut app, Some(token));
+            assert!(
+                result.action.is_none(),
+                "{token} must not spend a model turn"
+            );
+            let text = result.message.as_deref().unwrap_or_default();
+            assert!(
+                text.contains("require_approval_for_writes"),
+                "{token}: {text}"
+            );
+            assert!(text.contains("max_continuations"), "{token}: {text}");
+        }
     }
 
     /// The shipped preset must survive its own preflight, or `/config preset

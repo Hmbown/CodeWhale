@@ -132,6 +132,8 @@ pub const DEFAULT_VLLM_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
 pub const DEFAULT_VLLM_BASE_URL: &str = "http://localhost:8000/v1";
 pub const DEFAULT_OLLAMA_MODEL: &str = "deepseek-v4-flash";
 pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
+pub const DEFAULT_OLLAMA_CLOUD_MODEL: &str = "gpt-oss:120b";
+pub const DEFAULT_OLLAMA_CLOUD_BASE_URL: &str = codewhale_config::provider::OLLAMA_CLOUD_BASE_URL;
 pub const DEFAULT_HUGGINGFACE_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
 pub const DEFAULT_HUGGINGFACE_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
 pub const DEFAULT_HUGGINGFACE_BASE_URL: &str = "https://router.huggingface.co/v1";
@@ -165,15 +167,16 @@ pub const COMMON_DEEPSEEK_MODELS: &[&str] = &[
     "deepseek/deepseek-v4-flash",
 ];
 pub const OFFICIAL_DEEPSEEK_MODELS: &[&str] = &["deepseek-v4-pro", "deepseek-v4-flash"];
-pub const DEFAULT_ZAI_MODEL: &str = "GLM-5.2";
-pub const ZAI_GLM_5_1_MODEL: &str = "GLM-5.1";
-pub const ZAI_GLM_5_2_MODEL: &str = "GLM-5.2";
-// GLM-5.3 is live on the Z.ai Coding Plan (2026-08-13). The id follows the
-// family's naming convention. Limits and reasoning options still inherit
-// from glm-5.2 until Z.ai publishes distinct 5.3 numbers; no USD price is
+// GLM-5.3 is live on the Z.ai Coding Plan (2026-08-13) and is the default
+// for new Z.ai routes. Limits and reasoning options still inherit from
+// glm-5.2 until Z.ai publishes distinct 5.3 numbers; no USD price is
 // claimed. Scope is first-party Z.ai plus its OpenRouter mirror only.
 // Correct at crates/config/assets/models_dev.bundled.json
 // `_meta.pending_release_metadata` when distinct 5.3 facts exist.
+// Explicit GLM-5.2 selections keep their own id: only the default moved.
+pub const DEFAULT_ZAI_MODEL: &str = ZAI_GLM_5_3_MODEL;
+pub const ZAI_GLM_5_1_MODEL: &str = "GLM-5.1";
+pub const ZAI_GLM_5_2_MODEL: &str = "GLM-5.2";
 pub const ZAI_GLM_5_3_MODEL: &str = "GLM-5.3";
 pub const ZAI_GLM_5_TURBO_MODEL: &str = "GLM-5-Turbo";
 pub const DEFAULT_ZAI_BASE_URL: &str = "https://api.z.ai/api/coding/paas/v4";
@@ -229,6 +232,8 @@ pub const DEFAULT_GOOGLE_BASE_URL: &str =
     "https://generativelanguage.googleapis.com/v1beta/openai/";
 pub const DEFAULT_TELECOMJS_MODEL: &str = "deepseek-v4-pro";
 pub const DEFAULT_TELECOMJS_BASE_URL: &str = "https://aigw.telecomjs.com/v1";
+pub const DEFAULT_EDENAI_MODEL: &str = "deepseek/deepseek-v4-pro";
+pub const DEFAULT_EDENAI_BASE_URL: &str = "https://api.edenai.run/v3";
 // Alibaba Cloud Model Studio (DashScope) defaults
 pub const DEFAULT_MODELSTUDIO_TOKEN_PLAN_MODEL: &str = "qwen3.8-max";
 pub const DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL: &str =

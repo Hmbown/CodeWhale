@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:3a759de92f8b -->
+<!-- source: README.md sha256:1569156eb887 -->
 # Codewhale
 
 一个面向终端的开源编程智能体——模型由你自带。
@@ -47,6 +47,19 @@ codewhale web                            # local browser client on 127.0.0.1
 - **默认只读,放开权限才更进一步。** Plan 模式不改动文件,审批把关每一次高风险命令。只有当命令确实被 OS 沙箱包装时,Codewhale 才会如实标明:macOS 上是可用时启用的 Seatbelt,Linux 上是需显式启用的 bubblewrap。仓库的 `constitution.json` 会编译成写入拦截,连 Full Access 也无法跳过。
 - **随时可以续跑的工作。** Fleet 把每一步记录在只追加的账本里,`fleet resume` 从你停下的地方继续。
 
+## 集成
+
+- **DeepSeek Harness（dsh）——通过 Codewhale 连接。**
+  `codewhale integrations dsh connect` 可将现有的 `@deepseek-ai/dsh` 安装
+  连接到你的 Codewhale 提供商路由、权限和工作区；`integrations dsh
+  install-bundle` 会添加可选的 DSH 插件包，让 `dsh --profile codewhale`
+  独立携带同一身份。Codewhale 负责权限与生命周期；dsh 保留自己的会话、
+  配置文件和凭据，不会被改动。详见
+  [docs/INTEGRATIONS_DSH.md](docs/INTEGRATIONS_DSH.md)。
+- **VS Code。** 官方扩展脚手架（`extensions/vscode`）可在集成终端中打开
+  Codewhale，并通过本地运行时提供只读的 Agent View。目前仍是本地开发
+  预览版，尚未发布到插件市场。
+
 ## 了解更多
 
 - [docs/PROVIDERS.md](docs/PROVIDERS.md) — 每一条 provider 路由:托管、网关与本地
@@ -74,4 +87,4 @@ Issue、PR、复现步骤、日志和功能请求,在这里都算真实的项目
 
 [MIT](LICENSE)。独立的社区项目,与任何模型 provider 均无隶属关系。
 
-[![Star History Chart](https://api.star-history.com/chart?repos=Hmbown/CodeWhale&type=date&legend=top-left)](https://www.star-history.com/?repos=Hmbown%2FCodeWhale&type=date)
+![Codewhale 在终端中并行派出三个只读 scout 子代理](assets/fanout.gif)

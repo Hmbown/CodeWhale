@@ -1027,6 +1027,127 @@ network_hosts = ["example.invalid"]
     );
 }
 
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn reviewed_node_mjs_plugin_connects_through_inherited_descriptor() {
+    if std::process::Command::new("node")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping reviewed Node ESM launch test because node is unavailable");
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let plugins_root = dir.path().join("plugins");
+    let plugin_base = plugins_root.join("node-esm");
+    fs::create_dir_all(&plugin_base).unwrap();
+    fs::write(
+        plugin_base.join("server.mjs"),
+        r#"import readline from 'node:readline';
+const lines = readline.createInterface({ input: process.stdin });
+lines.on('line', (line) => {
+  const request = JSON.parse(line);
+  if (request.id === undefined) return;
+  let result;
+  if (request.method === 'initialize') {
+    result = {
+      protocolVersion: '2025-06-18',
+      capabilities: { tools: {} },
+      serverInfo: { name: 'node-esm', version: '1.0.0' }
+    };
+  } else if (request.method === 'tools/list') {
+    result = {
+      tools: [{ name: 'ready', description: 'ready', inputSchema: { type: 'object' } }]
+    };
+  } else {
+    result = {};
+  }
+  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\n');
+});
+"#,
+    )
+    .unwrap();
+    fs::write(
+        plugin_base.join("plugin.toml"),
+        r#"
+schema_version = 1
+[plugin]
+name = "node-esm"
+version = "1.0.0"
+
+[mcp_servers.local]
+command = "node"
+args = ["server.mjs"]
+connect_timeout = 2
+"#,
+    )
+    .unwrap();
+
+    let discovery = crate::plugins::discovery::DiscoveryConfig {
+        workspace: dir.path().join("project"),
+        user_plugins_dir: plugins_root,
+        workspace_plugins_dir: dir.path().join("workspace-plugins-unused"),
+        builtin_plugin_dirs: Vec::new(),
+        state_path: dir.path().join("plugin-state/state.json"),
+    };
+    let mut registry = crate::plugins::discovery::discover_with_config(&discovery);
+    registry.trust("node-esm").unwrap();
+    registry.enable("node-esm").unwrap();
+    let active = registry.active_plugins()[0].clone();
+    let authority = registry.authority_for("node-esm").unwrap();
+    let merged = merge_plugin_mcp_servers_from_plugins(
+        McpConfig::default(),
+        vec![("node-esm".to_string(), active, authority)],
+    )
+    .unwrap();
+    let mut pool = McpPool::new(merged);
+
+    let connection = pool
+        .get_or_connect("plugin-8-node-esm-local")
+        .await
+        .unwrap();
+    assert_eq!(connection.tools().len(), 1);
+    assert_eq!(connection.tools()[0].name, "ready");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn node_esm_descriptor_launch_keeps_options_argv_shape_and_script_arguments() {
+    use std::ffi::OsString;
+    let os = |value: &str| OsString::from(value);
+
+    // Options before the entrypoint stay in front; the entry is imported by
+    // descriptor once, an empty main is supplied, and the descriptor path is
+    // echoed after `--` so `process.argv[1]` keeps the file-mode shape.
+    let args = vec![
+        os("--max-old-space-size=256"),
+        os("/dev/fd/7"),
+        os("--port"),
+        os("0"),
+    ];
+    assert_eq!(
+        super::node_esm_descriptor_args(&args, 1),
+        vec![
+            os("--max-old-space-size=256"),
+            os("--import"),
+            os("/dev/fd/7"),
+            os("-e"),
+            os(""),
+            os("--"),
+            os("/dev/fd/7"),
+            os("--port"),
+            os("0"),
+        ]
+    );
+
+    // A `.mjs` that is not the first positional argument is not the
+    // entrypoint; the launch is left untouched.
+    let args = vec![os("other.js"), os("/dev/fd/7")];
+    assert_eq!(super::node_esm_descriptor_args(&args, 1), args);
+}
+
 #[test]
 fn plugin_server_ids_are_unambiguous_across_hyphenated_plugin_and_server_names() {
     let left = qualified_plugin_server_name("foo-bar", "baz");

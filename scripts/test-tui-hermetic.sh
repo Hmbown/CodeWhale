@@ -34,7 +34,7 @@ while [ "$run" -le "$runs" ]; do
     USERPROFILE="$root/home" \
     CODEWHALE_HOME="$root/codewhale-home" \
     XDG_CONFIG_HOME="$root/xdg" \
-    DEEPSEEK_CONFIG_PATH="$root/codewhale-home/config.toml" \
+    CODEWHALE_CONFIG_PATH="$root/codewhale-home/config.toml" \
     CODEX_HOME="$root/codex" \
     GROK_HOME="$root/grok" \
     GROK_AUTH_PATH="$root/grok/auth.json" \

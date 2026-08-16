@@ -98,15 +98,15 @@ impl InstallMethod {
 
     /// The exact shell command that updates this install.
     ///
-    /// Homebrew still points at the legacy `deepseek-tui` formula: no
-    /// `codewhale` formula is published yet (see `docs/INSTALL.md`), and
-    /// naming one that does not exist would hand the user a command that
-    /// fails.
+    /// Homebrew's primary formula is `codewhale`. Existing Cellar paths
+    /// under the legacy `deepseek-tui` name still detect as Homebrew; those
+    /// installs can keep using `brew upgrade deepseek-tui` during the
+    /// overlap window, but new notices name the Codewhale formula.
     #[must_use]
     pub fn update_command(self) -> &'static str {
         match self {
             Self::Npm => "npm install -g codewhale@latest",
-            Self::Homebrew => "brew upgrade deepseek-tui",
+            Self::Homebrew => "brew upgrade codewhale",
             Self::Cargo => "cargo install codewhale-cli --locked --force",
             Self::Binary => "codewhale update",
         }
@@ -167,6 +167,9 @@ mod tests {
     #[test]
     fn homebrew_install_is_detected_from_cellar_on_both_prefixes() {
         for exe in [
+            "/opt/homebrew/Cellar/codewhale/0.9.8/bin/codewhale",
+            "/usr/local/Cellar/codewhale/0.9.8/bin/codewhale",
+            "/home/linuxbrew/.linuxbrew/Cellar/codewhale/0.9.8/bin/codewhale",
             "/opt/homebrew/Cellar/deepseek-tui/0.9.4/bin/codewhale",
             "/usr/local/Cellar/deepseek-tui/0.9.4/bin/codewhale",
             "/home/linuxbrew/.linuxbrew/Cellar/deepseek-tui/0.9.4/bin/codewhale",
@@ -177,10 +180,9 @@ mod tests {
                 "{exe} should read as Homebrew"
             );
         }
-        // The formula is still the legacy name; see `docs/INSTALL.md`.
         assert_eq!(
             InstallMethod::Homebrew.update_command(),
-            "brew upgrade deepseek-tui"
+            "brew upgrade codewhale"
         );
         assert!(!InstallMethod::Homebrew.supports_self_update());
     }

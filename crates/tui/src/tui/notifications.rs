@@ -448,11 +448,18 @@ fn taskbar_progress_sequence(state: u8, progress: Option<u8>) -> String {
     }
 }
 
-/// Build the OSC 0 window-title sequence. Split from the write for the same
-/// reason as [`taskbar_progress_sequence`].
+const MAX_TERMINAL_TITLE_CHARS: usize = 160;
+
+/// Build a bounded OSC 0 window-title sequence. User-controlled session names
+/// can reach this boundary, so control and bidi-format characters are removed
+/// before the title is embedded in a terminal escape sequence.
 #[must_use]
 fn terminal_title_sequence(title: &str) -> String {
-    format!("\x1b]0;{title}\x07")
+    let safe: String = crate::session_manager::sanitize_session_title(title)
+        .chars()
+        .take(MAX_TERMINAL_TITLE_CHARS)
+        .collect();
+    format!("\x1b]0;{safe}\x07")
 }
 
 /// Whether raw terminal control sequences may be written to stdout.
@@ -485,6 +492,83 @@ pub fn set_taskbar_progress_busy() {
 /// Clear taskbar progress — call at turn end.
 pub fn clear_taskbar_progress() {
     set_taskbar_progress(0, None);
+}
+
+/// Current session name, mirrored by the render loop so background title
+/// updates can identify their session without duplicating session state.
+static TITLE_PREFIX: OnceLock<Mutex<String>> = OnceLock::new();
+
+pub(crate) fn title_prefix_slot() -> &'static Mutex<String> {
+    TITLE_PREFIX.get_or_init(|| Mutex::new(String::new()))
+}
+
+/// Serialise tests that touch the process-global title prefix so parallel
+/// threads cannot leak a prefix into an unrelated assertion. Also used by
+/// `underwater` tests that drive [`set_title_prefix`] through the render
+/// loop.
+#[cfg(test)]
+pub(crate) fn title_prefix_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Mirror the current session name into the background title renderer.
+///
+/// Change detection keeps the per-frame render-loop sync free when the title
+/// did not move; on an actual change the running title is redrawn immediately
+/// so alt-tabbed sessions pick up the new identity without waiting for the
+/// next activity-verb update.
+pub fn set_title_prefix(prefix: Option<&str>) {
+    let prefix = prefix.unwrap_or_default().trim();
+    let changed = {
+        let mut slot = title_prefix_slot()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if slot.as_str() == prefix {
+            false
+        } else {
+            slot.clear();
+            slot.push_str(prefix);
+            true
+        }
+    };
+    // Redraw only after the prefix lock is released: the title render path
+    // re-locks [`title_prefix_slot`] through `decorate_title`, and a `Mutex`
+    // is not reentrant — drawing while holding it would deadlock the
+    // render loop on the first `/title` during an active turn.
+    if !changed {
+        return;
+    }
+    if TITLE_ANIMATION_RUNNING.load(Ordering::SeqCst) {
+        let base = title_animation_base()
+            .lock()
+            .map_or_else(|_| "Codewhale".to_string(), |base| base.clone());
+        let motion = TITLE_MOTION_ENABLED.load(Ordering::SeqCst);
+        set_terminal_title(&title_activity_label(
+            &base,
+            Duration::ZERO,
+            TERMINAL_FOCUSED.load(Ordering::SeqCst),
+            motion,
+        ));
+    } else {
+        // At rest nothing else repaints OSC 0 until the next turn starts, so
+        // `/title` or `/rename` between turns must redraw the resting title
+        // itself — otherwise the tab keeps the old name while the command
+        // already reported success.
+        set_terminal_title(&decorate_title(resting_title_body()));
+    }
+}
+
+/// The undecorated title body shown between turns: the completion marker
+/// while it is still on display, otherwise the plain product name.
+fn resting_title_body() -> &'static str {
+    if COMPLETION_MARKER_SHOWN.load(Ordering::SeqCst) {
+        "✓ done"
+    } else {
+        "Codewhale"
+    }
 }
 
 /// Shared flag controlling the title activity marker. Set to `true` by
@@ -562,11 +646,26 @@ fn title_activity_label(base: &str, elapsed: Duration, focused: bool, motion: bo
     // Static title when motion is off or the window is focused: one whale +
     // state, no competing spinner in the focused app chrome.
     if !motion || focused {
-        return format!("🐳 {body}");
+        return decorate_title(&format!("🐳 {body}"));
     }
     let frame = TITLE_WHALE_FRAMES
         [(elapsed.as_millis() / TITLE_FRAME_HOLD.as_millis()) as usize % TITLE_WHALE_FRAMES.len()];
-    format!("{frame} {body}")
+    decorate_title(&format!("{frame} {body}"))
+}
+
+/// Apply the `[prefix] ` decoration to a raw window-title body.
+///
+/// With no configured prefix this returns the input unchanged, so existing
+/// installs keep the exact titles they had before this feature landed.
+fn decorate_title(raw: &str) -> String {
+    let prefix = title_prefix_slot()
+        .lock()
+        .map_or_else(|_| String::new(), |prefix| prefix.clone());
+    if prefix.is_empty() {
+        raw.to_string()
+    } else {
+        format!("[{prefix}] {raw}")
+    }
 }
 
 /// Write OSC 0 (set window title) sequence.
@@ -671,7 +770,7 @@ pub fn stop_title_animation() {
     // Always show the completion marker so quiet-sound modes still communicate
     // finish state in the window title; interaction clears it.
     COMPLETION_MARKER_SHOWN.store(true, Ordering::SeqCst);
-    set_terminal_title("✓ done");
+    set_terminal_title(&decorate_title("✓ done"));
     play_completion_sound();
 }
 
@@ -683,7 +782,7 @@ pub fn stop_title_animation_quietly() {
     TITLE_ANIMATION_RUNNING.store(false, Ordering::SeqCst);
     TITLE_ANIMATION_GENERATION.fetch_add(1, Ordering::SeqCst);
     COMPLETION_MARKER_SHOWN.store(false, Ordering::SeqCst);
-    set_terminal_title("Codewhale");
+    set_terminal_title(&decorate_title("Codewhale"));
 }
 
 /// Clear the completion marker from the title when the user interacts.
@@ -692,7 +791,7 @@ pub fn stop_title_animation_quietly() {
 /// marker doesn't persist once the user is back at the terminal.
 pub fn reset_title_on_interaction() {
     if COMPLETION_MARKER_SHOWN.swap(false, Ordering::SeqCst) {
-        set_terminal_title("Codewhale");
+        set_terminal_title(&decorate_title("Codewhale"));
     }
 }
 
@@ -1130,6 +1229,7 @@ mod tests {
 
     #[test]
     fn title_whale_is_static_when_focused_or_motion_disabled() {
+        let _guard = prefix_lock();
         if let Ok(mut verb) = title_activity_verb().lock() {
             "working…".clone_into(&mut *verb);
         }
@@ -1155,6 +1255,82 @@ mod tests {
     fn title_whale_frames_are_the_restored_emoji_pair() {
         assert_eq!(TITLE_WHALE_FRAMES, &["🐳", "🐋", "🐳", "🐋"]);
         assert_eq!(TITLE_FRAME_HOLD, Duration::from_millis(800));
+    }
+
+    /// Serialise tests that touch the process-global title prefix so parallel
+    /// threads cannot leak a prefix into an unrelated assertion.
+    fn prefix_lock() -> std::sync::MutexGuard<'static, ()> {
+        title_prefix_test_lock()
+    }
+
+    #[test]
+    fn title_prefix_decorates_activity_label() {
+        let _guard = prefix_lock();
+        set_title_prefix(Some("task-7"));
+        if let Ok(mut verb) = title_activity_verb().lock() {
+            "reasoning…".clone_into(&mut *verb);
+        }
+        assert_eq!(
+            title_activity_label("Codewhale", Duration::ZERO, true, true),
+            "[task-7] 🐳 reasoning…"
+        );
+        assert_eq!(
+            title_activity_label("Codewhale", Duration::ZERO, false, true),
+            "[task-7] 🐳 reasoning…"
+        );
+        set_title_prefix(None);
+        assert_eq!(
+            title_activity_label("Codewhale", Duration::ZERO, true, true),
+            "🐳 reasoning…"
+        );
+    }
+
+    #[test]
+    fn title_prefix_decorates_rest_and_completion_titles() {
+        let _guard = prefix_lock();
+        set_title_prefix(Some("feature/x"));
+        assert_eq!(decorate_title("Codewhale"), "[feature/x] Codewhale");
+        assert_eq!(decorate_title("✓ done"), "[feature/x] ✓ done");
+        set_title_prefix(None);
+        assert_eq!(decorate_title("Codewhale"), "Codewhale");
+        assert_eq!(decorate_title("✓ done"), "✓ done");
+        // Empty/whitespace prefixes behave exactly like `None`.
+        set_title_prefix(Some("   "));
+        assert_eq!(decorate_title("Codewhale"), "Codewhale");
+        set_title_prefix(None);
+    }
+
+    #[test]
+    fn title_prefix_change_detection_skips_redundant_writes() {
+        let _guard = prefix_lock();
+        set_title_prefix(Some("alpha"));
+        assert_eq!(title_prefix_slot().lock().unwrap().as_str(), "alpha");
+        // Setting the same prefix again must not clear the stored value.
+        set_title_prefix(Some("alpha"));
+        assert_eq!(title_prefix_slot().lock().unwrap().as_str(), "alpha");
+        set_title_prefix(Some("beta"));
+        assert_eq!(title_prefix_slot().lock().unwrap().as_str(), "beta");
+        set_title_prefix(None);
+        assert_eq!(title_prefix_slot().lock().unwrap().as_str(), "");
+    }
+
+    #[test]
+    fn set_title_prefix_redraws_without_deadlocking_while_animating() {
+        // Regression: `set_title_prefix` used to redraw the title while still
+        // holding the prefix lock. The redraw path (`title_activity_label` →
+        // `decorate_title`) re-locks the same `Mutex`, and `Mutex` is not
+        // reentrant — the first `/title` during an active turn froze the
+        // whole render loop. Exercise the exact path: prefix change while
+        // the animation worker is running.
+        let _guard = prefix_lock();
+        start_title_animation("Codewhale");
+        assert!(TITLE_ANIMATION_RUNNING.load(Ordering::SeqCst));
+        set_title_prefix(Some("task-7"));
+        assert_eq!(title_prefix_slot().lock().unwrap().as_str(), "task-7");
+        set_title_prefix(None);
+        assert_eq!(title_prefix_slot().lock().unwrap().as_str(), "");
+        stop_title_animation_quietly();
+        assert!(!TITLE_ANIMATION_RUNNING.load(Ordering::SeqCst));
     }
 
     /// Serialise tests that mutate process-global environment or notification
@@ -1381,6 +1557,52 @@ mod tests {
             terminal_title_sequence("🐳 working…"),
             "\x1b]0;🐳 working…\x07"
         );
+    }
+
+    #[test]
+    fn terminal_title_sequence_strips_control_and_bidi_injection() {
+        assert_eq!(
+            terminal_title_sequence("safe\u{1b}]2;owned\u{7}\u{202e}title"),
+            "\x1b]0;safe]2;ownedtitle\x07"
+        );
+        let oversized = "x".repeat(MAX_TERMINAL_TITLE_CHARS + 20);
+        assert_eq!(
+            terminal_title_sequence(&oversized),
+            format!("\x1b]0;{}\x07", "x".repeat(MAX_TERMINAL_TITLE_CHARS))
+        );
+    }
+
+    #[test]
+    fn terminal_title_sequence_strips_zero_width_and_bidi_marks_but_keeps_cjk() {
+        // C1 controls (0x9C ST, 0x9D OSC), zero-width joiners/spaces, bidi
+        // marks and isolates, BOM, soft hyphen, and line separators are all
+        // dropped; CJK, emoji, and ordinary punctuation survive untouched.
+        assert_eq!(
+            terminal_title_sequence(
+                "会\u{9d}0;議\u{9c}\u{200b}A\u{200f}B\u{061c}C\u{2066}D\u{2069}\u{feff}E\u{00ad}F\u{2028}G 🐳!"
+            ),
+            "\x1b]0;会0;議ABCDEFG 🐳!\x07"
+        );
+        // Length is bounded by chars, so a CJK title keeps whole characters.
+        let cjk = "漢".repeat(MAX_TERMINAL_TITLE_CHARS + 5);
+        assert_eq!(
+            terminal_title_sequence(&cjk),
+            format!("\x1b]0;{}\x07", "漢".repeat(MAX_TERMINAL_TITLE_CHARS))
+        );
+    }
+
+    #[test]
+    fn title_prefix_change_at_rest_repaints_the_resting_title() {
+        let _guard = prefix_lock();
+        TITLE_ANIMATION_RUNNING.store(false, Ordering::SeqCst);
+        COMPLETION_MARKER_SHOWN.store(false, Ordering::SeqCst);
+        set_title_prefix(Some("Alpha"));
+        assert_eq!(decorate_title(resting_title_body()), "[Alpha] Codewhale");
+        COMPLETION_MARKER_SHOWN.store(true, Ordering::SeqCst);
+        assert_eq!(decorate_title(resting_title_body()), "[Alpha] ✓ done");
+        COMPLETION_MARKER_SHOWN.store(false, Ordering::SeqCst);
+        set_title_prefix(None);
+        assert_eq!(decorate_title(resting_title_body()), "Codewhale");
     }
 
     #[test]

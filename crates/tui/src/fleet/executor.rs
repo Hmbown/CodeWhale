@@ -166,13 +166,16 @@ pub(crate) fn authority_envelope_for_worker(
             )
         };
     let shell = if authority == ToolMutationAuthority::ReadOnly
-        && matches!(&spec.agent_type, FleetRole::Scout | FleetRole::Reviewer)
+        && matches!(
+            &spec.agent_type,
+            FleetRole::Scout | FleetRole::Reviewer | FleetRole::Planner
+        )
         && spec.runtime_profile.shell.allows_shell()
     {
-        // Scout and Reviewer get one classifier-bounded foreground shell.
-        // Verifiers keep
-        // the dedicated Run surface, while planners/consultants remain
-        // shell-less and writers retain the historical subprocess contract.
+        // Scout, Reviewer, and Planner get one classifier-bounded
+        // foreground shell. Verifiers keep the dedicated Run surface,
+        // consultants remain shell-less, and writers retain the historical
+        // subprocess contract.
         ToolShellAuthority::ReadOnly
     } else {
         ToolShellAuthority::None
@@ -961,7 +964,7 @@ mod tests {
     }
 
     #[test]
-    fn consultant_launch_spec_carries_network_off_with_read_only_authority() {
+    fn consultant_launch_spec_carries_read_only_authority_with_network_reads() {
         let tmp = TempDir::new().unwrap();
         let mut task = task("advise on the release candidate");
         task.worker.as_mut().unwrap().role = Some("consultant".to_string());
@@ -970,7 +973,9 @@ mod tests {
             launch_spec.agent_type,
             crate::tools::subagent::FleetRole::Consultant
         );
-        assert!(!launch_spec.runtime_profile.permissions.network);
+        // Counsel only: never writes the workspace, but may read the web.
+        assert!(!launch_spec.runtime_profile.permissions.write);
+        assert!(launch_spec.runtime_profile.permissions.network);
 
         let cmd = build_worker_exec_command_with_launch_spec(
             "codewhale",
@@ -991,7 +996,7 @@ mod tests {
         let authority = ToolAuthorityEnvelope::from_json(&cmd.args[authority_index + 1]).unwrap();
         assert_eq!(authority.owner, "worker-1");
         assert_eq!(authority.authority, ToolMutationAuthority::ReadOnly);
-        assert_eq!(authority.network_access, Some(false));
+        assert_eq!(authority.network_access, Some(true));
         assert_eq!(authority.shell, ToolShellAuthority::None);
         assert_eq!(authority.verification, ToolVerificationAuthority::None);
         assert!(authority.writable_roots.is_empty());
@@ -1000,9 +1005,9 @@ mod tests {
     }
 
     #[test]
-    fn scout_and_reviewer_launches_carry_only_read_only_shell_authority() {
+    fn scout_reviewer_and_planner_launches_carry_only_read_only_shell_authority() {
         let tmp = TempDir::new().unwrap();
-        for role in ["scout", "reviewer"] {
+        for role in ["scout", "reviewer", "planner"] {
             let mut task = task("inspect repository and GitHub state");
             task.worker.as_mut().unwrap().role = Some(role.to_string());
             let launch_spec = launch_spec(&task, tmp.path());

@@ -396,7 +396,7 @@ fn compact_structured_tool_result_for_context(tool_name: &str, raw: &str) -> Opt
 fn tool_result_context_limits_for_window(context_window: u32) -> ToolResultContextLimits {
     let is_large_context = context_window >= LARGE_CONTEXT_WINDOW_TOKENS;
 
-    if is_large_context {
+    let mut limits = if is_large_context {
         ToolResultContextLimits {
             hard_limit_chars: LARGE_CONTEXT_TOOL_RESULT_HARD_LIMIT_CHARS,
             noisy_soft_limit_chars: LARGE_CONTEXT_TOOL_RESULT_SOFT_LIMIT_CHARS,
@@ -408,7 +408,18 @@ fn tool_result_context_limits_for_window(context_window: u32) -> ToolResultConte
             noisy_soft_limit_chars: TOOL_RESULT_CONTEXT_SOFT_LIMIT_CHARS,
             snippet_chars: TOOL_RESULT_CONTEXT_SNIPPET_CHARS,
         }
+    };
+    if let Some(bytes) =
+        crate::tools::large_output_router::WorkshopConfig::active_tool_result_max_bytes()
+    {
+        // Opt-in long-context profiles may raise the model-visible budget.
+        // Never lower the compile-time floor; cap at 2 MiB (#5367).
+        let raised = bytes.clamp(limits.hard_limit_chars, 2 * 1024 * 1024);
+        limits.hard_limit_chars = raised;
+        limits.snippet_chars = (raised / 3).max(limits.snippet_chars);
+        limits.noisy_soft_limit_chars = limits.noisy_soft_limit_chars.max(raised / 6);
     }
+    limits
 }
 
 #[cfg(test)]

@@ -123,6 +123,7 @@ function deriveProvidersFromConfig(cfg: string): ProviderFact[] {
     Sglang: { id: "sglang", label: "SGLang", env: "SGLANG_API_KEY" },
     Vllm: { id: "vllm", label: "vLLM", env: "VLLM_API_KEY" },
     Ollama: { id: "ollama", label: "Ollama", env: "OLLAMA_API_KEY" },
+    OllamaCloud: { id: "ollama-cloud", label: "Ollama Cloud", env: "OLLAMA_CLOUD_API_KEY / OLLAMA_API_KEY" },
     Huggingface: { id: "huggingface", label: "Hugging Face", env: "HUGGINGFACE_API_KEY / HF_TOKEN" },
     Deepinfra: { id: "deepinfra", label: "DeepInfra", env: "DEEPINFRA_API_KEY / DEEPINFRA_TOKEN" },
     Together: { id: "together", label: "Together AI", env: "TOGETHER_API_KEY" },
@@ -142,18 +143,19 @@ function deriveProvidersFromConfig(cfg: string): ProviderFact[] {
     Telecomjs: { id: "telecomjs", label: "TelecomJS TokenHub", env: "TELECOMJS_API_KEY" },
     Xai: { id: "xai", label: "xAI", env: "XAI_API_KEY" },
     Mistral: { id: "mistral", label: "Mistral AI", env: "MISTRAL_API_KEY" },
-  Antigravity: { id: "antigravity", label: "Google Antigravity", env: "ANTIGRAVITY_API_KEY / AGY_ADC_AUTH" },
-  Google: { id: "google", label: "Google Gemini", env: "GOOGLE_API_KEY / GEMINI_API_KEY" },
+    Google: { id: "google", label: "Google Gemini", env: "GOOGLE_API_KEY / GEMINI_API_KEY" },
+    Edenai: { id: "edenai", label: "Eden AI", env: "EDENAI_API_KEY" },
     ModelstudioTokenPlan: { id: "modelstudio-token-plan", label: "Model Studio Token Plan", env: "MODELSTUDIO_API_KEY" },
     ModelstudioTokenPlanAnthropic: { id: "modelstudio-token-plan-anthropic", label: "Model Studio Token Plan (Anthropic-compatible)", env: "MODELSTUDIO_API_KEY" },
     ModelstudioCodingPlan: { id: "modelstudio-coding-plan", label: "Model Studio Coding Plan", env: "MODELSTUDIO_API_KEY" },
     ModelstudioCodingPlanAnthropic: { id: "modelstudio-coding-plan-anthropic", label: "Model Studio Coding Plan (Anthropic-compatible)", env: "MODELSTUDIO_API_KEY" },
   };
   // Log loudly on unmapped variants so a new provider can never be silently
-  // dropped from the drift-derived facts again. DeepseekCN (#1104) and the
-  // dynamic Custom meta-provider (#1519, user-defined endpoints) are the
-  // deliberate exclusions.
-  const EXCLUDED = new Set(["DeepseekCN", "Custom"]);
+  // dropped from the drift-derived facts again. DeepseekCN (#1104), the
+  // dynamic Custom meta-provider (#1519, user-defined endpoints), and
+  // Antigravity (off the website 44 until the cloud-code wire is a
+  // first-class advertised outbound route) are the deliberate exclusions.
+  const EXCLUDED = new Set(["DeepseekCN", "Custom", "Antigravity"]);
   const unmapped = variants.filter((v) => !EXCLUDED.has(v) && !labelMap[v]);
   if (unmapped.length > 0) {
     console.warn(

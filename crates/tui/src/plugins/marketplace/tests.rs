@@ -192,6 +192,35 @@ fn kimi_relative_sources_keep_resolution_for_install_time() {
 }
 
 #[test]
+fn kimi_zip_sources_are_visible_but_not_advertised_as_installable() {
+    let body = r#"{
+      "version": "2",
+      "plugins": [
+        {"id": "zipped", "source": "https://example.invalid/zipped.zip"},
+        {"id": "tarred", "source": "https://example.invalid/tarred.tgz"}
+      ]
+    }"#;
+    let catalog = parse("kimi", MarketplaceFormat::Kimi, body);
+    let zipped = catalog.candidate_by_name("zipped").unwrap();
+    assert!(matches!(
+        zipped.source,
+        MarketplaceSourceSpec::ArchiveUrl { .. }
+    ));
+    assert!(matches!(
+        &zipped.install_plan,
+        MarketplaceInstallPlan::Unsupported { reason, .. }
+            if reason == super::parsers::kimi::KIMI_ZIP_UNSUPPORTED_REASON
+    ));
+
+    let tarred = catalog.candidate_by_name("tarred").unwrap();
+    assert!(matches!(
+        &tarred.install_plan,
+        MarketplaceInstallPlan::Supported { source_kind, .. }
+            if source_kind == super::parsers::kimi::KIMI_GZIP_TARBALL_SOURCE_KIND
+    ));
+}
+
+#[test]
 fn claude_docs_marketplace_parses_both_source_forms() {
     let catalog = parse_auto("claude", CLAUDE_DOCS_MARKETPLACE);
     assert_eq!(catalog.format, MarketplaceFormat::Claude);

@@ -4,6 +4,7 @@ pub mod ids;
 pub mod journal;
 pub mod request;
 pub mod session;
+pub mod tool_parser;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};

@@ -5,6 +5,7 @@
  * produces an operator-facing summary. No write tools required.
  *
  * Run: /workflow run docs/examples/dogfood-automatic/wf_a1_read_only_audit.workflow.js
+ *      (or: codewhale workflow run --source-path docs/examples/dogfood-automatic/wf_a1_read_only_audit.workflow.js --runtime inline)
  */
 export default async function (args) {
   phase("Scout");

@@ -3,8 +3,7 @@
 How CodeWhale keeps model metadata current — what already auto-updates, what
 is hand-maintained, and what a scheduled catalog job should (and should not) do.
 
-Related docs: [`MODEL_PROVIDER_AUDIT.md`](./MODEL_PROVIDER_AUDIT.md),
-[`PROVIDERS.md`](./PROVIDERS.md), RFC
+Related docs: [`PROVIDERS.md`](./PROVIDERS.md), RFC
 [`rfcs/UNIFIED_PROVIDER_LOGIN.md`](./rfcs/UNIFIED_PROVIDER_LOGIN.md).
 
 ---

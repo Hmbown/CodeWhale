@@ -1482,13 +1482,45 @@ impl SessionManager {
     }
 }
 
-/// Trim and bound a user-supplied session title.
+/// Unicode format characters that never belong in a session title: bidi
+/// embeddings/overrides/isolates and marks, zero-width joiners/spaces, the
+/// soft hyphen, BOM, and line/paragraph separators. Together with
+/// `char::is_control` (C0, DEL, C1 — so ESC, BEL, ST, and OSC introducers)
+/// this is the one character policy for the persisted title, the terminal
+/// tab title, and every plain-text listing that echoes a title.
+pub(crate) fn is_title_format_char(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{00ad}'
+            | '\u{061c}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{2028}'..='\u{202e}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{feff}'
+    )
+}
+
+/// Drop control and bidi/zero-width format characters from a title.
+///
+/// A session title is user- or content-derived text that later reaches an
+/// OSC 0 terminal title, `codewhale sessions` stdout, and the picker, so the
+/// persisted value must not be able to carry a raw escape sequence. Ordinary
+/// text, punctuation, CJK, and emoji pass through untouched.
+pub fn sanitize_session_title(raw: &str) -> String {
+    raw.chars()
+        .filter(|ch| !ch.is_control() && !is_title_format_char(*ch))
+        .collect()
+}
+
+/// Sanitize, trim, and bound a user-supplied session title.
 ///
 /// Returns `InvalidInput` for an empty title or one longer than
 /// [`MAX_SESSION_TITLE_CHARS`] so every rename surface (picker, `/rename`,
 /// `PATCH /v1/sessions/{id}`) rejects the same inputs with the same reason.
 pub fn normalize_session_title(title: &str) -> std::io::Result<String> {
-    let trimmed = title.trim();
+    let sanitized = sanitize_session_title(title);
+    let trimmed = sanitized.trim();
     if trimmed.is_empty() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -2016,7 +2048,12 @@ pub(crate) fn strip_thinking_tags(text: &str) -> String {
 /// Truncate a string to create a title (character-safe for UTF-8)
 fn truncate_title(s: &str, max_len: usize) -> String {
     let s = s.trim();
-    let first_line = s.lines().next().unwrap_or(s);
+    // Older sessions may carry a title saved before sanitization existed;
+    // never echo raw controls into stdout or the picker. Take the first
+    // line before sanitizing so a legacy multi-line title still shows only
+    // its first line.
+    let first_line = sanitize_session_title(s.lines().next().unwrap_or(s));
+    let first_line = first_line.trim();
 
     let char_count = first_line.chars().count();
     if char_count <= max_len {
@@ -3217,6 +3254,24 @@ mod tests {
 
         let day_ago = now - chrono::Duration::days(3);
         assert_eq!(format_age(&day_ago), "3d ago");
+    }
+
+    #[test]
+    fn session_titles_never_keep_terminal_controls_or_bidi_format_chars() {
+        let raw = "Ev\u{1b}]0;PWNED\u{7}il\u{202e}R\u{200b}Z\u{9d}0;X\u{9c}After\u{2066}B\u{2069} 会議 🐳";
+        assert_eq!(
+            sanitize_session_title(raw),
+            "Ev]0;PWNEDilRZ0;XAfterB 会議 🐳"
+        );
+        // Every rename surface goes through normalize_session_title.
+        assert_eq!(
+            normalize_session_title(raw).unwrap(),
+            "Ev]0;PWNEDilRZ0;XAfterB 会議 🐳"
+        );
+        // A title that is nothing but controls is an empty title.
+        assert!(normalize_session_title("\u{1b}\u{7}\u{200b}").is_err());
+        // The listing line re-sanitizes titles saved before this policy.
+        assert_eq!(truncate_title(raw, 40), "Ev]0;PWNEDilRZ0;XAfterB 会議 🐳");
     }
 
     #[test]

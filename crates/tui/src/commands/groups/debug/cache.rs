@@ -301,17 +301,45 @@ fn format_cache_stats(app: &App) -> String {
             let changes = app.prefix_change_count;
             let stable_checks = checks.saturating_sub(changes);
 
+            let drift = app.prefix_drift_count;
             if changes == 0 {
                 out.push_str(&format!(
                     "  Stability: {pct}% ({stable_checks}/{checks} checks)\n"
                 ));
                 out.push_str("  Status:    stable (no prefix changes this session)\n");
+                if app.prefix_context_updates > 0 {
+                    out.push_str(&format!(
+                        "  Context updates: {} (workspace drift delivered as history, header unchanged)\n",
+                        app.prefix_context_updates
+                    ));
+                }
             } else {
                 out.push_str(&format!(
                     "  Stability: {pct}% ({stable_checks}/{checks} checks, {changes} change{})\n",
                     if changes == 1 { "" } else { "s" }
                 ));
-                out.push_str("  Status:    WARNING — prefix has changed\n");
+                if drift == 0 {
+                    out.push_str(
+                        "  Status:    stable (all changes were declared header changes)\n",
+                    );
+                } else {
+                    out.push_str(&format!(
+                        "  Status:    WARNING — {drift} undeclared drift{}\n",
+                        if drift == 1 { "" } else { "s" }
+                    ));
+                }
+                if let Some(ref reason) = app.prefix_pin_reason {
+                    out.push_str(&format!("  Pin reason: {reason}\n"));
+                }
+                if app.prefix_context_updates > 0 {
+                    out.push_str(&format!(
+                        "  Context updates: {} (workspace drift delivered as history, header unchanged)\n",
+                        app.prefix_context_updates
+                    ));
+                }
+                if let Some(ref reason) = app.prefix_last_miss_reason {
+                    out.push_str(&format!("  Last miss:  {reason}\n"));
+                }
                 if let Some(ref desc) = app.last_prefix_change_desc {
                     out.push_str(&format!("  Last change: {desc}\n"));
                 }
@@ -330,8 +358,20 @@ fn format_cache_stats(app: &App) -> String {
             out.push_str(&format!("  Pinned hash: {hash}\n"));
             let short = if hash.len() >= 12 { &hash[..12] } else { hash };
             out.push_str(&format!("  Short id:    {short}\n"));
-            if app.prefix_change_count > 0 {
-                out.push_str("  Drift:       WARNING — hash has changed during this session\n");
+            if app.prefix_drift_count > 0 {
+                out.push_str("  Drift:       WARNING — undeclared hash change this session\n");
+                out.push_str(&format!(
+                    "               ({change} change{plural} detected, {drift} undeclared)\n",
+                    change = app.prefix_change_count,
+                    plural = if app.prefix_change_count == 1 {
+                        ""
+                    } else {
+                        "s"
+                    },
+                    drift = app.prefix_drift_count,
+                ));
+            } else if app.prefix_change_count > 0 {
+                out.push_str("  Drift:       none (all changes were declared)\n");
                 out.push_str(&format!(
                     "               ({change} change{plural} detected)\n",
                     change = app.prefix_change_count,
@@ -339,7 +379,7 @@ fn format_cache_stats(app: &App) -> String {
                         ""
                     } else {
                         "s"
-                    }
+                    },
                 ));
             } else {
                 out.push_str("  Drift:       none (hash stable)\n");

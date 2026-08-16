@@ -15,6 +15,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::localization::Locale;
 use crate::palette;
 use crate::tui::app::AppMode;
+use crate::tui::app::AppModeUi;
 use crate::tui::menu_style;
 use crate::tui::views::{
     ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, centered_modal_area,

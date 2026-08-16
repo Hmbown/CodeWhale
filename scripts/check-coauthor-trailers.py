@@ -206,6 +206,35 @@ def lookup_identity(aliases: dict[str, Identity], *values: str) -> Identity | No
     return None
 
 
+def merged_author_emails(commit: Commit) -> set[str]:
+    """Author emails of the commits a merge commit brings in.
+
+    A merge commit that lands a contributor's PR preserves the contributor as
+    author of the merged commits themselves. When such a merge also carries a
+    `Harvested from PR #N by @login` line (so the auto-close workflow credits
+    the PR), the contributor's authorship on the second-parent side is the
+    machine-readable credit; the merge commit does not need a duplicate
+    trailer.
+    """
+    parents = commit.parents.split()
+    if len(parents) < 2:
+        return set()
+    try:
+        raw = subprocess.check_output(
+            [
+                "git",
+                "log",
+                "--format=%ae",
+                f"{parents[0]}..{commit.sha}",
+            ],
+            cwd=ROOT,
+            text=True,
+        )
+    except subprocess.CalledProcessError:
+        return set()
+    return {norm_key(line) for line in raw.splitlines() if line.strip()}
+
+
 def is_preserved_mapped_identity(commit: Commit, role: str, identity: Identity) -> bool:
     return (
         commit.sha.strip().lower(),
@@ -285,6 +314,7 @@ def validate(commits: list[Commit], aliases: dict[str, Identity], check_authors:
             expected = lookup_identity(aliases, coauthor.email, coauthor.name)
             if expected and is_preserved_mapped_identity(commit, "coauthor", coauthor):
                 coauthor_emails.add(norm_key(expected.email))
+        merged_emails = merged_author_emails(commit) if harvested_logins else set()
         for login in harvested_logins:
             expected = lookup_identity(aliases, login)
             if expected is None:
@@ -295,6 +325,7 @@ def validate(commits: list[Commit], aliases: dict[str, Identity], check_authors:
             if (
                 norm_key(commit.author_email) != norm_key(expected.email)
                 and norm_key(expected.email) not in coauthor_emails
+                and norm_key(expected.email) not in merged_emails
             ):
                 errors.append(
                     f"{prefix}: `Harvested from PR ... by @{login}` needs machine-readable "

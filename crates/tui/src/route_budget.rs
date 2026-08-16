@@ -318,6 +318,11 @@ mod tests {
             output_ceiling_source(ApiProvider::Moonshot, "k3"),
             OutputCeilingSource::Documented(131_072)
         );
+        assert_eq!(
+            output_ceiling_source(ApiProvider::OllamaCloud, "some-cloud-build"),
+            OutputCeilingSource::Uncatalogued(UNCATALOGUED_COMPAT_MAX_OUTPUT_TOKENS),
+            "hosted Ollama Cloud must not inherit the local runtime's unbounded output semantics"
+        );
     }
 
     #[test]

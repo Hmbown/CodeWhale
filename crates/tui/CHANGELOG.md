@@ -7,14 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet._
+## [0.9.8] - 2026-08-16
 
-## [0.9.8] - 2026-08-14
+Codewhale v0.9.8 ships the remaining assigned finish. Remaining web
+settings polish moves to v0.9.9. Prefab third-party templates that have
+a published OpenAI-compatible host ship here (#5350).
 
-Remaining web settings polish and prefab third-party templates move to
-v0.9.9.
+### Fixed
+
+- `sudo` (and `su`/setuid helpers) work again for wheel-group administrators
+  who want Codewhale to be able to escalate: the Linux startup hardening's
+  irreversible `PR_SET_NO_NEW_PRIVS` flag — inherited by every child process —
+  is now skippable with `CODEWHALE_NO_NEW_PRIVS=0` (#5413). The flag stays on
+  by default; the no-ptrace and no-core-dump measures are never skipped.
+
+- Abort-class process deaths no longer poison the terminal (#5424). A
+  stack overflow, allocation failure, or double panic skips the panic hook
+  and every cleanup guard, which is how a v0.9.7 user's mid-turn exit left
+  mouse capture leaking SGR sequences into their shell. An
+  async-signal-safe handler now restores the terminal modes and appends a
+  one-line cause marker to `~/.codewhale/crashes/last-fatal-signal.log`
+  before re-raising, keeping the honest 128+signal wait status. A SIGKILL
+  (OOM killer) remains uninterceptable by design.
 
 ### Changed
+
+- Prompt-cache prefix is pinned for the session. The tool loop no longer
+  recomposes the system prompt from disk on every model step, so an agent
+  writing a file no longer busts the provider KV prefix cache mid-turn. The
+  system prompt and tool catalog are re-composed only on a declared header
+  change (`/model`, mode, goal, session resume), which re-pins under a logged
+  reason; an undeclared change is reported as drift and the original pin is
+  kept instead of silently becoming the new baseline. Workspace, AGENTS.md,
+  skills, memory, and goal drift now reaches the model as one bounded
+  `<context_update>` user message at the next user turn — a history append,
+  not a header rewrite. `/cache stats` shows the pin reason, the last-miss
+  reason, the undeclared-drift count, and the context-update count. See
+  [docs/CACHE.md](docs/CACHE.md).
 
 - Plugin compatibility is now per-component. A reviewed, trusted, enabled
   bundle that mixes Skills or MCP with unsupported commands, agents, hooks,
@@ -50,8 +79,11 @@ v0.9.9.
   thread** cannot paint over the session fact chips. Chips wrap instead
   of sliding under the rail.
 
-- Z.ai `GLM-5.3` is a live Coding Plan picker option (`/model` after
-  `/provider zai`, or `model = "GLM-5.3"`). `GLM-5.2` stays the default.
+- Z.ai `GLM-5.3` is live on the Coding Plan and is now the default direct
+  Z.ai model: `DEFAULT_ZAI_MODEL` resolves to `GLM-5.3` in both
+  `codewhale-tui` and `codewhale-config`, and it is the first `/model` row
+  after `/provider zai`. Explicit `GLM-5.2` selections (`model = "GLM-5.2"`
+  and its `glm-5.2` aliases) keep their own id — only the default moved.
   Limits and reasoning options still inherit from `GLM-5.2` until Z.ai
   publishes distinct 5.3 numbers. No USD price is claimed. A live call
   can still 429 with entitlement code 1311 on accounts that are not
@@ -67,6 +99,116 @@ v0.9.9.
 - Documented catalogue output ceilings (DeepSeek V4 384K) are honored on
   the request. A clean output-limit stop continues the turn instead of
   killing it (#5373).
+
+- Ollama Cloud is a first-class hosted provider (`/provider ollama-cloud`)
+  on the official OpenAI-compatible `https://ollama.com/v1` route. Local
+  Ollama stays keyless. The exact released `ollama` + Cloud URL tuple keeps
+  a bounded compatibility path across saved sessions, Fleet, and nested
+  subagents; neighboring remotes stay custom and fail closed against
+  inherited official credentials.
+
+- Homebrew ships a `codewhale` formula. `brew tap Hmbown/deepseek-tui &&
+  brew install codewhale` is the install path; `brew upgrade codewhale`
+  updates it. The legacy `deepseek-tui` formula remains a deprecated alias
+  for one overlap release.
+
+- Terminal tab/window titles now carry the existing saved session name before
+  the live state (`Codewhale`, `reasoning…`, `using tool…`, `done`), so parallel
+  sessions are identifiable at a glance without a second title setting.
+  `/title <name>` is a discoverable alias for `/rename`; both update the one
+  session name shown in the picker, composer, and terminal tab. Control,
+  bidi, and zero-width format characters are stripped from the saved name
+  itself, so `/title`, `/rename`, the picker, the Runtime API,
+  `codewhale sessions`, and the OSC 0 tab title all carry the same
+  escape-free text (#5419, Sh1Zuku).
+- Eden AI is a named OpenAI-compatible Chat Completions provider (`edenai`,
+  aliases `eden-ai` / `eden_ai`) with `EDENAI_API_KEY`, global and EU base-URL
+  overrides, a live provider-scoped model catalog, and
+  `deepseek/deepseek-v4-pro` as the verified default. Generic reasoning fields
+  stay omitted because Eden AI routes multiple upstream model families
+  (#5422, Kai Nacke).
+- Children (sub-agents and Fleet workers) inherit the session's permission
+  posture faithfully: Auto-Review's deterministic floor and model guardian
+  decide a worker's held calls (fail closed when unavailable, never a
+  prompt); under Ask a held call is raised in the parent's approval UI and
+  the worker waits visibly; Full Access still fails closed on the safety
+  floor. Each prompt-less decision is a one-line note in that worker's
+  transcript (focus mode) and an audit-log record.
+- Worker role defaults keep what the role does not intend to withhold:
+  every built-in role keeps network reads; `planner` may run read-only
+  shell probes; `custom` inherits the parent's write/network/shell posture
+  and is narrowed only by its explicit tool list or the spawning call.
+  Read-only roles (`scout`, `reviewer`, `planner`, `verifier`,
+  `consultant`) still never write the workspace. The focused worker's
+  header states its effective posture from the runtime snapshot.
+- `/workflow status`, `/workflow cancel [run_id]`, `/workflow settings`, and
+  `/workflow help` are answered by Codewhale itself from the run journal and
+  live run state — no model turn — and `/workflow run <path>` launches a
+  checked-in workflow as-is. `/config workflow` and `/config goal` explain
+  the effective tables. The workflow tool now honors the session `[workflow]`
+  table (`automatic`, `auto_start_read_only`, `require_approval_for_writes`,
+  limits) instead of product defaults.
+- Goal mode enters as readily as DeepSeek Harness: the agent may create the
+  session goal when a direct request describes a verifiable multi-turn end
+  state, and Codewhale shows a one-line `Goal set` receipt with how to pause
+  or clear it. Bare `/goal` shows plain progress (and how to continue when no
+  turn is running), prints usage on an empty session instead of asking the
+  model, and `/goal help|status` are reserved words.
+
+- Whale Teams in the terminal: the six Signal Cut whale identities (Scout,
+  Patch, Harbor, Echo, Keel, Lantern) appear as species badges on `/fleet`
+  roster rows and worker rows, with an identity portrait in the roster detail
+  pane and a six-state word (Resting, Thinking, Working, Waiting for you,
+  Blocked, Offline) derived only from the child's real runtime status. Colors
+  come from the theme tokens, every glyph has an ASCII fallback, and the
+  working wake animates only under full motion. See
+  `docs/design/WHALE_TEAMS_TUI.md`.
+- A session metrics strip on the phase row (`4 turns · 108 steps │ LLM
+  11m46s · Tool call 1m52s │ TTFT avg 1.5s · 120 tok/s │ Cache hit 99% │
+  Input 9.3M`), on by default as the `session_metrics` footer item
+  (`/statusline`, `[tui].status_items`). Every value comes from engine
+  receipts — turn starts, per-model-call usage with stream time,
+  time-to-first-token and whole-call time, tool start/complete edges, and
+  provider-reported cache and input tokens. Cells without evidence are
+  omitted, never estimated. `/status` prints the untrimmed line; the phase
+  row sheds its lowest-value groups to fit the columns it actually has.
+- Auto-Review decisions nobody was prompted for are now visible in the
+  transcript as one-line notes: model-guardian allow/deny verdicts with
+  their risk tier and stated reason, guardian failures (denied, fail
+  closed), deterministic policy blocks, and holds Auto-Review denied
+  without pausing. The audit log keeps the full record. `/permissions`
+  ends with the active posture, what it decides on its own versus never,
+  and the audit-log path. The footer's `Esc to interrupt` hint is
+  localized. See `docs/design/AUTO_MODE_PARITY.md` for the Claude Code /
+  Kimi Code parity ledger and follow-ups.
+- `codewhale integrations dsh status|plan|connect|update|launch|disable|enable|remove`
+  connects an existing official DeepSeek Harness (`dsh` 0.1.0-rc.6, verified)
+  through Codewhale using only its documented seams: a `--patch` overlay that
+  pins the exact Codewhale provider/model/endpoint identity (native
+  `deepseek-official` route, or a hand-declared `openai-completions` route
+  named `codewhale-<provider>` for OpenAI-compatible providers), the
+  Codewhale permission posture exported as `DSH_PERMISSION_MODE`, and an
+  append-only receipt. Codewhale writes only under
+  `$CODEWHALE_HOME/integrations/dsh/`, never copies API keys or edits DSH
+  files, never broadens permissions (`--allow-full-access` only mirrors an
+  existing Codewhale full-access posture), and reports not-installed /
+  offline / incompatible / detected / connected / stale-config /
+  stale-version / disabled honestly. Anthropic Messages and OpenAI Responses
+  routes are refused as not carriable. The documented DSH plugin path is an
+  explicit opt-in: `install-bundle` materializes a Codewhale bundle package
+  (`codewhale-dsh-bundle`, MIT notice retained) and installs it with
+  `dsh plugin --profile codewhale add <path>` into a dedicated `codewhale`
+  profile (pnpm required, reported truthfully when missing; `web`/`headless`
+  untouched), so `dsh --profile codewhale` alone carries the identity;
+  `update` regenerates the bundle patch and `remove-bundle` reverses it,
+  leaving the DSH-owned profile directory in place. `/setup tools` and `codewhale doctor`
+  show the read-only detection state; `doctor` also lists the DSH read-only
+  credential consent alongside Codex and Grok. The optional `--skin` export
+  writes a Codewhale token stylesheet generated from the TUI palette
+  (Blue Stage dark/light, ombre water column, mode/permission/state colors,
+  reduced-motion fallbacks); DSH exposes no custom-theme API, so the sheet is
+  labeled an unsupported overlay and is never injected. See
+  `docs/INTEGRATIONS_DSH.md`.
 
 ### Fixed
 
@@ -102,11 +244,77 @@ v0.9.9.
 
 - Google Gemini is its own backend (`/provider google`) on the official
   OpenAI-compatible route with thought-signature capture/replay and
-  fail-closed replay for thinking models. Antigravity (`agy` 1.1.13) joins
-  as a separate credential-plane provider: consent-gated read-only import
-  of the official CLI's login with `ANTIGRAVITY_API_KEY`/`AGY_ADC_AUTH`
-  precedence; requests fail closed until the cloud-code wire protocol is
-  implemented.
+  fail-closed replay for thinking models. Antigravity (`agy` 1.1.13) is
+  a separate provider: consent-gated read-only import of the official
+  CLI's login, then a text-only cloud-code stream
+  (`/v1internal:streamGenerateContent`). Tools, images, and unknown SSE
+  shapes fail closed. Gemini 3.7 Flash is not advertised until a live
+  turn succeeds on this wire. The website 44-count still excludes
+  Antigravity.
+
+- DeepSeek Flash SSE on macOS no longer turns mid-character HTTP/2
+  flushes into U+FFFD replacement characters (#5374). Invalid UTF-8
+  fails the line instead of using lossy decode.
+
+- `[workshop] read_result_max_bytes` and `tool_result_max_bytes` raise
+  the model-visible read/tool-result floor; they never lower the
+  compile-time defaults and cap at 2MiB (#5367).
+
+- Fireworks and OpenCode Zen DeepSeek V4 Flash/Pro keep a bundled
+  family rate when the live control plane is down, so session cost is
+  not stuck on `unverified_live_pricing` (#5241). `kimi-k3` stays
+  unpriced until a published rate exists.
+
+- Provider setup ships a SenseNova OpenAI-compatible preset (`S`) on
+  the published `https://token.sensenova.cn/v1` host (#5350). OpenCode
+  Zen/Go stay first-class rows. Agnes has no published URL, so it has
+  no preset.
+
+- Privileged release workflows no longer restore rust-cache, sccache,
+  or npm caches after checking out a caller-supplied SHA (CodeQL
+  cache-poisoning #88–#106). Catalog drift no longer prints raw
+  bundled/upstream blobs (#107).
+
+- Cancelling a turn now cancels its foreground child agents with it.
+
+- Empty compaction no longer wipes conversation history.
+
+- Wide terminals and tmux panes fill the full available width again for the
+  transcript and composer (#5322). The brief v0.9 session-shell side gutter
+  is gone so expanding a pane rematerializes layout the same way shrinking
+  does.
+
+- The agent tool schema rejects empty calls.
+
+- The local web client keeps recovered stream gaps closed, user questions
+  answerable, manual bootstrap access intact, and streamed prose quiet for
+  assistive tech.
+
+- Website zh-Hans copy now says 宪章, matching the TUI pack (#5397,
+  Lstarsky0).
+
+- Public website provider facts include Google Gemini and Ollama Cloud
+  (44 runnable routes). Antigravity stays credential-plane-only.
+  Harvested from #5398 (Lstarsky0) with that correction.
+
+- The website models page carries a truthful read-only settings preview
+  built from repository facts; it never implies the site can change local
+  configuration (#5370, #5411, mvanhorn).
+
+- The canonical `ultra` reasoning effort now maps to each provider's
+  maximum tier alongside the legacy `ultracode` alias, instead of being
+  silently dropped (#5303, #5409, buiducnhat).
+
+- Session titles truncate by character count, not byte offset, so
+  multi-byte titles (CJK, emoji) cut at the intended width and word
+  boundary instead of past the limit (#5415).
+- Wide terminals and tmux panes fill the full available width again for the
+  transcript and composer (#5322). The brief v0.9 session-shell side gutter is
+  gone so expanding a pane rematerializes layout the same way shrinking does.
+- The background verifier test drives the current libtest executable
+  instead of the rustup `rustc` shim, so the TUI suite no longer depends
+  on `$HOME` or holds the process-wide test environment lock across an
+  async wait (#5056, #5423, Isabel Wu).
 
 ### Removed
 
@@ -134,6 +342,27 @@ v0.9.9.
 - A `/models` 2xx probe is a connection check, not model readiness.
 - Site layout uses one container, the ticker no longer implies false
   provider readiness, and install links stay in the active locale.
+
+### Contributors
+
+- EvanProgramming (@EvanProgramming) — webhook client panic fallback
+  (#5381); session-index JSONL mutex (#5382).
+- Lstarsky0 (@Lstarsky0) — session peek hides internal runtime events
+  (#5376); thinking-ladder test re-pin (#5378); provider-count follow-ups
+  (#5383/#5384); macOS agy fixture canonicalization (#5392); zh-Hans 宪章
+  terminology (#5397); regenerated website facts harvested and corrected
+  from #5398.
+- Matt Van Horn (@mvanhorn) — read-only models settings preview on the
+  website (#5411, fixes #5370).
+- Nhat Bui (@buiducnhat) — canonical `ultra` reasoning effort mapped across
+  provider effort tables (#5409); session titles truncated by character
+  count, not byte offset (#5415).
+- Sh1Zuku (@SparkofSpike) — `/title` and the session name in the terminal
+  tab/window title, plus the mid-turn title deadlock fix (#5419).
+- Kai Nacke (@redstar) — Eden AI provider registration, aliases,
+  `EDENAI_API_KEY`, and the global/EU endpoints (#5422).
+- Isabel Wu (@wuisabel-gif) — background verifier test isolated from
+  rustup and `$HOME` (#5423, slice of #5056).
 
 ## [0.9.7] - 2026-08-12
 

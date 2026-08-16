@@ -21,9 +21,10 @@ codewhale web --port 8788
 ```
 
 Codewhale starts the Runtime API, serves the dependency-free client embedded
-in the installed binary, and asks the operating system to open the launch URL
-in the default browser. Stop the process with `Ctrl+C`; the browser session
-ends with it.
+in the installed binary, prints a single-use launch URL, and asks the operating
+system to open that URL in the default browser. If the browser does not open,
+use the printed URL within ten minutes. Stop the process with `Ctrl+C`; the
+browser session ends with it.
 
 ## What the browser can do
 
@@ -46,9 +47,10 @@ session cookie and immediately invalidates the capability.
 Reused, expired, malformed, and non-loopback bootstrap attempts fail closed.
 The Runtime token is not placed in rendered HTML, browser storage, URL
 queries or fragments, or browser-launch arguments. The one-time bootstrap
-value briefly passes through the operating system's browser launcher; it is
-single-use and short-lived, but a hostile process already running as the same
-OS user remains inside the local trust boundary.
+value is printed in the local terminal and briefly passes through the operating
+system's browser launcher. It is single-use and expires after ten minutes, but
+a hostile process already running as the same OS user remains inside the local
+trust boundary.
 
 Cookie-authenticated state-changing requests must also present the exact
 local web origin. Cross-origin browser requests are rejected. Existing
@@ -68,9 +70,9 @@ before operating either one, especially before selecting a non-loopback bind.
 ## Troubleshooting
 
 - If port `7878` is occupied, pass an unused `--port` value.
-- If the browser cannot be opened, the command exits with an error rather than
-  printing or leaving a reusable bootstrap capability behind. Check the
-  operating system's default-browser setup, then start `codewhale web` again.
+- If the browser does not open, copy the printed single-use bootstrap URL into
+  a browser on the same machine within ten minutes. Start `codewhale web` again
+  if that URL has already been used or expired.
 - If the page loads but a provider is unavailable, inspect `codewhale doctor`
   and `/provider`; the web command does not configure or move provider
   credentials.

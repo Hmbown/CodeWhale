@@ -855,6 +855,7 @@ pub(crate) fn mirror_saved_api_key_in_config(
         ApiProvider::Sglang => &mut providers.sglang,
         ApiProvider::Vllm => &mut providers.vllm,
         ApiProvider::Ollama => &mut providers.ollama,
+        ApiProvider::OllamaCloud => &mut providers.ollama_cloud,
         ApiProvider::Huggingface => &mut providers.huggingface,
         ApiProvider::Deepinfra => &mut providers.deepinfra,
         ApiProvider::Together => &mut providers.together,
@@ -876,6 +877,7 @@ pub(crate) fn mirror_saved_api_key_in_config(
         ApiProvider::Google => &mut providers.google,
         ApiProvider::Antigravity => &mut providers.antigravity,
         ApiProvider::Telecomjs => &mut providers.telecomjs,
+        ApiProvider::Edenai => &mut providers.edenai,
         ApiProvider::ModelstudioTokenPlan => &mut providers.modelstudio_token_plan,
         ApiProvider::ModelstudioTokenPlanAnthropic => {
             &mut providers.modelstudio_token_plan_anthropic
@@ -913,7 +915,7 @@ pub(crate) fn restore_loaded_session_provider(
     identity: ProviderIdentity,
 ) {
     let provider = identity.provider;
-    config.provider = Some(identity.key.clone());
+    config.scope_to_provider_identity(&identity);
     app.set_provider_identity_record(identity);
     app.billing_presentation = crate::route_billing::for_route(config, provider);
     app.max_subagents = config
@@ -1004,7 +1006,9 @@ pub(crate) fn derive_session_title(messages: &[Message]) -> Option<String> {
         })
     })?;
 
-    let first_line = text.lines().next().unwrap_or("").trim();
+    let first_line =
+        crate::session_manager::sanitize_session_title(text.lines().next().unwrap_or("").trim());
+    let first_line = first_line.trim();
     if first_line.is_empty() {
         return None;
     }
@@ -1023,4 +1027,32 @@ pub(crate) fn derive_session_title(messages: &[Message]) -> Option<String> {
     }
 
     Some(short_title_truncate(first_line, SESSION_TITLE_MAX_CHARS))
+}
+
+#[cfg(test)]
+mod derived_title_tests {
+    use super::*;
+
+    fn user(text: &str) -> Message {
+        Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::Text {
+                text: text.to_string(),
+                cache_control: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn derived_titles_drop_terminal_controls_and_bidi_format_chars() {
+        // The first user message can carry pasted escape sequences; the
+        // derived session name must never persist them.
+        let msgs = [user("Fix \u{1b}]0;PWNED\u{7}the\u{202e} build 会議")];
+        assert_eq!(
+            derive_session_title(&msgs).as_deref(),
+            Some("Fix ]0;PWNEDthe build 会議")
+        );
+        // Controls alone leave no title to derive.
+        assert_eq!(derive_session_title(&[user("\u{1b}\u{7}\u{200b}")]), None);
+    }
 }

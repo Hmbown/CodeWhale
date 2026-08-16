@@ -84,18 +84,73 @@ cargo clippy --workspace --all-targets --all-features --locked -- \
   -A clippy::assertions_on_constants
 ```
 
+#### Fast local loop
+
+The full gate above is what CI enforces, but you do not need it for every
+edit. `crates/tui` is a ~750k-line crate, so the loop that stays fast is
+the one that avoids rebuilding it more than necessary (numbers and the
+reasoning are in [`docs/BUILD_PERFORMANCE.md`](docs/BUILD_PERFORMANCE.md)):
+
+```bash
+# 1. Type-check first (seconds after the first build; no codegen, no link).
+scripts/dev-cargo.sh check -p codewhale-tui
+
+# 2. Run only the tests near your change (one crate, one filter).
+scripts/dev-test.sh tui fleet_setup
+# or: scripts/dev-test.sh crates/tui/src/elapsed.rs
+
+# 3. Run a whole crate's unit suite. scripts/dev-test.sh uses nextest when
+#    it is installed (one process per test, all cores busy, slow tests
+#    named; ~100 s here vs ~270 s with libtest).
+cargo install cargo-nextest --locked      # once
+scripts/dev-test.sh tui
+scripts/dev-cargo.sh nextest run --workspace --all-features --locked
+
+# 4. Before pushing, run the authoritative gate exactly as CI does:
+cargo test --workspace --all-features --locked
+```
+
+`.config/nextest.toml` already serializes the PTY suite and bounds the
+integration tests that spawn the real binary, so `cargo nextest run` is
+safe to use on the whole workspace (nextest does not run doctests; the
+authoritative `cargo test` gate does). Tests must not depend on running in
+the same process as another test (nextest gives every test its own
+process); if a test needs the rustls crypto provider, install it in that
+test as production does at startup.
+
+On a machine with less than 16 GB of RAM (or when cross-compiling, e.g.
+for OHOS), build one rustc at a time: `CARGO_BUILD_JOBS=1` (or `-j1`), one
+crate at a time, `--lib` for tests, never `--workspace`/`--all-targets`.
+The tui library needs ~6 GB for its own rustc and its unit-test build ~8 GB;
+`cargo test --workspace` runs both at once. Numbers and the full recipe:
+[`docs/BUILD_PERFORMANCE.md`](docs/BUILD_PERFORMANCE.md#low-memory-build-recipe-machines-with--16-gb-cross-builds).
+
+If you work in several worktrees, do **not** share one `CARGO_TARGET_DIR`
+by default: two cargos on the same target flock and serialize. Use
+`scripts/dev-cargo.sh` / `scripts/dev-test.sh`, which give each workspace
+its own Cargo `build-dir` (`{workspace-path-hash}` under
+`${CODEWHALE_CACHE_ROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/codewhale}`).
+`CODEWHALE_DEV_CACHE=local` keeps `./target` if you want that.
+`sccache` wraps rustc only when incremental compilation is already off
+(`CARGO_INCREMENTAL=0` or `CODEWHALE_SCCACHE=1`) and `sccache` is on
+`PATH`; a missing binary is a printed fallback, not an error. Override
+the cache root with `CODEWHALE_CACHE_ROOT` — there is no machine-specific
+default. A single shared `CARGO_TARGET_DIR` remains valid only for
+serialized trunk work. See
+[`docs/BUILD_PERFORMANCE.md`](docs/BUILD_PERFORMANCE.md).
+
 Some suites are slow, platform-bound, or intentionally excluded from the
 default run; treat them as documented isolation cases rather than
 failures of the normal gate:
 
-- **PTY snapshots** (`cargo test -p codewhale-tui --test qa_pty
+- **PTY snapshots** (`cargo test -p codewhale-tui --test pty qa_pty
   --locked`) are Unix-only and internally serialized. One recovery-boot
   case is `#[ignore]`d for a documented input-starvation issue. When a
   PTY case fails, rerun that exact case in isolation and diagnose the
   rendered frame before calling it a flake; `run_verifiers_background_*`
   is the one known full-suite-parallelism flake that passes in
   isolation.
-- **Release runtime QA** (`cargo test -p codewhale-tui --test
+- **Release runtime QA** (`cargo test -p codewhale-tui --test pty
   release_runtime_qa --locked`) includes an `#[ignore]`d 32-worker storm
   benchmark that is only run explicitly for evidence gathering.
 - **OCR** (`image_ocr`) uses the macOS Vision framework or a locally
@@ -327,8 +382,8 @@ reopened, ask the contributor to resubmit after the allowlist PR is merged.
 ## Agent-Assisted Improvements
 
 Codewhale is allowed to help improve Codewhale, but the contribution still has
-to be shaped for human review. The recommended workflow is the
-[recursive self-improvement prompt](the `codewhale-ops` repo): run it
+to be shaped for human review. The recommended workflow is the recursive self-improvement prompt
+in the private `codewhale-ops` repo: run it
 from a fresh fork or branch, let the agent find exactly one small friction point,
 and stop after one patch. DeepSeek V4 Pro is the reference path for this loop
 today, but any configured provider works — the review shape matters more than

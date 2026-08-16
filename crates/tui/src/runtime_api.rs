@@ -748,6 +748,35 @@ struct StartTurnResponse {
     turn: TurnRecord,
 }
 
+fn install_runtime_server_workshop_budgets(
+    config: &Config,
+) -> crate::tools::large_output_router::WorkshopConfig {
+    crate::tools::large_output_router::WorkshopConfig::install_active(config.workshop.as_ref())
+}
+
+fn open_runtime_threads_for_server(
+    config: &Config,
+    workspace: PathBuf,
+    manager_config: RuntimeThreadManagerConfig,
+    plugin_registry: Arc<crate::plugins::PluginRegistry>,
+) -> Result<(
+    SharedRuntimeThreadManager,
+    crate::tools::large_output_router::WorkshopConfig,
+)> {
+    // The Runtime API lazily creates engines after the HTTP/Web server starts.
+    // Install the resolved process-wide read/tool byte limits before the
+    // thread manager can spawn any of those engines, matching interactive and
+    // headless exec startup.
+    let workshop_activation = install_runtime_server_workshop_budgets(config);
+    let manager = Arc::new(RuntimeThreadManager::open_with_plugin_registry(
+        config.clone(),
+        workspace,
+        manager_config,
+        plugin_registry,
+    )?);
+    Ok((manager, workshop_activation))
+}
+
 /// Start the runtime API server.
 pub async fn run_http_server(
     config: Config,
@@ -771,12 +800,12 @@ pub async fn run_http_server(
         config.default_text_model.clone(),
         Some(options.workers),
     );
-    let runtime_threads = Arc::new(RuntimeThreadManager::open_with_plugin_registry(
-        config.clone(),
+    let (runtime_threads, _workshop_activation) = open_runtime_threads_for_server(
+        &config,
         workspace.clone(),
         RuntimeThreadManagerConfig::from_task_data_dir(task_cfg.data_dir.clone()),
         plugin_discovery.registry_for_workspace(&workspace),
-    )?);
+    )?;
     let task_manager =
         TaskManager::start_with_runtime_manager(task_cfg, config.clone(), runtime_threads.clone())
             .await?;
@@ -864,11 +893,12 @@ pub async fn run_http_server(
     if let Some(bootstrap) = web_bootstrap {
         println!("Codewhale web enabled at http://{bound_addr}/");
         let bootstrap_url = web::bootstrap_url(bound_addr, &bootstrap);
-        if let Err(error) = crate::utils::open_url(&bootstrap_url) {
-            scheduler_cancel.cancel();
-            scheduler_handle.abort();
-            return Err(error)
-                .context("Failed to open the Codewhale web client in the default browser");
+        println!(
+            "Codewhale web bootstrap (single-use, expires in {} min): {bootstrap_url}",
+            web::BOOTSTRAP_TTL.as_secs() / 60
+        );
+        if let Some(warning) = web_launcher_warning(crate::utils::open_url(&bootstrap_url)) {
+            println!("{warning}");
         }
     }
     let is_loopback = options.host == "127.0.0.1" || options.host == "::1";
@@ -900,6 +930,14 @@ pub async fn run_http_server(
     scheduler_cancel.cancel();
     scheduler_handle.abort();
     serve_result
+}
+
+fn web_launcher_warning(result: Result<()>) -> Option<String> {
+    result.err().map(|error| {
+        format!(
+            "warning: could not open the default browser ({error}); open the bootstrap URL above manually"
+        )
+    })
 }
 
 fn fallback_sessions_dir() -> PathBuf {
@@ -1082,6 +1120,7 @@ pub fn build_router(state: RuntimeApiState) -> Router {
         .route("/", get(web::web_page))
         .route("/assets/codewhale-web.css", get(web::web_styles))
         .route("/assets/codewhale-web.js", get(web::web_script))
+        .route("/assets/codewhale-192.png", get(web::web_icon))
         .route(
             "/__codewhale/bootstrap/{nonce}",
             get(web::exchange_bootstrap),

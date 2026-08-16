@@ -58,6 +58,7 @@ mod goal_loop;
 mod hashing;
 mod hooks;
 mod image_attach;
+mod integrations;
 mod lane_control;
 mod llm_client;
 mod llm_response_cache;
@@ -136,7 +137,9 @@ mod task_manager;
 mod telemetry_notice;
 #[cfg(test)]
 mod test_support;
-mod tls;
+// TLS bootstrap and platform client builders live in codewhale-release;
+// `crate::tls::*` keeps resolving for every caller.
+use codewhale_release::tls;
 mod todo_snapshot;
 mod tool_history_repair;
 mod tool_inspection;
@@ -343,6 +346,11 @@ enum Commands {
     },
     /// Inspect feature flags
     Features(FeaturesCli),
+    /// Connect third-party harnesses through Codewhale (currently: DeepSeek Harness `dsh`)
+    Integrations {
+        #[command(subcommand)]
+        command: IntegrationsCommand,
+    },
     /// Run a command inside the sandbox
     Sandbox(SandboxArgs),
     /// Run a local server (e.g. MCP)
@@ -1380,6 +1388,96 @@ enum McpCommand {
     },
 }
 
+#[derive(Subcommand, Debug, Clone)]
+pub(crate) enum IntegrationsCommand {
+    /// Official DeepSeek Harness (`dsh`) connected through Codewhale
+    Dsh {
+        #[command(subcommand)]
+        command: DshIntegrationCommand,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub(crate) enum DshIntegrationCommand {
+    /// Detect dsh and report the integration state without writing anything
+    Status {
+        /// Emit machine-readable JSON
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Show exactly what `connect`/`update` would write, without writing it
+    Plan {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// DSH profile the overlay targets (`web` or `headless`)
+        #[arg(long, default_value = "web")]
+        profile: String,
+        /// Mirror Codewhale full access as DSH danger-full-access (only when Codewhale itself runs with full access)
+        #[arg(long, default_value_t = false)]
+        allow_full_access: bool,
+        /// Also export the Codewhale skin stylesheet (unsupported DSH overlay; never injected)
+        #[arg(long, default_value_t = false)]
+        skin: bool,
+    },
+    /// Write the overlay and receipt under $CODEWHALE_HOME/integrations/dsh
+    Connect {
+        #[arg(long, default_value = "web")]
+        profile: String,
+        #[arg(long, default_value_t = false)]
+        allow_full_access: bool,
+        #[arg(long, default_value_t = false)]
+        skin: bool,
+        /// Confirm the disclosed plan without an interactive prompt (required when stdin is not a terminal)
+        #[arg(long, default_value_t = false)]
+        yes: bool,
+    },
+    /// Re-derive the overlay from the current Codewhale route
+    Update {
+        #[arg(long)]
+        profile: Option<String>,
+        #[arg(long, default_value_t = false)]
+        allow_full_access: bool,
+        /// Keep/refresh the skin export (defaults to the previous choice)
+        #[arg(long)]
+        skin: Option<bool>,
+        #[arg(long, default_value_t = false)]
+        yes: bool,
+    },
+    /// Run dsh with the Codewhale overlay; extra args go to the dsh app
+    Launch {
+        /// Override the recorded profile (`web` or `headless`)
+        #[arg(long)]
+        profile: Option<String>,
+        /// Print the exact command instead of running it
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Keep the overlay but refuse launches
+    Disable,
+    /// Allow launches again
+    Enable,
+    /// Delete Codewhale-owned files only; $DSH_HOME is never touched
+    Remove {
+        #[arg(long, default_value_t = false)]
+        yes: bool,
+    },
+    /// Documented DSH plugin path: install the Codewhale bundle into a dedicated `codewhale` DSH profile via `dsh plugin add` (pnpm required)
+    InstallBundle {
+        /// Which shipped DSH app the dedicated profile boots (`web` or `headless`)
+        #[arg(long, default_value = "web")]
+        app: String,
+        #[arg(long, default_value_t = false)]
+        yes: bool,
+    },
+    /// `dsh plugin --profile codewhale remove codewhale-dsh-bundle`, then delete only Codewhale-owned bundle files
+    RemoveBundle {
+        #[arg(long, default_value_t = false)]
+        yes: bool,
+    },
+}
+
 #[derive(Args, Debug, Clone)]
 struct FeaturesCli {
     #[command(subcommand)]
@@ -1467,6 +1565,14 @@ fn run_with_args(args: Vec<String>) -> Result<()> {
     // MUST run before Tokio is booted and before any threads are spawned.
     // See crates/tui/src/sandbox/process_hardening.rs for ordering rationale.
     crate::sandbox::process_hardening::apply_process_hardening();
+
+    // ── Fatal-signal terminal guard (#5424) ───────────────────────────────
+    // Abort-class deaths (stack overflow, allocation failure, double panic)
+    // skip the panic hook AND every Drop guard, leaving mouse capture and
+    // the kitty keyboard stack leaking into the user's shell. A classic
+    // sigaction handler restores the terminal and stamps a marker before
+    // re-raising. Also before any threads exist.
+    crate::tui::ui::fatal_signal_guard::install_fatal_signal_guard();
 
     // Set up process panic hook before anything else — writes crash dumps
     // to ~/.deepseek/crashes/ even if the panic happens before tokio is up,
@@ -2099,6 +2205,13 @@ async fn run_async_main_dispatch(
             Commands::Features(command) => {
                 let config = load_config_from_cli(&cli)?;
                 run_features_command(&config, command)
+            }
+            Commands::Integrations { command } => {
+                // Identity derivation is structural: credential-bearing
+                // environment values never enter this path.
+                let config = load_structural_config_from_cli(&cli)?;
+                let workspace = resolve_workspace(&cli);
+                integrations::cli::run(&config, &workspace, command)
             }
             Commands::Sandbox(args) => run_sandbox_command(args),
             Commands::Serve(args) => {
@@ -3578,6 +3691,7 @@ impl CredentialDiagnostic {
 
 fn resolve_credential_diagnostic(config: &Config) -> CredentialDiagnostic {
     let provider = config.api_provider();
+    let base_url = config.deepseek_base_url();
     let auth_mode = config.auth_mode_for_provider(provider);
     if crate::config::auth_mode_disables_api_key(auth_mode.as_deref()) {
         return CredentialDiagnostic::new(
@@ -3586,8 +3700,8 @@ fn resolve_credential_diagnostic(config: &Config) -> CredentialDiagnostic {
         );
     }
     if !crate::config::auth_mode_requires_api_key(auth_mode.as_deref())
-        && (provider.is_self_hosted()
-            || crate::config::base_url_uses_local_host(&config.deepseek_base_url()))
+        && (crate::config::provider_route_is_keyless_self_hosted(provider, &base_url)
+            || crate::config::base_url_uses_local_host(&base_url))
     {
         return CredentialDiagnostic::new(
             ApiKeySource::LocalRuntime,
@@ -3972,7 +4086,8 @@ fn doctor_should_probe_api(
     base_url: &str,
     probes: crate::doctor::DoctorProbeRequest,
 ) -> bool {
-    let local = provider.is_self_hosted() || crate::config::base_url_uses_local_host(base_url);
+    let local = crate::config::provider_route_is_keyless_self_hosted(provider, base_url)
+        || crate::config::base_url_uses_local_host(base_url);
     probes.should_probe_api(local)
 }
 
@@ -4192,6 +4307,15 @@ async fn run_doctor(
         println!("  {line}");
     }
 
+    println!();
+    println!(
+        "{}",
+        "DeepSeek Harness integration (read-only detection):".bold()
+    );
+    for line in doctor_dsh_integration_lines(config, workspace) {
+        println!("  {line}");
+    }
+
     let credential = resolve_credential_diagnostic(config);
     let source_label = match credential.source {
         ApiKeySource::ConfigDeclared => "literal config value structurally present",
@@ -4274,8 +4398,10 @@ async fn run_doctor(
     }
     let live_api_requested =
         doctor_should_probe_api(config.api_provider(), &api_target.base_url, probes);
-    let endpoint_is_local = config.api_provider().is_self_hosted()
-        || crate::config::base_url_uses_local_host(&api_target.base_url);
+    let endpoint_is_local = crate::config::provider_route_is_keyless_self_hosted(
+        config.api_provider(),
+        &api_target.base_url,
+    ) || crate::config::base_url_uses_local_host(&api_target.base_url);
     if doctor_should_probe_auth(config) && live_api_requested {
         print!("  {} Testing connection...", "·".dimmed());
         use std::io::Write;
@@ -5994,12 +6120,72 @@ fn doctor_provider_model_report_json(config: &Config) -> serde_json::Value {
     })
 }
 
+fn doctor_dsh_integration_report(
+    config: &Config,
+    workspace: &Path,
+) -> anyhow::Result<crate::integrations::dsh::DshStatusReport> {
+    use crate::integrations::dsh;
+    let paths = dsh::DshPaths::from_process()?;
+    let detection = dsh::detect::detect(&dsh::DetectEnv::from_process(), &dsh::ProcessRunner);
+    let identity = dsh::codewhale_route_identity(config, workspace);
+    dsh::compute_status(
+        &paths,
+        detection,
+        identity,
+        false,
+        dsh::bundle_availability_now(),
+    )
+}
+
+fn doctor_dsh_integration_lines(config: &Config, workspace: &Path) -> Vec<String> {
+    match doctor_dsh_integration_report(config, workspace) {
+        Ok(report) => {
+            let mut lines = vec![
+                format!("state: {}", report.state.label()),
+                crate::integrations::dsh::status_line(&report),
+                format!(
+                    "owned files: {} (overlay {})",
+                    crate::utils::display_path(&report.paths_root),
+                    if report.overlay_present {
+                        "present"
+                    } else {
+                        "absent"
+                    }
+                ),
+            ];
+            if !report.shadowing_namespaces.is_empty() {
+                lines.push(format!(
+                    "dsh settings.yaml sections that can shadow the overlay: {}",
+                    report.shadowing_namespaces.join(", ")
+                ));
+            }
+            lines
+        }
+        Err(error) => vec![format!("unavailable: {error}")],
+    }
+}
+
+fn doctor_dsh_integration_json(config: &Config, workspace: &Path) -> serde_json::Value {
+    match doctor_dsh_integration_report(config, workspace) {
+        Ok(report) => serde_json::json!({
+            "state": report.state.label(),
+            "summary": crate::integrations::dsh::status_line(&report),
+            "dsh_version": report.detection.version,
+            "compatibility": report.detection.compatibility.label(),
+            "overlay_present": report.overlay_present,
+            "shadowing_namespaces": report.shadowing_namespaces,
+        }),
+        Err(error) => serde_json::json!({ "state": "unavailable", "error": error.to_string() }),
+    }
+}
+
 fn doctor_external_credential_consent_statuses(
     config: &Config,
 ) -> Vec<codewhale_config::ExternalCredentialConsentStatus> {
     [
         crate::config::ApiProvider::OpenaiCodex,
         crate::config::ApiProvider::Xai,
+        crate::config::ApiProvider::Deepseek,
     ]
     .into_iter()
     .filter_map(|provider| config.external_credential_consent_status(provider))
@@ -6419,6 +6605,7 @@ fn run_doctor_json(
             "availability": credential.availability.label(),
         },
         "external_credentials": doctor_external_credential_consent_json(config),
+        "dsh_integration": doctor_dsh_integration_json(config, workspace),
         "base_url": crate::doctor::structural_url_authority(&api_target.base_url),
         "default_text_model": api_target.model,
         // DGF-01: this report describes the route a session launched now
@@ -11264,7 +11451,12 @@ async fn run_exec_agent(
         locale_tag: crate::localization::resolve_locale(&settings.locale)
             .tag()
             .to_string(),
-        workshop: config.workshop.clone(),
+        workshop: {
+            crate::tools::large_output_router::WorkshopConfig::install_active(
+                config.workshop.as_ref(),
+            );
+            config.workshop.clone()
+        },
         search_provider: execution_config.search_provider(),
         search_api_key: execution_config
             .search
@@ -11652,7 +11844,9 @@ async fn run_exec_agent(
                     eprintln!("error: {}", envelope.message);
                 }
             }
-            Event::TurnUsage { usage, duration_ms } => {
+            Event::TurnUsage {
+                usage, duration_ms, ..
+            } => {
                 if output_format == ExecOutputFormat::StreamJson {
                     turn_usage_seq = turn_usage_seq.saturating_add(1);
                     emit_exec_stream_event(&ExecStreamEvent::TurnUsage {
@@ -14612,21 +14806,25 @@ mod terminal_mode_tests {
             provider: crate::config::ApiProvider::Custom,
             key: "lm-studio".to_string(),
             exact_id: Some("lm-studio".to_string()),
+            migrated_legacy_ollama_cloud_route: false,
         };
         let literal = crate::config::ProviderIdentity {
             provider: crate::config::ApiProvider::Custom,
             key: "custom".to_string(),
             exact_id: Some("custom".to_string()),
+            migrated_legacy_ollama_cloud_route: false,
         };
         let root = crate::config::ProviderIdentity {
             provider: crate::config::ApiProvider::Custom,
             key: "custom".to_string(),
             exact_id: None,
+            migrated_legacy_ollama_cloud_route: false,
         };
         let built_in = crate::config::ProviderIdentity {
             provider: crate::config::ApiProvider::Deepseek,
             key: "deepseek".to_string(),
             exact_id: Some("deepseek".to_string()),
+            migrated_legacy_ollama_cloud_route: false,
         };
 
         assert_eq!(
@@ -16972,6 +17170,32 @@ mod doctor_live_probe_tests {
     }
 
     #[test]
+    fn ollama_cloud_probe_uses_hosted_opt_in_not_local_opt_in() {
+        let cloud = codewhale_config::provider::OLLAMA_CLOUD_BASE_URL;
+        assert!(!doctor_should_probe_api(
+            crate::config::ApiProvider::OllamaCloud,
+            cloud,
+            crate::doctor::DoctorProbeRequest::default(),
+        ));
+        assert!(doctor_should_probe_api(
+            crate::config::ApiProvider::OllamaCloud,
+            cloud,
+            crate::doctor::DoctorProbeRequest {
+                probe_api: true,
+                ..crate::doctor::DoctorProbeRequest::default()
+            },
+        ));
+        assert!(!doctor_should_probe_api(
+            crate::config::ApiProvider::OllamaCloud,
+            cloud,
+            crate::doctor::DoctorProbeRequest {
+                probe_local: true,
+                ..crate::doctor::DoctorProbeRequest::default()
+            },
+        ));
+    }
+
+    #[test]
     fn custom_loopback_probe_also_requires_explicit_opt_in() {
         assert!(!doctor_should_probe_api(
             crate::config::ApiProvider::Custom,
@@ -17619,6 +17843,58 @@ mod setup_helper_tests {
 
         assert_eq!(resolve_api_key_source(&config), ApiKeySource::Unknown);
         assert!(config.deepseek_api_key().is_err());
+    }
+
+    #[test]
+    fn ollama_doctor_credential_source_is_route_aware() {
+        let local = Config {
+            provider: Some("ollama".to_string()),
+            ..Config::default()
+        };
+        assert_eq!(resolve_api_key_source(&local), ApiKeySource::LocalRuntime);
+        assert_eq!(
+            resolve_credential_diagnostic(&local).availability,
+            CredentialAvailability::NotRequired
+        );
+
+        let ollama_config = |base_url: &str| Config {
+            provider: Some("ollama".to_string()),
+            providers: Some(crate::config::ProvidersConfig {
+                ollama: crate::config::ProviderConfig {
+                    base_url: Some(base_url.to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Config::default()
+        };
+        let cloud = ollama_config(codewhale_config::provider::OLLAMA_CLOUD_BASE_URL);
+        assert_eq!(
+            cloud.api_provider(),
+            crate::config::ApiProvider::OllamaCloud
+        );
+        assert_eq!(
+            resolve_api_key_source(&cloud),
+            ApiKeySource::SecretStoreUnprobed
+        );
+        assert_eq!(
+            resolve_credential_diagnostic(&cloud).availability,
+            CredentialAvailability::NotProbed
+        );
+        assert_eq!(doctor_auth_scheme(&cloud), "bearer");
+        let report = doctor_route_report(&cloud);
+        assert_eq!(report["provider"], "ollama-cloud");
+        assert_eq!(report["provider_config_table"], "ollama_cloud");
+
+        let custom_remote = ollama_config("https://ollama-gateway.example.test/v1");
+        assert_eq!(
+            resolve_api_key_source(&custom_remote),
+            ApiKeySource::Unknown
+        );
+        assert_eq!(
+            resolve_credential_diagnostic(&custom_remote).availability,
+            CredentialAvailability::Unknown
+        );
     }
 
     #[test]

@@ -1026,6 +1026,7 @@ fn xiaomi_is_explicit_pay_as_you_go(config: Option<&ProviderConfig>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::Usage;
     use crate::pricing::CostCurrency;
 
     fn config_with(provider: ApiProvider, provider_config: ProviderConfig) -> Config {
@@ -1812,6 +1813,42 @@ mod tests {
         );
         assert_eq!(format_usage_chip(&chip).as_deref(), Some("cost: local"));
         assert!(!format_usage_line(&chip).contains('$'));
+    }
+
+    #[test]
+    fn ollama_cloud_is_unknown_and_counts_as_possible_spend() {
+        let config = Config {
+            provider: Some("ollama-cloud".to_string()),
+            providers: Some(crate::config::ProvidersConfig {
+                ollama_cloud: crate::config::ProviderConfig {
+                    api_key: Some("cloud-key".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let billing = for_route(&config, ApiProvider::OllamaCloud);
+        assert_eq!(billing, BillingPresentation::Unknown);
+        assert!(!billing.shows_money());
+
+        let audit = crate::pricing::audit_turn_cost_for_route(
+            ApiProvider::OllamaCloud,
+            crate::config::DEFAULT_OLLAMA_CLOUD_MODEL,
+            Some(crate::pricing::UNCLASSIFIED_BILLING_SURFACE),
+            &Usage {
+                input_tokens: 1_000,
+                output_tokens: 100,
+                ..Usage::default()
+            },
+            chrono::Utc::now(),
+            billing,
+        );
+        assert_eq!(
+            audit.unpriced_reason,
+            Some(crate::pricing::UnpricedReason::UnknownBillingBasis)
+        );
+        assert!(audit.counts_toward_money_coverage());
     }
 
     #[test]

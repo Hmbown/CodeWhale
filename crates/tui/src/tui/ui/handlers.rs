@@ -1296,7 +1296,7 @@ pub(crate) async fn handle_view_events(
                 if app.view_stack.top_kind() != Some(ModalKind::SubAgents) {
                     let agents = subagent_view_agents(app, &app.subagent_cache);
                     app.view_stack
-                        .push(crate::tui::views::SubAgentsView::new(agents));
+                        .push(crate::tui::views::SubAgentsView::for_app(app, agents));
                 }
                 app.status_message =
                     Some(tr(app.ui_locale, MessageId::SubagentsFetching).to_string());
@@ -1375,6 +1375,20 @@ pub(crate) async fn handle_view_events(
                 app.needs_redraw = true;
             }
             ViewEvent::FleetProfileDraftCommitRequested { draft, scope } => {
+                // A project-scope save is refused (never silently redirected)
+                // when project profiles are disabled for this launch: the file
+                // would be written where nothing loads it.
+                if scope == crate::fleet::profile::FleetProfileScope::Project
+                    && !crate::fleet::roster::project_agent_profiles_enabled()
+                {
+                    app.set_sticky_status(
+                        tr(app.ui_locale, MessageId::FleetDestProjectDisabledSave).into_owned(),
+                        StatusToastLevel::Error,
+                        None,
+                    );
+                    app.needs_redraw = true;
+                    continue;
+                }
                 // The TOML is rendered deterministically from the validated
                 // draft and written atomically; the target path is derived
                 // from the sanitized id, never model-chosen.
@@ -1592,20 +1606,16 @@ pub(crate) async fn handle_view_events(
                 }
             }
             ViewEvent::OpenAgentTranscript { agent_id } => {
-                // Always opens: the transcript surface itself explains a
-                // missing capture, so every entry point lands on the same
-                // destination for the same agent id.
-                crate::tui::agent_transcript::open_agent_transcript(app, &agent_id);
-                app.needs_redraw = true;
-            }
-            ViewEvent::OpenAgentDetails { agent_id } => {
-                if !crate::tui::agent_details::open_agent_details(app, &agent_id) {
-                    app.status_message = Some("Agent details are unavailable".to_string());
+                // One agent, one destination: focus the worker so its full
+                // transcript owns the main area and the composer addresses
+                // its fork. The register modal closes so the focus is visible.
+                if app.view_stack.top_kind() == Some(ModalKind::SubAgents) {
+                    app.view_stack.pop();
                 }
+                crate::tui::agent_focus::focus_agent(app, &agent_id);
                 app.needs_redraw = true;
             }
-            ViewEvent::AgentDetailsClosed { agent_id }
-            | ViewEvent::AgentTranscriptClosed { agent_id } => {
+            ViewEvent::AgentDetailsClosed { agent_id } => {
                 crate::tui::work_surface::agent_details_closed(app, &agent_id);
             }
             ViewEvent::FilePickerSelected { path } => {

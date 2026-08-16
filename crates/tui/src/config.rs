@@ -69,6 +69,7 @@ pub enum ApiProvider {
     Sglang,
     Vllm,
     Ollama,
+    OllamaCloud,
     Huggingface,
     Together,
     Qianfan,
@@ -92,12 +93,15 @@ pub enum ApiProvider {
     /// backend, not an OpenAI alias: thought signatures on tool calls are
     /// captured and replayed per Google's contract.
     Google,
-    /// Google Antigravity (`agy`). Credential plane only: consent-gated
-    /// read-only import of the official CLI's login. Sends fail closed
-    /// until the cloud-code wire protocol is implemented.
+    /// Google Antigravity (`agy`). Consent-gated read-only import of the
+    /// official CLI's login, then a text-only cloud-code stream
+    /// (`/v1internal:streamGenerateContent`). Tools and non-text parts
+    /// fail closed.
     Antigravity,
     /// Jiangsu Telecom TokenHub — OpenAI-compatible AI gateway.
     Telecomjs,
+    /// Eden AI — OpenAI-compatible AI gateway (aggregator).
+    Edenai,
     /// Alibaba Cloud Model Studio — Token Plan (OpenAI-compatible Chat Completions).
     ModelstudioTokenPlan,
     /// Alibaba Cloud Model Studio — Token Plan Anthropic-compatible endpoint.
@@ -130,6 +134,11 @@ pub(crate) struct ProviderIdentity {
     /// root-level `provider = "custom"` route and must never be upgraded to an
     /// exact `[providers.custom]` table merely because one exists later.
     pub(crate) exact_id: Option<String>,
+    /// Runtime provenance for the released `ollama` + exact Cloud route.
+    /// Persistence writes the canonical Cloud kind plus the original `ollama`
+    /// id, then reconstructs this flag on resume; the flag itself is not
+    /// serialized.
+    pub(crate) migrated_legacy_ollama_cloud_route: bool,
 }
 
 impl ProviderIdentity {
@@ -325,7 +334,7 @@ impl ApiProvider {
 
     /// `ApiProvider` discriminant → `ProviderKind` lookup.
     /// Index 1 is `None` for the legacy `DeepseekCN` variant.
-    const KIND_LOOKUP: [Option<codewhale_config::ProviderKind>; 46] = [
+    const KIND_LOOKUP: [Option<codewhale_config::ProviderKind>; 48] = [
         Some(codewhale_config::ProviderKind::Deepseek),
         None, // DeepseekCN
         Some(codewhale_config::ProviderKind::DeepseekAnthropic),
@@ -346,6 +355,7 @@ impl ApiProvider {
         Some(codewhale_config::ProviderKind::Sglang),
         Some(codewhale_config::ProviderKind::Vllm),
         Some(codewhale_config::ProviderKind::Ollama),
+        Some(codewhale_config::ProviderKind::OllamaCloud),
         Some(codewhale_config::ProviderKind::Huggingface),
         Some(codewhale_config::ProviderKind::Together),
         Some(codewhale_config::ProviderKind::Qianfan),
@@ -367,6 +377,7 @@ impl ApiProvider {
         Some(codewhale_config::ProviderKind::Google),
         Some(codewhale_config::ProviderKind::Antigravity),
         Some(codewhale_config::ProviderKind::Telecomjs),
+        Some(codewhale_config::ProviderKind::Edenai),
         Some(codewhale_config::ProviderKind::ModelstudioTokenPlan),
         Some(codewhale_config::ProviderKind::ModelstudioTokenPlanAnthropic),
         Some(codewhale_config::ProviderKind::ModelstudioCodingPlan),
@@ -375,7 +386,7 @@ impl ApiProvider {
     ];
 
     /// `ProviderKind` discriminant → `ApiProvider` lookup.
-    const FROM_KIND_LOOKUP: [Self; 45] = [
+    const FROM_KIND_LOOKUP: [Self; 47] = [
         Self::Deepseek,
         Self::DeepseekAnthropic,
         Self::NvidiaNim,
@@ -395,6 +406,7 @@ impl ApiProvider {
         Self::Sglang,
         Self::Vllm,
         Self::Ollama,
+        Self::OllamaCloud,
         Self::Huggingface,
         Self::Together,
         Self::Qianfan,
@@ -420,6 +432,7 @@ impl ApiProvider {
         Self::ModelstudioCodingPlanAnthropic,
         Self::Antigravity,
         Self::Google,
+        Self::Edenai,
         Self::Custom,
     ];
 
@@ -487,6 +500,7 @@ fn subagent_provider_key_matches(key: &str, provider: ApiProvider) -> bool {
         ),
         ApiProvider::Openrouter => matches!(normalized.as_str(), "openrouter" | "open_router"),
         ApiProvider::Orcarouter => matches!(normalized.as_str(), "orcarouter" | "orca_router"),
+        ApiProvider::Edenai => matches!(normalized.as_str(), "edenai" | "eden_ai"),
         ApiProvider::OpenaiCodex => matches!(
             normalized.as_str(),
             "openai_codex" | "codex" | "chatgpt" | "openai_chatgpt"
@@ -1164,10 +1178,10 @@ fn canonical_zai_model_id(model: &str) -> Option<&'static str> {
     let normalized = normalized.replace(['_', ' '], "-");
     match normalized.as_str() {
         "glm-5.1" | "glm-5-1" | "zai-glm-5.1" | "zai-glm-5-1" => Some(ZAI_GLM_5_1_MODEL),
-        "glm-5.2" | "glm-5-2" | "zai-glm-5.2" | "zai-glm-5-2" => Some(DEFAULT_ZAI_MODEL),
-        // Resolves to its own constant, never to `DEFAULT_ZAI_MODEL`: adding a
-        // model must not silently re-point an explicit 5.3 request at the
-        // default (GLM-5.2).
+        // Each alias resolves to its own constant, never through
+        // `DEFAULT_ZAI_MODEL`: moving the default (now GLM-5.3) must not
+        // silently re-point an explicit GLM-5.2 request.
+        "glm-5.2" | "glm-5-2" | "zai-glm-5.2" | "zai-glm-5-2" => Some(ZAI_GLM_5_2_MODEL),
         "glm-5.3" | "glm-5-3" | "zai-glm-5.3" | "zai-glm-5-3" => Some(ZAI_GLM_5_3_MODEL),
         "glm-5-turbo" | "glm-5turbo" | "zai-glm-5-turbo" => Some(ZAI_GLM_5_TURBO_MODEL),
         _ => None,
@@ -1476,7 +1490,7 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
         ApiProvider::Sglang => vec![DEFAULT_SGLANG_MODEL, DEFAULT_SGLANG_FLASH_MODEL],
         ApiProvider::Vllm => vec![DEFAULT_VLLM_MODEL, DEFAULT_VLLM_FLASH_MODEL],
         ApiProvider::Volcengine => vec![DEFAULT_VOLCENGINE_MODEL, DEFAULT_VOLCENGINE_FLASH_MODEL],
-        ApiProvider::Ollama => Vec::new(),
+        ApiProvider::Ollama | ApiProvider::OllamaCloud => Vec::new(),
         ApiProvider::Openai | ApiProvider::Atlascloud => OFFICIAL_DEEPSEEK_MODELS.to_vec(),
         ApiProvider::Together => vec![DEFAULT_TOGETHER_MODEL, DEFAULT_TOGETHER_FLASH_MODEL],
         ApiProvider::Qianfan => vec![DEFAULT_QIANFAN_MODEL],
@@ -1484,7 +1498,7 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
         ApiProvider::Openmodel => vec![DEFAULT_OPENMODEL_MODEL],
         ApiProvider::Zai => vec![
             DEFAULT_ZAI_MODEL,
-            ZAI_GLM_5_3_MODEL,
+            ZAI_GLM_5_2_MODEL,
             ZAI_GLM_5_1_MODEL,
             ZAI_GLM_5_TURBO_MODEL,
         ],
@@ -1573,6 +1587,7 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
         // The cloud-code wire protocol is not implemented; no model is
         // advertised for the credential-import-only route.
         ApiProvider::Antigravity => Vec::new(),
+        ApiProvider::Edenai => vec![DEFAULT_EDENAI_MODEL],
         // Custom endpoints expose no built-in completion names; the user
         // supplies their own model id (#1519).
         ApiProvider::Custom => Vec::new(),
@@ -2084,6 +2099,9 @@ pub enum StatusItem {
     Tokens,
     /// DeepSeek account balance, refreshed once per turn completion.
     Balance,
+    /// Session metrics strip: turns · steps │ LLM · tools │ TTFT · tok/s │
+    /// cache │ in — sourced from engine timings and provider usage.
+    SessionMetrics,
 }
 
 impl StatusItem {
@@ -2103,6 +2121,7 @@ impl StatusItem {
             StatusItem::Cache,
             StatusItem::GitBranch,
             StatusItem::Tokens,
+            StatusItem::SessionMetrics,
         ]
     }
 
@@ -2124,6 +2143,7 @@ impl StatusItem {
             StatusItem::RateLimit => "rate_limit",
             StatusItem::Tokens => "tokens",
             StatusItem::Balance => "balance",
+            StatusItem::SessionMetrics => "session_metrics",
         }
     }
 
@@ -2147,6 +2167,7 @@ impl StatusItem {
             "rate_limit" => Some(Self::RateLimit),
             "tokens" => Some(Self::Tokens),
             "balance" => Some(Self::Balance),
+            "session_metrics" => Some(Self::SessionMetrics),
             _ => None,
         }
     }
@@ -2169,6 +2190,7 @@ impl StatusItem {
             StatusItem::RateLimit => "Rate-limit remaining",
             StatusItem::Tokens => "Session tokens",
             StatusItem::Balance => "Account balance",
+            StatusItem::SessionMetrics => "Session metrics",
         }
     }
 
@@ -2191,6 +2213,7 @@ impl StatusItem {
             StatusItem::RateLimit => "remaining requests in the budget (reserved)",
             StatusItem::Tokens => "input / cache-hit / output token totals",
             StatusItem::Balance => "topped-up + granted balance from DeepSeek",
+            StatusItem::SessionMetrics => "turns · steps · LLM/tool time · TTFT · tok/s · input",
         }
     }
 
@@ -2212,6 +2235,7 @@ impl StatusItem {
             StatusItem::LastToolElapsed,
             StatusItem::RateLimit,
             StatusItem::Tokens,
+            StatusItem::SessionMetrics,
         ]
     }
 
@@ -2558,6 +2582,15 @@ pub struct Config {
     /// model changed without persisting compatibility state back to config.
     #[serde(skip)]
     pub(crate) migrated_deepseek_model_alias: Option<String>,
+    /// Runtime-only receipt that the released `ollama` + exact
+    /// `https://ollama.com/v1` tuple was upgraded to `ollama-cloud` in memory.
+    ///
+    /// This survives route-scoped config clones so old provider-table and
+    /// secret-slot reads remain available to that exact migrated route. It is
+    /// never serialized and is never set for an explicit `ollama-cloud`
+    /// selection.
+    #[serde(skip)]
+    pub(crate) migrated_legacy_ollama_cloud_route: bool,
     /// Native tool catalog controls. This table controls built-in
     /// tool loading policy.
     #[serde(default)]
@@ -3381,6 +3414,8 @@ pub struct ProvidersConfig {
     pub vllm: ProviderConfig,
     #[serde(default)]
     pub ollama: ProviderConfig,
+    #[serde(default, alias = "ollama-cloud", alias = "ollamaCloud")]
+    pub ollama_cloud: ProviderConfig,
     #[serde(default, alias = "hugging-face", alias = "hf")]
     pub huggingface: ProviderConfig,
     #[serde(default, alias = "deep-infra", alias = "deep_infra")]
@@ -3483,6 +3518,9 @@ pub struct ProvidersConfig {
         alias = "tokenhub"
     )]
     pub telecomjs: ProviderConfig,
+    /// Eden AI — OpenAI-compatible AI gateway (aggregator).
+    #[serde(default, alias = "eden-ai", alias = "eden_ai")]
+    pub edenai: ProviderConfig,
     /// Alibaba Cloud Model Studio — Token Plan (OpenAI-compatible Chat Completions).
     #[serde(default, alias = "modelstudio-token-plan")]
     pub modelstudio_token_plan: ProviderConfig,
@@ -3534,6 +3572,7 @@ impl ProvidersConfig {
             ("providers.sglang", &self.sglang),
             ("providers.vllm", &self.vllm),
             ("providers.ollama", &self.ollama),
+            ("providers.ollama_cloud", &self.ollama_cloud),
             ("providers.huggingface", &self.huggingface),
             ("providers.deepinfra", &self.deepinfra),
             ("providers.together", &self.together),
@@ -4436,6 +4475,9 @@ impl Config {
             return ApiProvider::Custom;
         }
         if let Some(provider) = self.provider.as_deref().and_then(ApiProvider::parse) {
+            if provider == ApiProvider::Ollama && self.selects_legacy_ollama_cloud_route() {
+                return ApiProvider::OllamaCloud;
+            }
             return provider;
         }
         self.base_url
@@ -4449,6 +4491,38 @@ impl Config {
                     .map(|_| ApiProvider::DeepseekCN)
             })
             .unwrap_or(ApiProvider::Deepseek)
+    }
+
+    /// Whether the live config uses the released route-sensitive Ollama Cloud
+    /// shape. This is a pure in-memory compatibility check: no config or
+    /// secret state is rewritten, and only the exact official `/v1` endpoint
+    /// upgrades from `ollama` to `ollama-cloud`.
+    fn selects_legacy_ollama_cloud_route(&self) -> bool {
+        if self.migrated_legacy_ollama_cloud_route {
+            return true;
+        }
+        if self.provider.as_deref().and_then(ApiProvider::parse) != Some(ApiProvider::Ollama) {
+            return false;
+        }
+        self.legacy_ollama_cloud_route_configured()
+    }
+
+    /// Whether the legacy Ollama table itself names the exact hosted route,
+    /// independent of which provider the parent session currently selects.
+    /// Fleet and subagent pins need this route-scoped form.
+    fn legacy_ollama_cloud_route_configured(&self) -> bool {
+        let base_url = self
+            .providers
+            .as_ref()
+            .and_then(|providers| providers.ollama.base_url.as_deref())
+            .map(str::to_string)
+            .or_else(|| first_nonempty_env(&["OLLAMA_BASE_URL"]));
+        base_url.is_some_and(|base_url| {
+            codewhale_config::provider::migrates_legacy_ollama_cloud_route(
+                codewhale_config::ProviderKind::Ollama,
+                &base_url,
+            )
+        })
     }
 
     /// Return the exact non-secret key for an active provider route.
@@ -4478,6 +4552,14 @@ impl Config {
         &self,
         provider: ApiProvider,
     ) -> std::result::Result<ProviderIdentity, String> {
+        if provider == ApiProvider::OllamaCloud
+            && (self.migrated_legacy_ollama_cloud_route
+                || self.provider.as_deref().and_then(ApiProvider::parse)
+                    == Some(ApiProvider::Ollama))
+            && self.legacy_ollama_cloud_route_configured()
+        {
+            return self.resolve_provider_identity(ApiProvider::Ollama.as_str());
+        }
         self.resolve_provider_identity(&self.provider_identity_for(provider))
     }
 
@@ -4508,13 +4590,23 @@ impl Config {
             .is_some();
 
         if !has_exact_custom_table
-            && let Some(provider) = ApiProvider::parse(key)
+            && let Some(mut provider) = ApiProvider::parse(key)
             && provider != ApiProvider::Custom
         {
+            let migrated_legacy_ollama_cloud_route =
+                provider == ApiProvider::Ollama && self.legacy_ollama_cloud_route_configured();
+            if provider == ApiProvider::Ollama && migrated_legacy_ollama_cloud_route {
+                provider = ApiProvider::OllamaCloud;
+            }
             return Ok(ProviderIdentity {
                 provider,
                 key: provider.as_str().to_string(),
-                exact_id: Some(provider.as_str().to_string()),
+                exact_id: Some(if migrated_legacy_ollama_cloud_route {
+                    ApiProvider::Ollama.as_str().to_string()
+                } else {
+                    provider.as_str().to_string()
+                }),
+                migrated_legacy_ollama_cloud_route,
             });
         }
 
@@ -4532,6 +4624,7 @@ impl Config {
                         provider: ApiProvider::Custom,
                         key: ApiProvider::Custom.as_str().to_string(),
                         exact_id: None,
+                        migrated_legacy_ollama_cloud_route: false,
                     });
                 }
             }
@@ -4616,7 +4709,30 @@ impl Config {
             provider: ApiProvider::Custom,
             key: exact_key.to_string(),
             exact_id: Some(exact_key.to_string()),
+            migrated_legacy_ollama_cloud_route: false,
         })
+    }
+
+    /// Resolve a provider explicitly pinned by a current Fleet/subagent
+    /// declaration.
+    ///
+    /// A scoped legacy Ollama Cloud config retains its migration marker so the
+    /// active client can keep reading `[providers.ollama]` and the old secret
+    /// slot. That marker is provenance for the active route, not an alias for a
+    /// newly declared `ollama-cloud` pin: the explicit pin must bind the
+    /// first-class table and credential slot even when it is declared by a
+    /// child of the migrated route.
+    pub(crate) fn resolve_provider_pin_identity(
+        &self,
+        provider_id: &str,
+    ) -> std::result::Result<ProviderIdentity, String> {
+        let mut identity = self.resolve_provider_identity(provider_id)?;
+        if identity.provider == ApiProvider::OllamaCloud
+            && ApiProvider::parse(provider_id.trim()) == Some(ApiProvider::OllamaCloud)
+        {
+            identity.migrated_legacy_ollama_cloud_route = false;
+        }
+        Ok(identity)
     }
 
     /// Resolve an additive exact provider id. Unlike raw selector resolution,
@@ -4689,7 +4805,7 @@ impl Config {
             );
         };
 
-        let Some(provider) = ApiProvider::parse(kind) else {
+        let Some(mut provider) = ApiProvider::parse(kind) else {
             // Pre-additive releases sometimes wrote an exact named custom key
             // into `model_provider`. Preserve that shape, but reject a
             // contradictory additive id instead of silently choosing one.
@@ -4705,6 +4821,14 @@ impl Config {
                 None => self.resolve_provider_identity(kind),
             };
         };
+        let migrated_legacy_ollama_cloud = (provider == ApiProvider::Ollama
+            && self.legacy_ollama_cloud_route_configured())
+            || (provider == ApiProvider::OllamaCloud
+                && id.and_then(ApiProvider::parse) == Some(ApiProvider::Ollama)
+                && self.legacy_ollama_cloud_route_configured());
+        if migrated_legacy_ollama_cloud {
+            provider = ApiProvider::OllamaCloud;
+        }
 
         if provider == ApiProvider::Custom {
             if let Some(id) = id {
@@ -4726,11 +4850,14 @@ impl Config {
                 provider: ApiProvider::Custom,
                 key: ApiProvider::Custom.as_str().to_string(),
                 exact_id: None,
+                migrated_legacy_ollama_cloud_route: false,
             });
         }
 
         if let Some(id) = id
             && ApiProvider::parse(id) != Some(provider)
+            && !(migrated_legacy_ollama_cloud
+                && ApiProvider::parse(id) == Some(ApiProvider::Ollama))
         {
             return Err(format!(
                 "persisted provider route declares built-in kind '{}' but exact provider id '{id}' names a different route; repair the mismatched fields because Codewhale will not guess or fall back",
@@ -4759,7 +4886,12 @@ impl Config {
         Ok(ProviderIdentity {
             provider,
             key: provider.as_str().to_string(),
-            exact_id: Some(provider.as_str().to_string()),
+            exact_id: Some(if migrated_legacy_ollama_cloud {
+                ApiProvider::Ollama.as_str().to_string()
+            } else {
+                provider.as_str().to_string()
+            }),
+            migrated_legacy_ollama_cloud_route: migrated_legacy_ollama_cloud,
         })
     }
 
@@ -4769,6 +4901,7 @@ impl Config {
     /// otherwise capture the table. Removing it from the scoped clone keeps
     /// the root endpoint authoritative without mutating the live registry.
     pub(crate) fn scope_to_provider_identity(&mut self, identity: &ProviderIdentity) {
+        self.migrated_legacy_ollama_cloud_route = identity.migrated_legacy_ollama_cloud_route;
         self.provider = Some(identity.key.clone());
         if identity.provider == ApiProvider::Custom
             && identity.persisted_id().is_none()
@@ -4913,6 +5046,10 @@ impl Config {
             ApiProvider::Sglang => &providers.sglang,
             ApiProvider::Vllm => &providers.vllm,
             ApiProvider::Ollama => &providers.ollama,
+            ApiProvider::OllamaCloud if self.selects_legacy_ollama_cloud_route() => {
+                &providers.ollama
+            }
+            ApiProvider::OllamaCloud => &providers.ollama_cloud,
             ApiProvider::Volcengine => &providers.volcengine,
             ApiProvider::Huggingface => &providers.huggingface,
             ApiProvider::Deepinfra => &providers.deepinfra,
@@ -4935,6 +5072,7 @@ impl Config {
             ApiProvider::Google => &providers.google,
             ApiProvider::Antigravity => &providers.antigravity,
             ApiProvider::Telecomjs => &providers.telecomjs,
+            ApiProvider::Edenai => &providers.edenai,
             ApiProvider::ModelstudioTokenPlan => &providers.modelstudio_token_plan,
             ApiProvider::ModelstudioTokenPlanAnthropic => {
                 &providers.modelstudio_token_plan_anthropic
@@ -4968,6 +5106,7 @@ impl Config {
                 .clone()
                 .unwrap_or_else(|| "__custom__".to_string())
         });
+        let legacy_ollama_cloud = self.selects_legacy_ollama_cloud_route();
         let providers = self.providers.get_or_insert_with(ProvidersConfig::default);
         if let Some(key) = custom_key {
             return providers.custom.entry(key).or_default();
@@ -4992,6 +5131,8 @@ impl Config {
             ApiProvider::Sglang => &mut providers.sglang,
             ApiProvider::Vllm => &mut providers.vllm,
             ApiProvider::Ollama => &mut providers.ollama,
+            ApiProvider::OllamaCloud if legacy_ollama_cloud => &mut providers.ollama,
+            ApiProvider::OllamaCloud => &mut providers.ollama_cloud,
             ApiProvider::Volcengine => &mut providers.volcengine,
             ApiProvider::Huggingface => &mut providers.huggingface,
             ApiProvider::Deepinfra => &mut providers.deepinfra,
@@ -5014,6 +5155,7 @@ impl Config {
             ApiProvider::Google => &mut providers.google,
             ApiProvider::Antigravity => &mut providers.antigravity,
             ApiProvider::Telecomjs => &mut providers.telecomjs,
+            ApiProvider::Edenai => &mut providers.edenai,
             ApiProvider::ModelstudioTokenPlan => &mut providers.modelstudio_token_plan,
             ApiProvider::ModelstudioTokenPlanAnthropic => {
                 &mut providers.modelstudio_token_plan_anthropic
@@ -5345,6 +5487,7 @@ impl Config {
             ApiProvider::Sglang => DEFAULT_SGLANG_MODEL,
             ApiProvider::Vllm => DEFAULT_VLLM_MODEL,
             ApiProvider::Ollama => DEFAULT_OLLAMA_MODEL,
+            ApiProvider::OllamaCloud => DEFAULT_OLLAMA_CLOUD_MODEL,
             ApiProvider::Volcengine => DEFAULT_VOLCENGINE_MODEL,
             ApiProvider::Huggingface => DEFAULT_HUGGINGFACE_MODEL,
             ApiProvider::Deepinfra => DEFAULT_DEEPINFRA_MODEL,
@@ -5378,6 +5521,7 @@ impl Config {
             ApiProvider::Google => DEFAULT_GOOGLE_MODEL,
             ApiProvider::Antigravity => DEFAULT_ANTIGRAVITY_MODEL,
             ApiProvider::Telecomjs => DEFAULT_TELECOMJS_MODEL,
+            ApiProvider::Edenai => DEFAULT_EDENAI_MODEL,
             ApiProvider::ModelstudioTokenPlan
             | ApiProvider::ModelstudioTokenPlanAnthropic
             | ApiProvider::ModelstudioCodingPlan
@@ -5480,6 +5624,7 @@ impl Config {
             | ApiProvider::Sglang
             | ApiProvider::Vllm
             | ApiProvider::Ollama
+            | ApiProvider::OllamaCloud
             | ApiProvider::Volcengine
             | ApiProvider::Huggingface
             | ApiProvider::Deepinfra
@@ -5499,6 +5644,7 @@ impl Config {
             | ApiProvider::Google
             | ApiProvider::Antigravity
             | ApiProvider::Telecomjs
+            | ApiProvider::Edenai
             | ApiProvider::ModelstudioTokenPlan
             | ApiProvider::ModelstudioTokenPlanAnthropic
             | ApiProvider::ModelstudioCodingPlan
@@ -5585,6 +5731,7 @@ impl Config {
                         ApiProvider::Sglang => DEFAULT_SGLANG_BASE_URL,
                         ApiProvider::Vllm => DEFAULT_VLLM_BASE_URL,
                         ApiProvider::Ollama => DEFAULT_OLLAMA_BASE_URL,
+                        ApiProvider::OllamaCloud => DEFAULT_OLLAMA_CLOUD_BASE_URL,
                         ApiProvider::Volcengine => DEFAULT_VOLCENGINE_BASE_URL,
                         ApiProvider::Huggingface => DEFAULT_HUGGINGFACE_BASE_URL,
                         ApiProvider::Deepinfra => DEFAULT_DEEPINFRA_BASE_URL,
@@ -5607,6 +5754,7 @@ impl Config {
                         ApiProvider::Google => DEFAULT_GOOGLE_BASE_URL,
                         ApiProvider::Antigravity => DEFAULT_ANTIGRAVITY_BASE_URL,
                         ApiProvider::Telecomjs => DEFAULT_TELECOMJS_BASE_URL,
+                        ApiProvider::Edenai => DEFAULT_EDENAI_BASE_URL,
                         ApiProvider::ModelstudioTokenPlan
                         | ApiProvider::ModelstudioTokenPlanAnthropic
                         | ApiProvider::ModelstudioCodingPlan
@@ -5902,7 +6050,7 @@ impl Config {
             return false;
         }
 
-        provider.is_self_hosted()
+        provider_route_is_keyless_self_hosted(provider, &self.base_url_for_route(provider))
             || (provider == self.api_provider()
                 && base_url_uses_local_host(&self.deepseek_base_url()))
     }
@@ -6151,9 +6299,8 @@ impl Config {
         // Official Antigravity (`agy`) login. `ANTIGRAVITY_API_KEY` config
         // and env slots were already checked above; here the process's own
         // `AGY_ADC_AUTH` wins over the consented `state.vscdb`, which is
-        // imported read-only from the one pinned path. The token only ever
-        // reaches the credential plane — sends still fail closed in the
-        // client because the cloud-code wire protocol is unimplemented.
+        // imported read-only from the one pinned path. The token is then
+        // used on the cloud-code stream; it is never logged.
         if provider == ApiProvider::Antigravity && !custom_endpoint {
             let grant = self
                 .external_credential_read_grant(
@@ -6178,14 +6325,15 @@ impl Config {
                     tracing::debug!(
                         target: "config",
                         source = other.source_label(),
-                        "antigravity credential plane resolved; sends remain fail-closed"
+                        "antigravity credential plane did not yield a sendable token"
                     );
                 }
             }
         }
 
         if !auth_mode_requires_api_key(auth_mode.as_deref())
-            && (provider.is_self_hosted() || base_url_uses_local_host(&self.deepseek_base_url()))
+            && (provider_route_is_keyless_self_hosted(provider, &self.deepseek_base_url())
+                || base_url_uses_local_host(&self.deepseek_base_url()))
         {
             return Ok(String::new());
         }
@@ -6279,7 +6427,20 @@ impl Config {
             }
             // Self-hosted deployments commonly run without auth on localhost.
             // Return an empty key and let the client omit the Authorization header.
-            ApiProvider::Sglang | ApiProvider::Vllm | ApiProvider::Ollama => Ok(String::new()),
+            ApiProvider::Sglang | ApiProvider::Vllm => Ok(String::new()),
+            ApiProvider::Ollama
+                if provider_route_is_keyless_self_hosted(provider, &self.deepseek_base_url()) =>
+            {
+                Ok(String::new())
+            }
+            ApiProvider::Ollama => {
+                let help = credential_help_for_provider_route(provider, &self.deepseek_base_url());
+                anyhow::bail!(
+                    "Ollama Cloud API key not found. Get a key: {}. Run 'codewhale auth set --provider ollama', set OLLAMA_API_KEY, or add [providers.ollama] api_key in ~/.codewhale/config.toml.",
+                    help.credential_url
+                        .unwrap_or(codewhale_config::provider::OLLAMA_CLOUD_API_KEY_URL)
+                )
+            }
             // Custom OpenAI-compatible endpoints (#1519): the key comes from the
             // env var named by `[providers.<name>] api_key_env`. If we reached
             // here it is unset/empty (and the endpoint is not loopback).
@@ -7208,6 +7369,7 @@ fn provider_env_base_url_override(provider: ApiProvider) -> Option<String> {
         ApiProvider::Sglang => &["SGLANG_BASE_URL"],
         ApiProvider::Vllm => &["VLLM_BASE_URL"],
         ApiProvider::Ollama => &["OLLAMA_BASE_URL"],
+        ApiProvider::OllamaCloud => &["OLLAMA_CLOUD_BASE_URL"],
         ApiProvider::Huggingface => &["HUGGINGFACE_BASE_URL", "HF_BASE_URL"],
         ApiProvider::Meta => &["META_MODEL_API_BASE_URL", "MODEL_API_BASE_URL"],
         ApiProvider::Xai => &["XAI_BASE_URL"],
@@ -7215,6 +7377,7 @@ fn provider_env_base_url_override(provider: ApiProvider) -> Option<String> {
         ApiProvider::Google => &["GOOGLE_BASE_URL", "GEMINI_BASE_URL"],
         ApiProvider::Antigravity => &["ANTIGRAVITY_BASE_URL"],
         ApiProvider::Telecomjs => &["TELECOMJS_BASE_URL"],
+        ApiProvider::Edenai => &["EDENAI_BASE_URL"],
         ApiProvider::ModelstudioTokenPlan | ApiProvider::ModelstudioTokenPlanAnthropic => {
             &["MODELSTUDIO_TOKEN_PLAN_BASE_URL"]
         }
@@ -7289,7 +7452,9 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
         config.provider = Some(value);
     }
     let active_base_url_from_env = env_base_url_override().is_some()
-        || provider_env_base_url_override(config.api_provider()).is_some();
+        || provider_env_base_url_override(config.api_provider()).is_some()
+        || (config.selects_legacy_ollama_cloud_route()
+            && first_nonempty_env(&["OLLAMA_BASE_URL"]).is_some());
     if let Ok(value) = codewhale_env_var("CODEWHALE_BASE_URL", "DEEPSEEK_BASE_URL") {
         match config.api_provider() {
             ApiProvider::Deepseek | ApiProvider::DeepseekCN => {
@@ -7430,6 +7595,13 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
                     .providers
                     .get_or_insert_with(ProvidersConfig::default)
                     .ollama
+                    .base_url = Some(value);
+            }
+            ApiProvider::OllamaCloud => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .ollama_cloud
                     .base_url = Some(value);
             }
             ApiProvider::Volcengine => {
@@ -7577,6 +7749,13 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
                     .providers
                     .get_or_insert_with(ProvidersConfig::default)
                     .telecomjs
+                    .base_url = Some(value);
+            }
+            ApiProvider::Edenai => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .edenai
                     .base_url = Some(value);
             }
             ApiProvider::ModelstudioTokenPlan => {
@@ -7826,6 +8005,16 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
             .telecomjs
             .base_url = Some(value);
     }
+    if matches!(config.api_provider(), ApiProvider::Edenai)
+        && let Ok(value) = std::env::var("EDENAI_BASE_URL")
+        && !value.trim().is_empty()
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .edenai
+            .base_url = Some(value);
+    }
     if matches!(
         config.api_provider(),
         ApiProvider::ModelstudioTokenPlan | ApiProvider::ModelstudioTokenPlanAnthropic
@@ -7914,6 +8103,7 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
                 ApiProvider::Sglang => &mut providers.sglang,
                 ApiProvider::Vllm => &mut providers.vllm,
                 ApiProvider::Ollama => &mut providers.ollama,
+                ApiProvider::OllamaCloud => &mut providers.ollama_cloud,
                 ApiProvider::Volcengine => &mut providers.volcengine,
                 ApiProvider::Huggingface => &mut providers.huggingface,
                 ApiProvider::Deepinfra => &mut providers.deepinfra,
@@ -7936,6 +8126,7 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
                 ApiProvider::Google => &mut providers.google,
                 ApiProvider::Antigravity => &mut providers.antigravity,
                 ApiProvider::Telecomjs => &mut providers.telecomjs,
+                ApiProvider::Edenai => &mut providers.edenai,
                 ApiProvider::ModelstudioTokenPlan => &mut providers.modelstudio_token_plan,
                 ApiProvider::ModelstudioTokenPlanAnthropic => {
                     &mut providers.modelstudio_token_plan_anthropic
@@ -7954,7 +8145,7 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
             entry.http_headers = Some(provider_headers);
         }
     }
-    if matches!(config.api_provider(), ApiProvider::Ollama)
+    if config.provider.as_deref().and_then(ApiProvider::parse) == Some(ApiProvider::Ollama)
         && let Ok(value) = std::env::var("OLLAMA_BASE_URL")
         && !value.trim().is_empty()
     {
@@ -7962,6 +8153,17 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
             .providers
             .get_or_insert_with(ProvidersConfig::default)
             .ollama
+            .base_url = Some(value);
+    }
+    if matches!(config.api_provider(), ApiProvider::OllamaCloud)
+        && config.provider.as_deref().and_then(ApiProvider::parse) == Some(ApiProvider::OllamaCloud)
+        && let Ok(value) = std::env::var("OLLAMA_CLOUD_BASE_URL")
+        && !value.trim().is_empty()
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .ollama_cloud
             .base_url = Some(value);
     }
     if matches!(config.api_provider(), ApiProvider::Sglang)
@@ -7974,8 +8176,15 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
     {
         config.default_text_model = Some(value);
     }
-    if matches!(config.api_provider(), ApiProvider::Ollama)
-        && let Ok(value) = std::env::var("OLLAMA_MODEL")
+    if matches!(
+        config.api_provider(),
+        ApiProvider::Ollama | ApiProvider::OllamaCloud
+    ) && let Ok(value) = std::env::var("OLLAMA_MODEL")
+    {
+        config.default_text_model = Some(value);
+    }
+    if matches!(config.api_provider(), ApiProvider::OllamaCloud)
+        && let Ok(value) = std::env::var("OLLAMA_CLOUD_MODEL")
     {
         config.default_text_model = Some(value);
     }
@@ -8148,6 +8357,16 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
             .telecomjs
             .model = Some(value);
     }
+    if matches!(config.api_provider(), ApiProvider::Edenai)
+        && let Ok(value) = std::env::var("EDENAI_MODEL")
+        && !value.trim().is_empty()
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .edenai
+            .model = Some(value);
+    }
     if matches!(
         config.api_provider(),
         ApiProvider::ModelstudioTokenPlan | ApiProvider::ModelstudioTokenPlanAnthropic
@@ -8261,6 +8480,7 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
                 ApiProvider::Sglang => &mut providers.sglang,
                 ApiProvider::Vllm => &mut providers.vllm,
                 ApiProvider::Ollama => &mut providers.ollama,
+                ApiProvider::OllamaCloud => &mut providers.ollama_cloud,
                 ApiProvider::Volcengine => &mut providers.volcengine,
                 ApiProvider::Huggingface => &mut providers.huggingface,
                 ApiProvider::Deepinfra => &mut providers.deepinfra,
@@ -8283,6 +8503,7 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
                 ApiProvider::Google => &mut providers.google,
                 ApiProvider::Antigravity => &mut providers.antigravity,
                 ApiProvider::Telecomjs => &mut providers.telecomjs,
+                ApiProvider::Edenai => &mut providers.edenai,
                 ApiProvider::ModelstudioTokenPlan => &mut providers.modelstudio_token_plan,
                 ApiProvider::ModelstudioTokenPlanAnthropic => {
                     &mut providers.modelstudio_token_plan_anthropic
@@ -8578,10 +8799,12 @@ pub(crate) fn provider_passes_model_through(provider: ApiProvider) -> bool {
             | ApiProvider::Qianfan
             | ApiProvider::Openmodel
             | ApiProvider::Ollama
+            | ApiProvider::OllamaCloud
             | ApiProvider::Huggingface
             | ApiProvider::Meta
             | ApiProvider::Xai
             | ApiProvider::Telecomjs
+            | ApiProvider::Edenai
             | ApiProvider::ModelstudioTokenPlan
             | ApiProvider::ModelstudioTokenPlanAnthropic
             | ApiProvider::ModelstudioCodingPlan
@@ -8828,6 +9051,20 @@ fn base_url_is_custom_for_provider(provider: ApiProvider, base_url: &str) -> boo
         .kind()
         .unwrap_or(codewhale_config::ProviderKind::Deepseek);
     codewhale_config::provider_preserves_custom_base_url_model(kind, base_url)
+}
+
+/// Whether this concrete route is a self-hosted endpoint whose credentials
+/// are optional by default.
+///
+/// Ollama is local; the released exact `ollama` + `https://ollama.com/v1`
+/// tuple is upgraded to `OllamaCloud` before this helper runs. Cloud is never
+/// self-hosted, while neighboring remote Ollama URLs remain custom and are
+/// rejected before they can inherit ambient or saved credentials.
+pub(crate) fn provider_route_is_keyless_self_hosted(provider: ApiProvider, base_url: &str) -> bool {
+    if provider == ApiProvider::Ollama {
+        return base_url_uses_local_host(base_url);
+    }
+    provider.is_self_hosted()
 }
 
 fn provider_preserves_custom_base_url_model(provider: ApiProvider, base_url: &str) -> bool {
@@ -9422,6 +9659,8 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         reasoning_effort_inferred_from_legacy_alias: override_cfg
             .reasoning_effort_inferred_from_legacy_alias
             || base.reasoning_effort_inferred_from_legacy_alias,
+        migrated_legacy_ollama_cloud_route: override_cfg.migrated_legacy_ollama_cloud_route
+            || base.migrated_legacy_ollama_cloud_route,
         migrated_deepseek_model_alias: override_cfg
             .migrated_deepseek_model_alias
             .or(base.migrated_deepseek_model_alias),
@@ -9660,6 +9899,7 @@ fn merge_providers(
             sglang: merge_provider_config(base.sglang, override_cfg.sglang),
             vllm: merge_provider_config(base.vllm, override_cfg.vllm),
             ollama: merge_provider_config(base.ollama, override_cfg.ollama),
+            ollama_cloud: merge_provider_config(base.ollama_cloud, override_cfg.ollama_cloud),
             volcengine: merge_provider_config(base.volcengine, override_cfg.volcengine),
             huggingface: merge_provider_config(base.huggingface, override_cfg.huggingface),
             deepinfra: merge_provider_config(base.deepinfra, override_cfg.deepinfra),
@@ -9683,6 +9923,7 @@ fn merge_providers(
             google: merge_provider_config(base.google, override_cfg.google),
             antigravity: merge_provider_config(base.antigravity, override_cfg.antigravity),
             telecomjs: merge_provider_config(base.telecomjs, override_cfg.telecomjs),
+            edenai: merge_provider_config(base.edenai, override_cfg.edenai),
             modelstudio_token_plan: merge_provider_config(
                 base.modelstudio_token_plan,
                 override_cfg.modelstudio_token_plan,
@@ -10397,9 +10638,13 @@ fn user_global_config_api_key(provider: ApiProvider) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
     let doc: codewhale_config::ConfigToml = toml::from_str(&text).ok()?;
     let json = serde_json::to_value(&doc).ok()?;
+    let provider_config_key = provider.metadata().map_or_else(
+        || provider.as_str(),
+        |metadata| metadata.provider_config_key(),
+    );
     let key = json
         .get("providers")?
-        .get(provider.as_str())?
+        .get(provider_config_key)?
         .get("api_key")?
         .as_str()?;
     let key = key.trim();
@@ -10462,6 +10707,24 @@ pub fn has_api_key_for(config: &Config, provider: ApiProvider) -> bool {
         // checks below instead of masking a configured key.
         return true;
     }
+    if provider == ApiProvider::Antigravity && !config.provider_uses_custom_endpoint(provider) {
+        let path = codewhale_config::default_agy_credentials_path();
+        if config
+            .external_credential_read_grant(
+                provider,
+                codewhale_config::ExternalCredentialSource::AgyCli,
+                &path,
+            )
+            .is_ok_and(|grant| {
+                crate::agy_credentials::antigravity_oauth_token_from_grant(&grant)
+                    .ok()
+                    .flatten()
+                    .is_some()
+            })
+        {
+            return true;
+        }
+    }
     if matches!(
         provider,
         ApiProvider::Deepseek | ApiProvider::DeepseekAnthropic
@@ -10486,7 +10749,7 @@ pub fn has_api_key_for(config: &Config, provider: ApiProvider) -> bool {
     }
 
     if !auth_mode_requires_api_key(auth_mode.as_deref())
-        && (provider.is_self_hosted()
+        && (provider_route_is_keyless_self_hosted(provider, &config.base_url_for_route(provider))
             || (provider == config.api_provider()
                 && base_url_uses_local_host(&config.deepseek_base_url())))
     {
@@ -10680,6 +10943,7 @@ pub fn save_api_key_for(provider: ApiProvider, api_key: &str) -> Result<PathBuf>
             provider,
             key: provider.as_str().to_string(),
             exact_id: Some(provider.as_str().to_string()),
+            migrated_legacy_ollama_cloud_route: false,
         },
         &Config {
             provider: Some(provider.as_str().to_string()),
@@ -11246,11 +11510,28 @@ fn provider_secret_store_api_key_with_mode(
     } else {
         codewhale_secrets::Secrets::auto_detect()
     };
-    secrets
+    let primary = secrets
         .get(provider_secret_store_slot(provider))
         .ok()
         .flatten()
-        .filter(|value| !value.trim().is_empty())
+        .filter(|value| !value.trim().is_empty());
+    if primary.is_some() {
+        return primary;
+    }
+
+    // The old local identity owned the hosted slot only when the live config
+    // selected the exact Ollama Cloud route. Never apply this fallback to a
+    // neighboring/custom endpoint or to an explicit new `ollama-cloud`
+    // selection, and never write/copy/delete either slot while resolving.
+    (provider == ApiProvider::OllamaCloud && config.selects_legacy_ollama_cloud_route())
+        .then(|| {
+            secrets
+                .get(ApiProvider::Ollama.as_str())
+                .ok()
+                .flatten()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .flatten()
 }
 
 /// The shadowing warning for a config-file `api_key` that wins over a live

@@ -101,21 +101,9 @@ jobs:
         with:
           toolchain: stable
           targets: ${{ matrix.target }}
-      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        id: sccache
-        continue-on-error: true
-      - name: Enable sccache
-        if: steps.sccache.outcome == 'success'
-        shell: bash
-        run: |
-          {
-            echo "SCCACHE_GHA_ENABLED=true"
-            echo "RUSTC_WRAPPER=sccache"
-            echo "SCCACHE_IGNORE_SERVER_IO_ERROR=1"
-          } >> "${GITHUB_ENV}"
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          cache-bin: false
+      # Privileged artifact builds check out inputs.source_sha. Do not
+      # restore or save rust-cache / sccache here — those keys are shared
+      # with default-branch CI (CodeQL #95–#96, #104–#106).
       - name: Build static Linux binaries (musl)
         if: endsWith(matrix.target, '-unknown-linux-musl')
         shell: bash

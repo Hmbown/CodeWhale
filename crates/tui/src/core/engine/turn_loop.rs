@@ -20,6 +20,33 @@ use codewhale_core::request::{PrimaryTurnRequest, prepare_primary_turn_request};
 
 const MAX_APPROVAL_INTENT_SUMMARY_CHARS: usize = 2_000;
 
+fn localized_request_preparation_error(locale_tag: &str, error: &anyhow::Error) -> Option<String> {
+    if matches!(
+        error.downcast_ref::<crate::client::cloud_code::CloudCodeRequestError>(),
+        Some(crate::client::cloud_code::CloudCodeRequestError::SystemPromptUnsupported)
+    ) {
+        return Some(
+            crate::localization::tr(
+                crate::localization::resolve_locale(locale_tag),
+                crate::localization::MessageId::CloudCodeSystemPromptUnsupported,
+            )
+            .into_owned(),
+        );
+    }
+    None
+}
+
+pub(super) fn initial_stream_error_user_message(locale_tag: &str, error: &anyhow::Error) -> String {
+    localized_request_preparation_error(locale_tag, error).unwrap_or_else(|| error.to_string())
+}
+
+pub(super) fn preview_request_error_user_message(
+    locale_tag: &str,
+    error: &anyhow::Error,
+) -> String {
+    localized_request_preparation_error(locale_tag, error).unwrap_or_else(|| format!("{error:#}"))
+}
+
 fn approval_intent_summary(text: &str) -> Option<String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -432,12 +459,30 @@ impl Engine {
                         usage: usage.clone(),
                         duration_ms: u64::try_from(started.elapsed().as_millis())
                             .unwrap_or(u64::MAX),
+                        first_token_ms: None,
+                        request_ms: None,
                     })
                     .await;
             }
         }
         let decision = review.outcome.audit_decision();
         let risk = review.outcome.audit_risk();
+        // The transcript receipt names the verdict a person never saw a
+        // prompt for. Cancellation is not a decision and gets no receipt.
+        let receipt = match &review.outcome {
+            super::reviewer::ReviewerOutcome::Allow { reason, .. } => Some((
+                crate::core::events::ToolGateVerdict::Allowed,
+                reason.clone(),
+            )),
+            super::reviewer::ReviewerOutcome::Deny { reason, .. } => {
+                Some((crate::core::events::ToolGateVerdict::Denied, reason.clone()))
+            }
+            super::reviewer::ReviewerOutcome::Unavailable { reason } => Some((
+                crate::core::events::ToolGateVerdict::Unavailable,
+                reason.clone(),
+            )),
+            super::reviewer::ReviewerOutcome::Cancelled => None,
+        };
         let result = review.outcome.into_tool_result(context.tool_name);
         emit_tool_audit(json!({
             "event": "tool.auto_review",
@@ -447,6 +492,20 @@ impl Engine {
             "risk": risk,
             "reason": result.as_ref().map_or_else(|error| error.to_string(), Clone::clone),
         }));
+        if let Some((verdict, reason)) = receipt {
+            let _ = self
+                .tx_event
+                .send(Event::ToolGateDecision {
+                    agent_id: None,
+                    tool_id: tool_id.to_string(),
+                    tool_name: context.tool_name.to_string(),
+                    gate: crate::core::events::ToolGate::AutoReviewGuardian,
+                    decision: verdict,
+                    risk: risk.map(str::to_string),
+                    reason: crate::core::events::bounded_gate_reason(&reason),
+                })
+                .await;
+        }
         result.map(|_| ())
     }
 
@@ -555,9 +614,16 @@ impl Engine {
             // the idle handler starts a separate follow-up turn.
             self.drain_subagent_completion_events("queued").await;
 
-            // Ensure system prompt is up to date with latest session states
-            self.refresh_system_prompt();
-
+            // The pinned system + tools prefix is frozen for the session:
+            // recomposing it here from disk on every tool step is exactly what
+            // kills DeepSeek's KV prefix cache once the agent writes a file
+            // (the project pack listing changes -> the system hash changes ->
+            // the next same-turn request is a full miss). Header changes come
+            // only from explicit ops (`/model`, mode, goal, session sync),
+            // which refresh under a declared reason. Volatile facts the model
+            // must see mid-turn (LSP diagnostics, steer input, subagent
+            // completions) are appended to history above, never spliced into
+            // the frozen prefix.
             if turn.at_max_steps() {
                 // Exhausting the step budget while the model still owes work
                 // is a real failure. Exhausting it after a delivered answer,
@@ -642,6 +708,9 @@ impl Engine {
                             let auto_messages_after = result.messages.len();
                             let retries_used = result.retries_used;
                             self.session.replace_messages(result.messages);
+                            if let Some(pm) = self.session.prefix_stability.as_mut() {
+                                pm.note_history_reset("compaction");
+                            }
                             self.commit_compaction_checkpoint(result.summary_prompt);
                             self.emit_session_updated().await;
                             let removed = auto_messages_before.saturating_sub(auto_messages_after);
@@ -747,52 +816,77 @@ impl Engine {
             // invalidate DeepSeek's KV prefix cache for this turn.
             // Sends an event on EVERY check so the TUI can maintain
             // its own counter for the stable-checks tally.
+            let declared_change = self.session.pending_prefix_change_reason.take();
             if let Some(pm) = self.session.prefix_stability.as_mut() {
                 let system_text =
                     crate::prefix_cache::system_prompt_text(self.session.system_prompt.as_ref());
                 let tools_ref: Option<&[crate::models::Tool]> = active_tools.as_deref();
-                match pm.check_and_update(&system_text, tools_ref) {
-                    Err(change) => {
-                        let pinned_hash = pm
-                            .pinned_fingerprint()
-                            .map(|fp| fp.combined_sha256.clone())
-                            .unwrap_or_default();
+                let outcome = pm.check(&system_text, tools_ref, declared_change.as_deref());
+                let pinned_hash = pm
+                    .pinned_fingerprint()
+                    .map(|fp| fp.combined_sha256.clone())
+                    .unwrap_or_default();
+                let stability_pct = (pm.stability_ratio() * 100.0).round() as u32;
+                let pin_reason = pm.pin_reason().unwrap_or_default().to_string();
+                let last_miss_reason = pm.last_miss_reason().unwrap_or_default().to_string();
+                let context_updates = pm.context_update_count();
+                let event = match outcome {
+                    crate::prefix_cache::PrefixCheck::Stable => Event::PrefixCacheChange {
+                        description: String::new(),
+                        system_prompt_changed: false,
+                        tools_changed: false,
+                        stability_pct,
+                        changed: false,
+                        pinned_combined_hash: pinned_hash,
+                        pin_reason,
+                        last_miss_reason,
+                        context_updates,
+                    },
+                    crate::prefix_cache::PrefixCheck::Repinned { reason, change } => {
+                        // A declared header change re-pins under a logged
+                        // reason: the miss is expected and attributable.
                         tracing::debug!(
                             target: "prefix_cache",
-                            "{}",
+                            reason = %reason,
+                            "prefix re-pinned: {}",
                             change.description()
                         );
-                        let _ = self
-                            .tx_event
-                            .send(Event::PrefixCacheChange {
-                                description: change.description(),
-                                system_prompt_changed: change.system_changed,
-                                tools_changed: change.tools_changed,
-                                stability_pct: (pm.stability_ratio() * 100.0).round() as u32,
-                                changed: true,
-                                pinned_combined_hash: pinned_hash,
-                            })
-                            .await;
+                        Event::PrefixCacheChange {
+                            description: format!("{reason} — {}", change.description()),
+                            system_prompt_changed: change.system_changed,
+                            tools_changed: change.tools_changed,
+                            stability_pct,
+                            changed: true,
+                            pinned_combined_hash: pinned_hash,
+                            pin_reason,
+                            last_miss_reason,
+                            context_updates,
+                        }
                     }
-                    Ok(_) => {
-                        let pinned_hash = pm
-                            .pinned_fingerprint()
-                            .map(|fp| fp.combined_sha256.clone())
-                            .unwrap_or_default();
-                        // Stable check — keep the TUI counter in sync.
-                        let _ = self
-                            .tx_event
-                            .send(Event::PrefixCacheChange {
-                                description: String::new(),
-                                system_prompt_changed: false,
-                                tools_changed: false,
-                                stability_pct: (pm.stability_ratio() * 100.0).round() as u32,
-                                changed: false,
-                                pinned_combined_hash: pinned_hash,
-                            })
-                            .await;
+                    crate::prefix_cache::PrefixCheck::Drift { change } => {
+                        // Undeclared drift: the pin is kept so the same prefix
+                        // keeps counting as a miss until an explicit op moves
+                        // it. This should not happen after the mid-loop
+                        // refresh removal — if it does it is a real bug.
+                        tracing::warn!(
+                            target: "prefix_cache",
+                            "undeclared prefix drift (pin held): {}",
+                            change.description()
+                        );
+                        Event::PrefixCacheChange {
+                            description: format!("drift — {}", change.description()),
+                            system_prompt_changed: change.system_changed,
+                            tools_changed: change.tools_changed,
+                            stability_pct,
+                            changed: true,
+                            pinned_combined_hash: pinned_hash,
+                            pin_reason,
+                            last_miss_reason,
+                            context_updates,
+                        }
                     }
-                }
+                };
+                let _ = self.tx_event.send(event).await;
             }
 
             // Three-zone prefix contract (#2264): freeze baseline on first
@@ -808,15 +902,17 @@ impl Engine {
             match &self.session.frozen_prefix {
                 Some(frozen) => {
                     if let Err(drift) = frozen.verify(&system_text, current_tools) {
+                        // Report drift; never replace the frozen baseline. The
+                        // original freeze is the byte prefix the provider cache
+                        // is keyed on — re-freezing here would make `/cache`
+                        // look stable while the provider cache is already dead.
+                        // A declared header change is re-pinned through the
+                        // PrefixStabilityManager path above under a logged
+                        // reason; the three-zone baseline stays put.
                         tracing::debug!(
                             target: "prefix_cache",
-                            "three-zone drift: {drift}"
+                            "three-zone drift (baseline held): {drift}"
                         );
-                        let pinned = PinnedPrefix::new(
-                            self.session.system_prompt.as_ref(),
-                            current_tools.to_vec(),
-                        );
-                        self.session.frozen_prefix = Some(pinned.freeze());
                     }
                 }
                 None => {
@@ -834,6 +930,9 @@ impl Engine {
                             stability_pct: 100,
                             changed: false,
                             pinned_combined_hash: frozen.hash().to_string(),
+                            pin_reason: "initial".to_string(),
+                            last_miss_reason: String::new(),
+                            context_updates: 0,
                         })
                         .await;
                     self.session.frozen_prefix = Some(frozen);
@@ -907,6 +1006,10 @@ impl Engine {
                     })
                     .await;
             }
+            // Session metrics: the model call is measured from this dispatch
+            // instant (connection setup included), and time-to-first-token is
+            // the gap to the first content-bearing stream event.
+            let mut request_dispatched_at = Instant::now();
             let stream_result = tokio::select! {
                 biased;
                 () = self.cancel_token.cancelled() => {
@@ -921,7 +1024,9 @@ impl Engine {
                     s
                 }
                 Err(e) => {
-                    let message = self.decorate_auth_error_message(e.to_string());
+                    let message = self.decorate_auth_error_message(
+                        initial_stream_error_user_message(&self.config.locale_tag, &e),
+                    );
                     if is_context_length_error_message(&message)
                         && context_recovery_attempts < MAX_CONTEXT_RECOVERY_ATTEMPTS
                         && self
@@ -1003,6 +1108,8 @@ impl Engine {
             // `stream_start` is reset on a transparent retry so the wall-clock
             // budget restarts with the fresh stream.
             let mut stream_start = Instant::now();
+            // First content-bearing event of this model call, for TTFT.
+            let mut first_token_at: Option<Instant> = None;
             // #2990 sleep-resume bookkeeping: monotonic and wall-clock stamps
             // of the last stream progress. `Instant` pauses across a host
             // suspend while `SystemTime` does not, so a large divergence on
@@ -1108,6 +1215,7 @@ impl Engine {
                         // billed us / user has seen output" (must surface).
                         if !any_content_received && !matches!(e, StreamEvent::MessageStart { .. }) {
                             any_content_received = true;
+                            first_token_at.get_or_insert_with(Instant::now);
                         }
                         e
                     }
@@ -1153,6 +1261,7 @@ impl Engine {
                             // Drop the failed stream before issuing the new
                             // request to release the underlying connection.
                             drop(stream);
+                            request_dispatched_at = Instant::now();
                             let retry_stream_result = tokio::select! {
                                 biased;
                                 () = self.cancel_token.cancelled() => break,
@@ -1547,6 +1656,17 @@ impl Engine {
                         usage: usage.clone(),
                         duration_ms: u64::try_from(stream_start.elapsed().as_millis())
                             .unwrap_or(u64::MAX),
+                        first_token_ms: first_token_at.map(|at| {
+                            u64::try_from(
+                                at.saturating_duration_since(request_dispatched_at)
+                                    .as_millis(),
+                            )
+                            .unwrap_or(u64::MAX)
+                        }),
+                        request_ms: Some(
+                            u64::try_from(request_dispatched_at.elapsed().as_millis())
+                                .unwrap_or(u64::MAX),
+                        ),
                     })
                     .await;
             }
@@ -2132,6 +2252,8 @@ impl Engine {
                                     usage: child_usage,
                                     duration_ms: u64::try_from(repl_started.elapsed().as_millis())
                                         .unwrap_or(u64::MAX),
+                                    first_token_ms: None,
+                                    request_ms: None,
                                 })
                                 .await;
                         }
@@ -2677,6 +2799,18 @@ impl Engine {
                         AutoReviewPlanDecision::Block(reason) => {
                             approval_required = false;
                             approval_force_prompt = false;
+                            let _ = self
+                                .tx_event
+                                .send(Event::ToolGateDecision {
+                                    agent_id: None,
+                                    tool_id: tool_id.clone(),
+                                    tool_name: tool_name.clone(),
+                                    gate: crate::core::events::ToolGate::AutoReviewDeterministic,
+                                    decision: crate::core::events::ToolGateVerdict::Denied,
+                                    risk: None,
+                                    reason: crate::core::events::bounded_gate_reason(&reason),
+                                })
+                                .await;
                             blocked_error = Some(auto_review_block_tool_error(&reason));
                         }
                         AutoReviewPlanDecision::ConsultReviewer(held_reason) => {

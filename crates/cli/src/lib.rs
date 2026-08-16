@@ -60,6 +60,8 @@ enum ProviderArg {
     Sglang,
     Vllm,
     Ollama,
+    #[value(alias = "ollama_cloud")]
+    OllamaCloud,
     Huggingface,
     Together,
     OpenaiCodex,
@@ -110,6 +112,11 @@ enum ProviderArg {
     Mistral,
     /// Google Gemini (official OpenAI-compatible endpoint).
     Google,
+    /// Google Antigravity (`agy`) — consent-gated OAuth import.
+    #[value(alias = "agy")]
+    Antigravity,
+    #[value(alias = "eden-ai", alias = "eden_ai")]
+    Edenai,
 }
 
 impl From<ProviderArg> for ProviderKind {
@@ -133,6 +140,7 @@ impl From<ProviderArg> for ProviderKind {
             ProviderArg::Sglang => ProviderKind::Sglang,
             ProviderArg::Vllm => ProviderKind::Vllm,
             ProviderArg::Ollama => ProviderKind::Ollama,
+            ProviderArg::OllamaCloud => ProviderKind::OllamaCloud,
             ProviderArg::Huggingface => ProviderKind::Huggingface,
             ProviderArg::Together => ProviderKind::Together,
             ProviderArg::OpenaiCodex => ProviderKind::OpenaiCodex,
@@ -151,6 +159,8 @@ impl From<ProviderArg> for ProviderKind {
             ProviderArg::Xai => ProviderKind::Xai,
             ProviderArg::Mistral => ProviderKind::Mistral,
             ProviderArg::Google => ProviderKind::Google,
+            ProviderArg::Antigravity => ProviderKind::Antigravity,
+            ProviderArg::Edenai => ProviderKind::Edenai,
         }
     }
 }
@@ -348,6 +358,8 @@ lifecycle generation you observed.
     Mcp(TuiPassthroughArgs),
     /// Inspect feature flags.
     Features(TuiPassthroughArgs),
+    /// Connect third-party harnesses through Codewhale (e.g. `integrations dsh status`).
+    Integrations(TuiPassthroughArgs),
     /// Run a local Codewhale server.
     #[command(after_help = "\
 Forwarded serve options:
@@ -1839,6 +1851,14 @@ fn run() -> Result<()> {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
             run_tui_in_process(&cli, &resolved_runtime, tui_args("mcp", args))
         }
+        Some(Commands::Integrations(args)) => {
+            // Integrations only need route *identity*. Do not recover or
+            // export a stored credential just to plan/launch a third-party
+            // harness: it resolves its own keys from its own environment.
+            let resolved_runtime =
+                resolve_runtime_for_diagnostic_dispatch(&store, &runtime_overrides);
+            run_tui_in_process(&cli, &resolved_runtime, tui_args("integrations", args))
+        }
         Some(Commands::Features(args)) => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
             run_tui_in_process(&cli, &resolved_runtime, tui_args("features", args))
@@ -2481,6 +2501,10 @@ fn external_credential_target(
         ProviderKind::Deepseek | ProviderKind::DeepseekAnthropic => (
             codewhale_config::ExternalCredentialSource::DshCli,
             codewhale_config::default_dsh_credentials_path(),
+        ),
+        ProviderKind::Antigravity => (
+            codewhale_config::ExternalCredentialSource::AgyCli,
+            codewhale_config::default_agy_credentials_path(),
         ),
         ProviderKind::Moonshot => bail!(
             "Kimi is API-key-only in Codewhale. Create a key at https://platform.kimi.ai/console/api-keys; Kimi CLI OAuth import is unsupported."
@@ -5438,6 +5462,20 @@ mod tests {
     }
 
     #[test]
+    fn ollama_cloud_provider_aliases_parse_as_builtin() {
+        for alias in ["ollama-cloud", "ollama_cloud"] {
+            assert_eq!(builtin_provider_arg(alias), Some(ProviderArg::OllamaCloud));
+        }
+    }
+
+    #[test]
+    fn antigravity_provider_aliases_parse_as_builtin() {
+        for alias in ["antigravity", "agy"] {
+            assert_eq!(builtin_provider_arg(alias), Some(ProviderArg::Antigravity));
+        }
+    }
+
+    #[test]
     fn legacy_dual_wire_provider_flag_keeps_named_table_kind() {
         // The CLI flag must resolve legacy spellings to the table-owning
         // dialect kind (mirroring TOML serde), never to the collapsed catalog
@@ -7849,8 +7887,8 @@ mod tests {
             .map(|provider| provider.kind())
             .collect();
         // Full registry keeps legacy dialect/plan kinds; ALL is the catalog surface.
-        assert_eq!(registry_kinds.len(), 43);
-        assert_eq!(ProviderKind::ALL.len(), 38);
+        assert_eq!(registry_kinds.len(), 47);
+        assert_eq!(ProviderKind::ALL.len(), 42);
         for kind in ProviderKind::ALL {
             assert!(
                 registry_kinds.contains(&kind),

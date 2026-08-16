@@ -62,16 +62,54 @@ diff, linked issues, tests, and CI before merging, harvesting, closing, or
 deferring it. A sub-agent's result is a working set, not a substitute for
 stewardship.
 
-| Role          | Stance                                 | Writes? | Shell posture | Typical use                                  |
-|---------------|----------------------------------------|---------|---------------|----------------------------------------------|
-| `worker`      | flexible; do whatever the parent says  | yes     | yes           | the default; multi-step tasks                |
-| `scout`       | read-only; map the relevant code fast  | no      | read-only (net + bounded verify) | "find every call site of `Foo`; check the PR with gh" |
-| `planner`     | analyse and produce a strategy         | minimal | minimal       | "design the migration; don't execute"        |
-| `reviewer`    | read-and-grade with severity scores    | no      | read-only (net + bounded verify) | "audit this PR for bugs"                     |
-| `builder`     | land a specific change with min edit   | yes     | yes           | "rewrite `bar.rs::Foo::bar` to do X"         |
-| `verifier`    | run tests / validation, report outcome | no      | test-focused  | "run cargo test --workspace, report"         |
-| `consultant`  | short-lived, high-reasoning counsel     | no      | none          | "what are we missing in this design?"        |
-| `custom`      | explicit narrow tool allowlist         | depends | depends       | locked-down dispatch with hand-picked tools  |
+| Role          | Stance                                 | Writes? | Network? | Shell posture | Typical use                                  |
+|---------------|----------------------------------------|---------|----------|---------------|----------------------------------------------|
+| `worker`      | flexible; do whatever the parent says  | yes     | yes      | yes           | the default; multi-step tasks                |
+| `scout`       | read-only; map the relevant code fast  | no      | yes      | read-only (net + bounded verify) | "find every call site of `Foo`; check the PR with gh" |
+| `planner`     | analyse and produce a strategy         | no      | yes      | read-only probes | "design the migration; don't execute"        |
+| `reviewer`    | read-and-grade with severity scores    | no      | yes      | read-only (net + bounded verify) | "audit this PR for bugs"                     |
+| `builder`     | land a specific change with min edit   | yes     | yes      | yes           | "rewrite `bar.rs::Foo::bar` to do X"         |
+| `verifier`    | run tests / validation, report outcome | no      | yes      | test-focused  | "run cargo test --workspace, report"         |
+| `consultant`  | short-lived, high-reasoning counsel     | no      | yes      | none          | "what are we missing in this design?"        |
+| `custom`      | explicit narrow tool allowlist         | inherits | inherits | inherits     | hand-picked tools on the parent's posture    |
+
+A role's default is what the role *intends*, and the parent's effective
+posture is always the ceiling (a child never widens beyond its parent).
+Read-only roles withhold **workspace writes** by intent; nothing else is
+taken away by default — every role keeps network reads, and `custom`
+inherits the parent's write/network/shell posture and is narrowed only by
+its explicit tool list or the spawning call. The focused worker's header
+states the effective posture (`scout · read-only · network · read-only
+shell`) from the runtime's own permission snapshot.
+
+**Delegation moves work, never authority** (the containment answer for
+#5426). A read-only role delegating to a write-capable role (scout →
+builder) is a supported escape hatch for *work capacity* — the child brings
+its own model, route, and step budget — but the child's authority is clamped
+against the delegating parent's live posture, not the operator's: a scout's
+builder child lands read-only with raw shell and mutating tools denied, and
+canonical `Bash` is denied to it too (only bounded-inspection roles keep the
+classified read-only shell). Delegating to obtain shell is therefore
+mechanically useless — the scout's own bounded shell (`git -C … log`,
+`find … | head`, `npm view …`, classifier-gated) is the only shell path a
+read-only parent has. Read-only is transitive through any delegation chain:
+the clamp (`ChildAuthority::clamp` in `fleet/exact.rs`) intersects every
+field with the narrower side, the deny-list union means a descendant can
+never drop an ancestor's restriction, and `inherit_disallowed_tools: false`
+cannot drop a posture denial (`is_posture_denial`). This is pinned by
+`a_read_only_parents_delegation_never_widens_authority` in
+`crates/tui/src/fleet/exact.rs` tests.
+
+The session's **permission posture** applies inside every child exactly as
+it applies to the parent turn: under Auto-Review the same deterministic
+floor and one-shot model guardian decide a worker's held calls (never a
+prompt; an unavailable guardian denies, fail closed); under Ask a held call
+the role cannot delegate is raised as an approval prompt in the parent's
+UI and the worker waits visibly (`waiting for user`), or is denied with the
+reason on hosts that cannot prompt; Full Access still fails closed on the
+non-bypassable safety floor. Each decision nobody was prompted for is a
+one-line note in that worker's transcript (visible when it is focused) and
+an audit-log record. See `docs/MODES.md`.
 
 Each role's full system prompt lives in
 `crates/tui/src/tools/subagent/mod.rs` (search for

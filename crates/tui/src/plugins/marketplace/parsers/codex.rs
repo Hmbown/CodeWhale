@@ -238,7 +238,7 @@ fn parse_codex_entry(
         Some("INSTALLED_BY_DEFAULT") => {
             entry_diags.push(MarketplaceDiagnostic::warning(
                 "NO_AUTO_INSTALL",
-                format!("Codex policy `INSTALLED_BY_DEFAULT` is ignored: Codewhale installs only on an explicit operator action"),
+                "Codex policy `INSTALLED_BY_DEFAULT` is ignored: Codewhale installs only on an explicit operator action".to_string(),
                 Some(name.clone()),
                 Some(index),
             ));

@@ -67,8 +67,8 @@ mod model;
 mod panels;
 mod render;
 
-pub use input::{handle_key, handle_mouse};
-pub(crate) use interaction::agent_details_closed;
+pub use input::{enter_agents, handle_key, handle_mouse};
+pub(crate) use interaction::{agent_details_closed, release_focus};
 pub use model::{RailPanel, WorkSurfacePlacement, WorkSurfaceState};
 pub(crate) use render::collapse_strip;
 pub use render::{height, render, split_chat};
@@ -1271,6 +1271,35 @@ mod tests {
     }
 
     #[test]
+    fn focused_worker_row_carries_the_left_marker_and_queued_follow_ups() {
+        let mut app = fleet_app(Some(111_900));
+        // No focus, nothing queued: the row is exactly as before.
+        let plain = fleet_row(&render_rows(&mut app, 100, 4));
+        assert!(!plain.starts_with("❯"), "{plain}");
+        assert!(!plain.contains("queued"), "{plain}");
+
+        crate::tui::agent_focus::focus_agent(&mut app, "agent_stream");
+        app.agent_queued_follow_ups
+            .insert("agent_stream".to_string(), 1);
+        let focused = fleet_row(&render_rows(&mut app, 110, 4));
+        assert!(
+            focused.trim_start().starts_with("❯ ▸ general-purpose"),
+            "left-edge marker names the addressed fork: {focused}"
+        );
+        assert!(focused.ends_with("· 1 queued"), "{focused}");
+
+        // The counter is the runtime's truth: once the child takes the input
+        // the next AgentList refresh clears it and the suffix disappears.
+        app.agent_queued_follow_ups.clear();
+        let drained = fleet_row(&render_rows(&mut app, 110, 4));
+        assert!(!drained.contains("queued"), "{drained}");
+        // Leaving focus removes the gutter again.
+        crate::tui::agent_focus::exit_focus(&mut app);
+        let back = fleet_row(&render_rows(&mut app, 100, 4));
+        assert_eq!(back, plain);
+    }
+
+    #[test]
     fn fleet_row_repaints_resolved_model_and_each_distinct_usage_total() {
         let mut app = fleet_app(None);
         crate::tui::ui::record_agent_spawned_route(&mut app, "agent_stream", "deepseek-v4-pro");
@@ -1763,15 +1792,18 @@ mod tests {
         assert_eq!(mouse.work_surface.selected, keyboard_selection);
 
         crate::tui::mouse_ui::apply_sidebar_row_action(&mut mouse, mouse_action);
+        // One agent, one destination: activation focuses the worker in place
+        // (its full transcript owns the conversation area) instead of opening
+        // a modal, and leaving focus keeps the rail selection where it was.
+        assert!(
+            mouse
+                .agent_focus
+                .as_ref()
+                .is_some_and(|focus| focus.is("agent_converge")),
+            "activation must focus the worker"
+        );
         let selected_before_close = mouse.work_surface.selected.clone();
-        let events = mouse
-            .view_stack
-            .handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-        let [crate::tui::views::ViewEvent::AgentTranscriptClosed { agent_id }] = events.as_slice()
-        else {
-            panic!("Left should close the agent transcript with a receipt: {events:?}");
-        };
-        super::interaction::agent_details_closed(&mut mouse, agent_id);
+        assert!(crate::tui::agent_focus::exit_focus(&mut mouse));
         assert_eq!(mouse.work_surface.selected, selected_before_close);
         assert!(mouse.work_surface.opened.is_none());
     }
@@ -2988,8 +3020,10 @@ mod tests {
         );
         crate::tui::mouse_ui::apply_sidebar_row_action(&mut app, action);
         assert!(
-            !app.view_stack.is_empty(),
-            "the finished agent's transcript must actually open"
+            app.agent_focus
+                .as_ref()
+                .is_some_and(|focus| focus.is("agent-finished")),
+            "the finished agent's transcript must actually take focus"
         );
     }
 

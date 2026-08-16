@@ -17,7 +17,11 @@ use std::path::{Path, PathBuf};
 
 use super::render::{escape_review_path, escape_review_text};
 use crate::commands::CommandResult;
+use crate::localization::{Locale, MessageId, tr};
 use crate::plugins::marketplace::parsers::MarketplaceDocument;
+use crate::plugins::marketplace::parsers::kimi::{
+    KIMI_GZIP_TARBALL_SOURCE_KIND, KIMI_REMOTE_UNSUPPORTED_REASON, KIMI_ZIP_UNSUPPORTED_REASON,
+};
 use crate::plugins::marketplace::store::{MarketplaceStore, StoredMarketplaceCatalog};
 use crate::plugins::marketplace::types::{
     MarketplaceCatalog, MarketplaceFormat, MarketplaceInstallPlan, MarketplaceSourceSpec,
@@ -47,11 +51,11 @@ pub(super) fn dispatch(app: &mut App, words: &[&str]) -> CommandResult {
     }
 }
 
-fn open_store(app: &App) -> Result<MarketplaceStore, CommandResult> {
+fn open_store(app: &App) -> Result<MarketplaceStore, Box<CommandResult>> {
     MarketplaceStore::open(app.plugin_registry.state_path()).ok_or_else(|| {
-        CommandResult::error(
+        Box::new(CommandResult::error(
             "This plugin registry has no persistence store, so marketplace catalogs cannot be saved.",
-        )
+        ))
     })
 }
 
@@ -73,7 +77,7 @@ fn add(app: &mut App, name: &str, raw_path: &str) -> CommandResult {
     }
     let store = match open_store(app) {
         Ok(store) => store,
-        Err(result) => return result,
+        Err(result) => return *result,
     };
     let path = PathBuf::from(raw_path.trim());
     let path = if path.is_absolute() {
@@ -141,7 +145,7 @@ fn add(app: &mut App, name: &str, raw_path: &str) -> CommandResult {
 fn list(app: &mut App) -> CommandResult {
     let store = match open_store(app) {
         Ok(store) => store,
-        Err(result) => return result,
+        Err(result) => return *result,
     };
     let state = match store.load() {
         Ok(state) => state,
@@ -162,7 +166,7 @@ fn list(app: &mut App) -> CommandResult {
     for (name, entry) in state.catalogs() {
         output.push('\n');
         output.push_str(&render_catalog_summary(name, &entry.catalog));
-        output.push_str(&render_candidates(&entry.catalog, false));
+        output.push_str(&render_candidates(app.ui_locale, &entry.catalog, false));
     }
     output.push_str(
         "\nTiers and provenance are display-only. Install with /plugin marketplace install <catalog> <candidate>; \
@@ -174,7 +178,7 @@ fn list(app: &mut App) -> CommandResult {
 fn show(app: &mut App, name: &str) -> CommandResult {
     let store = match open_store(app) {
         Ok(store) => store,
-        Err(result) => return result,
+        Err(result) => return *result,
     };
     let state = match store.load() {
         Ok(state) => state,
@@ -197,14 +201,14 @@ fn show(app: &mut App, name: &str) -> CommandResult {
         "{}",
         escape_review_path(Path::new(&entry.source_path))
     );
-    output.push_str(&render_candidates(&entry.catalog, true));
+    output.push_str(&render_candidates(app.ui_locale, &entry.catalog, true));
     CommandResult::message(output)
 }
 
 fn remove(app: &mut App, name: &str) -> CommandResult {
     let store = match open_store(app) {
         Ok(store) => store,
-        Err(result) => return result,
+        Err(result) => return *result,
     };
     match store.remove(name) {
         Ok(true) => CommandResult::message(format!(
@@ -222,7 +226,7 @@ fn remove(app: &mut App, name: &str) -> CommandResult {
 fn install(app: &mut App, catalog_name: &str, candidate_name: &str) -> CommandResult {
     let store = match open_store(app) {
         Ok(store) => store,
-        Err(result) => return result,
+        Err(result) => return *result,
     };
     let state = match store.load() {
         Ok(state) => state,
@@ -259,7 +263,7 @@ fn install(app: &mut App, catalog_name: &str, candidate_name: &str) -> CommandRe
         return CommandResult::error(format!(
             "Candidate `{}` cannot be installed by Codewhale: {}",
             escape_review_text(candidate_name),
-            escape_review_text(reason)
+            escape_review_text(&localized_marketplace_plan_text(app.ui_locale, reason))
         ));
     };
     let spec = spec.as_str();
@@ -270,12 +274,11 @@ fn install(app: &mut App, catalog_name: &str, candidate_name: &str) -> CommandRe
 }
 
 fn resolve_spec(source_path: &str, source: &MarketplaceSourceSpec, spec: &str) -> String {
-    if let MarketplaceSourceSpec::LocalPath { path } = source {
-        if path.is_relative() {
-            if let Some(dir) = Path::new(source_path).parent() {
-                return format!("path:{}", dir.join(path).display());
-            }
-        }
+    if let MarketplaceSourceSpec::LocalPath { path } = source
+        && path.is_relative()
+        && let Some(dir) = Path::new(source_path).parent()
+    {
+        return format!("path:{}", dir.join(path).display());
     }
     spec.to_string()
 }
@@ -352,7 +355,18 @@ fn render_catalog_summary(name: &str, catalog: &MarketplaceCatalog) -> String {
     out
 }
 
-fn render_candidates(catalog: &MarketplaceCatalog, detailed: bool) -> String {
+fn localized_marketplace_plan_text(locale: Locale, value: &str) -> std::borrow::Cow<'_, str> {
+    match value {
+        KIMI_ZIP_UNSUPPORTED_REASON => tr(locale, MessageId::PluginKimiMarketplaceZipUnsupported),
+        KIMI_REMOTE_UNSUPPORTED_REASON => {
+            tr(locale, MessageId::PluginKimiMarketplaceRemoteUnsupported)
+        }
+        KIMI_GZIP_TARBALL_SOURCE_KIND => tr(locale, MessageId::PluginKimiMarketplaceGzipTarball),
+        _ => std::borrow::Cow::Borrowed(value),
+    }
+}
+
+fn render_candidates(locale: Locale, catalog: &MarketplaceCatalog, detailed: bool) -> String {
     let mut out = String::new();
     for candidate in &catalog.candidates {
         let status = if candidate.has_errors() {
@@ -385,6 +399,7 @@ fn render_candidates(catalog: &MarketplaceCatalog, detailed: bool) -> String {
         let _ = writeln!(out, "    compatibility: {compatibility}");
         match &candidate.install_plan {
             MarketplaceInstallPlan::Supported { source_kind, .. } => {
+                let source_kind = localized_marketplace_plan_text(locale, source_kind);
                 let _ = writeln!(
                     out,
                     "    installable via {source_kind}: /plugin marketplace install {} {}",
@@ -393,7 +408,8 @@ fn render_candidates(catalog: &MarketplaceCatalog, detailed: bool) -> String {
                 );
             }
             MarketplaceInstallPlan::Unsupported { reason, .. } => {
-                let _ = writeln!(out, "    not installable: {}", escape_review_text(reason));
+                let reason = localized_marketplace_plan_text(locale, reason);
+                let _ = writeln!(out, "    not installable: {}", escape_review_text(&reason));
             }
         }
         if detailed {
@@ -456,4 +472,19 @@ fn render_diagnostics_inline(
         })
         .collect::<Vec<_>>()
         .join("; ")
+}
+
+#[cfg(test)]
+mod localized_plan_tests {
+    use super::*;
+
+    #[test]
+    fn kimi_plan_codes_resolve_at_render_time() {
+        let zip = localized_marketplace_plan_text(Locale::Es419, KIMI_ZIP_UNSUPPORTED_REASON);
+        let remote = localized_marketplace_plan_text(Locale::Es419, KIMI_REMOTE_UNSUPPORTED_REASON);
+        let gzip = localized_marketplace_plan_text(Locale::Es419, KIMI_GZIP_TARBALL_SOURCE_KIND);
+        assert!(zip.contains("no admite paquetes ZIP"), "{zip}");
+        assert!(remote.contains("deben terminar en .tar.gz"), "{remote}");
+        assert_eq!(gzip, "URL de tarball gzip");
+    }
 }

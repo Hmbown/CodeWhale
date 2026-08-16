@@ -89,9 +89,11 @@ impl Default for CompactionConfig {
     }
 }
 
-/// Minimum non-whitespace characters for a usable successor summary.
-/// Below this (or missing required section headings), treat as degenerate and
-/// retry once rather than shipping amnesia (compactionidea failure ladder).
+/// A provider can return HTTP success with an empty, non-text, or known
+/// placeholder response. Committing that response would discard the useful
+/// history while leaving only a placeholder checkpoint. Keep this deliberately
+/// conservative: it is a corruption guard, not a prose-length or language
+/// scorer.
 const COMPACTION_LANGUAGE_CONTRACT: &str = "Use the natural language of the most recent \
 substantive user message for reasoning and user-facing prose. Keep code, identifiers, paths, \
 commands, logs, tool payloads, quotations, and the English structural labels verbatim. English \
@@ -941,6 +943,7 @@ pub async fn compact_messages_safe(
     };
 
     let mut last_error: Option<anyhow::Error> = None;
+    let mut quality_retries = 0u32;
 
     for attempt in 0..MAX_RETRIES {
         if attempt > 0 {
@@ -949,13 +952,15 @@ pub async fn compact_messages_safe(
             tokio::time::sleep(delay).await;
         }
 
-        match compact_messages(client, compaction_input, config).await {
+        match compact_messages_with_metadata(client, compaction_input, config, &mut quality_retries)
+            .await
+        {
             Ok((msgs, prompt, removed)) => {
                 drop(removed);
                 return Ok(CompactionResult {
                     messages: sanitize_retained_messages(msgs),
                     summary_prompt: prompt,
-                    retries_used: attempt,
+                    retries_used: attempt.saturating_add(quality_retries),
                 });
             }
             Err(e) => {
@@ -1043,16 +1048,29 @@ fn user_anchors_section(workspace: Option<&std::path::Path>) -> String {
     }
 }
 
-pub async fn compact_messages(
+#[cfg(test)]
+async fn compact_messages(
     client: &dyn ModelClient,
     messages: &[Message],
     config: &CompactionConfig,
+) -> Result<(Vec<Message>, Option<SystemPrompt>, Vec<Message>)> {
+    let mut quality_retries = 0;
+    let (messages, summary_prompt, removed) =
+        compact_messages_with_metadata(client, messages, config, &mut quality_retries).await?;
+    Ok((messages, summary_prompt, removed))
+}
+
+async fn compact_messages_with_metadata(
+    client: &dyn ModelClient,
+    messages: &[Message],
+    config: &CompactionConfig,
+    quality_retries: &mut u32,
 ) -> Result<(Vec<Message>, Option<SystemPrompt>, Vec<Message>)> {
     if messages.is_empty() {
         return Ok((Vec::new(), None, Vec::new()));
     }
 
-    let summary = create_summary(client, messages, config).await?;
+    let summary = create_summary(client, messages, config, quality_retries).await?;
     let anchors = user_anchors_section(config.workspace.as_deref());
     let checkpoint_text = build_compaction_summary_block_text(&summary, &anchors);
     let summary_block = SystemBlock {
@@ -1085,6 +1103,58 @@ fn compact_prompt(focus: Option<&str>) -> String {
     prompt
 }
 
+fn compact_quality_retry_prompt(focus: Option<&str>) -> String {
+    let mut prompt = format!(
+        "The previous handoff response was empty or a placeholder. Return a substantive factual \
+continuation handoff. State the user objective, completed and current work, hard constraints, verified \
+evidence, unresolved failures, and the single next action. Do not refuse, call tools, discuss \
+checkpoint machinery, or return a placeholder. {COMPACTION_LANGUAGE_CONTRACT}"
+    );
+    if let Some(focus) = focus.map(str::trim).filter(|focus| !focus.is_empty()) {
+        let _ = write!(
+            prompt,
+            "\n\nThe user asked this compaction to focus on: {focus}"
+        );
+    }
+    prompt
+}
+
+fn validate_compaction_summary(summary: &str) -> Result<()> {
+    let trimmed = summary.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("Compaction summary response was unusable: no text was returned.");
+    }
+
+    // Strip every non-word edge, not just ASCII punctuation. Providers can
+    // return visually non-empty Unicode punctuation or emoji-only payloads;
+    // neither is a usable continuation checkpoint. `is_alphanumeric` keeps
+    // this language-neutral for CJK and other scripts without imposing a
+    // prose-length heuristic.
+    let normalized = trimmed
+        .trim_matches(|ch: char| !ch.is_alphanumeric())
+        .to_ascii_lowercase();
+    if normalized.is_empty() {
+        anyhow::bail!(
+            "Compaction summary response was unusable: only whitespace or punctuation was returned."
+        );
+    }
+    if matches!(
+        normalized.as_str(),
+        "no summary available"
+            | "summary unavailable"
+            | "no summary"
+            | "n/a"
+            | "na"
+            | "not available"
+            | "i cannot provide a summary"
+            | "i can't provide a summary"
+            | "unable to provide a summary"
+    ) {
+        anyhow::bail!("Compaction summary response was unusable: a placeholder was returned.");
+    }
+    Ok(())
+}
+
 /// Drop the oldest history message before retrying an over-window summary
 /// request (Codex parity: `history.remove_first_item()`), plus any tool
 /// results the removal orphans — strict providers reject unpaired results.
@@ -1107,6 +1177,7 @@ async fn create_summary(
     client: &dyn ModelClient,
     messages: &[Message],
     config: &CompactionConfig,
+    quality_retries: &mut u32,
 ) -> Result<String> {
     // The summarization request IS the live conversation plus one final user
     // message asking for the handoff summary, so the provider's prefix cache
@@ -1130,6 +1201,7 @@ async fn create_summary(
         }],
     });
 
+    let mut quality_retry_used = false;
     loop {
         // Codex compaction is a normal model generation over the existing
         // cached prefix. Do the same here: the resolved route decides how
@@ -1204,7 +1276,7 @@ async fn create_summary(
             );
         }
 
-        return Ok(response
+        let summary = response
             .content
             .iter()
             .filter_map(|block| match block {
@@ -1212,7 +1284,34 @@ async fn create_summary(
                 _ => None,
             })
             .collect::<Vec<_>>()
-            .join("\n"));
+            .join("\n");
+
+        if let Err(error) = validate_compaction_summary(&summary) {
+            if quality_retry_used {
+                return Err(error.context(
+                    "Compaction summary remained unusable after one conservative retry; \
+no replacement checkpoint was committed",
+                ));
+            }
+
+            quality_retry_used = true;
+            *quality_retries = (*quality_retries).saturating_add(1);
+            logging::warn(
+                "Compaction provider returned an unusable successful response; retrying once with the conservative handoff prompt",
+            );
+            let Some(instruction) = request_messages.last_mut() else {
+                return Err(error.context(
+                    "Compaction summary validation failed and the retry instruction was missing",
+                ));
+            };
+            instruction.content = vec![ContentBlock::Text {
+                text: compact_quality_retry_prompt(config.focus.as_deref()),
+                cache_control: None,
+            }];
+            continue;
+        }
+
+        return Ok(summary);
     }
 }
 
@@ -1568,6 +1667,74 @@ mod tests {
         2. Key technical concepts — sqlite. 7. Pending tasks — finish the fixed clock. \
         8. Current work — rerunning the session tests.";
 
+    struct ScriptedSummaryClient {
+        responses: std::sync::Mutex<std::collections::VecDeque<anyhow::Result<Vec<ContentBlock>>>>,
+        requests: std::sync::Mutex<Vec<MessageRequest>>,
+    }
+
+    impl ScriptedSummaryClient {
+        fn new(responses: Vec<Vec<ContentBlock>>) -> Self {
+            Self::with_outcomes(responses.into_iter().map(Ok).collect())
+        }
+
+        fn with_outcomes(responses: Vec<anyhow::Result<Vec<ContentBlock>>>) -> Self {
+            Self {
+                responses: std::sync::Mutex::new(responses.into()),
+                requests: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::core::model_client::ModelClient for ScriptedSummaryClient {
+        fn provider_name(&self) -> &str {
+            "test"
+        }
+
+        fn model(&self) -> &str {
+            "test-model"
+        }
+
+        async fn create_message(
+            &self,
+            request: MessageRequest,
+        ) -> anyhow::Result<crate::models::MessageResponse> {
+            self.requests
+                .lock()
+                .expect("capture scripted summary request")
+                .push(request);
+            let outcome = self
+                .responses
+                .lock()
+                .expect("read scripted summary response")
+                .pop_front()
+                .ok_or_else(|| anyhow::anyhow!("scripted summary responses exhausted"))?;
+            let content = outcome?;
+            Ok(crate::models::MessageResponse {
+                id: "summary-scripted".to_string(),
+                r#type: "message".to_string(),
+                role: "assistant".to_string(),
+                content,
+                model: "test-model".to_string(),
+                stop_reason: None,
+                stop_sequence: None,
+                container: None,
+                usage: crate::models::Usage::default(),
+            })
+        }
+
+        async fn create_message_stream(
+            &self,
+            _request: MessageRequest,
+        ) -> anyhow::Result<crate::llm_client::StreamEventBox> {
+            anyhow::bail!("streaming is unused by compaction")
+        }
+
+        async fn health_check(&self) -> anyhow::Result<bool> {
+            Ok(true)
+        }
+    }
+
     #[async_trait::async_trait]
     impl crate::core::model_client::ModelClient for FixedSummaryClient {
         fn provider_name(&self) -> &str {
@@ -1683,6 +1850,185 @@ mod tests {
         )));
         assert!(is_compaction_checkpoint_message(&retained[2]));
         assert_eq!(user_text_of(&retained[2]).as_deref(), Some(text.as_str()));
+    }
+
+    #[test]
+    fn summary_quality_gate_rejects_empty_and_known_placeholder_text() {
+        for summary in [
+            "",
+            " \n\t ",
+            "...",
+            "。。。",
+            "🫧",
+            "N/A",
+            "(no summary available)",
+            "I cannot provide a summary.",
+        ] {
+            let error = validate_compaction_summary(summary)
+                .expect_err("degenerate summary must fail closed");
+            assert!(error.to_string().contains("unusable"), "{error}");
+        }
+        validate_compaction_summary(FIXED_SUMMARY)
+            .expect("a substantive continuation handoff must be accepted");
+        validate_compaction_summary(
+            "目的: #4394の空要約を防止。完了: 検証と実装。制約: 履歴を変更しない。次: テスト実行。",
+        )
+        .expect("a concise multilingual handoff must not be rejected by prose length");
+    }
+
+    #[tokio::test]
+    async fn empty_successful_summary_retries_once_without_replacing_history() {
+        let original = vec![
+            msg(
+                "user",
+                "Keep the migration transactional and preserve existing sessions.",
+            ),
+            msg(
+                "assistant",
+                "I am updating the session store and its fixtures.",
+            ),
+        ];
+        let client = ScriptedSummaryClient::new(vec![
+            vec![ContentBlock::Text {
+                text: " \n\t ".to_string(),
+                cache_control: None,
+            }],
+            vec![ContentBlock::Text {
+                text: FIXED_SUMMARY.to_string(),
+                cache_control: None,
+            }],
+        ]);
+        let config = CompactionConfig {
+            model: "test-model".to_string(),
+            cache_summary: false,
+            ..Default::default()
+        };
+
+        let result = compact_messages_safe(&client, &original, None, &prepared(&config))
+            .await
+            .expect("the conservative retry should recover a usable summary");
+
+        let requests = client
+            .requests
+            .lock()
+            .expect("read scripted summary requests");
+        assert_eq!(requests.len(), 2, "quality failure retries exactly once");
+        let ContentBlock::Text { text, .. } = &requests[1]
+            .messages
+            .last()
+            .expect("retry instruction")
+            .content[0]
+        else {
+            panic!("retry instruction must be text");
+        };
+        assert!(text.contains("previous handoff response was empty"));
+        drop(requests);
+
+        assert_eq!(
+            result.retries_used, 1,
+            "quality retry must reach diagnostics"
+        );
+        assert_eq!(original[0].role, "user", "source history remains untouched");
+        assert!(result.messages.iter().any(is_compaction_checkpoint_message));
+        let Some(SystemPrompt::Blocks(blocks)) = result.summary_prompt else {
+            panic!("recovered summary must be committed");
+        };
+        assert!(blocks[0].text.contains(FIXED_SUMMARY));
+        assert!(!blocks[0].text.contains("(no summary available)"));
+    }
+
+    #[tokio::test]
+    async fn quality_retry_count_survives_a_later_transient_failure() {
+        let client = ScriptedSummaryClient::with_outcomes(vec![
+            Ok(vec![ContentBlock::Text {
+                text: "...".to_string(),
+                cache_control: None,
+            }]),
+            Err(anyhow::anyhow!("request timed out")),
+            Ok(vec![ContentBlock::Text {
+                text: FIXED_SUMMARY.to_string(),
+                cache_control: None,
+            }]),
+        ]);
+        let config = CompactionConfig {
+            model: "test-model".to_string(),
+            cache_summary: false,
+            ..Default::default()
+        };
+
+        let result = compact_messages_safe(
+            &client,
+            &[msg("user", "Preserve the current migration state.")],
+            None,
+            &prepared(&config),
+        )
+        .await
+        .expect("the outer retry should recover after the transient failure");
+
+        assert_eq!(
+            result.retries_used, 2,
+            "one quality retry plus one outer transient retry must be reported"
+        );
+        assert_eq!(
+            client
+                .requests
+                .lock()
+                .expect("read scripted summary requests")
+                .len(),
+            3,
+            "the diagnostic count must match the two calls after the initial request"
+        );
+    }
+
+    #[tokio::test]
+    async fn non_text_summary_failure_preserves_history_after_one_retry() {
+        let original = vec![
+            msg(
+                "user",
+                "Do not lose the current branch or the failing test name.",
+            ),
+            msg("assistant", "The failing test is session_store::roundtrip."),
+        ];
+        let client = ScriptedSummaryClient::new(vec![
+            vec![ContentBlock::thinking("internal-only response")],
+            vec![ContentBlock::thinking("still no user-visible handoff")],
+        ]);
+        let config = CompactionConfig {
+            model: "test-model".to_string(),
+            cache_summary: false,
+            ..Default::default()
+        };
+
+        let error = compact_messages_safe(&client, &original, None, &prepared(&config))
+            .await
+            .expect_err("two non-text responses must not replace history");
+
+        assert!(
+            error
+                .to_string()
+                .contains("remained unusable after one conservative retry"),
+            "{error}"
+        );
+        assert_eq!(
+            client
+                .requests
+                .lock()
+                .expect("read scripted summary requests")
+                .len(),
+            2,
+            "quality failure gets one retry, not the transient retry ladder"
+        );
+        assert_eq!(
+            original,
+            vec![
+                msg(
+                    "user",
+                    "Do not lose the current branch or the failing test name."
+                ),
+                msg("assistant", "The failing test is session_store::roundtrip."),
+            ],
+            "borrowed source history must remain byte-for-byte unchanged"
+        );
     }
 
     #[tokio::test]

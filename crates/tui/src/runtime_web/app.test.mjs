@@ -17,12 +17,34 @@ import {
   NO_TARGET,
   canReply,
   refusalMessage,
+  receiptPresentation,
   resolveApprovalTarget,
   resolveReplyTarget,
   sessionTarget,
   streamCursor,
   threadTarget,
 } from "./app.mjs";
+
+describe("receiptPresentation", () => {
+  it("keeps a failed MCP transport compact while preserving the raw receipt", () => {
+    const raw = "Failed to connect MCP server 'github': Stdio transport closed MCP server stderr (last 1 line): Docker is not running";
+    expect(receiptPresentation({ kind: "status", status: "completed", summary: raw })).toEqual({
+      label: "MCP · Unavailable",
+      summary: "github could not connect",
+      raw,
+      failed: true,
+    });
+  });
+
+  it("does not rewrite ordinary receipts", () => {
+    expect(receiptPresentation({ kind: "tool_result", status: "completed", summary: "3 tests passed" })).toEqual({
+      label: "Tool Result · Completed",
+      summary: "3 tests passed",
+      raw: "3 tests passed",
+      failed: false,
+    });
+  });
+});
 
 /** Minimal stand-in for the live stream state the real client threads through. */
 function streamState(threadId, approvalIds = []) {

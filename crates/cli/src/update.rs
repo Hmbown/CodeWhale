@@ -646,6 +646,8 @@ original install method:
     cargo install codewhale-cli --locked
 
   Homebrew:
+    brew upgrade codewhale
+    # existing Cellar/deepseek-tui installs can still:
     brew upgrade deepseek-tui
 
   Manual binary:
@@ -1941,7 +1943,7 @@ mod tests {
 
         let brew =
             managed_install_warning(InstallMethod::Homebrew).expect("brew is package-managed");
-        assert!(brew.contains("brew upgrade deepseek-tui"));
+        assert!(brew.contains("brew upgrade codewhale"));
 
         assert!(managed_install_warning(InstallMethod::Cargo).is_some());
 
@@ -1963,6 +1965,7 @@ mod tests {
         assert!(message.contains("cargo uninstall deepseek-tui 2>/dev/null || true"));
         assert!(message.contains("cargo install codewhale-cli --locked"));
         assert!(!message.contains("cargo install codewhale-tui --locked"));
+        assert!(message.contains("brew upgrade codewhale"));
         assert!(message.contains("brew upgrade deepseek-tui"));
         assert!(message.contains("https://github.com/Hmbown/CodeWhale/releases/latest"));
     }

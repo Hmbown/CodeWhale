@@ -457,6 +457,20 @@ fn is_codewhale_credential_path(path: &Path) -> bool {
 
 const READ_MAX_LINES: usize = 2_000;
 const READ_MAX_BYTES: usize = 50 * 1024;
+const READ_RESULT_ABSOLUTE_MAX_BYTES: usize = 2 * 1024 * 1024;
+
+fn effective_read_max_bytes() -> usize {
+    crate::tools::large_output_router::WorkshopConfig::active_read_result_max_bytes()
+        .map(|n| n.clamp(READ_MAX_BYTES, READ_RESULT_ABSOLUTE_MAX_BYTES))
+        .unwrap_or(READ_MAX_BYTES)
+}
+
+fn effective_read_max_lines() -> usize {
+    match crate::tools::large_output_router::WorkshopConfig::active_read_result_max_bytes() {
+        Some(bytes) if bytes > READ_MAX_BYTES => (bytes / 80).clamp(READ_MAX_LINES, 20_000),
+        _ => READ_MAX_LINES,
+    }
+}
 
 type FileMutationMutex = AsyncMutex<()>;
 
@@ -595,10 +609,9 @@ fn contract_read_window(content: &str) -> ContractReadWindow {
     if content.ends_with('\n') {
         let _ = lines.pop();
     }
-    if lines
-        .first()
-        .is_some_and(|line| line.len() > READ_MAX_BYTES)
-    {
+    let max_bytes = effective_read_max_bytes();
+    let max_lines = effective_read_max_lines();
+    if lines.first().is_some_and(|line| line.len() > max_bytes) {
         return ContractReadWindow {
             content: String::new(),
             shown_lines: 0,
@@ -608,7 +621,7 @@ fn contract_read_window(content: &str) -> ContractReadWindow {
         };
     }
 
-    if lines.len() <= READ_MAX_LINES && content.len() <= READ_MAX_BYTES {
+    if lines.len() <= max_lines && content.len() <= max_bytes {
         return ContractReadWindow {
             content: content.to_string(),
             shown_lines: lines.len(),
@@ -621,9 +634,9 @@ fn contract_read_window(content: &str) -> ContractReadWindow {
     let mut kept = Vec::new();
     let mut bytes = 0usize;
     let mut truncated_by_bytes = false;
-    for line in lines.iter().take(READ_MAX_LINES) {
+    for line in lines.iter().take(max_lines) {
         let next = line.len() + usize::from(!kept.is_empty());
-        if bytes.saturating_add(next) > READ_MAX_BYTES {
+        if bytes.saturating_add(next) > max_bytes {
             truncated_by_bytes = true;
             break;
         }
@@ -1096,9 +1109,13 @@ fn render_line_window(
     // short head (budget/5) plus the matching tail so the model sees both
     // ends of a long range. The full file already lives at `path_str` — the
     // recovery note names that absolute/workspace path for a re-read.
-    let truncated_by_bytes = numbered.len() > MAX_VISIBLE_BYTES;
+    let visible_bytes =
+        crate::tools::large_output_router::WorkshopConfig::active_read_result_max_bytes()
+            .map(|n| n.clamp(MAX_VISIBLE_BYTES, READ_RESULT_ABSOLUTE_MAX_BYTES))
+            .unwrap_or(MAX_VISIBLE_BYTES);
+    let truncated_by_bytes = numbered.len() > visible_bytes;
     let shown_content = if truncated_by_bytes {
-        let (head, tail) = head_tail_for_budget(&numbered, MAX_VISIBLE_BYTES);
+        let (head, tail) = head_tail_for_budget(&numbered, visible_bytes);
         format!("{head}{BYTE_TRUNCATION_SEPARATOR}{tail}")
     } else {
         numbered

@@ -19,7 +19,10 @@ permissions:
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # PRs: cancel superseded head runs. Push/schedule/dispatch on main must not
+  # cancel each other — they share github.ref with no pull_request.number, and
+  # canceling mid-run hid assertion failures that shipped in v0.9.8 (#5383).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -106,13 +109,13 @@ jobs:
             # arm (fail-safe default-heavy). Light-classified scripts below
             # are exercised by ALWAYS-on jobs/steps that run regardless of
             # `heavy` (check-versions.sh / check-ohos-deps.sh via Version
-            # drift, check-coauthor-trailers.py via Lint), so no coverage is
-            # lost.
+            # drift, check-coauthor-trailers.py via Lint, dev-cache/dev-test
+            # self-checks via Version drift), so no coverage is lost.
             case "${path}" in
               scripts/release/npm-wrapper-smoke.js|scripts/mobile-smoke.sh|scripts/check-provider-registry.py)
                 heavy=true
                 ;;
-              docs/*|*.md|.github/PULL_REQUEST_TEMPLATE.md|.github/ISSUE_TEMPLATE/*|.github/scripts/agent-task-metadata.test.sh|.github/workflows/agent-task-labels.yml|.github/workflows/auto-tag.yml|.github/workflows/stale.yml|.github/workflows/triage.yml|scripts/release/check-versions.sh|scripts/release/check-ohos-deps.sh|scripts/release/install-dogfood.sh|scripts/release/install-dogfood.test.sh|scripts/release/prepare-release.sh|scripts/release/prepare-release.test.sh|scripts/check-coauthor-trailers.py)
+              docs/*|*.md|.github/PULL_REQUEST_TEMPLATE.md|.github/ISSUE_TEMPLATE/*|.github/scripts/agent-task-metadata.test.sh|.github/workflows/agent-task-labels.yml|.github/workflows/auto-tag.yml|.github/workflows/stale.yml|.github/workflows/triage.yml|scripts/release/check-versions.sh|scripts/release/check-ohos-deps.sh|scripts/release/install-dogfood.sh|scripts/release/install-dogfood.test.sh|scripts/release/prepare-release.sh|scripts/release/prepare-release.test.sh|scripts/check-coauthor-trailers.py|scripts/dev-cache.sh|scripts/dev-cache.test.sh|scripts/dev-cargo.sh|scripts/dev-test.sh|scripts/dev-test.test.sh)
                 ;;
               *)
                 heavy=true
@@ -174,6 +177,8 @@ jobs:
           bash scripts/release/require-release-tag-checkout.test.sh
           bash scripts/release/validate-crate-publish-order.test.sh
           bash scripts/release/verify-remote-tag.test.sh
+          sh scripts/dev-cache.test.sh
+          sh scripts/dev-test.test.sh
           bash .github/scripts/update-homebrew-tap.test.sh
           node .github/scripts/release-workflows.test.js
           node --test scripts/release/assemble-release-assets.test.js
@@ -432,9 +437,17 @@ jobs:
         with:
           cache-bin: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Run tests
+      - uses: taiki-e/install-action@nextest
         if: needs.changes.outputs.heavy == 'true' && (matrix.os != 'ubuntu-latest' || github.event_name == 'workflow_dispatch')
-        run: cargo test --workspace --all-features --locked
+      - name: Run tests
+        # Same test binaries as `cargo test`, run by cargo-nextest: one
+        # process per test, all runner cores busy, slow tests named instead
+        # of stalling the binary. `.config/nextest.toml` serializes the PTY
+        # binary and bounds the integration binary that spawns the real
+        # executable; retries are off, so a flake is a red run, not a hidden
+        # one. nextest does not run doctests — the next step keeps them.
+        if: needs.changes.outputs.heavy == 'true' && (matrix.os != 'ubuntu-latest' || github.event_name == 'workflow_dispatch')
+        run: cargo nextest run --workspace --all-features --locked --profile ci
         env:
           # Give test threads the stack the product gives itself. main.rs runs
           # the owner thread and every tokio worker at
@@ -448,6 +461,11 @@ jobs:
           # Box::pin'd that one frame; the mismatch itself remained). std reads
           # this for any thread spawned without an explicit size, which covers
           # both libtest's per-test threads and tokio's workers.
+          RUST_MIN_STACK: '16777216'
+      - name: Run doctests
+        if: needs.changes.outputs.heavy == 'true' && (matrix.os != 'ubuntu-latest' || github.event_name == 'workflow_dispatch')
+        run: cargo test --workspace --all-features --locked --doc
+        env:
           RUST_MIN_STACK: '16777216'
       # The Ubuntu lint lane validates non-RSS backlog fields. Run the same
       # source-bound measurement on macOS so loss or growth of RSS evidence

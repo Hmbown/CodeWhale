@@ -214,7 +214,7 @@ reported the same way a rejected global one is.
 | `message_submit` | before a submitted message reaches history or the model | **can replace or block the text** |
 | `tool_call_before` | before each tool call executes | **can allow / deny / ask, rewrite input, add context** |
 | `tool_call_after` | after each tool result settles, including completions the transcript does not redraw | observer |
-| `mode_change` | on every applied Plan/Act/Operate transition | observer |
+| `mode_change` | on every applied Plan/Work/Operate transition (`Act` is a compatibility alias for Work) | observer |
 | `on_error` | on transport, capacity, and auth errors, and on tool failures | observer |
 | `turn_end` | after a turn completes and post-turn state is updated | observer |
 | `subagent_spawn` | when a sub-agent starts | observer |

@@ -2272,7 +2272,10 @@ impl RuntimeThreadManager {
     /// Atomically replace the authoritative runtime config after preflighting
     /// every loaded thread's exact route. Active turns retain their immutable
     /// descriptor; the next `start_turn` resolves and installs the new route.
-    pub async fn reload_config(&self, new_config: Config) -> Result<()> {
+    pub async fn reload_config(
+        &self,
+        new_config: Config,
+    ) -> Result<crate::tools::large_output_router::WorkshopConfig> {
         let _engine_load = self.engine_load.lock().await;
         let entries: Vec<(
             String,
@@ -2319,10 +2322,19 @@ impl RuntimeThreadManager {
             );
         }
 
+        // `engine_load` is still held here, so a thread cannot construct an
+        // engine from the accepted config before its process-wide read/tool
+        // byte limits are active. Rejected reloads leave the prior limits in
+        // place.
+        let workshop_activation = crate::tools::large_output_router::WorkshopConfig::install_active(
+            new_config.workshop.as_ref(),
+        );
+        let workflow_table = new_config.workflow_config();
         {
             let mut guard = self.config.write();
             *guard = new_config;
         }
+        crate::tools::workflow::set_session_workflow_config(&self.workspace, workflow_table);
 
         let settings = crate::settings::Settings::load().unwrap_or_default();
         let stream_chunk_timeout_secs = self.read_config().stream_chunk_timeout_secs();
@@ -2367,7 +2379,7 @@ impl RuntimeThreadManager {
                 "Reloaded runtime controls; provider route will apply on the next turn"
             );
         }
-        Ok(())
+        Ok(workshop_activation)
     }
 
     #[cfg(test)]

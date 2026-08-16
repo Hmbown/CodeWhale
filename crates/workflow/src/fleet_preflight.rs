@@ -123,8 +123,17 @@ impl EndpointIdentity {
 pub struct PreflightedRoute {
     /// The member this route belongs to.
     pub member_id: String,
-    /// Exact configured provider key, as the operator named it.
+    /// Canonical runtime provider identity recorded on receipts.
     pub provider_id: String,
+    /// Runtime configuration key used to rebuild this route when compatibility
+    /// migration canonicalized [`Self::provider_id`] for receipts.
+    ///
+    /// Absent for ordinary routes. The released Ollama Cloud shape is the
+    /// current use: a saved `ollama` route is reported canonically as
+    /// `ollama-cloud`, while client construction must still read the exact
+    /// legacy table and credential slot. This value is non-secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_config_id: Option<String>,
     /// Provider kind (`zai`, `openai`, `deepseek`, `vllm`, …).
     pub provider_kind: String,
     /// The model id exactly as saved in the Fleet file.
@@ -141,10 +150,20 @@ pub struct PreflightedRoute {
 }
 
 impl PreflightedRoute {
+    /// Provider key the host must scope when rebuilding this frozen route.
+    #[must_use]
+    pub fn provider_config_id(&self) -> &str {
+        self.provider_config_id
+            .as_deref()
+            .unwrap_or(&self.provider_id)
+    }
+
     /// The frozen provider/model pair, in canonical wire form.
     ///
-    /// This is what a receipt records and what a child spawns with — the two
-    /// cannot disagree because there is only one value.
+    /// This is what a receipt records and the provider identity the child
+    /// ultimately runs. [`Self::provider_config_id`] may retain an older
+    /// configuration selector solely so rebuilding that identity reads the
+    /// correct table and credential slot.
     #[must_use]
     pub fn frozen(&self) -> FrozenRoute {
         FrozenRoute {
@@ -277,6 +296,7 @@ mod tests {
         PreflightedRoute {
             member_id: member.to_string(),
             provider_id: provider.to_string(),
+            provider_config_id: None,
             provider_kind: provider.to_string(),
             declared_model: wire.to_string(),
             wire_model: wire.to_string(),

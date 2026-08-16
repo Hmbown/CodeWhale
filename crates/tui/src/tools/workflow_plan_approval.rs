@@ -982,6 +982,43 @@ mod tests {
     }
 
     #[test]
+    fn require_approval_for_writes_true_blocks_write_start_read_only_stays_auto() {
+        let mut cfg = config();
+        cfg.require_approval_for_writes = true;
+        cfg.auto_start_read_only = true;
+        let write_plan = json!({
+            "action": "start",
+            "plan": {
+                "goal": "land the fix",
+                "risk": "writes",
+                "children": [{
+                    "prompt": "patch it",
+                    "type": "implementer",
+                    "mode": "read_write"
+                }]
+            }
+        });
+        let read_only = json!({
+            "action": "start",
+            "plan": {
+                "goal": "scout crates",
+                "risk": "read_only",
+                "children": [{ "prompt": "look", "type": "explore" }]
+            }
+        });
+        assert_eq!(
+            workflow_approval_requirement_for(&write_plan, &cfg),
+            ApprovalRequirement::Required,
+            "require_approval_for_writes = true must require the card for a write start"
+        );
+        assert_eq!(
+            workflow_approval_requirement_for(&read_only, &cfg),
+            ApprovalRequirement::Auto,
+            "auto_start_read_only = true must still auto-start a read-only plan"
+        );
+    }
+
+    #[test]
     fn require_approval_for_writes_false_allows_elevated_auto() {
         let mut cfg = config();
         cfg.require_approval_for_writes = false;

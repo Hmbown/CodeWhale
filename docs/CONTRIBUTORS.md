@@ -28,6 +28,40 @@ notes, and relevant issue/PR comments.
 ## Contributors by time
 
 <details open>
+<summary><strong>v0.9.8 — marketplace, Google, Ollama Cloud</strong></summary>
+
+**Merged or adapted contributions**
+
+- **[EvanProgramming](https://github.com/EvanProgramming)** — webhook hook
+  sink no longer panics when its HTTP client fails to build (#5381); session-index
+  JSONL writes are serialized so concurrent stores cannot drop an append
+  (#5382)
+- **[Lstarsky0](https://github.com/Lstarsky0)** — session peek hides internal
+  runtime events (#5376); thinking-ladder tests re-pinned (#5378);
+  provider-count follow-ups (#5383/#5384); macOS agy fixture
+  canonicalization (#5392); website zh-Hans 宪章 terminology (#5397);
+  regenerated website facts harvested and corrected so Google and Ollama
+  Cloud are listed and Antigravity is not advertised as a route (#5398)
+- **[mvanhorn](https://github.com/mvanhorn)** — read-only, repository-fact
+  driven settings preview on the website models page (#5411, fixes #5370)
+- **[buiducnhat](https://github.com/buiducnhat)** — canonical `ultra`
+  reasoning effort mapped to every provider's maximum tier (#5409); session
+  titles truncated by character count instead of byte offset so CJK and
+  emoji names cut at the intended width (#5415)
+- **[SparkofSpike](https://github.com/SparkofSpike)** — `/title` and the
+  saved session name in the terminal tab/window title, plus the fix for the
+  deadlock when the title changed during an active turn; landed as a
+  discoverable alias of `/rename` on the one persisted session name (#5419)
+- **[redstar](https://github.com/redstar)** — Eden AI registered as a named
+  OpenAI-compatible provider with `EDENAI_API_KEY`, `eden-ai`/`eden_ai`
+  aliases, and the global and EU endpoints (#5422)
+- **[wuisabel-gif](https://github.com/wuisabel-gif)** — background verifier
+  test isolated from the rustup `rustc` shim and `$HOME`, one narrow
+  reliability slice of #5056 (#5423)
+
+</details>
+
+<details>
 <summary><strong>v0.9.7 — the catalog stays ordinary</strong></summary>
 
 **Merged or adapted contributions**

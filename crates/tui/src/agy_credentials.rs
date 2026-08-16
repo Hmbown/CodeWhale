@@ -248,7 +248,13 @@ mod tests {
 
     fn fixture_db(token_value: Option<&str>) -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("state.vscdb");
+        // Canonicalize: production open_secure_regular_file uses O_NOFOLLOW on
+        // every path component, so macOS TempDir paths under `/var` (symlink
+        // to `private/var`) would fail the secure open for an unrelated reason.
+        // Resolving the fixture root keeps the suite focused on credential
+        // parsing while preserving the production no-follow boundary.
+        let root = dir.path().canonicalize().expect("canonical temp root");
+        let path = root.join("state.vscdb");
         let connection = rusqlite::Connection::open(&path).expect("create fixture database");
         connection
             .execute_batch(

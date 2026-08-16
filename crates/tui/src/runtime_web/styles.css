@@ -4,14 +4,16 @@
   --ink-1: #08111c;
   --ink-2: #0e1729;
   --ink-3: #182742;
-  --line: rgba(106, 174, 242, 0.18);
-  --line-strong: rgba(106, 174, 242, 0.32);
+  --stage-surface: #0e1729;
+  --plate: rgba(22, 34, 56, 0.88);
+  --line: rgba(122, 160, 230, 0.14);
+  --line-strong: rgba(122, 160, 230, 0.25);
   --text: #f6f2e8;
   --text-soft: #b6c0d4;
   --text-dim: #93a0b8;
   --action: #6aaef2;
   --action-strong: #4f8fe8;
-  --action-wash: rgba(106, 174, 242, 0.11);
+  --action-wash: rgba(106, 174, 242, 0.12);
   --human: #f6c453;
   --human-wash: rgba(246, 196, 83, 0.11);
   --live: #4fd1c5;
@@ -19,8 +21,8 @@
   --warning: #ff7a59;
   --danger: #ff86b2;
   --ok: #9bd66f;
-  --rail: 248px;
-  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --rail: 208px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -38,6 +40,7 @@ body {
   overflow: hidden;
   background: var(--ink-0);
   color: var(--text);
+  -webkit-font-smoothing: antialiased;
 }
 
 button,
@@ -66,27 +69,28 @@ summary:focus-visible {
 }
 
 .shell {
+  --visual-viewport-height: 100dvh;
+  --visual-viewport-offset-top: 0px;
   display: grid;
   grid-template-columns: var(--rail) minmax(0, 1fr);
   width: 100%;
-  height: 100%;
-  background:
-    radial-gradient(circle at 73% -20%, rgba(49, 95, 216, 0.14), transparent 42%),
-    var(--ink-0);
+  height: var(--visual-viewport-height);
+  min-height: 0;
+  background: var(--ink-0);
 }
 
 .rail {
   position: relative;
   z-index: 20;
   display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
-  gap: 14px;
+  grid-template-rows: 48px auto auto minmax(120px, 1fr) minmax(0, 34%) auto;
+  gap: 7px;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  padding: 18px 14px 12px;
+  padding: 8px 8px 9px;
   border-right: 1px solid var(--line);
-  background: rgba(8, 17, 28, 0.96);
+  background: #060c18;
 }
 
 .rail-brand,
@@ -105,22 +109,16 @@ summary:focus-visible {
 
 .rail-brand {
   min-width: 0;
-  gap: 10px;
+  gap: 9px;
+  padding: 0 7px;
 }
 
 .brand-mark {
-  display: grid;
-  flex: 0 0 34px;
-  width: 34px;
-  height: 34px;
-  place-items: center;
-  border: 1px solid rgba(246, 196, 83, 0.42);
-  border-radius: 10px;
-  background: var(--human-wash);
-  color: var(--human);
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.05em;
+  display: block;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
 }
 
 .eyebrow {
@@ -134,19 +132,25 @@ summary:focus-visible {
 }
 
 .brand-name {
-  margin: 2px 0 0;
+  margin: 0;
   font-size: 15px;
-  font-weight: 680;
+  font-weight: 650;
   letter-spacing: -0.01em;
+}
+
+.brand-context {
+  margin: 1px 0 0;
+  color: var(--text-dim);
+  font-size: 10px;
 }
 
 .primary-button,
 .quiet-button,
 .send-button,
 .icon-button {
-  min-height: 34px;
+  min-height: 32px;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: 7px;
   background: var(--ink-2);
   color: var(--text-soft);
   font-size: 12px;
@@ -196,19 +200,31 @@ summary:focus-visible {
   min-width: 0;
   align-items: center;
   justify-content: center;
-  gap: 7px;
+  justify-content: flex-start;
+  min-height: 36px;
+  padding: 0 10px;
+  border-color: transparent;
+  background: var(--action-wash);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.new-thread:hover {
+  border-color: transparent;
+  background: rgba(106, 174, 242, 0.18);
+  color: var(--text);
 }
 
 .search-field {
   display: flex;
   min-width: 0;
-  height: 36px;
+  height: 30px;
   align-items: center;
   gap: 8px;
-  padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: rgba(3, 7, 13, 0.55);
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: rgba(3, 7, 13, 0.42);
   color: var(--text-dim);
 }
 
@@ -233,7 +249,7 @@ textarea::placeholder {
 
 .thread-list {
   min-height: 0;
-  margin: 0 -4px;
+  margin: 0;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -243,25 +259,27 @@ textarea::placeholder {
 .thread-row {
   display: block;
   width: 100%;
-  margin: 2px 0;
-  padding: 10px;
+  min-height: 48px;
+  margin: 1px 0;
+  padding: 7px 9px;
   overflow: hidden;
   border: 1px solid transparent;
-  border-radius: 9px;
+  border-radius: 7px;
   background: transparent;
   color: var(--text-soft);
   text-align: left;
 }
 
 .thread-row:hover {
-  background: rgba(24, 39, 66, 0.62);
+  background: rgba(106, 174, 242, 0.07);
   color: var(--text);
 }
 
 .thread-row[aria-current="true"] {
-  border-color: rgba(106, 174, 242, 0.32);
+  border-color: transparent;
   background: var(--action-wash);
   color: var(--text);
+  box-shadow: inset 2px 0 0 var(--action);
 }
 
 .thread-title-row {
@@ -273,24 +291,24 @@ textarea::placeholder {
 .thread-title {
   overflow: hidden;
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 560;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .thread-preview {
   display: -webkit-box;
-  margin-top: 5px;
+  margin-top: 3px;
   overflow: hidden;
   color: var(--text-dim);
   font-size: 10px;
-  line-height: 1.45;
+  line-height: 1.35;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
 
 .thread-meta {
-  margin-top: 7px;
+  margin-top: 4px;
   overflow: hidden;
   color: var(--text-dim);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -385,7 +403,7 @@ textarea::placeholder {
    session store cannot push the connection footer off-screen. */
 .saved-sessions {
   min-height: 0;
-  max-height: 34%;
+  max-height: 100%;
   display: flex;
   flex-direction: column;
   padding-top: 9px;
@@ -409,7 +427,7 @@ textarea::placeholder {
   min-width: 0;
   align-items: flex-start;
   gap: 8px;
-  padding: 9px 4px 0;
+  padding: 8px 7px 0;
   border-top: 1px solid var(--line);
   color: var(--text-dim);
   font-size: 10px;
@@ -455,22 +473,24 @@ textarea::placeholder {
     "transcript"
     "attention"
     "composer";
-  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+  grid-template-rows: 58px auto minmax(0, 1fr) auto auto;
   min-width: 0;
   min-height: 0;
+  background: var(--stage-surface);
 }
 
 .session-header {
   display: grid;
   grid-area: header;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 12px 20px;
+  grid-template-columns: minmax(180px, 1fr) minmax(0, auto) auto;
+  align-items: center;
+  gap: 12px;
   min-width: 0;
   overflow: hidden;
-  padding: 15px 24px 13px;
+  padding: 0 18px;
   border-bottom: 1px solid var(--line);
-  background: rgba(8, 17, 28, 0.72);
-  backdrop-filter: blur(14px);
+  background: rgba(14, 23, 41, 0.94);
+  backdrop-filter: blur(10px);
 }
 
 .session-heading {
@@ -483,7 +503,7 @@ textarea::placeholder {
 }
 
 .session-header h1 {
-  margin: 3px 0 0;
+  margin: 1px 0 0;
   overflow: hidden;
   font-size: 16px;
   font-weight: 680;
@@ -495,16 +515,18 @@ textarea::placeholder {
 
 .header-actions {
   align-self: center;
-  gap: 7px;
+  gap: 4px;
 }
 
 .session-facts {
   display: flex;
-  flex-wrap: wrap;
-  grid-column: 1 / -1;
+  flex-wrap: nowrap;
+  grid-column: auto;
   min-width: 0;
-  gap: 6px;
-  overflow: hidden;
+  gap: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
 }
 
 .session-facts::-webkit-scrollbar {
@@ -513,11 +535,12 @@ textarea::placeholder {
 
 .fact-chip {
   flex: 0 0 auto;
-  min-height: 23px;
-  gap: 5px;
-  padding: 0 8px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
+  min-height: 22px;
+  gap: 4px;
+  padding: 0 7px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  border-radius: 0;
   color: var(--text-dim);
   font-size: 9px;
   white-space: nowrap;
@@ -537,10 +560,10 @@ textarea::placeholder {
 .status-banner {
   grid-area: status;
   margin: 12px auto 0;
-  width: min(760px, calc(100% - 32px));
+  width: min(724px, calc(100% - 32px));
   padding: 9px 12px;
   border: 1px solid rgba(255, 122, 89, 0.34);
-  border-radius: 9px;
+  border-radius: 7px;
   background: rgba(48, 25, 21, 0.48);
   color: var(--warning);
   font-size: 11px;
@@ -550,12 +573,13 @@ textarea::placeholder {
 .transcript {
   grid-area: transcript;
   min-height: 0;
-  padding: 30px max(16px, calc((100% - 760px) / 2)) 48px;
+  padding: 28px max(18px, calc((100% - 724px) / 2)) 44px;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   scroll-behavior: smooth;
   scrollbar-color: var(--ink-3) transparent;
+  background: var(--stage-surface);
 }
 
 .empty-state {
@@ -563,7 +587,7 @@ textarea::placeholder {
   min-height: 100%;
   place-content: center;
   justify-items: center;
-  padding: 32px;
+  padding: 28px;
   color: var(--text-dim);
   text-align: center;
 }
@@ -582,46 +606,54 @@ textarea::placeholder {
   line-height: 1.6;
 }
 
-.empty-orbit {
-  color: var(--human);
-  font-size: 34px;
+.empty-mark {
+  display: block;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  opacity: 0.9;
 }
 
 .message,
 .receipt,
 .reasoning {
   width: 100%;
-  margin: 0 0 14px;
+  margin: 0 0 20px;
 }
 
 .message-label,
 .receipt-label {
   margin-bottom: 6px;
   color: var(--text-dim);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
 }
 
 .message-body {
   max-width: 100%;
-  padding: 13px 15px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: rgba(14, 23, 41, 0.74);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--text);
-  font-size: 13px;
-  line-height: 1.65;
+  font-size: 14px;
+  line-height: 1.68;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 
 .message.user .message-body {
-  margin-left: clamp(0px, 8vw, 72px);
-  border-color: rgba(246, 196, 83, 0.22);
-  background: rgba(246, 196, 83, 0.07);
+  width: fit-content;
+  max-width: 82%;
+  margin-left: auto;
+  padding: 10px 14px;
+  border-radius: 17px 17px 5px 17px;
+  background: var(--plate);
+  font-size: 13px;
 }
+
+.message.user .message-label { display: none; }
 
 .message.in-progress .message-body::after {
   content: "";
@@ -639,20 +671,45 @@ textarea::placeholder {
 }
 
 .receipt {
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: rgba(8, 17, 28, 0.54);
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: -8px;
+  color: var(--text-dim);
 }
 
-.receipt.failed {
-  border-color: rgba(255, 134, 178, 0.28);
+.receipt-dot {
+  flex: 0 0 6px;
+  width: 6px;
+  height: 6px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--live);
+}
+
+.receipt.failed .receipt-dot {
+  background: var(--danger);
+}
+
+.receipt-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.receipt-copy strong {
+  color: var(--text-soft);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.45;
 }
 
 .receipt-summary {
-  color: var(--text-soft);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10px;
+  color: var(--text-dim);
+  font-size: 10.5px;
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
@@ -691,7 +748,7 @@ textarea::placeholder {
 
 .attention {
   grid-area: attention;
-  width: min(760px, calc(100% - 32px));
+  width: min(724px, calc(100% - 32px));
   max-height: 42vh;
   margin: 0 auto 10px;
   overflow-y: auto;
@@ -771,16 +828,16 @@ textarea::placeholder {
 
 .composer-wrap {
   grid-area: composer;
-  padding: 0 max(16px, calc((100% - 760px) / 2)) 18px;
-  background: linear-gradient(transparent, var(--ink-0) 24%);
+  padding: 0 max(18px, calc((100% - 724px) / 2)) 16px;
+  background: linear-gradient(transparent, var(--stage-surface) 24%);
 }
 
 .composer {
   overflow: hidden;
-  border: 1px solid var(--line-strong);
-  border-radius: 13px;
-  background: rgba(14, 23, 41, 0.96);
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--plate);
+  box-shadow: none;
 }
 
 .composer:focus-within {
@@ -790,9 +847,9 @@ textarea::placeholder {
 .composer textarea {
   display: block;
   width: 100%;
-  min-height: 54px;
+  min-height: 58px;
   max-height: 180px;
-  padding: 13px 14px 6px;
+  padding: 14px 15px 7px;
   resize: none;
   overflow-y: auto;
   border: 0;
@@ -806,7 +863,7 @@ textarea::placeholder {
 .composer-bar {
   justify-content: space-between;
   gap: 12px;
-  padding: 6px 7px 7px 13px;
+  padding: 5px 7px 7px 14px;
 }
 
 .composer-hint {
@@ -889,8 +946,11 @@ noscript {
 
   .rail {
     position: fixed;
-    inset: 0 auto 0 0;
-    width: min(86vw, 320px);
+    top: var(--visual-viewport-offset-top);
+    bottom: auto;
+    left: 0;
+    width: min(84vw, 292px);
+    height: var(--visual-viewport-height);
     transform: translateX(-102%);
     box-shadow: 24px 0 70px rgba(0, 0, 0, 0.45);
     transition: transform 160ms ease-out;
@@ -907,12 +967,15 @@ noscript {
 
   .rail-scrim {
     position: fixed;
-    inset: 0;
+    top: var(--visual-viewport-offset-top);
+    right: 0;
+    bottom: auto;
+    left: 0;
     z-index: 15;
     display: block;
     visibility: hidden;
     width: 100%;
-    height: 100%;
+    height: var(--visual-viewport-height);
     padding: 0;
     border: 0;
     opacity: 0;
@@ -931,7 +994,7 @@ noscript {
   }
 
   .session-header {
-    padding: 12px 14px 10px;
+    padding: 0 12px;
   }
 
   .session-header h1 {
@@ -961,43 +1024,50 @@ noscript {
 }
 
 @media (max-width: 430px) {
+  .session {
+    grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+  }
+
   .session-header {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 8px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px;
+    min-height: 82px;
+    padding-top: 6px;
+    padding-bottom: 5px;
   }
 
   .header-actions {
-    position: absolute;
-    top: 10px;
-    right: 10px;
+    position: static;
   }
 
   .header-actions .quiet-button {
-    width: 34px;
-    padding: 0;
-    overflow: hidden;
-    color: transparent;
-    font-size: 0;
-  }
-
-  #rename-thread::after {
-    content: "✎";
-    color: var(--text-soft);
-    font-size: 13px;
-  }
-
-  #archive-thread::after {
-    content: "⌫";
-    color: var(--danger);
-    font-size: 13px;
+    min-width: 0;
+    min-height: 28px;
+    padding: 0 7px;
+    font-size: 10px;
   }
 
   .session-heading {
-    padding-right: 78px;
+    padding-right: 0;
   }
 
   .session-facts {
-    grid-column: 1;
+    display: flex;
+    grid-column: 1 / -1;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-top: 2px;
+    scrollbar-width: none;
+  }
+
+  .session-facts .fact-chip[data-fact="workspace"],
+  .session-facts .fact-chip[data-fact="branch"] {
+    display: none;
+  }
+
+  .session-facts .fact-chip:first-child:not([data-fact="workspace"]):not([data-fact="branch"]),
+  .session-facts .fact-chip[data-fact="model"] {
+    border-left: 0;
   }
 
   .composer-hint {
@@ -1006,6 +1076,32 @@ noscript {
 
   .composer-bar {
     justify-content: flex-end;
+  }
+}
+
+@media (pointer: coarse) {
+  .primary-button,
+  .quiet-button,
+  .send-button,
+  .icon-button,
+  .new-thread,
+  .thread-row,
+  .search-field,
+  .other-answer,
+  .rename-dialog input,
+  .answer-option,
+  .remember-field,
+  .receipt summary,
+  .reasoning summary {
+    min-height: 44px;
+  }
+
+  .answer-option,
+  .remember-field,
+  .receipt summary,
+  .reasoning summary {
+    display: flex;
+    align-items: center;
   }
 }
 

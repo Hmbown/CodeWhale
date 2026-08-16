@@ -144,7 +144,10 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &mut App) {
             ));
         }
         left.push(Span::styled(
-            " · Esc to interrupt",
+            format!(
+                " · {}",
+                tr(app.ui_locale, MessageId::FooterHintEscInterrupt)
+            ),
             Style::default().fg(app.ui_theme.text_dim),
         ));
     }
@@ -173,7 +176,13 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &mut App) {
         ));
     }
 
-    if tier != ShellTier::Compact
+    // The session metrics strip owns the cache cell when it is on; the
+    // standalone `cache N%` chip stays for users who turned the strip off.
+    let metrics_enabled = app
+        .status_items
+        .contains(&crate::config::StatusItem::SessionMetrics);
+    if !metrics_enabled
+        && tier != ShellTier::Compact
         && app.status_items.contains(&crate::config::StatusItem::Cache)
         && let Some(pct) = session_cache_hit_percentage(app)
     {
@@ -213,8 +222,58 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &mut App) {
         })
     };
 
+    // `← for agents · ↓ to manage`: advertised only while workers exist,
+    // because those keys only take that meaning then (an empty composer with
+    // no workers keeps ← and ↓ as ordinary cursor keys).
+    let agent_hints = (tier != ShellTier::Compact && crate::tui::agent_focus::agents_exist(app))
+        .then(|| crate::tui::agent_focus::footer_agent_hints(app));
+    let right_text: Cow<'static, str> = match agent_hints {
+        Some(hints) if !right_text.is_empty() => Cow::Owned(format!("{hints} · {right_text}")),
+        // A settled turn keeps the strip above the composer without the key
+        // chorus; the two agent keys still apply there, so they stay visible.
+        Some(hints) if phase == ShellPhase::Done => Cow::Owned(hints),
+        _ => right_text,
+    };
+
     let right_width = right_text.width();
     let available = usize::from(area.width);
+
+    // Session metrics strip (`4 turns · 108 steps │ LLM 11m46s · tools 1m52s
+    // │ TTFT 1.5s · 120 tok/s │ cache 99% │ in 9.3M`). It takes whatever
+    // columns are genuinely free after the phase marker, the ledger chips, a
+    // floor for any live toast, and the key hints, and sheds its
+    // lowest-value groups to fit rather than truncating a number.
+    if metrics_enabled {
+        let snapshot = crate::tui::session_metrics::snapshot_from_app(app);
+        if !snapshot.is_empty() {
+            let toast_reserve = status_toast
+                .as_ref()
+                .filter(|toast| !toast.text.trim().is_empty())
+                .map(|toast| toast.text.trim().width().min(TOAST_MIN_WIDTH) + TOAST_SEPARATOR_WIDTH)
+                .unwrap_or(0);
+            let budget = available.saturating_sub(
+                span_width(&left)
+                    + span_width(&tail)
+                    + toast_reserve
+                    + right_width
+                    + TOAST_RIGHT_GAP
+                    + METRICS_SEPARATOR_WIDTH,
+            );
+            let ascii = crate::tui::color_compat::ascii_safe_enabled();
+            let strip = crate::tui::session_metrics::fit_to_width(
+                crate::tui::session_metrics::build_groups(snapshot, app.ui_locale),
+                budget,
+                crate::tui::session_metrics::Separators::for_ascii(ascii),
+            );
+            if !strip.is_empty() {
+                tail.push(Span::styled(
+                    if ascii { " | " } else { " │ " },
+                    Style::default().fg(app.ui_theme.text_dim),
+                ));
+                tail.extend(crate::tui::session_metrics::spans(&strip, &app.ui_theme));
+            }
+        }
+    }
 
     if tier != ShellTier::Compact
         && let Some(toast) = status_toast.filter(|toast| {
@@ -270,6 +329,8 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &mut App) {
 
 /// Width of the ` · ` separator painted before the toast.
 const TOAST_SEPARATOR_WIDTH: usize = 3;
+/// Width of the ` │ ` separator painted before the session metrics strip.
+const METRICS_SEPARATOR_WIDTH: usize = 3;
 /// Blank columns kept between the toast and the right-aligned key hints, so
 /// the two never read as one run-on sentence.
 const TOAST_RIGHT_GAP: usize = 2;
@@ -450,6 +511,42 @@ mod tests {
         );
     }
 
+    fn strip_text(app: &mut App, width: u16) -> String {
+        let backend = TestBackend::new(width, 1);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal
+            .draw(|frame| render(frame.area(), frame.buffer_mut(), app))
+            .expect("draw");
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
+    }
+
+    #[test]
+    fn idle_footer_advertises_agents_and_manage_keys_only_while_workers_exist() {
+        let mut app = test_app();
+        app.ui_locale = crate::localization::Locale::En;
+        let quiet = strip_text(&mut app, 160);
+        assert!(!quiet.contains("for agents"), "{quiet}");
+        assert!(!quiet.contains("to manage"), "{quiet}");
+
+        app.agent_progress
+            .insert("agent_one".to_string(), "working".to_string());
+        let with_workers = strip_text(&mut app, 160);
+        assert!(
+            with_workers.contains("← for agents · ↓ to manage · "),
+            "dot-chain hint before the existing key hints: {with_workers}"
+        );
+        assert!(
+            with_workers.contains("fn+F1:") || with_workers.contains("F1:"),
+            "{with_workers}"
+        );
+    }
+
     #[test]
     fn working_band_keeps_elapsed_time_when_model_is_thinking() {
         let mut app = test_app();
@@ -568,5 +665,100 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
         assert!(!text.contains("cache"), "compact strip: {text}");
+    }
+
+    fn app_with_session_metrics() -> App {
+        let mut app = test_app();
+        app.status_items = vec![crate::config::StatusItem::SessionMetrics];
+        app.turn_counter = 4;
+        // Two model calls: 100 tokens over a 2 s stream (TTFT 500 ms, whole
+        // call 2.4 s) and 20 tokens over 1 s (TTFT 300 ms, 1.1 s).
+        app.session_metrics
+            .record_model_call(100, 2_000, Some(500), Some(2_400));
+        app.session_metrics
+            .record_model_call(20, 1_000, Some(300), Some(1_100));
+        app.session_metrics.record_tool_started("t1");
+        app.session_metrics.record_tool_completed("t1");
+        app.session.total_input_tokens = 9_300_000;
+        app.session.total_cache_hit_tokens = 99;
+        app.session.total_cache_miss_tokens = 1;
+        app
+    }
+
+    #[test]
+    fn session_metrics_strip_paints_every_group_when_the_row_has_room() {
+        let mut app = app_with_session_metrics();
+        let text = strip_text(&mut app, 170);
+        assert!(text.contains("4 turns · 3 steps"), "{text}");
+        assert!(text.contains("LLM 3.5s · Tool call"), "{text}");
+        assert!(text.contains("TTFT avg 400ms · 40 tok/s"), "{text}");
+        assert!(text.contains("Cache hit 99%"), "{text}");
+        assert!(text.contains("Input 9.3M"), "{text}");
+        // The strip must not push the right-hand key hints off the row.
+        assert!(text.contains("keys"), "{text}");
+
+        // A 120-column idle row shares the line with the full key hints, so
+        // every group keeps its headline fact and sheds its second cell.
+        let text = strip_text(&mut app, 120);
+        assert!(
+            text.contains("4 turns │ LLM 3.5s │ TTFT avg 400ms │ Cache hit 99% │ Input 9.3M"),
+            "{text}"
+        );
+        assert!(text.contains("keys"), "{text}");
+    }
+
+    #[test]
+    fn session_metrics_strip_sheds_groups_on_narrow_rows_and_never_truncates() {
+        let mut app = app_with_session_metrics();
+        let normal = strip_text(&mut app, 80);
+        assert!(normal.contains("Input 9.3M"), "{normal}");
+        assert!(normal.contains("Cache hit 99%"), "{normal}");
+        assert!(!normal.contains("tok/s"), "{normal}");
+        assert!(normal.contains("keys"), "{normal}");
+
+        let compact = strip_text(&mut app, 60);
+        // Whatever survives at 60 columns is whole cells, never a cut number.
+        for cell in ["9.3M", "99%", "3.5s", "4 turns"] {
+            if compact.contains(cell) {
+                assert!(
+                    compact.contains(&format!("Input {}", "9.3M"))
+                        || compact.contains(&format!("Cache hit {}", "99%"))
+                        || compact.contains("LLM 3.5s")
+                        || compact.contains("4 turns"),
+                    "{compact}"
+                );
+            }
+        }
+        assert!(!compact.contains("Tool call"), "{compact}");
+        assert!(!compact.contains("tok/s"), "{compact}");
+    }
+
+    #[test]
+    fn session_metrics_strip_is_hidden_when_the_status_item_is_off_or_nothing_happened() {
+        let mut app = app_with_session_metrics();
+        app.status_items = vec![crate::config::StatusItem::Cache];
+        let text = strip_text(&mut app, 120);
+        assert!(!text.contains("turns"), "{text}");
+        // The legacy standalone cache chip still serves users who turned
+        // the strip off.
+        assert!(text.contains("cache 99%"), "{text}");
+
+        let mut fresh = test_app();
+        fresh.status_items = vec![crate::config::StatusItem::SessionMetrics];
+        let text = strip_text(&mut fresh, 120);
+        assert!(!text.contains("turns"), "{text}");
+        assert!(!text.contains("│"), "{text}");
+    }
+
+    #[test]
+    fn session_metrics_strip_is_on_by_default() {
+        assert!(
+            crate::config::StatusItem::default_footer()
+                .contains(&crate::config::StatusItem::SessionMetrics)
+        );
+        assert_eq!(
+            crate::config::StatusItem::from_key("session_metrics"),
+            Some(crate::config::StatusItem::SessionMetrics)
+        );
     }
 }

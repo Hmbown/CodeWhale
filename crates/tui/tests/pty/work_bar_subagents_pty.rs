@@ -28,6 +28,9 @@ const INTERACTION_TIMEOUT: Duration = Duration::from_secs(20);
 const PASTE_GUARD_SETTLE: Duration = Duration::from_millis(180);
 const COMPOSER_READY_TEXT: &str = "Write a task";
 const MODEL: &str = "deepseek-v4-pro";
+/// The empty-composer hint while a worker is focused (its full transcript
+/// owns the conversation area and the composer addresses its fork).
+const FOCUS_MARKER: &str = "Esc returns to main";
 
 /// The user prompt that triggers the fan-out. Only ever present in a *parent*
 /// request, so the responder can tell parent from child without guessing.
@@ -74,8 +77,15 @@ fn agent_tool_call_sse(count: usize) -> String {
                 "function": {
                     "name": "agent",
                     "arguments": serde_json::to_string(&json!({
-                        "message": format!("{CHILD_MARKER}{worker} keep working"),
-                        "agent_type": "explorer",
+                        "action": "start",
+                        // The work bar is the inspectable surface for agents
+                        // that outlive the parent wrap-up. Turn-owned starts
+                        // are cancelled when the mock parent finishes, which
+                        // is not the owner-reported "spawned and inspectable"
+                        // contract these probes pin.
+                        "detached": true,
+                        "prompt": format!("{CHILD_MARKER}{worker} keep working"),
+                        "type": "explorer",
                         // Explicit fresh context: a forked child would carry the
                         // parent prompt into its own requests and defeat the
                         // parent/child discrimination in the responder.
@@ -389,28 +399,29 @@ async fn work_bar_lists_a_running_subagent_and_opens_it_by_click_and_enter() -> 
 
     // Click the row: the door must open onto the agent's transcript.
     tui.send(keys::mouse::click(row, col))?;
-    tui.wait_for_text("Agent transcript", Duration::from_secs(5))
+    tui.wait_for_text(FOCUS_MARKER, Duration::from_secs(5))
         .map_err(|_| {
             anyhow!(
-                "clicking the sub-agent row did not open its transcript\n{}",
+                "clicking the sub-agent row did not focus its transcript\n{}",
                 tui.debug_dump()
             )
         })?;
 
-    // Close, then prove keyboard parity: Alt+W focuses the strip, End selects
-    // the last selectable row (a worker), Enter opens the same transcript.
+    // Leave focus, then prove keyboard parity: Alt+W focuses the strip, End
+    // selects the last selectable row (a worker), Enter focuses the same
+    // worker a click does.
     tui.send(keys::key::esc())?;
     tui.wait_for(
-        |frame| !frame.text().contains("Agent transcript"),
+        |frame| !frame.text().contains(FOCUS_MARKER),
         Duration::from_secs(5),
     )?;
     tui.send(keys::key::alt('w'))?;
     tui.send(b"\x1b[F")?; // End
     tui.send(keys::key::enter())?;
-    tui.wait_for_text("Agent transcript", Duration::from_secs(5))
+    tui.wait_for_text(FOCUS_MARKER, Duration::from_secs(5))
         .map_err(|_| {
             anyhow!(
-                "Enter on the selected work-bar row did not open the transcript a click opens\n{}",
+                "Enter on the selected work-bar row did not focus the worker a click focuses\n{}",
                 tui.debug_dump()
             )
         })?;
@@ -470,10 +481,10 @@ async fn work_bar_still_shows_subagents_when_todos_are_present() -> Result<()> {
     );
     let (row, col) = worker.expect("checked above");
     tui.send(keys::mouse::click(row, col))?;
-    tui.wait_for_text("Agent transcript", Duration::from_secs(5))
+    tui.wait_for_text(FOCUS_MARKER, Duration::from_secs(5))
         .map_err(|_| {
             anyhow!(
-                "clicking the sub-agent row did not open its transcript\n{}",
+                "clicking the sub-agent row did not focus its transcript\n{}",
                 tui.debug_dump()
             )
         })?;
@@ -537,10 +548,10 @@ async fn work_bar_shows_a_running_subagent_under_the_pinned_rail_panel() -> Resu
     );
     let (row, col) = worker.expect("checked above");
     tui.send(keys::mouse::click(row, col))?;
-    tui.wait_for_text("Agent transcript", Duration::from_secs(5))
+    tui.wait_for_text(FOCUS_MARKER, Duration::from_secs(5))
         .map_err(|_| {
             anyhow!(
-                "clicking the sub-agent row did not open its transcript\n{}",
+                "clicking the sub-agent row did not focus its transcript\n{}",
                 tui.debug_dump()
             )
         })?;
@@ -688,12 +699,12 @@ async fn finished_agent_row_opens_its_transcript_and_alt_v_reaches_details() -> 
         std::thread::sleep(Duration::from_millis(40));
     };
 
-    // Activation lands in the transcript directly — no details detour.
+    // Activation lands in the focused transcript directly — no details detour.
     tui.send(keys::mouse::click(row, col))?;
-    tui.wait_for_text("Agent transcript", Duration::from_secs(5))
+    tui.wait_for_text(FOCUS_MARKER, Duration::from_secs(5))
         .map_err(|_| {
             anyhow!(
-                "clicking the finished agent row did not open its transcript\n{}",
+                "clicking the finished agent row did not focus its transcript\n{}",
                 tui.debug_dump()
             )
         })?;

@@ -1,5 +1,8 @@
+pub mod approval_mode;
 pub mod bash_arity;
 pub mod shell_expand;
+
+pub use approval_mode::ApprovalMode;
 
 use std::collections::HashSet;
 

@@ -20,6 +20,7 @@ mod resume;
 mod save;
 mod sessions;
 mod structcopy;
+mod title;
 mod tree;
 // This group dir intentionally has a `session.rs` child module with the same
 // name. The module_inception allow is a permanent structure rationale, not
@@ -38,6 +39,10 @@ impl CommandGroup for SessionCommands {
             Box::new(FunctionCommand::new(
                 rename::RenameCmd::info(),
                 rename::RenameCmd::execute,
+            )),
+            Box::new(FunctionCommand::new(
+                title::TitleCmd::info(),
+                title::TitleCmd::execute,
             )),
             Box::new(FunctionCommand::new(
                 save::SaveCmd::info(),

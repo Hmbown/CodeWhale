@@ -85,11 +85,16 @@ The fast `deepseek-v4-flash` / thinking-off path is called Fin in the product
 language. Fin is a seam for routing, summaries, cheap child calls, and
 coordination work; it does not change approval behavior.
 
-`/goal` sets a session objective with an optional token budget and keeps active
-objectives visible as Work context. `/goal pause` stops goal continuation without
-changing the objective, `/goal resume` resumes and sends the objective back into
-the turn, `/goal complete` marks it done, `/goal blocked` marks it blocked, and
-`/goal clear` removes it. Goal state does not change the active TUI mode,
+`/goal <objective>` sets a session objective with an optional token budget and
+keeps active objectives visible as Work context. The agent may also create the
+goal itself when a direct request describes a verifiable end state that will
+take more than one turn ("until the tests pass", "make X work end to end"); it
+then shows one receipt line and you can `/goal pause` or `/goal clear` it. Bare
+`/goal` shows progress (state, elapsed, continuations, and how to continue when
+no turn is running); with no goal and no conversation yet it prints usage.
+`/goal pause` stops goal continuation without changing the objective, `/goal
+resume` resumes and sends the objective back into the turn, `/goal complete`
+marks it done, `/goal blocked` marks it blocked, and `/goal clear` removes it. Goal state does not change the active TUI mode,
 permission posture, or model route. This remains distinct from `--model auto`, which
 only controls model and thinking selection.
 
@@ -241,6 +246,31 @@ therefore visible to the next turn. Untrusted runtime-generated input is
 narrowed before metadata is built and cannot invent approval authority. An
 explicit Full Access sub-agent handoff preserves the parent's standing posture
 so ordinary child work does not begin prompting again.
+
+### Children (sub-agents and Fleet workers)
+
+Children inherit the session posture faithfully rather than a bare
+auto-approve bit:
+
+- **Auto-Review**: a worker's held call goes through the same deterministic
+  policy (proven-safe calls run; publish-like and destructive background work
+  is hard-blocked) and, for holds it cannot prove safe, the same one-shot
+  model guardian using the child's own session client. No prompt is ever
+  opened for a child; an unavailable guardian denies, fail closed.
+- **Ask**: a call the role may delegate runs. A held call is raised as an
+  approval prompt in the parent's UI (`agent:<id>:approval:<n>`) when the
+  host is an interactive TUI; the worker waits visibly (`waiting for user`)
+  and the person's answer is routed back to it, whether the parent turn is
+  idle or itself awaiting an approval. Hosts that cannot prompt deny with the
+  reason.
+- **Full Access**: ordinary calls run; destructive detached work still fails
+  closed, because children are background workers.
+
+Role posture and the execution envelope are checked before and after this
+gate and never widen. Every decision a person did not make at a prompt is
+written to the audit log and to the child's transcript as a one-line note
+(`Auto-Review allowed 'bash' (low risk, model guardian): …`), visible when
+the worker is focused.
 
 ## Small-Screen Status Behavior
 

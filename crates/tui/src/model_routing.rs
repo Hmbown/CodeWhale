@@ -140,10 +140,10 @@ pub(crate) fn provider_router_candidates(
         let normalized = crate::config::normalize_model_name_for_provider(provider, current_model)
             .unwrap_or_else(|| current_model.to_string());
         return RouterCandidates {
-            // GLM-5.2 (the default) routes faster/explore children to GLM-5-Turbo,
-            // the same-family fast sibling; GLM-5.3 inherits that pairing without
-            // taking it away from 5.2. GLM-5.1 and GLM-5-Turbo itself have no
-            // cheaper tier and keep children on the parent model.
+            // GLM-5.3 (the default) and GLM-5.2 route faster/explore children
+            // to GLM-5-Turbo, the same-family fast sibling. GLM-5.1 and
+            // GLM-5-Turbo itself have no cheaper tier and keep children on the
+            // parent model.
             cheap: if normalized == crate::config::ZAI_GLM_5_2_MODEL
                 || normalized == crate::config::ZAI_GLM_5_3_MODEL
             {
@@ -1344,7 +1344,7 @@ mod tests {
         assert!(!balanced.contains("Cost-saving mode is ON"));
         assert!(
             cost_saving.contains(
-                "For the active provider `zai`, `GLM-5-Turbo` is the fast tier and `GLM-5.2` is the strong tier"
+                "For the active provider `zai`, `GLM-5-Turbo` is the fast tier and `GLM-5.3` is the strong tier"
             ),
             "cost-saving classifier policy must name the provider-safe pair: {cost_saving}"
         );
@@ -1570,9 +1570,8 @@ mod tests {
             "low must be normalized up to high for the Z.ai route, not passed through"
         );
 
-        // GLM-5.3 is a first-class peer: same provider ownership, same effort
-        // normalization, and it must resolve to its own id (not fold into the
-        // GLM-5.2 default).
+        // GLM-5.3 is the default and a first-class route: same provider
+        // ownership, same effort normalization, and it resolves to its own id.
         let route_53 = resolve_explicit_route_with_inventory(&config, "GLM-5.3")
             .expect("explicit GLM-5.3 route should resolve to its provider");
         assert_eq!(
@@ -1583,7 +1582,7 @@ mod tests {
         assert_eq!(
             route_53.model,
             crate::config::ZAI_GLM_5_3_MODEL,
-            "GLM-5.3 must keep its own id, not fall back to the GLM-5.2 default"
+            "GLM-5.3 must resolve to its own id"
         );
         assert_eq!(route_53.reasoning_effort, Some(ReasoningEffort::High));
     }
@@ -1615,7 +1614,7 @@ mod tests {
             receipt.reason,
             AutoRouteReason::LocalHeuristic(AutoRouteHeuristicReason::ShortRequest)
         );
-        assert_eq!(receipt.pair.strong, crate::config::ZAI_GLM_5_2_MODEL);
+        assert_eq!(receipt.pair.strong, crate::config::DEFAULT_ZAI_MODEL);
         assert_eq!(
             receipt.pair.fast.as_deref(),
             Some(crate::config::ZAI_GLM_5_TURBO_MODEL)
@@ -1744,7 +1743,7 @@ mod tests {
         .await
         .expect("strong-tier route");
         assert_eq!(strong.provider, ApiProvider::Zai);
-        assert_eq!(strong.model, crate::config::ZAI_GLM_5_2_MODEL);
+        assert_eq!(strong.model, crate::config::DEFAULT_ZAI_MODEL);
         let strong_receipt = strong.receipt.expect("strong receipt");
         assert_eq!(strong_receipt.tier, AutoRouteTier::Strong);
         assert_eq!(strong_receipt.scope, AutoRouteScope::ResolvedProvider);
@@ -1935,7 +1934,7 @@ mod tests {
         .expect("cost-saving Auto route should resolve");
 
         assert_eq!(balanced_route.provider, ApiProvider::Zai);
-        assert_eq!(balanced_route.model, crate::config::ZAI_GLM_5_2_MODEL);
+        assert_eq!(balanced_route.model, crate::config::DEFAULT_ZAI_MODEL);
         assert_eq!(cost_saving_route.provider, ApiProvider::Zai);
         assert_eq!(
             cost_saving_route.model,

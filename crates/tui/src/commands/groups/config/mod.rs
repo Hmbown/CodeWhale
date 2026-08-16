@@ -180,3 +180,57 @@ pub(in crate::commands) fn dispatch(
     };
     Some(result)
 }
+
+/// `/workflow settings` and `/config workflow`: the effective `[workflow]`
+/// and `[goal]` tables with what each value does, read from the refreshed
+/// session table after a config.toml reload (no model turn). The workflow
+/// tool reads the same table, so the two surfaces cannot disagree. This
+/// surface explains, it does not edit.
+pub(in crate::commands) fn workflow_settings(app: &App) -> CommandResult {
+    let refreshed = crate::tools::workflow::session_workflow_config(&app.workspace);
+    let cfg = refreshed.as_ref().unwrap_or(&app.workflow_config);
+    let on = |value: bool| if value { "on" } else { "off" };
+    let lines = [
+        "[workflow] — config.toml".to_string(),
+        format!(
+            "automatic = {}  · the agent may start a workflow itself for broad or staged work; off means only /workflow starts one",
+            on(cfg.automatic)
+        ),
+        format!(
+            "auto_start_read_only = {}  · read-only plans start without an approval card",
+            on(cfg.auto_start_read_only)
+        ),
+        format!(
+            "require_approval_for_writes = {}  · plans that write, use shell/network, or elevate show an approval card first",
+            on(cfg.require_approval_for_writes)
+        ),
+        format!(
+            "auto_start_child_limit = {}  · larger automatic plans ask first or use /workflow",
+            cfg.auto_start_child_limit
+        ),
+        format!(
+            "max_children = {} · max_concurrent = {} · max_depth = {}  · hard ceilings for one run",
+            cfg.max_children, cfg.max_concurrent, cfg.max_depth
+        ),
+        format!(
+            "default_token_budget = {}  · shared admission hint for a run and its children",
+            cfg.default_token_budget
+        ),
+        format!(
+            "max_parallel_writes_without_worktree = {}  · 0 forces worktree isolation for parallel writes",
+            cfg.max_parallel_writes_without_worktree
+        ),
+        format!(
+            "persist_completed_activity = {} · persist_completed_across_restarts = {}  · keep finished runs visible / across restarts (journal: .codewhale/workflow-runs.jsonl)",
+            on(cfg.persist_completed_activity),
+            on(cfg.persist_completed_across_restarts)
+        ),
+        String::new(),
+        "[goal] — config.toml".to_string(),
+        format!(
+            "max_continuations = {}  · automatic continuation passes before a goal pauses; 0 = unlimited (completion, blocked, or you stop it)",
+            app.goal_max_continuations
+        ),
+    ];
+    CommandResult::message(lines.join("\n"))
+}

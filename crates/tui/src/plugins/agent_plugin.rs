@@ -45,6 +45,10 @@ use crate::mcp::{McpServerConfig, McpServerOAuthConfig};
 /// and stays readable.
 pub const PLUGIN_JSON_NAME: &str = "plugin.json";
 pub const PLUGIN_TOML_NAME: &str = "plugin.toml";
+/// Kimi Code's native plugin manifest. Codewhale consumes the compatible
+/// Skills and MCP subset directly so official Kimi bundles do not need to be
+/// rewritten or copied by hand before installation.
+pub const KIMI_PLUGIN_JSON_NAME: &str = "kimi.plugin.json";
 /// Sibling file carrying MCP server definitions for a `plugin.json` bundle.
 pub const MCP_JSON_NAME: &str = "mcp.json";
 
@@ -131,11 +135,313 @@ pub fn resolve_manifest_path(root: &Path) -> Option<PathBuf> {
     if json.is_file() {
         return Some(json);
     }
+    let kimi_json = root.join(KIMI_PLUGIN_JSON_NAME);
+    if kimi_json.is_file() {
+        return Some(kimi_json);
+    }
     let toml = root.join(PLUGIN_TOML_NAME);
     if toml.is_file() {
         return Some(toml);
     }
     None
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Kimi Code compatibility
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KimiPluginManifest {
+    #[serde(rename = "$schema", default)]
+    schema: Option<String>,
+    name: String,
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    keywords: Vec<String>,
+    #[serde(default)]
+    author: Option<KimiAuthor>,
+    #[serde(default)]
+    homepage: Option<String>,
+    #[serde(default)]
+    repository: Option<String>,
+    #[serde(default)]
+    license: Option<String>,
+    #[serde(default)]
+    skills: Option<KimiPathSpec>,
+    #[serde(default)]
+    commands: Option<KimiPathSpec>,
+    #[serde(default)]
+    agents: Option<KimiPathSpec>,
+    #[serde(rename = "mcpServers", default)]
+    mcp_servers: BTreeMap<String, KimiMcpServer>,
+    #[serde(rename = "interface", default)]
+    interface_metadata: Option<KimiInterface>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum KimiAuthor {
+    Text(String),
+    Detailed(StandardAuthor),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum KimiPathSpec {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl KimiPathSpec {
+    fn into_plugin_path_spec(self) -> Result<PluginPathSpec, String> {
+        match self {
+            Self::One(path) => Ok(PluginPathSpec {
+                path: Some(path),
+                paths: Vec::new(),
+            }),
+            Self::Many(paths) if paths.is_empty() => {
+                Err("Kimi plugin component path list must not be empty".to_string())
+            }
+            Self::Many(paths) => Ok(PluginPathSpec { path: None, paths }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KimiInterface {
+    #[serde(rename = "displayName", default)]
+    display_name: Option<String>,
+    #[serde(rename = "shortDescription", default)]
+    _short_description: Option<String>,
+    #[serde(rename = "longDescription", default)]
+    _long_description: Option<String>,
+    #[serde(rename = "developerName", default)]
+    _developer_name: Option<String>,
+    #[serde(rename = "websiteURL", default)]
+    _website_url: Option<String>,
+    #[serde(rename = "iconUrl", default)]
+    _icon_url: Option<String>,
+    #[serde(rename = "category", default)]
+    _category: Option<String>,
+    #[serde(rename = "hostKind", default)]
+    host_kind: Option<String>,
+    #[serde(default)]
+    platforms: Vec<String>,
+    #[serde(rename = "mcpOverrides", default)]
+    mcp_overrides: BTreeMap<String, KimiMcpInterfaceOverride>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KimiMcpInterfaceOverride {
+    #[serde(rename = "displayName", default)]
+    _display_name: Option<String>,
+    #[serde(rename = "iconUrl", default)]
+    _icon_url: Option<String>,
+}
+
+/// Kimi's MCP shape is the standard MCP server entry plus a top-level
+/// `enabledTools` allow-list. Keeping this as a separate closed type prevents
+/// Kimi-only fields from weakening the Agent Plugins `mcp.json` parser.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KimiMcpServer {
+    #[serde(rename = "type", default)]
+    transport: Option<String>,
+    #[serde(default)]
+    command: Option<String>,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    env: BTreeMap<String, String>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    headers: BTreeMap<String, String>,
+    #[serde(default)]
+    extensions: BTreeMap<String, serde_json::Value>,
+    #[serde(rename = "enabledTools", default)]
+    enabled_tools: Vec<String>,
+}
+
+impl KimiMcpServer {
+    fn into_config(self, id: &str) -> Result<McpServerConfig, String> {
+        let enabled_tools = self.enabled_tools;
+        let standard = StandardMcpServer {
+            transport: self.transport,
+            command: self.command,
+            args: self.args,
+            env: self.env,
+            cwd: self.cwd,
+            url: self.url,
+            headers: self.headers,
+            extensions: self.extensions,
+        };
+        let mut config = standard_server_to_config(id, standard)?;
+        if !enabled_tools.is_empty() {
+            if !config.enabled_tools.is_empty() && config.enabled_tools != enabled_tools {
+                return Err(format!(
+                    "kimi.plugin.json MCP server `{id}` declares conflicting enabledTools filters"
+                ));
+            }
+            config.enabled_tools = enabled_tools;
+        }
+        Ok(config)
+    }
+}
+
+/// Parse the Skills/MCP-compatible subset of a Kimi Code plugin manifest.
+///
+/// The input shape is deliberately closed. Kimi capabilities Codewhale does
+/// not yet implement (for example lifecycle hooks or prompt injection) fail
+/// validation instead of being silently dropped and then presented as fully
+/// working. In addition to the Skills-only official bundles, this accepts the
+/// known Kimi-managed CU shape: display/platform interface metadata and MCP
+/// `enabledTools`. External applications, daemons, binaries, and permissions
+/// are prerequisites outside this parser and are never implied to exist.
+pub fn parse_kimi_plugin_json(text: &str, root: &Path) -> Result<PluginManifest, String> {
+    let kimi: KimiPluginManifest = serde_json::from_str(text)
+        .map_err(|error| format!("failed to parse kimi.plugin.json: {error}"))?;
+    if let Some(schema) = kimi.schema.as_deref()
+        && schema.trim().is_empty()
+    {
+        return Err("kimi.plugin.json `$schema` must be a non-empty string".to_string());
+    }
+    if !is_kimi_plugin_name(&kimi.name) {
+        return Err(format!(
+            "kimi.plugin.json name `{}` is invalid (1-{MAX_PLUGIN_NAME_CHARS} lowercase ASCII letters, digits, hyphens, or underscores; must start with a letter or digit)",
+            kimi.name
+        ));
+    }
+
+    let skills = match kimi.skills {
+        Some(paths) => Some(paths.into_plugin_path_spec()?),
+        None if root.join("SKILL.md").is_file() => Some(PluginPathSpec {
+            path: Some(".".to_string()),
+            paths: Vec::new(),
+        }),
+        None => None,
+    };
+    let commands = kimi
+        .commands
+        .map(KimiPathSpec::into_plugin_path_spec)
+        .transpose()?;
+    let agents = kimi
+        .agents
+        .map(KimiPathSpec::into_plugin_path_spec)
+        .transpose()?;
+
+    let mut mcp_servers = HashMap::with_capacity(kimi.mcp_servers.len());
+    for (id, server) in kimi.mcp_servers {
+        mcp_servers.insert(id.clone(), server.into_config(&id)?);
+    }
+    let mut network_hosts = mcp_servers
+        .values()
+        .filter_map(|server| server.url.as_deref())
+        .filter_map(|url| reqwest::Url::parse(url).ok())
+        .filter_map(|url| url.host_str().map(str::to_ascii_lowercase))
+        .collect::<Vec<_>>();
+    network_hosts.sort();
+    network_hosts.dedup();
+
+    let author = match kimi.author {
+        Some(KimiAuthor::Text(author)) => Some(author),
+        Some(KimiAuthor::Detailed(author)) => Some(compose_author(author)?),
+        None => None,
+    };
+    let (display_name, when) = match kimi.interface_metadata {
+        Some(interface) => {
+            if let Some(host_kind) = interface.host_kind.as_deref()
+                && !host_kind.eq_ignore_ascii_case("local")
+            {
+                return Err(format!(
+                    "kimi.plugin.json interface hostKind `{host_kind}` is unsupported; only `local` is understood"
+                ));
+            }
+            if interface
+                .mcp_overrides
+                .keys()
+                .any(|key| key.trim().is_empty())
+            {
+                return Err(
+                    "kimi.plugin.json interface mcpOverrides keys must not be empty".to_string(),
+                );
+            }
+            let mut platforms = Vec::with_capacity(interface.platforms.len());
+            let mut seen = BTreeSet::new();
+            const SUPPORTED_PLATFORMS: &[&str] = &[
+                "windows", "linux", "macos", "freebsd", "openbsd", "netbsd", "android", "ios",
+            ];
+            for platform in interface.platforms {
+                let platform = platform.trim().to_ascii_lowercase();
+                if !SUPPORTED_PLATFORMS.contains(&platform.as_str()) {
+                    return Err(format!(
+                        "kimi.plugin.json interface has unsupported platform `{platform}`"
+                    ));
+                }
+                if !seen.insert(platform.clone()) {
+                    return Err(format!(
+                        "kimi.plugin.json interface repeats platform `{platform}`"
+                    ));
+                }
+                platforms.push(platform);
+            }
+            let when = (!platforms.is_empty()).then_some(PluginWhen {
+                os: Some(platforms),
+                binaries: None,
+            });
+            (interface.display_name, when)
+        }
+        None => (None, None),
+    };
+
+    Ok(PluginManifest {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        plugin: PluginMeta {
+            name: kimi.name,
+            description: kimi.description,
+            version: kimi.version.unwrap_or_else(|| "0.0.0".to_string()),
+            author,
+            homepage: kimi.homepage,
+            repository: kimi.repository,
+            license: kimi.license,
+            keywords: kimi.keywords,
+            display_name,
+        },
+        skills,
+        commands,
+        agents,
+        hooks: None,
+        lsp: None,
+        native: None,
+        mcp_servers: (!mcp_servers.is_empty()).then_some(mcp_servers),
+        capabilities: PluginCapabilities {
+            network_hosts,
+            ..PluginCapabilities::default()
+        },
+        when,
+    })
+}
+
+#[must_use]
+pub fn is_kimi_plugin_name(name: &str) -> bool {
+    let count = name.chars().count();
+    count > 0
+        && count <= MAX_PLUGIN_NAME_CHARS
+        && name
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '-' | '_'))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

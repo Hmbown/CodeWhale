@@ -59,7 +59,7 @@ oauth2 = "5"
 # ColorCompatBackend answers `get_cursor_position()` from tracked state
 # (#2640's recommended workaround), so the pin is no longer needed and lru
 # can resolve to >= 0.18.2 (RUSTSEC-2026-0253).
-ratatui = { version = "=0.30.0", features = ["unstable-rendered-line-info"] }
+ratatui = { version = "=0.30.2", features = ["unstable-rendered-line-info"] }
 ratatui-core = "0.1"
 regex = "1.11"
 reqwest = { workspace = true, features = ["blocking", "stream", "form", "http2"] }
@@ -111,6 +111,7 @@ codewhale-build-support = { path = "../build-support", version = "0.9.8" }
 
 [dev-dependencies]
 cucumber = "0.23.0"
+jsonschema.workspace = true
 wiremock = "0.6"
 tiny_http = "0.12"
 pretty_assertions = "1.4"

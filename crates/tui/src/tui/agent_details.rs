@@ -894,18 +894,14 @@ mod tests {
             events.as_slice(),
             [ViewEvent::OpenAgentTranscript { agent_id: id }] if id == agent_id
         ));
-        crate::tui::agent_transcript::open_agent_transcript(&mut app, agent_id);
+        // The transcript destination is the in-place focus; the details view
+        // survives underneath and its chord still points at the transcript.
+        crate::tui::agent_focus::focus_agent(&mut app, agent_id);
         assert!(
-            matches!(
-                app.view_stack
-                    .handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
-                    .as_slice(),
-                [ViewEvent::AgentTranscriptClosed { agent_id: id }] if id == agent_id
-            ),
-            "transcript Esc closes only the top pager, with its own receipt"
+            app.agent_focus
+                .as_ref()
+                .is_some_and(|focus| focus.is(agent_id))
         );
-        // The details view underneath survives and its chord still points at
-        // the transcript.
         assert!(matches!(
             app.view_stack
                 .handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::ALT))

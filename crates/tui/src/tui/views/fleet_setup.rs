@@ -205,6 +205,20 @@ pub struct FleetSetupSnapshot {
     /// config / project), so the wizard can say when a chosen role would
     /// override an existing roster member.
     roster_members: Vec<(String, String)>,
+    /// Saved (file-backed) roster members keyed by lowercased id: where the
+    /// file lives and the route it pins, so reopening a saved profile from
+    /// `/fleet` starts from what is on disk instead of the wizard defaults.
+    roster_details: Vec<RosterMemberDetail>,
+    /// Whether project-scope profiles are enabled for this launch
+    /// (`--no-project-config` disables them). When false, "This project" is
+    /// offered disabled with that reason instead of writing a file nothing
+    /// will load.
+    project_profiles_enabled: bool,
+    /// Resolved personal profile directory (`$CODEWHALE_HOME/agents`), or the
+    /// reason it could not be resolved. Captured once at snapshot time so the
+    /// wizard never re-reads the environment while painting and tests can
+    /// point it at a temp dir.
+    personal_profile_dir: Result<PathBuf, String>,
     /// `(exact provider id, model id, readiness label, selectable)` routes for a worker,
     /// drawn from ALL configured providers — not only the active one (#4093).
     /// Shown after `inherit` in the Model step so a Fleet worker can be pinned
@@ -216,6 +230,17 @@ pub struct FleetSetupSnapshot {
         String,
         crate::provider_readiness::ResolvedProviderReadiness,
     )>,
+}
+
+/// A file-backed roster member as it exists on disk (project or personal).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RosterMemberDetail {
+    id: String,
+    scope: FleetProfileScope,
+    source: PathBuf,
+    provider: Option<String>,
+    model: Option<String>,
+    reasoning_effort: Option<String>,
 }
 
 impl FleetSetupSnapshot {
@@ -236,12 +261,32 @@ impl FleetSetupSnapshot {
             .map(|fleet| fleet.exec.max_spawn_depth)
             .unwrap_or_else(|| codewhale_config::FleetExecConfig::default().max_spawn_depth)
             .min(codewhale_config::MAX_SPAWN_DEPTH_CEILING);
-        let roster_members =
-            crate::fleet::roster::FleetRoster::load(&config.fleet_config(), &app.workspace)
-                .members()
-                .iter()
-                .map(|member| (member.id.to_lowercase(), member.origin.to_string()))
-                .collect();
+        let roster =
+            crate::fleet::roster::FleetRoster::load(&config.fleet_config(), &app.workspace);
+        let roster_members = roster
+            .members()
+            .iter()
+            .map(|member| (member.id.to_lowercase(), member.origin.to_string()))
+            .collect();
+        let roster_details = roster
+            .members()
+            .iter()
+            .filter_map(|member| {
+                let scope = match member.origin {
+                    crate::fleet::roster::ProfileOrigin::Workspace => FleetProfileScope::Project,
+                    crate::fleet::roster::ProfileOrigin::Personal => FleetProfileScope::Personal,
+                    _ => return None,
+                };
+                Some(RosterMemberDetail {
+                    id: member.id.to_lowercase(),
+                    scope,
+                    source: member.source.clone(),
+                    provider: member.profile.provider.clone(),
+                    model: member.profile.model.clone(),
+                    reasoning_effort: member.profile.reasoning_effort.clone(),
+                })
+            })
+            .collect();
         let active_route_readiness = crate::provider_readiness::resolve_for_model(
             config,
             app.api_provider,
@@ -266,6 +311,10 @@ impl FleetSetupSnapshot {
             heartbeat_timeout_secs: config
                 .subagent_heartbeat_timeout_secs_for_provider(app.api_provider),
             roster_members,
+            roster_details,
+            project_profiles_enabled: crate::fleet::roster::project_agent_profiles_enabled(),
+            personal_profile_dir: crate::fleet::profile::personal_agent_profile_dir()
+                .map_err(|err| format!("{err:#}")),
             available_models: cross_provider_model_routes(
                 config,
                 app.api_provider,
@@ -412,8 +461,50 @@ enum Step {
     Composition,
     /// Pick the model-routing class.
     Model,
+    /// Choose where the profile is saved (this project or personal).
+    Destination,
     /// Review the full posture and save.
     Review,
+}
+
+/// The two save destinations, in the order the Destination step lists them.
+const DESTINATION_ORDER: [FleetProfileScope; 2] =
+    [FleetProfileScope::Project, FleetProfileScope::Personal];
+
+/// Resolved facts about one save destination, computed off the paint path
+/// (on entering the Destination/Review steps and when the role changes).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DestinationStatus {
+    scope: FleetProfileScope,
+    /// `None` when the destination can be written; otherwise the localized
+    /// reason it is offered disabled.
+    unavailable_reason: Option<String>,
+    /// Exact file that saving would write.
+    target: PathBuf,
+    /// Whether `target` already exists (saving would replace it).
+    target_exists: bool,
+}
+
+/// Which control on the Review step owns keyboard focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReviewFocus {
+    Save,
+    ChangeDestination,
+    Back,
+}
+
+impl ReviewFocus {
+    const ORDER: [Self; 3] = [Self::Save, Self::ChangeDestination, Self::Back];
+
+    fn next(self) -> Self {
+        let idx = Self::ORDER.iter().position(|f| *f == self).unwrap_or(0);
+        Self::ORDER[(idx + 1) % Self::ORDER.len()]
+    }
+
+    fn prev(self) -> Self {
+        let idx = Self::ORDER.iter().position(|f| *f == self).unwrap_or(0);
+        Self::ORDER[(idx + Self::ORDER.len() - 1) % Self::ORDER.len()]
+    }
 }
 
 /// The workflow-owned request and its validated, deliberately unratified
@@ -550,13 +641,23 @@ pub struct FleetSetupView {
     model_idx: usize,
     thinking_idx: usize,
     profile_scope: FleetProfileScope,
-    /// Cached `profile_file_status` for the Review step.
-    ///
-    /// `render_review` used to recompute this on every paint — `exists()` +
-    /// `is_dir()` + a full `read_dir` extension count, inside the draw closure
-    /// (#3908). Recomputed on entry to Review and when the scope toggles,
-    /// which are the only inputs it depends on.
-    profile_status: Option<(String, String)>,
+    /// Whether the user has explicitly chosen (or a saved profile supplied) the
+    /// save destination. Until then the header says the choice is still ahead
+    /// instead of silently presenting a default as a decision.
+    scope_decided: bool,
+    /// Highlighted row on the Destination step (index into DESTINATION_ORDER).
+    destination_idx: usize,
+    /// Resolved destination facts for both scopes. Recomputed on entry to the
+    /// Destination/Review steps and when the role (file name) changes; the
+    /// draw path never touches the filesystem (#3908).
+    destinations: Option<[DestinationStatus; 2]>,
+    /// Focused control on the Review step (Tab/Shift-Tab/←/→ move it).
+    review_focus: ReviewFocus,
+    /// Replacing an existing file needs a second Enter on the save control.
+    replace_armed: bool,
+    /// One-line inline notice (e.g. why a model row cannot be selected).
+    /// Cleared on the next navigation key.
+    notice: Option<String>,
     review_scroll: usize,
     /// A model-drafted profile awaiting save (already sanitized and
     /// bounded by the untrusted gate). Cleared when the selection changes so
@@ -609,10 +710,12 @@ impl FleetSetupView {
         let old_model_idx = self.model_idx;
         let old_thinking_idx = self.thinking_idx;
         let old_profile_scope = self.profile_scope;
+        let old_scope_decided = self.scope_decided;
+        let old_destination_idx = self.destination_idx;
+        let old_review_focus = self.review_focus;
         let old_model_query = self.model_query.clone();
         let old_model_filter_active = self.model_filter_active;
         let old_review_scroll = self.review_scroll;
-        let old_profile_status = self.profile_status.clone();
         let old_model_draft = self.model_draft.clone();
         let old_model_draft_preview = self.model_draft_preview.clone();
 
@@ -623,14 +726,19 @@ impl FleetSetupView {
         self.model_idx = old_model_idx.min(self.filtered_model_indices().len().saturating_sub(1));
         self.thinking_idx = old_thinking_idx;
         self.profile_scope = old_profile_scope;
+        self.scope_decided = old_scope_decided;
+        self.destination_idx = old_destination_idx;
+        self.review_focus = old_review_focus;
         self.model_query = old_model_query;
         self.model_filter_active = old_model_filter_active;
         self.review_scroll = old_review_scroll;
-        self.profile_status = old_profile_status;
         self.model_draft = old_model_draft;
         self.model_draft_preview = old_model_draft_preview;
         if self.step == Step::Composition && !self.has_composition_for_selected_role() {
             self.step = Step::Model;
+        }
+        if matches!(self.step, Step::Destination | Step::Review) {
+            self.refresh_destinations();
         }
     }
 
@@ -654,6 +762,43 @@ impl FleetSetupView {
             .position(|choice| choice.label.eq_ignore_ascii_case(role.trim()))
             .unwrap_or(ROLES.len() - 1);
         view.step = Step::Model;
+        // Reopening a SAVED member edits what is on disk: preselect its route,
+        // thinking tier, and — most importantly — the scope it was saved in,
+        // so "edit" can never quietly land in the other destination.
+        let role_id = role.trim().to_ascii_lowercase();
+        let saved = view
+            .snapshot
+            .roster_details
+            .iter()
+            .find(|detail| detail.id == role_id)
+            .cloned();
+        if let Some(saved) = saved {
+            view.profile_scope = saved.scope;
+            view.scope_decided = true;
+            view.destination_idx = DESTINATION_ORDER
+                .iter()
+                .position(|scope| *scope == saved.scope)
+                .unwrap_or(0);
+            if let Some(model) = saved.model.as_deref() {
+                let idx = view.model_routes.iter().position(|(provider, candidate)| {
+                    candidate == model
+                        && saved
+                            .provider
+                            .as_deref()
+                            .is_none_or(|p| p.eq_ignore_ascii_case(provider))
+                });
+                if let Some(idx) = idx {
+                    view.model_idx = idx;
+                }
+            }
+            if let Some(effort) = saved.reasoning_effort.as_deref()
+                && let Some(idx) = THINKING_CHOICES
+                    .iter()
+                    .position(|choice| choice.label.eq_ignore_ascii_case(effort))
+            {
+                view.thinking_idx = idx;
+            }
+        }
         view
     }
 
@@ -704,7 +849,12 @@ impl FleetSetupView {
             // repositories by default. Project scope remains one `s` away and
             // keeps higher roster precedence when explicitly selected.
             profile_scope: FleetProfileScope::Personal,
-            profile_status: None,
+            scope_decided: false,
+            destination_idx: DESTINATION_ORDER.len() - 1,
+            destinations: None,
+            review_focus: ReviewFocus::Save,
+            replace_armed: false,
+            notice: None,
             review_scroll: 0,
             model_draft: None,
             model_draft_preview: None,
@@ -811,9 +961,10 @@ impl FleetSetupView {
             return ViewAction::None;
         }
         self.composition_decision = CompositionDecision::Accepted;
-        self.step = Step::Review;
-        self.review_scroll = 0;
-        self.refresh_profile_status();
+        // Accepting a suggestion still routes through the Destination step:
+        // where the file lives is a human decision, not part of the advisory.
+        self.step = Step::Destination;
+        self.refresh_destinations();
         ViewAction::None
     }
 
@@ -839,22 +990,130 @@ impl FleetSetupView {
     /// member of the same id (e.g. "overrides built-in reviewer"). A saved
     /// profile shadows lower roster layers rather than adding a new member.
     fn roster_override_note(&self) -> Option<String> {
+        self.override_note_for_scope(self.profile_scope)
+    }
+
+    /// Precedence consequence of saving the selected role into `scope`, given
+    /// what the roster already contains for that id. Returns `None` when the
+    /// id is new everywhere.
+    fn override_note_for_scope(&self, scope: FleetProfileScope) -> Option<String> {
         let role = self.selected_role().to_lowercase();
-        self.snapshot
+        let locale = self.snapshot.locale;
+        let (id, origin) = self
+            .snapshot
             .roster_members
             .iter()
-            .find(|(id, _)| *id == role)
-            .map(|(id, origin)| {
-                if self.profile_scope == FleetProfileScope::Personal && origin == "project" {
-                    format!(
-                        "The project '{id}' profile remains higher precedence; this personal profile applies elsewhere."
-                    )
-                } else if self.profile_scope == FleetProfileScope::Personal {
-                    format!("Overrides {origin} '{id}' unless a project profile exists.")
-                } else {
-                    format!("Overrides the {origin} '{id}' roster member.")
-                }
-            })
+            .find(|(id, _)| *id == role)?;
+        let has_project_copy = self
+            .snapshot
+            .roster_details
+            .iter()
+            .any(|d| d.id == role && d.scope == FleetProfileScope::Project);
+        let has_personal_copy = self
+            .snapshot
+            .roster_details
+            .iter()
+            .any(|d| d.id == role && d.scope == FleetProfileScope::Personal);
+        Some(match scope {
+            FleetProfileScope::Personal if has_project_copy => {
+                tr(locale, MessageId::FleetDestOverridesProject).replace("{id}", id)
+            }
+            FleetProfileScope::Project if has_personal_copy => {
+                tr(locale, MessageId::FleetDestOverridesPersonal).replace("{id}", id)
+            }
+            _ => tr(locale, MessageId::FleetDestOverridesBuiltIn)
+                .replace("{origin}", origin)
+                .replace("{id}", id),
+        })
+    }
+
+    /// Localized "This project" / "Personal" label for a scope.
+    fn scope_label(&self, scope: FleetProfileScope) -> String {
+        tr(
+            self.snapshot.locale,
+            match scope {
+                FleetProfileScope::Project => MessageId::FleetDestProjectLabel,
+                FleetProfileScope::Personal => MessageId::FleetDestPersonalLabel,
+            },
+        )
+        .into_owned()
+    }
+
+    fn destination_for(&self, scope: FleetProfileScope) -> Option<&DestinationStatus> {
+        self.destinations
+            .as_ref()
+            .and_then(|all| all.iter().find(|d| d.scope == scope))
+    }
+
+    /// The header chip: where the file will be written, or that the choice is
+    /// still ahead. Visible on every step so the destination is never a
+    /// surprise on the last screen.
+    fn saves_to_line(&self) -> String {
+        let locale = self.snapshot.locale;
+        if !self.scope_decided {
+            return tr(locale, MessageId::FleetSavesToUndecided).into_owned();
+        }
+        let path = self
+            .destination_for(self.profile_scope)
+            .map(|d| d.target.display().to_string())
+            .unwrap_or_else(|| self.projected_target(self.profile_scope));
+        tr(locale, MessageId::FleetSavesToChip)
+            .replace("{scope}", &self.scope_label(self.profile_scope))
+            .replace("{path}", &path)
+    }
+
+    /// Best-effort target path without touching the filesystem (used before
+    /// `refresh_destinations` has run for the current role).
+    fn projected_target(&self, scope: FleetProfileScope) -> String {
+        let file = format!("{}.toml", profile_file_stem(&self.selected_role()));
+        match scope {
+            FleetProfileScope::Project => self
+                .snapshot
+                .workspace
+                .join(crate::fleet::profile::WORKSPACE_AGENT_PROFILE_DIR)
+                .join(file)
+                .display()
+                .to_string(),
+            FleetProfileScope::Personal => match &self.snapshot.personal_profile_dir {
+                Ok(dir) => dir.join(file).display().to_string(),
+                Err(_) => format!("{}/{file}", scope.display_dir()),
+            },
+        }
+    }
+
+    /// The label of the primary Review action — it names its effect.
+    fn save_action_label(&self) -> String {
+        let locale = self.snapshot.locale;
+        let exists = self
+            .destination_for(self.profile_scope)
+            .is_some_and(|d| d.target_exists);
+        if exists && self.replace_armed {
+            let file = self
+                .destination_for(self.profile_scope)
+                .and_then(|d| {
+                    d.target
+                        .file_name()
+                        .map(|f| f.to_string_lossy().into_owned())
+                })
+                .unwrap_or_default();
+            return tr(locale, MessageId::FleetActionConfirmReplace).replace("{file}", &file);
+        }
+        tr(
+            locale,
+            match (self.profile_scope, exists) {
+                (FleetProfileScope::Project, false) => MessageId::FleetActionSaveProject,
+                (FleetProfileScope::Personal, false) => MessageId::FleetActionSavePersonal,
+                (FleetProfileScope::Project, true) => MessageId::FleetActionReplaceProject,
+                (FleetProfileScope::Personal, true) => MessageId::FleetActionReplacePersonal,
+            },
+        )
+        .into_owned()
+    }
+
+    /// Whether the currently chosen destination can be written.
+    fn selected_destination_available(&self) -> bool {
+        self.destination_for(self.profile_scope)
+            .is_none_or(|d| d.unavailable_reason.is_none())
     }
 
     /// The concrete model chosen for this worker, written to the profile
@@ -929,6 +1188,7 @@ impl FleetSetupView {
             Step::Role => ROLES.len(),
             Step::Composition => 0,
             Step::Model => self.filtered_model_indices().len(),
+            Step::Destination => DESTINATION_ORDER.len(),
             Step::Review => 0,
         }
     }
@@ -949,6 +1209,10 @@ impl FleetSetupView {
                 if self.composition_decision != CompositionDecision::Pending {
                     self.composition_decision = CompositionDecision::Edited;
                 }
+            }
+            Step::Destination => {
+                self.destination_idx =
+                    crate::tui::list_nav::wrap_index(self.destination_idx, self.step_len(), -1);
             }
             Step::Review => self.review_scroll = self.review_scroll.saturating_sub(1),
         }
@@ -976,6 +1240,10 @@ impl FleetSetupView {
                     self.composition_decision = CompositionDecision::Edited;
                 }
             }
+            Step::Destination => {
+                self.destination_idx =
+                    crate::tui::list_nav::wrap_index(self.destination_idx, self.step_len(), 1);
+            }
             Step::Review => self.review_scroll = self.review_scroll.saturating_add(1),
         }
     }
@@ -983,11 +1251,34 @@ impl FleetSetupView {
     /// Re-stat the profile directory. Called on the two transitions that can
     /// change the answer — entering Review, and toggling project/user scope —
     /// so the Review step never touches the filesystem while painting.
-    fn refresh_profile_status(&mut self) {
-        self.profile_status = Some(profile_file_status(
-            self.profile_scope,
-            &self.snapshot.workspace,
-        ));
+    fn refresh_destinations(&mut self) {
+        let file = format!("{}.toml", profile_file_stem(&self.selected_role()));
+        let statuses = DESTINATION_ORDER.map(|scope| {
+            destination_status(
+                scope,
+                &self.snapshot.workspace,
+                &self.snapshot.personal_profile_dir,
+                &file,
+                self.snapshot.project_profiles_enabled,
+                self.snapshot.locale,
+            )
+        });
+        self.destinations = Some(statuses);
+        self.replace_armed = false;
+    }
+
+    /// Choose a destination explicitly (Destination step or roster preload).
+    fn choose_destination(&mut self, scope: FleetProfileScope) {
+        if self.profile_scope != scope {
+            self.discard_model_draft();
+        }
+        self.profile_scope = scope;
+        self.scope_decided = true;
+        self.destination_idx = DESTINATION_ORDER
+            .iter()
+            .position(|s| *s == scope)
+            .unwrap_or(0);
+        self.replace_armed = false;
     }
 
     /// starter profile TOML the next save keypress would persist.
@@ -1002,11 +1293,11 @@ impl FleetSetupView {
                 let idx = self.real_model_idx();
                 match self.model_row_states.get(idx) {
                     Some(FleetModelRowState::Ready) => {
-                        // Shortest valid path: role → model → review/save.
+                        // Path: role → model → destination → review/save.
                         // Thinking defaults to inherit; adjust on review with `t`.
-                        self.step = Step::Review;
-                        self.review_scroll = 0;
-                        self.refresh_profile_status();
+                        self.notice = None;
+                        self.step = Step::Destination;
+                        self.refresh_destinations();
                     }
                     Some(FleetModelRowState::NeedsActivation) => {
                         // Dormant external-consent route: explicit human
@@ -1028,15 +1319,73 @@ impl FleetSetupView {
                             );
                         }
                     }
-                    Some(FleetModelRowState::Blocked { .. }) => {
-                        // The summary line already shows the reason; stay on
-                        // the Model step so the user can pick a different route.
+                    Some(FleetModelRowState::Blocked { reason }) => {
+                        // Stay on the Model step, but say why Enter did nothing
+                        // and where to fix it instead of failing silently.
+                        self.notice = Some(
+                            tr(self.snapshot.locale, MessageId::FleetModelRowBlockedNotice)
+                                .replace("{reason}", reason),
+                        );
                     }
                     None => {}
                 }
                 ViewAction::None
             }
-            Step::Review => self.commit_starter_profile_action(),
+            Step::Destination => {
+                let scope =
+                    DESTINATION_ORDER[self.destination_idx.min(DESTINATION_ORDER.len() - 1)];
+                let available = self
+                    .destination_for(scope)
+                    .is_none_or(|d| d.unavailable_reason.is_none());
+                if !available {
+                    // A disabled destination never falls back to the other one.
+                    return ViewAction::None;
+                }
+                self.choose_destination(scope);
+                self.step = Step::Review;
+                self.review_scroll = 0;
+                self.review_focus = ReviewFocus::Save;
+                self.refresh_destinations();
+                ViewAction::None
+            }
+            Step::Review => self.activate_review_focus(),
+        }
+    }
+
+    /// Enter on the Review step acts on the focused control.
+    fn activate_review_focus(&mut self) -> ViewAction {
+        match self.review_focus {
+            ReviewFocus::Save => self.save_action(),
+            ReviewFocus::ChangeDestination => {
+                self.step = Step::Destination;
+                self.refresh_destinations();
+                ViewAction::None
+            }
+            ReviewFocus::Back => self.back(),
+        }
+    }
+
+    /// The single save path for both the deterministic starter profile and a
+    /// model-authored draft. Replacing an existing file requires a second
+    /// press: the first arms the control and renames it; nothing is written
+    /// until the second. An unavailable destination never saves.
+    fn save_action(&mut self) -> ViewAction {
+        if !self.scope_decided || !self.selected_destination_available() {
+            return ViewAction::None;
+        }
+        let exists = self
+            .destination_for(self.profile_scope)
+            .is_some_and(|d| d.target_exists);
+        if exists && !self.replace_armed {
+            self.replace_armed = true;
+            return ViewAction::None;
+        }
+        match self.model_draft.clone() {
+            Some(draft) => ViewAction::EmitAndClose(ViewEvent::FleetProfileDraftCommitRequested {
+                draft,
+                scope: self.profile_scope,
+            }),
+            None => self.commit_starter_profile_action(),
         }
     }
 
@@ -1050,11 +1399,18 @@ impl FleetSetupView {
                 ViewAction::None
             }
             Step::Model => {
+                self.notice = None;
                 self.step = Step::Role;
                 ViewAction::None
             }
-            Step::Review => {
+            Step::Destination => {
                 self.step = Step::Model;
+                ViewAction::None
+            }
+            Step::Review => {
+                self.replace_armed = false;
+                self.step = Step::Destination;
+                self.refresh_destinations();
                 ViewAction::None
             }
         }
@@ -1123,24 +1479,31 @@ impl FleetSetupView {
                 hints.push(ActionHint::new("Enter", "next"));
                 hints.push(ActionHint::new("←", "back"));
             }
+            Step::Destination => {
+                hints.push(ActionHint::new("↑/↓", "choose"));
+                hints.push(ActionHint::new("Enter/Space", "next"));
+                hints.push(ActionHint::new("←", "back"));
+            }
             Step::Review => {
+                hints.push(ActionHint::new("Tab", "focus"));
+                hints.push(ActionHint::new("Enter", "activate"));
                 hints.push(ActionHint::new("↑/↓", "scroll"));
-                hints.push(ActionHint::new("s", "save location"));
                 hints.push(ActionHint::new("t", "thinking"));
                 if self.model_draft.is_some() {
-                    hints.push(ActionHint::new("Enter", "Save profile"));
-                    hints.push(ActionHint::new("g", "Save profile"));
                     hints.push(ActionHint::new("m", "redraft"));
-                } else {
-                    hints.push(ActionHint::new("Enter/g", "save"));
-                    if self.snapshot.provider_ready {
-                        hints.push(ActionHint::new("m", "model draft"));
-                    }
+                } else if self.snapshot.provider_ready {
+                    hints.push(ActionHint::new("m", "model draft"));
                 }
                 hints.push(ActionHint::new("←", "back"));
             }
         }
-        hints.push(ActionHint::new("Esc", "cancel"));
+        // Esc is honest: it steps back everywhere except the first screen,
+        // where it cancels the wizard.
+        if self.step == Step::Role {
+            hints.push(ActionHint::new("Esc", "cancel"));
+        } else {
+            hints.push(ActionHint::new("Esc", "back"));
+        }
         hints
     }
 }
@@ -1175,6 +1538,10 @@ impl ModalView for FleetSetupView {
                             if self.composition_decision != CompositionDecision::Pending {
                                 self.composition_decision = CompositionDecision::Edited;
                             }
+                        }
+                        Step::Destination => {
+                            self.destination_idx = row.min(DESTINATION_ORDER.len() - 1);
+                            return ViewAction::None;
                         }
                         Step::Review => {}
                     }
@@ -1226,9 +1593,33 @@ impl ModalView for FleetSetupView {
             }
             return ViewAction::None;
         }
+        // Any navigation key clears a one-shot notice; the notice is re-set
+        // below when the same blocked action is attempted again.
+        if !matches!(key.code, KeyCode::Null) {
+            self.notice = None;
+        }
         match key.code {
             KeyCode::Esc if self.step != Step::Role => self.back(),
-            KeyCode::Esc | KeyCode::Char('q') => ViewAction::Close,
+            KeyCode::Esc => ViewAction::Close,
+            KeyCode::Char('q') if self.step == Step::Role => ViewAction::Close,
+            // Tab moves focus; it never changes where the file is written.
+            KeyCode::Tab if self.step == Step::Review => {
+                self.review_focus = self.review_focus.next();
+                self.replace_armed = false;
+                ViewAction::None
+            }
+            KeyCode::BackTab if self.step == Step::Review => {
+                self.review_focus = self.review_focus.prev();
+                self.replace_armed = false;
+                ViewAction::None
+            }
+            KeyCode::Right | KeyCode::Char('l') if self.step == Step::Review => {
+                self.review_focus = self.review_focus.next();
+                self.replace_armed = false;
+                ViewAction::None
+            }
+            KeyCode::Char(' ') if self.step == Step::Destination => self.advance(),
+            KeyCode::Char(' ') if self.step == Step::Review => self.activate_review_focus(),
             KeyCode::Char('a') if self.step == Step::Composition => self.accept_composition(),
             KeyCode::Char('e') if self.step == Step::Composition => self.edit_composition(),
             KeyCode::Char('r') if self.step == Step::Composition => self.reject_composition(),
@@ -1252,11 +1643,12 @@ impl ModalView for FleetSetupView {
                 self.move_down();
                 ViewAction::None
             }
+            // Secondary accelerator: jump to the Destination step. The primary
+            // way to change the destination is the focused Review control.
             KeyCode::Char('s') if self.step == Step::Review => {
-                self.profile_scope = self.profile_scope.toggled();
-                self.discard_model_draft();
-                self.review_scroll = 0;
-                self.refresh_profile_status();
+                self.replace_armed = false;
+                self.step = Step::Destination;
+                self.refresh_destinations();
                 ViewAction::None
             }
             KeyCode::Char('t') if self.step == Step::Review => {
@@ -1282,31 +1674,8 @@ impl ModalView for FleetSetupView {
                 })
             }
             KeyCode::Char('g') if self.step == Step::Review => {
-                self.model_draft.clone().map_or_else(
-                    || self.commit_starter_profile_action(),
-                    |draft| {
-                        ViewAction::EmitAndClose(ViewEvent::FleetProfileDraftCommitRequested {
-                            draft,
-                            scope: self.profile_scope,
-                        })
-                    },
-                )
-            }
-            KeyCode::Enter | KeyCode::Right | KeyCode::Char('l')
-                if self.step == Step::Review && self.model_draft.is_some() =>
-            {
-                // A save-ready draft is on screen; Enter should save it,
-                // not silently start the manual profile-prompt flow and drop
-                // the draft.
-                match self.model_draft.clone() {
-                    Some(draft) => {
-                        ViewAction::EmitAndClose(ViewEvent::FleetProfileDraftCommitRequested {
-                            draft,
-                            scope: self.profile_scope,
-                        })
-                    }
-                    None => ViewAction::None,
-                }
+                self.review_focus = ReviewFocus::Save;
+                self.save_action()
             }
             KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => self.advance(),
             KeyCode::Left | KeyCode::Char('h') => self.back(),
@@ -1332,10 +1701,11 @@ impl ModalView for FleetSetupView {
         // into a tall empty card on roomy terminals. Review is proof-dense and
         // scrollable, so it keeps the extra row budgeted for the footer gutter.
         let preferred_height = match self.step {
-            Step::Role => 21,
-            Step::Composition => 25,
-            Step::Model => 22,
-            Step::Review => 31,
+            Step::Role => 22,
+            Step::Composition => 26,
+            Step::Model => 23,
+            Step::Destination => 22,
+            Step::Review => 32,
         };
         let popup_area = centered_modal_area(area, 96, preferred_height, 60, 16);
         render_modal_surface(area, popup_area, buf);
@@ -1344,7 +1714,8 @@ impl ModalView for FleetSetupView {
             Step::Role => 1,
             Step::Composition => 2,
             Step::Model => 2,
-            Step::Review => 3,
+            Step::Destination => 3,
+            Step::Review => 4,
         };
         let block = Block::default()
             .title(Line::from(Span::styled(
@@ -1355,7 +1726,7 @@ impl ModalView for FleetSetupView {
             )))
             .title_bottom(
                 Line::from(Span::styled(
-                    format!(" Step {step_no}/3 "),
+                    format!(" Step {step_no}/4 "),
                     Style::default().fg(palette::TEXT_MUTED),
                 ))
                 .alignment(ratatui::layout::Alignment::Right),
@@ -1371,18 +1742,19 @@ impl ModalView for FleetSetupView {
         let hints = self.footer_hints();
         let content = render_modal_footer_with_gutter(inner, buf, &hints);
 
-        // Header (intro + breadcrumb) above the step body.
+        // Header (title + subtitle + "Saves to" chip) above the step body.
+        // In the Compact tier the subtitle is dropped so the chip survives.
+        let header_rows = if content.height < 12 { 2 } else { 3 };
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(3), Constraint::Min(1)])
+            .constraints([Constraint::Length(header_rows), Constraint::Min(1)])
             .split(content);
         self.render_header(chunks[0], buf);
 
         match self.step {
             Step::Role => {
                 let mut context = vec![
-                    "Fleet runs sub-agents that delegate work. Pick the role this".to_string(),
-                    "team member should play. It becomes the profile role_hint.".to_string(),
+                    "Fleet runs sub-agents that delegate work. Pick the role this team member should play; the saved profile carries it as its role_hint.".to_string(),
                 ];
                 if let Some(note) = self.roster_override_note() {
                     context.push(note);
@@ -1390,12 +1762,31 @@ impl ModalView for FleetSetupView {
                 render_choice_step(chunks[1], buf, &ROLES, self.role_idx, &context);
                 register_choice_hitboxes(chunks[1], ROLES.len(), self.role_idx, &self.row_hitboxes);
             }
+            Step::Destination => {
+                self.render_destination(chunks[1], buf);
+                register_choice_hitboxes(
+                    chunks[1],
+                    DESTINATION_ORDER.len(),
+                    self.destination_idx,
+                    &self.row_hitboxes,
+                );
+            }
             Step::Composition => self.render_composition(chunks[1], buf),
             Step::Model => {
                 let filtered = self.filtered_model_indices();
+                // Compact tier: the row summary and any notice matter more
+                // than the long route description, which would push them
+                // below the fold.
+                let compact = chunks[1].height < 12;
                 let filtered_choices: Vec<Choice> = filtered
                     .iter()
-                    .map(|idx| self.model_choices[*idx].clone())
+                    .map(|idx| {
+                        let mut choice = self.model_choices[*idx].clone();
+                        if compact {
+                            choice.description = Cow::Borrowed("");
+                        }
+                        choice
+                    })
                     .collect();
                 let selected = self.model_idx.min(filtered.len().saturating_sub(1));
                 let filter_line = if self.model_filter_active {
@@ -1413,23 +1804,20 @@ impl ModalView for FleetSetupView {
                         self.model_choices.len()
                     )
                 };
-                render_choice_step(
-                    chunks[1],
-                    buf,
-                    &filtered_choices,
-                    selected,
-                    &[
-                        filter_line,
-                        format!(
-                            "Current route: {} / {}  ·  reasoning {}",
-                            self.snapshot.provider, self.snapshot.model, self.snapshot.reasoning
-                        ),
-                        match self.selected_model() {
-                            Some(model) => format!("This worker will run on {model}."),
-                            None => "This worker inherits your current route.".to_string(),
-                        },
-                    ],
-                );
+                let mut context = Vec::new();
+                if let Some(notice) = &self.notice {
+                    context.push(notice.clone());
+                }
+                context.push(filter_line);
+                context.push(format!(
+                    "Current route: {} / {}  ·  reasoning {}",
+                    self.snapshot.provider, self.snapshot.model, self.snapshot.reasoning
+                ));
+                context.push(match self.selected_model() {
+                    Some(model) => format!("This worker will run on {model}."),
+                    None => "This worker inherits your current route.".to_string(),
+                });
+                render_choice_step(chunks[1], buf, &filtered_choices, selected, &context);
                 register_choice_hitboxes(
                     chunks[1],
                     filtered_choices.len(),
@@ -1444,41 +1832,130 @@ impl ModalView for FleetSetupView {
 
 impl FleetSetupView {
     fn render_header(&self, area: Rect, buf: &mut Buffer) {
-        let (title, subtitle) = match self.step {
+        let (title, subtitle): (Cow<'static, str>, Cow<'static, str>) = match self.step {
             Step::Role => (
-                "Choose a team role",
-                "Each Fleet member plays one role in the delegation.",
+                Cow::Borrowed("Choose a team role"),
+                Cow::Borrowed("Each Fleet member plays one role in the delegation."),
             ),
             Step::Composition => (
-                "Unratified composition suggestion",
-                "Review the configured-pool assignments; nothing is saved or running.",
+                Cow::Borrowed("Unratified composition suggestion"),
+                Cow::Borrowed(
+                    "Review the configured-pool assignments; nothing is saved or running.",
+                ),
             ),
             Step::Model => (
-                "Choose a model",
-                "Pick this worker's model, or inherit your current route.",
+                Cow::Borrowed("Choose a model"),
+                Cow::Borrowed("Pick this worker's model, or inherit your current route."),
+            ),
+            Step::Destination => (
+                Cow::Owned(tr(self.snapshot.locale, MessageId::FleetDestStepTitle).into_owned()),
+                Cow::Owned(tr(self.snapshot.locale, MessageId::FleetDestStepSubtitle).into_owned()),
             ),
             Step::Review if self.model_draft.is_some() => (
-                "Save profile",
-                "Exact TOML shown below. Press Enter or g to save, m to redraft.",
+                Cow::Borrowed("Save profile"),
+                Cow::Borrowed(
+                    "Exact TOML shown below; nothing is written until you activate the save control.",
+                ),
             ),
             Step::Review => (
-                "Review & save",
-                "Confirm provider, model, readiness, profile availability, and overwrite, then save the profile.",
+                Cow::Borrowed("Review & save"),
+                Cow::Borrowed("Nothing is written until you activate the save control."),
             ),
         };
-        let lines = vec![
-            Line::from(Span::styled(
-                title,
-                Style::default().fg(palette::WHALE_INFO).bold(),
-            )),
-            Line::from(Span::styled(
-                subtitle,
+        let chip_style = Style::default().fg(palette::TEXT_MUTED);
+        let mut lines = vec![Line::from(Span::styled(
+            title.into_owned(),
+            Style::default().fg(palette::WHALE_INFO).bold(),
+        ))];
+        if area.height >= 3 {
+            lines.push(Line::from(Span::styled(
+                subtitle.into_owned(),
                 Style::default().fg(palette::TEXT_MUTED),
-            )),
-        ];
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: true })
-            .render(area, buf);
+            )));
+        }
+        lines.push(Line::from(Span::styled(
+            truncate_view_text(&self.saves_to_line(), usize::from(area.width)),
+            chip_style,
+        )));
+        // No wrapping: each header row is one line, so the chip row is
+        // always the last row and never pushed out by a long subtitle.
+        Paragraph::new(lines).render(area, buf);
+    }
+
+    /// The Destination step: a focused two-option list (This project /
+    /// Personal) with the exact resolved file, whether it will be replaced,
+    /// and the precedence consequence, for the highlighted option.
+    fn render_destination(&self, area: Rect, buf: &mut Buffer) {
+        let locale = self.snapshot.locale;
+        // Compact tier: keep the choice, the file, and the consequence; drop
+        // the long explanation rather than clip the file line off-screen.
+        let compact = area.height < 12;
+        let workspace_name = self
+            .snapshot
+            .workspace
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| self.snapshot.workspace.display().to_string());
+        let choices: Vec<Choice> = DESTINATION_ORDER
+            .iter()
+            .map(|scope| {
+                let unavailable = self
+                    .destination_for(*scope)
+                    .and_then(|d| d.unavailable_reason.clone());
+                let (label, summary, description) = match scope {
+                    FleetProfileScope::Project => (
+                        MessageId::FleetDestProjectLabel,
+                        MessageId::FleetDestProjectSummary,
+                        MessageId::FleetDestProjectDescription,
+                    ),
+                    FleetProfileScope::Personal => (
+                        MessageId::FleetDestPersonalLabel,
+                        MessageId::FleetDestPersonalSummary,
+                        MessageId::FleetDestPersonalDescription,
+                    ),
+                };
+                let _ = unavailable;
+                Choice {
+                    label: Cow::Owned(tr(locale, label).into_owned()),
+                    summary: Cow::Owned(tr(locale, summary).into_owned()),
+                    description: if compact {
+                        Cow::Borrowed("")
+                    } else {
+                        Cow::Owned(tr(locale, description).replace("{workspace}", &workspace_name))
+                    },
+                }
+            })
+            .collect();
+        let selected = self.destination_idx.min(DESTINATION_ORDER.len() - 1);
+        let scope = DESTINATION_ORDER[selected];
+        let mut context = Vec::new();
+        match self.destination_for(scope) {
+            Some(status) => {
+                if let Some(reason) = &status.unavailable_reason {
+                    context.push(
+                        tr(locale, MessageId::FleetDestUnavailable).replace("{reason}", reason),
+                    );
+                }
+                context.push(
+                    tr(locale, MessageId::FleetDestPathLine)
+                        .replace("{path}", &status.target.display().to_string()),
+                );
+                if status.target_exists {
+                    context.push(
+                        tr(locale, MessageId::FleetDestWillReplace)
+                            .replace("{path}", &status.target.display().to_string()),
+                    );
+                }
+            }
+            None => context.push(
+                tr(locale, MessageId::FleetDestPathLine)
+                    .replace("{path}", &self.projected_target(scope)),
+            ),
+        }
+        if let Some(note) = self.override_note_for_scope(scope) {
+            context.push(note);
+        }
+        render_choice_step(area, buf, &choices, selected, &context);
     }
 
     fn render_composition(&self, area: Rect, buf: &mut Buffer) {
@@ -1544,23 +2021,30 @@ impl FleetSetupView {
     }
 
     fn render_review(&self, area: Rect, buf: &mut Buffer) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        // Row 1: the focused action controls. Row 2+: the scrollable summary.
+        // Keeping the controls out of the scroll region means the save action
+        // and its label are visible at every scroll offset and every size.
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(2), Constraint::Min(1)])
+            .split(area);
+        self.render_review_actions(rows[0], buf);
+        let body = rows[1];
+
         // A ratify-ready draft is on screen: show the exact TOML preview
-        // inline, scrolled by the same `review_scroll` state, so `g`/Enter in
-        // THIS view's own `handle_key` ratify it directly — no separate pager
-        // in the way to swallow the keypress (#4093).
+        // inline, scrolled by the same `review_scroll` state, so the save
+        // control in THIS view ratifies it directly — no separate pager in the
+        // way to swallow the keypress (#4093).
         if let Some(preview) = self.model_draft_preview.as_deref() {
-            render_scrollable_text(area, buf, preview, self.review_scroll);
+            render_scrollable_text(body, buf, preview, self.review_scroll);
             return;
         }
 
         let role = &ROLES[self.role_idx.min(ROLES.len() - 1)];
-        // Cached on entry to this step and on scope toggle; see `profile_status`.
-        let profile_value = self
-            .profile_status
-            .as_ref()
-            .map(|(value, _)| value.clone())
-            .unwrap_or_default();
-        let file_stem = profile_file_stem(&role.label);
+        let locale = self.snapshot.locale;
         let mut lines: Vec<Line> = Vec::new();
         let section = |lines: &mut Vec<Line>, label: &str, body: String| {
             lines.push(Line::from(Span::styled(
@@ -1574,13 +2058,38 @@ impl FleetSetupView {
             lines.push(Line::from(""));
         };
 
+        // "Saves to" comes first: it is the decision this screen exists to
+        // confirm. Exact file, replace/create, precedence consequence.
+        let mut saves_to = vec![format!(
+            "{} · {}",
+            self.scope_label(self.profile_scope),
+            self.destination_for(self.profile_scope)
+                .map(|d| d.target.display().to_string())
+                .unwrap_or_else(|| self.projected_target(self.profile_scope))
+        )];
+        if let Some(status) = self.destination_for(self.profile_scope) {
+            if let Some(reason) = &status.unavailable_reason {
+                saves_to
+                    .push(tr(locale, MessageId::FleetDestUnavailable).replace("{reason}", reason));
+            } else if status.target_exists {
+                saves_to.push(
+                    tr(locale, MessageId::FleetDestWillReplace)
+                        .replace("{path}", &status.target.display().to_string()),
+                );
+            }
+        }
+        if let Some(note) = self.roster_override_note() {
+            saves_to.push(note);
+        }
+        section(
+            &mut lines,
+            &tr(locale, MessageId::FleetReviewSavesTo),
+            saves_to.join("  ·  "),
+        );
         section(
             &mut lines,
             "Role",
-            match self.roster_override_note() {
-                Some(note) => format!("{} — {} · {note}", role.label, role.summary),
-                None => format!("{} — {}", role.label, role.summary),
-            },
+            format!("{} — {}", role.label, role.summary),
         );
         section(
             &mut lines,
@@ -1643,19 +2152,6 @@ impl FleetSetupView {
         section(&mut lines, "Thinking", self.selected_thinking_label());
         section(
             &mut lines,
-            "Profile availability",
-            match self.profile_scope {
-                FleetProfileScope::Project => format!(
-                    "Project — saved with this repository at {PROFILE_DIR}. Press s for a personal profile reusable across repositories. This choice only controls where the profile is available; active workspace, trusted-path, and permission policy still govern execution."
-                ),
-                FleetProfileScope::Personal => format!(
-                    "Personal — reusable at {}; project profiles override by id. Press s for project. Scope changes discovery only; workspace, trusted-path, and permission policy still govern execution.",
-                    self.profile_scope.display_dir()
-                ),
-            },
-        );
-        section(
-            &mut lines,
             "Auth & readiness",
             if self.snapshot.provider_ready {
                 "Active route can be attempted with the current credentials.".to_string()
@@ -1693,29 +2189,63 @@ impl FleetSetupView {
             ),
         );
         section(&mut lines, "Review policy", self.review_policy_summary());
-        section(
-            &mut lines,
-            "Profile",
-            format!(
-                "{}/{file_stem}.toml  ·  {profile_value} present. Press Enter or g once to save the deterministic starter profile.",
-                self.profile_scope.display_dir(),
-            ),
-        );
 
         // `scroll` offsets by *visual* (post-wrap) rows, so the bound must count
         // wrapped rows — not logical lines — or the bottom sections become
         // unreachable. Estimate each line's wrapped height from its display
         // width; an over-estimate is harmless (scroll clamps at the real end).
-        let wrap_width = usize::from(area.width).max(1);
+        let wrap_width = usize::from(body.width).max(1);
         let visual_rows: usize = lines
             .iter()
             .map(|line| line.width().div_ceil(wrap_width).max(1))
             .sum();
-        let max_scroll = visual_rows.saturating_sub(usize::from(area.height).max(1));
+        let max_scroll = visual_rows.saturating_sub(usize::from(body.height).max(1));
         let scroll = self.review_scroll.min(max_scroll);
         Paragraph::new(lines)
             .wrap(Wrap { trim: true })
             .scroll((scroll as u16, 0))
+            .render(body, buf);
+    }
+
+    /// The Review step's focused control row: [Save…] [Change destination]
+    /// [Back]. The focused control is drawn with the canonical selection style
+    /// and the `▸` marker; a disabled save control (unavailable destination)
+    /// is dimmed and named with the reason on the "Saves to" line.
+    fn render_review_actions(&self, area: Rect, buf: &mut Buffer) {
+        let locale = self.snapshot.locale;
+        let save_enabled = self.scope_decided && self.selected_destination_available();
+        let controls: [(ReviewFocus, String, bool); 3] = [
+            (ReviewFocus::Save, self.save_action_label(), save_enabled),
+            (
+                ReviewFocus::ChangeDestination,
+                tr(locale, MessageId::FleetActionChangeDestination).into_owned(),
+                true,
+            ),
+            (
+                ReviewFocus::Back,
+                tr(locale, MessageId::FleetActionBack).into_owned(),
+                true,
+            ),
+        ];
+        let mut spans: Vec<Span> = Vec::new();
+        for (focus, label, enabled) in controls {
+            let focused = focus == self.review_focus;
+            let text = format!(
+                "{} {} ",
+                crate::tui::glyphs::selection_marker(focused),
+                label
+            );
+            let style = match (focused, enabled) {
+                (true, true) => menu_style::selected_row_style(),
+                (true, false) => menu_style::disabled_selected_row_style(),
+                (false, true) => Style::default().fg(palette::TEXT_PRIMARY),
+                (false, false) => Style::default().fg(palette::TEXT_MUTED).dim(),
+            };
+            spans.push(Span::styled(text, style));
+            spans.push(Span::raw(" "));
+        }
+        Paragraph::new(vec![Line::from(spans), Line::from("")])
+            .wrap(Wrap { trim: true })
             .render(area, buf);
     }
 
@@ -1803,17 +2333,19 @@ fn render_choice_step(
 
     // Detail: summary + wrapped description + wrapped context, all word-wrapped.
     let choice = &choices[selected.min(choices.len().saturating_sub(1))];
-    let mut detail_lines: Vec<Line> = vec![
-        Line::from(Span::styled(
-            choice.summary.clone(),
-            Style::default().fg(palette::WHALE_ACTION).bold(),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
+    let mut detail_lines: Vec<Line> = vec![Line::from(Span::styled(
+        choice.summary.clone(),
+        Style::default().fg(palette::WHALE_ACTION).bold(),
+    ))];
+    // An empty description (compact tiers drop the long explanation so the
+    // decisive facts stay on screen) leaves no orphan blank rows behind.
+    if !choice.description.is_empty() {
+        detail_lines.push(Line::from(""));
+        detail_lines.push(Line::from(Span::styled(
             choice.description.clone(),
             Style::default().fg(palette::TEXT_PRIMARY),
-        )),
-    ];
+        )));
+    }
     if !context.is_empty() {
         detail_lines.push(Line::from(""));
         for entry in context {
@@ -1881,41 +2413,62 @@ fn choice_window_start(total: usize, selected: usize, visible: usize) -> usize {
         .min(total.saturating_sub(visible))
 }
 
-fn profile_file_status(scope: FleetProfileScope, workspace: &Path) -> (String, String) {
-    let dir = match crate::fleet::profile::agent_profile_dir_for_scope(scope, workspace) {
-        Ok(dir) => dir,
-        Err(err) => {
-            return (
-                "blocked".to_string(),
-                format!("profile save location unavailable: {err:#}"),
-            );
+/// Resolve one save destination off the paint path: the exact target file,
+/// whether it already exists, and — when it cannot be written — the localized
+/// reason. A disabled destination is never silently swapped for the other.
+fn destination_status(
+    scope: FleetProfileScope,
+    workspace: &Path,
+    personal_dir: &Result<PathBuf, String>,
+    file_name: &str,
+    project_profiles_enabled: bool,
+    locale: crate::localization::Locale,
+) -> DestinationStatus {
+    let dir: Result<PathBuf, String> = match scope {
+        FleetProfileScope::Project => {
+            Ok(workspace.join(crate::fleet::profile::WORKSPACE_AGENT_PROFILE_DIR))
         }
+        FleetProfileScope::Personal => personal_dir.clone(),
     };
-    let display_dir = scope.display_dir();
-    if !dir.exists() {
-        return (
-            "0 files".to_string(),
-            format!("create {display_dir}/*.toml"),
+    let (target, mut unavailable_reason) = match dir {
+        Ok(dir) => (dir.join(file_name), None),
+        Err(err) => (
+            PathBuf::from(scope.display_dir()).join(file_name),
+            Some(tr(locale, MessageId::FleetDestReasonHomeUnavailable).replace("{error}", &err)),
+        ),
+    };
+    if unavailable_reason.is_none() {
+        match scope {
+            FleetProfileScope::Project => {
+                if !project_profiles_enabled {
+                    unavailable_reason =
+                        Some(tr(locale, MessageId::FleetDestReasonNoProjectConfig).into_owned());
+                } else if !workspace.is_dir() {
+                    unavailable_reason = Some(
+                        tr(locale, MessageId::FleetDestReasonWorkspaceMissing)
+                            .replace("{path}", &workspace.display().to_string()),
+                    );
+                }
+            }
+            FleetProfileScope::Personal => {}
+        }
+    }
+    if unavailable_reason.is_none()
+        && let Some(parent) = target.parent()
+        && parent.exists()
+        && !parent.is_dir()
+    {
+        unavailable_reason = Some(
+            tr(locale, MessageId::FleetDestReasonWorkspaceMissing)
+                .replace("{path}", &parent.display().to_string()),
         );
     }
-    if !dir.is_dir() {
-        return (
-            "blocked".to_string(),
-            format!("{} is not a dir", dir.display()),
-        );
-    }
-
-    let count = std::fs::read_dir(&dir)
-        .ok()
-        .into_iter()
-        .flat_map(|entries| entries.flatten())
-        .filter(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("toml"))
-        .count();
-
-    if count == 1 {
-        ("1 file".to_string(), display_dir.to_string())
-    } else {
-        (format!("{count} files"), display_dir.to_string())
+    let target_exists = unavailable_reason.is_none() && target.is_file();
+    DestinationStatus {
+        scope,
+        unavailable_reason,
+        target,
+        target_exists,
     }
 }
 
@@ -1963,6 +2516,9 @@ mod tests {
                 .iter()
                 .map(|member| (member.id.to_lowercase(), member.origin.to_string()))
                 .collect(),
+            roster_details: Vec::new(),
+            project_profiles_enabled: true,
+            personal_profile_dir: Ok(test_personal_dir()),
             available_models: vec![
                 (
                     "deepseek".to_string(),
@@ -1980,6 +2536,15 @@ mod tests {
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    /// A hermetic personal profile dir shared by the fixture snapshot, so no
+    /// test reads the developer's real `$CODEWHALE_HOME/agents`.
+    fn test_personal_dir() -> PathBuf {
+        static DIR: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+        DIR.get_or_init(|| tempfile::tempdir().expect("personal dir"))
+            .path()
+            .join("agents")
     }
 
     fn sample_draft() -> Box<crate::fleet::profile::FleetProfileDraft> {
@@ -2050,8 +2615,353 @@ mod tests {
 
     fn to_review(view: &mut FleetSetupView) {
         view.handle_key(key(KeyCode::Enter)); // Role -> Model
-        view.handle_key(key(KeyCode::Enter)); // Model -> Review
+        view.handle_key(key(KeyCode::Enter)); // Model -> Destination
+        assert_eq!(view.step, Step::Destination);
+        view.handle_key(key(KeyCode::Enter)); // Destination (Personal) -> Review
         assert_eq!(view.step, Step::Review);
+    }
+
+    /// Rendered text with all whitespace and box borders removed, so a phrase
+    /// or path that wrapped across rows (temp-dir paths vary in length per
+    /// platform and CI runner) still compares as one token.
+    fn squashed(text: &str) -> String {
+        text.chars()
+            .filter(|c| !c.is_whitespace() && !matches!(c, '│' | '┃' | '┆' | '┊' | '|'))
+            .collect()
+    }
+
+    fn contains_wrapped(text: &str, needle: &str) -> bool {
+        squashed(text).contains(&squashed(needle))
+    }
+
+    fn rendered_text(view: &FleetSetupView, w: u16, h: u16) -> String {
+        let area = Rect::new(0, 0, w, h);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+        (0..h)
+            .map(|y| {
+                (0..w)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn workspace_snapshot(workspace: &Path) -> FleetSetupSnapshot {
+        FleetSetupSnapshot {
+            workspace: workspace.to_path_buf(),
+            ..snapshot()
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Save-scope redesign: destination step, review actions, no silent writes.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn destination_step_sits_between_model_and_review_and_names_the_exact_file() {
+        let temp = tempfile::tempdir().expect("temp workspace");
+        let mut view = FleetSetupView::from_snapshot(workspace_snapshot(temp.path()));
+        view.handle_key(key(KeyCode::Down)); // scout
+        view.handle_key(key(KeyCode::Enter)); // -> Model
+        view.handle_key(key(KeyCode::Enter)); // inherit -> Destination
+        assert_eq!(view.step, Step::Destination);
+        assert!(
+            !view.scope_decided,
+            "nothing is decided until the user picks"
+        );
+        let text = rendered_text(&view, 120, 32);
+        assert!(text.contains("Where should this profile live?"), "{text}");
+        assert!(text.contains("This project"), "{text}");
+        assert!(text.contains("Personal"), "{text}");
+        assert!(text.contains("Step 3/4"), "{text}");
+        // The highlighted (Personal) row shows its resolved file.
+        let personal = test_personal_dir().join("scout.toml");
+        assert!(
+            text.contains("File:") && text.contains("agents"),
+            "resolved file must be visible: {text}"
+        );
+        assert_eq!(view.destinations.as_ref().unwrap()[1].target, personal);
+        // Up -> This project shows the workspace file.
+        view.handle_key(key(KeyCode::Up));
+        let text = rendered_text(&view, 120, 32);
+        let project = temp.path().join(PROFILE_DIR).join("scout.toml");
+        assert!(!text.contains("Will replace"), "{text}");
+        assert_eq!(view.destinations.as_ref().unwrap()[0].target, project);
+    }
+
+    #[test]
+    fn header_chip_says_where_it_saves_on_every_step_once_decided() {
+        let temp = tempfile::tempdir().expect("temp workspace");
+        let mut view = FleetSetupView::from_snapshot(workspace_snapshot(temp.path()));
+        let text = rendered_text(&view, 120, 32);
+        assert!(text.contains("Saves to: choose in step 3"), "{text}");
+        view.handle_key(key(KeyCode::Enter));
+        view.handle_key(key(KeyCode::Enter));
+        view.handle_key(key(KeyCode::Up)); // This project
+        view.handle_key(key(KeyCode::Enter)); // -> Review
+        assert_eq!(view.step, Step::Review);
+        assert!(view.scope_decided);
+        assert_eq!(view.profile_scope, FleetProfileScope::Project);
+        let text = rendered_text(&view, 120, 32);
+        assert!(text.contains("Saves to: This project"), "{text}");
+        assert!(text.contains("Save to this project"), "{text}");
+        // Going back keeps the decided destination visible while revising.
+        view.handle_key(key(KeyCode::Esc)); // -> Destination
+        view.handle_key(key(KeyCode::Esc)); // -> Model
+        assert_eq!(view.step, Step::Model);
+        let text = rendered_text(&view, 120, 32);
+        assert!(text.contains("Saves to: This project"), "{text}");
+    }
+
+    #[test]
+    fn switching_destination_preserves_role_model_and_thinking() {
+        let temp = tempfile::tempdir().expect("temp workspace");
+        let mut view = FleetSetupView::from_snapshot(workspace_snapshot(temp.path()));
+        view.handle_key(key(KeyCode::Down));
+        view.handle_key(key(KeyCode::Down)); // builder
+        view.handle_key(key(KeyCode::Enter));
+        view.handle_key(key(KeyCode::Down)); // deepseek-v4-pro
+        view.handle_key(key(KeyCode::Enter)); // -> Destination
+        view.handle_key(key(KeyCode::Up)); // This project
+        view.handle_key(key(KeyCode::Enter)); // -> Review
+        view.handle_key(key(KeyCode::Char('t'))); // thinking: off
+        let role = view.selected_role();
+        let route = view.selected_route();
+        let thinking = view.thinking_idx;
+        assert_eq!(view.profile_scope, FleetProfileScope::Project);
+        // Change destination via the focused control, pick Personal.
+        view.handle_key(key(KeyCode::Tab));
+        assert_eq!(view.review_focus, ReviewFocus::ChangeDestination);
+        assert_eq!(
+            view.profile_scope,
+            FleetProfileScope::Project,
+            "Tab never changes scope"
+        );
+        view.handle_key(key(KeyCode::Enter));
+        assert_eq!(view.step, Step::Destination);
+        view.handle_key(key(KeyCode::Down));
+        view.handle_key(key(KeyCode::Char(' ')));
+        assert_eq!(view.step, Step::Review);
+        assert_eq!(view.profile_scope, FleetProfileScope::Personal);
+        assert_eq!(view.selected_role(), role);
+        assert_eq!(view.selected_route(), route);
+        assert_eq!(view.thinking_idx, thinking);
+        let text = rendered_text(&view, 120, 32);
+        assert!(text.contains("Save as Personal profile"), "{text}");
+    }
+
+    #[test]
+    fn existing_target_is_announced_and_needs_a_second_enter_to_replace() {
+        let temp = tempfile::tempdir().expect("temp workspace");
+        let dir = temp.path().join(PROFILE_DIR);
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(dir.join("manager.toml"), "id = \"manager\"\n").expect("existing");
+        let mut view = FleetSetupView::from_snapshot(workspace_snapshot(temp.path()));
+        view.handle_key(key(KeyCode::Enter)); // manager
+        view.handle_key(key(KeyCode::Enter)); // inherit -> Destination
+        view.handle_key(key(KeyCode::Up)); // This project
+        let text = rendered_text(&view, 120, 32);
+        assert!(
+            contains_wrapped(&text, "Will replace the existing file"),
+            "{text}"
+        );
+        view.handle_key(key(KeyCode::Enter)); // -> Review
+        let text = rendered_text(&view, 120, 32);
+        assert!(contains_wrapped(&text, "Replace in this project"), "{text}");
+        assert!(
+            contains_wrapped(&text, "Will replace the existing file"),
+            "{text}"
+        );
+        // First Enter arms; nothing is emitted.
+        let action = view.handle_key(key(KeyCode::Enter));
+        assert!(
+            matches!(action, ViewAction::None),
+            "first Enter must not save"
+        );
+        assert!(view.replace_armed);
+        let text = rendered_text(&view, 120, 32);
+        assert!(
+            text.contains("Press Enter again to replace manager.toml"),
+            "{text}"
+        );
+        // Moving focus disarms.
+        view.handle_key(key(KeyCode::Tab));
+        assert!(!view.replace_armed);
+        view.handle_key(key(KeyCode::BackTab));
+        view.handle_key(key(KeyCode::Enter)); // arm again
+        let action = view.handle_key(key(KeyCode::Enter)); // confirm
+        let ViewAction::EmitAndClose(ViewEvent::FleetProfileDraftCommitRequested { draft, scope }) =
+            action
+        else {
+            panic!("second Enter saves");
+        };
+        assert_eq!(scope, FleetProfileScope::Project);
+        assert_eq!(draft.id, "manager");
+    }
+
+    #[test]
+    fn project_destination_is_disabled_with_a_reason_and_never_falls_back() {
+        let temp = tempfile::tempdir().expect("temp workspace");
+        let mut view = FleetSetupView::from_snapshot(FleetSetupSnapshot {
+            project_profiles_enabled: false,
+            ..workspace_snapshot(temp.path())
+        });
+        view.handle_key(key(KeyCode::Enter));
+        view.handle_key(key(KeyCode::Enter)); // -> Destination
+        view.handle_key(key(KeyCode::Up)); // This project (disabled)
+        let text = rendered_text(&view, 120, 32);
+        assert!(
+            text.contains("Not available: project profiles are disabled"),
+            "{text}"
+        );
+        let action = view.handle_key(key(KeyCode::Enter));
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(
+            view.step,
+            Step::Destination,
+            "disabled destination does not advance"
+        );
+        assert!(!view.scope_decided);
+        assert_eq!(
+            view.profile_scope,
+            FleetProfileScope::Personal,
+            "no silent fallback either way: the scope is untouched"
+        );
+        // Personal still works.
+        view.handle_key(key(KeyCode::Down));
+        view.handle_key(key(KeyCode::Enter));
+        assert_eq!(view.step, Step::Review);
+        assert_eq!(view.profile_scope, FleetProfileScope::Personal);
+    }
+
+    #[test]
+    fn precedence_consequences_are_stated_for_both_destinations() {
+        let temp = tempfile::tempdir().expect("temp workspace");
+        let project_source = temp.path().join(PROFILE_DIR).join("scout.toml");
+        let mut snap = workspace_snapshot(temp.path());
+        snap.roster_members.retain(|(id, _)| id != "scout");
+        snap.roster_members
+            .push(("scout".to_string(), "project".to_string()));
+        snap.roster_details.push(RosterMemberDetail {
+            id: "scout".to_string(),
+            scope: FleetProfileScope::Project,
+            source: project_source,
+            provider: Some("deepseek".to_string()),
+            model: Some("deepseek-v4-flash".to_string()),
+            reasoning_effort: None,
+        });
+        let mut view = FleetSetupView::from_snapshot(snap);
+        view.handle_key(key(KeyCode::Down)); // scout
+        view.handle_key(key(KeyCode::Enter));
+        view.handle_key(key(KeyCode::Enter)); // -> Destination (Personal highlighted)
+        let text = rendered_text(&view, 120, 32);
+        assert!(text.contains("already has a"), "{text}");
+        view.handle_key(key(KeyCode::Up)); // This project
+        let text = rendered_text(&view, 120, 32);
+        assert!(!text.contains("already has a"), "{text}");
+        assert!(text.contains("Replaces the project"), "{text}");
+    }
+
+    #[test]
+    fn reopening_a_saved_member_preloads_its_scope_and_route() {
+        let temp = tempfile::tempdir().expect("temp workspace");
+        let mut snap = workspace_snapshot(temp.path());
+        snap.roster_members.retain(|(id, _)| id != "scout");
+        snap.roster_members
+            .push(("scout".to_string(), "project".to_string()));
+        snap.roster_details.push(RosterMemberDetail {
+            id: "scout".to_string(),
+            scope: FleetProfileScope::Project,
+            source: temp.path().join(PROFILE_DIR).join("scout.toml"),
+            provider: Some("deepseek".to_string()),
+            model: Some("deepseek-v4-flash".to_string()),
+            reasoning_effort: Some("high".to_string()),
+        });
+        let view = FleetSetupView::from_snapshot_for_role(snap, "scout");
+        assert_eq!(view.step, Step::Model);
+        assert!(view.scope_decided);
+        assert_eq!(view.profile_scope, FleetProfileScope::Project);
+        assert_eq!(
+            view.selected_route(),
+            Some(("deepseek".to_string(), "deepseek-v4-flash".to_string()))
+        );
+        assert_eq!(view.selected_reasoning_effort().as_deref(), Some("high"));
+        let text = rendered_text(&view, 120, 32);
+        assert!(text.contains("Saves to: This project"), "{text}");
+    }
+
+    #[test]
+    fn blocked_model_row_explains_why_enter_did_nothing() {
+        let mut snap = snapshot();
+        snap.available_models = vec![(
+            "xai".to_string(),
+            "grok-4.5".to_string(),
+            crate::provider_readiness::ResolvedProviderReadiness::MissingKey,
+        )];
+        let mut view = FleetSetupView::from_snapshot(snap);
+        view.handle_key(key(KeyCode::Enter)); // -> Model
+        view.model_idx = 1;
+        view.handle_key(key(KeyCode::Enter));
+        assert_eq!(view.step, Step::Model);
+        assert!(
+            view.notice
+                .as_deref()
+                .is_some_and(|n| n.contains("Not selectable"))
+        );
+        let text = rendered_text(&view, 120, 32);
+        assert!(text.contains("Not selectable"), "{text}");
+        view.handle_key(key(KeyCode::Down));
+        assert!(view.notice.is_none(), "navigation clears the notice");
+    }
+
+    #[test]
+    fn q_only_cancels_from_the_first_step_and_esc_is_back_elsewhere() {
+        let mut view = FleetSetupView::from_snapshot(snapshot());
+        view.handle_key(key(KeyCode::Enter)); // -> Model
+        assert!(matches!(
+            view.handle_key(key(KeyCode::Char('q'))),
+            ViewAction::None
+        ));
+        assert_eq!(view.step, Step::Model);
+        assert!(matches!(
+            view.handle_key(key(KeyCode::Esc)),
+            ViewAction::None
+        ));
+        assert_eq!(view.step, Step::Role);
+        assert!(matches!(
+            view.handle_key(key(KeyCode::Char('q'))),
+            ViewAction::Close
+        ));
+        let hints = view.footer_hints();
+        assert!(hints.iter().any(|h| h.key == "Esc" && h.label == "cancel"));
+    }
+
+    #[test]
+    fn destination_and_review_stay_readable_at_60x16_80x24_and_120x32() {
+        let temp = tempfile::tempdir().expect("temp workspace");
+        for (w, h) in [(60u16, 16u16), (80, 24), (120, 32)] {
+            let mut view = FleetSetupView::from_snapshot(workspace_snapshot(temp.path()));
+            view.handle_key(key(KeyCode::Enter));
+            view.handle_key(key(KeyCode::Enter)); // -> Destination
+            let text = rendered_text(&view, w, h);
+            assert!(text.contains("This project"), "{w}x{h}: {text}");
+            assert!(text.contains("Personal"), "{w}x{h}: {text}");
+            assert!(text.contains("File:"), "{w}x{h}: {text}");
+            assert!(text.contains("Saves to:"), "{w}x{h}: {text}");
+            view.handle_key(key(KeyCode::Up));
+            view.handle_key(key(KeyCode::Enter)); // -> Review
+            let text = rendered_text(&view, w, h);
+            assert!(text.contains("Save to this project"), "{w}x{h}: {text}");
+            assert!(text.contains("Saves to: This project"), "{w}x{h}: {text}");
+            for line in text.lines() {
+                assert!(
+                    unicode_width::UnicodeWidthStr::width(line) <= usize::from(w),
+                    "{w}x{h}: overflow: {line}"
+                );
+            }
+        }
     }
 
     fn open_composition(view: &mut FleetSetupView) {
@@ -2115,6 +3025,8 @@ mod tests {
             accepted.handle_key(key(KeyCode::Char('a'))),
             ViewAction::None
         ));
+        assert_eq!(accepted.step, Step::Destination);
+        accepted.handle_key(key(KeyCode::Enter)); // Destination -> Review
         assert_eq!(accepted.step, Step::Review);
         assert_eq!(accepted.composition_decision, CompositionDecision::Accepted);
         assert_eq!(accepted.selected_route().as_ref(), Some(&expected));
@@ -2257,7 +3169,9 @@ mod tests {
             view.selected_route(),
             Some(("zai".to_string(), "glm-5.2".to_string()))
         );
-        view.handle_key(key(KeyCode::Enter)); // Model -> Review
+        view.handle_key(key(KeyCode::Enter)); // Model -> Destination
+        view.handle_key(key(KeyCode::Enter)); // Destination -> Review
+        assert_eq!(view.step, Step::Review);
         while view.selected_reasoning_effort().as_deref() != Some("max") {
             view.handle_key(key(KeyCode::Char('t')));
         }
@@ -2422,9 +3336,9 @@ mod tests {
 
         // Back to the role step and change the selection: the draft no
         // longer matches the answers and must not survive to ratification.
-        view.handle_key(key(KeyCode::Left));
-        view.handle_key(key(KeyCode::Left));
-        view.handle_key(key(KeyCode::Left));
+        view.handle_key(key(KeyCode::Left)); // Review -> Destination
+        view.handle_key(key(KeyCode::Left)); // Destination -> Model
+        view.handle_key(key(KeyCode::Left)); // Model -> Role
         assert_eq!(view.step, Step::Role);
         view.handle_key(key(KeyCode::Down));
         assert!(view.model_draft.is_none());
@@ -2454,6 +3368,8 @@ mod tests {
         assert_eq!(view.model_idx, 1);
 
         view.handle_key(key(KeyCode::Enter));
+        assert_eq!(view.step, Step::Destination);
+        view.handle_key(key(KeyCode::Enter));
         assert_eq!(view.step, Step::Review);
 
         // `t` cycles thinking on the review step without an extra wizard screen.
@@ -2461,6 +3377,8 @@ mod tests {
         assert_eq!(view.thinking_idx, 1);
 
         // Left steps back through the wizard.
+        view.handle_key(key(KeyCode::Left));
+        assert_eq!(view.step, Step::Destination);
         view.handle_key(key(KeyCode::Left));
         assert_eq!(view.step, Step::Model);
         view.handle_key(key(KeyCode::Left));
@@ -2564,25 +3482,25 @@ mod tests {
         );
     }
 
-    /// #3908: `render_review` recomputed `profile_file_status` — `exists()` +
-    /// `is_dir()` + a full `read_dir` extension count — on every paint. It is
-    /// now computed on the transitions that can change it, so the value the
-    /// Review step paints must be present and must track a scope toggle.
+    /// #3908: destination facts (exists/is_dir) are computed on the
+    /// transitions that can change them — never per paint.
     #[test]
-    fn review_profile_status_is_cached_on_transitions_not_recomputed_per_paint() {
+    fn review_destinations_are_cached_on_transitions_not_recomputed_per_paint() {
         let mut view = FleetSetupView::from_snapshot(snapshot());
         assert!(
-            view.profile_status.is_none(),
-            "nothing is stat-ed before the user reaches Review"
+            view.destinations.is_none(),
+            "nothing is stat-ed before the user reaches the Destination step"
         );
 
-        view.advance();
-        view.advance();
-        assert_eq!(view.step, Step::Review);
+        view.advance(); // Role -> Model
+        view.advance(); // Model -> Destination
+        assert_eq!(view.step, Step::Destination);
         let on_entry = view
-            .profile_status
+            .destinations
             .clone()
-            .expect("entering Review must populate the cached status");
+            .expect("entering Destination must populate the cached statuses");
+        view.advance(); // Destination -> Review
+        assert_eq!(view.step, Step::Review);
 
         // Painting repeatedly must not change the cached value — that is the
         // whole point — and must not panic on the cached-read path.
@@ -2591,38 +3509,70 @@ mod tests {
             let mut buf = Buffer::empty(area);
             view.render(area, &mut buf);
         }
-        assert_eq!(view.profile_status.as_ref(), Some(&on_entry));
-
-        // Toggling scope changes which directory is described, so the cache
-        // has to be refreshed on that keypress.
-        let before_scope = view.profile_scope;
-        view.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
-        assert_ne!(view.profile_scope, before_scope);
-        assert!(
-            view.profile_status.is_some(),
-            "a scope toggle must leave a freshly computed status behind"
-        );
+        assert_eq!(view.destinations.as_ref(), Some(&on_entry));
     }
 
     #[test]
-    fn profile_status_distinguishes_fresh_and_existing_workspaces() {
+    fn destination_status_reports_new_file_replace_and_disabled_reasons() {
         let temp = tempfile::tempdir().expect("temp workspace");
-        assert_eq!(
-            profile_file_status(FleetProfileScope::Project, temp.path()),
-            (
-                "0 files".to_string(),
-                "create .codewhale/agents/*.toml".to_string()
-            )
+        let personal = Ok(temp.path().join("home-agents"));
+        let fresh = destination_status(
+            FleetProfileScope::Project,
+            temp.path(),
+            &personal,
+            "reviewer.toml",
+            true,
+            crate::localization::Locale::En,
         );
+        assert_eq!(
+            fresh.target,
+            temp.path().join(PROFILE_DIR).join("reviewer.toml")
+        );
+        assert!(!fresh.target_exists);
+        assert!(fresh.unavailable_reason.is_none());
 
         let profile_dir = temp.path().join(PROFILE_DIR);
         std::fs::create_dir_all(&profile_dir).expect("profile dir");
         std::fs::write(profile_dir.join("reviewer.toml"), "id = \"reviewer\"\n")
             .expect("existing profile");
-        assert_eq!(
-            profile_file_status(FleetProfileScope::Project, temp.path()),
-            ("1 file".to_string(), PROFILE_DIR.to_string())
+        let existing = destination_status(
+            FleetProfileScope::Project,
+            temp.path(),
+            &personal,
+            "reviewer.toml",
+            true,
+            crate::localization::Locale::En,
         );
+        assert!(
+            existing.target_exists,
+            "the exact target file is detected, not a dir count"
+        );
+
+        let disabled = destination_status(
+            FleetProfileScope::Project,
+            temp.path(),
+            &personal,
+            "reviewer.toml",
+            false,
+            crate::localization::Locale::En,
+        );
+        assert!(
+            disabled
+                .unavailable_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("--no-project-config")),
+            "{disabled:?}"
+        );
+
+        let missing = destination_status(
+            FleetProfileScope::Project,
+            &temp.path().join("does-not-exist"),
+            &personal,
+            "reviewer.toml",
+            true,
+            crate::localization::Locale::En,
+        );
+        assert!(missing.unavailable_reason.is_some(), "{missing:?}");
     }
 
     #[test]
@@ -2634,7 +3584,9 @@ mod tests {
         view.handle_key(key(KeyCode::Enter)); // -> Model
         // Model: inherit(0) deepseek-v4-pro(1) -> deepseek-v4-pro.
         view.handle_key(key(KeyCode::Down));
-        view.handle_key(key(KeyCode::Enter)); // Model -> Review
+        view.handle_key(key(KeyCode::Enter)); // Model -> Destination
+        view.handle_key(key(KeyCode::Enter)); // Destination -> Review
+        assert_eq!(view.step, Step::Review);
         while view.selected_reasoning_effort().as_deref() != Some("max") {
             view.handle_key(key(KeyCode::Char('t')));
         }
@@ -2673,11 +3625,24 @@ mod tests {
 
     #[test]
     fn review_defaults_to_personal_and_can_switch_to_project() {
-        let mut view = FleetSetupView::from_snapshot(snapshot());
+        let temp = tempfile::tempdir().expect("temp workspace");
+        let mut view = FleetSetupView::from_snapshot(workspace_snapshot(temp.path()));
         to_review(&mut view);
 
         assert_eq!(view.profile_scope, FleetProfileScope::Personal);
+        // `s` is a secondary accelerator back to the Destination step; the
+        // destination itself is chosen with a focused control, never toggled
+        // silently.
         view.handle_key(key(KeyCode::Char('s')));
+        assert_eq!(view.step, Step::Destination);
+        assert_eq!(
+            view.profile_scope,
+            FleetProfileScope::Personal,
+            "s alone changes nothing"
+        );
+        view.handle_key(key(KeyCode::Up)); // This project
+        view.handle_key(key(KeyCode::Enter));
+        assert_eq!(view.step, Step::Review);
         assert_eq!(view.profile_scope, FleetProfileScope::Project);
 
         let action = view.handle_key(key(KeyCode::Enter));
@@ -2722,7 +3687,7 @@ mod tests {
         assert_eq!(view.selected_role(), "reviewer");
         assert_eq!(
             view.roster_override_note().as_deref(),
-            Some("Overrides built-in 'reviewer' unless a project profile exists.")
+            Some("Replaces the built-in 'reviewer' role in the roster.")
         );
 
         let role_step = render_through_stack(
@@ -2738,7 +3703,7 @@ mod tests {
         )
         .join("\n");
         assert!(
-            role_step.contains("Overrides built-in 'reviewer'"),
+            contains_wrapped(&role_step, "Replaces the built-in 'reviewer'"),
             "{role_step}"
         );
 
@@ -2755,7 +3720,10 @@ mod tests {
             40,
         )
         .join("\n");
-        assert!(review.contains("Overrides built-in 'reviewer'"), "{review}");
+        assert!(
+            contains_wrapped(&review, "Replaces the built-in 'reviewer'"),
+            "{review}"
+        );
 
         // "custom" also matches a built-in roster member.
         let mut custom_view = FleetSetupView::from_snapshot(snapshot());
@@ -2765,7 +3733,7 @@ mod tests {
         assert_eq!(custom_view.selected_role(), "custom");
         assert_eq!(
             custom_view.roster_override_note().as_deref(),
-            Some("Overrides built-in 'custom' unless a project profile exists.")
+            Some("Replaces the built-in 'custom' role in the roster.")
         );
     }
 
@@ -3013,12 +3981,17 @@ mod tests {
         }
     }
 
+    const BLEED_FILL: &str = "\u{e000}";
+
     fn render_through_stack(view_at: impl Fn() -> FleetSetupView, w: u16, h: u16) -> Vec<String> {
         let area = Rect::new(0, 0, w, h);
         let mut buf = Buffer::empty(area);
         for y in 0..h {
             for x in 0..w {
-                buf[(x, y)].set_symbol("X");
+                // A private-use glyph that no rendered copy or temp path can
+                // contain, so bleed-through detection cannot false-positive
+                // on a path like `/Volumes/VIXinSSD/...`.
+                buf[(x, y)].set_symbol(BLEED_FILL);
             }
         }
         let mut stack = ViewStack::new();
@@ -3058,11 +4031,11 @@ mod tests {
 
                 // No bleed-through anywhere in the composited frame.
                 assert!(
-                    !text.contains('X'),
+                    !text.contains(BLEED_FILL),
                     "{label} {w}x{h}: background bleed-through"
                 );
                 // Some action label is always visible.
-                assert!(text.contains("cancel"), "{label} {w}x{h}: missing footer");
+                assert!(text.contains("Esc"), "{label} {w}x{h}: missing footer");
                 // The first impression communicates Fleet = agent team.
                 assert!(
                     text.contains("agent team"),
@@ -3107,9 +4080,9 @@ mod tests {
 
         let action_row = rows
             .iter()
-            .rposition(|row| row.contains("cancel"))
-            .expect("footer cancel action");
-        let footer_row = rows[..action_row]
+            .rposition(|row| row.contains("Esc"))
+            .expect("footer Esc action");
+        let footer_row = rows[..=action_row]
             .iter()
             .rposition(|row| row.contains("scroll"))
             .expect("footer shortcut row");
@@ -3127,7 +4100,7 @@ mod tests {
 
     #[test]
     fn choice_steps_at_cursor_size_stay_content_sized() {
-        for (step, expected_height) in [(Step::Role, 21usize), (Step::Model, 22usize)] {
+        for (step, expected_height) in [(Step::Role, 22usize), (Step::Model, 23usize)] {
             let rows = render_through_stack(
                 || {
                     let mut view = FleetSetupView::from_snapshot(snapshot());
@@ -3167,25 +4140,19 @@ mod tests {
         )
         .join("\n");
         for section in [
+            "Saves to",
             "Role",
             "Model",
-            "Profile availability",
             "Auth & readiness",
             "Permissions",
         ] {
             assert!(top.contains(section), "review missing section: {section}");
         }
-        for truth in [
-            "Scope changes discovery only",
-            "trusted-path",
-            "permission policy still",
-            "govern execution",
-        ] {
-            assert!(
-                top.contains(truth),
-                "profile availability must not imply execution authority: {top}"
-            );
-        }
+        // The destination line names the scope and the exact file; the
+        // permission posture stays governed by the sections below it.
+        assert!(top.contains("Personal · "), "{top}");
+        assert!(top.contains("agents"), "{top}");
+        assert!(top.contains("Inherit the parent envelope"), "{top}");
 
         // The review is intentionally scrollable; scrolling to the bottom reveals
         // the workspace/org execution policy, review policy, and honest save note.
@@ -3204,7 +4171,7 @@ mod tests {
             "Tools",
             "Workspace",
             "Review policy",
-            "Press Enter or g once",
+            "Save as Personal profile",
         ] {
             assert!(bottom.contains(needle), "scrolled review missing: {needle}");
         }

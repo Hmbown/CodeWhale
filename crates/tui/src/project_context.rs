@@ -198,7 +198,7 @@ fn load_project_context_with_parents_and_home(
 ) -> ProjectContext {
     let workspace_canonical = canonicalize_workspace_or_keep(workspace);
     let mut ctx = load_project_context(workspace);
-    let parent_search_stop = project_context_parent_search_stop_dir();
+    let parent_search_stop = project_context_parent_search_stop_dir(home_dir);
 
     // If no context found in workspace, check parent directories
     if !ctx.has_instructions() {
@@ -285,7 +285,7 @@ pub(crate) fn project_context_cache_candidate_paths(
 ) -> Vec<PathBuf> {
     let workspace = canonicalize_workspace_or_keep(workspace);
     let mut paths = Vec::new();
-    let parent_search_stop = project_context_parent_search_stop_dir();
+    let parent_search_stop = project_context_parent_search_stop_dir(home_dir);
 
     let mut current = Some(workspace.as_path());
     while let Some(dir) = current {
@@ -407,8 +407,8 @@ fn find_git_root(cwd: &Path) -> Option<PathBuf> {
     }
 }
 
-fn project_context_parent_search_stop_dir() -> Option<PathBuf> {
-    crate::config::effective_home_dir().map(|home| canonicalize_workspace_or_keep(&home))
+fn project_context_parent_search_stop_dir(home_dir: Option<&Path>) -> Option<PathBuf> {
+    home_dir.map(canonicalize_workspace_or_keep)
 }
 
 /// Combine global user-wide preferences with a project-local
@@ -1118,13 +1118,9 @@ mod tests {
         )
         .expect("write important");
 
-        let start = std::time::Instant::now();
+        // Boundedness is a structural contract below; wall-clock time depends
+        // on host load and is not a reliable assertion in the full suite.
         let ctx = load_project_context_with_parents_and_home(workspace.path(), Some(home.path()));
-        let elapsed = start.elapsed();
-        assert!(
-            elapsed < std::time::Duration::from_secs(2),
-            "auto-generated context should stay bounded, took {elapsed:?}"
-        );
         assert!(ctx.has_instructions());
 
         let generated_path = workspace.path().join(".codewhale").join("instructions.md");
@@ -1153,6 +1149,38 @@ mod tests {
         assert!(
             !generated.contains("file-0999.rs"),
             "bounded context should omit the tail of the noisy directory"
+        );
+    }
+
+    #[test]
+    fn explicit_home_bounds_parent_search_without_process_environment() {
+        let home = tempdir().expect("home tempdir");
+        fs::write(
+            home.path().join("AGENTS.md"),
+            "must not be loaded as project context",
+        )
+        .expect("write home AGENTS.md");
+        let workspace = home.path().join("projects").join("demo");
+        fs::create_dir_all(&workspace).expect("mkdir workspace");
+
+        let ctx = load_project_context_with_parents_and_home(&workspace, Some(home.path()));
+
+        assert_eq!(
+            ctx.source_path, None,
+            "the explicit home is the parent-search boundary, not project context"
+        );
+        assert!(
+            ctx.instructions
+                .as_deref()
+                .is_some_and(|text| text.contains("Project Context (Auto-generated, ephemeral)")),
+            "expected generated context, got {:?}",
+            ctx.instructions
+        );
+        assert!(
+            project_context_cache_candidate_paths(&workspace, Some(home.path()))
+                .iter()
+                .all(|candidate| candidate != &home.path().join("AGENTS.md")),
+            "cache candidates must use the same explicit parent-search boundary"
         );
     }
 

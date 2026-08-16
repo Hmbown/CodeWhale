@@ -1138,6 +1138,33 @@ fn reasoning_effort_api_values_are_provider_aware_for_codex() {
 }
 
 #[test]
+fn ollama_cloud_normal_turns_preserve_the_documented_reasoning_ladder() {
+    let base_url = crate::config::DEFAULT_OLLAMA_CLOUD_BASE_URL;
+    let model = crate::config::DEFAULT_OLLAMA_CLOUD_MODEL;
+    for effort in [
+        ReasoningEffort::Off,
+        ReasoningEffort::Low,
+        ReasoningEffort::Medium,
+        ReasoningEffort::High,
+        ReasoningEffort::Max,
+    ] {
+        assert_eq!(
+            effort.normalize_for_route(ApiProvider::OllamaCloud, base_url, model),
+            effort,
+            "{effort:?} must remain distinct on Ollama's documented Cloud ladder"
+        );
+    }
+    assert_eq!(
+        ReasoningEffort::Minimal.normalize_for_route(ApiProvider::OllamaCloud, base_url, model,),
+        ReasoningEffort::Low
+    );
+    assert_eq!(
+        ReasoningEffort::XHigh.normalize_for_route(ApiProvider::OllamaCloud, base_url, model),
+        ReasoningEffort::Max
+    );
+}
+
+#[test]
 fn reasoning_effort_uses_one_strict_alias_table_and_legacy_fallback() {
     for raw in ["off", "none", "disabled", "false"] {
         assert_eq!(ReasoningEffort::parse_strict(raw), Ok(ReasoningEffort::Off));
