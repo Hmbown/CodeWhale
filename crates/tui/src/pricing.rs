@@ -1397,6 +1397,21 @@ fn verified_catalog_offering(
     else {
         return VerifiedOffering::Absent;
     };
+    // Models.dev is a capabilities catalog. A live overlay from that fetch
+    // must never be treated as a rate source — leftover `cost` fields are
+    // not provider prices, and `https://api.codewhale.net/session` 503
+    // (`control_plane_not_attached`) is not a healthy live price list
+    // (#5241). Prefer the bundled snapshot (curated in-repo rates, when
+    // present) and otherwise ignore live cost so hand/bundled fallbacks
+    // can restore a usable session total.
+    if crate::provider_lake::live_catalog_origin(provider, catalog_model)
+        == Some(crate::provider_lake::LiveSource::ModelsDev)
+    {
+        let offering =
+            crate::provider_lake::bundled_catalog_offering_for_model(provider, catalog_model)
+                .unwrap_or_else(|| capabilities_only_offering(offering));
+        return VerifiedOffering::Usable(offering);
+    }
     let Some(pricing) = OfferingPricing::from_catalog_offering(&offering) else {
         // No priced row to verify; downstream treats this as unpriced.
         return VerifiedOffering::Usable(offering);
@@ -1416,6 +1431,15 @@ fn verified_catalog_offering(
         },
         None => VerifiedOffering::Unusable(defect),
     }
+}
+
+/// Drop any cost on a Models.dev live overlay so leftover price fields cannot
+/// be billed as `provider_live` (#5241).
+fn capabilities_only_offering(
+    mut offering: codewhale_config::catalog::CatalogOffering,
+) -> codewhale_config::catalog::CatalogOffering {
+    offering.cost = None;
+    offering
 }
 
 /// Project a hand-sourced provider row into an audit.
@@ -1631,6 +1655,14 @@ fn provider_owned_hand_pricing_at(
     recorded_at: DateTime<Utc>,
 ) -> Option<ModelPricing> {
     let model_lower = model.trim().to_ascii_lowercase();
+    // Hosted Fireworks / OpenCode Zen rates are provider-owned docs rows, not
+    // first-party DeepSeek's $0.0028 cache-hit card and not Models.dev.
+    if provider == ApiProvider::Fireworks {
+        return fireworks_bundled_fallback_pricing(&model_lower);
+    }
+    if provider == ApiProvider::OpencodeZen {
+        return opencode_zen_bundled_fallback_pricing(&model_lower);
+    }
     let provider_owns_row = match provider {
         ApiProvider::Deepseek | ApiProvider::DeepseekCN | ApiProvider::DeepseekAnthropic => {
             matches!(
@@ -1707,6 +1739,52 @@ fn provider_owned_hand_pricing_at(
     provider_owns_row
         .then(|| pricing_for_model_at(&lookup, recorded_at))
         .flatten()
+}
+
+/// Fireworks serverless Standard rates (2026-08-15 audit).
+/// <https://docs.fireworks.ai/serverless/pricing>
+///
+/// Cache-write is unpublished on that table. Do not inherit first-party
+/// DeepSeek's $0.0028 cache-hit card — Fireworks publishes $0.028.
+fn fireworks_bundled_fallback_pricing(model_lower: &str) -> Option<ModelPricing> {
+    match fireworks_deployment_id(model_lower) {
+        "deepseek-v4-flash" | "deepseek-v4-flash-0731" => {
+            Some(hosted_deepseek_v4_flash_standard_pricing())
+        }
+        "deepseek-v4-pro" => Some(hosted_deepseek_v4_pro_standard_pricing()),
+        // kimi-k3 stays unpriced until Fireworks publishes a rate for it
+        // (see `fireworks_and_zen_flash_use_bundled_family_rates`).
+        _ => None,
+    }
+}
+
+fn fireworks_deployment_id(model_lower: &str) -> &str {
+    model_lower
+        .strip_prefix("accounts/fireworks/models/")
+        .or_else(|| model_lower.strip_prefix("accounts/fireworks/routers/"))
+        .unwrap_or(model_lower)
+}
+
+/// OpenCode Zen PAYG rates (2026-08-15 audit).
+/// <https://opencode.ai/docs/zen/>
+///
+/// Cached write is unpublished (`-` on the Zen table). Flash cache-read is
+/// $0.028, not first-party DeepSeek's $0.0028.
+fn opencode_zen_bundled_fallback_pricing(model_lower: &str) -> Option<ModelPricing> {
+    match model_lower {
+        "deepseek-v4-flash" | "deepseek-v4-flash-0731" => {
+            Some(hosted_deepseek_v4_flash_standard_pricing())
+        }
+        _ => None,
+    }
+}
+
+fn hosted_deepseek_v4_flash_standard_pricing() -> ModelPricing {
+    usd_only_pricing(0.028, 0.14, 0.28)
+}
+
+fn hosted_deepseek_v4_pro_standard_pricing() -> ModelPricing {
+    usd_only_pricing(0.145, 1.74, 3.48)
 }
 
 /// The offering's pricing row as it actually applies to this route.
@@ -3686,6 +3764,287 @@ mod tests {
             }
             .sanitized(),
             CostEstimate::default()
+        );
+    }
+
+    fn official_route_audit(provider: ApiProvider, model: &str, usage: &Usage) -> TurnCostAudit {
+        audit_turn_cost_for_route_at(
+            provider,
+            model,
+            billing_surface_for_route(provider, Some(provider.default_base_url())),
+            usage,
+            Utc::now(),
+        )
+    }
+
+    fn million_input_usage() -> Usage {
+        Usage {
+            input_tokens: 1_000_000,
+            output_tokens: 0,
+            ..Usage::default()
+        }
+    }
+
+    /// #5241: Fireworks flash / pro and OpenCode Zen flash must leave
+    /// `unverified_live_pricing` via provider-docs bundled rates when live
+    /// control-plane / Models.dev pricing is not a usable rate source.
+    #[test]
+    fn hosted_flash_and_pro_routes_price_from_bundled_docs_rates() {
+        let usage = million_input_usage();
+        let now = Utc::now();
+        let cases = [
+            (
+                ApiProvider::Fireworks,
+                "accounts/fireworks/models/deepseek-v4-flash-0731",
+                0.14,
+            ),
+            (
+                ApiProvider::Fireworks,
+                "accounts/fireworks/models/deepseek-v4-flash",
+                0.14,
+            ),
+            (ApiProvider::Fireworks, "deepseek-v4-flash", 0.14),
+            (
+                ApiProvider::Fireworks,
+                "accounts/fireworks/models/deepseek-v4-pro",
+                1.74,
+            ),
+            (ApiProvider::OpencodeZen, "deepseek-v4-flash", 0.14),
+        ];
+        for (provider, model, expected_usd) in cases {
+            let audit = official_route_audit(provider, model, &usage);
+            assert!(
+                audit.is_priced(),
+                "{provider:?}/{model} must price on its official endpoint: {audit:?}"
+            );
+            assert_ne!(
+                audit.unpriced_reason,
+                Some(UnpricedReason::UnverifiedLivePricing),
+                "{provider:?}/{model}"
+            );
+            assert_eq!(
+                audit.provenance,
+                Some(PricingProvenance::ProviderDocs),
+                "{provider:?}/{model}"
+            );
+            let estimate = audit.estimate.expect("priced");
+            assert!(
+                (estimate.usd - expected_usd).abs() < 1e-12,
+                "{provider:?}/{model}: {} != {expected_usd}",
+                estimate.usd
+            );
+            assert_eq!(estimate.cny, 0.0, "{provider:?}/{model}");
+
+            let hand =
+                provider_owned_hand_pricing_at(provider, model, now).expect("bundled fallback row");
+            if model.contains("flash") {
+                assert_eq!(hand.usd.input_cache_hit_per_million, 0.028);
+                assert_ne!(
+                    hand.usd.input_cache_hit_per_million, 0.0028,
+                    "must not inherit first-party DeepSeek cache-hit"
+                );
+            }
+        }
+
+        let deepseek = deepseek_v4_flash_pricing();
+        assert_eq!(deepseek.usd.input_cache_hit_per_million, 0.0028);
+    }
+
+    #[test]
+    fn models_dev_live_cost_is_capabilities_only_and_falls_back_to_bundled_rates() {
+        let _live = crate::provider_lake::lock_live_snapshot();
+        crate::provider_lake::clear_live_snapshot();
+        let now = Utc::now();
+        let fetched_at = u64::try_from(now.timestamp()).expect("timestamp");
+        crate::provider_lake::set_live_snapshot(
+            codewhale_config::catalog::CatalogSnapshot {
+                offerings: vec![codewhale_config::catalog::CatalogOffering {
+                    provider: "fireworks".to_string(),
+                    wire_model_id: "accounts/fireworks/models/deepseek-v4-flash-0731".to_string(),
+                    endpoint_key: "chat".to_string(),
+                    cost: Some(codewhale_config::models_dev::ModelsDevCost {
+                        input: Some(99.0),
+                        output: Some(199.0),
+                        cache_read: Some(9.0),
+                        cache_write: None,
+                    }),
+                    source: codewhale_config::catalog::CatalogSource::Live {
+                        base_url_fingerprint: "models-dev-capabilities".to_string(),
+                        fetched_at,
+                    },
+                    ..Default::default()
+                }],
+            },
+            crate::provider_lake::LiveSource::ModelsDev,
+        );
+
+        let usage = million_input_usage();
+        let audit = official_route_audit(
+            ApiProvider::Fireworks,
+            "accounts/fireworks/models/deepseek-v4-flash-0731",
+            &usage,
+        );
+        crate::provider_lake::clear_live_snapshot();
+
+        assert!(audit.is_priced(), "{audit:?}");
+        assert_ne!(
+            audit.unpriced_reason,
+            Some(UnpricedReason::UnverifiedLivePricing)
+        );
+        assert_eq!(audit.provenance, Some(PricingProvenance::ProviderDocs));
+        assert_eq!(audit.live_pricing_defect, None);
+        let estimate = audit.estimate.expect("priced");
+        assert!(
+            (estimate.usd - 0.14).abs() < 1e-12,
+            "models.dev leftover cost must not be billed: {}",
+            estimate.usd
+        );
+    }
+
+    #[test]
+    fn unverifiable_provider_live_rates_degrade_to_bundled_docs_with_defect() {
+        let _live = crate::provider_lake::lock_live_snapshot();
+        crate::provider_lake::clear_live_snapshot();
+        let now = Utc::now();
+        let fetched_at = u64::try_from(now.timestamp()).expect("timestamp");
+        crate::provider_lake::set_live_snapshot(
+            codewhale_config::catalog::CatalogSnapshot {
+                offerings: vec![codewhale_config::catalog::CatalogOffering {
+                    provider: "opencode-zen".to_string(),
+                    wire_model_id: "deepseek-v4-flash".to_string(),
+                    endpoint_key: "chat".to_string(),
+                    cost: Some(codewhale_config::models_dev::ModelsDevCost {
+                        input: Some(99.0),
+                        output: Some(199.0),
+                        cache_read: Some(9.0),
+                        cache_write: None,
+                    }),
+                    source: codewhale_config::catalog::CatalogSource::Live {
+                        base_url_fingerprint: "other-endpoint".to_string(),
+                        fetched_at,
+                    },
+                    ..Default::default()
+                }],
+            },
+            crate::provider_lake::LiveSource::PerProvider,
+        );
+
+        let usage = million_input_usage();
+        let audit = official_route_audit(ApiProvider::OpencodeZen, "deepseek-v4-flash", &usage);
+        crate::provider_lake::clear_live_snapshot();
+
+        assert!(audit.is_priced(), "{audit:?}");
+        assert_eq!(audit.provenance, Some(PricingProvenance::ProviderDocs));
+        assert!(
+            audit.live_pricing_defect.is_some(),
+            "unverified provider-live must receipt a defect: {audit:?}"
+        );
+        let estimate = audit.estimate.expect("priced");
+        assert!((estimate.usd - 0.14).abs() < 1e-12, "{}", estimate.usd);
+    }
+
+    #[test]
+    fn verified_provider_live_rates_win_over_bundled_docs() {
+        let _live = crate::provider_lake::lock_live_snapshot();
+        crate::provider_lake::clear_live_snapshot();
+        let now = Utc::now();
+        let fetched_at = u64::try_from(now.timestamp()).expect("timestamp");
+        let fingerprint = codewhale_config::catalog::base_url_fingerprint(
+            crate::config::DEFAULT_FIREWORKS_BASE_URL,
+        );
+        crate::provider_lake::set_live_snapshot(
+            codewhale_config::catalog::CatalogSnapshot {
+                offerings: vec![codewhale_config::catalog::CatalogOffering {
+                    provider: "fireworks".to_string(),
+                    wire_model_id: "accounts/fireworks/models/kimi-k3".to_string(),
+                    endpoint_key: "chat".to_string(),
+                    cost: Some(codewhale_config::models_dev::ModelsDevCost {
+                        input: Some(9.0),
+                        output: Some(18.0),
+                        cache_read: Some(1.0),
+                        cache_write: None,
+                    }),
+                    source: codewhale_config::catalog::CatalogSource::Live {
+                        base_url_fingerprint: fingerprint.clone(),
+                        fetched_at,
+                    },
+                    ..Default::default()
+                }],
+            },
+            crate::provider_lake::LiveSource::PerProvider,
+        );
+
+        let usage = million_input_usage();
+        let audit = audit_turn_cost_for_route_on_endpoint_at(
+            ApiProvider::Fireworks,
+            "accounts/fireworks/models/kimi-k3",
+            billing_surface_for_route(
+                ApiProvider::Fireworks,
+                Some(crate::config::DEFAULT_FIREWORKS_BASE_URL),
+            ),
+            Some(&fingerprint),
+            &usage,
+            now,
+        );
+        crate::provider_lake::clear_live_snapshot();
+
+        assert!(audit.is_priced(), "{audit:?}");
+        assert_eq!(audit.provenance, Some(PricingProvenance::ProviderLive));
+        assert_eq!(audit.live_pricing_defect, None);
+        let estimate = audit.estimate.expect("priced");
+        assert!(
+            (estimate.usd - 9.0).abs() < 1e-12,
+            "verified live must win: {}",
+            estimate.usd
+        );
+    }
+
+    #[test]
+    fn models_dev_live_overlay_does_not_replace_bundled_catalog_rates() {
+        let _live = crate::provider_lake::lock_live_snapshot();
+        crate::provider_lake::clear_live_snapshot();
+        let now = Utc::now();
+        let fetched_at = u64::try_from(now.timestamp()).expect("timestamp");
+        crate::provider_lake::set_live_snapshot(
+            codewhale_config::catalog::CatalogSnapshot {
+                offerings: vec![codewhale_config::catalog::CatalogOffering {
+                    provider: "openai".to_string(),
+                    wire_model_id: "gpt-5.5".to_string(),
+                    endpoint_key: "chat".to_string(),
+                    cost: Some(codewhale_config::models_dev::ModelsDevCost {
+                        input: Some(99.0),
+                        output: Some(199.0),
+                        cache_read: Some(9.0),
+                        cache_write: None,
+                    }),
+                    source: codewhale_config::catalog::CatalogSource::Live {
+                        base_url_fingerprint: "models-dev-capabilities".to_string(),
+                        fetched_at,
+                    },
+                    ..Default::default()
+                }],
+            },
+            crate::provider_lake::LiveSource::ModelsDev,
+        );
+
+        // Stay under the 272K long-context surcharge so this asserts the
+        // catalog source, not the unrepresented-tier guard.
+        let usage = Usage {
+            input_tokens: 10_000,
+            output_tokens: 0,
+            ..Usage::default()
+        };
+        let audit = official_route_audit(ApiProvider::Openai, "gpt-5.5", &usage);
+        crate::provider_lake::clear_live_snapshot();
+
+        assert!(audit.is_priced(), "{audit:?}");
+        assert_eq!(audit.provenance, Some(PricingProvenance::ModelsDevBundled));
+        assert_eq!(audit.live_pricing_defect, None);
+        let estimate = audit.estimate.expect("priced");
+        assert!(
+            (estimate.usd - 0.05).abs() < 1e-12,
+            "bundled OpenAI rate must win over models.dev leftover cost: {}",
+            estimate.usd
         );
     }
 

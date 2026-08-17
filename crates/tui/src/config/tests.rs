@@ -1973,6 +1973,40 @@ fn launch_concurrency_defaults_and_clamps_to_max_subagents() {
 }
 
 #[test]
+fn subagent_budget_defaults_read_the_subagents_table() {
+    // #5324: per-child step/wall-time defaults are operator config
+    // (`[subagents]`), not per-call schema fields. `0` means unset (keep the
+    // role / 1800s defaults).
+    let cfg: SubagentsConfig =
+        toml::from_str("default_max_steps = 90\ndefault_wall_time_secs = 600")
+            .expect("parse [subagents] budget keys");
+    assert_eq!(cfg.default_max_steps, Some(90));
+    assert_eq!(cfg.default_wall_time_secs, Some(600));
+
+    let mut config = Config {
+        subagents: Some(SubagentsConfig {
+            default_max_steps: Some(240),
+            default_wall_time_secs: Some(2700),
+            ..SubagentsConfig::default()
+        }),
+        ..Config::default()
+    };
+    assert_eq!(config.subagent_default_max_steps(), Some(240));
+    assert_eq!(config.subagent_default_wall_time_secs(), Some(2700));
+
+    config.subagents = Some(SubagentsConfig {
+        default_max_steps: Some(0),
+        default_wall_time_secs: Some(0),
+        ..SubagentsConfig::default()
+    });
+    assert_eq!(config.subagent_default_max_steps(), None);
+    assert_eq!(config.subagent_default_wall_time_secs(), None);
+
+    assert_eq!(Config::default().subagent_default_max_steps(), None);
+    assert_eq!(Config::default().subagent_default_wall_time_secs(), None);
+}
+
+#[test]
 fn launch_concurrency_honors_deprecated_interactive_max_launch_alias() {
     // The old TOML key `interactive_max_launch` still deserializes, via
     // #[serde(rename)], into the hidden legacy field, and the resolver
@@ -10773,6 +10807,88 @@ fn status_items_deser_allows_missing_field() {
     "#;
     let tui: TuiConfig = toml::from_str(toml_str).expect("missing status_items should parse");
     assert_eq!(tui.status_items, None);
+}
+
+#[test]
+fn transcript_prose_measure_loads_and_resolves() -> Result<()> {
+    // #5436: absent = full width; 0 also means full width; a positive
+    // integer caps prose wrap at that many columns.
+    let absent: Config = toml::from_str("provider = \"openai\"\n")?;
+    absent.validate()?;
+    assert_eq!(absent.prose_measure(), None);
+
+    let zero: Config = toml::from_str(
+        "
+[transcript]
+prose_measure = 0
+",
+    )?;
+    zero.validate()?;
+    assert_eq!(zero.prose_measure(), None, "0 must mean full width");
+
+    let capped: Config = toml::from_str(
+        "
+[transcript]
+prose_measure = 120
+",
+    )?;
+    capped.validate()?;
+    assert_eq!(capped.prose_measure(), Some(120));
+    Ok(())
+}
+
+#[test]
+fn transcript_prose_measure_rejects_negative_with_clear_error() {
+    let config: Config = toml::from_str(
+        "
+[transcript]
+prose_measure = -5
+",
+    )
+    .expect("negative integers must parse so validate can name the key");
+
+    let error = config
+        .validate()
+        .expect_err("negative prose_measure should be rejected");
+    let message = error.to_string();
+    assert!(
+        message.contains("transcript.prose_measure"),
+        "error should name the key: {message}"
+    );
+    assert!(
+        message.contains("-5"),
+        "error should echo the value: {message}"
+    );
+    assert!(
+        message.contains("positive whole number"),
+        "error should say what is expected: {message}"
+    );
+}
+
+#[test]
+fn transcript_prose_measure_rejects_non_integers_with_clear_error() {
+    for raw in ["\"fill\"", "12.5", "true"] {
+        let config: Config = toml::from_str(&format!(
+            "
+[transcript]
+prose_measure = {raw}
+"
+        ))
+        .unwrap_or_else(|_| panic!("{raw} must parse so validate can name the key"));
+
+        let error = config
+            .validate()
+            .expect_err(&format!("{raw} should be rejected"));
+        let message = error.to_string();
+        assert!(
+            message.contains("transcript.prose_measure"),
+            "error should name the key for {raw}: {message}"
+        );
+        assert!(
+            message.contains("positive whole number"),
+            "error should say what is expected for {raw}: {message}"
+        );
+    }
 }
 
 #[test]

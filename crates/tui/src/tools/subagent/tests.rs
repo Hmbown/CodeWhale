@@ -4789,31 +4789,169 @@ fn subagent_tool_schemas_advertise_real_type_and_role_vocabulary() {
         );
     }
     assert!(agent_schema["properties"].get("role").is_none());
-    assert!(agent_schema["properties"].get("max_depth").is_some());
-    // Scout replaced the user-facing `model_strength` control: the schema no
-    // longer advertises it (legacy parsing survives for compatibility only).
-    assert!(
-        agent_schema["properties"].get("model_strength").is_none(),
-        "model_strength must not be advertised: {}",
+    // #5324/#5123: the advertised surface is exactly 12 fields. Budgets,
+    // model/thinking overrides, worktree-path knobs and spawn-contract
+    // ceremony moved off the schema; the parser still accepts them for
+    // replay compat (pinned by
+    // `agent_tool_unadvertised_fields_remain_parse_accepted` below).
+    let mut advertised: Vec<&str> = agent_schema["properties"]
+        .as_object()
+        .expect("agent schema properties must be an object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    advertised.sort_unstable();
+    let mut expected = [
+        "action",
+        "agent_id",
+        "detached",
+        "message",
+        "name",
+        "profile",
+        "prompt",
+        "resume_from",
+        "type",
+        "until",
+        "worktree",
+        "write_roots",
+    ];
+    expected.sort_unstable();
+    assert_eq!(
+        advertised, expected,
+        "the agent tool must advertise exactly the 12-field surface: {}",
         agent_schema["properties"]
     );
-    let thinking = schema_property_description(&agent_schema, "thinking");
-    assert!(
-        thinking.contains("inherit") && thinking.contains("scout/lookups"),
-        "thinking description should teach child thinking control: {thinking}"
-    );
-    assert!(agent_schema["properties"].get("model").is_some());
-    assert!(
-        agent_schema["properties"].get("token_budget").is_none(),
-        "ad-hoc children should inherit the generous runtime budget; exposing an optional cap invites accidental micromanagement"
-    );
+    for unadvertised in [
+        "max_depth",
+        "max_steps",
+        "wall_time_secs",
+        "model",
+        "model_strength",
+        "thinking",
+        "fork_context",
+        "workspace_policy",
+        "write_authority",
+        "worktree_base",
+        "worktree_branch",
+        "worktree_path",
+        "cwd",
+        "deliberate",
+        "dependencies",
+        "acceptance",
+        "expected_artifact",
+        "exact_files",
+        "coordination_contracts",
+        "timeout_secs",
+        "reason",
+        "include_archived",
+        // Pre-#5324 precedent: parse-accepted but never advertised.
+        "token_budget",
+    ] {
+        assert!(
+            agent_schema["properties"].get(unadvertised).is_none(),
+            "agent schema must not advertise {unadvertised:?}: {}",
+            agent_schema["properties"]
+        );
+    }
     let worktree = schema_property_description(&agent_schema, "worktree");
     assert!(
         worktree.contains("git worktree") && worktree.contains("parallel edit"),
         "worktree description should teach isolated parallel edits: {worktree}"
     );
-    assert!(agent_schema["properties"].get("worktree_branch").is_some());
-    assert!(agent_schema["properties"].get("worktree_path").is_some());
+}
+
+#[test]
+fn agent_tool_unadvertised_fields_remain_parse_accepted() {
+    // #5324 compat: the fields removed from the advertised schema must stay
+    // parse-accepted and honored unchanged — saved transcripts, ACP/MCP
+    // clients and Fleet configs still replay them. Same contract as the
+    // `token_budget` precedent (docs/SUBAGENTS.md).
+    let request = parse_spawn_request(&json!({
+        "prompt": "summarize the diff",
+        "model": "deepseek-v4-flash",
+        "model_strength": "faster",
+        "thinking": "max",
+        "max_steps": 300,
+        "wall_time_secs": 900,
+        "max_depth": 2,
+        "fork_context": false,
+        "workspace_policy": "shared",
+        "expected_artifact": "review findings",
+        "dependencies": ["#5324"],
+        "acceptance": ["tests pass"],
+        "exact_files": ["Cargo.toml"],
+        "coordination_contracts": ["public-api"],
+        "deliberate": false,
+    }))
+    .expect("every removed field must stay parse-accepted");
+    assert_eq!(request.model.as_deref(), Some("deepseek-v4-flash"));
+    assert_eq!(request.model_strength, SubAgentModelStrength::Faster);
+    assert!(request.model_strength_explicit);
+    assert_eq!(subagent_thinking_label(request.thinking), "max");
+    assert!(request.thinking_explicit);
+    assert_eq!(request.max_steps, Some(300));
+    assert_eq!(request.wall_time, Some(Duration::from_secs(900)));
+    assert_eq!(request.max_depth, Some(2));
+    assert_eq!(request.fork_context, Some(false));
+    assert!(
+        request.worktree.is_none(),
+        "workspace_policy=shared must not fabricate a worktree"
+    );
+    assert_eq!(
+        request.expected_artifact.as_deref(),
+        Some("review findings")
+    );
+    assert_eq!(request.dependencies, vec!["#5324".to_string()]);
+    assert_eq!(request.acceptance, vec!["tests pass".to_string()]);
+    assert_eq!(request.exact_files, vec!["Cargo.toml".to_string()]);
+    assert_eq!(
+        request.coordination_contracts,
+        vec!["public-api".to_string()]
+    );
+
+    // Declared authority still parses on its own (the containment rule that
+    // read_only cannot also declare write scope is unchanged #5426/#5435
+    // behavior, not schema rejection).
+    let request = parse_spawn_request(&json!({
+        "prompt": "p",
+        "write_authority": "read_only",
+    }))
+    .expect("write_authority must stay parse-accepted");
+    assert_eq!(request.write_authority, Some(SpawnWriteAuthority::ReadOnly));
+    let err = parse_spawn_request(&json!({
+        "prompt": "p",
+        "write_authority": "read_only",
+        "exact_files": ["Cargo.toml"],
+    }))
+    .expect_err("read_only plus a declared write scope stays refused");
+    assert!(err.to_string().contains("read_only"), "{err}");
+
+    // token_budget keeps its own long-standing unadvertised-but-accepted
+    // contract.
+    let request = parse_spawn_request(&json!({
+        "prompt": "p",
+        "token_budget": 5000,
+    }))
+    .expect("token_budget must stay parse-accepted");
+    assert_eq!(request.token_budget, Some(5000));
+
+    // The removed lifecycle extras are still read on their actions:
+    // action aliases keep parsing, wait still reads timeout_secs, status
+    // still reads include_archived, and interrupt still reaches its target
+    // resolution carrying reason (an unknown id proves parsing succeeded —
+    // a schema-style rejection would name the field instead).
+    assert_eq!(
+        parse_agent_tool_action(&json!({"action": "wait", "timeout_secs": 5})).unwrap(),
+        AgentToolAction::Wait
+    );
+    assert_eq!(
+        parse_agent_tool_action(&json!({"op": "status", "include_archived": true})).unwrap(),
+        AgentToolAction::Status
+    );
+    assert_eq!(
+        parse_agent_tool_action(&json!({"action": "interrupt", "reason": "stale"})).unwrap(),
+        AgentToolAction::Interrupt
+    );
 }
 
 #[test]
@@ -4977,7 +5115,10 @@ fn agent_tool_schema_advertises_lifecycle_and_coordination_actions() {
     assert!(action.contains("cancel"));
     assert!(agent_schema["properties"].get("agent_id").is_some());
     assert!(agent_schema["properties"].get("message").is_some());
-    assert!(agent_schema["properties"].get("reason").is_some());
+    // `reason` (interrupt), `timeout_secs` (wait) and `include_archived`
+    // (status) moved off the advertised schema with #5324; the pinning test
+    // above asserts their absence and the compat test below their continued
+    // parse-acceptance.
 }
 
 #[test]
@@ -9091,6 +9232,8 @@ fn explicit_state_roots_isolate_managers_for_the_same_execution_workspace() {
         Duration::from_secs(60),
         2,
         None,
+        None,
+        None,
     );
     let manager_b = new_shared_subagent_manager_with_state_root_and_timeout(
         workspace.clone(),
@@ -9099,6 +9242,8 @@ fn explicit_state_roots_isolate_managers_for_the_same_execution_workspace() {
         2,
         Duration::from_secs(60),
         2,
+        None,
+        None,
         None,
     );
 
@@ -14176,6 +14321,15 @@ fn child_step_override_wins_and_clamps_to_hard_ceiling() {
     assert_eq!(resolve_max_steps(FleetRole::Builder, Some(7), None), 7);
     assert_eq!(
         resolve_max_steps(FleetRole::Worker, Some(u32::MAX), None),
+        MAX_SUBAGENT_STEPS
+    );
+    // #5324: `[subagents] default_max_steps` is the configured fallback when
+    // the call carries no explicit budget; an explicit value still wins and
+    // the hard ceiling still clamps the configured default.
+    assert_eq!(resolve_max_steps(FleetRole::Scout, None, Some(90)), 90);
+    assert_eq!(resolve_max_steps(FleetRole::Builder, Some(7), Some(90)), 7);
+    assert_eq!(
+        resolve_max_steps(FleetRole::Worker, None, Some(u32::MAX)),
         MAX_SUBAGENT_STEPS
     );
 }

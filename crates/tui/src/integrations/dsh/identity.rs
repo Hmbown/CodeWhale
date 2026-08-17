@@ -71,7 +71,9 @@ impl DshPermissionMode {
 pub(crate) enum DshAdapter {
     /// `@deepseek-ai/dsh-llm-deepseek`, route id `deepseek-official`.
     DeepseekNative,
-    /// `@deepseek-ai/dsh-llm-pi-ai` hand-declared `openai-completions` route.
+    /// `@deepseek-ai/dsh-llm-pi-ai` hand-declared route. The route names the
+    /// provider's own wire dialect (`openai-completions`, `openai-responses`,
+    /// or `anthropic-messages`); see [`pi_ai_api_for`].
     PiAiOpenAiCompatible { route_id: String },
     /// DSH cannot carry this route; nothing is written for it.
     Unsupported { reason: String },
@@ -187,6 +189,27 @@ fn base_url_is_structural(url: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The `api:` dialect a hand-declared `dsh-llm-pi-ai` route names for a
+/// Codewhale wire protocol — identity-preserving, never an approximation.
+///
+/// Verified against the installed `@deepseek-ai/dsh@0.1.0-rc.6`:
+/// `@deepseek-ai/dsh-llm-pi-ai`'s exported profile schema accepts exactly
+/// `openai-completions | openai-responses | anthropic-messages` for `api:`
+/// (`lib/index.js`: `const PROTOCOLS = { "openai-completions": …,
+/// "openai-responses": openAIResponsesApi, "anthropic-messages": … }`),
+/// while `@deepseek-ai/dsh-llm-deepseek` (the `deepseek-official` route)
+/// speaks chat completions only — its single wire call posts to
+/// `<baseURL>/chat/completions` with no protocol switch — so
+/// Responses-dialect DeepSeek routes (e.g. `deepseek-v4-flash`) ride the
+/// pi-ai hand-declared route instead.
+pub(crate) fn pi_ai_api_for(protocol: WireProtocol) -> &'static str {
+    match protocol {
+        WireProtocol::ChatCompletions => "openai-completions",
+        WireProtocol::Responses => "openai-responses",
+        WireProtocol::AnthropicMessages => "anthropic-messages",
+    }
+}
+
 fn route_id_for(provider_id: &str) -> String {
     let mut out = String::from("codewhale-");
     for ch in provider_id.chars() {
@@ -241,30 +264,15 @@ pub(crate) fn map_identity(
         };
     }
 
-    match identity.protocol {
-        WireProtocol::ChatCompletions => {}
-        WireProtocol::Responses => {
-            return MappedIdentity {
-                source: identity.clone(),
-                adapter: DshAdapter::Unsupported {
-                    reason: "route speaks the OpenAI Responses protocol; this adapter only declares openai-completions DSH routes".to_string(),
-                },
-                dsh_reasoning_effort: None,
-                permission_mode,
-                disclosures,
-            };
-        }
-        WireProtocol::AnthropicMessages => {
-            return MappedIdentity {
-                source: identity.clone(),
-                adapter: DshAdapter::Unsupported {
-                    reason: "route speaks the Anthropic Messages protocol; this adapter only declares openai-completions DSH routes".to_string(),
-                },
-                dsh_reasoning_effort: None,
-                permission_mode,
-                disclosures,
-            };
-        }
+    // Every wire dialect Codewhale can speak, `dsh-llm-pi-ai` declares a
+    // hand-declared route for (see `pi_ai_api_for`), so the route is carried
+    // in its own dialect rather than refused or approximated as completions.
+    if identity.protocol != WireProtocol::ChatCompletions {
+        disclosures.push(format!(
+            "Route speaks the {} dialect; DSH carries it through the `@deepseek-ai/dsh-llm-pi-ai` hand-declared route (`api: {}`) — the wire dialect is preserved, never approximated as chat completions.",
+            dialect_label(identity.protocol),
+            pi_ai_api_for(identity.protocol)
+        ));
     }
 
     if identity.reasoning_effort.is_some() {
@@ -296,6 +304,14 @@ pub(crate) fn map_identity(
         dsh_reasoning_effort: None,
         permission_mode,
         disclosures,
+    }
+}
+
+fn dialect_label(protocol: WireProtocol) -> &'static str {
+    match protocol {
+        WireProtocol::ChatCompletions => "OpenAI Chat Completions",
+        WireProtocol::Responses => "OpenAI Responses",
+        WireProtocol::AnthropicMessages => "Anthropic Messages",
     }
 }
 
@@ -354,7 +370,7 @@ pub(crate) fn render_overlay(mapped: &MappedIdentity) -> Option<String> {
             {
                 out.push_str(&format!("        apiKeyEnv: {}\n", yaml_str(env)));
             }
-            out.push_str("        api: openai-completions\n");
+            out.push_str(&format!("        api: {}\n", pi_ai_api_for(src.protocol)));
             out.push_str(&format!("        baseURL: {}\n", yaml_str(&src.base_url)));
             out.push_str("        models:\n");
             out.push_str(&format!("          - id: {}\n", yaml_str(&src.model)));

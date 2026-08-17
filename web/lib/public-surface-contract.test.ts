@@ -405,12 +405,21 @@ done
     expect(matrixText).not.toContain('"approvalPostures"');
 
     for (const path of [
+      "README.ar.md",
+      "README.ca.md",
+      "README.de.md",
       "README.es-419.md",
+      "README.fr.md",
+      "README.hi.md",
+      "README.it.md",
       "README.ja-JP.md",
       "README.ko-KR.md",
+      "README.pl.md",
       "README.pt-BR.md",
+      "README.tr.md",
       "README.vi.md",
       "README.zh-CN.md",
+      "README.zh-TW.md",
     ]) {
       expect(text(path), path).toContain("Shift+Tab");
     }

@@ -81,6 +81,14 @@ pub(crate) fn rename_with_manager(
     }
     let mut session = match manager.load_session(session_id) {
         Ok(s) => s,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            match live_session_before_first_snapshot(manager, session_id, app) {
+                Some(s) => s,
+                None => {
+                    return CommandResult::error(format!("Could not load session: {err}"));
+                }
+            }
+        }
         Err(e) => return CommandResult::error(format!("Could not load session: {e}")),
     };
 
@@ -126,6 +134,39 @@ pub(crate) fn rename_with_manager(
         }
         Err(e) => CommandResult::error(format!("Could not save session: {e}")),
     }
+}
+
+/// Recover the session document for a live turn that has not completed (and
+/// therefore persisted) its first snapshot yet (#5430).
+///
+/// Until a turn completes, `sessions/<id>.json` does not exist — only the
+/// crash checkpoint written at dispatch does — so a mid-first-turn
+/// `/rename` or `/title` used to fail outright with "Could not load
+/// session". Prefer the durable checkpoint; if even that has not been
+/// flushed yet, rebuild the document from the same in-memory `App` state the
+/// checkpoint itself was built from. Everything rename needs to preserve
+/// (id, created_at, fork lineage, journal) is either in the checkpoint or
+/// has never existed, and `update_session` re-syncs the conversation from
+/// `App` state immediately afterwards in both cases.
+fn live_session_before_first_snapshot(
+    manager: &SessionManager,
+    session_id: &str,
+    app: &App,
+) -> Option<crate::session_manager::SavedSession> {
+    if let Ok(Some(checkpoint)) = manager.load_session_checkpoint(session_id) {
+        return Some(checkpoint);
+    }
+    Some(
+        crate::session_manager::create_saved_session_with_id_and_mode(
+            session_id.to_string(),
+            &app.api_messages,
+            &app.model_selection_for_persistence(),
+            &app.workspace,
+            u64::from(app.session.total_tokens),
+            app.system_prompt.as_ref(),
+            Some(app.mode.as_setting()),
+        ),
+    )
 }
 
 #[cfg(test)]
@@ -290,5 +331,65 @@ mod tests {
 
         let reloaded = manager.load_session(&session_id).unwrap();
         assert_eq!(reloaded.metadata.title, max_title);
+    }
+
+    // #5430: until a session's first turn completes, only the crash
+    // checkpoint written at dispatch exists — `sessions/<id>.json` does not.
+    // A mid-first-turn `/rename`/`/title` must apply from that checkpoint
+    // instead of failing with "Could not load session".
+    #[test]
+    fn rename_mid_first_turn_recovers_from_checkpoint_when_snapshot_missing() {
+        let tmp = TempDir::new().unwrap();
+        let manager = make_session_manager(&tmp);
+        let mut app = make_app(&tmp);
+
+        let checkpoint =
+            create_saved_session_with_mode(&[], "deepseek-v4-pro", tmp.path(), 0, None, None);
+        let session_id = checkpoint.metadata.id.clone();
+        manager.save_checkpoint(&checkpoint).unwrap();
+        app.current_session_id = Some(session_id.clone());
+        app.api_messages = vec![user_message("first turn still streaming")];
+
+        let result = rename_with_manager("Midturn Rename", &session_id, &manager, &mut app);
+        assert!(!result.is_error, "{result:?}");
+        assert_eq!(app.session_title.as_deref(), Some("Midturn Rename"));
+
+        // The rename promotes the checkpoint record to the durable session
+        // file, so the listing and the next launch see the new title.
+        let persisted = manager.load_session(&session_id).unwrap();
+        assert_eq!(persisted.metadata.title, "Midturn Rename");
+        assert_eq!(persisted.messages.len(), 1);
+    }
+
+    // Worst case of the same window: the user renames before even the
+    // dispatch checkpoint has been flushed. The document is then built from
+    // the same in-memory App state the checkpoint itself would carry.
+    #[test]
+    fn rename_mid_first_turn_builds_from_app_state_when_nothing_persisted() {
+        let tmp = TempDir::new().unwrap();
+        let manager = make_session_manager(&tmp);
+        let mut app = make_app(&tmp);
+
+        let session_id = "live-before-first-checkpoint";
+        app.current_session_id = Some(session_id.to_string());
+        app.api_messages = vec![user_message("turn one, nothing persisted yet")];
+
+        let result = rename_with_manager("Earliest Rename", session_id, &manager, &mut app);
+        assert!(!result.is_error, "{result:?}");
+        assert_eq!(app.session_title.as_deref(), Some("Earliest Rename"));
+
+        let persisted = manager.load_session(session_id).unwrap();
+        assert_eq!(persisted.metadata.title, "Earliest Rename");
+        assert_eq!(persisted.messages.len(), 1);
+    }
+
+    fn user_message(text: &str) -> crate::models::Message {
+        crate::models::Message {
+            role: "user".to_string(),
+            content: vec![crate::models::ContentBlock::Text {
+                text: text.to_string(),
+                cache_control: None,
+            }],
+        }
     }
 }

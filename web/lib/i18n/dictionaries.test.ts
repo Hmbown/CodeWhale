@@ -67,6 +67,16 @@ const CHROME_PROSE_KEYS = [
   "tickerAria",
 ] as const satisfies readonly (keyof ChromeDict)[];
 
+/**
+ * Locale/key pairs whose English-identical value is a native loanword in
+ * that locale, not a missing translation — asserted below so the equality
+ * is deliberate and visible. German "Community" matches the TUI pack
+ * (crates/tui/locales/de.json: "Community & Mitwirken").
+ */
+const CHROME_LOANWORDS: Record<string, readonly string[]> = {
+  de: ["navCommunity"],
+};
+
 /** Home keys that are real sentences and must be translated. */
 const HOME_PROSE_KEYS = [
   "metaTitle",
@@ -128,7 +138,10 @@ function flattenStrings(dict: object): Record<string, string> {
 describe("website dictionaries", () => {
   it("cover every routed locale except the English reference", () => {
     expect([...DICTIONARY_LOCALES].sort()).toEqual(
-      ["zh", "es", "id", "ja", "ko", "pt-BR", "ru", "uk", "vi"].sort(),
+      [
+        "zh", "es", "id", "ja", "ko", "pt-BR", "ru", "uk", "vi",
+        "fr", "de", "ca", "hi", "tr", "it", "pl", "ar",
+      ].sort(),
     );
     // Chinese is dictionary-backed like every other locale — no inline
     // en/zh special case survives in the page/component sources (#4934).
@@ -191,6 +204,12 @@ describe("website dictionaries", () => {
     }
     // zh ships a real translation, not an English pass-through.
     expect(getDocsGuide("zh").overviewTitle).not.toBe(EN_DOCS_GUIDE.overviewTitle);
+    // The wave-2 locales ship docs-guide too, translated rather than passed through.
+    for (const locale of ["fr", "de", "ca", "hi", "tr", "it", "pl", "ar"]) {
+      expect(getDocsGuide(locale).overviewTitle, `${locale} docs-guide`).not.toBe(
+        EN_DOCS_GUIDE.overviewTitle,
+      );
+    }
     // A locale without the file falls back to the English reference object.
     expect(getDocsGuide("ja")).toBe(EN_DOCS_GUIDE);
   });
@@ -216,11 +235,11 @@ describe("website dictionaries", () => {
 
   it("falls back to the English dictionary for unrouted locales — no missing markers", () => {
     for (const key of Object.keys(EN_CHROME) as (keyof ChromeDict)[]) {
-      expect(getChrome("fr")[key]).toBe(EN_CHROME[key]);
+      expect(getChrome("xx")[key]).toBe(EN_CHROME[key]);
       expect(getChrome("en")[key]).toBe(EN_CHROME[key]);
     }
     for (const key of Object.keys(EN_HOME) as (keyof HomeDict)[]) {
-      expect(getHome("de")[key]).toEqual(EN_HOME[key]);
+      expect(getHome("xx")[key]).toEqual(EN_HOME[key]);
     }
   });
 
@@ -277,7 +296,13 @@ describe("website dictionaries", () => {
     for (const locale of DICTIONARY_LOCALES) {
       const chrome = getChrome(locale);
       const home = getHome(locale);
+      const loanwords = new Set(CHROME_LOANWORDS[locale] ?? []);
       for (const key of CHROME_PROSE_KEYS) {
+        if (loanwords.has(key)) {
+          // A documented loanword: the shared value IS the native word.
+          expect(chrome[key], `${locale} chrome ${key} loanword`).toBe(EN_CHROME[key]);
+          continue;
+        }
         expect(chrome[key], `${locale} chrome ${key} is English pass-through`).not.toBe(
           EN_CHROME[key],
         );

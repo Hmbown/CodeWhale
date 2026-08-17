@@ -5,6 +5,7 @@ import {
   isPartialLocale,
   isTrackedLocale,
   isValidLocale,
+  localeDirection,
   locales,
   partialLocales,
 } from "./config";
@@ -21,7 +22,10 @@ describe("locale registry (single canonical taxonomy)", () => {
     const notRouted = ALL_LOCALES.filter(
       (l) => l.status === "planned" || l.status === "deferred",
     ).map((l) => l.code);
-    expect(notRouted.length).toBeGreaterThan(0);
+    // Every tracked locale is routed as of the wave-2 localization, so the
+    // registry has no planned/deferred entries today — the invariant below
+    // still guards any future demotion.
+    expect(notRouted).toEqual([]);
     for (const code of notRouted) {
       expect(locales).not.toContain(code);
       expect(isValidLocale(code)).toBe(false);
@@ -29,15 +33,26 @@ describe("locale registry (single canonical taxonomy)", () => {
     }
   });
 
-  it("ships the v0.9.2 website wave as partial with visible status", () => {
-    for (const code of ["ja", "vi", "ko", "ru", "uk", "es", "pt-BR", "id"]) {
-      expect(isValidLocale(code)).toBe(true);
-      expect(isPartialLocale(code)).toBe(true);
+  it("ships the v0.9.2 wave and the wave-2 majors as partial with visible status", () => {
+    for (const code of [
+      "ja", "vi", "ko", "ru", "uk", "es", "pt-BR", "id",
+      "fr", "de", "ca", "hi", "tr", "it", "pl", "ar",
+    ]) {
+      expect(isValidLocale(code), code).toBe(true);
+      expect(isPartialLocale(code), code).toBe(true);
     }
     expect(partialLocales).not.toContain("en");
     expect(partialLocales).not.toContain("zh");
-    expect(isPartialLocale("fr")).toBe(false);
-    expect(isValidLocale("fr")).toBe(false);
+  });
+
+  it("derives the document direction from the registry (RTL plumbing)", () => {
+    expect(localeDirection("ar")).toBe("rtl");
+    for (const l of ALL_LOCALES) {
+      if (l.code === "ar") continue;
+      expect(localeDirection(l.code), `${l.code} dir`).toBe("ltr");
+    }
+    expect(localeDirection("en")).toBe("ltr");
+    expect(localeDirection("xx")).toBe("ltr");
   });
 
   it("has unique codes and native-script labels", () => {

@@ -3188,7 +3188,16 @@ pub struct SubAgentManager {
     state_path: Option<PathBuf>,
     coordination_process_lock: std::sync::Mutex<Option<CoordinationProcessLock>>,
     coordination_process_lock_required: bool,
+    /// Configured default per-child model-turn budget (`[subagents]
+    /// default_max_steps`, #5324). `None` keeps the Fleet role defaults
+    /// (`WorkerRuntimeProfile::default_max_steps`); an explicit spawn
+    /// `max_steps` still wins.
     max_steps: Option<u32>,
+    /// Configured default per-child wall-clock budget (`[subagents]
+    /// default_wall_time_secs`, #5324). `None` keeps
+    /// `DEFAULT_CHILD_WALL_TIME`; an explicit spawn `wall_time_secs` still
+    /// wins.
+    wall_time: Option<Duration>,
     max_agents: usize,
     max_admitted_agents: usize,
     default_token_budget: Option<u64>,
@@ -3317,6 +3326,7 @@ impl SubAgentManager {
             coordination_process_lock: std::sync::Mutex::new(None),
             coordination_process_lock_required: false,
             max_steps: None,
+            wall_time: None,
             max_agents,
             max_admitted_agents: max_agents,
             default_token_budget: None,
@@ -3364,6 +3374,24 @@ impl SubAgentManager {
     #[must_use]
     pub fn with_default_token_budget(mut self, budget: Option<u64>) -> Self {
         self.default_token_budget = positive_token_budget(budget);
+        self
+    }
+
+    /// Set the configured default per-child model-turn budget applied when a
+    /// spawn carries no explicit `max_steps` (#5324). `None` keeps the Fleet
+    /// role defaults.
+    #[must_use]
+    pub fn with_default_max_steps(mut self, max_steps: Option<u32>) -> Self {
+        self.max_steps = max_steps;
+        self
+    }
+
+    /// Set the configured default per-child wall-clock budget applied when a
+    /// spawn carries no explicit `wall_time_secs` (#5324). `None` keeps
+    /// `DEFAULT_CHILD_WALL_TIME`.
+    #[must_use]
+    pub fn with_default_wall_time(mut self, wall_time: Option<Duration>) -> Self {
+        self.wall_time = wall_time;
         self
     }
 
@@ -6034,6 +6062,7 @@ impl SubAgentManager {
         runtime.worker_profile.max_steps = max_steps;
         let wall_time = options
             .wall_time
+            .or(self.wall_time)
             .unwrap_or(DEFAULT_CHILD_WALL_TIME)
             .min(MAX_CHILD_WALL_TIME);
         let worker_spec = AgentWorkerSpec {
@@ -7377,6 +7406,10 @@ pub fn new_shared_subagent_manager_with_timeout(
         running_heartbeat_timeout,
         launch_concurrency,
         default_token_budget,
+        // `[subagents]` budget defaults are an interactive `agent`-tool
+        // concern; this control-plane path keeps role/spec defaults.
+        None,
+        None,
     )
 }
 
@@ -7387,6 +7420,7 @@ pub fn new_shared_subagent_manager_with_timeout(
 /// `state_root/.codewhale/state`. Distinct state roots intentionally do not
 /// share write claims; an embedding host that runs them against the same
 /// workspace must provide any required cross-session write coordination.
+#[allow(clippy::too_many_arguments)] // legacy open constructor; budget pair rides along
 #[must_use]
 pub fn new_shared_subagent_manager_with_state_root_and_timeout(
     workspace: PathBuf,
@@ -7396,6 +7430,8 @@ pub fn new_shared_subagent_manager_with_state_root_and_timeout(
     running_heartbeat_timeout: Duration,
     launch_concurrency: usize,
     default_token_budget: Option<u64>,
+    default_max_steps: Option<u32>,
+    default_wall_time: Option<Duration>,
 ) -> SharedSubAgentManager {
     let max_agents = max_agents.clamp(1, MAX_SUBAGENTS);
     let state_path = match default_state_path(&state_root) {
@@ -7414,7 +7450,9 @@ pub fn new_shared_subagent_manager_with_state_root_and_timeout(
         .with_admission_limit(max_admitted_agents)
         .with_running_heartbeat_timeout(running_heartbeat_timeout)
         .with_launch_concurrency(launch_concurrency)
-        .with_default_token_budget(default_token_budget);
+        .with_default_token_budget(default_token_budget)
+        .with_default_max_steps(default_max_steps)
+        .with_default_wall_time(default_wall_time);
     if let Some(state_path) = state_path {
         manager = manager.with_state_path(state_path);
     }
@@ -7574,18 +7612,27 @@ impl ToolSpec for AgentTool {
             "Start with action=start and prompt; returns a turn-owned agent_id immediately. Read-only roles need no extra fields. Set detached=true only for work that must remain independently observable after the turn. ",
             "Use multiple starts for independent parallel tasks. ",
             "type selects the Fleet role: worker (full tool access), scout (fast read-only exploration), planner (grounded strategy, read-only probes), reviewer (reads and grades code), builder (lands focused code changes), verifier (runs tests and reports evidence), consultant (read-only design counsel), or custom (allowed_tools on the parent's posture). ",
-            "profile runs the child as a named Fleet profile (roster member) — its role posture, model route, and instruction overlay — so pass a profile only when the task needs that member and never pass model alongside it. ",
-            "max_depth caps how deep the child may spawn its own descendants (it can only narrow the inherited budget). workspace_policy=shared (default) runs in the parent checkout; worktree=true (or workspace_policy=worktree) gives the child an isolated git worktree — use it whenever parallel writers must not collide with the parent checkout. ",
-            "A write-capable child defaults write scope to the parent workspace; narrow it with write_roots (repo-relative directory trees) and exact_files (individual files) so parallel children claim disjoint scope. ",
+            "profile runs the child as a named Fleet profile (roster member) — its role posture, model route, and thinking tier — so pass a profile only when the task needs that member. Without a profile the child inherits the parent's model; per-call model or thinking overrides are not part of this surface. ",
+            "Child run budgets (model turns, wall time) come from Fleet role defaults and operator [subagents] config, not per-call fields. ",
+            "worktree=true gives the child an isolated git worktree — use it whenever parallel writers must not collide with the parent checkout. ",
+            "A write-capable child defaults write scope to the parent workspace; narrow it with write_roots (repo-relative directory trees) so parallel children claim disjoint scope. ",
             "Prefer type=builder for write work and type=verifier (or the Run tool with action=\"verifiers\") after writes settle — dispatch is not completion. ",
             "Coordinate through this same tool: action=message queues a note without waking the child; action=followup delivers queued notes and wakes a running child for its next user-provenance turn; action=interrupt stops the current child turn while preserving its checkpoint; action=wait blocks without changing child state, and until=\"all\" joins a whole fan-out in one call. ",
             "Action contract: start requires prompt; message/followup require a target and message; peek/interrupt/cancel require a target; status and wait may be unscoped. ",
             "The narrow agents/list, agents/message, agents/followup, agents/interrupt, and agents/wait tools expose the same semantics directly; there is no second transport. ",
-            "In Operate, use detached=true only for independent or long work that must outlive the active turn; a write-capable root start defaults write scope to the parent workspace unless narrowed with write_roots, exact_files, or coordination_contracts; arbitrary shell remains gated. ",
+            "In Operate, use detached=true only for independent or long work that must outlive the active turn; a write-capable root start defaults write scope to the parent workspace unless narrowed with write_roots; arbitrary shell remains gated. ",
             "Legacy action=status|peek|cancel remain for compatibility."
         )
     }
 
+    /// Advertised `agent` schema: exactly 12 fields (#5324, #5123) —
+    /// action, prompt, type, profile, name, agent_id, message, until,
+    /// detached, worktree, write_roots, resume_from — plus the
+    /// action-discriminated `dependentSchemas` tree. Every field removed
+    /// from this schema (budgets, model/thinking overrides, worktree-path
+    /// knobs, deliberate/spawn-contract knobs, wait/status extras) stays
+    /// parse-accepted unchanged for saved transcripts, ACP/MCP clients and
+    /// Fleet configs, exactly like `token_budget`; see docs/SUBAGENTS.md.
     fn input_schema(&self) -> Value {
         let target_required = json!([
             {
@@ -7614,23 +7661,9 @@ impl ToolSpec for AgentTool {
                     "type": "string",
                     "description": "Agent id or session name for any action except start and unscoped status/wait."
                 },
-                "timeout_secs": {
-                    "type": "integer",
-                    "minimum": 5,
-                    "maximum": 120,
-                    "description": "For action=wait: maximum seconds to block (default 30). Prefer ending the turn and staying reachable — results arrive automatically as <codewhale:subagent.done> sentinels — only wait when you must join before continuing."
-                },
                 "message": {
                     "type": "string",
                     "description": "Parent note for action=message or action=followup. message queues only; followup also wakes a running child."
-                },
-                "reason": {
-                    "type": "string",
-                    "description": "Optional bounded reason for action=interrupt."
-                },
-                "include_archived": {
-                    "type": "boolean",
-                    "description": "For action=status without agent_id, include prior-session completed agents."
                 },
                 "name": {
                     "type": "string",
@@ -7638,21 +7671,11 @@ impl ToolSpec for AgentTool {
                 },
                 "prompt": {
                     "type": "string",
-                    "description": "The focused task to give the worker. A read-only role needs no write scope; a write-capable role defaults to the parent workspace unless narrowed with write_roots, exact_files, or coordination_contracts."
+                    "description": "The focused task to give the worker. A read-only role needs no write scope; a write-capable role defaults to the parent workspace unless narrowed with write_roots."
                 },
                 "detached": {
                     "type": "boolean",
                     "description": "False (default): the active turn owns this direct child and cancels it before ending. true: explicitly detached work remains running and inspectable after the parent turn ends; cancel it with agent(action=cancel)."
-                },
-                "dependencies": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "Bounded prerequisite facts or task ids relevant to this child. Raw parent reasoning and transcript text do not belong here."
-                },
-                "acceptance": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "Bounded observable checks this child must satisfy before completion."
                 },
                 "type": {
                     "type": "string",
@@ -7661,91 +7684,16 @@ impl ToolSpec for AgentTool {
                 },
                 "profile": {
                     "type": "string",
-                    "description": "Optional Fleet roster member to run this child as (e.g. reviewer, scout, builder, verifier, synthesizer, manager, or a custom member from project .codewhale/agents/, personal $CODEWHALE_HOME/agents/, or [fleet.profiles] config). The member supplies role posture, model routing, instruction overlay, and delegation bounds. Named profiles bind 1:1 to their configured route — 'model' is not accepted when a named profile is set. Only 'general' (no profile) permits the model option. See /fleet. For fast exploration use the scout role."
-                },
-                "model": {
-                    "type": "string",
-                    "description": "Optional exact provider model id for the child — general dispatch only (no named profile). Not accepted when a named fleet profile is set; named agents use their configured route. For quick research and triage use the scout role, which resolves its own route."
-                },
-                "thinking": {
-                    "type": "string",
-                    "enum": ["inherit", "auto", "off", "low", "medium", "high", "max"],
-                    "description": "Optional child thinking budget. inherit (default) follows the parent thinking mode. auto chooses from the child prompt. off is best for scout/lookups. high is for normal reasoning. max is for hard design/debug/release/security work."
-                },
-                "cwd": {
-                    "type": "string",
-                    "description": "Optional pre-existing working directory for the child; must be inside the parent workspace. Prefer worktree=true for isolated parallel edit tasks."
+                    "description": "Optional Fleet roster member to run this child as (e.g. reviewer, scout, builder, verifier, synthesizer, manager, or a custom member from project .codewhale/agents/, personal $CODEWHALE_HOME/agents/, or [fleet.profiles] config). The member supplies role posture, model routing, thinking tier, instruction overlay, and delegation bounds. Named profiles bind 1:1 to their configured route — the child's model and thinking come from the profile or inherit the parent; there is no per-call model override on this surface. See /fleet. For fast exploration use the scout role."
                 },
                 "worktree": {
                     "type": "boolean",
                     "description": "When true, create a fresh git worktree and branch for this child before it starts. Use for parallel edit tasks that must not collide with the parent checkout."
                 },
-                "worktree_branch": {
-                    "type": "string",
-                    "description": "Optional branch name for worktree=true. Defaults to codex/agent-<name>-<id>."
-                },
-                "worktree_base": {
-                    "type": "string",
-                    "description": "Optional git ref to branch the worktree from. Defaults to HEAD in the parent checkout."
-                },
-                "worktree_path": {
-                    "type": "string",
-                    "description": "Optional worktree checkout path. Relative paths are created under the default sibling .codewhale-worktrees directory, not inside the parent checkout."
-                },
-                "fork_context": {
-                    "type": "boolean",
-                    "description": "Unset (default): auto — a read-only Fleet worker (scout/planner/reviewer/verifier or read_only write authority) running the parent's exact model route in the parent workspace forks the parent's cached context prefix; anything else starts fresh. true: force the parent prefix (cheap only on the parent's model route). false: force a fresh isolated context."
-                },
-                "max_depth": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 3,
-                    "description": "Optional absolute nested-agent depth cap for this child. It may only narrow the inherited runtime budget, never widen it. Defaults to the inherited budget."
-                },
-                "max_steps": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 2000,
-                    "description": "Optional child model-turn budget. Defaults by Fleet role (60 for scout/reviewer/planner/verifier, 120 for builder/worker/custom) and is clamped to 2000."
-                },
-                "wall_time_secs": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 86400,
-                    "description": "Optional child wall-clock budget in seconds. Default 1800; clamped to 86400."
-                },
-                "workspace_policy": {
-                    "type": "string",
-                    "enum": ["shared", "worktree"],
-                    "description": "Workspace isolation policy — enforced. worktree creates a fresh git worktree for the child; shared runs in the parent checkout and conflicts with worktree options."
-                },
-                "expected_artifact": {
-                    "type": "string",
-                    "description": "What the child should return (summary, patch path, test report, review findings, …). Appended to the child's prompt so the contract is visible to it."
-                },
-                "write_authority": {
-                    "type": "string",
-                    "enum": ["read_only", "workspace_write", "worktree_write"],
-                    "description": "Write authority for the child — enforced. read_only removes write permission from the child's runtime profile (and its descendants); worktree_write requires worktree isolation."
-                },
                 "write_roots": {
                     "type": "array",
                     "items": { "type": "string" },
                     "description": "Expected repo-relative directory trees this child may mutate. Defaults to the parent workspace ('.') when omitted on a write-capable start. Shared write-capable children claim these before launch; scope expansion must use agents/coordinate before mutation. Paths outside the parent workspace are refused."
-                },
-                "exact_files": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "Expected repo-relative individual files this child may mutate."
-                },
-                "coordination_contracts": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "Named shared contracts or schemas this child owns while active; equal names contend even when file paths differ."
-                },
-                "deliberate": {
-                    "type": "boolean",
-                    "description": "When true, require type (or profile), workspace_policy, expected_artifact, and write_authority."
                 },
                 "resume_from": {
                     "type": "string",

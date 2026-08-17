@@ -313,23 +313,7 @@ fn keyed_openai_compatible_route_names_only_the_env_var() {
 }
 
 #[test]
-fn unsupported_protocols_and_credentialed_urls_are_refused() {
-    let id = identity(
-        "anthropic",
-        "claude",
-        "https://api.anthropic.com",
-        WireProtocol::AnthropicMessages,
-    );
-    let mapped = map_identity(&id, false);
-    assert!(matches!(mapped.adapter, DshAdapter::Unsupported { .. }));
-    assert!(render_overlay(&mapped).is_none());
-    let id = identity(
-        "openai-codex",
-        "gpt",
-        "https://x/responses",
-        WireProtocol::Responses,
-    );
-    assert!(!map_identity(&id, false).mappable());
+fn credentialed_base_urls_are_refused_and_the_error_names_the_route() {
     let id = identity(
         "custom",
         "m",
@@ -348,6 +332,118 @@ fn unsupported_protocols_and_credentialed_urls_are_refused() {
         WireProtocol::ChatCompletions,
     );
     assert!(!map_identity(&id, false).mappable());
+    // A Responses-dialect route with a credentialed URL is still refused —
+    // carrying the dialect never relaxes the structural-URL guard.
+    let id = identity(
+        "custom",
+        "m",
+        "https://user:token@gateway/v1",
+        WireProtocol::Responses,
+    );
+    assert!(!map_identity(&id, false).mappable());
+
+    // The plan refusal names the current route so it is actionable.
+    let (_dir, paths) = lab_paths();
+    let detection = detection_ok();
+    let id = identity(
+        "custom",
+        "secret-gateway-model",
+        "https://user:token@gateway/v1",
+        WireProtocol::ChatCompletions,
+    );
+    let error = super::plan(&paths, &detection, &id, "web", false, false)
+        .expect_err("credentialed URL must refuse");
+    let text = format!("{error:#}");
+    assert!(text.contains("custom/secret-gateway-model"), "{text}");
+    assert!(text.contains("userinfo"), "{text}");
+}
+
+#[test]
+fn responses_dialect_route_is_carried_not_approximated() {
+    // The default DeepSeek route from #5434: deepseek-v4-flash speaks the
+    // Responses dialect at https://api.deepseek.com/beta.
+    let id = identity(
+        "deepseek",
+        "deepseek-v4-flash",
+        "https://api.deepseek.com/beta",
+        WireProtocol::Responses,
+    );
+    let mapped = map_identity(&id, false);
+    assert_eq!(
+        mapped.adapter,
+        DshAdapter::PiAiOpenAiCompatible {
+            route_id: "codewhale-deepseek".to_string()
+        }
+    );
+    assert_eq!(mapped.dsh_provider(), Some("codewhale-deepseek"));
+    let overlay = render_overlay(&mapped).unwrap();
+    assert!(overlay.contains("provider: 'codewhale-deepseek'"));
+    assert!(overlay.contains("api: openai-responses"));
+    assert!(!overlay.contains("api: openai-completions"));
+    assert!(overlay.contains("baseURL: 'https://api.deepseek.com/beta'"));
+    assert!(overlay.contains("apiKeyEnv: 'DEEPSEEK_API_KEY'"));
+    assert!(overlay.contains("model: 'deepseek-v4-flash'"));
+    assert!(
+        mapped
+            .disclosures
+            .iter()
+            .any(|d| d.contains("openai-responses") && d.contains("never approximated"))
+    );
+
+    // And it plans cleanly end-to-end.
+    let (_dir, paths) = lab_paths();
+    let detection = detection_ok();
+    let plan = super::plan(&paths, &detection, &id, "web", false, false).unwrap();
+    assert!(plan.overlay_text.contains("api: openai-responses"));
+    assert_eq!(plan.mapped.dsh_provider(), Some("codewhale-deepseek"));
+}
+
+#[test]
+fn anthropic_messages_route_is_carried_in_its_own_dialect() {
+    let id = identity(
+        "anthropic",
+        "claude-sonnet-5",
+        "https://api.anthropic.com",
+        WireProtocol::AnthropicMessages,
+    );
+    let mapped = map_identity(&id, false);
+    assert!(matches!(
+        mapped.adapter,
+        DshAdapter::PiAiOpenAiCompatible { .. }
+    ));
+    let overlay = render_overlay(&mapped).unwrap();
+    assert!(overlay.contains("api: anthropic-messages"));
+    assert!(overlay.contains("apiKeyEnv: 'ANTHROPIC_API_KEY'"));
+    assert!(overlay.contains("baseURL: 'https://api.anthropic.com'"));
+}
+
+#[test]
+fn status_surfaces_route_carryability_before_plan() {
+    let (_dir, paths) = lab_paths();
+    let detection = detection_ok();
+    let id = identity(
+        "deepseek",
+        "deepseek-v4-flash",
+        "https://api.deepseek.com/beta",
+        WireProtocol::Responses,
+    );
+    let report = compute_status(&paths, detection.clone(), Ok(id), false, avail()).unwrap();
+    let line = status_line(&report);
+    assert!(
+        line.contains("deepseek/deepseek-v4-flash is carryable via codewhale-deepseek"),
+        "{line}"
+    );
+
+    let id = identity(
+        "custom",
+        "m",
+        "https://user:token@gateway/v1",
+        WireProtocol::ChatCompletions,
+    );
+    let report = compute_status(&paths, detection, Ok(id), false, avail()).unwrap();
+    let line = status_line(&report);
+    assert!(line.contains("custom/m cannot be carried by DSH"), "{line}");
+    assert!(line.contains("userinfo"), "{line}");
 }
 
 #[test]

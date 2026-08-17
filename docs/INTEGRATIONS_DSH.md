@@ -29,11 +29,13 @@ with the opt-in plugin path below, whatever `dsh plugin` itself writes into
 the dedicated `codewhale` DSH profile):
 
 - `codewhale.patch.yml` — the overlay. Identity only: provider route, model,
-  base URL, and (native DeepSeek route) `reasoningEffort`. For
-  OpenAI-compatible providers it declares a `codewhale-<provider>` route on
-  DSH's `llm-pi-ai` adapter with `apiKeyEnv` naming the provider's canonical
-  environment variable — the *name*, never the value. Keyless local routes
-  (loopback Ollama / LM Studio / vLLM / SGLang) carry no credential reference.
+  base URL, and (native DeepSeek route) `reasoningEffort`. For every
+  non-native route it declares a `codewhale-<provider>` route on DSH's
+  `llm-pi-ai` adapter, naming that route's own wire dialect under `api:`
+  (`openai-completions`, `openai-responses`, or `anthropic-messages`) and
+  `apiKeyEnv` naming the provider's canonical environment variable — the
+  *name*, never the value. Keyless local routes (loopback Ollama / LM Studio
+  / vLLM / SGLang) carry no credential reference.
 - `receipt.json` — the current connection record plus an append-only history
   of `connect` / `update` / `disable` / `enable` / `remove` events with the
   overlay SHA-256, dsh version, `$DSH_HOME`, mapped identity, permission mode,
@@ -102,8 +104,24 @@ sessions, and profiles remain theirs.
   cleared in DSH; `status`/`plan` list them.
 - Reasoning tiers are mapped only for the native DeepSeek route
   (`off|high|max`); hand-declared routes send no effort parameter.
-- Anthropic Messages and OpenAI Responses routes cannot be carried and are
-  refused rather than approximated.
+- Wire dialects are carried, never approximated: a Chat Completions route
+  declares `api: openai-completions`, an OpenAI Responses route (e.g. the
+  default `deepseek/deepseek-v4-flash`) declares `api: openai-responses`,
+  and an Anthropic Messages route declares `api: anthropic-messages`. This
+  follows the installed adapters' own declarations (verified against
+  `@deepseek-ai/dsh@0.1.0-rc.6`): `@deepseek-ai/dsh-llm-deepseek` — the
+  `deepseek-official` route — speaks chat completions only (its single wire
+  call posts to `<baseURL>/chat/completions`, with no protocol switch),
+  while `@deepseek-ai/dsh-llm-pi-ai`'s hand-declared route schema accepts
+  exactly `openai-completions | openai-responses | anthropic-messages` for
+  `api:`. So DeepSeek chat routes ride the native adapter (with reasoning
+  tiers), and every other dialect — including DeepSeek's own
+  Responses-dialect models — rides a hand-declared `codewhale-*` pi-ai
+  route in its own dialect.
+- What is refused: base URLs that embed credentials (userinfo or
+  query/fragment material) are never copied into the overlay; `plan` fails
+  naming the current `provider/model` and the reason, and `status` shows
+  carry-ability for the current route before `plan` is ever run.
 
 ## The DSH plugin path (`install-bundle`)
 

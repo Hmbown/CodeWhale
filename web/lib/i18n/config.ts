@@ -29,6 +29,9 @@
 /** Status of a locale relative to the website. */
 export type LocaleStatus = "shipped" | "partial" | "planned" | "deferred";
 
+/** Direction of the locale's script — used for the html `dir` attribute. */
+export type LocaleDirection = "ltr" | "rtl";
+
 export interface LocaleEntry {
   /** ISO 639-1 or IETF BCP 47 language tag used in routes. */
   code: string;
@@ -36,8 +39,15 @@ export interface LocaleEntry {
   label: string;
   /** Status relative to the website. */
   status: LocaleStatus;
+  /** Text direction for the html `dir` attribute. Defaults to "ltr". */
+  dir?: LocaleDirection;
   /** One-line scope note shown to maintainers (not rendered). */
   note?: string;
+}
+
+/** Text direction of a tracked locale ("ltr" for untracked codes). */
+export function localeDirection(locale: string): LocaleDirection {
+  return ALL_LOCALES.find((l) => l.code === locale)?.dir ?? "ltr";
 }
 
 /**
@@ -105,20 +115,20 @@ export const ALL_LOCALES: LocaleEntry[] = [
   {
     code: "fr",
     label: "Français",
-    status: "planned",
-    note: "#4788 — TUI pack shipped in v0.9.2; website next wave",
+    status: "partial",
+    note: "#4788 — TUI pack shipped in v0.9.2; chrome + home + docs-guide localized; page bodies fall back to English",
   },
   {
     code: "de",
     label: "Deutsch",
-    status: "planned",
-    note: "#4788 — TUI pack shipped in v0.9.2; website next wave",
+    status: "partial",
+    note: "#4788 — TUI pack shipped in v0.9.2; chrome + home + docs-guide localized; page bodies fall back to English",
   },
   {
     code: "ca",
     label: "Català",
-    status: "planned",
-    note: "#4749/#4788 — TUI pack shipped in v0.9.2; website next wave",
+    status: "partial",
+    note: "#4749/#4788 — TUI pack shipped in v0.9.2; chrome + home + docs-guide localized; page bodies fall back to English",
   },
   {
     code: "id",
@@ -129,14 +139,33 @@ export const ALL_LOCALES: LocaleEntry[] = [
   {
     code: "hi",
     label: "हिन्दी",
-    status: "planned",
-    note: "#4790 — TUI pack shipped in v0.9.2; website next wave",
+    status: "partial",
+    note: "#4790 — TUI pack shipped in v0.9.2; chrome + home + docs-guide localized; page bodies fall back to English",
+  },
+  {
+    code: "tr",
+    label: "Türkçe",
+    status: "partial",
+    note: "major-language wave — chrome + home + docs-guide localized; page bodies fall back to English",
+  },
+  {
+    code: "it",
+    label: "Italiano",
+    status: "partial",
+    note: "major-language wave — chrome + home + docs-guide localized; page bodies fall back to English",
+  },
+  {
+    code: "pl",
+    label: "Polski",
+    status: "partial",
+    note: "major-language wave — chrome + home + docs-guide localized; page bodies fall back to English",
   },
   {
     code: "ar",
     label: "العربية",
-    status: "deferred",
-    note: "RTL candidate — needs bidirectional layout/typography QA first",
+    status: "partial",
+    dir: "rtl",
+    note: "RTL — html dir derived from this entry; chrome + home + docs-guide localized, page bodies fall back to English",
   },
 ];
 

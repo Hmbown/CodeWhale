@@ -1266,6 +1266,12 @@ impl Engine {
             config.subagent_heartbeat_timeout,
             config.launch_concurrency,
             config.subagent_token_budget,
+            // #5324: per-child budget defaults are operator config, not
+            // per-call schema fields.
+            api_config.subagent_default_max_steps(),
+            api_config
+                .subagent_default_wall_time_secs()
+                .map(std::time::Duration::from_secs),
         );
         let shell_manager = config
             .runtime_services

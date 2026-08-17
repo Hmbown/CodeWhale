@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Fraunces, IBM_Plex_Sans, JetBrains_Mono, Noto_Serif_SC } from "next/font/google";
 import { Nav } from "@/components/nav";
 import { Footer } from "@/components/footer";
-import { locales, type Locale } from "@/lib/i18n/config";
+import { localeDirection, locales, type Locale } from "@/lib/i18n/config";
 import { getChrome, getHome } from "@/lib/i18n/dictionaries";
 import { buildPageMetadata } from "@/lib/page-meta";
 import "../globals.css";
@@ -63,10 +63,14 @@ export default async function LocaleLayout({
 }) {
   const { locale } = await params;
   const chrome = getChrome(locale);
+  // RTL locales (e.g. ar) set the document direction from the canonical
+  // registry so the browser handles bidirectional layout from the root.
+  const dir = localeDirection(locale);
 
   return (
     <html
       lang={locale}
+      dir={dir}
       className={`${display.variable} ${body.variable} ${mono.variable} ${cjk.variable}`}
       suppressHydrationWarning
     >

@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:1569156eb887 -->
+<!-- source: README.md sha256:4fc19c5f9596 -->
 # Codewhale
 
 Агент для програмування з відкритим кодом у вашому терміналі — модель приносите ви.
@@ -28,7 +28,7 @@ Codewhale починався як нативний інструмент для D
 це — одна з найкорисніших речей, які ви можете зробити — див.
 [Участь у проєкті](#участь-у-проєкті).
 
-[English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja-JP.md) · [Tiếng Việt](README.vi.md) · [Bahasa Indonesia](README.id.md) · [한국어](README.ko-KR.md) · [Español](README.es-419.md) · [Português](README.pt-BR.md) · [Русский](README.ru.md) · [codewhale.net](https://codewhale.net/) · [Документація](docs) · [Журнал змін](CHANGELOG.md) · [Discord](https://discord.gg/37gfS3ksug)
+[English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja-JP.md) · [Tiếng Việt](README.vi.md) · [Bahasa Indonesia](README.id.md) · [한국어](README.ko-KR.md) · [Español](README.es-419.md) · [Português](README.pt-BR.md) · [Русский](README.ru.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [繁體中文](README.zh-TW.md) · [हिन्दी](README.hi.md) · [Türkçe](README.tr.md) · [Italiano](README.it.md) · [Polski](README.pl.md) · [العربية](README.ar.md) · [Català](README.ca.md) · [codewhale.net](https://codewhale.net/) · [Документація](docs) · [Журнал змін](CHANGELOG.md) · [Discord](https://discord.gg/37gfS3ksug)
 
 [![CI](https://github.com/Hmbown/CodeWhale/actions/workflows/ci.yml/badge.svg)](https://github.com/Hmbown/CodeWhale/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/codewhale-cli?label=crates.io)](https://crates.io/crates/codewhale-cli)

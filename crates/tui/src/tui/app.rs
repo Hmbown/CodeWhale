@@ -1448,6 +1448,9 @@ pub struct App {
     /// Toggled by `/voice-control`.
     pub voice_control_enabled: bool,
     pub transcript_spacing: TranscriptSpacing,
+    /// Prose wrap cap from `[transcript] prose_measure` (#5436). `None`
+    /// means prose uses the full content width, like tool/status cells.
+    pub(crate) prose_measure: Option<u16>,
     /// Sidebar hover state for mouse tooltip support.
     pub sidebar_hover: SidebarHoverState,
     /// Current hover tooltip text, if any.
@@ -4520,6 +4523,7 @@ impl App {
             motion_mode: self.motion_policy().mode(),
             spacing: self.transcript_spacing,
             palette_mode: self.ui_theme.mode,
+            prose_measure: self.prose_measure,
         }
     }
 

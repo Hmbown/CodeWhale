@@ -8,8 +8,8 @@ use anyhow::{Context, Result};
 
 use crate::config::Config;
 use crate::integrations::dsh::{
-    self, CLI_COMMAND, DetectEnv, DshIntegrationState, DshPaths, DshPlan, DshReceiptEvent,
-    DshStatusReport, ProcessRunner, RELATIONSHIP_LABEL,
+    self, CLI_COMMAND, DetectEnv, DshAdapter, DshIntegrationState, DshPaths, DshPlan,
+    DshReceiptEvent, DshStatusReport, ProcessRunner, RELATIONSHIP_LABEL,
 };
 use crate::{DshIntegrationCommand, IntegrationsCommand};
 
@@ -167,13 +167,21 @@ fn print_status(report: &DshStatusReport) {
         }
     }
     match (&report.current_identity, &report.current_identity_error) {
-        (Some(now), _) => println!(
+        (Some(now), _) if now.mappable() => println!(
             "  current Codewhale route: {}/{} · {} · would map via {}",
             now.source.provider_id,
             now.source.model,
             now.source.base_url,
             now.dsh_provider().unwrap_or("(not mappable)")
         ),
+        (Some(now), _) => {
+            if let DshAdapter::Unsupported { reason } = &now.adapter {
+                println!(
+                    "  current Codewhale route: {}/{} · {} · cannot be carried by DSH: {reason}",
+                    now.source.provider_id, now.source.model, now.source.base_url
+                );
+            }
+        }
         (None, Some(error)) => println!("  current Codewhale route: unresolved ({error})"),
         (None, None) => {}
     }

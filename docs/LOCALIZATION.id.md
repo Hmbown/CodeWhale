@@ -55,6 +55,15 @@ Paket TUI di bawah `crates/tui/locales/` adalah permukaan terjemahan terbesar di
 | Bahasa Portugis Brasil | `README.pt-BR.md` | **shipped** | Ditinjau per rilis |
 | Bahasa Rusia | `README.ru.md` | **shipped** | Ditinjau per rilis |
 | Bahasa Ukraina | `README.uk.md` | **shipped** | Ditinjau per rilis |
+| Bahasa Prancis | `README.fr.md` | **shipped** | Menunggu tinjauan penutur asli |
+| Bahasa Jerman | `README.de.md` | **shipped** | Menunggu tinjauan penutur asli |
+| Bahasa Mandarin Tradisional | `README.zh-TW.md` | **shipped** | Menunggu tinjauan penutur asli |
+| Bahasa Hindi | `README.hi.md` | **shipped** | Menunggu tinjauan penutur asli |
+| Bahasa Turki | `README.tr.md` | **shipped** | Menunggu tinjauan penutur asli |
+| Bahasa Italia | `README.it.md` | **shipped** | Menunggu tinjauan penutur asli |
+| Bahasa Polandia | `README.pl.md` | **shipped** | Menunggu tinjauan penutur asli |
+| Bahasa Arab | `README.ar.md` | **shipped** | Menunggu tinjauan penutur asli |
+| Bahasa Katalan | `README.ca.md` | **shipped** | Menunggu tinjauan penutur asli |
 
 ---
 

@@ -31,6 +31,30 @@ import { chrome as ukChrome } from "./uk/chrome";
 import { home as ukHome } from "./uk/home";
 import { chrome as esChrome } from "./es/chrome";
 import { home as esHome } from "./es/home";
+import { chrome as frChrome } from "./fr/chrome";
+import { home as frHome } from "./fr/home";
+import { docsGuide as frDocsGuide } from "./fr/docs-guide";
+import { chrome as deChrome } from "./de/chrome";
+import { home as deHome } from "./de/home";
+import { docsGuide as deDocsGuide } from "./de/docs-guide";
+import { chrome as caChrome } from "./ca/chrome";
+import { home as caHome } from "./ca/home";
+import { docsGuide as caDocsGuide } from "./ca/docs-guide";
+import { chrome as hiChrome } from "./hi/chrome";
+import { home as hiHome } from "./hi/home";
+import { docsGuide as hiDocsGuide } from "./hi/docs-guide";
+import { chrome as trChrome } from "./tr/chrome";
+import { home as trHome } from "./tr/home";
+import { docsGuide as trDocsGuide } from "./tr/docs-guide";
+import { chrome as itChrome } from "./it/chrome";
+import { home as itHome } from "./it/home";
+import { docsGuide as itDocsGuide } from "./it/docs-guide";
+import { chrome as plChrome } from "./pl/chrome";
+import { home as plHome } from "./pl/home";
+import { docsGuide as plDocsGuide } from "./pl/docs-guide";
+import { chrome as arChrome } from "./ar/chrome";
+import { home as arHome } from "./ar/home";
+import { docsGuide as arDocsGuide } from "./ar/docs-guide";
 import { chrome as ptBrChrome } from "./pt-BR/chrome";
 import { home as ptBrHome } from "./pt-BR/home";
 import { chrome as idChrome } from "./id/chrome";
@@ -44,6 +68,14 @@ const CHROME: Record<string, ChromeDict> = {
   ru: ruChrome,
   uk: ukChrome,
   es: esChrome,
+  fr: frChrome,
+  de: deChrome,
+  ca: caChrome,
+  hi: hiChrome,
+  tr: trChrome,
+  it: itChrome,
+  pl: plChrome,
+  ar: arChrome,
   "pt-BR": ptBrChrome,
   id: idChrome,
 };
@@ -56,6 +88,14 @@ const HOME: Record<string, HomeDict> = {
   ru: ruHome,
   uk: ukHome,
   es: esHome,
+  fr: frHome,
+  de: deHome,
+  ca: caHome,
+  hi: hiHome,
+  tr: trHome,
+  it: itHome,
+  pl: plHome,
+  ar: arHome,
   "pt-BR": ptBrHome,
   id: idHome,
 };
@@ -72,6 +112,14 @@ export const DICTIONARY_LOCALES = Object.keys(CHROME) as readonly string[];
  */
 const DOCS_GUIDE: Record<string, DocsGuideDict> = {
   zh: zhDocsGuide,
+  fr: frDocsGuide,
+  de: deDocsGuide,
+  ca: caDocsGuide,
+  hi: hiDocsGuide,
+  tr: trDocsGuide,
+  it: itDocsGuide,
+  pl: plDocsGuide,
+  ar: arDocsGuide,
 };
 
 export function getChrome(locale: string): ChromeDict {

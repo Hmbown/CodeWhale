@@ -15,8 +15,8 @@ Customer-visible copy also follows the [Codewhale voice and terminal
 charter](VOICE.md); commands, key names, and glyphs remain code-owned around
 localized prose.
 
-Last updated: 2026-08-12 (retire the stale `zh-Hant` partial declaration
-left behind by #5143).
+Last updated: 2026-08-16 (README translations for fr, de, zh-TW, hi, tr,
+it, pl, ar, and ca).
 Source-of-truth README: `README.md` (English, post-#3087).
 
 ## Status legend
@@ -130,6 +130,15 @@ what the `(partial)` badge is honest about.
 | Russian | `README.ru.md` | **shipped** | Same (#3092). Awaiting native-speaker review. |
 | Ukrainian | `README.uk.md` | **shipped** | Same (#4791). Awaiting native-speaker review. |
 | Indonesian | `README.id.md` | **shipped** | Same (#4789). Awaiting native-speaker review. |
+| French | `README.fr.md` | **shipped** | Same. Awaiting native-speaker review. |
+| German | `README.de.md` | **shipped** | Same. Awaiting native-speaker review. |
+| Traditional Chinese | `README.zh-TW.md` | **shipped** | Same. Awaiting native-speaker review. |
+| Hindi | `README.hi.md` | **shipped** | Same. Awaiting native-speaker review. |
+| Turkish | `README.tr.md` | **shipped** | Same. Awaiting native-speaker review. |
+| Italian | `README.it.md` | **shipped** | Same. Awaiting native-speaker review. |
+| Polish | `README.pl.md` | **shipped** | Same. Awaiting native-speaker review. |
+| Arabic | `README.ar.md` | **shipped** | Same. Awaiting native-speaker review. Markdown only; no HTML `dir` attributes. |
+| Catalan | `README.ca.md` | **shipped** | Same. Awaiting native-speaker review. |
 
 ## Drift checks
 

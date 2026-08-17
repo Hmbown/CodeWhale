@@ -196,6 +196,13 @@ pub struct TranscriptRenderOptions {
     /// Resolved application theme mode. This keeps cached markdown syntax
     /// colors aligned with an explicit theme selection.
     pub palette_mode: palette::PaletteMode,
+    /// Wrap cap (columns) for prose cells — user messages, assistant answers,
+    /// and reasoning/thinking blocks. `None` spends the full content width,
+    /// matching tool/status cells (#5436); `Some(n)` caps prose at `n` columns
+    /// for a bounded reading measure. Resolved once per render pass from
+    /// `[transcript] prose_measure` so the main cache and the full-screen
+    /// overlay agree on the same effective width.
+    pub(crate) prose_measure: Option<u16>,
 }
 
 impl Default for TranscriptRenderOptions {
@@ -213,17 +220,26 @@ impl Default for TranscriptRenderOptions {
             motion_mode: MotionMode::Full,
             spacing: TranscriptSpacing::Comfortable,
             palette_mode: palette::PaletteMode::detect(),
+            prose_measure: None,
         }
     }
 }
 
-/// Max wrap measure (in columns) for prose cells - user messages, assistant
-/// answers, and reasoning/thinking blocks - in the live transcript. At
-/// ultrawide terminal widths this stops prose from stretching edge-to-edge
-/// while tool and status cells keep the full content width. Applied at the
-/// live-transcript render entry points so the main cache and the
-/// full-screen overlay agree on the same effective width.
-pub(crate) const PROSE_MAX_MEASURE: u16 = 105;
+impl TranscriptRenderOptions {
+    /// Effective wrap width for a prose cell at the given content width.
+    ///
+    /// `prose_measure` caps the measure; without a cap the prose cell uses
+    /// the full content width, like tool/status cells. Applied only at the
+    /// live-transcript render entry points so the main cache and the
+    /// full-screen overlay agree on the same effective width.
+    #[must_use]
+    pub(crate) fn prose_width(self, width: u16) -> u16 {
+        match self.prose_measure {
+            Some(cap) => width.clamp(1, cap),
+            None => width.max(1),
+        }
+    }
+}
 
 impl HistoryCell {
     #[must_use]
@@ -272,7 +288,7 @@ impl HistoryCell {
             *cache = crate::tui::markdown_render::IncrementalMarkdownRenderCache::default();
             return Some(0);
         }
-        let width = width.clamp(1, PROSE_MAX_MEASURE);
+        let width = options.prose_width(width);
         Some(update_streaming_message_render(
             cache,
             content,
@@ -478,16 +494,15 @@ impl HistoryCell {
     ) -> (Vec<RenderedTranscriptLine>, Option<ReasoningAction>) {
         if matches!(self, HistoryCell::Thinking { .. }) {
             let (lines, action) =
-                self.lines_with_options_folded(width.clamp(1, PROSE_MAX_MEASURE), options, folded);
+                self.lines_with_options_folded(options.prose_width(width), options, folded);
             return (hard_break_copy_lines(lines), action);
         }
         let lines = match self {
-            HistoryCell::User { content } => hard_break_copy_lines(render_user_message(
-                content,
-                width.clamp(1, PROSE_MAX_MEASURE),
-            )),
+            HistoryCell::User { content } => {
+                hard_break_copy_lines(render_user_message(content, options.prose_width(width)))
+            }
             HistoryCell::Assistant { content, streaming } => {
-                let width = width.clamp(1, PROSE_MAX_MEASURE);
+                let width = options.prose_width(width);
                 let mut rendered = render_message_with_copy_metadata_for_palette(
                     ASSISTANT_GLYPH,
                     assistant_label_style_for(*streaming, options.low_motion),

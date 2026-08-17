@@ -121,7 +121,9 @@ turn's user message.
 
 `agent` starts fresh by default: the child gets its role prompt plus the
 task you pass. Use `fork_context: true` when the child should continue from
-the parent's current request prefix instead. In fork mode the runtime keeps the
+the parent's current request prefix instead. (`fork_context` is not in the
+advertised v0.9.9 schema — it stays parse-accepted for compat callers, and
+auto-forking for read-only roles continues unchanged.) In fork mode the runtime keeps the
 parent prefill/prompt prefix byte-identical where available, appends a
 structured state snapshot, then adds the sub-agent role instructions and task
 at the tail. That preserves DeepSeek prefix-cache reuse while giving the child
@@ -338,6 +340,9 @@ max_concurrent = 20
 launch_concurrency = 20
 max_admitted = 200
 max_depth = 6
+# Per-child run budgets when a call carries none (role defaults: 60/120 turns).
+default_max_steps = 120
+default_wall_time_secs = 1800
 token_budget = 100000
 
 [subagents.providers.deepseek]
@@ -369,6 +374,58 @@ max_admitted = 12
 Use `/config subagents status` to see both the global values and the active
 provider's resolved fanout, depth, and timeout profile.
 
+## Advertised agent-tool fields (v0.9.9)
+
+The model-facing `agent` tool schema advertises exactly **12 fields**
+(#5324, #5123):
+
+`action`, `prompt`, `type`, `profile`, `name`, `agent_id`, `message`,
+`until`, `detached`, `worktree`, `write_roots`, `resume_from`
+
+plus the action-discriminated `dependentSchemas` tree (`start` requires
+`prompt`; `message`/`followup` require a target and `message`; `peek`/
+`interrupt`/`cancel` require a target). The schema change is part of the
+pinned prompt prefix, so upgrading re-fills the provider KV prefix once per
+session (docs/CACHE.md; accepted at the v0.9.9 boundary).
+
+**Parse-accepted but unadvertised (compat).** The following inputs were
+removed from the advertised schema but remain parse-accepted and honored
+unchanged, so saved transcripts, ACP/MCP clients and Fleet configs replay
+as-is — the same contract `token_budget` already follows:
+
+- budgets: `max_steps`, `wall_time_secs`, `max_depth` (see
+  [Child budgets](#child-budgets-steps-wall-time) for where defaults now
+  come from)
+- routing: `model`, `model_strength`, `thinking` (a `profile` pins route and
+  thinking tier; without one the child inherits the operator model)
+- workspace/isolation: `workspace_policy`, `write_authority`, `fork_context`,
+  `cwd`, `worktree_path`, `worktree_branch`, `worktree_base`
+- spawn contract: `deliberate`, `dependencies`, `acceptance`,
+  `expected_artifact`, `exact_files`, `coordination_contracts`
+- lifecycle extras: `timeout_secs` (wait), `reason` (interrupt),
+  `include_archived` (status), and `token_budget`
+
+Authority never widens: the #5426/#5435 containment clamps are unchanged —
+`write_authority` moves to roles/profiles, and delegation can only narrow
+inherited authority.
+
+## Child budgets (steps, wall time)
+
+Per-child run budgets are no longer per-call schema fields (#5324). They come
+from, in order:
+
+1. an explicit parse-accepted `max_steps` / `wall_time_secs` on the call
+   (replay compat),
+2. the operator defaults `[subagents] default_max_steps` and
+   `[subagents] default_wall_time_secs`,
+3. Fleet role defaults: **60** model turns for read-mostly roles
+   (scout/planner/reviewer/verifier/consultant), **120** for
+   builder/worker/custom (`WorkerRuntimeProfile::default_max_steps`), and a
+   **1800 s** wall-clock default.
+
+Step values clamp to the 2000-turn hard ceiling; wall-time values clamp to
+1..=86400 s.
+
 ## Token budget governor
 
 Set `[subagents].token_budget` to give each root `agent` run an aggregate
@@ -382,7 +439,8 @@ runtime budget; exposing an optional cap invites accidental micromanagement."
 The parser still accepts the key (plus the `tokenBudget`/`max_tokens` aliases,
 `mod.rs:10620`) so Workflow-shaped callers that construct the call themselves
 can scope a budget, but the model is never told the field exists. Configure it
-through `[subagents].token_budget` instead.
+through `[subagents].token_budget` instead. Since v0.9.9 it is one entry in
+the wider parse-accepted-but-unadvertised compat list above.
 
 Provider-reported input and output tokens are folded into the worker record as
 each child model call completes. The persisted `usage` object shows the

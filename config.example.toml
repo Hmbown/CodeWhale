@@ -1023,6 +1023,19 @@ osc8_links = true            # emit OSC 8 escapes around URLs (Cmd+click in iTer
 # mention_menu_behavior = "fuzzy" # fuzzy | browser; browser lists immediate directory children for @-mentions.
 
 # ─────────────────────────────────────────────────────────────────────────────────
+# Transcript
+# ─────────────────────────────────────────────────────────────────────────────────
+# Prose — user messages, assistant answers, and reasoning/thinking — fills the
+# full content width, consistent with tool/status cells and the wide-frame
+# decision in #5322 (#5436). Owners who want a bounded reading measure on
+# ultrawide terminals can cap it in columns.
+[transcript]
+# prose_measure = 120   # positive integer: cap prose wrap at N columns.
+                        # 0 or absent = full content width (default).
+                        # Must be a positive whole number; tool, diff, and
+                        # status cells always keep the full content width.
+
+# ─────────────────────────────────────────────────────────────────────────────────
 # Feature Flags
 # ─────────────────────────────────────────────────────────────────────────────────
 [features]

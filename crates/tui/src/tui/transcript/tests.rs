@@ -1236,17 +1236,19 @@ fn ensure_filtered_reuses_unchanged_cells() {
 }
 
 #[test]
-fn prose_cells_wrap_at_bounded_measure_on_ultrawide() {
-    // v0.9.4: prose (user/assistant/thinking) must stop stretching
-    // edge-to-edge at ultrawide widths while tool cells keep the full
-    // content width. The cache key stays `(CellId, fed_width, revision)`
-    // so resize keeps its single-feed cost model; the per-cell measure is
-    // applied inside the render entry points.
-    let measure = crate::tui::history::PROSE_MAX_MEASURE;
-    let long = "prose line that is intentionally long enough to wrap \
-                    at one hundred and five columns but not at ordinary \
-                    widths, repeated to guarantee several wrapped rows "
-        .repeat(4);
+fn prose_cells_fill_full_width_on_ultrawide_by_default() {
+    // #5436: prose (user/assistant/thinking) spends the full content width
+    // on wide terminals, consistent with tool cells and the #5322
+    // wide-frame decision. The old 105-column rail is gone unless
+    // `transcript.prose_measure` opts back into a bounded measure. The
+    // cache key stays `(CellId, fed_width, revision)` so resize keeps its
+    // single-feed cost model; the per-cell measure is applied inside the
+    // render entry points.
+    const RETIRED_RAIL_MEASURE: usize = 105;
+    let long = "ultrawide prose paragraph that wraps its words across \
+                    the whole terminal canvas, repeated to guarantee \
+                    several wrapped rows at any column budget, "
+        .repeat(6);
     let cells = [
         user_cell(&long),
         assistant_cell(&long, false),
@@ -1265,38 +1267,172 @@ fn prose_cells_wrap_at_bounded_measure_on_ultrawide() {
     let options = TranscriptRenderOptions {
         low_motion: true,
         motion_mode: crate::tui::motion::MotionMode::Still,
+        // Expanded thinking so the reasoning body also spends the width.
+        verbose: true,
+        thinking_default_expanded: true,
         ..TranscriptRenderOptions::default()
     };
 
     let mut cache = TranscriptViewCache::new();
     cache.ensure_filtered(&refs, &revisions, 220, options, &HashSet::new(), None, None);
 
-    fn max_line_width(cell: &CachedCell) -> usize {
-        cell.lines
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| unicode_width::UnicodeWidthStr::width(span.content.as_ref()))
-                    .sum()
-            })
-            .max()
-            .unwrap_or(0)
-    }
-
     for idx in 0..3 {
-        let width = max_line_width(&cache.per_cell[idx]);
+        let width = max_line_width(&cache.per_cell[idx].lines);
         assert!(
-            width <= usize::from(measure),
-            "prose cell {idx} wrapped to {width} columns, over the \
-                 {measure}-column measure",
+            width > RETIRED_RAIL_MEASURE,
+            "prose cell {idx} wrapped to {width} columns — still on the retired \
+                 {RETIRED_RAIL_MEASURE}-column rail",
+        );
+        assert!(
+            width <= 220,
+            "prose cell {idx} wrapped to {width} columns, past the 220-column canvas",
         );
     }
-    let tool_width = max_line_width(&cache.per_cell[3]);
+    let tool_width = max_line_width(&cache.per_cell[3].lines);
     assert!(
-        tool_width > usize::from(measure),
+        tool_width > RETIRED_RAIL_MEASURE,
         "tool cell must keep the full width, got {tool_width}",
     );
+}
+
+#[test]
+fn transcript_prose_measure_caps_prose_but_not_tools() {
+    // A positive `transcript.prose_measure` restores a bounded reading
+    // measure for prose only; tool/status cells keep the full content width
+    // (#5436). The 120-column cap is deliberately above the retired
+    // 105-column rail so a pass proves the configured cap — not the old
+    // default — is in effect.
+    let long = "ultrawide ".repeat(400);
+    let cells = [
+        user_cell(&long),
+        assistant_cell(&long, false),
+        HistoryCell::Thinking {
+            content: long.clone(),
+            streaming: false,
+            duration_secs: Some(2.0),
+        },
+        exec_tool_cell_with_output(
+            "cargo test --all",
+            "long tool output that itself wraps well past the prose measure ".repeat(6),
+        ),
+    ];
+    let refs: Vec<&HistoryCell> = cells.iter().collect();
+    let revisions = vec![1u64, 2, 3, 4];
+    let options = TranscriptRenderOptions {
+        low_motion: true,
+        motion_mode: crate::tui::motion::MotionMode::Still,
+        verbose: true,
+        thinking_default_expanded: true,
+        prose_measure: Some(120),
+        ..TranscriptRenderOptions::default()
+    };
+
+    let mut cache = TranscriptViewCache::new();
+    cache.ensure_filtered(&refs, &revisions, 220, options, &HashSet::new(), None, None);
+
+    for idx in 0..3 {
+        let width = max_line_width(&cache.per_cell[idx].lines);
+        assert!(
+            width > 105,
+            "prose cell {idx} wrapped to {width} columns — still on the retired \
+                 105-column rail, so the configured cap is not in effect",
+        );
+        assert!(
+            width <= 120,
+            "prose cell {idx} wrapped to {width} columns, over the 120-column measure",
+        );
+    }
+    let tool_width = max_line_width(&cache.per_cell[3].lines);
+    assert!(
+        tool_width > 120,
+        "tool cell must keep the full width past the prose measure, got {tool_width}",
+    );
+}
+
+#[test]
+fn overlay_and_streaming_entries_share_the_prose_measure() {
+    // The main cache and the full-screen live-transcript overlay must agree
+    // on the same effective prose width — the reason the measure rides on
+    // `TranscriptRenderOptions` instead of being re-derived per cell
+    // (#5436). Render one streaming assistant message through both
+    // live-transcript entry points: the copy-metadata path (overlay) and
+    // the incremental streaming path (active cell).
+    let long = "ultrawide ".repeat(400);
+    let cell = assistant_cell(&long, true);
+    let options = TranscriptRenderOptions {
+        low_motion: true,
+        motion_mode: crate::tui::motion::MotionMode::Still,
+        prose_measure: Some(120),
+        ..TranscriptRenderOptions::default()
+    };
+
+    let overlay_lines = cell.lines_with_copy_metadata(220, options);
+    let overlay_width = overlay_lines
+        .iter()
+        .map(|line| max_line_width(std::slice::from_ref(&line.line)))
+        .max()
+        .unwrap_or(0);
+
+    let mut cache = crate::tui::markdown_render::IncrementalMarkdownRenderCache::default();
+    let mut streaming_lines = Vec::new();
+    let mut links = Vec::new();
+    let mut separators = Vec::new();
+    let mut prefix_widths = Vec::new();
+    cell.update_incremental_streaming_render(
+        220,
+        options,
+        false,
+        &mut cache,
+        &mut streaming_lines,
+        &mut links,
+        &mut separators,
+        &mut prefix_widths,
+    );
+    let streaming_width = max_line_width(&streaming_lines);
+
+    for (name, width) in [("overlay", overlay_width), ("streaming", streaming_width)] {
+        assert!(
+            width > 105,
+            "{name} entry stayed on the retired 105-column rail ({width} columns)",
+        );
+        assert!(
+            width <= 120,
+            "{name} entry wrapped to {width} columns, over the 120-column measure",
+        );
+    }
+}
+
+#[test]
+fn prose_width_resolves_the_transcript_prose_measure_contract() {
+    // Absent = full content width (floored at 1); a positive cap clamps
+    // from above only, so narrow terminals keep their content width
+    // (#5436: 0/absent means full width).
+    let full = TranscriptRenderOptions::default();
+    assert_eq!(full.prose_measure, None);
+    assert_eq!(full.prose_width(220), 220);
+    assert_eq!(full.prose_width(96), 96);
+    assert_eq!(full.prose_width(0), 1);
+
+    let capped = TranscriptRenderOptions {
+        prose_measure: Some(120),
+        ..TranscriptRenderOptions::default()
+    };
+    assert_eq!(capped.prose_width(220), 120);
+    assert_eq!(capped.prose_width(96), 96);
+    assert_eq!(capped.prose_width(0), 1);
+}
+
+fn max_line_width(lines: &[Line<'static>]) -> usize {
+    lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| unicode_width::UnicodeWidthStr::width(span.content.as_ref()))
+                .sum()
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 #[test]

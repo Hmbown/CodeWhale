@@ -325,9 +325,11 @@ pub(crate) fn plan(
 ) -> Result<DshPlan> {
     let mapped = map_identity(identity, allow_full_access);
     let overlay_text = render_overlay(&mapped).ok_or_else(|| match &mapped.adapter {
-        DshAdapter::Unsupported { reason } => {
-            anyhow::anyhow!("current Codewhale route cannot be carried by DSH: {reason}")
-        }
+        DshAdapter::Unsupported { reason } => anyhow::anyhow!(
+            "current Codewhale route {}/{} cannot be carried by DSH: {reason}",
+            identity.provider_id,
+            identity.model
+        ),
         _ => anyhow::anyhow!("overlay could not be rendered"),
     })?;
     let overlay_sha256 = sha256_hex(overlay_text.as_bytes());
@@ -899,9 +901,34 @@ pub(crate) fn status_line(report: &DshStatusReport) -> String {
         DshIntegrationState::Incompatible { reason, .. } => {
             format!("incompatible — dsh {version}: {reason}")
         }
-        DshIntegrationState::Detected { .. } => format!(
-            "detected — dsh {version}, not connected; `{CLI_COMMAND} plan` explains what would be written"
-        ),
+        DshIntegrationState::Detected { .. } => {
+            // Surface route carry-ability before `plan` is ever run, so a
+            // refuse-at-plan-time surprise is visible in `status`/doctor.
+            let carry = match report.current_identity.as_ref() {
+                Some(now) if now.mappable() => format!(
+                    "current route {}/{} is carryable via {}",
+                    now.source.provider_id,
+                    now.source.model,
+                    now.dsh_provider().unwrap_or("(unknown adapter)")
+                ),
+                Some(now) => match &now.adapter {
+                    DshAdapter::Unsupported { reason } => format!(
+                        "current route {}/{} cannot be carried by DSH: {reason}",
+                        now.source.provider_id, now.source.model
+                    ),
+                    _ => String::new(),
+                },
+                None => String::new(),
+            };
+            let carry = if carry.is_empty() {
+                String::new()
+            } else {
+                format!("; {carry}")
+            };
+            format!(
+                "detected — dsh {version}, not connected{carry}; `{CLI_COMMAND} plan` explains what would be written"
+            )
+        }
         DshIntegrationState::Connected { .. } => {
             let identity = report
                 .record

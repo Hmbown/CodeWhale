@@ -528,6 +528,213 @@ fn compaction_tui_builder(
         .env("NO_ANIMATIONS", "1")
 }
 
+/// Loopback responder whose streaming turns each complete with a distinct
+/// marker after a fixed hold, so a PTY scenario can issue commands while the
+/// turn is provably still in flight and then wait for that turn's own
+/// completion marker.
+#[derive(Clone)]
+struct HeldTurnTextResponder {
+    requests: Arc<AtomicUsize>,
+    hold: Duration,
+}
+
+impl HeldTurnTextResponder {
+    fn new(hold: Duration) -> Self {
+        Self {
+            requests: Arc::new(AtomicUsize::new(0)),
+            hold,
+        }
+    }
+}
+
+impl Respond for HeldTurnTextResponder {
+    fn respond(&self, _request: &Request) -> ResponseTemplate {
+        let turn = self.requests.fetch_add(1, Ordering::SeqCst) + 1;
+        sse_response(text_sse(
+            DEEPSEEK_TEST_MODEL,
+            &format!("rename-qa turn {turn} complete"),
+        ))
+        .set_delay(self.hold)
+    }
+}
+
+/// Every OSC 0 (window title) sequence body the child has emitted so far.
+fn osc0_titles(transcript: &[u8]) -> Vec<String> {
+    let text = String::from_utf8_lossy(transcript);
+    let mut titles = Vec::new();
+    let mut rest = text.as_ref();
+    while let Some(start) = rest.find("\x1b]0;") {
+        rest = &rest[start + 4..];
+        let Some(end) = rest.find('\x07') else {
+            break;
+        };
+        titles.push(rest[..end].to_string());
+        rest = &rest[end + 1..];
+    }
+    titles
+}
+
+/// Assert the terminal tab (OSC 0) has been repainted with `prefix` as the
+/// `[prefix]` identity decoration.
+fn expect_osc0_prefix(harness: &Harness, prefix: &str) -> Result<()> {
+    let needle = format!("[{prefix}]");
+    let titles = osc0_titles(&harness.transcript());
+    anyhow::ensure!(
+        titles.iter().any(|title| title.starts_with(&needle)),
+        "OSC 0 window title was never repainted with {needle:?}; observed titles: {titles:?}"
+    );
+    Ok(())
+}
+
+/// The persisted `metadata.title` of the single saved session in the sealed
+/// home's sessions directory (checkpoints and sidecars excluded).
+fn persisted_session_title(ws: &SealedWorkspace) -> Result<(String, String)> {
+    let sessions_dir = ws.home().join(".codewhale/sessions");
+    let mut found: Vec<(String, String)> = Vec::new();
+    for entry in std::fs::read_dir(&sessions_dir)? {
+        let path = entry?.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let value: Value = serde_json::from_slice(&std::fs::read(&path)?)
+            .map_err(|err| anyhow!("session {path:?} is not valid JSON: {err}"))?;
+        let Some(id) = value["metadata"]["id"].as_str() else {
+            continue;
+        };
+        let title = value["metadata"]["title"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        found.push((id.to_string(), title));
+    }
+    anyhow::ensure!(
+        found.len() == 1,
+        "expected exactly one saved session, found {found:?}"
+    );
+    Ok(found.pop().expect("len checked"))
+}
+
+/// #5430: `/rename` and `/title` during a live turn must apply immediately
+/// (receipt + OSC 0 tab repaint while the stream is still open) and survive
+/// the turn's own autosave, the session listing, and the next launch. Both
+/// commands share one implementation, so one scenario drives both entry
+/// points: mid-turn on the session's first turn, mid-turn on a later turn,
+/// and at rest between turns.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn release_rename_title_mid_turn_and_mid_session_apply_and_survive() -> Result<()> {
+    let _guard = RELEASE_RUNTIME_QA_LOCK.lock().await;
+    let server = MockServer::start().await;
+    let responder = HeldTurnTextResponder::new(Duration::from_secs(3));
+    mount_models(&server, &[DEEPSEEK_TEST_MODEL]).await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+
+    let ws = make_sealed_workspace()?;
+    let mut tui = compaction_tui_builder(&ws, &server).spawn()?;
+    enter_launch_session(&mut tui)?;
+
+    // --- Phase 1: /rename mid-turn, during the session's FIRST turn (before
+    // any completed-turn autosave has ever written the session file). ---
+    type_and_submit(&mut tui, "rename qa first turn")?;
+    wait_for_counter(&mut tui, &responder.requests, 1, INTERACTION_TIMEOUT)?;
+    type_and_submit(&mut tui, "/rename PTY Midturn One")?;
+    tui.wait_for_text(
+        "Session and terminal tab renamed to \"PTY Midturn One\"",
+        INTERACTION_TIMEOUT,
+    )?;
+    // The tab repaint must land while the turn is still streaming: the
+    // responder holds every response for three seconds.
+    expect_osc0_prefix(&tui, "PTY Midturn One")?;
+    tui.wait_for_text("rename-qa turn 1 complete", INTERACTION_TIMEOUT)?;
+    let (session_id, title) = persisted_session_title(&ws)?;
+    assert_eq!(
+        title, "PTY Midturn One",
+        "first-turn mid-turn rename did not survive the turn's own autosave"
+    );
+
+    // --- Phase 2: /rename mid-turn on a later turn of the same session. ---
+    type_and_submit(&mut tui, "rename qa second turn")?;
+    wait_for_counter(&mut tui, &responder.requests, 2, INTERACTION_TIMEOUT)?;
+    type_and_submit(&mut tui, "/rename PTY Midturn Two")?;
+    tui.wait_for_text(
+        "Session and terminal tab renamed to \"PTY Midturn Two\"",
+        INTERACTION_TIMEOUT,
+    )?;
+    expect_osc0_prefix(&tui, "PTY Midturn Two")?;
+    tui.wait_for_text("rename-qa turn 2 complete", INTERACTION_TIMEOUT)?;
+    let (id2, title2) = persisted_session_title(&ws)?;
+    assert_eq!(
+        id2, session_id,
+        "a mid-turn rename must not fork a new session"
+    );
+    assert_eq!(
+        title2, "PTY Midturn Two",
+        "later-turn mid-turn rename did not survive the turn's own autosave"
+    );
+
+    // --- Phase 3: /title (the alias entry point) mid-turn. ---
+    type_and_submit(&mut tui, "title qa third turn")?;
+    wait_for_counter(&mut tui, &responder.requests, 3, INTERACTION_TIMEOUT)?;
+    type_and_submit(&mut tui, "/title PTY Midturn Title")?;
+    tui.wait_for_text(
+        "Session and terminal tab renamed to \"PTY Midturn Title\"",
+        INTERACTION_TIMEOUT,
+    )?;
+    expect_osc0_prefix(&tui, "PTY Midturn Title")?;
+    tui.wait_for_text("rename-qa turn 3 complete", INTERACTION_TIMEOUT)?;
+    let (_, title3) = persisted_session_title(&ws)?;
+    assert_eq!(
+        title3, "PTY Midturn Title",
+        "mid-turn /title did not survive the turn's own autosave"
+    );
+
+    // --- Phase 4: at rest (mid-session, no turn in flight), both commands. ---
+    type_and_submit(&mut tui, "/rename PTY Resting Rename")?;
+    tui.wait_for_text(
+        "Session and terminal tab renamed to \"PTY Resting Rename\"",
+        INTERACTION_TIMEOUT,
+    )?;
+    expect_osc0_prefix(&tui, "PTY Resting Rename")?;
+    let (_, title4) = persisted_session_title(&ws)?;
+    assert_eq!(title4, "PTY Resting Rename");
+
+    type_and_submit(&mut tui, "/title PTY Resting Title")?;
+    tui.wait_for_text(
+        "Session and terminal tab renamed to \"PTY Resting Title\"",
+        INTERACTION_TIMEOUT,
+    )?;
+    expect_osc0_prefix(&tui, "PTY Resting Title")?;
+    let (_, title5) = persisted_session_title(&ws)?;
+    assert_eq!(title5, "PTY Resting Title");
+
+    // --- Phase 5: the session listing shows the live title. ---
+    type_and_submit(&mut tui, "/sessions")?;
+    tui.wait_for_text("PTY Resting Title", INTERACTION_TIMEOUT)?;
+    tui.send(keys::key::esc())?;
+    // The picker's action rail ("all workspaces") is picker chrome, never
+    // transcript text, so its disappearance proves the overlay closed — the
+    // renamed title itself legitimately stays in the transcript behind it.
+    tui.wait_for(
+        |frame| !frame.contains("all workspaces"),
+        INTERACTION_TIMEOUT,
+    )?;
+
+    // --- Phase 6: next launch — a fresh process over the same sealed home
+    // lists the renamed session. ---
+    let _ = tui.shutdown();
+    let mut next = compaction_tui_builder(&ws, &server).spawn()?;
+    enter_launch_session(&mut next)?;
+    type_and_submit(&mut next, "/sessions")?;
+    next.wait_for_text("PTY Resting Title", INTERACTION_TIMEOUT)?;
+    let (_, title6) = persisted_session_title(&ws)?;
+    assert_eq!(title6, "PTY Resting Title");
+    let _ = next.shutdown();
+    Ok(())
+}
+
 /// The session metrics strip on the phase row after exactly one completed
 /// turn: `1 turn`, `Input 12` (the mock usage's prompt_tokens), and an
 /// `LLM` time — sourced from the engine's usage receipt and its own model-call

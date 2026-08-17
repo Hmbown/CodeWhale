@@ -276,6 +276,37 @@ fn type_and_submit(harness: &mut Harness, text: &str) -> Result<()> {
     Ok(())
 }
 
+/// `←` then Enter after the parent turn has settled on a still-running row.
+///
+/// A 200ms sleep between those keys is a race: completion redraws drop rail
+/// focus and Enter becomes a composer no-op. Wait for the live row, then
+/// send the keys back-to-back.
+fn focus_listed_worker(harness: &mut Harness, worker: &str) -> Result<()> {
+    harness.wait_for_text("for agents", INTERACTION_TIMEOUT)?;
+    harness.wait_for_text("to manage", INTERACTION_TIMEOUT)?;
+    harness.wait_for_text(COMPOSER_READY_TEXT, INTERACTION_TIMEOUT)?;
+    harness.wait_for_text("✓ done", INTERACTION_TIMEOUT)?;
+    harness.wait_for(
+        |frame| {
+            let text = frame.text();
+            text.contains(worker) && !text.contains("completed")
+        },
+        INTERACTION_TIMEOUT,
+    )?;
+    let mut chord = keys::key::left();
+    chord.extend(keys::key::enter());
+    harness.send(chord)?;
+    harness
+        .wait_for_text(FOCUS_MARKER, INTERACTION_TIMEOUT)
+        .map_err(|_| {
+            anyhow!(
+                "← then Enter did not focus the worker\n{}",
+                harness.debug_dump()
+            )
+        })?;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn focus_a_worker_send_a_follow_up_and_return_to_main() -> Result<()> {
     let _guard = AGENT_FOCUS_PTY_LOCK.lock().await;
@@ -392,13 +423,15 @@ const GATE_PARENT_PROMPT: &str = "spawn the gate probe worker now";
 const GATE_CHILD_MARKER: &str = "gateprobe";
 const GATE_ECHO: &str = "gate-probe-output";
 
-/// Serves the parent (streaming), the child (non-streaming: one held `bash`
-/// call, then a wrap-up), and the Auto-Review guardian (non-streaming
-/// verdict) from one loopback endpoint, telling them apart by body shape.
+/// Serves the parent (streaming), the child (non-streaming: one `bash` call,
+/// then a held wrap-up so the worker stays `running` while we focus), and the
+/// Auto-Review guardian (non-streaming verdict) from one loopback endpoint,
+/// telling them apart by body shape.
 struct GateResponder {
     child_rounds: Arc<AtomicUsize>,
     guardian_requests: Arc<AtomicUsize>,
     parent_turns: Arc<AtomicUsize>,
+    child_hold: Duration,
 }
 
 impl Respond for GateResponder {
@@ -441,7 +474,7 @@ impl Respond for GateResponder {
                     "usage": {"prompt_tokens": 12, "completion_tokens": 6, "total_tokens": 18}
                 }));
             }
-            return chat_message_response("gate child wrapped up");
+            return chat_message_response("gate child wrapped up").set_delay(self.child_hold);
         }
         if raw.contains(GATE_PARENT_PROMPT) {
             if self.parent_turns.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -505,6 +538,10 @@ async fn auto_review_gates_a_workers_call_and_the_receipt_shows_in_focus() -> Re
             child_rounds: Arc::clone(&child_rounds),
             guardian_requests: Arc::clone(&guardian_requests),
             parent_turns: Arc::new(AtomicUsize::new(0)),
+            // Hold the wrap-up, not the bash call: the guardian receipt is
+            // written when bash is allowed, and ← focuses a *running* row
+            // the same way the sibling journey does.
+            child_hold: Duration::from_secs(40),
         })
         .mount(&server)
         .await;
@@ -521,7 +558,7 @@ async fn auto_review_gates_a_workers_call_and_the_receipt_shows_in_focus() -> Re
     let mut tui = tui_builder_with_posture(&ws, &server.uri(), false).spawn()?;
     tui.wait_for_text(COMPOSER_READY_TEXT, BOOT_TIMEOUT)?;
     type_and_submit(&mut tui, GATE_PARENT_PROMPT)?;
-    // Child round 1 (held bash) → guardian → the call runs → child round 2.
+    // Child bash → guardian → the call runs → child wrap-up request (held).
     wait_for_counter(&mut tui, &guardian_requests, 1, INTERACTION_TIMEOUT)?;
     wait_for_counter(&mut tui, &child_rounds, 2, INTERACTION_TIMEOUT)?;
     tui.wait_for_text("gate parent wrapped up", INTERACTION_TIMEOUT)?;
@@ -533,31 +570,21 @@ async fn auto_review_gates_a_workers_call_and_the_receipt_shows_in_focus() -> Re
     );
     capture(&mut tui, "10-gate-main");
 
-    // Focus the worker: its transcript carries the guardian receipt.
-    tui.wait_for_text("for agents", INTERACTION_TIMEOUT)?;
-    tui.send(b"\x1b[D")?; // Left
-    std::thread::sleep(Duration::from_millis(200));
-    tui.pump();
-    tui.send(keys::key::enter())?;
-    tui.wait_for_text(FOCUS_MARKER, Duration::from_secs(5))
-        .map_err(|_| {
-            anyhow!(
-                "← then Enter did not focus the worker\n{}",
-                tui.debug_dump()
-            )
-        })?;
-    tui.wait_for_text("Auto-Review allowed 'bash'", Duration::from_secs(10))
-        .map_err(|_| {
-            anyhow!(
-                "focused worker transcript lacks the guardian receipt\n{}",
-                tui.debug_dump()
-            )
-        })?;
-    let focused = tui.debug_dump();
-    assert!(
-        focused.contains("model guardian"),
-        "receipt must name the guardian:\n{focused}"
-    );
+    // Focus the still-running worker: its transcript carries the receipt.
+    focus_listed_worker(&mut tui, "gate-worker")?;
+    tui.wait_for(
+        |frame| {
+            let text = frame.text();
+            text.contains("Auto-Review allowed 'bash'") && text.contains("model guardian")
+        },
+        INTERACTION_TIMEOUT,
+    )
+    .map_err(|_| {
+        anyhow!(
+            "focused worker transcript lacks the guardian receipt\n{}",
+            tui.debug_dump()
+        )
+    })?;
     capture(&mut tui, "11-gate-focused-receipt");
     tui.send(keys::key::esc())?;
     let _ = tui.shutdown();
