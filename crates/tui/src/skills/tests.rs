@@ -53,7 +53,7 @@ fn discovery_metrics_reset_and_snapshot_are_exact() {
 fn prompt_warning_sanitizer_scrubs_stale_conventional_home_roots() {
     let workspace = std::path::Path::new("/tmp/workspace");
     let warning = "Skill at /Users/private-name/.agents/skills/a/SKILL.md is shadowed by /home/other/.skills/a/SKILL.md";
-    let sanitized = super::sanitize_prompt_path_text(warning, workspace);
+    let sanitized = super::sanitize_prompt_path_text(warning, workspace, None);
     assert_eq!(
         sanitized,
         "Skill at ~/.agents/skills/a/SKILL.md is shadowed by ~/.skills/a/SKILL.md"
@@ -1724,6 +1724,59 @@ fn workspace_and_dir_entry_point_shares_the_same_cache() {
     assert_eq!(rewalked, super::SkillDiscoveryMetrics::default());
     assert_eq!(first.len(), second.len());
     assert!(second.get("configured").is_some());
+}
+
+#[test]
+fn configured_skill_prompt_uses_a_stable_root_in_entries_and_warnings() {
+    let _env_lock = crate::test_support::lock_test_env();
+    super::clear_skill_discovery_cache();
+    let tmpdir = TempDir::new().unwrap();
+    let home = tmpdir.path().join("home");
+    let workspace = home.join("workspace");
+    let skills_dir = home
+        .join("runtime")
+        .join("sessions")
+        .join("session-123")
+        .join("skills");
+    std::fs::create_dir_all(&workspace).unwrap();
+    write_skill(
+        &workspace.join(".claude").join("skills"),
+        "workspace-skill",
+        "Workspace skill",
+        "Instructions",
+    );
+    let configured_skill = skills_dir.join("visual-design");
+    std::fs::create_dir_all(&configured_skill).unwrap();
+    std::fs::write(
+        configured_skill.join("SKILL.md"),
+        "---\nname: Visual Design\ndescription: Design assets\n---\nInstructions",
+    )
+    .unwrap();
+    let _home = crate::test_support::EnvVarGuard::set("HOME", &home);
+    let _userprofile = crate::test_support::EnvVarGuard::set("USERPROFILE", &home);
+    let _codewhale_home =
+        crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.join(".codewhale"));
+
+    let rendered =
+        super::render_available_skills_context_for_workspace_and_dir_with_mode_and_plugins(
+            &workspace,
+            &skills_dir,
+            super::SkillDiscoveryMode::Compatible,
+            "en",
+            None,
+        )
+        .expect("configured skill context");
+
+    assert!(rendered.contains("- visual-design: Design assets\n"));
+    assert!(rendered.contains(
+        "- workspace-skill: Workspace skill (file: .claude/skills/workspace-skill/SKILL.md)"
+    ));
+    assert!(
+        rendered
+            .contains("in <configured-skills>/visual-design/SKILL.md is not a safe command name")
+    );
+    assert!(!rendered.contains("session-123"), "{rendered}");
+    assert!(!rendered.contains(home.to_str().unwrap()), "{rendered}");
 }
 
 #[test]

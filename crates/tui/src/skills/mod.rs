@@ -1279,14 +1279,31 @@ pub fn render_available_skills_context_for_workspace_and_dir_with_mode_and_plugi
     let registry =
         discover_for_workspace_and_dir_with_mode_and_plugins(workspace, skills_dir, mode, plugins)
             .into_enabled();
-    render_skills_block(&registry, locale, workspace)
+    render_skills_block_with_configured_root(&registry, locale, workspace, Some(skills_dir))
 }
 
 /// Replace absolute path prefixes in free-form text (skill load warnings)
 /// with privacy-safe stand-ins before the text enters the system-prompt
-/// prefix (#4632). Workspace paths become `.`, home-dir paths become `~`.
-fn sanitize_prompt_path_text(text: &str, workspace: &Path) -> String {
+/// prefix (#4632). Workspace paths become `.`, home-dir paths become `~`,
+/// and a caller-provided skills root gets a stable logical name.
+fn sanitize_prompt_path_text(
+    text: &str,
+    workspace: &Path,
+    configured_skills_root: Option<&Path>,
+) -> String {
     let mut out = text.to_string();
+    if let Some(root) = configured_skills_root {
+        for root in [Some(root.to_path_buf()), fs::canonicalize(root).ok()]
+            .into_iter()
+            .flatten()
+        {
+            if let Some(root) = root.to_str()
+                && !root.is_empty()
+            {
+                out = out.replace(root, "<configured-skills>");
+            }
+        }
+    }
     if let Some(ws) = workspace.to_str()
         && !ws.is_empty()
     {
@@ -1337,7 +1354,42 @@ fn privacy_safe_skill_path(path: &Path, workspace: &Path) -> String {
     }
 }
 
+fn path_is_within_root(path: &Path, root: &Path) -> bool {
+    if path.starts_with(root) {
+        return true;
+    }
+    let Some(canonical_path) = fs::canonicalize(path).ok() else {
+        return false;
+    };
+    let Some(canonical_root) = fs::canonicalize(root).ok() else {
+        return false;
+    };
+    canonical_path.starts_with(canonical_root)
+}
+
+fn prompt_skill_path(
+    path: &Path,
+    workspace: &Path,
+    configured_skills_root: Option<&Path>,
+) -> Option<String> {
+    if let Some(root) = configured_skills_root {
+        if path_is_within_root(path, root) {
+            return None;
+        }
+    }
+    Some(privacy_safe_skill_path(path, workspace))
+}
+
 fn render_skills_block(registry: &SkillRegistry, locale: &str, workspace: &Path) -> Option<String> {
+    render_skills_block_with_configured_root(registry, locale, workspace, None)
+}
+
+fn render_skills_block_with_configured_root(
+    registry: &SkillRegistry,
+    locale: &str,
+    workspace: &Path,
+    configured_skills_root: Option<&Path>,
+) -> Option<String> {
     if registry.is_empty() && registry.warnings().is_empty() {
         return None;
     }
@@ -1395,24 +1447,29 @@ Skills are optional local instruction packs. This budgeted index exposes routing
         // installs, in which case `<dir>/<name>/SKILL.md` would not exist
         // and the model would fail to open it. Rendered privacy-safe
         // (workspace-relative or ~/…) so the prompt prefix never embeds
-        // absolute user paths (#4632).
-        let display_path = privacy_safe_skill_path(&skill.path, workspace);
+        // absolute user paths (#4632). A caller-provided skills root omits its
+        // physical path because that root may change per session; load_skill
+        // still resolves the stable skill name through the internal registry.
+        let display_path = prompt_skill_path(&skill.path, workspace, configured_skills_root);
         let description = truncate_for_prompt(
             skill.description_for_locale(locale),
             MAX_SKILL_DESCRIPTION_CHARS,
         );
         let source = match &skill.source {
-            SkillSource::Native => format!("file: {display_path}"),
+            SkillSource::Native => display_path.map(|path| format!("file: {path}")),
             SkillSource::Plugin {
                 plugin_id,
                 plugin_name,
                 ..
-            } => format!("reviewed plugin snapshot: {plugin_name} ({plugin_id}); use load_skill"),
+            } => Some(format!(
+                "reviewed plugin snapshot: {plugin_name} ({plugin_id}); use load_skill"
+            )),
         };
-        let line = if description.is_empty() {
-            format!("- {}: ({source})\n", skill.name)
-        } else {
-            format!("- {}: {} ({source})\n", skill.name, description)
+        let line = match (description.is_empty(), source) {
+            (true, Some(source)) => format!("- {}: ({source})\n", skill.name),
+            (true, None) => format!("- {}\n", skill.name),
+            (false, Some(source)) => format!("- {}: {} ({source})\n", skill.name, description),
+            (false, None) => format!("- {}: {}\n", skill.name, description),
         };
 
         if out.chars().count() + line.chars().count() + fixed_reserve > MAX_AVAILABLE_SKILLS_CHARS {
@@ -1435,7 +1492,7 @@ Skills are optional local instruction packs. This budgeted index exposes routing
             let line = format!(
                 "- {}\n",
                 truncate_for_prompt(
-                    &sanitize_prompt_path_text(warning, workspace),
+                    &sanitize_prompt_path_text(warning, workspace, configured_skills_root,),
                     MAX_SKILL_DESCRIPTION_CHARS,
                 )
             );
