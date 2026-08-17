@@ -27,7 +27,7 @@ export interface RepoFacts {
 }
 
 export const FACTS: RepoFacts = {
-  "generatedAt": "2026-08-16T06:49:12.949Z",
+  "generatedAt": "2026-08-17T06:09:37.228Z",
   "sourceRevision": null,
   "sourceCommittedAt": null,
   "version": "0.9.8",
@@ -290,9 +290,9 @@ export const FACTS: RepoFacts = {
   "toolCount": 74,
   "license": "MIT",
   "latestPublishedRelease": {
-    "tag": "v0.9.7",
-    "version": "0.9.7",
-    "publishedAt": "2026-08-13T08:36:49Z",
-    "url": "https://github.com/Hmbown/CodeWhale/releases/tag/v0.9.7"
+    "tag": "v0.9.8",
+    "version": "0.9.8",
+    "publishedAt": "2026-08-16T19:25:25Z",
+    "url": "https://github.com/Hmbown/CodeWhale/releases/tag/v0.9.8"
   }
 };

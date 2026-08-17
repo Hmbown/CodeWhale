@@ -35,10 +35,10 @@
     ]
   },
   "latestPublishedRelease": {
-    "tag": "v0.9.7",
-    "version": "0.9.7",
-    "publishedAt": "2026-08-13T08:36:49Z",
-    "url": "https://github.com/Hmbown/CodeWhale/releases/tag/v0.9.7",
+    "tag": "v0.9.8",
+    "version": "0.9.8",
+    "publishedAt": "2026-08-16T19:25:25Z",
+    "url": "https://github.com/Hmbown/CodeWhale/releases/tag/v0.9.8",
     "sources": [
       "web/data/latest-published-release.json"
     ]
