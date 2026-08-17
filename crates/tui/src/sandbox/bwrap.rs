@@ -105,7 +105,7 @@ pub fn build_bwrap_command(
     args: &[String],
     writable_roots: &[WritableRoot],
     network_access: bool,
-    extensions: &super::BwrapMountExtensions,
+    extensions: &crate::sandbox::BwrapMountExtensions,
 ) -> Vec<String> {
     let (writable_mounts, read_only_mounts) = safe_mounts(writable_roots);
     let (extra_read_only, device_mounts) = extensions.resolve();
@@ -261,7 +261,7 @@ mod tests {
             &["-c".to_string(), "echo hi".to_string()],
             &[WritableRoot::new(cwd.to_path_buf())],
             false,
-            &super::BwrapMountExtensions::default(),
+            &crate::sandbox::BwrapMountExtensions::default(),
         );
 
         // Should start with bwrap
@@ -299,7 +299,7 @@ mod tests {
             &[],
             &[],
             false,
-            &super::BwrapMountExtensions::default(),
+            &crate::sandbox::BwrapMountExtensions::default(),
         );
 
         assert!(!cmd.iter().any(|arg| arg == "--bind"));
@@ -332,7 +332,7 @@ mod tests {
             &[],
             &roots,
             true,
-            &super::BwrapMountExtensions::default(),
+            &crate::sandbox::BwrapMountExtensions::default(),
         );
 
         for root in [&workspace, &extra] {
@@ -366,7 +366,7 @@ mod tests {
         let extra_ro = dir.path().join("vendor-libs");
         std::fs::create_dir_all(&extra_ro).expect("extra ro dir");
 
-        let extensions = super::BwrapMountExtensions {
+        let extensions = crate::sandbox::BwrapMountExtensions {
             read_only_roots: vec![
                 extra_ro.clone(),
                 dir.path().join("missing-ro"), // silently skipped
@@ -412,7 +412,7 @@ mod tests {
         std::fs::create_dir_all(&narrowed).expect("dirs");
 
         let roots = vec![WritableRoot::new(workspace.clone())];
-        let extensions = super::BwrapMountExtensions {
+        let extensions = crate::sandbox::BwrapMountExtensions {
             read_only_roots: vec![narrowed.clone()],
             device_roots: vec![],
         };
