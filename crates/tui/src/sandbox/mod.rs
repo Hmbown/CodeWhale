@@ -412,7 +412,7 @@ impl BwrapMountExtensions {
             .read_only_roots
             .iter()
             .filter_map(|path| bwrap::existing_directory_shim(path))
-            .filter(|path| path != Path::new("/"))
+            .filter(|path| path != std::path::Path::new("/"))
             .collect();
         let devices = self
             .device_roots
