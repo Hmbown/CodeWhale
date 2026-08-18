@@ -1,11 +1,15 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-const script = new URL("../scripts/check-cloudflare-deploy-env.mjs", import.meta.url);
+// fileURLToPath, not `.pathname`: the latter stays percent-encoded, so a
+// checkout under a path with non-ASCII characters spawns a filename that
+// does not exist and every case here fails on a module-not-found exit.
+const script = fileURLToPath(new URL("../scripts/check-cloudflare-deploy-env.mjs", import.meta.url));
 
 function run(overrides: Record<string, string>, args: string[] = []) {
-  return spawnSync(process.execPath, [script.pathname, ...args], {
+  return spawnSync(process.execPath, [script, ...args], {
     encoding: "utf8",
     env: {
       ...process.env,
