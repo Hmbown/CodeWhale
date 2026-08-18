@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:4fc19c5f9596 -->
+<!-- source: README.md sha256:3294a0dd6917 -->
 # Codewhale
 
 터미널에서 쓰는 오픈소스 코딩 에이전트 — 모델은 당신이 가져옵니다.
@@ -98,4 +98,4 @@ TUI 안에서: `/model`은 프로바이더와 모델을 함께 전환하고, `/f
 
 [MIT](LICENSE). 독립 커뮤니티 프로젝트이며, 어떤 모델 프로바이더와도 제휴 관계가 없습니다.
 
-![터미널에서 읽기 전용 scout 하위 에이전트 세 개를 병렬로 펼치는 Codewhale](assets/fanout.gif)
+[![Star History Chart](https://star-history.dera.page/svg?repos=Hmbown/CodeWhale&type=date&legend=top-left)](https://star-history.dera.page/#Hmbown/CodeWhale&type=date)

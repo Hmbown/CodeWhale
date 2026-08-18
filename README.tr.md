@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:4fc19c5f9596 -->
+<!-- source: README.md sha256:3294a0dd6917 -->
 # Codewhale
 
 Terminaliniz için açık kaynak bir kodlama ajanı — modeli siz getirin.
@@ -157,4 +157,4 @@ deneyiminde iş birliği için [OpenWarp](https://github.com/zerx-lab/warp) ile
 [MIT](LICENSE). Bağımsız bir topluluk projesi; hiçbir model sağlayıcısıyla
 bağlı değildir.
 
-![Codewhale bir terminalde üç salt okunur scout alt ajanını açıyor](assets/fanout.gif)
+[![Star History Chart](https://star-history.dera.page/svg?repos=Hmbown/CodeWhale&type=date&legend=top-left)](https://star-history.dera.page/#Hmbown/CodeWhale&type=date)

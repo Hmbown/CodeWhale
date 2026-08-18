@@ -148,4 +148,4 @@ terminal-agent experience.
 [MIT](LICENSE). An independent community project, not affiliated with any model
 provider.
 
-![Codewhale fanning out three read-only scout subagents in a terminal](assets/fanout.gif)
+[![Star History Chart](https://star-history.dera.page/svg?repos=Hmbown/CodeWhale&type=date&legend=top-left)](https://star-history.dera.page/#Hmbown/CodeWhale&type=date)

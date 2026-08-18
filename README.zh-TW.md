@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:4fc19c5f9596 -->
+<!-- source: README.md sha256:3294a0dd6917 -->
 # Codewhale
 
 給終端機用的開源程式設計智能體——模型由你自備。
@@ -87,4 +87,4 @@ Issue、PR、重現步驟、紀錄檔和功能請求，在這裡都算真實的�
 
 [MIT](LICENSE)。獨立的社群專案，與任何模型 provider 均無隸屬關係。
 
-![Codewhale 在終端機中並行派出三個唯讀 scout 子代理](assets/fanout.gif)
+[![Star History Chart](https://star-history.dera.page/svg?repos=Hmbown/CodeWhale&type=date&legend=top-left)](https://star-history.dera.page/#Hmbown/CodeWhale&type=date)

@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:4fc19c5f9596 -->
+<!-- source: README.md sha256:3294a0dd6917 -->
 # Codewhale
 
 Un agent de programmation open source pour votre terminal — apportez votre propre modèle.
@@ -167,4 +167,4 @@ collaboration sur l'expérience d'agent dans le terminal.
 [MIT](LICENSE). Projet communautaire indépendant, non affilié à aucun
 fournisseur de modèles.
 
-![Codewhale déployant trois sous-agents scout en lecture seule dans un terminal](assets/fanout.gif)
+[![Star History Chart](https://star-history.dera.page/svg?repos=Hmbown/CodeWhale&type=date&legend=top-left)](https://star-history.dera.page/#Hmbown/CodeWhale&type=date)
