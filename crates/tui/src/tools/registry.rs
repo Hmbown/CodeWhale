@@ -22,7 +22,7 @@ use super::schema_canonicalize;
 use super::schema_sanitize;
 use super::spec::{
     ApprovalRequirement, RichToolResult, ToolCapability, ToolContext, ToolError, ToolResult,
-    ToolSpec,
+    ToolResultContentBlock, ToolSpec,
 };
 
 // === Types ===
@@ -1484,43 +1484,86 @@ impl ToolSpec for McpToolAdapter {
         !is_mcp_read_helper(&self.name)
     }
 
-    async fn execute(&self, input: Value, _context: &ToolContext) -> Result<ToolResult, ToolError> {
+    async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
+        self.execute_rich(input, context)
+            .await
+            .map(RichToolResult::into_result)
+    }
+
+    async fn execute_rich(
+        &self,
+        input: Value,
+        _context: &ToolContext,
+    ) -> Result<RichToolResult, ToolError> {
         let mut pool = self.pool.lock().await;
         let result = pool
             .call_tool(&self.name, input)
             .await
             .map_err(|e| ToolError::execution_failed(format!("MCP tool failed: {e}")))?;
-        Ok(mcp_result_to_tool_result(&result))
+        Ok(mcp_result_to_rich_tool_result(result))
     }
 }
 
-/// Map an MCP `tools/call` result to a `ToolResult`. MCP servers signal tool
-/// failure with `isError: true` on an otherwise successful JSON-RPC response;
-/// wrapping that in `ToolResult::success` tells the model a rejected call
-/// worked (#5123-class). Error results keep their text payload verbatim so
-/// the model still sees the server's message.
-fn mcp_result_to_tool_result(result: &Value) -> ToolResult {
-    let content = serde_json::to_string(result).unwrap_or_else(|_| result.to_string());
+const MCP_IMAGE_TEXT_PLACEHOLDER: &str = "[MCP image payload removed from text output]";
+
+/// Map an MCP `tools/call` result to the provider-neutral rich result used by
+/// native tools. Image payloads travel as typed blocks instead of being
+/// duplicated into the JSON text as multi-megabyte base64 strings.
+///
+/// MCP servers signal tool failure with `isError: true` on an otherwise
+/// successful JSON-RPC response. Error results keep their text payload
+/// verbatim so the model still sees the server's message (#5123-class).
+pub(crate) fn mcp_result_to_rich_tool_result(mut result: Value) -> RichToolResult {
+    let mut content_blocks = Vec::new();
+    if let Some(items) = result.get_mut("content").and_then(Value::as_array_mut) {
+        for item in items {
+            let Some(object) = item.as_object_mut() else {
+                continue;
+            };
+            if object.get("type").and_then(Value::as_str) != Some("image") {
+                continue;
+            }
+
+            let mime_type = object
+                .get("mimeType")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let data = object.remove("data");
+            if data.is_some() {
+                object.insert(
+                    "data".to_string(),
+                    Value::String(MCP_IMAGE_TEXT_PLACEHOLDER.to_string()),
+                );
+            }
+            if let (Some(mime_type), Some(Value::String(data))) = (mime_type, data) {
+                content_blocks.push(ToolResultContentBlock::Image { mime_type, data });
+            }
+        }
+    }
+
+    let content = serde_json::to_string(&result).unwrap_or_else(|_| result.to_string());
     let is_error = result
         .get("isError")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    if !is_error {
-        return ToolResult::success(content);
-    }
-    let text = result
-        .get("content")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.get("text").and_then(Value::as_str))
-                .collect::<Vec<_>>()
-                .join("\n")
-        })
-        .filter(|text| !text.is_empty())
-        .unwrap_or(content);
-    ToolResult::error(text)
+    let result = if is_error {
+        let text = result
+            .get("content")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.get("text").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .filter(|text| !text.is_empty())
+            .unwrap_or(content);
+        ToolResult::error(text)
+    } else {
+        ToolResult::success(content)
+    };
+    RichToolResult::with_content_blocks(result, content_blocks)
 }
 
 #[cfg(test)]

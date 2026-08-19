@@ -217,14 +217,15 @@ impl Engine {
         pool: Arc<AsyncMutex<McpPool>>,
         name: &str,
         input: serde_json::Value,
-    ) -> Result<ToolResult, ToolError> {
+    ) -> Result<RichToolResult, ToolError> {
         let mut pool = pool.lock().await;
         let result = pool
             .call_tool(name, input)
             .await
             .map_err(|e| ToolError::execution_failed(format!("MCP tool failed: {e}")))?;
-        let content = serde_json::to_string(&result).unwrap_or_else(|_| result.to_string());
-        Ok(ToolResult::success(content))
+        Ok(crate::image_attach::bound_rich_tool_result(
+            crate::tools::registry::mcp_result_to_rich_tool_result(result),
+        ))
     }
 
     pub(super) async fn execute_parallel_tool(
@@ -461,9 +462,7 @@ impl Engine {
 
         let outcome: Result<RichToolResult, ToolError> = if McpPool::is_mcp_tool(&tool_name) {
             if let Some(pool) = mcp_pool {
-                Engine::execute_mcp_tool_with_pool(pool, &tool_name, tool_input)
-                    .await
-                    .map(RichToolResult::plain)
+                Engine::execute_mcp_tool_with_pool(pool, &tool_name, tool_input).await
             } else {
                 Err(ToolError::not_available(format!(
                     "tool '{tool_name}' is not registered"
