@@ -875,7 +875,13 @@ impl ProviderDashboardRow {
     /// Every technical fact the picker knows that the row deliberately does
     /// not carry. This is detail-pane text: it wraps there and can be read,
     /// instead of being formatted for a row that clips it after three fields.
-    /// Route, endpoint and protocol have their own labelled lines.
+    ///
+    /// Each fact names its own group. Unlabelled, the pane printed
+    /// `stream:y` and `stream:unknown` on adjacent lines — the first meaning
+    /// "streams responses", the second "we do not know how it streams
+    /// reasoning" — and `local (self-hosted)` directly under the readiness
+    /// line `local · not checked`, where it read as the same sentence twice.
+    /// `Capabilities:` and `Reasoning:` are what tell those apart.
     fn detail_facts(&self) -> String {
         // Self-hosted providers carry a local/private posture; surface it next
         // to the auth state so the entry reads correctly without a key (#3083).
@@ -890,28 +896,36 @@ impl ProviderDashboardRow {
             } else {
                 ""
             };
-        let request_concurrency = self
-            .request_concurrency
-            .label()
-            .map(|label| format!(" | {label}"))
-            .unwrap_or_default();
-        format!(
-            "{}{} | {} | origin:{} | {} | {}{} | catalog:{}{}",
-            self.auth_status.label(),
-            self_hosted,
-            self.usage_meter,
-            self.model_origin.label(),
-            self.capabilities.label(),
-            self.reasoning.label(),
-            request_concurrency,
-            self.catalog_label(),
-            // Only experimental integrations add a tag; supported ones stay
-            // noise-free (#2984).
-            self.maturity
-                .tag()
-                .map(|tag| format!(" | {tag}"))
-                .unwrap_or_default(),
-        )
+        let meter = self.usage_meter.trim();
+        let usage = meter
+            .strip_prefix("cost: ")
+            .or_else(|| meter.strip_prefix("usage: "))
+            .unwrap_or(meter);
+        let reasoning = self.reasoning.label();
+        // The group label already says "reasoning"; the value need not.
+        let reasoning = reasoning
+            .strip_prefix("reasoning:")
+            .unwrap_or(reasoning.as_str());
+        let mut facts = vec![
+            format!("Credential: {}{}", self.auth_status.label(), self_hosted),
+            format!("Usage: {usage}"),
+            format!("Origin: {}", self.model_origin.label()),
+            format!("Capabilities: {}", self.capabilities.label()),
+            format!("Reasoning: {reasoning}"),
+        ];
+        if let Some(label) = self.request_concurrency.label() {
+            facts.push(format!(
+                "Requests: {}",
+                label.strip_prefix("req:").unwrap_or(label.as_str())
+            ));
+        }
+        facts.push(format!("Models: {}", self.catalog_label()));
+        // Only experimental integrations add a tag; supported ones stay
+        // noise-free (#2984).
+        if let Some(tag) = self.maturity.tag() {
+            facts.push(format!("Maturity: {tag}"));
+        }
+        facts.join(" | ")
     }
 
     fn catalog_label(&self) -> String {
@@ -2838,6 +2852,17 @@ impl ProviderPickerView {
                 Style::default().fg(palette::TEXT_MUTED),
             )),
         ];
+        // Notes before facts. A note is why the readiness line says what it
+        // says — "missing OPENROUTER_API_KEY" is the thing to go and do —
+        // while the facts below are reference. Labelling the facts made them
+        // wrap, and the first thing a wrap pushes off a short pane should
+        // never be the instruction.
+        for message in row.messages.iter().take(2) {
+            lines.push(Line::from(Span::styled(
+                format!("Note: {message}"),
+                Style::default().fg(palette::STATUS_WARNING),
+            )));
+        }
         // One fact per line. Pipe-joined prose wraps mid-fact and reads as a
         // wall; a stack of short lines can be skimmed the way the rows can.
         lines.extend(row.detail_facts().split(" | ").map(|fact| {
@@ -2846,12 +2871,6 @@ impl ProviderPickerView {
                 Style::default().fg(palette::TEXT_MUTED),
             ))
         }));
-        for message in row.messages.iter().take(2) {
-            lines.push(Line::from(Span::styled(
-                format!("Note: {message}"),
-                Style::default().fg(palette::STATUS_WARNING),
-            )));
-        }
         if let Some(status) = row.external_credential_status.as_ref() {
             let state = if status.route_state == "active" {
                 self.tr(MessageId::CtxInspActive)
@@ -4555,6 +4574,32 @@ mod tests {
     }
 
     #[test]
+    fn provider_detail_names_the_group_each_fact_belongs_to() {
+        let config = Config::default();
+        let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+        move_to_provider(&mut picker, ApiProvider::Ollama);
+        let text = render_text(&picker, 120, 32);
+
+        // Unlabelled, this pane printed `stream:y` (the provider streams
+        // responses) directly above `stream:unknown` (we do not know how it
+        // streams reasoning), and put `local (self-hosted)` under a readiness
+        // line already reading `local · not checked`. The group label is the
+        // only thing that tells those apart.
+        for label in [
+            "Credential: ",
+            "Usage: ",
+            "Capabilities: ",
+            "Reasoning: ",
+            "Models: ",
+        ] {
+            assert!(text.contains(label), "detail pane lost {label:?}:\n{text}");
+        }
+        // The label names the group, so the value must not stutter it back.
+        assert!(!text.contains("Usage: cost:"), "{text}");
+        assert!(!text.contains("Reasoning: reasoning:"), "{text}");
+    }
+
+    #[test]
     fn footer_shortcuts_work_when_pressed_as_the_footer_spells_them() {
         // The footer says "A browse all" and "L local only". Pressed with
         // shift held — the only way to type a capital — those used to fall
@@ -5387,7 +5432,7 @@ mod tests {
             ProviderReasoningStreamVisibility::StructuredThinking
         );
         assert_eq!(row.reasoning.selected_control.as_deref(), Some("max"));
-        assert!(row.detail_facts().contains("reasoning:high/max"));
+        assert!(row.detail_facts().contains("Reasoning: high/max"));
         assert!(row.detail_facts().contains("stream:structured"));
     }
 
@@ -5535,7 +5580,7 @@ mod tests {
         );
         assert_eq!(row.request_concurrency.active, None);
         assert!(
-            row.detail_facts().contains("req:cap 3"),
+            row.detail_facts().contains("Requests: cap 3"),
             "Z.ai's effective default cap must surface in /provider, got {:?}",
             row.detail_facts()
         );
@@ -5564,7 +5609,7 @@ mod tests {
         );
         assert_eq!(row.request_concurrency.active, Some(2));
         assert!(
-            row.detail_facts().contains("req:2/3"),
+            row.detail_facts().contains("Requests: 2/3"),
             "active runtime concurrency must surface in /provider, got {:?}",
             row.detail_facts()
         );
@@ -5599,7 +5644,7 @@ mod tests {
         assert_eq!(row.reasoning.selected_control.as_deref(), Some("xhigh"));
         assert!(
             row.detail_facts()
-                .contains("reasoning:low/medium/high/xhigh")
+                .contains("Reasoning: low/medium/high/xhigh")
         );
     }
 
@@ -5648,7 +5693,7 @@ mod tests {
             &config,
         );
         assert_eq!(row.model_origin, ProviderModelOrigin::Default);
-        assert!(row.detail_facts().contains("origin:default"));
+        assert!(row.detail_facts().contains("Origin: default"));
 
         // Saved: a configured model override for the provider.
         let config = Config {
@@ -5668,7 +5713,7 @@ mod tests {
             &config,
         );
         assert_eq!(row.model_origin, ProviderModelOrigin::Saved);
-        assert!(row.detail_facts().contains("origin:saved"));
+        assert!(row.detail_facts().contains("Origin: saved"));
     }
 
     #[test]
@@ -6761,7 +6806,7 @@ mod tests {
         assert!(!rendered.contains("auth:configured"));
         assert!(rendered.contains("Route: custom-model"));
         assert!(rendered.contains("chat"));
-        assert!(rendered.contains("cost: unknown"));
+        assert!(rendered.contains("Usage: unknown"));
         assert!(rendered.contains("Endpoint: http://localhost:9000/v1"));
     }
 
