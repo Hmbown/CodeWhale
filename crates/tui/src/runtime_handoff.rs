@@ -80,9 +80,8 @@ const RESTORED_COMPLETIONS_HEADER: &str = "[Codewhale restored sub-agent checkpo
 const RESTORED_RUNNING_HEADER: &str = "[Codewhale restored sub-agent runtime checkpoint]";
 const RESTORED_TOPOLOGY_HEADER: &str = "[Codewhale restored Agent topology checkpoint]";
 
-const AGENT_TOPOLOGY_EVENT_PREFIX: &str = concat!(
-    "<codewhale:runtime_state kind=\"agent_topology\" schema=\"v1\" visibility=\"internal\">\n",
-);
+const AGENT_TOPOLOGY_EVENT_PREFIX: &str =
+    "<codewhale:runtime_state kind=\"agent_topology\" schema=\"v1\" visibility=\"internal\">\n";
 const AGENT_TOPOLOGY_EVENT_SUFFIX: &str = "\n</codewhale:runtime_state>";
 const AGENT_TOPOLOGY_TURN_META: &str = concat!(
     "<turn_meta>\n",
