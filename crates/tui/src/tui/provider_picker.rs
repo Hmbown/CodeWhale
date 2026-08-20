@@ -282,8 +282,14 @@ pub struct ProviderRequestConcurrencySummary {
 /// The three cells a provider row renders, before column widths are known.
 /// The provider name is not in here: it is read straight off the row, because
 /// it is the one field the eye is actually scanning for.
+///
+/// `status` carries two phrasings of the same fact. A 40-column pane cannot
+/// hold "Alibaba Cloud Model Studio" and "missing key" on one line, and a
+/// provider's name is not ours to shorten — the sentence we wrote about it
+/// is. `status_compact` is that shorter sentence, not a clipped one.
 struct ProviderRowCells {
     status: String,
+    status_compact: String,
     trailing: String,
     tag: Option<&'static str>,
 }
@@ -801,19 +807,23 @@ impl ProviderDashboardRow {
     /// is keyless and priced the same, so it carries the default model — the
     /// only thing that actually differs down that column.
     fn row_cells(&self, view: ProviderListView) -> ProviderRowCells {
-        let (status, trailing) = match view {
+        let (status, status_compact, trailing) = match view {
             // "no cloud key" is the whole reason these rows are offered
             // first-run, and it is the answer to "can I use it right now".
             ProviderListView::Local => (
                 "no cloud key".to_string(),
-                self.default_route.logical_model.clone(),
+                "no key".to_string(),
+                bare_model(&self.default_route.logical_model).to_string(),
             ),
-            ProviderListView::Configured | ProviderListView::Catalog => {
-                (self.status_cell(), self.price_cell())
-            }
+            ProviderListView::Configured | ProviderListView::Catalog => (
+                self.status_cell(),
+                self.status_cell_compact().to_string(),
+                self.price_cell(),
+            ),
         };
         ProviderRowCells {
             status,
+            status_compact,
             trailing,
             // Only experimental integrations add a tag; supported ones stay
             // noise-free (#2984).
@@ -835,6 +845,27 @@ impl ProviderDashboardRow {
             .strip_suffix(" · not checked")
             .unwrap_or(label.as_ref())
             .to_string()
+    }
+
+    /// The same readiness in the fewest columns that still reads as English.
+    /// Used only when the pane is too narrow for the full phrasing — see
+    /// `ProviderRowCells`. Every arm is a rewrite, never a prefix of the long
+    /// form with an ellipsis stuck on it.
+    fn status_cell_compact(&self) -> &'static str {
+        match &self.readiness {
+            ResolvedProviderReadiness::MissingKey => "no key",
+            ResolvedProviderReadiness::MissingLogin => "no login",
+            ResolvedProviderReadiness::ExternalConsentPendingSelection => "consent",
+            ResolvedProviderReadiness::SavedUnchecked => "saved",
+            ResolvedProviderReadiness::ImportedTokenUnchecked => "imported",
+            ResolvedProviderReadiness::NoAuthUnchecked => "no auth",
+            ResolvedProviderReadiness::LocalUnchecked => "local",
+            ResolvedProviderReadiness::Ready => "ready",
+            ResolvedProviderReadiness::ConnectionCheckedModelUnchecked => "endpoint ok",
+            ResolvedProviderReadiness::SavedLastCheckFailed { .. } => "failed",
+            ResolvedProviderReadiness::InvalidRoute => "bad route",
+            ResolvedProviderReadiness::Legacy => "legacy",
+        }
     }
 
     /// What this provider costs to run, and nothing else. The `cost:`/`usage:`
@@ -1449,6 +1480,16 @@ fn readiness_for(
     health: &ProviderReadinessSnapshot,
 ) -> ResolvedProviderReadiness {
     crate::provider_readiness::resolve_with_identity(identity, credential, route_ok, health)
+}
+
+/// A route's model without its vendor namespace. The row that carries this
+/// cell already names the provider, so the `deepseek-ai/` in front of
+/// `DeepSeek-V4-Pro` is the provider said a second time — and it was the
+/// thing pushing the whole model column off the local view at 120 columns.
+/// Shedding the namespace sheds a field; the detail pane's `Route:` line
+/// still prints the id whole.
+fn bare_model(model: &str) -> &str {
+    model.rsplit('/').next().unwrap_or(model)
 }
 
 fn usage_meter_for(provider: ApiProvider) -> String {
@@ -2688,7 +2729,7 @@ impl ProviderPickerView {
             .collect();
         let width = usize::from(layout.list.width);
         let text_width = crate::tui::ui_text::text_display_width;
-        let mut name_col = filtered
+        let names_col = filtered
             .iter()
             .map(|(_, row)| text_width(&row.display_name))
             .max()
@@ -2706,20 +2747,50 @@ impl ProviderPickerView {
         // " ▸ name *  status  trailing": the arrow rail plus the two-space
         // gutters are the fixed cost of the grid. The active mark rides
         // inside the name column so it stays attached to the name it
-        // qualifies instead of floating in the padding.
+        // qualifies instead of floating in the padding — and it is only
+        // reserved when some row on screen actually carries it, because two
+        // columns held for nothing are two columns the status wanted.
         const FIXED: usize = 3;
         const GAP: usize = 2;
         const ACTIVE_MARK: usize = 2;
-        name_col += ACTIVE_MARK;
-        // Shed a whole column before letting anything dangle an ellipsis, and
-        // shed from the right: the price goes first, then the status (the
-        // detail pane still spells it out), and only a pane too narrow for the
-        // names themselves clips anything. A half-written provider name is the
-        // one thing this row can never afford.
-        let show_trailing =
+        let mark_col = if filtered.iter().any(|(_, row)| row.is_active) {
+            ACTIVE_MARK
+        } else {
+            0
+        };
+        let mut name_col = names_col + mark_col;
+        // Shed a whole column before letting anything dangle an ellipsis. When
+        // only one of the two can be afforded, keep the one that differs row
+        // to row: readiness in the catalog and configured views, the model in
+        // the local view, where every row is keyless and "no cloud key" is the
+        // same sentence forty times over.
+        let both =
             trailing_col > 0 && FIXED + name_col + GAP + status_col + GAP + trailing_col <= width;
-        let show_status = FIXED + name_col + GAP + status_col <= width;
-        if !show_status {
+        let status_alone = FIXED + name_col + GAP + status_col <= width;
+        let trailing_alone = trailing_col > 0 && FIXED + name_col + GAP + trailing_col <= width;
+        let (grid_status, show_trailing) = match (both, self.view) {
+            (true, _) => (true, true),
+            (false, ProviderListView::Local) if trailing_alone => (false, true),
+            _ => (status_alone, false),
+        };
+        // Below the grid the readiness is rephrased short and right-aligned to
+        // the pane edge, which keeps the common answer ("no key" on nearly
+        // every catalog row) lined up while letting one long provider name eat
+        // into its own row and nobody else's. Only a pane with no room for a
+        // name at all shows names alone: at 40 columns the grid dropped
+        // readiness from every row, and a first-run reader had no way to tell
+        // which providers needed a key.
+        let ragged_status = !grid_status
+            && !show_trailing
+            && cells.iter().zip(filtered.iter()).any(|(cells, (_, row))| {
+                FIXED
+                    + text_width(&row.display_name)
+                    + mark_col
+                    + 1
+                    + text_width(&cells.status_compact)
+                    <= width
+            });
+        if !grid_status && !show_trailing && !ragged_status {
             name_col = name_col.min(width.saturating_sub(FIXED).max(1));
         }
 
@@ -2756,10 +2827,11 @@ impl ProviderPickerView {
             });
             let name = crate::tui::ui_text::truncate_line_to_width(
                 &row.display_name,
-                name_col.saturating_sub(ACTIVE_MARK),
+                name_col.saturating_sub(mark_col),
             );
             let mark = if row.is_active { " *" } else { "" };
-            let pad = name_col.saturating_sub(text_width(&name) + text_width(mark));
+            let name_width = text_width(&name);
+            let pad = name_col.saturating_sub(name_width + text_width(mark));
             let mut spans = vec![
                 Span::styled(" ", spacer_style),
                 Span::styled(arrow, label_style),
@@ -2768,7 +2840,7 @@ impl ProviderPickerView {
                 // The active route is an identity mark, not a status.
                 Span::styled(mark, ink(palette::WHALE_INFO)),
             ];
-            if show_status {
+            if grid_status {
                 spans.push(Span::styled(" ".repeat(pad + GAP), spacer_style));
                 let status_pad = if show_trailing && !cells.trailing.is_empty() {
                     status_col.saturating_sub(text_width(&cells.status))
@@ -2785,6 +2857,22 @@ impl ProviderPickerView {
                         cells.trailing.clone(),
                         ink(palette::TEXT_MUTED),
                     ));
+                }
+            } else if show_trailing && !cells.trailing.is_empty() {
+                spans.push(Span::styled(" ".repeat(pad + GAP), spacer_style));
+                spans.push(Span::styled(
+                    cells.trailing.clone(),
+                    ink(palette::TEXT_MUTED),
+                ));
+            } else if ragged_status {
+                // Right-aligned against the pane edge, so the answers line up
+                // even where the names cannot.
+                let used = FIXED + name_width + text_width(mark);
+                let status = &cells.status_compact;
+                if used + 1 + text_width(status) <= width {
+                    let gutter = width - used - text_width(status);
+                    spans.push(Span::styled(" ".repeat(gutter), spacer_style));
+                    spans.push(Span::styled(status.clone(), ink(row.status_ink(self.view))));
                 }
             }
             if let Some(tag) = cells.tag {
@@ -4566,7 +4654,9 @@ mod tests {
         // A row that ends in an ellipsis is the UI saying "there is more you
         // cannot see". The grid sheds the price, then the status, so whatever
         // is left is whole at every width the modal supports.
-        for width in [56_u16, 64, 72, 80, 96, 120] {
+        // 40 and 48 exercise the ragged right-aligned readiness that replaces
+        // the grid when a pane cannot hold both columns (#5522 asks for 40x12).
+        for width in [40_u16, 48, 56, 64, 72, 80, 96, 120] {
             let text = render_text(&picker, width, 20);
             assert!(
                 text.contains("DeepSeek *"),
@@ -4583,6 +4673,27 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_cost_column_states_a_cost_and_a_rate_keeps_its_unit() {
+        // The trailing column answers one question — what will this cost me —
+        // in whichever shape the provider actually bills: a rate, a quota, a
+        // billing model. They belong together. What a bare `$3.00/$15.00`
+        // does not carry is per what, and with no column header there is
+        // nowhere else to put it.
+        let config = Config::default();
+        let row = ProviderDashboardRow::from_config(
+            ApiProvider::Anthropic,
+            ApiProvider::Deepseek,
+            &config,
+        );
+        let cells = row.row_cells(ProviderListView::Catalog);
+        assert!(
+            cells.trailing.starts_with('$') && cells.trailing.ends_with(" mtok"),
+            "a price without its unit is a pair of numbers: {:?}",
+            cells.trailing
+        );
     }
 
     #[test]
@@ -4612,24 +4723,84 @@ mod tests {
     }
 
     #[test]
-    fn the_cost_column_states_a_cost_and_a_rate_keeps_its_unit() {
-        // The trailing column answers one question — what will this cost me —
-        // in whichever shape the provider actually bills: a rate, a quota, a
-        // billing model. They belong together. What a bare `$3.00/$15.00`
-        // does not carry is per what, and with no column header there is
-        // nowhere else to put it.
+    fn local_rows_keep_the_default_model_next_to_the_detail_pane() {
+        // The local view's third column is the default model — the only fact
+        // that differs down a list where every row is keyless and free. With
+        // the detail pane taking a third of a 120-column modal, one namespaced
+        // model id (`deepseek-ai/DeepSeek-V4-Pro`) set the column width for
+        // every row and pushed the whole column off the screen.
         let config = Config::default();
-        let row = ProviderDashboardRow::from_config(
-            ApiProvider::Anthropic,
-            ApiProvider::Deepseek,
-            &config,
-        );
-        let cells = row.row_cells(ProviderListView::Catalog);
+        let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+        picker.show_local_routes();
+        assert_eq!(picker.view, ProviderListView::Local);
+
+        for width in [80_u16, 100, 120] {
+            let text = render_text(&picker, width, 32);
+            assert!(
+                text.contains("DeepSeek-V4-Pro"),
+                "local rows lost the model column at {width}:\n{text}"
+            );
+            assert!(
+                text.contains("deepseek-v4-flash"),
+                "local rows lost the model column at {width}:\n{text}"
+            );
+        }
+
+        // At 120 the detail pane takes a third and both columns still fit —
+        // but only because the row sheds the `deepseek-ai/` namespace it
+        // already implies. Carrying the whole id cost the readiness column.
+        let text = render_text(&picker, 120, 32);
+        let sglang = text
+            .lines()
+            .find(|line| line.contains("SGLang"))
+            .unwrap_or_else(|| panic!("no SGLang row:\n{text}"));
         assert!(
-            cells.trailing.starts_with('$') && cells.trailing.ends_with(" mtok"),
-            "a price without its unit is a pair of numbers: {:?}",
-            cells.trailing
+            sglang.contains("no cloud key") && sglang.contains("DeepSeek-V4-Pro"),
+            "the local row must keep readiness and model together: {sglang:?}\n{text}"
         );
+        assert!(!sglang.contains("deepseek-ai/"), "{sglang:?}");
+    }
+
+    #[test]
+    fn catalog_states_readiness_on_every_row_at_forty_columns() {
+        // #5522 asks for 40x12 to work. Onboarding has no detail pane, so a
+        // catalog row that shows only a name leaves a first-run reader with no
+        // way to tell which providers need a key before pressing Enter on one.
+        // Ambient provider keys change which readiness each row resolves to,
+        // so pin the environment the way the rest of this module does.
+        let _lock = crate::test_support::lock_test_env();
+        let config = Config::default();
+        let mut picker =
+            ProviderPickerView::new_for_onboarding(ApiProvider::Ollama, None, &config, None);
+        picker.handle_key(shifted(KeyCode::Char('A')));
+        assert_eq!(picker.view, ProviderListView::Catalog);
+        // Ask the picker what its own rows say rather than hardcoding a
+        // vocabulary a machine with keys in its environment would not produce.
+        let vocabulary: Vec<&'static str> = picker
+            .rows
+            .iter()
+            .map(ProviderDashboardRow::status_cell_compact)
+            .collect();
+
+        let text = render_text(&picker, 40, 12);
+        let named: Vec<&str> = text
+            .lines()
+            .filter(|line| line.contains('│'))
+            .filter(|line| {
+                !["move", "Esc", "Ctrl+", "Enter"]
+                    .iter()
+                    .any(|hint| line.contains(hint))
+            })
+            .filter(|line| line.trim_matches(|c| c == '│' || c == ' ').len() > 1)
+            .collect();
+        assert!(named.len() >= 4, "expected catalog rows:\n{text}");
+        for line in &named {
+            assert!(
+                vocabulary.iter().any(|word| line.contains(word)),
+                "row states no readiness at 40 columns: {line:?}\n{text}"
+            );
+            assert!(!line.contains('…'), "row dangles at 40 columns: {line:?}");
+        }
     }
 
     #[test]
