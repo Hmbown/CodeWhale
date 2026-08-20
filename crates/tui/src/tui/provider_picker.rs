@@ -821,21 +821,34 @@ impl ProviderDashboardRow {
         }
     }
 
-    /// The readiness label, minus the trailing "· not checked" qualifier.
+    /// The readiness label, minus the trailing "· not checked" caveat.
     /// `key saved · not checked` and `local · not checked` say the same
     /// caveat on every row that carries them; the leading clause is the fact
     /// that differs, and the detail pane still prints the label in full.
+    ///
+    /// Only that exact caveat is dropped. `external consent · select to
+    /// check` ends in an instruction, not a caveat, and cutting it left the
+    /// row telling the reader a state with no way out of it.
     fn status_cell(&self) -> String {
         let label = self.readiness.label();
         label
-            .split_once(" · ")
-            .map_or_else(|| label.to_string(), |(head, _)| head.to_string())
+            .strip_suffix(" · not checked")
+            .unwrap_or(label.as_ref())
+            .to_string()
     }
 
-    /// Money only. The `cost:`/`usage:` prefix and the `mtok` unit are the
-    /// same on every row that has them, and `unknown` twenty times down a
-    /// column is worse than an empty cell — a blank says "no price" without
-    /// spending a dozen columns to say it.
+    /// What this provider costs to run, and nothing else. The `cost:`/`usage:`
+    /// prefix is the same on every row that has one, and `unknown` twenty
+    /// times down a column is worse than an empty cell — a blank says "no
+    /// price" without spending a dozen columns to say it.
+    ///
+    /// The column holds three shapes of answer — a rate (`$3.00/$15.00
+    /// mtok`), a quota (`Codex OAuth quota`), a billing model (`subscription`,
+    /// `pay-as-you-go`) — and they belong together, because they are all the
+    /// answer to "what will this cost me". What they cannot share is a
+    /// missing unit: `$3.00/$15.00` on its own is a pair of numbers, so the
+    /// rate keeps its `mtok` even though every rate row repeats it. There is
+    /// no column header here to carry it instead.
     fn price_cell(&self) -> String {
         let meter = self.usage_meter.trim();
         let value = meter
@@ -845,7 +858,6 @@ impl ProviderDashboardRow {
         if value == "unknown" || value == "local" {
             return String::new();
         }
-        let value = value.strip_suffix(" mtok").unwrap_or(value);
         // Some meters repeat the provider name the row already shows.
         value
             .strip_prefix(&format!("{} ", self.display_name))
@@ -4597,6 +4609,49 @@ mod tests {
         // The label names the group, so the value must not stutter it back.
         assert!(!text.contains("Usage: cost:"), "{text}");
         assert!(!text.contains("Reasoning: reasoning:"), "{text}");
+    }
+
+    #[test]
+    fn the_cost_column_states_a_cost_and_a_rate_keeps_its_unit() {
+        // The trailing column answers one question — what will this cost me —
+        // in whichever shape the provider actually bills: a rate, a quota, a
+        // billing model. They belong together. What a bare `$3.00/$15.00`
+        // does not carry is per what, and with no column header there is
+        // nowhere else to put it.
+        let config = Config::default();
+        let row = ProviderDashboardRow::from_config(
+            ApiProvider::Anthropic,
+            ApiProvider::Deepseek,
+            &config,
+        );
+        let cells = row.row_cells(ProviderListView::Catalog);
+        assert!(
+            cells.trailing.starts_with('$') && cells.trailing.ends_with(" mtok"),
+            "a price without its unit is a pair of numbers: {:?}",
+            cells.trailing
+        );
+    }
+
+    #[test]
+    fn status_cell_drops_the_caveat_and_keeps_the_instruction() {
+        // The row trims `key saved · not checked` to `key saved`: every row
+        // carrying that caveat carries the same one. `external consent ·
+        // select to check` is not that shape — the tail is the way out of the
+        // state, and cutting it left the row naming a problem with no move.
+        let saved = ProviderDashboardRow::from_config(
+            ApiProvider::Deepseek,
+            ApiProvider::Deepseek,
+            &Config::default(),
+        );
+        let mut row = saved;
+        row.readiness = ResolvedProviderReadiness::SavedUnchecked;
+        assert_eq!(row.status_cell(), "key saved");
+
+        row.readiness = ResolvedProviderReadiness::ExternalConsentPendingSelection;
+        assert_eq!(row.status_cell(), "external consent · select to check");
+
+        row.readiness = ResolvedProviderReadiness::ConnectionCheckedModelUnchecked;
+        assert_eq!(row.status_cell(), "models endpoint 2xx · model not checked");
     }
 
     #[test]
