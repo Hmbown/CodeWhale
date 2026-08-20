@@ -30,7 +30,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Position, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Widget, Wrap},
 };
@@ -277,6 +277,15 @@ pub struct ProviderDefaultRoute {
 pub struct ProviderRequestConcurrencySummary {
     pub limit: Option<usize>,
     pub active: Option<usize>,
+}
+
+/// The three cells a provider row renders, before column widths are known.
+/// The provider name is not in here: it is read straight off the row, because
+/// it is the one field the eye is actually scanning for.
+struct ProviderRowCells {
+    status: String,
+    trailing: String,
+    tag: Option<&'static str>,
 }
 
 /// How battle-tested a provider integration is, independent of whether the
@@ -786,23 +795,90 @@ impl ProviderDashboardRow {
         }
     }
 
-    fn list_row_hint(&self, view: ProviderListView) -> String {
-        match view {
-            ProviderListView::Configured => {
-                format!("{} | {}", self.readiness.label(), self.auth_status.label())
-            }
-            ProviderListView::Catalog => self.compact_hint(),
-            ProviderListView::Local => format!(
-                "local · no cloud key · {} · {}",
-                compact_base_url(&self.base_url),
-                self.default_route.logical_model
+    /// A provider row answers three questions and no others: which provider,
+    /// can I use it right now, and what will it cost. `trailing` carries the
+    /// money in the catalog and configured views; in the local view every row
+    /// is keyless and priced the same, so it carries the default model — the
+    /// only thing that actually differs down that column.
+    fn row_cells(&self, view: ProviderListView) -> ProviderRowCells {
+        let (status, trailing) = match view {
+            // "no cloud key" is the whole reason these rows are offered
+            // first-run, and it is the answer to "can I use it right now".
+            ProviderListView::Local => (
+                "no cloud key".to_string(),
+                self.default_route.logical_model.clone(),
             ),
+            ProviderListView::Configured | ProviderListView::Catalog => {
+                (self.status_cell(), self.price_cell())
+            }
+        };
+        ProviderRowCells {
+            status,
+            trailing,
+            // Only experimental integrations add a tag; supported ones stay
+            // noise-free (#2984).
+            tag: self.maturity.tag(),
         }
     }
 
-    fn compact_hint(&self) -> String {
+    /// The readiness label, minus the trailing "· not checked" qualifier.
+    /// `key saved · not checked` and `local · not checked` say the same
+    /// caveat on every row that carries them; the leading clause is the fact
+    /// that differs, and the detail pane still prints the label in full.
+    fn status_cell(&self) -> String {
+        let label = self.readiness.label();
+        label
+            .split_once(" · ")
+            .map_or_else(|| label.to_string(), |(head, _)| head.to_string())
+    }
+
+    /// Money only. The `cost:`/`usage:` prefix and the `mtok` unit are the
+    /// same on every row that has them, and `unknown` twenty times down a
+    /// column is worse than an empty cell — a blank says "no price" without
+    /// spending a dozen columns to say it.
+    fn price_cell(&self) -> String {
+        let meter = self.usage_meter.trim();
+        let value = meter
+            .strip_prefix("cost: ")
+            .or_else(|| meter.strip_prefix("usage: "))
+            .unwrap_or(meter);
+        if value == "unknown" || value == "local" {
+            return String::new();
+        }
+        let value = value.strip_suffix(" mtok").unwrap_or(value);
+        // Some meters repeat the provider name the row already shows.
+        value
+            .strip_prefix(&format!("{} ", self.display_name))
+            .unwrap_or(value)
+            .to_string()
+    }
+
+    /// Ink for the status cell. Needing a key, a login, or a consent choice is
+    /// Cognition (you have to act); a failed check or a broken route is
+    /// Failure; a route that has actually answered is Outcome; everything else
+    /// is Metadata. Red never paints "not set up yet".
+    fn status_ink(&self, view: ProviderListView) -> Color {
+        if view == ProviderListView::Local {
+            return palette::TEXT_MUTED;
+        }
+        match &self.readiness {
+            ResolvedProviderReadiness::MissingKey
+            | ResolvedProviderReadiness::MissingLogin
+            | ResolvedProviderReadiness::ExternalConsentPendingSelection => palette::STATUS_WARNING,
+            ResolvedProviderReadiness::SavedLastCheckFailed { .. }
+            | ResolvedProviderReadiness::InvalidRoute => palette::STATUS_ERROR,
+            ResolvedProviderReadiness::Ready => palette::STATUS_SUCCESS,
+            _ => palette::TEXT_MUTED,
+        }
+    }
+
+    /// Every technical fact the picker knows that the row deliberately does
+    /// not carry. This is detail-pane text: it wraps there and can be read,
+    /// instead of being formatted for a row that clips it after three fields.
+    /// Route, endpoint and protocol have their own labelled lines.
+    fn detail_facts(&self) -> String {
         // Self-hosted providers carry a local/private posture; surface it next
-        // to the base URL so the row reads correctly without a key (#3083).
+        // to the auth state so the entry reads correctly without a key (#3083).
         let self_hosted =
             if crate::config::provider_route_is_keyless_self_hosted(self.provider, &self.base_url)
                 || matches!(
@@ -820,15 +896,10 @@ impl ProviderDashboardRow {
             .map(|label| format!(" | {label}"))
             .unwrap_or_default();
         format!(
-            "{} | {} | {} | {} | base:{}{} | route:{}{} origin:{} | {} | {}{} | catalog:{}{}",
-            self.readiness.label(),
+            "{}{} | {} | origin:{} | {} | {}{} | catalog:{}{}",
             self.auth_status.label(),
-            self.usage_meter,
-            self.supported_protocols.join("+"),
-            compact_base_url(&self.base_url),
             self_hosted,
-            self.default_route.logical_model,
-            route_wire_suffix(&self.default_route),
+            self.usage_meter,
             self.model_origin.label(),
             self.capabilities.label(),
             self.reasoning.label(),
@@ -1400,26 +1471,6 @@ fn protocol_label(protocol: RequestProtocol) -> &'static str {
         WireFormat::Responses => "responses",
         WireFormat::AnthropicMessages => "anthropic",
     }
-}
-
-fn route_wire_suffix(route: &ProviderDefaultRoute) -> String {
-    if route.logical_model == route.wire_model {
-        String::new()
-    } else {
-        format!(" -> {}", route.wire_model)
-    }
-}
-
-/// Strip the scheme and trailing slash, then cap the length so one long base
-/// URL can't dominate (and overflow) the provider hint row. Capped values get
-/// an ellipsis; short URLs pass through unchanged.
-fn compact_base_url(base_url: &str) -> String {
-    let stripped = base_url
-        .trim()
-        .trim_start_matches("https://")
-        .trim_start_matches("http://")
-        .trim_end_matches('/');
-    crate::tui::ui_text::truncate_line_to_width(stripped, 24)
 }
 
 /// Resolve the external credential target for a provider that supports
@@ -2591,71 +2642,129 @@ impl ProviderPickerView {
             .unwrap_or(0);
         let visible_rows = usize::from(layout.list.height);
         let visible_start = Self::visible_start(selected_pos, filtered.len(), visible_rows);
-        let mut lines: Vec<Line> = Vec::with_capacity(visible_rows);
-        for (pos, (idx, row)) in filtered
+
+        // Columns, not pipe-joined prose: pipes make the eye parse, columns
+        // let it scan. Widths come from every filtered row, not just the
+        // window on screen, so the columns hold still while you scroll.
+        let cells: Vec<ProviderRowCells> = filtered
             .iter()
+            .map(|(_, row)| row.row_cells(self.view))
+            .collect();
+        let width = usize::from(layout.list.width);
+        let text_width = crate::tui::ui_text::text_display_width;
+        let mut name_col = filtered
+            .iter()
+            .map(|(_, row)| text_width(&row.display_name))
+            .max()
+            .unwrap_or(0);
+        let status_col = cells
+            .iter()
+            .map(|cells| text_width(&cells.status))
+            .max()
+            .unwrap_or(0);
+        let trailing_col = cells
+            .iter()
+            .map(|cells| text_width(&cells.trailing))
+            .max()
+            .unwrap_or(0);
+        // " ▸ name *  status  trailing": the arrow rail plus the two-space
+        // gutters are the fixed cost of the grid. The active mark rides
+        // inside the name column so it stays attached to the name it
+        // qualifies instead of floating in the padding.
+        const FIXED: usize = 3;
+        const GAP: usize = 2;
+        const ACTIVE_MARK: usize = 2;
+        name_col += ACTIVE_MARK;
+        // Shed a whole column before letting anything dangle an ellipsis, and
+        // shed from the right: the price goes first, then the status (the
+        // detail pane still spells it out), and only a pane too narrow for the
+        // names themselves clips anything. A half-written provider name is the
+        // one thing this row can never afford.
+        let show_trailing =
+            trailing_col > 0 && FIXED + name_col + GAP + status_col + GAP + trailing_col <= width;
+        let show_status = FIXED + name_col + GAP + status_col <= width;
+        if !show_status {
+            name_col = name_col.min(width.saturating_sub(FIXED).max(1));
+        }
+
+        let mut lines: Vec<Line> = Vec::with_capacity(visible_rows);
+        for (pos, ((idx, row), cells)) in filtered
+            .iter()
+            .zip(cells.iter())
             .enumerate()
             .skip(visible_start)
             .take(visible_rows)
         {
             let is_selected = *idx == self.selected_idx;
             debug_assert_eq!(is_selected, pos == selected_pos);
-            let is_active = row.is_active;
             let arrow = crate::tui::glyphs::selection_marker(is_selected);
-            let active_dot = if is_active { " *" } else { "  " };
             let spacer_style = if is_selected {
                 menu_style::selected_row_bg_style()
             } else {
                 Style::default()
             };
-            let label_style = if is_selected {
-                menu_style::selected_row_style_with_fg(palette::SELECTION_TEXT)
-            } else {
-                Style::default().fg(palette::TEXT_PRIMARY)
-            };
-            let has_usable_auth = matches!(
-                row.credential_state,
-                CredentialState::Saved
-                    | CredentialState::ImportedToken
-                    | CredentialState::NoAuth
-                    | CredentialState::Local
-                    | CredentialState::Legacy
-            );
-            let hint_style = if is_selected {
-                let hint_fg = if has_usable_auth {
-                    palette::TEXT_MUTED
+            let ink = |color: Color| {
+                if is_selected {
+                    menu_style::selected_row_style_with_fg(color)
                 } else {
-                    palette::STATUS_WARNING
-                };
-                menu_style::selected_row_style_with_fg(hint_fg)
-            } else if has_usable_auth {
-                Style::default().fg(palette::TEXT_MUTED)
-            } else {
-                Style::default().fg(palette::STATUS_WARNING)
+                    Style::default().fg(color)
+                }
             };
-            let prefix = format!(" {arrow} {}{active_dot}  ", row.display_name);
-            let hint = crate::tui::ui_text::semantic_truncate_between_affixes(
-                &prefix,
-                &row.list_row_hint(self.view),
-                "",
-                usize::from(layout.list.width),
+            // One weight per meaning: the name is the only thing the eye is
+            // hunting for, the status is the only thing that changes colour,
+            // and the price stays metadata even on a row that needs a key.
+            let label_style = ink(if is_selected {
+                palette::SELECTION_TEXT
+            } else {
+                palette::TEXT_PRIMARY
+            });
+            let name = crate::tui::ui_text::truncate_line_to_width(
+                &row.display_name,
+                name_col.saturating_sub(ACTIVE_MARK),
             );
-            let mut line = Line::from(vec![
+            let mark = if row.is_active { " *" } else { "" };
+            let pad = name_col.saturating_sub(text_width(&name) + text_width(mark));
+            let mut spans = vec![
                 Span::styled(" ", spacer_style),
                 Span::styled(arrow, label_style),
                 Span::styled(" ", spacer_style),
-                Span::styled(row.display_name.as_str(), label_style),
-                Span::styled(active_dot, label_style),
-                Span::styled("  ", spacer_style),
-                Span::styled(hint, hint_style),
-            ]);
+                Span::styled(name, label_style),
+                // The active route is an identity mark, not a status.
+                Span::styled(mark, ink(palette::WHALE_INFO)),
+            ];
+            if show_status {
+                spans.push(Span::styled(" ".repeat(pad + GAP), spacer_style));
+                let status_pad = if show_trailing && !cells.trailing.is_empty() {
+                    status_col.saturating_sub(text_width(&cells.status))
+                } else {
+                    0
+                };
+                spans.push(Span::styled(
+                    format!("{}{}", cells.status, " ".repeat(status_pad)),
+                    ink(row.status_ink(self.view)),
+                ));
+                if show_trailing && !cells.trailing.is_empty() {
+                    spans.push(Span::styled(" ".repeat(GAP), spacer_style));
+                    spans.push(Span::styled(
+                        cells.trailing.clone(),
+                        ink(palette::TEXT_MUTED),
+                    ));
+                }
+            }
+            if let Some(tag) = cells.tag {
+                let used: usize = spans.iter().map(|span| text_width(&span.content)).sum();
+                if used + GAP + text_width(tag) <= width {
+                    spans.push(Span::styled(" ".repeat(GAP), spacer_style));
+                    spans.push(Span::styled(tag, ink(palette::TEXT_DIM)));
+                }
+            }
+            let mut line = Line::from(spans);
             if is_selected {
                 line.style = menu_style::selected_row_bg_style();
-                let target_width = usize::from(layout.list.width);
                 let line_width = line.width();
-                if line_width < target_width {
+                if line_width < width {
                     line.spans.push(Span::styled(
-                        " ".repeat(target_width - line_width),
+                        " ".repeat(width - line_width),
                         menu_style::selected_row_bg_style(),
                     ));
                 }
@@ -2700,14 +2809,11 @@ impl ProviderPickerView {
                     .fg(palette::TEXT_PRIMARY)
                     .add_modifier(Modifier::BOLD),
             )),
+            // The row answers three questions; this pane is where the full
+            // readiness sentence and every remaining fact actually fit.
             Line::from(Span::styled(
-                format!(
-                    "{} | {} | {}",
-                    row.readiness.label(),
-                    row.auth_status.label(),
-                    row.catalog_label()
-                ),
-                Style::default().fg(palette::TEXT_MUTED),
+                row.readiness.label().to_string(),
+                Style::default().fg(row.status_ink(self.view)),
             )),
             Line::from(Span::styled(
                 format!("Route: {route}"),
@@ -2718,28 +2824,18 @@ impl ProviderPickerView {
                 Style::default().fg(palette::TEXT_MUTED),
             )),
             Line::from(Span::styled(
-                format!(
-                    "Protocol: {} | Usage: {}",
-                    row.supported_protocols.join("+"),
-                    row.usage_meter
-                ),
-                Style::default().fg(palette::TEXT_MUTED),
-            )),
-            Line::from(Span::styled(
-                format!("Capabilities: {}", row.capabilities.label()),
-                Style::default().fg(palette::TEXT_MUTED),
-            )),
-            Line::from(Span::styled(
-                format!("Reasoning: {}", row.reasoning.label()),
+                format!("Protocol: {}", row.supported_protocols.join("+")),
                 Style::default().fg(palette::TEXT_MUTED),
             )),
         ];
-        if let Some(concurrency) = row.request_concurrency.label() {
-            lines.push(Line::from(Span::styled(
-                concurrency,
+        // One fact per line. Pipe-joined prose wraps mid-fact and reads as a
+        // wall; a stack of short lines can be skimmed the way the rows can.
+        lines.extend(row.detail_facts().split(" | ").map(|fact| {
+            Line::from(Span::styled(
+                fact.to_string(),
                 Style::default().fg(palette::TEXT_MUTED),
-            )));
-        }
+            ))
+        }));
         for message in row.messages.iter().take(2) {
             lines.push(Line::from(Span::styled(
                 format!("Note: {message}"),
@@ -4434,18 +4530,30 @@ mod tests {
     }
 
     #[test]
-    fn provider_picker_semantically_truncates_dense_rows_at_narrow_width() {
+    fn provider_picker_sheds_columns_instead_of_dangling_an_ellipsis() {
         let config = Config::default();
         let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
         picker.toggle_view();
 
-        let text = render_text(&picker, 64, 16);
-        assert!(text.contains('…'), "{text}");
-        for (idx, line) in text.lines().enumerate() {
+        // A row that ends in an ellipsis is the UI saying "there is more you
+        // cannot see". The grid sheds the price, then the status, so whatever
+        // is left is whole at every width the modal supports.
+        for width in [56_u16, 64, 72, 80, 96, 120] {
+            let text = render_text(&picker, width, 20);
             assert!(
-                crate::tui::ui_text::text_display_width(line) <= 64,
-                "line {idx} overflows: {line:?}"
+                text.contains("DeepSeek *"),
+                "the selected provider must render whole at {width}:\n{text}"
             );
+            for (idx, line) in text.lines().enumerate() {
+                assert!(
+                    !line.contains('…'),
+                    "line {idx} dangles at {width}: {line:?}"
+                );
+                assert!(
+                    crate::tui::ui_text::text_display_width(line) <= usize::from(width),
+                    "line {idx} overflows at {width}: {line:?}"
+                );
+            }
         }
     }
 
@@ -4474,26 +4582,6 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(picker.selected_provider(), ApiProvider::Zai);
-    }
-
-    #[test]
-    fn compact_base_url_strips_scheme_and_caps_length() {
-        // Short URLs pass through unchanged (scheme + trailing slash stripped).
-        assert_eq!(
-            compact_base_url("https://api.deepseek.com/"),
-            "api.deepseek.com"
-        );
-        assert_eq!(
-            compact_base_url("http://localhost:9000/v1"),
-            "localhost:9000/v1"
-        );
-        // A long URL is capped so it can't dominate the hint row.
-        let long = compact_base_url("https://api-us-west-2.example-region.company.com/v1/openai");
-        assert!(long.ends_with("..."), "expected an ellipsis, got {long:?}");
-        assert!(
-            long.chars().count() <= 24,
-            "capped to 24 cols, got {long:?}"
-        );
     }
 
     #[test]
@@ -5073,7 +5161,7 @@ mod tests {
         assert_eq!(missing.auth_status, ProviderAuthStatus::Missing);
         assert_eq!(missing.readiness, ResolvedProviderReadiness::MissingKey);
         assert_eq!(missing.usage_meter, "cost: unknown");
-        assert!(!missing.compact_hint().contains("(self-hosted)"));
+        assert!(!missing.detail_facts().contains("(self-hosted)"));
         assert!(
             missing
                 .messages
@@ -5095,7 +5183,7 @@ mod tests {
             configured.readiness,
             ResolvedProviderReadiness::SavedUnchecked
         );
-        assert!(!configured.compact_hint().contains("(self-hosted)"));
+        assert!(!configured.detail_facts().contains("(self-hosted)"));
     }
 
     #[test]
@@ -5216,9 +5304,9 @@ mod tests {
         // #2984: maturity is a separate axis from auth/readiness.
         assert_eq!(row.maturity, ProviderMaturity::Experimental);
         assert!(
-            row.compact_hint().contains("experimental"),
+            row.detail_facts().contains("experimental"),
             "experimental maturity must surface in the hint, got {:?}",
-            row.compact_hint()
+            row.detail_facts()
         );
     }
 
@@ -5234,9 +5322,9 @@ mod tests {
         // #2984: supported integrations stay noise-free (no tag).
         assert_eq!(row.maturity, ProviderMaturity::Supported);
         assert!(
-            !row.compact_hint().contains("experimental"),
+            !row.detail_facts().contains("experimental"),
             "supported providers must omit the experimental tag, got {:?}",
-            row.compact_hint()
+            row.detail_facts()
         );
     }
 
@@ -5267,8 +5355,8 @@ mod tests {
             ProviderReasoningStreamVisibility::StructuredThinking
         );
         assert_eq!(row.reasoning.selected_control.as_deref(), Some("max"));
-        assert!(row.compact_hint().contains("reasoning:high/max"));
-        assert!(row.compact_hint().contains("stream:structured"));
+        assert!(row.detail_facts().contains("reasoning:high/max"));
+        assert!(row.detail_facts().contains("stream:structured"));
     }
 
     #[test]
@@ -5295,7 +5383,7 @@ mod tests {
             row.reasoning.stream_visibility,
             ProviderReasoningStreamVisibility::StructuredThinking
         );
-        assert!(row.compact_hint().contains("stream:structured"));
+        assert!(row.detail_facts().contains("stream:structured"));
     }
 
     #[test]
@@ -5342,7 +5430,7 @@ mod tests {
             "the picker must name the provenance instead of presenting a bare limit as provider fact"
         );
         assert!(
-            row.compact_hint()
+            row.detail_facts()
                 .contains("ctx:262K(static Kimi Code safe floor)"),
             "the compact picker receipt must retain context provenance"
         );
@@ -5415,9 +5503,9 @@ mod tests {
         );
         assert_eq!(row.request_concurrency.active, None);
         assert!(
-            row.compact_hint().contains("req:cap 3"),
+            row.detail_facts().contains("req:cap 3"),
             "Z.ai's effective default cap must surface in /provider, got {:?}",
-            row.compact_hint()
+            row.detail_facts()
         );
     }
 
@@ -5444,9 +5532,9 @@ mod tests {
         );
         assert_eq!(row.request_concurrency.active, Some(2));
         assert!(
-            row.compact_hint().contains("req:2/3"),
+            row.detail_facts().contains("req:2/3"),
             "active runtime concurrency must surface in /provider, got {:?}",
-            row.compact_hint()
+            row.detail_facts()
         );
     }
 
@@ -5478,7 +5566,7 @@ mod tests {
         );
         assert_eq!(row.reasoning.selected_control.as_deref(), Some("xhigh"));
         assert!(
-            row.compact_hint()
+            row.detail_facts()
                 .contains("reasoning:low/medium/high/xhigh")
         );
     }
@@ -5505,7 +5593,7 @@ mod tests {
         // never hardcoded per UI surface.
         assert!(row.capabilities.context_window.is_some());
         assert!(row.capabilities.max_output.is_some());
-        let hint = row.compact_hint();
+        let hint = row.detail_facts();
         assert!(hint.contains("ctx:"), "metadata badge missing: {hint}");
         assert!(hint.contains("out:"), "metadata badge missing: {hint}");
         // Capability cluster present (tri-state; unknown renders `?`, never
@@ -5528,7 +5616,7 @@ mod tests {
             &config,
         );
         assert_eq!(row.model_origin, ProviderModelOrigin::Default);
-        assert!(row.compact_hint().contains("origin:default"));
+        assert!(row.detail_facts().contains("origin:default"));
 
         // Saved: a configured model override for the provider.
         let config = Config {
@@ -5548,7 +5636,7 @@ mod tests {
             &config,
         );
         assert_eq!(row.model_origin, ProviderModelOrigin::Saved);
-        assert!(row.compact_hint().contains("origin:saved"));
+        assert!(row.detail_facts().contains("origin:saved"));
     }
 
     #[test]
@@ -5587,18 +5675,18 @@ mod tests {
             ProviderDashboardRow::from_config(ApiProvider::Ollama, ApiProvider::Ollama, &config);
         assert_eq!(row.auth_status, ProviderAuthStatus::Local);
         assert!(
-            row.compact_hint().contains("(self-hosted)"),
+            row.detail_facts().contains("(self-hosted)"),
             "self-hosted hint missing: {}",
-            row.compact_hint()
+            row.detail_facts()
         );
 
         let sglang =
             ProviderDashboardRow::from_config(ApiProvider::Sglang, ApiProvider::Sglang, &config);
         assert_eq!(sglang.auth_status, ProviderAuthStatus::Optional);
         assert!(
-            sglang.compact_hint().contains("(self-hosted)"),
+            sglang.detail_facts().contains("(self-hosted)"),
             "self-hosted hint missing for SGLang: {}",
-            sglang.compact_hint()
+            sglang.detail_facts()
         );
     }
 
@@ -5627,7 +5715,7 @@ mod tests {
         assert_eq!(row.auth_status, ProviderAuthStatus::Missing);
         assert_eq!(row.credential_state, CredentialState::MissingKey);
         assert_eq!(row.readiness, ResolvedProviderReadiness::MissingKey);
-        assert!(row.compact_hint().contains("(self-hosted)"));
+        assert!(row.detail_facts().contains("(self-hosted)"));
     }
 
     #[test]
@@ -5706,7 +5794,7 @@ mod tests {
         assert_eq!(row.auth_status, ProviderAuthStatus::Missing);
         assert_eq!(row.credential_state, CredentialState::MissingKey);
         assert_eq!(row.readiness, ResolvedProviderReadiness::MissingKey);
-        assert!(!row.compact_hint().contains("oauth"));
+        assert!(!row.detail_facts().contains("oauth"));
     }
 
     #[test]
@@ -5741,7 +5829,7 @@ mod tests {
         assert_eq!(row.credential_state, CredentialState::NoAuth);
         assert_eq!(row.readiness, ResolvedProviderReadiness::NoAuthUnchecked);
         assert!(picker.selected_has_key());
-        assert!(row.compact_hint().contains("auth:none"));
+        assert!(row.detail_facts().contains("auth:none"));
     }
 
     #[test]
@@ -6484,7 +6572,7 @@ mod tests {
         assert_eq!(row.auth_status, ProviderAuthStatus::Missing);
         assert_eq!(row.readiness, ResolvedProviderReadiness::MissingKey);
         assert_eq!(row.readiness.label(), "missing key");
-        let hint = row.compact_hint();
+        let hint = row.detail_facts();
         assert!(hint.contains("key:not-set"));
         assert!(!hint.contains("needs-auth"));
         assert!(!hint.contains("auth:missing"));
@@ -6493,6 +6581,57 @@ mod tests {
                 .iter()
                 .any(|message| message.contains("missing OPENROUTER_API_KEY"))
         );
+    }
+
+    #[test]
+    fn provider_row_states_readiness_once_and_leaves_unknown_pricing_blank() {
+        let _lock = crate::test_support::lock_test_env();
+        let _openrouter_key = EnvVarGuard::remove("OPENROUTER_API_KEY");
+        let config = Config::default();
+        let row = ProviderDashboardRow::from_config(
+            ApiProvider::Openrouter,
+            ApiProvider::Deepseek,
+            &config,
+        );
+
+        // "missing key" and "key:not-set" are the same fact three characters
+        // apart. The row states it once; the detail pane keeps the exact auth
+        // token for anyone who needs to distinguish it from OAuth or consent.
+        let cells = row.row_cells(ProviderListView::Catalog);
+        assert_eq!(cells.status, "missing key");
+        assert!(!cells.status.contains("key:not-set"));
+        assert!(row.detail_facts().contains("key:not-set"));
+
+        // "cost: unknown" is invariant down twenty rows. A blank cell says it
+        // without spending a dozen columns per row to repeat it.
+        assert_eq!(row.usage_meter, "cost: unknown");
+        assert!(cells.trailing.is_empty(), "{:?}", cells.trailing);
+    }
+
+    #[test]
+    fn provider_row_status_drops_the_not_checked_qualifier_but_the_detail_keeps_it() {
+        let config = Config::default();
+        let row =
+            ProviderDashboardRow::from_config(ApiProvider::Ollama, ApiProvider::Ollama, &config);
+
+        assert_eq!(row.readiness.label(), "local · not checked");
+        // Every row that carries the caveat carries the same caveat; the
+        // leading clause is the part that differs down the column.
+        assert_eq!(row.status_cell(), "local");
+        // A local runtime has no meter, so the money column stays empty
+        // instead of repeating the status word.
+        assert!(row.price_cell().is_empty());
+    }
+
+    #[test]
+    fn local_view_row_carries_the_model_that_will_answer() {
+        let config = Config::default();
+        let row =
+            ProviderDashboardRow::from_config(ApiProvider::Ollama, ApiProvider::Ollama, &config);
+
+        let cells = row.row_cells(ProviderListView::Local);
+        assert_eq!(cells.status, "no cloud key");
+        assert_eq!(cells.trailing, row.default_route.logical_model);
     }
 
     #[test]
