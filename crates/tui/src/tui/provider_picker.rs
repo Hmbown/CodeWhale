@@ -1465,6 +1465,16 @@ fn pricing_label(provider: ApiProvider, pricing: Option<&PricingSku>) -> String 
     }
 }
 
+/// Whether a key event is a bare character press. crossterm reports a shifted
+/// ASCII letter as `Char('A')` **with** `KeyModifiers::SHIFT`, so guarding on
+/// `modifiers.is_empty()` silently drops every capital: the `A`, `L`, `C`, `M`
+/// this modal's own footer advertises did nothing when pressed as advertised,
+/// and a capital typed into the search box never reached the query. Shift is
+/// part of the character here, not a chord the picker binds.
+fn plain_char(key: KeyEvent) -> bool {
+    key.modifiers.difference(KeyModifiers::SHIFT).is_empty()
+}
+
 fn protocol_label(protocol: RequestProtocol) -> &'static str {
     match protocol {
         WireFormat::ChatCompletions => "chat",
@@ -3904,7 +3914,7 @@ impl ModalView for ProviderPickerView {
                     }
                 }
                 KeyCode::Char(c)
-                    if key.modifiers.is_empty()
+                    if plain_char(key)
                         && self.query.is_empty()
                         && c.eq_ignore_ascii_case(&'x')
                         && self.row_visible(self.selected_idx)
@@ -3916,7 +3926,7 @@ impl ModalView for ProviderPickerView {
                     })
                 }
                 KeyCode::Char(c)
-                    if key.modifiers.is_empty()
+                    if plain_char(key)
                         && c.eq_ignore_ascii_case(&'e')
                         && self.query.is_empty()
                         && self.row_visible(self.selected_idx)
@@ -3931,7 +3941,7 @@ impl ModalView for ProviderPickerView {
                     ViewAction::None
                 }
                 KeyCode::Char(c)
-                    if key.modifiers.is_empty()
+                    if plain_char(key)
                         && c.eq_ignore_ascii_case(&'r')
                         && self.query.is_empty()
                         && self.row_visible(self.selected_idx) =>
@@ -3944,57 +3954,43 @@ impl ModalView for ProviderPickerView {
                 // type-ahead arm so `a`/`A` always toggles instead of
                 // seeking a provider whose name starts with "a".
                 KeyCode::Char(c)
-                    if key.modifiers.is_empty()
-                        && self.query.is_empty()
-                        && c.eq_ignore_ascii_case(&'a') =>
+                    if plain_char(key) && self.query.is_empty() && c.eq_ignore_ascii_case(&'a') =>
                 {
                     self.toggle_view();
                     ViewAction::None
                 }
                 KeyCode::Char(c)
-                    if key.modifiers.is_empty()
-                        && self.query.is_empty()
-                        && c.eq_ignore_ascii_case(&'l') =>
+                    if plain_char(key) && self.query.is_empty() && c.eq_ignore_ascii_case(&'l') =>
                 {
                     self.show_local_routes();
                     ViewAction::None
                 }
                 KeyCode::Char(c)
-                    if key.modifiers.is_empty()
-                        && self.query.is_empty()
-                        && c.eq_ignore_ascii_case(&'i') =>
+                    if plain_char(key) && self.query.is_empty() && c.eq_ignore_ascii_case(&'i') =>
                 {
                     self.enter_lm_studio_form();
                     ViewAction::None
                 }
                 KeyCode::Char(c)
-                    if key.modifiers.is_empty()
-                        && self.query.is_empty()
-                        && c.eq_ignore_ascii_case(&'c') =>
+                    if plain_char(key) && self.query.is_empty() && c.eq_ignore_ascii_case(&'c') =>
                 {
                     self.enter_custom_form();
                     ViewAction::None
                 }
                 KeyCode::Char(c)
-                    if key.modifiers.is_empty()
-                        && self.query.is_empty()
-                        && c.eq_ignore_ascii_case(&'d') =>
+                    if plain_char(key) && self.query.is_empty() && c.eq_ignore_ascii_case(&'d') =>
                 {
                     self.enter_ds4_form();
                     ViewAction::None
                 }
                 KeyCode::Char(c)
-                    if key.modifiers.is_empty()
-                        && self.query.is_empty()
-                        && c.eq_ignore_ascii_case(&'s') =>
+                    if plain_char(key) && self.query.is_empty() && c.eq_ignore_ascii_case(&'s') =>
                 {
                     self.enter_sensenova_form();
                     ViewAction::None
                 }
                 KeyCode::Char(c)
-                    if key.modifiers.is_empty()
-                        && self.query.is_empty()
-                        && c.eq_ignore_ascii_case(&'p') =>
+                    if plain_char(key) && self.query.is_empty() && c.eq_ignore_ascii_case(&'p') =>
                 {
                     self.enter_template_list();
                     ViewAction::None
@@ -4014,7 +4010,7 @@ impl ModalView for ProviderPickerView {
                 // (#3083). Handled before the type-ahead arm so `m`/`M` opens
                 // models instead of seeking a provider whose name starts with m.
                 KeyCode::Char(c)
-                    if key.modifiers.is_empty()
+                    if plain_char(key)
                         && self.query.is_empty()
                         && c.eq_ignore_ascii_case(&'m')
                         && self.row_visible(self.selected_idx) =>
@@ -4032,12 +4028,7 @@ impl ModalView for ProviderPickerView {
                     self.update_query(query);
                     ViewAction::None
                 }
-                KeyCode::Char(ch)
-                    if key.modifiers.is_empty()
-                        && !key
-                            .modifiers
-                            .contains(crossterm::event::KeyModifiers::CONTROL) =>
-                {
+                KeyCode::Char(ch) if plain_char(key) => {
                     let mut query = self.query.clone();
                     query.push(ch);
                     self.update_query(query);
@@ -4062,7 +4053,7 @@ impl ModalView for ProviderPickerView {
                     self.xai_auth_choice = XaiAuthChoice::DeviceOAuth;
                     ViewAction::None
                 }
-                KeyCode::Char(c) if key.modifiers.is_empty() && c.eq_ignore_ascii_case(&'e') => {
+                KeyCode::Char(c) if plain_char(key) && c.eq_ignore_ascii_case(&'e') => {
                     self.enter_external_consent_choice();
                     ViewAction::None
                 }
@@ -4488,6 +4479,12 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
+    /// A capital letter as a real terminal delivers it: crossterm attaches
+    /// `SHIFT` to the event, which is exactly what the picker used to reject.
+    fn shifted(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::SHIFT)
+    }
+
     fn ctrl(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::CONTROL)
     }
@@ -4555,6 +4552,41 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn footer_shortcuts_work_when_pressed_as_the_footer_spells_them() {
+        // The footer says "A browse all" and "L local only". Pressed with
+        // shift held — the only way to type a capital — those used to fall
+        // through to nothing, because the guard demanded no modifiers at all.
+        let config = Config::default();
+        let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+        assert_eq!(picker.view, ProviderListView::Configured);
+
+        picker.handle_key(shifted(KeyCode::Char('A')));
+        assert_eq!(picker.view, ProviderListView::Catalog);
+
+        picker.handle_key(shifted(KeyCode::Char('L')));
+        assert_eq!(picker.view, ProviderListView::Local);
+    }
+
+    #[test]
+    fn search_accepts_capitals() {
+        let config = Config::default();
+        let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+        picker.toggle_view();
+        // Once a query is open every letter is text, so a capital typed into
+        // it must land. It used to be dropped on the floor.
+        picker.handle_key(key(KeyCode::Char('z')));
+        picker.handle_key(shifted(KeyCode::Char('A')));
+        assert_eq!(picker.query, "zA");
+        assert!(
+            picker
+                .filtered_rows()
+                .iter()
+                .any(|(_, row)| row.provider == ApiProvider::Zai),
+            "a capitalised query must still match Z.ai"
+        );
     }
 
     #[test]
