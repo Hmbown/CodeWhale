@@ -4826,6 +4826,44 @@ mod tests {
     }
 
     #[test]
+    fn a_long_readiness_label_never_costs_the_other_rows_their_status() {
+        // `external consent · select to check` is 34 columns and sizes the
+        // whole status column, so keeping it whole (rather than cutting the
+        // instruction off) is only safe if the layout has somewhere to go
+        // when it does not fit. It does: the compact phrasing, right-aligned.
+        let config = Config::default();
+        let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+        picker.toggle_view();
+        let idx = picker
+            .rows
+            .iter()
+            .position(|row| row.provider == ApiProvider::Xai)
+            .expect("xAI row");
+        picker.rows[idx].readiness = ResolvedProviderReadiness::ExternalConsentPendingSelection;
+
+        for width in [40_u16, 64, 80, 120, 160] {
+            let text = render_text(&picker, width, 24);
+            for line in text.lines() {
+                assert!(!line.contains('…'), "dangles at {width}: {line:?}");
+                assert!(
+                    crate::tui::ui_text::text_display_width(line) <= usize::from(width),
+                    "overflows at {width}: {line:?}"
+                );
+            }
+            // Read a list row, not the detail pane — the pane prints the
+            // selected row's readiness whatever the list does.
+            let anthropic = text
+                .lines()
+                .find(|line| line.contains("Anthropic"))
+                .unwrap_or_else(|| panic!("no Anthropic row at {width}:\n{text}"));
+            assert!(
+                anthropic.contains("missing key") || anthropic.contains("no key"),
+                "the other rows lost their readiness at {width}: {anthropic:?}\n{text}"
+            );
+        }
+    }
+
+    #[test]
     fn footer_shortcuts_work_when_pressed_as_the_footer_spells_them() {
         // The footer says "A browse all" and "L local only". Pressed with
         // shift held — the only way to type a capital — those used to fall
