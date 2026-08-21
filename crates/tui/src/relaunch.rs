@@ -59,6 +59,7 @@ pub(crate) fn take_pending() -> Option<String> {
 /// The argv `/relaunch` hands to the next process image:
 /// `<exe> resume <session-id>` — the CLI's positional resume form, which the
 /// standalone TUI binary also accepts as its `resume` subcommand.
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) fn relaunch_argv(exe: &Path, session_id: &str) -> (PathBuf, Vec<String>) {
     (
         exe.to_path_buf(),
