@@ -322,6 +322,15 @@ pub(crate) fn recover_engine_event_disconnect(app: &mut App) -> bool {
         return false;
     }
 
+    // Capture the in-progress turn identity before the reset below clears
+    // it; the folded outbox `turn_end` must name the turn that died
+    // mid-flight (the TUI analogue of the exec channel-closed guarantee).
+    let orphaned_turn_id = app.runtime_turn_id.clone();
+    let orphaned_turn_status = app.runtime_turn_status.clone();
+    let orphaned_turn_started_at = app.turn_started_at;
+    let orphaned_thread_id = app.hooks.session_id().to_string();
+    let orphaned_workspace = app.workspace.clone();
+
     streaming_thinking::finalize_current(app);
     app.finalize_streaming_assistant_as_interrupted();
     app.finalize_active_cell_as_interrupted();
@@ -363,6 +372,34 @@ pub(crate) fn recover_engine_event_disconnect(app: &mut App) -> bool {
         StatusToastLevel::Error,
         None,
     );
+
+    // Lifecycle outbox: mirror the exec channel-closed guarantee in the
+    // TUI. A turn killed by a disconnected engine never receives a
+    // `TurnComplete`, so its `turn_start` would otherwise stay orphaned in
+    // the outbox. Only an in-progress turn (exactly the state `turn_start`
+    // is emitted for) gets the folded `turn.failed` pair. No-op when the
+    // feature is disabled.
+    if orphaned_turn_status.as_deref() == Some("in_progress") {
+        let duration_ms = orphaned_turn_started_at
+            .map(|started| started.elapsed().as_millis() as u64)
+            .unwrap_or_default();
+        app.lifecycle_outbox.emit(codewhale_hooks::LifecycleEvent {
+            event: "turn_end".to_string(),
+            kind: "turn.failed".to_string(),
+            thread_id: orphaned_thread_id,
+            turn_id: orphaned_turn_id,
+            item_id: None,
+            payload: serde_json::json!({
+                "status": "failed",
+                "duration_ms": duration_ms,
+                "workspace": orphaned_workspace.display().to_string(),
+                "error": codewhale_hooks::bounded_text(
+                    "Engine stopped before completing the turn.",
+                    codewhale_hooks::OUTBOX_DETAIL_MAX_CHARS,
+                ),
+            }),
+        });
+    }
     true
 }
 
@@ -1179,5 +1216,118 @@ mod stall_outbox_tests {
             !dir.path().join("outbox.jsonl").exists(),
             "no outbox file must be created when the feature is off"
         );
+    }
+
+    /// `recover_engine_event_disconnect` must close an orphaned in-progress
+    /// turn with the folded `turn_end` (`turn.failed`) — the TUI analogue of
+    /// the exec channel-closed guarantee. Without it, a turn killed by a
+    /// disconnected engine leaves its `turn_start` orphaned in the outbox.
+    #[tokio::test]
+    async fn engine_disconnect_emits_folded_turn_end_for_in_progress_turn() {
+        let _lock = crate::test_support::lock_test_env();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let outbox_path = dir.path().join("outbox.jsonl");
+
+        let config = Config {
+            lifecycle_outbox: Some(codewhale_config::LifecycleOutboxToml {
+                path: Some(outbox_path.clone()),
+                webhook_url: None,
+                webhook_token: None,
+            }),
+            ..Default::default()
+        };
+        let options = TuiOptions {
+            start_in_agent_mode: true,
+            ..crate::test_support::test_tui_options(dir.path())
+        };
+        let mut app = App::new(options, &config);
+        assert!(app.lifecycle_outbox.is_enabled());
+        let expected_workspace = app.workspace.display().to_string();
+
+        app.runtime_turn_id = Some("turn-1".to_string());
+        app.runtime_turn_status = Some("in_progress".to_string());
+        app.turn_started_at = Some(std::time::Instant::now());
+        app.is_loading = true;
+
+        let recovered = recover_engine_event_disconnect(&mut app);
+        assert!(recovered, "disconnect with live work must recover");
+
+        // The outbox writer task drains asynchronously; wait for the line.
+        let mut lines = Vec::new();
+        for _ in 0..200 {
+            if let Ok(text) = tokio::fs::read_to_string(&outbox_path).await {
+                lines = text
+                    .lines()
+                    .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("json"))
+                    .collect();
+                if !lines.is_empty() {
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        assert_eq!(
+            lines.len(),
+            1,
+            "expected one folded turn_end outbox line: {lines:#?}"
+        );
+        let line = &lines[0];
+        assert_eq!(line["event"], "turn_end");
+        assert_eq!(line["kind"], "turn.failed");
+        assert_eq!(line["turn_id"], "turn-1");
+        assert_eq!(line["schema_version"], 1);
+        assert_eq!(line["seq"], 1);
+        assert_eq!(line["payload"]["status"], "failed");
+        assert_eq!(
+            line["payload"]["workspace"],
+            serde_json::json!(expected_workspace)
+        );
+        assert!(
+            line["payload"]["duration_ms"].as_u64().is_some(),
+            "folded turn_end must carry the wall-clock duration"
+        );
+        let error = line["payload"]["error"].as_str().expect("error");
+        assert!(error.contains("Engine stopped"));
+    }
+
+    /// A disconnect with no in-progress turn (nothing emitted a `turn_start`)
+    /// must not fabricate a `turn_end` — the folded pair exists only to close
+    /// a real orphan. Recovery behavior (toast, state reset) is unchanged.
+    #[tokio::test]
+    async fn engine_disconnect_without_in_progress_turn_writes_nothing() {
+        let _lock = crate::test_support::lock_test_env();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let outbox_path = dir.path().join("outbox.jsonl");
+
+        let config = Config {
+            lifecycle_outbox: Some(codewhale_config::LifecycleOutboxToml {
+                path: Some(outbox_path.clone()),
+                webhook_url: None,
+                webhook_token: None,
+            }),
+            ..Default::default()
+        };
+        let options = TuiOptions {
+            start_in_agent_mode: true,
+            ..crate::test_support::test_tui_options(dir.path())
+        };
+        let mut app = App::new(options, &config);
+        assert!(app.lifecycle_outbox.is_enabled());
+
+        // Live work (compaction) but no in-progress turn: `turn_start` was
+        // never emitted, so no `turn_end` may be fabricated.
+        app.is_compacting = true;
+
+        let recovered = recover_engine_event_disconnect(&mut app);
+        assert!(recovered);
+
+        // Nothing was ever enqueued to the outbox, so no file appears.
+        assert!(
+            !outbox_path.exists(),
+            "no folded turn_end may be fabricated when no turn was in progress"
+        );
+        assert!(!app.is_compacting);
+        assert!(!app.status_toasts.is_empty());
     }
 }
