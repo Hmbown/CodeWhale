@@ -460,7 +460,7 @@ pub async fn run_tui(
     let engine_config = build_engine_config(&app, config);
 
     // Spawn the Engine - it will handle all API communication
-    let engine_handle = spawn_tui_engine(engine_config, config);
+    let engine_handle = spawn_tui_engine(engine_config, config, app.lifecycle_outbox.clone());
     crate::startup_trace::mark("engine_spawned");
     // The translation client is optional: it never crashes the TUI on
     // startup, even when the API key is missing, the base URL is malformed,
@@ -1536,23 +1536,6 @@ pub(crate) async fn run_event_loop(
                         app.last_reasoning = None;
                         app.pending_tool_uses.clear();
                         last_status_frame = Instant::now();
-                        // Lifecycle outbox (`[lifecycle_outbox]`): the turn
-                        // boundary the shell-hook system deliberately lacks.
-                        // No-op when the feature is disabled.
-                        app.lifecycle_outbox.emit(codewhale_hooks::LifecycleEvent {
-                            event: "turn_start".to_string(),
-                            kind: "turn.started".to_string(),
-                            thread_id: app.hooks.session_id().to_string(),
-                            turn_id: app.runtime_turn_id.clone(),
-                            item_id: None,
-                            payload: serde_json::json!({
-                                "model": codewhale_hooks::bounded_text(
-                                    &app.model,
-                                    codewhale_hooks::OUTBOX_DETAIL_MAX_CHARS,
-                                ),
-                                "workspace": app.workspace.display().to_string(),
-                            }),
-                        });
                     }
                     EngineEvent::ToolRequestSnapshot { snapshot } => {
                         app.session.last_tool_request_snapshot = Some(snapshot);
@@ -2056,40 +2039,11 @@ pub(crate) async fn run_event_loop(
                             surface_observer_hook_submission_failure(app, error);
                         }
 
-                        // Lifecycle outbox (`[lifecycle_outbox]`): one
-                        // `turn_end` event per completed turn, with the kind
-                        // projected from the turn status — `turn.failed` for
-                        // failed turns, `turn.completed` for completed ones,
-                        // `turn.interrupted` for locally cancelled ones.
-                        // No-op when the feature is disabled.
-                        {
-                            let outbox_status =
-                                app.runtime_turn_status.as_deref().unwrap_or("unknown");
-                            let kind = match outbox_status {
-                                "completed" => "turn.completed",
-                                "failed" => "turn.failed",
-                                "interrupted" => "turn.interrupted",
-                                _ => "turn.ended",
-                            };
-                            app.lifecycle_outbox.emit(codewhale_hooks::LifecycleEvent {
-                                event: "turn_end".to_string(),
-                                kind: kind.to_string(),
-                                thread_id: app.hooks.session_id().to_string(),
-                                turn_id: app.runtime_turn_id.clone(),
-                                item_id: None,
-                                payload: serde_json::json!({
-                                    "status": outbox_status,
-                                    "duration_ms": turn_elapsed.as_millis() as u64,
-                                    "workspace": app.workspace.display().to_string(),
-                                    "error": error
-                                        .as_deref()
-                                        .map(|message| codewhale_hooks::bounded_text(
-                                            message,
-                                            codewhale_hooks::OUTBOX_DETAIL_MAX_CHARS,
-                                        )),
-                                }),
-                            });
-                        }
+                        // Lifecycle outbox: turn boundaries are emitted
+                        // engine-side (Engine::lifecycle_outbox), so the
+                        // synthetic goal-continuation turns that never pass
+                        // through this dispatch get the same turn pair as
+                        // user turns. This arm only updates UI state.
 
                         if queued_to_send.is_none() {
                             queued_to_send = app.pop_queued_message();
@@ -3113,7 +3067,7 @@ pub(crate) async fn run_event_loop(
         if let Some(rollback_warning) = respawn_after_provider_rollback {
             let _ = engine_handle.send(Op::Shutdown).await;
             let engine_config = build_engine_config(app, config);
-            engine_handle = spawn_tui_engine(engine_config, config);
+            engine_handle = spawn_tui_engine(engine_config, config, app.lifecycle_outbox.clone());
             if !app.api_messages.is_empty() {
                 let _ = engine_handle
                     .send(Op::SyncSession {

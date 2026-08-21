@@ -978,7 +978,7 @@ pub(crate) async fn apply_provider_fallback_switch(
 
     let _ = engine_handle.send(Op::Shutdown).await;
     let engine_config = build_engine_config(app, config);
-    *engine_handle = spawn_tui_engine(engine_config, config);
+    *engine_handle = spawn_tui_engine(engine_config, config, app.lifecycle_outbox.clone());
 
     if !app.api_messages.is_empty() {
         let _ = engine_handle
@@ -1077,7 +1077,11 @@ pub(crate) async fn apply_command_result(
                 sync_runtime_workspace_state(task_manager, app.workspace.clone()).await;
                 if respawn {
                     let _ = engine_handle.send(Op::Shutdown).await;
-                    *engine_handle = spawn_tui_engine(build_engine_config(app, config), config);
+                    *engine_handle = spawn_tui_engine(
+                        build_engine_config(app, config),
+                        config,
+                        app.lifecycle_outbox.clone(),
+                    );
                 } else {
                     let _ = engine_handle
                         .send(Op::SetModel {
@@ -1159,7 +1163,11 @@ pub(crate) async fn apply_command_result(
                 app.update_model_compaction_budget();
                 if provider_changed || workspace_changed {
                     let _ = engine_handle.send(Op::Shutdown).await;
-                    *engine_handle = spawn_tui_engine(build_engine_config(app, config), config);
+                    *engine_handle = spawn_tui_engine(
+                        build_engine_config(app, config),
+                        config,
+                        app.lifecycle_outbox.clone(),
+                    );
                 }
                 // SyncSession carries the conversation but not resolved route
                 // limits. Refresh the engine's model first so a loaded,
@@ -1247,7 +1255,11 @@ pub(crate) async fn apply_command_result(
                     );
                 }
                 let _ = engine_handle.send(Op::Shutdown).await;
-                *engine_handle = spawn_tui_engine(build_engine_config(app, config), config);
+                *engine_handle = spawn_tui_engine(
+                    build_engine_config(app, config),
+                    config,
+                    app.lifecycle_outbox.clone(),
+                );
                 if !app.api_messages.is_empty() {
                     let _ = engine_handle
                         .send(Op::SyncSession {
@@ -2075,7 +2087,8 @@ pub(crate) async fn apply_command_result(
                         // Rebuild the engine with the new config so API key/model/base URL take effect.
                         let _ = engine_handle.send(Op::Shutdown).await;
                         let engine_config = build_engine_config(app, config);
-                        *engine_handle = spawn_tui_engine(engine_config, config);
+                        *engine_handle =
+                            spawn_tui_engine(engine_config, config, app.lifecycle_outbox.clone());
                         if !app.api_messages.is_empty() {
                             let _ = engine_handle
                                 .send(Op::SyncSession {

@@ -1056,8 +1056,11 @@ pub(crate) async fn handle_view_events(
                         sync_runtime_workspace_state(task_manager, app.workspace.clone()).await;
                         if respawn {
                             let _ = engine_handle.send(Op::Shutdown).await;
-                            *engine_handle =
-                                spawn_tui_engine(build_engine_config(app, config), config);
+                            *engine_handle = spawn_tui_engine(
+                                build_engine_config(app, config),
+                                config,
+                                app.lifecycle_outbox.clone(),
+                            );
                         } else {
                             let _ = engine_handle
                                 .send(Op::SetModel {
