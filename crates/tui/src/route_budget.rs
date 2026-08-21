@@ -517,8 +517,19 @@ mod tests {
         ));
     }
 
+    /// The assertion values here depend on `explicit_max_output_tokens_override`
+    /// seeing no ambient env override, and sibling tests in this binary
+    /// (this module, `client`, `vision/tools`, `core/engine`) set
+    /// `CODEWHALE_MAX_OUTPUT_TOKENS`/`DEEPSEEK_MAX_OUTPUT_TOKENS` while holding
+    /// `lock_test_env`. Without the lock and guards this test could read a
+    /// concurrent writer's value mid-assertion (process-global env, parallel
+    /// threads), which is the order-dependent flake this guards against.
     #[test]
     fn v4_trigger_uses_window_percent_when_it_fits_spendable_input() {
+        let _lock = crate::test_support::lock_test_env();
+        let _codewhale = crate::test_support::EnvVarGuard::remove("CODEWHALE_MAX_OUTPUT_TOKENS");
+        let _deepseek = crate::test_support::EnvVarGuard::remove("DEEPSEEK_MAX_OUTPUT_TOKENS");
+
         let budget = route_context_budget(ApiProvider::Deepseek, "deepseek-v4-pro", None, 0)
             .expect("V4 route budget");
 
