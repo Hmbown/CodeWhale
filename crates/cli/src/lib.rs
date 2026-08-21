@@ -385,8 +385,12 @@ New integrations should prefer `codewhale app-server`.")]
         after_help = "The browser receives a one-time loopback bootstrap capability, never the Runtime token.\nThe capability is exchanged for a bounded, process-local HttpOnly, SameSite=Strict web session and then invalidated."
     )]
     Web(WebArgs),
-    /// Generate shell completions.
-    Completions(TuiPassthroughArgs),
+    /// Generate shell completions. Compatibility alias for `completion`.
+    Completions {
+        /// Shell to generate completions for.
+        #[arg(value_enum)]
+        shell: Shell,
+    },
     /// Configure provider credentials.
     Login(LoginArgs),
     /// Remove saved authentication state.
@@ -545,6 +549,18 @@ struct RunArgs {
 struct TuiPassthroughArgs {
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     args: Vec<String>,
+}
+
+fn completion_script(shell: Shell) -> Vec<u8> {
+    let mut command = Cli::command();
+    let mut output = Vec::new();
+    generate(shell, &mut command, "codewhale", &mut output);
+    output
+}
+
+fn generate_completions(shell: Shell) {
+    let output = completion_script(shell);
+    let _ = io::stdout().write_all(&output);
 }
 
 #[derive(Debug, Args)]
@@ -1878,9 +1894,9 @@ fn run() -> Result<()> {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
             run_tui_server_in_process(&cli, &resolved_runtime, web_serve_passthrough(&args))
         }
-        Some(Commands::Completions(args)) => {
-            let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
-            run_tui_in_process(&cli, &resolved_runtime, tui_args("completions", args))
+        Some(Commands::Completions { shell }) => {
+            generate_completions(shell);
+            Ok(())
         }
         Some(Commands::Login(args)) => run_login_command(&mut store, args),
         Some(Commands::Logout) => run_logout_command(&mut store),
@@ -1980,8 +1996,7 @@ fn run() -> Result<()> {
             run_app_server_command(&cli, &resolved_runtime, args)
         }
         Some(Commands::Completion { shell }) => {
-            let mut cmd = Cli::command();
-            generate(shell, &mut cmd, "codewhale", &mut io::stdout());
+            generate_completions(shell);
             Ok(())
         }
         Some(Commands::Metrics(args)) => run_metrics_command(args),
@@ -4924,6 +4939,32 @@ mod tests {
 
     fn parse_ok(argv: &[&str]) -> Cli {
         Cli::try_parse_from(argv).unwrap_or_else(|err| panic!("parse failed for {argv:?}: {err}"))
+    }
+
+    #[test]
+    fn legacy_completions_alias_parses_shell_without_tui_passthrough() {
+        let cli = parse_ok(&["codewhale", "completions", "powershell"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Completions {
+                shell: Shell::PowerShell
+            })
+        ));
+    }
+
+    #[test]
+    fn every_completion_shell_uses_the_public_binary_name() {
+        for shell in [Shell::Bash, Shell::Fish, Shell::PowerShell, Shell::Zsh] {
+            let script = String::from_utf8(completion_script(shell)).expect("completion UTF-8");
+            assert!(
+                script.contains("codewhale"),
+                "{shell:?} completion must name the public binary"
+            );
+            assert!(
+                !script.contains("codewhale-tui"),
+                "{shell:?} completion must not teach the runtime binary name"
+            );
+        }
     }
 
     fn help_for(argv: &[&str]) -> String {

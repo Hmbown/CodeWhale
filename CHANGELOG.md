@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restating it never changed anything. Shipped binaries were never affected;
   `release-artifacts.yml` builds `--profile dist` with fat LTO and
   `codegen-units = 1`.
+- The legacy `codewhale completions <shell>` command now generates scripts
+  from the public `codewhale` CLI instead of delegating to `codewhale-tui`, so
+  PowerShell and other shell completions no longer teach the retired binary
+  name (#5526).
 
 ## [0.9.10] - 2026-08-19
 
